@@ -1,6 +1,6 @@
-//! JSONL → `ParsedMessage` conversion.
+//! JSONL → `ParsedMessage` 转换层。
 //!
-//! Spec: `openspec/specs/session-parsing/spec.md`.
+//! Spec：`openspec/specs/session-parsing/spec.md`。
 
 use cdt_core::{
     ContentBlock, HardNoiseReason, MessageCategory, MessageContent, MessageType, ParsedMessage,
@@ -58,16 +58,14 @@ struct RawMessage {
     model: Option<String>,
 }
 
-/// Parse a single JSONL line into a `ParsedMessage`.
+/// 把一行 JSONL 解析成 `ParsedMessage`。
 ///
-/// Returns `Ok(None)` when the line is a structurally valid JSON object
-/// but has no `uuid` or an unrecognised `type` (TS `SessionParser`
-/// silently drops these). Returns `Err(ParseError::MalformedLine)` on
-/// invalid JSON, and `Err(ParseError::SchemaMismatch)` if fields have the
-/// wrong JSON shape.
+/// - 当 JSON 结构合法但缺 `uuid`、或 `type` 不在已知集合内时，返回
+///   `Ok(None)`（TS 版 `SessionParser` 也是静默跳过）。
+/// - JSON 语法错误返回 `Err(ParseError::MalformedLine)`。
+/// - 字段形状不符时返回 `Err(ParseError::SchemaMismatch)`。
 ///
-/// `line_number` is used only for error reporting; callers without file
-/// context should pass `0`.
+/// `line_number` 仅用于错误信息。没有文件上下文的调用方传 `0` 即可。
 pub fn parse_entry_at(line: &str, line_number: usize) -> Result<Option<ParsedMessage>, ParseError> {
     if line.trim().is_empty() {
         return Ok(None);
@@ -125,7 +123,7 @@ pub fn parse_entry_at(line: &str, line_number: usize) -> Result<Option<ParsedMes
     }))
 }
 
-/// Convenience wrapper for callers without file context.
+/// 给没有文件上下文的调用方准备的便捷包装，等价于 `parse_entry_at(line, 0)`。
 pub fn parse_entry(line: &str) -> Result<Option<ParsedMessage>, ParseError> {
     parse_entry_at(line, 0)
 }
@@ -161,9 +159,9 @@ fn classify_category(
     match message_type {
         MessageType::User => MessageCategory::User,
         MessageType::Assistant => MessageCategory::Assistant,
-        // Non-conversational entries are always hard noise above, so we
-        // should never reach these branches — but we keep them exhaustive
-        // to avoid `unreachable!()` panics if classification logic shifts.
+        // 非会话型条目（system/summary/file-history-snapshot/queue-operation）
+        // 在上面已经被分类成 hard noise，理论上走不到下面这几条分支；
+        // 保留是为了避免未来分类逻辑调整时出现 `unreachable!()` panic。
         MessageType::System => MessageCategory::System,
         MessageType::Summary | MessageType::FileHistorySnapshot | MessageType::QueueOperation => {
             MessageCategory::HardNoise(HardNoiseReason::NonConversationalEntry)

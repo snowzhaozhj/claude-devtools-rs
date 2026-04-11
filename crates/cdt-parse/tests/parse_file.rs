@@ -53,7 +53,7 @@ async fn two_adjacent_malformed_lines_both_skipped() {
 
 #[tokio::test]
 async fn large_session_file_preserves_order() {
-    // 10k entries, alternating user/assistant, no duplicate requestIds.
+    // 10k 条，user/assistant 交替，不含重复 requestId。
     let mut contents = String::with_capacity(10_000 * 160);
     for i in 0..10_000 {
         if i % 2 == 0 {
@@ -73,7 +73,7 @@ async fn large_session_file_preserves_order() {
     let f = write_tmp(&contents);
     let out = parse_file(f.path()).await.unwrap();
     assert_eq!(out.len(), 10_000);
-    // Spot-check file order is preserved.
+    // 抽样检查文件顺序是否被保留。
     assert_eq!(out[0].uuid, "u0");
     assert_eq!(out[0].message_type, MessageType::User);
     assert_eq!(out[1].uuid, "a1");

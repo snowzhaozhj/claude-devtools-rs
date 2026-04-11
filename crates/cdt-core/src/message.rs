@@ -1,15 +1,15 @@
-//! Parsed message types shared across all capability crates.
+//! 跨 capability crate 共享的已解析消息类型。
 //!
-//! These types are the Rust counterpart of the TS `ParsedMessage` shape
-//! (see `../claude-devtools/src/main/types/messages.ts`). They are the
-//! contract between `cdt-parse` and every downstream consumer.
+//! 这些类型是 TS 版 `ParsedMessage`
+//! （见 `../claude-devtools/src/main/types/messages.ts`）的 Rust 对应物，
+//! 是 `cdt-parse` 与所有下游消费方之间的契约。
 //!
-//! Spec: `openspec/specs/session-parsing/spec.md`.
+//! Spec：`openspec/specs/session-parsing/spec.md`。
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Raw JSONL entry `type` field.
+/// JSONL 原始条目的 `type` 字段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MessageType {
@@ -21,11 +21,10 @@ pub enum MessageType {
     QueueOperation,
 }
 
-/// Post-classification category used by downstream filters.
+/// 下游过滤使用的分类结果（在解析阶段完成）。
 ///
-/// `HardNoise` messages MUST be excluded from any user-facing rendering
-/// but are still emitted by the parser so that analytics / debug views
-/// can observe them.
+/// `HardNoise` 的消息在任何面向用户的渲染中都必须排除，但解析器仍会把它们
+/// 产出来，以便统计 / 调试视图可以观察到 noise 比例。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageCategory {
     User,
@@ -43,21 +42,21 @@ impl MessageCategory {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HardNoiseReason {
-    /// `system`, `summary`, `file-history-snapshot`, `queue-operation`.
+    /// `system` / `summary` / `file-history-snapshot` / `queue-operation` 条目。
     NonConversationalEntry,
-    /// Assistant message with `model == "<synthetic>"`.
+    /// `model == "<synthetic>"` 的 assistant 占位消息。
     SyntheticAssistant,
-    /// User message wrapped solely in `<local-command-caveat>`.
+    /// 仅被 `<local-command-caveat>` 包裹的用户消息。
     LocalCommandCaveatOnly,
-    /// User message wrapped solely in `<system-reminder>`.
+    /// 仅被 `<system-reminder>` 包裹的用户消息。
     SystemReminderOnly,
-    /// Empty `<local-command-stdout></local-command-stdout>` or stderr.
+    /// 空的 `<local-command-stdout></local-command-stdout>` / stderr 输出。
     EmptyCommandOutput,
-    /// `[Request interrupted by user...`.
+    /// 以 `[Request interrupted by user` 起首的中断标记。
     InterruptMarker,
 }
 
-/// Token usage block, matches Anthropic API `usage` shape.
+/// Token 用量，字段与 Anthropic API 的 `usage` 一致。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TokenUsage {
     #[serde(default)]
@@ -70,8 +69,8 @@ pub struct TokenUsage {
     pub cache_creation_input_tokens: u64,
 }
 
-/// User/assistant message content. Legacy sessions ship a plain string,
-/// modern sessions ship an array of content blocks.
+/// 用户 / assistant 消息正文。老会话直接是字符串，
+/// 新会话是一组 content block 数组。
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum MessageContent {
@@ -85,8 +84,8 @@ impl Default for MessageContent {
     }
 }
 
-/// Image source metadata (base64 payload elided from downstream consumers
-/// to keep memory bounded — we only remember the media type).
+/// 图片来源元数据。注意 base64 数据会完整保留在 `data` 字段里，下游若关心
+/// 内存占用，应尽早丢弃或替换为引用。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ImageSource {
     #[serde(rename = "type", default)]
@@ -97,11 +96,11 @@ pub struct ImageSource {
     pub data: String,
 }
 
-/// Single content block inside a message.
+/// 消息正文中的单个 content block。
 ///
-/// `Unknown` is the forward-compat catch-all for block types the current
-/// parser does not recognise (e.g. future Anthropic SDK additions); the
-/// parser logs a `debug!` on each occurrence so we can spot drift.
+/// `Unknown` 是向前兼容的兜底分支，用于 parser 暂未识别的新 block 类型
+/// （例如 Anthropic SDK 未来新增的类型）；遇到时保留为 `Unknown`，
+/// 下游需要时可以通过 `tracing::debug!` 发现漂移。
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
@@ -135,7 +134,7 @@ pub enum ContentBlock {
     Unknown,
 }
 
-/// Extracted `tool_use` reference.
+/// 从消息正文里抽取出来的 `tool_use` 引用。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ToolCall {
     pub id: String,
@@ -146,7 +145,7 @@ pub struct ToolCall {
     pub task_subagent_type: Option<String>,
 }
 
-/// Extracted `tool_result` reference.
+/// 从消息正文里抽取出来的 `tool_result` 引用。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ToolResult {
     pub tool_use_id: String,
@@ -154,7 +153,7 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// Parsed message — one JSONL line after classification.
+/// 一条 JSONL 行经解析 + 分类后的结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedMessage {
     pub uuid: String,

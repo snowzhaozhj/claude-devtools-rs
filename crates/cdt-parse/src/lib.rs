@@ -1,13 +1,13 @@
-//! JSONL session parsing.
+//! JSONL 会话解析。
 //!
-//! Owns the **session-parsing** capability (see
-//! `openspec/specs/session-parsing/spec.md`). Responsibilities:
-//! - Streaming JSONL reader (line-by-line, tolerant of malformed lines)
-//! - Classification into `ParsedMessage` records via `cdt_core` types
-//! - Hard-noise classification (synthetic placeholders, interrupt markers,
-//!   `<local-command-caveat>`/`<system-reminder>` wrappers, etc.)
-//! - `requestId` deduplication — the TS impl defined the function but
-//!   never called it; this port wires it in unconditionally.
+//! 本 crate 拥有 **session-parsing** capability（见
+//! `openspec/specs/session-parsing/spec.md`），职责包括：
+//! - 流式按行读取 JSONL，容忍坏行；
+//! - 把每行转换为 `cdt_core::ParsedMessage`；
+//! - Hard-noise 分类（synthetic 占位、interrupt 标记、`<local-command-caveat>` /
+//!   `<system-reminder>` 包裹等）；
+//! - `requestId` 去重——TS 版定义了函数却从未调用，Rust 版无条件接进
+//!   `parse_file` 的主路径。
 
 pub mod error;
 

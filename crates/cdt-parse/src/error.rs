@@ -1,27 +1,27 @@
-//! Error types for session-parsing.
+//! session-parsing 的错误类型。
 
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
-    #[error("io error reading {path}: {source}")]
+    #[error("读取 {path} 时发生 IO 错误：{source}")]
     Io {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
 
-    /// A JSONL line could not be parsed as JSON. `line` is 1-based.
-    #[error("malformed JSON at line {line}: {source}")]
+    /// 某一行无法作为 JSON 解析。`line` 为 1-based 行号。
+    #[error("第 {line} 行 JSON 格式错误：{source}")]
     MalformedLine {
         line: usize,
         #[source]
         source: serde_json::Error,
     },
 
-    /// JSON parsed but did not match the expected `ChatHistoryEntry`
-    /// shape. `line` is 1-based when known, `0` if called via
-    /// `parse_entry` with no file context.
-    #[error("schema mismatch at line {line}: {reason}")]
+    /// JSON 解析成功，但字段形状与期望的 `ChatHistoryEntry` 不符。
+    /// 有文件上下文时 `line` 为 1-based 行号；`parse_entry` 无文件
+    /// 上下文时传 `0`。
+    #[error("第 {line} 行结构不匹配：{reason}")]
     SchemaMismatch { line: usize, reason: String },
 }

@@ -1,9 +1,8 @@
-//! Hard-noise classifier.
+//! Hard-noise 分类器。
 //!
-//! See spec `openspec/specs/session-parsing/spec.md` §"Classify hard noise
-//! messages". The classifier observes already-deserialized message fields
-//! plus the raw `model` string and decides whether a message must be
-//! filtered from any user-facing rendering.
+//! 见 spec `openspec/specs/session-parsing/spec.md` §"Classify hard noise
+//! messages"。分类器观察已反序列化的消息字段以及原始 `model` 字符串，
+//! 判断该消息是否必须从任何面向用户的渲染中过滤掉。
 
 use cdt_core::{ContentBlock, HardNoiseReason, MessageContent, MessageType};
 
@@ -13,7 +12,7 @@ const LOCAL_COMMAND_STDOUT_EMPTY: &str = "<local-command-stdout></local-command-
 const LOCAL_COMMAND_STDERR_EMPTY: &str = "<local-command-stderr></local-command-stderr>";
 const INTERRUPT_PREFIX: &str = "[Request interrupted by user";
 
-/// Returns `Some(reason)` if the message is hard noise, `None` otherwise.
+/// 若消息属于 hard noise 则返回 `Some(reason)`，否则返回 `None`。
 pub(crate) fn classify_hard_noise(
     message_type: MessageType,
     model: Option<&str>,
@@ -66,9 +65,8 @@ fn classify_user_content(content: &MessageContent) -> Option<HardNoiseReason> {
     None
 }
 
-/// Returns the displayable user text if the content is either a legacy
-/// string or an array containing at least one text block. Returns `None`
-/// when the content is empty or contains no text.
+/// 从用户消息正文里抽取可显示文本：content 是 legacy 字符串或
+/// 含至少一个 text block 的数组时，返回拼接后的文本；否则返回 `None`。
 fn extract_user_text(content: &MessageContent) -> Option<String> {
     match content {
         MessageContent::Text(s) => Some(s.clone()),
@@ -87,9 +85,8 @@ fn extract_user_text(content: &MessageContent) -> Option<String> {
     }
 }
 
-/// True if `text` is fully wrapped in a single `<tag>…</tag>` pair with no
-/// non-whitespace content outside the wrapper. Used for the "solely
-/// wrapped in X" spec scenarios.
+/// 若 `text` 完整被一对 `<tag>…</tag>` 包裹、且包裹外没有任何非空白
+/// 字符，则返回 true。用于匹配 spec 中"仅被 X 包裹"的场景。
 fn wraps_tag(text: &str, open_tag: &str) -> bool {
     let close_tag = format!("</{}", &open_tag[1..]);
     if !text.starts_with(open_tag) {

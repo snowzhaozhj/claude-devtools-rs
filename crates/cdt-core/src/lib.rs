@@ -1,16 +1,15 @@
-//! Shared types and traits for claude-devtools-rs.
+//! claude-devtools-rs 的共享类型与 trait。
 //!
-//! This crate is the foundation of the workspace. It owns the types that
-//! cross capability boundaries (`ParsedMessage`, `ContentBlock`,
-//! `ToolCall`, `TokenUsage`, etc.) and is the ONLY crate other crates may
-//! depend on without introducing runtime infrastructure.
+//! 本 crate 是整个 workspace 的地基：承载跨 capability 边界的类型
+//! （`ParsedMessage`、`ContentBlock`、`ToolCall`、`TokenUsage` 等），
+//! 也是其他 crate 唯一可以无代价依赖的基础 crate
+//! （任何 crate 依赖它都不会被动引入运行时设施）。
 //!
-//! Invariants (see `openspec/specs/rust-workspace-layout/spec.md`):
-//! - MUST NOT depend on `tokio`, `axum`, `notify`, `ssh2`, `reqwest`, or any
-//!   other runtime infrastructure crate.
-//! - MUST stay usable from synchronous unit tests without async runtime setup.
-//! - Any type needed by two or more capability crates belongs here, not
-//!   duplicated.
+//! 不变式（见 `openspec/specs/rust-workspace-layout/spec.md`）：
+//! - 禁止依赖 `tokio`、`axum`、`notify`、`ssh2`、`reqwest` 等任何运行时
+//!   基础设施 crate。
+//! - 必须能在同步单元测试里直接使用，不需要异步运行时。
+//! - 任何被两个及以上 capability crate 使用的类型都应放在这里，避免重复定义。
 
 pub mod message;
 
@@ -20,7 +19,7 @@ pub use message::{
 };
 
 pub mod prelude {
-    //! Re-exports for consumers.
+    //! 给消费方用的再导出集合。
     pub use super::message::{
         ContentBlock, HardNoiseReason, ImageSource, MessageCategory, MessageContent, MessageType,
         ParsedMessage, TokenUsage, ToolCall, ToolResult,

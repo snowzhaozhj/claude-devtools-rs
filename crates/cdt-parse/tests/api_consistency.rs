@@ -1,5 +1,6 @@
-//! Verifies that `parse_entry` looped line-by-line produces the same
-//! `ParsedMessage` list as `parse_file` (before dedup).
+//! 验证：对同一份输入，逐行循环调用 `parse_entry` 得到的 `ParsedMessage`
+//! 列表应与 `parse_file` 的产出完全一致（前提是没有 requestId 重复，
+//! 即不会触发 dedup 分支）。
 
 use std::io::Write;
 
