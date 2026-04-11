@@ -1,0 +1,5 @@
+{"type":"user","uuid":"u1","timestamp":"2026-04-11T00:00:00Z","message":{"role":"user","content":"start"}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-04-11T00:00:01Z","message":{"role":"assistant","model":"claude-opus-4-6","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":3,"output_tokens":1}}}
+{"type":"assistant","uuid":"a2","timestamp":"2026-04-11T00:00:02Z","message":{"role":"assistant","model":"claude-opus-4-6","content":[{"type":"text","text":"more"}],"usage":{"input_tokens":0,"output_tokens":1}}}
+{"type":"user","uuid":"c1","timestamp":"2026-04-11T00:00:03Z","isCompactSummary":true,"message":{"role":"user","content":[{"type":"text","text":"summary of so far"}]}}
+{"type":"assistant","uuid":"a3","timestamp":"2026-04-11T00:00:04Z","message":{"role":"assistant","model":"claude-opus-4-6","content":[{"type":"text","text":"after compact"}],"usage":{"input_tokens":1,"output_tokens":1}}}

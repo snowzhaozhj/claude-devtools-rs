@@ -11,8 +11,13 @@
 //! - 必须能在同步单元测试里直接使用，不需要异步运行时。
 //! - 任何被两个及以上 capability crate 使用的类型都应放在这里，避免重复定义。
 
+pub mod chunk;
 pub mod message;
 
+pub use chunk::{
+    AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep,
+    SubagentPlaceholder, SystemChunk, ToolExecutionPlaceholder, UserChunk,
+};
 pub use message::{
     ContentBlock, HardNoiseReason, ImageSource, MessageCategory, MessageContent, MessageType,
     ParsedMessage, TokenUsage, ToolCall, ToolResult,
@@ -20,6 +25,10 @@ pub use message::{
 
 pub mod prelude {
     //! 给消费方用的再导出集合。
+    pub use super::chunk::{
+        AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep,
+        SubagentPlaceholder, SystemChunk, ToolExecutionPlaceholder, UserChunk,
+    };
     pub use super::message::{
         ContentBlock, HardNoiseReason, ImageSource, MessageCategory, MessageContent, MessageType,
         ParsedMessage, TokenUsage, ToolCall, ToolResult,

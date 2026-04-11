@@ -1,8 +1,5 @@
-# chunk-building Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change rust-rewrite-baseline. Update Purpose after archive.
-## Requirements
 ### Requirement: Build independent chunks from classified messages
 
 The system SHALL convert a sequence of `ParsedMessage` into a sequence of independent chunks of four types: `UserChunk`, `AIChunk`, `SystemChunk`, `CompactChunk`. Chunks SHALL NOT be paired — a `UserChunk` does not "own" the following `AIChunk`. 连续的 assistant 消息 SHALL 被合并到同一个 `AIChunk.responses` 中，直到遇到真实用户消息、`SystemChunk` 对应的 `<local-command-stdout>` 消息、`CompactChunk` 对应的 compact summary 消息或输入末尾时 flush。
@@ -116,4 +113,3 @@ The system SHALL emit a `CompactChunk` whenever a `ParsedMessage` with `is_compa
 #### Scenario: Compaction flushes pending assistant buffer
 - **WHEN** a compact summary message arrives while an assistant buffer of 2 responses is in progress
 - **THEN** the system SHALL first flush the buffered `AIChunk` and THEN emit the `CompactChunk`
-

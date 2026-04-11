@@ -1,0 +1,8 @@
+---
+source: crates/cdt-analyze/tests/chunks.rs
+expression: summarize(&chunks)
+---
+[
+    "User(uuid=u1, ts=2026-04-11T00:00:00+00:00, content=Text(\"hello\"), tokens_in=0, tokens_out=0)",
+    "Ai(responses=1, ts=2026-04-11T00:00:01+00:00, duration_ms=None, tokens_in=5, tokens_out=3, tool_count=0, steps=1, tool_executions=0, subagents=0)",
+]

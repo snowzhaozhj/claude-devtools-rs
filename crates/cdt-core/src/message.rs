@@ -135,7 +135,7 @@ pub enum ContentBlock {
 }
 
 /// 从消息正文里抽取出来的 `tool_use` 引用。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -146,7 +146,7 @@ pub struct ToolCall {
 }
 
 /// 从消息正文里抽取出来的 `tool_result` 引用。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResult {
     pub tool_use_id: String,
     pub content: serde_json::Value,

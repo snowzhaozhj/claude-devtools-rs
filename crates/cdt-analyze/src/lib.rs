@@ -3,6 +3,7 @@
 //! Owns four baseline capabilities (see `openspec/specs/`):
 //! - **chunk-building** — builds independent `UserChunk` / `AIChunk` /
 //!   `SystemChunk` / `CompactChunk` from a stream of `ParsedMessage`s.
+//!   See `openspec/specs/chunk-building/spec.md`.
 //! - **tool-execution-linking** — pairs `tool_use` with `tool_result` by id;
 //!   resolves Task calls to subagent sessions via a three-phase fallback
 //!   (result-based → description-based → positional); builds tool execution
@@ -19,12 +20,10 @@
 //! - **Fix, don't replicate**: Task-tool filtering when a subagent is resolved
 //!   must actually happen in `AIChunk` construction (the TS impl forgets).
 //! - **Fix, don't replicate**: duplicate `tool_use_id` must log a warning.
-//!
-//! Port status: **stub**.
 
-pub mod chunk {
-    //! chunk-building capability.
-}
+pub mod chunk;
+
+pub use chunk::{aggregate_metrics, build_chunks, extract_semantic_steps};
 
 pub mod tool_linking {
     //! tool-execution-linking capability.

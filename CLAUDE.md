@@ -116,6 +116,9 @@ cargo test -p cdt-analyze            # test one crate
 - **Logging**: `tracing`; subscriber initialized once in `cdt-cli`.
 - **No `unwrap()` in library code** — use `?` or typed errors.
 - **No cross-crate imports of internal modules** — go through each crate's public API.
+- **clippy pedantic 陷阱**：`doc_markdown` 要求 doc/module 注释里出现的 `CamelCase` 或 `snake_case` 标识符都用反引号包裹，中文注释也不例外（`AIChunk` / `tool_count`）。
+- **insta 快照接受**：没装 `cargo-insta` 就用 `INSTA_UPDATE=always cargo test -p <crate>`；提交生成的 `tests/snapshots/*.snap`。
+- **同步解析入口**：`cdt-analyze` 的集成测试不引入 tokio——用 `cdt_parse::parse_entry_at(line, n)` 逐行解析 fixture，再跑 `dedupe_by_request_id`。
 - Detailed rules: `.claude/rules/rust.md`.
 
 ## What to do first in a fresh session
