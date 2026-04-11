@@ -119,6 +119,11 @@ cargo test -p cdt-analyze            # test one crate
 - **clippy pedantic 陷阱**：`doc_markdown` 要求 doc/module 注释里出现的 `CamelCase` 或 `snake_case` 标识符都用反引号包裹，中文注释也不例外（`AIChunk` / `tool_count`）。
 - **insta 快照接受**：没装 `cargo-insta` 就用 `INSTA_UPDATE=always cargo test -p <crate>`；提交生成的 `tests/snapshots/*.snap`。
 - **同步解析入口**：`cdt-analyze` 的集成测试不引入 tokio——用 `cdt_parse::parse_entry_at(line, n)` 逐行解析 fixture，再跑 `dedupe_by_request_id`。
+- **自动化**：
+  - Hooks（`.claude/hooks/`）：`.rs` 编辑后自动跑所属 crate 的 `cargo clippy -- -D warnings`；直接编辑 `openspec/specs/**` 会被 PreToolUse 拒绝（走 delta）。
+  - Subagent：`spec-fidelity-reviewer` 按 capability 审计 scenario→test 覆盖。
+  - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
+  - MCP：`.mcp.json` 注册 GitHub MCP，需要 `GITHUB_PERSONAL_ACCESS_TOKEN` 环境变量。
 - Detailed rules: `.claude/rules/rust.md`.
 
 ## What to do first in a fresh session
