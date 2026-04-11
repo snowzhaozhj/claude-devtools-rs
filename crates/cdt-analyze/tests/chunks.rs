@@ -43,18 +43,26 @@ fn summarize(chunks: &[Chunk]) -> Vec<String> {
                 u.metrics.input_tokens,
                 u.metrics.output_tokens
             ),
-            Chunk::Ai(a) => format!(
-                "Ai(responses={}, ts={}, duration_ms={:?}, tokens_in={}, tokens_out={}, tool_count={}, steps={}, tool_executions={}, subagents={})",
-                a.responses.len(),
-                a.timestamp.to_rfc3339(),
-                a.duration_ms,
-                a.metrics.input_tokens,
-                a.metrics.output_tokens,
-                a.metrics.tool_count,
-                a.semantic_steps.len(),
-                a.tool_executions.len(),
-                a.subagents.len()
-            ),
+            Chunk::Ai(a) => {
+                let orphans = a
+                    .tool_executions
+                    .iter()
+                    .filter(|e| matches!(e.output, cdt_core::ToolOutput::Missing))
+                    .count();
+                format!(
+                    "Ai(responses={}, ts={}, duration_ms={:?}, tokens_in={}, tokens_out={}, tool_count={}, steps={}, tool_executions={}, orphans={}, subagents={})",
+                    a.responses.len(),
+                    a.timestamp.to_rfc3339(),
+                    a.duration_ms,
+                    a.metrics.input_tokens,
+                    a.metrics.output_tokens,
+                    a.metrics.tool_count,
+                    a.semantic_steps.len(),
+                    a.tool_executions.len(),
+                    orphans,
+                    a.subagents.len()
+                )
+            }
             Chunk::System(s) => format!(
                 "System(uuid={}, ts={}, text={:?})",
                 s.uuid,
@@ -81,6 +89,13 @@ fn simple_user_assistant_snapshot() {
 #[test]
 fn multi_assistant_coalescing_snapshot() {
     let msgs = parse_fixture("multi_ai.jsonl");
+    let chunks = build_chunks(&msgs);
+    insta::assert_debug_snapshot!(summarize(&chunks));
+}
+
+#[test]
+fn tool_result_paired_snapshot() {
+    let msgs = parse_fixture("with_tool_result.jsonl");
     let chunks = build_chunks(&msgs);
     insta::assert_debug_snapshot!(summarize(&chunks));
 }

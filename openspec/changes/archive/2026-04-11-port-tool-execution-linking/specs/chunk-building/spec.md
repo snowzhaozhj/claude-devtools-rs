@@ -1,39 +1,4 @@
-# chunk-building Specification
-
-## Purpose
-TBD - created by archiving change rust-rewrite-baseline. Update Purpose after archive.
-## Requirements
-### Requirement: Build independent chunks from classified messages
-
-The system SHALL convert a sequence of `ParsedMessage` into a sequence of independent chunks of four types: `UserChunk`, `AIChunk`, `SystemChunk`, `CompactChunk`. Chunks SHALL NOT be paired — a `UserChunk` does not "own" the following `AIChunk`. 连续的 assistant 消息 SHALL 被合并到同一个 `AIChunk.responses` 中，直到遇到真实用户消息、`SystemChunk` 对应的 `<local-command-stdout>` 消息、`CompactChunk` 对应的 compact summary 消息或输入末尾时 flush。
-
-#### Scenario: User question followed by AI response
-- **WHEN** the input is a real user message followed by one assistant message
-- **THEN** the output SHALL be one `UserChunk` and one `AIChunk` as independent entries, in input order
-
-#### Scenario: Multiple assistant turns before next user input
-- **WHEN** several assistant messages appear consecutively without intervening real user input
-- **THEN** they SHALL be coalesced into a single `AIChunk` whose `responses` field holds all assistant messages in chronological order
-
-#### Scenario: Assistant buffer flushed by following user message
-- **WHEN** an assistant buffer of N responses is followed by a real user message
-- **THEN** the system SHALL emit the accumulated `AIChunk` before the new `UserChunk`
-
-#### Scenario: Command output appears inline
-- **WHEN** a user message whose content is exactly wrapped by `<local-command-stdout>...</local-command-stdout>` appears in the stream
-- **THEN** a `SystemChunk` SHALL be emitted for it, not absorbed into a surrounding `AIChunk`, and any in-progress assistant buffer SHALL be flushed first
-
-### Requirement: Filter sidechain and hard-noise messages
-
-The system SHALL exclude messages where `is_sidechain == true` and messages whose `MessageCategory` is `HardNoise(_)` before building chunks. 被过滤掉的消息 SHALL NOT 影响 chunk 顺序、指标或语义步骤。
-
-#### Scenario: Sidechain subagent messages in main stream
-- **WHEN** the input contains messages marked `is_sidechain = true`
-- **THEN** those messages SHALL NOT appear in any main-thread chunk and SHALL NOT contribute to any `ChunkMetrics`
-
-#### Scenario: Hard-noise messages dropped before chunk construction
-- **WHEN** the input contains messages classified as `MessageCategory::HardNoise(_)` (synthetic assistant placeholder, empty command output, interrupt marker, 等)
-- **THEN** the system SHALL drop them before chunk construction and SHALL NOT emit a chunk for them
+## MODIFIED Requirements
 
 ### Requirement: Compute per-chunk metrics
 
@@ -85,18 +50,6 @@ Each chunk SHALL expose `timestamp`、可选的 `duration` 和 `metrics`，其�
 - **WHEN** `build_chunks` is invoked without passing any subagent candidate pool
 - **THEN** Task tool executions SHALL remain in `AIChunk.tool_executions`, and downstream consumers MAY still invoke `filter_resolved_tasks` explicitly; end-to-end default-path filtering is deferred to `team-coordination-metadata`
 
-### Requirement: Attach subagents to AIChunks
-
-`AIChunk` SHALL 暴露一个稳定字段用于挂载由该 chunk 生成的 subagent Process 记录。chunk-building 只负责结构占位：字段默认空列表；真实的 Process 归集由 `team-coordination-metadata` capability 履行。
-
-#### Scenario: Structure slot exists
-- **WHEN** an `AIChunk` is built under the chunk-building capability only
-- **THEN** its subagents field SHALL exist and be empty
-
-#### Scenario: Single subagent spawn
-- **WHEN** an `AIChunk` assistant messages spawned one subagent
-- **THEN** after `team-coordination-metadata` runs, `AIChunk.subagents` SHALL contain one Process record with its own session id, timestamps, metrics, and optional team metadata (verified under that capability)
-
 ### Requirement: Extract semantic steps for AIChunks
 
 The system SHALL extract a list of `SemanticStep` (thinking、text output、tool execution、subagent spawn) from each `AIChunk` in chronological order for UI visualization. `Thinking` 与 `Text` 步骤从 `ParsedMessage.content` 中按 block 顺序抽取；`ToolExecution` 步骤以 `tool_use_id` + `tool_name` + `timestamp` 的形式生成，与 `AIChunk.tool_executions` 里的条目一一对应（可通过 `tool_use_id` 交叉查找真实 `ToolExecution`）；`SubagentSpawn` 变体先保留但不产出，留给 `team-coordination-metadata` 填充。
@@ -108,16 +61,3 @@ The system SHALL extract a list of `SemanticStep` (thinking、text output、tool
 #### Scenario: SubagentSpawn step is reserved but not yet emitted
 - **WHEN** chunk-building runs without the downstream subagent capability
 - **THEN** no `SemanticStep::SubagentSpawn` SHALL be emitted, and the enum variant SHALL remain available for later ports
-
-### Requirement: Emit CompactChunks at compaction boundaries
-
-The system SHALL emit a `CompactChunk` whenever a `ParsedMessage` with `is_compact_summary == true` is encountered, preserving the summary text and boundary timestamp. 在产出 `CompactChunk` 之前，任何正在累积的 `AIChunk` buffer SHALL 先 flush。
-
-#### Scenario: Session with one compaction
-- **WHEN** the session contains exactly one `ParsedMessage` with `is_compact_summary == true`
-- **THEN** exactly one `CompactChunk` SHALL be emitted at that position with the message's timestamp and textual summary
-
-#### Scenario: Compaction flushes pending assistant buffer
-- **WHEN** a compact summary message arrives while an assistant buffer of 2 responses is in progress
-- **THEN** the system SHALL first flush the buffered `AIChunk` and THEN emit the `CompactChunk`
-

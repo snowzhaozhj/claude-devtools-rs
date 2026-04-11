@@ -13,24 +13,30 @@
 
 pub mod chunk;
 pub mod message;
+pub mod process;
+pub mod tool_execution;
 
 pub use chunk::{
-    AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep,
-    SubagentPlaceholder, SystemChunk, ToolExecutionPlaceholder, UserChunk,
+    AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep, SystemChunk,
+    UserChunk,
 };
 pub use message::{
     ContentBlock, HardNoiseReason, ImageSource, MessageCategory, MessageContent, MessageType,
     ParsedMessage, TokenUsage, ToolCall, ToolResult,
 };
+pub use process::{Process, SubagentCandidate, TeamMeta};
+pub use tool_execution::{ToolExecution, ToolOutput};
 
 pub mod prelude {
     //! 给消费方用的再导出集合。
     pub use super::chunk::{
-        AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep,
-        SubagentPlaceholder, SystemChunk, ToolExecutionPlaceholder, UserChunk,
+        AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep, SystemChunk,
+        UserChunk,
     };
     pub use super::message::{
         ContentBlock, HardNoiseReason, ImageSource, MessageCategory, MessageContent, MessageType,
         ParsedMessage, TokenUsage, ToolCall, ToolResult,
     };
+    pub use super::process::{Process, SubagentCandidate, TeamMeta};
+    pub use super::tool_execution::{ToolExecution, ToolOutput};
 }

@@ -22,12 +22,13 @@
 //! - **Fix, don't replicate**: duplicate `tool_use_id` must log a warning.
 
 pub mod chunk;
+pub mod tool_linking;
 
 pub use chunk::{aggregate_metrics, build_chunks, extract_semantic_steps};
-
-pub mod tool_linking {
-    //! tool-execution-linking capability.
-}
+pub use tool_linking::{
+    Resolution, ResolvedTask, ToolLinkingResult, filter_resolved_tasks, pair_tool_executions,
+    resolve_subagents,
+};
 
 pub mod context {
     //! context-tracking capability.

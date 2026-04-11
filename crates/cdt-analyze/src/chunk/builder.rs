@@ -15,18 +15,30 @@
 //!         - 否则 → flush buffer，产出 `UserChunk`；
 //! 3. 末尾 flush。
 
+use std::collections::HashMap;
+
 use cdt_core::{
     AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, ContentBlock, MessageCategory,
-    MessageContent, ParsedMessage, SystemChunk, UserChunk,
+    MessageContent, ParsedMessage, SystemChunk, ToolExecution, UserChunk,
 };
 
 use super::metrics::aggregate_metrics;
 use super::semantic::extract_semantic_steps;
+use crate::tool_linking::pair_tool_executions;
 
 const STDOUT_OPEN: &str = "<local-command-stdout>";
 const STDOUT_CLOSE: &str = "</local-command-stdout>";
 
 pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
+    let linking = pair_tool_executions(messages);
+    let mut executions_by_assistant: HashMap<String, Vec<ToolExecution>> = HashMap::new();
+    for exec in linking.executions {
+        executions_by_assistant
+            .entry(exec.source_assistant_uuid.clone())
+            .or_default()
+            .push(exec);
+    }
+
     let mut out: Vec<Chunk> = Vec::new();
     let mut buffer: Vec<AssistantResponse> = Vec::new();
 
@@ -47,7 +59,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
                 });
             }
             MessageCategory::Compact => {
-                flush_buffer(&mut buffer, &mut out);
+                flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
                 out.push(Chunk::Compact(CompactChunk {
                     uuid: msg.uuid.clone(),
                     timestamp: msg.timestamp,
@@ -58,7 +70,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
             }
             MessageCategory::User => {
                 if let Some(stdout) = extract_local_command_stdout(&msg.content) {
-                    flush_buffer(&mut buffer, &mut out);
+                    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
                     out.push(Chunk::System(SystemChunk {
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
@@ -79,7 +91,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
                         }));
                     }
                 } else {
-                    flush_buffer(&mut buffer, &mut out);
+                    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
                     out.push(Chunk::User(UserChunk {
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
@@ -95,11 +107,15 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
         }
     }
 
-    flush_buffer(&mut buffer, &mut out);
+    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
     out
 }
 
-fn flush_buffer(buffer: &mut Vec<AssistantResponse>, out: &mut Vec<Chunk>) {
+fn flush_buffer(
+    buffer: &mut Vec<AssistantResponse>,
+    out: &mut Vec<Chunk>,
+    executions_by_assistant: &mut HashMap<String, Vec<ToolExecution>>,
+) {
     if buffer.is_empty() {
         return;
     }
@@ -113,13 +129,19 @@ fn flush_buffer(buffer: &mut Vec<AssistantResponse>, out: &mut Vec<Chunk>) {
         }
         _ => None,
     };
+    let mut tool_executions: Vec<ToolExecution> = Vec::new();
+    for r in &responses {
+        if let Some(mut execs) = executions_by_assistant.remove(&r.uuid) {
+            tool_executions.append(&mut execs);
+        }
+    }
     out.push(Chunk::Ai(AIChunk {
         timestamp,
         duration_ms,
         responses,
         metrics,
         semantic_steps,
-        tool_executions: Vec::new(),
+        tool_executions,
         subagents: Vec::new(),
     }));
 }
@@ -499,7 +521,8 @@ mod tests {
     }
 
     #[test]
-    fn tool_execution_list_is_empty_placeholder() {
+    fn tool_executions_populated_for_tool_use() {
+        // 孤立 tool_use：应产出 1 条 orphan ToolExecution
         let msgs = vec![assistant(
             "a1",
             1,
@@ -513,8 +536,93 @@ mod tests {
         let Chunk::Ai(ai) = &chunks[0] else {
             panic!("expected AIChunk");
         };
-        assert!(ai.tool_executions.is_empty());
+        assert_eq!(ai.tool_executions.len(), 1);
+        assert_eq!(ai.tool_executions[0].tool_use_id, "t1");
+        assert_eq!(ai.tool_executions[0].end_ts, None);
+        assert_eq!(ai.tool_executions[0].output, cdt_core::ToolOutput::Missing);
         assert!(ai.subagents.is_empty());
+    }
+
+    #[test]
+    fn tool_executions_pair_assistant_and_user_result() {
+        let mut result_user = blank_message("u1", 2);
+        result_user.content = MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "t1".into(),
+            content: serde_json::json!("done"),
+            is_error: false,
+        }]);
+        let msgs = vec![
+            assistant(
+                "a1",
+                1,
+                &[ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "Bash".into(),
+                    input: serde_json::json!({"cmd": "ls"}),
+                }],
+            ),
+            result_user,
+        ];
+        let chunks = build_chunks(&msgs);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        assert_eq!(ai.tool_executions.len(), 1);
+        let exec = &ai.tool_executions[0];
+        assert_eq!(exec.source_assistant_uuid, "a1");
+        assert!(exec.end_ts.is_some());
+        assert!(matches!(exec.output, cdt_core::ToolOutput::Text { .. }));
+    }
+
+    #[test]
+    fn tool_executions_distributed_across_chunks() {
+        let mut u1 = blank_message("uu1", 2);
+        u1.content = MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "t1".into(),
+            content: serde_json::json!("first"),
+            is_error: false,
+        }]);
+        let mut u2 = blank_message("uu2", 4);
+        u2.content = MessageContent::Text("real user msg".into());
+        let mut u3 = blank_message("uu3", 6);
+        u3.content = MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "t2".into(),
+            content: serde_json::json!("second"),
+            is_error: false,
+        }]);
+        let msgs = vec![
+            assistant(
+                "a1",
+                1,
+                &[ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "Bash".into(),
+                    input: serde_json::json!({}),
+                }],
+            ),
+            u1,
+            u2, // flush AIChunk #1
+            assistant(
+                "a2",
+                5,
+                &[ContentBlock::ToolUse {
+                    id: "t2".into(),
+                    name: "Read".into(),
+                    input: serde_json::json!({}),
+                }],
+            ),
+            u3,
+        ];
+        let chunks = build_chunks(&msgs);
+        let ai_chunks: Vec<&AIChunk> = chunks
+            .iter()
+            .filter_map(|c| if let Chunk::Ai(a) = c { Some(a) } else { None })
+            .collect();
+        assert_eq!(ai_chunks.len(), 2);
+        assert_eq!(ai_chunks[0].tool_executions.len(), 1);
+        assert_eq!(ai_chunks[0].tool_executions[0].tool_use_id, "t1");
+        assert_eq!(ai_chunks[1].tool_executions.len(), 1);
+        assert_eq!(ai_chunks[1].tool_executions[0].tool_use_id, "t2");
     }
 
     #[test]

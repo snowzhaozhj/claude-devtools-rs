@@ -10,6 +10,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::message::{MessageContent, TokenUsage, ToolCall};
+use crate::process::Process;
+use crate::tool_execution::ToolExecution;
 
 /// 对单个 chunk 汇总的指标。
 ///
@@ -84,16 +86,6 @@ pub enum SemanticStep {
     },
 }
 
-/// 占位符：真实的 `ToolExecution` 结构由 `tool-execution-linking` capability
-/// 引入；在此之前 `AIChunk` 仅暴露一个空 `Vec` 以锁定字段位置。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ToolExecutionPlaceholder {}
-
-/// 占位符：真实的 subagent `Process` 由 `team-coordination-metadata`
-/// capability 引入。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SubagentPlaceholder {}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserChunk {
     pub uuid: String,
@@ -110,12 +102,11 @@ pub struct AIChunk {
     pub responses: Vec<AssistantResponse>,
     pub metrics: ChunkMetrics,
     pub semantic_steps: Vec<SemanticStep>,
-    /// TODO(port-tool-execution-linking)：由下一轮 port 填充。
     #[serde(default)]
-    pub tool_executions: Vec<ToolExecutionPlaceholder>,
+    pub tool_executions: Vec<ToolExecution>,
     /// TODO(port-team-coordination-metadata)：由更晚的 port 填充。
     #[serde(default)]
-    pub subagents: Vec<SubagentPlaceholder>,
+    pub subagents: Vec<Process>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -273,11 +264,5 @@ mod tests {
             summary_text: "summary".into(),
             metrics: ChunkMetrics::zero(),
         }));
-    }
-
-    #[test]
-    fn placeholders_roundtrip() {
-        roundtrip(&ToolExecutionPlaceholder {});
-        roundtrip(&SubagentPlaceholder {});
     }
 }
