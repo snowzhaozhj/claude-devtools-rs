@@ -109,9 +109,10 @@
 - 代码：`ErrorDetector.ts` 主要靠内容匹配 + 规则，没明确的 `is_error` 分支
 - 决策：需要二次确认实现细节；若确实未检 `is_error`，倾向 **修实现**（spec 的行为更正确）
 
-### [coverage-gap] computeContextStats / processSessionContextWithPhases 无单元测试
+### [coverage-gap] computeContextStats / processSessionContextWithPhases 无单元测试 ✅ 已在 `port-context-tracking` 补齐
 - `test/renderer/utils/` 下只有 `claudeMdTracker.test.ts`
 - Rust port 时应补这两个核心函数的测试
+- **Rust 实现**：`crates/cdt-analyze/src/context/stats.rs::compute_context_stats`（3 单测覆盖 empty / 聚合 / CLAUDE.md 去重）+ `session.rs::process_session_context_with_phases`（入口）；`crates/cdt-analyze/tests/context_tracking.rs` 7 个集成测试覆盖 spec 5 条 Requirement 与本 port 新增的 ADDED / MODIFIED scenario（empty slice、compaction delta `{pre=1000, post=600, delta=-400}`、末尾 compact 不产生 delta、路径去重、missing token fallback、camelCase JSON shape）。
 
 ---
 

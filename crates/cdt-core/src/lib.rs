@@ -12,14 +12,24 @@
 //! - 任何被两个及以上 capability crate 使用的类型都应放在这里，避免重复定义。
 
 pub mod chunk;
+pub mod context;
 pub mod message;
 pub mod process;
 pub mod project;
+pub mod tokens;
 pub mod tool_execution;
 
 pub use chunk::{
     AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep, SystemChunk,
     UserChunk,
+};
+pub use context::{
+    ClaudeMdContextInjection, ClaudeMdFileInfo, ClaudeMdScope, CompactionTokenDelta,
+    ContextInjection, ContextPhase, ContextPhaseInfo, ContextStats, CountsByCategory,
+    MentionedFileInfo, MentionedFileInjection, TaskCoordinationBreakdown,
+    TaskCoordinationInjection, TaskCoordinationKind, ThinkingTextBreakdown, ThinkingTextInjection,
+    ThinkingTextKind, TokensByCategory, ToolOutputInjection, ToolTokenBreakdown,
+    UserMessageInjection,
 };
 pub use message::{
     ContentBlock, HardNoiseReason, ImageSource, MessageCategory, MessageContent, MessageType,
@@ -29,6 +39,7 @@ pub use process::{Process, SubagentCandidate, TeamMeta};
 pub use project::{
     Project, RepositoryGroup, RepositoryIdentity, Session, SessionMetadata, Worktree,
 };
+pub use tokens::{estimate_content_tokens, estimate_tokens};
 pub use tool_execution::{ToolExecution, ToolOutput};
 
 pub mod prelude {
