@@ -19,6 +19,9 @@ context: |
   Tech stack: Rust 1.85+ (edition 2024), tokio async runtime (in leaf crates
   only), serde, thiserror, tracing. UI technology is undecided and
   deferred until after the data layer is ported.
+  
+  语言：中文（简体）
+  所有产出物必须用简体中文撰写。
 
 rules:
   proposal:

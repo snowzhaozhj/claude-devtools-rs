@@ -12,15 +12,17 @@
 
 ## session-parsing
 
-### [impl-bug?] requestId 去重函数存在但未被调用
+### [impl-bug?] requestId 去重函数存在但未被调用 ✅ 已在 `port-session-parsing` 修正
 - Spec: `Deduplicate streaming entries by requestId` requirement
 - 代码：`src/main/utils/jsonl.ts` 定义了 `deduplicateByRequestId`，但 `src/main/services/parsing/SessionParser.ts:77` 附近的 `processMessages()` 未调用它
 - 现状：流式 rewrite 场景下可能计入多条同 `requestId` 的 assistant 消息
 - Rust port 决策：实现去重（按 spec），不复刻这个 miss
+- **Rust 实现**：`crates/cdt-parse/src/dedupe.rs::dedupe_by_request_id` 由 `parse_file` 在收集完所有 `ParsedMessage` 后自动调用；`crates/cdt-parse/tests/dedupe.rs::parse_file_invokes_dedup_automatically` 是 wire-in 回归测试。
 
-### [coverage-gap] 缺 JSONL 解析恶意输入的测试
+### [coverage-gap] 缺 JSONL 解析恶意输入的测试 ✅ 已在 `port-session-parsing` 补齐
 - `test/main/services/parsing/` 没有对单行 malformed JSON 的用例
 - Rust port 时应配套加 scenario-level test
+- **Rust 实现**：`crates/cdt-parse/tests/parse_file.rs::{malformed_line_in_middle_is_skipped, two_adjacent_malformed_lines_both_skipped, empty_file_returns_empty_vec}` 覆盖全部三种异常路径；malformed 行通过 `tracing::warn!` 报告并跳过。
 
 ---
 
