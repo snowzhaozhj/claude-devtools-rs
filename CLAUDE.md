@@ -109,11 +109,20 @@ cargo test -p cdt-analyze            # test one crate
 - **Logging**: `tracing`; subscriber initialized once in `cdt-cli`.
 - **No `unwrap()` in library code** — use `?` or typed errors.
 - **No cross-crate imports of internal modules** — go through each crate's public API.
-- **clippy pedantic 陷阱**：`doc_markdown` 要求 doc/module 注释里出现的 `CamelCase` 或 `snake_case` 标识符都用反引号包裹，中文注释也不例外（`AIChunk` / `tool_count`）。
+- **clippy pedantic 陷阱（本 workspace 反复触发，写的时候就避开）**：
+  - `doc_markdown`：doc/module 注释里出现的 `CamelCase` / `snake_case` 标识符都要反引号包裹，中文注释也不例外（`AIChunk` / `tool_count`）。
+  - `map_unwrap_or`：`opt.map(f).unwrap_or_else(g)` → `opt.map_or_else(g, f)`。
+  - `single_match_else`：`match x { Some(v) => v, None => { ... } }` → `if let Some(v) = x { v } else { ... }`。
+  - `needless_continue`：match arm / loop 末尾的 `continue` / `=> continue,` 写成 `{}` / `=> {}`。
+  - `assigning_clones`：`a = b.clone()` → `a.clone_from(&b)`（对 `Vec` / `String` 字段尤其敏感）。
+  - `cloned_ref_to_slice_refs`：测试里 `&[item.clone()]` → `std::slice::from_ref(&item)`。
+  - `cast_possible_wrap`：`u64 as i64` 禁用；用 `i64::try_from(x).unwrap_or(i64::MAX)`。
+  - `case_sensitive_file_extension_comparisons`：`name.ends_with(".jsonl")` → `Path::new(&name).extension().is_some_and(|e| e.eq_ignore_ascii_case("jsonl"))`。
+  - `uninlined_format_args`：`format!("{}", x)` → `format!("{x}")`；命名参数 `format!("{foo}", foo = bar)` 也要内联。
 - **insta 快照接受**：没装 `cargo-insta` 就用 `INSTA_UPDATE=always cargo test -p <crate>`；提交生成的 `tests/snapshots/*.snap`。
 - **同步解析入口**：`cdt-analyze` 的集成测试不引入 tokio——用 `cdt_parse::parse_entry_at(line, n)` 逐行解析 fixture，再跑 `dedupe_by_request_id`。
 - **自动化**：
-  - Hooks（`.claude/hooks/`）：`.rs` 编辑后自动跑所属 crate 的 `cargo clippy -- -D warnings`；直接编辑 `openspec/specs/**` 会被 PreToolUse 拒绝（走 delta）。
+  - Hooks（`.claude/hooks/`）：`.rs` 编辑后自动跑所属 crate 的 `cargo clippy -- -D warnings`；`git commit` 前自动跑 `openspec validate --strict`。**`openspec/specs/**` 的直接编辑由约定（不是 hook）约束** —— spec 变更必须走 `openspec/changes/<name>/specs/` 的 delta，由 `/opsx:archive` 时 sync 回主 spec。
   - Subagent：`spec-fidelity-reviewer` 按 capability 审计 scenario→test 覆盖。
   - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
   - MCP：`.mcp.json` 注册 GitHub MCP，需要 `GITHUB_PERSONAL_ACCESS_TOKEN` 环境变量。
