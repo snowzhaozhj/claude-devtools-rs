@@ -22,7 +22,9 @@ cdt-ssh = { path = "crates/cdt-ssh" }
 cdt-api = { path = "crates/cdt-api" }
 
 # Runtime / infrastructure — only leaf crates add these as direct deps.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time", "process"] }
+async-trait = "0.1"
+sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

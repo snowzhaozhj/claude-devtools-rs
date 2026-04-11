@@ -14,6 +14,7 @@
 pub mod chunk;
 pub mod message;
 pub mod process;
+pub mod project;
 pub mod tool_execution;
 
 pub use chunk::{
@@ -25,6 +26,9 @@ pub use message::{
     ParsedMessage, TokenUsage, ToolCall, ToolResult,
 };
 pub use process::{Process, SubagentCandidate, TeamMeta};
+pub use project::{
+    Project, RepositoryGroup, RepositoryIdentity, Session, SessionMetadata, Worktree,
+};
 pub use tool_execution::{ToolExecution, ToolOutput};
 
 pub mod prelude {
@@ -38,5 +42,8 @@ pub mod prelude {
         ParsedMessage, TokenUsage, ToolCall, ToolResult,
     };
     pub use super::process::{Process, SubagentCandidate, TeamMeta};
+    pub use super::project::{
+        Project, RepositoryGroup, RepositoryIdentity, Session, SessionMetadata, Worktree,
+    };
     pub use super::tool_execution::{ToolExecution, ToolOutput};
 }

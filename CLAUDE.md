@@ -46,7 +46,7 @@ claude-devtools-rs/
 | session-parsing                | `cdt-parse`     | done ✓      |
 | chunk-building                 | `cdt-analyze`   | done ✓      |
 | tool-execution-linking         | `cdt-analyze`   | done ✓ †    |
-| project-discovery              | `cdt-discover`  | not started |
+| project-discovery              | `cdt-discover`  | done ✓      |
 | context-tracking               | `cdt-analyze`   | not started |
 | team-coordination-metadata     | `cdt-analyze`   | not started |
 | session-search                 | `cdt-discover`  | not started |
@@ -61,18 +61,17 @@ claude-devtools-rs/
 
 ## Remaining port order
 
-剩余 10 个 capability 按依赖链推进（已完成 3 项见上表）。每步 ship 成一个 `port-<capability>` opsx change，spec 行为与 TS 不一致时写 MODIFIED delta。
+剩余 9 个 capability 按依赖链推进（已完成 4 项见上表）。每步 ship 成一个 `port-<capability>` opsx change，spec 行为与 TS 不一致时写 MODIFIED delta。
 
-1. **project-discovery** — 引入 `FileSystemProvider` trait，解锁 session-search / ssh-remote-context
-2. **context-tracking** — 6-category injection classifier + phase resets
-3. **file-watching** — 100ms debounce + event broadcast
-4. **session-search** — scope 化搜索 + mtime cache
-5. **configuration-management** — config persist + CLAUDE.md reader + `@mention` sandbox
-6. **notification-triggers** — error detector + trigger evaluator
-7. **team-coordination-metadata** — teammate 检测 + `Process.team` 富化 + team 工具摘要；同时接尾 port 3 的 Task filter / `tool_count` 语义
-8. **ssh-remote-context** — 实现 `FileSystemProvider` over SSH
-9. **ipc-data-api** — trait surface
-10. **http-data-api** — axum server mirroring IPC
+1. **context-tracking** — 6-category injection classifier + phase resets
+2. **file-watching** — 100ms debounce + event broadcast
+3. **session-search** — scope 化搜索 + mtime cache
+4. **configuration-management** — config persist + CLAUDE.md reader + `@mention` sandbox
+5. **notification-triggers** — error detector + trigger evaluator
+6. **team-coordination-metadata** — teammate 检测 + `Process.team` 富化 + team 工具摘要；同时接尾 port 3 的 Task filter / `tool_count` 语义
+7. **ssh-remote-context** — 为 `FileSystemProvider` 实现 SSH 后端（seam 已在 `port-project-discovery` 落地）
+8. **ipc-data-api** — trait surface
+9. **http-data-api** — axum server mirroring IPC
 
 ## Known TS impl-bugs — FIX, do not replicate
 
@@ -80,6 +79,7 @@ From `openspec/followups.md`。已修项带 ✓，剩余是后续 port 的 MUST 
 
 - ✓ **session-parsing**：`deduplicateByRequestId` 已在 `crates/cdt-parse/src/dedupe.rs` 接入 `parse_file` 主路径。
 - ✓ **tool-execution-linking**：duplicate `tool_use_id` 由 `pair_tool_executions` `tracing::warn!` + `duplicates_dropped` 计数。
+- ✓ **project-discovery**：路径解码 spec-gap 已落地 —— `path_decoder::decode_path` best-effort + `ProjectPathResolver::resolve` 通过 session `cwd` 字段消歧；新增 `FileSystemProvider::read_lines_head` 修正 SSH 模式全文件读取的隐性性能 bug。
 - ◐ **chunk-building**：Task 过滤纯函数 `filter_resolved_tasks` 已实现，但默认 `build_chunks` 路径未接入；端到端接入留给 `port-team-coordination-metadata`。
 - **configuration-management**: `ConfigManager.loadConfig()` on corrupted
   file should back up the bad file before loading defaults. TS only logs.
@@ -115,6 +115,16 @@ cargo test -p cdt-analyze            # test one crate
   - Subagent：`spec-fidelity-reviewer` 按 capability 审计 scenario→test 覆盖。
   - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
   - MCP：`.mcp.json` 注册 GitHub MCP，需要 `GITHUB_PERSONAL_ACCESS_TOKEN` 环境变量。
+- **opsx:apply 推进节拍（硬约束）**：port 内任何多步改动必须按固定流水线推进，**不得**把 PostToolUse clippy hook 的沉默当作"可以停手"的信号。节拍：
+  1. `Edit` 源文件（可并行）
+  2. `cargo clippy --workspace --all-targets -- -D warnings` 汇总校验（**不是**靠 hook 单文件回显）
+  3. `cargo fmt --all`
+  4. `cargo test -p <crate>`（或 `--workspace`）
+  5. 联动 `openspec/followups.md` + 根 `CLAUDE.md` 的 Capability→crate map 与 "Known TS impl-bugs" 段
+  6. `openspec validate <change> --strict`
+  7. 勾 `openspec/changes/<change>/tasks.md` 的 checkbox
+  8. 发最终文本总结
+  每轮 tool call 结束前自检一句"这批之后要么发下批工具、要么发最终文本，二者必居其一"；只发 Edit 没有后续计划 = 禁止。开工时把 tasks.md 的每个 `##` section 作为 `TaskCreate` 入队，完成一个 `TaskUpdate completed` 一个，给自己留显式的"下一步指针"。
 - Detailed rules: `.claude/rules/rust.md`.
 
 ## What to do first in a fresh session

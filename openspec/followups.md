@@ -79,10 +79,11 @@
 
 ## project-discovery
 
-### [spec-gap] 路径解码"最接近的存在路径"歧义消解没实现
+### [spec-gap] 路径解码"最接近的存在路径"歧义消解没实现 ✅ 已在 `port-project-discovery` 修正
 - Spec: `Path containing legitimate hyphens` → "resolving to the closest existing filesystem path when ambiguous"
 - 代码：`src/main/utils/pathDecoder.ts:40-64` 是 best-effort 简单替换，注释明确说不能歧义消解；歧义靠 `ProjectPathResolver.ts:76-86` 通过读 JSONL 里的 `cwd` 补救
 - 决策：**改 spec**，把机制写清楚：解码是 best-effort；真实路径由 session 文件中的 cwd 字段最终确定
+- **Rust 实现**：`crates/cdt-discover/src/path_decoder.rs::decode_path` 保持 best-effort；`crates/cdt-discover/src/project_path_resolver.rs::ProjectPathResolver::resolve` 的解析顺序为 composite registry → cache → 绝对路径 hint → `read_lines_head` 抽 session `cwd` 字段 → `decode_path` fallback。集成测试 `cwd_field_overrides_decode` / `decode_path_fallback_used_when_no_cwd_in_sessions` 覆盖两条主路径。同时 port 在 `FileSystemProvider` 上新增 `read_lines_head`，修正 TS 侧 SSH 模式必须拉完整 JSONL 的隐性性能 bug。
 
 ---
 

@@ -10,11 +10,23 @@ description = "Project and session discovery, search (owns project-discovery and
 [lints]
 workspace = true
 
+[features]
+default = []
+# 本地真跑 `git init` / `git worktree add` 的端到端测试；CI 默认 off。
+git-integration-test = []
+
 [dependencies]
 cdt-core = { workspace = true }
 cdt-parse = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
+async-trait = { workspace = true }
+sha2 = { workspace = true }
 chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time", "process"] }

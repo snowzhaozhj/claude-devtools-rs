@@ -1,20 +1,31 @@
 //! Discovery and search over Claude Code session data.
 //!
-//! Owns two baseline capabilities:
-//! - **project-discovery** — scan `~/.claude/projects/`, decode encoded
-//!   paths, list sessions per project, group by git worktree, track pinned
-//!   sessions. Path decoding is best-effort; authoritative cwd comes from
-//!   the `cwd` field inside session entries.
-//! - **session-search** — in-session, per-project, and cross-project search
-//!   with noise exclusion, mtime-aware cache, and staged limits for SSH
-//!   contexts.
+//! 本 crate 拥有两个 baseline capability：
+//! - **project-discovery** — 扫描 `~/.claude/projects/`、解码编码路径、
+//!   列出每个项目的 session、按 git worktree 分组、追踪 subproject。路径
+//!   解码是 best-effort；真实 cwd 从 session 文件中的 `cwd` 字段恢复。
+//! - **session-search** — 尚未开始 port。
 //!
-//! Port status: **stub**.
+//! Spec：`openspec/specs/project-discovery/spec.md`。
 
-pub mod projects {
-    //! project-discovery capability.
-}
+pub mod error;
+pub mod fs_provider;
+pub mod path_decoder;
+pub mod project_path_resolver;
+pub mod project_scanner;
+pub mod subproject_registry;
+pub mod worktree_grouper;
 
-pub mod search {
-    //! session-search capability.
-}
+pub use error::{DiscoverError, FsError};
+pub use fs_provider::{
+    DirEntry, EntryKind, FileSystemProvider, FsHandle, FsKind, FsMetadata, LocalFileSystemProvider,
+    local_handle,
+};
+pub use path_decoder::{
+    COMPOSITE_SEPARATOR, decode_path, extract_base_dir, extract_project_name,
+    get_projects_base_path, get_todos_base_path, is_valid_encoded_path,
+};
+pub use project_path_resolver::ProjectPathResolver;
+pub use project_scanner::ProjectScanner;
+pub use subproject_registry::{SubprojectEntry, SubprojectRegistry};
+pub use worktree_grouper::{GitIdentityResolver, LocalGitIdentityResolver, WorktreeGrouper};
