@@ -59,39 +59,28 @@ claude-devtools-rs/
 
 † tool-execution-linking 的 pair / resolver / filter 都是纯函数，已完整实现且有单测覆盖；但默认 `build_chunks` 路径只接入了 pair。`resolve_subagents` 的 candidate 装载与 `filter_resolved_tasks` 的端到端接入，以及 `ChunkMetrics::tool_count` 的过渡语义修正，留给 `port-team-coordination-metadata`（对应 change archive 里 tasks.md section 11）。
 
-## Recommended port order
+## Remaining port order
 
-Port in dependency order (each step unblocks the next):
+剩余 10 个 capability 按依赖链推进（已完成 3 项见上表）。每步 ship 成一个 `port-<capability>` opsx change，spec 行为与 TS 不一致时写 MODIFIED delta。
 
-1. **session-parsing** — JSONL → `ParsedMessage`. This unblocks everything downstream. While porting, introduce the core types in `cdt-core` (`ParsedMessage`, `ContentBlock`, `ToolCall`, `ToolResult`, `TokenUsage`, `MessageCategory`).
-2. **chunk-building** — `ParsedMessage` stream → `Chunk` enum (User/AI/System/Compact). Introduces `Chunk`, `EnhancedChunk`, metrics.
-3. **tool-execution-linking** — pair `tool_use`/`tool_result`; three-phase Task→subagent matcher. Introduces `ToolExecution`, `Process`.
-4. **context-tracking** — 6-category injection classifier + phase resets.
-5. **project-discovery** — scan, decode paths, worktree group. Introduces `FileSystemProvider` trait in `cdt-core`.
-6. **file-watching** — 100ms debounce, event broadcast.
-7. **session-search** — in-session / per-project / global search with mtime cache.
-8. **configuration-management** — config persist, CLAUDE.md reader, @mention resolver (with sandboxing).
-9. **notification-triggers** — error detector + trigger evaluator + regex safety validation.
-10. **team-coordination-metadata** — teammate message detection, `Process.team` enrichment, team tool summaries.
-11. **ssh-remote-context** — implement `FileSystemProvider` over SSH.
-12. **ipc-data-api** — trait surface covering the full operation set.
-13. **http-data-api** — axum server mirroring IPC operations under `/api`.
-
-Each step should ship as one opsx change named `port-<capability>` with a
-MODIFIED Requirements delta whenever Rust semantics force a clarification or
-the port intentionally diverges from the TS baseline.
+1. **project-discovery** — 引入 `FileSystemProvider` trait，解锁 session-search / ssh-remote-context
+2. **context-tracking** — 6-category injection classifier + phase resets
+3. **file-watching** — 100ms debounce + event broadcast
+4. **session-search** — scope 化搜索 + mtime cache
+5. **configuration-management** — config persist + CLAUDE.md reader + `@mention` sandbox
+6. **notification-triggers** — error detector + trigger evaluator
+7. **team-coordination-metadata** — teammate 检测 + `Process.team` 富化 + team 工具摘要；同时接尾 port 3 的 Task filter / `tool_count` 语义
+8. **ssh-remote-context** — 实现 `FileSystemProvider` over SSH
+9. **ipc-data-api** — trait surface
+10. **http-data-api** — axum server mirroring IPC
 
 ## Known TS impl-bugs — FIX, do not replicate
 
-From `openspec/followups.md`:
+From `openspec/followups.md`。已修项带 ✓，剩余是后续 port 的 MUST 项：
 
-- **session-parsing**: `deduplicateByRequestId` exists in TS but is never
-  called from `SessionParser.processMessages`. Rust port MUST wire dedup in.
-- **chunk-building**: Task tool filtering (hide resolved Task calls from the
-  AIChunk tool list) is spec'd but not implemented in TS. Rust port MUST
-  filter.
-- **tool-execution-linking**: duplicate `tool_use_id` must log a warning —
-  TS silently takes the first. Rust port MUST log.
+- ✓ **session-parsing**：`deduplicateByRequestId` 已在 `crates/cdt-parse/src/dedupe.rs` 接入 `parse_file` 主路径。
+- ✓ **tool-execution-linking**：duplicate `tool_use_id` 由 `pair_tool_executions` `tracing::warn!` + `duplicates_dropped` 计数。
+- ◐ **chunk-building**：Task 过滤纯函数 `filter_resolved_tasks` 已实现，但默认 `build_chunks` 路径未接入；端到端接入留给 `port-team-coordination-metadata`。
 - **configuration-management**: `ConfigManager.loadConfig()` on corrupted
   file should back up the bad file before loading defaults. TS only logs.
   Rust port MUST back up.
@@ -130,7 +119,7 @@ cargo test -p cdt-analyze            # test one crate
 
 ## What to do first in a fresh session
 
-1. Run `cargo build --workspace` to confirm the bootstrap still compiles.
-2. Read `openspec/specs/session-parsing/spec.md` and `openspec/followups.md`.
-3. Propose the first port: `/opsx:propose port-session-parsing`.
-4. Work through it with `/opsx:apply`, writing code in `crates/cdt-parse/` and core types in `crates/cdt-core/`.
+1. Run `cargo build --workspace` 确认 bootstrap 仍可编译；`cargo test -p cdt-core -p cdt-analyze` 跑一遍既有回归。
+2. 看顶部 Capability → crate map 的进度栏，决定下一个 port（当前 3/13 done）。
+3. 对目标 capability 跑 `/ts-parity-check <cap>` 查 TS 源对照与 followups。
+4. `/opsx:propose port-<cap>` → `/opsx:apply` → `/opsx:archive`。跨 port 之间 `/clear`，port 内保持同会话。
