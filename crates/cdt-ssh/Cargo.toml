@@ -1,0 +1,17 @@
+[package]
+name = "cdt-ssh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SSH remote context support (owns ssh-remote-context). Implements FileSystemProvider over SSH."
+
+[lints]
+workspace = true
+
+[dependencies]
+cdt-core = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }

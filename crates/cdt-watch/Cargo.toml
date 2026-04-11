@@ -1,0 +1,17 @@
+[package]
+name = "cdt-watch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Debounced file system watching for Claude Code session files (owns file-watching)."
+
+[lints]
+workspace = true
+
+[dependencies]
+cdt-core = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }

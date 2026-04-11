@@ -1,0 +1,30 @@
+schema: spec-driven
+
+context: |
+  claude-devtools-rs is a Rust port of the TypeScript Electron app
+  claude-devtools (https://github.com/matt1398/claude-devtools). The parent
+  TS repo lives at ../claude-devtools (from the RustroverProjects root) and
+  holds the authoritative baseline at commit time of this bootstrap.
+
+  These specs were copied verbatim from the TS repo's
+  openspec/changes/archive/2026-04-11-rust-rewrite-baseline/ on bootstrap day
+  and are now owned independently by this Rust project. They describe the
+  13 core data/logic capabilities the Rust port must implement.
+
+  Porting happens one capability at a time. Each port change is proposed as
+  a MODIFIED Requirements delta against the relevant capability spec so that
+  known implementation bugs from the TS side can be deliberately fixed
+  (not replicated) — see openspec/followups.md for the bug list.
+
+  Tech stack: Rust 1.85+ (edition 2024), tokio async runtime (in leaf crates
+  only), serde, thiserror, tracing. UI technology is undecided and
+  deferred until after the data layer is ported.
+
+rules:
+  proposal:
+    - Keep proposals concise — baseline already explains the why
+    - Each port change should scope to ONE capability (or tightly coupled pair)
+    - If a change would fix an impl-bug from followups.md, call it out explicitly
+  tasks:
+    - Tasks should map cleanly to the owning crate in the workspace
+    - Include `cargo test -p <crate>` and `cargo clippy -p <crate>` steps before merge

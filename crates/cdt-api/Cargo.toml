@@ -1,0 +1,25 @@
+[package]
+name = "cdt-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Data API facade: IPC trait surface + HTTP/SSE server (owns ipc-data-api + http-data-api)."
+
+[lints]
+workspace = true
+
+[dependencies]
+cdt-core = { workspace = true }
+cdt-parse = { workspace = true }
+cdt-analyze = { workspace = true }
+cdt-discover = { workspace = true }
+cdt-watch = { workspace = true }
+cdt-config = { workspace = true }
+cdt-ssh = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }

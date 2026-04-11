@@ -1,0 +1,20 @@
+[package]
+name = "cdt-discover"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Project and session discovery, search (owns project-discovery and session-search)."
+
+[lints]
+workspace = true
+
+[dependencies]
+cdt-core = { workspace = true }
+cdt-parse = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }

@@ -1,6 +1,59 @@
-[package]
-name = "claude-devtools-rs"
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/zhaohejie/claude-devtools-rs"
+authors = ["zhaohejie"]
 
-[dependencies]
+[workspace.dependencies]
+# Shared crate interdeps — keep versions aligned here.
+cdt-core = { path = "crates/cdt-core" }
+cdt-parse = { path = "crates/cdt-parse" }
+cdt-analyze = { path = "crates/cdt-analyze" }
+cdt-discover = { path = "crates/cdt-discover" }
+cdt-watch = { path = "crates/cdt-watch" }
+cdt-config = { path = "crates/cdt-config" }
+cdt-ssh = { path = "crates/cdt-ssh" }
+cdt-api = { path = "crates/cdt-api" }
+
+# Runtime / infrastructure — only leaf crates add these as direct deps.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+futures = "0.3"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Pragmatic opt-outs: these pedantic lints fire too often in idiomatic Rust without real benefit.
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

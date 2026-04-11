@@ -1,0 +1,22 @@
+[package]
+name = "cdt-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "claude-devtools-rs CLI entrypoint. Wires services and runs the API."
+
+[[bin]]
+name = "cdt"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+cdt-api = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
