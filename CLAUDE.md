@@ -43,10 +43,10 @@ claude-devtools-rs/
 
 | Capability                     | Owning crate    | Port status |
 |--------------------------------|-----------------|-------------|
+| session-parsing                | `cdt-parse`     | done ✓      |
+| chunk-building                 | `cdt-analyze`   | done ✓      |
+| tool-execution-linking         | `cdt-analyze`   | done ✓ †    |
 | project-discovery              | `cdt-discover`  | not started |
-| session-parsing                | `cdt-parse`     | not started |
-| chunk-building                 | `cdt-analyze`   | not started |
-| tool-execution-linking         | `cdt-analyze`   | not started |
 | context-tracking               | `cdt-analyze`   | not started |
 | team-coordination-metadata     | `cdt-analyze`   | not started |
 | session-search                 | `cdt-discover`  | not started |
@@ -56,6 +56,8 @@ claude-devtools-rs/
 | ssh-remote-context             | `cdt-ssh`       | not started |
 | ipc-data-api                   | `cdt-api`       | not started |
 | http-data-api                  | `cdt-api`       | not started |
+
+† tool-execution-linking 的 pair / resolver / filter 都是纯函数，已完整实现且有单测覆盖；但默认 `build_chunks` 路径只接入了 pair。`resolve_subagents` 的 candidate 装载与 `filter_resolved_tasks` 的端到端接入，以及 `ChunkMetrics::tool_count` 的过渡语义修正，留给 `port-team-coordination-metadata`（对应 change archive 里 tasks.md section 11）。
 
 ## Recommended port order
 
