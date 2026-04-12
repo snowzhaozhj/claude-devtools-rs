@@ -94,6 +94,8 @@ cargo test -p cdt-analyze            # test one crate
 - **No cross-crate imports of internal modules** — go through each crate's public API.
 - **Serde camelCase**：所有面向前端（Tauri IPC）的 struct 必须 `#[serde(rename_all = "camelCase")]`；enum 用 `rename_all_fields = "camelCase"` 给字段、`rename_all = "snake_case"` 给 tag 值。例外：`TokenUsage` 保持 snake_case（与 Anthropic API 原始格式一致）。
 - **`is_meta` 消息过滤**：JSONL 中 `isMeta: true` 的 user 消息（skill prompt、system-reminder 注入）在 `build_chunks` 中跳过，不产出 `UserChunk`；但其中的 `tool_result` 仍合并到 assistant buffer。
+- **Svelte 5 `@const` 位置限制**：`{@const}` 只能是 `{#if}`/`{:else}`/`{#each}`/`{#snippet}`/`<Component>` 的直接子级，不能放在 `<div>` 等 HTML 元素内。需要在块开头集中声明。
+- **前端渲染依赖**：`marked`（markdown→HTML）+ `highlight.js`（语法高亮，按需加载语言）+ `dompurify`（XSS 防护）。highlight.js 不引入预制主题 CSS，用自定义 Tokyo Night token 颜色。
 - **clippy pedantic 陷阱（本 workspace 反复触发，写的时候就避开）**：
   - `doc_markdown`：doc/module 注释里出现的 `CamelCase` / `snake_case` 标识符都要反引号包裹，中文注释也不例外（`AIChunk` / `tool_count`）。
   - `map_unwrap_or`：`opt.map(f).unwrap_or_else(g)` → `opt.map_or_else(g, f)`。
@@ -131,4 +133,4 @@ cargo test -p cdt-analyze            # test one crate
 1. Run `cargo build --workspace` 确认 data layer 可编译；`cargo test --workspace` 跑一遍回归。
 2. 13 个 data layer capability 已全部完成。当前工作重心是 UI 层（Tauri + Svelte）。
 3. `cargo tauri dev` 启动桌面应用验证当前状态。
-4. UI 功能迭代仍走 openspec 工作流：`/opsx:propose <feature>` → `/opsx:apply` → `/opsx:archive`。
+4. UI 功能迭代仍走 openspec 工作流：`/opsx:propose <feature>` → `/opsx:apply` → `/opsx:archive`。纯前端 UI 改动（不涉及数据层 spec）可简化：proposal + tasks 即可，design 可选，specs 跳过。或小改直接写 + commit 不走 openspec。
