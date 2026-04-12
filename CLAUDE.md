@@ -1,20 +1,14 @@
 # claude-devtools-rs
 
 Rust port of [claude-devtools](../claude-devtools) — the Electron app that
-visualizes Claude Code session execution. This repo ports the **data and
-logic layer** (13 capabilities); UI technology is undecided and deferred.
-
-## Goal
-
-Reproduce the behavior frozen in `openspec/specs/` — one capability at a
-time — in idiomatic Rust, while **fixing** the known TS implementation bugs
-listed in `openspec/followups.md` rather than replicating them.
+visualizes Claude Code session execution.数据层 13 个 capability 已全部完成，
+当前工作重心是 UI 层（Tauri 2 + Svelte 5 桌面应用）。
 
 ## Parent repo
 
 The TypeScript source is at `/Users/zhaohejie/RustroverProjects/claude-devtools`.
-It is the historical reference only; all behavioral contracts live here in
-`openspec/specs/` now. When in doubt, read the spec — not the TS source.
+It is the historical reference only；所有行为契约以 `openspec/specs/` 为准。
+TS 侧的 7 个 impl-bug 已全部在 Rust port 中修复（详见 `openspec/followups.md`）。
 
 ## Workspace layout
 
@@ -47,9 +41,9 @@ claude-devtools-rs/
 |--------------------------------|-----------------|-------------|
 | session-parsing                | `cdt-parse`     | done ✓      |
 | chunk-building                 | `cdt-analyze`   | done ✓      |
-| tool-execution-linking         | `cdt-analyze`   | done ✓ †    |
+| tool-execution-linking         | `cdt-analyze`   | done ✓      |
 | project-discovery              | `cdt-discover`  | done ✓      |
-| context-tracking               | `cdt-analyze`   | done ✓ ‡    |
+| context-tracking               | `cdt-analyze`   | done ✓      |
 | team-coordination-metadata     | `cdt-analyze`   | done ✓      |
 | session-search                 | `cdt-discover`  | done ✓      |
 | file-watching                  | `cdt-watch`     | done ✓      |
@@ -59,9 +53,7 @@ claude-devtools-rs/
 | ipc-data-api                   | `cdt-api`       | done ✓      |
 | http-data-api                  | `cdt-api`       | done ✓      |
 
-† tool-execution-linking 的 pair / resolver / filter 都是纯函数，已完整实现且有单测覆盖。`filter_resolved_tasks` 已在 `port-team-coordination-metadata` 接入 `build_chunks_with_subagents`；`resolve_subagents` 的 candidate 装载由调用方（`cdt-api` 层）负责。
-
-‡ context-tracking 的 6 类 injection、phase 管理、compaction token delta 已在 `cdt-analyze::context` 完整实现且有单测覆盖；CLAUDE.md 文件 / `@mention` 的真实磁盘扫描依赖 `initial_claude_md_injections` 外部注入，已由 `port-configuration-management` 的 `ClaudeMdReader` 提供数据源。
+13/13 全部 done。详细的实现备注见各 port 的 archive（`openspec/changes/archive/`）。
 
 ## UI 层 (Tauri 2 + Svelte 5)
 
@@ -70,23 +62,9 @@ claude-devtools-rs/
 - `cargo tauri dev`：启动开发模式（Vite HMR + Rust hot reload）
 - `src-tauri/` 通过 path deps 引用 `crates/` 下的数据层 crate
 - Tauri IPC commands 直接调用 `LocalDataApi`，不走 HTTP
+- **已有页面**：ProjectList → SessionList → SessionDetail（chunks 列表、AI chunk 展开/折叠、tool execution 详情、metrics 汇总）
 - **陷阱**：`src-tauri/` 必须在 workspace `Cargo.toml` 的 `exclude` 列表里；`beforeDevCommand` 从 `src-tauri/` 目录执行，路径用 `../ui`
-
-## Known TS impl-bugs — FIX, do not replicate
-
-From `openspec/followups.md`。已修项带 ✓，剩余是后续 port 的 MUST 项：
-
-- ✓ **session-parsing**：`deduplicateByRequestId` 已在 `crates/cdt-parse/src/dedupe.rs` 接入 `parse_file` 主路径。
-- ✓ **tool-execution-linking**：duplicate `tool_use_id` 由 `pair_tool_executions` `tracing::warn!` + `duplicates_dropped` 计数。
-- ✓ **project-discovery**：路径解码 spec-gap 已落地 —— `path_decoder::decode_path` best-effort + `ProjectPathResolver::resolve` 通过 session `cwd` 字段消歧；新增 `FileSystemProvider::read_lines_head` 修正 SSH 模式全文件读取的隐性性能 bug。
-- ✓ **context-tracking**：TS 侧完全无测试的 coverage-gap 已补齐 —— `cdt-analyze::context` 的 aggregator / stats / session 三层各自单测（12 单测 + 7 集成测试），compaction delta、路径去重、camelCase JSON shape 都有硬断言。
-- ✓ **chunk-building**：`filter_resolved_tasks` 已在 `build_chunks_with_subagents` 端到端接入（`port-team-coordination-metadata`）。
-- ✓ **configuration-management**: `ConfigManager.loadConfig()` on corrupted
-  file should back up the bad file before loading defaults. TS only logs.
-  Rust port 已实现备份（`manager.rs` `backup_corrupted_file`）。
-- ✓ **notification-triggers**: `is_error=true` on tool_result should trigger
-  error detection。Rust port 已实现 `is_error` flag 检查
-  （`error_trigger_checker.rs` `check_tool_result_trigger`）。
+- **陷阱**：浏览器直接访问 `localhost:5173` 会报 `invoke` undefined——`@tauri-apps/api` 只在 Tauri webview 内可用，测试必须通过 `cargo tauri dev` 的窗口
 
 ## Common commands
 
@@ -114,6 +92,8 @@ cargo test -p cdt-analyze            # test one crate
 - **Logging**: `tracing`; subscriber initialized once in `cdt-cli`.
 - **No `unwrap()` in library code** — use `?` or typed errors.
 - **No cross-crate imports of internal modules** — go through each crate's public API.
+- **Serde camelCase**：所有面向前端（Tauri IPC）的 struct 必须 `#[serde(rename_all = "camelCase")]`；enum 用 `rename_all_fields = "camelCase"` 给字段、`rename_all = "snake_case"` 给 tag 值。例外：`TokenUsage` 保持 snake_case（与 Anthropic API 原始格式一致）。
+- **`is_meta` 消息过滤**：JSONL 中 `isMeta: true` 的 user 消息（skill prompt、system-reminder 注入）在 `build_chunks` 中跳过，不产出 `UserChunk`；但其中的 `tool_result` 仍合并到 assistant buffer。
 - **clippy pedantic 陷阱（本 workspace 反复触发，写的时候就避开）**：
   - `doc_markdown`：doc/module 注释里出现的 `CamelCase` / `snake_case` 标识符都要反引号包裹，中文注释也不例外（`AIChunk` / `tool_count`）。
   - `map_unwrap_or`：`opt.map(f).unwrap_or_else(g)` → `opt.map_or_else(g, f)`。
@@ -139,8 +119,8 @@ cargo test -p cdt-analyze            # test one crate
   2. `cargo clippy --workspace --all-targets -- -D warnings` 汇总校验（**不是**靠 hook 单文件回显）
   3. `cargo fmt --all`
   4. `cargo test -p <crate>`（或 `--workspace`）
-  5. 联动 `openspec/followups.md` + 根 `CLAUDE.md` 的 Capability→crate map 与 "Known TS impl-bugs" 段
-  6. `openspec validate <change> --strict`
+  5. `npm run check`（如改了 `ui/` 下的文件）
+  6. `openspec validate <change> --strict`（如有 openspec change）
   7. 勾 `openspec/changes/<change>/tasks.md` 的 checkbox
   8. 发最终文本总结
   每轮 tool call 结束前自检一句"这批之后要么发下批工具、要么发最终文本，二者必居其一"；只发 Edit 没有后续计划 = 禁止。开工时把 tasks.md 的每个 `##` section 作为 `TaskCreate` 入队，完成一个 `TaskUpdate completed` 一个，给自己留显式的"下一步指针"。
