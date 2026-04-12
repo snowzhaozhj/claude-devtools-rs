@@ -124,6 +124,9 @@ cargo test -p cdt-analyze            # test one crate
   - `cast_possible_wrap`：`u64 as i64` 禁用；用 `i64::try_from(x).unwrap_or(i64::MAX)`。
   - `case_sensitive_file_extension_comparisons`：`name.ends_with(".jsonl")` → `Path::new(&name).extension().is_some_and(|e| e.eq_ignore_ascii_case("jsonl"))`。
   - `uninlined_format_args`：`format!("{}", x)` → `format!("{x}")`；命名参数 `format!("{foo}", foo = bar)` 也要内联。
+  - `manual_string_new`：测试中 `"".into()` / `"".to_owned()` → `String::new()`。
+  - `manual_pattern_char_comparison`：`trim_end_matches(|c: char| c == '/' || c == '\\')` → `trim_end_matches(['/', '\\'])`。
+  - `while_let_loop`：`loop { match x.next().await { Ok(Some(v)) => ..., _ => break } }` → `while let Ok(Some(v)) = x.next().await { ... }`。
 - **insta 快照接受**：没装 `cargo-insta` 就用 `INSTA_UPDATE=always cargo test -p <crate>`；提交生成的 `tests/snapshots/*.snap`。
 - **同步解析入口**：`cdt-analyze` 的集成测试不引入 tokio——用 `cdt_parse::parse_entry_at(line, n)` 逐行解析 fixture，再跑 `dedupe_by_request_id`。
 - **自动化**：
