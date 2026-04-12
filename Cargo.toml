@@ -32,6 +32,7 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 futures = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3"
@@ -42,6 +43,8 @@ serial_test = "3"
 lru = "0.14"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

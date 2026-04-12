@@ -61,19 +61,19 @@ The system SHALL expose a Server-Sent Events endpoint that delivers the same eve
 
 ### Requirement: Return safe defaults on lookup failures (current baseline)
 
-The system SHALL, in the current baseline, return safe defaults (empty arrays, empty objects, `null`) for lookup failures rather than distinct HTTP status codes, and SHALL only surface non-2xx responses for unexpected server errors. This captures the current TS implementation — the planned Rust port is free to promote lookup failures to `404`/`400`/`409` with structured error bodies as an improvement, provided the change is tracked in a separate spec delta.
+The system SHALL return structured error responses for lookup failures: `404` with `{"code":"not_found","message":"..."}` for missing resources, `400` with `{"code":"validation_error","message":"..."}` for invalid input. This is an intentional improvement over the TS baseline which returns `200` with `null`/empty arrays.
 
 #### Scenario: GET nonexistent session
 - **WHEN** a client requests a session id that does not exist
-- **THEN** the response SHALL be `200` with body `null`
+- **THEN** the response SHALL be `404` with a JSON body containing `code: "not_found"`
 
 #### Scenario: GET sessions for unknown project
 - **WHEN** a client requests sessions for a project id that cannot be resolved
-- **THEN** the response SHALL be `200` with an empty array
+- **THEN** the response SHALL be `404` with a JSON body containing `code: "not_found"`
 
 #### Scenario: Unhandled server exception
 - **WHEN** an unexpected exception is thrown while serving a request
-- **THEN** the response SHALL be a 5xx status with an error body describing the failure (implementation-defined shape)
+- **THEN** the response SHALL be `500` with a JSON body containing `code: "internal"`
 
 ### Requirement: Bind to configured port with graceful fallback
 
