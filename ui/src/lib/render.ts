@@ -1,0 +1,37 @@
+import { marked } from "marked";
+import hljs from "highlight.js/lib/core";
+import json from "highlight.js/lib/languages/json";
+import bash from "highlight.js/lib/languages/bash";
+import typescript from "highlight.js/lib/languages/typescript";
+import rust from "highlight.js/lib/languages/rust";
+import python from "highlight.js/lib/languages/python";
+import DOMPurify from "dompurify";
+
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("rust", rust);
+hljs.registerLanguage("python", python);
+
+const renderer = new marked.Renderer();
+renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
+  const language = lang && hljs.getLanguage(lang) ? lang : undefined;
+  const highlighted = language
+    ? hljs.highlight(text, { language }).value
+    : hljs.highlightAuto(text).value;
+  return `<pre><code class="hljs">${highlighted}</code></pre>`;
+};
+
+marked.setOptions({ renderer, async: false, breaks: true });
+
+export function renderMarkdown(text: string): string {
+  const raw = marked.parse(text) as string;
+  return DOMPurify.sanitize(raw);
+}
+
+export function highlightCode(code: string, lang: string = "json"): string {
+  if (hljs.getLanguage(lang)) {
+    return DOMPurify.sanitize(hljs.highlight(code, { language: lang }).value);
+  }
+  return DOMPurify.sanitize(hljs.highlightAuto(code).value);
+}
