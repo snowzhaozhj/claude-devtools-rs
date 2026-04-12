@@ -50,7 +50,7 @@ claude-devtools-rs/
 | context-tracking               | `cdt-analyze`   | done ✓ ‡    |
 | team-coordination-metadata     | `cdt-analyze`   | not started |
 | session-search                 | `cdt-discover`  | not started |
-| file-watching                  | `cdt-watch`     | not started |
+| file-watching                  | `cdt-watch`     | done ✓      |
 | configuration-management       | `cdt-config`    | not started |
 | notification-triggers          | `cdt-config`    | not started |
 | ssh-remote-context             | `cdt-ssh`       | not started |

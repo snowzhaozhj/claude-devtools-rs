@@ -36,8 +36,9 @@ bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3"
 dirs = "6"
-notify-debouncer-mini = "0.7"
+notify = "8"
 insta = { version = "1", features = ["yaml"] }
+serial_test = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

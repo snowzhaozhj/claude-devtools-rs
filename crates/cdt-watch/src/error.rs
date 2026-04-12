@@ -5,5 +5,5 @@
 pub enum WatchError {
     /// 初始化底层 watcher 失败。
     #[error("watcher init failed: {0}")]
-    Init(#[from] notify_debouncer_mini::notify::Error),
+    Init(#[from] notify::Error),
 }
