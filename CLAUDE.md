@@ -32,6 +32,8 @@ claude-devtools-rs/
 │   ├── cdt-ssh/              # ssh-remote-context
 │   ├── cdt-api/              # ipc-data-api + http-data-api (facade + HTTP server)
 │   └── cdt-cli/              # binary entrypoint (bin = cdt)
+├── ui/                       # Svelte 5 + Vite 前端
+├── src-tauri/                # Tauri 2 Rust 后端 (excluded from workspace)
 ├── openspec/
 │   ├── specs/                # 13 capability specs (authoritative)
 │   ├── followups.md          # TS impl-bugs to fix, not replicate
@@ -61,18 +63,14 @@ claude-devtools-rs/
 
 ‡ context-tracking 的 6 类 injection、phase 管理、compaction token delta 已在 `cdt-analyze::context` 完整实现且有单测覆盖；CLAUDE.md 文件 / `@mention` 的真实磁盘扫描依赖 `initial_claude_md_injections` 外部注入，已由 `port-configuration-management` 的 `ClaudeMdReader` 提供数据源。
 
-## Remaining port order
+## UI 层 (Tauri 2 + Svelte 5)
 
-剩余 8 个 capability 按依赖链推进（已完成 5 项见上表）。每步 ship 成一个 `port-<capability>` opsx change，spec 行为与 TS 不一致时写 MODIFIED delta。
-
-1. **file-watching** — 100ms debounce + event broadcast
-2. **session-search** — scope 化搜索 + mtime cache
-3. **configuration-management** — config persist + CLAUDE.md reader + `@mention` sandbox（会接入 `port-context-tracking` 的 `initial_claude_md_injections`）
-4. **notification-triggers** — error detector + trigger evaluator
-5. **team-coordination-metadata** — teammate 检测 + `Process.team` 富化 + team 工具摘要；同时接尾 port 3 的 Task filter / `tool_count` 语义、以及 context-tracking 的 `teammate_message` display item
-6. **ssh-remote-context** — 为 `FileSystemProvider` 实现 SSH 后端（seam 已在 `port-project-discovery` 落地）
-7. **ipc-data-api** — trait surface
-8. **http-data-api** — axum server mirroring IPC
+- `ui/`：Svelte 5 + Vite 前端（暗色主题，Tokyo Night 风格）
+- `src-tauri/`：Tauri 2 Rust 后端（独立 Cargo.toml，excluded from workspace）
+- `cargo tauri dev`：启动开发模式（Vite HMR + Rust hot reload）
+- `src-tauri/` 通过 path deps 引用 `crates/` 下的数据层 crate
+- Tauri IPC commands 直接调用 `LocalDataApi`，不走 HTTP
+- **陷阱**：`src-tauri/` 必须在 workspace `Cargo.toml` 的 `exclude` 列表里；`beforeDevCommand` 从 `src-tauri/` 目录执行，路径用 `../ui`
 
 ## Known TS impl-bugs — FIX, do not replicate
 
@@ -82,7 +80,7 @@ From `openspec/followups.md`。已修项带 ✓，剩余是后续 port 的 MUST 
 - ✓ **tool-execution-linking**：duplicate `tool_use_id` 由 `pair_tool_executions` `tracing::warn!` + `duplicates_dropped` 计数。
 - ✓ **project-discovery**：路径解码 spec-gap 已落地 —— `path_decoder::decode_path` best-effort + `ProjectPathResolver::resolve` 通过 session `cwd` 字段消歧；新增 `FileSystemProvider::read_lines_head` 修正 SSH 模式全文件读取的隐性性能 bug。
 - ✓ **context-tracking**：TS 侧完全无测试的 coverage-gap 已补齐 —— `cdt-analyze::context` 的 aggregator / stats / session 三层各自单测（12 单测 + 7 集成测试），compaction delta、路径去重、camelCase JSON shape 都有硬断言。
-- ◐ **chunk-building**：Task 过滤纯函数 `filter_resolved_tasks` 已实现，但默认 `build_chunks` 路径未接入；端到端接入留给 `port-team-coordination-metadata`。
+- ✓ **chunk-building**：`filter_resolved_tasks` 已在 `build_chunks_with_subagents` 端到端接入（`port-team-coordination-metadata`）。
 - ✓ **configuration-management**: `ConfigManager.loadConfig()` on corrupted
   file should back up the bad file before loading defaults. TS only logs.
   Rust port 已实现备份（`manager.rs` `backup_corrupted_file`）。
@@ -97,7 +95,9 @@ cargo build --workspace              # build all crates
 cargo test --workspace               # run tests
 cargo clippy --workspace --all-targets  # lint (workspace-level lints in Cargo.toml)
 cargo fmt --all                      # format
-cargo run -p cdt-cli                 # run the CLI binary
+cargo run -p cdt-cli                 # run the CLI binary (HTTP server)
+cargo tauri dev                      # launch Tauri desktop app (dev mode)
+cargo tauri build --debug            # build desktop app (debug)
 cargo build -p cdt-parse             # build one crate in isolation
 cargo test -p cdt-analyze            # test one crate
 ```
@@ -148,7 +148,7 @@ cargo test -p cdt-analyze            # test one crate
 
 ## What to do first in a fresh session
 
-1. Run `cargo build --workspace` 确认 bootstrap 仍可编译；`cargo test -p cdt-core -p cdt-analyze` 跑一遍既有回归。
-2. 看顶部 Capability → crate map 的进度栏，决定下一个 port。
-3. 对目标 capability 跑 `/ts-parity-check <cap>` 查 TS 源对照与 followups。
-4. `/opsx:propose port-<cap>` → `/opsx:apply` → `/opsx:archive`。跨 port 之间 `/clear`，port 内保持同会话。
+1. Run `cargo build --workspace` 确认 data layer 可编译；`cargo test --workspace` 跑一遍回归。
+2. 13 个 data layer capability 已全部完成。当前工作重心是 UI 层（Tauri + Svelte）。
+3. `cargo tauri dev` 启动桌面应用验证当前状态。
+4. UI 功能迭代仍走 openspec 工作流：`/opsx:propose <feature>` → `/opsx:apply` → `/opsx:archive`。
