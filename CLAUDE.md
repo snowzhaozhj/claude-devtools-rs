@@ -102,6 +102,11 @@ cargo build -p cdt-parse             # build one crate in isolation
 cargo test -p cdt-analyze            # test one crate
 ```
 
+## macOS 开发陷阱
+
+- `TempDir` 返回 `/var/...` 但 `notify`/FSEvents 返回 `/private/var/...`（symlink canonicalization）。涉及路径比较时必须 `canonicalize()`。
+- `notify-debouncer-mini` 的 timer 不受 `tokio::time::pause()` 控制，测试不确定。优先用 `notify` 裸接 + 自实现 tokio debounce。
+
 ## Conventions
 
 - **Error types**: library crates use `thiserror` enums; the `cdt-cli` binary uses `anyhow::Result`.
@@ -141,6 +146,6 @@ cargo test -p cdt-analyze            # test one crate
 ## What to do first in a fresh session
 
 1. Run `cargo build --workspace` 确认 bootstrap 仍可编译；`cargo test -p cdt-core -p cdt-analyze` 跑一遍既有回归。
-2. 看顶部 Capability → crate map 的进度栏，决定下一个 port（当前 3/13 done）。
+2. 看顶部 Capability → crate map 的进度栏，决定下一个 port。
 3. 对目标 capability 跑 `/ts-parity-check <cap>` 查 TS 源对照与 followups。
 4. `/opsx:propose port-<cap>` → `/opsx:apply` → `/opsx:archive`。跨 port 之间 `/clear`，port 内保持同会话。
