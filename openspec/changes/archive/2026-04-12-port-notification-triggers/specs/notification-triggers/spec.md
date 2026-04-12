@@ -1,8 +1,5 @@
-# notification-triggers Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change rust-rewrite-baseline. Update Purpose after archive.
-## Requirements
 ### Requirement: Detect errors from tool executions
 
 The system SHALL detect tool execution errors by inspecting `tool_result` blocks for `is_error=true` flag and by matching configured error patterns against tool output content. The `is_error` flag check MUST take precedence over content pattern matching.
@@ -51,14 +48,6 @@ The system SHALL validate user-provided regex patterns before use, rejecting pat
 #### Scenario: Regex cache bounded
 - **WHEN** more than 500 unique regex patterns are compiled
 - **THEN** the oldest cached entry SHALL be evicted (LRU policy)
-
-### Requirement: Test triggers against historical sessions
-
-The system SHALL let a caller test a trigger configuration against existing session data and return the list of historical messages that would have matched, without persisting any notification.
-
-#### Scenario: Preview a new trigger
-- **WHEN** a user previews a new trigger against the last 30 days of sessions
-- **THEN** the system SHALL return all would-have-matched messages with session id, timestamp, and preview
 
 ### Requirement: Persist and expose notifications
 

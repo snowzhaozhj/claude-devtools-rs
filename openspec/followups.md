@@ -104,10 +104,10 @@
 - 两者行为等价（CompactChunk 总是对应 compact summary message），但机制描述需要对齐
 - 决策：**微调 spec 措辞**为"context phase boundaries derived from compact items / compact summary messages"
 
-### [spec-gap] notification-triggers spec 里的 `is_error` 检测路径可能偏离实现
+### [spec-gap] notification-triggers spec 里的 `is_error` 检测路径可能偏离实现 ✅ 已在 `port-notification-triggers` 确认并实现
 - Spec: "detect by inspecting tool_result for is_error=true"
-- 代码：`ErrorDetector.ts` 主要靠内容匹配 + 规则，没明确的 `is_error` 分支
-- 决策：需要二次确认实现细节；若确实未检 `is_error`，倾向 **修实现**（spec 的行为更正确）
+- 代码：TS `ErrorTriggerChecker.ts:170` 的 `requireError` 分支实际检查了 `result.isError`，行为与 spec 一致
+- Rust port 已实现 `is_error` flag 检查（`error_trigger_checker.rs` `check_tool_result_trigger`）
 
 ### [coverage-gap] computeContextStats / processSessionContextWithPhases 无单元测试 ✅ 已在 `port-context-tracking` 补齐
 - `test/renderer/utils/` 下只有 `claudeMdTracker.test.ts`

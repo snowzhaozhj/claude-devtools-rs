@@ -19,6 +19,9 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 dirs = { workspace = true }
 regex = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+lru = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

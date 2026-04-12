@@ -52,7 +52,7 @@ claude-devtools-rs/
 | session-search                 | `cdt-discover`  | done ✓      |
 | file-watching                  | `cdt-watch`     | done ✓      |
 | configuration-management       | `cdt-config`    | done ✓      |
-| notification-triggers          | `cdt-config`    | not started |
+| notification-triggers          | `cdt-config`    | done ✓      |
 | ssh-remote-context             | `cdt-ssh`       | not started |
 | ipc-data-api                   | `cdt-api`       | not started |
 | http-data-api                  | `cdt-api`       | not started |
@@ -86,9 +86,9 @@ From `openspec/followups.md`。已修项带 ✓，剩余是后续 port 的 MUST 
 - ✓ **configuration-management**: `ConfigManager.loadConfig()` on corrupted
   file should back up the bad file before loading defaults. TS only logs.
   Rust port 已实现备份（`manager.rs` `backup_corrupted_file`）。
-- **notification-triggers**: `is_error=true` on tool_result should trigger
-  error detection; TS relies on content-pattern matching instead. Rust port
-  MUST check the flag.
+- ✓ **notification-triggers**: `is_error=true` on tool_result should trigger
+  error detection。Rust port 已实现 `is_error` flag 检查
+  （`error_trigger_checker.rs` `check_tool_result_trigger`）。
 
 ## Common commands
 

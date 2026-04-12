@@ -41,6 +41,7 @@ insta = { version = "1", features = ["yaml"] }
 serial_test = "3"
 lru = "0.14"
 regex = "1"
+uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
