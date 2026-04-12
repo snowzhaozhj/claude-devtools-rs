@@ -195,6 +195,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cdt-api",
+ "cdt-config",
+ "cdt-discover",
+ "cdt-ssh",
  "tokio",
  "tracing",
  "tracing-subscriber",
