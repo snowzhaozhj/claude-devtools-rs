@@ -12,6 +12,13 @@ workspace = true
 
 [dependencies]
 cdt-core = { workspace = true }
+cdt-discover = { path = "../cdt-discover" }
+async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
+serde = { workspace = true }
+dirs = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

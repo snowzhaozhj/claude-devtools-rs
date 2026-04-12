@@ -53,7 +53,7 @@ claude-devtools-rs/
 | file-watching                  | `cdt-watch`     | done ✓      |
 | configuration-management       | `cdt-config`    | done ✓      |
 | notification-triggers          | `cdt-config`    | done ✓      |
-| ssh-remote-context             | `cdt-ssh`       | not started |
+| ssh-remote-context             | `cdt-ssh`       | done ✓      |
 | ipc-data-api                   | `cdt-api`       | not started |
 | http-data-api                  | `cdt-api`       | not started |
 
