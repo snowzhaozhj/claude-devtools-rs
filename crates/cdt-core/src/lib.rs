@@ -18,6 +18,7 @@ pub mod process;
 pub mod project;
 pub mod tokens;
 pub mod tool_execution;
+pub mod watch_event;
 
 pub use chunk::{
     AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep, SystemChunk,
@@ -41,6 +42,7 @@ pub use project::{
 };
 pub use tokens::{estimate_content_tokens, estimate_tokens};
 pub use tool_execution::{ToolExecution, ToolOutput};
+pub use watch_event::{FileChangeEvent, TodoChangeEvent};
 
 pub mod prelude {
     //! 给消费方用的再导出集合。
