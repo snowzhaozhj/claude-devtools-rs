@@ -12,6 +12,13 @@ workspace = true
 
 [dependencies]
 cdt-core = { workspace = true }
+dirs = { workspace = true }
+notify = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+serial_test = { workspace = true }

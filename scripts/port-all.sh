@@ -51,7 +51,7 @@ fail() {
 ║
 ║    # propose 失败，无代码改动，直接重跑：
 ║    git checkout port/${cap}
-║    claude --model sonnet -p '/opsx:propose port-${cap}' --allowedTools '*'
+║    claude --model opus -p '/opsx:propose port-${cap}' --allowedTools '*'
 ║    git add -A && git commit -m 'port-${cap}: propose'
 GUIDE
       ;;
@@ -71,34 +71,54 @@ GUIDE
 GUIDE
       ;;
     test)
+      echo "║"
+      echo "║    # 测试失败，错误输出（末尾 20 行）："
+      echo "║    ┌──────────────────────────────────────"
+      tail -20 "/tmp/port-${cap}-verify.log" 2>/dev/null | while IFS= read -r line; do
+        echo "║    │ ${line}"
+      done
+      echo "║    └──────────────────────────────────────"
+      echo "║    # 完整日志: /tmp/port-${cap}-verify.log"
       cat <<GUIDE
 ║
-║    # 测试失败，代码已写完但有 bug
+║    # 恢复：让 claude 读日志并修复
 ║    git checkout port/${cap}
-║    cargo test --workspace 2>&1 | tail -30  # 先看哪个测试挂了
-║    claude --model opus -p '修复 port-${cap} 的测试失败，运行 cargo test --workspace 查看错误并修复，每个修复单独 commit' --allowedTools '*'
+║    claude --model opus -p '读取 /tmp/port-${cap}-verify.log 的测试失败输出，诊断并修复，每个修复单独 commit' --allowedTools '*'
 GUIDE
       ;;
     clippy)
+      echo "║"
+      echo "║    # clippy 错误输出（末尾 20 行）："
+      echo "║    ┌──────────────────────────────────────"
+      tail -20 "/tmp/port-${cap}-verify.log" 2>/dev/null | while IFS= read -r line; do
+        echo "║    │ ${line}"
+      done
+      echo "║    └──────────────────────────────────────"
+      echo "║    # 完整日志: /tmp/port-${cap}-verify.log"
       cat <<GUIDE
 ║
-║    # clippy 不通过，通常是小问题
+║    # 恢复：让 claude 读日志并修复
 ║    git checkout port/${cap}
-║    claude --model sonnet -p '修复所有 clippy warnings: cargo clippy --workspace --all-targets -- -D warnings，修完后 commit' --allowedTools '*'
+║    claude --model sonnet -p '读取 /tmp/port-${cap}-verify.log 的 clippy 错误，修复所有 warnings 后 commit' --allowedTools '*'
 GUIDE
       ;;
     review-fix)
+      echo "║"
+      echo "║    # review 修复后测试失败（末尾 20 行）："
+      echo "║    ┌──────────────────────────────────────"
+      tail -20 "/tmp/port-${cap}-verify.log" 2>/dev/null | while IFS= read -r line; do
+        echo "║    │ ${line}"
+      done
+      echo "║    └──────────────────────────────────────"
       cat <<GUIDE
 ║
-║    # review 修复引入了新问题
+║    # 选项 A: 撤销 review 的修改，回到 apply 完成的状态
 ║    git checkout port/${cap}
-║    git diff HEAD~1 --stat  # 看 review 改了什么
-║
-║    # 选项 A: 撤销 review 的修改，手动处理
 ║    git revert HEAD --no-edit
 ║
-║    # 选项 B: 让 opus 修
-║    claude --model opus -p '上一轮 review 修复引入了测试失败，诊断并修复' --allowedTools '*'
+║    # 选项 B: 让 opus 读日志修复
+║    git checkout port/${cap}
+║    claude --model opus -p '读取 /tmp/port-${cap}-verify.log，上一轮 review 修复引入了测试失败，诊断并修复' --allowedTools '*'
 GUIDE
       ;;
     archive)
@@ -160,9 +180,9 @@ for cap in "${CAPS[@]}"; do
   git checkout -b "port/${cap}" main 2>/dev/null \
     || git checkout "port/${cap}"
 
-  # ── Phase 1: propose (sonnet) ──
-  echo "[$(date +%H:%M)] Phase 1/6: propose (sonnet)"
-  claude --model sonnet -p \
+  # ── Phase 1: propose (opus) ──
+  echo "[$(date +%H:%M)] Phase 1/6: propose (opus)"
+  claude --model opus -p \
     "/opsx:propose port-${cap}" --allowedTools '*' \
     || fail "$cap" "propose" "claude propose 会话异常退出"
   git add -A && git commit -m "port-${cap}: propose" --allow-empty
@@ -174,12 +194,15 @@ for cap in "${CAPS[@]}"; do
     --allowedTools '*' \
     || fail "$cap" "apply" "claude apply 会话异常退出"
 
-  # ── Phase 3: 硬卡点验证 ──
+  # ── Phase 3: 硬卡点验证（输出存日志，失败时展示） ──
   echo "[$(date +%H:%M)] Phase 3/6: 全量验证"
-  cargo test --workspace \
-    || fail "$cap" "test" "cargo test 失败"
-  cargo clippy --workspace --all-targets -- -D warnings \
-    || fail "$cap" "clippy" "clippy warnings"
+  local logfile="/tmp/port-${cap}-verify.log"
+  if ! cargo test --workspace 2>&1 | tee "$logfile"; then
+    fail "$cap" "test" "cargo test 失败，详见 ${logfile}"
+  fi
+  if ! cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee "$logfile"; then
+    fail "$cap" "clippy" "clippy warnings，详见 ${logfile}"
+  fi
 
   # ── Phase 4: review + 自动修 (sonnet) ──
   echo "[$(date +%H:%M)] Phase 4/6: code review (sonnet)"
@@ -189,8 +212,9 @@ for cap in "${CAPS[@]}"; do
 
   # ── Phase 5: review 修复后再验证 ──
   echo "[$(date +%H:%M)] Phase 5/6: review 后验证"
-  cargo test --workspace \
-    || fail "$cap" "review-fix" "review 修复后测试失败"
+  if ! cargo test --workspace 2>&1 | tee "$logfile"; then
+    fail "$cap" "review-fix" "review 修复后测试失败，详见 ${logfile}"
+  fi
 
   # ── Phase 6: archive (sonnet) ──
   echo "[$(date +%H:%M)] Phase 6/6: archive (sonnet)"

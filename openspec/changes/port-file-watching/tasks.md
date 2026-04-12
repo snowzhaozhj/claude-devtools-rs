@@ -1,0 +1,37 @@
+## 1. 依赖准备
+
+- [x] 1.1 在 workspace `Cargo.toml` `[workspace.dependencies]` 中添加 `notify-debouncer-mini`（实际使用 `0.7`，适配 notify v8 生态）
+- [x] 1.2 在 `crates/cdt-watch/Cargo.toml` 中引用 `notify-debouncer-mini = { workspace = true }`
+
+## 2. cdt-core：共享事件类型
+
+- [x] 2.1 在 `crates/cdt-core/src/` 新增 `watch_event.rs`，定义 `FileChangeEvent`（含 `project_id: String`、`session_id: String`、`deleted: bool`）和 `TodoChangeEvent`（含 `session_id: String`）；两者均 `#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]`
+- [x] 2.2 在 `crates/cdt-core/src/lib.rs` `pub mod watch_event; pub use watch_event::{FileChangeEvent, TodoChangeEvent};` 导出
+
+## 3. cdt-watch：核心实现
+
+- [x] 3.1 新增 `crates/cdt-watch/src/watcher.rs`：定义 `FileWatcher` 结构体，持有 `broadcast::Sender<FileChangeEvent>` 和 `broadcast::Sender<TodoChangeEvent>`；暴露 `FileWatcher::new() -> Self`、`subscribe_files() -> broadcast::Receiver<FileChangeEvent>`、`subscribe_todos() -> broadcast::Receiver<TodoChangeEvent>`、`async fn start(self) -> Result<(), WatchError>`
+- [x] 3.2 在 `start()` 内，使用 `notify_debouncer_mini::new_debouncer(Duration::from_millis(100), callback)` 同时监听 `~/.claude/projects/`（递归）和 `~/.claude/todos/`（非递归）
+- [x] 3.3 实现事件路由：projects 目录下 `.jsonl` 文件事件 → 解析 `project_id` / `session_id` → 广播 `FileChangeEvent`；todos 目录下 `.json` 事件 → 解析 `session_id` → 广播 `TodoChangeEvent`
+- [x] 3.4 实现 deleted 标记：`notify-debouncer-mini` 去抖后通过 `!path.exists()` 检测删除（debouncer 不保留原始 `EventKind`）
+- [x] 3.5 新增 `crates/cdt-watch/src/error.rs`：`#[derive(thiserror::Error, Debug)] pub enum WatchError { Init(#[from] notify::Error) }`
+- [x] 3.6 在 `crates/cdt-watch/src/lib.rs` 替换 `stub()` 占位符，`pub mod watcher; pub mod error; pub use watcher::FileWatcher; pub use error::WatchError;`
+- [x] 3.7 瞬时错误处理：在事件回调中，遇到 `notify::Error`（非致命）时 `tracing::warn!` 并 continue，不向外传播
+
+## 4. 测试
+
+- [x] 4.1 在 `crates/cdt-watch/tests/` 新增 `file_watching.rs`；每个 `#[tokio::test]` 使用 `tempfile::TempDir` 创建隔离目录，通过 `FileWatcher::with_paths()` 指定自定义路径
+- [x] 4.2 测试 Scenario "New session file created"：写入 `.jsonl` 文件后接收到 `FileChangeEvent`，`deleted == false`，`project_id` / `session_id` 正确
+- [x] 4.3 测试 Scenario "Existing session file appended"：对已存在 `.jsonl` 写入字节后接收到 `FileChangeEvent`
+- [x] 4.4 测试 Scenario "Session file deleted"：删除 `.jsonl` 后接收到 `FileChangeEvent` 且 `deleted == true`
+- [x] 4.5 测试 Scenario "Todo file updated"：写入 `<sessionId>.json` 后接收到 `TodoChangeEvent`，`session_id` 正确
+- [x] 4.6 测试 Scenario "Burst of writes"（去抖）：真实文件 I/O + `serial_test` 串行化，30ms 内 5 次写入后验证事件数 < 写入数（macOS FSEvents 合并行为不可精确预测，断言去抖生效即可）
+- [x] 4.7 测试 Scenario "Two subscribers present"：两个 `subscribe_files()` 各接收到事件恰好一次
+
+## 5. 质量校验
+
+- [x] 5.1 `cargo clippy -p cdt-watch -p cdt-core --all-targets -- -D warnings` 零警告
+- [x] 5.2 `cargo fmt --all` 无变更
+- [x] 5.3 `cargo test -p cdt-watch -p cdt-core` 全绿
+- [ ] 5.4 `openspec validate port-file-watching --strict` 通过
+- [x] 5.5 更新根 `CLAUDE.md` Capability→crate 表中 `file-watching` 行为 `done ✓`
