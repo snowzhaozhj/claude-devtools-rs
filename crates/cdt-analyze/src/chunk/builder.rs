@@ -22,9 +22,12 @@ use cdt_core::{
     MessageContent, ParsedMessage, SystemChunk, ToolExecution, UserChunk,
 };
 
+use cdt_core::SubagentCandidate;
+
 use super::metrics::aggregate_metrics;
 use super::semantic::extract_semantic_steps;
-use crate::tool_linking::pair_tool_executions;
+use crate::team::is_teammate_message;
+use crate::tool_linking::{filter_resolved_tasks, pair_tool_executions, resolve_subagents};
 
 const STDOUT_OPEN: &str = "<local-command-stdout>";
 const STDOUT_CLOSE: &str = "</local-command-stdout>";
@@ -69,6 +72,10 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
                 }));
             }
             MessageCategory::User => {
+                // Teammate 消息不产出 UserChunk（spec: team-coordination-metadata）
+                if is_teammate_message(msg) {
+                    continue;
+                }
                 if let Some(stdout) = extract_local_command_stdout(&msg.content) {
                     flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
                     out.push(Chunk::System(SystemChunk {
@@ -103,6 +110,111 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
             }
             // `System` 这个 variant 在 parser 端被 hard-noise 前置拦截，
             // 实际不会走到这里；保留分支只是为了避免漏 match 告警。
+            MessageCategory::System | MessageCategory::HardNoise(_) => {}
+        }
+    }
+
+    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
+    out
+}
+
+/// 带 subagent 候选的 chunk 构建。
+///
+/// 在 `build_chunks` 基础上额外：
+/// 1. 调用 `resolve_subagents` 匹配 Task → subagent session
+/// 2. 调用 `filter_resolved_tasks` 从 execution 列表过滤已 resolve 的 Task
+///
+/// 调用方负责装载 `SubagentCandidate` 列表（从磁盘扫描 subagent session）。
+pub fn build_chunks_with_subagents(
+    messages: &[ParsedMessage],
+    candidates: &[SubagentCandidate],
+) -> Vec<Chunk> {
+    let linking = pair_tool_executions(messages);
+
+    let task_calls: Vec<_> = messages
+        .iter()
+        .flat_map(|m| m.tool_calls.iter())
+        .filter(|tc| tc.is_task)
+        .cloned()
+        .collect();
+
+    let resolved = resolve_subagents(&task_calls, &linking.executions, candidates);
+    let mut executions = linking.executions;
+    filter_resolved_tasks(&mut executions, &resolved);
+
+    let mut executions_by_assistant: HashMap<String, Vec<ToolExecution>> = HashMap::new();
+    for exec in executions {
+        executions_by_assistant
+            .entry(exec.source_assistant_uuid.clone())
+            .or_default()
+            .push(exec);
+    }
+
+    let mut out: Vec<Chunk> = Vec::new();
+    let mut buffer: Vec<AssistantResponse> = Vec::new();
+
+    for msg in messages {
+        if msg.is_sidechain || msg.category.is_hard_noise() {
+            continue;
+        }
+
+        match &msg.category {
+            MessageCategory::Assistant => {
+                buffer.push(AssistantResponse {
+                    uuid: msg.uuid.clone(),
+                    timestamp: msg.timestamp,
+                    content: msg.content.clone(),
+                    tool_calls: msg.tool_calls.clone(),
+                    usage: msg.usage.clone(),
+                    model: msg.model.clone(),
+                });
+            }
+            MessageCategory::Compact => {
+                flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
+                out.push(Chunk::Compact(CompactChunk {
+                    uuid: msg.uuid.clone(),
+                    timestamp: msg.timestamp,
+                    duration_ms: None,
+                    summary_text: extract_plain_text(&msg.content),
+                    metrics: ChunkMetrics::zero(),
+                }));
+            }
+            MessageCategory::User => {
+                if is_teammate_message(msg) {
+                    continue;
+                }
+                if let Some(stdout) = extract_local_command_stdout(&msg.content) {
+                    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
+                    out.push(Chunk::System(SystemChunk {
+                        uuid: msg.uuid.clone(),
+                        timestamp: msg.timestamp,
+                        duration_ms: None,
+                        content_text: stdout,
+                        metrics: ChunkMetrics::zero(),
+                    }));
+                } else if is_tool_result_only(&msg.content) {
+                    if let Some(last) = buffer.last_mut() {
+                        append_tool_results(last, &msg.content);
+                    } else {
+                        out.push(Chunk::User(UserChunk {
+                            uuid: msg.uuid.clone(),
+                            timestamp: msg.timestamp,
+                            duration_ms: None,
+                            content: msg.content.clone(),
+                            metrics: ChunkMetrics::zero(),
+                        }));
+                    }
+                } else {
+                    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
+                    out.push(Chunk::User(UserChunk {
+                        uuid: msg.uuid.clone(),
+                        timestamp: msg.timestamp,
+                        duration_ms: None,
+                        content: msg.content.clone(),
+                        metrics: ChunkMetrics::zero(),
+                    }));
+                }
+            }
             MessageCategory::System | MessageCategory::HardNoise(_) => {}
         }
     }

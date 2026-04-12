@@ -25,7 +25,9 @@ pub mod chunk;
 pub mod context;
 pub mod tool_linking;
 
-pub use chunk::{aggregate_metrics, build_chunks, extract_semantic_steps};
+pub use chunk::{
+    aggregate_metrics, build_chunks, build_chunks_with_subagents, extract_semantic_steps,
+};
 pub use context::{
     ComputeStatsParams, ComputeStatsResult, ProcessSessionParams, SessionContextResult,
     compute_context_stats, process_session_context_with_phases,
@@ -35,6 +37,4 @@ pub use tool_linking::{
     resolve_subagents,
 };
 
-pub mod team {
-    //! team-coordination-metadata capability.
-}
+pub mod team;

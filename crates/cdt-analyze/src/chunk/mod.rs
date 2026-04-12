@@ -9,6 +9,6 @@ mod builder;
 mod metrics;
 mod semantic;
 
-pub use builder::build_chunks;
+pub use builder::{build_chunks, build_chunks_with_subagents};
 pub use metrics::aggregate_metrics;
 pub use semantic::extract_semantic_steps;

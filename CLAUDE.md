@@ -48,7 +48,7 @@ claude-devtools-rs/
 | tool-execution-linking         | `cdt-analyze`   | done ✓ †    |
 | project-discovery              | `cdt-discover`  | done ✓      |
 | context-tracking               | `cdt-analyze`   | done ✓ ‡    |
-| team-coordination-metadata     | `cdt-analyze`   | not started |
+| team-coordination-metadata     | `cdt-analyze`   | done ✓      |
 | session-search                 | `cdt-discover`  | done ✓      |
 | file-watching                  | `cdt-watch`     | done ✓      |
 | configuration-management       | `cdt-config`    | done ✓      |
@@ -57,9 +57,9 @@ claude-devtools-rs/
 | ipc-data-api                   | `cdt-api`       | not started |
 | http-data-api                  | `cdt-api`       | not started |
 
-† tool-execution-linking 的 pair / resolver / filter 都是纯函数，已完整实现且有单测覆盖；但默认 `build_chunks` 路径只接入了 pair。`resolve_subagents` 的 candidate 装载与 `filter_resolved_tasks` 的端到端接入，以及 `ChunkMetrics::tool_count` 的过渡语义修正，留给 `port-team-coordination-metadata`（对应 change archive 里 tasks.md section 11）。
+† tool-execution-linking 的 pair / resolver / filter 都是纯函数，已完整实现且有单测覆盖。`filter_resolved_tasks` 已在 `port-team-coordination-metadata` 接入 `build_chunks_with_subagents`；`resolve_subagents` 的 candidate 装载由调用方（`cdt-api` 层）负责。
 
-‡ context-tracking 的 6 类 injection、phase 管理、compaction token delta 已在 `cdt-analyze::context` 完整实现且有单测覆盖；CLAUDE.md 文件 / `@mention` 的真实磁盘扫描依赖 `initial_claude_md_injections` 外部注入，留给 `port-configuration-management` 接入。`teammate_message` display item 留给 `port-team-coordination-metadata`。
+‡ context-tracking 的 6 类 injection、phase 管理、compaction token delta 已在 `cdt-analyze::context` 完整实现且有单测覆盖；CLAUDE.md 文件 / `@mention` 的真实磁盘扫描依赖 `initial_claude_md_injections` 外部注入，已由 `port-configuration-management` 的 `ClaudeMdReader` 提供数据源。
 
 ## Remaining port order
 
