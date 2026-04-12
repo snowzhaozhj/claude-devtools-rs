@@ -51,7 +51,7 @@ claude-devtools-rs/
 | team-coordination-metadata     | `cdt-analyze`   | not started |
 | session-search                 | `cdt-discover`  | done ✓      |
 | file-watching                  | `cdt-watch`     | done ✓      |
-| configuration-management       | `cdt-config`    | not started |
+| configuration-management       | `cdt-config`    | done ✓      |
 | notification-triggers          | `cdt-config`    | not started |
 | ssh-remote-context             | `cdt-ssh`       | not started |
 | ipc-data-api                   | `cdt-api`       | not started |
@@ -83,9 +83,9 @@ From `openspec/followups.md`。已修项带 ✓，剩余是后续 port 的 MUST 
 - ✓ **project-discovery**：路径解码 spec-gap 已落地 —— `path_decoder::decode_path` best-effort + `ProjectPathResolver::resolve` 通过 session `cwd` 字段消歧；新增 `FileSystemProvider::read_lines_head` 修正 SSH 模式全文件读取的隐性性能 bug。
 - ✓ **context-tracking**：TS 侧完全无测试的 coverage-gap 已补齐 —— `cdt-analyze::context` 的 aggregator / stats / session 三层各自单测（12 单测 + 7 集成测试），compaction delta、路径去重、camelCase JSON shape 都有硬断言。
 - ◐ **chunk-building**：Task 过滤纯函数 `filter_resolved_tasks` 已实现，但默认 `build_chunks` 路径未接入；端到端接入留给 `port-team-coordination-metadata`。
-- **configuration-management**: `ConfigManager.loadConfig()` on corrupted
+- ✓ **configuration-management**: `ConfigManager.loadConfig()` on corrupted
   file should back up the bad file before loading defaults. TS only logs.
-  Rust port MUST back up.
+  Rust port 已实现备份（`manager.rs` `backup_corrupted_file`）。
 - **notification-triggers**: `is_error=true` on tool_result should trigger
   error detection; TS relies on content-pattern matching instead. Rust port
   MUST check the flag.

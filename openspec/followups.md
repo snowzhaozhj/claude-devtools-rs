@@ -89,10 +89,10 @@
 
 ## configuration-management
 
-### [impl-bug?] 损坏 config 不会自动备份
+### [impl-bug?] 损坏 config 不会自动备份 ✅ 已在 `port-configuration-management` 修复
 - Spec: "back up the corrupted file, load defaults, log the error, and continue"
 - 代码：`ConfigManager.ts:379-396 loadConfig()` 只 log + 加载默认，没有备份
-- 决策：Rust port 时按 spec 实现备份行为
+- 决策：Rust port 已按 spec 实现备份行为（`cdt-config::manager::ConfigManager::backup_corrupted_file`）
 
 ---
 

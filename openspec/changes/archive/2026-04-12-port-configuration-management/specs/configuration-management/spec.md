@@ -1,8 +1,5 @@
-# configuration-management Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change rust-rewrite-baseline. Update Purpose after archive.
-## Requirements
 ### Requirement: Persist application configuration
 
 The system SHALL persist application configuration (triggers, UI preferences, pinned sessions, HTTP server port, SSH hosts, feature toggles) to a user-scoped configuration file (`~/.claude/claude-devtools-config.json`) and load it on startup.
@@ -18,18 +15,6 @@ The system SHALL persist application configuration (triggers, UI preferences, pi
 #### Scenario: Partial config with missing fields
 - **WHEN** the configuration file parses successfully but is missing some fields
 - **THEN** the system SHALL merge with defaults to fill missing fields, preserving existing values
-
-### Requirement: Expose config read and update operations
-
-The system SHALL expose operations to read the current configuration, update a field, add a trigger, remove a trigger, pin/unpin a session, and open the config file in an external editor.
-
-#### Scenario: Update a single config field
-- **WHEN** a caller updates the HTTP port to a new value
-- **THEN** the new value SHALL be persisted and returned on the next read
-
-#### Scenario: Add a new trigger
-- **WHEN** a caller adds a trigger via the add-trigger operation
-- **THEN** the trigger SHALL be persisted with a generated id and appear in subsequent reads
 
 ### Requirement: Read CLAUDE.md files
 
