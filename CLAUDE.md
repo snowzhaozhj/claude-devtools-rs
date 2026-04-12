@@ -54,7 +54,7 @@ claude-devtools-rs/
 | configuration-management       | `cdt-config`    | done ✓      |
 | notification-triggers          | `cdt-config`    | done ✓      |
 | ssh-remote-context             | `cdt-ssh`       | done ✓      |
-| ipc-data-api                   | `cdt-api`       | not started |
+| ipc-data-api                   | `cdt-api`       | done ✓      |
 | http-data-api                  | `cdt-api`       | not started |
 
 † tool-execution-linking 的 pair / resolver / filter 都是纯函数，已完整实现且有单测覆盖。`filter_resolved_tasks` 已在 `port-team-coordination-metadata` 接入 `build_chunks_with_subagents`；`resolve_subagents` 的 candidate 装载由调用方（`cdt-api` 层）负责。
