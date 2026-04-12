@@ -6,3 +6,5 @@
 .idea/*.iml
 .claude/local.json
 .claude/settings.local.json
+ui/node_modules
+src-tauri/target
