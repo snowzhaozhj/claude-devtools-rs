@@ -4,15 +4,18 @@
 //! - **project-discovery** — 扫描 `~/.claude/projects/`、解码编码路径、
 //!   列出每个项目的 session、按 git worktree 分组、追踪 subproject。路径
 //!   解码是 best-effort；真实 cwd 从 session 文件中的 `cwd` 字段恢复。
-//! - **session-search** — 尚未开始 port。
+//! - **session-search** — 三级搜索 scope + mtime LRU 缓存 + SSH 分阶段限制。
 //!
-//! Spec：`openspec/specs/project-discovery/spec.md`。
+//! Spec：`openspec/specs/project-discovery/spec.md`、`openspec/specs/session-search/spec.md`。
 
 pub mod error;
 pub mod fs_provider;
 pub mod path_decoder;
 pub mod project_path_resolver;
 pub mod project_scanner;
+pub mod search_cache;
+pub mod search_extract;
+pub mod session_search;
 pub mod subproject_registry;
 pub mod worktree_grouper;
 

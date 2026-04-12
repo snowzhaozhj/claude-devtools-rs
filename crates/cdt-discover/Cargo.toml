@@ -26,6 +26,7 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 sha2 = { workspace = true }
 chrono = { workspace = true }
+lru = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

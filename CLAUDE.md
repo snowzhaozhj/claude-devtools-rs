@@ -49,7 +49,7 @@ claude-devtools-rs/
 | project-discovery              | `cdt-discover`  | done ✓      |
 | context-tracking               | `cdt-analyze`   | done ✓ ‡    |
 | team-coordination-metadata     | `cdt-analyze`   | not started |
-| session-search                 | `cdt-discover`  | not started |
+| session-search                 | `cdt-discover`  | done ✓      |
 | file-watching                  | `cdt-watch`     | done ✓      |
 | configuration-management       | `cdt-config`    | not started |
 | notification-triggers          | `cdt-config`    | not started |

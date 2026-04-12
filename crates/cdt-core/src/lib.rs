@@ -16,6 +16,7 @@ pub mod context;
 pub mod message;
 pub mod process;
 pub mod project;
+pub mod search;
 pub mod tokens;
 pub mod tool_execution;
 pub mod watch_event;
@@ -40,6 +41,7 @@ pub use process::{Process, SubagentCandidate, TeamMeta};
 pub use project::{
     Project, RepositoryGroup, RepositoryIdentity, Session, SessionMetadata, Worktree,
 };
+pub use search::{SearchHit, SearchSessionsResult, SessionSearchResult};
 pub use tokens::{estimate_content_tokens, estimate_tokens};
 pub use tool_execution::{ToolExecution, ToolOutput};
 pub use watch_event::{FileChangeEvent, TodoChangeEvent};
