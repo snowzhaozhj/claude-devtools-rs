@@ -20,6 +20,126 @@ export interface PaginatedResponse<T> {
   total: number;
 }
 
+// ---------------------------------------------------------------------------
+// Chunk 类型（与 Rust cdt-core serde(tag="kind", rename_all="snake_case") 对齐）
+// ---------------------------------------------------------------------------
+
+export interface ChunkMetrics {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  toolCount: number;
+  costUsd: number | null;
+}
+
+export interface AssistantResponse {
+  uuid: string;
+  timestamp: string;
+  content: string | ContentBlock[];
+  toolCalls: ToolCall[];
+  usage: TokenUsage | null;
+  model: string | null;
+}
+
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  input: unknown;
+  isTask: boolean;
+  taskDescription: string | null;
+  taskSubagentType: string | null;
+}
+
+export interface ContentBlock {
+  type: string;
+  text?: string;
+  thinking?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+  toolUseId?: string;
+  content?: unknown;
+  isError?: boolean;
+}
+
+export type SemanticStep =
+  | { kind: "thinking"; text: string; timestamp: string }
+  | { kind: "text"; text: string; timestamp: string }
+  | { kind: "tool_execution"; toolUseId: string; toolName: string; timestamp: string }
+  | { kind: "subagent_spawn"; placeholderId: string; timestamp: string };
+
+export type ToolOutput =
+  | { kind: "text"; text: string }
+  | { kind: "structured"; value: unknown }
+  | { kind: "missing" };
+
+export interface ToolExecution {
+  toolUseId: string;
+  toolName: string;
+  input: unknown;
+  output: ToolOutput;
+  isError: boolean;
+  startTs: string;
+  endTs: string | null;
+  sourceAssistantUuid: string;
+}
+
+export interface UserChunk {
+  kind: "user";
+  uuid: string;
+  timestamp: string;
+  durationMs: number | null;
+  content: string | ContentBlock[];
+  metrics: ChunkMetrics;
+}
+
+export interface AIChunk {
+  kind: "ai";
+  timestamp: string;
+  durationMs: number | null;
+  responses: AssistantResponse[];
+  metrics: ChunkMetrics;
+  semanticSteps: SemanticStep[];
+  toolExecutions: ToolExecution[];
+  subagents: unknown[];
+}
+
+export interface SystemChunk {
+  kind: "system";
+  uuid: string;
+  timestamp: string;
+  durationMs: number | null;
+  contentText: string;
+  metrics: ChunkMetrics;
+}
+
+export interface CompactChunk {
+  kind: "compact";
+  uuid: string;
+  timestamp: string;
+  durationMs: number | null;
+  summaryText: string;
+  metrics: ChunkMetrics;
+}
+
+export type Chunk = UserChunk | AIChunk | SystemChunk | CompactChunk;
+
+export interface SessionDetail {
+  sessionId: string;
+  projectId: string;
+  chunks: Chunk[];
+  metrics: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+}
+
 export async function listProjects(): Promise<ProjectInfo[]> {
   return await invoke("list_projects");
 }
@@ -39,6 +159,6 @@ export async function listSessions(
 export async function getSessionDetail(
   projectId: string,
   sessionId: string
-): Promise<any> {
+): Promise<SessionDetail> {
   return await invoke("get_session_detail", { projectId, sessionId });
 }

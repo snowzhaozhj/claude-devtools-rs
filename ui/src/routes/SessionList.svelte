@@ -4,9 +4,10 @@
 
   interface Props {
     projectId: string;
+    onSelect: (sessionId: string) => void;
   }
 
-  let { projectId }: Props = $props();
+  let { projectId, onSelect }: Props = $props();
 
   let sessions: SessionSummary[] = $state([]);
   let total = $state(0);
@@ -45,9 +46,6 @@
   }
 
   function formatSessionId(id: string): string {
-    if (id.length > 16) {
-      return id.slice(0, 8) + "..." + id.slice(-4);
-    }
     return id;
   }
 </script>
@@ -65,10 +63,10 @@
     <div class="empty">暂无会话</div>
   {:else}
     {#each sessions as session}
-      <div class="session-card">
+      <button class="session-card" onclick={() => onSelect(session.sessionId)}>
         <div class="session-id">{formatSessionId(session.sessionId)}</div>
         <div class="session-time">{formatTime(session.timestamp)}</div>
-      </div>
+      </button>
     {/each}
   {/if}
 </div>

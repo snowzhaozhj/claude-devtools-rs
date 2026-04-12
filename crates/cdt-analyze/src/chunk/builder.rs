@@ -45,6 +45,25 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
     let mut out: Vec<Chunk> = Vec::new();
     let mut buffer: Vec<AssistantResponse> = Vec::new();
 
+    chunk_loop(
+        messages,
+        &mut buffer,
+        &mut out,
+        &mut executions_by_assistant,
+    );
+
+    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
+    out
+}
+
+/// 主循环：遍历消息序列产出 chunk，被 `build_chunks` 和
+/// `build_chunks_with_subagents` 共用。
+fn chunk_loop(
+    messages: &[ParsedMessage],
+    buffer: &mut Vec<AssistantResponse>,
+    out: &mut Vec<Chunk>,
+    executions_by_assistant: &mut HashMap<String, Vec<ToolExecution>>,
+) {
     for msg in messages {
         if msg.is_sidechain || msg.category.is_hard_noise() {
             continue;
@@ -62,7 +81,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
                 });
             }
             MessageCategory::Compact => {
-                flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
+                flush_buffer(buffer, out, executions_by_assistant);
                 out.push(Chunk::Compact(CompactChunk {
                     uuid: msg.uuid.clone(),
                     timestamp: msg.timestamp,
@@ -72,12 +91,22 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
                 }));
             }
             MessageCategory::User => {
-                // Teammate 消息不产出 UserChunk（spec: team-coordination-metadata）
+                // Teammate 消息不产出 `UserChunk`（spec: team-coordination-metadata）
                 if is_teammate_message(msg) {
                     continue;
                 }
+                // `is_meta` 消息是 skill prompt / system-reminder 注入，
+                // 不是真正用户输入——跳过但仍需处理 tool_result 合并
+                if msg.is_meta {
+                    if is_tool_result_only(&msg.content) {
+                        if let Some(last) = buffer.last_mut() {
+                            append_tool_results(last, &msg.content);
+                        }
+                    }
+                    continue;
+                }
                 if let Some(stdout) = extract_local_command_stdout(&msg.content) {
-                    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
+                    flush_buffer(buffer, out, executions_by_assistant);
                     out.push(Chunk::System(SystemChunk {
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
@@ -86,19 +115,13 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
                         metrics: ChunkMetrics::zero(),
                     }));
                 } else if is_tool_result_only(&msg.content) {
+                    // tool_result only 的用户消息合并到前一个 assistant buffer；
+                    // buffer 为空时丢弃——这些不是真正的用户输入
                     if let Some(last) = buffer.last_mut() {
                         append_tool_results(last, &msg.content);
-                    } else {
-                        out.push(Chunk::User(UserChunk {
-                            uuid: msg.uuid.clone(),
-                            timestamp: msg.timestamp,
-                            duration_ms: None,
-                            content: msg.content.clone(),
-                            metrics: ChunkMetrics::zero(),
-                        }));
                     }
                 } else {
-                    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
+                    flush_buffer(buffer, out, executions_by_assistant);
                     out.push(Chunk::User(UserChunk {
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
@@ -113,9 +136,6 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
             MessageCategory::System | MessageCategory::HardNoise(_) => {}
         }
     }
-
-    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
-    out
 }
 
 /// 带 subagent 候选的 chunk 构建。
@@ -153,71 +173,12 @@ pub fn build_chunks_with_subagents(
     let mut out: Vec<Chunk> = Vec::new();
     let mut buffer: Vec<AssistantResponse> = Vec::new();
 
-    for msg in messages {
-        if msg.is_sidechain || msg.category.is_hard_noise() {
-            continue;
-        }
-
-        match &msg.category {
-            MessageCategory::Assistant => {
-                buffer.push(AssistantResponse {
-                    uuid: msg.uuid.clone(),
-                    timestamp: msg.timestamp,
-                    content: msg.content.clone(),
-                    tool_calls: msg.tool_calls.clone(),
-                    usage: msg.usage.clone(),
-                    model: msg.model.clone(),
-                });
-            }
-            MessageCategory::Compact => {
-                flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
-                out.push(Chunk::Compact(CompactChunk {
-                    uuid: msg.uuid.clone(),
-                    timestamp: msg.timestamp,
-                    duration_ms: None,
-                    summary_text: extract_plain_text(&msg.content),
-                    metrics: ChunkMetrics::zero(),
-                }));
-            }
-            MessageCategory::User => {
-                if is_teammate_message(msg) {
-                    continue;
-                }
-                if let Some(stdout) = extract_local_command_stdout(&msg.content) {
-                    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
-                    out.push(Chunk::System(SystemChunk {
-                        uuid: msg.uuid.clone(),
-                        timestamp: msg.timestamp,
-                        duration_ms: None,
-                        content_text: stdout,
-                        metrics: ChunkMetrics::zero(),
-                    }));
-                } else if is_tool_result_only(&msg.content) {
-                    if let Some(last) = buffer.last_mut() {
-                        append_tool_results(last, &msg.content);
-                    } else {
-                        out.push(Chunk::User(UserChunk {
-                            uuid: msg.uuid.clone(),
-                            timestamp: msg.timestamp,
-                            duration_ms: None,
-                            content: msg.content.clone(),
-                            metrics: ChunkMetrics::zero(),
-                        }));
-                    }
-                } else {
-                    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
-                    out.push(Chunk::User(UserChunk {
-                        uuid: msg.uuid.clone(),
-                        timestamp: msg.timestamp,
-                        duration_ms: None,
-                        content: msg.content.clone(),
-                        metrics: ChunkMetrics::zero(),
-                    }));
-                }
-            }
-            MessageCategory::System | MessageCategory::HardNoise(_) => {}
-        }
-    }
+    chunk_loop(
+        messages,
+        &mut buffer,
+        &mut out,
+        &mut executions_by_assistant,
+    );
 
     flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
     out
@@ -807,5 +768,65 @@ mod tests {
             content: serde_json::json!(null),
             is_error: false,
         };
+    }
+
+    #[test]
+    fn meta_messages_are_skipped() {
+        let mut meta = user("m1", 2, "Propose a new change - skill prompt...");
+        meta.is_meta = true;
+        let msgs = vec![
+            user("u1", 0, "hi"),
+            assistant(
+                "a1",
+                1,
+                &[ContentBlock::Text {
+                    text: "hello".into(),
+                }],
+            ),
+            meta,
+            assistant(
+                "a2",
+                3,
+                &[ContentBlock::Text {
+                    text: "done".into(),
+                }],
+            ),
+        ];
+        let chunks = build_chunks(&msgs);
+        // meta 消息不产出 UserChunk，a1 和 a2 合并为一个 AIChunk
+        assert_eq!(chunks.len(), 2);
+        assert!(matches!(chunks[0], Chunk::User(_)));
+        assert!(matches!(chunks[1], Chunk::Ai(_)));
+    }
+
+    #[test]
+    fn meta_tool_result_still_merges_into_buffer() {
+        let mut meta_result = blank_message("m1", 2);
+        meta_result.is_meta = true;
+        meta_result.content = MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "t1".into(),
+            content: serde_json::json!("ok"),
+            is_error: false,
+        }]);
+        let msgs = vec![
+            assistant(
+                "a1",
+                1,
+                &[ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "Bash".into(),
+                    input: serde_json::json!({}),
+                }],
+            ),
+            meta_result,
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 1);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        // tool_result 仍应被合并，execution 应有结果
+        assert_eq!(ai.tool_executions.len(), 1);
+        assert!(ai.tool_executions[0].end_ts.is_some());
     }
 }

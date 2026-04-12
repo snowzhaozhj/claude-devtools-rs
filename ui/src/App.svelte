@@ -1,10 +1,12 @@
 <script lang="ts">
   import ProjectList from "./routes/ProjectList.svelte";
   import SessionList from "./routes/SessionList.svelte";
+  import SessionDetail from "./routes/SessionDetail.svelte";
 
-  let currentView: "projects" | "sessions" = $state("projects");
+  let currentView: "projects" | "sessions" | "detail" = $state("projects");
   let selectedProjectId: string = $state("");
   let selectedProjectName: string = $state("");
+  let selectedSessionId: string = $state("");
 
   function selectProject(id: string, name: string) {
     selectedProjectId = id;
@@ -12,22 +14,33 @@
     currentView = "sessions";
   }
 
+  function selectSession(sessionId: string) {
+    selectedSessionId = sessionId;
+    currentView = "detail";
+  }
+
   function goBack() {
-    currentView = "projects";
+    if (currentView === "detail") {
+      currentView = "sessions";
+    } else {
+      currentView = "projects";
+    }
   }
 </script>
 
 <main>
   <header>
     <div class="header-content">
-      {#if currentView === "sessions"}
+      {#if currentView !== "projects"}
         <button class="back-btn" onclick={goBack}>← 返回</button>
       {/if}
       <h1>
         {#if currentView === "projects"}
           Claude DevTools
-        {:else}
+        {:else if currentView === "sessions"}
           {selectedProjectName}
+        {:else}
+          会话详情
         {/if}
       </h1>
     </div>
@@ -36,8 +49,10 @@
   <div class="content">
     {#if currentView === "projects"}
       <ProjectList onSelect={selectProject} />
+    {:else if currentView === "sessions"}
+      <SessionList projectId={selectedProjectId} onSelect={selectSession} />
     {:else}
-      <SessionList projectId={selectedProjectId} />
+      <SessionDetail projectId={selectedProjectId} sessionId={selectedSessionId} />
     {/if}
   </div>
 </main>

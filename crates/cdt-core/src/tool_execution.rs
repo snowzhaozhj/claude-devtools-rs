@@ -15,7 +15,11 @@ use serde::{Deserialize, Serialize};
 ///   原样保留，不在本层拆分——UI 层按需解析。
 /// - `Missing`：orphan `tool_use`，没有匹配的 `tool_result`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ToolOutput {
     Text { text: String },
     Structured { value: serde_json::Value },
@@ -24,6 +28,7 @@ pub enum ToolOutput {
 
 /// 单次 tool 执行的完整记录，`AIChunk.tool_executions` 的元素类型。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolExecution {
     pub tool_use_id: String,
     pub tool_name: String,

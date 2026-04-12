@@ -19,6 +19,7 @@ use crate::tool_execution::ToolExecution;
 /// `port-tool-execution-linking` 之前统计所有 `tool_use` 块（含 `Task`），
 /// 之后会按 Task 过滤语义修正；`cost_usd` 暂为 `None`，等引入价格表后启用。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChunkMetrics {
     #[serde(default)]
     pub input_tokens: u64,
@@ -47,6 +48,7 @@ impl ChunkMetrics {
 /// tool_result-only 用户消息反向挂载的结果，供后续 `tool-execution-linking`
 /// 使用；本 capability 不填充它。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AssistantResponse {
     pub uuid: String,
     pub timestamp: DateTime<Utc>,
@@ -65,7 +67,11 @@ pub struct AssistantResponse {
 /// 是为了让未来的 `port-team-coordination-metadata` 在不修改 `cdt-core`
 /// 公共 API 的情况下补上真实来源。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum SemanticStep {
     Thinking {
         text: String,
@@ -87,6 +93,7 @@ pub enum SemanticStep {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserChunk {
     pub uuid: String,
     pub timestamp: DateTime<Utc>,
@@ -96,6 +103,7 @@ pub struct UserChunk {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AIChunk {
     pub timestamp: DateTime<Utc>,
     pub duration_ms: Option<i64>,
@@ -110,6 +118,7 @@ pub struct AIChunk {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SystemChunk {
     pub uuid: String,
     pub timestamp: DateTime<Utc>,
@@ -119,6 +128,7 @@ pub struct SystemChunk {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompactChunk {
     pub uuid: String,
     pub timestamp: DateTime<Utc>,
@@ -128,7 +138,11 @@ pub struct CompactChunk {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Chunk {
     User(UserChunk),
     Ai(AIChunk),
