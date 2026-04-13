@@ -12,6 +12,7 @@ export interface SessionSummary {
   projectId: string;
   timestamp: number;
   messageCount: number;
+  title: string | null;
 }
 
 export interface PaginatedResponse<T> {

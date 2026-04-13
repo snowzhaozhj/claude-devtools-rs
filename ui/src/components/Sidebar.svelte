@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listProjects, listSessions, getSessionDetail, type ProjectInfo, type SessionSummary, type PaginatedResponse, type Chunk } from "../lib/api";
-  import { cleanDisplayText } from "../lib/toolHelpers";
+  import { listProjects, listSessions, type ProjectInfo, type SessionSummary, type PaginatedResponse } from "../lib/api";
   import SidebarHeader from "./SidebarHeader.svelte";
 
   interface Props {
@@ -17,9 +16,6 @@
   let sessions: SessionSummary[] = $state([]);
   let projectsLoading = $state(true);
   let sessionsLoading = $state(false);
-
-  /** 缓存 session 的第一条 user message 作为标题 */
-  let sessionTitles: Map<string, string> = $state(new Map());
 
   onMount(async () => {
     try {
@@ -40,60 +36,12 @@
     try {
       const result: PaginatedResponse<SessionSummary> = await listSessions(projectId);
       sessions = result.items;
-      // 异步加载每个 session 的第一条消息作为标题
-      for (const s of result.items) {
-        if (!sessionTitles.has(s.sessionId)) {
-          loadSessionTitle(projectId, s.sessionId);
-        }
-      }
     } catch (e) {
       console.error("Failed to load sessions:", e);
       sessions = [];
     } finally {
       sessionsLoading = false;
     }
-  }
-
-  async function loadSessionTitle(projectId: string, sessionId: string) {
-    try {
-      const detail = await getSessionDetail(projectId, sessionId);
-      const title = extractFirstUserMessage(detail.chunks);
-      if (title) {
-        const updated = new Map(sessionTitles);
-        updated.set(sessionId, title);
-        sessionTitles = updated;
-      }
-    } catch { /* ignore */ }
-  }
-
-  function extractFirstUserMessage(chunks: Chunk[]): string {
-    // 优先找非命令的用户消息
-    for (const c of chunks) {
-      if (c.kind === "user") {
-        const raw = typeof c.content === "string" ? c.content : extractTextContent(c.content);
-        const text = cleanDisplayText(raw);
-        if (text && !text.startsWith("/")) return text.slice(0, 80);
-      }
-    }
-    // fallback: 任何 user 消息
-    for (const c of chunks) {
-      if (c.kind === "user") {
-        const raw = typeof c.content === "string" ? c.content : extractTextContent(c.content);
-        const text = cleanDisplayText(raw);
-        if (text) return text.slice(0, 80);
-      }
-    }
-    return "";
-  }
-
-  function extractTextContent(content: unknown[]): string {
-    for (const b of content) {
-      if (b && typeof b === "object" && "type" in b) {
-        const x = b as Record<string, unknown>;
-        if (x.type === "text" && typeof x.text === "string") return x.text;
-      }
-    }
-    return "";
   }
 
   $effect(() => {
@@ -181,7 +129,7 @@
               onclick={() => onSelectSession(session.sessionId)}
             >
               <div class="session-title">
-                {sessionTitles.get(session.sessionId) || session.sessionId.slice(0, 8) + "…"}
+                {session.title || session.sessionId.slice(0, 8) + "…"}
               </div>
               <div class="session-meta">
                 <span class="session-msg-count">C{session.messageCount || ""}</span>

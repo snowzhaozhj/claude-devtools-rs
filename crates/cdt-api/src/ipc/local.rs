@@ -17,6 +17,7 @@ use cdt_parse::parse_file;
 use cdt_ssh::{ActiveContext, SshConnectionManager, parse_ssh_config_file, resolve_host};
 
 use super::error::ApiError;
+use super::session_metadata::extract_session_metadata;
 use super::traits::DataApi;
 use super::types::{
     ConfigUpdateRequest, ContextInfo, PaginatedRequest, PaginatedResponse, ProjectInfo,
@@ -88,17 +89,29 @@ impl DataApi for LocalDataApi {
             .and_then(|c| c.parse::<usize>().ok())
             .unwrap_or(0);
         let total = sessions.len();
-        let page: Vec<SessionSummary> = sessions
+        let page_sessions: Vec<_> = sessions
             .into_iter()
             .skip(offset)
             .take(pagination.page_size)
-            .map(|s| SessionSummary {
+            .collect();
+
+        let projects_dir = path_decoder::get_projects_base_path();
+        let base_dir = cdt_discover::path_decoder::extract_base_dir(project_id);
+        let dir = projects_dir.join(base_dir);
+
+        let mut page = Vec::with_capacity(page_sessions.len());
+        for s in page_sessions {
+            let jsonl_path = dir.join(format!("{}.jsonl", s.id));
+            let meta = extract_session_metadata(&jsonl_path).await;
+            page.push(SessionSummary {
                 session_id: s.id.clone(),
                 project_id: project_id.to_owned(),
                 timestamp: s.last_modified,
-                message_count: 0,
-            })
-            .collect();
+                message_count: meta.message_count,
+                title: meta.title,
+            });
+        }
+
         let next_cursor = if offset + page.len() < total {
             Some((offset + page.len()).to_string())
         } else {

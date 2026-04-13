@@ -5,6 +5,7 @@
 pub mod error;
 pub mod events;
 pub mod local;
+pub mod session_metadata;
 pub mod traits;
 pub mod types;
 

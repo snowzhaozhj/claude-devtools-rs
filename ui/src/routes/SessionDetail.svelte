@@ -17,17 +17,17 @@
   let loading = $state(true);
   let error: string | null = $state(null);
   let expandedItems: Set<string> = $state(new Set());
-  /** 存储被用户手动收起的 AI chunk index。默认全部展开。 */
-  let collapsedChunks: Set<number> = $state(new Set());
+  /** 存储被用户手动展开的 AI chunk index。默认全部收起。 */
+  let expandedChunks: Set<number> = $state(new Set());
 
   function toggleChunk(idx: number) {
-    const n = new Set(collapsedChunks);
+    const n = new Set(expandedChunks);
     if (n.has(idx)) n.delete(idx); else n.add(idx);
-    collapsedChunks = n;
+    expandedChunks = n;
   }
 
-  function isChunkExpanded(idx: number): boolean {
-    return !collapsedChunks.has(idx);
+  function isChunkToolsVisible(idx: number): boolean {
+    return expandedChunks.has(idx);
   }
 
   onMount(async () => {
@@ -41,7 +41,7 @@
       loading = true;
       error = null;
       expandedItems = new Set();
-      collapsedChunks = new Set();
+      expandedChunks = new Set();
       getSessionDetail(projectId, sessionId)
         .then(d => detail = d)
         .catch(e => error = String(e))
@@ -170,7 +170,7 @@
       <!-- AI -->
       {:else if chunk.kind === "ai"}
         {@const toolCount = aiToolCount(chunk)}
-        {@const toolsVisible = isChunkExpanded(i)}
+        {@const toolsVisible = isChunkToolsVisible(i)}
         <div class="msg-row msg-row-ai">
           <div class="msg-ai-container">
             <!-- AI header -->

@@ -50,6 +50,9 @@ pub struct SessionSummary {
     pub project_id: String,
     pub timestamp: i64,
     pub message_count: usize,
+    /// 第一条用户消息（清洗后），用作 sidebar 标题。
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// 会话详情。
