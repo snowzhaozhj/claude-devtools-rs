@@ -37,32 +37,18 @@ claude-devtools-rs/
 
 ## Capability → crate map
 
-| Capability                     | Owning crate    | Port status |
-|--------------------------------|-----------------|-------------|
-| session-parsing                | `cdt-parse`     | done ✓      |
-| chunk-building                 | `cdt-analyze`   | done ✓      |
-| tool-execution-linking         | `cdt-analyze`   | done ✓      |
-| project-discovery              | `cdt-discover`  | done ✓      |
-| context-tracking               | `cdt-analyze`   | done ✓      |
-| team-coordination-metadata     | `cdt-analyze`   | done ✓      |
-| session-search                 | `cdt-discover`  | done ✓      |
-| file-watching                  | `cdt-watch`     | done ✓      |
-| configuration-management       | `cdt-config`    | done ✓      |
-| notification-triggers          | `cdt-config`    | done ✓      |
-| ssh-remote-context             | `cdt-ssh`       | done ✓      |
-| ipc-data-api                   | `cdt-api`       | done ✓      |
-| http-data-api                  | `cdt-api`       | done ✓      |
-
-13/13 全部 done。详细的实现备注见各 port 的 archive（`openspec/changes/archive/`）。
+13/13 全部 done。Capability→crate 映射：`cdt-parse`(session-parsing)、`cdt-analyze`(chunk-building/tool-linking/context-tracking/team-metadata)、`cdt-discover`(project-discovery/session-search)、`cdt-watch`(file-watching)、`cdt-config`(configuration-management/notification-triggers)、`cdt-ssh`(ssh-remote-context)、`cdt-api`(ipc-data-api/http-data-api)。详见 `openspec/changes/archive/`。
 
 ## UI 层 (Tauri 2 + Svelte 5)
 
-- `ui/`：Svelte 5 + Vite 前端（暗色主题，Tokyo Night 风格）
+- `ui/`：Svelte 5 + Vite 前端（暖灰主题，Soft Charcoal 配色，约 40 个 CSS 变量）
 - `src-tauri/`：Tauri 2 Rust 后端（独立 Cargo.toml，excluded from workspace）
 - `cargo tauri dev`：启动开发模式（Vite HMR + Rust hot reload）
 - `src-tauri/` 通过 path deps 引用 `crates/` 下的数据层 crate
 - Tauri IPC commands 直接调用 `LocalDataApi`，不走 HTTP
-- **已有页面**：ProjectList → SessionList → SessionDetail（chunks 列表、AI chunk 展开/折叠、tool execution 详情、metrics 汇总）
+- **布局**：Sidebar（项目选择器 + 日期分组会话列表）+ Main（SessionDetail）双栏持久化
+- **已有组件**：BaseItem（统一可展开项）、StatusDot、专用 Tool Viewer（Read/Edit/Write/Bash/Default）
+- **session 元数据**：后端 `cdt-api/session_metadata.rs` 轻量扫描 JSONL 提取标题（前 200 行）+ 消息计数，前端直接使用
 - **陷阱**：`src-tauri/` 必须在 workspace `Cargo.toml` 的 `exclude` 列表里；`beforeDevCommand` 从 `src-tauri/` 目录执行，路径用 `../ui`
 - **陷阱**：浏览器直接访问 `localhost:5173` 会报 `invoke` undefined——`@tauri-apps/api` 只在 Tauri webview 内可用，测试必须通过 `cargo tauri dev` 的窗口
 
@@ -78,6 +64,7 @@ cargo tauri dev                      # launch Tauri desktop app (dev mode)
 cargo tauri build --debug            # build desktop app (debug)
 cargo build -p cdt-parse             # build one crate in isolation
 cargo test -p cdt-analyze            # test one crate
+npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
 ```
 
 ## macOS 开发陷阱
@@ -95,20 +82,10 @@ cargo test -p cdt-analyze            # test one crate
 - **Serde camelCase**：所有面向前端（Tauri IPC）的 struct 必须 `#[serde(rename_all = "camelCase")]`；enum 用 `rename_all_fields = "camelCase"` 给字段、`rename_all = "snake_case"` 给 tag 值。例外：`TokenUsage` 保持 snake_case（与 Anthropic API 原始格式一致）。
 - **`is_meta` 消息过滤**：JSONL 中 `isMeta: true` 的 user 消息（skill prompt、system-reminder 注入）在 `build_chunks` 中跳过，不产出 `UserChunk`；但其中的 `tool_result` 仍合并到 assistant buffer。
 - **Svelte 5 `@const` 位置限制**：`{@const}` 只能是 `{#if}`/`{:else}`/`{#each}`/`{#snippet}`/`<Component>` 的直接子级，不能放在 `<div>` 等 HTML 元素内。需要在块开头集中声明。
-- **前端渲染依赖**：`marked`（markdown→HTML）+ `highlight.js`（语法高亮，按需加载语言）+ `dompurify`（XSS 防护）。highlight.js 不引入预制主题 CSS，用自定义 Tokyo Night token 颜色。
-- **clippy pedantic 陷阱（本 workspace 反复触发，写的时候就避开）**：
-  - `doc_markdown`：doc/module 注释里出现的 `CamelCase` / `snake_case` 标识符都要反引号包裹，中文注释也不例外（`AIChunk` / `tool_count`）。
-  - `map_unwrap_or`：`opt.map(f).unwrap_or_else(g)` → `opt.map_or_else(g, f)`。
-  - `single_match_else`：`match x { Some(v) => v, None => { ... } }` → `if let Some(v) = x { v } else { ... }`。
-  - `needless_continue`：match arm / loop 末尾的 `continue` / `=> continue,` 写成 `{}` / `=> {}`。
-  - `assigning_clones`：`a = b.clone()` → `a.clone_from(&b)`（对 `Vec` / `String` 字段尤其敏感）。
-  - `cloned_ref_to_slice_refs`：测试里 `&[item.clone()]` → `std::slice::from_ref(&item)`。
-  - `cast_possible_wrap`：`u64 as i64` 禁用；用 `i64::try_from(x).unwrap_or(i64::MAX)`。
-  - `case_sensitive_file_extension_comparisons`：`name.ends_with(".jsonl")` → `Path::new(&name).extension().is_some_and(|e| e.eq_ignore_ascii_case("jsonl"))`。
-  - `uninlined_format_args`：`format!("{}", x)` → `format!("{x}")`；命名参数 `format!("{foo}", foo = bar)` 也要内联。
-  - `manual_string_new`：测试中 `"".into()` / `"".to_owned()` → `String::new()`。
-  - `manual_pattern_char_comparison`：`trim_end_matches(|c: char| c == '/' || c == '\\')` → `trim_end_matches(['/', '\\'])`。
-  - `while_let_loop`：`loop { match x.next().await { Ok(Some(v)) => ..., _ => break } }` → `while let Ok(Some(v)) = x.next().await { ... }`。
+- **前端渲染依赖**：`marked`（markdown→HTML）+ `highlight.js`（语法高亮，按需加载语言）+ `dompurify`（XSS 防护）。highlight.js 不引入预制主题 CSS，用 `app.css` 中自定义 Soft Charcoal token 颜色。
+- **原版 UI 参考**：前端文本清洗逻辑移植自 `../claude-devtools/src/shared/utils/contentSanitizer.ts`（`sanitizeDisplayContent`）。扩展 UI 功能时优先查原版 `src/renderer/` 和 `src/shared/` 对应实现，直接移植而非自己造轮子。
+- **Tauri IPC 透传**：`src-tauri/src/lib.rs` 的 commands 返回 `serde_json::Value`，`cdt-api` 类型扩展字段（如 `SessionSummary` 加 `title`）自动透传，不需要改 Tauri 层。
+- **clippy pedantic**：workspace 开启 pedantic，PostToolUse hook 会在每次 `.rs` 编辑后自动跑 clippy 报错。最常踩的：`doc_markdown`（注释里标识符要反引号）、`cast_possible_wrap`（`u64 as i64` → `i64::try_from`）、`uninlined_format_args`（`format!("{}", x)` → `format!("{x}")`）。其余照 clippy 输出修即可。
 - **insta 快照接受**：没装 `cargo-insta` 就用 `INSTA_UPDATE=always cargo test -p <crate>`；提交生成的 `tests/snapshots/*.snap`。
 - **同步解析入口**：`cdt-analyze` 的集成测试不引入 tokio——用 `cdt_parse::parse_entry_at(line, n)` 逐行解析 fixture，再跑 `dedupe_by_request_id`。
 - **自动化**：
