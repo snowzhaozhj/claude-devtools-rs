@@ -1,51 +1,110 @@
 import type { ToolExecution, ToolOutput } from "./api";
 
+// ---------------------------------------------------------------------------
+// 内容清洗（移植自原版 contentSanitizer.ts）
+// ---------------------------------------------------------------------------
+
+/** 完全移除的噪声标签 */
+const NOISE_TAG_PATTERNS = [
+  /<local-command-caveat>[\s\S]*?<\/local-command-caveat>/gi,
+  /<system-reminder>[\s\S]*?<\/system-reminder>/gi,
+  /<task-notification>[\s\S]*?<\/task-notification>/gi,
+];
+
+/** task 通知尾部指令 */
+const TASK_OUTPUT_INSTRUCTION_PATTERN =
+  / ?Read the output file to retrieve the result: [^\s]+/g;
+
+function isCommandContent(content: string): boolean {
+  return content.startsWith("<command-name>") || content.startsWith("<command-message>");
+}
+
+function isCommandOutputContent(content: string): boolean {
+  return content.startsWith("<local-command-stdout>") || content.startsWith("<local-command-stderr>");
+}
+
+/** 提取 <local-command-stdout/stderr> 内容 */
+function extractCommandOutput(content: string): string | null {
+  const match = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/i.exec(content);
+  if (match) return match[1].trim();
+  const matchErr = /<local-command-stderr>([\s\S]*?)<\/local-command-stderr>/i.exec(content);
+  if (matchErr) return matchErr[1].trim();
+  return null;
+}
+
+/** 提取 slash 命令为可读格式，如 "/model sonnet" */
+function extractCommandDisplay(content: string): string | null {
+  const nameMatch = /<command-name>\/([^<]+)<\/command-name>/.exec(content);
+  const argsMatch = /<command-args>([^<]*)<\/command-args>/.exec(content);
+  if (nameMatch) {
+    const name = `/${nameMatch[1].trim()}`;
+    const args = argsMatch?.[1]?.trim();
+    return args ? `${name} ${args}` : name;
+  }
+  return null;
+}
+
+export interface SlashInfo {
+  name: string;
+  message?: string;
+  args?: string;
+}
+
+/** 从 command XML 标签提取 slash 信息 */
+export function extractSlashInfo(content: string): SlashInfo | null {
+  const nameMatch = /<command-name>\/([^<]+)<\/command-name>/.exec(content);
+  if (!nameMatch) return null;
+  const name = nameMatch[1].trim();
+  const messageMatch = /<command-message>([^<]*)<\/command-message>/.exec(content);
+  const argsMatch = /<command-args>([^<]*)<\/command-args>/.exec(content);
+  return {
+    name,
+    message: messageMatch?.[1]?.trim() ?? undefined,
+    args: argsMatch?.[1]?.trim() ?? undefined,
+  };
+}
+
 /**
- * 清洗文本：移除 JSONL 中的元数据标签。
- * - `<command-name>...</command-name>`, `<command-message>...</command-message>`
- * - `<command-args>...</command-args>`
- * - `<system-reminder>...</system-reminder>` (含多行内容)
- * - `<local-command-caveat>...</local-command-caveat>`
- * - `<local-command-stdout>...</local-command-stdout>`
- * - 其他类似的 XML 包装标签
+ * 清洗 JSONL 原始内容为可显示文本。
+ * 逻辑与原版 `sanitizeDisplayContent` 对齐，额外处理 ANSI 转义码。
  */
 export function cleanDisplayText(text: string): string {
   if (!text) return "";
+
+  // 命令输出 → 直接返回内容
+  if (isCommandOutputContent(text)) {
+    const output = extractCommandOutput(text);
+    if (output) return stripAnsi(output);
+  }
+
+  // slash 命令 → 返回 "/name args" 格式
+  if (isCommandContent(text)) {
+    const display = extractCommandDisplay(text);
+    if (display) return display;
+  }
+
+  // 通用清洗
   let s = text;
+  for (const p of NOISE_TAG_PATTERNS) {
+    s = s.replace(p, "");
+  }
+  s = s
+    .replace(/<command-name>[\s\S]*?<\/command-name>/gi, "")
+    .replace(/<command-message>[\s\S]*?<\/command-message>/gi, "")
+    .replace(/<command-args>[\s\S]*?<\/command-args>/gi, "")
+    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/gi, "")
+    .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/gi, "");
+  s = s.replace(TASK_OUTPUT_INSTRUCTION_PATTERN, "");
 
-  // 1. 移除多行块标签（连同内容一起删除）
-  s = s.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "");
-  s = s.replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, "");
+  return stripAnsi(s).trim();
+}
 
-  // 2. 提取 command-message 内容（如果有），这是用户实际输入
-  const cmdMsgMatch = s.match(/<command-message>([\s\S]*?)<\/command-message>/);
-
-  // 3. 移除 local-command-stdout 连同内容（这是命令输出，不是用户输入）
-  s = s.replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, "");
-
-  // 4. 移除其他自定义 XML 标签（只去标签，保留内容）
-  s = s.replace(/<\/?(?:command-name|command-message|command-args)[^>]*>/g, "");
-
-  // 5. 移除 ANSI 转义序列（真实 ESC 字符 \x1b）
+/** 移除 ANSI 转义序列 */
+function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
   s = s.replace(/\x1b\[[0-9;]*m/g, "");
-
-  // 6. 移除残留的 ANSI 码文本形式（[1m, [22m, [0m 等）
   s = s.replace(/\[(\d+;)*\d*m/g, "");
-
-  // 7. 如果清洗后为空但有 command-message，用它
-  s = s.trim();
-  if (!s && cmdMsgMatch) {
-    s = cmdMsgMatch[1].trim();
-  }
-
-  // 8. 去除连续的重复行（如 "/model\nmodel" → "/model"）
-  const lines = s.split("\n").map(l => l.trim()).filter(Boolean);
-  if (lines.length === 2 && lines[0].startsWith("/") && lines[0].slice(1) === lines[1]) {
-    s = lines[0];
-  }
-
-  return s.trim();
+  return s;
 }
 
 /** 根据工具名和 input 生成摘要文本 */
