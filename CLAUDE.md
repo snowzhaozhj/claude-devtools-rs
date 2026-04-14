@@ -47,8 +47,7 @@ claude-devtools-rs/
 - `src-tauri/` 通过 path deps 引用 `crates/` 下的数据层 crate
 - Tauri IPC commands 直接调用 `LocalDataApi`，不走 HTTP
 - **布局**：Sidebar（项目选择器 + 日期分组会话列表）+ Main（SessionDetail）双栏持久化
-- **已有组件**：BaseItem（统一可展开项）、StatusDot、专用 Tool Viewer（Read/Edit/Write/Bash/Default）
-- **已有组件（续）**：OutputBlock（代码块通用容器）、SearchBar（Cmd+F 搜索）、ContextPanel（右侧边栏上下文面板）、SidebarHeader
+- **已有组件**：BaseItem（可展开项）、StatusDot、OutputBlock（代码块容器）、SearchBar（Cmd+F）、ContextPanel（右侧边栏）、SidebarHeader、Tool Viewer（Read/Edit/Write/Bash/Default）
 - **SVG 图标**：`ui/src/lib/icons.ts` 导出 lucide 风格 SVG path 常量（Wrench/Brain/Bot/Terminal 等），BaseItem 通过 `svgIcon` prop 渲染
 - **Context Panel 数据流**：后端 `cdt-api` 调用 `cdt-analyze::context::process_session_context_with_phases` 计算 `ContextInjection[]`（6 类结构化数据），通过 `SessionDetail.contextInjections` 传给前端。CLAUDE.md 文件通过 `cdt-config::read_all_claude_md_files` 从文件系统扫描（不在 JSONL 中）。
 - **session 元数据**：后端 `cdt-api/session_metadata.rs` 轻量扫描 JSONL 提取标题（前 200 行）+ 消息计数，前端直接使用
@@ -64,6 +63,7 @@ cargo test --workspace               # run tests
 cargo clippy --workspace --all-targets  # lint (workspace-level lints in Cargo.toml)
 cargo fmt --all                      # format
 cargo run -p cdt-cli                 # run the CLI binary (HTTP server)
+npm install --prefix ui              # install frontend dependencies (first time)
 cargo tauri dev                      # launch Tauri desktop app (dev mode)
 cargo tauri build --debug            # build desktop app (debug)
 cargo build -p cdt-parse             # build one crate in isolation
@@ -99,16 +99,7 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
   - Subagent：`spec-fidelity-reviewer` 按 capability 审计 scenario→test 覆盖。
   - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
   - MCP：`.mcp.json` 注册 GitHub MCP，需要 `GITHUB_PERSONAL_ACCESS_TOKEN` 环境变量。
-- **opsx:apply 推进节拍（硬约束）**：port 内任何多步改动必须按固定流水线推进，**不得**把 PostToolUse clippy hook 的沉默当作"可以停手"的信号。节拍：
-  1. `Edit` 源文件（可并行）
-  2. `cargo clippy --workspace --all-targets -- -D warnings` 汇总校验（**不是**靠 hook 单文件回显）
-  3. `cargo fmt --all`
-  4. `cargo test -p <crate>`（或 `--workspace`）
-  5. `npm run check`（如改了 `ui/` 下的文件）
-  6. `openspec validate <change> --strict`（如有 openspec change）
-  7. 勾 `openspec/changes/<change>/tasks.md` 的 checkbox
-  8. 发最终文本总结
-  每轮 tool call 结束前自检一句"这批之后要么发下批工具、要么发最终文本，二者必居其一"；只发 Edit 没有后续计划 = 禁止。开工时把 tasks.md 的每个 `##` section 作为 `TaskCreate` 入队，完成一个 `TaskUpdate completed` 一个，给自己留显式的"下一步指针"。
+- **opsx:apply 推进节拍**：详见 `.claude/rules/opsx-apply-cadence.md`。核心：Edit → clippy → fmt → test → npm check → validate → 勾 checkbox → 文本总结，不得中途停手。
 - Detailed rules: `.claude/rules/rust.md`.
 
 ## UI 已知遗留问题
