@@ -139,6 +139,7 @@ export interface SessionDetail {
   chunks: Chunk[];
   metrics: Record<string, unknown>;
   metadata: Record<string, unknown>;
+  contextInjections: unknown[];
 }
 
 export async function listProjects(): Promise<ProjectInfo[]> {

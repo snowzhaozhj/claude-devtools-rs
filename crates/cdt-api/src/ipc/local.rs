@@ -153,6 +153,41 @@ impl DataApi for LocalDataApi {
 
         let chunks = build_chunks(&messages);
 
+        // 从 session cwd 扫描实际 CLAUDE.md 文件
+        let project_root = messages
+            .iter()
+            .find_map(|m| m.cwd.as_deref())
+            .unwrap_or("");
+        let initial_claude_md = build_claude_md_from_filesystem(project_root).await;
+
+        // 调用 context-tracking 计算完整的 context injections
+        let empty_cmd = std::collections::HashMap::new();
+        let empty_mf = std::collections::HashMap::new();
+        let token_dicts = cdt_analyze::context::TokenDictionaries::new(
+            Path::new(""),
+            &empty_cmd,
+            &empty_cmd,
+            &empty_mf,
+        );
+        let ctx_result = cdt_analyze::context::process_session_context_with_phases(
+            &chunks,
+            &cdt_analyze::context::ProcessSessionParams {
+                project_root: Path::new(""),
+                token_dictionaries: token_dicts,
+                initial_claude_md_injections: &initial_claude_md,
+            },
+        );
+
+        // 取最后一个 phase 的最后一个 AI group 的 accumulated_injections
+        let context_injections = ctx_result
+            .phase_info
+            .phases
+            .last()
+            .and_then(|phase| ctx_result.stats_map.get(&phase.last_ai_group_id))
+            .map(|stats| &stats.accumulated_injections)
+            .and_then(|inj| serde_json::to_value(inj).ok())
+            .unwrap_or(serde_json::Value::Array(Vec::new()));
+
         Ok(SessionDetail {
             session_id: session_id.to_owned(),
             project_id: project_id.to_owned(),
@@ -162,6 +197,7 @@ impl DataApi for LocalDataApi {
                 "last_modified": session.last_modified,
                 "size": session.size,
             }),
+            context_injections,
         })
     }
 
@@ -180,6 +216,7 @@ impl DataApi for LocalDataApi {
                     chunks: serde_json::Value::Null,
                     metrics: serde_json::Value::Null,
                     metadata: serde_json::json!({"status": "not_found"}),
+                    context_injections: serde_json::Value::Array(Vec::new()),
                 }),
             }
         }
@@ -371,4 +408,41 @@ impl DataApi for LocalDataApi {
         // 简化：worktree session 需要 WorktreeGrouper，暂返回空
         Ok(serde_json::json!([]))
     }
+}
+
+/// 从文件系统扫描 CLAUDE.md 文件，构建 `ClaudeMdContextInjection` 列表。
+async fn build_claude_md_from_filesystem(project_root: &str) -> Vec<cdt_core::ContextInjection> {
+    use cdt_config::claude_md::Scope;
+
+    let files = read_all_claude_md_files(Path::new(project_root)).await;
+    files
+        .into_iter()
+        .filter(|(_, info)| info.exists)
+        .map(|(scope, info)| {
+            let core_scope = match scope {
+                Scope::Enterprise => cdt_core::ClaudeMdScope::Enterprise,
+                Scope::User | Scope::UserRules | Scope::AutoMemory => {
+                    cdt_core::ClaudeMdScope::User
+                }
+                Scope::Project
+                | Scope::ProjectAlt
+                | Scope::ProjectRules
+                | Scope::ProjectLocal => cdt_core::ClaudeMdScope::Project,
+            };
+            let display_name = info
+                .path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&info.path)
+                .to_owned();
+            cdt_core::ContextInjection::ClaudeMd(cdt_core::ClaudeMdContextInjection {
+                id: format!("claude-md-{}", info.path),
+                path: info.path,
+                display_name,
+                scope: core_scope,
+                estimated_tokens: u64::try_from(info.estimated_tokens).unwrap_or(0),
+                first_seen_turn_index: 0,
+            })
+        })
+        .collect()
 }

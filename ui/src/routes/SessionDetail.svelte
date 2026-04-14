@@ -6,6 +6,7 @@
   import { clearHighlights } from "../lib/searchHighlight";
   import BaseItem from "../components/BaseItem.svelte";
   import SearchBar from "../components/SearchBar.svelte";
+  import ContextPanel from "../components/ContextPanel.svelte";
   import DefaultToolViewer from "../components/tool-viewers/DefaultToolViewer.svelte";
   import ReadToolViewer from "../components/tool-viewers/ReadToolViewer.svelte";
   import EditToolViewer from "../components/tool-viewers/EditToolViewer.svelte";
@@ -22,6 +23,7 @@
   /** 存储被用户手动展开的 AI chunk index。默认全部收起。 */
   let expandedChunks: Set<number> = $state(new Set());
   let searchVisible = $state(false);
+  let contextPanelVisible = $state(false);
   let conversationEl: HTMLElement | undefined = $state();
 
   function toggleChunk(idx: number) {
@@ -164,7 +166,11 @@
   <div class="top-bar">
     <span class="top-title">{firstUserTitle(detail.chunks)}</span>
     <div class="top-meta">
-      <span class="top-badge">Context ({detail.chunks.length})</span>
+      <button
+        class="top-badge"
+        class:top-badge-active={contextPanelVisible}
+        onclick={() => contextPanelVisible = !contextPanelVisible}
+      >Context ({detail.chunks.length})</button>
     </div>
   </div>
 
@@ -175,6 +181,8 @@
     onClose={() => searchVisible = false}
   />
 
+  <!-- Content area (conversation + optional context panel) -->
+  <div class="content-area">
   <!-- Conversation -->
   <div class="conversation" bind:this={conversationEl}>
     {#each detail.chunks as chunk, i}
@@ -307,6 +315,11 @@
       {/if}
     {/each}
   </div>
+
+  {#if contextPanelVisible}
+    <ContextPanel {detail} onClose={() => contextPanelVisible = false} />
+  {/if}
+  </div>
 {/if}
 </div>
 
@@ -362,6 +375,28 @@
     background: var(--badge-neutral-bg);
     padding: 2px 10px;
     border-radius: 4px;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.1s, color 0.1s;
+  }
+
+  .top-badge:hover {
+    background: var(--color-border);
+    color: var(--color-text-secondary);
+  }
+
+  .top-badge-active {
+    background: var(--color-border-emphasis);
+    color: var(--color-text);
+  }
+
+  /* ── Content area ── */
+  .content-area {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    min-height: 0;
   }
 
   /* ── Conversation ── */

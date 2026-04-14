@@ -64,6 +64,10 @@ pub struct SessionDetail {
     pub chunks: serde_json::Value,
     pub metrics: serde_json::Value,
     pub metadata: serde_json::Value,
+    /// session 级别的 context injections（6 类结构化数据），
+    /// 由 `process_session_context_with_phases` 计算。
+    #[serde(default)]
+    pub context_injections: serde_json::Value,
 }
 
 // =============================================================================
