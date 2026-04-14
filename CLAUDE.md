@@ -48,9 +48,13 @@ claude-devtools-rs/
 - Tauri IPC commands 直接调用 `LocalDataApi`，不走 HTTP
 - **布局**：Sidebar（项目选择器 + 日期分组会话列表）+ Main（SessionDetail）双栏持久化
 - **已有组件**：BaseItem（统一可展开项）、StatusDot、专用 Tool Viewer（Read/Edit/Write/Bash/Default）
+- **已有组件（续）**：OutputBlock（代码块通用容器）、SearchBar（Cmd+F 搜索）、ContextPanel（右侧边栏上下文面板）、SidebarHeader
+- **SVG 图标**：`ui/src/lib/icons.ts` 导出 lucide 风格 SVG path 常量（Wrench/Brain/Bot/Terminal 等），BaseItem 通过 `svgIcon` prop 渲染
+- **Context Panel 数据流**：后端 `cdt-api` 调用 `cdt-analyze::context::process_session_context_with_phases` 计算 `ContextInjection[]`（6 类结构化数据），通过 `SessionDetail.contextInjections` 传给前端。CLAUDE.md 文件通过 `cdt-config::read_all_claude_md_files` 从文件系统扫描（不在 JSONL 中）。
 - **session 元数据**：后端 `cdt-api/session_metadata.rs` 轻量扫描 JSONL 提取标题（前 200 行）+ 消息计数，前端直接使用
 - **陷阱**：`src-tauri/` 必须在 workspace `Cargo.toml` 的 `exclude` 列表里；`beforeDevCommand` 从 `src-tauri/` 目录执行，路径用 `../ui`
 - **陷阱**：浏览器直接访问 `localhost:5173` 会报 `invoke` undefined——`@tauri-apps/api` 只在 Tauri webview 内可用，测试必须通过 `cargo tauri dev` 的窗口
+- **陷阱**：Vite HMR 只更新前端代码；后端 Rust crate 改动后需要 `pkill -f claude-devtools-tauri && cargo tauri dev` 重启（Tauri 的 file watcher 有时不触发自动重编译）。
 
 ## Common commands
 
@@ -80,7 +84,9 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
 - **No `unwrap()` in library code** — use `?` or typed errors.
 - **No cross-crate imports of internal modules** — go through each crate's public API.
 - **Serde camelCase**：所有面向前端（Tauri IPC）的 struct 必须 `#[serde(rename_all = "camelCase")]`；enum 用 `rename_all_fields = "camelCase"` 给字段、`rename_all = "snake_case"` 给 tag 值。例外：`TokenUsage` 保持 snake_case（与 Anthropic API 原始格式一致）。
+- **`ContextInjection` serde 格式**：`#[serde(tag = "category", rename_all = "kebab-case")]` 是 internally-tagged，JSON 为 `{ "category": "claude-md", "id": "...", ... }`（不是 `{ "ClaudeMd": {...} }`）。前端按 `inj.category` 字段 switch 匹配。
 - **`is_meta` 消息过滤**：JSONL 中 `isMeta: true` 的 user 消息（skill prompt、system-reminder 注入）在 `build_chunks` 中跳过，不产出 `UserChunk`；但其中的 `tool_result` 仍合并到 assistant buffer。
+- **Svelte 5 `$effect` 依赖陷阱**：`$effect` 中读取的所有响应式变量自动成为依赖。若需要在 effect 中读取但不触发重跑的变量，用 `untrack(() => variable)` 包裹。典型场景：session 切换 effect 中清理搜索状态。
 - **Svelte 5 `@const` 位置限制**：`{@const}` 只能是 `{#if}`/`{:else}`/`{#each}`/`{#snippet}`/`<Component>` 的直接子级，不能放在 `<div>` 等 HTML 元素内。需要在块开头集中声明。
 - **前端渲染依赖**：`marked`（markdown→HTML）+ `highlight.js`（语法高亮，按需加载语言）+ `dompurify`（XSS 防护）。highlight.js 不引入预制主题 CSS，用 `app.css` 中自定义 Soft Charcoal token 颜色。
 - **原版 UI 参考**：前端文本清洗逻辑移植自 `../claude-devtools/src/shared/utils/contentSanitizer.ts`（`sanitizeDisplayContent`）。扩展 UI 功能时优先查原版 `src/renderer/` 和 `src/shared/` 对应实现，直接移植而非自己造轮子。
@@ -104,6 +110,12 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
   8. 发最终文本总结
   每轮 tool call 结束前自检一句"这批之后要么发下批工具、要么发最终文本，二者必居其一"；只发 Edit 没有后续计划 = 禁止。开工时把 tasks.md 的每个 `##` section 作为 `TaskCreate` 入队，完成一个 `TaskUpdate completed` 一个，给自己留显式的"下一步指针"。
 - Detailed rules: `.claude/rules/rust.md`.
+
+## UI 已知遗留问题
+
+- **Subagent 数据为空**：`AIChunk.subagents` 依赖 `resolve_subagents` 做跨 session 解析，当前 API 层未集成
+- **Slash 命令不在 chunks 中**：slash 在 `isMeta` user 消息中，被 `build_chunks` 过滤，summary 统计中缺失
+- **AI header tool call 计数偏少**：需对比原版 `displaySummary.ts` 的 `buildSummary` 逻辑确认差异来源
 
 ## What to do first in a fresh session
 
