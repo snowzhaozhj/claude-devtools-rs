@@ -2,7 +2,8 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import { getSessionDetail, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
-  import { getToolSummary, getToolStatus, cleanDisplayText } from "../lib/toolHelpers";
+  import { getToolSummary, getToolStatus, cleanDisplayText, buildAiGroupSummary } from "../lib/toolHelpers";
+  import { WRENCH, BRAIN, BOT, TERMINAL } from "../lib/icons";
   import { clearHighlights } from "../lib/searchHighlight";
   import BaseItem from "../components/BaseItem.svelte";
   import SearchBar from "../components/SearchBar.svelte";
@@ -205,7 +206,7 @@
 
       <!-- AI -->
       {:else if chunk.kind === "ai"}
-        {@const toolCount = aiToolCount(chunk)}
+        {@const summaryText = buildAiGroupSummary(chunk)}
         {@const toolsVisible = isChunkToolsVisible(i)}
         <div class="msg-row msg-row-ai">
           <div class="msg-ai-container">
@@ -214,12 +215,12 @@
               <span class="ai-avatar">C</span>
               <span class="ai-label">Claude</span>
               <span class="ai-model">{aiModel(chunk)}</span>
-              {#if toolCount > 0}
+              {#if summaryText}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <span class="ai-tool-toggle" onclick={() => toggleChunk(i)}>
                   <span class="ai-tool-chevron" class:ai-tool-chevron-open={toolsVisible}>▸</span>
-                  {toolCount} tool{toolCount > 1 ? "s" : ""}
+                  {summaryText}
                 </span>
               {/if}
               <span class="ai-header-spacer"></span>
@@ -236,7 +237,7 @@
                     {#if exec}
                       {@const key = `${i}-tool-${exec.toolUseId}`}
                       <BaseItem
-                        icon="T"
+                        svgIcon={WRENCH}
                         label={exec.toolName}
                         summary={getToolSummary(exec.toolName, exec.input)}
                         status={getToolStatus(exec)}
@@ -259,7 +260,15 @@
                       </BaseItem>
                     {/if}
                   {:else if step.kind === "subagent_spawn"}
-                    <BaseItem icon=">" label="Subagent" isExpanded={false} onclick={() => {}} />
+                    {@const sub = chunk.subagents?.find(s => s.sessionId === step.placeholderId)}
+                    <BaseItem
+                      svgIcon={BOT}
+                      label={sub?.team ? sub.team.memberName : "Subagent"}
+                      summary={sub?.rootTaskDescription ? (sub.rootTaskDescription.length > 60 ? sub.rootTaskDescription.slice(0, 60) + "…" : sub.rootTaskDescription) : step.placeholderId.slice(0, 8)}
+                      durationMs={sub?.endTs && sub?.spawnTs ? new Date(sub.endTs).getTime() - new Date(sub.spawnTs).getTime() : undefined}
+                      isExpanded={false}
+                      onclick={() => {}}
+                    />
                   {/if}
                 {/each}
               </div>
@@ -270,7 +279,7 @@
               {#each chunk.semanticSteps as step, si}
                 {#if step.kind === "thinking"}
                   <BaseItem
-                    icon="*"
+                    svgIcon={BRAIN}
                     label="Thinking"
                     isExpanded={expandedItems.has(`${i}-think-${si}`)}
                     onclick={() => toggle(`${i}-think-${si}`)}
@@ -291,13 +300,13 @@
       {:else if chunk.kind === "system"}
         {@const sysText = cleanDisplayText(chunk.contentText)}
         {#if sysText}
-          <div class="msg-row msg-row-system">
-            <div class="msg-system">
+          <div class="msg-row msg-row-system-left">
+            <div class="system-header">
+              <svg class="system-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={TERMINAL}/></svg>
               <span class="system-label">System</span>
-              <span class="system-sep">·</span>
               <span class="system-time">{ftime(chunk.timestamp)}</span>
             </div>
-            <div class="system-content">{sysText}</div>
+            <pre class="system-pre">{sysText}</pre>
           </div>
         {/if}
 
@@ -564,28 +573,46 @@
     padding: 8px 0;
   }
 
-  .msg-system {
+  .msg-row-system-left {
+    padding: 8px 0;
+    max-width: 85%;
+  }
+
+  .system-header {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
+    margin-bottom: 4px;
+  }
+
+  .system-icon {
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
   }
 
   .system-label {
     color: var(--color-text-muted);
     font-weight: 500;
+    font-size: 12px;
   }
 
-  .system-sep { color: var(--color-text-muted); }
   .system-time { color: var(--color-text-muted); font-size: 11px; }
 
-  .system-content {
-    font-size: 13px;
-    color: var(--color-text-muted);
-    text-align: center;
-    max-width: 600px;
-    word-break: break-word;
-    padding: 4px 0;
+  .system-pre {
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--chat-system-text);
+    background: var(--chat-system-bg);
+    border-radius: 12px;
+    padding: 10px 14px;
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    max-height: 384px;
+    overflow-y: auto;
+    line-height: 1.5;
   }
 
   /* ── Prose (markdown) ── */

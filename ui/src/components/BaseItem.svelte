@@ -4,6 +4,7 @@
 
   interface Props {
     icon?: string;
+    svgIcon?: string;
     label: string;
     summary?: string;
     tokenCount?: number;
@@ -14,7 +15,7 @@
     children?: Snippet;
   }
 
-  let { icon, label, summary, tokenCount, status, durationMs, isExpanded, onclick, children }: Props = $props();
+  let { icon, svgIcon, label, summary, tokenCount, status, durationMs, isExpanded, onclick, children }: Props = $props();
 
   function formatTokens(n: number): string {
     if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
@@ -32,7 +33,9 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="base-item-header" onclick={onclick}>
-    {#if icon}
+    {#if svgIcon}
+      <svg class="base-item-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={svgIcon}/></svg>
+    {:else if icon}
       <span class="base-item-icon">{icon}</span>
     {/if}
 
@@ -91,6 +94,13 @@
     font-size: 14px;
     width: 16px;
     text-align: center;
+    flex-shrink: 0;
+    color: var(--tool-item-muted);
+  }
+
+  .base-item-svg {
+    width: 14px;
+    height: 14px;
     flex-shrink: 0;
     color: var(--tool-item-muted);
   }

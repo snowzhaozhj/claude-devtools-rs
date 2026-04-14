@@ -208,3 +208,29 @@ export function getLanguageFromPath(filePath: string): string {
 export function getFileName(filePath: string): string {
   return filePath.split("/").pop() ?? filePath;
 }
+
+/** 对齐原版 buildSummary：统计 AI chunk 中各类项数量 */
+export function buildAiGroupSummary(chunk: {
+  toolExecutions: unknown[];
+  subagents: unknown[];
+  semanticSteps: Array<{ kind: string }>;
+}): string {
+  const tools = chunk.toolExecutions.length;
+  let texts = 0;
+  let thinkings = 0;
+  let subagentSpawns = 0;
+  for (const s of chunk.semanticSteps) {
+    if (s.kind === "text") texts++;
+    else if (s.kind === "thinking") thinkings++;
+    else if (s.kind === "subagent_spawn") subagentSpawns++;
+  }
+  // subagent 数量取 resolved subagents 和 spawn steps 的较大值
+  const subagents = Math.max(chunk.subagents?.length ?? 0, subagentSpawns);
+
+  const parts: string[] = [];
+  if (tools > 0) parts.push(`${tools} tool call${tools > 1 ? "s" : ""}`);
+  if (texts > 0) parts.push(`${texts} message${texts > 1 ? "s" : ""}`);
+  if (subagents > 0) parts.push(`${subagents} subagent${subagents > 1 ? "s" : ""}`);
+  if (thinkings > 0) parts.push(`${thinkings} thinking`);
+  return parts.join(", ");
+}

@@ -102,6 +102,15 @@ export interface UserChunk {
   metrics: ChunkMetrics;
 }
 
+export interface SubagentProcess {
+  sessionId: string;
+  rootTaskDescription: string | null;
+  spawnTs: string;
+  endTs: string | null;
+  metrics: ChunkMetrics;
+  team: { teamName: string; memberName: string; memberColor: string | null } | null;
+}
+
 export interface AIChunk {
   kind: "ai";
   timestamp: string;
@@ -110,7 +119,7 @@ export interface AIChunk {
   metrics: ChunkMetrics;
   semanticSteps: SemanticStep[];
   toolExecutions: ToolExecution[];
-  subagents: unknown[];
+  subagents: SubagentProcess[];
 }
 
 export interface SystemChunk {
