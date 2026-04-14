@@ -70,7 +70,7 @@
     color: var(--diff-added-text);
     padding: 10px 12px;
     margin: 0;
-    white-space: pre-wrap;
+    white-space: pre;
     overflow-x: auto;
     max-height: 400px;
     overflow-y: auto;

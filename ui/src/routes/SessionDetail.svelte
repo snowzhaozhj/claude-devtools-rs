@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { getSessionDetail, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
   import { getToolSummary, getToolStatus, cleanDisplayText } from "../lib/toolHelpers";
+  import { clearHighlights } from "../lib/searchHighlight";
   import BaseItem from "../components/BaseItem.svelte";
+  import SearchBar from "../components/SearchBar.svelte";
   import DefaultToolViewer from "../components/tool-viewers/DefaultToolViewer.svelte";
   import ReadToolViewer from "../components/tool-viewers/ReadToolViewer.svelte";
   import EditToolViewer from "../components/tool-viewers/EditToolViewer.svelte";
@@ -19,6 +21,8 @@
   let expandedItems: Set<string> = $state(new Set());
   /** 存储被用户手动展开的 AI chunk index。默认全部收起。 */
   let expandedChunks: Set<number> = $state(new Set());
+  let searchVisible = $state(false);
+  let conversationEl: HTMLElement | undefined = $state();
 
   function toggleChunk(idx: number) {
     const n = new Set(expandedChunks);
@@ -30,14 +34,30 @@
     return expandedChunks.has(idx);
   }
 
+  function handleKeydown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+      e.preventDefault();
+      searchVisible = true;
+    }
+  }
+
   onMount(async () => {
+    document.addEventListener("keydown", handleKeydown);
     try { detail = await getSessionDetail(projectId, sessionId); }
     catch (e) { error = String(e); }
     finally { loading = false; }
   });
 
+  onDestroy(() => {
+    document.removeEventListener("keydown", handleKeydown);
+  });
+
   $effect(() => {
     if (sessionId) {
+      untrack(() => {
+        if (searchVisible && conversationEl) clearHighlights(conversationEl);
+        searchVisible = false;
+      });
       loading = true;
       error = null;
       expandedItems = new Set();
@@ -132,6 +152,7 @@
   }
 </script>
 
+<div class="session-detail">
 {#if loading}
   <div class="state-msg">加载中...</div>
 {:else if error}
@@ -147,8 +168,15 @@
     </div>
   </div>
 
+  <!-- Search bar -->
+  <SearchBar
+    visible={searchVisible}
+    containerEl={conversationEl ?? null}
+    onClose={() => searchVisible = false}
+  />
+
   <!-- Conversation -->
-  <div class="conversation">
+  <div class="conversation" bind:this={conversationEl}>
     {#each detail.chunks as chunk, i}
 
       <!-- User -->
@@ -280,8 +308,17 @@
     {/each}
   </div>
 {/if}
+</div>
 
 <style>
+  /* ── Root ── */
+  .session-detail {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+  }
+
   /* ── States ── */
   .state-msg {
     display: flex;
@@ -300,6 +337,7 @@
     padding: 10px 24px;
     border-bottom: 1px solid var(--color-border);
     gap: 12px;
+    flex-shrink: 0;
   }
 
   .top-title {
@@ -328,6 +366,8 @@
 
   /* ── Conversation ── */
   .conversation {
+    flex: 1;
+    overflow-y: auto;
     padding: 16px 24px 48px;
     display: flex;
     flex-direction: column;

@@ -43,9 +43,9 @@
   --chat-ai-icon: #9c9a95;
 
   /* Code blocks */
-  --code-bg: #f4f3f0;
-  --code-header-bg: #eceae6;
-  --code-border: #e0deda;
+  --code-bg: #efeee9;
+  --code-header-bg: #e8e6e0;
+  --code-border: #d5d3cf;
   --code-line-number: #b5b3ae;
   --code-filename: #2563eb;
 
@@ -77,8 +77,8 @@
   --prose-link: #2563eb;
   --prose-code-bg: rgba(0, 0, 0, 0.06);
   --prose-code-text: #3d3b36;
-  --prose-pre-bg: #f4f3f0;
-  --prose-pre-border: #e0deda;
+  --prose-pre-bg: #efeee9;
+  --prose-pre-border: #d5d3cf;
   --prose-blockquote-border: #d5d3cf;
   --prose-table-border: #e5e4e1;
   --prose-table-header-bg: #f0efed;
@@ -103,6 +103,11 @@
   --tag-bg: #f0efed;
   --tag-text: #6b6964;
   --tag-border: #e5e4e1;
+
+  /* Search highlight */
+  --highlight-bg: rgba(250, 204, 21, 0.4);
+  --highlight-bg-current: rgba(250, 204, 21, 0.8);
+  --highlight-ring: rgba(202, 138, 4, 0.6);
 
   /* Fonts */
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -151,4 +156,20 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Search highlight
+   ═══════════════════════════════════════════════════════════════ */
+
+mark[data-search-match] {
+  background: var(--highlight-bg);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+mark[data-search-current] {
+  background: var(--highlight-bg-current);
+  outline: 2px solid var(--highlight-ring);
 }

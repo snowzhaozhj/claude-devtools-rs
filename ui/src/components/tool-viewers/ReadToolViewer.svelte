@@ -136,8 +136,7 @@
   }
 
   .line-content {
-    white-space: pre-wrap;
-    overflow-wrap: break-word;
+    white-space: pre;
   }
 
   /* Syntax tokens */

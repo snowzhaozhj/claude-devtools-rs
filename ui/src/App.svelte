@@ -52,8 +52,10 @@
 
   .main-content {
     flex: 1;
-    overflow-y: auto;
+    overflow: hidden;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
   }
 
   .empty-state {

@@ -16,6 +16,7 @@
   let sessions: SessionSummary[] = $state([]);
   let projectsLoading = $state(true);
   let sessionsLoading = $state(false);
+  let filterQuery = $state("");
 
   onMount(async () => {
     try {
@@ -94,7 +95,12 @@
     return date.toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
   }
 
-  const dateGroups = $derived(groupByDate(sessions));
+  const filteredSessions = $derived(
+    filterQuery
+      ? sessions.filter(s => (s.title || s.sessionId).toLowerCase().includes(filterQuery.toLowerCase()))
+      : sessions
+  );
+  const dateGroups = $derived(groupByDate(filteredSessions));
   const totalSessions = $derived(sessions.length);
 </script>
 
@@ -105,11 +111,16 @@
     {onSelectProject}
   />
 
-  <!-- Session count -->
+  <!-- Session filter + count -->
   {#if !sessionsLoading && selectedProjectId}
-    <div class="session-count-bar">
-      <span class="session-count-label">SESSIONS</span>
-      <span class="session-count-num">{totalSessions}</span>
+    <div class="session-filter-bar">
+      <input
+        class="session-filter-input"
+        type="text"
+        placeholder="搜索会话…"
+        bind:value={filterQuery}
+      />
+      <span class="session-count-num">{filteredSessions.length}/{totalSessions}</span>
     </div>
   {/if}
 
@@ -118,6 +129,8 @@
       <div class="sidebar-status">加载中...</div>
     {:else if sessions.length === 0}
       <div class="sidebar-status">暂无会话</div>
+    {:else if filteredSessions.length === 0}
+      <div class="sidebar-status">无匹配会话</div>
     {:else}
       {#each dateGroups as group}
         <div class="date-group">
@@ -155,28 +168,41 @@
     overflow: hidden;
   }
 
-  .session-count-bar {
+  .session-filter-bar {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
+    gap: 8px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--color-border);
   }
 
-  .session-count-label {
-    font-size: 11px;
-    font-weight: 600;
+  .session-filter-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-family: inherit;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .session-filter-input:focus {
+    border-color: var(--color-border-emphasis);
+  }
+
+  .session-filter-input::placeholder {
     color: var(--color-text-muted);
-    letter-spacing: 0.5px;
   }
 
   .session-count-num {
     font-size: 11px;
     color: var(--color-text-muted);
-    background: var(--badge-neutral-bg);
-    padding: 0 6px;
-    border-radius: 10px;
-    font-weight: 500;
+    flex-shrink: 0;
+    font-family: var(--font-mono);
   }
 
   .session-list {

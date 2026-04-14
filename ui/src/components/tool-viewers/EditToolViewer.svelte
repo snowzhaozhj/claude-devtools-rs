@@ -82,7 +82,7 @@
     font-family: var(--font-mono);
     padding: 8px 10px;
     margin: 0;
-    white-space: pre-wrap;
+    white-space: pre;
     overflow-x: auto;
     line-height: 1.5;
     max-height: 300px;
