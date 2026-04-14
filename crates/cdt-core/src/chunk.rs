@@ -13,6 +13,22 @@ use crate::message::{MessageContent, TokenUsage, ToolCall};
 use crate::process::Process;
 use crate::tool_execution::ToolExecution;
 
+/// 从 isMeta 用户消息中提取的 slash 命令信息。
+///
+/// 格式：`<command-name>/xxx</command-name>` + 可选
+/// `<command-message>` 和 `<command-args>`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlashCommand {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
+    pub message_uuid: String,
+    pub timestamp: DateTime<Utc>,
+}
+
 /// 对单个 chunk 汇总的指标。
 ///
 /// Token 字段语义与 [`TokenUsage`] 对齐；`tool_count` 在
@@ -115,6 +131,9 @@ pub struct AIChunk {
     /// TODO(port-team-coordination-metadata)：由更晚的 port 填充。
     #[serde(default)]
     pub subagents: Vec<Process>,
+    /// 前驱 isMeta 消息中提取的 slash 命令（如 `/commit`、`/review-pr`）。
+    #[serde(default)]
+    pub slash_commands: Vec<SlashCommand>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -255,6 +274,7 @@ mod tests {
             semantic_steps: Vec::new(),
             tool_executions: Vec::new(),
             subagents: Vec::new(),
+            slash_commands: Vec::new(),
         }));
     }
 

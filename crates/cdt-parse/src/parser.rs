@@ -176,7 +176,7 @@ fn extract_tool_calls(content: &MessageContent) -> Vec<ToolCall> {
     let mut out = Vec::new();
     for block in blocks {
         if let ContentBlock::ToolUse { id, name, input } = block {
-            let is_task = name == "Task";
+            let is_task = name == "Task" || name == "Agent";
             let (task_description, task_subagent_type) = if is_task {
                 (
                     input

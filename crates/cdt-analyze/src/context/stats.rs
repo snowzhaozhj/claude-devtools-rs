@@ -173,6 +173,7 @@ mod tests {
             semantic_steps: Vec::new(),
             tool_executions: Vec::new(),
             subagents: Vec::new(),
+            slash_commands: Vec::new(),
         }
     }
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cdt_api::{DataApi, LocalDataApi, PaginatedRequest};
+use cdt_api::{DataApi, LocalDataApi, PaginatedRequest, SearchRequest};
 use cdt_config::{ConfigManager, NotificationManager};
 use cdt_discover::{local_handle, path_decoder, ProjectScanner};
 use cdt_ssh::SshConnectionManager;
@@ -49,6 +49,23 @@ async fn get_session_detail(
     serde_json::to_value(&detail).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn search_sessions(
+    data: State<'_, AppData>,
+    project_id: String,
+    query: String,
+) -> Result<serde_json::Value, String> {
+    let request = SearchRequest {
+        query,
+        project_id: Some(project_id),
+        session_id: None,
+    };
+    data.api
+        .search(&request)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -83,6 +100,7 @@ pub fn run() {
             list_projects,
             list_sessions,
             get_session_detail,
+            search_sessions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

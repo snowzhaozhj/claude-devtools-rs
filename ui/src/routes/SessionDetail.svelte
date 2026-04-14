@@ -3,7 +3,7 @@
   import { getSessionDetail, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
   import { getToolSummary, getToolStatus, cleanDisplayText, buildAiGroupSummary } from "../lib/toolHelpers";
-  import { WRENCH, BRAIN, BOT, TERMINAL } from "../lib/icons";
+  import { WRENCH, BRAIN, BOT, TERMINAL, SLASH } from "../lib/icons";
   import { clearHighlights } from "../lib/searchHighlight";
   import BaseItem from "../components/BaseItem.svelte";
   import SearchBar from "../components/SearchBar.svelte";
@@ -231,6 +231,15 @@
             <!-- Tool rows (toggle visibility) -->
             {#if toolsVisible}
               <div class="ai-tools-section">
+                {#each chunk.slashCommands ?? [] as slash}
+                  <BaseItem
+                    svgIcon={SLASH}
+                    label={"/" + slash.name}
+                    summary={slash.args ?? slash.message ?? ""}
+                    isExpanded={false}
+                    onclick={() => {}}
+                  />
+                {/each}
                 {#each chunk.semanticSteps as step, si}
                   {#if step.kind === "tool_execution"}
                     {@const exec = chunk.toolExecutions.find(e => e.toolUseId === step.toolUseId)}

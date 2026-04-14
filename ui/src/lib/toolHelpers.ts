@@ -213,9 +213,11 @@ export function getFileName(filePath: string): string {
 export function buildAiGroupSummary(chunk: {
   toolExecutions: unknown[];
   subagents: unknown[];
+  slashCommands?: unknown[];
   semanticSteps: Array<{ kind: string }>;
 }): string {
   const tools = chunk.toolExecutions.length;
+  const slashes = chunk.slashCommands?.length ?? 0;
   let texts = 0;
   let thinkings = 0;
   let subagentSpawns = 0;
@@ -229,6 +231,7 @@ export function buildAiGroupSummary(chunk: {
 
   const parts: string[] = [];
   if (tools > 0) parts.push(`${tools} tool call${tools > 1 ? "s" : ""}`);
+  if (slashes > 0) parts.push(`${slashes} slash${slashes > 1 ? "es" : ""}`);
   if (texts > 0) parts.push(`${texts} message${texts > 1 ? "s" : ""}`);
   if (subagents > 0) parts.push(`${subagents} subagent${subagents > 1 ? "s" : ""}`);
   if (thinkings > 0) parts.push(`${thinkings} thinking`);

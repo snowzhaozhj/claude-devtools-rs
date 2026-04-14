@@ -17,3 +17,6 @@ export const TERMINAL =
 
 export const CHEVRON_RIGHT =
   "M9 18l6-6-6-6";
+
+export const SLASH =
+  "M22 2L2 22";

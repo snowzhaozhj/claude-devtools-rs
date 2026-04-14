@@ -111,6 +111,14 @@ export interface SubagentProcess {
   team: { teamName: string; memberName: string; memberColor: string | null } | null;
 }
 
+export interface SlashCommand {
+  name: string;
+  message: string | null;
+  args: string | null;
+  messageUuid: string;
+  timestamp: string;
+}
+
 export interface AIChunk {
   kind: "ai";
   timestamp: string;
@@ -120,6 +128,7 @@ export interface AIChunk {
   semanticSteps: SemanticStep[];
   toolExecutions: ToolExecution[];
   subagents: SubagentProcess[];
+  slashCommands: SlashCommand[];
 }
 
 export interface SystemChunk {

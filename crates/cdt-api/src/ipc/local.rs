@@ -7,12 +7,15 @@ use std::path::Path;
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use cdt_analyze::build_chunks;
+use cdt_analyze::build_chunks_with_subagents;
 use cdt_config::{
     ConfigManager, NotificationManager, read_all_claude_md_files,
     read_mentioned_file as config_read_mentioned_file, validate_file_path,
 };
-use cdt_discover::{ProjectScanner, path_decoder};
+use cdt_discover::{
+    LocalFileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
+    path_decoder,
+};
 use cdt_parse::parse_file;
 use cdt_ssh::{ActiveContext, SshConnectionManager, parse_ssh_config_file, resolve_host};
 
@@ -27,6 +30,7 @@ use super::types::{
 /// 本地文件系统 `DataApi` 实现。
 pub struct LocalDataApi {
     scanner: Mutex<ProjectScanner>,
+    searcher: SessionSearcher<LocalFileSystemProvider>,
     config_mgr: Mutex<ConfigManager>,
     notif_mgr: Mutex<NotificationManager>,
     ssh_mgr: Mutex<SshConnectionManager>,
@@ -39,8 +43,12 @@ impl LocalDataApi {
         notif_mgr: NotificationManager,
         ssh_mgr: SshConnectionManager,
     ) -> Self {
+        let fs = std::sync::Arc::new(LocalFileSystemProvider::new());
+        let cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
+        let searcher = SessionSearcher::new(fs, cache);
         Self {
             scanner: Mutex::new(scanner),
+            searcher,
             config_mgr: Mutex::new(config_mgr),
             notif_mgr: Mutex::new(notif_mgr),
             ssh_mgr: Mutex::new(ssh_mgr),
@@ -151,7 +159,10 @@ impl DataApi for LocalDataApi {
             .await
             .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
 
-        let chunks = build_chunks(&messages);
+        // 扫描 subagent 候选
+        let candidates = scan_subagent_candidates(&projects_dir.join(project_id), session_id).await;
+
+        let chunks = build_chunks_with_subagents(&messages, &candidates);
 
         // 从 session cwd 扫描实际 CLAUDE.md 文件
         let project_root = messages.iter().find_map(|m| m.cwd.as_deref()).unwrap_or("");
@@ -225,12 +236,28 @@ impl DataApi for LocalDataApi {
     // =========================================================================
 
     async fn search(&self, request: &SearchRequest) -> Result<serde_json::Value, ApiError> {
-        // 简化实现：返回空结果
-        // 完整实现需要 SessionSearcher + SearchTextCache
-        Ok(serde_json::json!({
-            "query": request.query,
-            "results": [],
-        }))
+        if request.query.is_empty() {
+            return Ok(serde_json::json!({
+                "query": "",
+                "results": [],
+            }));
+        }
+
+        let config = SearchConfig::default();
+        let max_results = 50;
+
+        let project_id = request
+            .project_id
+            .as_deref()
+            .ok_or_else(|| ApiError::validation("project_id is required for search"))?;
+
+        let result = self
+            .searcher
+            .search_sessions(project_id, &request.query, max_results, &config)
+            .await
+            .map_err(|e| ApiError::internal(format!("search error: {e}")))?;
+
+        serde_json::to_value(&result).map_err(|e| ApiError::internal(format!("{e}")))
     }
 
     // =========================================================================
@@ -439,4 +466,138 @@ async fn build_claude_md_from_filesystem(project_root: &str) -> Vec<cdt_core::Co
             })
         })
         .collect()
+}
+
+/// 扫描 subagent 候选文件，构建 `SubagentCandidate` 列表。
+///
+/// 扫描路径：
+/// - 新结构：`{project_dir}/{session_id}/subagents/agent-*.jsonl`
+/// - 旧结构：`{project_dir}/agent-*.jsonl`（需要读首行检查 parent session）
+///
+/// 扫描失败时静默返回空列表（warn 日志）。
+async fn scan_subagent_candidates(
+    project_dir: &Path,
+    session_id: &str,
+) -> Vec<cdt_core::SubagentCandidate> {
+    let mut candidates = Vec::new();
+
+    // 新结构：{project_dir}/{session_id}/subagents/
+    let new_dir = project_dir.join(session_id).join("subagents");
+    if let Ok(mut entries) = tokio::fs::read_dir(&new_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("agent-")
+                && name_str.ends_with(".jsonl")
+                && !name_str.starts_with("agent-acompact")
+            {
+                if let Some(c) = parse_subagent_candidate(&entry.path()).await {
+                    candidates.push(c);
+                }
+            }
+        }
+    }
+
+    // 旧结构：{project_dir}/agent-*.jsonl
+    if let Ok(mut entries) = tokio::fs::read_dir(project_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("agent-")
+                && name_str.ends_with(".jsonl")
+                && !name_str.starts_with("agent-acompact")
+            {
+                if let Some(c) = parse_subagent_candidate(&entry.path()).await {
+                    // 旧结构需要检查 parent session 是否匹配
+                    if c.parent_session_id.as_deref() == Some(session_id) {
+                        candidates.push(c);
+                    }
+                }
+            }
+        }
+    }
+
+    candidates
+}
+
+/// 轻量解析一个 subagent JSONL 文件的前几行，提取候选信息。
+async fn parse_subagent_candidate(path: &Path) -> Option<cdt_core::SubagentCandidate> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+
+    let mut session_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.strip_prefix("agent-").unwrap_or(s).to_owned())
+        .unwrap_or_default();
+    let mut spawn_ts = None;
+    let mut parent_session_id = None;
+    let mut description_hint = None;
+    let mut is_warmup = false;
+
+    // 只读前 10 行获取关键信息
+    let mut line_count = 0;
+    while let Ok(Some(line)) = lines.next_line().await {
+        line_count += 1;
+        if line_count > 10 {
+            break;
+        }
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+
+        // 提取时间戳（取最早的）
+        if spawn_ts.is_none() {
+            if let Some(ts_str) = val.get("timestamp").and_then(|v| v.as_str()) {
+                spawn_ts = chrono::DateTime::parse_from_rfc3339(ts_str)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Utc));
+            }
+        }
+
+        // 提取 parent session id
+        if parent_session_id.is_none() {
+            if let Some(pid) = val.get("parentUuid").and_then(|v| v.as_str()) {
+                parent_session_id = Some(pid.to_owned());
+            }
+        }
+
+        // 提取 session id（如果消息里有 agentId）
+        if let Some(aid) = val.get("agentId").and_then(|v| v.as_str()) {
+            aid.clone_into(&mut session_id);
+        }
+
+        // 检查是否是 warmup subagent
+        // content 在 message.content 嵌套层中
+        if val.get("type").and_then(|v| v.as_str()) == Some("user") {
+            let content_val = val
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .unwrap_or(&val["content"]);
+            if let Some(content) = content_val.as_str() {
+                if content == "Warmup" {
+                    is_warmup = true;
+                    break;
+                }
+                if description_hint.is_none() && !content.is_empty() {
+                    description_hint = Some(content.chars().take(200).collect());
+                }
+            }
+        }
+    }
+
+    if is_warmup {
+        return None;
+    }
+
+    Some(cdt_core::SubagentCandidate {
+        session_id,
+        description_hint,
+        spawn_ts: spawn_ts.unwrap_or_default(),
+        parent_session_id,
+        metrics: cdt_core::ChunkMetrics::zero(),
+    })
 }

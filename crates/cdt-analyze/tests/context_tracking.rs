@@ -54,6 +54,7 @@ fn ai_chunk(
         semantic_steps: Vec::new(),
         tool_executions: tools,
         subagents: Vec::new(),
+        slash_commands: Vec::new(),
     })
 }
 

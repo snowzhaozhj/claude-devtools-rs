@@ -22,8 +22,8 @@ pub mod tool_execution;
 pub mod watch_event;
 
 pub use chunk::{
-    AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep, SystemChunk,
-    UserChunk,
+    AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep, SlashCommand,
+    SystemChunk, UserChunk,
 };
 pub use context::{
     ClaudeMdContextInjection, ClaudeMdFileInfo, ClaudeMdScope, CompactionTokenDelta,

@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use cdt_core::{
     AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, ContentBlock, MessageCategory,
-    MessageContent, ParsedMessage, SystemChunk, ToolExecution, UserChunk,
+    MessageContent, ParsedMessage, SlashCommand, SystemChunk, ToolExecution, UserChunk,
 };
 
 use cdt_core::SubagentCandidate;
@@ -27,7 +27,9 @@ use cdt_core::SubagentCandidate;
 use super::metrics::aggregate_metrics;
 use super::semantic::extract_semantic_steps;
 use crate::team::is_teammate_message;
-use crate::tool_linking::{filter_resolved_tasks, pair_tool_executions, resolve_subagents};
+use crate::tool_linking::{
+    Resolution, ResolvedTask, filter_resolved_tasks, pair_tool_executions, resolve_subagents,
+};
 
 const STDOUT_OPEN: &str = "<local-command-stdout>";
 const STDOUT_CLOSE: &str = "</local-command-stdout>";
@@ -44,15 +46,22 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
 
     let mut out: Vec<Chunk> = Vec::new();
     let mut buffer: Vec<AssistantResponse> = Vec::new();
+    let mut pending_slashes: Vec<SlashCommand> = Vec::new();
 
     chunk_loop(
         messages,
         &mut buffer,
         &mut out,
         &mut executions_by_assistant,
+        &mut pending_slashes,
     );
 
-    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
+    flush_buffer(
+        &mut buffer,
+        &mut out,
+        &mut executions_by_assistant,
+        &mut pending_slashes,
+    );
     out
 }
 
@@ -63,6 +72,7 @@ fn chunk_loop(
     buffer: &mut Vec<AssistantResponse>,
     out: &mut Vec<Chunk>,
     executions_by_assistant: &mut HashMap<String, Vec<ToolExecution>>,
+    pending_slashes: &mut Vec<SlashCommand>,
 ) {
     for msg in messages {
         if msg.is_sidechain || msg.category.is_hard_noise() {
@@ -81,7 +91,7 @@ fn chunk_loop(
                 });
             }
             MessageCategory::Compact => {
-                flush_buffer(buffer, out, executions_by_assistant);
+                flush_buffer(buffer, out, executions_by_assistant, pending_slashes);
                 out.push(Chunk::Compact(CompactChunk {
                     uuid: msg.uuid.clone(),
                     timestamp: msg.timestamp,
@@ -105,8 +115,14 @@ fn chunk_loop(
                     }
                     continue;
                 }
+                // Slash 命令消息（<command-name>/xxx</command-name>）：
+                // 提取 slash 信息，不产出 UserChunk
+                if let Some(slash) = extract_slash_info(&msg.content, &msg.uuid, msg.timestamp) {
+                    pending_slashes.push(slash);
+                    continue;
+                }
                 if let Some(stdout) = extract_local_command_stdout(&msg.content) {
-                    flush_buffer(buffer, out, executions_by_assistant);
+                    flush_buffer(buffer, out, executions_by_assistant, pending_slashes);
                     out.push(Chunk::System(SystemChunk {
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
@@ -121,7 +137,7 @@ fn chunk_loop(
                         append_tool_results(last, &msg.content);
                     }
                 } else {
-                    flush_buffer(buffer, out, executions_by_assistant);
+                    flush_buffer(buffer, out, executions_by_assistant, pending_slashes);
                     out.push(Chunk::User(UserChunk {
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
@@ -159,6 +175,15 @@ pub fn build_chunks_with_subagents(
         .collect();
 
     let resolved = resolve_subagents(&task_calls, &linking.executions, candidates);
+
+    // 构建 task_use_id → source_assistant_uuid 映射
+    let task_to_assistant: HashMap<String, String> = linking
+        .executions
+        .iter()
+        .filter(|e| task_calls.iter().any(|t| t.id == e.tool_use_id))
+        .map(|e| (e.tool_use_id.clone(), e.source_assistant_uuid.clone()))
+        .collect();
+
     let mut executions = linking.executions;
     filter_resolved_tasks(&mut executions, &resolved);
 
@@ -172,22 +197,73 @@ pub fn build_chunks_with_subagents(
 
     let mut out: Vec<Chunk> = Vec::new();
     let mut buffer: Vec<AssistantResponse> = Vec::new();
+    let mut pending_slashes: Vec<SlashCommand> = Vec::new();
 
     chunk_loop(
         messages,
         &mut buffer,
         &mut out,
         &mut executions_by_assistant,
+        &mut pending_slashes,
     );
 
-    flush_buffer(&mut buffer, &mut out, &mut executions_by_assistant);
+    flush_buffer(
+        &mut buffer,
+        &mut out,
+        &mut executions_by_assistant,
+        &mut pending_slashes,
+    );
+
+    // 把 resolved subagent Process 分配到对应 AIChunk
+    attach_subagents_to_chunks(&mut out, &resolved, &task_to_assistant);
+
     out
+}
+
+/// 把 resolved subagent `Process` 分配到拥有对应 Task `tool_use` 的 `AIChunk`。
+fn attach_subagents_to_chunks(
+    chunks: &mut [Chunk],
+    resolved: &[ResolvedTask],
+    task_to_assistant: &HashMap<String, String>,
+) {
+    // 构建 assistant_uuid → chunk_index 映射（owned keys 避免借用冲突）
+    let mut assistant_to_chunk: HashMap<String, usize> = HashMap::new();
+    for (i, chunk) in chunks.iter().enumerate() {
+        if let Chunk::Ai(ai) = chunk {
+            for r in &ai.responses {
+                assistant_to_chunk.insert(r.uuid.clone(), i);
+            }
+        }
+    }
+
+    for rt in resolved {
+        let process = match &rt.resolution {
+            Resolution::ResultBased { process }
+            | Resolution::DescriptionBased { process }
+            | Resolution::Positional { process } => process,
+            Resolution::Orphan => continue,
+        };
+        if let Some(assistant_uuid) = task_to_assistant.get(&rt.task_use_id) {
+            if let Some(&chunk_idx) = assistant_to_chunk.get(assistant_uuid) {
+                if let Chunk::Ai(ai) = &mut chunks[chunk_idx] {
+                    ai.subagents.push(process.clone());
+                    // 在 tool_execution step 后插入 SubagentSpawn step
+                    ai.semantic_steps
+                        .push(cdt_core::SemanticStep::SubagentSpawn {
+                            placeholder_id: process.session_id.clone(),
+                            timestamp: process.spawn_ts,
+                        });
+                }
+            }
+        }
+    }
 }
 
 fn flush_buffer(
     buffer: &mut Vec<AssistantResponse>,
     out: &mut Vec<Chunk>,
     executions_by_assistant: &mut HashMap<String, Vec<ToolExecution>>,
+    pending_slashes: &mut Vec<SlashCommand>,
 ) {
     if buffer.is_empty() {
         return;
@@ -208,6 +284,7 @@ fn flush_buffer(
             tool_executions.append(&mut execs);
         }
     }
+    let slash_commands = std::mem::take(pending_slashes);
     out.push(Chunk::Ai(AIChunk {
         timestamp,
         duration_ms,
@@ -216,7 +293,61 @@ fn flush_buffer(
         semantic_steps,
         tool_executions,
         subagents: Vec::new(),
+        slash_commands,
     }));
+}
+
+/// 从 isMeta 消息内容中提取 slash 命令信息。
+///
+/// 格式：`<command-name>/xxx</command-name>`，可选
+/// `<command-message>` 和 `<command-args>`。
+fn extract_slash_info(
+    content: &MessageContent,
+    uuid: &str,
+    timestamp: chrono::DateTime<chrono::Utc>,
+) -> Option<SlashCommand> {
+    let text = match content {
+        MessageContent::Text(s) => s.as_str(),
+        MessageContent::Blocks(blocks) => {
+            // 取第一个 text block
+            blocks.iter().find_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })?
+        }
+    };
+    // <command-name>/xxx</command-name>
+    let name_start = text.find("<command-name>/")?;
+    let after_prefix = &text[name_start + "<command-name>/".len()..];
+    let name_end = after_prefix.find("</command-name>")?;
+    let name = after_prefix[..name_end].trim().to_owned();
+    if name.is_empty() {
+        return None;
+    }
+
+    let message = extract_xml_tag(text, "command-message");
+    let args = extract_xml_tag(text, "command-args");
+
+    Some(SlashCommand {
+        name,
+        message,
+        args,
+        message_uuid: uuid.to_owned(),
+        timestamp,
+    })
+}
+
+fn extract_xml_tag(text: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(&open)? + open.len();
+    let end = text[start..].find(&close)? + start;
+    let val = text[start..end].trim();
+    if val.is_empty() {
+        None
+    } else {
+        Some(val.to_owned())
+    }
 }
 
 fn extract_plain_text(content: &MessageContent) -> String {

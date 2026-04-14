@@ -30,5 +30,7 @@ pub use path_decoder::{
 };
 pub use project_path_resolver::ProjectPathResolver;
 pub use project_scanner::ProjectScanner;
+pub use search_cache::SearchTextCache;
+pub use session_search::{SearchConfig, SessionSearcher};
 pub use subproject_registry::{SubprojectEntry, SubprojectRegistry};
 pub use worktree_grouper::{GitIdentityResolver, LocalGitIdentityResolver, WorktreeGrouper};
