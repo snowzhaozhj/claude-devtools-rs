@@ -154,10 +154,7 @@ impl DataApi for LocalDataApi {
         let chunks = build_chunks(&messages);
 
         // 从 session cwd 扫描实际 CLAUDE.md 文件
-        let project_root = messages
-            .iter()
-            .find_map(|m| m.cwd.as_deref())
-            .unwrap_or("");
+        let project_root = messages.iter().find_map(|m| m.cwd.as_deref()).unwrap_or("");
         let initial_claude_md = build_claude_md_from_filesystem(project_root).await;
 
         // 调用 context-tracking 计算完整的 context injections
@@ -421,13 +418,10 @@ async fn build_claude_md_from_filesystem(project_root: &str) -> Vec<cdt_core::Co
         .map(|(scope, info)| {
             let core_scope = match scope {
                 Scope::Enterprise => cdt_core::ClaudeMdScope::Enterprise,
-                Scope::User | Scope::UserRules | Scope::AutoMemory => {
-                    cdt_core::ClaudeMdScope::User
+                Scope::User | Scope::UserRules | Scope::AutoMemory => cdt_core::ClaudeMdScope::User,
+                Scope::Project | Scope::ProjectAlt | Scope::ProjectRules | Scope::ProjectLocal => {
+                    cdt_core::ClaudeMdScope::Project
                 }
-                Scope::Project
-                | Scope::ProjectAlt
-                | Scope::ProjectRules
-                | Scope::ProjectLocal => cdt_core::ClaudeMdScope::Project,
             };
             let display_name = info
                 .path
