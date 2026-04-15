@@ -42,23 +42,35 @@ claude-devtools-rs/
 
 ## UI 层 (Tauri 2 + Svelte 5)
 
-- `ui/`：Svelte 5 + Vite 前端（深色/浅色/跟随系统三主题，`app.css` 中 `:root` 浅色 + `[data-theme="dark"]` 深色变量）
-- `src-tauri/`：Tauri 2 Rust 后端（独立 Cargo.toml，excluded from workspace）
-- `cargo tauri dev`：启动开发模式（Vite HMR + Rust hot reload）
-- `src-tauri/` 通过 path deps 引用 `crates/` 下的数据层 crate
+### 架构
+
+- `ui/`：Svelte 5 + Vite 前端；`src-tauri/`：Tauri 2 Rust 后端（独立 Cargo.toml，excluded from workspace），通过 path deps 引用 `crates/`
 - Tauri IPC commands 直接调用 `LocalDataApi`（不走 HTTP）。当前 10 个 commands：list_projects / list_sessions / get_session_detail / search_sessions / get_config / update_config / get_notifications / mark_notification_read / add_trigger / remove_trigger
 - **Trigger CRUD 走独立方法**：`LocalDataApi::add_trigger()` / `remove_trigger()` 是非 trait 公开方法（独立 `impl` 块），不在 `DataApi` trait 中
-- **布局**：Sidebar + TabBar + Main 三层。Tab 支持 session / settings / notifications 三种类型
-- **已有组件**：BaseItem、StatusDot、OutputBlock、SearchBar（Cmd+F）、ContextPanel、SidebarHeader、TabBar（bell+齿轮图标+badge）、Tool Viewer（Read/Edit/Write/Bash/Default）
-- **页面路由**：SessionDetail（session tab）、SettingsView（settings tab，General+Notifications section，trigger CRUD）、NotificationsView（notifications tab，列表+标记已读+导航）
+
+### 布局与组件
+
+- **布局**：Sidebar + TabBar + Main 三层。Tab 支持 session / settings / notifications 三种类型（settings/notifications 为单例 tab）
+- **页面**：SessionDetail、SettingsView（General+Notifications section，trigger CRUD）、NotificationsView（列表+标记已读+导航到 session）
+- **组件**：BaseItem、StatusDot、OutputBlock、SearchBar（Cmd+F）、ContextPanel、SidebarHeader、TabBar（bell+齿轮图标+未读 badge）、Tool Viewer（Read/Edit/Write/Bash/Default）
+- **SVG 图标**：`ui/src/lib/icons.ts` 导出 lucide 风格 SVG path 常量，BaseItem 通过 `svgIcon` prop 渲染
+
+### 状态与主题
+
 - **状态管理**：`tabStore.svelte.ts` 模块级 `$state`，管理 tabs/activeTabId/per-tab UI 状态/session 缓存/notificationUnreadCount。Settings/Notifications 状态在各自组件内管理
-- **主题切换**：`lib/theme.ts` 的 `applyTheme()` 设置 `document.documentElement` 的 `data-theme` 属性，App 启动时从 config 读取并应用
-- **SVG 图标**：`ui/src/lib/icons.ts` 导出 lucide 风格 SVG path 常量（Wrench/Brain/Bot/Terminal 等），BaseItem 通过 `svgIcon` prop 渲染
-- **Context Panel 数据流**：后端 `cdt-api` 调用 `cdt-analyze::context::process_session_context_with_phases` 计算 `ContextInjection[]`（6 类结构化数据），通过 `SessionDetail.contextInjections` 传给前端。CLAUDE.md 文件通过 `cdt-config::read_all_claude_md_files` 从文件系统扫描（不在 JSONL 中）。
-- **session 元数据**：后端 `cdt-api/session_metadata.rs` 轻量扫描 JSONL 提取标题（前 200 行）+ 消息计数，前端直接使用
-- **陷阱**：`src-tauri/` 必须在 workspace `Cargo.toml` 的 `exclude` 列表里；`beforeDevCommand` 从 `src-tauri/` 目录执行，路径用 `../ui`
-- **陷阱**：浏览器直接访问 `localhost:5173` 会报 `invoke` undefined——`@tauri-apps/api` 只在 Tauri webview 内可用，测试必须通过 `cargo tauri dev` 的窗口
-- **陷阱**：Vite HMR 只更新前端代码；后端 Rust crate 改动后需要 `pkill -f claude-devtools-tauri && cargo tauri dev` 重启（Tauri 的 file watcher 有时不触发自动重编译）。
+- **主题切换**：`app.css` 中 `:root` 浅色 + `[data-theme="dark"]` 深色 + `@media prefers-color-scheme` 跟随系统。`lib/theme.ts` 的 `applyTheme()` 设置 `data-theme` 属性，App 启动时从 config 读取
+
+### 数据流
+
+- **Context Panel**：后端 `cdt-api` → `cdt-analyze::context::process_session_context_with_phases` → `ContextInjection[]`；CLAUDE.md 通过 `cdt-config::read_all_claude_md_files` 文件系统扫描
+- **session 元数据**：`cdt-api/session_metadata.rs` 轻量扫描 JSONL 提取标题（前 200 行）+ 消息计数
+
+### 陷阱
+
+- `src-tauri/` 必须在 workspace `Cargo.toml` 的 `exclude` 列表里；`beforeDevCommand` 从 `src-tauri/` 目录执行，路径用 `../ui`
+- 浏览器直接访问 `localhost:5173` 会报 `invoke` undefined——必须通过 `cargo tauri dev` 的窗口测试
+- Vite HMR 只更新前端；后端改动需 `pkill -f claude-devtools-tauri && cargo tauri dev` 重启
+- `npm run check --prefix ui` 必须从项目根目录执行，从 `src-tauri/` 目录跑会找不到 `package.json`
 
 ## Common commands
 
@@ -102,7 +114,8 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
 - **insta 快照接受**：没装 `cargo-insta` 就用 `INSTA_UPDATE=always cargo test -p <crate>`；提交生成的 `tests/snapshots/*.snap`。
 - **同步解析入口**：`cdt-analyze` 的集成测试不引入 tokio——用 `cdt_parse::parse_entry_at(line, n)` 逐行解析 fixture，再跑 `dedupe_by_request_id`。
 - **自动化**：
-  - Hooks（`.claude/hooks/`）：`.rs` 编辑后自动跑所属 crate 的 `cargo clippy -- -D warnings`；`git commit` 前自动跑 `openspec validate --strict`。**`openspec/specs/**` 的直接编辑由约定（不是 hook）约束** —— spec 变更必须走 `openspec/changes/<name>/specs/` 的 delta，由 `/opsx:archive` 时 sync 回主 spec。
+  - Hooks（`.claude/hooks/`）：`.rs` 编辑后自动跑所属 crate 的 `cargo clippy -- -D warnings`；`.svelte` 编辑后自动跑 `svelte-check`；`git commit` 前自动跑 `openspec validate --strict`。
+  - **spec 变更约定**：**修改**已有 spec 必须走 `openspec/changes/<name>/specs/` 的 delta，archive 时 sync 回主 spec。**新增** spec（如 UI 行为 spec）可直接写入 `openspec/specs/<name>/spec.md`。
   - Subagent：`spec-fidelity-reviewer` 按 capability 审计 scenario→test 覆盖。
   - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
   - MCP：`.mcp.json` 注册 GitHub MCP，需要 `GITHUB_PERSONAL_ACCESS_TOKEN` 环境变量。
@@ -111,9 +124,9 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
 
 ## UI 已知遗留问题
 
-- **Subagent 数据为空**：`AIChunk.subagents` 依赖 `resolve_subagents` 做跨 session 解析，当前 API 层未集成
-- **Slash 命令不在 chunks 中**：slash 在 `isMeta` user 消息中，被 `build_chunks` 过滤，summary 统计中缺失
 - **AI header tool call 计数偏少**：需对比原版 `displaySummary.ts` 的 `buildSummary` 逻辑确认差异来源
+- **Settings 部分项无实际效果**：默认标签页（dashboard 页未实现）；主题切换已实现
+- **通知实时性**：无文件监听事件推送，通知列表只在打开 tab 时加载
 
 ## What to do first in a fresh session
 
