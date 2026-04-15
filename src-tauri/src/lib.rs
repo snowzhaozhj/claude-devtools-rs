@@ -4,7 +4,7 @@ use cdt_api::{ConfigUpdateRequest, DataApi, LocalDataApi, PaginatedRequest, Sear
 use cdt_config::{ConfigManager, NotificationManager, NotificationTrigger};
 use cdt_discover::{local_handle, path_decoder, ProjectScanner};
 use cdt_ssh::SshConnectionManager;
-use tauri::State;
+use tauri::{Emitter, State};
 
 struct AppData {
     api: Arc<LocalDataApi>,
@@ -101,13 +101,18 @@ async fn get_notifications(
 
 #[tauri::command]
 async fn mark_notification_read(
+    app: tauri::AppHandle,
     data: State<'_, AppData>,
     notification_id: String,
 ) -> Result<bool, String> {
-    data.api
+    let result = data
+        .api
         .mark_notification_read(&notification_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // 通知前端刷新 badge
+    let _ = app.emit("notification-update", ());
+    Ok(result)
 }
 
 #[tauri::command]

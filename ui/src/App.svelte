@@ -7,13 +7,22 @@
   import SettingsView from "./routes/SettingsView.svelte";
   import NotificationsView from "./routes/NotificationsView.svelte";
   import DashboardView from "./routes/DashboardView.svelte";
-  import { openTab, getActiveTab } from "./lib/tabStore.svelte";
-  import { getConfig } from "./lib/api";
+  import { openTab, getActiveTab, setUnreadCount } from "./lib/tabStore.svelte";
+  import { getConfig, getNotifications } from "./lib/api";
   import { applyTheme } from "./lib/theme";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
   let selectedProjectId: string = $state("");
   let selectedProjectName: string = $state("");
   let commandPaletteOpen = $state(false);
+  let unlistenNotif: UnlistenFn | null = null;
+
+  async function onNotificationUpdate() {
+    try {
+      const r = await getNotifications(1, 0);
+      setUnreadCount(r.unreadCount);
+    } catch { /* 静默 */ }
+  }
 
   function handleGlobalKeydown(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -24,6 +33,8 @@
 
   onMount(async () => {
     document.addEventListener("keydown", handleGlobalKeydown);
+    // 监听后端 notification-update 事件
+    unlistenNotif = await listen("notification-update", onNotificationUpdate);
     try {
       const config = await getConfig();
       applyTheme(config.general.theme);
@@ -32,6 +43,7 @@
 
   onDestroy(() => {
     document.removeEventListener("keydown", handleGlobalKeydown);
+    unlistenNotif?.();
   });
 
   const activeTab = $derived(getActiveTab());

@@ -1,9 +1,30 @@
 <script lang="ts">
-  import { getTabs, getActiveTabId, setActiveTab, closeTab, openSettingsTab, openNotificationsTab, getUnreadCount } from "../lib/tabStore.svelte";
+  import { onMount, onDestroy } from "svelte";
+  import { getTabs, getActiveTabId, setActiveTab, closeTab, openSettingsTab, openNotificationsTab, getUnreadCount, setUnreadCount } from "../lib/tabStore.svelte";
+  import { getNotifications } from "../lib/api";
 
   const tabs = $derived(getTabs());
   const activeTabId = $derived(getActiveTabId());
   const unreadCount = $derived(getUnreadCount());
+
+  // 30 秒轮询 unreadCount
+  let pollTimer: ReturnType<typeof setInterval>;
+
+  async function refreshUnreadCount() {
+    try {
+      const result = await getNotifications(1, 0);
+      setUnreadCount(result.unreadCount);
+    } catch { /* 静默失败 */ }
+  }
+
+  onMount(() => {
+    refreshUnreadCount();
+    pollTimer = setInterval(refreshUnreadCount, 30000);
+  });
+
+  onDestroy(() => {
+    clearInterval(pollTimer);
+  });
 
   function handleClose(e: MouseEvent, tabId: string) {
     e.stopPropagation();
