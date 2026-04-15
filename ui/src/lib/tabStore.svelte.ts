@@ -4,8 +4,11 @@ import type { SessionDetail } from "./api";
 // Tab 数据模型
 // ---------------------------------------------------------------------------
 
+export type TabType = "session" | "settings" | "notifications";
+
 export interface Tab {
   id: string;
+  type: TabType;
   sessionId: string;
   projectId: string;
   label: string;
@@ -36,6 +39,7 @@ function createDefaultUIState(): TabUIState {
 
 let tabs: Tab[] = $state([]);
 let activeTabId: string | null = $state(null);
+let notificationUnreadCount: number = $state(0);
 
 const tabUIStates = new Map<string, TabUIState>();
 const tabSessionCache = new Map<string, SessionDetail>();
@@ -57,6 +61,14 @@ export function getActiveTab(): Tab | null {
   return tabs.find((t) => t.id === activeTabId) ?? null;
 }
 
+export function getUnreadCount(): number {
+  return notificationUnreadCount;
+}
+
+export function setUnreadCount(count: number): void {
+  notificationUnreadCount = count;
+}
+
 // ---------------------------------------------------------------------------
 // Tab 操作
 // ---------------------------------------------------------------------------
@@ -67,7 +79,9 @@ export function openTab(
   label: string,
 ): void {
   // 已有同 session 的 tab → 切换焦点
-  const existing = tabs.find((t) => t.sessionId === sessionId);
+  const existing = tabs.find(
+    (t) => t.type === "session" && t.sessionId === sessionId,
+  );
   if (existing) {
     activeTabId = existing.id;
     return;
@@ -75,12 +89,51 @@ export function openTab(
 
   const tab: Tab = {
     id: crypto.randomUUID(),
+    type: "session",
     sessionId,
     projectId,
     label: label.length > 50 ? label.slice(0, 50) + "…" : label,
     createdAt: Date.now(),
   };
 
+  tabs = [...tabs, tab];
+  activeTabId = tab.id;
+}
+
+/** 打开 Settings tab（单例） */
+export function openSettingsTab(): void {
+  const existing = tabs.find((t) => t.type === "settings");
+  if (existing) {
+    activeTabId = existing.id;
+    return;
+  }
+  const tab: Tab = {
+    id: crypto.randomUUID(),
+    type: "settings",
+    sessionId: "",
+    projectId: "",
+    label: "Settings",
+    createdAt: Date.now(),
+  };
+  tabs = [...tabs, tab];
+  activeTabId = tab.id;
+}
+
+/** 打开 Notifications tab（单例） */
+export function openNotificationsTab(): void {
+  const existing = tabs.find((t) => t.type === "notifications");
+  if (existing) {
+    activeTabId = existing.id;
+    return;
+  }
+  const tab: Tab = {
+    id: crypto.randomUUID(),
+    type: "notifications",
+    sessionId: "",
+    projectId: "",
+    label: "Notifications",
+    createdAt: Date.now(),
+  };
   tabs = [...tabs, tab];
   activeTabId = tab.id;
 }
@@ -101,7 +154,6 @@ export function closeTab(tabId: string): void {
     if (newTabs.length === 0) {
       activeTabId = null;
     } else {
-      // 优先同位置，否则前一个
       const nextIdx = Math.min(idx, newTabs.length - 1);
       activeTabId = newTabs[nextIdx].id;
     }

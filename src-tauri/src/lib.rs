@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cdt_api::{DataApi, LocalDataApi, PaginatedRequest, SearchRequest};
+use cdt_api::{ConfigUpdateRequest, DataApi, LocalDataApi, PaginatedRequest, SearchRequest};
 use cdt_config::{ConfigManager, NotificationManager};
 use cdt_discover::{local_handle, path_decoder, ProjectScanner};
 use cdt_ssh::SshConnectionManager;
@@ -66,6 +66,50 @@ async fn search_sessions(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_config(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
+    data.api.get_config().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_config(
+    data: State<'_, AppData>,
+    section: String,
+    config_data: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let request = ConfigUpdateRequest {
+        section,
+        data: config_data,
+    };
+    data.api
+        .update_config(&request)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_notifications(
+    data: State<'_, AppData>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    data.api
+        .get_notifications(limit.unwrap_or(50), offset.unwrap_or(0))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn mark_notification_read(
+    data: State<'_, AppData>,
+    notification_id: String,
+) -> Result<bool, String> {
+    data.api
+        .mark_notification_read(&notification_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -101,6 +145,10 @@ pub fn run() {
             list_sessions,
             get_session_detail,
             search_sessions,
+            get_config,
+            update_config,
+            get_notifications,
+            mark_notification_read,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

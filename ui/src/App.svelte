@@ -2,6 +2,8 @@
   import Sidebar from "./components/Sidebar.svelte";
   import TabBar from "./components/TabBar.svelte";
   import SessionDetail from "./routes/SessionDetail.svelte";
+  import SettingsView from "./routes/SettingsView.svelte";
+  import NotificationsView from "./routes/NotificationsView.svelte";
   import { openTab, getActiveTab } from "./lib/tabStore.svelte";
 
   let selectedProjectId: string = $state("");
@@ -31,7 +33,11 @@
     <TabBar />
 
     <main class="main-content">
-      {#if activeTab}
+      {#if activeTab?.type === "settings"}
+        <SettingsView />
+      {:else if activeTab?.type === "notifications"}
+        <NotificationsView />
+      {:else if activeTab?.type === "session"}
         {#key activeTab.id}
           <SessionDetail
             tabId={activeTab.id}

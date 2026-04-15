@@ -182,3 +182,97 @@ export async function getSessionDetail(
 ): Promise<SessionDetail> {
   return await invoke("get_session_detail", { projectId, sessionId });
 }
+
+// ---------------------------------------------------------------------------
+// Config 类型
+// ---------------------------------------------------------------------------
+
+export interface NotificationTrigger {
+  id: string;
+  name: string;
+  enabled: boolean;
+  contentType: string;
+  mode: string;
+  color?: string;
+}
+
+export interface NotificationConfig {
+  enabled: boolean;
+  soundEnabled: boolean;
+  triggers: NotificationTrigger[];
+}
+
+export interface GeneralConfig {
+  launchAtLogin: boolean;
+  showDockIcon: boolean;
+  theme: string;
+  defaultTab: string;
+  autoExpandAiGroups: boolean;
+}
+
+export interface AppConfig {
+  notifications: NotificationConfig;
+  general: GeneralConfig;
+}
+
+export async function getConfig(): Promise<AppConfig> {
+  return await invoke("get_config");
+}
+
+export async function updateConfig(
+  section: string,
+  configData: Record<string, unknown>
+): Promise<AppConfig> {
+  return await invoke("update_config", { section, configData });
+}
+
+// ---------------------------------------------------------------------------
+// Notifications 类型
+// ---------------------------------------------------------------------------
+
+export interface DetectedError {
+  id: string;
+  timestamp: number;
+  sessionId: string;
+  projectId: string;
+  filePath: string;
+  source: string;
+  message: string;
+  triggerName?: string;
+  triggerColor?: string;
+}
+
+export interface StoredNotification {
+  id: string;
+  timestamp: number;
+  sessionId: string;
+  projectId: string;
+  filePath: string;
+  source: string;
+  message: string;
+  triggerName?: string;
+  triggerColor?: string;
+  isRead: boolean;
+  createdAt: number;
+}
+
+export interface GetNotificationsResult {
+  notifications: StoredNotification[];
+  total: number;
+  totalCount: number;
+  unreadCount: number;
+  hasMore: boolean;
+}
+
+export async function getNotifications(
+  limit: number = 50,
+  offset: number = 0
+): Promise<GetNotificationsResult> {
+  return await invoke("get_notifications", { limit, offset });
+}
+
+export async function markNotificationRead(
+  notificationId: string
+): Promise<boolean> {
+  return await invoke("mark_notification_read", { notificationId });
+}
