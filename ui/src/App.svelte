@@ -1,13 +1,23 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import TabBar from "./components/TabBar.svelte";
   import SessionDetail from "./routes/SessionDetail.svelte";
   import SettingsView from "./routes/SettingsView.svelte";
   import NotificationsView from "./routes/NotificationsView.svelte";
   import { openTab, getActiveTab } from "./lib/tabStore.svelte";
+  import { getConfig } from "./lib/api";
+  import { applyTheme } from "./lib/theme";
 
   let selectedProjectId: string = $state("");
   let selectedProjectName: string = $state("");
+
+  onMount(async () => {
+    try {
+      const config = await getConfig();
+      applyTheme(config.general.theme);
+    } catch { /* 加载失败保持默认浅色 */ }
+  });
 
   const activeTab = $derived(getActiveTab());
 

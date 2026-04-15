@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getConfig, updateConfig, type AppConfig } from "../lib/api";
+  import { applyTheme } from "../lib/theme";
 
   let config: AppConfig | null = $state(null);
   let loading = $state(true);
@@ -21,17 +22,19 @@
   async function updateGeneral(key: string, value: unknown) {
     if (!config) return;
     saveError = null;
-    // 乐观更新
     config = {
       ...config,
       general: { ...config.general, [key]: value },
     };
+    if (key === "theme") applyTheme(value as string);
     try {
       await updateConfig("general", { [key]: value });
     } catch (e) {
       saveError = `保存失败: ${e}`;
-      // 回滚：重新加载
-      try { config = await getConfig(); } catch { /* ignore */ }
+      try {
+        config = await getConfig();
+        applyTheme(config.general.theme);
+      } catch { /* ignore */ }
     }
   }
 
