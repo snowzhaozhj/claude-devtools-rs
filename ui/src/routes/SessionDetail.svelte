@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { onMount, onDestroy, untrack } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { getSessionDetail, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
   import { getToolSummary, getToolStatus, cleanDisplayText, buildAiGroupSummary } from "../lib/toolHelpers";
   import { WRENCH, BRAIN, BOT, TERMINAL, SLASH } from "../lib/icons";
   import { clearHighlights } from "../lib/searchHighlight";
+  import { getTabUIState, saveTabUIState, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
   import SearchBar from "../components/SearchBar.svelte";
   import ContextPanel from "../components/ContextPanel.svelte";
@@ -14,18 +15,20 @@
   import WriteToolViewer from "../components/tool-viewers/WriteToolViewer.svelte";
   import BashToolViewer from "../components/tool-viewers/BashToolViewer.svelte";
 
-  interface Props { projectId: string; sessionId: string; }
-  let { projectId, sessionId }: Props = $props();
+  interface Props { tabId: string; projectId: string; sessionId: string; }
+  let { tabId, projectId, sessionId }: Props = $props();
 
   let detail: SessionDetail | null = $state(null);
   let loading = $state(true);
   let error: string | null = $state(null);
-  let expandedItems: Set<string> = $state(new Set());
-  /** 存储被用户手动展开的 AI chunk index。默认全部收起。 */
-  let expandedChunks: Set<number> = $state(new Set());
-  let searchVisible = $state(false);
-  let contextPanelVisible = $state(false);
   let conversationEl: HTMLElement | undefined = $state();
+
+  // per-tab UI 状态（从 tabStore 恢复）
+  let uiState = getTabUIState(tabId);
+  let expandedItems: Set<string> = $state(new Set(uiState.expandedItems));
+  let expandedChunks: Set<number> = $state(new Set(uiState.expandedChunks));
+  let searchVisible = $state(uiState.searchVisible);
+  let contextPanelVisible = $state(uiState.contextPanelVisible);
 
   function toggleChunk(idx: number) {
     const n = new Set(expandedChunks);
@@ -46,30 +49,37 @@
 
   onMount(async () => {
     document.addEventListener("keydown", handleKeydown);
-    try { detail = await getSessionDetail(projectId, sessionId); }
-    catch (e) { error = String(e); }
-    finally { loading = false; }
+
+    // 优先从 tabStore 缓存加载 session 数据
+    const cached = getCachedSession(tabId);
+    if (cached) {
+      detail = cached;
+      loading = false;
+    } else {
+      try {
+        const d = await getSessionDetail(projectId, sessionId);
+        detail = d;
+        setCachedSession(tabId, d);
+      } catch (e) { error = String(e); }
+      finally { loading = false; }
+    }
+
+    // 恢复滚动位置
+    if (conversationEl && uiState.scrollTop > 0) {
+      conversationEl.scrollTop = uiState.scrollTop;
+    }
   });
 
   onDestroy(() => {
     document.removeEventListener("keydown", handleKeydown);
-  });
-
-  $effect(() => {
-    if (sessionId) {
-      untrack(() => {
-        if (searchVisible && conversationEl) clearHighlights(conversationEl);
-        searchVisible = false;
-      });
-      loading = true;
-      error = null;
-      expandedItems = new Set();
-      expandedChunks = new Set();
-      getSessionDetail(projectId, sessionId)
-        .then(d => detail = d)
-        .catch(e => error = String(e))
-        .finally(() => loading = false);
-    }
+    // 保存 per-tab UI 状态
+    saveTabUIState(tabId, {
+      expandedChunks: new Set(expandedChunks),
+      expandedItems: new Set(expandedItems),
+      searchVisible,
+      contextPanelVisible,
+      scrollTop: conversationEl?.scrollTop ?? 0,
+    });
   });
 
   function toggle(key: string) {

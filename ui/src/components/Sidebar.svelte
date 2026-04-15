@@ -5,12 +5,12 @@
 
   interface Props {
     selectedProjectId: string;
-    selectedSessionId: string;
+    activeSessionId: string;
     onSelectProject: (id: string, name: string) => void;
-    onSelectSession: (sessionId: string) => void;
+    onSelectSession: (sessionId: string, label: string) => void;
   }
 
-  let { selectedProjectId, selectedSessionId, onSelectProject, onSelectSession }: Props = $props();
+  let { selectedProjectId, activeSessionId, onSelectProject, onSelectSession }: Props = $props();
 
   let projects: ProjectInfo[] = $state([]);
   let sessions: SessionSummary[] = $state([]);
@@ -138,8 +138,8 @@
           {#each group.sessions as session}
             <button
               class="session-item"
-              class:session-item-active={session.sessionId === selectedSessionId}
-              onclick={() => onSelectSession(session.sessionId)}
+              class:session-item-active={session.sessionId === activeSessionId}
+              onclick={() => onSelectSession(session.sessionId, session.title || session.sessionId.slice(0, 8))}
             >
               <div class="session-title">
                 {session.title || session.sessionId.slice(0, 8) + "…"}

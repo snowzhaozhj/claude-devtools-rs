@@ -1,46 +1,58 @@
 <script lang="ts">
   import Sidebar from "./components/Sidebar.svelte";
+  import TabBar from "./components/TabBar.svelte";
   import SessionDetail from "./routes/SessionDetail.svelte";
+  import { openTab, getActiveTab } from "./lib/tabStore.svelte";
 
   let selectedProjectId: string = $state("");
   let selectedProjectName: string = $state("");
-  let selectedSessionId: string = $state("");
+
+  const activeTab = $derived(getActiveTab());
 
   function selectProject(id: string, name: string) {
     selectedProjectId = id;
     selectedProjectName = name;
-    selectedSessionId = "";
   }
 
-  function selectSession(sessionId: string) {
-    selectedSessionId = sessionId;
+  function selectSession(sessionId: string, label: string) {
+    openTab(sessionId, selectedProjectId, label || sessionId.slice(0, 12));
   }
 </script>
 
 <div class="app-layout">
   <Sidebar
     {selectedProjectId}
-    {selectedSessionId}
+    activeSessionId={activeTab?.sessionId ?? ""}
     onSelectProject={selectProject}
     onSelectSession={selectSession}
   />
 
-  <main class="main-content">
-    {#if selectedSessionId}
-      <SessionDetail projectId={selectedProjectId} sessionId={selectedSessionId} />
-    {:else}
-      <div class="empty-state">
-        <div class="empty-icon">◈</div>
-        <div class="empty-title">
-          {#if selectedProjectId}
-            选择一个会话查看详情
-          {:else}
-            选择一个项目开始
-          {/if}
+  <div class="main-area">
+    <TabBar />
+
+    <main class="main-content">
+      {#if activeTab}
+        {#key activeTab.id}
+          <SessionDetail
+            tabId={activeTab.id}
+            projectId={activeTab.projectId}
+            sessionId={activeTab.sessionId}
+          />
+        {/key}
+      {:else}
+        <div class="empty-state">
+          <div class="empty-icon">◈</div>
+          <div class="empty-title">
+            {#if selectedProjectId}
+              选择一个会话查看详情
+            {:else}
+              选择一个项目开始
+            {/if}
+          </div>
         </div>
-      </div>
-    {/if}
-  </main>
+      {/if}
+    </main>
+  </div>
 </div>
 
 <style>
@@ -50,10 +62,18 @@
     overflow: hidden;
   }
 
+  .main-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+  }
+
   .main-content {
     flex: 1;
     overflow: hidden;
-    min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
   }
