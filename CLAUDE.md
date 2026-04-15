@@ -2,6 +2,7 @@
 
 Rust port of [claude-devtools](../claude-devtools) — the Electron app that
 visualizes Claude Code session execution.数据层 13 个 capability 已全部完成，
+UI 层新增 3 个行为 spec（tab-management / session-display / sidebar-navigation），
 当前工作重心是 UI 层（Tauri 2 + Svelte 5 桌面应用）。
 
 ## Parent repo
