@@ -4,7 +4,9 @@
   import { renderMarkdown } from "../lib/render";
   import { getToolSummary, getToolStatus, cleanDisplayText, buildAiGroupSummary } from "../lib/toolHelpers";
   import { WRENCH, BRAIN, BOT, TERMINAL, SLASH } from "../lib/icons";
+  import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
+  import { processMermaidBlocks } from "../lib/mermaid";
   import { getTabUIState, saveTabUIState, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
   import SearchBar from "../components/SearchBar.svelte";
@@ -67,6 +69,13 @@
     // 恢复滚动位置
     if (conversationEl && uiState.scrollTop > 0) {
       conversationEl.scrollTop = uiState.scrollTop;
+    }
+  });
+
+  // Mermaid 图表后处理：detail 加载后扫描并渲染 mermaid 代码块
+  $effect(() => {
+    if (detail && conversationEl) {
+      tick().then(() => processMermaidBlocks(conversationEl!));
     }
   });
 

@@ -15,6 +15,11 @@ hljs.registerLanguage("python", python);
 
 const renderer = new marked.Renderer();
 renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
+  // Mermaid 代码块：输出占位 div，由 processMermaidBlocks 后处理
+  if (lang === "mermaid") {
+    const encoded = btoa(unescape(encodeURIComponent(text)));
+    return `<div class="mermaid-block" data-code="${encoded}"><pre><code class="hljs">${DOMPurify.sanitize(text)}</code></pre></div>`;
+  }
   const language = lang && hljs.getLanguage(lang) ? lang : undefined;
   const highlighted = language
     ? hljs.highlight(text, { language }).value

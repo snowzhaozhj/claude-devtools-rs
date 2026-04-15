@@ -360,3 +360,54 @@ mark[data-search-current] {
   background: var(--highlight-bg-current);
   outline: 2px solid var(--highlight-ring);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Mermaid diagram blocks
+   ═══════════════════════════════════════════════════════════════ */
+
+.mermaid-block {
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 0.6em 0;
+}
+
+.mermaid-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px;
+  background: var(--code-header-bg);
+  border-bottom: 1px solid var(--code-border);
+}
+
+.mermaid-toggle-btn {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.mermaid-toggle-btn:hover {
+  background: var(--tool-item-hover-bg);
+  color: var(--color-text-secondary);
+}
+
+.mermaid-svg {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+  overflow: auto;
+  background: var(--code-bg);
+}
+
+.mermaid-error {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--tool-result-error-text);
+  background: var(--tool-result-error-bg);
+}

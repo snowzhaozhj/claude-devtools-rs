@@ -23,6 +23,7 @@
     "@types/dompurify": "^3.0.5",
     "dompurify": "^3.3.3",
     "highlight.js": "^11.11.1",
-    "marked": "^18.0.0"
+    "marked": "^18.0.0",
+    "mermaid": "^11.14.0"
   }
 }
