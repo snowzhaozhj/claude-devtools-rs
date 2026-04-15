@@ -434,6 +434,35 @@ impl DataApi for LocalDataApi {
     }
 }
 
+// =============================================================================
+// Trigger CRUD（非 trait 方法，供 Tauri commands 直接调用）
+// =============================================================================
+
+impl LocalDataApi {
+    /// 添加 trigger，返回更新后的 `AppConfig`。
+    pub async fn add_trigger(
+        &self,
+        trigger: cdt_config::NotificationTrigger,
+    ) -> Result<serde_json::Value, ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        let config = mgr
+            .add_trigger(trigger)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))?;
+        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    /// 删除 trigger，返回更新后的 `AppConfig`。
+    pub async fn remove_trigger(&self, trigger_id: &str) -> Result<serde_json::Value, ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        let config = mgr
+            .remove_trigger(trigger_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))?;
+        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
+    }
+}
+
 /// 从文件系统扫描 CLAUDE.md 文件，构建 `ClaudeMdContextInjection` 列表。
 async fn build_claude_md_from_filesystem(project_root: &str) -> Vec<cdt_core::ContextInjection> {
     use cdt_config::claude_md::Scope;

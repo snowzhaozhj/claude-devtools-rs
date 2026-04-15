@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cdt_api::{ConfigUpdateRequest, DataApi, LocalDataApi, PaginatedRequest, SearchRequest};
-use cdt_config::{ConfigManager, NotificationManager};
+use cdt_config::{ConfigManager, NotificationManager, NotificationTrigger};
 use cdt_discover::{local_handle, path_decoder, ProjectScanner};
 use cdt_ssh::SshConnectionManager;
 use tauri::State;
@@ -110,6 +110,28 @@ async fn mark_notification_read(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn add_trigger(
+    data: State<'_, AppData>,
+    trigger: NotificationTrigger,
+) -> Result<serde_json::Value, String> {
+    data.api
+        .add_trigger(trigger)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remove_trigger(
+    data: State<'_, AppData>,
+    trigger_id: String,
+) -> Result<serde_json::Value, String> {
+    data.api
+        .remove_trigger(&trigger_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -149,6 +171,8 @@ pub fn run() {
             update_config,
             get_notifications,
             mark_notification_read,
+            add_trigger,
+            remove_trigger,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

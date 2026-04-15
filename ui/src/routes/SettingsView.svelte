@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getConfig, updateConfig, type AppConfig } from "../lib/api";
+  import { getConfig, updateConfig, addTrigger, removeTrigger, type AppConfig, type NotificationTrigger } from "../lib/api";
   import { applyTheme } from "../lib/theme";
 
   let config: AppConfig | null = $state(null);
@@ -8,6 +8,13 @@
   let error: string | null = $state(null);
   let saveError: string | null = $state(null);
   let activeSection: "general" | "notifications" = $state("general");
+
+  // 新建 trigger 表单
+  let showAddForm = $state(false);
+  let newName = $state("");
+  let newMode: string = $state("error_status");
+  let newColor = $state("#e53e3e");
+  let addingTrigger = $state(false);
 
   onMount(async () => {
     try {
@@ -22,29 +29,20 @@
   async function updateGeneral(key: string, value: unknown) {
     if (!config) return;
     saveError = null;
-    config = {
-      ...config,
-      general: { ...config.general, [key]: value },
-    };
+    config = { ...config, general: { ...config.general, [key]: value } };
     if (key === "theme") applyTheme(value as string);
     try {
       await updateConfig("general", { [key]: value });
     } catch (e) {
       saveError = `保存失败: ${e}`;
-      try {
-        config = await getConfig();
-        applyTheme(config.general.theme);
-      } catch { /* ignore */ }
+      try { config = await getConfig(); applyTheme(config.general.theme); } catch { /* ignore */ }
     }
   }
 
   async function updateNotifications(key: string, value: unknown) {
     if (!config) return;
     saveError = null;
-    config = {
-      ...config,
-      notifications: { ...config.notifications, [key]: value },
-    };
+    config = { ...config, notifications: { ...config.notifications, [key]: value } };
     try {
       await updateConfig("notifications", { [key]: value });
     } catch (e) {
@@ -52,22 +50,79 @@
       try { config = await getConfig(); } catch { /* ignore */ }
     }
   }
+
+  async function handleAddTrigger() {
+    if (!newName.trim()) return;
+    addingTrigger = true;
+    saveError = null;
+    const trigger = {
+      id: `custom-${Date.now()}`,
+      name: newName.trim(),
+      enabled: true,
+      contentType: "tool_result",
+      mode: newMode,
+      requireError: newMode === "error_status" ? true : undefined,
+      color: newColor,
+    };
+    try {
+      config = await addTrigger(trigger);
+      showAddForm = false;
+      newName = "";
+      newMode = "error_status";
+      newColor = "#e53e3e";
+    } catch (e) {
+      saveError = `添加失败: ${e}`;
+    } finally {
+      addingTrigger = false;
+    }
+  }
+
+  async function handleRemoveTrigger(trigger: NotificationTrigger) {
+    saveError = null;
+    try {
+      config = await removeTrigger(trigger.id);
+    } catch (e) {
+      saveError = `删除失败: ${e}`;
+    }
+  }
+
+  async function handleToggleTrigger(trigger: NotificationTrigger) {
+    if (!config) return;
+    saveError = null;
+    // 乐观更新
+    config = {
+      ...config,
+      notifications: {
+        ...config.notifications,
+        triggers: config.notifications.triggers.map((t) =>
+          t.id === trigger.id ? { ...t, enabled: !t.enabled } : t
+        ),
+      },
+    };
+    try {
+      // 通过 update_config 更新整个 triggers 数组
+      await updateConfig("notifications", {
+        triggers: config.notifications.triggers,
+      });
+    } catch (e) {
+      saveError = `更新失败: ${e}`;
+      try { config = await getConfig(); } catch { /* ignore */ }
+    }
+  }
+
+  const modeLabels: Record<string, string> = {
+    error_status: "错误检测",
+    content_match: "内容匹配",
+    token_threshold: "Token 超限",
+  };
 </script>
 
 <div class="settings-view">
   <div class="settings-header">
     <h2 class="settings-title">设置</h2>
     <div class="settings-tabs">
-      <button
-        class="section-tab"
-        class:section-tab-active={activeSection === "general"}
-        onclick={() => activeSection = "general"}
-      >常规</button>
-      <button
-        class="section-tab"
-        class:section-tab-active={activeSection === "notifications"}
-        onclick={() => activeSection = "notifications"}
-      >通知</button>
+      <button class="section-tab" class:section-tab-active={activeSection === "general"} onclick={() => activeSection = "general"}>常规</button>
+      <button class="section-tab" class:section-tab-active={activeSection === "notifications"} onclick={() => activeSection = "notifications"}>通知</button>
     </div>
   </div>
 
@@ -84,99 +139,114 @@
       {#if activeSection === "general"}
         <div class="section">
           <h3 class="section-title">常规</h3>
-
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">主题</span>
               <span class="setting-desc">应用的颜色方案</span>
             </div>
-            <select
-              class="setting-select"
-              onchange={(e) => updateGeneral("theme", (e.target as HTMLSelectElement).value)}
-            >
+            <select class="setting-select" onchange={(e) => updateGeneral("theme", (e.target as HTMLSelectElement).value)}>
               <option value="dark" selected={config.general.theme === "dark"}>深色</option>
               <option value="light" selected={config.general.theme === "light"}>浅色</option>
               <option value="system" selected={config.general.theme === "system"}>跟随系统</option>
             </select>
           </div>
-
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">默认标签页</span>
               <span class="setting-desc">启动时打开的页面</span>
             </div>
-            <select
-              class="setting-select"
-              onchange={(e) => updateGeneral("defaultTab", (e.target as HTMLSelectElement).value)}
-            >
+            <select class="setting-select" onchange={(e) => updateGeneral("defaultTab", (e.target as HTMLSelectElement).value)}>
               <option value="dashboard" selected={config.general.defaultTab === "dashboard"}>仪表盘</option>
               <option value="last-session" selected={config.general.defaultTab === "last-session"}>上次会话</option>
             </select>
           </div>
-
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">自动展开 AI 组</span>
               <span class="setting-desc">打开会话时自动展开工具执行区域</span>
             </div>
-            <button
-              class="toggle-btn"
-              class:toggle-on={config.general.autoExpandAiGroups}
-              onclick={() => updateGeneral("autoExpandAiGroups", !config!.general.autoExpandAiGroups)}
-            >{config.general.autoExpandAiGroups ? "开" : "关"}</button>
+            <button class="toggle-btn" class:toggle-on={config.general.autoExpandAiGroups} onclick={() => updateGeneral("autoExpandAiGroups", !config!.general.autoExpandAiGroups)}>
+              {config.general.autoExpandAiGroups ? "开" : "关"}
+            </button>
           </div>
         </div>
 
       {:else if activeSection === "notifications"}
         <div class="section">
           <h3 class="section-title">通知</h3>
-
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">启用通知</span>
               <span class="setting-desc">当触发器规则匹配时产生通知</span>
             </div>
-            <button
-              class="toggle-btn"
-              class:toggle-on={config.notifications.enabled}
-              onclick={() => updateNotifications("enabled", !config!.notifications.enabled)}
-            >{config.notifications.enabled ? "开" : "关"}</button>
+            <button class="toggle-btn" class:toggle-on={config.notifications.enabled} onclick={() => updateNotifications("enabled", !config!.notifications.enabled)}>
+              {config.notifications.enabled ? "开" : "关"}
+            </button>
           </div>
-
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">提示音</span>
               <span class="setting-desc">收到通知时播放声音</span>
             </div>
-            <button
-              class="toggle-btn"
-              class:toggle-on={config.notifications.soundEnabled}
-              onclick={() => updateNotifications("soundEnabled", !config!.notifications.soundEnabled)}
-            >{config.notifications.soundEnabled ? "开" : "关"}</button>
+            <button class="toggle-btn" class:toggle-on={config.notifications.soundEnabled} onclick={() => updateNotifications("soundEnabled", !config!.notifications.soundEnabled)}>
+              {config.notifications.soundEnabled ? "开" : "关"}
+            </button>
           </div>
 
-          {#if config.notifications.triggers.length > 0}
+          <!-- 触发器区域 -->
+          <div class="trigger-header">
             <h4 class="subsection-title">触发器规则</h4>
-            <p class="subsection-desc">触发器定义了哪些会话事件会产生通知。工具执行错误、关键词匹配、token 超限都可以作为触发条件。</p>
+            <button class="add-btn" onclick={() => showAddForm = !showAddForm}>
+              {showAddForm ? "取消" : "+ 新建"}
+            </button>
+          </div>
+          <p class="subsection-desc">触发器监控会话中的工具错误、关键词匹配、token 超限等事件并自动产生通知。</p>
+
+          <!-- 新建表单 -->
+          {#if showAddForm}
+            <div class="add-form">
+              <div class="form-row">
+                <label class="form-label">名称</label>
+                <input class="form-input" type="text" placeholder="如：编译错误检测" bind:value={newName} />
+              </div>
+              <div class="form-row">
+                <label class="form-label">模式</label>
+                <select class="form-select" bind:value={newMode}>
+                  <option value="error_status">错误检测（工具执行失败时触发）</option>
+                  <option value="content_match">内容匹配（匹配关键词/正则时触发）</option>
+                  <option value="token_threshold">Token 超限（token 用量超阈值时触发）</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label class="form-label">颜色</label>
+                <input class="form-color" type="color" bind:value={newColor} />
+              </div>
+              <button class="form-submit" onclick={handleAddTrigger} disabled={!newName.trim() || addingTrigger}>
+                {addingTrigger ? "添加中..." : "添加触发器"}
+              </button>
+            </div>
+          {/if}
+
+          <!-- 触发器列表 -->
+          {#if config.notifications.triggers.length > 0}
             <div class="trigger-list">
-              {#each config.notifications.triggers as trigger}
+              {#each config.notifications.triggers as trigger (trigger.id)}
                 <div class="trigger-row">
-                  <span
-                    class="trigger-color"
-                    style:background={trigger.color || "var(--color-text-muted)"}
-                  ></span>
+                  <span class="trigger-color" style:background={trigger.color || "var(--color-text-muted)"}></span>
                   <span class="trigger-name">{trigger.name}</span>
-                  <span class="trigger-mode">{trigger.mode}</span>
-                  <span class="trigger-status" class:trigger-disabled={!trigger.enabled}>
-                    {trigger.enabled ? "启用" : "禁用"}
-                  </span>
+                  <span class="trigger-mode">{modeLabels[trigger.mode] || trigger.mode}</span>
+                  <button
+                    class="trigger-toggle"
+                    class:trigger-toggle-on={trigger.enabled}
+                    onclick={() => handleToggleTrigger(trigger)}
+                    title={trigger.enabled ? "点击禁用" : "点击启用"}
+                  >{trigger.enabled ? "启用" : "禁用"}</button>
+                  <button class="trigger-delete" onclick={() => handleRemoveTrigger(trigger)} title="删除触发器">×</button>
                 </div>
               {/each}
             </div>
-          {:else}
-            <div class="empty-triggers">
-              暂无触发器规则。触发器用于监控会话中的工具错误、关键词匹配等事件并自动产生通知。
-            </div>
+          {:else if !showAddForm}
+            <div class="empty-triggers">暂无触发器。点击上方"+ 新建"创建第一个触发器。</div>
           {/if}
         </div>
       {/if}
@@ -185,209 +255,56 @@
 </div>
 
 <style>
-  .settings-view {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow: hidden;
-  }
-
-  .settings-header {
-    padding: 16px 24px 0;
-    border-bottom: 1px solid var(--color-border);
-    flex-shrink: 0;
-  }
-
-  .settings-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--color-text);
-    margin: 0 0 12px;
-  }
-
-  .settings-tabs {
-    display: flex;
-    gap: 0;
-  }
-
-  .section-tab {
-    padding: 8px 16px;
-    border: none;
-    background: none;
-    color: var(--color-text-muted);
-    font: inherit;
-    font-size: 13px;
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: color 0.1s, border-color 0.1s;
-  }
-
-  .section-tab:hover {
-    color: var(--color-text-secondary);
-  }
-
-  .section-tab-active {
-    color: var(--color-text);
-    border-bottom-color: var(--color-border-emphasis);
-  }
-
-  .settings-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 20px 24px;
-  }
-
-  .save-error {
-    padding: 8px 12px;
-    margin-bottom: 12px;
-    border-radius: 6px;
-    background: rgba(229, 62, 62, 0.1);
-    color: var(--tool-result-error-text);
-    font-size: 13px;
-  }
-
-  .state-msg {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 200px;
-    color: var(--color-text-muted);
-    font-size: 14px;
-  }
+  .settings-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+  .settings-header { padding: 16px 24px 0; border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
+  .settings-title { font-size: 16px; font-weight: 600; color: var(--color-text); margin: 0 0 12px; }
+  .settings-tabs { display: flex; }
+  .section-tab { padding: 8px 16px; border: none; background: none; color: var(--color-text-muted); font: inherit; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; transition: color 0.1s, border-color 0.1s; }
+  .section-tab:hover { color: var(--color-text-secondary); }
+  .section-tab-active { color: var(--color-text); border-bottom-color: var(--color-border-emphasis); }
+  .settings-body { flex: 1; overflow-y: auto; padding: 20px 24px; }
+  .save-error { padding: 8px 12px; margin-bottom: 12px; border-radius: 6px; background: rgba(229, 62, 62, 0.1); color: var(--tool-result-error-text); font-size: 13px; }
+  .state-msg { display: flex; align-items: center; justify-content: center; height: 200px; color: var(--color-text-muted); font-size: 14px; }
   .state-err { color: var(--tool-result-error-text); }
-
   .section { display: flex; flex-direction: column; gap: 4px; }
+  .section-title { font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 12px; }
+  .setting-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-radius: 6px; background: var(--color-surface-raised, var(--color-surface)); }
+  .setting-info { display: flex; flex-direction: column; gap: 2px; }
+  .setting-label { font-size: 13px; color: var(--color-text); }
+  .setting-desc { font-size: 11px; color: var(--color-text-muted); }
+  .setting-select { padding: 5px 10px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); color: var(--color-text); font: inherit; font-size: 12px; cursor: pointer; outline: none; }
+  .setting-select:focus { border-color: var(--color-border-emphasis); }
+  .toggle-btn { padding: 5px 16px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); color: var(--color-text-muted); font: inherit; font-size: 12px; cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s; min-width: 44px; }
+  .toggle-on { background: var(--color-border-emphasis); color: var(--color-text); border-color: var(--color-border-emphasis); }
 
-  .section-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--color-text);
-    margin: 0 0 12px;
-  }
+  /* Trigger 区域 */
+  .trigger-header { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; }
+  .subsection-title { font-size: 13px; font-weight: 600; color: var(--color-text-secondary); margin: 0; }
+  .subsection-desc { font-size: 12px; color: var(--color-text-muted); margin: 4px 0 8px; line-height: 1.4; }
+  .add-btn { padding: 4px 12px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); color: var(--color-text-secondary); font: inherit; font-size: 12px; cursor: pointer; transition: background 0.1s; }
+  .add-btn:hover { background: var(--tool-item-hover-bg); }
 
-  .subsection-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--color-text-secondary);
-    margin: 20px 0 4px;
-  }
+  /* 新建表单 */
+  .add-form { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 6px; background: var(--color-surface-raised, var(--color-surface)); border: 1px solid var(--color-border); margin-bottom: 8px; }
+  .form-row { display: flex; align-items: center; gap: 10px; }
+  .form-label { font-size: 12px; color: var(--color-text-secondary); min-width: 40px; }
+  .form-input { flex: 1; padding: 5px 10px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); color: var(--color-text); font: inherit; font-size: 12px; outline: none; }
+  .form-input:focus { border-color: var(--color-border-emphasis); }
+  .form-select { flex: 1; padding: 5px 10px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); color: var(--color-text); font: inherit; font-size: 12px; outline: none; }
+  .form-color { width: 32px; height: 28px; border: 1px solid var(--color-border); border-radius: 4px; padding: 2px; cursor: pointer; background: var(--color-surface); }
+  .form-submit { align-self: flex-end; padding: 6px 16px; border: none; border-radius: 4px; background: var(--color-border-emphasis); color: var(--color-text); font: inherit; font-size: 12px; cursor: pointer; transition: opacity 0.1s; }
+  .form-submit:hover { opacity: 0.85; }
+  .form-submit:disabled { opacity: 0.5; cursor: default; }
 
-  .subsection-desc {
-    font-size: 12px;
-    color: var(--color-text-muted);
-    margin: 0 0 8px;
-    line-height: 1.4;
-  }
-
-  .setting-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 14px;
-    border-radius: 6px;
-    background: var(--color-surface-raised, var(--color-surface));
-  }
-
-  .setting-info {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .setting-label {
-    font-size: 13px;
-    color: var(--color-text);
-  }
-
-  .setting-desc {
-    font-size: 11px;
-    color: var(--color-text-muted);
-  }
-
-  .setting-select {
-    padding: 5px 10px;
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-surface);
-    color: var(--color-text);
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-    outline: none;
-  }
-
-  .setting-select:focus {
-    border-color: var(--color-border-emphasis);
-  }
-
-  .toggle-btn {
-    padding: 5px 16px;
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-surface);
-    color: var(--color-text-muted);
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
-    min-width: 44px;
-  }
-
-  .toggle-on {
-    background: var(--color-border-emphasis);
-    color: var(--color-text);
-    border-color: var(--color-border-emphasis);
-  }
-
-  .trigger-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .trigger-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-radius: 6px;
-    background: var(--color-surface-raised, var(--color-surface));
-    font-size: 13px;
-  }
-
-  .trigger-color {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .trigger-name {
-    flex: 1;
-    color: var(--color-text);
-  }
-
-  .trigger-mode {
-    color: var(--color-text-muted);
-    font-size: 11px;
-    font-family: var(--font-mono);
-  }
-
-  .trigger-status {
-    font-size: 11px;
-    color: var(--color-text-secondary);
-  }
-
-  .trigger-disabled {
-    color: var(--color-text-muted);
-    opacity: 0.6;
-  }
-
-  .empty-triggers {
-    padding: 16px 12px;
-    color: var(--color-text-muted);
-    font-size: 13px;
-    text-align: center;
-    line-height: 1.5;
-  }
+  /* 触发器列表 */
+  .trigger-list { display: flex; flex-direction: column; gap: 4px; }
+  .trigger-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 6px; background: var(--color-surface-raised, var(--color-surface)); font-size: 13px; }
+  .trigger-color { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .trigger-name { flex: 1; color: var(--color-text); }
+  .trigger-mode { color: var(--color-text-muted); font-size: 11px; font-family: var(--font-mono); }
+  .trigger-toggle { padding: 2px 8px; border: 1px solid var(--color-border); border-radius: 3px; background: transparent; color: var(--color-text-muted); font: inherit; font-size: 11px; cursor: pointer; transition: background 0.1s, color 0.1s; }
+  .trigger-toggle-on { color: var(--color-text-secondary); background: var(--tool-item-hover-bg); }
+  .trigger-delete { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: 4px; background: transparent; color: var(--color-text-muted); font-size: 14px; cursor: pointer; flex-shrink: 0; transition: background 0.1s, color 0.1s; }
+  .trigger-delete:hover { background: rgba(229, 62, 62, 0.15); color: var(--tool-result-error-text); }
+  .empty-triggers { padding: 16px 12px; color: var(--color-text-muted); font-size: 13px; text-align: center; line-height: 1.5; }
 </style>

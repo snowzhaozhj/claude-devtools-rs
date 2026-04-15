@@ -276,3 +276,29 @@ export async function markNotificationRead(
 ): Promise<boolean> {
   return await invoke("mark_notification_read", { notificationId });
 }
+
+// ---------------------------------------------------------------------------
+// Trigger CRUD
+// ---------------------------------------------------------------------------
+
+export interface NewTrigger {
+  id: string;
+  name: string;
+  enabled: boolean;
+  contentType: string;
+  mode: string;
+  requireError?: boolean;
+  matchField?: string;
+  matchPattern?: string;
+  tokenThreshold?: number;
+  tokenType?: string;
+  color?: string;
+}
+
+export async function addTrigger(trigger: NewTrigger): Promise<AppConfig> {
+  return await invoke("add_trigger", { trigger });
+}
+
+export async function removeTrigger(triggerId: string): Promise<AppConfig> {
+  return await invoke("remove_trigger", { triggerId });
+}
