@@ -2,7 +2,7 @@
 
 Rust port of [claude-devtools](../claude-devtools) — the Electron app that
 visualizes Claude Code session execution.数据层 13 个 capability 已全部完成，
-UI 层新增 3 个行为 spec（tab-management / session-display / sidebar-navigation），
+UI 层新增 6 个行为 spec（tab-management / session-display / sidebar-navigation / ui-search / settings-ui / notification-ui），
 当前工作重心是 UI 层（Tauri 2 + Svelte 5 桌面应用）。
 
 ## Parent repo
@@ -30,7 +30,7 @@ claude-devtools-rs/
 ├── ui/                       # Svelte 5 + Vite 前端
 ├── src-tauri/                # Tauri 2 Rust 后端 (excluded from workspace)
 ├── openspec/
-│   ├── specs/                # 13 capability specs (authoritative)
+│   ├── specs/                # 13 data specs + 6 UI specs (authoritative)
 │   ├── followups.md          # TS impl-bugs to fix, not replicate
 │   └── README.md             # workflow + capability map
 └── .claude/rules/rust.md     # Rust coding conventions
@@ -42,13 +42,17 @@ claude-devtools-rs/
 
 ## UI 层 (Tauri 2 + Svelte 5)
 
-- `ui/`：Svelte 5 + Vite 前端（暖灰主题，Soft Charcoal 配色，约 40 个 CSS 变量）
+- `ui/`：Svelte 5 + Vite 前端（深色/浅色/跟随系统三主题，`app.css` 中 `:root` 浅色 + `[data-theme="dark"]` 深色变量）
 - `src-tauri/`：Tauri 2 Rust 后端（独立 Cargo.toml，excluded from workspace）
 - `cargo tauri dev`：启动开发模式（Vite HMR + Rust hot reload）
 - `src-tauri/` 通过 path deps 引用 `crates/` 下的数据层 crate
-- Tauri IPC commands 直接调用 `LocalDataApi`，不走 HTTP
-- **布局**：Sidebar（项目选择器 + 日期分组会话列表）+ Main（SessionDetail）双栏持久化
-- **已有组件**：BaseItem（可展开项）、StatusDot、OutputBlock（代码块容器）、SearchBar（Cmd+F）、ContextPanel（右侧边栏）、SidebarHeader、Tool Viewer（Read/Edit/Write/Bash/Default）
+- Tauri IPC commands 直接调用 `LocalDataApi`（不走 HTTP）。当前 10 个 commands：list_projects / list_sessions / get_session_detail / search_sessions / get_config / update_config / get_notifications / mark_notification_read / add_trigger / remove_trigger
+- **Trigger CRUD 走独立方法**：`LocalDataApi::add_trigger()` / `remove_trigger()` 是非 trait 公开方法（独立 `impl` 块），不在 `DataApi` trait 中
+- **布局**：Sidebar + TabBar + Main 三层。Tab 支持 session / settings / notifications 三种类型
+- **已有组件**：BaseItem、StatusDot、OutputBlock、SearchBar（Cmd+F）、ContextPanel、SidebarHeader、TabBar（bell+齿轮图标+badge）、Tool Viewer（Read/Edit/Write/Bash/Default）
+- **页面路由**：SessionDetail（session tab）、SettingsView（settings tab，General+Notifications section，trigger CRUD）、NotificationsView（notifications tab，列表+标记已读+导航）
+- **状态管理**：`tabStore.svelte.ts` 模块级 `$state`，管理 tabs/activeTabId/per-tab UI 状态/session 缓存/notificationUnreadCount。Settings/Notifications 状态在各自组件内管理
+- **主题切换**：`lib/theme.ts` 的 `applyTheme()` 设置 `document.documentElement` 的 `data-theme` 属性，App 启动时从 config 读取并应用
 - **SVG 图标**：`ui/src/lib/icons.ts` 导出 lucide 风格 SVG path 常量（Wrench/Brain/Bot/Terminal 等），BaseItem 通过 `svgIcon` prop 渲染
 - **Context Panel 数据流**：后端 `cdt-api` 调用 `cdt-analyze::context::process_session_context_with_phases` 计算 `ContextInjection[]`（6 类结构化数据），通过 `SessionDetail.contextInjections` 传给前端。CLAUDE.md 文件通过 `cdt-config::read_all_claude_md_files` 从文件系统扫描（不在 JSONL 中）。
 - **session 元数据**：后端 `cdt-api/session_metadata.rs` 轻量扫描 JSONL 提取标题（前 200 行）+ 消息计数，前端直接使用
@@ -88,6 +92,8 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
 - **`ContextInjection` serde 格式**：`#[serde(tag = "category", rename_all = "kebab-case")]` 是 internally-tagged，JSON 为 `{ "category": "claude-md", "id": "...", ... }`（不是 `{ "ClaudeMd": {...} }`）。前端按 `inj.category` 字段 switch 匹配。
 - **`is_meta` 消息过滤**：JSONL 中 `isMeta: true` 的 user 消息（skill prompt、system-reminder 注入）在 `build_chunks` 中跳过，不产出 `UserChunk`；但其中的 `tool_result` 仍合并到 assistant buffer。
 - **Svelte 5 `$effect` 依赖陷阱**：`$effect` 中读取的所有响应式变量自动成为依赖。若需要在 effect 中读取但不触发重跑的变量，用 `untrack(() => variable)` 包裹。典型场景：session 切换 effect 中清理搜索状态。
+- **Svelte 5 `<button>` 嵌套禁止**：`<button>` 内不能嵌套 `<button>`，浏览器会修复 DOM 结构导致 Svelte 假设失效。用 `<span role="button" tabindex="-1">` 替代。
+- **Settings 乐观更新模式**：config 修改不能依赖 `updateConfig` 返回值刷新 UI，应先乐观更新本地 `$state`，异步调 API，失败时回滚（重新 `getConfig`）。
 - **Svelte 5 `@const` 位置限制**：`{@const}` 只能是 `{#if}`/`{:else}`/`{#each}`/`{#snippet}`/`<Component>` 的直接子级，不能放在 `<div>` 等 HTML 元素内。需要在块开头集中声明。
 - **前端渲染依赖**：`marked`（markdown→HTML）+ `highlight.js`（语法高亮，按需加载语言）+ `dompurify`（XSS 防护）。highlight.js 不引入预制主题 CSS，用 `app.css` 中自定义 Soft Charcoal token 颜色。
 - **原版 UI 参考**：前端文本清洗逻辑移植自 `../claude-devtools/src/shared/utils/contentSanitizer.ts`（`sanitizeDisplayContent`）。扩展 UI 功能时优先查原版 `src/renderer/` 和 `src/shared/` 对应实现，直接移植而非自己造轮子。
@@ -114,4 +120,4 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
 1. Run `cargo build --workspace` 确认 data layer 可编译；`cargo test --workspace` 跑一遍回归。
 2. 13 个 data layer capability 已全部完成。当前工作重心是 UI 层（Tauri + Svelte）。
 3. `cargo tauri dev` 启动桌面应用验证当前状态。
-4. UI 功能迭代仍走 openspec 工作流：`/opsx:propose <feature>` → `/opsx:apply` → `/opsx:archive`。纯前端 UI 改动（不涉及数据层 spec）可简化：proposal + tasks 即可，design 可选，specs 跳过。或小改直接写 + commit 不走 openspec。
+4. UI 功能迭代：**大功能**（多步骤、跨模块、需要设计决策）走 openspec（propose → apply → archive）；**小改动**（主题切换、Trigger CRUD、样式修复等单点改动）直接写 + commit，不走 openspec。判断标准：是否需要 design.md 记录架构决策。
