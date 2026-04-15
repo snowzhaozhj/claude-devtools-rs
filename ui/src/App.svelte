@@ -1,22 +1,37 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import TabBar from "./components/TabBar.svelte";
+  import CommandPalette from "./components/CommandPalette.svelte";
   import SessionDetail from "./routes/SessionDetail.svelte";
   import SettingsView from "./routes/SettingsView.svelte";
   import NotificationsView from "./routes/NotificationsView.svelte";
+  import DashboardView from "./routes/DashboardView.svelte";
   import { openTab, getActiveTab } from "./lib/tabStore.svelte";
   import { getConfig } from "./lib/api";
   import { applyTheme } from "./lib/theme";
 
   let selectedProjectId: string = $state("");
   let selectedProjectName: string = $state("");
+  let commandPaletteOpen = $state(false);
+
+  function handleGlobalKeydown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      e.preventDefault();
+      commandPaletteOpen = !commandPaletteOpen;
+    }
+  }
 
   onMount(async () => {
+    document.addEventListener("keydown", handleGlobalKeydown);
     try {
       const config = await getConfig();
       applyTheme(config.general.theme);
     } catch { /* 加载失败保持默认浅色 */ }
+  });
+
+  onDestroy(() => {
+    document.removeEventListener("keydown", handleGlobalKeydown);
   });
 
   const activeTab = $derived(getActiveTab());
@@ -56,20 +71,19 @@
           />
         {/key}
       {:else}
-        <div class="empty-state">
-          <div class="empty-icon">◈</div>
-          <div class="empty-title">
-            {#if selectedProjectId}
-              选择一个会话查看详情
-            {:else}
-              选择一个项目开始
-            {/if}
-          </div>
-        </div>
+        <DashboardView onSelectProject={selectProject} />
       {/if}
     </main>
   </div>
 </div>
+
+{#if commandPaletteOpen}
+  <CommandPalette
+    {selectedProjectId}
+    onSelectProject={selectProject}
+    onClose={() => { commandPaletteOpen = false; }}
+  />
+{/if}
 
 <style>
   .app-layout {
@@ -94,22 +108,4 @@
     flex-direction: column;
   }
 
-  .empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    gap: 12px;
-    color: var(--color-text-muted);
-  }
-
-  .empty-icon {
-    font-size: 48px;
-    opacity: 0.3;
-  }
-
-  .empty-title {
-    font-size: 14px;
-  }
 </style>
