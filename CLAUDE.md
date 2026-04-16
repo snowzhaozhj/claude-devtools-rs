@@ -50,20 +50,21 @@ claude-devtools-rs/
 
 ### 布局与组件
 
-- **布局**：Sidebar + TabBar + Main 三层。Tab 支持 session / settings / notifications 三种类型（settings/notifications 为单例 tab）
-- **页面**：SessionDetail、SettingsView（General+Notifications section，trigger CRUD）、NotificationsView（列表+标记已读+导航到 session）
-- **组件**：BaseItem、StatusDot、OutputBlock、SearchBar（Cmd+F）、ContextPanel、SidebarHeader、TabBar（bell+齿轮图标+未读 badge）、Tool Viewer（Read/Edit/Write/Bash/Default）
+- **布局**：Sidebar（可拖拽宽度 200~500px）+ TabBar + Main 三层。无 tab 时显示 Dashboard 项目概览。Tab 支持 session / settings / notifications 三种类型（settings/notifications 为单例 tab）
+- **页面**：SessionDetail、SettingsView、NotificationsView、DashboardView（项目卡片网格，替代空状态）
+- **组件**：BaseItem、StatusDot、OutputBlock、SearchBar（Cmd+F）、CommandPalette（Cmd+K 全局搜索）、ContextPanel（Category/Ranked 双视图 + DirectoryTree）、DiffViewer（LCS 行级 diff）、DirectoryTree（递归目录树）、SessionContextMenu（右键菜单 5 项）、SidebarHeader、TabBar（bell+齿轮+未读 badge 30s 轮询）、Tool Viewer（Read/Edit/Write/Bash/Default）
 - **SVG 图标**：`ui/src/lib/icons.ts` 导出 lucide 风格 SVG path 常量，BaseItem 通过 `svgIcon` prop 渲染
 
 ### 状态与主题
 
-- **状态管理**：`tabStore.svelte.ts` 模块级 `$state`，管理 tabs/activeTabId/per-tab UI 状态/session 缓存/notificationUnreadCount。Settings/Notifications 状态在各自组件内管理
+- **状态管理**：`tabStore.svelte.ts` 管理 tabs/activeTabId/per-tab UI 状态/session 缓存/notificationUnreadCount。`sidebarStore.svelte.ts` 管理 sidebar 宽度、per-project Pin/Hide 状态（内存级）。Settings/Notifications 状态在各自组件内管理
 - **主题切换**：`app.css` 中 `:root` 浅色 + `[data-theme="dark"]` 深色 + `@media prefers-color-scheme` 跟随系统。`lib/theme.ts` 的 `applyTheme()` 设置 `data-theme` 属性，App 启动时从 config 读取
 
 ### 数据流
 
 - **Context Panel**：后端 `cdt-api` → `cdt-analyze::context::process_session_context_with_phases` → `ContextInjection[]`；CLAUDE.md 通过 `cdt-config::read_all_claude_md_files` 文件系统扫描
 - **session 元数据**：`cdt-api/session_metadata.rs` 轻量扫描 JSONL 提取标题（前 200 行）+ 消息计数
+- **通知实时更新**：后端 `mark_notification_read` 后通过 `app.emit("notification-update")` 推送；前端 `listen()` 监听立即刷新 badge；TabBar 额外每 30 秒轮询 unreadCount
 
 ### 陷阱
 
@@ -107,7 +108,7 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
 - **Svelte 5 `<button>` 嵌套禁止**：`<button>` 内不能嵌套 `<button>`，浏览器会修复 DOM 结构导致 Svelte 假设失效。用 `<span role="button" tabindex="-1">` 替代。
 - **Settings 乐观更新模式**：config 修改不能依赖 `updateConfig` 返回值刷新 UI，应先乐观更新本地 `$state`，异步调 API，失败时回滚（重新 `getConfig`）。
 - **Svelte 5 `@const` 位置限制**：`{@const}` 只能是 `{#if}`/`{:else}`/`{#each}`/`{#snippet}`/`<Component>` 的直接子级，不能放在 `<div>` 等 HTML 元素内。需要在块开头集中声明。
-- **前端渲染依赖**：`marked`（markdown→HTML）+ `highlight.js`（语法高亮，按需加载语言）+ `dompurify`（XSS 防护）。highlight.js 不引入预制主题 CSS，用 `app.css` 中自定义 Soft Charcoal token 颜色。
+- **前端渲染依赖**：`marked`（markdown→HTML）+ `highlight.js`（语法高亮，按需加载语言）+ `dompurify`（XSS 防护）+ `mermaid`（图表渲染，动态 import）。highlight.js 不引入预制主题 CSS，用 `app.css` 中自定义 Soft Charcoal token 颜色。
 - **原版 UI 参考**：前端文本清洗逻辑移植自 `../claude-devtools/src/shared/utils/contentSanitizer.ts`（`sanitizeDisplayContent`）。扩展 UI 功能时优先查原版 `src/renderer/` 和 `src/shared/` 对应实现，直接移植而非自己造轮子。
 - **Tauri IPC 透传**：`src-tauri/src/lib.rs` 的 commands 返回 `serde_json::Value`，`cdt-api` 类型扩展字段（如 `SessionSummary` 加 `title`）自动透传，不需要改 Tauri 层。
 - **clippy pedantic**：workspace 开启 pedantic，PostToolUse hook 会在每次 `.rs` 编辑后自动跑 clippy 报错。最常踩的：`doc_markdown`（注释里标识符要反引号）、`cast_possible_wrap`（`u64 as i64` → `i64::try_from`）、`uninlined_format_args`（`format!("{}", x)` → `format!("{x}")`）。其余照 clippy 输出修即可。
@@ -125,8 +126,8 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
 ## UI 已知遗留问题
 
 - **AI header tool call 计数偏少**：需对比原版 `displaySummary.ts` 的 `buildSummary` 逻辑确认差异来源
-- **Settings 部分项无实际效果**：默认标签页（dashboard 页未实现）；主题切换已实现
-- **通知实时性**：无文件监听事件推送，通知列表只在打开 tab 时加载
+- **FileWatcher 通知管道**：cdt-watch 可监听文件变更，但尚未接入 trigger 匹配→自动创建通知的扫描管道
+- **Pin/Hide 不持久化**：Sidebar 的 Pin/Hide 状态为内存级，重启后丢失，需接后端 config 持久化
 
 ## What to do first in a fresh session
 
