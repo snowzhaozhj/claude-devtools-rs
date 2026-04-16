@@ -38,6 +38,7 @@ mod tests {
             start_ts: Utc::now(),
             end_ts: None,
             source_assistant_uuid: "a1".into(),
+            result_agent_id: None,
         }
     }
 

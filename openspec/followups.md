@@ -63,7 +63,7 @@
 - spec 只说"match task descriptions and spawn timestamps"过于笼统
 - 建议：归档前给 `tool-execution-linking` 补一条 `Match Task calls to subagents by three fallbacks` 的 requirement
 
-### [impl-bug?] Phase 1 subagent 匹配路径错：应读 JSONL 顶层 `toolUseResult.agentId` 而非 content block text
+### [impl-bug?] Phase 1 subagent 匹配路径错：应读 JSONL 顶层 `toolUseResult.agentId` 而非 content block text ✅ 已在 2026-04-16 subagent 三连修复中修正
 - **背景**：2026-04-16 `fix-ai-header-tool-count` 修复过程中定位到此问题，已部分缓解（添加了从 content block 文本抽取 `agentId:` 的兜底），但根本问题未修。
 - **原版实现**（`../claude-devtools/src/main/services/analysis/SubagentResolver.ts`）：从 JSONL 条目的**顶层** `toolUseResult.agentId` 字段直接读取 subagent session id。此字段是 Claude Code 写 JSONL 时独立于 `message.content` 输出的结构化结果。
 - **Rust 现状**（`crates/cdt-analyze/src/tool_linking/resolver.rs::extract_session_id`）：只看 `ToolExecution.output`，该字段来自 content block 里的 `tool_result`。当前从 text 里 regex 抽 `agentId:` 仅是兜底。
@@ -73,6 +73,7 @@
   2. `cdt-analyze` 的 `ToolExecution` 增加 `result_agent_id: Option<String>` 字段
   3. `extract_session_id` Phase 1 优先读该字段
 - **风险**：`cdt-parse` 结构体扩展会触发 serde 兼容性检查；需同步更新 `session-parsing` spec。
+- **Rust 实现**：`ParsedMessage.tool_use_result: Option<Value>` 在 `cdt-parse/src/parser.rs` 通过 `#[serde(rename = "toolUseResult")]` 保留；`ToolExecution.result_agent_id: Option<String>` 在 `cdt-analyze/src/tool_linking/pair.rs` 从 user 消息顶层 `toolUseResult.agentId` 抽取；`resolver.rs::extract_session_id(exec)` 优先读 `result_agent_id`；新增单测 `phase1_prefers_result_agent_id_over_output`。
 
 ### [impl-bug?] `dedupe_by_request_id` 丢弃含 Agent tool_use 的 assistant 消息
 - **背景**：2026-04-16 verify_session 调试发现：session 文件共 14 个 Task/Agent tool_use，但 parse 完只剩 6 个；损失 8 个的原因指向 `dedupe_by_request_id`。

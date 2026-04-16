@@ -32,7 +32,7 @@ pub fn resolve_subagents(
         let Some(exec) = executions.iter().find(|e| e.tool_use_id == task.id) else {
             continue;
         };
-        let Some(session_id) = extract_session_id(&exec.output) else {
+        let Some(session_id) = extract_session_id(exec) else {
             continue;
         };
         if let Some((c_idx, cand)) = candidates
@@ -120,8 +120,14 @@ pub fn resolve_subagents(
     results
 }
 
-fn extract_session_id(output: &ToolOutput) -> Option<String> {
-    match output {
+fn extract_session_id(exec: &ToolExecution) -> Option<String> {
+    // Phase 1 优先：JSONL 顶层 toolUseResult.agentId（由 cdt-parse 保留）
+    if let Some(id) = exec.result_agent_id.as_deref() {
+        if !id.is_empty() {
+            return Some(id.to_owned());
+        }
+    }
+    match &exec.output {
         ToolOutput::Structured { value } => {
             // 直接对象格式：{"session_id": "xxx"}
             if let Some(id) = value.get("session_id").and_then(|v| v.as_str()) {
@@ -196,7 +202,7 @@ fn candidate_to_process(cand: &SubagentCandidate, task: &ToolCall) -> Process {
         session_id: cand.session_id.clone(),
         root_task_description: task.task_description.clone(),
         spawn_ts: cand.spawn_ts,
-        end_ts: None,
+        end_ts: cand.end_ts,
         metrics: cand.metrics.clone(),
         team: None,
     }
@@ -236,6 +242,7 @@ mod tests {
             start_ts: ts(n),
             end_ts: Some(ts(n + 1)),
             source_assistant_uuid: "a1".into(),
+            result_agent_id: None,
         }
     }
 
@@ -244,6 +251,7 @@ mod tests {
             session_id: session.into(),
             description_hint: Some(hint.into()),
             spawn_ts: ts(n),
+            end_ts: None,
             parent_session_id: Some("parent".into()),
             metrics: ChunkMetrics::zero(),
         }
@@ -267,6 +275,20 @@ mod tests {
         assert!(matches!(
             r[0].resolution,
             Resolution::ResultBased { ref process } if process.session_id == "s-99"
+        ));
+    }
+
+    #[test]
+    fn phase1_prefers_result_agent_id_over_output() {
+        let tasks = vec![task("t1", "anything")];
+        let mut exec = exec("t1", 5, ToolOutput::Missing);
+        exec.result_agent_id = Some("s-top".into());
+        let execs = vec![exec];
+        let cands = vec![cand("s-top", "other", 6)];
+        let r = resolve_subagents(&tasks, &execs, &cands);
+        assert!(matches!(
+            r[0].resolution,
+            Resolution::ResultBased { ref process } if process.session_id == "s-top"
         ));
     }
 

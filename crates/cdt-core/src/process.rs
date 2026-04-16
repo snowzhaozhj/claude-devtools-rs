@@ -50,6 +50,9 @@ pub struct SubagentCandidate {
     #[serde(default)]
     pub description_hint: Option<String>,
     pub spawn_ts: DateTime<Utc>,
+    /// Subagent 会话结束时间（JSONL 最后一条消息的 timestamp）；正在运行时为 `None`。
+    #[serde(default)]
+    pub end_ts: Option<DateTime<Utc>>,
     #[serde(default)]
     pub parent_session_id: Option<String>,
     pub metrics: ChunkMetrics,
@@ -100,6 +103,7 @@ mod tests {
             session_id: "s1".into(),
             description_hint: Some("investigate logs".into()),
             spawn_ts: ts(),
+            end_ts: None,
             parent_session_id: Some("parent".into()),
             metrics: ChunkMetrics::zero(),
         });

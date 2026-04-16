@@ -357,6 +357,7 @@ mod tests {
             source_tool_assistant_uuid: None,
             is_compact_summary: false,
             request_id: None,
+            tool_use_result: None,
         }
     }
 

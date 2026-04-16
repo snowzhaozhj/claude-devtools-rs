@@ -179,6 +179,9 @@ pub struct ParsedMessage {
     pub source_tool_assistant_uuid: Option<String>,
     pub is_compact_summary: bool,
     pub request_id: Option<String>,
+    /// JSONL 顶层 `toolUseResult` 字段，由 Claude Code 独立于 `message.content` 写入。
+    /// Subagent 匹配需要读其中的 `agentId`（见 `openspec/followups.md` Phase 1 bug）。
+    pub tool_use_result: Option<serde_json::Value>,
 }
 
 #[cfg(test)]

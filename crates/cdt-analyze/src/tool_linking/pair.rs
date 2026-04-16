@@ -79,6 +79,12 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         continue;
                     }
                     pu.linked = true;
+                    let result_agent_id = msg
+                        .tool_use_result
+                        .as_ref()
+                        .and_then(|v| v.get("agentId"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned);
                     executions.push(ToolExecution {
                         tool_use_id: tool_use_id.clone(),
                         tool_name: pu.tool_name.clone(),
@@ -88,6 +94,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         start_ts: pu.start_ts,
                         end_ts: Some(msg.timestamp),
                         source_assistant_uuid: pu.source_assistant_uuid.clone(),
+                        result_agent_id,
                     });
                 }
             }
@@ -108,6 +115,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                     start_ts: pu.start_ts,
                     end_ts: None,
                     source_assistant_uuid: pu.source_assistant_uuid,
+                    result_agent_id: None,
                 });
             }
         }
@@ -165,6 +173,7 @@ mod tests {
             source_tool_assistant_uuid: None,
             is_compact_summary: false,
             request_id: None,
+            tool_use_result: None,
         }
     }
 

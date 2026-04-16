@@ -42,6 +42,10 @@ pub struct ToolExecution {
     /// 产生该 `tool_use` 的 assistant 消息 uuid，用于 `build_chunks` 把 execution
     /// 分发回正确的 `AIChunk`。
     pub source_assistant_uuid: String,
+    /// 从 JSONL 顶层 `toolUseResult.agentId` 提取的 subagent session id。
+    /// Subagent 匹配 Phase 1 优先读取此字段（比 content block 文本抽取更可靠）。
+    #[serde(default)]
+    pub result_agent_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -92,6 +96,7 @@ mod tests {
             start_ts: ts(),
             end_ts: Some(ts()),
             source_assistant_uuid: "a1".into(),
+            result_agent_id: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert_eq!(serde_json::from_str::<ToolExecution>(&json).unwrap(), value);

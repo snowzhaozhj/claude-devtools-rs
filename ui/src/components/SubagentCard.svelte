@@ -5,9 +5,10 @@
 
   interface Props {
     process: SubagentProcess;
+    parentProjectId?: string;
   }
 
-  let { process }: Props = $props();
+  let { process, parentProjectId = "" }: Props = $props();
 
   let isExpanded = $state(false);
 
@@ -46,7 +47,7 @@
 
   function navigateToSession() {
     const label = (process.team?.memberName ?? "Subagent") + " — " + (process.rootTaskDescription ?? process.sessionId).slice(0, 40);
-    openTab(process.sessionId, "", label);
+    openTab(process.sessionId, parentProjectId, label);
   }
 
   function fk(n: number): string {

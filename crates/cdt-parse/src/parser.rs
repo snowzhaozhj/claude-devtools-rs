@@ -36,6 +36,8 @@ struct RawEntry {
     agent_id: Option<String>,
     #[serde(rename = "requestId", default)]
     request_id: Option<String>,
+    #[serde(rename = "toolUseResult", default)]
+    tool_use_result: Option<serde_json::Value>,
     #[serde(rename = "isCompactSummary", default)]
     is_compact_summary: Option<bool>,
     #[serde(rename = "sourceToolUseID", default)]
@@ -120,6 +122,7 @@ pub fn parse_entry_at(line: &str, line_number: usize) -> Result<Option<ParsedMes
         source_tool_assistant_uuid: raw.source_tool_assistant_uuid,
         is_compact_summary,
         request_id: raw.request_id,
+        tool_use_result: raw.tool_use_result,
     }))
 }
 

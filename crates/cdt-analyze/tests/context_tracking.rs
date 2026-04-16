@@ -80,6 +80,7 @@ fn bash_tool(id: &str, cmd: &str, output: &str) -> ToolExecution {
         start_ts: ts(0),
         end_ts: Some(ts(0)),
         source_assistant_uuid: "a0".into(),
+        result_agent_id: None,
     }
 }
 

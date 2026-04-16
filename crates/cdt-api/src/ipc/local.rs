@@ -138,29 +138,42 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         session_id: &str,
     ) -> Result<SessionDetail, ApiError> {
+        let projects_dir = path_decoder::get_projects_base_path();
+        let project_dir = projects_dir.join(project_id);
+
         let scanner = self.scanner.lock().await;
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;
+        drop(scanner);
 
-        let session = sessions
-            .iter()
-            .find(|s| s.id == session_id)
-            .ok_or_else(|| ApiError::not_found(format!("session {session_id}")))?;
+        let main_session = sessions.iter().find(|s| s.id == session_id);
 
-        // 构建 JSONL 文件路径
-        let projects_dir = path_decoder::get_projects_base_path();
-        let jsonl_path = projects_dir
-            .join(project_id)
-            .join(format!("{session_id}.jsonl"));
+        let (jsonl_path, last_modified, size) = if let Some(s) = main_session {
+            (
+                project_dir.join(format!("{session_id}.jsonl")),
+                Some(s.last_modified),
+                Some(s.size),
+            )
+        } else if let Some(path) = find_subagent_jsonl(&project_dir, session_id).await {
+            let meta = tokio::fs::metadata(&path).await.ok();
+            let modified = meta.as_ref().and_then(|m| m.modified().ok()).map(|t| {
+                let dt: chrono::DateTime<chrono::Utc> = t.into();
+                dt.timestamp_millis()
+            });
+            let size = meta.as_ref().map(std::fs::Metadata::len);
+            (path, modified, size)
+        } else {
+            return Err(ApiError::not_found(format!("session {session_id}")));
+        };
 
         let messages = parse_file(&jsonl_path)
             .await
             .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
 
-        // 扫描 subagent 候选
-        let candidates = scan_subagent_candidates(&projects_dir.join(project_id), session_id).await;
+        // 扫描 subagent 候选（subagent 会话自身通常无下级 subagent，但保持一致）
+        let candidates = scan_subagent_candidates(&project_dir, session_id).await;
 
         let chunks = build_chunks_with_subagents(&messages, &candidates);
 
@@ -202,8 +215,8 @@ impl DataApi for LocalDataApi {
             chunks: serde_json::to_value(&chunks).unwrap_or_default(),
             metrics: serde_json::json!({"message_count": messages.len()}),
             metadata: serde_json::json!({
-                "last_modified": session.last_modified,
-                "size": session.size,
+                "last_modified": last_modified,
+                "size": size,
             }),
             context_injections,
         })
@@ -497,6 +510,31 @@ async fn build_claude_md_from_filesystem(project_root: &str) -> Vec<cdt_core::Co
         .collect()
 }
 
+/// 在 project 目录下查找指定 session id 的 subagent JSONL 文件。
+///
+/// 检查两种结构：
+/// - 新：`{project_dir}/*/subagents/agent-{session_id}.jsonl`（扁平扫一层主 session 目录）
+/// - 旧：`{project_dir}/agent-{session_id}.jsonl`
+async fn find_subagent_jsonl(project_dir: &Path, session_id: &str) -> Option<std::path::PathBuf> {
+    let filename = format!("agent-{session_id}.jsonl");
+
+    // 旧结构：project_dir/agent-<id>.jsonl
+    let flat = project_dir.join(&filename);
+    if tokio::fs::metadata(&flat).await.is_ok() {
+        return Some(flat);
+    }
+
+    // 新结构：project_dir/{parent_session}/subagents/agent-<id>.jsonl
+    let mut entries = tokio::fs::read_dir(project_dir).await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let candidate = entry.path().join("subagents").join(&filename);
+        if tokio::fs::metadata(&candidate).await.is_ok() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 /// 扫描 subagent 候选文件，构建 `SubagentCandidate` 列表。
 ///
 /// 扫描路径：
@@ -563,56 +601,55 @@ async fn parse_subagent_candidate(path: &Path) -> Option<cdt_core::SubagentCandi
         .map(|s| s.strip_prefix("agent-").unwrap_or(s).to_owned())
         .unwrap_or_default();
     let mut spawn_ts = None;
+    let mut end_ts: Option<chrono::DateTime<chrono::Utc>> = None;
     let mut parent_session_id = None;
     let mut description_hint = None;
     let mut is_warmup = false;
 
-    // 只读前 10 行获取关键信息
+    // 前 10 行提取元数据；之后继续扫描以记录最后一条 timestamp 作为 end_ts
     let mut line_count = 0;
     while let Ok(Some(line)) = lines.next_line().await {
         line_count += 1;
-        if line_count > 10 {
-            break;
-        }
         let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
 
-        // 提取时间戳（取最早的）
-        if spawn_ts.is_none() {
-            if let Some(ts_str) = val.get("timestamp").and_then(|v| v.as_str()) {
-                spawn_ts = chrono::DateTime::parse_from_rfc3339(ts_str)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&chrono::Utc));
-            }
-        }
-
-        // 提取 parent session id
-        if parent_session_id.is_none() {
-            if let Some(pid) = val.get("parentUuid").and_then(|v| v.as_str()) {
-                parent_session_id = Some(pid.to_owned());
-            }
-        }
-
-        // 提取 session id（如果消息里有 agentId）
-        if let Some(aid) = val.get("agentId").and_then(|v| v.as_str()) {
-            aid.clone_into(&mut session_id);
-        }
-
-        // 检查是否是 warmup subagent
-        // content 在 message.content 嵌套层中
-        if val.get("type").and_then(|v| v.as_str()) == Some("user") {
-            let content_val = val
-                .get("message")
-                .and_then(|m| m.get("content"))
-                .unwrap_or(&val["content"]);
-            if let Some(content) = content_val.as_str() {
-                if content == "Warmup" {
-                    is_warmup = true;
-                    break;
+        if let Some(ts_str) = val.get("timestamp").and_then(|v| v.as_str()) {
+            let parsed = chrono::DateTime::parse_from_rfc3339(ts_str)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            if let Some(ts) = parsed {
+                if spawn_ts.is_none() {
+                    spawn_ts = Some(ts);
                 }
-                if description_hint.is_none() && !content.is_empty() {
-                    description_hint = Some(content.chars().take(200).collect());
+                end_ts = Some(ts);
+            }
+        }
+
+        if line_count <= 10 {
+            if parent_session_id.is_none() {
+                if let Some(pid) = val.get("parentUuid").and_then(|v| v.as_str()) {
+                    parent_session_id = Some(pid.to_owned());
+                }
+            }
+
+            if let Some(aid) = val.get("agentId").and_then(|v| v.as_str()) {
+                aid.clone_into(&mut session_id);
+            }
+
+            if val.get("type").and_then(|v| v.as_str()) == Some("user") {
+                let content_val = val
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .unwrap_or(&val["content"]);
+                if let Some(content) = content_val.as_str() {
+                    if content == "Warmup" {
+                        is_warmup = true;
+                        break;
+                    }
+                    if description_hint.is_none() && !content.is_empty() {
+                        description_hint = Some(content.chars().take(200).collect());
+                    }
                 }
             }
         }
@@ -622,10 +659,17 @@ async fn parse_subagent_candidate(path: &Path) -> Option<cdt_core::SubagentCandi
         return None;
     }
 
+    // 只有当最后一行时间戳晚于首行时才算已结束；否则视为仍在运行
+    let end_ts = match (spawn_ts, end_ts) {
+        (Some(start), Some(end)) if end > start => Some(end),
+        _ => None,
+    };
+
     Some(cdt_core::SubagentCandidate {
         session_id,
         description_hint,
         spawn_ts: spawn_ts.unwrap_or_default(),
+        end_ts,
         parent_session_id,
         metrics: cdt_core::ChunkMetrics::zero(),
     })

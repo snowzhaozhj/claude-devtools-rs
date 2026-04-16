@@ -210,6 +210,7 @@ mod tests {
             start_ts: ts(),
             end_ts: Some(ts()),
             source_assistant_uuid: "a1".into(),
+            result_agent_id: None,
         });
         let user = UserChunk {
             uuid: "u1".into(),
