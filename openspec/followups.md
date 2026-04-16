@@ -28,11 +28,12 @@
 
 ## chunk-building
 
-### [impl-bug?] Task tool 过滤未在 AIChunk 构建阶段生效
+### [impl-bug?] Task tool 过滤未在 AIChunk 构建阶段生效 ✅ 已在 Rust port 修复
 - Spec: `Filter Task tool uses when subagent data is available`
 - 代码：`ToolExecutionBuilder` 构建所有 tool execution，随后的 `ChunkFactory.buildAIChunkFromBuffer` 未在 subagent 已 resolve 的情况下移除对应 Task tool_use
 - 可能结果：UI 里同一个 Task 既作为工具项展示，也作为 subagent 展示
 - Rust port 决策：按 spec 过滤
+- **Rust 实现**：后端 `build_chunks_with_subagents` 已调用 `filter_resolved_tasks`；前端新增 `displayItemBuilder.ts` 的 `buildDisplayItems` 从 `semanticSteps` 构建统一 `DisplayItem[]`，header summary 由 `buildSummary(items)` 统计（对齐原版 `displaySummary.ts`），subagent 用独立 `SubagentCard` 组件渲染。
 
 ### [coverage-gap] 多 tool 链接 / orphan tool_result / Task 过滤没有测试
 - `test/main/services/analysis/ChunkBuilder.test.ts` 只覆盖基础 chunk 创建和 sidechain 过滤
@@ -61,6 +62,28 @@
 - `SubagentResolver.ts:207-309` 实现了三级 fallback 匹配
 - spec 只说"match task descriptions and spawn timestamps"过于笼统
 - 建议：归档前给 `tool-execution-linking` 补一条 `Match Task calls to subagents by three fallbacks` 的 requirement
+
+### [impl-bug?] Phase 1 subagent 匹配路径错：应读 JSONL 顶层 `toolUseResult.agentId` 而非 content block text
+- **背景**：2026-04-16 `fix-ai-header-tool-count` 修复过程中定位到此问题，已部分缓解（添加了从 content block 文本抽取 `agentId:` 的兜底），但根本问题未修。
+- **原版实现**（`../claude-devtools/src/main/services/analysis/SubagentResolver.ts`）：从 JSONL 条目的**顶层** `toolUseResult.agentId` 字段直接读取 subagent session id。此字段是 Claude Code 写 JSONL 时独立于 `message.content` 输出的结构化结果。
+- **Rust 现状**（`crates/cdt-analyze/src/tool_linking/resolver.rs::extract_session_id`）：只看 `ToolExecution.output`，该字段来自 content block 里的 `tool_result`。当前从 text 里 regex 抽 `agentId:` 仅是兜底。
+- **影响**：14 个 Task/Agent tool_use 中只有 4 个成功匹配到 subagent（`chunk[1]` ×2 / `chunk[15]` / `chunk[25]`），其余 10 个因 content block 中不含 agentId 文本而 fallback 到 description/positional 匹配失败。
+- **修复路径**：
+  1. `cdt-parse` 需在 `ParsedMessage` 上保留 JSONL 顶层 `toolUseResult` 字段（当前被丢弃）
+  2. `cdt-analyze` 的 `ToolExecution` 增加 `result_agent_id: Option<String>` 字段
+  3. `extract_session_id` Phase 1 优先读该字段
+- **风险**：`cdt-parse` 结构体扩展会触发 serde 兼容性检查；需同步更新 `session-parsing` spec。
+
+### [impl-bug?] `dedupe_by_request_id` 丢弃含 Agent tool_use 的 assistant 消息
+- **背景**：2026-04-16 verify_session 调试发现：session 文件共 14 个 Task/Agent tool_use，但 parse 完只剩 6 个；损失 8 个的原因指向 `dedupe_by_request_id`。
+- **原因猜测**：原版 TS `deduplicateByRequestId` 可能按"保留最后一条"策略（流式 rewrite），Rust 的 `crates/cdt-parse/src/dedupe.rs` 可能走了"保留第一条"，导致含完整 Agent tool_use 的最终消息被丢。需逐条对比 JSONL 原始数据确认。
+- **验证方法**：用 `crates/cdt-api/examples/verify_session.rs` 统计 14 个 tool_use 的 requestId 分布，比对 dedupe 前后差异。
+- **修复路径**：修正 dedupe 保留策略 + 补充单元测试（同 requestId 多条 assistant 消息的保留顺序）。
+
+### [coverage-gap] Rust 匹配 `Task || Agent` 两个工具名，原版只匹配 `Task`
+- `resolver.rs` 的 Task filter 包含 `name == "Task" || name == "Agent"`
+- 原版只有 `name === "Task"`
+- **原因**：Claude Code 新版本把 Task 工具改名为 Agent，Rust port 做了兼容；非 bug，但需在 spec 里显式声明"Task/Agent 同义词"。
 
 ---
 

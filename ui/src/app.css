@@ -95,6 +95,16 @@
   --tool-result-error-bg: rgba(239, 68, 68, 0.08);
   --tool-result-error-text: #dc2626;
 
+  /* Cards (subagent, etc.) */
+  --card-bg: #f9f9f7;
+  --card-border: #d5d3cf;
+  --card-header-bg: #f0efed;
+  --card-header-hover: #eae9e6;
+  --card-icon-muted: #a8a5a0;
+  --card-text-light: #3a3935;
+  --card-text-lighter: #2a2925;
+  --card-separator: #d5d3cf;
+
   /* Badges */
   --badge-neutral-bg: #e5e4e1;
   --badge-neutral-text: #6b6964;
@@ -196,6 +206,15 @@
   --tool-result-error-bg: rgba(239, 68, 68, 0.12);
   --tool-result-error-text: #f87171;
 
+  --card-bg: #121212;
+  --card-border: #27272a;
+  --card-header-bg: #18181b;
+  --card-header-hover: #1f1f23;
+  --card-icon-muted: #52525b;
+  --card-text-light: #d4d4d8;
+  --card-text-lighter: #e4e4e7;
+  --card-separator: #3f3f46;
+
   --badge-neutral-bg: #3a3a37;
   --badge-neutral-text: #a8a5a0;
 
@@ -287,6 +306,15 @@
     --tool-result-success-text: #4ade80;
     --tool-result-error-bg: rgba(239, 68, 68, 0.12);
     --tool-result-error-text: #f87171;
+
+    --card-bg: #121212;
+    --card-border: #27272a;
+    --card-header-bg: #18181b;
+    --card-header-hover: #1f1f23;
+    --card-icon-muted: #52525b;
+    --card-text-light: #d4d4d8;
+    --card-text-lighter: #e4e4e7;
+    --card-separator: #3f3f46;
 
     --badge-neutral-bg: #3a3a37;
     --badge-neutral-text: #a8a5a0;

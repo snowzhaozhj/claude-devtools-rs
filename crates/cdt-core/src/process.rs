@@ -13,6 +13,7 @@ use crate::chunk::ChunkMetrics;
 
 /// 团队成员元数据，由 `team-coordination-metadata` capability 填充。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TeamMeta {
     pub team_name: String,
     pub member_name: String,
@@ -25,6 +26,7 @@ pub struct TeamMeta {
 /// `team` 在 `port-tool-execution-linking` 范围内保持 `None`；
 /// `port-team-coordination-metadata` 会按 `TeamMeta` 填充。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Process {
     pub session_id: String,
     #[serde(default)]

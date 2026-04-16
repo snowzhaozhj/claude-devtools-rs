@@ -121,16 +121,54 @@ pub fn resolve_subagents(
 }
 
 fn extract_session_id(output: &ToolOutput) -> Option<String> {
-    let ToolOutput::Structured { value } = output else {
-        return None;
-    };
-    if let Some(id) = value.get("session_id").and_then(|v| v.as_str()) {
-        return Some(id.to_owned());
+    match output {
+        ToolOutput::Structured { value } => {
+            // 直接对象格式：{"session_id": "xxx"}
+            if let Some(id) = value.get("session_id").and_then(|v| v.as_str()) {
+                return Some(id.to_owned());
+            }
+            // teammate 格式：{"teammate_spawned": {"session_id": "xxx"}}
+            if let Some(id) = value
+                .get("teammate_spawned")
+                .and_then(|v| v.get("session_id").and_then(|s| s.as_str()))
+            {
+                return Some(id.to_owned());
+            }
+            // Agent tool result 格式：[{"text": "...agentId: xxx..."}]
+            // 也可能是 [{"type":"text","text":"..."}] 数组
+            let text = extract_text_from_structured(value)?;
+            extract_agent_id_from_text(&text)
+        }
+        ToolOutput::Text { text } => extract_agent_id_from_text(text),
+        ToolOutput::Missing => None,
     }
-    value
-        .get("teammate_spawned")
-        .and_then(|v| v.get("session_id").and_then(|s| s.as_str()))
-        .map(str::to_owned)
+}
+
+/// 从结构化 value 中提取文本内容。
+/// 支持：数组 `[{"text":"..."}]` / `[{"type":"text","text":"..."}]`
+fn extract_text_from_structured(value: &serde_json::Value) -> Option<String> {
+    if let Some(arr) = value.as_array() {
+        for item in arr {
+            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                return Some(text.to_owned());
+            }
+        }
+    }
+    None
+}
+
+/// 从文本中提取 `agentId: <id>` 格式的 session ID。
+fn extract_agent_id_from_text(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("agentId:") {
+            let id = rest.split_whitespace().next()?;
+            if !id.is_empty() {
+                return Some(id.to_owned());
+            }
+        }
+    }
+    None
 }
 
 fn description_matches(task_desc: &str, candidate_hint: &str) -> bool {

@@ -2,13 +2,15 @@
   import { onMount, onDestroy } from "svelte";
   import { getSessionDetail, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
-  import { getToolSummary, getToolStatus, cleanDisplayText, buildAiGroupSummary } from "../lib/toolHelpers";
-  import { WRENCH, BRAIN, BOT, TERMINAL, SLASH } from "../lib/icons";
+  import { getToolSummary, getToolStatus, cleanDisplayText } from "../lib/toolHelpers";
+  import { buildDisplayItems, buildSummary } from "../lib/displayItemBuilder";
+  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE } from "../lib/icons";
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
   import { getTabUIState, saveTabUIState, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
+  import SubagentCard from "../components/SubagentCard.svelte";
   import SearchBar from "../components/SearchBar.svelte";
   import ContextPanel from "../components/ContextPanel.svelte";
   import DefaultToolViewer from "../components/tool-viewers/DefaultToolViewer.svelte";
@@ -142,10 +144,6 @@
     return "Claude";
   }
 
-  function aiToolCount(chunk: AIChunk): number {
-    return chunk.toolExecutions.length;
-  }
-
   function isReadTool(exec: ToolExecution): boolean { return exec.toolName === "Read" && !exec.isError; }
   function isEditTool(exec: ToolExecution): boolean { return exec.toolName === "Edit"; }
   function isWriteTool(exec: ToolExecution): boolean { return exec.toolName === "Write" && !exec.isError; }
@@ -225,7 +223,8 @@
 
       <!-- AI -->
       {:else if chunk.kind === "ai"}
-        {@const summaryText = buildAiGroupSummary(chunk)}
+        {@const di = buildDisplayItems(chunk)}
+        {@const summaryText = buildSummary(di.items)}
         {@const toolsVisible = isChunkToolsVisible(i)}
         <div class="msg-row msg-row-ai">
           <div class="msg-ai-container">
@@ -247,79 +246,80 @@
               <span class="ai-time">{ftime(chunk.timestamp)}</span>
             </div>
 
-            <!-- Tool rows (toggle visibility) -->
+            <!-- Display items (toggle visibility) -->
             {#if toolsVisible}
               <div class="ai-tools-section">
-                {#each chunk.slashCommands ?? [] as slash}
-                  <BaseItem
-                    svgIcon={SLASH}
-                    label={"/" + slash.name}
-                    summary={slash.args ?? slash.message ?? ""}
-                    isExpanded={false}
-                    onclick={() => {}}
-                  />
-                {/each}
-                {#each chunk.semanticSteps as step, si}
-                  {#if step.kind === "tool_execution"}
-                    {@const exec = chunk.toolExecutions.find(e => e.toolUseId === step.toolUseId)}
-                    {#if exec}
-                      {@const key = `${i}-tool-${exec.toolUseId}`}
-                      <BaseItem
-                        svgIcon={WRENCH}
-                        label={exec.toolName}
-                        summary={getToolSummary(exec.toolName, exec.input)}
-                        status={getToolStatus(exec)}
-                        isExpanded={expandedItems.has(key)}
-                        onclick={() => toggle(key)}
-                      >
-                        {#snippet children()}
-                          {#if isReadTool(exec)}
-                            <ReadToolViewer {exec} />
-                          {:else if isEditTool(exec)}
-                            <EditToolViewer {exec} />
-                          {:else if isWriteTool(exec)}
-                            <WriteToolViewer {exec} />
-                          {:else if isBashTool(exec)}
-                            <BashToolViewer {exec} />
-                          {:else}
-                            <DefaultToolViewer {exec} />
-                          {/if}
-                        {/snippet}
-                      </BaseItem>
-                    {/if}
-                  {:else if step.kind === "subagent_spawn"}
-                    {@const sub = chunk.subagents?.find(s => s.sessionId === step.placeholderId)}
+                {#each di.items as item, di_idx}
+                  {#if item.type === "slash"}
                     <BaseItem
-                      svgIcon={BOT}
-                      label={sub?.team ? sub.team.memberName : "Subagent"}
-                      summary={sub?.rootTaskDescription ? (sub.rootTaskDescription.length > 60 ? sub.rootTaskDescription.slice(0, 60) + "…" : sub.rootTaskDescription) : step.placeholderId.slice(0, 8)}
-                      durationMs={sub?.endTs && sub?.spawnTs ? new Date(sub.endTs).getTime() - new Date(sub.spawnTs).getTime() : undefined}
+                      svgIcon={SLASH}
+                      label={"/" + item.slash.name}
+                      summary={item.slash.args ?? item.slash.message ?? ""}
                       isExpanded={false}
                       onclick={() => {}}
                     />
+                  {:else if item.type === "tool"}
+                    {@const exec = item.execution}
+                    {@const key = `${i}-tool-${exec.toolUseId}`}
+                    <BaseItem
+                      svgIcon={WRENCH}
+                      label={exec.toolName}
+                      summary={getToolSummary(exec.toolName, exec.input)}
+                      status={getToolStatus(exec)}
+                      isExpanded={expandedItems.has(key)}
+                      onclick={() => toggle(key)}
+                    >
+                      {#snippet children()}
+                        {#if isReadTool(exec)}
+                          <ReadToolViewer {exec} />
+                        {:else if isEditTool(exec)}
+                          <EditToolViewer {exec} />
+                        {:else if isWriteTool(exec)}
+                          <WriteToolViewer {exec} />
+                        {:else if isBashTool(exec)}
+                          <BashToolViewer {exec} />
+                        {:else}
+                          <DefaultToolViewer {exec} />
+                        {/if}
+                      {/snippet}
+                    </BaseItem>
+                  {:else if item.type === "thinking"}
+                    {@const key = `${i}-think-${di_idx}`}
+                    <BaseItem
+                      svgIcon={BRAIN}
+                      label="Thinking"
+                      isExpanded={expandedItems.has(key)}
+                      onclick={() => toggle(key)}
+                    >
+                      {#snippet children()}
+                        <div class="prose prose-thinking">{@html renderMarkdown(item.text)}</div>
+                      {/snippet}
+                    </BaseItem>
+                  {:else if item.type === "output"}
+                    {@const key = `${i}-output-${di_idx}`}
+                    <BaseItem
+                      svgIcon={MESSAGE_SQUARE}
+                      label="Output"
+                      summary={item.text.length > 60 ? item.text.slice(0, 60) + "…" : item.text}
+                      isExpanded={expandedItems.has(key)}
+                      onclick={() => toggle(key)}
+                    >
+                      {#snippet children()}
+                        <div class="prose">{@html renderMarkdown(item.text)}</div>
+                      {/snippet}
+                    </BaseItem>
+                  {:else if item.type === "subagent"}
+                    <SubagentCard process={item.process} />
                   {/if}
                 {/each}
               </div>
             {/if}
 
-            <!-- Text + thinking content (always visible) -->
+            <!-- Last output (always visible) -->
             <div class="ai-body">
-              {#each chunk.semanticSteps as step, si}
-                {#if step.kind === "thinking"}
-                  <BaseItem
-                    svgIcon={BRAIN}
-                    label="Thinking"
-                    isExpanded={expandedItems.has(`${i}-think-${si}`)}
-                    onclick={() => toggle(`${i}-think-${si}`)}
-                  >
-                    {#snippet children()}
-                      <div class="prose prose-thinking">{@html renderMarkdown(step.text)}</div>
-                    {/snippet}
-                  </BaseItem>
-                {:else if step.kind === "text"}
-                  <div class="prose">{@html renderMarkdown(step.text)}</div>
-                {/if}
-              {/each}
+              {#if di.lastOutput}
+                <div class="prose">{@html renderMarkdown(di.lastOutput.text)}</div>
+              {/if}
             </div>
           </div>
         </div>

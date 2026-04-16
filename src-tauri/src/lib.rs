@@ -4,7 +4,7 @@ use cdt_api::{ConfigUpdateRequest, DataApi, LocalDataApi, PaginatedRequest, Sear
 use cdt_config::{ConfigManager, NotificationManager, NotificationTrigger};
 use cdt_discover::{local_handle, path_decoder, ProjectScanner};
 use cdt_ssh::SshConnectionManager;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 
 struct AppData {
     api: Arc<LocalDataApi>,
@@ -164,6 +164,10 @@ pub fn run() {
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
+                // 打开 WebView devtools 供调试
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                }
             }
             Ok(())
         })
