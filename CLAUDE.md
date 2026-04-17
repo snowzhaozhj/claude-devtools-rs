@@ -134,7 +134,12 @@ just bootstrap           # npm install --prefix ui（首次）
 
 ## UI 已知遗留问题
 
-（无；P0/P1 已清零。自动通知管线见 `2026-04-17-auto-notification-pipeline`，Pin/Hide 持久化见 commit `22ea8d8`。）
+两条关联待办（详细实现路径见 `openspec/followups.md` "实时会话刷新" 段，建议走 openspec）：
+
+1. **实时 `file-change` 桥未接前端**：后端 FileWatcher 正常跑但只给 notifier 用，前端 `SessionDetail.svelte:54-75` `onMount` 一次性拉数据，不会自动追加新消息。需要 `src-tauri/src/lib.rs` emit `file-change` 事件 + 前端 listener + per-session detail 重拉 + sidebar 列表刷新 + in-flight dedupe。
+2. **Session "in progress" + 中断检测未实现**：原版 `checkMessagesOngoing` 算法 + `OngoingIndicator`（sidebar 绿点 / 会话底部 "Session is in progress..." 横幅）未 port。附带 impl-bug：`crates/cdt-parse/src/noise.rs:13` 把 `[Request interrupted by user` 当 hard noise 过滤，与原版"保留为 `interruption` semantic step"相反，需要先从 `HardNoise` 拎出来成独立 category。依赖 #1 才能"看到绿点变白"。
+
+建议顺序：#1 → #2 → Execution Trace / 多 Pane / 虚拟滚动。桌面通知/系统托盘见 commit `f546b88`。
 
 ## What to do first in a fresh session
 
