@@ -166,6 +166,22 @@ export function setActiveTab(tabId: string): void {
   }
 }
 
+/**
+ * 拖拽重排：把 fromIndex 位置的 tab 移到 toIndex 位置。
+ * activeTabId 保持不变（只改顺序，不改焦点）。
+ * 越界 / 相同索引静默返回。
+ */
+export function reorderTab(fromIndex: number, toIndex: number): void {
+  if (fromIndex === toIndex) return;
+  if (fromIndex < 0 || fromIndex >= tabs.length) return;
+  if (toIndex < 0 || toIndex >= tabs.length) return;
+
+  const next = tabs.slice();
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  tabs = next;
+}
+
 // ---------------------------------------------------------------------------
 // Per-tab UI 状态
 // ---------------------------------------------------------------------------

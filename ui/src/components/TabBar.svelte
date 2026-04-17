@@ -1,11 +1,31 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { getTabs, getActiveTabId, setActiveTab, closeTab, openSettingsTab, openNotificationsTab, getUnreadCount, setUnreadCount } from "../lib/tabStore.svelte";
+  import {
+    getTabs,
+    getActiveTabId,
+    setActiveTab,
+    closeTab,
+    openSettingsTab,
+    openNotificationsTab,
+    getUnreadCount,
+    setUnreadCount,
+    reorderTab,
+  } from "../lib/tabStore.svelte";
   import { getNotifications } from "../lib/api";
 
   const tabs = $derived(getTabs());
   const activeTabId = $derived(getActiveTabId());
   const unreadCount = $derived(getUnreadCount());
+
+  // ---------- 拖拽状态（pointer events 方案） ----------
+  // 选择 pointer 而非 HTML5 drag：macOS WKWebView 会把 HTML5 drag
+  // 当成跨应用 copy 操作（dropEffect=copy），drop 事件在 document 内不触发。
+  // 这里自己做 pointerdown/move/up 状态机，完全绕开 WKWebView 的行为差异。
+  let dragSourceIndex = $state<number | null>(null);
+  let dragOverIndex = $state<number | null>(null);
+  let isDragging = $state(false);
+  let dragStartX = 0;
+  const DRAG_THRESHOLD = 5; // px，超过该距离才进入拖拽态，低于则视为点击
 
   // 30 秒轮询 unreadCount
   let pollTimer: ReturnType<typeof setInterval>;
@@ -14,7 +34,9 @@
     try {
       const result = await getNotifications(1, 0);
       setUnreadCount(result.unreadCount);
-    } catch { /* 静默失败 */ }
+    } catch {
+      /* 静默失败 */
+    }
   }
 
   onMount(() => {
@@ -26,7 +48,7 @@
     clearInterval(pollTimer);
   });
 
-  function handleClose(e: MouseEvent, tabId: string) {
+  function handleClose(e: Event, tabId: string) {
     e.stopPropagation();
     closeTab(tabId);
   }
@@ -36,16 +58,90 @@
     if (type === "notifications") return "🔔";
     return "";
   }
+
+  // ---------- 拖拽处理（pointer 状态机） ----------
+  function handlePointerDown(e: PointerEvent, index: number) {
+    // 只处理鼠标左键 / 主指针
+    if (e.button !== 0) return;
+    dragSourceIndex = index;
+    dragStartX = e.clientX;
+    isDragging = false;
+    dragOverIndex = null;
+    // 全局监听 move/up/cancel，保证即使鼠标滑出 TabBar 也能收到事件
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", handlePointerUp);
+    document.addEventListener("pointercancel", handlePointerCancel);
+  }
+
+  function handlePointerMove(e: PointerEvent) {
+    if (dragSourceIndex === null) return;
+    if (!isDragging) {
+      if (Math.abs(e.clientX - dragStartX) <= DRAG_THRESHOLD) return;
+      isDragging = true;
+    }
+    // 命中测试：找鼠标下方的 .tab-item 及其 data-tab-index
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const tabEl = el?.closest<HTMLElement>(".tab-item");
+    if (!tabEl) {
+      dragOverIndex = null;
+      return;
+    }
+    const raw = tabEl.dataset.tabIndex;
+    const idx = raw === undefined ? Number.NaN : Number(raw);
+    dragOverIndex = Number.isNaN(idx) ? null : idx;
+  }
+
+  function handlePointerUp() {
+    const wasDragging = isDragging;
+    const src = dragSourceIndex;
+    const tgt = dragOverIndex;
+    cleanupDrag();
+    if (wasDragging) {
+      if (src !== null && tgt !== null && tgt !== src) {
+        reorderTab(src, tgt);
+      }
+    } else if (src !== null) {
+      // 未越过 threshold → 视为普通点击，激活 tab
+      const tab = tabs[src];
+      if (tab) setActiveTab(tab.id);
+    }
+  }
+
+  function handlePointerCancel() {
+    cleanupDrag();
+  }
+
+  function cleanupDrag() {
+    dragSourceIndex = null;
+    dragOverIndex = null;
+    isDragging = false;
+    document.removeEventListener("pointermove", handlePointerMove);
+    document.removeEventListener("pointerup", handlePointerUp);
+    document.removeEventListener("pointercancel", handlePointerCancel);
+  }
 </script>
 
 <div class="tab-bar">
-  <div class="tab-list">
-    {#each tabs as tab (tab.id)}
-      <button
+  <div class="tab-list" role="tablist">
+    {#each tabs as tab, index (tab.id)}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div
         class="tab-item"
         class:tab-item-active={tab.id === activeTabId}
-        onclick={() => setActiveTab(tab.id)}
+        class:tab-item-dragging={isDragging && dragSourceIndex === index}
+        class:tab-item-drop-target={isDragging && dragOverIndex === index && dragSourceIndex !== index}
+        role="tab"
+        tabindex="0"
+        aria-selected={tab.id === activeTabId}
+        data-tab-index={index}
         title={tab.label}
+        onpointerdown={(e) => handlePointerDown(e, index)}
+        onkeydown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setActiveTab(tab.id);
+          }
+        }}
       >
         {#if tab.type !== "session"}
           <span class="tab-icon">{tabIcon(tab.type)}</span>
@@ -56,11 +152,14 @@
           class="tab-close"
           role="button"
           tabindex="-1"
-          onclick={(e) => handleClose(e, tab.id)}
-          onkeydown={(e) => { if (e.key === 'Enter') handleClose(e as unknown as MouseEvent, tab.id); }}
           aria-label="关闭标签"
+          onpointerdown={(e) => e.stopPropagation()}
+          onclick={(e) => handleClose(e, tab.id)}
+          onkeydown={(e) => {
+            if (e.key === "Enter") handleClose(e, tab.id);
+          }}
         >×</span>
-      </button>
+      </div>
     {/each}
   </div>
 
@@ -114,9 +213,22 @@
     color: var(--color-text-muted);
     font: inherit;
     font-size: 12px;
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    /* 禁用 WKWebView 原生 drag：pointer 方案不需要它，开启反而会
+       让系统以为用户在往应用外拖，派发跨应用 copy 导致 drop 丢失。 */
+    -webkit-user-drag: none;
+    transition: background 0.1s, color 0.1s, opacity 0.1s;
     flex-shrink: 0;
+    /* 为 drop-target 左边缘 indicator 预留定位上下文 */
+    position: relative;
+    /* 拖拽过程中屏蔽触控手势的横向滑动默认行为 */
+    touch-action: none;
+  }
+
+  .tab-item:active {
+    cursor: grabbing;
   }
 
   .tab-item:hover {
@@ -130,6 +242,23 @@
     border-bottom: 2px solid var(--color-border-emphasis);
   }
 
+  /* 正在被拖动的 tab：半透明，对齐原版 opacity 0.3 */
+  .tab-item-dragging {
+    opacity: 0.3;
+  }
+
+  /* drop 目标：左边缘 2px 竖线 indicator */
+  .tab-item-drop-target::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--color-border-emphasis);
+    pointer-events: none;
+  }
+
   .tab-icon {
     font-size: 13px;
     flex-shrink: 0;
@@ -141,6 +270,7 @@
     white-space: nowrap;
     flex: 1;
     text-align: left;
+    pointer-events: none;
   }
 
   .tab-close {

@@ -24,7 +24,7 @@ use super::session_metadata::extract_session_metadata;
 use super::traits::DataApi;
 use super::types::{
     ConfigUpdateRequest, ContextInfo, PaginatedRequest, PaginatedResponse, ProjectInfo,
-    SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
+    ProjectSessionPrefs, SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
 };
 
 /// 本地文件系统 `DataApi` 实现。
@@ -475,6 +475,63 @@ impl LocalDataApi {
         serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
     }
 
+    /// Pin 一个 session（project + session 维度），写入配置文件。
+    pub async fn pin_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        mgr.pin_session(project_id, session_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    /// 取消 pin，写入配置文件。
+    pub async fn unpin_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        mgr.unpin_session(project_id, session_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    /// 隐藏一个 session，写入配置文件。
+    pub async fn hide_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        mgr.hide_session(project_id, session_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    /// 取消隐藏，写入配置文件。
+    pub async fn unhide_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        mgr.unhide_session(project_id, session_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    /// 返回当前 project 的 pin/hide session id 列表，供前端首次 load 时 prime `$state`。
+    ///
+    /// 列表顺序保持 `ConfigManager` 内部的"最近在前"约定（pin 用 `pinned_at` 倒序插入、
+    /// hide 用 `hidden_at` 倒序插入）。
+    pub async fn get_project_session_prefs(
+        &self,
+        project_id: &str,
+    ) -> Result<ProjectSessionPrefs, ApiError> {
+        let mgr = self.config_mgr.lock().await;
+        let config = mgr.get_config();
+        let pinned = config
+            .sessions
+            .pinned_sessions
+            .get(project_id)
+            .map(|v| v.iter().map(|p| p.session_id.clone()).collect())
+            .unwrap_or_default();
+        let hidden = config
+            .sessions
+            .hidden_sessions
+            .get(project_id)
+            .map(|v| v.iter().map(|h| h.session_id.clone()).collect())
+            .unwrap_or_default();
+        Ok(ProjectSessionPrefs { pinned, hidden })
+    }
+
     /// 读取 `.claude/agents/*.md` 配置（全局 + 所有已发现项目）。
     ///
     /// 用于前端 subagent 彩色 badge 的颜色查询，对齐原版 `agentConfigs` store。
@@ -718,4 +775,97 @@ async fn parse_subagent_candidate(path: &Path) -> Option<cdt_core::SubagentCandi
         messages,
         is_ongoing,
     })
+}
+
+// =============================================================================
+// 测试：覆盖 Pin/Hide facade（走独立 impl 块的非 trait 方法）
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cdt_config::{ConfigManager, NotificationManager};
+    use cdt_discover::{ProjectScanner, local_handle};
+    use cdt_ssh::SshConnectionManager;
+    use tempfile::tempdir;
+
+    /// 构造一个内存态的 `LocalDataApi`，仅 config 路径指向独立 tempdir。
+    ///
+    /// 其余 manager 用默认值即可——Pin/Hide 测试只关心 config 落盘。
+    async fn build_api(config_path: std::path::PathBuf) -> LocalDataApi {
+        let mut config_mgr = ConfigManager::new(Some(config_path));
+        config_mgr.load().await.unwrap();
+        let notif_mgr = NotificationManager::new(None);
+        let ssh_mgr = SshConnectionManager::new();
+        let scanner = ProjectScanner::new(local_handle(), std::path::PathBuf::from("/tmp"));
+        LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr)
+    }
+
+    #[tokio::test]
+    async fn pin_then_get_prefs_returns_sessions() {
+        let dir = tempdir().unwrap();
+        let api = build_api(dir.path().join("config.json")).await;
+
+        api.pin_session("proj-a", "sess-1").await.unwrap();
+        api.pin_session("proj-a", "sess-2").await.unwrap();
+
+        let prefs = api.get_project_session_prefs("proj-a").await.unwrap();
+        // 最近 pin 的在前
+        assert_eq!(prefs.pinned, vec!["sess-2".to_owned(), "sess-1".to_owned()]);
+        assert!(prefs.hidden.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unpin_removes_entry() {
+        let dir = tempdir().unwrap();
+        let api = build_api(dir.path().join("config.json")).await;
+
+        api.pin_session("proj-a", "sess-1").await.unwrap();
+        api.unpin_session("proj-a", "sess-1").await.unwrap();
+
+        let prefs = api.get_project_session_prefs("proj-a").await.unwrap();
+        assert!(prefs.pinned.is_empty());
+    }
+
+    #[tokio::test]
+    async fn hide_and_unhide_roundtrip() {
+        let dir = tempdir().unwrap();
+        let api = build_api(dir.path().join("config.json")).await;
+
+        api.hide_session("proj-a", "sess-x").await.unwrap();
+        let prefs = api.get_project_session_prefs("proj-a").await.unwrap();
+        assert_eq!(prefs.hidden, vec!["sess-x".to_owned()]);
+
+        api.unhide_session("proj-a", "sess-x").await.unwrap();
+        let prefs = api.get_project_session_prefs("proj-a").await.unwrap();
+        assert!(prefs.hidden.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prefs_persist_across_manager_reload() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+
+        {
+            let api = build_api(path.clone()).await;
+            api.pin_session("proj-a", "sess-1").await.unwrap();
+            api.hide_session("proj-a", "sess-2").await.unwrap();
+        }
+
+        // 新建 api 重新从磁盘 load
+        let api = build_api(path).await;
+        let prefs = api.get_project_session_prefs("proj-a").await.unwrap();
+        assert_eq!(prefs.pinned, vec!["sess-1".to_owned()]);
+        assert_eq!(prefs.hidden, vec!["sess-2".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn empty_project_returns_default() {
+        let dir = tempdir().unwrap();
+        let api = build_api(dir.path().join("config.json")).await;
+
+        let prefs = api.get_project_session_prefs("unknown").await.unwrap();
+        assert!(prefs.pinned.is_empty());
+        assert!(prefs.hidden.is_empty());
+    }
 }

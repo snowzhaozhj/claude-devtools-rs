@@ -147,6 +147,71 @@ async fn read_agent_configs(data: State<'_, AppData>) -> Result<serde_json::Valu
     serde_json::to_value(&configs).map_err(|e| e.to_string())
 }
 
+// =============================================================================
+// Sidebar Pin/Hide 持久化
+// =============================================================================
+
+#[tauri::command]
+async fn pin_session(
+    data: State<'_, AppData>,
+    project_id: String,
+    session_id: String,
+) -> Result<(), String> {
+    data.api
+        .pin_session(&project_id, &session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn unpin_session(
+    data: State<'_, AppData>,
+    project_id: String,
+    session_id: String,
+) -> Result<(), String> {
+    data.api
+        .unpin_session(&project_id, &session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn hide_session(
+    data: State<'_, AppData>,
+    project_id: String,
+    session_id: String,
+) -> Result<(), String> {
+    data.api
+        .hide_session(&project_id, &session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn unhide_session(
+    data: State<'_, AppData>,
+    project_id: String,
+    session_id: String,
+) -> Result<(), String> {
+    data.api
+        .unhide_session(&project_id, &session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_project_session_prefs(
+    data: State<'_, AppData>,
+    project_id: String,
+) -> Result<serde_json::Value, String> {
+    let prefs = data
+        .api
+        .get_project_session_prefs(&project_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&prefs).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -193,6 +258,11 @@ pub fn run() {
             add_trigger,
             remove_trigger,
             read_agent_configs,
+            pin_session,
+            unpin_session,
+            hide_session,
+            unhide_session,
+            get_project_session_prefs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

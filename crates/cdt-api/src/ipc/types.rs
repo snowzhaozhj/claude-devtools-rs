@@ -124,3 +124,19 @@ pub struct ContextInfo {
     #[serde(default)]
     pub host: Option<String>,
 }
+
+// =============================================================================
+// Sidebar 偏好（Pin/Hide）
+// =============================================================================
+
+/// 某个 project 当前持久化的 session pin/hide 列表。
+///
+/// 供前端 `sidebarStore` 首次加载某 project 时 prime 本地 `$state`。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSessionPrefs {
+    /// 当前 project 被 pin 的 session id 列表（按 `pinnedAt` 倒序）。
+    pub pinned: Vec<String>,
+    /// 当前 project 被 hide 的 session id 列表（按 `hiddenAt` 倒序）。
+    pub hidden: Vec<String>,
+}

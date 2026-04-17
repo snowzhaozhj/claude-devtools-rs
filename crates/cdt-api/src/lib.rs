@@ -13,6 +13,6 @@ pub mod ipc;
 pub use http::{AppState, start_server};
 pub use ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, ContextInfo, DataApi, LocalDataApi,
-    PaginatedRequest, PaginatedResponse, ProjectInfo, PushEvent, SearchRequest, SessionDetail,
-    SessionSummary, SshConnectRequest,
+    PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectSessionPrefs, PushEvent,
+    SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
 };

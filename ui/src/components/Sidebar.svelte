@@ -10,6 +10,7 @@
     isHidden, toggleHide,
     getShowHidden, toggleShowHidden,
     getHiddenCount,
+    loadProjectPrefs,
   } from "../lib/sidebarStore.svelte";
 
   interface Props {
@@ -98,6 +99,8 @@
   $effect(() => {
     if (selectedProjectId) {
       loadSessions(selectedProjectId);
+      // 首次访问此 project 时从后端拉取 pin/hide 持久化状态（幂等）
+      void loadProjectPrefs(selectedProjectId);
     }
   });
 

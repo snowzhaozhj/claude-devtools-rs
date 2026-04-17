@@ -15,5 +15,5 @@ pub use local::LocalDataApi;
 pub use traits::DataApi;
 pub use types::{
     ConfigUpdateRequest, ContextInfo, PaginatedRequest, PaginatedResponse, ProjectInfo,
-    SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
+    ProjectSessionPrefs, SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
 };
