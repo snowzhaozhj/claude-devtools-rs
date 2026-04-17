@@ -45,7 +45,7 @@ claude-devtools-rs/
 ### 架构
 
 - `ui/`：Svelte 5 + Vite 前端；`src-tauri/`：Tauri 2 Rust 后端（独立 Cargo.toml，excluded from workspace），通过 path deps 引用 `crates/`
-- Tauri IPC commands 直接调用 `LocalDataApi`（不走 HTTP）。当前 10 个 commands：list_projects / list_sessions / get_session_detail / search_sessions / get_config / update_config / get_notifications / mark_notification_read / add_trigger / remove_trigger
+- Tauri IPC commands 直接调用 `LocalDataApi`（不走 HTTP）。当前 16 个 commands（见 `src-tauri/src/lib.rs` 的 `invoke_handler!`）：session CRUD（list_projects / list_sessions / get_session_detail / search_sessions）、config（get_config / update_config）、通知（get_notifications / mark_notification_read / add_trigger / remove_trigger）、agents（read_agent_configs）、pin/hide（pin_session / unpin_session / hide_session / unhide_session / get_project_session_prefs）
 - **Trigger CRUD 走独立方法**：`LocalDataApi::add_trigger()` / `remove_trigger()` 是非 trait 公开方法（独立 `impl` 块），不在 `DataApi` trait 中
 
 ### 布局与组件
@@ -73,6 +73,7 @@ claude-devtools-rs/
 - Vite HMR 只更新前端；后端改动需 `pkill -f claude-devtools-tauri && cargo tauri dev` 重启
 - `npm run check --prefix ui` 必须从项目根目录执行，从 `src-tauri/` 目录跑会找不到 `package.json`
 - Tauri `setup` 里启动后台 task 用 `tauri::async_runtime::spawn`，不要裸 `tokio::spawn`；订阅后端 `broadcast::Receiver` 转 `emit(...)` 是典型模式（见 `src-tauri/src/lib.rs` 的 FileWatcher + notifier bridge）
+- **桌面通知 / 系统托盘**：`tauri-plugin-notification`（`src-tauri/Cargo.toml` + `capabilities/default.json` 加 `notification:default`）+ `TrayIconBuilder::with_id("main-tray")`（`setup` 里构建，icon 取 `app.default_window_icon()`）。后端从 Rust 发通知用 `app_handle.notification().builder().title(..).body(..).sound("default").show()`；前端 Dock badge 用 `getCurrentWindow().setBadgeCount()`（macOS 独占）。参见 commit `f546b88`。
 
 ## Common commands
 
