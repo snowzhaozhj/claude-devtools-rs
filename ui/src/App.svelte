@@ -12,6 +12,7 @@
   import { applyTheme } from "./lib/theme";
   import { loadAgentConfigs } from "./lib/agentConfigsStore.svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
 
   let selectedProjectId: string = $state("");
   let selectedProjectName: string = $state("");
@@ -23,6 +24,10 @@
     try {
       const r = await getNotifications(1, 0);
       setUnreadCount(r.unreadCount);
+      // 同步 macOS Dock badge（Windows 不支持，会静默失败）
+      try {
+        await getCurrentWindow().setBadgeCount(r.unreadCount > 0 ? r.unreadCount : undefined);
+      } catch { /* 非 macOS 平台静默 */ }
     } catch { /* 静默 */ }
   }
 
@@ -45,6 +50,8 @@
     } catch { /* 加载失败保持默认浅色 */ }
     // 加载 agent configs 供 subagent 彩色 badge 使用
     await loadAgentConfigs();
+    // 启动时同步一次 Dock badge（显示持久化的未读数）
+    await onNotificationUpdate();
   });
 
   onDestroy(() => {

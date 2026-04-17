@@ -5,7 +5,12 @@ use cdt_config::{ConfigManager, NotificationManager, NotificationTrigger};
 use cdt_discover::{local_handle, path_decoder, ProjectScanner};
 use cdt_ssh::SshConnectionManager;
 use cdt_watch::FileWatcher;
-use tauri::{Emitter, Manager, State};
+use tauri::{
+    Emitter, Manager, State,
+    menu::{MenuBuilder, MenuItemBuilder},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+};
+use tauri_plugin_notification::NotificationExt;
 
 struct AppData {
     api: Arc<LocalDataApi>,
@@ -242,6 +247,7 @@ pub fn run() {
     });
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(AppData { api: api.clone() })
         .setup(move |app| {
             if cfg!(debug_assertions) {
@@ -256,6 +262,53 @@ pub fn run() {
                 }
             }
 
+            // 系统托盘：左键点击 toggle 主窗口；菜单 Show / Quit
+            let show_item = MenuItemBuilder::with_id("show", "显示窗口").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+            let tray_menu = MenuBuilder::new(app)
+                .items(&[&show_item, &quit_item])
+                .build()?;
+            let _tray = TrayIconBuilder::with_id("main-tray")
+                .icon(
+                    app.default_window_icon()
+                        .cloned()
+                        .expect("app should have default icon"),
+                )
+                .tooltip("Claude DevTools")
+                .menu(&tray_menu)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.unminimize();
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let is_visible = window.is_visible().unwrap_or(false);
+                            if is_visible {
+                                let _ = window.hide();
+                            } else {
+                                let _ = window.unminimize();
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                })
+                .build(app)?;
+
             // 启动 FileWatcher：监听 `~/.claude/projects/` + `~/.claude/todos/`，
             // 将 file 变更广播给自动通知管线
             let watcher_for_task = watcher.clone();
@@ -266,13 +319,58 @@ pub fn run() {
             });
 
             // 把自动通知管线产出的 DetectedError 桥到前端 `notification-added` 事件
+            // 同时按 config.notifications.{enabled,soundEnabled} 发 OS native 通知
             let mut error_rx = api.subscribe_detected_errors();
             let app_handle = app.handle().clone();
+            let api_for_notif = api.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
                     match error_rx.recv().await {
                         Ok(err) => {
                             let _ = app_handle.emit("notification-added", &err);
+
+                            // 读最新 config 判断是否发 OS 通知
+                            let cfg = api_for_notif.get_config().await.ok();
+                            let enabled = cfg
+                                .as_ref()
+                                .and_then(|c| c.get("notifications"))
+                                .and_then(|n| n.get("enabled"))
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(true);
+                            let sound_enabled = cfg
+                                .as_ref()
+                                .and_then(|c| c.get("notifications"))
+                                .and_then(|n| n.get("soundEnabled"))
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(true);
+                            let snoozed_until = cfg
+                                .as_ref()
+                                .and_then(|c| c.get("notifications"))
+                                .and_then(|n| n.get("snoozedUntil"))
+                                .and_then(serde_json::Value::as_i64);
+                            let now_ms = i64::try_from(
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis(),
+                            )
+                            .unwrap_or(i64::MAX);
+                            let snoozed = snoozed_until.is_some_and(|until| until > now_ms);
+
+                            if enabled && !snoozed {
+                                let body: String = err.message.chars().take(200).collect();
+                                let mut builder = app_handle
+                                    .notification()
+                                    .builder()
+                                    .title("Claude Code Error")
+                                    .body(format!("[{}] {}", err.context.project_name, body));
+                                if sound_enabled {
+                                    builder = builder.sound("default");
+                                }
+                                if let Err(e) = builder.show() {
+                                    log::warn!("failed to show OS notification: {e}");
+                                }
+                            }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
