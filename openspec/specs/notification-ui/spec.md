@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定义通知页面的行为契约：通知列表展示、标记已读、导航到错误会话、TabBar badge。
+定义通知页面（NotificationsView）与 TabBar badge 的行为契约：未读计数的实时刷新策略（后端 `notification-update` / `notification-added` 事件驱动 + 30 秒兜底轮询）、通知列表分页与空态展示、标记已读（单条与全部）、点击通知导航到错误所在会话并自动标记已读、触发器颜色在卡片左侧圆点的呈现、前端状态与后端 `NotificationManager` 的一致性保证。
 
 ## Requirements
 

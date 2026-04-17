@@ -72,27 +72,34 @@ claude-devtools-rs/
 - 浏览器直接访问 `localhost:5173` 会报 `invoke` undefined——必须通过 `cargo tauri dev` 的窗口测试
 - Vite HMR 只更新前端；后端改动需 `pkill -f claude-devtools-tauri && cargo tauri dev` 重启
 - `npm run check --prefix ui` 必须从项目根目录执行，从 `src-tauri/` 目录跑会找不到 `package.json`
+- Tauri `setup` 里启动后台 task 用 `tauri::async_runtime::spawn`，不要裸 `tokio::spawn`；订阅后端 `broadcast::Receiver` 转 `emit(...)` 是典型模式（见 `src-tauri/src/lib.rs` 的 FileWatcher + notifier bridge）
 
 ## Common commands
 
+所有任务通过 `just` 跑（见 `justfile`）。首次执行 `brew install just` 安装（若未装）。
+
 ```bash
-cargo build --workspace              # build all crates
-cargo test --workspace               # run tests
-cargo clippy --workspace --all-targets  # lint (workspace-level lints in Cargo.toml)
-cargo fmt --all                      # format
-cargo run -p cdt-cli                 # run the CLI binary (HTTP server)
-npm install --prefix ui              # install frontend dependencies (first time)
-cargo tauri dev                      # launch Tauri desktop app (dev mode)
-cargo tauri build --debug            # build desktop app (debug)
-cargo build -p cdt-parse             # build one crate in isolation
-cargo test -p cdt-analyze            # test one crate
-npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
+just                     # 列出所有 recipes
+just build               # workspace build
+just build-tauri         # src-tauri build（独立 manifest）
+just test                # Rust + 前端全测（cdt-watch 自动单线程补跑避 FSEvents flake）
+just test-crate cdt-analyze   # 单 crate 测试
+just lint                # workspace + src-tauri clippy 严格模式
+just fmt                 # cargo fmt --all
+just check-ui            # svelte-check + tsc
+just dev                 # cargo tauri dev
+just spec-validate       # openspec validate --all --strict
+just preflight           # fmt + lint + test + spec-validate（提交前一把梭）
+just bootstrap           # npm install --prefix ui（首次）
 ```
+
+直接跑 `cargo xxx` 仍可用，但注意：`cd src-tauri/` 后 Bash tool 的 cwd 会持久化，后续 `cargo test --workspace` 会误入 tauri 子 manifest——优先用 `just` 或 `--manifest-path`。
 
 ## macOS 开发陷阱
 
 - `TempDir` 返回 `/var/...` 但 `notify`/FSEvents 返回 `/private/var/...`（symlink canonicalization）。涉及路径比较时必须 `canonicalize()`。
 - `notify-debouncer-mini` 的 timer 不受 `tokio::time::pause()` 控制，测试不确定。优先用 `notify` 裸接 + 自实现 tokio debounce。
+- `cdt-watch` 的 `tests/file_watching.rs` 在 macOS 并发跑 flaky（FSEvents 时序依赖）；`just test` 已经把它单拎出来用 `--test-threads=1` 跑。直接 `cargo test --workspace` 偶尔会挂，优先用 `just test`。
 
 ## Conventions
 
@@ -111,6 +118,8 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
 - **前端渲染依赖**：`marked`（markdown→HTML）+ `highlight.js`（语法高亮，按需加载语言）+ `dompurify`（XSS 防护）+ `mermaid`（图表渲染，动态 import）。highlight.js 不引入预制主题 CSS，用 `app.css` 中自定义 Soft Charcoal token 颜色。
 - **原版 UI 参考**：前端文本清洗逻辑移植自 `../claude-devtools/src/shared/utils/contentSanitizer.ts`（`sanitizeDisplayContent`）。扩展 UI 功能时优先查原版 `src/renderer/` 和 `src/shared/` 对应实现，直接移植而非自己造轮子。
 - **Tauri IPC 透传**：`src-tauri/src/lib.rs` 的 commands 返回 `serde_json::Value`，`cdt-api` 类型扩展字段（如 `SessionSummary` 加 `title`）自动透传，不需要改 Tauri 层。
+- **`LocalDataApi` 构造器扩展**：需要注入新基础设施（FileWatcher、SSH pool 等）时新增 `new_with_<xxx>()` 构造器，**不改** `new()` 签名——旧构造器被 `crates/cdt-api/tests/*.rs` 依赖，改签名会批量破坏集成测试。
+- **后台服务的本机路径参数化**：涉及 `~/.claude/projects/` 的后台服务（notifier、未来的 history scanner）不要在函数内直接 `path_decoder::get_projects_base_path()`，显式从构造器传 `projects_dir: PathBuf`，否则集成测试会命中真实本机路径。
 - **clippy pedantic**：workspace 开启 pedantic，PostToolUse hook 会在每次 `.rs` 编辑后自动跑 clippy 报错。最常踩的：`doc_markdown`（注释里标识符要反引号）、`cast_possible_wrap`（`u64 as i64` → `i64::try_from`）、`uninlined_format_args`（`format!("{}", x)` → `format!("{x}")`）。其余照 clippy 输出修即可。
 - **insta 快照接受**：没装 `cargo-insta` 就用 `INSTA_UPDATE=always cargo test -p <crate>`；提交生成的 `tests/snapshots/*.snap`。
 - **同步解析入口**：`cdt-analyze` 的集成测试不引入 tokio——用 `cdt_parse::parse_entry_at(line, n)` 逐行解析 fixture，再跑 `dedupe_by_request_id`。
