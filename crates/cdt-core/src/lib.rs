@@ -37,7 +37,7 @@ pub use message::{
     ContentBlock, HardNoiseReason, ImageSource, MessageCategory, MessageContent, MessageType,
     ParsedMessage, TokenUsage, ToolCall, ToolResult,
 };
-pub use process::{Process, SubagentCandidate, TeamMeta};
+pub use process::{MainSessionImpact, Process, SubagentCandidate, TeamMeta};
 pub use project::{
     Project, RepositoryGroup, RepositoryIdentity, Session, SessionMetadata, Worktree,
 };
@@ -56,7 +56,7 @@ pub mod prelude {
         ContentBlock, HardNoiseReason, ImageSource, MessageCategory, MessageContent, MessageType,
         ParsedMessage, TokenUsage, ToolCall, ToolResult,
     };
-    pub use super::process::{Process, SubagentCandidate, TeamMeta};
+    pub use super::process::{MainSessionImpact, Process, SubagentCandidate, TeamMeta};
     pub use super::project::{
         Project, RepositoryGroup, RepositoryIdentity, Session, SessionMetadata, Worktree,
     };

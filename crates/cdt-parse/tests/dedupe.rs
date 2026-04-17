@@ -58,18 +58,22 @@ fn non_assistant_with_request_id_is_not_deduped() {
 }
 
 #[tokio::test]
-async fn parse_file_invokes_dedup_automatically() {
-    // This is the wire-in test: the TS impl-bug was that dedup existed but was never called.
+async fn parse_file_does_not_dedupe_by_request_id() {
+    // Claude Code 实际 JSONL 里同 requestId 的多条 assistant 记录承载不同
+    // content block（thinking / text / 各 tool_use）——并非 streaming rewrite。
+    // 早期 Rust port 错误地在 parse_file 中调用 dedup 导致丢失 tool_use，
+    // 现已移除。本测试防护回归。详见 openspec/followups.md。
     let contents = concat!(
-        r#"{"type":"assistant","uuid":"a1","timestamp":"2026-04-11T10:00:00Z","requestId":"r1","message":{"role":"assistant","model":"m","content":[{"type":"text","text":"partial"}]}}"#,
+        r#"{"type":"assistant","uuid":"a1","timestamp":"2026-04-11T10:00:00Z","requestId":"r1","message":{"role":"assistant","model":"m","content":[{"type":"text","text":"first"}]}}"#,
         "\n",
-        r#"{"type":"assistant","uuid":"a2","timestamp":"2026-04-11T10:00:01Z","requestId":"r1","message":{"role":"assistant","model":"m","content":[{"type":"text","text":"final"}]}}"#,
+        r#"{"type":"assistant","uuid":"a2","timestamp":"2026-04-11T10:00:01Z","requestId":"r1","message":{"role":"assistant","model":"m","content":[{"type":"text","text":"second"}]}}"#,
         "\n",
     );
     let mut f = NamedTempFile::new().unwrap();
     f.write_all(contents.as_bytes()).unwrap();
 
     let out = parse_file(f.path()).await.unwrap();
-    assert_eq!(out.len(), 1, "dedup must be wired into parse_file");
-    assert_eq!(out[0].uuid, "a2");
+    assert_eq!(out.len(), 2, "parse_file must preserve all records");
+    assert_eq!(out[0].uuid, "a1");
+    assert_eq!(out[1].uuid, "a2");
 }

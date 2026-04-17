@@ -105,7 +105,7 @@ impl<F: FileSystemProvider> SessionSearcher<F> {
 
         let mut files = self.list_session_files(&project_dir).await?;
         // 按 mtime 降序
-        files.sort_by(|a, b| b.1.cmp(&a.1));
+        files.sort_by_key(|f| std::cmp::Reverse(f.1));
 
         let mut results = Vec::new();
         let mut total_matches = 0usize;
@@ -228,7 +228,7 @@ impl<F: FileSystemProvider> SessionSearcher<F> {
         for entry in entries {
             if let Some(id) = entry.name.strip_suffix(".jsonl") {
                 let path = dir.join(&entry.name);
-                let mtime = self.fs.stat(&path).await.map(|m| m.mtime_ms()).unwrap_or(0);
+                let mtime = self.fs.stat(&path).await.map_or(0, |m| m.mtime_ms());
                 result.push((path, mtime, id.to_owned()));
             }
         }

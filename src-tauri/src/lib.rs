@@ -137,6 +137,16 @@ async fn remove_trigger(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn read_agent_configs(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
+    let configs = data
+        .api
+        .read_agent_configs()
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&configs).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -182,6 +192,7 @@ pub fn run() {
             mark_notification_read,
             add_trigger,
             remove_trigger,
+            read_agent_configs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

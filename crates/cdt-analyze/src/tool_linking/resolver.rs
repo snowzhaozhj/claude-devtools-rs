@@ -5,7 +5,10 @@
 //!
 //! 纯函数，输入为已预过滤的 `SubagentCandidate` 列表（装载逻辑不属本 capability）。
 
-use cdt_core::{Process, SubagentCandidate, ToolCall, ToolExecution, ToolOutput};
+use cdt_core::{
+    MainSessionImpact, Process, SubagentCandidate, ToolCall, ToolExecution, ToolOutput,
+    estimate_content_tokens, estimate_tokens,
+};
 
 use super::{Resolution, ResolvedTask};
 
@@ -42,7 +45,7 @@ pub fn resolve_subagents(
         {
             used[c_idx] = true;
             results[i].resolution = Resolution::ResultBased {
-                process: candidate_to_process(cand, task),
+                process: candidate_to_process(cand, task, Some(exec)),
             };
         }
     }
@@ -83,8 +86,9 @@ pub fn resolve_subagents(
         if matches.len() == 1 {
             let ci = matches[0];
             used[ci] = true;
+            let exec = executions.iter().find(|e| e.tool_use_id == task.id);
             results[i].resolution = Resolution::DescriptionBased {
-                process: candidate_to_process(&candidates[ci], task),
+                process: candidate_to_process(&candidates[ci], task, exec),
             };
         }
     }
@@ -111,8 +115,10 @@ pub fn resolve_subagents(
         for (task_pos, &task_idx) in unresolved_task_indices.iter().enumerate() {
             let ci = cand_sorted[task_pos];
             used[ci] = true;
+            let task = &task_calls[task_idx];
+            let exec = executions.iter().find(|e| e.tool_use_id == task.id);
             results[task_idx].resolution = Resolution::Positional {
-                process: candidate_to_process(&candidates[ci], &task_calls[task_idx]),
+                process: candidate_to_process(&candidates[ci], task, exec),
             };
         }
     }
@@ -197,7 +203,11 @@ fn within_window(
     (task_ts - cand_ts).num_seconds().abs() <= TIME_WINDOW_SECS
 }
 
-fn candidate_to_process(cand: &SubagentCandidate, task: &ToolCall) -> Process {
+fn candidate_to_process(
+    cand: &SubagentCandidate,
+    task: &ToolCall,
+    exec: Option<&ToolExecution>,
+) -> Process {
     Process {
         session_id: cand.session_id.clone(),
         root_task_description: task.task_description.clone(),
@@ -205,7 +215,61 @@ fn candidate_to_process(cand: &SubagentCandidate, task: &ToolCall) -> Process {
         end_ts: cand.end_ts,
         metrics: cand.metrics.clone(),
         team: None,
+        subagent_type: extract_subagent_type_from_task_input(task),
+        messages: cand.messages.clone(),
+        main_session_impact: aggregate_main_session_impact(exec),
+        is_ongoing: compute_is_ongoing(cand),
+        duration_ms: compute_duration_ms(cand),
+        parent_task_id: Some(task.id.clone()),
+        description: task.task_description.clone(),
     }
+}
+
+/// 从 Task `tool_call` 中抽取 `subagent_type`，优先走预解析字段。
+pub(crate) fn extract_subagent_type_from_task_input(task: &ToolCall) -> Option<String> {
+    if let Some(t) = task.task_subagent_type.clone() {
+        return Some(t);
+    }
+    task.input
+        .get("subagent_type")
+        .and_then(|v| v.as_str())
+        .map(std::string::ToString::to_string)
+}
+
+/// 估算 subagent 在父 session 中的 token 开销：call tokens + result tokens。
+///
+/// 对齐原版 `aiGroupHelpers.ts::attachMainSessionImpact`：`callTokens` 来自
+/// Task `tool_use.input` 的 token 估算，`resultTokens` 来自 `tool_result.content`
+/// 的 token 估算。若 exec 缺失则返回 `None`。
+pub(crate) fn aggregate_main_session_impact(
+    exec: Option<&ToolExecution>,
+) -> Option<MainSessionImpact> {
+    let exec = exec?;
+    let call_tokens = estimate_content_tokens(&exec.input) as u64;
+    let result_tokens = match &exec.output {
+        ToolOutput::Text { text } => estimate_tokens(text) as u64,
+        ToolOutput::Structured { value } => estimate_content_tokens(value) as u64,
+        ToolOutput::Missing => 0,
+    };
+    let total = call_tokens.saturating_add(result_tokens);
+    if total == 0 {
+        return None;
+    }
+    Some(MainSessionImpact {
+        total_tokens: total,
+    })
+}
+
+/// 根据 `spawn_ts` / `end_ts` 计算 subagent 持续时长（毫秒）。
+pub(crate) fn compute_duration_ms(cand: &SubagentCandidate) -> Option<u64> {
+    let end = cand.end_ts?;
+    let ms = (end - cand.spawn_ts).num_milliseconds();
+    u64::try_from(ms).ok()
+}
+
+/// 是否仍在运行：优先读 candidate 自带的 `is_ongoing`；否则按 `end_ts` 缺失判定。
+pub(crate) fn compute_is_ongoing(cand: &SubagentCandidate) -> bool {
+    cand.is_ongoing || cand.end_ts.is_none()
 }
 
 #[cfg(test)]
@@ -254,6 +318,8 @@ mod tests {
             end_ts: None,
             parent_session_id: Some("parent".into()),
             metrics: ChunkMetrics::zero(),
+            messages: Vec::new(),
+            is_ongoing: false,
         }
     }
 
@@ -359,5 +425,158 @@ mod tests {
         let cands: Vec<SubagentCandidate> = Vec::new();
         let r = resolve_subagents(&tasks, &execs, &cands);
         assert!(r[0].resolution.is_orphan());
+    }
+
+    fn take_process(res: &Resolution) -> &Process {
+        match res {
+            Resolution::ResultBased { process }
+            | Resolution::DescriptionBased { process }
+            | Resolution::Positional { process } => process,
+            Resolution::Orphan => panic!("orphan"),
+        }
+    }
+
+    #[test]
+    fn subagent_type_populated_from_task_input() {
+        let mut t = task("t1", "review");
+        t.task_subagent_type = Some("code-reviewer".into());
+        let tasks = vec![t];
+        let execs = vec![exec(
+            "t1",
+            5,
+            ToolOutput::Structured {
+                value: serde_json::json!({"session_id": "s-1"}),
+            },
+        )];
+        let cands = vec![cand("s-1", "review", 6)];
+        let r = resolve_subagents(&tasks, &execs, &cands);
+        let p = take_process(&r[0].resolution);
+        assert_eq!(p.subagent_type.as_deref(), Some("code-reviewer"));
+    }
+
+    #[test]
+    fn subagent_type_falls_back_to_input_field() {
+        let t = ToolCall {
+            id: "t1".into(),
+            name: "Task".into(),
+            input: serde_json::json!({"description": "x", "subagent_type": "deep-explorer"}),
+            is_task: true,
+            task_description: Some("x".into()),
+            task_subagent_type: None,
+        };
+        let tasks = vec![t];
+        let execs = vec![exec(
+            "t1",
+            5,
+            ToolOutput::Structured {
+                value: serde_json::json!({"session_id": "s-1"}),
+            },
+        )];
+        let cands = vec![cand("s-1", "x", 6)];
+        let r = resolve_subagents(&tasks, &execs, &cands);
+        let p = take_process(&r[0].resolution);
+        assert_eq!(p.subagent_type.as_deref(), Some("deep-explorer"));
+    }
+
+    #[test]
+    fn parent_task_id_backfilled_on_match() {
+        let tasks = vec![task("t-abc", "desc")];
+        let execs = vec![exec(
+            "t-abc",
+            5,
+            ToolOutput::Structured {
+                value: serde_json::json!({"session_id": "s-1"}),
+            },
+        )];
+        let cands = vec![cand("s-1", "desc", 6)];
+        let r = resolve_subagents(&tasks, &execs, &cands);
+        let p = take_process(&r[0].resolution);
+        assert_eq!(p.parent_task_id.as_deref(), Some("t-abc"));
+    }
+
+    #[test]
+    fn duration_ms_computed_from_spawn_and_end() {
+        let mut c = cand("s-1", "desc", 10);
+        c.end_ts = Some(ts(15)); // +5s
+        let tasks = vec![task("t1", "desc")];
+        let execs = vec![exec(
+            "t1",
+            5,
+            ToolOutput::Structured {
+                value: serde_json::json!({"session_id": "s-1"}),
+            },
+        )];
+        let r = resolve_subagents(&tasks, &execs, &[c]);
+        let p = take_process(&r[0].resolution);
+        assert_eq!(p.duration_ms, Some(5_000));
+        assert!(!p.is_ongoing);
+    }
+
+    #[test]
+    fn is_ongoing_true_when_no_end_ts() {
+        let tasks = vec![task("t1", "desc")];
+        let execs = vec![exec(
+            "t1",
+            5,
+            ToolOutput::Structured {
+                value: serde_json::json!({"session_id": "s-1"}),
+            },
+        )];
+        let cands = vec![cand("s-1", "desc", 6)]; // end_ts = None
+        let r = resolve_subagents(&tasks, &execs, &cands);
+        let p = take_process(&r[0].resolution);
+        assert!(p.is_ongoing);
+        assert_eq!(p.duration_ms, None);
+    }
+
+    #[test]
+    fn main_session_impact_aggregates_task_result_tokens() {
+        // 构造一个带输出文本的 exec，让 estimate 能产出非零 token 数
+        let big_text = "x".repeat(200); // 50 tokens 左右
+        let tasks = vec![task("t1", "desc")];
+        let execs = vec![exec(
+            "t1",
+            5,
+            ToolOutput::Text {
+                text: big_text.clone(),
+            },
+        )];
+        let cands = vec![cand("s-1", "desc", 6)];
+        // phase1 无 session id → fallback phase2（desc 匹配）
+        let r = resolve_subagents(&tasks, &execs, &cands);
+        let p = take_process(&r[0].resolution);
+        let impact = p
+            .main_session_impact
+            .expect("main_session_impact should be populated when exec has tokens");
+        assert!(impact.total_tokens > 0);
+    }
+
+    #[test]
+    fn messages_from_candidate_flow_into_process() {
+        use cdt_core::{AIChunk, Chunk, ChunkMetrics};
+        use chrono::TimeZone;
+        let chunk = Chunk::Ai(AIChunk {
+            timestamp: chrono::Utc.timestamp_opt(0, 0).unwrap(),
+            duration_ms: None,
+            responses: vec![],
+            metrics: ChunkMetrics::zero(),
+            semantic_steps: vec![],
+            tool_executions: vec![],
+            subagents: vec![],
+            slash_commands: vec![],
+        });
+        let mut c = cand("s-1", "desc", 6);
+        c.messages = vec![chunk.clone()];
+        let tasks = vec![task("t1", "desc")];
+        let execs = vec![exec(
+            "t1",
+            5,
+            ToolOutput::Structured {
+                value: serde_json::json!({"session_id": "s-1"}),
+            },
+        )];
+        let r = resolve_subagents(&tasks, &execs, &[c]);
+        let p = take_process(&r[0].resolution);
+        assert_eq!(p.messages.len(), 1);
     }
 }

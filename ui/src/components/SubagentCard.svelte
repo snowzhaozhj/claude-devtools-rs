@@ -1,146 +1,246 @@
 <script lang="ts">
-  import type { SubagentProcess } from "../lib/api";
+  import type { SubagentProcess, ContentBlock, ToolCall } from "../lib/api";
   import { CHEVRON_RIGHT } from "../lib/icons";
-  import { openTab } from "../lib/tabStore.svelte";
+  import { getTeamColorSet, getSubagentTypeColorSet, type TeamColorSet } from "../lib/teamColors";
+  import { getAgentConfigsByName } from "../lib/agentConfigsStore.svelte";
+  import { formatDuration } from "../lib/formatters";
+  import { buildDisplayItemsFromChunks, buildSummary } from "../lib/displayItemBuilder";
+  import MetricsPill from "./MetricsPill.svelte";
+  import ExecutionTrace from "./ExecutionTrace.svelte";
 
   interface Props {
     process: SubagentProcess;
-    parentProjectId?: string;
+    /** 嵌套深度，由 ExecutionTrace 传递；顶层 0 */
+    depth?: number;
   }
 
-  let { process, parentProjectId = "" }: Props = $props();
+  let { process, depth = 0 }: Props = $props();
 
   let isExpanded = $state(false);
+  let isTraceExpanded = $state(false);
 
-  const truncatedDesc = $derived(
-    process.rootTaskDescription
-      ? process.rootTaskDescription.length > 60
-        ? process.rootTaskDescription.slice(0, 60) + "…"
-        : process.rootTaskDescription
-      : "Subagent"
-  );
-
-  const isCompleted = $derived(!!process.endTs);
-
-  const durationText = $derived.by(() => {
-    if (!process.endTs || !process.spawnTs) return null;
-    const ms = new Date(process.endTs).getTime() - new Date(process.spawnTs).getTime();
-    if (ms < 1000) return `${ms}ms`;
-    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-    const min = Math.floor(ms / 60000);
-    const sec = Math.floor((ms % 60000) / 1000);
-    return sec > 0 ? `${min}m ${sec}s` : `${min}m`;
+  // ----------------- 颜色 -----------------
+  const colorSet: TeamColorSet = $derived.by(() => {
+    if (process.team) return getTeamColorSet(process.team.memberColor);
+    if (process.subagentType) {
+      return getSubagentTypeColorSet(process.subagentType, getAgentConfigsByName());
+    }
+    // 完全无类型信息：返回中性色 sentinel（用 badge 空字符串判定不渲染）
+    return { border: "transparent", badge: "transparent", text: "" };
   });
 
-  // team 用 memberColor，非 team 默认 teal
-  const dotColor = $derived(
-    process.team?.memberColor ?? "#2dd4bf"
+  // ----------------- Badge 标签 -----------------
+  const badgeLabel = $derived.by(() => {
+    if (process.team) return process.team.memberName;
+    if (process.subagentType) return process.subagentType;
+    return "Task";
+  });
+  const showBadgeDot = $derived(process.team != null || process.subagentType != null);
+
+  // ----------------- Description -----------------
+  const description = $derived(
+    process.description ?? process.rootTaskDescription ?? "Subagent",
+  );
+  const truncatedDesc = $derived(
+    description.length > 60 ? description.slice(0, 60) + "…" : description,
   );
 
-  const badgeLabel = $derived(
-    process.team ? process.team.memberName : "Task"
+  // ----------------- Model 提取 -----------------
+  const modelName = $derived.by(() => {
+    for (const c of process.messages) {
+      if (c.kind !== "ai") continue;
+      for (const r of c.responses) {
+        if (r.model && r.model !== "<synthetic>") {
+          return r.model.replace("claude-", "").replace(/-\d{8}$/, "");
+        }
+      }
+    }
+    return null;
+  });
+
+  // ----------------- Last usage / context window 合计 -----------------
+  const isolatedTokens = $derived.by(() => {
+    let last: typeof process.messages[number] extends infer _C
+      ? null | { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
+      : never = null;
+    for (const c of process.messages) {
+      if (c.kind !== "ai") continue;
+      for (const r of c.responses) {
+        if (r.usage) last = r.usage;
+      }
+    }
+    if (!last) return 0;
+    return (
+      (last.input_tokens ?? 0) +
+      (last.output_tokens ?? 0) +
+      (last.cache_read_input_tokens ?? 0) +
+      (last.cache_creation_input_tokens ?? 0)
+    );
+  });
+
+  // ----------------- Shutdown-only team 特例 -----------------
+  const isShutdownOnly = $derived.by(() => {
+    if (!process.team) return false;
+    let assistantCount = 0;
+    let onlyCall: ToolCall | null = null;
+    for (const c of process.messages) {
+      if (c.kind !== "ai") continue;
+      for (const r of c.responses) {
+        assistantCount++;
+        if (r.toolCalls.length === 1) {
+          onlyCall = r.toolCalls[0];
+        }
+      }
+    }
+    if (assistantCount !== 1 || !onlyCall) return false;
+    if (onlyCall.name !== "SendMessage") return false;
+    const input = onlyCall.input as { type?: string } | null;
+    return input?.type === "shutdown_response";
+  });
+
+  // ----------------- ExecutionTrace items -----------------
+  const traceItems = $derived(
+    isExpanded ? buildDisplayItemsFromChunks(process.messages) : [],
   );
+  const traceSummary = $derived(
+    isExpanded ? buildSummary(traceItems) : "",
+  );
+
+  // ----------------- Duration -----------------
+  const durationText = $derived(formatDuration(process.durationMs));
 
   function toggleExpanded() {
     isExpanded = !isExpanded;
   }
-
-  function navigateToSession() {
-    const label = (process.team?.memberName ?? "Subagent") + " — " + (process.rootTaskDescription ?? process.sessionId).slice(0, 40);
-    openTab(process.sessionId, parentProjectId, label);
-  }
-
-  function fk(n: number): string {
-    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-    if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
-    return String(n);
+  function toggleTrace(e: Event) {
+    e.stopPropagation();
+    isTraceExpanded = !isTraceExpanded;
   }
 </script>
 
-<div class="sa-card">
-  <!-- Header (clickable) -->
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="sa-header" class:sa-header-expanded={isExpanded} onclick={toggleExpanded}>
-    <!-- Chevron -->
-    <svg class="sa-chevron" class:sa-chevron-open={isExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
-
-    <!-- Colored dot -->
-    <span class="sa-dot" style="background-color: {dotColor}"></span>
-
-    <!-- Type badge -->
-    <span class="sa-badge" style="background-color: {dotColor}20; color: {dotColor}; border: 1px solid {dotColor}40">
-      {badgeLabel}
+{#if isShutdownOnly && process.team}
+  <!-- 极简 shutdown-only 行 -->
+  <div class="sa-shutdown" style="border-color: {colorSet.border}40">
+    <span class="sa-dot" style="background-color: {colorSet.border}"></span>
+    <span class="sa-badge" style="background-color: {colorSet.badge}; color: {colorSet.text}; border-color: {colorSet.border}40">
+      {process.team.memberName}
     </span>
-
-    <!-- Description -->
-    <span class="sa-desc">{truncatedDesc}</span>
-
-    <!-- Status indicator -->
-    {#if isCompleted}
-      <svg class="sa-status-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-    {:else}
-      <svg class="sa-status-running" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-    {/if}
-
-    <!-- Token metrics -->
-    {#if process.metrics}
-      <span class="sa-tokens">{fk(process.metrics.inputTokens + process.metrics.outputTokens)}</span>
-    {/if}
-
-    <!-- Duration -->
+    <span class="sa-shutdown-label">Shutdown confirmed</span>
+    <span class="sa-shutdown-spacer"></span>
     {#if durationText}
       <span class="sa-duration">{durationText}</span>
     {/if}
   </div>
+{:else}
+  <div class="sa-card" class:sa-nested={depth > 0}>
+    <!-- Header -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="sa-header" class:sa-header-expanded={isExpanded} onclick={toggleExpanded}>
+      <svg class="sa-chevron" class:sa-chevron-open={isExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
 
-  <!-- Expanded content -->
-  {#if isExpanded}
-    <div class="sa-body">
-      <!-- Meta row -->
-      <div class="sa-meta">
-        <span class="sa-meta-label">Type</span>
-        <span class="sa-meta-value">{process.team ? "Team" : "Task"}</span>
-        <span class="sa-meta-sep">·</span>
-        {#if durationText}
-          <span class="sa-meta-label">Duration</span>
-          <span class="sa-meta-value">{durationText}</span>
-          <span class="sa-meta-sep">·</span>
-        {/if}
-        <span class="sa-meta-label">ID</span>
-        <span class="sa-meta-value sa-meta-id" title={process.sessionId}>{process.sessionId.slice(0, 8)}</span>
-      </div>
-
-      <!-- Full description -->
-      {#if process.rootTaskDescription && process.rootTaskDescription.length > 60}
-        <div class="sa-full-desc">{process.rootTaskDescription}</div>
+      {#if showBadgeDot}
+        <span class="sa-dot" style="background-color: {colorSet.border}"></span>
+        <span class="sa-badge" style="background-color: {colorSet.badge}; color: {colorSet.text}; border-color: {colorSet.border}40">
+          {badgeLabel}
+        </span>
+      {:else}
+        <svg class="sa-bot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="10" rx="2" />
+          <circle cx="12" cy="5" r="2" />
+          <path d="M12 7v4" />
+          <line x1="8" y1="16" x2="8" y2="16" />
+          <line x1="16" y1="16" x2="16" y2="16" />
+        </svg>
+        <span class="sa-badge sa-badge-neutral">Task</span>
       {/if}
 
-      <!-- Context usage -->
-      {#if process.metrics && (process.metrics.inputTokens > 0 || process.metrics.outputTokens > 0)}
-        <div class="sa-context">
-          <div class="sa-context-title">Context Usage</div>
-          <div class="sa-context-row">
-            <span class="sa-context-label">Input</span>
-            <span class="sa-context-val">{process.metrics.inputTokens.toLocaleString()}</span>
-          </div>
-          <div class="sa-context-row">
-            <span class="sa-context-label">Output</span>
-            <span class="sa-context-val">{process.metrics.outputTokens.toLocaleString()}</span>
-          </div>
-        </div>
+      {#if modelName}
+        <span class="sa-model">{modelName}</span>
       {/if}
 
-      <!-- Navigate button -->
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="sa-navigate" onclick={(e: MouseEvent) => { e.stopPropagation(); navigateToSession(); }}>
-        <svg class="sa-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17l9.2-9.2M17 17V8H8"/></svg>
-        <span>Open Session</span>
-      </div>
+      <span class="sa-desc">{truncatedDesc}</span>
+
+      {#if process.isOngoing}
+        <svg class="sa-status-running" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+      {:else}
+        <svg class="sa-status-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      {/if}
+
+      <MetricsPill
+        mainTokens={process.team ? null : (process.mainSessionImpact?.totalTokens ?? null)}
+        isolatedTokens={isolatedTokens}
+        isolatedLabel={process.team ? "Context Window" : "Subagent Context"}
+      />
+
+      {#if durationText}
+        <span class="sa-duration">{durationText}</span>
+      {/if}
     </div>
-  {/if}
-</div>
+
+    {#if isExpanded}
+      <div class="sa-body">
+        <!-- Meta 行 -->
+        <div class="sa-meta">
+          <span class="sa-meta-label">Type</span>
+          <span class="sa-meta-value">{process.subagentType ?? (process.team ? "Team" : "Task")}</span>
+          <span class="sa-meta-sep">·</span>
+          {#if durationText}
+            <span class="sa-meta-label">Duration</span>
+            <span class="sa-meta-value">{durationText}</span>
+            <span class="sa-meta-sep">·</span>
+          {/if}
+          {#if modelName}
+            <span class="sa-meta-label">Model</span>
+            <span class="sa-meta-value">{modelName}</span>
+            <span class="sa-meta-sep">·</span>
+          {/if}
+          <span class="sa-meta-label">ID</span>
+          <span class="sa-meta-value sa-meta-id" title={process.sessionId}>{process.sessionId.slice(0, 8)}</span>
+        </div>
+
+        <!-- Context Usage -->
+        {#if (process.mainSessionImpact && process.mainSessionImpact.totalTokens > 0) || isolatedTokens > 0}
+          <div class="sa-context">
+            <div class="sa-context-title">Context Usage</div>
+            {#if !process.team && process.mainSessionImpact && process.mainSessionImpact.totalTokens > 0}
+              <div class="sa-context-row">
+                <span class="sa-context-label">Main Context</span>
+                <span class="sa-context-val">{process.mainSessionImpact.totalTokens.toLocaleString()}</span>
+              </div>
+            {/if}
+            {#if isolatedTokens > 0}
+              <div class="sa-context-row">
+                <span class="sa-context-label">{process.team ? "Context Window" : "Subagent Context"}</span>
+                <span class="sa-context-val">{isolatedTokens.toLocaleString()}</span>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- Execution Trace 折叠块 -->
+        {#if traceItems.length > 0}
+          <div class="sa-trace">
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="sa-trace-header" onclick={toggleTrace}>
+              <svg class="sa-trace-chevron" class:sa-trace-chevron-open={isTraceExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
+              <span class="sa-trace-label">Execution Trace</span>
+              {#if traceSummary}
+                <span class="sa-trace-summary">· {traceSummary}</span>
+              {/if}
+            </div>
+            {#if isTraceExpanded}
+              <div class="sa-trace-body">
+                <ExecutionTrace items={traceItems} {depth} />
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </div>
+{/if}
 
 <style>
   .sa-card {
@@ -148,7 +248,9 @@
     border: 1px solid var(--card-border);
     background: var(--card-bg);
     overflow: hidden;
-    transition: box-shadow 0.2s;
+  }
+  .sa-nested {
+    background: var(--card-header-bg);
   }
 
   .sa-header {
@@ -159,11 +261,9 @@
     cursor: pointer;
     transition: background-color 0.1s;
   }
-
   .sa-header:hover {
     background: var(--card-header-hover);
   }
-
   .sa-header-expanded {
     background: var(--card-header-bg);
     border-bottom: 1px solid var(--card-border);
@@ -176,15 +276,21 @@
     color: var(--card-icon-muted);
     transition: transform 0.15s ease;
   }
-
   .sa-chevron-open {
     transform: rotate(90deg);
   }
 
   .sa-dot {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .sa-bot {
+    width: 16px;
+    height: 16px;
+    color: var(--color-text-muted);
     flex-shrink: 0;
   }
 
@@ -195,6 +301,19 @@
     letter-spacing: 0.05em;
     padding: 1px 6px;
     border-radius: 4px;
+    border: 1px solid;
+    flex-shrink: 0;
+  }
+  .sa-badge-neutral {
+    background: var(--badge-neutral-bg);
+    color: var(--color-text-secondary);
+    border-color: var(--card-border);
+  }
+
+  .sa-model {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
     flex-shrink: 0;
   }
 
@@ -214,7 +333,6 @@
     flex-shrink: 0;
     color: #22c55e;
   }
-
   .sa-status-running {
     width: 14px;
     height: 14px;
@@ -222,17 +340,9 @@
     color: #3b82f6;
     animation: spin 1s linear infinite;
   }
-
   @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
-  }
-
-  .sa-tokens {
-    font-size: 11px;
-    font-family: var(--font-mono);
-    color: var(--card-icon-muted);
-    flex-shrink: 0;
   }
 
   .sa-duration {
@@ -243,7 +353,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Expanded body */
   .sa-body {
     padding: 12px;
     display: flex;
@@ -258,37 +367,14 @@
     gap: 4px 6px;
     font-size: 11px;
   }
-
-  .sa-meta-label {
-    color: var(--card-icon-muted);
-  }
-
-  .sa-meta-value {
-    color: var(--card-text-light);
-    font-family: var(--font-mono);
-  }
-
-  .sa-meta-id {
-    max-width: 120px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--card-icon-muted);
-  }
-
-  .sa-meta-sep {
-    color: var(--card-separator);
-  }
-
-  .sa-full-desc {
-    font-size: 12px;
-    color: var(--card-text-light);
-    line-height: 1.5;
-  }
+  .sa-meta-label { color: var(--card-icon-muted); }
+  .sa-meta-value { color: var(--card-text-light); font-family: var(--font-mono); }
+  .sa-meta-id { max-width: 120px; overflow: hidden; text-overflow: ellipsis; color: var(--card-icon-muted); }
+  .sa-meta-sep { color: var(--card-separator); }
 
   .sa-context {
     padding-top: 4px;
   }
-
   .sa-context-title {
     font-size: 10px;
     font-weight: 600;
@@ -297,19 +383,16 @@
     color: var(--card-icon-muted);
     margin-bottom: 6px;
   }
-
   .sa-context-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 2px 0;
   }
-
   .sa-context-label {
     font-size: 12px;
     color: var(--tool-item-summary);
   }
-
   .sa-context-val {
     font-size: 12px;
     font-family: var(--font-mono);
@@ -317,23 +400,60 @@
     color: var(--card-text-lighter);
   }
 
-  .sa-navigate {
+  .sa-trace {
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--card-header-bg);
+  }
+  .sa-trace-header {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+    padding: 6px 10px;
+    cursor: pointer;
+    transition: background-color 0.1s;
+  }
+  .sa-trace-header:hover {
+    background: var(--card-header-hover);
+  }
+  .sa-trace-chevron {
+    width: 12px;
+    height: 12px;
+    color: var(--card-icon-muted);
+    transition: transform 0.15s ease;
+    flex-shrink: 0;
+  }
+  .sa-trace-chevron-open {
+    transform: rotate(90deg);
+  }
+  .sa-trace-label {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+  }
+  .sa-trace-summary {
+    font-size: 11px;
+    color: var(--card-icon-muted);
+  }
+  .sa-trace-body {
+    padding: 8px;
+    border-top: 1px solid var(--card-border);
+  }
+
+  /* Shutdown-only 特例 */
+  .sa-shutdown {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid;
+    background: var(--card-bg);
+    opacity: 0.6;
+  }
+  .sa-shutdown-label {
     font-size: 12px;
     color: var(--card-icon-muted);
-    cursor: pointer;
-    padding: 4px 0;
-    transition: color 0.1s;
   }
-
-  .sa-navigate:hover {
-    color: var(--card-text-light);
-  }
-
-  .sa-nav-icon {
-    width: 14px;
-    height: 14px;
-  }
+  .sa-shutdown-spacer { flex: 1; }
 </style>

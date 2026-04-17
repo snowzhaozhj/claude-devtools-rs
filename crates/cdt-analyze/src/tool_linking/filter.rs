@@ -50,6 +50,13 @@ mod tests {
             end_ts: None,
             metrics: ChunkMetrics::zero(),
             team: None,
+            subagent_type: None,
+            messages: Vec::new(),
+            main_session_impact: None,
+            is_ongoing: false,
+            duration_ms: None,
+            parent_task_id: None,
+            description: None,
         }
     }
 

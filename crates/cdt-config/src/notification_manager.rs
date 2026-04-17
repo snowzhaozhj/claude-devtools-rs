@@ -102,7 +102,7 @@ impl NotificationManager {
 
         // 按 created_at 降序（最新在前）
         let mut sorted: Vec<&StoredNotification> = self.notifications.iter().collect();
-        sorted.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        sorted.sort_by_key(|n| std::cmp::Reverse(n.created_at));
 
         let page: Vec<StoredNotification> = sorted
             .into_iter()
@@ -160,8 +160,7 @@ impl NotificationManager {
     fn prune(&mut self) {
         if self.notifications.len() > MAX_NOTIFICATIONS {
             // 按 created_at 升序排列，移除最老的
-            self.notifications
-                .sort_by(|a, b| a.created_at.cmp(&b.created_at));
+            self.notifications.sort_by_key(|n| n.created_at);
             let excess = self.notifications.len() - MAX_NOTIFICATIONS;
             self.notifications.drain(..excess);
         }

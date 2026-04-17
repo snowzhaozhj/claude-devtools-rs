@@ -8,6 +8,7 @@
 
 import type {
   AIChunk,
+  Chunk,
   ToolExecution,
   SubagentProcess,
   SlashCommand,
@@ -141,6 +142,24 @@ export function buildDisplayItems(chunk: AIChunk): {
 // ---------------------------------------------------------------------------
 // buildSummary
 // ---------------------------------------------------------------------------
+
+/**
+ * 从 subagent 的 `messages: Chunk[]` 串联构建 DisplayItem 流。
+ *
+ * 对齐原版 `aiGroupEnhancer.ts::buildDisplayItemsFromMessages`：把 subagent session
+ * 里所有 AI chunk 的 DisplayItem 平铺串接；user / system / compact chunk 忽略
+ * （subagent 内部的 user 消息通常是 tool_result，已由 ExecutionTrace 的 tool item 覆盖）。
+ */
+export function buildDisplayItemsFromChunks(chunks: Chunk[]): DisplayItem[] {
+  const out: DisplayItem[] = [];
+  for (const c of chunks) {
+    if (c.kind !== "ai") continue;
+    const { items, lastOutput } = buildDisplayItems(c);
+    out.push(...items);
+    if (lastOutput) out.push(lastOutput);
+  }
+  return out;
+}
 
 /**
  * 统计 DisplayItem 列表中各类型数量，生成 header summary 字符串。

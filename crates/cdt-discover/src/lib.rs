@@ -8,6 +8,7 @@
 //!
 //! Spec：`openspec/specs/project-discovery/spec.md`、`openspec/specs/session-search/spec.md`。
 
+pub mod agent_configs;
 pub mod error;
 pub mod fs_provider;
 pub mod path_decoder;

@@ -102,6 +102,10 @@ export interface UserChunk {
   metrics: ChunkMetrics;
 }
 
+export interface MainSessionImpact {
+  totalTokens: number;
+}
+
 export interface SubagentProcess {
   sessionId: string;
   rootTaskDescription: string | null;
@@ -109,6 +113,13 @@ export interface SubagentProcess {
   endTs: string | null;
   metrics: ChunkMetrics;
   team: { teamName: string; memberName: string; memberColor: string | null } | null;
+  subagentType: string | null;
+  messages: Chunk[];
+  mainSessionImpact: MainSessionImpact | null;
+  isOngoing: boolean;
+  durationMs: number | null;
+  parentTaskId: string | null;
+  description: string | null;
 }
 
 export interface SlashCommand {

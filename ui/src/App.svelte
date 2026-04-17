@@ -10,6 +10,7 @@
   import { openTab, getActiveTab, setUnreadCount } from "./lib/tabStore.svelte";
   import { getConfig, getNotifications } from "./lib/api";
   import { applyTheme } from "./lib/theme";
+  import { loadAgentConfigs } from "./lib/agentConfigsStore.svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
   let selectedProjectId: string = $state("");
@@ -39,6 +40,8 @@
       const config = await getConfig();
       applyTheme(config.general.theme);
     } catch { /* 加载失败保持默认浅色 */ }
+    // 加载 agent configs 供 subagent 彩色 badge 使用
+    await loadAgentConfigs();
   });
 
   onDestroy(() => {

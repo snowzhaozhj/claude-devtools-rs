@@ -474,6 +474,32 @@ impl LocalDataApi {
             .map_err(|e| ApiError::internal(format!("{e}")))?;
         serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
     }
+
+    /// 读取 `.claude/agents/*.md` 配置（全局 + 所有已发现项目）。
+    ///
+    /// 用于前端 subagent 彩色 badge 的颜色查询，对齐原版 `agentConfigs` store。
+    pub async fn read_agent_configs(
+        &self,
+    ) -> Result<Vec<cdt_discover::agent_configs::AgentConfig>, ApiError> {
+        let mut scanner = self.scanner.lock().await;
+        let projects = scanner
+            .scan()
+            .await
+            .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
+        drop(scanner);
+
+        let pairs: Vec<(String, String)> = projects
+            .iter()
+            .map(|p| (p.id.clone(), p.path.to_string_lossy().into_owned()))
+            .collect();
+        // 扫描涉及文件系统 I/O，放到 blocking 线程池避免阻塞 runtime
+        let configs = tokio::task::spawn_blocking(move || {
+            cdt_discover::agent_configs::read_agent_configs(&pairs)
+        })
+        .await
+        .map_err(|e| ApiError::internal(format!("join error: {e}")))?;
+        Ok(configs)
+    }
 }
 
 /// 从文件系统扫描 CLAUDE.md 文件，构建 `ClaudeMdContextInjection` 列表。
@@ -664,6 +690,23 @@ async fn parse_subagent_candidate(path: &Path) -> Option<cdt_core::SubagentCandi
         (Some(start), Some(end)) if end > start => Some(end),
         _ => None,
     };
+    let is_ongoing = end_ts.is_none();
+
+    // 完整解析 subagent session，构建 Chunk 流供 UI 展示 ExecutionTrace。
+    //
+    // 注：subagent session 的所有消息对**父** session 而言是 sidechain，但对
+    // subagent 自己来说不是——而 `build_chunks` 会跳过 `is_sidechain=true`。
+    // 这里 clone 一份消息并清除 sidechain 标记，以便 Chunk 正常产出。
+    // 对齐原版 `aiGroupHelpers.ts::computeSubagentPhaseBreakdown` 的处理。
+    let messages = match parse_file(path).await {
+        Ok(mut msgs) => {
+            for m in &mut msgs {
+                m.is_sidechain = false;
+            }
+            cdt_analyze::build_chunks(&msgs)
+        }
+        Err(_) => Vec::new(),
+    };
 
     Some(cdt_core::SubagentCandidate {
         session_id,
@@ -672,5 +715,7 @@ async fn parse_subagent_candidate(path: &Path) -> Option<cdt_core::SubagentCandi
         end_ts,
         parent_session_id,
         metrics: cdt_core::ChunkMetrics::zero(),
+        messages,
+        is_ongoing,
     })
 }

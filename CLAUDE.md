@@ -125,7 +125,6 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
 
 ## UI 已知遗留问题
 
-- **AI header tool call 计数偏少**：需对比原版 `displaySummary.ts` 的 `buildSummary` 逻辑确认差异来源
 - **FileWatcher 通知管道**：cdt-watch 可监听文件变更，但尚未接入 trigger 匹配→自动创建通知的扫描管道
 - **Pin/Hide 不持久化**：Sidebar 的 Pin/Hide 状态为内存级，重启后丢失，需接后端 config 持久化
 

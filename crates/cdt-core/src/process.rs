@@ -9,7 +9,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::chunk::ChunkMetrics;
+use crate::chunk::{Chunk, ChunkMetrics};
 
 /// 团队成员元数据，由 `team-coordination-metadata` capability 填充。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,6 +19,16 @@ pub struct TeamMeta {
     pub member_name: String,
     #[serde(default)]
     pub member_color: Option<String>,
+}
+
+/// Subagent 对父 session 的 token 贡献。
+///
+/// 来源：parent session 中 Task `tool_result` 携带的 `usage` 聚合。
+/// 字段目前仅 `total_tokens`；`breakdown` 细项留待后续扩展。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MainSessionImpact {
+    pub total_tokens: u64,
 }
 
 /// 解析出的 subagent 进程记录。
@@ -38,6 +48,29 @@ pub struct Process {
     /// TODO(port-team-coordination-metadata)：由下一轮 port 填充。
     #[serde(default)]
     pub team: Option<TeamMeta>,
+    /// Task `tool_use` `input.subagent_type`，例如 `"code-reviewer"`。
+    #[serde(default)]
+    pub subagent_type: Option<String>,
+    /// 由 `build_chunks` 从 subagent session 的 `ParsedMessage` 流构建；用于
+    /// 前端内联渲染 `ExecutionTrace`。
+    #[serde(default)]
+    pub messages: Vec<Chunk>,
+    /// 此 subagent 对父 session 的 token 贡献（来自 Task `tool_result.usage` 聚合）。
+    #[serde(default)]
+    pub main_session_impact: Option<MainSessionImpact>,
+    /// subagent session 是否仍在运行（最后一条 assistant 消息尚无配对 `tool_result` 且无 `end_ts`）。
+    #[serde(default)]
+    pub is_ongoing: bool,
+    /// `end_ts - spawn_ts` 的毫秒差；未结束时为 `None`。
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    /// 触发此 subagent 的 Task/Agent `tool_use` 的 id；由 resolver 匹配成功时回填。
+    #[serde(default)]
+    pub parent_task_id: Option<String>,
+    /// Task `tool_use` 的 `input.description`，独立于 `root_task_description`
+    /// （后者来自 subagent session root prompt）。
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Resolver 的输入候选：一个已预装载的 subagent session 的轻量摘要。
@@ -56,6 +89,13 @@ pub struct SubagentCandidate {
     #[serde(default)]
     pub parent_session_id: Option<String>,
     pub metrics: ChunkMetrics,
+    /// 预构建的 subagent session chunk 流；用于 resolver 把 subagent 执行链
+    /// 透传给 UI（`Process.messages`）。装载方调用 `build_chunks` 生成。
+    #[serde(default)]
+    pub messages: Vec<Chunk>,
+    /// 是否还在运行——由装载方根据 JSONL 尾部状态判定。
+    #[serde(default)]
+    pub is_ongoing: bool,
 }
 
 #[cfg(test)]
@@ -86,7 +126,7 @@ mod tests {
     }
 
     #[test]
-    fn process_roundtrip() {
+    fn process_roundtrip_defaults() {
         roundtrip(&Process {
             session_id: "s1".into(),
             root_task_description: Some("investigate logs".into()),
@@ -94,7 +134,43 @@ mod tests {
             end_ts: None,
             metrics: ChunkMetrics::zero(),
             team: None,
+            subagent_type: None,
+            messages: Vec::new(),
+            main_session_impact: None,
+            is_ongoing: false,
+            duration_ms: None,
+            parent_task_id: None,
+            description: None,
         });
+    }
+
+    #[test]
+    fn process_roundtrip_full() {
+        roundtrip(&Process {
+            session_id: "s1".into(),
+            root_task_description: Some("investigate logs".into()),
+            spawn_ts: ts(),
+            end_ts: Some(ts()),
+            metrics: ChunkMetrics::zero(),
+            team: Some(TeamMeta {
+                team_name: "alpha".into(),
+                member_name: "scout".into(),
+                member_color: Some("#ff0000".into()),
+            }),
+            subagent_type: Some("code-reviewer".into()),
+            messages: Vec::new(),
+            main_session_impact: Some(MainSessionImpact { total_tokens: 1234 }),
+            is_ongoing: false,
+            duration_ms: Some(5678),
+            parent_task_id: Some("toolu_abc".into()),
+            description: Some("review the PR".into()),
+        });
+    }
+
+    #[test]
+    fn main_session_impact_serializes_camel_case() {
+        let v = serde_json::to_value(MainSessionImpact { total_tokens: 42 }).unwrap();
+        assert_eq!(v, serde_json::json!({ "totalTokens": 42 }));
     }
 
     #[test]
@@ -106,6 +182,8 @@ mod tests {
             end_ts: None,
             parent_session_id: Some("parent".into()),
             metrics: ChunkMetrics::zero(),
+            messages: Vec::new(),
+            is_ongoing: false,
         });
     }
 }

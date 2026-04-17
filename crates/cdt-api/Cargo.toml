@@ -29,3 +29,6 @@ tower-http = { workspace = true }
 futures = { workspace = true }
 tokio-stream = { workspace = true }
 chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

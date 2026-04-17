@@ -309,7 +309,7 @@
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "subagent"}
-                    <SubagentCard process={item.process} parentProjectId={projectId} />
+                    <SubagentCard process={item.process} />
                   {/if}
                 {/each}
               </div>

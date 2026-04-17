@@ -119,7 +119,7 @@ impl ProjectScanner {
                 is_pinned: pinned.contains(id),
             });
         }
-        sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+        sessions.sort_by_key(|s| std::cmp::Reverse(s.last_modified));
         Ok(sessions)
     }
 
@@ -154,7 +154,7 @@ impl ProjectScanner {
             return Ok(Vec::new());
         }
 
-        session_stats.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+        session_stats.sort_by_key(|s| std::cmp::Reverse(s.mtime_ms));
 
         // Group sessions by extracted cwd. `None` bucket = sessions without a cwd.
         let mut cwd_buckets: BTreeMap<String, CwdBucket> = BTreeMap::new();

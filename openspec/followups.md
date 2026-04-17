@@ -75,11 +75,10 @@
 - **风险**：`cdt-parse` 结构体扩展会触发 serde 兼容性检查；需同步更新 `session-parsing` spec。
 - **Rust 实现**：`ParsedMessage.tool_use_result: Option<Value>` 在 `cdt-parse/src/parser.rs` 通过 `#[serde(rename = "toolUseResult")]` 保留；`ToolExecution.result_agent_id: Option<String>` 在 `cdt-analyze/src/tool_linking/pair.rs` 从 user 消息顶层 `toolUseResult.agentId` 抽取；`resolver.rs::extract_session_id(exec)` 优先读 `result_agent_id`；新增单测 `phase1_prefers_result_agent_id_over_output`。
 
-### [impl-bug?] `dedupe_by_request_id` 丢弃含 Agent tool_use 的 assistant 消息
-- **背景**：2026-04-16 verify_session 调试发现：session 文件共 14 个 Task/Agent tool_use，但 parse 完只剩 6 个；损失 8 个的原因指向 `dedupe_by_request_id`。
-- **原因猜测**：原版 TS `deduplicateByRequestId` 可能按"保留最后一条"策略（流式 rewrite），Rust 的 `crates/cdt-parse/src/dedupe.rs` 可能走了"保留第一条"，导致含完整 Agent tool_use 的最终消息被丢。需逐条对比 JSONL 原始数据确认。
-- **验证方法**：用 `crates/cdt-api/examples/verify_session.rs` 统计 14 个 tool_use 的 requestId 分布，比对 dedupe 前后差异。
-- **修复路径**：修正 dedupe 保留策略 + 补充单元测试（同 requestId 多条 assistant 消息的保留顺序）。
+### [impl-bug?] `dedupe_by_request_id` 丢弃含 Agent tool_use 的 assistant 消息 ✅ 已在 `align-subagent-ui-with-original` 修正
+- **实际根因**（2026-04-17 定位）：Claude Code 新 JSONL 格式里，同 `requestId` 表示"同一次 API response 的 grouping key"——一次响应的多个 content block（`thinking` / `text` / 每个独立 `tool_use`）被写成多条独立 assistant 记录共享同一 `requestId`。盲目 dedupe 会把含不同 `tool_use` 的记录误判为 streaming rewrite 而丢弃。
+- **验证数据**：session `46a25772-b57c-43bb-9ca6-f0292f9ca912` 下 `requestId=req_011Ca5q9ggoStFzstiaLR5Y1` 有 4 条记录（1 thinking + 1 text + 2 独立 tool_use），dedupe 后仅剩 1 条，丢失 2 个 Agent 调用。
+- **修复**：移除 `parse_file` 主路径上的 `dedupe_by_request_id` 调用；`dedupe_by_request_id` 函数保留在 `crates/cdt-parse/src/dedupe.rs` 供 metrics 计算按需使用。session-parsing spec 的 "Deduplicate streaming entries by requestId" requirement 已反转：SHALL NOT 在 parse_file 自动去重。回归测试 `crates/cdt-parse/tests/dedupe.rs::parse_file_does_not_dedupe_by_request_id`。
 
 ### [coverage-gap] Rust 匹配 `Task || Agent` 两个工具名，原版只匹配 `Task`
 - `resolver.rs` 的 Task filter 包含 `name == "Task" || name == "Agent"`
