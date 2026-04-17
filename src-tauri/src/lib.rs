@@ -4,6 +4,7 @@ use cdt_api::{ConfigUpdateRequest, DataApi, LocalDataApi, PaginatedRequest, Sear
 use cdt_config::{ConfigManager, NotificationManager, NotificationTrigger};
 use cdt_discover::{local_handle, path_decoder, ProjectScanner};
 use cdt_ssh::SshConnectionManager;
+use cdt_watch::FileWatcher;
 use tauri::{Emitter, Manager, State};
 
 struct AppData {
@@ -215,7 +216,7 @@ async fn get_project_session_prefs(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-    let api = rt.block_on(async {
+    let (api, watcher) = rt.block_on(async {
         let mut config_mgr = ConfigManager::new(None);
         let _ = config_mgr.load().await;
 
@@ -224,15 +225,25 @@ pub fn run() {
 
         let fs = local_handle();
         let projects_dir = path_decoder::get_projects_base_path();
-        let scanner = ProjectScanner::new(fs, projects_dir);
+        let scanner = ProjectScanner::new(fs, projects_dir.clone());
         let ssh_mgr = SshConnectionManager::new();
 
-        Arc::new(LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr))
+        let watcher = Arc::new(FileWatcher::new());
+        let api = Arc::new(LocalDataApi::new_with_watcher(
+            scanner,
+            config_mgr,
+            notif_mgr,
+            ssh_mgr,
+            watcher.as_ref(),
+            projects_dir,
+        ));
+
+        (api, watcher)
     });
 
     tauri::Builder::default()
-        .manage(AppData { api })
-        .setup(|app| {
+        .manage(AppData { api: api.clone() })
+        .setup(move |app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -244,6 +255,31 @@ pub fn run() {
                     window.open_devtools();
                 }
             }
+
+            // 启动 FileWatcher：监听 `~/.claude/projects/` + `~/.claude/todos/`，
+            // 将 file 变更广播给自动通知管线
+            let watcher_for_task = watcher.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = watcher_for_task.start().await {
+                    log::warn!("FileWatcher terminated: {err}");
+                }
+            });
+
+            // 把自动通知管线产出的 DetectedError 桥到前端 `notification-added` 事件
+            let mut error_rx = api.subscribe_detected_errors();
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match error_rx.recv().await {
+                        Ok(err) => {
+                            let _ = app_handle.emit("notification-added", &err);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

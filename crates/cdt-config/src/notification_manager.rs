@@ -78,8 +78,13 @@ impl NotificationManager {
             .map_err(|e| ConfigError::io(&self.file_path, e))
     }
 
-    /// 添加通知，自动 prune + 保存。
-    pub async fn add_notification(&mut self, error: DetectedError) -> Result<(), ConfigError> {
+    /// 添加通知，自动 prune + 保存。按 `error.id` 去重：若已存在同 id 记录，
+    /// 直接返回 `Ok(false)` 不写入，不触发 save；新增成功返回 `Ok(true)`。
+    pub async fn add_notification(&mut self, error: DetectedError) -> Result<bool, ConfigError> {
+        if self.notifications.iter().any(|n| n.error.id == error.id) {
+            return Ok(false);
+        }
+
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -92,7 +97,8 @@ impl NotificationManager {
         });
 
         self.prune();
-        self.save().await
+        self.save().await?;
+        Ok(true)
     }
 
     /// 分页获取通知。
@@ -286,6 +292,22 @@ mod tests {
         let mut mgr2 = NotificationManager::new(Some(path));
         mgr2.load().await.unwrap();
         assert_eq!(mgr2.get_notifications(10, 0).total, 1);
+    }
+
+    #[tokio::test]
+    async fn add_notification_dedup_by_id() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("notif.json");
+        let mut mgr = NotificationManager::new(Some(path));
+
+        let err = make_error("same-id");
+        let first = mgr.add_notification(err.clone()).await.unwrap();
+        let second = mgr.add_notification(err).await.unwrap();
+
+        assert!(first, "first add should be new");
+        assert!(!second, "second add with same id should be dedup");
+        assert_eq!(mgr.get_notifications(10, 0).total, 1);
+        assert_eq!(mgr.get_unread_count(), 1);
     }
 
     #[tokio::test]

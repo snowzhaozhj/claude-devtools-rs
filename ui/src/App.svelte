@@ -17,6 +17,7 @@
   let selectedProjectName: string = $state("");
   let commandPaletteOpen = $state(false);
   let unlistenNotif: UnlistenFn | null = null;
+  let unlistenNotifAdded: UnlistenFn | null = null;
 
   async function onNotificationUpdate() {
     try {
@@ -34,8 +35,10 @@
 
   onMount(async () => {
     document.addEventListener("keydown", handleGlobalKeydown);
-    // 监听后端 notification-update 事件
+    // 监听后端 notification-update 事件（mark-as-read 后刷新 badge）
     unlistenNotif = await listen("notification-update", onNotificationUpdate);
+    // 监听自动通知管线新产生的通知：立即刷新 badge + 请求前台页面 reload 列表
+    unlistenNotifAdded = await listen("notification-added", onNotificationUpdate);
     try {
       const config = await getConfig();
       applyTheme(config.general.theme);
@@ -47,6 +50,7 @@
   onDestroy(() => {
     document.removeEventListener("keydown", handleGlobalKeydown);
     unlistenNotif?.();
+    unlistenNotifAdded?.();
   });
 
   const activeTab = $derived(getActiveTab());

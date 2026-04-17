@@ -4,7 +4,7 @@
 
 use cdt_core::{ContentBlock, MessageContent, ToolResult};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use sha2::{Digest, Sha256};
 
 /// 检测到的错误。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,16 +113,27 @@ pub fn extract_text_from_content(content: &MessageContent) -> String {
     }
 }
 
-/// 构建 `DetectedError`。
+/// 构建 `DetectedError`，id 为 `(session_id, file_path, line_number, tool_use_id, trigger_id,
+/// message)` 元组的 SHA-256 前 16 字节 hex。确定性 id 使同一错误重新检测时产出相同条目，
+/// 配合 `NotificationManager::add_notification` 的 dedup 实现零副作用重扫。
 pub fn create_detected_error(params: CreateDetectedErrorParams) -> DetectedError {
+    let message = truncate_message(&params.message);
+    let id = compute_detected_error_id(
+        &params.session_id,
+        &params.file_path,
+        params.line_number,
+        params.tool_use_id.as_deref(),
+        params.trigger_id.as_deref(),
+        &message,
+    );
     DetectedError {
-        id: Uuid::new_v4().to_string(),
+        id,
         timestamp: params.timestamp_ms,
         session_id: params.session_id,
         project_id: params.project_id,
         file_path: params.file_path,
         source: params.source,
-        message: truncate_message(&params.message),
+        message,
         line_number: Some(params.line_number),
         tool_use_id: params.tool_use_id,
         trigger_color: params.trigger_color,
@@ -133,6 +144,35 @@ pub fn create_detected_error(params: CreateDetectedErrorParams) -> DetectedError
             cwd: params.cwd,
         },
     }
+}
+
+fn compute_detected_error_id(
+    session_id: &str,
+    file_path: &str,
+    line_number: usize,
+    tool_use_id: Option<&str>,
+    trigger_id: Option<&str>,
+    message: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(session_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(file_path.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(line_number.to_le_bytes());
+    hasher.update(b"\0");
+    hasher.update(tool_use_id.unwrap_or("").as_bytes());
+    hasher.update(b"\0");
+    hasher.update(trigger_id.unwrap_or("").as_bytes());
+    hasher.update(b"\0");
+    hasher.update(message.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(32);
+    for b in &digest[..16] {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 #[cfg(test)]
@@ -196,9 +236,8 @@ mod tests {
         assert!(result.ends_with("..."));
     }
 
-    #[test]
-    fn create_detected_error_produces_uuid() {
-        let e = create_detected_error(CreateDetectedErrorParams {
+    fn sample_params() -> CreateDetectedErrorParams {
+        CreateDetectedErrorParams {
             session_id: "s1".into(),
             project_id: "p1".into(),
             file_path: "/tmp/test.jsonl".into(),
@@ -208,13 +247,48 @@ mod tests {
             message: "fail".into(),
             timestamp_ms: 1000,
             cwd: None,
-            tool_use_id: None,
+            tool_use_id: Some("tu1".into()),
             trigger_color: None,
             trigger_id: Some("t1".into()),
             trigger_name: Some("My Trigger".into()),
-        });
-        assert!(!e.id.is_empty());
-        assert_eq!(e.source, "Bash");
-        assert_eq!(e.trigger_id, Some("t1".into()));
+        }
+    }
+
+    #[test]
+    fn create_detected_error_produces_deterministic_id() {
+        let a = create_detected_error(sample_params());
+        let b = create_detected_error(sample_params());
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.id.len(), 32);
+        assert!(a.id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(a.source, "Bash");
+        assert_eq!(a.trigger_id, Some("t1".into()));
+    }
+
+    #[test]
+    fn create_detected_error_different_sessions_different_ids() {
+        let a = create_detected_error(sample_params());
+        let mut p = sample_params();
+        p.session_id = "s2".into();
+        let b = create_detected_error(p);
+        assert_ne!(a.id, b.id);
+    }
+
+    #[test]
+    fn create_detected_error_different_triggers_different_ids() {
+        let a = create_detected_error(sample_params());
+        let mut p = sample_params();
+        p.trigger_id = Some("t2".into());
+        let b = create_detected_error(p);
+        assert_ne!(a.id, b.id);
+    }
+
+    #[test]
+    fn create_detected_error_different_messages_different_ids() {
+        let a = create_detected_error(sample_params());
+        let mut p = sample_params();
+        p.message = "different failure".into();
+        let b = create_detected_error(p);
+        assert_ne!(a.id, b.id);
     }
 }

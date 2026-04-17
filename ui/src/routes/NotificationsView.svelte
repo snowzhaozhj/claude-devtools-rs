@@ -1,22 +1,34 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getNotifications, markNotificationRead, type StoredNotification, type GetNotificationsResult } from "../lib/api";
   import { openTab, setUnreadCount } from "../lib/tabStore.svelte";
 
   let notifications: StoredNotification[] = $state([]);
   let loading = $state(true);
   let error: string | null = $state(null);
+  let unlistenAdded: UnlistenFn | null = null;
 
-  onMount(async () => {
+  async function reload() {
     try {
       const result: GetNotificationsResult = await getNotifications(100, 0);
       notifications = result.notifications;
       setUnreadCount(result.unreadCount);
+      error = null;
     } catch (e) {
       error = String(e);
-    } finally {
-      loading = false;
     }
+  }
+
+  onMount(async () => {
+    await reload();
+    loading = false;
+    // 自动通知管线新增条目时，若通知面板当前打开则立即刷新
+    unlistenAdded = await listen("notification-added", () => { void reload(); });
+  });
+
+  onDestroy(() => {
+    unlistenAdded?.();
   });
 
   async function handleMarkRead(e: MouseEvent, notif: StoredNotification) {

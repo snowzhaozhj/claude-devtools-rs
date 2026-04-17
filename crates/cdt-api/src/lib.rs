@@ -9,6 +9,7 @@
 
 pub mod http;
 pub mod ipc;
+pub mod notifier;
 
 pub use http::{AppState, start_server};
 pub use ipc::{
@@ -16,3 +17,4 @@ pub use ipc::{
     PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectSessionPrefs, PushEvent,
     SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
 };
+pub use notifier::NotificationPipeline;

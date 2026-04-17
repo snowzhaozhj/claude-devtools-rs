@@ -125,8 +125,7 @@ npm run check --prefix ui            # svelte-check + tsc (前端类型检查)
 
 ## UI 已知遗留问题
 
-- **FileWatcher 通知管道**：cdt-watch 可监听文件变更，但尚未接入 trigger 匹配→自动创建通知的扫描管道
-- **Pin/Hide 不持久化**：Sidebar 的 Pin/Hide 状态为内存级，重启后丢失，需接后端 config 持久化
+（无；P0/P1 已清零。自动通知管线见 `2026-04-17-auto-notification-pipeline`，Pin/Hide 持久化见 commit `22ea8d8`。）
 
 ## What to do first in a fresh session
 

@@ -27,3 +27,4 @@ cdt-api = { path = "../crates/cdt-api" }
 cdt-discover = { path = "../crates/cdt-discover" }
 cdt-config = { path = "../crates/cdt-config" }
 cdt-ssh = { path = "../crates/cdt-ssh" }
+cdt-watch = { path = "../crates/cdt-watch" }

@@ -3,13 +3,14 @@
 //! 组装底层 crate 调用，作为默认的数据 API 实现。
 
 use std::path::Path;
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast};
 
 use cdt_analyze::build_chunks_with_subagents;
 use cdt_config::{
-    ConfigManager, NotificationManager, read_all_claude_md_files,
+    ConfigManager, DetectedError, NotificationManager, read_all_claude_md_files,
     read_mentioned_file as config_read_mentioned_file, validate_file_path,
 };
 use cdt_discover::{
@@ -18,6 +19,7 @@ use cdt_discover::{
 };
 use cdt_parse::parse_file;
 use cdt_ssh::{ActiveContext, SshConnectionManager, parse_ssh_config_file, resolve_host};
+use cdt_watch::FileWatcher;
 
 use super::error::ApiError;
 use super::session_metadata::extract_session_metadata;
@@ -26,14 +28,19 @@ use super::types::{
     ConfigUpdateRequest, ContextInfo, PaginatedRequest, PaginatedResponse, ProjectInfo,
     ProjectSessionPrefs, SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
 };
+use crate::notifier::NotificationPipeline;
 
 /// 本地文件系统 `DataApi` 实现。
 pub struct LocalDataApi {
     scanner: Mutex<ProjectScanner>,
     searcher: SessionSearcher<LocalFileSystemProvider>,
-    config_mgr: Mutex<ConfigManager>,
-    notif_mgr: Mutex<NotificationManager>,
+    config_mgr: Arc<Mutex<ConfigManager>>,
+    notif_mgr: Arc<Mutex<NotificationManager>>,
     ssh_mgr: Mutex<SshConnectionManager>,
+    /// 自动通知管线的 `DetectedError` 广播发送端。仅在 `new_with_watcher`
+    /// 构造下存在；`new()` 构造返回 `None`，此时 `subscribe_detected_errors`
+    /// 返回一条永不发消息的 receiver（caller 代码统一）。
+    error_tx: Option<broadcast::Sender<DetectedError>>,
 }
 
 impl LocalDataApi {
@@ -49,9 +56,64 @@ impl LocalDataApi {
         Self {
             scanner: Mutex::new(scanner),
             searcher,
-            config_mgr: Mutex::new(config_mgr),
-            notif_mgr: Mutex::new(notif_mgr),
+            config_mgr: Arc::new(Mutex::new(config_mgr)),
+            notif_mgr: Arc::new(Mutex::new(notif_mgr)),
             ssh_mgr: Mutex::new(ssh_mgr),
+            error_tx: None,
+        }
+    }
+
+    /// 带 `FileWatcher` 的构造器：spawn 自动通知管线，订阅 watcher 的 file 广播，
+    /// 检测结果通过 `subscribe_detected_errors()` 暴露给 host runtime（如 Tauri）。
+    ///
+    /// 不取 watcher 所有权——watcher 的生命周期由 host 管理；本构造器只订阅其广播。
+    /// `projects_dir` 显式传入而不是依赖 `path_decoder::get_projects_base_path()`，
+    /// 让测试可以用 tmp 目录、让 host 可在需要时传入非默认路径。
+    pub fn new_with_watcher(
+        scanner: ProjectScanner,
+        config_mgr: ConfigManager,
+        notif_mgr: NotificationManager,
+        ssh_mgr: SshConnectionManager,
+        watcher: &FileWatcher,
+        projects_dir: std::path::PathBuf,
+    ) -> Self {
+        let fs = std::sync::Arc::new(LocalFileSystemProvider::new());
+        let cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
+        let searcher = SessionSearcher::new(fs, cache);
+
+        let config_mgr = Arc::new(Mutex::new(config_mgr));
+        let notif_mgr = Arc::new(Mutex::new(notif_mgr));
+        let (error_tx, _) = broadcast::channel::<DetectedError>(256);
+
+        let pipeline = NotificationPipeline::new(
+            watcher.subscribe_files(),
+            config_mgr.clone(),
+            notif_mgr.clone(),
+            error_tx.clone(),
+            projects_dir,
+        );
+        tokio::spawn(pipeline.run());
+
+        Self {
+            scanner: Mutex::new(scanner),
+            searcher,
+            config_mgr,
+            notif_mgr,
+            ssh_mgr: Mutex::new(ssh_mgr),
+            error_tx: Some(error_tx),
+        }
+    }
+
+    /// 订阅自动通知管线产出的新 `DetectedError`。
+    ///
+    /// 若 `LocalDataApi` 通过 `new()` 构造（无 watcher），返回一条永不收到消息的
+    /// receiver（channel 本地 drop tx）——让 caller 代码统一 `.recv().await` 路径。
+    pub fn subscribe_detected_errors(&self) -> broadcast::Receiver<DetectedError> {
+        if let Some(tx) = &self.error_tx {
+            tx.subscribe()
+        } else {
+            let (_tx, rx) = broadcast::channel::<DetectedError>(1);
+            rx
         }
     }
 }
