@@ -26,7 +26,8 @@
   /* User chat bubble */
   --chat-user-bg: #e8e6df;
   --chat-user-text: #3d3b36;
-  --chat-user-border: #d5d3cc;
+  --chat-user-border: #c8c5bb;
+  --chat-user-shadow: 0 1px 2px rgba(60, 55, 45, 0.06);
 
   /* Tool items */
   --tool-item-name: #3d3b36;
@@ -147,7 +148,8 @@
 
   --chat-user-bg: #2e3330;
   --chat-user-text: #c5d0c8;
-  --chat-user-border: #3d4a3f;
+  --chat-user-border: #485448;
+  --chat-user-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 
   --tool-item-name: #e0ded9;
   --tool-item-summary: #a8a5a0;

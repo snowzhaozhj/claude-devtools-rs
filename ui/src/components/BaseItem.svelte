@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import StatusDot from "./StatusDot.svelte";
+  import { CHEVRON_RIGHT } from "../lib/icons";
 
   interface Props {
     icon?: string;
@@ -60,7 +61,9 @@
       <span class="base-item-duration">{formatDuration(durationMs)}</span>
     {/if}
 
-    <span class="base-item-chevron" class:base-item-chevron-open={isExpanded}>▸</span>
+    <span class="base-item-chevron" class:base-item-chevron-open={isExpanded}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT} /></svg>
+    </span>
   </div>
 
   {#if isExpanded && children}
@@ -150,11 +153,17 @@
   }
 
   .base-item-chevron {
-    font-size: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--tool-item-muted);
     flex-shrink: 0;
-    width: 12px;
     transition: transform 0.15s ease;
+  }
+
+  .base-item-chevron svg {
+    width: 12px;
+    height: 12px;
   }
 
   .base-item-chevron-open {

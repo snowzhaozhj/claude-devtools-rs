@@ -24,6 +24,7 @@
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, dedupeRefresh } from "../lib/fileChangeStore.svelte";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
+  import { MESSAGE_SQUARE } from "../lib/icons";
 
   // 虚拟滚动行高（实测 .session-item ≈ 44px：padding 8+8 + title 13×1.4 +
   // meta 11×1.4）；header 行高强制对齐 44 让单一 windowing 单元生效。
@@ -413,7 +414,11 @@
               </span>
             </div>
             <div class="session-meta">
-              <span class="session-msg-count">C{session.messageCount || ""}</span>
+              <span class="session-msg-count">
+                <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={MESSAGE_SQUARE} /></svg>
+                {session.messageCount || 0}
+              </span>
+              <span class="session-meta-sep">·</span>
               <span class="session-time">{formatTime(session.timestamp)}</span>
             </div>
           </button>
@@ -604,19 +609,35 @@
 
   .session-meta {
     display: flex;
-    gap: 8px;
+    gap: 6px;
     align-items: center;
   }
 
   .session-msg-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
     font-size: 11px;
     color: var(--color-text-muted);
-    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .meta-icon {
+    width: 11px;
+    height: 11px;
+    flex-shrink: 0;
+  }
+
+  .session-meta-sep {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    opacity: 0.5;
   }
 
   .session-time {
     font-size: 11px;
     color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
   }
 
   /* Resize handle */

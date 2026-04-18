@@ -4,7 +4,7 @@
   import { renderMarkdown } from "../lib/render";
   import { getToolSummary, getToolStatus, cleanDisplayText } from "../lib/toolHelpers";
   import { buildDisplayItems, buildSummary } from "../lib/displayItemBuilder";
-  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE } from "../lib/icons";
+  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG, BOT } from "../lib/icons";
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
@@ -174,6 +174,23 @@
     } catch { return ""; }
   }
 
+  function fduration(ms: number): string {
+    if (ms < 1000) return `${ms}ms`;
+    const s = ms / 1000;
+    if (s < 60) return `${s.toFixed(1)}s`;
+    const m = Math.floor(s / 60);
+    const rs = Math.floor(s % 60);
+    return `${m}m ${rs}s`;
+  }
+
+  function toolDurationMs(exec: ToolExecution): number | undefined {
+    if (!exec.endTs) return undefined;
+    const start = Date.parse(exec.startTs);
+    const end = Date.parse(exec.endTs);
+    if (Number.isNaN(start) || Number.isNaN(end)) return undefined;
+    return Math.max(0, end - start);
+  }
+
   function utext(content: string | unknown[]): string {
     let raw = "";
     if (typeof content === "string") {
@@ -268,6 +285,9 @@
               <div class="msg-bubble-header">
                 <span class="msg-time">{ftime(chunk.timestamp)}</span>
                 <span class="msg-who-user">You</span>
+                <span class="msg-avatar-user">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html USER_SVG}</svg>
+                </span>
               </div>
               <div class="prose">{@html renderMarkdown(text)}</div>
             </div>
@@ -284,19 +304,29 @@
           <div class="msg-ai-container">
             <!-- AI header -->
             <div class="ai-header-row">
-              <span class="ai-avatar">C</span>
+              <span class="ai-avatar">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={BOT} /></svg>
+              </span>
               <span class="ai-label">Claude</span>
               <span class="ai-model">{aiModel(chunk)}</span>
               {#if summaryText}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <span class="ai-tool-toggle" onclick={() => toggleChunk(i)}>
-                  <span class="ai-tool-chevron" class:ai-tool-chevron-open={toolsVisible}>▸</span>
+                  <span class="ai-tool-chevron" class:ai-tool-chevron-open={toolsVisible}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT} /></svg>
+                  </span>
                   {summaryText}
                 </span>
               {/if}
               <span class="ai-header-spacer"></span>
               <span class="ai-tokens">{fk(chunk.metrics.inputTokens)} / {fk(chunk.metrics.outputTokens)}</span>
+              {#if chunk.durationMs != null && chunk.durationMs > 0}
+                <span class="ai-duration" title="耗时">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html CLOCK_SVG}</svg>
+                  {fduration(chunk.durationMs)}
+                </span>
+              {/if}
               <span class="ai-time">{ftime(chunk.timestamp)}</span>
             </div>
 
@@ -330,6 +360,7 @@
                       label={exec.toolName}
                       summary={getToolSummary(exec.toolName, exec.input)}
                       status={getToolStatus(exec)}
+                      durationMs={toolDurationMs(exec)}
                       isExpanded={expandedItems.has(key)}
                       onclick={() => toggle(key)}
                     >
@@ -538,6 +569,7 @@
     background: var(--chat-user-bg);
     color: var(--chat-user-text);
     border: 1px solid var(--chat-user-border);
+    box-shadow: var(--chat-user-shadow);
   }
 
   .msg-bubble-header {
@@ -555,7 +587,19 @@
   .msg-who-user {
     font-size: 12px;
     font-weight: 600;
-    color: var(--color-text);
+    color: var(--color-text-secondary);
+  }
+
+  .msg-avatar-user {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-secondary);
+  }
+
+  .msg-avatar-user svg {
+    width: 13px;
+    height: 13px;
   }
 
   /* ── AI message ── */
@@ -566,6 +610,8 @@
   .msg-ai-container {
     width: 100%;
     max-width: 95%;
+    border-left: 2px solid var(--chat-ai-border);
+    padding-left: 12px;
   }
 
   .ai-header-row {
@@ -579,14 +625,13 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    background: var(--badge-neutral-bg);
-    color: var(--color-text);
-    font-size: 11px;
-    font-weight: 700;
+    color: var(--color-text-secondary);
     flex-shrink: 0;
+  }
+
+  .ai-avatar svg {
+    width: 16px;
+    height: 16px;
   }
 
   .ai-label {
@@ -625,8 +670,15 @@
   }
 
   .ai-tool-chevron {
-    font-size: 9px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     transition: transform 0.15s ease;
+  }
+
+  .ai-tool-chevron svg {
+    width: 11px;
+    height: 11px;
   }
 
   .ai-tool-chevron-open {
@@ -634,12 +686,10 @@
   }
 
   .ai-tools-section {
-    padding: 4px 0 4px 30px;
+    padding: 4px 0;
     display: flex;
     flex-direction: column;
     gap: 2px;
-    border-left: 2px solid var(--color-border);
-    margin-left: 10px;
     margin-bottom: 4px;
   }
 
@@ -652,6 +702,22 @@
     flex-shrink: 0;
   }
 
+  .ai-duration {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .ai-duration svg {
+    width: 11px;
+    height: 11px;
+  }
+
   .ai-time {
     font-size: 11px;
     color: var(--color-text-muted);
@@ -659,7 +725,7 @@
   }
 
   .ai-body {
-    padding: 0 0 8px 30px;
+    padding: 0 0 8px 0;
     display: flex;
     flex-direction: column;
     gap: 4px;

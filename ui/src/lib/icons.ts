@@ -28,3 +28,35 @@ export const BELL =
 /** Lucide settings (齿轮) */
 export const SETTINGS =
   "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z";
+
+/** Lucide chevron-down — 下拉箭头（单 path） */
+export const CHEVRON_DOWN = "M6 9l6 6 6-6";
+
+/** Lucide file-text — session tab icon（多段，使用 {@html}） */
+export const FILE_TEXT_SVG = `
+<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/>
+<path d="M14 2v6h6"/>
+<path d="M16 13H8"/>
+<path d="M16 17H8"/>
+<path d="M10 9H8"/>
+`;
+
+/** Lucide folder-git-2 — 项目卡片/侧栏 icon（多段，使用 {@html}） */
+export const FOLDER_GIT2_SVG = `
+<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v1"/>
+<circle cx="13" cy="12" r="2"/>
+<path d="M18 19c-2.8 0-5-2.2-5-5v8"/>
+<circle cx="20" cy="19" r="2"/>
+`;
+
+/** Lucide clock — 耗时 */
+export const CLOCK_SVG = `
+<circle cx="12" cy="12" r="10"/>
+<polyline points="12 6 12 12 16 14"/>
+`;
+
+/** Lucide user — 用户气泡 avatar */
+export const USER_SVG = `
+<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+<circle cx="12" cy="7" r="4"/>
+`;

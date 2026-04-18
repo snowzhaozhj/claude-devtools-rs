@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { listProjects, type ProjectInfo } from "../lib/api";
   import { shortenPath } from "../lib/toolHelpers";
+  import { FOLDER_GIT2_SVG } from "../lib/icons";
 
   interface Props {
     onSelectProject: (id: string, name: string) => void;
@@ -67,7 +68,11 @@
             class="dash-card"
             onclick={() => onSelectProject(project.id, project.displayName)}
           >
-            <div class="dash-card-icon">◆</div>
+            <div class="dash-card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                {@html FOLDER_GIT2_SVG}
+              </svg>
+            </div>
             <div class="dash-card-name">{project.displayName}</div>
             <div class="dash-card-path">{shortenPath(project.path)}</div>
             <div class="dash-card-meta">
@@ -86,12 +91,14 @@
     justify-content: center;
     height: 100%;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 48px 24px;
   }
 
   .dashboard-inner {
     width: 100%;
-    max-width: 800px;
+    max-width: 1100px;
+    min-width: 0;
   }
 
   .dash-search-wrap {
@@ -163,8 +170,9 @@
 
   .dash-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 12px;
+    width: 100%;
   }
 
   .dash-card {
@@ -174,23 +182,37 @@
     padding: 16px;
     background: var(--color-surface);
     border: 1px solid var(--color-border);
-    border-radius: 10px;
+    border-radius: 8px;
     cursor: pointer;
     text-align: left;
     font: inherit;
     color: var(--color-text);
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+    min-width: 0;
   }
 
   .dash-card:hover {
     border-color: var(--color-border-emphasis);
+    background: var(--color-surface-raised);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   }
 
   .dash-card-icon {
-    font-size: 20px;
-    color: var(--color-text-muted);
-    margin-bottom: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+    margin-bottom: 8px;
+  }
+
+  .dash-card-icon svg {
+    width: 16px;
+    height: 16px;
   }
 
   .dash-card-name {

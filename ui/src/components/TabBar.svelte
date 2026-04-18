@@ -15,7 +15,7 @@
   import { beginDrag, getDragSource, getHit, isDragging } from "../lib/dragSession.svelte";
   import { getNotifications } from "../lib/api";
   import TabContextMenu from "./TabContextMenu.svelte";
-  import { BELL, SETTINGS } from "../lib/icons";
+  import { BELL, SETTINGS, FILE_TEXT_SVG } from "../lib/icons";
 
   interface Props {
     paneId: string;
@@ -58,12 +58,6 @@
   function handleClose(e: Event, tabId: string) {
     e.stopPropagation();
     closeTab(tabId);
-  }
-
-  function tabIcon(type: string): string {
-    if (type === "settings") return "⚙";
-    if (type === "notifications") return "🔔";
-    return "";
   }
 
   function handlePointerDown(e: PointerEvent, index: number, tabId: string) {
@@ -130,9 +124,17 @@
           }
         }}
       >
-        {#if tab.type !== "session"}
-          <span class="tab-icon">{tabIcon(tab.type)}</span>
-        {/if}
+        <span class="tab-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            {#if tab.type === "settings"}
+              <path d={SETTINGS} />
+            {:else if tab.type === "notifications"}
+              <path d={BELL} />
+            {:else}
+              {@html FILE_TEXT_SVG}
+            {/if}
+          </svg>
+        </span>
         <span class="tab-label">{tab.label}</span>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <span
@@ -269,8 +271,20 @@
   }
 
   .tab-icon {
-    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted);
     flex-shrink: 0;
+  }
+
+  .tab-icon svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .tab-item-active .tab-icon {
+    color: var(--color-text-secondary);
   }
 
   .tab-label {

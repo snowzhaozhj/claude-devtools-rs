@@ -1,5 +1,6 @@
 <script lang="ts">
   import { type ProjectInfo } from "../lib/api";
+  import { CHEVRON_DOWN, FOLDER_GIT2_SVG } from "../lib/icons";
 
   interface Props {
     projects: ProjectInfo[];
@@ -30,9 +31,17 @@
 
 <div class="sidebar-header">
   <button class="project-selector" onclick={toggleDropdown}>
-    <span class="project-icon">◆</span>
+    <span class="project-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        {@html FOLDER_GIT2_SVG}
+      </svg>
+    </span>
     <span class="project-name">{selectedName}</span>
-    <span class="dropdown-arrow">{dropdownOpen ? "▴" : "▾"}</span>
+    <span class="dropdown-arrow" class:dropdown-arrow-open={dropdownOpen}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d={CHEVRON_DOWN} />
+      </svg>
+    </span>
   </button>
 
   {#if dropdownOpen}
@@ -86,8 +95,16 @@
   }
 
   .project-icon {
-    font-size: 10px;
-    color: var(--color-text-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+  }
+
+  .project-icon svg {
+    width: 16px;
+    height: 16px;
   }
 
   .project-name {
@@ -99,9 +116,21 @@
   }
 
   .dropdown-arrow {
-    font-size: 10px;
-    color: var(--color-text-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-secondary);
     flex-shrink: 0;
+    transition: transform 0.15s ease;
+  }
+
+  .dropdown-arrow svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .dropdown-arrow-open {
+    transform: rotate(180deg);
   }
 
   .dropdown-backdrop {
