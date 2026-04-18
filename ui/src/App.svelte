@@ -13,6 +13,7 @@
   import { loadAgentConfigs } from "./lib/agentConfigsStore.svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { initFileChangeStore } from "./lib/fileChangeStore.svelte";
 
   let selectedProjectId: string = $state("");
   let selectedProjectName: string = $state("");
@@ -50,6 +51,8 @@
     } catch { /* 加载失败保持默认浅色 */ }
     // 加载 agent configs 供 subagent 彩色 badge 使用
     await loadAgentConfigs();
+    // 单例 listen("file-change") —— 路由组件通过 fileChangeStore 注册 handler
+    await initFileChangeStore();
     // 启动时同步一次 Dock badge（显示持久化的未读数）
     await onNotificationUpdate();
   });

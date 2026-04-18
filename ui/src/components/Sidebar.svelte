@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { listProjects, listSessions, type ProjectInfo, type SessionSummary, type PaginatedResponse } from "../lib/api";
   import SidebarHeader from "./SidebarHeader.svelte";
   import SessionContextMenu from "./SessionContextMenu.svelte";
@@ -12,6 +12,7 @@
     getHiddenCount,
     loadProjectPrefs,
   } from "../lib/sidebarStore.svelte";
+  import { registerHandler, unregisterHandler, dedupeRefresh } from "../lib/fileChangeStore.svelte";
 
   interface Props {
     selectedProjectId: string;
@@ -103,6 +104,25 @@
       void loadProjectPrefs(selectedProjectId);
     }
   });
+
+  // 注册 file-change handler；依赖 selectedProjectId，切 project 时
+  // 重新注册让闭包捕获最新值
+  $effect(() => {
+    const currentProjectId = selectedProjectId;
+    if (!currentProjectId) {
+      unregisterHandler("sidebar");
+      return;
+    }
+    registerHandler("sidebar", (payload) => {
+      if (payload.projectId !== currentProjectId) return;
+      void dedupeRefresh(`sidebar:${currentProjectId}`, () =>
+        untrack(() => loadSessions(currentProjectId)),
+      );
+    });
+    return () => unregisterHandler("sidebar");
+  });
+
+  onDestroy(() => unregisterHandler("sidebar"));
 
   // ---------------------------------------------------------------------------
   // Date grouping

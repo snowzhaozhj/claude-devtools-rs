@@ -9,6 +9,7 @@
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
   import { getTabUIState, saveTabUIState, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
+  import { registerHandler, unregisterHandler, dedupeRefresh } from "../lib/fileChangeStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
   import SearchBar from "../components/SearchBar.svelte";
@@ -51,6 +52,27 @@
     }
   }
 
+  const fileChangeKey = `session-detail-${tabId}`;
+
+  async function refreshDetail() {
+    const wasAtBottom = !!conversationEl
+      && conversationEl.scrollTop + conversationEl.clientHeight
+        >= conversationEl.scrollHeight - 16;
+    try {
+      const d = await getSessionDetail(projectId, sessionId);
+      detail = d;
+      setCachedSession(tabId, d);
+      if (wasAtBottom) {
+        await tick();
+        if (conversationEl) {
+          conversationEl.scrollTop = conversationEl.scrollHeight;
+        }
+      }
+    } catch (e) {
+      console.warn("auto refresh getSessionDetail failed:", e);
+    }
+  }
+
   onMount(async () => {
     document.addEventListener("keydown", handleKeydown);
 
@@ -72,6 +94,12 @@
     if (conversationEl && uiState.scrollTop > 0) {
       conversationEl.scrollTop = uiState.scrollTop;
     }
+
+    // 注册 file-change handler：命中当前 (projectId, sessionId) 时合并刷新
+    registerHandler(fileChangeKey, (payload) => {
+      if (payload.projectId !== projectId || payload.sessionId !== sessionId) return;
+      void dedupeRefresh(`detail:${projectId}|${sessionId}`, refreshDetail);
+    });
   });
 
   // Mermaid 图表后处理：detail 加载后扫描并渲染 mermaid 代码块
@@ -83,6 +111,7 @@
 
   onDestroy(() => {
     document.removeEventListener("keydown", handleKeydown);
+    unregisterHandler(fileChangeKey);
     // 保存 per-tab UI 状态
     saveTabUIState(tabId, {
       expandedChunks: new Set(expandedChunks),

@@ -318,6 +318,22 @@ pub fn run() {
                 }
             });
 
+            // 把 FileWatcher 的 FileChangeEvent 桥到前端 `file-change` 事件，
+            // 让 SessionDetail 与 Sidebar 自动刷新。
+            let mut file_rx = watcher.subscribe_files();
+            let app_handle_for_files = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match file_rx.recv().await {
+                        Ok(event) => {
+                            let _ = app_handle_for_files.emit("file-change", &event);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+
             // 把自动通知管线产出的 DetectedError 桥到前端 `notification-added` 事件
             // 同时按 config.notifications.{enabled,soundEnabled} 发 OS native 通知
             let mut error_rx = api.subscribe_detected_errors();
