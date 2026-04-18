@@ -16,6 +16,9 @@ use cdt_parse::parse_entry_at;
 pub struct SessionMetadata {
     pub title: Option<String>,
     pub message_count: usize,
+    /// 会话是否仍在进行。计算方式见
+    /// `cdt_analyze::check_messages_ongoing`。
+    pub is_ongoing: bool,
 }
 
 /// 扫描标题时读取的最大行数（与原版 `maxLines: 200` 对齐）。
@@ -29,6 +32,7 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
         return SessionMetadata {
             title: None,
             message_count: 0,
+            is_ongoing: false,
         };
     };
 
@@ -40,6 +44,7 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
     let mut message_count: usize = 0;
     let mut awaiting_ai = false;
     let mut line_number: usize = 0;
+    let mut all_messages: Vec<cdt_core::ParsedMessage> = Vec::new();
 
     while let Ok(Some(line)) = lines.next_line().await {
         line_number += 1;
@@ -86,6 +91,8 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
                 }
             }
         }
+
+        all_messages.push(msg);
     }
 
     // 没有真实用户消息时用 slash 命令后备
@@ -93,9 +100,12 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
         title = command_fallback;
     }
 
+    let is_ongoing = cdt_analyze::check_messages_ongoing(&all_messages);
+
     SessionMetadata {
         title,
         message_count,
+        is_ongoing,
     }
 }
 

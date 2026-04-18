@@ -73,13 +73,17 @@ fn synthetic_assistant_is_hard_noise() {
 }
 
 #[test]
-fn interrupt_marker_is_hard_noise() {
+fn interrupt_marker_is_interruption_category() {
     let line = r#"{"type":"user","uuid":"u1","timestamp":"2026-04-11T10:00:00Z","message":{"role":"user","content":"[Request interrupted by user for tool use]"}}"#;
     let msg = parse_entry(line).unwrap().expect("message should parse");
-    assert_eq!(
-        msg.category,
-        MessageCategory::HardNoise(HardNoiseReason::InterruptMarker)
-    );
+    assert_eq!(msg.category, MessageCategory::Interruption);
+}
+
+#[test]
+fn interrupt_marker_in_blocks_is_interruption_category() {
+    let line = r#"{"type":"user","uuid":"u2","timestamp":"2026-04-11T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
+    let msg = parse_entry(line).unwrap().expect("message should parse");
+    assert_eq!(msg.category, MessageCategory::Interruption);
 }
 
 #[test]

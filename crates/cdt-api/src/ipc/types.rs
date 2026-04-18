@@ -53,6 +53,13 @@ pub struct SessionSummary {
     /// 第一条用户消息（清洗后），用作 sidebar 标题。
     #[serde(default)]
     pub title: Option<String>,
+    /// 会话是否仍在进行（最后一个 ending event 之后仍有 AI 活动）。
+    ///
+    /// 计算规则见 `cdt_analyze::check_messages_ongoing` 与
+    /// `openspec/specs/sidebar-navigation/spec.md` §"Ongoing indicator
+    /// on session item"。
+    #[serde(default)]
+    pub is_ongoing: bool,
 }
 
 /// 会话详情。
@@ -68,6 +75,10 @@ pub struct SessionDetail {
     /// 由 `process_session_context_with_phases` 计算。
     #[serde(default)]
     pub context_injections: serde_json::Value,
+    /// 会话是否仍在进行。由 `cdt_analyze::check_messages_ongoing`
+    /// 计算，值应与同 session 的 `SessionSummary.is_ongoing` 一致。
+    #[serde(default)]
+    pub is_ongoing: bool,
 }
 
 // =============================================================================

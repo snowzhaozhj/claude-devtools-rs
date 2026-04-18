@@ -14,6 +14,7 @@
   import SubagentCard from "../components/SubagentCard.svelte";
   import SearchBar from "../components/SearchBar.svelte";
   import ContextPanel from "../components/ContextPanel.svelte";
+  import OngoingBanner from "../components/OngoingBanner.svelte";
   import DefaultToolViewer from "../components/tool-viewers/DefaultToolViewer.svelte";
   import ReadToolViewer from "../components/tool-viewers/ReadToolViewer.svelte";
   import EditToolViewer from "../components/tool-viewers/EditToolViewer.svelte";
@@ -128,6 +129,29 @@
     expandedItems = n;
   }
 
+  // 为 `{#each detail.chunks}` 提供稳定 key。刷新时 chunks 数组整体被替换，
+  // 缺 key 会让 Svelte 按索引 diff — 导致所有 chunk 的 DOM 被视为新节点重建，
+  // 出现可见闪烁 + mermaid/highlight.js 重跑。用 UserChunk/System/Compact 的
+  // `uuid`，AIChunk 取第一条 response 的 `uuid`（AIChunk 结构无顶层 uuid，
+  // 但至少有一条 response）；都缺时回落到 timestamp。
+  function chunkKey(c: Chunk): string {
+    if (c.kind === "ai") return c.responses[0]?.uuid ?? c.timestamp;
+    return c.uuid;
+  }
+
+  // 最后一个 AIChunk 的索引。ongoing=true 时它的 lastOutput 位置被
+  // `<OngoingBanner />` 替代；结束后换回真正的内容。对齐原版
+  // `LastOutputDisplay.tsx` 的 `isLastGroup && isSessionOngoing` 语义——
+  // banner 占 lastOutput 坑位，不作为独立节点追加到对话流尾部，从而避免
+  // ongoing 切换时 scrollHeight 跳变引起的闪烁。
+  const lastAiIndex = $derived.by(() => {
+    if (!detail) return -1;
+    for (let i = detail.chunks.length - 1; i >= 0; i--) {
+      if (detail.chunks[i].kind === "ai") return i;
+    }
+    return -1;
+  });
+
   function sumMetrics(chunks: Chunk[]): ChunkMetrics {
     const r: ChunkMetrics = { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, toolCount: 0, costUsd: null };
     for (const c of chunks) {
@@ -232,7 +256,7 @@
   <div class="content-area">
   <!-- Conversation -->
   <div class="conversation" bind:this={conversationEl}>
-    {#each detail.chunks as chunk, i}
+    {#each detail.chunks as chunk, i (chunkKey(chunk))}
 
       <!-- User -->
       {#if chunk.kind === "user"}
@@ -255,6 +279,7 @@
         {@const di = buildDisplayItems(chunk)}
         {@const summaryText = buildSummary(di.items)}
         {@const toolsVisible = isChunkToolsVisible(i)}
+        {@const interruptions = chunk.semanticSteps.filter((s) => s.kind === "interruption")}
         <div class="msg-row msg-row-ai">
           <div class="msg-ai-container">
             <!-- AI header -->
@@ -346,9 +371,16 @@
 
             <!-- Last output (always visible) -->
             <div class="ai-body">
-              {#if di.lastOutput}
+              {#if i === lastAiIndex && detail.isOngoing}
+                <!-- 对齐原版 LastOutputDisplay：最后 AI 组在 ongoing 时
+                     banner 占 lastOutput 位置，结束后换回真正的内容 -->
+                <OngoingBanner />
+              {:else if di.lastOutput}
                 <div class="prose">{@html renderMarkdown(di.lastOutput.text)}</div>
               {/if}
+              {#each interruptions as _interrupt}
+                <div class="interruption-block">Session interrupted by user</div>
+              {/each}
             </div>
           </div>
         </div>
@@ -754,5 +786,24 @@
   .prose-thinking {
     color: var(--thinking-content-text);
     font-size: 13px;
+  }
+
+  /* Interruption 块：红色提示 "Session interrupted by user" */
+  .interruption-block {
+    margin-top: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--color-danger-bg, rgba(239, 68, 68, 0.08));
+    border: 1px solid var(--color-danger-border, rgba(239, 68, 68, 0.3));
+    color: var(--color-danger-text, #ef4444);
+    font-size: 12px;
+    line-height: 1.4;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .interruption-block::before {
+    content: "⛔";
+    font-size: 12px;
   }
 </style>

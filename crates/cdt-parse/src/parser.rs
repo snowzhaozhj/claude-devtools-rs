@@ -97,8 +97,9 @@ pub fn parse_entry_at(line: &str, line_number: usize) -> Result<Option<ParsedMes
     let tool_results = extract_tool_results(&content);
 
     let noise_reason = noise::classify_hard_noise(message_type, model.as_deref(), &content);
+    let is_interrupt = noise_reason.is_none() && noise::is_interrupt_marker(message_type, &content);
     let is_compact_summary = raw.is_compact_summary.unwrap_or(false);
-    let category = classify_category(message_type, noise_reason, is_compact_summary);
+    let category = classify_category(message_type, noise_reason, is_interrupt, is_compact_summary);
 
     Ok(Some(ParsedMessage {
         uuid,
@@ -151,10 +152,14 @@ fn parse_timestamp(raw: Option<&str>) -> DateTime<Utc> {
 fn classify_category(
     message_type: MessageType,
     noise: Option<HardNoiseReason>,
+    is_interrupt: bool,
     is_compact: bool,
 ) -> MessageCategory {
     if let Some(reason) = noise {
         return MessageCategory::HardNoise(reason);
+    }
+    if is_interrupt {
+        return MessageCategory::Interruption;
     }
     if is_compact {
         return MessageCategory::Compact;

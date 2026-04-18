@@ -23,6 +23,7 @@
 
 pub mod chunk;
 pub mod context;
+pub mod session_state;
 pub mod tool_linking;
 
 pub use chunk::{
@@ -32,6 +33,7 @@ pub use context::{
     ComputeStatsParams, ComputeStatsResult, ProcessSessionParams, SessionContextResult,
     compute_context_stats, process_session_context_with_phases,
 };
+pub use session_state::check_messages_ongoing;
 pub use tool_linking::{
     Resolution, ResolvedTask, ToolLinkingResult, filter_resolved_tasks, pair_tool_executions,
     resolve_subagents,

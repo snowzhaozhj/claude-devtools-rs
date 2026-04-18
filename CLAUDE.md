@@ -136,11 +136,7 @@ just bootstrap           # npm install --prefix ui（首次）
 
 ## UI 已知遗留问题
 
-剩余一条（详细实现路径见 `openspec/followups.md` "实时会话刷新" 段第二条）：
-
-1. **Session "in progress" + 中断检测未实现**：原版 `checkMessagesOngoing` 算法 + `OngoingIndicator`（sidebar 绿点 / 会话底部 "Session is in progress..." 横幅）未 port。附带 impl-bug：`crates/cdt-parse/src/noise.rs:13` 把 `[Request interrupted by user` 当 hard noise 过滤，与原版"保留为 `interruption` semantic step"相反，需要先从 `HardNoise` 拎出来成独立 category。依赖**实时 `file-change` 桥**（已在 `2026-04-18-realtime-session-refresh` 修复）才能"看到绿点变白"——前置条件已就绪。
-
-建议顺序：上面 #1 → Execution Trace / 多 Pane / 虚拟滚动。桌面通知/系统托盘见 commit `f546b88`；实时刷新见 change `2026-04-18-realtime-session-refresh`。
+P0/P1 全部清零。后续增强按原路线图继续：Execution Trace / 多 Pane 分屏 / 虚拟滚动。桌面通知与系统托盘见 commit `f546b88`；实时 `file-change` 桥见 change `2026-04-18-realtime-session-refresh`；ongoing + interruption（sidebar 绿点 / 底部 banner / `[Request interrupted by user` 红色块）见 change `port-session-ongoing-and-interruption`。
 
 ## What to do first in a fresh session
 

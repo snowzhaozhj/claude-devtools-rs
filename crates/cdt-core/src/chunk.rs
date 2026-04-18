@@ -106,6 +106,14 @@ pub enum SemanticStep {
         placeholder_id: String,
         timestamp: DateTime<Utc>,
     },
+    /// 用户按 Esc / 拒绝工具触发的 `[Request interrupted by user` 消息。
+    ///
+    /// chunk-building 将其追加到前一个 `AIChunk.semantic_steps` 末尾，
+    /// UI 以红色块渲染 "Session interrupted by user"。
+    Interruption {
+        text: String,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -249,6 +257,10 @@ mod tests {
         });
         roundtrip(&SemanticStep::SubagentSpawn {
             placeholder_id: "sa1".into(),
+            timestamp: ts(),
+        });
+        roundtrip(&SemanticStep::Interruption {
+            text: "[Request interrupted by user for tool use]".into(),
             timestamp: ts(),
         });
     }

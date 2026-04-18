@@ -46,10 +46,6 @@ fn classify_user_content(content: &MessageContent) -> Option<HardNoiseReason> {
     let text = extract_user_text(content)?;
     let trimmed = text.trim();
 
-    if trimmed.starts_with(INTERRUPT_PREFIX) {
-        return Some(HardNoiseReason::InterruptMarker);
-    }
-
     if trimmed == LOCAL_COMMAND_STDOUT_EMPTY || trimmed == LOCAL_COMMAND_STDERR_EMPTY {
         return Some(HardNoiseReason::EmptyCommandOutput);
     }
@@ -83,6 +79,21 @@ fn extract_user_text(content: &MessageContent) -> Option<String> {
             if acc.is_empty() { None } else { Some(acc) }
         }
     }
+}
+
+/// 用户消息文本是否以 `INTERRUPT_PREFIX` 起首。
+///
+/// 独立于 hard-noise 分类——interrupt marker 需要保留到 chunk-building
+/// 产出 `SemanticStep::Interruption`，并参与 `check_messages_ongoing`
+/// 的 ending-event 判定。
+pub(crate) fn is_interrupt_marker(message_type: MessageType, content: &MessageContent) -> bool {
+    if message_type != MessageType::User {
+        return false;
+    }
+    let Some(text) = extract_user_text(content) else {
+        return false;
+    };
+    text.trim().starts_with(INTERRUPT_PREFIX)
 }
 
 /// 若 `text` 完整被一对 `<tag>…</tag>` 包裹、且包裹外没有任何非空白
@@ -140,15 +151,51 @@ mod tests {
     }
 
     #[test]
-    fn interrupt_marker_is_noise() {
+    fn interrupt_marker_is_not_hard_noise() {
+        // 与原版 TS 相反：interrupt marker 不再归 hard noise；保留分类给
+        // chunk-building 做 `SemanticStep::Interruption`。
         assert_eq!(
             classify_hard_noise(
                 MessageType::User,
                 None,
                 &text_content("[Request interrupted by user for tool use]")
             ),
-            Some(HardNoiseReason::InterruptMarker)
+            None
         );
+    }
+
+    #[test]
+    fn is_interrupt_marker_detects_prefix_in_text() {
+        assert!(is_interrupt_marker(
+            MessageType::User,
+            &text_content("[Request interrupted by user for tool use]"),
+        ));
+    }
+
+    #[test]
+    fn is_interrupt_marker_detects_prefix_in_blocks() {
+        assert!(is_interrupt_marker(
+            MessageType::User,
+            &MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "[Request interrupted by user]".into(),
+            }]),
+        ));
+    }
+
+    #[test]
+    fn is_interrupt_marker_ignores_non_user() {
+        assert!(!is_interrupt_marker(
+            MessageType::Assistant,
+            &text_content("[Request interrupted by user]"),
+        ));
+    }
+
+    #[test]
+    fn is_interrupt_marker_rejects_plain_text() {
+        assert!(!is_interrupt_marker(
+            MessageType::User,
+            &text_content("hello"),
+        ));
     }
 
     #[test]

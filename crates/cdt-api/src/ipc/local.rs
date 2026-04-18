@@ -179,6 +179,7 @@ impl DataApi for LocalDataApi {
                 timestamp: s.last_modified,
                 message_count: meta.message_count,
                 title: meta.title,
+                is_ongoing: meta.is_ongoing,
             });
         }
 
@@ -237,6 +238,7 @@ impl DataApi for LocalDataApi {
         // 扫描 subagent 候选（subagent 会话自身通常无下级 subagent，但保持一致）
         let candidates = scan_subagent_candidates(&project_dir, session_id).await;
 
+        let is_ongoing = cdt_analyze::check_messages_ongoing(&messages);
         let chunks = build_chunks_with_subagents(&messages, &candidates);
 
         // 从 session cwd 扫描实际 CLAUDE.md 文件
@@ -281,6 +283,7 @@ impl DataApi for LocalDataApi {
                 "size": size,
             }),
             context_injections,
+            is_ongoing,
         })
     }
 
@@ -300,6 +303,7 @@ impl DataApi for LocalDataApi {
                     metrics: serde_json::Value::Null,
                     metadata: serde_json::json!({"status": "not_found"}),
                     context_injections: serde_json::Value::Array(Vec::new()),
+                    is_ongoing: false,
                 }),
             }
         }

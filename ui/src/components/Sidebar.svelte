@@ -3,6 +3,7 @@
   import { listProjects, listSessions, type ProjectInfo, type SessionSummary, type PaginatedResponse } from "../lib/api";
   import SidebarHeader from "./SidebarHeader.svelte";
   import SessionContextMenu from "./SessionContextMenu.svelte";
+  import OngoingIndicator from "./OngoingIndicator.svelte";
   import { openTab } from "../lib/tabStore.svelte";
   import {
     getSidebarWidth, setSidebarWidth,
@@ -83,17 +84,22 @@
     }
   });
 
-  async function loadSessions(projectId: string) {
+  /**
+   * @param silent - 自动刷新（file-change）时传 true，保留现有列表直到新数据
+   *   到达后原地替换。否则每次 file-change 都会先切到"加载中..."再切回来，
+   *   引发整列表闪烁。仅首次加载 / 切项目时展示 loading。
+   */
+  async function loadSessions(projectId: string, silent = false) {
     if (!projectId) { sessions = []; return; }
-    sessionsLoading = true;
+    if (!silent) sessionsLoading = true;
     try {
       const result: PaginatedResponse<SessionSummary> = await listSessions(projectId);
       sessions = result.items;
     } catch (e) {
       console.error("Failed to load sessions:", e);
-      sessions = [];
+      if (!silent) sessions = [];
     } finally {
-      sessionsLoading = false;
+      if (!silent) sessionsLoading = false;
     }
   }
 
@@ -269,6 +275,9 @@
               oncontextmenu={(e) => onContextMenu(e, session)}
             >
               <div class="session-title">
+                {#if session.isOngoing}
+                  <OngoingIndicator />
+                {/if}
                 <svg class="pin-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M12 17v5"/>
                   <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>
@@ -299,6 +308,9 @@
               oncontextmenu={(e) => onContextMenu(e, session)}
             >
               <div class="session-title">
+                {#if session.isOngoing}
+                  <OngoingIndicator />
+                {/if}
                 <span class="session-title-text">
                   {session.title || session.sessionId.slice(0, 8) + "…"}
                 </span>

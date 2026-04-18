@@ -13,6 +13,7 @@ export interface SessionSummary {
   timestamp: number;
   messageCount: number;
   title: string | null;
+  isOngoing: boolean;
 }
 
 export interface PaginatedResponse<T> {
@@ -75,7 +76,8 @@ export type SemanticStep =
   | { kind: "thinking"; text: string; timestamp: string }
   | { kind: "text"; text: string; timestamp: string }
   | { kind: "tool_execution"; toolUseId: string; toolName: string; timestamp: string }
-  | { kind: "subagent_spawn"; placeholderId: string; timestamp: string };
+  | { kind: "subagent_spawn"; placeholderId: string; timestamp: string }
+  | { kind: "interruption"; text: string; timestamp: string };
 
 export type ToolOutput =
   | { kind: "text"; text: string }
@@ -169,6 +171,7 @@ export interface SessionDetail {
   metrics: Record<string, unknown>;
   metadata: Record<string, unknown>;
   contextInjections: unknown[];
+  isOngoing: boolean;
 }
 
 export async function listProjects(): Promise<ProjectInfo[]> {

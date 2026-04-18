@@ -31,6 +31,12 @@ pub enum MessageCategory {
     Assistant,
     System,
     Compact,
+    /// 用户按 Esc 或拒绝工具产生的 `[Request interrupted by user` 消息。
+    ///
+    /// 不算 hard noise——chunk-building 会消费它产出
+    /// `SemanticStep::Interruption`，`check_messages_ongoing` 依赖它作为
+    /// ending event。
+    Interruption,
     HardNoise(HardNoiseReason),
 }
 
@@ -52,8 +58,6 @@ pub enum HardNoiseReason {
     SystemReminderOnly,
     /// 空的 `<local-command-stdout></local-command-stdout>` / stderr 输出。
     EmptyCommandOutput,
-    /// 以 `[Request interrupted by user` 起首的中断标记。
-    InterruptMarker,
 }
 
 /// Token 用量，字段与 Anthropic API 的 `usage` 一致。

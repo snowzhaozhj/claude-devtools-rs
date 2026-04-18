@@ -47,7 +47,10 @@ pub fn extract_searchable_entries(messages: &[ParsedMessage]) -> (Vec<Searchable
             MessageCategory::Assistant => {
                 ai_buffer.push(msg);
             }
-            MessageCategory::System | MessageCategory::Compact => {
+            // System / Compact / Interruption：flush pending AI buffer
+            // 保持顺序；Interruption 不进入搜索索引（它是控制信号，非可
+            // 搜索内容）。
+            MessageCategory::System | MessageCategory::Compact | MessageCategory::Interruption => {
                 flush_ai_buffer(&ai_buffer, &mut entries);
                 ai_buffer.clear();
             }

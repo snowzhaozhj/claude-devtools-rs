@@ -19,7 +19,8 @@ use std::collections::HashMap;
 
 use cdt_core::{
     AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, ContentBlock, MessageCategory,
-    MessageContent, ParsedMessage, SlashCommand, SystemChunk, ToolExecution, UserChunk,
+    MessageContent, ParsedMessage, SemanticStep, SlashCommand, SystemChunk, ToolExecution,
+    UserChunk,
 };
 
 use cdt_core::SubagentCandidate;
@@ -147,10 +148,30 @@ fn chunk_loop(
                     }));
                 }
             }
+            MessageCategory::Interruption => {
+                // 先 flush 已有 assistant buffer 产出 AIChunk；再把
+                // Interruption 追加到最后一个 AIChunk 的 semantic_steps。
+                // 没有前驱 AIChunk 时丢弃（对齐原版：孤立中断不产出新 chunk）。
+                flush_buffer(buffer, out, executions_by_assistant, pending_slashes);
+                append_interruption_to_last_ai(out, msg);
+            }
             // `System` 这个 variant 在 parser 端被 hard-noise 前置拦截，
             // 实际不会走到这里；保留分支只是为了避免漏 match 告警。
             MessageCategory::System | MessageCategory::HardNoise(_) => {}
         }
+    }
+}
+
+/// 把 `Interruption` 消息追加为最后一个 `AIChunk` 的 `SemanticStep::Interruption`。
+///
+/// 若 `out` 末尾不是 `AIChunk`（或完全为空），静默丢弃——这与原版
+/// `SemanticStep` 序列中孤立中断不占位的行为一致。
+fn append_interruption_to_last_ai(out: &mut [Chunk], msg: &ParsedMessage) {
+    if let Some(Chunk::Ai(ai)) = out.iter_mut().rev().find(|c| matches!(c, Chunk::Ai(_))) {
+        ai.semantic_steps.push(SemanticStep::Interruption {
+            text: extract_plain_text(&msg.content),
+            timestamp: msg.timestamp,
+        });
     }
 }
 
@@ -960,5 +981,91 @@ mod tests {
         // tool_result 仍应被合并，execution 应有结果
         assert_eq!(ai.tool_executions.len(), 1);
         assert!(ai.tool_executions[0].end_ts.is_some());
+    }
+
+    fn interruption(uuid: &str, n: i64, text: &str) -> ParsedMessage {
+        ParsedMessage {
+            category: MessageCategory::Interruption,
+            content: MessageContent::Text(text.into()),
+            ..blank_message(uuid, n)
+        }
+    }
+
+    #[test]
+    fn interrupt_marker_appended_as_semantic_step_to_last_ai_chunk() {
+        let msgs = vec![
+            assistant("a1", 1, &[ContentBlock::Text { text: "hi".into() }]),
+            interruption("u1", 2, "[Request interrupted by user for tool use]"),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 1);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        let Some(SemanticStep::Interruption { text, .. }) = ai.semantic_steps.last() else {
+            panic!(
+                "expected trailing Interruption step, got {:?}",
+                ai.semantic_steps
+            );
+        };
+        assert_eq!(text, "[Request interrupted by user for tool use]");
+    }
+
+    #[test]
+    fn interrupt_marker_appended_after_flushed_ai_chunk() {
+        // assistant 之后先遇 user 消息 flush，再出现 interrupt：
+        // interrupt 应追加到已 flush 的最后一个 AIChunk。
+        let msgs = vec![
+            assistant("a1", 1, &[ContentBlock::Text { text: "hi".into() }]),
+            user("u1", 2, "next?"),
+            interruption("u2", 3, "[Request interrupted by user]"),
+        ];
+        let chunks = build_chunks(&msgs);
+        // AIChunk + UserChunk，interrupt 追加到 AIChunk
+        assert_eq!(chunks.len(), 2);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk first");
+        };
+        assert!(matches!(
+            ai.semantic_steps.last(),
+            Some(SemanticStep::Interruption { .. })
+        ));
+    }
+
+    #[test]
+    fn interrupt_marker_without_prior_ai_is_dropped() {
+        // 文件开头就 interrupt：没有前驱 AIChunk，丢弃，不产 chunk。
+        let msgs = vec![interruption("u1", 0, "[Request interrupted by user]")];
+        let chunks = build_chunks(&msgs);
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn multiple_interruptions_preserve_order_in_same_ai_chunk() {
+        let msgs = vec![
+            assistant("a1", 1, &[ContentBlock::Text { text: "hi".into() }]),
+            interruption("u1", 2, "[Request interrupted by user A]"),
+            interruption("u2", 3, "[Request interrupted by user B]"),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 1);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        let interrupts: Vec<&str> = ai
+            .semantic_steps
+            .iter()
+            .filter_map(|s| match s {
+                SemanticStep::Interruption { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            interrupts,
+            vec![
+                "[Request interrupted by user A]",
+                "[Request interrupted by user B]"
+            ]
+        );
     }
 }
