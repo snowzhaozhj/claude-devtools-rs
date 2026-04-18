@@ -100,7 +100,7 @@ just bootstrap           # npm install --prefix ui（首次）
 
 - `TempDir` 返回 `/var/...` 但 `notify`/FSEvents 返回 `/private/var/...`（symlink canonicalization）。涉及路径比较时必须 `canonicalize()`。
 - `notify-debouncer-mini` 的 timer 不受 `tokio::time::pause()` 控制，测试不确定。优先用 `notify` 裸接 + 自实现 tokio debounce。
-- `cdt-watch` 的 `tests/file_watching.rs` 在 macOS 并发跑 flaky（FSEvents 时序依赖）；`just test` 已经把它单拎出来用 `--test-threads=1` 跑。直接 `cargo test --workspace` 偶尔会挂，优先用 `just test`。
+- `cdt-watch` 的 `tests/file_watching.rs` 在 macOS 跑 flaky（FSEvents 时序依赖）；`just test` 单线程补跑也可能 5/6 timeout（**不只是** `burst_of_writes_debounced`）。判断是否真回归：`cargo test -p cdt-watch <test_name>` 单 case 跑——单跑能通过即视为环境 flake，可继续 archive；改 watcher 行为时才需要纠结全套通过。
 
 ## Conventions
 
@@ -127,6 +127,7 @@ just bootstrap           # npm install --prefix ui（首次）
 - **自动化**：
   - Hooks（`.claude/hooks/`）：`.rs` 编辑后自动跑所属 crate 的 `cargo clippy -- -D warnings`；`.svelte` 编辑后自动跑 `svelte-check`；`git commit` 前自动跑 `openspec validate --strict`。
   - **spec 变更约定**：**修改**已有 spec 必须走 `openspec/changes/<name>/specs/` 的 delta，archive 时 sync 回主 spec。**新增** spec（如 UI 行为 spec）可直接写入 `openspec/specs/<name>/spec.md`。
+  - **spec delta 写法**：`ADDED/MODIFIED Requirement` 体的**第一段**必须含 `SHALL` 或 `MUST`，否则 `openspec validate --strict` 报 `must contain SHALL or MUST`；中文背景描述要放在规约句之后。`openspec archive <slug> -y` 归档后目录会变成 `<日期>-<slug>`（多一层日期前缀），followups/CLAUDE.md 里引用时仍按归档前的 slug 写。
   - Subagent：`spec-fidelity-reviewer` 按 capability 审计 scenario→test 覆盖。
   - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
   - MCP：`.mcp.json` 注册 GitHub MCP，需要 `GITHUB_PERSONAL_ACCESS_TOKEN` 环境变量。
