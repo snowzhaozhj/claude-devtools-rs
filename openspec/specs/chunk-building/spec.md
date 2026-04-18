@@ -7,7 +7,7 @@ TBD - created by archiving change rust-rewrite-baseline. Update Purpose after ar
 
 The system SHALL convert a sequence of `ParsedMessage` into a sequence of independent chunks of four types: `UserChunk`, `AIChunk`, `SystemChunk`, `CompactChunk`. Chunks SHALL NOT be paired — a `UserChunk` does not "own" the following `AIChunk`. 连续的 assistant 消息 SHALL 被合并到同一个 `AIChunk.responses` 中，直到遇到真实用户消息、`SystemChunk` 对应的 `<local-command-stdout>` 消息、`CompactChunk` 对应的 compact summary 消息或输入末尾时 flush。
 
-`AIChunk` SHALL 暴露 `slash_commands: Vec<SlashCommand>` 字段，包含由前述 isMeta 消息中提取的 slash 命令。默认为空数组。
+`AIChunk` SHALL 暴露 `slash_commands: Vec<SlashCommand>` 字段，包含紧邻前一条 slash user 消息提取的 slash 命令（详见 `Emit slash commands as both UserChunk and AIChunk.slash_commands` Requirement）。默认为空数组。
 
 #### Scenario: User question followed by AI response
 - **WHEN** the input is a real user message followed by one assistant message
@@ -25,8 +25,8 @@ The system SHALL convert a sequence of `ParsedMessage` into a sequence of indepe
 - **WHEN** a user message whose content is exactly wrapped by `<local-command-stdout>...</local-command-stdout>` appears in the stream
 - **THEN** a `SystemChunk` SHALL be emitted for it, not absorbed into a surrounding `AIChunk`, and any in-progress assistant buffer SHALL be flushed first
 
-#### Scenario: AIChunk includes slash commands from preceding isMeta message
-- **WHEN** an isMeta user message with a slash command precedes an assistant response
+#### Scenario: AIChunk includes slash commands from preceding slash user message
+- **WHEN** a slash user message (content starting with `<command-name>/xxx</command-name>`, `is_meta=false`) immediately precedes an assistant response
 - **THEN** the resulting `AIChunk` SHALL have the extracted slash command in its `slash_commands` field
 
 ### Requirement: Filter sidechain and hard-noise messages
@@ -134,27 +134,40 @@ The system SHALL emit a `CompactChunk` whenever a `ParsedMessage` with `is_compa
 - **WHEN** a compact summary message arrives while an assistant buffer of 2 responses is in progress
 - **THEN** the system SHALL first flush the buffered `AIChunk` and THEN emit the `CompactChunk`
 
-### Requirement: Extract slash commands from isMeta messages
+### Requirement: Emit slash commands as both UserChunk and AIChunk.slash_commands
 
-The system SHALL 在构建 chunks 时从 `isMeta=true` 的 user 消息中提取 slash 命令信息。Slash 命令通过 `<command-name>/xxx</command-name>` XML 标签识别，提取 name、message（`<command-message>`）和 args（`<command-args>`）。
+Slash 命令消息（content 以 `<command-name>/xxx</command-name>` 起首的 **非 `isMeta`** user 消息，可附加 `<command-message>` 和 `<command-args>`）SHALL 同时产出两处表示，对齐原版 TS 的 UserGroup 气泡 + AIGroup SlashItem 双重渲染：
 
-提取的 slash 命令 SHALL 附加到紧随其后的 `AIChunk` 的 `slash_commands` 字段中。若 isMeta 消息不含 slash 命令格式，SHALL 静默跳过。
+1. 作为独立 `UserChunk` 发出（content 保留原始 XML，UI 侧由 `cleanDisplayText` 清洗为 `/name args` 气泡展示）；
+2. 把提取的 `SlashCommand { name, message, args, message_uuid, timestamp, instructions }` 挂到紧邻下一个 `AIChunk` 的 `slash_commands` 字段。
 
-#### Scenario: isMeta message with slash command
-- **WHEN** an isMeta user message contains `<command-name>/commit</command-name>`
-- **THEN** the system SHALL extract a `SlashCommand` with `name="commit"` and attach it to the next `AIChunk.slash_commands`
+`SlashCommand.instructions` SHALL 取自 `is_meta=true` 且 `parent_uuid` 指向该 slash user 消息 `uuid` 的 follow-up user 消息的首个非空 text block；若不存在则为 `None`。实现 SHALL 在 chunk-building 入口预扫一次消息序列建立 `parent_uuid → text` 映射，避免依赖消息到达顺序。
 
-#### Scenario: isMeta message with slash command including message and args
-- **WHEN** an isMeta user message contains `<command-name>/review-pr</command-name><command-message>review-pr</command-message><command-args>123</command-args>`
+**紧邻约束**：pending slash MUST 只能挂到紧随其后的 `AIChunk`。若在 pending slash 与下一个 `AIChunk` 之间出现一条普通 user 消息（非 slash、非 `tool_result`-only、非 `<local-command-stdout>`），实现 SHALL 在产出该普通 `UserChunk` 前清空 pending slash——对齐原版 `extractPrecedingSlashInfo` "只看紧邻前 UserGroup" 的语义。
+
+#### Scenario: Slash message adjacent to assistant response
+- **WHEN** a slash user message with content `<command-name>/commit</command-name><command-message>commit</command-message>` is directly followed by an assistant response, with no intervening non-slash user message
+- **THEN** the output SHALL contain a `UserChunk` (preserving raw XML content) followed by an `AIChunk` whose `slash_commands` contains one entry with `name="commit"`, `message=Some("commit")`, `args=None`, and `message_uuid` equal to the slash message's uuid
+
+#### Scenario: Slash arguments extracted
+- **WHEN** a slash user message contains `<command-name>/review-pr</command-name><command-message>review-pr</command-message><command-args>123</command-args>`
 - **THEN** the extracted `SlashCommand` SHALL have `name="review-pr"`, `message=Some("review-pr")`, `args=Some("123")`
 
-#### Scenario: isMeta message without slash format
-- **WHEN** an isMeta user message contains a system-reminder injection without `<command-name>` tags
-- **THEN** no `SlashCommand` SHALL be extracted and the message SHALL be handled as before (tool_result merge or skip)
+#### Scenario: Slash instructions sourced from isMeta follow-up
+- **WHEN** a slash user message with uuid `"s1"` is followed by an `is_meta=true` user message whose `parent_uuid == "s1"` carries a text block `"Review this session..."`, then an assistant response
+- **THEN** the resulting `AIChunk.slash_commands[0].instructions` SHALL equal `Some("Review this session...")`
+
+#### Scenario: Non-slash isMeta message is not a slash source
+- **WHEN** an `is_meta=true` user message contains a system-reminder injection without `<command-name>` tags and is not a follow-up for any slash uuid
+- **THEN** no `SlashCommand` SHALL be extracted from it; the message SHALL still contribute `tool_result` blocks to the pending assistant buffer per the `is_meta` filter rule
 
 #### Scenario: Slash command with no following AIChunk
-- **WHEN** a slash command is extracted from an isMeta message but no subsequent AIChunk exists
-- **THEN** the slash command SHALL be discarded without error
+- **WHEN** a slash user message appears at the end of a session with no subsequent assistant response
+- **THEN** the slash's `UserChunk` SHALL still be emitted, but the extracted `SlashCommand` SHALL be discarded without error
+
+#### Scenario: Normal user message between slash and AI drops pending slash
+- **WHEN** the stream is `slash user message → non-slash user message → assistant message`
+- **THEN** the resulting `AIChunk.slash_commands` SHALL be empty; the slash MUST NOT be attached because a non-slash `UserChunk` was emitted between them
 
 ### Requirement: Emit interruption semantic step for interrupt-marker messages
 

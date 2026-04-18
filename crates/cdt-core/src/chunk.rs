@@ -27,6 +27,11 @@ pub struct SlashCommand {
     pub args: Option<String>,
     pub message_uuid: String,
     pub timestamp: DateTime<Utc>,
+    /// Slash 命令的 follow-up 指令文本（由 `isMeta=true` 且 `parentUuid` 指向
+    /// 该 slash 的 user 消息的 text block 提供）。AI group 内 `SlashItem` 展开时
+    /// 以 markdown 渲染；为空则不可展开。对齐原版 `extractSlashes` 的 instructions。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 /// 对单个 chunk 汇总的指标。

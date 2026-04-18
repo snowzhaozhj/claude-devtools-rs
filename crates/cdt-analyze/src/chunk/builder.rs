@@ -45,6 +45,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
             .push(exec);
     }
 
+    let follow_ups = build_slash_follow_up_map(messages);
     let mut out: Vec<Chunk> = Vec::new();
     let mut buffer: Vec<AssistantResponse> = Vec::new();
     let mut pending_slashes: Vec<SlashCommand> = Vec::new();
@@ -55,6 +56,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
         &mut out,
         &mut executions_by_assistant,
         &mut pending_slashes,
+        &follow_ups,
     );
 
     flush_buffer(
@@ -66,6 +68,38 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
     out
 }
 
+/// 预扫 messages 建立 `parent_uuid → instructions_text` 映射。
+///
+/// Slash 命令的 follow-up 指令文本是 `is_meta=true` 且 `parent_uuid` 指向 slash
+/// 消息 uuid 的 user 消息，其 content 的第一个 text block。在 chunk-building
+/// 前一次性建 map，slash 分支按 `msg.uuid` 查表注入 instructions。
+fn build_slash_follow_up_map(messages: &[ParsedMessage]) -> HashMap<String, String> {
+    let mut map: HashMap<String, String> = HashMap::new();
+    for msg in messages {
+        if !msg.is_meta {
+            continue;
+        }
+        let Some(parent) = msg.parent_uuid.as_ref() else {
+            continue;
+        };
+        if msg.source_tool_use_id.is_some() {
+            continue;
+        }
+        let MessageContent::Blocks(blocks) = &msg.content else {
+            continue;
+        };
+        for b in blocks {
+            if let ContentBlock::Text { text } = b {
+                if !text.is_empty() {
+                    map.entry(parent.clone()).or_insert_with(|| text.clone());
+                    break;
+                }
+            }
+        }
+    }
+    map
+}
+
 /// 主循环：遍历消息序列产出 chunk，被 `build_chunks` 和
 /// `build_chunks_with_subagents` 共用。
 fn chunk_loop(
@@ -74,6 +108,7 @@ fn chunk_loop(
     out: &mut Vec<Chunk>,
     executions_by_assistant: &mut HashMap<String, Vec<ToolExecution>>,
     pending_slashes: &mut Vec<SlashCommand>,
+    follow_ups: &HashMap<String, String>,
 ) {
     for msg in messages {
         if msg.is_sidechain || msg.category.is_hard_noise() {
@@ -117,8 +152,22 @@ fn chunk_loop(
                     continue;
                 }
                 // Slash 命令消息（<command-name>/xxx</command-name>）：
-                // 提取 slash 信息，不产出 UserChunk
-                if let Some(slash) = extract_slash_info(&msg.content, &msg.uuid, msg.timestamp) {
+                // 对齐原版——既产出 UserChunk（UI 侧 cleanDisplayText 会把 XML
+                // 清洗为 `/name args` 气泡），也把 slash 信息留给下一个 AIChunk 的
+                // `slash_commands`（供 AI group 内 SlashItem 展示 instructions）。
+                if let Some(mut slash) = extract_slash_info(&msg.content, &msg.uuid, msg.timestamp)
+                {
+                    if let Some(instructions) = follow_ups.get(&msg.uuid) {
+                        slash.instructions = Some(instructions.clone());
+                    }
+                    flush_buffer(buffer, out, executions_by_assistant, pending_slashes);
+                    out.push(Chunk::User(UserChunk {
+                        uuid: msg.uuid.clone(),
+                        timestamp: msg.timestamp,
+                        duration_ms: None,
+                        content: msg.content.clone(),
+                        metrics: ChunkMetrics::zero(),
+                    }));
                     pending_slashes.push(slash);
                     continue;
                 }
@@ -139,6 +188,10 @@ fn chunk_loop(
                     }
                 } else {
                     flush_buffer(buffer, out, executions_by_assistant, pending_slashes);
+                    // 普通用户输入会"打断" slash → AIChunk 的紧邻关系：
+                    // 对齐原版 extractPrecedingSlashInfo 只看紧邻前一个 UserGroup 的语义，
+                    // 未被 AIChunk 消费的 slash 在此抛弃，不会跨过这条 user 挂到后续 AI。
+                    pending_slashes.clear();
                     out.push(Chunk::User(UserChunk {
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
@@ -216,6 +269,7 @@ pub fn build_chunks_with_subagents(
             .push(exec);
     }
 
+    let follow_ups = build_slash_follow_up_map(messages);
     let mut out: Vec<Chunk> = Vec::new();
     let mut buffer: Vec<AssistantResponse> = Vec::new();
     let mut pending_slashes: Vec<SlashCommand> = Vec::new();
@@ -226,6 +280,7 @@ pub fn build_chunks_with_subagents(
         &mut out,
         &mut executions_by_assistant,
         &mut pending_slashes,
+        &follow_ups,
     );
 
     flush_buffer(
@@ -355,6 +410,7 @@ fn extract_slash_info(
         args,
         message_uuid: uuid.to_owned(),
         timestamp,
+        instructions: None,
     })
 }
 
@@ -950,6 +1006,73 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert!(matches!(chunks[0], Chunk::User(_)));
         assert!(matches!(chunks[1], Chunk::Ai(_)));
+    }
+
+    #[test]
+    fn slash_adjacent_to_ai_emits_user_chunk_and_populates_slash_commands() {
+        // slash 紧邻 AIChunk（中间没有其他 user message）：
+        // 既产出 UserChunk（UI 气泡），也挂到 AIChunk.slash_commands（AI group 内 SlashItem）。
+        let slash = user(
+            "s1",
+            0,
+            "<command-name>/claude-md-management:claude-md-improver</command-name><command-message>claude-md-management:claude-md-improver</command-message>",
+        );
+        let msgs = vec![
+            slash,
+            assistant(
+                "a1",
+                1,
+                &[ContentBlock::Text {
+                    text: "开始改 CLAUDE.md".into(),
+                }],
+            ),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 2);
+        let Chunk::User(slash_user) = &chunks[0] else {
+            panic!("expected slash UserChunk at index 0");
+        };
+        assert_eq!(slash_user.uuid, "s1");
+        let Chunk::Ai(ai) = &chunks[1] else {
+            panic!("expected AIChunk at index 1");
+        };
+        assert_eq!(ai.slash_commands.len(), 1);
+        assert_eq!(
+            ai.slash_commands[0].name,
+            "claude-md-management:claude-md-improver"
+        );
+        assert_eq!(ai.slash_commands[0].message_uuid, "s1");
+    }
+
+    #[test]
+    fn normal_user_message_between_slash_and_ai_drops_pending_slash() {
+        // slash → 普通 user → AI 响应：原版 precedingSlash 只看紧邻 user group，
+        // 中间夹了普通 user 后 AIChunk 不应再挂 slash。
+        let slash = user(
+            "s1",
+            0,
+            "<command-name>/clear</command-name><command-message>clear</command-message>",
+        );
+        let msgs = vec![
+            slash,
+            user("u1", 1, "真实提问"),
+            assistant(
+                "a1",
+                2,
+                &[ContentBlock::Text {
+                    text: "回复".into(),
+                }],
+            ),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 3);
+        let Chunk::Ai(ai) = &chunks[2] else {
+            panic!("expected AIChunk at index 2");
+        };
+        assert!(
+            ai.slash_commands.is_empty(),
+            "slash 应被普通 user 打断，不挂到后续 AIChunk"
+        );
     }
 
     #[test]

@@ -154,6 +154,7 @@ export interface SlashCommand {
   args: string | null;
   messageUuid: string;
   timestamp: string;
+  instructions: string | null;
 }
 
 export interface AIChunk {

@@ -111,8 +111,10 @@ just bootstrap           # npm install --prefix ui（首次）
 - **No cross-crate imports of internal modules** — go through each crate's public API.
 - **Serde camelCase**：所有面向前端（Tauri IPC）的 struct 必须 `#[serde(rename_all = "camelCase")]`；enum 用 `rename_all_fields = "camelCase"` 给字段、`rename_all = "snake_case"` 给 tag 值。例外：`TokenUsage` 保持 snake_case（与 Anthropic API 原始格式一致）。
 - **`ContextInjection` serde 格式**：`#[serde(tag = "category", rename_all = "kebab-case")]` 是 internally-tagged，JSON 为 `{ "category": "claude-md", "id": "...", ... }`（不是 `{ "ClaudeMd": {...} }`）。前端按 `inj.category` 字段 switch 匹配。
-- **`is_meta` 消息过滤**：JSONL 中 `isMeta: true` 的 user 消息（skill prompt、system-reminder 注入）在 `build_chunks` 中跳过，不产出 `UserChunk`；但其中的 `tool_result` 仍合并到 assistant buffer。
-- **Interruption 消息分类**：`[Request interrupted by user` 起首的 user 消息是 `MessageCategory::Interruption`（**非** hard noise）；chunk-building 消费产出 `SemanticStep::Interruption` 追加到前一 AIChunk；`cdt_analyze::check_messages_ongoing` 以 Interruption 为 ending event。TS 侧曾当 hard noise 过滤，port 已反向修复，勿回退。
+- **chunk-building 语义契约**：`is_meta` / slash / interruption 三类消息的完整行为契约在 `openspec/specs/chunk-building/spec.md`（Scenario 级覆盖）。port 专属踩坑：
+  - **`is_meta` 过滤**：跳过产 `UserChunk`，但 `tool_result` 仍合并到 assistant buffer（spec 待补）。
+  - **Slash 双产出 + 紧邻约束**：slash user 消息既要产 `UserChunk`（UI 气泡）又要挂到下一个 `AIChunk.slash_commands`；`instructions` 来自 `is_meta=true + parent_uuid=slash.uuid` 的 follow-up；普通 user 消息产 `UserChunk` 前必须 `pending_slashes.clear()`。TS 原版通过"只看紧邻前 UserGroup"实现，勿回退。
+  - **Interruption 分类**：`[Request interrupted by user` 起首的 user 消息是 `MessageCategory::Interruption`（**非** hard noise），产 `SemanticStep::Interruption` 追加到前一 AIChunk。TS 侧曾当 hard noise 过滤，port 已反向修复，勿回退。
 - **Svelte 5 `$effect` 依赖陷阱**：`$effect` 中读取的所有响应式变量自动成为依赖。若需要在 effect 中读取但不触发重跑的变量，用 `untrack(() => variable)` 包裹。典型场景：session 切换 effect 中清理搜索状态。
 - **Svelte 5 `<button>` 嵌套禁止**：`<button>` 内不能嵌套 `<button>`，浏览器会修复 DOM 结构导致 Svelte 假设失效。用 `<span role="button" tabindex="-1">` 替代。
 - **Settings 乐观更新模式**：config 修改不能依赖 `updateConfig` 返回值刷新 UI，应先乐观更新本地 `$state`，异步调 API，失败时回滚（重新 `getConfig`）。

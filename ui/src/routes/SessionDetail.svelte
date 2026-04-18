@@ -305,13 +305,23 @@
               <div class="ai-tools-section">
                 {#each di.items as item, di_idx}
                   {#if item.type === "slash"}
+                    {@const slashKey = `${i}-slash-${di_idx}`}
+                    {@const hasInstructions = !!item.slash.instructions}
                     <BaseItem
                       svgIcon={SLASH}
                       label={"/" + item.slash.name}
                       summary={item.slash.args ?? item.slash.message ?? ""}
-                      isExpanded={false}
-                      onclick={() => {}}
-                    />
+                      tokenCount={hasInstructions ? Math.ceil((item.slash.instructions ?? "").length / 4) : undefined}
+                      status={hasInstructions ? "ok" : undefined}
+                      isExpanded={hasInstructions && expandedItems.has(slashKey)}
+                      onclick={hasInstructions ? () => toggle(slashKey) : () => {}}
+                    >
+                      {#snippet children()}
+                        {#if item.slash.instructions}
+                          <div class="prose slash-instructions">{@html renderMarkdown(item.slash.instructions)}</div>
+                        {/if}
+                      {/snippet}
+                    </BaseItem>
                   {:else if item.type === "tool"}
                     {@const exec = item.execution}
                     {@const key = `${i}-tool-${exec.toolUseId}`}
