@@ -1,12 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import Sidebar from "./components/Sidebar.svelte";
-  import TabBar from "./components/TabBar.svelte";
   import CommandPalette from "./components/CommandPalette.svelte";
-  import SessionDetail from "./routes/SessionDetail.svelte";
-  import SettingsView from "./routes/SettingsView.svelte";
-  import NotificationsView from "./routes/NotificationsView.svelte";
-  import DashboardView from "./routes/DashboardView.svelte";
+  import PaneContainer from "./components/layout/PaneContainer.svelte";
   import {
     openTab,
     getActiveTab,
@@ -15,7 +11,12 @@
     setActiveTab,
     closeTab,
     setUnreadCount,
+    getPaneLayout,
+    getFocusedPaneId,
+    focusPane,
+    splitPane,
   } from "./lib/tabStore.svelte";
+  import { MAX_PANES } from "./lib/paneTypes";
   import { getConfig, getNotifications } from "./lib/api";
   import { applyTheme } from "./lib/theme";
   import { loadAgentConfigs } from "./lib/agentConfigsStore.svelte";
@@ -84,6 +85,32 @@
       setActiveTab(list[nextIdx].id);
       return;
     }
+
+    // Cmd/Ctrl + \ → split focused pane 的 activeTab 到右侧（新 pane）
+    if (e.key === "\\") {
+      const layout = getPaneLayout();
+      if (layout.panes.length >= MAX_PANES) return;
+      const focusedId = getFocusedPaneId();
+      const activeId = getActiveTabId();
+      if (!activeId) return;
+      e.preventDefault();
+      splitPane(focusedId, activeId, "right");
+      return;
+    }
+
+    // Cmd/Ctrl + Option/Alt + ← / → → focus 上/下一个 pane（循环）
+    if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      const layout = getPaneLayout();
+      if (layout.panes.length <= 1) return;
+      const idx = layout.panes.findIndex((p) => p.id === layout.focusedPaneId);
+      if (idx === -1) return;
+      e.preventDefault();
+      const nextIdx = e.key === "ArrowLeft"
+        ? (idx - 1 + layout.panes.length) % layout.panes.length
+        : (idx + 1) % layout.panes.length;
+      focusPane(layout.panes[nextIdx].id);
+      return;
+    }
   }
 
   onMount(async () => {
@@ -131,25 +158,10 @@
   />
 
   <div class="main-area">
-    <TabBar />
-
-    <main class="main-content">
-      {#if activeTab?.type === "settings"}
-        <SettingsView />
-      {:else if activeTab?.type === "notifications"}
-        <NotificationsView />
-      {:else if activeTab?.type === "session"}
-        {#key activeTab.id}
-          <SessionDetail
-            tabId={activeTab.id}
-            projectId={activeTab.projectId}
-            sessionId={activeTab.sessionId}
-          />
-        {/key}
-      {:else}
-        <DashboardView onSelectProject={selectProject} />
-      {/if}
-    </main>
+    <PaneContainer
+      {selectedProjectId}
+      onSelectProject={selectProject}
+    />
   </div>
 </div>
 
@@ -175,13 +187,4 @@
     overflow: hidden;
     min-width: 0;
   }
-
-  .main-content {
-    flex: 1;
-    overflow: hidden;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
 </style>

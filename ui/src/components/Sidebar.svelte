@@ -4,7 +4,8 @@
   import SidebarHeader from "./SidebarHeader.svelte";
   import SessionContextMenu from "./SessionContextMenu.svelte";
   import OngoingIndicator from "./OngoingIndicator.svelte";
-  import { openTab } from "../lib/tabStore.svelte";
+  import { openTab, openTabInNewPane, getPaneLayout } from "../lib/tabStore.svelte";
+  import { MAX_PANES } from "../lib/paneTypes";
   import {
     getSidebarWidth, setSidebarWidth,
     isPinned, togglePin,
@@ -338,13 +339,16 @@
 <!-- Context menu (rendered outside sidebar to avoid overflow clipping) -->
 {#if ctxMenu}
   {@const ctx = ctxMenu}
+  {@const canSplit = getPaneLayout().panes.length < MAX_PANES}
   <SessionContextMenu
     x={ctx.x}
     y={ctx.y}
     sessionId={ctx.session.sessionId}
     isPinned={isPinned(selectedProjectId, ctx.session.sessionId)}
     isHidden={isHidden(selectedProjectId, ctx.session.sessionId)}
+    {canSplit}
     onOpenInNewTab={() => openTab(ctx.session.sessionId, selectedProjectId, sessionLabel(ctx.session))}
+    onOpenInNewPane={() => openTabInNewPane(ctx.session.sessionId, selectedProjectId, sessionLabel(ctx.session))}
     onTogglePin={() => togglePin(selectedProjectId, ctx.session.sessionId)}
     onToggleHide={() => toggleHide(selectedProjectId, ctx.session.sessionId)}
     onClose={() => { ctxMenu = null; }}

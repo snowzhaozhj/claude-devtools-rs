@@ -1,31 +1,38 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import {
-    getTabs,
-    getActiveTabId,
-    setActiveTab,
     closeTab,
-    openSettingsTab,
-    openNotificationsTab,
+    getPaneById,
+    getPaneLayout,
     getUnreadCount,
+    openNotificationsTab,
+    openSettingsTab,
+    setActiveTab,
     setUnreadCount,
-    reorderTab,
+    splitPane,
   } from "../lib/tabStore.svelte";
+  import { MAX_PANES } from "../lib/paneTypes";
+  import { beginDrag, getDragSource, getHit, isDragging } from "../lib/dragSession.svelte";
   import { getNotifications } from "../lib/api";
+  import TabContextMenu from "./TabContextMenu.svelte";
+  import { BELL, SETTINGS } from "../lib/icons";
 
-  const tabs = $derived(getTabs());
-  const activeTabId = $derived(getActiveTabId());
+  interface Props {
+    paneId: string;
+  }
+
+  let { paneId }: Props = $props();
+
+  const pane = $derived(getPaneById(paneId));
+  const tabs = $derived(pane?.tabs ?? []);
+  const activeTabId = $derived(pane?.activeTabId ?? null);
   const unreadCount = $derived(getUnreadCount());
+  const dragSource = $derived(getDragSource());
+  const dragActive = $derived(isDragging());
+  const hit = $derived(getHit());
 
-  // ---------- 拖拽状态（pointer events 方案） ----------
-  // 选择 pointer 而非 HTML5 drag：macOS WKWebView 会把 HTML5 drag
-  // 当成跨应用 copy 操作（dropEffect=copy），drop 事件在 document 内不触发。
-  // 这里自己做 pointerdown/move/up 状态机，完全绕开 WKWebView 的行为差异。
-  let dragSourceIndex = $state<number | null>(null);
-  let dragOverIndex = $state<number | null>(null);
-  let isDragging = $state(false);
-  let dragStartX = 0;
-  const DRAG_THRESHOLD = 5; // px，超过该距离才进入拖拽态，低于则视为点击
+  // 拖拽状态由 dragSession（模块级）统一管理；TabBar 只触发 beginDrag
+  // + 根据 hit 派生 drop indicator 视觉
 
   // 30 秒轮询 unreadCount
   let pollTimer: ReturnType<typeof setInterval>;
@@ -59,65 +66,43 @@
     return "";
   }
 
-  // ---------- 拖拽处理（pointer 状态机） ----------
-  function handlePointerDown(e: PointerEvent, index: number) {
-    // 只处理鼠标左键 / 主指针
+  function handlePointerDown(e: PointerEvent, index: number, tabId: string) {
     if (e.button !== 0) return;
-    dragSourceIndex = index;
-    dragStartX = e.clientX;
-    isDragging = false;
-    dragOverIndex = null;
-    // 全局监听 move/up/cancel，保证即使鼠标滑出 TabBar 也能收到事件
-    document.addEventListener("pointermove", handlePointerMove);
-    document.addEventListener("pointerup", handlePointerUp);
-    document.addEventListener("pointercancel", handlePointerCancel);
+    beginDrag(tabId, paneId, index, e.clientX);
   }
 
-  function handlePointerMove(e: PointerEvent) {
-    if (dragSourceIndex === null) return;
-    if (!isDragging) {
-      if (Math.abs(e.clientX - dragStartX) <= DRAG_THRESHOLD) return;
-      isDragging = true;
-    }
-    // 命中测试：找鼠标下方的 .tab-item 及其 data-tab-index
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const tabEl = el?.closest<HTMLElement>(".tab-item");
-    if (!tabEl) {
-      dragOverIndex = null;
-      return;
-    }
-    const raw = tabEl.dataset.tabIndex;
-    const idx = raw === undefined ? Number.NaN : Number(raw);
-    dragOverIndex = Number.isNaN(idx) ? null : idx;
+  // ---------- 右键菜单 ----------
+  let ctxMenu: { x: number; y: number; tabId: string } | null = $state(null);
+
+  function handleContextMenu(e: MouseEvent, tabId: string) {
+    e.preventDefault();
+    ctxMenu = { x: e.clientX, y: e.clientY, tabId };
   }
 
-  function handlePointerUp() {
-    const wasDragging = isDragging;
-    const src = dragSourceIndex;
-    const tgt = dragOverIndex;
-    cleanupDrag();
-    if (wasDragging) {
-      if (src !== null && tgt !== null && tgt !== src) {
-        reorderTab(src, tgt);
-      }
-    } else if (src !== null) {
-      // 未越过 threshold → 视为普通点击，激活 tab
-      const tab = tabs[src];
-      if (tab) setActiveTab(tab.id);
-    }
+  function closeOthers(keepTabId: string) {
+    const p = getPaneById(paneId);
+    if (!p) return;
+    // 复制快照避免迭代时修改
+    const toClose = p.tabs.filter((t) => t.id !== keepTabId).map((t) => t.id);
+    for (const id of toClose) closeTab(id);
   }
 
-  function handlePointerCancel() {
-    cleanupDrag();
+  function isSourceTab(index: number): boolean {
+    return (
+      dragActive &&
+      !!dragSource &&
+      dragSource.paneId === paneId &&
+      dragSource.sourceIndex === index
+    );
   }
 
-  function cleanupDrag() {
-    dragSourceIndex = null;
-    dragOverIndex = null;
-    isDragging = false;
-    document.removeEventListener("pointermove", handlePointerMove);
-    document.removeEventListener("pointerup", handlePointerUp);
-    document.removeEventListener("pointercancel", handlePointerCancel);
+  function isDropTargetTab(index: number): boolean {
+    if (!dragActive || !hit || hit.kind !== "tab") return false;
+    if (hit.paneId !== paneId) return false;
+    if (hit.index !== index) return false;
+    // 同 pane 且与 source 同 index 时不算 drop target
+    if (dragSource && dragSource.paneId === paneId && dragSource.sourceIndex === index) return false;
+    return true;
   }
 </script>
 
@@ -128,14 +113,16 @@
       <div
         class="tab-item"
         class:tab-item-active={tab.id === activeTabId}
-        class:tab-item-dragging={isDragging && dragSourceIndex === index}
-        class:tab-item-drop-target={isDragging && dragOverIndex === index && dragSourceIndex !== index}
+        class:tab-item-dragging={isSourceTab(index)}
+        class:tab-item-drop-target={isDropTargetTab(index)}
         role="tab"
         tabindex="0"
         aria-selected={tab.id === activeTabId}
         data-tab-index={index}
+        data-pane-id={paneId}
         title={tab.label}
-        onpointerdown={(e) => handlePointerDown(e, index)}
+        onpointerdown={(e) => handlePointerDown(e, index, tab.id)}
+        oncontextmenu={(e) => handleContextMenu(e, tab.id)}
         onkeydown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
@@ -165,16 +152,38 @@
 
   <div class="tab-actions">
     <button class="tab-action-btn" onclick={() => openNotificationsTab()} title="通知">
-      <span class="bell-icon">🔔</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d={BELL} />
+      </svg>
       {#if unreadCount > 0}
         <span class="badge">{unreadCount > 99 ? "99+" : unreadCount}</span>
       {/if}
     </button>
     <button class="tab-action-btn" onclick={() => openSettingsTab()} title="设置">
-      ⚙
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d={SETTINGS} />
+      </svg>
     </button>
   </div>
 </div>
+
+{#if ctxMenu}
+  {@const ctx = ctxMenu}
+  {@const pane = getPaneById(paneId)}
+  {@const canSplit = getPaneLayout().panes.length < MAX_PANES}
+  {@const canCloseOthers = (pane?.tabs.length ?? 0) > 1}
+  <TabContextMenu
+    x={ctx.x}
+    y={ctx.y}
+    {canSplit}
+    {canCloseOthers}
+    onClose={() => { ctxMenu = null; }}
+    onCloseTab={() => closeTab(ctx.tabId)}
+    onCloseOthers={() => closeOthers(ctx.tabId)}
+    onSplitLeft={() => splitPane(paneId, ctx.tabId, "left")}
+    onSplitRight={() => splitPane(paneId, ctx.tabId, "right")}
+  />
+{/if}
 
 <style>
   .tab-bar {
@@ -313,21 +322,22 @@
     width: 28px;
     height: 28px;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     background: transparent;
     color: var(--color-text-muted);
-    font-size: 14px;
     cursor: pointer;
     transition: background 0.1s, color 0.1s;
+    padding: 0;
   }
 
   .tab-action-btn:hover {
-    background: var(--tool-item-hover-bg);
+    background: var(--color-surface-raised);
     color: var(--color-text);
   }
 
-  .bell-icon {
-    font-size: 14px;
+  .tab-action-btn svg {
+    width: 16px;
+    height: 16px;
   }
 
   .badge {
