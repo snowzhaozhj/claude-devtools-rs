@@ -63,7 +63,7 @@ claude-devtools-rs/
 ### 数据流
 
 - **Context Panel**：后端 `cdt-api` → `cdt-analyze::context::process_session_context_with_phases` → `ContextInjection[]`；CLAUDE.md 通过 `cdt-config::read_all_claude_md_files` 文件系统扫描
-- **session 元数据**：`cdt-api/session_metadata.rs` 轻量扫描 JSONL 提取标题（前 200 行）+ 消息计数
+- **session 元数据**：`list_sessions` IPC 返回**骨架** SessionSummary（title=null/messageCount=0/isOngoing=false），后台 JoinSet+Semaphore(8) 并发扫描，每条通过 `subscribe_session_metadata()` broadcast → Tauri emit `session-metadata-update` → Sidebar 按 sessionId in-place patch。HTTP 路径走 `list_sessions_sync` 保留同步完整返回。
 - **通知实时更新**：后端 `mark_notification_read` 后通过 `app.emit("notification-update")` 推送；前端 `listen()` 监听立即刷新 badge；TabBar 额外每 30 秒轮询 unreadCount
 
 ### 陷阱
@@ -123,6 +123,9 @@ just bootstrap           # npm install --prefix ui（首次）
 - **Tauri IPC 透传**：`src-tauri/src/lib.rs` 的 commands 返回 `serde_json::Value`，`cdt-api` 类型扩展字段（如 `SessionSummary` 加 `title`）自动透传，不需要改 Tauri 层。
 - **file-change 节流链**：后端 `cdt-watch::FileWatcher` debounce 100 ms；前端 `ui/src/lib/fileChangeStore::dedupeRefresh` 仅合并 in-flight 期间的并发调用，**不做时间节流**。活跃 Claude 会话高频写 JSONL 时会触发每几百 ms 一次 re-render——如需降频，给 `dedupeRefresh` 加 250 ms cooldown 或用 trailing debounce 包 handler。
 - **`LocalDataApi` 构造器扩展**：需要注入新基础设施（FileWatcher、SSH pool 等）时新增 `new_with_<xxx>()` 构造器，**不改** `new()` 签名——旧构造器被 `crates/cdt-api/tests/*.rs` 依赖，改签名会批量破坏集成测试。
+- **IPC vs HTTP 行为分叉**：trait 加默认方法 fallback 到通用版本，`LocalDataApi` 自己 override 真版本——HTTP 跑 LocalDataApi 拿完整结果，其他实现安全降级。例：`DataApi::list_sessions_sync` 默认调 `list_sessions`（骨架），LocalDataApi override 为同步全扫。
+- **后台任务 per-key 取消**：触发新一轮后台扫描前需 abort 同 key 的旧任务时，用 `Arc<std::sync::Mutex<HashMap<K, AbortHandle>>>`：spawn 后 `insert(key, handle.abort_handle())`；新调用进入先 `remove(key).map(|h| h.abort())`；任务尾部从 map 自清理。例见 `LocalDataApi::list_sessions` 的 `active_scans`。
+- **Svelte 5 `{@attach}` 挂副作用**：DOM 元素需要副作用 + cleanup（ResizeObserver、IntersectionObserver、scroll listener 等）时用 `{@attach (el) => { ...setup; return () => cleanup; }}`，比 `bind:this + onMount + onDestroy` 三段式更内聚。例见 `Sidebar.svelte::session-list` 容器挂 ResizeObserver。
 - **后台服务的本机路径参数化**：涉及 `~/.claude/projects/` 的后台服务（notifier、未来的 history scanner）不要在函数内直接 `path_decoder::get_projects_base_path()`，显式从构造器传 `projects_dir: PathBuf`，否则集成测试会命中真实本机路径。
 - **clippy pedantic**：workspace 开启 pedantic，PostToolUse hook 会在每次 `.rs` 编辑后自动跑 clippy 报错。最常踩的：`doc_markdown`（注释里标识符要反引号）、`cast_possible_wrap`（`u64 as i64` → `i64::try_from`）、`uninlined_format_args`（`format!("{}", x)` → `format!("{x}")`）。其余照 clippy 输出修即可。
 - **insta 快照接受**：没装 `cargo-insta` 就用 `INSTA_UPDATE=always cargo test -p <crate>`；提交生成的 `tests/snapshots/*.snap`。
@@ -139,11 +142,11 @@ just bootstrap           # npm install --prefix ui（首次）
 
 ## UI 已知遗留问题
 
-P0/P1 全部清零。后续增强按原路线图继续：Execution Trace / 多 Pane 分屏 / 虚拟滚动。桌面通知与系统托盘见 commit `f546b88`；实时 `file-change` 桥见 change `2026-04-18-realtime-session-refresh`；ongoing + interruption（sidebar 绿点 / 底部 banner / `[Request interrupted by user` 红色块）见 change `port-session-ongoing-and-interruption`。
+原路线图（P0/P1/P2）已全部清零：Execution Trace、多 Pane 分屏（archive `port-multi-pane-split`）、虚拟滚动 + 元数据 push（archive `sidebar-session-list-fast-load`）。新待办看 `openspec/followups.md`。已落成的关键改动：桌面通知与系统托盘见 commit `f546b88`；实时 `file-change` 桥见 change `2026-04-18-realtime-session-refresh`；ongoing + interruption 见 change `port-session-ongoing-and-interruption`。
 
 ## What to do first in a fresh session
 
 1. Run `cargo build --workspace` 确认 data layer 可编译；`cargo test --workspace` 跑一遍回归。
 2. 13 个 data layer capability 已全部完成。当前工作重心是 UI 层（Tauri + Svelte）。
-3. `cargo tauri dev` 启动桌面应用验证当前状态。
+3. `just dev` 启动桌面应用验证当前状态。
 4. UI 功能迭代：**大功能**（多步骤、跨模块、需要设计决策）走 openspec（propose → apply → archive）；**小改动**（主题切换、Trigger CRUD、样式修复等单点改动）直接写 + commit，不走 openspec。判断标准：是否需要 design.md 记录架构决策。
