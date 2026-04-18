@@ -1,10 +1,11 @@
 <script lang="ts">
   import type { SubagentProcess, ContentBlock, ToolCall } from "../lib/api";
-  import { CHEVRON_RIGHT } from "../lib/icons";
+  import { CHEVRON_RIGHT, TERMINAL } from "../lib/icons";
   import { getTeamColorSet, getSubagentTypeColorSet, type TeamColorSet } from "../lib/teamColors";
   import { getAgentConfigsByName } from "../lib/agentConfigsStore.svelte";
   import { formatDuration } from "../lib/formatters";
   import { buildDisplayItemsFromChunks, buildSummary } from "../lib/displayItemBuilder";
+  import { parseModelString } from "../lib/modelParser";
   import MetricsPill from "./MetricsPill.svelte";
   import ExecutionTrace from "./ExecutionTrace.svelte";
 
@@ -30,10 +31,11 @@
   });
 
   // ----------------- Badge 标签 -----------------
+  // 非 team 场景固定显示 `TASK`（对齐原版 SubagentItem.tsx badge 文案），
+  // subagentType 仅用于决定圆点/徽章的着色，不再作为徽章文字。
   const badgeLabel = $derived.by(() => {
     if (process.team) return process.team.memberName;
-    if (process.subagentType) return process.subagentType;
-    return "Task";
+    return "TASK";
   });
   const showBadgeDot = $derived(process.team != null || process.subagentType != null);
 
@@ -50,9 +52,8 @@
     for (const c of process.messages) {
       if (c.kind !== "ai") continue;
       for (const r of c.responses) {
-        if (r.model && r.model !== "<synthetic>") {
-          return r.model.replace("claude-", "").replace(/-\d{8}$/, "");
-        }
+        const info = parseModelString(r.model);
+        if (info) return info.name;
       }
     }
     return null;
@@ -152,7 +153,7 @@
           <line x1="8" y1="16" x2="8" y2="16" />
           <line x1="16" y1="16" x2="16" y2="16" />
         </svg>
-        <span class="sa-badge sa-badge-neutral">Task</span>
+        <span class="sa-badge sa-badge-neutral">TASK</span>
       {/if}
 
       {#if modelName}
@@ -225,6 +226,7 @@
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div class="sa-trace-header" onclick={toggleTrace}>
               <svg class="sa-trace-chevron" class:sa-trace-chevron-open={isTraceExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
+              <svg class="sa-trace-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={TERMINAL}/></svg>
               <span class="sa-trace-label">Execution Trace</span>
               {#if traceSummary}
                 <span class="sa-trace-summary">· {traceSummary}</span>
@@ -426,6 +428,12 @@
   }
   .sa-trace-chevron-open {
     transform: rotate(90deg);
+  }
+  .sa-trace-terminal {
+    width: 14px;
+    height: 14px;
+    color: var(--card-icon-muted);
+    flex-shrink: 0;
   }
   .sa-trace-label {
     font-size: 12px;

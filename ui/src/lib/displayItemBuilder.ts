@@ -91,6 +91,13 @@ export function buildDisplayItems(chunk: AIChunk): {
     subMap.set(sub.sessionId, sub);
   }
 
+  // 收集已关联 subagent 的 Task `tool_use_id`，用于跳过重复的 Task 工具调用
+  // 渲染（对齐原版 displayItemBuilder.ts 的 `taskIdsWithSubagents` 过滤）。
+  const taskIdsWithSubagents = new Set<string>();
+  for (const sub of chunk.subagents) {
+    if (sub.parentTaskId) taskIdsWithSubagents.add(sub.parentTaskId);
+  }
+
   const items: DisplayItem[] = [];
 
   // slash 命令排最前
@@ -120,9 +127,13 @@ export function buildDisplayItems(chunk: AIChunk): {
 
       case "tool_execution": {
         const exec = execMap.get(step.toolUseId);
-        if (exec) {
-          items.push({ type: "tool", execution: exec });
+        if (!exec) break;
+        // 跳过已关联 subagent 的 Task tool_execution：subagent 卡片
+        // 本身就是该 Task 的可视代表，再渲染一次 Tool item 会重复。
+        if (exec.toolName === "Task" && taskIdsWithSubagents.has(exec.toolUseId)) {
+          break;
         }
+        items.push({ type: "tool", execution: exec });
         break;
       }
 

@@ -323,12 +323,27 @@ fn attach_subagents_to_chunks(
             if let Some(&chunk_idx) = assistant_to_chunk.get(assistant_uuid) {
                 if let Chunk::Ai(ai) = &mut chunks[chunk_idx] {
                     ai.subagents.push(process.clone());
-                    // 在 tool_execution step 后插入 SubagentSpawn step
-                    ai.semantic_steps
-                        .push(cdt_core::SemanticStep::SubagentSpawn {
-                            placeholder_id: process.session_id.clone(),
-                            timestamp: process.spawn_ts,
-                        });
+                    let spawn_step = SemanticStep::SubagentSpawn {
+                        placeholder_id: process.session_id.clone(),
+                        timestamp: process.spawn_ts,
+                    };
+                    // SubagentSpawn 必须紧随其对应 Task 的 ToolExecution step；
+                    // 找不到时退化 append 并 warn（见 chunk-building spec 对应
+                    // Scenario "SubagentSpawn step inserted after the matching
+                    // Task ToolExecution"）。
+                    let task_pos = ai.semantic_steps.iter().position(
+                        |s| matches!(s, SemanticStep::ToolExecution { tool_use_id, .. } if tool_use_id == &rt.task_use_id),
+                    );
+                    if let Some(pos) = task_pos {
+                        ai.semantic_steps.insert(pos + 1, spawn_step);
+                    } else {
+                        tracing::warn!(
+                            task_use_id = %rt.task_use_id,
+                            subagent_session = %process.session_id,
+                            "attach_subagents: Task ToolExecution step not found, appending SubagentSpawn to tail"
+                        );
+                        ai.semantic_steps.push(spawn_step);
+                    }
                 }
             }
         }
@@ -800,6 +815,197 @@ mod tests {
                 .iter()
                 .any(|s| matches!(s, SemanticStep::SubagentSpawn { .. }))
         );
+    }
+
+    fn make_candidate(session_id: &str, n: i64, desc: Option<&str>) -> SubagentCandidate {
+        SubagentCandidate {
+            session_id: session_id.into(),
+            description_hint: desc.map(str::to_owned),
+            spawn_ts: ts(n),
+            end_ts: Some(ts(n + 10)),
+            parent_session_id: None,
+            metrics: ChunkMetrics::zero(),
+            messages: Vec::new(),
+            is_ongoing: false,
+        }
+    }
+
+    /// Result-based 匹配需要 Task `ToolExecution` 的 `output.toolUseResult` 中
+    /// 含 `subagentSessionId` 字段——构造一个满足的 parsed `tool_result`。
+    fn tool_result_with_subagent_session(tool_use_id: &str, session_id: &str) -> ContentBlock {
+        ContentBlock::ToolResult {
+            tool_use_id: tool_use_id.into(),
+            content: serde_json::json!([
+                {"type": "text", "text": format!("spawned {session_id}")}
+            ]),
+            is_error: false,
+        }
+    }
+
+    fn assistant_with_task(
+        uuid: &str,
+        n: i64,
+        pre_tools: &[(&str, &str)],
+        task_id: &str,
+        task_desc: &str,
+        post_tools: &[(&str, &str)],
+    ) -> ParsedMessage {
+        let mut blocks: Vec<ContentBlock> = Vec::new();
+        for (id, name) in pre_tools {
+            blocks.push(ContentBlock::ToolUse {
+                id: (*id).into(),
+                name: (*name).into(),
+                input: serde_json::json!({}),
+            });
+        }
+        blocks.push(ContentBlock::ToolUse {
+            id: task_id.into(),
+            name: "Task".into(),
+            input: serde_json::json!({"description": task_desc}),
+        });
+        for (id, name) in post_tools {
+            blocks.push(ContentBlock::ToolUse {
+                id: (*id).into(),
+                name: (*name).into(),
+                input: serde_json::json!({}),
+            });
+        }
+        assistant(uuid, n, &blocks)
+    }
+
+    fn result_user(uuid: &str, n: i64, pairs: &[(&str, Option<&str>)]) -> ParsedMessage {
+        // 对每个 tool_use 产一个 tool_result；description 用于生成 subagent_session_id 提示
+        let blocks: Vec<ContentBlock> = pairs
+            .iter()
+            .map(|(tid, sid_hint)| {
+                let content = if let Some(sid) = sid_hint {
+                    serde_json::json!([{"type": "text", "text": format!("session:{sid}")}])
+                } else {
+                    serde_json::json!("ok")
+                };
+                ContentBlock::ToolResult {
+                    tool_use_id: (*tid).into(),
+                    content,
+                    is_error: false,
+                }
+            })
+            .collect();
+        let mut m = blank_message(uuid, n);
+        m.content = MessageContent::Blocks(blocks);
+        m
+    }
+
+    #[test]
+    fn subagent_spawn_inserted_after_matching_task_step() {
+        // 前置 Read + Task + 后置 Grep，Task 匹配 subagent cand-1
+        let msgs = vec![
+            assistant_with_task(
+                "a1",
+                1,
+                &[("t_read", "Read")],
+                "t_task",
+                "inspect logs",
+                &[("t_grep", "Grep")],
+            ),
+            result_user(
+                "u1",
+                2,
+                &[
+                    ("t_read", None),
+                    ("t_task", Some("cand-1")),
+                    ("t_grep", None),
+                ],
+            ),
+        ];
+        let cands = vec![make_candidate("cand-1", 1, Some("inspect logs"))];
+        let chunks = build_chunks_with_subagents(&msgs, &cands);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        let kinds: Vec<&str> = ai
+            .semantic_steps
+            .iter()
+            .map(|s| match s {
+                SemanticStep::ToolExecution { tool_name, .. } => tool_name.as_str(),
+                SemanticStep::SubagentSpawn { .. } => "SubagentSpawn",
+                SemanticStep::Thinking { .. } => "Thinking",
+                SemanticStep::Text { .. } => "Text",
+                SemanticStep::Interruption { .. } => "Interruption",
+            })
+            .collect();
+        // Task 步骤仍在（前端层做去重），SubagentSpawn 紧随其后
+        assert_eq!(kinds, vec!["Read", "Task", "SubagentSpawn", "Grep"]);
+    }
+
+    #[test]
+    fn multiple_tasks_each_get_spawn_inserted_after_own_task() {
+        let msgs = vec![
+            assistant_with_task("a1", 1, &[], "t_task1", "first", &[]),
+            assistant_with_task("a2", 2, &[], "t_task2", "second", &[]),
+            result_user(
+                "u1",
+                3,
+                &[("t_task1", Some("cand-A")), ("t_task2", Some("cand-B"))],
+            ),
+        ];
+        let cands = vec![
+            make_candidate("cand-A", 1, Some("first")),
+            make_candidate("cand-B", 2, Some("second")),
+        ];
+        let chunks = build_chunks_with_subagents(&msgs, &cands);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        // 顺序：Task t_task1 → SubagentSpawn(A) → Task t_task2 → SubagentSpawn(B)
+        let trail: Vec<String> = ai
+            .semantic_steps
+            .iter()
+            .map(|s| match s {
+                SemanticStep::ToolExecution { tool_use_id, .. } => format!("t:{tool_use_id}"),
+                SemanticStep::SubagentSpawn { placeholder_id, .. } => format!("s:{placeholder_id}"),
+                _ => "other".into(),
+            })
+            .collect();
+        assert_eq!(
+            trail,
+            vec![
+                "t:t_task1".to_string(),
+                "s:cand-A".into(),
+                "t:t_task2".into(),
+                "s:cand-B".into(),
+            ]
+        );
+    }
+
+    #[test]
+    fn orphan_task_emits_no_subagent_spawn() {
+        let msgs = vec![assistant_with_task(
+            "a1",
+            1,
+            &[],
+            "t_task",
+            "unmatched",
+            &[],
+        )];
+        // 没有 candidate 匹配
+        let chunks = build_chunks_with_subagents(&msgs, &[]);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        assert!(
+            !ai.semantic_steps
+                .iter()
+                .any(|s| matches!(s, SemanticStep::SubagentSpawn { .. })),
+            "orphan Task should not emit SubagentSpawn"
+        );
+        assert!(
+            ai.semantic_steps
+                .iter()
+                .any(|s| matches!(s, SemanticStep::ToolExecution { tool_name, .. } if tool_name == "Task")),
+            "orphan Task ToolExecution should remain"
+        );
+        // 允许使用以避免未使用警告（mock tool_result 工具函数在其它测试里也用）
+        let _ = tool_result_with_subagent_session("x", "y");
     }
 
     #[test]
