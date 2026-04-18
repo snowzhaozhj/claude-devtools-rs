@@ -7,7 +7,15 @@
   import SettingsView from "./routes/SettingsView.svelte";
   import NotificationsView from "./routes/NotificationsView.svelte";
   import DashboardView from "./routes/DashboardView.svelte";
-  import { openTab, getActiveTab, setUnreadCount } from "./lib/tabStore.svelte";
+  import {
+    openTab,
+    getActiveTab,
+    getActiveTabId,
+    getTabs,
+    setActiveTab,
+    closeTab,
+    setUnreadCount,
+  } from "./lib/tabStore.svelte";
   import { getConfig, getNotifications } from "./lib/api";
   import { applyTheme } from "./lib/theme";
   import { loadAgentConfigs } from "./lib/agentConfigsStore.svelte";
@@ -33,9 +41,48 @@
   }
 
   function handleGlobalKeydown(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+    if (!(e.metaKey || e.ctrlKey)) return;
+
+    if (e.key === "k") {
       e.preventDefault();
       commandPaletteOpen = !commandPaletteOpen;
+      return;
+    }
+
+    // Cmd/Ctrl + 1~9 → 切到对应索引的 tab（1-based；超界忽略）
+    if (/^[1-9]$/.test(e.key)) {
+      const idx = Number(e.key) - 1;
+      const list = getTabs();
+      if (idx < list.length) {
+        e.preventDefault();
+        setActiveTab(list[idx].id);
+      }
+      return;
+    }
+
+    // Cmd/Ctrl + W → 关闭当前 tab
+    if (e.key === "w") {
+      const activeId = getActiveTabId();
+      if (activeId) {
+        e.preventDefault();
+        closeTab(activeId);
+      }
+      return;
+    }
+
+    // Cmd/Ctrl + [ / ] → 上一个 / 下一个 tab（循环）
+    if (e.key === "[" || e.key === "]") {
+      const list = getTabs();
+      if (list.length === 0) return;
+      const activeId = getActiveTabId();
+      const currentIdx = activeId ? list.findIndex((t) => t.id === activeId) : -1;
+      if (currentIdx === -1) return;
+      e.preventDefault();
+      const nextIdx = e.key === "["
+        ? (currentIdx - 1 + list.length) % list.length
+        : (currentIdx + 1) % list.length;
+      setActiveTab(list[nextIdx].id);
+      return;
     }
   }
 
