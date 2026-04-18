@@ -122,7 +122,7 @@
     registerHandler("sidebar", (payload) => {
       if (payload.projectId !== currentProjectId) return;
       void dedupeRefresh(`sidebar:${currentProjectId}`, () =>
-        untrack(() => loadSessions(currentProjectId)),
+        untrack(() => loadSessions(currentProjectId, true)),
       );
     });
     return () => unregisterHandler("sidebar");
