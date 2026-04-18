@@ -47,6 +47,16 @@ impl ProjectScanner {
         }
     }
 
+    /// 返回 scanner 持有的 projects 根目录路径。
+    ///
+    /// 用于上层 crate（如 `cdt-api`）需要在 scanner 维度构造文件路径
+    /// 时复用同一个 base，避免再依赖 `path_decoder::get_projects_base_path()`
+    /// 这种全局环境路径——便于集成测试通过 tempdir override。
+    #[must_use]
+    pub fn projects_dir(&self) -> &std::path::Path {
+        &self.projects_dir
+    }
+
     /// 扫描根目录并返回所有 project。根目录不存在 → 空列表 + warn，**不报错**。
     pub async fn scan(&mut self) -> Result<Vec<Project>, DiscoverError> {
         if !self.fs.exists(&self.projects_dir).await {

@@ -334,6 +334,24 @@ pub fn run() {
                 }
             });
 
+            // 把 list_sessions 后台元数据扫描的 SessionMetadataUpdate 桥到前端
+            // `session-metadata-update` 事件，供 Sidebar 增量 patch 列表项。
+            // 详见 openspec/specs/ipc-data-api/spec.md §"Emit session metadata updates"。
+            let mut metadata_rx = api.subscribe_session_metadata();
+            let app_handle_for_metadata = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match metadata_rx.recv().await {
+                        Ok(update) => {
+                            let _ = app_handle_for_metadata
+                                .emit("session-metadata-update", &update);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+
             // 把自动通知管线产出的 DetectedError 桥到前端 `notification-added` 事件
             // 同时按 config.notifications.{enabled,soundEnabled} 发 OS native 通知
             let mut error_rx = api.subscribe_detected_errors();

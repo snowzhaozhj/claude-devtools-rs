@@ -10,8 +10,8 @@ pub mod traits;
 pub mod types;
 
 pub use error::{ApiError, ApiErrorCode};
-pub use events::PushEvent;
-pub use local::LocalDataApi;
+pub use events::{PushEvent, SessionMetadataUpdate};
+pub use local::{LocalDataApi, METADATA_SCAN_CONCURRENCY};
 pub use traits::DataApi;
 pub use types::{
     ConfigUpdateRequest, ContextInfo, PaginatedRequest, PaginatedResponse, ProjectInfo,

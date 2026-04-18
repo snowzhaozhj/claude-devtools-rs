@@ -93,7 +93,10 @@ async fn list_sessions(
     Path(project_id): Path<String>,
     Query(pagination): Query<PaginatedRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let result = s.api.list_sessions(&project_id, &pagination).await?;
+    // HTTP 无 push 通道，保留同步完整返回语义（spec ipc-data-api §"HTTP
+    // list_sessions 保留同步完整返回"）。IPC 路径的骨架化由 trait 方法
+    // `list_sessions` 提供，这里显式走 `list_sessions_sync`。
+    let result = s.api.list_sessions_sync(&project_id, &pagination).await?;
     Ok(Json(result))
 }
 

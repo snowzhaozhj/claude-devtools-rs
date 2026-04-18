@@ -25,11 +25,28 @@ pub trait DataApi: Send + Sync {
     async fn list_projects(&self) -> Result<Vec<ProjectInfo>, ApiError>;
 
     /// 分页列出项目的会话。
+    ///
+    /// IPC 路径下返回**骨架** `SessionSummary`（`title` / `messageCount` /
+    /// `isOngoing` 为占位值），元数据通过 `subscribe_session_metadata()`
+    /// 异步推送。HTTP 路径请改用 `list_sessions_sync`。
     async fn list_sessions(
         &self,
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError>;
+
+    /// 同步完整返回 session 列表（含全部元数据）。HTTP API 专用——HTTP
+    /// 无 push 通道，无法走骨架化路径。
+    ///
+    /// 默认实现 fallback 到 `list_sessions`（即返回骨架）；具体实现可
+    /// override 为同步扫描（见 `LocalDataApi::list_sessions_sync`）。
+    async fn list_sessions_sync(
+        &self,
+        project_id: &str,
+        pagination: &PaginatedRequest,
+    ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
+        self.list_sessions(project_id, pagination).await
+    }
 
     /// 获取会话详情（chunks + metrics + metadata）。
     async fn get_session_detail(

@@ -2,11 +2,13 @@
 //!
 //! 组装底层 crate 调用，作为默认的数据 API 实现。
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, Semaphore, broadcast};
+use tokio::task::{AbortHandle, JoinSet};
 
 use cdt_analyze::build_chunks_with_subagents;
 use cdt_config::{
@@ -22,6 +24,7 @@ use cdt_ssh::{ActiveContext, SshConnectionManager, parse_ssh_config_file, resolv
 use cdt_watch::FileWatcher;
 
 use super::error::ApiError;
+use super::events::SessionMetadataUpdate;
 use super::session_metadata::extract_session_metadata;
 use super::traits::DataApi;
 use super::types::{
@@ -29,6 +32,14 @@ use super::types::{
     ProjectSessionPrefs, SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
 };
 use crate::notifier::NotificationPipeline;
+
+/// 元数据扫描的最大并发数。文件扫描是 I/O 密集，8 路并发足够打满 `NVMe`
+/// 顺序读且不抢 tokio runtime（详见 design.md decision 2）。
+pub const METADATA_SCAN_CONCURRENCY: usize = 8;
+
+/// 元数据 broadcast channel capacity。50 个 session 的项目最多产出 50
+/// 条 update，一些缓冲足以容纳订阅者短暂卡顿。
+const METADATA_BROADCAST_CAPACITY: usize = 256;
 
 /// 本地文件系统 `DataApi` 实现。
 pub struct LocalDataApi {
@@ -41,6 +52,12 @@ pub struct LocalDataApi {
     /// 构造下存在；`new()` 构造返回 `None`，此时 `subscribe_detected_errors`
     /// 返回一条永不发消息的 receiver（caller 代码统一）。
     error_tx: Option<broadcast::Sender<DetectedError>>,
+    /// `list_sessions` 后台元数据扫描的广播发送端。`subscribe_session_metadata()`
+    /// 返回 receiver，Tauri host 桥接为前端 `session-metadata-update` 事件。
+    session_metadata_tx: broadcast::Sender<SessionMetadataUpdate>,
+    /// 当前 per-project 进行中的元数据扫描句柄。`list_sessions` 调用前会
+    /// abort 同 project 的旧扫描，避免事件串扰（详见 design.md decision 4）。
+    active_scans: Arc<std::sync::Mutex<HashMap<String, AbortHandle>>>,
 }
 
 impl LocalDataApi {
@@ -53,6 +70,8 @@ impl LocalDataApi {
         let fs = std::sync::Arc::new(LocalFileSystemProvider::new());
         let cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
         let searcher = SessionSearcher::new(fs, cache);
+        let (session_metadata_tx, _) =
+            broadcast::channel::<SessionMetadataUpdate>(METADATA_BROADCAST_CAPACITY);
         Self {
             scanner: Mutex::new(scanner),
             searcher,
@@ -60,6 +79,8 @@ impl LocalDataApi {
             notif_mgr: Arc::new(Mutex::new(notif_mgr)),
             ssh_mgr: Mutex::new(ssh_mgr),
             error_tx: None,
+            session_metadata_tx,
+            active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -94,6 +115,9 @@ impl LocalDataApi {
         );
         tokio::spawn(pipeline.run());
 
+        let (session_metadata_tx, _) =
+            broadcast::channel::<SessionMetadataUpdate>(METADATA_BROADCAST_CAPACITY);
+
         Self {
             scanner: Mutex::new(scanner),
             searcher,
@@ -101,6 +125,8 @@ impl LocalDataApi {
             notif_mgr,
             ssh_mgr: Mutex::new(ssh_mgr),
             error_tx: Some(error_tx),
+            session_metadata_tx,
+            active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -115,6 +141,129 @@ impl LocalDataApi {
             let (_tx, rx) = broadcast::channel::<DetectedError>(1);
             rx
         }
+    }
+
+    /// 订阅 `list_sessions` 后台扫描产出的元数据增量更新。
+    ///
+    /// 每次 `list_sessions(project_id)` 调用会异步并发扫描该页 session 的
+    /// JSONL 文件，每扫完一个推送一条 `SessionMetadataUpdate`。同 project
+    /// 的旧扫描会在新调用进入时被 abort，避免事件串扰。
+    ///
+    /// 详见 `openspec/specs/ipc-data-api/spec.md` §"Emit session metadata
+    /// updates"。
+    pub fn subscribe_session_metadata(&self) -> broadcast::Receiver<SessionMetadataUpdate> {
+        self.session_metadata_tx.subscribe()
+    }
+
+    /// 同步骨架扫描：完成目录 scan + 分页切片 + 构造占位 `SessionSummary`，
+    /// 返回 (page, `next_cursor`, total, `page_jobs`, dir)。
+    ///
+    /// `page_jobs` 是 `(session_id, jsonl_path)` 元组列表，供后台元数据扫描
+    /// 任务消费。
+    async fn list_sessions_skeleton(
+        &self,
+        project_id: &str,
+        pagination: &PaginatedRequest,
+    ) -> Result<
+        (
+            Vec<SessionSummary>,
+            Option<String>,
+            usize,
+            Vec<(String, std::path::PathBuf)>,
+            std::path::PathBuf,
+        ),
+        ApiError,
+    > {
+        let scanner = self.scanner.lock().await;
+        let sessions = scanner
+            .list_sessions(project_id, &std::collections::BTreeSet::new())
+            .await
+            .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?;
+        let projects_dir = scanner.projects_dir().to_path_buf();
+        drop(scanner);
+
+        let offset = pagination
+            .cursor
+            .as_deref()
+            .and_then(|c| c.parse::<usize>().ok())
+            .unwrap_or(0);
+        let total = sessions.len();
+        let page_sessions: Vec<_> = sessions
+            .into_iter()
+            .skip(offset)
+            .take(pagination.page_size)
+            .collect();
+
+        let base_dir = cdt_discover::path_decoder::extract_base_dir(project_id);
+        let dir = projects_dir.join(base_dir);
+
+        let mut page = Vec::with_capacity(page_sessions.len());
+        let mut page_jobs = Vec::with_capacity(page_sessions.len());
+        for s in page_sessions {
+            let jsonl_path = dir.join(format!("{}.jsonl", s.id));
+            page.push(SessionSummary {
+                session_id: s.id.clone(),
+                project_id: project_id.to_owned(),
+                timestamp: s.last_modified,
+                message_count: 0,
+                title: None,
+                is_ongoing: false,
+            });
+            page_jobs.push((s.id, jsonl_path));
+        }
+
+        let page_len = page.len();
+        let next_cursor = if offset + page_len < total {
+            Some((offset + page_len).to_string())
+        } else {
+            None
+        };
+
+        Ok((page, next_cursor, total, page_jobs, dir))
+    }
+}
+
+/// 后台扫描某页 session 的元数据，每扫完一个 broadcast 一条
+/// `SessionMetadataUpdate`。并发度受 `METADATA_SCAN_CONCURRENCY` 限流。
+///
+/// 任务结束时（无论正常完成还是被 abort）从 `active_scans` 移除自己的
+/// `AbortHandle`。`broadcast::send` 在无订阅者时返回 `Err`，本函数静默
+/// 忽略——元数据更新本质上是 fire-and-forget。
+async fn scan_metadata_for_page(
+    project_id: String,
+    dir: std::path::PathBuf,
+    page_jobs: Vec<(String, std::path::PathBuf)>,
+    tx: broadcast::Sender<SessionMetadataUpdate>,
+    active_scans: Arc<std::sync::Mutex<HashMap<String, AbortHandle>>>,
+    cleanup_key: String,
+) {
+    let _ = dir; // dir 当前由 page_jobs 内的 jsonl_path 携带，保留参数为未来扩展（如懒构造路径）
+    let semaphore = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
+    let mut set = JoinSet::new();
+
+    for (session_id, jsonl_path) in page_jobs {
+        let permit_sem = semaphore.clone();
+        let tx = tx.clone();
+        let project_id = project_id.clone();
+        set.spawn(async move {
+            let Ok(_permit) = permit_sem.acquire_owned().await else {
+                return;
+            };
+            let meta = extract_session_metadata(&jsonl_path).await;
+            let _ = tx.send(SessionMetadataUpdate {
+                project_id,
+                session_id,
+                title: meta.title,
+                message_count: meta.message_count,
+                is_ongoing: meta.is_ongoing,
+            });
+        });
+    }
+
+    while set.join_next().await.is_some() {}
+
+    if let Ok(mut scans) = active_scans.lock() {
+        scans.remove(&cleanup_key);
     }
 }
 
@@ -142,52 +291,62 @@ impl DataApi for LocalDataApi {
             .collect())
     }
 
+    async fn list_sessions_sync(
+        &self,
+        project_id: &str,
+        pagination: &PaginatedRequest,
+    ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
+        let (mut page, next_cursor, total, page_jobs, _dir) =
+            self.list_sessions_skeleton(project_id, pagination).await?;
+
+        for (summary, (_id, path)) in page.iter_mut().zip(page_jobs.iter()) {
+            let meta = extract_session_metadata(path).await;
+            summary.title = meta.title;
+            summary.message_count = meta.message_count;
+            summary.is_ongoing = meta.is_ongoing;
+        }
+
+        Ok(PaginatedResponse {
+            items: page,
+            next_cursor,
+            total,
+        })
+    }
+
     async fn list_sessions(
         &self,
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let scanner = self.scanner.lock().await;
-        let sessions = scanner
-            .list_sessions(project_id, &std::collections::BTreeSet::new())
-            .await
-            .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?;
+        let (page, next_cursor, total, page_jobs, dir) =
+            self.list_sessions_skeleton(project_id, pagination).await?;
 
-        let offset = pagination
-            .cursor
-            .as_deref()
-            .and_then(|c| c.parse::<usize>().ok())
-            .unwrap_or(0);
-        let total = sessions.len();
-        let page_sessions: Vec<_> = sessions
-            .into_iter()
-            .skip(offset)
-            .take(pagination.page_size)
-            .collect();
-
-        let projects_dir = path_decoder::get_projects_base_path();
-        let base_dir = cdt_discover::path_decoder::extract_base_dir(project_id);
-        let dir = projects_dir.join(base_dir);
-
-        let mut page = Vec::with_capacity(page_sessions.len());
-        for s in page_sessions {
-            let jsonl_path = dir.join(format!("{}.jsonl", s.id));
-            let meta = extract_session_metadata(&jsonl_path).await;
-            page.push(SessionSummary {
-                session_id: s.id.clone(),
-                project_id: project_id.to_owned(),
-                timestamp: s.last_modified,
-                message_count: meta.message_count,
-                title: meta.title,
-                is_ongoing: meta.is_ongoing,
-            });
+        // 取消同 project 的旧扫描，避免事件串扰
+        if let Ok(mut scans) = self.active_scans.lock() {
+            if let Some(handle) = scans.remove(project_id) {
+                handle.abort();
+            }
         }
 
-        let next_cursor = if offset + page.len() < total {
-            Some((offset + page.len()).to_string())
-        } else {
-            None
-        };
+        if !page_jobs.is_empty() {
+            let tx = self.session_metadata_tx.clone();
+            let project_id_owned = project_id.to_owned();
+            let active_scans = self.active_scans.clone();
+            let pid_for_cleanup = project_id_owned.clone();
+
+            let handle = tokio::spawn(scan_metadata_for_page(
+                project_id_owned,
+                dir,
+                page_jobs,
+                tx,
+                active_scans.clone(),
+                pid_for_cleanup,
+            ));
+
+            if let Ok(mut scans) = self.active_scans.lock() {
+                scans.insert(project_id.to_owned(), handle.abort_handle());
+            }
+        }
 
         Ok(PaginatedResponse {
             items: page,

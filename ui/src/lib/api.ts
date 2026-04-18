@@ -7,12 +7,36 @@ export interface ProjectInfo {
   sessionCount: number;
 }
 
+/**
+ * 会话摘要。`title` / `messageCount` / `isOngoing` 在 IPC `list_sessions`
+ * 返回的**骨架**态下为占位（null / 0 / false），随后由
+ * `session-metadata-update` 事件按 sessionId 增量 patch 为真值。
+ *
+ * UI 渲染时应使用 fallback：`title || sessionId.slice(0, 8) + "…"`、
+ * `C${messageCount || ""}`、`{#if isOngoing}<OngoingIndicator />{/if}`，
+ * 这样骨架态也能直接展示。
+ *
+ * 详见 openspec/specs/ipc-data-api/spec.md §"Expose project and session
+ * queries" 与 sidebar-navigation §"骨架列表快速加载"。
+ */
 export interface SessionSummary {
   sessionId: string;
   projectId: string;
   timestamp: number;
   messageCount: number;
   title: string | null;
+  isOngoing: boolean;
+}
+
+/**
+ * 单条 session 元数据增量更新，由后端 `session-metadata-update` 事件推送。
+ * 前端 Sidebar 订阅后按 `sessionId` 在 `sessions[]` 中定位并 in-place patch。
+ */
+export interface SessionMetadataUpdate {
+  projectId: string;
+  sessionId: string;
+  title: string | null;
+  messageCount: number;
   isOngoing: boolean;
 }
 
