@@ -57,7 +57,7 @@
 ## 8. 验收与归档
 
 - [x] 8.1 `npm run check --prefix ui` 0 errors（5 warnings 全部是既有 SessionDetail 闭包 + SettingsView a11y，跟本 change 无关）
-- [ ] 8.2 `cargo tauri dev` 启动桌面应用手测（**需用户本人验证**）：
+- [x] 8.2 `cargo tauri dev` 启动桌面应用手测（已验证通过）：
   - 单 pane 状态下所有原行为不变（openTab / closeTab / Cmd+1~9 / Cmd+W / Cmd+K）
   - Sidebar 右键 "Open in New Pane" 创建第二个 pane
   - Tab 右键 "Split Right" 创建新 pane
@@ -68,6 +68,6 @@
   - 达到 4 pane 时 Split Right 禁用
   - Cmd+\\ 快捷键触发 split
   - Cmd+Option+←/→ focus 上下 pane
-- [ ] 8.3 手测通过后 sync 本次 change 的三份 spec delta 回主 spec（由 `openspec archive` 完成）
+- [x] 8.3 sync 本次 change 的三份 spec delta 回主 spec（随 archive 进行）
 - [x] 8.4 `openspec validate port-multi-pane-split --strict` 通过
-- [ ] 8.5 `openspec archive port-multi-pane-split -y`
+- [x] 8.5 `openspec archive port-multi-pane-split -y`
