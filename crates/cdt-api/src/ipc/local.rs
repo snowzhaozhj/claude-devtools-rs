@@ -1408,12 +1408,14 @@ async fn parse_subagent_candidate(path: &Path) -> Option<cdt_core::SubagentCandi
         return None;
     }
 
-    // 只有当最后一行时间戳晚于首行时才算已结束；否则视为仍在运行
+    // 只有当最后一行时间戳晚于首行时才算已结束；否则视为仍在运行。
+    // 注意：本字段仅用于 `compute_duration_ms` 与 resolver 内 OR 兜底；
+    // `is_ongoing` 的真实判定走下方 `check_messages_ongoing` 五信号算法，
+    // 与主 session（`get_session_detail` / `extract_session_metadata`）一致。
     let end_ts = match (spawn_ts, end_ts) {
         (Some(start), Some(end)) if end > start => Some(end),
         _ => None,
     };
-    let is_ongoing = end_ts.is_none();
 
     // 完整解析 subagent session，构建 Chunk 流供 UI 展示 ExecutionTrace。
     //
@@ -1421,14 +1423,20 @@ async fn parse_subagent_candidate(path: &Path) -> Option<cdt_core::SubagentCandi
     // subagent 自己来说不是——而 `build_chunks` 会跳过 `is_sidechain=true`。
     // 这里 clone 一份消息并清除 sidechain 标记，以便 Chunk 正常产出。
     // 对齐原版 `aiGroupHelpers.ts::computeSubagentPhaseBreakdown` 的处理。
-    let messages = match parse_file(path).await {
+    //
+    // ongoing 判定：在清 sidechain 与 build_chunks 之前先用原始 `ParsedMessage`
+    // 流跑 `check_messages_ongoing`——避免 followups.md "Subagent 状态判定"
+    // 段记录的 impl-bug：仅看 `end_ts > spawn_ts` 会把"中断后无 assistant 收尾"
+    // 的 subagent 误判为已完成，导致 `SubagentCard` 右上角误显示 ✓。
+    let (is_ongoing, messages) = match parse_file(path).await {
         Ok(mut msgs) => {
+            let ongoing = cdt_analyze::check_messages_ongoing(&msgs);
             for m in &mut msgs {
                 m.is_sidechain = false;
             }
-            cdt_analyze::build_chunks(&msgs)
+            (ongoing, cdt_analyze::build_chunks(&msgs))
         }
-        Err(_) => Vec::new(),
+        Err(_) => (end_ts.is_none(), Vec::new()),
     };
 
     Some(cdt_core::SubagentCandidate {
@@ -1950,5 +1958,122 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(out, cdt_core::ToolOutput::Missing));
+    }
+
+    // -------- subagent ongoing 判定（followups.md "Subagent 状态判定"）--------
+
+    /// 写一个最小 subagent JSONL：行 1 是 user description，后续行由调用方拼。
+    /// 时间戳保证 `spawn_ts` < `end_ts`，让旧逻辑判 done，
+    /// 从而暴露"末尾 `tool_use` 无收尾"被误判完成的 bug。
+    async fn write_subagent_jsonl(
+        dir: &std::path::Path,
+        agent_id: &str,
+        extra_lines: &[serde_json::Value],
+    ) -> std::path::PathBuf {
+        let path = dir.join(format!("agent-{agent_id}.jsonl"));
+        let mut buf = String::new();
+        // line 1: parent uuid + first timestamp + description（让 description_hint 拿到值）
+        let header = serde_json::json!({
+            "type": "user",
+            "uuid": "u-root",
+            "parentUuid": "parent-session-id",
+            "timestamp": "2026-04-15T10:00:00Z",
+            "agentId": agent_id,
+            "message": { "content": "investigate the bug" },
+        });
+        buf.push_str(&serde_json::to_string(&header).unwrap());
+        buf.push('\n');
+        for line in extra_lines {
+            buf.push_str(&serde_json::to_string(line).unwrap());
+            buf.push('\n');
+        }
+        tokio::fs::write(&path, buf).await.unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn parse_subagent_candidate_marks_unfinished_tool_use_as_ongoing() {
+        // 复现 followups 的 case：subagent 末尾是 assistant tool_use，
+        // 无配对 tool_result —— 旧逻辑（end_ts > spawn_ts → done）误判完成。
+        let dir = tempdir().unwrap();
+        let lines = [serde_json::json!({
+            "type": "assistant",
+            "uuid": "a-1",
+            "parentUuid": "u-root",
+            "timestamp": "2026-04-15T10:00:30Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    { "type": "tool_use", "id": "toolu_x", "name": "Bash", "input": {} }
+                ],
+            },
+        })];
+        let path = write_subagent_jsonl(dir.path(), "abcd", &lines).await;
+        let cand = parse_subagent_candidate(&path).await.expect("candidate");
+        assert!(
+            cand.is_ongoing,
+            "末尾 assistant tool_use 无 tool_result 应判 ongoing，旧逻辑会误报 done"
+        );
+        // end_ts 仍按时间戳填充（供 duration 计算），与 ongoing 判定独立
+        assert!(cand.end_ts.is_some(), "end_ts 应仍来自最后一行 timestamp");
+    }
+
+    #[tokio::test]
+    async fn parse_subagent_candidate_marks_text_ending_as_done() {
+        // 健康 subagent：末尾 assistant text，应判 done（与 check_messages_ongoing 对齐）。
+        let dir = tempdir().unwrap();
+        let lines = [serde_json::json!({
+            "type": "assistant",
+            "uuid": "a-1",
+            "parentUuid": "u-root",
+            "timestamp": "2026-04-15T10:00:30Z",
+            "message": {
+                "role": "assistant",
+                "content": [ { "type": "text", "text": "all done" } ],
+            },
+        })];
+        let path = write_subagent_jsonl(dir.path(), "efgh", &lines).await;
+        let cand = parse_subagent_candidate(&path).await.expect("candidate");
+        assert!(!cand.is_ongoing, "末尾 assistant text 是 ending，应判 done");
+        assert!(cand.end_ts.is_some());
+    }
+
+    #[tokio::test]
+    async fn parse_subagent_candidate_marks_orphan_tool_result_as_ongoing() {
+        // 复现真实 case `5a3a23b2.../agent-aee63780244f1f959.jsonl`：
+        // 末尾是 user/tool_result（subagent 中断后无 assistant 收尾）。
+        let dir = tempdir().unwrap();
+        let lines = [
+            serde_json::json!({
+                "type": "assistant",
+                "uuid": "a-1",
+                "parentUuid": "u-root",
+                "timestamp": "2026-04-15T10:00:30Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "tool_use", "id": "toolu_y", "name": "Bash", "input": {} }
+                    ],
+                },
+            }),
+            serde_json::json!({
+                "type": "user",
+                "uuid": "u-2",
+                "parentUuid": "a-1",
+                "timestamp": "2026-04-15T10:00:45Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        { "type": "tool_result", "tool_use_id": "toolu_y", "content": "ok" }
+                    ],
+                },
+            }),
+        ];
+        let path = write_subagent_jsonl(dir.path(), "ijkl", &lines).await;
+        let cand = parse_subagent_candidate(&path).await.expect("candidate");
+        assert!(
+            cand.is_ongoing,
+            "tool_use → tool_result 但无后续 assistant 收尾应判 ongoing"
+        );
     }
 }
