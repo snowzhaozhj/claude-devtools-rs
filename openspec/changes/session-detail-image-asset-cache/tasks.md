@@ -53,8 +53,8 @@
 
 ## 7. preflight + commit
 
-- [ ] 7.1 `just fmt` 通过
-- [ ] 7.2 `just lint` 通过（workspace + src-tauri clippy）
-- [ ] 7.3 `just test` 通过（含前端）
-- [ ] 7.4 `just spec-validate` 通过
-- [ ] 7.5 commit：`feat(perf): image base64 lazy load via asset:// 协议 (phase 3)`，body 引用本 change slug 与预期收益数字
+- [x] 7.1 `just fmt` 通过
+- [x] 7.2 `just lint` 通过（workspace + src-tauri clippy）
+- [x] 7.3 `just test` 通过（含前端）
+- [x] 7.4 `just spec-validate` 通过
+- [x] 7.5 commit `1bfe0ad` 已落（`feat(perf): image base64 lazy load via asset:// 协议 (phase 3)`）

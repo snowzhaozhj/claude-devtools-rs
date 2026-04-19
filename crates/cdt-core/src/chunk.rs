@@ -68,6 +68,11 @@ impl ChunkMetrics {
 /// 每条原始消息对应一个 `AssistantResponse`。`tool_results` 用于承接
 /// tool_result-only 用户消息反向挂载的结果，供后续 `tool-execution-linking`
 /// 使用；本 capability 不填充它。
+///
+/// `content_omitted` 是 IPC payload 优化字段（见 change `session-detail-response-content-omit`）：
+/// `get_session_detail` 返回路径默认把 `content` 替换为空 `MessageContent::Text("")` +
+/// 设此 flag 为 true，砍掉首屏 IPC 最大单一字段（实测占总 payload 41%）。前端无任何
+/// 代码读 `content`（chunk 显示文本走 `semanticSteps`），故无需懒拉接口。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantResponse {
@@ -80,6 +85,8 @@ pub struct AssistantResponse {
     pub usage: Option<TokenUsage>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub content_omitted: bool,
 }
 
 /// `AIChunk` 中按时间顺序提取的语义步骤，用于 UI 可视化。
@@ -242,6 +249,30 @@ mod tests {
             tool_calls: Vec::new(),
             usage: None,
             model: Some("claude-opus-4-6".into()),
+            content_omitted: false,
+        });
+    }
+
+    #[test]
+    fn assistant_response_default_content_omitted_false() {
+        let json = r#"{"uuid":"u1","timestamp":"2026-04-19T00:00:00Z","content":"hi","toolCalls":[],"usage":null,"model":null}"#;
+        let resp: AssistantResponse = serde_json::from_str(json).unwrap();
+        assert!(
+            !resp.content_omitted,
+            "missing contentOmitted SHALL deserialize to false (legacy compat)"
+        );
+    }
+
+    #[test]
+    fn assistant_response_content_omitted_roundtrip() {
+        roundtrip(&AssistantResponse {
+            uuid: "u1".into(),
+            timestamp: ts(),
+            content: MessageContent::Text(String::new()),
+            tool_calls: Vec::new(),
+            usage: None,
+            model: None,
+            content_omitted: true,
         });
     }
 

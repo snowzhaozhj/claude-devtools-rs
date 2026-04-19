@@ -53,6 +53,16 @@ const OMIT_SUBAGENT_MESSAGES: bool = true;
 /// 走 `data:` URI 路径。行为契约见 change `session-detail-image-asset-cache`。
 const OMIT_IMAGE_DATA: bool = true;
 
+/// IPC payload 优化（phase 4）：`get_session_detail` 默认把所有
+/// `AIChunk.responses[].content` 替换为空 `MessageContent::Text("")` + 设
+/// `content_omitted=true`，砍掉首屏 IPC 最大单一字段（实测 46a25772 case
+/// 1257 KB / 41%）。前端无任何代码读 `responses[].content`（chunk 显示文本
+/// 走 `semanticSteps`），故无需懒拉接口。
+///
+/// 紧急回滚：把本常量改为 `false` 即恢复完整 payload；前端零改动也无需 fallback。
+/// 行为契约见 change `session-detail-response-content-omit`。
+const OMIT_RESPONSE_CONTENT: bool = true;
+
 /// 遍历 chunks 内所有 `ContentBlock::Image`，把 `source.data` 替换为空字符串
 /// 并设 `source.data_omitted = true`。覆盖 `UserChunk.content`、
 /// `AIChunk.responses[].content` 与 `AIChunk.subagents[].messages[]` 嵌套层。
@@ -81,6 +91,25 @@ fn omit_image_in_content(content: &mut cdt_core::MessageContent) {
             if let cdt_core::ContentBlock::Image { source } = blk {
                 source.data.clear();
                 source.data_omitted = true;
+            }
+        }
+    }
+}
+
+/// 遍历 chunks 内所有 `AIChunk.responses[].content`，替换为空
+/// `MessageContent::Text("")` 并设 `content_omitted = true`。覆盖顶层
+/// `AIChunk` 与 `AIChunk.subagents[].messages[]` 嵌套层。`subagent.messages`
+/// 在 `OMIT_SUBAGENT_MESSAGES=true` 时已为空，本函数对其是安全 no-op；
+/// `OMIT_SUBAGENT_MESSAGES=false` 回滚时本函数仍能命中嵌套层。
+fn apply_response_content_omit(chunks: &mut [cdt_core::Chunk]) {
+    for chunk in chunks {
+        if let cdt_core::Chunk::Ai(ai) = chunk {
+            for resp in &mut ai.responses {
+                resp.content = cdt_core::MessageContent::Text(String::new());
+                resp.content_omitted = true;
+            }
+            for sub in &mut ai.subagents {
+                apply_response_content_omit(&mut sub.messages);
             }
         }
     }
@@ -521,6 +550,12 @@ impl DataApi for LocalDataApi {
             // 不会被裁。
             if OMIT_IMAGE_DATA {
                 apply_image_omit(&mut cloned);
+            }
+            // phase 4：response.content OMIT 同样在 subagent OMIT 之前跑，
+            // 覆盖 OMIT_SUBAGENT_MESSAGES=false 回滚路径下嵌套 messages 内的
+            // AIChunk.responses[].content。
+            if OMIT_RESPONSE_CONTENT {
+                apply_response_content_omit(&mut cloned);
             }
             if OMIT_SUBAGENT_MESSAGES {
                 for c in &mut cloned {
@@ -1551,6 +1586,7 @@ mod tests {
                 tool_calls: Vec::new(),
                 usage: None,
                 model: None,
+                content_omitted: false,
             }],
             metrics: cdt_core::ChunkMetrics::zero(),
             semantic_steps: Vec::new(),
@@ -1572,5 +1608,109 @@ mod tests {
         assert_eq!(source.data, "");
         assert!(source.data_omitted);
         assert_eq!(source.media_type, "image/jpeg");
+    }
+
+    // -------- phase 4: response.content OMIT --------
+
+    fn make_ai_chunk_with_text(text: &str, model: &str) -> cdt_core::Chunk {
+        cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            timestamp: ts(),
+            duration_ms: None,
+            responses: vec![cdt_core::AssistantResponse {
+                uuid: "r1".into(),
+                timestamp: ts(),
+                content: cdt_core::MessageContent::Text(text.into()),
+                tool_calls: Vec::new(),
+                usage: None,
+                model: Some(model.into()),
+                content_omitted: false,
+            }],
+            metrics: cdt_core::ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: Vec::new(),
+            subagents: Vec::new(),
+            slash_commands: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn apply_response_content_omit_clears_assistant_response_content() {
+        let mut chunks = vec![make_ai_chunk_with_text(
+            "非常长的回复内容...",
+            "claude-opus-4-7",
+        )];
+        apply_response_content_omit(&mut chunks);
+        let cdt_core::Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected ai chunk");
+        };
+        let resp = &ai.responses[0];
+        // content 已替换为空 Text
+        assert!(matches!(&resp.content, cdt_core::MessageContent::Text(s) if s.is_empty()));
+        assert!(resp.content_omitted);
+        // 其它字段保留
+        assert_eq!(resp.uuid, "r1");
+        assert_eq!(resp.model.as_deref(), Some("claude-opus-4-7"));
+    }
+
+    #[test]
+    fn apply_response_content_omit_clears_nested_subagent_response_content() {
+        // 构造一个 AIChunk，含一个 subagent，subagent.messages 内嵌套一个 AIChunk
+        let nested = make_ai_chunk_with_text("嵌套 subagent 内的回复", "claude-haiku-4-5");
+        let parent = cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            timestamp: ts(),
+            duration_ms: None,
+            responses: vec![cdt_core::AssistantResponse {
+                uuid: "parent-r".into(),
+                timestamp: ts(),
+                content: cdt_core::MessageContent::Text("父级回复".into()),
+                tool_calls: Vec::new(),
+                usage: None,
+                model: Some("claude-opus-4-7".into()),
+                content_omitted: false,
+            }],
+            metrics: cdt_core::ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: Vec::new(),
+            subagents: vec![cdt_core::Process {
+                session_id: "sub-1".into(),
+                root_task_description: None,
+                spawn_ts: ts(),
+                end_ts: None,
+                metrics: cdt_core::ChunkMetrics::zero(),
+                team: None,
+                subagent_type: None,
+                messages: vec![nested],
+                main_session_impact: None,
+                is_ongoing: false,
+                duration_ms: None,
+                parent_task_id: None,
+                description: None,
+                header_model: None,
+                last_isolated_tokens: 0,
+                is_shutdown_only: false,
+                messages_omitted: false,
+            }],
+            slash_commands: Vec::new(),
+        });
+        let mut chunks = vec![parent];
+        apply_response_content_omit(&mut chunks);
+
+        let cdt_core::Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected ai chunk");
+        };
+        // 顶层 responses[].content 被清
+        assert!(
+            matches!(&ai.responses[0].content, cdt_core::MessageContent::Text(s) if s.is_empty())
+        );
+        assert!(ai.responses[0].content_omitted);
+
+        // 嵌套 subagent.messages 内的 AIChunk.responses[].content 也被清
+        let cdt_core::Chunk::Ai(nested_ai) = &ai.subagents[0].messages[0] else {
+            panic!("expected nested ai chunk");
+        };
+        assert!(
+            matches!(&nested_ai.responses[0].content, cdt_core::MessageContent::Text(s) if s.is_empty())
+        );
+        assert!(nested_ai.responses[0].content_omitted);
     }
 }

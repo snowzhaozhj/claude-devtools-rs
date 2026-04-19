@@ -124,6 +124,7 @@ fn chunk_loop(
                     tool_calls: msg.tool_calls.clone(),
                     usage: msg.usage.clone(),
                     model: msg.model.clone(),
+                    content_omitted: false,
                 });
             }
             MessageCategory::Compact => {

@@ -49,6 +49,7 @@ fn ai_chunk(
             tool_calls: Vec::new(),
             usage,
             model: Some("claude-opus-4-6".into()),
+            content_omitted: false,
         }],
         metrics: ChunkMetrics::zero(),
         semantic_steps: Vec::new(),
