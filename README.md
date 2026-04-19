@@ -24,7 +24,15 @@
 - Linux：`.deb` / `.AppImage`
 - Windows：`.msi` / `.exe`
 
-> 应用未经代码签名：macOS 首次打开需在"系统设置 → 隐私与安全性"放行；Windows 会弹 SmartScreen。
+> 应用未经过 Apple Developer ID 签名（仅 ad-hoc 签名）/ Windows SmartScreen。
+>
+> **macOS 首次打开**：从 `.dmg` 拖到 `/Applications` 后，**右键 → 打开**（不是双击），点"打开"确认。若仍被拦截，"系统设置 → 隐私与安全性"里会有"仍要打开"选项。
+> 如果提示 "已损坏，无法打开"（浏览器下载会带 quarantine 属性），在终端跑：
+> ```bash
+> sudo xattr -rd com.apple.quarantine "/Applications/Claude DevTools.app"
+> ```
+>
+> **Windows**：SmartScreen 会拦 → "更多信息" → "仍要运行"。
 
 ## 从源码构建
 
