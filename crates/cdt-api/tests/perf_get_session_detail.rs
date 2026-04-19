@@ -170,20 +170,57 @@ async fn bench_get_session_detail_large_sessions() {
 
         // Payload 字段占比分解：定位减肥目标。
         let breakdown = analyze_payload(&chunks);
+        let ai_sum_known = breakdown.tool_exec_total
+            + breakdown.subagent_total
+            + breakdown.responses_total
+            + breakdown.semantic_steps;
+        let ai_top_meta = breakdown.chunk_ai.saturating_sub(ai_sum_known);
+        let tool_exec_meta = breakdown
+            .tool_exec_total
+            .saturating_sub(breakdown.tool_input + breakdown.tool_output);
+        let subagent_meta = breakdown
+            .subagent_total
+            .saturating_sub(breakdown.subagent_messages);
+        let responses_meta = breakdown
+            .responses_total
+            .saturating_sub(breakdown.response_content);
         eprintln!(
-            "  payload breakdown: tool_output={} KB, tool_input={} KB, subagent_msgs={} KB, response_content={} KB, semantic_steps={} KB, other≈{} KB",
-            breakdown.tool_output / 1024,
+            "  by chunk type: ai={} KB ({} chunks), user={} KB ({} chunks), system={} KB ({} chunks), compact={} KB ({} chunks)",
+            breakdown.chunk_ai / 1024,
+            breakdown.count_ai,
+            breakdown.chunk_user / 1024,
+            breakdown.count_user,
+            breakdown.chunk_system / 1024,
+            breakdown.count_system,
+            breakdown.chunk_compact / 1024,
+            breakdown.count_compact,
+        );
+        eprintln!(
+            "  ai sub-trees: tool_exec={} KB (input={} + output={} + meta={}), subagents={} KB (messages={} + meta={}), responses={} KB (content={} + meta={}), semantic_steps={} KB, ai_top_meta={} KB",
+            breakdown.tool_exec_total / 1024,
             breakdown.tool_input / 1024,
+            breakdown.tool_output / 1024,
+            tool_exec_meta / 1024,
+            breakdown.subagent_total / 1024,
             breakdown.subagent_messages / 1024,
+            subagent_meta / 1024,
+            breakdown.responses_total / 1024,
             breakdown.response_content / 1024,
+            responses_meta / 1024,
             breakdown.semantic_steps / 1024,
-            (payload.len().saturating_sub(
-                breakdown.tool_output
-                    + breakdown.tool_input
-                    + breakdown.subagent_messages
-                    + breakdown.response_content
-                    + breakdown.semantic_steps,
-            )) / 1024,
+            ai_top_meta / 1024,
+        );
+        eprintln!(
+            "  user blocks: tool_result={} KB ({} blocks), text={} KB ({} blocks), image={} KB ({} blocks), tool_use={} KB, thinking={} KB, unknown={} KB",
+            breakdown.user_tool_result / 1024,
+            breakdown.user_tool_result_blocks,
+            breakdown.user_text / 1024,
+            breakdown.user_text_blocks,
+            breakdown.user_image / 1024,
+            breakdown.user_image_blocks,
+            breakdown.user_tool_use / 1024,
+            breakdown.user_thinking / 1024,
+            breakdown.user_unknown / 1024,
         );
 
         // 经过 LocalDataApi::get_session_detail 的真实 IPC 路径——含
@@ -206,32 +243,113 @@ async fn bench_get_session_detail_large_sessions() {
 
 #[derive(Default)]
 struct PayloadBreakdown {
+    // 按 chunk 类型分（整段大小）
+    chunk_ai: usize,
+    chunk_user: usize,
+    chunk_system: usize,
+    chunk_compact: usize,
+    count_ai: usize,
+    count_user: usize,
+    count_system: usize,
+    count_compact: usize,
+    // AI chunk 内部子树（整段大小，含其下细分）
+    tool_exec_total: usize,
+    subagent_total: usize,
+    responses_total: usize,
+    // AI chunk 内部细分叶子
     tool_output: usize,
     tool_input: usize,
     subagent_messages: usize,
     response_content: usize,
     semantic_steps: usize,
+    // User chunk 内部按 content block 类型细分
+    user_text: usize,
+    user_tool_result: usize,
+    user_tool_use: usize,
+    user_image: usize,
+    user_thinking: usize,
+    user_unknown: usize,
+    user_text_blocks: usize,
+    user_image_blocks: usize,
+    user_tool_result_blocks: usize,
 }
 
-/// 把 chunks 反序列化为 `serde_json::Value` 后按已知 key 累计字节数（按
-/// 各 sub-tree 重新序列化）。粗略口径——目的是判断哪条 sub-tree 是大头。
+/// 两层细分：(1) 按 Chunk variant 算整段字节；(2) AI chunk 内部按子树拆。
+/// `ai_top_meta` 与 `tool_exec_meta` / `subagent_meta` / `responses_meta`
+/// 由调用方差出来，用于定位非叶子字段（uuid / `token_usage` / metrics 等）。
 fn analyze_payload(chunks: &[cdt_core::Chunk]) -> PayloadBreakdown {
     let mut b = PayloadBreakdown::default();
     for chunk in chunks {
-        let cdt_core::Chunk::Ai(ai) = chunk else {
-            continue;
-        };
-        for exec in &ai.tool_executions {
-            b.tool_input += serde_json::to_vec(&exec.input).map_or(0, |v| v.len());
-            b.tool_output += serde_json::to_vec(&exec.output).map_or(0, |v| v.len());
+        let chunk_size = serde_json::to_vec(chunk).map_or(0, |v| v.len());
+        match chunk {
+            cdt_core::Chunk::Ai(ai) => {
+                b.chunk_ai += chunk_size;
+                b.count_ai += 1;
+                for exec in &ai.tool_executions {
+                    b.tool_exec_total += serde_json::to_vec(exec).map_or(0, |v| v.len());
+                    b.tool_input += serde_json::to_vec(&exec.input).map_or(0, |v| v.len());
+                    b.tool_output += serde_json::to_vec(&exec.output).map_or(0, |v| v.len());
+                }
+                for sub in &ai.subagents {
+                    b.subagent_total += serde_json::to_vec(sub).map_or(0, |v| v.len());
+                    b.subagent_messages += serde_json::to_vec(&sub.messages).map_or(0, |v| v.len());
+                }
+                for resp in &ai.responses {
+                    b.responses_total += serde_json::to_vec(resp).map_or(0, |v| v.len());
+                    b.response_content += serde_json::to_vec(&resp.content).map_or(0, |v| v.len());
+                }
+                b.semantic_steps += serde_json::to_vec(&ai.semantic_steps).map_or(0, |v| v.len());
+            }
+            cdt_core::Chunk::User(u) => {
+                b.chunk_user += chunk_size;
+                b.count_user += 1;
+                accumulate_user_content(&u.content, &mut b);
+            }
+            cdt_core::Chunk::System(_) => {
+                b.chunk_system += chunk_size;
+                b.count_system += 1;
+            }
+            cdt_core::Chunk::Compact(_) => {
+                b.chunk_compact += chunk_size;
+                b.count_compact += 1;
+            }
         }
-        for sub in &ai.subagents {
-            b.subagent_messages += serde_json::to_vec(&sub.messages).map_or(0, |v| v.len());
-        }
-        for resp in &ai.responses {
-            b.response_content += serde_json::to_vec(&resp.content).map_or(0, |v| v.len());
-        }
-        b.semantic_steps += serde_json::to_vec(&ai.semantic_steps).map_or(0, |v| v.len());
     }
     b
+}
+
+fn accumulate_user_content(content: &cdt_core::MessageContent, b: &mut PayloadBreakdown) {
+    match content {
+        cdt_core::MessageContent::Text(s) => {
+            b.user_text += s.len();
+        }
+        cdt_core::MessageContent::Blocks(blocks) => {
+            for blk in blocks {
+                let blk_size = serde_json::to_vec(blk).map_or(0, |v| v.len());
+                match blk {
+                    cdt_core::ContentBlock::Text { .. } => {
+                        b.user_text += blk_size;
+                        b.user_text_blocks += 1;
+                    }
+                    cdt_core::ContentBlock::ToolResult { .. } => {
+                        b.user_tool_result += blk_size;
+                        b.user_tool_result_blocks += 1;
+                    }
+                    cdt_core::ContentBlock::ToolUse { .. } => {
+                        b.user_tool_use += blk_size;
+                    }
+                    cdt_core::ContentBlock::Image { .. } => {
+                        b.user_image += blk_size;
+                        b.user_image_blocks += 1;
+                    }
+                    cdt_core::ContentBlock::Thinking { .. } => {
+                        b.user_thinking += blk_size;
+                    }
+                    cdt_core::ContentBlock::Unknown => {
+                        b.user_unknown += blk_size;
+                    }
+                }
+            }
+        }
+    }
 }
