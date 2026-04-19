@@ -50,7 +50,8 @@
     {/if}
 
     {#if tokenCount != null && tokenCount > 0}
-      <span class="base-item-tokens">~{formatTokens(tokenCount)}</span>
+      <!-- 对齐原版 BaseItem.tsx:150 "~{formatTokens(tokenCount)} {tokenLabel}" -->
+      <span class="base-item-tokens">~{formatTokens(tokenCount)} tokens</span>
     {/if}
 
     {#if status}
