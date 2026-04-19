@@ -304,3 +304,46 @@ The system SHALL expose an in-process subscription mechanism on `LocalDataApi` n
 - **WHEN** SubagentCard A 展开后含嵌套 SubagentCard B；用户展开 B
 - **THEN** 前端 SHALL 用 B 的 sessionId 单独调 `get_subagent_trace(rootSessionId, B.sessionId)`，不复用 A 的结果
 
+### Requirement: Lazy load inline image asset
+
+新 IPC `get_image_asset(rootSessionId, sessionId, blockId) -> String` MUST 返回前端可直接用作 `<img src>` 的 URL，用于 ImageBlock 在视口内时按需加载被 `dataOmitted` 裁剪的内联截图。`blockId` 编码为 `"<chunkUuid>:<blockIndex>"`（chunk uuid + 该 image 在 `MessageContent::Blocks` 数组中的 index），唯一定位一条 user message 内的某个 ImageBlock。
+
+后端实现 SHALL：
+1. 在 `rootSessionId` 同 project 下定位 `sessionId` 对应的 jsonl（root 自身或子 subagent jsonl，路径解析与 `get_subagent_trace` 一致）。
+2. 解析对应行 message → 按 blockIndex 取出 `ContentBlock::Image.source.data`（base64 字符串）。
+3. 对 base64 字符串算 SHA256，截取前 16 hex 字符作为文件名 hash；扩展名从 `media_type`（如 `image/png` → `.png`）映射，未知类型 fallback `.bin`。
+4. 落盘路径：`<app_cache_dir()>/cdt-images/<hash>.<ext>`。若文件已存在 SHALL 直接返回 URL（不重写不报错）。
+5. 落盘成功后返回 Tauri `asset://localhost/<absolute_path>` 形式 URL（前端通过 `convertFileSrc` API 也能等价构造）。
+6. 任何步骤失败（jsonl 找不到、blockIndex 越界、磁盘写失败、media_type 解析异常）SHALL fallback 返回 `data:<mediaType>;base64,<原始 base64>` 字符串——前端 `<img src>` 仍可加载，可用性优先于性能。
+
+Tauri 配置 SHALL 在 `tauri.conf.json::app.security.assetProtocol.scope` 中允许 `<app_cache_dir>/cdt-images/**`，并在 `capabilities/default.json` 中包含 `core:asset:default` 权限——否则 webview 拒绝加载 `asset://` URL。
+
+#### Scenario: 拉取存在的 image asset
+
+- **WHEN** caller 调用 `get_image_asset("root-uuid", "root-uuid", "chunk-abc:1")` 且对应 jsonl 存在、blockIndex 1 是 ImageBlock
+- **THEN** 响应 SHALL 为 `asset://localhost/...cdt-images/<sha256前16>.png` 形式 URL
+- **AND** 该 URL 指向的文件 SHALL 已存在于磁盘且内容是原 base64 解码后的 raw bytes
+
+#### Scenario: 同 hash 跨调用去重
+
+- **WHEN** 两次 `get_image_asset` 调用解析出的 base64 内容字节完全相同
+- **THEN** 两次调用 SHALL 返回完全相同的 URL（同一文件名）
+- **AND** 第二次调用 SHALL NOT 重写已存在文件（按 `path.exists()` 短路）
+
+#### Scenario: blockId 定位失败 fallback 到 data URI
+
+- **WHEN** caller 调用 `get_image_asset` 但 jsonl 不存在 / blockIndex 越界 / 该 block 不是 ImageBlock
+- **THEN** 响应 SHALL 为 `data:application/octet-stream;base64,` 形式占位字符串（或空 base64）；前端 `<img>` 加载失败时显示 broken-image 图标
+- **AND** 后端 SHALL NOT panic，SHALL NOT 返回 IPC error（image 显示失败不应阻塞 session 渲染）
+
+#### Scenario: 嵌套 subagent 内的 image 通过 sessionId 定位
+
+- **WHEN** caller 调用 `get_image_asset("root-uuid", "subagent-sub-uuid", "chunk-xyz:0")`
+- **THEN** 后端 SHALL 在 `<root>/subagents/agent-<subagent-sub-uuid>.jsonl` 路径下定位 chunk，与 `get_subagent_trace` 路径解析逻辑一致
+
+#### Scenario: 落盘失败 fallback 到 data URI
+
+- **WHEN** cache 目录不可写（权限拒绝 / 磁盘满）
+- **THEN** 响应 SHALL 为 `data:<mediaType>;base64,<完整 base64>` 字符串，前端按 `<img src>` 仍可加载
+- **AND** 后端 SHALL `tracing::warn!` 记录失败原因供排查
+
