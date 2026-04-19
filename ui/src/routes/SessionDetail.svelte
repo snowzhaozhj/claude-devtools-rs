@@ -433,7 +433,18 @@
         {@const summaryText = buildSummary(di.items)}
         {@const toolsVisible = isChunkToolsVisible(i)}
         {@const interruptions = chunk.semanticSteps.filter((s) => s.kind === "interruption")}
-        {@const totalTokens = chunk.metrics.inputTokens + chunk.metrics.outputTokens + chunk.metrics.cacheCreationTokens + chunk.metrics.cacheReadTokens}
+        <!--
+          对齐原版 AIChatGroup.tsx:234-248 "Get the LAST assistant message's
+          usage (represents current context window snapshot)"——Anthropic API
+          的 usage 每次 call 都返回整段历史的 cache 大小，累加会重复计数；
+          取最后一条 response.usage 即为该 AI turn 结束时的 context snapshot。
+        -->
+        {@const lastUsage = [...chunk.responses].reverse().find((r) => r.usage)?.usage ?? null}
+        {@const headerInputTokens = lastUsage?.input_tokens ?? 0}
+        {@const headerOutputTokens = lastUsage?.output_tokens ?? 0}
+        {@const headerCacheRead = lastUsage?.cache_read_input_tokens ?? 0}
+        {@const headerCacheCreation = lastUsage?.cache_creation_input_tokens ?? 0}
+        {@const totalTokens = headerInputTokens + headerOutputTokens + headerCacheRead + headerCacheCreation}
         <div class="msg-row msg-row-ai">
           <div class="msg-ai-container">
             <!-- AI header -->
@@ -463,10 +474,22 @@
               {/if}
               <span class="ai-header-spacer"></span>
               {#if totalTokens > 0}
-                <span
-                  class="ai-tokens"
-                  title={`Total: ${totalTokens.toLocaleString()} tokens\nInput: ${chunk.metrics.inputTokens.toLocaleString()}\nOutput: ${chunk.metrics.outputTokens.toLocaleString()}\nCache create: ${chunk.metrics.cacheCreationTokens.toLocaleString()}\nCache read: ${chunk.metrics.cacheReadTokens.toLocaleString()}`}
-                >{fk(totalTokens)}</span>
+                <span class="ai-tokens">
+                  <!-- lucide Info：对齐原版 TokenUsageDisplay.tsx 的 Info icon 前缀 -->
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ai-tokens-info" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M12 16v-4" />
+                    <path d="M12 8h.01" />
+                  </svg>
+                  <span>{fk(totalTokens)}</span>
+                  <span class="ai-tokens-popover" role="tooltip">
+                    <span class="tok-row tok-row-total"><span>Total</span><span>{totalTokens.toLocaleString()}</span></span>
+                    <span class="tok-row"><span>Input</span><span>{headerInputTokens.toLocaleString()}</span></span>
+                    <span class="tok-row"><span>Output</span><span>{headerOutputTokens.toLocaleString()}</span></span>
+                    <span class="tok-row"><span>Cache create</span><span>{headerCacheCreation.toLocaleString()}</span></span>
+                    <span class="tok-row"><span>Cache read</span><span>{headerCacheRead.toLocaleString()}</span></span>
+                  </span>
+                </span>
               {/if}
               {#if chunk.durationMs != null && chunk.durationMs > 0}
                 <span class="ai-duration" title="耗时">
@@ -898,10 +921,69 @@
   .ai-header-spacer { flex: 1; }
 
   .ai-tokens {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 11px;
     color: var(--color-text-muted);
     font-family: var(--font-mono);
     flex-shrink: 0;
+    cursor: default;
+  }
+
+  .ai-tokens-info {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    opacity: 0.7;
+  }
+
+  .ai-tokens-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 20;
+    min-width: 160px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+  }
+
+  .ai-tokens:hover .ai-tokens-popover {
+    display: flex;
+  }
+
+  .tok-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .tok-row > :first-child {
+    color: var(--color-text-muted);
+  }
+
+  .tok-row > :last-child {
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tok-row-total {
+    padding-bottom: 4px;
+    margin-bottom: 2px;
+    border-bottom: 1px solid var(--card-separator, var(--card-border));
+    font-weight: 600;
+  }
+
+  .tok-row-total > :last-child {
+    color: var(--color-text);
   }
 
   .ai-duration {
