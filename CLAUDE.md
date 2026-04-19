@@ -129,7 +129,8 @@ just bootstrap           # npm install --prefix ui（首次）
 - **后台任务 per-key 取消**：触发新一轮后台扫描前需 abort 同 key 的旧任务时，用 `Arc<std::sync::Mutex<HashMap<K, AbortHandle>>>`：spawn 后 `insert(key, handle.abort_handle())`；新调用进入先 `remove(key).map(|h| h.abort())`；任务尾部从 map 自清理。例见 `LocalDataApi::list_sessions` 的 `active_scans`。
 - **Svelte 5 `{@attach}` 挂副作用**：DOM 元素需要副作用 + cleanup（ResizeObserver、IntersectionObserver、scroll listener 等）时用 `{@attach (el) => { ...setup; return () => cleanup; }}`，比 `bind:this + onMount + onDestroy` 三段式更内聚。例见 `Sidebar.svelte::session-list` 容器挂 ResizeObserver。
 - **后台服务的本机路径参数化**：涉及 `~/.claude/projects/` 的后台服务（notifier、未来的 history scanner）不要在函数内直接 `path_decoder::get_projects_base_path()`，显式从构造器传 `projects_dir: PathBuf`，否则集成测试会命中真实本机路径。
-- **clippy pedantic**：workspace 开启 pedantic，PostToolUse hook 会在每次 `.rs` 编辑后自动跑 clippy 报错。最常踩的：`doc_markdown`（注释里标识符要反引号）、`cast_possible_wrap`（`u64 as i64` → `i64::try_from`）、`uninlined_format_args`（`format!("{}", x)` → `format!("{x}")`）。其余照 clippy 输出修即可。
+- **clippy pedantic**：workspace 开启 pedantic，PostToolUse hook 会在每次 `.rs` 编辑后自动跑 clippy 报错。最常踩的：`doc_markdown`（注释里标识符要反引号）、`cast_possible_wrap`（`u64 as i64` → `i64::try_from`）、`uninlined_format_args`（`format!("{}", x)` → `format!("{x}")`）、`map_unwrap_or`（`x.map(f).unwrap_or(d)` → `x.map_or(d, f)`）、`is_some_and`（`opt.map(f).unwrap_or(false)` → `opt.is_some_and(f)`）、`if_not_else`（`if x != y { A } else { B }` → 倒顺序）、`manual_let_else`（`match X { Ok(v)=>v, Err(_)=>return ... }` → `let Ok(v) = X else { return ... }`）。其余照 clippy 输出修即可。
+- **IPC payload 瘦身模式**：default-cap 字段不能直接 drop（前端 header 仍要用），用 `#[serde(default)]` 加 derived header 字段 + `xxx_omitted: bool` flag + 新加 `get_xxx_lazy(...)` IPC + 顶部 `const OMIT_XXX: bool = true` 一行回滚开关；前端按 `xxxOmitted` 走 fallback 链兼容老后端。参见 change `subagent-messages-lazy-load`。Tauri webview IPC 吞吐实测 ≈ 13 KB/ms，>1 MB payload 就该考虑瘦身。
 - **insta 快照接受**：没装 `cargo-insta` 就用 `INSTA_UPDATE=always cargo test -p <crate>`；提交生成的 `tests/snapshots/*.snap`。
 - **同步解析入口**：`cdt-analyze` 的集成测试不引入 tokio——用 `cdt_parse::parse_entry_at(line, n)` 逐行解析 fixture，再跑 `dedupe_by_request_id`。
 - **自动化**：
@@ -156,3 +157,4 @@ just bootstrap           # npm install --prefix ui（首次）
 2. 13 个 data layer capability 已全部完成。当前工作重心是 UI 层（Tauri + Svelte）。
 3. `just dev` 启动桌面应用验证当前状态。
 4. UI 功能迭代：**大功能**（多步骤、跨模块、需要设计决策）走 openspec（propose → apply → archive）；**小改动**（主题切换、Trigger CRUD、样式修复等单点改动）直接写 + commit，不走 openspec。判断标准：是否需要 design.md 记录架构决策。
+5. 性能 / 卡顿排查入口：`cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture` —— 用真实 `~/.claude/projects/...` JSONL 跑，输出含各阶段后端耗时（parse / scan_subagents / build / serde / TOTAL）+ 字段级 payload breakdown（subagent_messages / response_content / tool_output 等）+ raw vs IPC OMIT 后对比。配套：后端 `tracing::info!(target: "cdt_api::perf", ...)` + 前端 `[perf]` console.info；先看数据再定方向。
