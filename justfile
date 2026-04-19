@@ -94,6 +94,7 @@ release-check:
     echo "✅ release-check 通过；下一步："
     echo "    git tag v$ROOT_VER && git push origin v$ROOT_VER"
 
-# 本地全量构建 Tauri 安装包（验证 CI 前）
+# 本地全量构建 Tauri 安装包（验证 CI 前）；先 build 前端再 tauri build
 release-build:
+    npm run build --prefix ui
     cargo tauri build
