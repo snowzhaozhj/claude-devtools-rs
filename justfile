@@ -64,3 +64,36 @@ spec-check CHANGE:
 
 # 提交前预检：fmt → lint → test → spec 校验（对齐 .claude/rules/opsx-apply-cadence.md）
 preflight: fmt lint test spec-validate
+
+# ──────── 发布 ────────
+
+# 发布前检查：版本号三处一致 + 工作树干净 + preflight
+release-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ROOT_VER=$(grep -E '^version\s*=' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+    TAURI_CARGO_VER=$(grep -E '^version\s*=' src-tauri/Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+    TAURI_CONF_VER=$(grep -E '"version":' src-tauri/tauri.conf.json | head -1 | sed -E 's/.*"version":\s*"([^"]+)".*/\1/')
+    echo "workspace Cargo.toml:     $ROOT_VER"
+    echo "src-tauri/Cargo.toml:     $TAURI_CARGO_VER"
+    echo "src-tauri/tauri.conf.json: $TAURI_CONF_VER"
+    if [ "$ROOT_VER" != "$TAURI_CARGO_VER" ] || [ "$ROOT_VER" != "$TAURI_CONF_VER" ]; then
+        echo ""
+        echo "❌ 版本号三处不一致，请先同步"
+        exit 1
+    fi
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo ""
+        echo "❌ 工作树不干净，请先 commit 或 stash"
+        exit 1
+    fi
+    echo ""
+    echo "✅ 版本一致 + 工作树干净，跑 preflight..."
+    just preflight
+    echo ""
+    echo "✅ release-check 通过；下一步："
+    echo "    git tag v$ROOT_VER && git push origin v$ROOT_VER"
+
+# 本地全量构建 Tauri 安装包（验证 CI 前）
+release-build:
+    cargo tauri build

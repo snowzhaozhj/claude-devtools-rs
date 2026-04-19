@@ -341,13 +341,13 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(AppData { api: api.clone() })
         .setup(move |app| {
-            if cfg!(debug_assertions) {
+            #[cfg(debug_assertions)]
+            {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
-                // 打开 WebView devtools 供调试
                 if let Some(window) = app.get_webview_window("main") {
                     window.open_devtools();
                 }

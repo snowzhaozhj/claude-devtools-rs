@@ -1,9 +1,9 @@
 # claude-devtools-rs
 
-Rust port of [claude-devtools](../claude-devtools) — the Electron app that
-visualizes Claude Code session execution.数据层 13 个 capability 已全部完成，
-UI 层新增 6 个行为 spec（tab-management / session-display / sidebar-navigation / ui-search / settings-ui / notification-ui），
-当前工作重心是 UI 层（Tauri 2 + Svelte 5 桌面应用）。
+[claude-devtools](../claude-devtools)（Electron 原版）的 Rust 端口，
+Tauri 2 + Svelte 5 桌面应用。13 个数据层 capability + 6 个 UI 行为 spec 均已实现；
+首个 release `v0.1.0` 已发，后续迭代不再直接在 `main` 上开发。
+用户视角的安装 / 开发 / 发布流程见 `README.md`，本文件是 contributor 专用的约定和陷阱手册。
 
 ## Parent repo
 
@@ -74,6 +74,7 @@ claude-devtools-rs/
 - `npm run check --prefix ui` 必须从项目根目录执行，从 `src-tauri/` 目录跑会找不到 `package.json`
 - Tauri `setup` 里启动后台 task 用 `tauri::async_runtime::spawn`，不要裸 `tokio::spawn`；订阅后端 `broadcast::Receiver` 转 `emit(...)` 是典型模式（见 `src-tauri/src/lib.rs` 的 FileWatcher + notifier bridge）
 - **桌面通知 / 系统托盘**：`tauri-plugin-notification`（`src-tauri/Cargo.toml` + `capabilities/default.json` 加 `notification:default`）+ `TrayIconBuilder::with_id("main-tray")`（`setup` 里构建，icon 取 `app.default_window_icon()`）。后端从 Rust 发通知用 `app_handle.notification().builder().title(..).body(..).sound("default").show()`；前端 Dock badge 用 `getCurrentWindow().setBadgeCount()`（macOS 独占）。参见 commit `f546b88`。
+- **`devtools` feature 不要进 release**：`src-tauri/Cargo.toml` 的 `tauri = { features = [...] }` **不要**写 `"devtools"`——加了之后 release bundle 会带 web inspector。tauri 2 在 debug 构建自动启 inspector 不依赖 feature，`cargo tauri dev` 照旧能开。调用 `window.open_devtools()` 必须用 `#[cfg(debug_assertions)]` **编译时** gate（不是 `if cfg!(debug_assertions)` 运行时宏）——后者 release 构建里会因 `open_devtools` API 不存在（它本身就有 `#[cfg(any(debug_assertions, feature = "devtools"))]`）而编译失败。
 
 ## Common commands
 
@@ -148,14 +149,24 @@ just bootstrap           # npm install --prefix ui（首次）
 - **opsx:apply 推进节拍**：详见 `.claude/rules/opsx-apply-cadence.md`。核心：Edit → clippy → fmt → test → npm check → validate → 勾 checkbox → 文本总结，不得中途停手。
 - Detailed rules: `.claude/rules/rust.md`.
 
-## UI 已知遗留问题
+## 发布与分支策略
 
-原路线图（P0/P1/P2）已全部清零：Execution Trace、多 Pane 分屏（change `port-multi-pane-split`）、虚拟滚动 + 元数据 push（change `sidebar-session-list-fast-load`）。新待办看 `openspec/followups.md`。已落成的关键改动（**只写 change slug，spec 行为契约直接看 `openspec/specs/<cap>/spec.md`，不要引用 `openspec/changes/archive/...` 路径**）：桌面通知与系统托盘见 commit `f546b88`；实时 `file-change` 桥见 change `realtime-session-refresh`；ongoing + interruption 见 change `port-session-ongoing-and-interruption`；大会话首屏 lazy markdown render 见 change `session-detail-lazy-render`——SessionDetail 内 markdown 走 `IntersectionObserver` 视口懒渲染，loading 期间 `<SessionDetailSkeleton />` 替代纯文本"加载中..."（行为契约见 `openspec/specs/session-display/spec.md` `Lazy markdown rendering for first paint performance` / `Skeleton placeholder while loading`）；**subagent.messages 首屏裁剪 + 懒加载** 见 change `subagent-messages-lazy-load`——`Process` 加 4 个 derived header 字段（`headerModel` / `lastIsolatedTokens` / `isShutdownOnly` / `messagesOmitted`），`get_session_detail` 默认裁 `subagent.messages` 为空（回滚开关 `OMIT_SUBAGENT_MESSAGES: bool`），新 IPC `get_subagent_trace(rootSessionId, subagentSessionId)` 在 SubagentCard 展开时按需懒拉，实测大 session payload 砍 60%（7702 KB → 3070 KB）；行为契约见 `openspec/specs/ipc-data-api/spec.md` `Lazy load subagent trace` 与 `openspec/specs/session-display/spec.md` 的 `Subagent 内联展开 ExecutionTrace` / `Subagent MetricsPill 多维度展示`。**phase 3 image base64 OMIT + asset:// 懒加载** 见 change `session-detail-image-asset-cache`——`ImageSource` 加 `dataOmitted`，`get_session_detail` 把所有 ImageBlock `source.data` 替换为空（回滚开关 `OMIT_IMAGE_DATA: bool`），新 IPC `get_image_asset(rootSessionId, sessionId, blockId)` SHA256 内容寻址落盘到 OS cache 目录返回 `asset://localhost/<path>` URL，前端 `ImageBlock.svelte` IntersectionObserver 视口内才拉；image-heavy session 实测砍 71-88%（4840 KB → 620 KB）；行为契约见 `openspec/specs/ipc-data-api/spec.md` `Lazy load inline image asset` 与 `openspec/specs/session-display/spec.md` `Inline image lazy load via asset protocol`。**phase 4 response.content OMIT** 见 change `session-detail-response-content-omit`——`AssistantResponse` 加 `contentOmitted`，`get_session_detail` 把所有 `responses[].content` 替换为空 `Text("")`（回滚开关 `OMIT_RESPONSE_CONTENT: bool`），无新 IPC 无前端改动（前端从未读 `responses[].content`，文本走 `semanticSteps`）；纯文本大 session 实测砍 40%（46a25772: 3070 → 1829 KB）；行为契约见 `openspec/specs/ipc-data-api/spec.md` `AssistantResponse content omitted by default`。后端 `LocalDataApi::get_session_detail` 与 `scan_subagent_candidates` 保留 `tracing::info!(target: "cdt_api::perf", ...)` 探针 + `crates/cdt-api/tests/perf_get_session_detail.rs` `#[ignore]` 基准测试（含 raw vs IPC payload + 字段级 breakdown）用于回归监测。
+- `main` 是发布分支，**不直接提交**。日常走 `feat/xxx` / `fix/xxx` 分支 → PR → merge（详见 README）
+- 版本号同步在三处：`Cargo.toml`（workspace）、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`
+- 打 `vX.Y.Z` tag 触发 `.github/workflows/release.yml` —— macOS arm64/x64 + Linux + Windows 矩阵构建 Tauri bundle 到 Draft Release
+- 发布前跑 `just release-check`（版本三处一致 + 工作树干净 + preflight）
+
+## 性能回归监测
+
+大会话首屏优化历经 4 个 phase：lazy markdown render（`session-detail-lazy-render`）→ subagent.messages 懒加载（`subagent-messages-lazy-load`，砍 60%）→ image base64 OMIT + `asset://` 懒加载（`session-detail-image-asset-cache`，砍 71-88%）→ response.content OMIT（`session-detail-response-content-omit`，砍 40%）→ tool_exec.output 懒加载（`session-detail-tool-output-lazy-load`）。
+"模式"沉淀为 Conventions 的 **IPC payload 瘦身模式**；具体 phase 实现查 `git log --grep="feat(perf)"`。
+回归入口：`cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture` —— 输出各阶段后端耗时 + 字段级 payload breakdown + raw vs IPC OMIT 对比。
+后端探针：`tracing::info!(target: "cdt_api::perf", ...)`；前端：`[perf]` console.info。
 
 ## What to do first in a fresh session
 
-1. Run `cargo build --workspace` 确认 data layer 可编译；`cargo test --workspace` 跑一遍回归。
-2. 13 个 data layer capability 已全部完成。当前工作重心是 UI 层（Tauri + Svelte）。
-3. `just dev` 启动桌面应用验证当前状态。
-4. UI 功能迭代：**大功能**（多步骤、跨模块、需要设计决策）走 openspec（propose → apply → archive）；**小改动**（主题切换、Trigger CRUD、样式修复等单点改动）直接写 + commit，不走 openspec。判断标准：是否需要 design.md 记录架构决策。
-5. 性能 / 卡顿排查入口：`cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture` —— 用真实 `~/.claude/projects/...` JSONL 跑，输出含各阶段后端耗时（parse / scan_subagents / build / serde / TOTAL）+ 字段级 payload breakdown（subagent_messages / response_content / tool_output 等）+ raw vs IPC OMIT 后对比。配套：后端 `tracing::info!(target: "cdt_api::perf", ...)` + 前端 `[perf]` console.info；先看数据再定方向。
+1. `cargo build --workspace` + `just test` 确认回归绿
+2. `just dev` 启动桌面应用验证当前状态
+3. UI 功能迭代：**大功能**（多步骤、跨模块、需要设计决策）走 openspec（propose → apply → archive）；**小改动**（单点样式修复、Trigger CRUD 等）直接写 + PR，不走 openspec。判断标准：是否需要 design.md 记录架构决策
+4. 开新工作前先 `git checkout -b feat/<slug>`，不要直接在 `main` 上写代码
+5. 性能 / 卡顿排查：用"性能回归监测"段的入口，**先看数据再定方向**

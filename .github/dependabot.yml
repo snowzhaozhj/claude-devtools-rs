@@ -1,5 +1,6 @@
 version: 2
 updates:
+  # workspace crates
   - package-ecosystem: cargo
     directory: /
     schedule:
@@ -15,6 +16,39 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
+  # src-tauri 独立 manifest（excluded from workspace）
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      tauri-deps:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(deps/tauri)"
+
+  # 前端 npm
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      ui-deps:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(deps/ui)"
+
+  # GitHub Actions
   - package-ecosystem: github-actions
     directory: /
     schedule:

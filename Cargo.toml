@@ -8,7 +8,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-repository = "https://github.com/zhaohejie/claude-devtools-rs"
+repository = "https://github.com/snowzhaozhj/claude-devtools-rs"
 authors = ["zhaohejie"]
 
 [workspace.dependencies]
