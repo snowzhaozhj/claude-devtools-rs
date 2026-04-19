@@ -37,6 +37,13 @@ use crate::notifier::NotificationPipeline;
 /// 顺序读且不抢 tokio runtime（详见 design.md decision 2）。
 pub const METADATA_SCAN_CONCURRENCY: usize = 8;
 
+/// IPC payload 优化：`get_session_detail` 默认把每个 `Process.messages`
+/// 裁剪为空 `Vec`、设 `messages_omitted=true`，砍掉 ~60% payload。前端
+/// `SubagentCard` 展开时调 `get_subagent_trace` 懒拉取。
+///
+/// 紧急回滚：把本常量改为 `false` 即恢复完整 payload；前端 fallback 路径自动生效。
+const OMIT_SUBAGENT_MESSAGES: bool = true;
+
 /// 元数据 broadcast channel capacity。50 个 session 的项目最多产出 50
 /// 条 update，一些缓冲足以容纳订阅者短暂卡顿。
 const METADATA_BROADCAST_CAPACITY: usize = 256;
@@ -360,9 +367,15 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         session_id: &str,
     ) -> Result<SessionDetail, ApiError> {
+        // 性能探针：拆 5 段计时——locate / parse / scan_subagents / build_chunks /
+        // context+claude_md / serialize。`tracing::info!` 由订阅者过滤，开销极低。
+        // 不要把这些段塞进一个汇总 log——分开打才能据此判断瓶颈走向。
+        let t_total = std::time::Instant::now();
+
         let projects_dir = path_decoder::get_projects_base_path();
         let project_dir = projects_dir.join(project_id);
 
+        let t_locate = std::time::Instant::now();
         let scanner = self.scanner.lock().await;
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
@@ -389,22 +402,29 @@ impl DataApi for LocalDataApi {
         } else {
             return Err(ApiError::not_found(format!("session {session_id}")));
         };
+        let locate_ms = t_locate.elapsed().as_millis();
 
+        let t_parse = std::time::Instant::now();
         let messages = parse_file(&jsonl_path)
             .await
             .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
+        let parse_ms = t_parse.elapsed().as_millis();
+        let message_count = messages.len();
 
-        // 扫描 subagent 候选（subagent 会话自身通常无下级 subagent，但保持一致）
+        let t_scan = std::time::Instant::now();
         let candidates = scan_subagent_candidates(&project_dir, session_id).await;
+        let scan_ms = t_scan.elapsed().as_millis();
+        let candidate_count = candidates.len();
 
+        let t_build = std::time::Instant::now();
         let is_ongoing = cdt_analyze::check_messages_ongoing(&messages);
         let chunks = build_chunks_with_subagents(&messages, &candidates);
+        let build_ms = t_build.elapsed().as_millis();
+        let chunk_count = chunks.len();
 
-        // 从 session cwd 扫描实际 CLAUDE.md 文件
+        let t_ctx = std::time::Instant::now();
         let project_root = messages.iter().find_map(|m| m.cwd.as_deref()).unwrap_or("");
         let initial_claude_md = build_claude_md_from_filesystem(project_root).await;
-
-        // 调用 context-tracking 计算完整的 context injections
         let empty_cmd = std::collections::HashMap::new();
         let empty_mf = std::collections::HashMap::new();
         let token_dicts = cdt_analyze::context::TokenDictionaries::new(
@@ -421,8 +441,6 @@ impl DataApi for LocalDataApi {
                 initial_claude_md_injections: &initial_claude_md,
             },
         );
-
-        // 取最后一个 phase 的最后一个 AI group 的 accumulated_injections
         let context_injections = ctx_result
             .phase_info
             .phases
@@ -431,19 +449,95 @@ impl DataApi for LocalDataApi {
             .map(|stats| &stats.accumulated_injections)
             .and_then(|inj| serde_json::to_value(inj).ok())
             .unwrap_or(serde_json::Value::Array(Vec::new()));
+        let ctx_ms = t_ctx.elapsed().as_millis();
 
-        Ok(SessionDetail {
+        let t_serde = std::time::Instant::now();
+        // IPC payload 瘦身：subagent.messages 默认裁剪为空，前端 SubagentCard
+        // 展开时通过 `get_subagent_trace` 懒拉取。把 messages 抠空 + 设
+        // `messages_omitted=true`；header_model / last_isolated_tokens /
+        // is_shutdown_only 已由 resolver 阶段填充，可独立渲染 header。
+        let chunks_for_payload = if OMIT_SUBAGENT_MESSAGES {
+            let mut cloned = chunks.clone();
+            for c in &mut cloned {
+                if let cdt_core::Chunk::Ai(ai) = c {
+                    for sub in &mut ai.subagents {
+                        sub.messages = Vec::new();
+                        sub.messages_omitted = true;
+                    }
+                }
+            }
+            cloned
+        } else {
+            chunks.clone()
+        };
+        let detail = SessionDetail {
             session_id: session_id.to_owned(),
             project_id: project_id.to_owned(),
-            chunks: serde_json::to_value(&chunks).unwrap_or_default(),
-            metrics: serde_json::json!({"message_count": messages.len()}),
+            chunks: serde_json::to_value(&chunks_for_payload).unwrap_or_default(),
+            metrics: serde_json::json!({"message_count": message_count}),
             metadata: serde_json::json!({
                 "last_modified": last_modified,
                 "size": size,
             }),
             context_injections,
             is_ongoing,
-        })
+        };
+        let serde_ms = t_serde.elapsed().as_millis();
+        let total_ms = t_total.elapsed().as_millis();
+
+        tracing::info!(
+            target: "cdt_api::perf",
+            session_id = %session_id,
+            messages = message_count,
+            chunks = chunk_count,
+            subagents = candidate_count,
+            locate_ms,
+            parse_ms,
+            scan_subagents_ms = scan_ms,
+            build_chunks_ms = build_ms,
+            context_ms = ctx_ms,
+            serde_ms,
+            total_ms,
+            "get_session_detail timings"
+        );
+
+        Ok(detail)
+    }
+
+    async fn get_subagent_trace(
+        &self,
+        root_session_id: &str,
+        subagent_session_id: &str,
+    ) -> Result<serde_json::Value, ApiError> {
+        // 跨所有 project 找 root session 所在目录——`get_subagent_trace` 调用
+        // 方（Tauri command）只携带 sessionId，不带 projectId，所以这里需要
+        // scan。`scan_subagents_for` 在 cdt-discover 里有现成实现，但这里
+        // 直接复用 `find_subagent_jsonl` + `path_decoder` 即可保持简单。
+        let projects_dir = path_decoder::get_projects_base_path();
+        let Ok(mut entries) = tokio::fs::read_dir(&projects_dir).await else {
+            return Ok(serde_json::Value::Array(Vec::new()));
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let project_dir = entry.path();
+            // root session 自身存在 → 才在该 project 里查 subagent
+            let root_jsonl = project_dir.join(format!("{root_session_id}.jsonl"));
+            if tokio::fs::metadata(&root_jsonl).await.is_ok() {
+                if let Some(path) = find_subagent_jsonl(&project_dir, subagent_session_id).await {
+                    let messages = parse_file(&path)
+                        .await
+                        .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
+                    let mut msgs = messages;
+                    for m in &mut msgs {
+                        m.is_sidechain = false;
+                    }
+                    let chunks = cdt_analyze::build_chunks(&msgs);
+                    return serde_json::to_value(&chunks)
+                        .map_err(|e| ApiError::internal(format!("{e}")));
+                }
+                break;
+            }
+        }
+        Ok(serde_json::Value::Array(Vec::new()))
     }
 
     async fn get_sessions_by_ids(
@@ -855,6 +949,7 @@ async fn scan_subagent_candidates(
     session_id: &str,
 ) -> Vec<cdt_core::SubagentCandidate> {
     let mut candidates = Vec::new();
+    let mut per_candidate_ms: Vec<u128> = Vec::new();
 
     // 新结构：{project_dir}/{session_id}/subagents/
     let new_dir = project_dir.join(session_id).join("subagents");
@@ -866,7 +961,9 @@ async fn scan_subagent_candidates(
                 && name_str.ends_with(".jsonl")
                 && !name_str.starts_with("agent-acompact")
             {
+                let t = std::time::Instant::now();
                 if let Some(c) = parse_subagent_candidate(&entry.path()).await {
+                    per_candidate_ms.push(t.elapsed().as_millis());
                     candidates.push(c);
                 }
             }
@@ -882,14 +979,28 @@ async fn scan_subagent_candidates(
                 && name_str.ends_with(".jsonl")
                 && !name_str.starts_with("agent-acompact")
             {
+                let t = std::time::Instant::now();
                 if let Some(c) = parse_subagent_candidate(&entry.path()).await {
-                    // 旧结构需要检查 parent session 是否匹配
                     if c.parent_session_id.as_deref() == Some(session_id) {
+                        per_candidate_ms.push(t.elapsed().as_millis());
                         candidates.push(c);
                     }
                 }
             }
         }
+    }
+
+    if !per_candidate_ms.is_empty() {
+        let total: u128 = per_candidate_ms.iter().sum();
+        let max = per_candidate_ms.iter().max().copied().unwrap_or_default();
+        tracing::info!(
+            target: "cdt_api::perf",
+            session_id = %session_id,
+            count = candidates.len(),
+            total_ms = total,
+            max_ms = max,
+            "scan_subagent_candidates per-candidate timings"
+        );
     }
 
     candidates

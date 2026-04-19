@@ -61,6 +61,21 @@ pub trait DataApi: Send + Sync {
         session_ids: &[String],
     ) -> Result<Vec<SessionDetail>, ApiError>;
 
+    /// 按需拉取一个 subagent 的完整 chunks 流。
+    ///
+    /// `get_session_detail` 返回的 `Process.messages` 默认裁剪为空（详见
+    /// `openspec/specs/ipc-data-api/spec.md` `Lazy load subagent trace`
+    /// requirement）；前端 `SubagentCard` 展开时调本方法按需获取。
+    ///
+    /// 默认实现返回空数组；`LocalDataApi` 提供真实读盘版本。
+    async fn get_subagent_trace(
+        &self,
+        _root_session_id: &str,
+        _subagent_session_id: &str,
+    ) -> Result<serde_json::Value, ApiError> {
+        Ok(serde_json::Value::Array(Vec::new()))
+    }
+
     // =========================================================================
     // 搜索
     // =========================================================================

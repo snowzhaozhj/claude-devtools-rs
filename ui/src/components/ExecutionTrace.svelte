@@ -14,10 +14,12 @@
 
   interface Props {
     items: DisplayItem[];
+    /** 顶层 SessionDetail 的 sessionId；嵌套 SubagentCard 用它做 getSubagentTrace 的 root key。 */
+    rootSessionId: string;
     depth?: number;
   }
 
-  let { items, depth = 0 }: Props = $props();
+  let { items, rootSessionId, depth = 0 }: Props = $props();
 
   const MAX_DEPTH = 8;
 
@@ -108,7 +110,7 @@
       </BaseItem>
     {:else if item.type === "subagent"}
       {#if depth < MAX_DEPTH}
-        <SubagentCard process={item.process} depth={depth + 1} />
+        <SubagentCard process={item.process} {rootSessionId} depth={depth + 1} />
       {:else}
         <!-- 达到最大递归深度，只渲染简化头 -->
         <div class="depth-limit">

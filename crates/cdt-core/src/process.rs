@@ -71,6 +71,27 @@ pub struct Process {
     /// （后者来自 subagent session root prompt）。
     #[serde(default)]
     pub description: Option<String>,
+    /// Subagent header 显示用的 model 名（已跑过 `parse_model_string` 简化，如
+    /// `"claude-haiku-4-5-20251001"` → `"haiku4.5"`）。`None` 表示无法识别。
+    /// 由 `candidate_to_process` 在 resolver 阶段从 `messages` 派生填充，让
+    /// `SubagentCard` header 在 IPC 裁剪 `messages` 后仍可独立渲染。
+    #[serde(default)]
+    pub header_model: Option<String>,
+    /// Subagent 最后一条 assistant `usage` 的 `input + output + cache_read +
+    /// cache_creation` 之和；`messages` 缺失时仍可显示 Context Window 槽位。
+    /// 0 表示无 usage 数据。
+    #[serde(default)]
+    pub last_isolated_tokens: u64,
+    /// Team-only 特例：subagent 仅含 1 条 assistant + 单一 `SendMessage`
+    /// `shutdown_response` 调用时为 true。让 `SubagentCard` 不依赖 `messages`
+    /// 即可走 shutdown-only 极简渲染分支。
+    #[serde(default)]
+    pub is_shutdown_only: bool,
+    /// IPC 优化标志：`get_session_detail` 默认裁剪 `messages` 为空 `Vec`、
+    /// 把本字段设为 true，调用方需通过 `get_subagent_trace` 按需拉取完整
+    /// trace；`messagesOmitted=false` 时 `messages` 应已含完整 chunks。
+    #[serde(default)]
+    pub messages_omitted: bool,
 }
 
 /// Resolver 的输入候选：一个已预装载的 subagent session 的轻量摘要。
@@ -141,6 +162,10 @@ mod tests {
             duration_ms: None,
             parent_task_id: None,
             description: None,
+            header_model: None,
+            last_isolated_tokens: 0,
+            is_shutdown_only: false,
+            messages_omitted: false,
         });
     }
 
@@ -164,7 +189,39 @@ mod tests {
             duration_ms: Some(5678),
             parent_task_id: Some("toolu_abc".into()),
             description: Some("review the PR".into()),
+            header_model: Some("haiku4.5".into()),
+            last_isolated_tokens: 4242,
+            is_shutdown_only: false,
+            messages_omitted: true,
         });
+    }
+
+    #[test]
+    fn process_messages_omitted_serializes_camel_case() {
+        let p = Process {
+            session_id: "s1".into(),
+            root_task_description: None,
+            spawn_ts: ts(),
+            end_ts: None,
+            metrics: ChunkMetrics::zero(),
+            team: None,
+            subagent_type: None,
+            messages: Vec::new(),
+            main_session_impact: None,
+            is_ongoing: false,
+            duration_ms: None,
+            parent_task_id: None,
+            description: None,
+            header_model: Some("opus4.7".into()),
+            last_isolated_tokens: 100,
+            is_shutdown_only: true,
+            messages_omitted: true,
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["headerModel"], serde_json::json!("opus4.7"));
+        assert_eq!(v["lastIsolatedTokens"], serde_json::json!(100));
+        assert_eq!(v["isShutdownOnly"], serde_json::json!(true));
+        assert_eq!(v["messagesOmitted"], serde_json::json!(true));
     }
 
     #[test]

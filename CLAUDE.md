@@ -134,8 +134,12 @@ just bootstrap           # npm install --prefix ui（首次）
 - **同步解析入口**：`cdt-analyze` 的集成测试不引入 tokio——用 `cdt_parse::parse_entry_at(line, n)` 逐行解析 fixture，再跑 `dedupe_by_request_id`。
 - **自动化**：
   - Hooks（`.claude/hooks/`）：`.rs` 编辑后自动跑所属 crate 的 `cargo clippy -- -D warnings`；`.svelte` 编辑后自动跑 `svelte-check`；`git commit` 前自动跑 `openspec validate --strict`。
-  - **spec 变更约定**：**修改**已有 spec 必须走 `openspec/changes/<name>/specs/` 的 delta，archive 时 sync 回主 spec。**新增** spec（如 UI 行为 spec）可直接写入 `openspec/specs/<name>/spec.md`。
-  - **spec delta 写法**：`ADDED/MODIFIED Requirement` 体的**第一段**必须含 `SHALL` 或 `MUST`，否则 `openspec validate --strict` 报 `must contain SHALL or MUST`；中文背景描述要放在规约句之后。`openspec archive <slug> -y` 归档后目录会变成 `<日期>-<slug>`（多一层日期前缀），followups/CLAUDE.md 里引用时仍按归档前的 slug 写。
+  - **spec 变更约定**（硬约束，违反需要修复）：
+    1. **修改**已有 spec 必须走 `openspec/changes/<slug>/specs/<cap>/spec.md` delta（含 `ADDED` / `MODIFIED` / `REMOVED` 块），`openspec archive <slug> -y` 时由命令自动 sync 回主 spec `openspec/specs/<cap>/spec.md`。**禁止**直接 Edit `openspec/specs/<cap>/spec.md`——那是 archive 的产出物，不是输入源。
+    2. **新增** spec（如全新 UI 行为 spec）可直接写入 `openspec/specs/<name>/spec.md`，不需要 change delta。
+    3. **archive 是历史快照**：`openspec/changes/archive/<日期>-<slug>/` 内的所有文件（含 `specs/<cap>/spec.md` delta、proposal、design、tasks）**冻结**——绝对不要事后 Edit；如需修订同一 capability 行为，开新 change 走 delta。
+    4. **引用约定**：CLAUDE.md / followups.md / commit message 引用一个已归档 change 时，**只**写 `change <slug>`（如 `change session-detail-lazy-render`），**不要**写 `archive 2026-XX-XX-<slug>` 也**不要**写 `openspec/changes/archive/...` 路径——理由：日期前缀只是文件系统位置，不是引用单位；行为契约的真实来源是主 spec。需要溯源到具体 Requirement 时，引用 `openspec/specs/<cap>/spec.md` `<Requirement 标题>`。
+  - **spec delta 写法**：`ADDED/MODIFIED Requirement` 体的**第一段**必须含 `SHALL` 或 `MUST`，否则 `openspec validate --strict` 报 `must contain SHALL or MUST`；中文背景描述要放在规约句之后。
   - Subagent：`spec-fidelity-reviewer` 按 capability 审计 scenario→test 覆盖。
   - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
   - MCP：`.mcp.json` 注册 GitHub MCP，需要 `GITHUB_PERSONAL_ACCESS_TOKEN` 环境变量。
@@ -144,7 +148,7 @@ just bootstrap           # npm install --prefix ui（首次）
 
 ## UI 已知遗留问题
 
-原路线图（P0/P1/P2）已全部清零：Execution Trace、多 Pane 分屏（archive `port-multi-pane-split`）、虚拟滚动 + 元数据 push（archive `sidebar-session-list-fast-load`）。新待办看 `openspec/followups.md`。已落成的关键改动：桌面通知与系统托盘见 commit `f546b88`；实时 `file-change` 桥见 change `2026-04-18-realtime-session-refresh`；ongoing + interruption 见 change `port-session-ongoing-and-interruption`。
+原路线图（P0/P1/P2）已全部清零：Execution Trace、多 Pane 分屏（change `port-multi-pane-split`）、虚拟滚动 + 元数据 push（change `sidebar-session-list-fast-load`）。新待办看 `openspec/followups.md`。已落成的关键改动（**只写 change slug，spec 行为契约直接看 `openspec/specs/<cap>/spec.md`，不要引用 `openspec/changes/archive/...` 路径**）：桌面通知与系统托盘见 commit `f546b88`；实时 `file-change` 桥见 change `realtime-session-refresh`；ongoing + interruption 见 change `port-session-ongoing-and-interruption`；大会话首屏 lazy markdown render 见 change `session-detail-lazy-render`——SessionDetail 内 markdown 走 `IntersectionObserver` 视口懒渲染，loading 期间 `<SessionDetailSkeleton />` 替代纯文本"加载中..."（行为契约见 `openspec/specs/session-display/spec.md` `Lazy markdown rendering for first paint performance` / `Skeleton placeholder while loading`）；**subagent.messages 首屏裁剪 + 懒加载** 见 change `subagent-messages-lazy-load`——`Process` 加 4 个 derived header 字段（`headerModel` / `lastIsolatedTokens` / `isShutdownOnly` / `messagesOmitted`），`get_session_detail` 默认裁 `subagent.messages` 为空（回滚开关 `OMIT_SUBAGENT_MESSAGES: bool`），新 IPC `get_subagent_trace(rootSessionId, subagentSessionId)` 在 SubagentCard 展开时按需懒拉，实测大 session payload 砍 60%（7702 KB → 3070 KB）；行为契约见 `openspec/specs/ipc-data-api/spec.md` `Lazy load subagent trace` 与 `openspec/specs/session-display/spec.md` 的 `Subagent 内联展开 ExecutionTrace` / `Subagent MetricsPill 多维度展示`。后端 `LocalDataApi::get_session_detail` 与 `scan_subagent_candidates` 保留 `tracing::info!(target: "cdt_api::perf", ...)` 探针 + `crates/cdt-api/tests/perf_get_session_detail.rs` `#[ignore]` 基准测试（含 raw vs IPC payload 对比）用于回归监测。
 
 ## What to do first in a fresh session
 

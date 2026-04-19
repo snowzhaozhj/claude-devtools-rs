@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { SubagentProcess, ContentBlock, ToolCall } from "../lib/api";
+  import type { SubagentProcess, ContentBlock, ToolCall, Chunk } from "../lib/api";
+  import { getSubagentTrace } from "../lib/api";
   import { CHEVRON_RIGHT, TERMINAL } from "../lib/icons";
   import { getTeamColorSet, getSubagentTypeColorSet, type TeamColorSet } from "../lib/teamColors";
   import { getAgentConfigsByName } from "../lib/agentConfigsStore.svelte";
@@ -11,14 +12,44 @@
 
   interface Props {
     process: SubagentProcess;
+    /** 顶层 SessionDetail 的 sessionId，用于 getSubagentTrace 懒拉取。
+        嵌套 SubagentCard 必须把同值一路传递（不变）。 */
+    rootSessionId: string;
     /** 嵌套深度，由 ExecutionTrace 传递；顶层 0 */
     depth?: number;
   }
 
-  let { process, depth = 0 }: Props = $props();
+  let { process, rootSessionId, depth = 0 }: Props = $props();
 
   let isExpanded = $state(false);
   let isTraceExpanded = $state(false);
+
+  // Lazy trace cache：messages 在 IPC 已被裁空时通过 getSubagentTrace 拉取后填入。
+  // 同 SubagentCard 实例多次展开/折叠不重拉。
+  let messagesLocal: Chunk[] | null = $state(null);
+  let isLoadingTrace = $state(false);
+
+  // 派生 messages：优先用本地缓存，fallback 到 process.messages
+  // （后端 OMIT_SUBAGENT_MESSAGES=false 或老后端时直接用 process.messages）。
+  const effectiveMessages = $derived<Chunk[]>(messagesLocal ?? process.messages);
+
+  async function ensureMessages(): Promise<void> {
+    if (messagesLocal != null) return;
+    if (!process.messagesOmitted) {
+      // 老后端 / 回滚开关 false：messages 已是完整
+      messagesLocal = process.messages;
+      return;
+    }
+    isLoadingTrace = true;
+    try {
+      messagesLocal = await getSubagentTrace(rootSessionId, process.sessionId);
+    } catch (e) {
+      console.warn("getSubagentTrace failed:", e);
+      messagesLocal = []; // 失败也别一直 loading；显示空 trace
+    } finally {
+      isLoadingTrace = false;
+    }
+  }
 
   // ----------------- 颜色 -----------------
   const colorSet: TeamColorSet = $derived.by(() => {
@@ -48,8 +79,11 @@
   );
 
   // ----------------- Model 提取 -----------------
+  // 优先用后端预算的 headerModel；缺失（老后端）时 fallback 派生。effectiveMessages
+  // 在 messagesOmitted=true 且未懒拉时为空数组——派生返回 null 即可。
   const modelName = $derived.by(() => {
-    for (const c of process.messages) {
+    if (process.headerModel) return process.headerModel;
+    for (const c of effectiveMessages) {
       if (c.kind !== "ai") continue;
       for (const r of c.responses) {
         const info = parseModelString(r.model);
@@ -61,10 +95,11 @@
 
   // ----------------- Last usage / context window 合计 -----------------
   const isolatedTokens = $derived.by(() => {
+    if ((process.lastIsolatedTokens ?? 0) > 0) return process.lastIsolatedTokens!;
     let last: typeof process.messages[number] extends infer _C
       ? null | { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
       : never = null;
-    for (const c of process.messages) {
+    for (const c of effectiveMessages) {
       if (c.kind !== "ai") continue;
       for (const r of c.responses) {
         if (r.usage) last = r.usage;
@@ -80,11 +115,15 @@
   });
 
   // ----------------- Shutdown-only team 特例 -----------------
+  // 优先用后端预算 flag；缺失（老后端）时 fallback 派生（与改造前完全一致）。
+  // effectiveMessages 在 messagesOmitted=true 且未懒拉时为空 → fallback 返回 false，
+  // 卡片走完整渲染分支——shutdown-only 是 team 极简渲染优化，错过显示完整也安全。
   const isShutdownOnly = $derived.by(() => {
+    if (process.isShutdownOnly !== undefined) return process.isShutdownOnly && process.team != null;
     if (!process.team) return false;
     let assistantCount = 0;
     let onlyCall: ToolCall | null = null;
-    for (const c of process.messages) {
+    for (const c of effectiveMessages) {
       if (c.kind !== "ai") continue;
       for (const r of c.responses) {
         assistantCount++;
@@ -101,7 +140,7 @@
 
   // ----------------- ExecutionTrace items -----------------
   const traceItems = $derived(
-    isExpanded ? buildDisplayItemsFromChunks(process.messages) : [],
+    isExpanded ? buildDisplayItemsFromChunks(effectiveMessages) : [],
   );
   const traceSummary = $derived(
     isExpanded ? buildSummary(traceItems) : "",
@@ -110,8 +149,9 @@
   // ----------------- Duration -----------------
   const durationText = $derived(formatDuration(process.durationMs));
 
-  function toggleExpanded() {
+  async function toggleExpanded() {
     isExpanded = !isExpanded;
+    if (isExpanded) await ensureMessages();
   }
   function toggleTrace(e: Event) {
     e.stopPropagation();
@@ -234,7 +274,11 @@
             </div>
             {#if isTraceExpanded}
               <div class="sa-trace-body">
-                <ExecutionTrace items={traceItems} {depth} />
+                {#if isLoadingTrace}
+                  <div class="sa-trace-loading">Loading trace…</div>
+                {:else}
+                  <ExecutionTrace items={traceItems} {rootSessionId} {depth} />
+                {/if}
               </div>
             {/if}
           </div>
@@ -446,6 +490,12 @@
   .sa-trace-body {
     padding: 8px;
     border-top: 1px solid var(--card-border);
+  }
+  .sa-trace-loading {
+    padding: 8px 4px;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    font-style: italic;
   }
 
   /* Shutdown-only 特例 */

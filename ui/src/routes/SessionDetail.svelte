@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { getSessionDetail, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution } from "../lib/api";
-  import { renderMarkdown } from "../lib/render";
   import { getToolSummary, getToolStatus, cleanDisplayText } from "../lib/toolHelpers";
   import { buildDisplayItems, buildSummary } from "../lib/displayItemBuilder";
   import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG, BOT } from "../lib/icons";
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
+  import { createLazyMarkdownObserver, estimatePlaceholderHeight } from "../lib/lazyMarkdown.svelte";
   import { getTabUIState, saveTabUIState, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
   import { registerHandler, unregisterHandler, dedupeRefresh } from "../lib/fileChangeStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
@@ -15,6 +15,7 @@
   import SearchBar from "../components/SearchBar.svelte";
   import ContextPanel from "../components/ContextPanel.svelte";
   import OngoingBanner from "../components/OngoingBanner.svelte";
+  import SessionDetailSkeleton from "../components/SessionDetailSkeleton.svelte";
   import DefaultToolViewer from "../components/tool-viewers/DefaultToolViewer.svelte";
   import ReadToolViewer from "../components/tool-viewers/ReadToolViewer.svelte";
   import EditToolViewer from "../components/tool-viewers/EditToolViewer.svelte";
@@ -28,6 +29,30 @@
   let loading = $state(true);
   let error: string | null = $state(null);
   let conversationEl: HTMLElement | undefined = $state();
+
+  // Lazy markdown observer：root 必须是 conversation 容器；mount 时创建，
+  // unmount 时 disconnect。observer 创建于 conversationEl 首次绑定后
+  // （processMermaid 后处理需要它，所以 attach 时 lazy 检查）。
+  let lazyObserver: ReturnType<typeof createLazyMarkdownObserver> | null = null;
+  function ensureObserver(): ReturnType<typeof createLazyMarkdownObserver> | null {
+    if (!lazyObserver && conversationEl) {
+      lazyObserver = createLazyMarkdownObserver(conversationEl);
+    }
+    return lazyObserver;
+  }
+  function attachMarkdown(text: string, kind: "user" | "ai" | "system" | "thinking" | "output" | "slash") {
+    return (el: HTMLElement) => {
+      const obs = ensureObserver();
+      if (!obs) return;
+      // 占位高度估算：进入视口前 min-height 控制 layout 稳定
+      el.style.minHeight = `${estimatePlaceholderHeight(text, kind)}px`;
+      obs.observe(el, text, async (rendered) => {
+        // 渲染完成后清理 min-height（让真实高度接管），并扫该子树的 mermaid block
+        rendered.style.minHeight = "";
+        await processMermaidBlocks(rendered);
+      });
+    };
+  }
 
   // per-tab UI 状态（从 tabStore 恢复）
   let uiState = getTabUIState(tabId);
@@ -77,18 +102,35 @@
   onMount(async () => {
     document.addEventListener("keydown", handleKeydown);
 
+    // 性能探针：拆 IPC / DOM-mount / mermaid 三段。仅首次（无缓存）首屏采样。
+    // 走 console，便于在 Tauri devtools 里直接看；不接入正式 telemetry。
+    const t_mount = performance.now();
+
     // 优先从 tabStore 缓存加载 session 数据
     const cached = getCachedSession(tabId);
     if (cached) {
       detail = cached;
       loading = false;
+      console.info(`[perf] SessionDetail ${sessionId.slice(0, 8)} cached hit`);
     } else {
       try {
+        const t_ipc = performance.now();
         const d = await getSessionDetail(projectId, sessionId);
+        const ipc_ms = performance.now() - t_ipc;
+        const chunks_len = d.chunks.length;
+        const payload_kb = JSON.stringify(d).length / 1024;
         detail = d;
         setCachedSession(tabId, d);
+        console.info(
+          `[perf] SessionDetail ${sessionId.slice(0, 8)} IPC ${ipc_ms.toFixed(0)}ms (chunks=${chunks_len}, payload=${payload_kb.toFixed(0)}KB)`
+        );
       } catch (e) { error = String(e); }
       finally { loading = false; }
+
+      // 等 DOM 真正 mount 完
+      await tick();
+      const total_ms = performance.now() - t_mount;
+      console.info(`[perf] SessionDetail ${sessionId.slice(0, 8)} first-paint ${total_ms.toFixed(0)}ms`);
     }
 
     // 恢复滚动位置
@@ -103,16 +145,15 @@
     });
   });
 
-  // Mermaid 图表后处理：detail 加载后扫描并渲染 mermaid 代码块
-  $effect(() => {
-    if (detail && conversationEl) {
-      tick().then(() => processMermaidBlocks(conversationEl!));
-    }
-  });
+  // Mermaid 图表后处理：旧版本在首屏 effect 全树扫描；现在迁移到
+  // lazy markdown observer 的 onRendered 回调内（按 chunk 子树扫描），
+  // 见 attachMarkdown 与 design.md decision 3。
 
   onDestroy(() => {
     document.removeEventListener("keydown", handleKeydown);
     unregisterHandler(fileChangeKey);
+    lazyObserver?.disconnect();
+    lazyObserver = null;
     // 保存 per-tab UI 状态
     saveTabUIState(tabId, {
       expandedChunks: new Set(expandedChunks),
@@ -244,7 +285,7 @@
 
 <div class="session-detail">
 {#if loading}
-  <div class="state-msg">加载中...</div>
+  <SessionDetailSkeleton />
 {:else if error}
   <div class="state-msg state-err">{error}</div>
 {:else if detail}
@@ -289,7 +330,7 @@
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html USER_SVG}</svg>
                 </span>
               </div>
-              <div class="prose">{@html renderMarkdown(text)}</div>
+              <div class="prose lazy-md" {@attach attachMarkdown(text, "user")}></div>
             </div>
           </div>
         {/if}
@@ -348,7 +389,7 @@
                     >
                       {#snippet children()}
                         {#if item.slash.instructions}
-                          <div class="prose slash-instructions">{@html renderMarkdown(item.slash.instructions)}</div>
+                          <div class="prose slash-instructions lazy-md" {@attach attachMarkdown(item.slash.instructions, "slash")}></div>
                         {/if}
                       {/snippet}
                     </BaseItem>
@@ -387,7 +428,7 @@
                       onclick={() => toggle(key)}
                     >
                       {#snippet children()}
-                        <div class="prose prose-thinking">{@html renderMarkdown(item.text)}</div>
+                        <div class="prose prose-thinking lazy-md" {@attach attachMarkdown(item.text, "thinking")}></div>
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "output"}
@@ -400,11 +441,11 @@
                       onclick={() => toggle(key)}
                     >
                       {#snippet children()}
-                        <div class="prose">{@html renderMarkdown(item.text)}</div>
+                        <div class="prose lazy-md" {@attach attachMarkdown(item.text, "output")}></div>
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "subagent"}
-                    <SubagentCard process={item.process} />
+                    <SubagentCard process={item.process} rootSessionId={sessionId} />
                   {/if}
                 {/each}
               </div>
@@ -417,7 +458,7 @@
                      banner 占 lastOutput 位置，结束后换回真正的内容 -->
                 <OngoingBanner />
               {:else if di.lastOutput}
-                <div class="prose">{@html renderMarkdown(di.lastOutput.text)}</div>
+                <div class="prose lazy-md" {@attach attachMarkdown(di.lastOutput.text, "ai")}></div>
               {/if}
               {#each interruptions as _interrupt}
                 <div class="interruption-block">Session interrupted by user</div>

@@ -56,6 +56,18 @@ async fn get_session_detail(
 }
 
 #[tauri::command]
+async fn get_subagent_trace(
+    data: State<'_, AppData>,
+    root_session_id: String,
+    subagent_session_id: String,
+) -> Result<serde_json::Value, String> {
+    data.api
+        .get_subagent_trace(&root_session_id, &subagent_session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn search_sessions(
     data: State<'_, AppData>,
     project_id: String,
@@ -418,6 +430,7 @@ pub fn run() {
             list_projects,
             list_sessions,
             get_session_detail,
+            get_subagent_trace,
             search_sessions,
             get_config,
             update_config,

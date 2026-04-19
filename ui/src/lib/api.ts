@@ -140,12 +140,21 @@ export interface SubagentProcess {
   metrics: ChunkMetrics;
   team: { teamName: string; memberName: string; memberColor: string | null } | null;
   subagentType: string | null;
+  /** 默认空 Vec（IPC 已裁剪）；展开 SubagentCard 时通过 getSubagentTrace 懒拉取。 */
   messages: Chunk[];
   mainSessionImpact: MainSessionImpact | null;
   isOngoing: boolean;
   durationMs: number | null;
   parentTaskId: string | null;
   description: string | null;
+  /** 后端预算的 header 模型名（已 simplify，如 "haiku4.5"）。messages 缺失时仍可显示。 */
+  headerModel?: string | null;
+  /** 后端预算的最后一条 assistant usage 总和（input+output+cacheRead+cacheCreation）。 */
+  lastIsolatedTokens?: number;
+  /** 后端预算的 shutdown-only flag（team-only 极简渲染分支）。 */
+  isShutdownOnly?: boolean;
+  /** true 表示 messages 已被 IPC 裁剪，需 getSubagentTrace 懒拉取。 */
+  messagesOmitted?: boolean;
 }
 
 export interface SlashCommand {
@@ -220,6 +229,20 @@ export async function getSessionDetail(
   sessionId: string
 ): Promise<SessionDetail> {
   return await invoke("get_session_detail", { projectId, sessionId });
+}
+
+/**
+ * 按需拉取 subagent 完整 chunks 流。SubagentCard 展开时使用——首屏 IPC 默认
+ * 把 SubagentProcess.messages 裁空，前端再单独拉取，砍 60% payload。
+ *
+ * 找不到（subagent jsonl 不存在 / root session 不属任何已知 project）时返回 []，
+ * 不报错。
+ */
+export async function getSubagentTrace(
+  rootSessionId: string,
+  subagentSessionId: string,
+): Promise<Chunk[]> {
+  return await invoke("get_subagent_trace", { rootSessionId, subagentSessionId });
 }
 
 // ---------------------------------------------------------------------------

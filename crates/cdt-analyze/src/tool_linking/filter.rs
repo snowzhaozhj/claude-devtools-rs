@@ -57,6 +57,10 @@ mod tests {
             duration_ms: None,
             parent_task_id: None,
             description: None,
+            header_model: None,
+            last_isolated_tokens: 0,
+            is_shutdown_only: false,
+            messages_omitted: false,
         }
     }
 

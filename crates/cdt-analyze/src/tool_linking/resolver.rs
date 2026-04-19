@@ -6,8 +6,8 @@
 //! 纯函数，输入为已预过滤的 `SubagentCandidate` 列表（装载逻辑不属本 capability）。
 
 use cdt_core::{
-    MainSessionImpact, Process, SubagentCandidate, ToolCall, ToolExecution, ToolOutput,
-    estimate_content_tokens, estimate_tokens,
+    Chunk, ContentBlock, MainSessionImpact, Process, SubagentCandidate, ToolCall, ToolExecution,
+    ToolOutput, estimate_content_tokens, estimate_tokens,
 };
 
 use super::{Resolution, ResolvedTask};
@@ -208,6 +208,8 @@ fn candidate_to_process(
     task: &ToolCall,
     exec: Option<&ToolExecution>,
 ) -> Process {
+    let (header_model, last_isolated_tokens, is_shutdown_only) =
+        derive_subagent_header(&cand.messages);
     Process {
         session_id: cand.session_id.clone(),
         root_task_description: task.task_description.clone(),
@@ -222,7 +224,117 @@ fn candidate_to_process(
         duration_ms: compute_duration_ms(cand),
         parent_task_id: Some(task.id.clone()),
         description: task.task_description.clone(),
+        header_model,
+        last_isolated_tokens,
+        is_shutdown_only,
+        // 由 IPC 层在裁剪时设 true；resolver 阶段始终 false（messages 还在）
+        messages_omitted: false,
     }
+}
+
+/// 从 subagent `messages` 派生 `SubagentCard` header 直接需要的 3 个字段，
+/// 让 IPC 裁剪 `messages` 后前端 header 仍可独立渲染。
+///
+/// 返回 `(header_model, last_isolated_tokens, is_shutdown_only)`：
+/// - `header_model`：最后一条 AI Chunk 最后一条 response.model，跑过
+///   `simplify_model_name` 简化（对齐 `session-display` spec 的
+///   "Subagent 模型名对齐 parseModelString" Requirement）。
+/// - `last_isolated_tokens`：最后一条 AI Chunk 最后一条 response.usage 的
+///   `input + output + cache_read + cache_creation` 之和。
+/// - `is_shutdown_only`：messages 仅含 1 条 assistant + 单 `SendMessage`
+///   `shutdown_response` 调用（team-only 极简渲染分支判定）。
+pub(crate) fn derive_subagent_header(messages: &[Chunk]) -> (Option<String>, u64, bool) {
+    let mut header_model: Option<String> = None;
+    let mut last_tokens: u64 = 0;
+    let mut assistant_count: usize = 0;
+    let mut only_send_shutdown = true;
+    let mut saw_any_send = false;
+
+    for c in messages {
+        let Chunk::Ai(ai) = c else { continue };
+        for r in &ai.responses {
+            assistant_count += 1;
+            if let Some(m) = r.model.as_ref() {
+                if let Some(simple) = simplify_model_name(m) {
+                    header_model = Some(simple);
+                }
+            }
+            if let Some(u) = r.usage.as_ref() {
+                last_tokens = u.input_tokens
+                    + u.output_tokens
+                    + u.cache_read_input_tokens
+                    + u.cache_creation_input_tokens;
+            }
+            // shutdown-only：每条 assistant 只能含 1 个 tool_use，且必须是
+            // SendMessage shutdown_response；否则 only_send_shutdown 翻 false
+            let mut tool_uses: Vec<&ContentBlock> = Vec::new();
+            if let cdt_core::MessageContent::Blocks(blocks) = &r.content {
+                for b in blocks {
+                    if matches!(b, ContentBlock::ToolUse { .. }) {
+                        tool_uses.push(b);
+                    }
+                }
+            }
+            if tool_uses.len() != 1 {
+                only_send_shutdown = false;
+            } else if let ContentBlock::ToolUse { name, input, .. } = tool_uses[0] {
+                if name == "SendMessage" {
+                    saw_any_send = true;
+                    let is_shutdown = input
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|s| s == "shutdown_response");
+                    if !is_shutdown {
+                        only_send_shutdown = false;
+                    }
+                } else {
+                    only_send_shutdown = false;
+                }
+            }
+        }
+    }
+
+    let is_shutdown_only = assistant_count == 1 && saw_any_send && only_send_shutdown;
+    (header_model, last_tokens, is_shutdown_only)
+}
+
+/// 移植自前端 `parseModelString.ts`：去 `claude-` 前缀、去 `-YYYYMMDD` 日期
+/// suffix，把剩下 `-` 分隔的 family/版本段以 `.` 连接。`<synthetic>` 与
+/// 空字符串返回 `None`。
+fn simplify_model_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "<synthetic>" {
+        return None;
+    }
+    let stripped = trimmed.strip_prefix("claude-").unwrap_or(trimmed);
+    // 去 `-YYYYMMDD`（8 位数字 suffix）
+    let parts: Vec<&str> = stripped.split('-').collect();
+    let kept: Vec<&str> = parts
+        .iter()
+        .copied()
+        .filter(|p| !(p.len() == 8 && p.chars().all(|c| c.is_ascii_digit())))
+        .collect();
+    if kept.is_empty() {
+        return None;
+    }
+    // family + 数字段以 `.` 连接：`["haiku", "4", "5"]` → `"haiku4.5"`
+    // 实现：先把第一段保留，后续段如果纯数字就直接拼，否则用 `.` 分隔
+    let mut out = String::new();
+    for (i, seg) in kept.iter().enumerate() {
+        if i == 0 {
+            out.push_str(seg);
+        } else if seg.chars().all(|c| c.is_ascii_digit()) {
+            // 第一个数字段直接拼到 family，后续数字段用 `.` 连接
+            if out.chars().last().is_some_and(|c| c.is_ascii_digit()) {
+                out.push('.');
+            }
+            out.push_str(seg);
+        } else {
+            out.push('-');
+            out.push_str(seg);
+        }
+    }
+    Some(out)
 }
 
 /// 从 Task `tool_call` 中抽取 `subagent_type`，优先走预解析字段。
@@ -578,5 +690,86 @@ mod tests {
         let r = resolve_subagents(&tasks, &execs, &[c]);
         let p = take_process(&r[0].resolution);
         assert_eq!(p.messages.len(), 1);
+    }
+
+    fn ai_chunk(model: Option<&str>, usage: Option<cdt_core::TokenUsage>) -> Chunk {
+        Chunk::Ai(cdt_core::AIChunk {
+            timestamp: ts(0),
+            duration_ms: None,
+            responses: vec![cdt_core::AssistantResponse {
+                uuid: "a".into(),
+                timestamp: ts(0),
+                content: cdt_core::MessageContent::Blocks(Vec::new()),
+                tool_calls: Vec::new(),
+                usage,
+                model: model.map(str::to_owned),
+            }],
+            metrics: cdt_core::ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: Vec::new(),
+            subagents: Vec::new(),
+            slash_commands: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn derive_subagent_header_picks_last_ai_model_simplified() {
+        let messages = vec![
+            ai_chunk(Some("claude-opus-4-7-20251001"), None),
+            ai_chunk(Some("claude-haiku-4-5-20251001"), None),
+        ];
+        let (model, _, _) = derive_subagent_header(&messages);
+        assert_eq!(model.as_deref(), Some("haiku4.5"));
+    }
+
+    #[test]
+    fn derive_subagent_header_sums_last_usage() {
+        let usage = cdt_core::TokenUsage {
+            input_tokens: 10,
+            output_tokens: 20,
+            cache_read_input_tokens: 30,
+            cache_creation_input_tokens: 40,
+        };
+        let messages = vec![
+            ai_chunk(Some("claude-haiku-4-5"), None),
+            ai_chunk(Some("claude-haiku-4-5"), Some(usage)),
+        ];
+        let (_, tokens, _) = derive_subagent_header(&messages);
+        assert_eq!(tokens, 100);
+    }
+
+    #[test]
+    fn derive_subagent_header_detects_shutdown_only() {
+        let send_block = ContentBlock::ToolUse {
+            id: "t1".into(),
+            name: "SendMessage".into(),
+            input: serde_json::json!({"type": "shutdown_response"}),
+        };
+        let chunk = Chunk::Ai(cdt_core::AIChunk {
+            timestamp: ts(0),
+            duration_ms: None,
+            responses: vec![cdt_core::AssistantResponse {
+                uuid: "a".into(),
+                timestamp: ts(0),
+                content: cdt_core::MessageContent::Blocks(vec![send_block]),
+                tool_calls: Vec::new(),
+                usage: None,
+                model: Some("claude-haiku-4-5".into()),
+            }],
+            metrics: cdt_core::ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: Vec::new(),
+            subagents: Vec::new(),
+            slash_commands: Vec::new(),
+        });
+        let (_, _, shutdown) = derive_subagent_header(&[chunk]);
+        assert!(shutdown);
+    }
+
+    #[test]
+    fn derive_subagent_header_multiple_assistants_not_shutdown_only() {
+        let messages = vec![ai_chunk(None, None), ai_chunk(None, None)];
+        let (_, _, shutdown) = derive_subagent_header(&messages);
+        assert!(!shutdown);
     }
 }
