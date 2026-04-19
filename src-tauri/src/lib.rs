@@ -162,6 +162,49 @@ async fn mark_notification_read(
 }
 
 #[tauri::command]
+async fn delete_notification(
+    app: tauri::AppHandle,
+    data: State<'_, AppData>,
+    notification_id: String,
+) -> Result<bool, String> {
+    let removed = data
+        .api
+        .delete_notification(&notification_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("notification-update", ());
+    Ok(removed)
+}
+
+#[tauri::command]
+async fn mark_all_notifications_read(
+    app: tauri::AppHandle,
+    data: State<'_, AppData>,
+) -> Result<(), String> {
+    data.api
+        .mark_all_notifications_read()
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("notification-update", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn clear_notifications(
+    app: tauri::AppHandle,
+    data: State<'_, AppData>,
+    trigger_id: Option<String>,
+) -> Result<usize, String> {
+    let removed = data
+        .api
+        .clear_notifications(trigger_id.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("notification-update", ());
+    Ok(removed)
+}
+
+#[tauri::command]
 async fn add_trigger(
     data: State<'_, AppData>,
     trigger: NotificationTrigger,
@@ -474,6 +517,9 @@ pub fn run() {
             update_config,
             get_notifications,
             mark_notification_read,
+            delete_notification,
+            mark_all_notifications_read,
+            clear_notifications,
             add_trigger,
             remove_trigger,
             read_agent_configs,

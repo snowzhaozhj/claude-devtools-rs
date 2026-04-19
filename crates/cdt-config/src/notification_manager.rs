@@ -162,6 +162,29 @@ impl NotificationManager {
         self.save().await
     }
 
+    /// 按 id 删除一条通知。存在并删除成功返回 `Ok(true)`；未找到返回 `Ok(false)` 且不落盘。
+    pub async fn delete_one(&mut self, notification_id: &str) -> Result<bool, ConfigError> {
+        let before = self.notifications.len();
+        self.notifications.retain(|n| n.error.id != notification_id);
+        if self.notifications.len() == before {
+            return Ok(false);
+        }
+        self.save().await?;
+        Ok(true)
+    }
+
+    /// 按 `trigger_id` 批量删除。返回被删条数。条数为 0 时不落盘。
+    pub async fn clear_by_trigger_id(&mut self, trigger_id: &str) -> Result<usize, ConfigError> {
+        let before = self.notifications.len();
+        self.notifications
+            .retain(|n| n.error.trigger_id.as_deref() != Some(trigger_id));
+        let removed = before - self.notifications.len();
+        if removed > 0 {
+            self.save().await?;
+        }
+        Ok(removed)
+    }
+
     /// Auto-prune 到 `MAX_NOTIFICATIONS`。
     fn prune(&mut self) {
         if self.notifications.len() > MAX_NOTIFICATIONS {
@@ -329,5 +352,76 @@ mod tests {
         let page3 = mgr.get_notifications(2, 4);
         assert_eq!(page3.notifications.len(), 1);
         assert!(!page3.has_more);
+    }
+
+    #[tokio::test]
+    async fn delete_one_removes_single() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("notif.json");
+        let mut mgr = NotificationManager::new(Some(path));
+
+        mgr.add_notification(make_error("e1")).await.unwrap();
+        mgr.add_notification(make_error("e2")).await.unwrap();
+        assert_eq!(mgr.get_unread_count(), 2);
+
+        let removed = mgr.delete_one("e1").await.unwrap();
+        assert!(removed);
+        assert_eq!(mgr.get_notifications(10, 0).total, 1);
+        assert_eq!(mgr.get_unread_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_one_missing_returns_false() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("notif.json");
+        let mut mgr = NotificationManager::new(Some(path.clone()));
+
+        mgr.add_notification(make_error("e1")).await.unwrap();
+        let mtime_before = tokio::fs::metadata(&path)
+            .await
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        // 休眠 10ms 避免文件系统 mtime 粒度误差
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let removed = mgr.delete_one("does-not-exist").await.unwrap();
+        assert!(!removed);
+
+        let mtime_after = tokio::fs::metadata(&path)
+            .await
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(
+            mtime_before, mtime_after,
+            "missing id must not rewrite file"
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_by_trigger_id_removes_matching_only() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("notif.json");
+        let mut mgr = NotificationManager::new(Some(path));
+
+        let mut e_a = make_error("ea");
+        e_a.trigger_id = Some("trigger-A".into());
+        let mut e_b = make_error("eb");
+        e_b.trigger_id = Some("trigger-B".into());
+        let mut e_c = make_error("ec");
+        e_c.trigger_id = Some("trigger-A".into());
+
+        mgr.add_notification(e_a).await.unwrap();
+        mgr.add_notification(e_b).await.unwrap();
+        mgr.add_notification(e_c).await.unwrap();
+
+        let removed = mgr.clear_by_trigger_id("trigger-A").await.unwrap();
+        assert_eq!(removed, 2);
+
+        let remaining = mgr.get_notifications(10, 0);
+        assert_eq!(remaining.total, 1);
+        assert_eq!(remaining.notifications[0].error.id, "eb");
     }
 }

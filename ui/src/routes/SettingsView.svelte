@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { getConfig, updateConfig, addTrigger, removeTrigger, type AppConfig, type NotificationTrigger } from "../lib/api";
   import { applyTheme } from "../lib/theme";
+  import SettingsToggle from "../lib/components/SettingsToggle.svelte";
 
   let config: AppConfig | null = $state(null);
   let loading = $state(true);
@@ -165,9 +166,11 @@
               <span class="setting-label">自动展开 AI 组</span>
               <span class="setting-desc">打开会话时自动展开工具执行区域</span>
             </div>
-            <button class="toggle-btn" class:toggle-on={config.general.autoExpandAiGroups} onclick={() => updateGeneral("autoExpandAiGroups", !config!.general.autoExpandAiGroups)}>
-              {config.general.autoExpandAiGroups ? "开" : "关"}
-            </button>
+            <SettingsToggle
+              enabled={config.general.autoExpandAiGroups}
+              onChange={(v) => updateGeneral("autoExpandAiGroups", v)}
+              ariaLabel="自动展开 AI 组"
+            />
           </div>
         </div>
 
@@ -179,18 +182,22 @@
               <span class="setting-label">启用通知</span>
               <span class="setting-desc">当触发器规则匹配时产生通知</span>
             </div>
-            <button class="toggle-btn" class:toggle-on={config.notifications.enabled} onclick={() => updateNotifications("enabled", !config!.notifications.enabled)}>
-              {config.notifications.enabled ? "开" : "关"}
-            </button>
+            <SettingsToggle
+              enabled={config.notifications.enabled}
+              onChange={(v) => updateNotifications("enabled", v)}
+              ariaLabel="启用通知"
+            />
           </div>
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">提示音</span>
               <span class="setting-desc">收到通知时播放声音</span>
             </div>
-            <button class="toggle-btn" class:toggle-on={config.notifications.soundEnabled} onclick={() => updateNotifications("soundEnabled", !config!.notifications.soundEnabled)}>
-              {config.notifications.soundEnabled ? "开" : "关"}
-            </button>
+            <SettingsToggle
+              enabled={config.notifications.soundEnabled}
+              onChange={(v) => updateNotifications("soundEnabled", v)}
+              ariaLabel="提示音"
+            />
           </div>
 
           <!-- 触发器区域 -->
@@ -235,12 +242,11 @@
                   <span class="trigger-color" style:background={trigger.color || "var(--color-text-muted)"}></span>
                   <span class="trigger-name">{trigger.name}</span>
                   <span class="trigger-mode">{modeLabels[trigger.mode] || trigger.mode}</span>
-                  <button
-                    class="trigger-toggle"
-                    class:trigger-toggle-on={trigger.enabled}
-                    onclick={() => handleToggleTrigger(trigger)}
-                    title={trigger.enabled ? "点击禁用" : "点击启用"}
-                  >{trigger.enabled ? "启用" : "禁用"}</button>
+                  <SettingsToggle
+                    enabled={trigger.enabled}
+                    onChange={() => handleToggleTrigger(trigger)}
+                    ariaLabel={trigger.enabled ? "点击禁用触发器" : "点击启用触发器"}
+                  />
                   <button class="trigger-delete" onclick={() => handleRemoveTrigger(trigger)} title="删除触发器">×</button>
                 </div>
               {/each}
@@ -274,9 +280,6 @@
   .setting-desc { font-size: 11px; color: var(--color-text-muted); }
   .setting-select { padding: 5px 10px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); color: var(--color-text); font: inherit; font-size: 12px; cursor: pointer; outline: none; }
   .setting-select:focus { border-color: var(--color-border-emphasis); }
-  .toggle-btn { padding: 5px 16px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); color: var(--color-text-muted); font: inherit; font-size: 12px; cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s; min-width: 44px; }
-  .toggle-on { background: var(--color-border-emphasis); color: var(--color-text); border-color: var(--color-border-emphasis); }
-
   /* Trigger 区域 */
   .trigger-header { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; }
   .subsection-title { font-size: 13px; font-weight: 600; color: var(--color-text-secondary); margin: 0; }
@@ -302,8 +305,6 @@
   .trigger-color { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .trigger-name { flex: 1; color: var(--color-text); }
   .trigger-mode { color: var(--color-text-muted); font-size: 11px; font-family: var(--font-mono); }
-  .trigger-toggle { padding: 2px 8px; border: 1px solid var(--color-border); border-radius: 3px; background: transparent; color: var(--color-text-muted); font: inherit; font-size: 11px; cursor: pointer; transition: background 0.1s, color 0.1s; }
-  .trigger-toggle-on { color: var(--color-text-secondary); background: var(--tool-item-hover-bg); }
   .trigger-delete { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: 4px; background: transparent; color: var(--color-text-muted); font-size: 14px; cursor: pointer; flex-shrink: 0; transition: background 0.1s, color 0.1s; }
   .trigger-delete:hover { background: rgba(229, 62, 62, 0.15); color: var(--tool-result-error-text); }
   .empty-triggers { padding: 16px 12px; color: var(--color-text-muted); font-size: 13px; text-align: center; line-height: 1.5; }

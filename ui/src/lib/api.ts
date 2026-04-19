@@ -385,6 +385,22 @@ export async function markNotificationRead(
   return await invoke("mark_notification_read", { notificationId });
 }
 
+export async function deleteNotification(
+  notificationId: string
+): Promise<boolean> {
+  return await invoke("delete_notification", { notificationId });
+}
+
+export async function markAllNotificationsRead(): Promise<void> {
+  return await invoke("mark_all_notifications_read");
+}
+
+export async function clearNotifications(
+  triggerId?: string
+): Promise<number> {
+  return await invoke("clear_notifications", { triggerId: triggerId ?? null });
+}
+
 // ---------------------------------------------------------------------------
 // Trigger CRUD
 // ---------------------------------------------------------------------------

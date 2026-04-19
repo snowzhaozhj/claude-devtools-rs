@@ -860,6 +860,35 @@ impl DataApi for LocalDataApi {
             .map_err(|e| ApiError::internal(format!("{e}")))
     }
 
+    async fn delete_notification(&self, notification_id: &str) -> Result<bool, ApiError> {
+        let mut mgr = self.notif_mgr.lock().await;
+        mgr.delete_one(notification_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn mark_all_notifications_read(&self) -> Result<(), ApiError> {
+        let mut mgr = self.notif_mgr.lock().await;
+        mgr.mark_all_as_read()
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn clear_notifications(&self, trigger_id: Option<&str>) -> Result<usize, ApiError> {
+        let mut mgr = self.notif_mgr.lock().await;
+        if let Some(id) = trigger_id {
+            mgr.clear_by_trigger_id(id)
+                .await
+                .map_err(|e| ApiError::internal(format!("{e}")))
+        } else {
+            let before = mgr.get_notifications(usize::MAX, 0).total;
+            mgr.clear_all()
+                .await
+                .map_err(|e| ApiError::internal(format!("{e}")))?;
+            Ok(before)
+        }
+    }
+
     // =========================================================================
     // SSH + Context
     // =========================================================================

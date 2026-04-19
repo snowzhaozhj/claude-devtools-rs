@@ -141,6 +141,16 @@ pub trait DataApi: Send + Sync {
     /// 标记通知已读。
     async fn mark_notification_read(&self, notification_id: &str) -> Result<bool, ApiError>;
 
+    /// 按 id 删除单条通知。存在并成功删除返回 `true`，不存在返回 `false`。
+    async fn delete_notification(&self, notification_id: &str) -> Result<bool, ApiError>;
+
+    /// 批量标记所有通知为已读。
+    async fn mark_all_notifications_read(&self) -> Result<(), ApiError>;
+
+    /// 清空通知。`trigger_id=None` 清全部；`Some(id)` 仅清该 trigger 产生的通知。
+    /// 返回被删条数。
+    async fn clear_notifications(&self, trigger_id: Option<&str>) -> Result<usize, ApiError>;
+
     // =========================================================================
     // SSH + Context
     // =========================================================================

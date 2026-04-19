@@ -58,6 +58,15 @@ pub fn build_router(state: AppState) -> Router {
             "/api/notifications/{notification_id}/read",
             post(mark_notification_read),
         )
+        .route(
+            "/api/notifications/{notification_id}",
+            axum::routing::delete(delete_notification),
+        )
+        .route(
+            "/api/notifications/mark-all-read",
+            post(mark_all_notifications_read),
+        )
+        .route("/api/notifications/clear", post(clear_notifications))
         // SSH + context
         .route("/api/contexts", get(list_contexts))
         .route("/api/contexts/switch", post(switch_context))
@@ -165,6 +174,39 @@ async fn mark_notification_read(
 ) -> Result<impl IntoResponse, ApiError> {
     let ok = s.api.mark_notification_read(&notification_id).await?;
     Ok(Json(serde_json::json!({"success": ok})))
+}
+
+async fn delete_notification(
+    State(s): State<AppState>,
+    Path(notification_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let removed = s.api.delete_notification(&notification_id).await?;
+    Ok(Json(serde_json::json!({"removed": removed})))
+}
+
+async fn mark_all_notifications_read(
+    State(s): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.mark_all_notifications_read().await?;
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ClearNotificationsBody {
+    #[serde(default)]
+    trigger_id: Option<String>,
+}
+
+async fn clear_notifications(
+    State(s): State<AppState>,
+    body: Option<Json<ClearNotificationsBody>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let removed = s
+        .api
+        .clear_notifications(body.trigger_id.as_deref())
+        .await?;
+    Ok(Json(serde_json::json!({"removed": removed})))
 }
 
 async fn list_contexts(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {

@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::defaults::default_config;
 use crate::error::ConfigError;
-use crate::trigger::{TriggerManager, merge_triggers};
+use crate::trigger::{TriggerManager, merge_triggers, validate_trigger};
 use crate::types::{AppConfig, HiddenSession, NotificationTrigger, PinnedSession};
 use crate::validation::{normalize_claude_root_path, validate_http_port, validate_snooze_minutes};
 
@@ -200,7 +200,32 @@ impl ConfigManager {
                             self.config.notifications.snooze_minutes = minutes;
                         }
                     }
-                    _ => {}
+                    "triggers" => {
+                        let list: Vec<NotificationTrigger> = serde_json::from_value(v.clone())
+                            .map_err(|e| {
+                                ConfigError::validation(format!(
+                                    "triggers must be an array of NotificationTrigger: {e}"
+                                ))
+                            })?;
+                        for t in &list {
+                            let r = validate_trigger(t);
+                            if !r.valid {
+                                return Err(ConfigError::validation(format!(
+                                    "Invalid trigger \"{}\": {}",
+                                    t.id,
+                                    r.errors.join(", ")
+                                )));
+                            }
+                        }
+                        self.config.notifications.triggers.clone_from(&list);
+                        self.trigger_manager.set_triggers(list);
+                    }
+                    other => {
+                        tracing::warn!(
+                            key = %other,
+                            "unknown notifications update key ignored"
+                        );
+                    }
                 }
             }
         }
@@ -666,5 +691,82 @@ mod tests {
         assert_eq!(result["a"], 1);
         assert_eq!(result["b"]["c"], 99);
         assert_eq!(result["b"]["d"], 3);
+    }
+
+    #[tokio::test]
+    async fn update_notifications_persists_triggers() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path.clone()));
+        mgr.load().await.unwrap();
+
+        let new_trigger = serde_json::json!({
+            "id": "custom-42",
+            "name": "My custom",
+            "enabled": true,
+            "contentType": "tool_result",
+            "mode": "error_status",
+            "requireError": true,
+        });
+        let updates = serde_json::json!({ "triggers": [new_trigger] });
+
+        let result = mgr.update_notifications(updates).await.unwrap();
+
+        assert_eq!(result.notifications.triggers.len(), 1);
+        assert_eq!(result.notifications.triggers[0].id, "custom-42");
+
+        let enabled = mgr.get_enabled_triggers();
+        assert_eq!(enabled.len(), 1);
+        assert_eq!(enabled[0].id, "custom-42");
+
+        let disk = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(disk.contains("custom-42"));
+    }
+
+    #[tokio::test]
+    async fn update_notifications_rejects_invalid_trigger() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path.clone()));
+        mgr.load().await.unwrap();
+
+        let before_count = mgr.get_config().notifications.triggers.len();
+        let before_enabled = mgr.get_enabled_triggers().len();
+
+        let bad = serde_json::json!({
+            "id": "",
+            "name": "",
+            "enabled": true,
+            "contentType": "tool_result",
+            "mode": "error_status",
+        });
+        let updates = serde_json::json!({ "triggers": [bad] });
+
+        let err = mgr.update_notifications(updates).await.unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+
+        assert_eq!(
+            mgr.get_config().notifications.triggers.len(),
+            before_count,
+            "triggers array must not be partially mutated on validation failure"
+        );
+        assert_eq!(
+            mgr.get_enabled_triggers().len(),
+            before_enabled,
+            "TriggerManager must not be mutated on validation failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_notifications_warn_on_unknown_key() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        let updates = serde_json::json!({ "fooBar": 123, "enabled": false });
+        let result = mgr.update_notifications(updates).await.unwrap();
+
+        assert!(!result.notifications.enabled);
     }
 }
