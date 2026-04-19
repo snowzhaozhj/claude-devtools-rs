@@ -23,24 +23,19 @@
 {#if showMain || showIsolated}
   <div class="metrics-pill">
     {#if showMain}
-      <span class="slot slot-main" title="Main Context: {mainTokens} tokens">
-        <span class="slot-label">Main</span>
-        <span class="slot-val">{formatTokensCompact(mainTokens)}</span>
-      </span>
+      <span class="slot slot-main" title="Main Context: {mainTokens} tokens">{formatTokensCompact(mainTokens)}</span>
     {/if}
     {#if showMain && showIsolated}
-      <span class="sep">·</span>
+      <span class="sep">|</span>
     {/if}
     {#if showIsolated}
-      <span class="slot slot-iso" title="{isolatedLabel}: {isolatedTokens} tokens">
-        <span class="slot-label">Ctx</span>
-        <span class="slot-val">{formatTokensCompact(isolatedTokens)}</span>
-      </span>
+      <span class="slot slot-iso" title="{isolatedLabel}: {isolatedTokens} tokens">{formatTokensCompact(isolatedTokens)}</span>
     {/if}
   </div>
 {/if}
 
 <style>
+  /* 对齐原版 MetricsPill.tsx：仅显示数字 + `|` 分隔，语义靠 hover tooltip */
   .metrics-pill {
     display: inline-flex;
     align-items: center;
@@ -48,38 +43,16 @@
     padding: 1px 8px;
     border-radius: 4px;
     background: var(--badge-neutral-bg);
+    border: 1px solid var(--card-border);
     font-size: 11px;
     font-family: var(--font-mono);
     flex-shrink: 0;
-  }
-
-  .slot {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .slot-label {
-    color: var(--color-text-muted);
-    text-transform: uppercase;
-    font-size: 9px;
-    letter-spacing: 0.05em;
-  }
-
-  .slot-val {
     color: var(--color-text-secondary);
     font-variant-numeric: tabular-nums;
+    cursor: default;
   }
 
-  .slot-main .slot-val {
-    color: #fbbf24;
-  }
+  .slot { display: inline-flex; align-items: center; }
 
-  .slot-iso .slot-val {
-    color: #38bdf8;
-  }
-
-  .sep {
-    color: var(--card-separator);
-  }
+  .sep { color: var(--card-separator); }
 </style>

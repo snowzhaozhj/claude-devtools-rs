@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
-  import { getToolSummary, getToolStatus, cleanDisplayText } from "../lib/toolHelpers";
+  import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications } from "../lib/toolHelpers";
   import { buildDisplayItems, buildSummary } from "../lib/displayItemBuilder";
   import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG, BOT } from "../lib/icons";
   import { tick } from "svelte";
@@ -370,7 +370,8 @@
       {#if chunk.kind === "user"}
         {@const text = utext(chunk.content)}
         {@const images = uimages(chunk.content, chunk.uuid)}
-        {#if text || images.length > 0}
+        {@const taskNotifications = parseTaskNotifications(chunk.content)}
+        {#if text || images.length > 0 || taskNotifications.length > 0}
           <div class="msg-row msg-row-user">
             <div class="msg-spacer"></div>
             <div class="msg-bubble msg-bubble-user">
@@ -391,6 +392,36 @@
                   sessionId={sessionId}
                   blockId={img.blockId}
                 />
+              {/each}
+              {#each taskNotifications as notif (notif.taskId)}
+                {@const isFailed = notif.status === "failed" || notif.status === "error"}
+                {@const isCompleted = notif.status === "completed"}
+                {@const cmdMatch = /"([^"]+)"/.exec(notif.summary)}
+                {@const cmdName = cmdMatch?.[1] ?? notif.summary}
+                {@const exitMatch = /\(exit code (\d+)\)/.exec(notif.summary)}
+                {@const exitCode = exitMatch?.[1]}
+                {@const fileBase = notif.outputFile.split("/").pop() ?? ""}
+                <div
+                  class="task-notif"
+                  class:task-notif-done={isCompleted}
+                  class:task-notif-fail={isFailed}
+                >
+                  <span class="task-notif-icon" aria-hidden="true">
+                    {#if isFailed}✕{:else if isCompleted}✓{:else}○{/if}
+                  </span>
+                  <div class="task-notif-body">
+                    <div class="task-notif-name">{cmdName || notif.taskId}</div>
+                    <div class="task-notif-meta">
+                      <span class="task-notif-status">{notif.status}</span>
+                      {#if exitCode != null}
+                        <span>exit {exitCode}</span>
+                      {/if}
+                      {#if fileBase}
+                        <span class="task-notif-file">{fileBase}</span>
+                      {/if}
+                    </div>
+                  </div>
+                </div>
               {/each}
             </div>
           </div>
@@ -703,6 +734,59 @@
   .msg-avatar-user svg {
     width: 13px;
     height: 13px;
+  }
+
+  /* task-notification 卡片：移植自原版 UserChatGroup.tsx 末尾的 task notif 渲染 */
+  .task-notif {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 6px 12px;
+    margin-top: 6px;
+    border-radius: 8px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+  }
+
+  .task-notif-icon {
+    flex-shrink: 0;
+    margin-top: 1px;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--color-text-muted);
+  }
+
+  .task-notif-done .task-notif-icon { color: var(--badge-success-text, #22c55e); }
+  .task-notif-fail .task-notif-icon { color: var(--error-highlight-text, #ef4444); }
+
+  .task-notif-body {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .task-notif-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .task-notif-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    color: var(--color-text-muted);
+  }
+
+  .task-notif-status { text-transform: capitalize; }
+  .task-notif-file {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 240px;
   }
 
   /* ── AI message ── */

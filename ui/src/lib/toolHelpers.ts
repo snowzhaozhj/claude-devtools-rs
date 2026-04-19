@@ -50,6 +50,46 @@ export interface SlashInfo {
   args?: string;
 }
 
+/**
+ * 后台任务通知卡片数据。移植自原版 `contentSanitizer.ts::TaskNotification`。
+ * 用户消息含 `<task-notification>` XML 时，文本被 `cleanDisplayText` 清空，
+ * 但卡片信息仍要单独渲染（对齐原版 `UserChatGroup.tsx::taskNotifications`）。
+ */
+export interface TaskNotification {
+  taskId: string;
+  status: string;
+  summary: string;
+  outputFile: string;
+}
+
+/** 从 user message content 抽取所有 `<task-notification>` 卡片信息。 */
+export function parseTaskNotifications(content: string | unknown[]): TaskNotification[] {
+  let raw = "";
+  if (typeof content === "string") {
+    raw = content;
+  } else if (Array.isArray(content)) {
+    for (const b of content) {
+      if (b && typeof b === "object" && "type" in b) {
+        const x = b as Record<string, unknown>;
+        if (x.type === "text" && typeof x.text === "string") raw += x.text;
+      }
+    }
+  }
+  const out: TaskNotification[] = [];
+  const re = /<task-notification>([\s\S]*?)<\/task-notification>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    const block = m[1];
+    out.push({
+      taskId: /<task-id>([^<]*)<\/task-id>/.exec(block)?.[1] ?? "",
+      status: /<status>([^<]*)<\/status>/.exec(block)?.[1] ?? "",
+      summary: /<summary>([\s\S]*?)<\/summary>/.exec(block)?.[1]?.trim() ?? "",
+      outputFile: /<output-file>([^<]*)<\/output-file>/.exec(block)?.[1] ?? "",
+    });
+  }
+  return out;
+}
+
 /** 从 command XML 标签提取 slash 信息 */
 export function extractSlashInfo(content: string): SlashInfo | null {
   const nameMatch = /<command-name>\/([^<]+)<\/command-name>/.exec(content);
