@@ -39,6 +39,7 @@ mod tests {
             end_ts: None,
             source_assistant_uuid: "a1".into(),
             result_agent_id: None,
+            output_omitted: false,
         }
     }
 

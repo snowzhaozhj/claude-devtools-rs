@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { getSessionDetail, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution } from "../lib/api";
+  import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
   import { getToolSummary, getToolStatus, cleanDisplayText } from "../lib/toolHelpers";
   import { buildDisplayItems, buildSummary } from "../lib/displayItemBuilder";
   import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG, BOT } from "../lib/icons";
@@ -165,10 +165,41 @@
     });
   });
 
-  function toggle(key: string) {
+  // tool output 懒拉缓存：toolUseId → ToolOutput。仅当 exec.outputOmitted=true
+  // 且用户首次展开该 tool 时通过 getToolOutput IPC 拉取。展开后渲染走
+  // `effectiveOutput()` —— cache 命中优先，否则用 exec.output（兼容老后端 / 回滚）。
+  let outputCache: Map<string, ToolOutput> = $state(new Map());
+
+  function effectiveExec(exec: ToolExecution): ToolExecution {
+    const cached = outputCache.get(exec.toolUseId);
+    if (!cached) return exec;
+    return { ...exec, output: cached };
+  }
+
+  async function ensureToolOutput(exec: ToolExecution): Promise<void> {
+    if (!exec.outputOmitted) return;
+    if (outputCache.has(exec.toolUseId)) return;
+    try {
+      const out = await getToolOutput(sessionId, sessionId, exec.toolUseId);
+      const next = new Map(outputCache);
+      next.set(exec.toolUseId, out);
+      outputCache = next;
+    } catch (e) {
+      console.warn("[perf] getToolOutput failed", exec.toolUseId, e);
+      // 失败保持 exec.output 原样（空），ToolViewer 显示 broken/missing 状态
+    }
+  }
+
+  function toggle(key: string, exec?: ToolExecution) {
     const n = new Set(expandedItems);
-    if (n.has(key)) n.delete(key); else n.add(key);
+    const opening = !n.has(key);
+    if (opening) n.add(key);
+    else n.delete(key);
     expandedItems = n;
+    if (opening && exec) {
+      // fire-and-forget：UI 立即展开占位，IPC 完成后 outputCache 触发重渲染
+      void ensureToolOutput(exec);
+    }
   }
 
   // 为 `{#each detail.chunks}` 提供稳定 key。刷新时 chunks 数组整体被替换，
@@ -426,6 +457,7 @@
                   {:else if item.type === "tool"}
                     {@const exec = item.execution}
                     {@const key = `${i}-tool-${exec.toolUseId}`}
+                    {@const eff = effectiveExec(exec)}
                     <BaseItem
                       svgIcon={WRENCH}
                       label={exec.toolName}
@@ -433,19 +465,19 @@
                       status={getToolStatus(exec)}
                       durationMs={toolDurationMs(exec)}
                       isExpanded={expandedItems.has(key)}
-                      onclick={() => toggle(key)}
+                      onclick={() => toggle(key, exec)}
                     >
                       {#snippet children()}
                         {#if isReadTool(exec)}
-                          <ReadToolViewer {exec} />
+                          <ReadToolViewer exec={eff} />
                         {:else if isEditTool(exec)}
-                          <EditToolViewer {exec} />
+                          <EditToolViewer exec={eff} />
                         {:else if isWriteTool(exec)}
-                          <WriteToolViewer {exec} />
+                          <WriteToolViewer exec={eff} />
                         {:else if isBashTool(exec)}
-                          <BashToolViewer {exec} />
+                          <BashToolViewer exec={eff} />
                         {:else}
-                          <DefaultToolViewer {exec} />
+                          <DefaultToolViewer exec={eff} />
                         {/if}
                       {/snippet}
                     </BaseItem>

@@ -63,6 +63,17 @@ const OMIT_IMAGE_DATA: bool = true;
 /// 行为契约见 change `session-detail-response-content-omit`。
 const OMIT_RESPONSE_CONTENT: bool = true;
 
+/// IPC payload 优化（phase 5）：`get_session_detail` 默认把所有
+/// `AIChunk.tool_executions[].output` 内 `text` / `value` 字段清空（保留 enum
+/// variant kind）+ 设 `output_omitted=true`，砍掉首屏 IPC 中 tool 输出（实测
+/// 46a25772 case 436 KB / 26%）。前端 `ExecutionTrace` 默认折叠，用户点击展开时
+/// 通过 `get_tool_output` IPC 按需懒拉。
+///
+/// 紧急回滚：把本常量改为 `false` 即恢复完整 payload；前端 fallback 路径
+/// （直接渲染 `exec.output`）自动接管。行为契约见 change
+/// `session-detail-tool-output-lazy-load`。
+const OMIT_TOOL_OUTPUT: bool = true;
+
 /// 遍历 chunks 内所有 `ContentBlock::Image`，把 `source.data` 替换为空字符串
 /// 并设 `source.data_omitted = true`。覆盖 `UserChunk.content`、
 /// `AIChunk.responses[].content` 与 `AIChunk.subagents[].messages[]` 嵌套层。
@@ -110,6 +121,26 @@ fn apply_response_content_omit(chunks: &mut [cdt_core::Chunk]) {
             }
             for sub in &mut ai.subagents {
                 apply_response_content_omit(&mut sub.messages);
+            }
+        }
+    }
+}
+
+/// 遍历 chunks 内所有 `AIChunk.tool_executions[].output`，inner `text` /
+/// `value` 字段清空（保留 enum variant kind）并设 `output_omitted = true`。
+/// 覆盖顶层 `AIChunk` 与 `AIChunk.subagents[].messages[]` 嵌套层。
+/// `subagent.messages` 在 `OMIT_SUBAGENT_MESSAGES=true` 时已为空，本函数
+/// 对其是安全 no-op；`OMIT_SUBAGENT_MESSAGES=false` 回滚时本函数仍能命中
+/// 嵌套层。
+fn apply_tool_output_omit(chunks: &mut [cdt_core::Chunk]) {
+    for chunk in chunks {
+        if let cdt_core::Chunk::Ai(ai) = chunk {
+            for exec in &mut ai.tool_executions {
+                exec.output.trim();
+                exec.output_omitted = true;
+            }
+            for sub in &mut ai.subagents {
+                apply_tool_output_omit(&mut sub.messages);
             }
         }
     }
@@ -557,6 +588,11 @@ impl DataApi for LocalDataApi {
             if OMIT_RESPONSE_CONTENT {
                 apply_response_content_omit(&mut cloned);
             }
+            // phase 5：tool_exec.output OMIT 同上，覆盖嵌套 messages 内的
+            // tool_executions[].output。
+            if OMIT_TOOL_OUTPUT {
+                apply_tool_output_omit(&mut cloned);
+            }
             if OMIT_SUBAGENT_MESSAGES {
                 for c in &mut cloned {
                     if let cdt_core::Chunk::Ai(ai) = c {
@@ -684,6 +720,44 @@ impl DataApi for LocalDataApi {
         };
 
         Ok(materialize_image_asset(cache_dir, &media_type, &data_b64).await)
+    }
+
+    async fn get_tool_output(
+        &self,
+        root_session_id: &str,
+        session_id: &str,
+        tool_use_id: &str,
+    ) -> Result<cdt_core::ToolOutput, ApiError> {
+        let projects_dir = path_decoder::get_projects_base_path();
+        let Some(jsonl_path) =
+            locate_session_jsonl(&projects_dir, root_session_id, session_id).await
+        else {
+            tracing::warn!(target: "cdt_api::tool_output", root_session_id, session_id, "jsonl not found");
+            return Ok(cdt_core::ToolOutput::Missing);
+        };
+
+        let messages = match parse_file(&jsonl_path).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(target: "cdt_api::tool_output", error = %e, "parse failed");
+                return Ok(cdt_core::ToolOutput::Missing);
+            }
+        };
+
+        // build_chunks 后线性 scan tool_executions 找 tool_use_id 匹配
+        let chunks = cdt_analyze::build_chunks(&messages);
+        for chunk in &chunks {
+            if let cdt_core::Chunk::Ai(ai) = chunk {
+                for exec in &ai.tool_executions {
+                    if exec.tool_use_id == tool_use_id {
+                        return Ok(exec.output.clone());
+                    }
+                }
+            }
+        }
+
+        tracing::debug!(target: "cdt_api::tool_output", tool_use_id, "id not found in chunks");
+        Ok(cdt_core::ToolOutput::Missing)
     }
 
     async fn get_sessions_by_ids(
@@ -1712,5 +1786,169 @@ mod tests {
             matches!(&nested_ai.responses[0].content, cdt_core::MessageContent::Text(s) if s.is_empty())
         );
         assert!(nested_ai.responses[0].content_omitted);
+    }
+
+    // -------- phase 5: tool_exec.output OMIT --------
+
+    fn make_tool_exec(id: &str, output: cdt_core::ToolOutput) -> cdt_core::ToolExecution {
+        cdt_core::ToolExecution {
+            tool_use_id: id.into(),
+            tool_name: "Bash".into(),
+            input: serde_json::json!({"command": "ls"}),
+            output,
+            is_error: false,
+            start_ts: ts(),
+            end_ts: Some(ts()),
+            source_assistant_uuid: "a1".into(),
+            result_agent_id: None,
+            output_omitted: false,
+        }
+    }
+
+    fn make_ai_chunk_with_tool(exec: cdt_core::ToolExecution) -> cdt_core::Chunk {
+        cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            timestamp: ts(),
+            duration_ms: None,
+            responses: Vec::new(),
+            metrics: cdt_core::ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: vec![exec],
+            subagents: Vec::new(),
+            slash_commands: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn apply_tool_output_omit_clears_text_variant() {
+        let exec = make_tool_exec(
+            "tu1",
+            cdt_core::ToolOutput::Text {
+                text: "very long bash output...".into(),
+            },
+        );
+        let mut chunks = vec![make_ai_chunk_with_tool(exec)];
+        apply_tool_output_omit(&mut chunks);
+        let cdt_core::Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected ai chunk");
+        };
+        let exec = &ai.tool_executions[0];
+        assert!(matches!(&exec.output, cdt_core::ToolOutput::Text { text } if text.is_empty()));
+        assert!(exec.output_omitted);
+        // 其它字段保留
+        assert_eq!(exec.tool_use_id, "tu1");
+        assert_eq!(exec.tool_name, "Bash");
+        assert!(exec.input.get("command").is_some());
+    }
+
+    #[test]
+    fn apply_tool_output_omit_clears_structured_variant() {
+        let exec = make_tool_exec(
+            "tu2",
+            cdt_core::ToolOutput::Structured {
+                value: serde_json::json!({"stdout": "lots", "stderr": ""}),
+            },
+        );
+        let mut chunks = vec![make_ai_chunk_with_tool(exec)];
+        apply_tool_output_omit(&mut chunks);
+        let cdt_core::Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected ai chunk");
+        };
+        let exec = &ai.tool_executions[0];
+        assert!(
+            matches!(&exec.output, cdt_core::ToolOutput::Structured { value } if value.is_null())
+        );
+        assert!(exec.output_omitted);
+    }
+
+    #[test]
+    fn apply_tool_output_omit_keeps_missing_variant_kind() {
+        let exec = make_tool_exec("tu3", cdt_core::ToolOutput::Missing);
+        let mut chunks = vec![make_ai_chunk_with_tool(exec)];
+        apply_tool_output_omit(&mut chunks);
+        let cdt_core::Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected ai chunk");
+        };
+        let exec = &ai.tool_executions[0];
+        assert!(matches!(&exec.output, cdt_core::ToolOutput::Missing));
+        // Missing 也设 flag——caller 看到 Missing + omitted=true 仍可触发懒拉，
+        // 拉回来若仍 Missing 则保留语义不变。
+        assert!(exec.output_omitted);
+    }
+
+    #[test]
+    fn apply_tool_output_omit_clears_nested_subagent_tool_output() {
+        let nested_exec = make_tool_exec(
+            "nested-tu",
+            cdt_core::ToolOutput::Text {
+                text: "nested output".into(),
+            },
+        );
+        let nested_ai = make_ai_chunk_with_tool(nested_exec);
+        let parent_exec = make_tool_exec(
+            "parent-tu",
+            cdt_core::ToolOutput::Text {
+                text: "parent output".into(),
+            },
+        );
+        let parent = cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            timestamp: ts(),
+            duration_ms: None,
+            responses: Vec::new(),
+            metrics: cdt_core::ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: vec![parent_exec],
+            subagents: vec![cdt_core::Process {
+                session_id: "sub-1".into(),
+                root_task_description: None,
+                spawn_ts: ts(),
+                end_ts: None,
+                metrics: cdt_core::ChunkMetrics::zero(),
+                team: None,
+                subagent_type: None,
+                messages: vec![nested_ai],
+                main_session_impact: None,
+                is_ongoing: false,
+                duration_ms: None,
+                parent_task_id: None,
+                description: None,
+                header_model: None,
+                last_isolated_tokens: 0,
+                is_shutdown_only: false,
+                messages_omitted: false,
+            }],
+            slash_commands: Vec::new(),
+        });
+        let mut chunks = vec![parent];
+        apply_tool_output_omit(&mut chunks);
+
+        let cdt_core::Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected ai chunk");
+        };
+        // 顶层 tool_executions[].output 被清
+        assert!(
+            matches!(&ai.tool_executions[0].output, cdt_core::ToolOutput::Text { text } if text.is_empty())
+        );
+        assert!(ai.tool_executions[0].output_omitted);
+
+        // 嵌套 subagent.messages 内的 tool_executions[].output 也被清
+        let cdt_core::Chunk::Ai(nested) = &ai.subagents[0].messages[0] else {
+            panic!("expected nested ai chunk");
+        };
+        assert!(
+            matches!(&nested.tool_executions[0].output, cdt_core::ToolOutput::Text { text } if text.is_empty())
+        );
+        assert!(nested.tool_executions[0].output_omitted);
+    }
+
+    #[tokio::test]
+    async fn get_tool_output_returns_missing_when_jsonl_not_exist() {
+        let dir = tempdir().unwrap();
+        let api = build_api(dir.path().join("config.json")).await;
+        // root_session_id 不存在 → Missing
+        let out = api
+            .get_tool_output("nonexistent-root", "nonexistent-root", "any-tu")
+            .await
+            .unwrap();
+        assert!(matches!(out, cdt_core::ToolOutput::Missing));
     }
 }

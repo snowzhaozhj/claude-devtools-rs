@@ -277,7 +277,7 @@
                 {#if isLoadingTrace}
                   <div class="sa-trace-loading">Loading trace…</div>
                 {:else}
-                  <ExecutionTrace items={traceItems} {rootSessionId} {depth} />
+                  <ExecutionTrace items={traceItems} {rootSessionId} sessionId={process.sessionId} {depth} />
                 {/if}
               </div>
             {/if}

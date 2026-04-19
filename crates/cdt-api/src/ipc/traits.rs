@@ -94,6 +94,23 @@ pub trait DataApi: Send + Sync {
         Ok(String::new())
     }
 
+    /// 按需拉取一条 tool execution 的完整 `output`。
+    ///
+    /// `get_session_detail` 默认把 `tool_executions[].output` 内 `text` /
+    /// `value` 字段清空 + 设 `output_omitted=true`（详见
+    /// `openspec/specs/ipc-data-api/spec.md` `Lazy load tool output`
+    /// requirement）；前端 `ExecutionTrace` 在用户点击展开时调本方法按需拉。
+    ///
+    /// 默认实现返回 `ToolOutput::Missing`；`LocalDataApi` 提供真实读盘版本。
+    async fn get_tool_output(
+        &self,
+        _root_session_id: &str,
+        _session_id: &str,
+        _tool_use_id: &str,
+    ) -> Result<cdt_core::ToolOutput, ApiError> {
+        Ok(cdt_core::ToolOutput::Missing)
+    }
+
     // =========================================================================
     // 搜索
     // =========================================================================

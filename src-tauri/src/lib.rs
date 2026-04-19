@@ -81,6 +81,21 @@ async fn get_image_asset(
 }
 
 #[tauri::command]
+async fn get_tool_output(
+    data: State<'_, AppData>,
+    root_session_id: String,
+    session_id: String,
+    tool_use_id: String,
+) -> Result<serde_json::Value, String> {
+    let output = data
+        .api
+        .get_tool_output(&root_session_id, &session_id, &tool_use_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&output).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn search_sessions(
     data: State<'_, AppData>,
     project_id: String,
@@ -453,6 +468,7 @@ pub fn run() {
             get_session_detail,
             get_subagent_trace,
             get_image_asset,
+            get_tool_output,
             search_sessions,
             get_config,
             update_config,

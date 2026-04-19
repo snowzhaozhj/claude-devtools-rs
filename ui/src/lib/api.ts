@@ -125,6 +125,10 @@ export interface ToolExecution {
   startTs: string;
   endTs: string | null;
   sourceAssistantUuid: string;
+  /** true 表示 output 已被 IPC 裁剪（inner text/value 清空但 variant kind 保留），
+   *  需通过 getToolOutput(rootSessionId, sessionId, toolUseId) 懒拉取。
+   *  老后端 / 回滚时为 false 或 undefined。 */
+  outputOmitted?: boolean;
 }
 
 export interface UserChunk {
@@ -269,6 +273,22 @@ export async function getImageAsset(
   blockId: string,
 ): Promise<string> {
   return await invoke("get_image_asset", { rootSessionId, sessionId, blockId });
+}
+
+/**
+ * 按需拉取一条 tool execution 的完整 output。
+ *
+ * `get_session_detail` 默认裁剪 `tool_executions[].output` 内 text/value 字段
+ * + 设 `outputOmitted=true`；ExecutionTrace 在用户点击展开时调本方法拿原 output。
+ *
+ * 失败 / 找不到 → 返回 `{ kind: "missing" }`，前端走 broken/missing 显示分支。
+ */
+export async function getToolOutput(
+  rootSessionId: string,
+  sessionId: string,
+  toolUseId: string,
+): Promise<ToolOutput> {
+  return await invoke("get_tool_output", { rootSessionId, sessionId, toolUseId });
 }
 
 // ---------------------------------------------------------------------------
