@@ -76,6 +76,24 @@ pub trait DataApi: Send + Sync {
         Ok(serde_json::Value::Array(Vec::new()))
     }
 
+    /// 按需把内联 image base64 落盘到 cache 目录并返回 `asset://` URL。
+    ///
+    /// `get_session_detail` 默认把 `ContentBlock::Image.source.data` 裁剪为空
+    /// + 设 `data_omitted=true`（详见 `openspec/specs/ipc-data-api/spec.md`
+    /// `Lazy load inline image asset` requirement）；前端 `ImageBlock` 在视口
+    /// 内时调本方法拿可直接用作 `<img src>` 的 URL。`block_id` 编码：
+    /// `"<chunkUuid>:<blockIndex>"`。
+    ///
+    /// 默认实现返回空字符串；`LocalDataApi` 提供真实落盘版本。
+    async fn get_image_asset(
+        &self,
+        _root_session_id: &str,
+        _session_id: &str,
+        _block_id: &str,
+    ) -> Result<String, ApiError> {
+        Ok(String::new())
+    }
+
     // =========================================================================
     // 搜索
     // =========================================================================

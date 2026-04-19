@@ -44,6 +44,48 @@ pub const METADATA_SCAN_CONCURRENCY: usize = 8;
 /// 紧急回滚：把本常量改为 `false` 即恢复完整 payload；前端 fallback 路径自动生效。
 const OMIT_SUBAGENT_MESSAGES: bool = true;
 
+/// IPC payload 优化（phase 3）：`get_session_detail` 默认把所有 `ContentBlock::Image`
+/// 的 base64 `data` 替换为空 + 设 `data_omitted=true`，砍掉 image-heavy session 的
+/// 大头 payload（实测 7826d1b8 case 4840 KB → ~620 KB）。前端 `ImageBlock`
+/// `IntersectionObserver` 进视口时调 `get_image_asset` 懒拉文件 URL。
+///
+/// 紧急回滚：把本常量改为 `false` 即恢复完整 base64 payload；前端 fallback
+/// 走 `data:` URI 路径。行为契约见 change `session-detail-image-asset-cache`。
+const OMIT_IMAGE_DATA: bool = true;
+
+/// 遍历 chunks 内所有 `ContentBlock::Image`，把 `source.data` 替换为空字符串
+/// 并设 `source.data_omitted = true`。覆盖 `UserChunk.content`、
+/// `AIChunk.responses[].content` 与 `AIChunk.subagents[].messages[]` 嵌套层。
+/// `subagent.messages` 在 `OMIT_SUBAGENT_MESSAGES=true` 时已为空，本函数对其
+/// 是安全 no-op；`OMIT_SUBAGENT_MESSAGES=false` 回滚时本函数仍能命中嵌套层。
+fn apply_image_omit(chunks: &mut [cdt_core::Chunk]) {
+    for chunk in chunks {
+        match chunk {
+            cdt_core::Chunk::User(u) => omit_image_in_content(&mut u.content),
+            cdt_core::Chunk::Ai(ai) => {
+                for resp in &mut ai.responses {
+                    omit_image_in_content(&mut resp.content);
+                }
+                for sub in &mut ai.subagents {
+                    apply_image_omit(&mut sub.messages);
+                }
+            }
+            cdt_core::Chunk::System(_) | cdt_core::Chunk::Compact(_) => {}
+        }
+    }
+}
+
+fn omit_image_in_content(content: &mut cdt_core::MessageContent) {
+    if let cdt_core::MessageContent::Blocks(blocks) = content {
+        for blk in blocks {
+            if let cdt_core::ContentBlock::Image { source } = blk {
+                source.data.clear();
+                source.data_omitted = true;
+            }
+        }
+    }
+}
+
 /// 元数据 broadcast channel capacity。50 个 session 的项目最多产出 50
 /// 条 update，一些缓冲足以容纳订阅者短暂卡顿。
 const METADATA_BROADCAST_CAPACITY: usize = 256;
@@ -65,6 +107,11 @@ pub struct LocalDataApi {
     /// 当前 per-project 进行中的元数据扫描句柄。`list_sessions` 调用前会
     /// abort 同 project 的旧扫描，避免事件串扰（详见 design.md decision 4）。
     active_scans: Arc<std::sync::Mutex<HashMap<String, AbortHandle>>>,
+    /// `get_image_asset` 落盘 cache 目录。由 Tauri host 通过
+    /// `new_with_image_cache` 注入 `app_cache_dir().join("cdt-images")`；
+    /// `None` 时 `get_image_asset` fallback 到 `data:` URI（默认构造路径
+    /// + 集成测试无 cache 目录依赖）。
+    image_cache_dir: Option<std::path::PathBuf>,
 }
 
 impl LocalDataApi {
@@ -88,7 +135,17 @@ impl LocalDataApi {
             error_tx: None,
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            image_cache_dir: None,
         }
+    }
+
+    /// 在已有 `LocalDataApi` 上注入 `image_cache_dir`，用于 Tauri host 把
+    /// `app_cache_dir().join("cdt-images")` 传进来。链式构造模式——可与
+    /// `new` / `new_with_watcher` 任一组合：`Self::new(...).with_image_cache(...)`。
+    #[must_use]
+    pub fn with_image_cache(mut self, dir: std::path::PathBuf) -> Self {
+        self.image_cache_dir = Some(dir);
+        self
     }
 
     /// 带 `FileWatcher` 的构造器：spawn 自动通知管线，订阅 watcher 的 file 广播，
@@ -134,6 +191,7 @@ impl LocalDataApi {
             error_tx: Some(error_tx),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            image_cache_dir: None,
         }
     }
 
@@ -456,19 +514,25 @@ impl DataApi for LocalDataApi {
         // 展开时通过 `get_subagent_trace` 懒拉取。把 messages 抠空 + 设
         // `messages_omitted=true`；header_model / last_isolated_tokens /
         // is_shutdown_only 已由 resolver 阶段填充，可独立渲染 header。
-        let chunks_for_payload = if OMIT_SUBAGENT_MESSAGES {
+        let chunks_for_payload = {
             let mut cloned = chunks.clone();
-            for c in &mut cloned {
-                if let cdt_core::Chunk::Ai(ai) = c {
-                    for sub in &mut ai.subagents {
-                        sub.messages = Vec::new();
-                        sub.messages_omitted = true;
+            // phase 3：image base64 OMIT 必须在 subagent OMIT 之前跑，否则
+            // OMIT_SUBAGENT_MESSAGES=false 回滚路径下嵌套 messages 内的 image
+            // 不会被裁。
+            if OMIT_IMAGE_DATA {
+                apply_image_omit(&mut cloned);
+            }
+            if OMIT_SUBAGENT_MESSAGES {
+                for c in &mut cloned {
+                    if let cdt_core::Chunk::Ai(ai) = c {
+                        for sub in &mut ai.subagents {
+                            sub.messages = Vec::new();
+                            sub.messages_omitted = true;
+                        }
                     }
                 }
             }
             cloned
-        } else {
-            chunks.clone()
         };
         let detail = SessionDetail {
             session_id: session_id.to_owned(),
@@ -538,6 +602,53 @@ impl DataApi for LocalDataApi {
             }
         }
         Ok(serde_json::Value::Array(Vec::new()))
+    }
+
+    async fn get_image_asset(
+        &self,
+        root_session_id: &str,
+        session_id: &str,
+        block_id: &str,
+    ) -> Result<String, ApiError> {
+        // block_id 编码：`<chunkUuid>:<blockIndex>`
+        let Some((chunk_uuid, block_index)) = block_id
+            .rsplit_once(':')
+            .and_then(|(u, i)| i.parse::<usize>().ok().map(|idx| (u.to_owned(), idx)))
+        else {
+            tracing::warn!(target: "cdt_api::image", block_id, "invalid block_id format");
+            return Ok(empty_data_uri());
+        };
+
+        // 定位 jsonl：root 自己 or `<root>/subagents/agent-<sub>.jsonl`。
+        let projects_dir = path_decoder::get_projects_base_path();
+        let Some(jsonl_path) =
+            locate_session_jsonl(&projects_dir, root_session_id, session_id).await
+        else {
+            tracing::warn!(target: "cdt_api::image", root_session_id, session_id, "jsonl not found");
+            return Ok(empty_data_uri());
+        };
+
+        // parse 整个文件 → 找 chunk_uuid → 取 block_index 的 image。
+        let messages = match parse_file(&jsonl_path).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(target: "cdt_api::image", error = %e, "parse failed");
+                return Ok(empty_data_uri());
+            }
+        };
+        let Some((data_b64, media_type)) =
+            find_image_block_in_messages(&messages, &chunk_uuid, block_index)
+        else {
+            tracing::warn!(target: "cdt_api::image", chunk_uuid, block_index, "image block not found");
+            return Ok(empty_data_uri());
+        };
+
+        // cache 目录未注入 → 直接 fallback data: URI。
+        let Some(cache_dir) = self.image_cache_dir.as_ref() else {
+            return Ok(format_data_uri(&media_type, &data_b64));
+        };
+
+        Ok(materialize_image_asset(cache_dir, &media_type, &data_b64).await)
     }
 
     async fn get_sessions_by_ids(
@@ -912,6 +1023,116 @@ async fn build_claude_md_from_filesystem(project_root: &str) -> Vec<cdt_core::Co
         .collect()
 }
 
+// =============================================================================
+// phase 3: image asset cache 辅助
+// =============================================================================
+
+/// 失败 fallback：返回一个空 `data:` URI 占位。前端 `<img>` 加载会显示
+/// broken-image，不阻塞 session 渲染。
+fn empty_data_uri() -> String {
+    "data:application/octet-stream;base64,".to_owned()
+}
+
+/// 完整 `data:` URI（落盘失败 / cache 目录未注入时 fallback）。
+fn format_data_uri(media_type: &str, base64_data: &str) -> String {
+    format!("data:{media_type};base64,{base64_data}")
+}
+
+/// 在 projects 根目录下定位 (`root_session_id`, `session_id`) 对应的 jsonl。
+///
+/// `session_id == root_session_id` 时直接找 root jsonl；不等时去 root 同 project
+/// 的 `subagents/agent-<sub>.jsonl`（与 `find_subagent_jsonl` 同样支持新旧两种结构）。
+async fn locate_session_jsonl(
+    projects_dir: &Path,
+    root_session_id: &str,
+    session_id: &str,
+) -> Option<std::path::PathBuf> {
+    let mut entries = tokio::fs::read_dir(projects_dir).await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let project_dir = entry.path();
+        let root_jsonl = project_dir.join(format!("{root_session_id}.jsonl"));
+        if tokio::fs::metadata(&root_jsonl).await.is_err() {
+            continue;
+        }
+        if session_id == root_session_id {
+            return Some(root_jsonl);
+        }
+        if let Some(p) = find_subagent_jsonl(&project_dir, session_id).await {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// 在已 parse 的消息流里按 `chunk_uuid` + `block_index` 找 ImageBlock，返回
+/// `(base64_data, media_type)`。`chunk_uuid` 即 `ParsedMessage.uuid`。
+fn find_image_block_in_messages(
+    messages: &[cdt_core::ParsedMessage],
+    chunk_uuid: &str,
+    block_index: usize,
+) -> Option<(String, String)> {
+    let msg = messages.iter().find(|m| m.uuid == chunk_uuid)?;
+    let cdt_core::MessageContent::Blocks(blocks) = &msg.content else {
+        return None;
+    };
+    let cdt_core::ContentBlock::Image { source } = blocks.get(block_index)? else {
+        return None;
+    };
+    Some((source.data.clone(), source.media_type.clone()))
+}
+
+/// SHA256 内容寻址 + 落盘到 cache 目录，返回 `asset://localhost/<absolute_path>`。
+/// 失败时 fallback 返回 `data:` URI。
+async fn materialize_image_asset(cache_dir: &Path, media_type: &str, base64_data: &str) -> String {
+    use base64::Engine;
+    use sha2::Digest;
+
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(base64_data) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(target: "cdt_api::image", error = %e, "base64 decode failed");
+            return format_data_uri(media_type, base64_data);
+        }
+    };
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(&bytes);
+    let digest = hasher.finalize();
+    let hash_hex: String = digest.iter().take(8).fold(String::new(), |mut acc, b| {
+        use std::fmt::Write;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
+
+    let ext = media_type_to_ext(media_type);
+    let file_path = cache_dir.join(format!("{hash_hex}.{ext}"));
+
+    if let Err(e) = tokio::fs::create_dir_all(cache_dir).await {
+        tracing::warn!(target: "cdt_api::image", error = %e, dir = %cache_dir.display(), "create cache dir failed");
+        return format_data_uri(media_type, base64_data);
+    }
+
+    if tokio::fs::metadata(&file_path).await.is_err() {
+        if let Err(e) = tokio::fs::write(&file_path, &bytes).await {
+            tracing::warn!(target: "cdt_api::image", error = %e, path = %file_path.display(), "write image cache failed");
+            return format_data_uri(media_type, base64_data);
+        }
+    }
+
+    format!("asset://localhost/{}", file_path.display())
+}
+
+fn media_type_to_ext(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        _ => "bin",
+    }
+}
+
 /// 在 project 目录下查找指定 session id 的 subagent JSONL 文件。
 ///
 /// 检查两种结构：
@@ -1203,5 +1424,153 @@ mod tests {
         let prefs = api.get_project_session_prefs("unknown").await.unwrap();
         assert!(prefs.pinned.is_empty());
         assert!(prefs.hidden.is_empty());
+    }
+
+    // -------- phase 3: image data OMIT --------
+
+    fn ts() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    fn make_image_block(data: &str, mime: &str) -> cdt_core::ContentBlock {
+        cdt_core::ContentBlock::Image {
+            source: cdt_core::ImageSource {
+                kind: "base64".into(),
+                media_type: mime.into(),
+                data: data.into(),
+                data_omitted: false,
+            },
+        }
+    }
+
+    fn make_user_chunk_with_image(uuid: &str, data: &str) -> cdt_core::Chunk {
+        cdt_core::Chunk::User(cdt_core::UserChunk {
+            uuid: uuid.into(),
+            timestamp: ts(),
+            duration_ms: None,
+            content: cdt_core::MessageContent::Blocks(vec![
+                cdt_core::ContentBlock::Text {
+                    text: "see image".into(),
+                },
+                make_image_block(data, "image/png"),
+            ]),
+            metrics: cdt_core::ChunkMetrics::zero(),
+        })
+    }
+
+    #[test]
+    fn apply_image_omit_clears_user_image_data() {
+        let mut chunks = vec![make_user_chunk_with_image("u1", "AAAAdata")];
+        apply_image_omit(&mut chunks);
+        let cdt_core::Chunk::User(u) = &chunks[0] else {
+            panic!("expected user chunk");
+        };
+        let cdt_core::MessageContent::Blocks(blocks) = &u.content else {
+            panic!("expected blocks");
+        };
+        let cdt_core::ContentBlock::Image { source } = &blocks[1] else {
+            panic!("expected image block");
+        };
+        assert_eq!(source.data, "");
+        assert!(source.data_omitted);
+        assert_eq!(source.media_type, "image/png");
+        assert_eq!(source.kind, "base64");
+        // 非 image block 不动
+        assert!(matches!(blocks[0], cdt_core::ContentBlock::Text { .. }));
+    }
+
+    #[test]
+    fn media_type_to_ext_known_and_unknown() {
+        assert_eq!(media_type_to_ext("image/png"), "png");
+        assert_eq!(media_type_to_ext("image/jpeg"), "jpg");
+        assert_eq!(media_type_to_ext("image/gif"), "gif");
+        assert_eq!(media_type_to_ext("image/webp"), "webp");
+        assert_eq!(media_type_to_ext("application/x-future"), "bin");
+    }
+
+    #[tokio::test]
+    async fn materialize_image_asset_writes_file_and_dedupes() {
+        use base64::Engine;
+        let dir = tempdir().unwrap();
+        let cache = dir.path().join("cdt-images");
+        // 8 字节明文 → base64
+        let raw = b"helloimg";
+        let b64 = base64::engine::general_purpose::STANDARD.encode(raw);
+
+        let url1 = materialize_image_asset(&cache, "image/png", &b64).await;
+        assert!(url1.starts_with("asset://localhost/"), "url={url1}");
+        let path1: std::path::PathBuf = url1
+            .strip_prefix("asset://localhost/")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let bytes_on_disk = tokio::fs::read(&path1).await.unwrap();
+        assert_eq!(bytes_on_disk, raw);
+
+        // 相同内容第二次调用 → URL 完全一致（hash 命名 + 复用）
+        let url2 = materialize_image_asset(&cache, "image/png", &b64).await;
+        assert_eq!(url1, url2);
+    }
+
+    #[tokio::test]
+    async fn materialize_image_asset_fallbacks_on_invalid_base64() {
+        let dir = tempdir().unwrap();
+        let cache = dir.path().join("cdt-images");
+        let url = materialize_image_asset(&cache, "image/png", "not-valid-base64!!!").await;
+        assert!(
+            url.starts_with("data:image/png;base64,"),
+            "expected fallback data URI, got {url}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_image_asset_invalid_block_id_returns_empty_data_uri() {
+        let dir = tempdir().unwrap();
+        let api = build_api(dir.path().join("config.json")).await;
+        let url = api
+            .get_image_asset("root-id", "root-id", "no-colon-here")
+            .await
+            .unwrap();
+        assert_eq!(url, empty_data_uri());
+    }
+
+    #[test]
+    fn apply_image_omit_clears_assistant_response_image() {
+        let ai = cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            timestamp: ts(),
+            duration_ms: None,
+            responses: vec![cdt_core::AssistantResponse {
+                uuid: "r1".into(),
+                timestamp: ts(),
+                content: cdt_core::MessageContent::Blocks(vec![make_image_block(
+                    "CCCCdata",
+                    "image/jpeg",
+                )]),
+                tool_calls: Vec::new(),
+                usage: None,
+                model: None,
+            }],
+            metrics: cdt_core::ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: Vec::new(),
+            subagents: Vec::new(),
+            slash_commands: Vec::new(),
+        });
+        let mut chunks = vec![ai];
+        apply_image_omit(&mut chunks);
+        let cdt_core::Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected ai chunk");
+        };
+        let cdt_core::MessageContent::Blocks(blocks) = &ai.responses[0].content else {
+            panic!("expected blocks");
+        };
+        let cdt_core::ContentBlock::Image { source } = &blocks[0] else {
+            panic!("expected image block");
+        };
+        assert_eq!(source.data, "");
+        assert!(source.data_omitted);
+        assert_eq!(source.media_type, "image/jpeg");
     }
 }

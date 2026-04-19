@@ -16,6 +16,7 @@
   import ContextPanel from "../components/ContextPanel.svelte";
   import OngoingBanner from "../components/OngoingBanner.svelte";
   import SessionDetailSkeleton from "../components/SessionDetailSkeleton.svelte";
+  import ImageBlock from "../components/ImageBlock.svelte";
   import DefaultToolViewer from "../components/tool-viewers/DefaultToolViewer.svelte";
   import ReadToolViewer from "../components/tool-viewers/ReadToolViewer.svelte";
   import EditToolViewer from "../components/tool-viewers/EditToolViewer.svelte";
@@ -247,6 +248,24 @@
     return cleanDisplayText(raw);
   }
 
+  /** 抽出 user content blocks 内的所有 image，附带稳定 blockId（chunkUuid:blockIndex）。*/
+  function uimages(content: string | unknown[], chunkUuid: string): { source: import("../lib/api").ImageSource; blockId: string }[] {
+    if (!Array.isArray(content)) return [];
+    const out: { source: import("../lib/api").ImageSource; blockId: string }[] = [];
+    content.forEach((b, idx) => {
+      if (b && typeof b === "object" && "type" in b) {
+        const x = b as Record<string, unknown>;
+        if (x.type === "image" && x.source && typeof x.source === "object") {
+          out.push({
+            source: x.source as import("../lib/api").ImageSource,
+            blockId: `${chunkUuid}:${idx}`,
+          });
+        }
+      }
+    });
+    return out;
+  }
+
   function aiModel(chunk: AIChunk): string {
     if (chunk.responses.length > 0) {
       const m = chunk.responses[chunk.responses.length - 1].model;
@@ -319,7 +338,8 @@
       <!-- User -->
       {#if chunk.kind === "user"}
         {@const text = utext(chunk.content)}
-        {#if text}
+        {@const images = uimages(chunk.content, chunk.uuid)}
+        {#if text || images.length > 0}
           <div class="msg-row msg-row-user">
             <div class="msg-spacer"></div>
             <div class="msg-bubble msg-bubble-user">
@@ -330,7 +350,17 @@
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html USER_SVG}</svg>
                 </span>
               </div>
-              <div class="prose lazy-md" {@attach attachMarkdown(text, "user")}></div>
+              {#if text}
+                <div class="prose lazy-md" {@attach attachMarkdown(text, "user")}></div>
+              {/if}
+              {#each images as img (img.blockId)}
+                <ImageBlock
+                  source={img.source}
+                  rootSessionId={sessionId}
+                  sessionId={sessionId}
+                  blockId={img.blockId}
+                />
+              {/each}
             </div>
           </div>
         {/if}

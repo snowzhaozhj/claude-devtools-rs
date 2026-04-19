@@ -84,6 +84,13 @@ export interface ToolCall {
   taskSubagentType: string | null;
 }
 
+export interface ImageSource {
+  type: string; // "base64"
+  media_type: string; // "image/png" 等（snake_case 与上游 Anthropic 格式一致）
+  data: string; // OMIT 路径下为空字符串
+  dataOmitted?: boolean; // 后端 OMIT_IMAGE_DATA=true 时为 true
+}
+
 export interface ContentBlock {
   type: string;
   text?: string;
@@ -94,6 +101,7 @@ export interface ContentBlock {
   toolUseId?: string;
   content?: unknown;
   isError?: boolean;
+  source?: ImageSource;
 }
 
 export type SemanticStep =
@@ -243,6 +251,24 @@ export async function getSubagentTrace(
   subagentSessionId: string,
 ): Promise<Chunk[]> {
   return await invoke("get_subagent_trace", { rootSessionId, subagentSessionId });
+}
+
+/**
+ * 按需拉取一个 image block 的可加载 URL。
+ *
+ * `get_session_detail` 默认裁剪 `ImageSource.data` 为空字符串 + 设
+ * `dataOmitted=true`；ImageBlock 组件进入视口时调本方法拿到：
+ *   - 成功落盘：`asset://localhost/<absolute_path>`（浏览器原生加载）
+ *   - 失败 fallback：`data:<media_type>;base64,<...>` URI（兼容路径）
+ *
+ * blockId 编码：`"<chunkUuid>:<blockIndex>"`。
+ */
+export async function getImageAsset(
+  rootSessionId: string,
+  sessionId: string,
+  blockId: string,
+): Promise<string> {
+  return await invoke("get_image_asset", { rootSessionId, sessionId, blockId });
 }
 
 // ---------------------------------------------------------------------------

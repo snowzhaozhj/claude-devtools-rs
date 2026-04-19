@@ -88,9 +88,13 @@ impl Default for MessageContent {
     }
 }
 
-/// 图片来源元数据。注意 base64 数据会完整保留在 `data` 字段里，下游若关心
-/// 内存占用，应尽早丢弃或替换为引用。
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+/// 图片来源元数据。注意 base64 数据会完整保留在 `data` 字段里——`get_session_detail`
+/// IPC 路径会按 `OMIT_IMAGE_DATA` 开关把 `data` 替换为空字符串 + 设 `data_omitted=true`，
+/// 前端通过新 IPC `get_image_asset` 按需懒拉文件 URL（行为契约见 change
+/// `session-detail-image-asset-cache`）。`type` / `media_type` 字段保持 `snake_case` 与上游
+/// Anthropic JSONL 格式一致——同 `TokenUsage` 例外；`data_omitted` 是 IPC 路径 derived 字段，
+/// 走 `camelCase`。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ImageSource {
     #[serde(rename = "type", default)]
     pub kind: String,
@@ -98,6 +102,8 @@ pub struct ImageSource {
     pub media_type: String,
     #[serde(default)]
     pub data: String,
+    #[serde(rename = "dataOmitted", default)]
+    pub data_omitted: bool,
 }
 
 /// 消息正文中的单个 content block。
@@ -273,6 +279,33 @@ mod tests {
         assert_eq!(usage.output_tokens, 20);
         assert_eq!(usage.cache_read_input_tokens, 0);
         assert_eq!(usage.cache_creation_input_tokens, 0);
+    }
+
+    #[test]
+    fn image_source_default_data_omitted_false() {
+        let json = r#"{"type":"base64","media_type":"image/png","data":"AAAA"}"#;
+        let src: ImageSource = serde_json::from_str(json).unwrap();
+        assert_eq!(src.kind, "base64");
+        assert_eq!(src.media_type, "image/png");
+        assert_eq!(src.data, "AAAA");
+        assert!(!src.data_omitted);
+    }
+
+    #[test]
+    fn image_source_data_omitted_roundtrip() {
+        let src = ImageSource {
+            kind: "base64".into(),
+            media_type: "image/png".into(),
+            data: String::new(),
+            data_omitted: true,
+        };
+        let json = serde_json::to_string(&src).unwrap();
+        assert!(
+            json.contains("\"dataOmitted\":true"),
+            "expected camelCase dataOmitted in JSON: {json}"
+        );
+        let back: ImageSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, src);
     }
 
     #[test]

@@ -20,7 +20,15 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/Library/Caches/claude-devtools-rs/**",
+          "$HOME/.cache/claude-devtools-rs/**",
+          "$LOCALAPPDATA/claude-devtools-rs/**"
+        ]
+      }
     }
   },
   "bundle": {

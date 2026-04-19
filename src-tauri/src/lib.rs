@@ -68,6 +68,19 @@ async fn get_subagent_trace(
 }
 
 #[tauri::command]
+async fn get_image_asset(
+    data: State<'_, AppData>,
+    root_session_id: String,
+    session_id: String,
+    block_id: String,
+) -> Result<String, String> {
+    data.api
+        .get_image_asset(&root_session_id, &session_id, &block_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn search_sessions(
     data: State<'_, AppData>,
     project_id: String,
@@ -246,14 +259,22 @@ pub fn run() {
         let ssh_mgr = SshConnectionManager::new();
 
         let watcher = Arc::new(FileWatcher::new());
-        let api = Arc::new(LocalDataApi::new_with_watcher(
+        // phase 3 image asset cache：用 OS 标准 cache 目录 + app 子目录。
+        // dirs::cache_dir() 同步且跨平台，无需 Tauri app handle。
+        let image_cache_dir = dirs::cache_dir()
+            .map(|d| d.join("claude-devtools-rs").join("cdt-images"));
+        let mut api_inner = LocalDataApi::new_with_watcher(
             scanner,
             config_mgr,
             notif_mgr,
             ssh_mgr,
             watcher.as_ref(),
             projects_dir,
-        ));
+        );
+        if let Some(dir) = image_cache_dir {
+            api_inner = api_inner.with_image_cache(dir);
+        }
+        let api = Arc::new(api_inner);
 
         (api, watcher)
     });
@@ -431,6 +452,7 @@ pub fn run() {
             list_sessions,
             get_session_detail,
             get_subagent_trace,
+            get_image_asset,
             search_sessions,
             get_config,
             update_config,
