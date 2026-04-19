@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
-  import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications } from "../lib/toolHelpers";
+  import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications, getToolContextTokens } from "../lib/toolHelpers";
   import { buildDisplayItems, buildSummary } from "../lib/displayItemBuilder";
-  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG, BOT } from "../lib/icons";
+  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG } from "../lib/icons";
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
@@ -433,12 +433,21 @@
         {@const summaryText = buildSummary(di.items)}
         {@const toolsVisible = isChunkToolsVisible(i)}
         {@const interruptions = chunk.semanticSteps.filter((s) => s.kind === "interruption")}
+        {@const totalTokens = chunk.metrics.inputTokens + chunk.metrics.outputTokens + chunk.metrics.cacheCreationTokens + chunk.metrics.cacheReadTokens}
         <div class="msg-row msg-row-ai">
           <div class="msg-ai-container">
             <!-- AI header -->
             <div class="ai-header-row">
-              <span class="ai-avatar">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={BOT} /></svg>
+              <span class="ai-avatar" aria-hidden="true">
+                <!-- lucide Bot：与原版 AIChatGroup.tsx 行 408 的 <Bot/> 对齐（多 path / rect） -->
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 8V4H8" />
+                  <rect width="16" height="12" x="4" y="8" rx="2" />
+                  <path d="M2 14h2" />
+                  <path d="M20 14h2" />
+                  <path d="M15 13v2" />
+                  <path d="M9 13v2" />
+                </svg>
               </span>
               <span class="ai-label">Claude</span>
               <span class="ai-model">{aiModel(chunk)}</span>
@@ -453,7 +462,12 @@
                 </span>
               {/if}
               <span class="ai-header-spacer"></span>
-              <span class="ai-tokens">{fk(chunk.metrics.inputTokens)} / {fk(chunk.metrics.outputTokens)}</span>
+              {#if totalTokens > 0}
+                <span
+                  class="ai-tokens"
+                  title={`Total: ${totalTokens.toLocaleString()} tokens\nInput: ${chunk.metrics.inputTokens.toLocaleString()}\nOutput: ${chunk.metrics.outputTokens.toLocaleString()}\nCache create: ${chunk.metrics.cacheCreationTokens.toLocaleString()}\nCache read: ${chunk.metrics.cacheReadTokens.toLocaleString()}`}
+                >{fk(totalTokens)}</span>
+              {/if}
               {#if chunk.durationMs != null && chunk.durationMs > 0}
                 <span class="ai-duration" title="耗时">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html CLOCK_SVG}</svg>
@@ -493,6 +507,7 @@
                       svgIcon={WRENCH}
                       label={exec.toolName}
                       summary={getToolSummary(exec.toolName, exec.input)}
+                      tokenCount={getToolContextTokens(exec)}
                       status={getToolStatus(exec)}
                       durationMs={toolDurationMs(exec)}
                       isExpanded={expandedItems.has(key)}

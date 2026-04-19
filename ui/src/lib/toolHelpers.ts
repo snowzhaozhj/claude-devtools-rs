@@ -139,6 +139,37 @@ export function cleanDisplayText(text: string): string {
   return stripAnsi(s).trim();
 }
 
+/**
+ * 估算文本 token 数。原版 `tokenFormatting.ts::estimateTokens` 同款启发式：
+ * 按 ~4 字符 / token 算，足够用于 UI 展示。
+ */
+export function estimateTokens(text: string | null | undefined): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / 4);
+}
+
+/** 估算任意 content（字符串 / 对象 / 数组）的 token 数，对象/数组先 JSON 序列化。 */
+export function estimateContentTokens(content: unknown): number {
+  if (content == null) return 0;
+  if (typeof content === "string") return estimateTokens(content);
+  return estimateTokens(JSON.stringify(content));
+}
+
+/**
+ * 估算单个工具调用占用的上下文 token 总和：input（Claude 生成）+ output
+ * （Claude 读回）。移植自原版 `getToolContextTokens`——把 Tool row 上原版
+ * 显示的 "~N tokens" 槽位补回 Rust 版。
+ */
+export function getToolContextTokens(exec: ToolExecution): number {
+  let total = estimateContentTokens(exec.input);
+  if (exec.output && exec.output.kind === "text") {
+    total += estimateTokens(exec.output.text);
+  } else if (exec.output && exec.output.kind === "structured") {
+    total += estimateContentTokens(exec.output.value);
+  }
+  return total;
+}
+
 /** 移除 ANSI 转义序列 */
 function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
