@@ -3,7 +3,7 @@
 //! 对应 TS `configValidation.ts`。对 `update_config` 的 payload
 //! 做分 section 校验，拦截无效值。
 
-use std::path::Path;
+use cdt_discover::looks_like_absolute_path;
 
 use crate::error::ConfigError;
 use crate::types::ConfigSection;
@@ -20,6 +20,14 @@ pub fn validate_http_port(port: u16) -> Result<(), ConfigError> {
 }
 
 /// 标准化 `claude_root_path`：空/非绝对路径 → `None`，去尾斜杠。
+///
+/// 跨平台识别三种绝对路径形式（`Path::is_absolute()` 只认当前平台的风格，
+/// Windows 上会拒绝 POSIX `/foo/bar`，但用户可能在 Windows 端配置 SSH 远端
+/// POSIX 路径或 WSL 挂载路径 `/mnt/c/...`，必须接受）：
+///
+/// 1. POSIX：以 `/` 开头
+/// 2. Windows 盘符：`[A-Za-z]:` 后接 `/` 或 `\`
+/// 3. UNC：以 `\\` 或 `//` 开头
 pub fn normalize_claude_root_path(value: Option<&str>) -> Option<String> {
     let raw = value?;
     let trimmed = raw.trim();
@@ -27,8 +35,7 @@ pub fn normalize_claude_root_path(value: Option<&str>) -> Option<String> {
         return None;
     }
 
-    let path = Path::new(trimmed);
-    if !path.is_absolute() {
+    if !looks_like_absolute_path(trimmed) {
         return None;
     }
 
@@ -101,12 +108,43 @@ mod tests {
     #[test]
     fn normalize_path_relative_rejected() {
         assert!(normalize_claude_root_path(Some("relative/path")).is_none());
+        assert!(normalize_claude_root_path(Some("foo\\bar")).is_none());
+        // 盘符后缺分隔符也不算合法
+        assert!(normalize_claude_root_path(Some("C:relative")).is_none());
     }
 
     #[test]
     fn normalize_path_root() {
         let r = normalize_claude_root_path(Some("/"));
         assert_eq!(r, Some("/".into()));
+    }
+
+    #[test]
+    fn normalize_path_windows_drive() {
+        assert_eq!(
+            normalize_claude_root_path(Some(r"C:\Users\alice\.claude")),
+            Some(r"C:\Users\alice\.claude".into())
+        );
+        assert_eq!(
+            normalize_claude_root_path(Some("C:/Users/alice/.claude")),
+            Some("C:/Users/alice/.claude".into())
+        );
+    }
+
+    #[test]
+    fn normalize_path_windows_trailing_backslash() {
+        assert_eq!(
+            normalize_claude_root_path(Some(r"C:\Users\alice\")),
+            Some(r"C:\Users\alice".into())
+        );
+    }
+
+    #[test]
+    fn normalize_path_unc() {
+        assert_eq!(
+            normalize_claude_root_path(Some(r"\\server\share\dir")),
+            Some(r"\\server\share\dir".into())
+        );
     }
 
     #[test]

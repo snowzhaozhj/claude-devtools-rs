@@ -44,6 +44,13 @@ static SENSITIVE_PATTERNS: LazyLock<RegexSet> = LazyLock::new(|| {
         r"credentials\.json$",
         r"secrets\.json$",
         r"tokens\.json$",
+        // Windows 特有敏感路径
+        r"(?i)[/\\]config[/\\]SAM$",
+        r"(?i)[/\\]config[/\\]SYSTEM$",
+        r"(?i)[/\\]NTDS\.dit$",
+        r"(?i)[/\\]Microsoft[/\\]Credentials[/\\]",
+        r"(?i)[/\\]Microsoft[/\\]Crypto[/\\]",
+        r"(?i)[/\\]Microsoft[/\\]Protect[/\\]",
     ])
     .expect("sensitive patterns should compile")
 });
@@ -74,9 +81,9 @@ impl PathValidationResult {
     }
 }
 
-/// Claude 基础路径。
+/// Claude 基础路径（用 `cdt-discover::home_dir` 对齐 Windows fallback 行为）。
 fn claude_base_path() -> PathBuf {
-    dirs::home_dir()
+    cdt_discover::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".claude")
 }
@@ -109,11 +116,17 @@ pub fn validate_file_path(file_path: &str, project_root: Option<&Path>) -> PathV
         return PathValidationResult::fail("Invalid file path");
     }
 
-    // 展开 ~ → home dir
+    // 展开 ~ → home dir。只接受 `~` / `~/` / `~\` 三种形式；`~username` 形式
+    // （指向特定用户 home）不展开，保留原样（TS 原版行为）。
     let expanded = if let Some(rest) = file_path.strip_prefix('~') {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(rest.trim_start_matches('/'))
+        let trimmed = rest.trim_start_matches(['/', '\\']);
+        if rest.is_empty() || rest.len() != trimmed.len() {
+            cdt_discover::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(trimmed)
+        } else {
+            PathBuf::from(file_path)
+        }
     } else {
         PathBuf::from(file_path)
     };
@@ -247,6 +260,38 @@ mod tests {
         assert!(matches_sensitive_pattern("/project/.env.local"));
         assert!(matches_sensitive_pattern("/home/user/.aws/credentials"));
         assert!(matches_sensitive_pattern("/etc/passwd"));
+    }
+
+    #[test]
+    fn tilde_user_form_not_expanded() {
+        // `~alice/foo` 是合法的 Unix 用户 home 展开，非当前用户 → 保留原样
+        let result = validate_file_path("~alice/foo", None);
+        // 应该因 "not absolute" 失败（因为返回字符串 `~alice/foo` 不是绝对路径）
+        assert!(!result.valid);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Path must be absolute"),
+            "expected tilde-user form to be left unchanged and rejected as non-absolute"
+        );
+    }
+
+    #[test]
+    fn windows_sensitive_paths_blocked() {
+        // Backslash paths（Windows native）
+        assert!(matches_sensitive_pattern(r"C:\Windows\System32\config\SAM"));
+        assert!(matches_sensitive_pattern(
+            r"C:\Windows\System32\config\SYSTEM"
+        ));
+        assert!(matches_sensitive_pattern(r"C:\Windows\NTDS\NTDS.dit"));
+        assert!(matches_sensitive_pattern(
+            r"C:\Users\alice\AppData\Roaming\Microsoft\Credentials\abc"
+        ));
+        assert!(matches_sensitive_pattern(
+            r"C:\Users\alice\AppData\Roaming\Microsoft\Crypto\Keys\xyz"
+        ));
+        assert!(matches_sensitive_pattern(
+            r"C:\Users\alice\AppData\Roaming\Microsoft\Protect\S-1-5-21"
+        ));
     }
 
     #[test]

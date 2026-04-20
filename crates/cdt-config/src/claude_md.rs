@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use cdt_discover::{encode_path, home_dir};
 use serde::{Deserialize, Serialize};
 
 /// 单个 CLAUDE.md 文件的信息。
@@ -49,27 +50,33 @@ fn estimate_tokens(content: &str) -> usize {
 }
 
 /// Claude 基础路径（默认 `~/.claude`）。
+///
+/// 用 `cdt-discover::home_dir` 的四级 fallback，Windows native 也能定位到
+/// `%USERPROFILE%\.claude\`（裸 `dirs::home_dir()` 在 `HOMEDRIVE+HOMEPATH` 场景
+/// 下会返 None 导致 fallback 到 `.`，即当前目录，不符合 auto-memory 语义）。
 fn claude_base_path() -> PathBuf {
-    dirs::home_dir()
+    home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".claude")
 }
 
 /// 平台相关的 enterprise CLAUDE.md 路径。
+///
+/// Windows 上用 `%ProgramFiles%` 动态解析，支持非 C 盘安装；fallback `C:\Program Files`。
 fn enterprise_path() -> PathBuf {
     if cfg!(target_os = "macos") {
         PathBuf::from("/Library/Application Support/ClaudeCode/CLAUDE.md")
     } else if cfg!(target_os = "windows") {
-        PathBuf::from(r"C:\Program Files\ClaudeCode\CLAUDE.md")
+        let program_files = std::env::var("ProgramFiles")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| r"C:\Program Files".to_owned());
+        PathBuf::from(program_files)
+            .join("ClaudeCode")
+            .join("CLAUDE.md")
     } else {
         PathBuf::from("/etc/claude-code/CLAUDE.md")
     }
-}
-
-/// 编码项目路径（用于 auto-memory 路径计算）。
-/// 与 TS `pathDecoder.ts` 的 `encodePath` 一致：替换 `/` → `-`，去首尾 `-`。
-fn encode_path(path: &str) -> String {
-    path.replace('/', "-").trim_matches('-').to_owned()
 }
 
 /// 读取单个文件的 CLAUDE.md 信息。
@@ -301,13 +308,12 @@ mod tests {
     }
 
     #[test]
-    fn encode_path_replaces_slashes() {
-        assert_eq!(encode_path("/Users/test/project"), "Users-test-project");
-    }
-
-    #[test]
-    fn encode_path_strips_leading_trailing_dash() {
-        assert_eq!(encode_path("/a/b/"), "a-b");
+    fn auto_memory_encoded_dir_uses_cdt_discover_encoder() {
+        // encode_path 现在由 cdt-discover 统一提供；这里仅冒烟验证 claude_md 拿到
+        // 的结果和 TS 原版一致（强制 leading `-`，保留冒号）。完整覆盖在
+        // `cdt-discover::path_decoder::tests`。
+        assert_eq!(encode_path("/Users/test/project"), "-Users-test-project");
+        assert_eq!(encode_path(r"C:\Users\alice\app"), "-C:-Users-alice-app");
     }
 
     #[tokio::test]

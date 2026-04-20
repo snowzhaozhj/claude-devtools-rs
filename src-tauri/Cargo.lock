@@ -627,6 +627,7 @@ name = "cdt-config"
 version = "0.1.0"
 dependencies = [
  "cdt-core",
+ "cdt-discover",
  "chrono",
  "dirs",
  "lru",
@@ -702,6 +703,7 @@ version = "0.1.0"
 dependencies = [
  "cdt-core",
  "dirs",
+ "dunce",
  "notify",
  "thiserror 2.0.18",
  "tokio",

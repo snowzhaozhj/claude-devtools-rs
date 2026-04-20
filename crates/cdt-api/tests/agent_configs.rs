@@ -14,13 +14,6 @@ use cdt_discover::{LocalFileSystemProvider, ProjectScanner};
 use cdt_ssh::SshConnectionManager;
 use tempfile::TempDir;
 
-fn encode_path(path: &str) -> String {
-    format!(
-        "-{}",
-        path.strip_prefix('/').unwrap_or(path).replace('/', "-")
-    )
-}
-
 fn write_md(path: &std::path::Path, contents: &str) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();
@@ -42,16 +35,22 @@ async fn read_agent_configs_surfaces_project_scoped_entry() {
         "---\nname: code-reviewer-test\ncolor: purple\ndescription: PR review\n---\nbody",
     );
 
-    // 写一个 session JSONL，包含 cwd 字段，让 ProjectScanner 能解析出 project
-    let encoded = encode_path(project_cwd.to_str().unwrap());
-    let encoded_dir = projects_base.join(&encoded);
+    // 写一个 session JSONL，包含 cwd 字段，让 ProjectScanner 能解析出 project。
+    //
+    // encoded 目录名用固定字面量而非 `encode_path(project_cwd)` —— Windows 上
+    // `project_cwd` 含盘符 `C:\...`，`encode_path` 产出 `-C:-Users-...` 含 `:`，
+    // NTFS 禁止目录名包含 `:`（Windows error 267 NotADirectory）。scanner 的
+    // encoded-name → cwd 解析依赖 JSONL 的 cwd 字段，对 encoded 名本身只要求
+    // 通过 `is_valid_encoded_path` 过滤；这里用纯字母 `-ws-my-proj` 即可，
+    // cwd 真实磁盘路径由 JSONL 字段提供。
+    let encoded_dir = projects_base.join("-ws-my-proj");
     std::fs::create_dir_all(&encoded_dir).unwrap();
     let jsonl = encoded_dir.join("sess-1.jsonl");
+    let cwd_str = project_cwd.to_str().unwrap().replace('\\', "\\\\");
     write_md(
         &jsonl,
         &format!(
-            "{{\"type\":\"user\",\"cwd\":\"{}\",\"uuid\":\"u1\",\"timestamp\":\"2026-04-17T00:00:00Z\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n",
-            project_cwd.to_str().unwrap()
+            "{{\"type\":\"user\",\"cwd\":\"{cwd_str}\",\"uuid\":\"u1\",\"timestamp\":\"2026-04-17T00:00:00Z\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n"
         ),
     );
 

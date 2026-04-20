@@ -130,11 +130,14 @@ pub fn list_hosts(configs: &[SshHostConfig]) -> Vec<String> {
         .collect()
 }
 
-/// 展开 `~` 为 home 目录。
+/// 展开 `~` 为 home 目录；同时接受 `~/` 与 `~\`（Windows SSH config 常用）。
 fn expand_tilde(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest).to_string_lossy().into_owned();
+    if let Some(rest) = path.strip_prefix('~') {
+        let trimmed = rest.trim_start_matches(['/', '\\']);
+        if rest.is_empty() || rest.len() != trimmed.len() {
+            if let Some(home) = dirs::home_dir() {
+                return home.join(trimmed).to_string_lossy().into_owned();
+            }
         }
     }
     path.to_owned()
@@ -208,6 +211,26 @@ Host *
     fn parse_empty_config() {
         let configs = parse_ssh_config("");
         assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn expand_tilde_supports_forward_and_backslash() {
+        let home = dirs::home_dir().expect("home dir resolvable");
+        let forward = expand_tilde("~/foo/bar");
+        let back = expand_tilde(r"~\foo\bar");
+        // 验证两种前缀都能展开到 home；不断言完整路径等值（rest 段分隔符会被
+        // `Path::join` 规范化到当前 OS 风格）。
+        assert!(forward.starts_with(&home.to_string_lossy().into_owned()));
+        assert!(back.starts_with(&home.to_string_lossy().into_owned()));
+        assert!(forward.contains("foo"));
+        assert!(back.contains("foo"));
+    }
+
+    #[test]
+    fn expand_tilde_without_separator_keeps_original() {
+        // 仅 `~username` 形式不属于 home 展开，按 TS 原版保持原样。
+        let out = expand_tilde("~alice/foo");
+        assert_eq!(out, "~alice/foo");
     }
 
     #[test]

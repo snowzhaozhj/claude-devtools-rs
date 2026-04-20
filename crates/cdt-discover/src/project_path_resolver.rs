@@ -20,7 +20,7 @@ use cdt_parse::parse_entry_at;
 
 use crate::error::DiscoverError;
 use crate::fs_provider::{FileSystemProvider, FsKind};
-use crate::path_decoder::{decode_path, extract_base_dir};
+use crate::path_decoder::{decode_path, extract_base_dir, looks_like_absolute_path};
 use crate::subproject_registry::SubprojectRegistry;
 
 /// 扫描 session 头部时最多读取的行数。对齐 TS 里的默认 `maxLines`。
@@ -66,7 +66,9 @@ impl ProjectPathResolver {
         }
 
         if let Some(h) = hint {
-            if h.is_absolute() {
+            // 跨平台绝对路径识别 —— Windows 上 `Path::is_absolute()` 拒绝 POSIX
+            // 风格，但 SSH 远端 / JSONL cwd 字段可能携带 POSIX 路径，必须接受
+            if looks_like_absolute_path(&h.to_string_lossy()) {
                 let owned = h.to_path_buf();
                 self.cache_set(project_id, &owned);
                 return Ok(owned);
@@ -90,8 +92,8 @@ impl ProjectPathResolver {
         for session_path in sessions.iter().take(max_inspect) {
             match self.extract_cwd_from_session(session_path).await {
                 Ok(Some(cwd)) => {
-                    let owned = PathBuf::from(cwd);
-                    if owned.is_absolute() {
+                    if looks_like_absolute_path(&cwd) {
+                        let owned = PathBuf::from(cwd);
                         self.cache_set(project_id, &owned);
                         return Ok(owned);
                     }
