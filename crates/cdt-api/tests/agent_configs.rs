@@ -10,16 +10,9 @@ use std::sync::Arc;
 
 use cdt_api::LocalDataApi;
 use cdt_config::{ConfigManager, NotificationManager};
-use cdt_discover::{LocalFileSystemProvider, ProjectScanner};
+use cdt_discover::{LocalFileSystemProvider, ProjectScanner, encode_path};
 use cdt_ssh::SshConnectionManager;
 use tempfile::TempDir;
-
-fn encode_path(path: &str) -> String {
-    format!(
-        "-{}",
-        path.strip_prefix('/').unwrap_or(path).replace('/', "-")
-    )
-}
 
 fn write_md(path: &std::path::Path, contents: &str) {
     if let Some(parent) = path.parent() {

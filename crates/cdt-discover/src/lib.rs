@@ -26,8 +26,8 @@ pub use fs_provider::{
     local_handle,
 };
 pub use path_decoder::{
-    COMPOSITE_SEPARATOR, decode_path, extract_base_dir, extract_project_name,
-    get_projects_base_path, get_todos_base_path, is_valid_encoded_path,
+    COMPOSITE_SEPARATOR, decode_path, encode_path, extract_base_dir, extract_project_name,
+    get_projects_base_path, get_todos_base_path, home_dir, is_valid_encoded_path,
 };
 pub use project_path_resolver::ProjectPathResolver;
 pub use project_scanner::ProjectScanner;

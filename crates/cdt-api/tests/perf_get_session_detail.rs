@@ -23,8 +23,7 @@ use cdt_parse::parse_file;
 use cdt_ssh::SshConnectionManager;
 
 fn projects_dir() -> PathBuf {
-    let home = std::env::var("HOME").expect("HOME not set");
-    PathBuf::from(home).join(".claude/projects")
+    cdt_discover::get_projects_base_path()
 }
 
 /// 复刻 `LocalDataApi::scan_subagent_candidates` 的扫描逻辑，但不调

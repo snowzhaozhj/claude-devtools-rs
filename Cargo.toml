@@ -42,6 +42,7 @@ dirs = "6"
 notify = "8"
 insta = { version = "1", features = ["yaml"] }
 serial_test = "3"
+dunce = "1"
 lru = "0.16"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }

@@ -47,15 +47,18 @@ impl FileWatcher {
     /// 创建监听自定义路径的 watcher（用于测试）。
     ///
     /// macOS 上 `/var` → `/private/var` 的 symlink 会导致 `notify` 返回的路径
-    /// 与传入路径前缀不匹配，因此 canonicalize 消除歧义。
+    /// 与传入路径前缀不匹配，因此 canonicalize 消除歧义。Windows 上 `std` 的
+    /// `canonicalize` 会返回 `\\?\C:\...` UNC 前缀，与 `notify` 回调给的普通路径
+    /// 不匹配，`starts_with` 永远 false —— 改用 `dunce::canonicalize` 自动去掉
+    /// 非 UNC 路径的 `\\?\` 前缀。macOS / Linux 行为与 `std` 一致。
     pub fn with_paths(projects_dir: PathBuf, todos_dir: PathBuf) -> Self {
         let (file_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
         let (todo_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
         Self {
             file_tx,
             todo_tx,
-            projects_dir: projects_dir.canonicalize().unwrap_or(projects_dir),
-            todos_dir: todos_dir.canonicalize().unwrap_or(todos_dir),
+            projects_dir: dunce::canonicalize(&projects_dir).unwrap_or(projects_dir),
+            todos_dir: dunce::canonicalize(&todos_dir).unwrap_or(todos_dir),
         }
     }
 
@@ -172,11 +175,13 @@ impl FileWatcher {
             return None;
         }
 
+        // 保留 OS 原生分隔符 —— project_id 作为 IPC 不透明 key，消费端按字符串
+        // 相等匹配 `ProjectScanner` 输出的 encoded 目录名，不做文件系统拼接。
         let project_id = components[..components.len() - 1]
             .iter()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
+            .collect::<PathBuf>()
+            .to_string_lossy()
+            .into_owned();
         let session_id = path.file_stem()?.to_string_lossy().into_owned();
 
         Some(FileChangeEvent {

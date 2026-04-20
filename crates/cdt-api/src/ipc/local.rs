@@ -1257,7 +1257,10 @@ async fn materialize_image_asset(cache_dir: &Path, media_type: &str, base64_data
         }
     }
 
-    format!("asset://localhost/{}", file_path.display())
+    // Windows 上 `file_path.display()` 含 `\`，Tauri asset protocol 按 POSIX URI
+    // 解析 —— 手动归一为 `/` 保证 `asset://localhost/C:/Users/...` 格式。
+    let url_path = file_path.to_string_lossy().replace('\\', "/");
+    format!("asset://localhost/{url_path}")
 }
 
 fn media_type_to_ext(mime: &str) -> &'static str {
