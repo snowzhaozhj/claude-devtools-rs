@@ -73,7 +73,7 @@ release-check:
     set -euo pipefail
     ROOT_VER=$(grep -E '^version\s*=' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
     TAURI_CARGO_VER=$(grep -E '^version\s*=' src-tauri/Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-    TAURI_CONF_VER=$(grep -E '"version":' src-tauri/tauri.conf.json | head -1 | sed -E 's/.*"version":\s*"([^"]+)".*/\1/')
+    TAURI_CONF_VER=$(grep -E '"version":' src-tauri/tauri.conf.json | head -1 | sed -E 's/.*"version":[[:space:]]*"([^"]+)".*/\1/')
     echo "workspace Cargo.toml:     $ROOT_VER"
     echo "src-tauri/Cargo.toml:     $TAURI_CARGO_VER"
     echo "src-tauri/tauri.conf.json: $TAURI_CONF_VER"
