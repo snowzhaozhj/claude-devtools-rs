@@ -130,6 +130,33 @@ fn translate_wsl_mount(posix: &str) -> String {
     posix.to_owned()
 }
 
+/// 跨平台识别绝对路径。
+///
+/// 标准库 `Path::is_absolute()` 只认当前平台的风格（Windows 上拒绝 POSIX
+/// `/foo/bar`、POSIX 上拒绝 Windows `C:\...`），但本项目里多处需要同时接受
+/// 两种风格：用户可能在 Windows 端配置 WSL `/mnt/c/...` 或 SSH 远端 POSIX
+/// 路径；JSONL 里的 `cwd` 字段来自 Claude Code CLI 的运行环境，Windows CLI
+/// 写 `C:\...`，macOS/Linux/WSL CLI 写 POSIX。
+///
+/// 识别三种形式：
+/// 1. POSIX：以 `/` 开头
+/// 2. Windows 盘符：`[A-Za-z]:` 后接 `/` 或 `\`
+/// 3. UNC：以 `\\` 或 `//` 开头（第 1 条已覆盖 `//`）
+#[must_use]
+pub fn looks_like_absolute_path(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    if bytes[0] == b'/' || bytes[0] == b'\\' {
+        return true;
+    }
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+}
+
 /// 从任意 project ID 抽出 `baseDir` —— composite ID 去掉 `::<hash>` 后缀，
 /// plain ID 原样返回。
 #[must_use]

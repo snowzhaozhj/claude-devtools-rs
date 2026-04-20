@@ -3,6 +3,8 @@
 //! 对应 TS `configValidation.ts`。对 `update_config` 的 payload
 //! 做分 section 校验，拦截无效值。
 
+use cdt_discover::looks_like_absolute_path;
+
 use crate::error::ConfigError;
 use crate::types::ConfigSection;
 
@@ -45,31 +47,6 @@ pub fn normalize_claude_root_path(value: Option<&str>) -> Option<String> {
     }
 
     Some(stripped.to_owned())
-}
-
-/// 跨平台识别绝对路径（见 `normalize_claude_root_path` doc）。
-fn looks_like_absolute_path(s: &str) -> bool {
-    let bytes = s.as_bytes();
-    if bytes.is_empty() {
-        return false;
-    }
-    // POSIX `/foo` 或 UNC `//server`
-    if bytes[0] == b'/' {
-        return true;
-    }
-    // UNC `\\server`
-    if bytes[0] == b'\\' {
-        return true;
-    }
-    // Windows 盘符 `C:\` 或 `C:/`
-    if bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && (bytes[2] == b'\\' || bytes[2] == b'/')
-    {
-        return true;
-    }
-    false
 }
 
 /// 校验 section 名是否合法。
