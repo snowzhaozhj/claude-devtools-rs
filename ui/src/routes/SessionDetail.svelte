@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
-  import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications, getToolInputTokens, getToolOutputTokens } from "../lib/toolHelpers";
+  import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications, getToolContextTokens, estimateTokens } from "../lib/toolHelpers";
   import { buildDisplayItems, buildSummary } from "../lib/displayItemBuilder";
   import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG } from "../lib/icons";
   import { tick } from "svelte";
@@ -530,9 +530,7 @@
                       svgIcon={WRENCH}
                       label={exec.toolName}
                       summary={getToolSummary(exec.toolName, exec.input)}
-                      tokenCount={getToolInputTokens(eff)}
-                      outputTokens={getToolOutputTokens(eff)}
-                      outputOmitted={!!exec.outputOmitted && eff === exec}
+                      tokenCount={getToolContextTokens(eff)}
                       status={getToolStatus(exec)}
                       durationMs={toolDurationMs(exec)}
                       isExpanded={expandedItems.has(key)}
@@ -557,6 +555,7 @@
                     <BaseItem
                       svgIcon={BRAIN}
                       label="Thinking"
+                      tokenCount={estimateTokens(item.text)}
                       isExpanded={expandedItems.has(key)}
                       onclick={() => toggle(key)}
                     >
@@ -570,6 +569,7 @@
                       svgIcon={MESSAGE_SQUARE}
                       label="Output"
                       summary={item.text.length > 60 ? item.text.slice(0, 60) + "…" : item.text}
+                      tokenCount={estimateTokens(item.text)}
                       isExpanded={expandedItems.has(key)}
                       onclick={() => toggle(key)}
                     >

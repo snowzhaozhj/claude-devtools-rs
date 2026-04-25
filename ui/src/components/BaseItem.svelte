@@ -9,8 +9,6 @@
     label: string;
     summary?: string;
     tokenCount?: number;
-    outputTokens?: number;
-    outputOmitted?: boolean;
     status?: "ok" | "error" | "pending" | "orphaned";
     durationMs?: number;
     isExpanded: boolean;
@@ -18,20 +16,7 @@
     children?: Snippet;
   }
 
-  let {
-    icon,
-    svgIcon,
-    label,
-    summary,
-    tokenCount,
-    outputTokens,
-    outputOmitted,
-    status,
-    durationMs,
-    isExpanded,
-    onclick,
-    children,
-  }: Props = $props();
+  let { icon, svgIcon, label, summary, tokenCount, status, durationMs, isExpanded, onclick, children }: Props = $props();
 
   function formatTokens(n: number): string {
     if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
@@ -65,24 +50,8 @@
     {/if}
 
     {#if tokenCount != null && tokenCount > 0}
-      {#if outputTokens != null || outputOmitted}
-        <!-- tool 场景：分别显示 input/output（对齐原版 callTokens / result.tokenCount） -->
-        <span
-          class="base-item-tokens"
-          title="in: {tokenCount} tokens / out: {outputOmitted
-            ? '懒加载'
-            : (outputTokens ?? 0) + ' tokens'}"
-        >
-          in ~{formatTokens(tokenCount)}{#if outputOmitted}
-            · out ⋯
-          {:else if outputTokens != null && outputTokens > 0}
-            · out ~{formatTokens(outputTokens)}
-          {/if}
-        </span>
-      {:else}
-        <!-- 通用场景（slash instructions 等）：原版 "~N tokens" 单数显示 -->
-        <span class="base-item-tokens">~{formatTokens(tokenCount)} tokens</span>
-      {/if}
+      <!-- 对齐原版 BaseItem.tsx:150 "~{formatTokens(tokenCount)} {tokenLabel}" -->
+      <span class="base-item-tokens">~{formatTokens(tokenCount)} tokens</span>
     {/if}
 
     {#if status}
