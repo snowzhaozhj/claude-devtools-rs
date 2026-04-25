@@ -3,15 +3,29 @@ import hljs from "highlight.js/lib/core";
 import json from "highlight.js/lib/languages/json";
 import bash from "highlight.js/lib/languages/bash";
 import typescript from "highlight.js/lib/languages/typescript";
+import javascript from "highlight.js/lib/languages/javascript";
 import rust from "highlight.js/lib/languages/rust";
 import python from "highlight.js/lib/languages/python";
+import markdown from "highlight.js/lib/languages/markdown";
+import yaml from "highlight.js/lib/languages/yaml";
+import xml from "highlight.js/lib/languages/xml";
+import css from "highlight.js/lib/languages/css";
+import go from "highlight.js/lib/languages/go";
 import DOMPurify from "dompurify";
 
 hljs.registerLanguage("json", json);
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("javascript", javascript);
 hljs.registerLanguage("rust", rust);
 hljs.registerLanguage("python", python);
+hljs.registerLanguage("markdown", markdown);
+hljs.registerLanguage("yaml", yaml);
+hljs.registerLanguage("xml", xml);
+hljs.registerLanguage("html", xml);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("scss", css);
+hljs.registerLanguage("go", go);
 
 const renderer = new marked.Renderer();
 renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
