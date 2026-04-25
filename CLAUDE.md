@@ -151,6 +151,7 @@ just bootstrap           # npm install --prefix ui（首次）
     4. **引用约定**：CLAUDE.md / followups.md / commit message 引用一个已归档 change 时，**只**写 `change <slug>`（如 `change session-detail-lazy-render`），**不要**写 `archive 2026-XX-XX-<slug>` 也**不要**写 `openspec/changes/archive/...` 路径——理由：日期前缀只是文件系统位置，不是引用单位；行为契约的真实来源是主 spec。需要溯源到具体 Requirement 时，引用 `openspec/specs/<cap>/spec.md` `<Requirement 标题>`。
     5. **archive 顺序坑（多 change 同 Requirement）**：`openspec archive <slug>` 用 delta 的 `MODIFIED Requirement` 完整 body **替换**主 spec 对应 Requirement，**不做三方合并**。如果你刚 archive 了 change A（修改 Req X），紧接着 archive 一个更老的 change B（也修改 Req X 但 delta 里没有 A 的内容），B 的 archive 会把 A 写入主 spec 的内容覆盖丢掉。规避：(a) 按 change 创建顺序 archive，先老后新；(b) 已经倒序 archive 时手工 diff 主 spec、把丢失的段落 merge 回去再 commit。本仓库 commit `1173885` 是案例。
     6. **行为契约级改动先 propose 再 apply**：涉及 IPC 字段语义 / 后端算法 / 状态判定 / 数据 omit 策略 / Tauri command 协议的改动，**先**写 `proposal.md` + `tasks.md`（空 checkbox）+ spec delta 并 `openspec validate <slug> --strict`，**再**动 code 边写边勾 checkbox，最后 archive。事后补 change 是已被否决的下策（reviewer 看 PR 时 spec 还旧、propose 阶段的设计取舍机会被跳过）。纯视觉对齐 / 文案 / SVG 路径仍按"小改动直接 commit"。判断不准默认走 openspec。
+    7. **OpenSpec 工作流走 skill，不要手写**：开 change 用 `/opsx:propose <slug>` 一次生成 proposal + design + tasks + specs delta + validate；apply 用 `/opsx:apply <slug>` 按 tasks.md 推进；archive 用 `/opsx:archive <slug>`（或等价 CLI `openspec archive <slug> -y`）。**禁止**手 `mkdir openspec/changes/<slug>` + `Write` 三件套——易漏 design.md、易写错 delta 格式。`design.md` **不是可选项**——任何 change 都要写明 D1/D2/D3... 决策记录（候选方案 / 取舍 / 风险），让 reviewer 能从设计层评估。
   - **spec delta 写法**：`ADDED/MODIFIED Requirement` 体的**第一段**必须含 `SHALL` 或 `MUST`，否则 `openspec validate --strict` 报 `must contain SHALL or MUST`；中文背景描述要放在规约句之后。
   - Subagent：`spec-fidelity-reviewer` 按 capability 审计 scenario→test 覆盖。
   - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
@@ -167,7 +168,7 @@ just bootstrap           # npm install --prefix ui（首次）
 
 ## 性能回归监测
 
-大会话首屏优化历经 4 个 phase：lazy markdown render（`session-detail-lazy-render`）→ subagent.messages 懒加载（`subagent-messages-lazy-load`，砍 60%）→ image base64 OMIT + `asset://` 懒加载（`session-detail-image-asset-cache`，砍 71-88%）→ response.content OMIT（`session-detail-response-content-omit`，砍 40%）→ tool_exec.output 懒加载（`session-detail-tool-output-lazy-load`）。
+大会话首屏优化历经多轮 IPC 瘦身：lazy markdown render（`session-detail-lazy-render`）→ subagent.messages 懒加载（`subagent-messages-lazy-load`，砍 60%）→ image base64 OMIT + `asset://` 懒加载（`session-detail-image-asset-cache`，砍 71-88%）→ response.content OMIT（`session-detail-response-content-omit`，砍 40%）→ tool_exec.output 懒加载（`session-detail-tool-output-lazy-load`）→ tool_output OMIT 携带 size 元数据消除 token 抖动（`tool-output-omit-preserve-size`）。
 "模式"沉淀为 Conventions 的 **IPC payload 瘦身模式**；具体 phase 实现查 `git log --grep="feat(perf)"`。
 回归入口：`cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture` —— 输出各阶段后端耗时 + 字段级 payload breakdown + raw vs IPC OMIT 对比。
 后端探针：`tracing::info!(target: "cdt_api::perf", ...)`；前端：`[perf]` console.info。
@@ -176,6 +177,6 @@ just bootstrap           # npm install --prefix ui（首次）
 
 1. `cargo build --workspace` + `just test` 确认回归绿
 2. `just dev` 启动桌面应用验证当前状态
-3. UI 功能迭代：**大功能**（多步骤、跨模块、需要设计决策）走 openspec（propose → apply → archive）；**小改动**（单点样式修复、Trigger CRUD 等）直接写 + PR，不走 openspec。判断标准：是否需要 design.md 记录架构决策
+3. UI 功能迭代：**行为契约改动**（IPC 字段 / 后端算法 / 状态判定 / 数据流语义）走 openspec（`/opsx:propose` → `/opsx:apply` → `/opsx:archive`，design.md 必备）；**纯视觉对齐 / 单点样式修复 / Trigger CRUD 等**直接写 + PR，不走 openspec。判断不准默认走 openspec（成本是写一份 proposal + delta，收益是契约清晰）。
 4. 开新工作前先 `git checkout -b feat/<slug>`，不要直接在 `main` 上写代码
 5. 性能 / 卡顿排查：用"性能回归监测"段的入口，**先看数据再定方向**
