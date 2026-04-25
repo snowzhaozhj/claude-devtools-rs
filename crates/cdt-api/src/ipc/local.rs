@@ -535,7 +535,14 @@ impl DataApi for LocalDataApi {
         let candidate_count = candidates.len();
 
         let t_build = std::time::Instant::now();
-        let is_ongoing = cdt_analyze::check_messages_ongoing(&messages);
+        let messages_ongoing = cdt_analyze::check_messages_ongoing(&messages);
+        // stale check 与 list_sessions 路径对齐（issue #94）：mtime > 5min 的
+        // ongoing 视为 crashed/killed。
+        let is_ongoing = if messages_ongoing {
+            !crate::ipc::session_metadata::is_file_stale(&jsonl_path).await
+        } else {
+            false
+        };
         let chunks = build_chunks_with_subagents(&messages, &candidates);
         let build_ms = t_build.elapsed().as_millis();
         let chunk_count = chunks.len();

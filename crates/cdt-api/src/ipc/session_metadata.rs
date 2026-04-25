@@ -3,14 +3,23 @@
 //! 与原版 `metadataExtraction.ts` 的 `analyzeSessionFileMetadata` 对齐：
 //! - 标题：第一条非 `is_meta`、非命令输出的 user 消息（清洗后截取前 200 字符）
 //! - 消息计数：user + 对应 assistant 轮次配对计数
+//! - `isOngoing`：`check_messages_ongoing` 结果再叠加 stale check（文件
+//!   mtime 距 now > 5 分钟视为 crashed/killed），对齐
+//!   `claude-devtools/src/main/services/discovery/ProjectScanner.ts`
+//!   `STALE_SESSION_THRESHOLD_MS = 5 * 60 * 1000`（issue #94）
 
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use cdt_core::message::{MessageCategory, MessageContent};
 use cdt_parse::parse_entry_at;
+
+/// 文件 mtime 距 now 超过此阈值则即便消息序列结构上为 ongoing 也强制判 done。
+/// 5 分钟，对齐原版 `STALE_SESSION_THRESHOLD_MS`。
+pub const STALE_SESSION_THRESHOLD: Duration = Duration::from_secs(5 * 60);
 
 /// 提取结果。
 pub struct SessionMetadata {
@@ -100,13 +109,37 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
         title = command_fallback;
     }
 
-    let is_ongoing = cdt_analyze::check_messages_ongoing(&all_messages);
+    let messages_ongoing = cdt_analyze::check_messages_ongoing(&all_messages);
+    let is_ongoing = if messages_ongoing {
+        !is_file_stale(path).await
+    } else {
+        false
+    };
 
     SessionMetadata {
         title,
         message_count,
         is_ongoing,
     }
+}
+
+/// 异步读 file mtime 并判定是否超过 stale 阈值。
+/// stat 失败时回退到 `false`（不强制 stale，保守保留 `messages_ongoing` 的判定）。
+pub async fn is_file_stale(path: &Path) -> bool {
+    let Ok(meta) = tokio::fs::metadata(path).await else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    is_session_stale(modified, SystemTime::now())
+}
+
+/// 纯函数版本：给定文件 mtime 与"当前时刻"判定 session 是否 stale。
+/// `now` 早于 `file_modified`（时钟回拨等异常）时返回 `false`。
+pub fn is_session_stale(file_modified: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(file_modified)
+        .is_ok_and(|elapsed| elapsed >= STALE_SESSION_THRESHOLD)
 }
 
 fn extract_text(content: &MessageContent) -> String {
@@ -196,5 +229,50 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
         s.to_string()
     } else {
         s.chars().take(max_chars).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at_secs_after(base: SystemTime, secs: u64) -> SystemTime {
+        base + Duration::from_secs(secs)
+    }
+
+    #[test]
+    fn freshly_written_session_is_not_stale() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let modified = at_secs_after(now, 0);
+        assert!(!is_session_stale(modified, now));
+    }
+
+    #[test]
+    fn session_at_4min_59s_is_not_stale() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let modified = now - Duration::from_secs(4 * 60 + 59);
+        assert!(!is_session_stale(modified, now));
+    }
+
+    #[test]
+    fn session_at_5min_exactly_is_stale() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let modified = now - STALE_SESSION_THRESHOLD;
+        assert!(is_session_stale(modified, now));
+    }
+
+    #[test]
+    fn session_far_in_past_is_stale() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let modified = now - Duration::from_secs(7 * 24 * 60 * 60);
+        assert!(is_session_stale(modified, now));
+    }
+
+    #[test]
+    fn clock_skew_with_future_mtime_is_not_stale() {
+        // file_modified > now（NTP 漂移 / 时区错配等）：保守判 not stale。
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let modified = now + Duration::from_secs(60);
+        assert!(!is_session_stale(modified, now));
     }
 }
