@@ -161,13 +161,19 @@ export function estimateContentTokens(content: unknown): number {
  * 显示的 "~N tokens" 槽位补回 Rust 版。
  */
 export function getToolContextTokens(exec: ToolExecution): number {
-  let total = estimateContentTokens(exec.input);
-  if (exec.output && exec.output.kind === "text") {
-    total += estimateTokens(exec.output.text);
-  } else if (exec.output && exec.output.kind === "structured") {
-    total += estimateContentTokens(exec.output.value);
-  }
-  return total;
+  return getToolInputTokens(exec) + getToolOutputTokens(exec);
+}
+
+/** 单独估算 tool 的 input（Claude 生成的参数）token 数。 */
+export function getToolInputTokens(exec: ToolExecution): number {
+  return estimateContentTokens(exec.input);
+}
+
+/** 单独估算 tool 的 output（工具回写）token 数；OMIT 状态下返回 0。 */
+export function getToolOutputTokens(exec: ToolExecution): number {
+  if (exec.output && exec.output.kind === "text") return estimateTokens(exec.output.text);
+  if (exec.output && exec.output.kind === "structured") return estimateContentTokens(exec.output.value);
+  return 0;
 }
 
 /** 移除 ANSI 转义序列 */

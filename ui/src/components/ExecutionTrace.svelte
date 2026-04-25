@@ -2,7 +2,7 @@
   import type { DisplayItem } from "../lib/displayItemBuilder";
   import { getToolOutput, type ToolExecution, type ToolOutput } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
-  import { getToolSummary, getToolStatus, cleanDisplayText, getToolContextTokens } from "../lib/toolHelpers";
+  import { getToolSummary, getToolStatus, cleanDisplayText, getToolInputTokens, getToolOutputTokens } from "../lib/toolHelpers";
   import { WRENCH, BRAIN, SLASH, MESSAGE_SQUARE } from "../lib/icons";
   import BaseItem from "./BaseItem.svelte";
   import SubagentCard from "./SubagentCard.svelte";
@@ -96,7 +96,9 @@
         svgIcon={WRENCH}
         label={exec.toolName}
         summary={getToolSummary(exec.toolName, exec.input)}
-        tokenCount={getToolContextTokens(exec)}
+        tokenCount={getToolInputTokens(eff)}
+        outputTokens={getToolOutputTokens(eff)}
+        outputOmitted={!!exec.outputOmitted && eff === exec}
         status={getToolStatus(exec)}
         isExpanded={expandedKeys.has(key)}
         onclick={() => toggle(key, exec)}

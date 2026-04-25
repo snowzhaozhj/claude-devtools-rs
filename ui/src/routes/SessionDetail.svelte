@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
-  import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications, getToolContextTokens } from "../lib/toolHelpers";
+  import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications, getToolInputTokens, getToolOutputTokens } from "../lib/toolHelpers";
   import { buildDisplayItems, buildSummary } from "../lib/displayItemBuilder";
   import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG } from "../lib/icons";
   import { tick } from "svelte";
@@ -530,7 +530,9 @@
                       svgIcon={WRENCH}
                       label={exec.toolName}
                       summary={getToolSummary(exec.toolName, exec.input)}
-                      tokenCount={getToolContextTokens(exec)}
+                      tokenCount={getToolInputTokens(eff)}
+                      outputTokens={getToolOutputTokens(eff)}
+                      outputOmitted={!!exec.outputOmitted && eff === exec}
                       status={getToolStatus(exec)}
                       durationMs={toolDurationMs(exec)}
                       isExpanded={expandedItems.has(key)}
