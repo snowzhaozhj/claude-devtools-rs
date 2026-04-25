@@ -96,7 +96,7 @@
         svgIcon={WRENCH}
         label={exec.toolName}
         summary={getToolSummary(exec.toolName, exec.input)}
-        tokenCount={getToolContextTokens(eff)}
+        tokenCount={getToolContextTokens(exec)}
         status={getToolStatus(exec)}
         isExpanded={expandedKeys.has(key)}
         onclick={() => toggle(key, exec)}

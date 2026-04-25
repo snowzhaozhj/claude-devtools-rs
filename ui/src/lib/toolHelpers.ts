@@ -169,8 +169,11 @@ export function getToolInputTokens(exec: ToolExecution): number {
   return estimateContentTokens(exec.input);
 }
 
-/** 单独估算 tool 的 output（工具回写）token 数；OMIT 状态下返回 0。 */
+/** 单独估算 tool 的 output（工具回写）token 数。
+ *  优先级：outputBytes（OMIT 层填的原始字节长度，懒加载前后稳定）→ 直接读 output.text/value（HTTP / 老后端 / 回滚路径）→ 0。
+ *  见 change `tool-output-omit-preserve-size`：BaseItem 头部 token 数因此在懒加载前后保持一致。 */
 export function getToolOutputTokens(exec: ToolExecution): number {
+  if (exec.outputBytes != null) return Math.ceil(exec.outputBytes / 4);
   if (exec.output && exec.output.kind === "text") return estimateTokens(exec.output.text);
   if (exec.output && exec.output.kind === "structured") return estimateContentTokens(exec.output.value);
   return 0;

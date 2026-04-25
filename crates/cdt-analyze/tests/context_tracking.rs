@@ -83,6 +83,7 @@ fn bash_tool(id: &str, cmd: &str, output: &str) -> ToolExecution {
         source_assistant_uuid: "a0".into(),
         result_agent_id: None,
         output_omitted: false,
+        output_bytes: None,
     }
 }
 

@@ -530,7 +530,7 @@
                       svgIcon={WRENCH}
                       label={exec.toolName}
                       summary={getToolSummary(exec.toolName, exec.input)}
-                      tokenCount={getToolContextTokens(eff)}
+                      tokenCount={getToolContextTokens(exec)}
                       status={getToolStatus(exec)}
                       durationMs={toolDurationMs(exec)}
                       isExpanded={expandedItems.has(key)}

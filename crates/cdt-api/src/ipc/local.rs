@@ -136,6 +136,17 @@ fn apply_tool_output_omit(chunks: &mut [cdt_core::Chunk]) {
     for chunk in chunks {
         if let cdt_core::Chunk::Ai(ai) = chunk {
             for exec in &mut ai.tool_executions {
+                // 在 trim 前记录原始 output 字节长度，让前端在懒加载前即可估算
+                // output token（按 4 字符/token），避免 BaseItem 头部 token 数随
+                // 展开抖动。`Missing` variant 保持 `None`。见 change
+                // `tool-output-omit-preserve-size`。
+                exec.output_bytes = match &exec.output {
+                    cdt_core::ToolOutput::Text { text } => Some(text.len() as u64),
+                    cdt_core::ToolOutput::Structured { value } => {
+                        Some(serde_json::to_string(value).map_or(0, |s| s.len() as u64))
+                    }
+                    cdt_core::ToolOutput::Missing => None,
+                };
                 exec.output.trim();
                 exec.output_omitted = true;
             }
@@ -1849,6 +1860,7 @@ mod tests {
             source_assistant_uuid: "a1".into(),
             result_agent_id: None,
             output_omitted: false,
+            output_bytes: None,
         }
     }
 
@@ -1867,10 +1879,11 @@ mod tests {
 
     #[test]
     fn apply_tool_output_omit_clears_text_variant() {
+        let original_text = "very long bash output...";
         let exec = make_tool_exec(
             "tu1",
             cdt_core::ToolOutput::Text {
-                text: "very long bash output...".into(),
+                text: original_text.into(),
             },
         );
         let mut chunks = vec![make_ai_chunk_with_tool(exec)];
@@ -1881,6 +1894,8 @@ mod tests {
         let exec = &ai.tool_executions[0];
         assert!(matches!(&exec.output, cdt_core::ToolOutput::Text { text } if text.is_empty()));
         assert!(exec.output_omitted);
+        // outputBytes 在 trim 前记录原始字节长度（change `tool-output-omit-preserve-size`）
+        assert_eq!(exec.output_bytes, Some(original_text.len() as u64));
         // 其它字段保留
         assert_eq!(exec.tool_use_id, "tu1");
         assert_eq!(exec.tool_name, "Bash");
@@ -1889,10 +1904,12 @@ mod tests {
 
     #[test]
     fn apply_tool_output_omit_clears_structured_variant() {
+        let value = serde_json::json!({"stdout": "lots", "stderr": ""});
+        let expected_bytes = serde_json::to_string(&value).unwrap().len() as u64;
         let exec = make_tool_exec(
             "tu2",
             cdt_core::ToolOutput::Structured {
-                value: serde_json::json!({"stdout": "lots", "stderr": ""}),
+                value: value.clone(),
             },
         );
         let mut chunks = vec![make_ai_chunk_with_tool(exec)];
@@ -1905,6 +1922,8 @@ mod tests {
             matches!(&exec.output, cdt_core::ToolOutput::Structured { value } if value.is_null())
         );
         assert!(exec.output_omitted);
+        // outputBytes = serde_json::to_string(原 value).len()
+        assert_eq!(exec.output_bytes, Some(expected_bytes));
     }
 
     #[test]
@@ -1920,6 +1939,8 @@ mod tests {
         // Missing 也设 flag——caller 看到 Missing + omitted=true 仍可触发懒拉，
         // 拉回来若仍 Missing 则保留语义不变。
         assert!(exec.output_omitted);
+        // Missing variant 不记录 outputBytes（保持 None）
+        assert_eq!(exec.output_bytes, None);
     }
 
     #[test]

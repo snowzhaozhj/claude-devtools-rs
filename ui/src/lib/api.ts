@@ -129,6 +129,10 @@ export interface ToolExecution {
    *  需通过 getToolOutput(rootSessionId, sessionId, toolUseId) 懒拉取。
    *  老后端 / 回滚时为 false 或 undefined。 */
   outputOmitted?: boolean;
+  /** OMIT 层在 trim 前记录的 output 原始字节长度（见 change `tool-output-omit-preserve-size`）。
+   *  解析层 / HTTP 路径 / 老后端为 undefined；前端 token 估算优先用此字段除以 4，
+   *  让懒加载前后 BaseItem 头部 token 数稳定。Missing variant 不填。 */
+  outputBytes?: number;
 }
 
 export interface UserChunk {
