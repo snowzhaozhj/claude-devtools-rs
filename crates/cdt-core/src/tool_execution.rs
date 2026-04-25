@@ -32,6 +32,10 @@ pub enum ToolOutput {
 /// `get_session_detail` 返回路径默认把 `output` 内 `text` / `value` 清空（保留 enum
 /// variant kind） + 设此 flag 为 true，砍掉首屏 IPC 中 tool 输出。前端
 /// `ExecutionTrace` 在用户点击展开时通过 `get_tool_output` IPC 按需懒拉。
+///
+/// `output_bytes` 与 `output_omitted` 配套（见 change `tool-output-omit-preserve-size`）：
+/// IPC OMIT 层在 `trim` 前记录原始字节长度，让前端在懒加载前即可估算 output token
+/// （按 4 字符/token 启发式）。解析层不主动填充——保持 `None`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolExecution {
@@ -53,6 +57,10 @@ pub struct ToolExecution {
     pub result_agent_id: Option<String>,
     #[serde(default)]
     pub output_omitted: bool,
+    /// IPC OMIT 时记录的 output 原始字节长度。解析层 `None`；OMIT 层仅
+    /// `Text` / `Structured` variant 填值，`Missing` 保持 `None`。
+    #[serde(default)]
+    pub output_bytes: Option<u64>,
 }
 
 impl ToolOutput {
@@ -118,6 +126,7 @@ mod tests {
             source_assistant_uuid: "a1".into(),
             result_agent_id: None,
             output_omitted: false,
+            output_bytes: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert_eq!(serde_json::from_str::<ToolExecution>(&json).unwrap(), value);
@@ -148,9 +157,18 @@ mod tests {
             source_assistant_uuid: "a1".into(),
             result_agent_id: None,
             output_omitted: true,
+            output_bytes: Some(42),
         };
         let json = serde_json::to_string(&value).unwrap();
         assert_eq!(serde_json::from_str::<ToolExecution>(&json).unwrap(), value);
+    }
+
+    #[test]
+    fn tool_execution_output_bytes_defaults_to_none() {
+        // 旧 payload 不带 outputBytes 字段：serde default 反序列化为 None。
+        let json = r#"{"toolUseId":"tu1","toolName":"Bash","input":{"cmd":"ls"},"output":{"kind":"text","text":"hi"},"isError":false,"startTs":"2026-04-11T00:00:00Z","endTs":null,"sourceAssistantUuid":"a1","resultAgentId":null,"outputOmitted":false}"#;
+        let exec: ToolExecution = serde_json::from_str(json).unwrap();
+        assert_eq!(exec.output_bytes, None);
     }
 
     #[test]

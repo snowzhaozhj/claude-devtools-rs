@@ -2,7 +2,7 @@
   import type { DisplayItem } from "../lib/displayItemBuilder";
   import { getToolOutput, type ToolExecution, type ToolOutput } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
-  import { getToolSummary, getToolStatus, cleanDisplayText, getToolContextTokens } from "../lib/toolHelpers";
+  import { getToolSummary, getToolStatus, cleanDisplayText, getToolContextTokens, estimateTokens } from "../lib/toolHelpers";
   import { WRENCH, BRAIN, SLASH, MESSAGE_SQUARE } from "../lib/icons";
   import BaseItem from "./BaseItem.svelte";
   import SubagentCard from "./SubagentCard.svelte";
@@ -120,6 +120,7 @@
       <BaseItem
         svgIcon={BRAIN}
         label="Thinking"
+        tokenCount={estimateTokens(item.text)}
         isExpanded={expandedKeys.has(key)}
         onclick={() => toggle(key)}
       >
@@ -134,6 +135,7 @@
         svgIcon={MESSAGE_SQUARE}
         label="Output"
         summary={cleaned.length > 60 ? cleaned.slice(0, 60) + "…" : cleaned}
+        tokenCount={estimateTokens(item.text)}
         isExpanded={expandedKeys.has(key)}
         onclick={() => toggle(key)}
       >

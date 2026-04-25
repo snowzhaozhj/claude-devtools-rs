@@ -420,6 +420,7 @@ mod tests {
             source_assistant_uuid: "a1".into(),
             result_agent_id: None,
             output_omitted: false,
+            output_bytes: None,
         }
     }
 

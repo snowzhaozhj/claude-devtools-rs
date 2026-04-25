@@ -96,6 +96,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         source_assistant_uuid: pu.source_assistant_uuid.clone(),
                         result_agent_id,
                         output_omitted: false,
+                        output_bytes: None,
                     });
                 }
             }
@@ -118,6 +119,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                     source_assistant_uuid: pu.source_assistant_uuid,
                     result_agent_id: None,
                     output_omitted: false,
+                    output_bytes: None,
                 });
             }
         }
