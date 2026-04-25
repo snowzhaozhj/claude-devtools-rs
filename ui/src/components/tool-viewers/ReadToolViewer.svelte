@@ -38,10 +38,10 @@
     </button>
   </div>
 
-  <!-- Code with line numbers -->
+  <!-- Code with line numbers (line numbers are CSS ::before, not part of clipboard text) -->
   <div class="code-container">
-    <pre class="code-content"><code>{#each lines as line, i}<span class="line-number">{i + 1}</span><span class="line-content">{@html highlightCode(line, language)}</span>
-{/each}</code></pre>
+    <pre class="code-content"><code>{#each lines as line, i}<span class="line" data-line={i + 1}>{@html highlightCode(line, language)}
+</span>{/each}</code></pre>
   </div>
 </div>
 
@@ -125,18 +125,22 @@
     border-radius: 0;
   }
 
-  .line-number {
-    display: inline-block;
+  .line {
+    display: block;
+    position: relative;
+    padding-left: 60px;
+    white-space: pre;
+  }
+
+  .line::before {
+    content: attr(data-line);
+    position: absolute;
+    left: 0;
     width: 48px;
     padding-right: 12px;
     text-align: right;
     color: var(--code-line-number);
     user-select: none;
-    flex-shrink: 0;
-  }
-
-  .line-content {
-    white-space: pre;
   }
 
   /* Syntax tokens */

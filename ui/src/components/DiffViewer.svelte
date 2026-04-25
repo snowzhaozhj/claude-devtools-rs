@@ -87,18 +87,20 @@
 
   <!-- Diff lines -->
   <div class="diff-body">
-    {#each diffLines as line}
-      <div
-        class="diff-line"
-        class:diff-line-added={line.type === "added"}
-        class:diff-line-removed={line.type === "removed"}
-      >
-        <span class="diff-gutter diff-gutter-old">{line.oldNum ?? ""}</span>
-        <span class="diff-gutter diff-gutter-new">{line.newNum ?? ""}</span>
-        <span class="diff-prefix">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
-        <span class="diff-content">{line.content || " "}</span>
-      </div>
-    {/each}
+    <div class="diff-body-inner">
+      {#each diffLines as line}
+        <div
+          class="diff-line"
+          class:diff-line-added={line.type === "added"}
+          class:diff-line-removed={line.type === "removed"}
+        >
+          <span class="diff-gutter diff-gutter-old">{line.oldNum ?? ""}</span>
+          <span class="diff-gutter diff-gutter-new">{line.newNum ?? ""}</span>
+          <span class="diff-prefix">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
+          <span class="diff-content">{line.content || " "}</span>
+        </div>
+      {/each}
+    </div>
   </div>
 </div>
 
@@ -157,6 +159,11 @@
     background: var(--code-bg);
   }
 
+  .diff-body-inner {
+    display: inline-block;
+    min-width: 100%;
+  }
+
   .diff-line {
     display: flex;
     line-height: 1.5;
@@ -195,7 +202,6 @@
   .diff-content {
     flex: 1;
     white-space: pre;
-    overflow-x: auto;
     padding-right: 8px;
   }
 
