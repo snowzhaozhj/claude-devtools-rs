@@ -14,6 +14,7 @@
   const content = $derived(String(input?.content ?? ""));
   const language = $derived(getLanguageFromPath(filePath));
   const isMarkdown = $derived(language === "markdown");
+  const lines = $derived(content.split("\n"));
 
   // .md 默认 preview，可切 code（对齐原版 WriteToolViewer.tsx 第 59-62 行）
   let viewMode = $state<"preview" | "code">("preview");
@@ -39,7 +40,10 @@
     {#if isMarkdown && viewMode === "preview"}
       <div class="md-preview">{@html renderMarkdown(content)}</div>
     {:else}
-      <pre class="write-code"><code>{@html highlightCode(content, language)}</code></pre>
+      <div class="write-code-container">
+        <pre class="write-code"><code>{#each lines as line, i}<span class="line" data-line={i + 1}>{@html highlightCode(line, language)}
+</span>{/each}</code></pre>
+      </div>
     {/if}
   {/if}
 </div>
@@ -104,16 +108,18 @@
     border-color: var(--color-text-muted);
   }
 
+  .write-code-container {
+    max-height: 400px;
+    overflow: auto;
+    background: var(--code-bg);
+  }
+
   .write-code {
     font-size: 12px;
     font-family: var(--font-mono);
-    color: var(--diff-added-text);
-    padding: 10px 12px;
+    color: var(--color-text-secondary);
+    padding: 10px 0;
     margin: 0;
-    white-space: pre;
-    overflow-x: auto;
-    max-height: 400px;
-    overflow-y: auto;
     line-height: 1.5;
   }
 
@@ -124,6 +130,36 @@
     font: inherit;
     border-radius: 0;
   }
+
+  .write-code .line {
+    display: block;
+    position: relative;
+    padding-left: 60px;
+    white-space: pre;
+  }
+
+  .write-code .line::before {
+    content: attr(data-line);
+    position: absolute;
+    left: 0;
+    width: 48px;
+    padding-right: 12px;
+    text-align: right;
+    color: var(--code-line-number);
+    user-select: none;
+  }
+
+  /* hljs token 颜色：与 ReadToolViewer 保持一致 */
+  .write-code :global(.hljs-string) { color: var(--syntax-string); }
+  .write-code :global(.hljs-number) { color: var(--syntax-number); }
+  .write-code :global(.hljs-keyword),
+  .write-code :global(.hljs-literal) { color: var(--syntax-keyword); }
+  .write-code :global(.hljs-attr) { color: var(--code-filename); }
+  .write-code :global(.hljs-comment) { color: var(--syntax-comment); }
+  .write-code :global(.hljs-function),
+  .write-code :global(.hljs-title) { color: var(--syntax-function); }
+  .write-code :global(.hljs-built_in),
+  .write-code :global(.hljs-type) { color: var(--syntax-type); }
 
   .md-preview {
     padding: 12px 16px;
