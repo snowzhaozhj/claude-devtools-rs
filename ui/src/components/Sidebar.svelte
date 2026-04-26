@@ -22,7 +22,7 @@
     getHiddenCount,
     loadProjectPrefs,
   } from "../lib/sidebarStore.svelte";
-  import { registerHandler, unregisterHandler, scheduleRefresh } from "../lib/fileChangeStore.svelte";
+  import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
   import { MESSAGE_SQUARE } from "../lib/icons";
 
@@ -199,7 +199,12 @@
         untrack(() => loadSessions(currentProjectId, true)),
       );
     });
-    return () => unregisterHandler("sidebar");
+    return () => {
+      unregisterHandler("sidebar");
+      // 切 project 时取消旧 trailing，否则旧闭包会用旧 currentProjectId
+      // 调 loadSessions 覆盖新 project 的列表（codex review 找到的 bug）
+      cancelScheduledRefresh(`sidebar:${currentProjectId}`);
+    };
   });
 
   onDestroy(() => {

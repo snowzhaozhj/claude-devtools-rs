@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import {
   _resetScheduleRefreshForTest,
+  cancelScheduledRefresh,
   dedupeRefresh,
   scheduleRefresh,
 } from './fileChangeStore.svelte'
@@ -80,14 +81,14 @@ describe('scheduleRefresh', () => {
     const fn = vi.fn().mockResolvedValue(undefined)
     scheduleRefresh('a', fn)
     // microtask 排干 dedupeRefresh 内 async IIFE
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(0)
     expect(fn).toHaveBeenCalledTimes(1)
   })
 
   test('窗口内多次调用合并为一次 trailing', async () => {
     const fn = vi.fn().mockResolvedValue(undefined)
     scheduleRefresh('b', fn)
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(0)
     expect(fn).toHaveBeenCalledTimes(1)
 
     // 紧接着的 5 次调用应该被 trailing 合并
@@ -109,7 +110,7 @@ describe('scheduleRefresh', () => {
     const third = vi.fn().mockResolvedValue(undefined)
 
     scheduleRefresh('c', first)
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(0)
     expect(first).toHaveBeenCalledTimes(1)
 
     scheduleRefresh('c', second)
@@ -123,12 +124,12 @@ describe('scheduleRefresh', () => {
   test('窗口结束后再调直接触发，无需 trailing', async () => {
     const fn = vi.fn().mockResolvedValue(undefined)
     scheduleRefresh('d', fn)
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(0)
     expect(fn).toHaveBeenCalledTimes(1)
 
     await vi.advanceTimersByTimeAsync(260)
     scheduleRefresh('d', fn)
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(0)
     expect(fn).toHaveBeenCalledTimes(2)
   })
 
@@ -137,7 +138,63 @@ describe('scheduleRefresh', () => {
     scheduleRefresh('e', fn)
     scheduleRefresh('f', fn)
     scheduleRefresh('g', fn)
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(0)
     expect(fn).toHaveBeenCalledTimes(3)
+  })
+
+  test('trailing 在上一轮 fn 仍 in-flight 时不被吞掉（codex bug 1）', async () => {
+    // 模拟：第一轮 fn 慢（500ms），trailing 在 250ms 时触发——若直接走
+    // dedupeRefresh 会命中 in-flight 合并把 trailing 的 fn 吃掉。新实现
+    // 应在第一轮 settle 后补跑最新 fn。
+    let firstResolve!: () => void
+    const firstPromise = new Promise<void>((r) => {
+      firstResolve = r
+    })
+    const first = vi.fn(() => firstPromise)
+    const second = vi.fn().mockResolvedValue(undefined)
+
+    scheduleRefresh('h', first)
+    expect(first).toHaveBeenCalledTimes(1)
+
+    // 250ms 内连发 trailing
+    scheduleRefresh('h', second)
+    await vi.advanceTimersByTimeAsync(260)
+    // trailing timer 触发后，second 应该被排队（first 仍 pending）
+    expect(second).not.toHaveBeenCalled()
+
+    // 第一轮 settle：补跑 second（经 scheduleRefresh 重排）
+    firstResolve()
+    await vi.advanceTimersByTimeAsync(260)
+    expect(second).toHaveBeenCalledTimes(1)
+  })
+
+  test('cancelScheduledRefresh 取消 pending trailing（codex bug 3）', async () => {
+    const fn = vi.fn().mockResolvedValue(undefined)
+    scheduleRefresh('i', fn)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fn).toHaveBeenCalledTimes(1)
+
+    // 排一个 trailing
+    scheduleRefresh('i', fn)
+    cancelScheduledRefresh('i')
+
+    await vi.advanceTimersByTimeAsync(500)
+    // 取消后 trailing 不应触发
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+
+  test('cancelScheduledRefresh 同时清 lastRunAt（避免长期堆积 + 切回立即触发）', async () => {
+    const fn = vi.fn().mockResolvedValue(undefined)
+    scheduleRefresh('j', fn)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fn).toHaveBeenCalledTimes(1)
+
+    // 立即 cancel：lastRunAt 也清掉
+    cancelScheduledRefresh('j')
+
+    // 紧接着重调：因为 lastRunAt 清了，应立即触发 leading
+    scheduleRefresh('j', fn)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fn).toHaveBeenCalledTimes(2)
   })
 })

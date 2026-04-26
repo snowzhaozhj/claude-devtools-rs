@@ -257,14 +257,32 @@ const displayItemsCache = new Map<
   { items: DisplayItem[]; lastOutput: OutputItem | null }
 >();
 
+/**
+ * chunk 内容指纹。除长度外还编码 toolExecutions / subagents 的"易变状态"：
+ * - tool: endTs（null→完成）/ isError / outputOmitted / output.kind / teammateSpawn
+ * - subagent: sessionId / isOngoing / endTs / messages.length（懒拉取后变化）
+ *
+ * 不能仅用长度——后端会就地更新 tool 状态（completion）和 subagent ongoing
+ * 标志位，长度不变但内容变化时若命中旧 cache 就会渲染 stale UI。
+ */
 function chunkDigest(chunk: AIChunk): string {
   const firstUuid = chunk.responses[0]?.uuid ?? chunk.timestamp;
   const stepsLen = chunk.semanticSteps.length;
   const lastStepTs = chunk.semanticSteps[stepsLen - 1]?.timestamp ?? "";
-  const toolsLen = chunk.toolExecutions.length;
   const teamLen = chunk.teammateMessages?.length ?? 0;
   const slashLen = chunk.slashCommands?.length ?? 0;
-  return `${firstUuid}|${stepsLen}|${lastStepTs}|${toolsLen}|${teamLen}|${slashLen}`;
+
+  let toolsState = "";
+  for (const t of chunk.toolExecutions) {
+    toolsState += `${t.toolUseId}:${t.endTs ?? "_"}:${t.isError ? "E" : ""}:${t.outputOmitted ? "O" : ""}:${t.output?.kind ?? "_"}:${t.teammateSpawn ? "T" : ""};`;
+  }
+
+  let subsState = "";
+  for (const s of chunk.subagents) {
+    subsState += `${s.sessionId}:${s.isOngoing ? "1" : "0"}:${s.endTs ?? "_"}:${s.messages?.length ?? 0};`;
+  }
+
+  return `${firstUuid}|${stepsLen}|${lastStepTs}|${teamLen}|${slashLen}|${toolsState}|${subsState}`;
 }
 
 export function buildDisplayItemsCached(chunk: AIChunk): {

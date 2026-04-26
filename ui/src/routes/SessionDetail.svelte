@@ -9,7 +9,7 @@
   import { processMermaidBlocks } from "../lib/mermaid";
   import { createLazyMarkdownObserver, estimatePlaceholderHeight } from "../lib/lazyMarkdown.svelte";
   import { getTabUIState, saveTabUIState, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
-  import { registerHandler, unregisterHandler, scheduleRefresh } from "../lib/fileChangeStore.svelte";
+  import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
   import TeammateMessageItem from "../components/TeammateMessageItem.svelte";
@@ -155,6 +155,7 @@
   onDestroy(() => {
     document.removeEventListener("keydown", handleKeydown);
     unregisterHandler(fileChangeKey);
+    cancelScheduledRefresh(`detail:${projectId}|${sessionId}`);
     lazyObserver?.disconnect();
     lazyObserver = null;
     // 保存 per-tab UI 状态
@@ -184,7 +185,17 @@
 
   async function ensureToolOutput(exec: ToolExecution): Promise<void> {
     if (!exec.outputOmitted) return;
-    if (outputCache.has(exec.toolUseId)) return;
+    const cached = outputCache.get(exec.toolUseId);
+    if (cached) {
+      // 命中即升级到 LRU 末尾：delete + set 让 Map 迭代顺序反映"最近使用"。
+      // 这里在 user-triggered toggle 路径上调（不在 render 路径），mutate
+      // outputCache state 触发的重渲染就是"展开 tool"本身想要的，无副作用。
+      const next = new Map(outputCache);
+      next.delete(exec.toolUseId);
+      next.set(exec.toolUseId, cached);
+      outputCache = next;
+      return;
+    }
     try {
       const out = await getToolOutput(sessionId, sessionId, exec.toolUseId);
       const next = new Map(outputCache);

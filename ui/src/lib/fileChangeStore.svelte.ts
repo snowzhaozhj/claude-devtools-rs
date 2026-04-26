@@ -40,6 +40,8 @@ export function disposeFileChangeStore(): void {
   for (const t of trailingTimers.values()) clearTimeout(t);
   trailingTimers.clear();
   trailingPending.clear();
+  scheduleInFlight.clear();
+  scheduleDirty.clear();
   lastRunAt.clear();
 }
 
@@ -83,7 +85,9 @@ export function dedupeRefresh(
 // scheduleRefresh：
 //   1. 距上次执行 ≥ 窗口：立即触发（leading），保留 UX 即时感
 //   2. 窗口内：保存为 pending，到窗口末尾跑一次最新 fn（trailing）
-//   3. 内部走 dedupeRefresh，仍享有 in-flight 合并
+//   3. 自管 in-flight：trailing 触发时若上一轮 fn 仍 pending，标记 dirty 等
+//      其 settle 后补跑最新 fn——避免与 dedupeRefresh 的 in-flight 合并
+//      把 trailing 吃掉（codex review 找到的 bug）。
 // ---------------------------------------------------------------------------
 
 const TRAILING_DEBOUNCE_MS = 250;
@@ -91,6 +95,37 @@ const TRAILING_DEBOUNCE_MS = 250;
 const trailingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const trailingPending = new Map<string, () => Promise<void>>();
 const lastRunAt = new Map<string, number>();
+const scheduleInFlight = new Map<string, Promise<void>>();
+const scheduleDirty = new Map<string, () => Promise<void>>();
+
+/**
+ * 内部执行入口：保证同 key 上一轮 fn 必定 settle 后才跑下一轮，且 settle 后
+ * 若期间有 dirty fn（最新一次 trailing 推进的 fn）则补跑。
+ */
+function runScheduled(key: string, fn: () => Promise<void>): void {
+  const existing = scheduleInFlight.get(key);
+  if (existing) {
+    // 上一轮还在跑——保存最新 fn 等其 settle 后补跑
+    scheduleDirty.set(key, fn);
+    return;
+  }
+  const p = (async () => {
+    try {
+      await fn();
+    } catch (e) {
+      console.warn("[scheduleRefresh] fn threw:", e);
+    } finally {
+      scheduleInFlight.delete(key);
+      const next = scheduleDirty.get(key);
+      if (next) {
+        scheduleDirty.delete(key);
+        // 节流间隔仍生效：经 scheduleRefresh 重排——若 < 250ms 则推到下一个 trailing
+        scheduleRefresh(key, next);
+      }
+    }
+  })();
+  scheduleInFlight.set(key, p);
+}
 
 /**
  * 节流刷新：高频 file-change 下，同 key 在 250ms 窗口内合并为一次"末尾刷新"。
@@ -102,7 +137,7 @@ export function scheduleRefresh(key: string, fn: () => Promise<void>): void {
 
   if (now - last >= TRAILING_DEBOUNCE_MS) {
     lastRunAt.set(key, now);
-    void dedupeRefresh(key, fn);
+    runScheduled(key, fn);
     return;
   }
 
@@ -116,10 +151,25 @@ export function scheduleRefresh(key: string, fn: () => Promise<void>): void {
     trailingPending.delete(key);
     if (pending) {
       lastRunAt.set(key, Date.now());
-      void dedupeRefresh(key, pending);
+      runScheduled(key, pending);
     }
   }, delay);
   trailingTimers.set(key, timer);
+}
+
+/**
+ * 取消同 key 的 pending trailing 与 dirty。
+ * 用于 effect cleanup / onDestroy：避免旧上下文的闭包在切换后误覆盖新数据
+ * （codex review 找到的 bug，典型是 Sidebar 切 project 后旧 trailing 用旧
+ * projectId loadSessions）。同时清 lastRunAt 防长期堆积。
+ */
+export function cancelScheduledRefresh(key: string): void {
+  const t = trailingTimers.get(key);
+  if (t !== undefined) clearTimeout(t);
+  trailingTimers.delete(key);
+  trailingPending.delete(key);
+  scheduleDirty.delete(key);
+  lastRunAt.delete(key);
 }
 
 /** 仅供测试：清理 throttle 状态。 */
@@ -127,5 +177,7 @@ export function _resetScheduleRefreshForTest(): void {
   for (const t of trailingTimers.values()) clearTimeout(t);
   trailingTimers.clear();
   trailingPending.clear();
+  scheduleInFlight.clear();
+  scheduleDirty.clear();
   lastRunAt.clear();
 }
