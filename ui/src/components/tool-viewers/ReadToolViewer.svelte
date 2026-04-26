@@ -49,11 +49,15 @@
   // .md 默认 preview，可切 code（对齐原版 ReadToolViewer.tsx 第 90-98 行）
   let viewMode = $state<"preview" | "code">("preview");
 
-  /** 复制时用 strip 后的纯文本（无 cat -n 前缀）。 */
+  /** 取 strip 后的纯文本（无 cat -n 前缀）；空内容时退回 outputText。 */
+  const cleanText = $derived(
+    parsedLines.length > 0 ? parsedLines.map((p) => p.text).join("\n") : outputText
+  );
+
+  /** 复制按钮：用 strip 后的纯文本。 */
   async function copyContent() {
     try {
-      const cleanText = parsedLines.map((p) => p.text).join("\n");
-      await navigator.clipboard.writeText(cleanText.length > 0 ? cleanText : outputText);
+      await navigator.clipboard.writeText(cleanText);
       copied = true;
       setTimeout(() => copied = false, 2000);
     } catch { /* ignore */ }
@@ -81,7 +85,8 @@
   </div>
 
   {#if isMarkdown && viewMode === "preview"}
-    <div class="md-preview">{@html renderMarkdown(outputText)}</div>
+    <!-- 用 strip 后的纯文本渲染：raw outputText 含 cat -n 前缀会让 markdown 标记失效 -->
+    <div class="md-preview">{@html renderMarkdown(cleanText)}</div>
   {:else}
     <!-- Code with line numbers (line numbers are CSS ::before, not part of clipboard text) -->
     <div class="code-container">
