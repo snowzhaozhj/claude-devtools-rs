@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定义两种搜索模式的行为契约：Cmd+F 会话内文本搜索（已实现）和 Cmd+K 全局搜索 Command Palette（待实现）。
+定义前端两类搜索模式的行为契约：Cmd+F 会话内文本搜索（在 conversation 容器中以 `<mark>` 高亮、Enter / Shift+Enter 循环导航、跳过 `<pre>` / `<code>` 代码块）与 Cmd+K Command Palette 全局搜索（项目 + 会话组合视图、键盘导航、Tab 系统打开）。两套搜索均独立于后端 `session-search` capability，前者纯 DOM 操作、后者基于已加载的元数据本地过滤。
 
 ## Requirements
 

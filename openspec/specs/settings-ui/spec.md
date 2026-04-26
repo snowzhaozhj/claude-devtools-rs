@@ -2,8 +2,10 @@
 
 ## Purpose
 
-定义 Settings 页面的行为契约：打开方式、section 导航、配置展示与修改、trigger 列表。
+定义 Settings 页面的行为契约：打开方式（TabBar 齿轮单例 tab）、section 导航（General / Notifications）、配置展示与修改、trigger 列表的启用 / 禁用与持久化。所有布尔开关 SHALL 走统一的 `SettingsToggle` 滑块组件以保证视觉一致与无障碍可达。
+
 ## Requirements
+
 ### Requirement: 打开 Settings 页面
 
 用户 SHALL 能通过 TabBar 齿轮图标打开 Settings 页面。Settings tab SHALL 为单例——若已打开则切换焦点。
