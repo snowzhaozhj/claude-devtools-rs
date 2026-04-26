@@ -56,6 +56,7 @@ fn ai_chunk(
         tool_executions: tools,
         subagents: Vec::new(),
         slash_commands: Vec::new(),
+        teammate_messages: Vec::new(),
     })
 }
 
@@ -84,6 +85,7 @@ fn bash_tool(id: &str, cmd: &str, output: &str) -> ToolExecution {
         result_agent_id: None,
         output_omitted: false,
         output_bytes: None,
+        teammate_spawn: None,
     }
 }
 

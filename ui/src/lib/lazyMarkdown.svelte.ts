@@ -10,7 +10,7 @@ import { renderMarkdown } from "./render";
 /** 紧急回滚开关：false 时 observe() 立即同步渲染（旧行为）。 */
 export const LAZY_MARKDOWN_ENABLED = true;
 
-type Kind = "user" | "ai" | "system" | "thinking" | "output" | "slash";
+type Kind = "user" | "ai" | "system" | "thinking" | "output" | "slash" | "teammate";
 
 /**
  * 估算占位高度（px）。进入视口后真实内容覆盖 min-height，
@@ -24,6 +24,7 @@ export function estimatePlaceholderHeight(text: string, kind: Kind): number {
     case "thinking":
     case "output":
     case "slash":
+    case "teammate":
       // 假设折行 80 字符/行，line-height ~22 px
       return Math.max(60, Math.ceil((len / 80) * 22));
     case "system": {

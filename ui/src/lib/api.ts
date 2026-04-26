@@ -116,6 +116,13 @@ export type ToolOutput =
   | { kind: "structured"; value: unknown }
   | { kind: "missing" };
 
+export interface TeammateSpawnInfo {
+  /** 队友成员名（如 "member-1"）。 */
+  name: string;
+  /** 队友色（teamColors 调色板键）；缺失时 UI 退化到 muted 视觉。 */
+  color?: string | null;
+}
+
 export interface ToolExecution {
   toolUseId: string;
   toolName: string;
@@ -133,6 +140,10 @@ export interface ToolExecution {
    *  解析层 / HTTP 路径 / 老后端为 undefined；前端 token 估算优先用此字段除以 4，
    *  让懒加载前后 BaseItem 头部 token 数稳定。Missing variant 不填。 */
   outputBytes?: number;
+  /** 当 tool_result.toolUseResult.status === "teammate_spawned" 时由后端
+   *  抽出的队友派生元数据。前端检测到非空 → 渲染极简单行（圆点 + member-X
+   *  badge + Teammate spawned）替代 DefaultToolViewer，对齐原版 LinkedToolItem.tsx。 */
+  teammateSpawn?: TeammateSpawnInfo | null;
 }
 
 export interface UserChunk {
@@ -182,6 +193,29 @@ export interface SlashCommand {
   instructions: string | null;
 }
 
+export interface TeammateMessage {
+  uuid: string;
+  teammateId: string;
+  /** named color (blue/green/...) 或 hex；缺失时 UI 退化到 muted 视觉。 */
+  color: string | null;
+  /** 队友自填主题，UI header 截断到 80 字显示。 */
+  summary: string | null;
+  /** 队友消息正文，markdown 渲染走 lazyMarkdown 管线。 */
+  body: string;
+  timestamp: string;
+  /**
+   * 配对的 SendMessage tool_use_id；orphan 时为 null/undefined（serde
+   * `skip_serializing_if = Option::is_none` 控制，UI 按 `?? null` 兼容）。
+   */
+  replyToToolUseId?: string | null;
+  /** body 灌入主 session 的 token 估算。null 时 token 槽不渲染。 */
+  tokenCount?: number | null;
+  /** 运维噪声（idle/shutdown/terminated），UI 渲染极简单行不开卡。 */
+  isNoise: boolean;
+  /** 重发关键词命中，UI 加 RefreshCw + opacity 0.6。 */
+  isResend: boolean;
+}
+
 export interface AIChunk {
   kind: "ai";
   timestamp: string;
@@ -192,6 +226,11 @@ export interface AIChunk {
   toolExecutions: ToolExecution[];
   subagents: SubagentProcess[];
   slashCommands: SlashCommand[];
+  /**
+   * 嵌入到该 turn 的队友回信。后端 `skip_serializing_if = Vec::is_empty`
+   * 控制：无 teammate 时字段在 IPC payload 中省略，前端按 `?? []` 兼容。
+   */
+  teammateMessages?: TeammateMessage[];
 }
 
 export interface SystemChunk {

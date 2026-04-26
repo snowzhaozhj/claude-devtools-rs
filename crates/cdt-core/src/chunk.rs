@@ -13,6 +13,36 @@ use crate::message::{MessageContent, TokenUsage, ToolCall};
 use crate::process::Process;
 use crate::tool_execution::ToolExecution;
 
+/// 嵌入到 `AIChunk` 内的队友回信记录。
+///
+/// 数据来源：被 `cdt_analyze::team::is_teammate_message` 识别出的 user 消息
+/// （形如 `<teammate-message teammate_id="..." color="..." summary="...">body</teammate-message>`）。
+/// chunk-building 阶段不再为这类消息产 `UserChunk`，而是解析为本结构后注入到下一个 flush
+/// 出的 `AIChunk.teammate_messages`，并在 `cdt_analyze::team::reply_link` 中向前扫描配对
+/// 触发它的 `SendMessage` `tool_use`（详见 `team-coordination-metadata` spec）。
+///
+/// `is_noise` / `is_resend` / `token_count` 在数据层预算并随字段透传，前端无须重算。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeammateMessage {
+    pub uuid: String,
+    pub teammate_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    pub body: String,
+    pub timestamp: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_tool_use_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_count: Option<u64>,
+    #[serde(default)]
+    pub is_noise: bool,
+    #[serde(default)]
+    pub is_resend: bool,
+}
+
 /// 从 isMeta 用户消息中提取的 slash 命令信息。
 ///
 /// 格式：`<command-name>/xxx</command-name>` + 可选
@@ -154,6 +184,12 @@ pub struct AIChunk {
     /// 前驱 isMeta 消息中提取的 slash 命令（如 `/commit`、`/review-pr`）。
     #[serde(default)]
     pub slash_commands: Vec<SlashCommand>,
+    /// 嵌入到该 turn 的队友回信（详见 [`TeammateMessage`] 与 chunk-building spec
+    /// 的 `Embed teammate messages into AIChunk` Requirement）。
+    /// 默认空 Vec；序列化时 `skip_serializing_if = "Vec::is_empty"`，
+    /// 无 teammate 嵌入时 IPC payload 不含 `teammateMessages` 键，老前端兼容。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub teammate_messages: Vec<TeammateMessage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -323,7 +359,95 @@ mod tests {
             tool_executions: Vec::new(),
             subagents: Vec::new(),
             slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
         }));
+    }
+
+    #[test]
+    fn ai_chunk_default_teammate_messages_empty() {
+        let json = r#"{"kind":"ai","timestamp":"2026-04-19T00:00:00Z","durationMs":null,"responses":[],"metrics":{},"semanticSteps":[],"toolExecutions":[],"subagents":[],"slashCommands":[]}"#;
+        let chunk: Chunk = serde_json::from_str(json).unwrap();
+        let Chunk::Ai(ai) = chunk else {
+            panic!("expected AI chunk");
+        };
+        assert!(
+            ai.teammate_messages.is_empty(),
+            "missing teammateMessages SHALL deserialize to empty Vec (legacy compat)"
+        );
+    }
+
+    #[test]
+    fn ai_chunk_empty_teammate_messages_omitted_in_json() {
+        let chunk = AIChunk {
+            timestamp: ts(),
+            duration_ms: None,
+            responses: Vec::new(),
+            metrics: ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: Vec::new(),
+            subagents: Vec::new(),
+            slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(
+            !json.contains("teammateMessages"),
+            "empty teammate_messages SHALL be omitted from JSON: got {json}"
+        );
+    }
+
+    #[test]
+    fn teammate_message_roundtrip_full() {
+        roundtrip(&TeammateMessage {
+            uuid: "u1".into(),
+            teammate_id: "alice".into(),
+            color: Some("blue".into()),
+            summary: Some("Hello".into()),
+            body: "body text".into(),
+            timestamp: ts(),
+            reply_to_tool_use_id: Some("toolu_01".into()),
+            token_count: Some(120),
+            is_noise: false,
+            is_resend: false,
+        });
+    }
+
+    #[test]
+    fn teammate_message_roundtrip_minimal() {
+        roundtrip(&TeammateMessage {
+            uuid: "u2".into(),
+            teammate_id: "bob".into(),
+            color: None,
+            summary: None,
+            body: String::new(),
+            timestamp: ts(),
+            reply_to_tool_use_id: None,
+            token_count: None,
+            is_noise: true,
+            is_resend: false,
+        });
+    }
+
+    #[test]
+    fn teammate_message_serializes_camel_case() {
+        let tm = TeammateMessage {
+            uuid: "u".into(),
+            teammate_id: "alice".into(),
+            color: Some("blue".into()),
+            summary: Some("s".into()),
+            body: "b".into(),
+            timestamp: ts(),
+            reply_to_tool_use_id: Some("t".into()),
+            token_count: Some(10),
+            is_noise: false,
+            is_resend: true,
+        };
+        let json = serde_json::to_string(&tm).unwrap();
+        assert!(json.contains("\"teammateId\":\"alice\""));
+        assert!(json.contains("\"replyToToolUseId\":\"t\""));
+        assert!(json.contains("\"tokenCount\":10"));
+        assert!(json.contains("\"isNoise\":false"));
+        assert!(json.contains("\"isResend\":true"));
     }
 
     #[test]

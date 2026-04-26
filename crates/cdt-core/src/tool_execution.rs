@@ -26,6 +26,19 @@ pub enum ToolOutput {
     Missing,
 }
 
+/// `Teammate spawn` 信息：从 `tool_result.toolUseResult.status == "teammate_spawned"`
+/// 中抽出的成员名 + 颜色。当 `ToolExecution` 关联的 tool 是"派生 teammate"行为
+/// 时，UI 用这个字段渲染极简单行卡（"member-X 圆点 + Teammate spawned"），替代
+/// 普通 tool item。对齐原版 `claude-devtools/src/renderer/components/chat/items/
+/// LinkedToolItem.tsx` 的 `isTeammateSpawned` 分支。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeammateSpawnInfo {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
 /// 单次 tool 执行的完整记录，`AIChunk.tool_executions` 的元素类型。
 ///
 /// `output_omitted` 是 IPC payload 优化字段（见 change `session-detail-tool-output-lazy-load`）：
@@ -61,6 +74,12 @@ pub struct ToolExecution {
     /// `Text` / `Structured` variant 填值，`Missing` 保持 `None`。
     #[serde(default)]
     pub output_bytes: Option<u64>,
+    /// `tool_result.toolUseResult.status == "teammate_spawned"` 时由
+    /// `cdt-analyze::tool_linking::pair` 填入的成员名 + 颜色（spec：
+    /// `tool-execution-linking` §`Detect teammate-spawned tool results`）。
+    /// `None` 表示这条 execution 不是 teammate spawn。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teammate_spawn: Option<TeammateSpawnInfo>,
 }
 
 impl ToolOutput {
@@ -127,9 +146,66 @@ mod tests {
             result_agent_id: None,
             output_omitted: false,
             output_bytes: None,
+            teammate_spawn: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert_eq!(serde_json::from_str::<ToolExecution>(&json).unwrap(), value);
+    }
+
+    #[test]
+    fn tool_execution_teammate_spawn_roundtrip() {
+        let value = ToolExecution {
+            tool_use_id: "tu-spawn".into(),
+            tool_name: "Agent".into(),
+            input: serde_json::json!({"name": "member-1"}),
+            output: ToolOutput::Structured {
+                value: serde_json::json!({"status": "teammate_spawned", "name": "member-1", "color": "blue"}),
+            },
+            is_error: false,
+            start_ts: ts(),
+            end_ts: Some(ts()),
+            source_assistant_uuid: "a1".into(),
+            result_agent_id: None,
+            output_omitted: false,
+            output_bytes: None,
+            teammate_spawn: Some(TeammateSpawnInfo {
+                name: "member-1".into(),
+                color: Some("blue".into()),
+            }),
+        };
+        let json = serde_json::to_string(&value).unwrap();
+        assert!(json.contains("\"teammateSpawn\":{\"name\":\"member-1\",\"color\":\"blue\"}"));
+        assert_eq!(serde_json::from_str::<ToolExecution>(&json).unwrap(), value);
+    }
+
+    #[test]
+    fn tool_execution_default_teammate_spawn_none() {
+        let json = r#"{"toolUseId":"tu1","toolName":"Bash","input":{"cmd":"ls"},"output":{"kind":"text","text":"hi"},"isError":false,"startTs":"2026-04-11T00:00:00Z","endTs":null,"sourceAssistantUuid":"a1","resultAgentId":null,"outputOmitted":false,"outputBytes":null}"#;
+        let exec: ToolExecution = serde_json::from_str(json).unwrap();
+        assert!(exec.teammate_spawn.is_none());
+    }
+
+    #[test]
+    fn tool_execution_empty_teammate_spawn_omitted() {
+        let value = ToolExecution {
+            tool_use_id: "tu1".into(),
+            tool_name: "Bash".into(),
+            input: serde_json::json!({"cmd": "ls"}),
+            output: ToolOutput::Text { text: "ok".into() },
+            is_error: false,
+            start_ts: ts(),
+            end_ts: Some(ts()),
+            source_assistant_uuid: "a1".into(),
+            result_agent_id: None,
+            output_omitted: false,
+            output_bytes: None,
+            teammate_spawn: None,
+        };
+        let json = serde_json::to_string(&value).unwrap();
+        assert!(
+            !json.contains("teammateSpawn"),
+            "None teammate_spawn SHALL be omitted: {json}"
+        );
     }
 
     #[test]
@@ -158,6 +234,7 @@ mod tests {
             result_agent_id: None,
             output_omitted: true,
             output_bytes: Some(42),
+            teammate_spawn: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert_eq!(serde_json::from_str::<ToolExecution>(&json).unwrap(), value);

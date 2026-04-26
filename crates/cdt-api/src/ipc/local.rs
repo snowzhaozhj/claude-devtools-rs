@@ -1725,6 +1725,7 @@ mod tests {
             tool_executions: Vec::new(),
             subagents: Vec::new(),
             slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
         });
         let mut chunks = vec![ai];
         apply_image_omit(&mut chunks);
@@ -1762,6 +1763,7 @@ mod tests {
             tool_executions: Vec::new(),
             subagents: Vec::new(),
             slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
         })
     }
 
@@ -1823,6 +1825,7 @@ mod tests {
                 messages_omitted: false,
             }],
             slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
         });
         let mut chunks = vec![parent];
         apply_response_content_omit(&mut chunks);
@@ -1861,6 +1864,7 @@ mod tests {
             result_agent_id: None,
             output_omitted: false,
             output_bytes: None,
+            teammate_spawn: None,
         }
     }
 
@@ -1874,6 +1878,7 @@ mod tests {
             tool_executions: vec![exec],
             subagents: Vec::new(),
             slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
         })
     }
 
@@ -1985,6 +1990,7 @@ mod tests {
                 messages_omitted: false,
             }],
             slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
         });
         let mut chunks = vec![parent];
         apply_tool_output_omit(&mut chunks);

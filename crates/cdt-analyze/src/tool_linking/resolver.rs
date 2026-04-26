@@ -421,6 +421,7 @@ mod tests {
             result_agent_id: None,
             output_omitted: false,
             output_bytes: None,
+            teammate_spawn: None,
         }
     }
 
@@ -678,6 +679,7 @@ mod tests {
             tool_executions: vec![],
             subagents: vec![],
             slash_commands: vec![],
+            teammate_messages: vec![],
         });
         let mut c = cand("s-1", "desc", 6);
         c.messages = vec![chunk.clone()];
@@ -712,6 +714,7 @@ mod tests {
             tool_executions: Vec::new(),
             subagents: Vec::new(),
             slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
         })
     }
 
@@ -765,6 +768,7 @@ mod tests {
             tool_executions: Vec::new(),
             subagents: Vec::new(),
             slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
         });
         let (_, _, shutdown) = derive_subagent_header(&[chunk]);
         assert!(shutdown);

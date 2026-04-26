@@ -29,6 +29,12 @@ export const SETTINGS =
 /** Lucide chevron-down — 下拉箭头（单 path） */
 export const CHEVRON_DOWN = "M6 9l6 6 6-6";
 
+/** Lucide corner-down-left — 单 path 折返箭头（用于 reply-to chip） */
+export const CORNER_DOWN_LEFT = "M9 10l-5 5 5 5M20 4v7a4 4 0 0 1-4 4H4";
+
+/** Lucide refresh-cw — 单 path 简化（resend 标记） */
+export const REFRESH_CW = "M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5";
+
 /** Lucide check-check — 批量标记已读（两条对勾） */
 export const CHECK_CHECK_SVG = `
 <path d="M18 6 7 17l-5-5"/>

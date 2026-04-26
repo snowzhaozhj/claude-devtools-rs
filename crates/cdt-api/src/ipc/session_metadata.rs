@@ -92,6 +92,9 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
                     if command_fallback.is_none() {
                         command_fallback = extract_command_display(&text);
                     }
+                } else if let Some(summary) = extract_teammate_summary_title(&text) {
+                    // teammate-message 包裹的消息：优先取 `summary` 属性作为标题
+                    title = Some(truncate_str(&summary, 200));
                 } else {
                     let sanitized = sanitize_for_title(&text);
                     if !sanitized.is_empty() {
@@ -195,6 +198,9 @@ fn extract_tag_content(text: &str, tag: &str) -> Option<String> {
 }
 
 /// 简单清洗：移除噪声标签（含内容），用于标题。
+///
+/// `<teammate-message ...>...</teammate-message>` 的 attributes 形式靠
+/// 通用前缀匹配剥除（与无 attribute 的 7 个标签共享算法）。
 fn sanitize_for_title(text: &str) -> String {
     let mut s = text.to_string();
     let tags = [
@@ -221,7 +227,49 @@ fn sanitize_for_title(text: &str) -> String {
             }
         }
     }
+    // teammate-message 含 attributes（teammate_id / color / summary），用前缀
+    // 模式 `<teammate-message ` 匹配开 tag。
+    loop {
+        let close = "</teammate-message>";
+        let Some(start) = s
+            .find("<teammate-message ")
+            .or_else(|| s.find("<teammate-message>"))
+        else {
+            break;
+        };
+        if let Some(rel_end) = s[start..].find(close) {
+            s.replace_range(start..start + rel_end + close.len(), "");
+        } else {
+            s.truncate(start);
+            break;
+        }
+    }
     s.trim().to_string()
+}
+
+/// 若 `text` trim 后以 `<teammate-message` 起首，提取 `summary="..."` 属性
+/// 内容作为标题候选；非 teammate 主导消息或无 summary 属性返回 `None`。
+///
+/// Spec：`openspec/specs/ipc-data-api/spec.md`
+/// §`Strip teammate-message tags from session title`。
+fn extract_teammate_summary_title(text: &str) -> Option<String> {
+    let trimmed = text.trim_start();
+    if !trimmed.starts_with("<teammate-message") {
+        return None;
+    }
+    // 取开 tag 范围内的属性串
+    let tag_end = trimmed.find('>')?;
+    let attrs = &trimmed[..tag_end];
+    // summary="..."
+    let idx = attrs.find("summary=\"")?;
+    let after = &attrs[idx + "summary=\"".len()..];
+    let close = after.find('"')?;
+    let summary = after[..close].trim();
+    if summary.is_empty() {
+        None
+    } else {
+        Some(summary.to_string())
+    }
 }
 
 fn truncate_str(s: &str, max_chars: usize) -> String {
@@ -274,5 +322,61 @@ mod tests {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let modified = now + Duration::from_secs(60);
         assert!(!is_session_stale(modified, now));
+    }
+
+    // ---- teammate-message title sanitize ----
+    //
+    // Spec：`openspec/specs/ipc-data-api/spec.md`
+    // §`Strip teammate-message tags from session title`。
+
+    #[test]
+    fn teammate_summary_extracted_when_message_solely_wrapped() {
+        let text = r#"<teammate-message teammate_id="alice" color="blue" summary="Set up project">body</teammate-message>"#;
+        let summary = extract_teammate_summary_title(text);
+        assert_eq!(summary.as_deref(), Some("Set up project"));
+    }
+
+    #[test]
+    fn teammate_no_summary_returns_none() {
+        let text = r#"<teammate-message teammate_id="alice" color="blue">body</teammate-message>"#;
+        let summary = extract_teammate_summary_title(text);
+        assert!(summary.is_none());
+    }
+
+    #[test]
+    fn non_teammate_message_returns_none() {
+        let text = "Hello team, please respond.";
+        let summary = extract_teammate_summary_title(text);
+        assert!(summary.is_none());
+    }
+
+    #[test]
+    fn sanitize_strips_teammate_message_tag() {
+        let text = r#"Hello team. <teammate-message teammate_id="alice" summary="x">body</teammate-message> please continue."#;
+        let result = sanitize_for_title(text);
+        assert!(
+            !result.contains("<teammate-message"),
+            "sanitize 后不应残留 <teammate-message 字面量: {result:?}"
+        );
+        assert!(
+            !result.contains("</teammate-message>"),
+            "sanitize 后不应残留 </teammate-message> 字面量: {result:?}"
+        );
+        assert!(
+            result.starts_with("Hello team."),
+            "应保留前置正文: {result:?}"
+        );
+        assert!(
+            result.ends_with("please continue."),
+            "应保留后置正文: {result:?}"
+        );
+    }
+
+    #[test]
+    fn sanitize_handles_teammate_without_attributes() {
+        // 边界：自闭合 attributes 缺失（罕见）
+        let text = r"prefix<teammate-message>inner</teammate-message>suffix";
+        let result = sanitize_for_title(text);
+        assert_eq!(result, "prefixsuffix");
     }
 }
