@@ -850,6 +850,7 @@ impl DataApi for LocalDataApi {
             "display" => mgr.update_display(request.data.clone()).await,
             "notifications" => mgr.update_notifications(request.data.clone()).await,
             "httpServer" => mgr.update_http_server(request.data.clone()).await,
+            "updater" => mgr.update_updater(request.data.clone()).await,
             _ => {
                 return Err(ApiError::validation(format!(
                     "unknown section: {}",

@@ -68,6 +68,7 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "hide_session",
     "unhide_session",
     "get_project_session_prefs",
+    "check_for_update",
 ];
 
 /// 构造一个最小可用的 `LocalDataApi` 用于 contract test。
@@ -101,12 +102,12 @@ fn ts() -> chrono::DateTime<Utc> {
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_22() {
+fn expected_tauri_commands_count_is_23() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        22,
+        23,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 22 个 Tauri command"
+         以及本文件常量；当前 src-tauri 注册 23 个 Tauri command"
     );
 }
 

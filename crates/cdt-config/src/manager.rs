@@ -322,6 +322,43 @@ impl ConfigManager {
         Ok(self.get_config())
     }
 
+    /// 更新 updater section。
+    ///
+    /// 支持字段：
+    /// - `autoUpdateCheckEnabled: bool` —— 启动后台自动检查开关
+    /// - `skippedUpdateVersion: string | null` —— null 清空、字符串写入
+    pub async fn update_updater(
+        &mut self,
+        updates: serde_json::Value,
+    ) -> Result<AppConfig, ConfigError> {
+        if let Some(obj) = updates.as_object() {
+            for (k, v) in obj {
+                match k.as_str() {
+                    "autoUpdateCheckEnabled" => {
+                        if let Some(b) = v.as_bool() {
+                            self.config.updater.auto_update_check_enabled = b;
+                        }
+                    }
+                    "skippedUpdateVersion" => {
+                        if v.is_null() {
+                            self.config.updater.skipped_update_version = None;
+                        } else if let Some(s) = v.as_str() {
+                            self.config.updater.skipped_update_version = Some(s.to_owned());
+                        }
+                    }
+                    other => {
+                        tracing::warn!(
+                            key = %other,
+                            "unknown updater update key ignored"
+                        );
+                    }
+                }
+            }
+        }
+        self.save().await?;
+        Ok(self.get_config())
+    }
+
     /// 更新 `httpServer` section。
     pub async fn update_http_server(
         &mut self,
@@ -755,6 +792,95 @@ mod tests {
             before_enabled,
             "TriggerManager must not be mutated on validation failure"
         );
+    }
+
+    #[tokio::test]
+    async fn updater_default_enabled_and_no_skipped_version() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        let cfg = mgr.get_config();
+        assert!(cfg.updater.auto_update_check_enabled);
+        assert!(cfg.updater.skipped_update_version.is_none());
+    }
+
+    #[tokio::test]
+    async fn updater_partial_config_missing_fields_uses_defaults() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 老配置：完全没有 updater 字段
+        tokio::fs::write(&path, r#"{"httpServer":{"port":9999}}"#)
+            .await
+            .unwrap();
+
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        let cfg = mgr.get_config();
+        assert!(
+            cfg.updater.auto_update_check_enabled,
+            "缺字段必须默认启用自动检查"
+        );
+        assert!(cfg.updater.skipped_update_version.is_none());
+        assert_eq!(cfg.http_server.port, 9999, "其他字段不应被覆盖");
+    }
+
+    #[tokio::test]
+    async fn updater_set_auto_check_disabled_persists() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path.clone()));
+        mgr.load().await.unwrap();
+
+        mgr.update_updater(serde_json::json!({ "autoUpdateCheckEnabled": false }))
+            .await
+            .unwrap();
+
+        // 重 load 验证持久化
+        let mut mgr2 = ConfigManager::new(Some(path));
+        mgr2.load().await.unwrap();
+        assert!(!mgr2.get_config().updater.auto_update_check_enabled);
+    }
+
+    #[tokio::test]
+    async fn updater_skipped_version_set_then_clear() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path.clone()));
+        mgr.load().await.unwrap();
+
+        mgr.update_updater(serde_json::json!({ "skippedUpdateVersion": "0.3.0" }))
+            .await
+            .unwrap();
+        assert_eq!(
+            mgr.get_config().updater.skipped_update_version.as_deref(),
+            Some("0.3.0")
+        );
+
+        mgr.update_updater(serde_json::json!({ "skippedUpdateVersion": null }))
+            .await
+            .unwrap();
+        assert!(mgr.get_config().updater.skipped_update_version.is_none());
+
+        // 序列化时缺省字段不应出现
+        let disk = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(!disk.contains("skippedUpdateVersion"));
+    }
+
+    #[tokio::test]
+    async fn updater_unknown_key_ignored() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        let result = mgr
+            .update_updater(serde_json::json!({ "fooBar": 123, "autoUpdateCheckEnabled": false }))
+            .await
+            .unwrap();
+        assert!(!result.updater.auto_update_check_enabled);
     }
 
     #[tokio::test]

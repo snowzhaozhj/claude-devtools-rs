@@ -45,6 +45,7 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'hide_session',
   'unhide_session',
   'get_project_session_prefs',
+  'check_for_update',
 ] as const
 
 export { KNOWN_TAURI_COMMANDS }
@@ -235,6 +236,23 @@ function buildHandler(fx: Fixture) {
         const prefs = fx.prefs[projectId]
         if (prefs) prefs.hidden = prefs.hidden.filter((s) => s !== sessionId)
         return null
+      }
+
+      case 'check_for_update': {
+        // Mock 模式不真正访问 GitHub Release endpoint。
+        // URL `?mock=1&update=available` 切换为返回 Available fixture，
+        // 默认返回 UpToDate。
+        const params = new URLSearchParams(window.location.search)
+        if (params.get('update') === 'available') {
+          return {
+            status: 'available',
+            currentVersion: '0.2.0',
+            newVersion: '0.3.0',
+            notes: '## 0.3.0\n\n- Mock 模式新版本通知\n- 用于 UI 调试',
+            signatureOk: true,
+          }
+        }
+        return { status: 'upToDate', currentVersion: '0.2.0' }
       }
 
       default:

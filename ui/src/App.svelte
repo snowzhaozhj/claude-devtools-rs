@@ -3,6 +3,8 @@
   import Sidebar from "./components/Sidebar.svelte";
   import CommandPalette from "./components/CommandPalette.svelte";
   import PaneContainer from "./components/layout/PaneContainer.svelte";
+  import UpdateBanner from "./components/UpdateBanner.svelte";
+  import { updateStore, type UpdateAvailablePayload } from "./lib/updateStore.svelte";
   import {
     openTab,
     getActiveTab,
@@ -29,6 +31,7 @@
   let commandPaletteOpen = $state(false);
   let unlistenNotif: UnlistenFn | null = null;
   let unlistenNotifAdded: UnlistenFn | null = null;
+  let unlistenUpdater: UnlistenFn | null = null;
 
   async function onNotificationUpdate() {
     try {
@@ -119,6 +122,11 @@
     unlistenNotif = await listen("notification-update", onNotificationUpdate);
     // 监听自动通知管线新产生的通知：立即刷新 badge + 请求前台页面 reload 列表
     unlistenNotifAdded = await listen("notification-added", onNotificationUpdate);
+    // 监听后端启动检查 emit 的 updater://available 事件，写入 store 弹横幅
+    unlistenUpdater = await listen<UpdateAvailablePayload>(
+      "updater://available",
+      (e) => updateStore.showAvailable(e.payload)
+    );
     try {
       const config = await getConfig();
       applyTheme(config.general.theme);
@@ -135,6 +143,7 @@
     document.removeEventListener("keydown", handleGlobalKeydown);
     unlistenNotif?.();
     unlistenNotifAdded?.();
+    unlistenUpdater?.();
   });
 
   const activeTab = $derived(getActiveTab());
@@ -149,19 +158,22 @@
   }
 </script>
 
-<div class="app-layout">
-  <Sidebar
-    {selectedProjectId}
-    activeSessionId={activeTab?.sessionId ?? ""}
-    onSelectProject={selectProject}
-    onSelectSession={selectSession}
-  />
-
-  <div class="main-area">
-    <PaneContainer
+<div class="app-root">
+  <UpdateBanner />
+  <div class="app-layout">
+    <Sidebar
       {selectedProjectId}
+      activeSessionId={activeTab?.sessionId ?? ""}
       onSelectProject={selectProject}
+      onSelectSession={selectSession}
     />
+
+    <div class="main-area">
+      <PaneContainer
+        {selectedProjectId}
+        onSelectProject={selectProject}
+      />
+    </div>
   </div>
 </div>
 
@@ -174,10 +186,18 @@
 {/if}
 
 <style>
-  .app-layout {
+  .app-root {
     display: flex;
+    flex-direction: column;
     height: 100vh;
     overflow: hidden;
+  }
+
+  .app-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
   }
 
   .main-area {
