@@ -14,7 +14,7 @@
 - **实时刷新**：FileWatcher debounce → IPC emit → 前端 in-place patch，无"加载中"闪烁
 - **桌面通知 + 系统托盘**：可自定义触发器，Dock 未读 badge（macOS）
 - **主题**：浅色 / 深色 / 跟随系统
-- **性能**：千条消息 session 首屏 IPC payload 砍 60–88%（lazy markdown / image asset:// / subagent 懒拉 / response.content OMIT）
+- **性能**：大会话首屏经多轮 IPC payload 瘦身（lazy markdown、image `asset://` 懒加载、subagent / tool output 懒拉、response.content OMIT），千条消息 session 仍能秒开
 
 ## 安装
 
@@ -68,7 +68,7 @@ npm run dev --prefix ui
 # 浏览器打开 http://localhost:5173/?mock=1&fixture=multi-project-rich
 ```
 
-`?mock=1` 启用 dev-only mockIPC，所有 22 个 Tauri command 走 fixture 数据；fixture 选项见 `ui/src/lib/__fixtures__/`（`empty` / `single-project` / `multi-project-rich`）。production bundle 完全不含 mockIPC（vite DCE 验证）。
+`?mock=1` 启用 dev-only mockIPC，所有 Tauri command 走 fixture 数据；fixture 选项见 `ui/src/lib/__fixtures__/`（`empty` / `single-project` / `multi-project-rich`）。production bundle 完全不含 mockIPC（vite DCE 验证）。
 
 ## 项目结构
 
@@ -86,7 +86,7 @@ crates/
 ui/                # Svelte 5 + Vite 前端
 src-tauri/         # Tauri 2 Rust 后端（excluded from workspace）
 openspec/
-├── specs/         # 13 data + 6 UI 行为契约（authoritative）
+├── specs/         # 行为契约真相源（authoritative）
 └── followups.md   # TS impl-bug 反向修复清单 + 性能待办
 ```
 
