@@ -31,9 +31,11 @@ test.describe('command palette', () => {
 
   test('CommandPalette 输入项目名能搜到', async ({ page }) => {
     await page.goto('/?mock=1&fixture=multi-project-rich')
+    // 等 mockIPC 注入完成 + Sidebar 挂载（keydown handler 才注册，否则 CI 上 dispatchEvent 太早）
+    await page.waitForFunction(() => '__cdtTest' in window, { timeout: 5_000 })
+    await expect(page.getByPlaceholder('搜索项目...')).toBeVisible({ timeout: 5_000 })
 
-    // Cmd/Ctrl+K：用 dispatchEvent 模拟，绕开浏览器 focus 不在 body 时
-    // keyboard.press 不触发 document keydown 的问题
+    // Cmd/Ctrl+K：用 dispatchEvent 模拟
     await page.evaluate(() => {
       const ev = new KeyboardEvent('keydown', {
         key: 'k',
@@ -44,7 +46,7 @@ test.describe('command palette', () => {
       document.dispatchEvent(ev)
     })
     const input = page.getByPlaceholder('搜索项目或会话...')
-    await expect(input).toBeVisible()
+    await expect(input).toBeVisible({ timeout: 5_000 })
 
     await input.fill('rust')
 
