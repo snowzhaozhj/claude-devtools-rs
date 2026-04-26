@@ -15,15 +15,45 @@
   const fileName = $derived(getFileName(filePath));
   const language = $derived(getLanguageFromPath(filePath));
   const outputText = $derived(toolOutputText(exec.output));
-  const lines = $derived(outputText.split("\n"));
+  const parsedLines = $derived(parseReadLines(outputText));
   const isMarkdown = $derived(language === "markdown");
+
+  /**
+   * 解析 Read 工具输出为 `{num, text}[]`。
+   *
+   * Claude Read 工具的 raw `tool_result.content` 是 cat -n 风格的 `<num>\t<text>` 前缀
+   * （见 ../../../docs JSONL fixtures），如果直接渲染会和 CSS `::before data-line` 双重显示
+   * 行号。本函数：
+   * - 严格检测每行是否匹配 `^\s*\d+\t.*$`（trailing newline 产生的尾部空字符串忽略）
+   * - 全部匹配 → strip 前缀，行号取自前缀本身（保留真实文件行号，对齐原版 CodeBlockViewer 的
+   *   `startLine` 语义）
+   * - 任一行不匹配 → fallback 用 i+1（兼容非 Read 路径或后端 enriched 后的干净内容）
+   */
+  function parseReadLines(raw: string): { num: number; text: string }[] {
+    if (raw.length === 0) return [];
+    // 去掉单一 trailing newline 避免 split 末尾产生空字符串干扰检测
+    const cleaned = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
+    const rawLines = cleaned.split("\n");
+    const catN = /^\s*(\d+)\t(.*)$/;
+    const parsed: { num: number; text: string }[] = [];
+    for (const l of rawLines) {
+      const m = catN.exec(l);
+      if (!m) {
+        return rawLines.map((text, i) => ({ num: i + 1, text }));
+      }
+      parsed.push({ num: Number(m[1]), text: m[2] });
+    }
+    return parsed;
+  }
 
   // .md 默认 preview，可切 code（对齐原版 ReadToolViewer.tsx 第 90-98 行）
   let viewMode = $state<"preview" | "code">("preview");
 
+  /** 复制时用 strip 后的纯文本（无 cat -n 前缀）。 */
   async function copyContent() {
     try {
-      await navigator.clipboard.writeText(outputText);
+      const cleanText = parsedLines.map((p) => p.text).join("\n");
+      await navigator.clipboard.writeText(cleanText.length > 0 ? cleanText : outputText);
       copied = true;
       setTimeout(() => copied = false, 2000);
     } catch { /* ignore */ }
@@ -55,7 +85,7 @@
   {:else}
     <!-- Code with line numbers (line numbers are CSS ::before, not part of clipboard text) -->
     <div class="code-container">
-      <pre class="code-content"><code>{#each lines as line, i}<span class="line" data-line={i + 1}>{@html highlightCode(line, language)}
+      <pre class="code-content"><code>{#each parsedLines as p (p.num)}<span class="line" data-line={p.num}>{@html highlightCode(p.text, language)}
 </span>{/each}</code></pre>
     </div>
   {/if}
