@@ -59,8 +59,12 @@ jobs:
         working-directory: ui
         run: npx playwright install --with-deps chromium
       - name: Playwright run (chromium, workers=2)
+        # `--update-snapshots` 让 toHaveScreenshot baseline 当次生成（spec
+        # D5：跨 OS / Chromium 版本会有亚像素 diff，不 commit baseline，
+        # CI 退化成「截图能截下来不报错」+ 失败时 artifact 给人审）。
+        # 真正视觉守护靠 selector / role-based assertion + 失败 trace。
         working-directory: ui
-        run: npm run test:e2e -- --workers=2
+        run: npm run test:e2e -- --workers=2 --update-snapshots
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4
