@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getLanguageFromPath, getFileName, shortenPath } from "../lib/toolHelpers";
+  import { highlightCode } from "../lib/render";
 
   interface Props {
     fileName: string;
@@ -67,6 +68,12 @@
   });
   const language = $derived(getLanguageFromPath(fileName));
   const shortName = $derived(getFileName(fileName));
+
+  /** 单行高亮：空行或纯空白行直接返回不可见占位，避免 hljs 在空字符串上做无谓工作。 */
+  function highlightLine(content: string): string {
+    if (content === "") return "";
+    return highlightCode(content, language);
+  }
 </script>
 
 <div class="diff-viewer">
@@ -97,7 +104,7 @@
           <span class="diff-gutter diff-gutter-old">{line.oldNum ?? ""}</span>
           <span class="diff-gutter diff-gutter-new">{line.newNum ?? ""}</span>
           <span class="diff-prefix">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
-          <span class="diff-content">{line.content || " "}</span>
+          <span class="diff-content">{#if line.content === ""}&nbsp;{:else}{@html highlightLine(line.content)}{/if}</span>
         </div>
       {/each}
     </div>
@@ -205,6 +212,10 @@
     padding-right: 8px;
   }
 
-  .diff-line-added .diff-content { color: var(--diff-added-text); }
-  .diff-line-removed .diff-content { color: var(--diff-removed-text); }
+  /* 不强制覆盖 hljs token 颜色——保留语法高亮，行 +/- 由 .diff-line-* 的背景区分 */
+  .diff-content :global(.hljs) {
+    background: transparent;
+    padding: 0;
+    color: inherit;
+  }
 </style>
