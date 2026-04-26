@@ -22,7 +22,7 @@
     getHiddenCount,
     loadProjectPrefs,
   } from "../lib/sidebarStore.svelte";
-  import { registerHandler, unregisterHandler, dedupeRefresh } from "../lib/fileChangeStore.svelte";
+  import { registerHandler, unregisterHandler, scheduleRefresh } from "../lib/fileChangeStore.svelte";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
   import { MESSAGE_SQUARE } from "../lib/icons";
 
@@ -195,7 +195,7 @@
     }
     registerHandler("sidebar", (payload) => {
       if (payload.projectId !== currentProjectId) return;
-      void dedupeRefresh(`sidebar:${currentProjectId}`, () =>
+      scheduleRefresh(`sidebar:${currentProjectId}`, () =>
         untrack(() => loadSessions(currentProjectId, true)),
       );
     });

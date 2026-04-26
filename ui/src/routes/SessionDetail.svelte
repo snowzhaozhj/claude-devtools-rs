@@ -2,14 +2,14 @@
   import { onMount, onDestroy } from "svelte";
   import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
   import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications, getToolContextTokens, estimateTokens } from "../lib/toolHelpers";
-  import { buildDisplayItems, buildSummary } from "../lib/displayItemBuilder";
+  import { buildDisplayItemsCached, buildSummary } from "../lib/displayItemBuilder";
   import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG } from "../lib/icons";
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
   import { createLazyMarkdownObserver, estimatePlaceholderHeight } from "../lib/lazyMarkdown.svelte";
   import { getTabUIState, saveTabUIState, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
-  import { registerHandler, unregisterHandler, dedupeRefresh } from "../lib/fileChangeStore.svelte";
+  import { registerHandler, unregisterHandler, scheduleRefresh } from "../lib/fileChangeStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
   import TeammateMessageItem from "../components/TeammateMessageItem.svelte";
@@ -144,7 +144,7 @@
     // 注册 file-change handler：命中当前 (projectId, sessionId) 时合并刷新
     registerHandler(fileChangeKey, (payload) => {
       if (payload.projectId !== projectId || payload.sessionId !== sessionId) return;
-      void dedupeRefresh(`detail:${projectId}|${sessionId}`, refreshDetail);
+      scheduleRefresh(`detail:${projectId}|${sessionId}`, refreshDetail);
     });
   });
 
@@ -170,6 +170,10 @@
   // tool output 懒拉缓存：toolUseId → ToolOutput。仅当 exec.outputOmitted=true
   // 且用户首次展开该 tool 时通过 getToolOutput IPC 拉取。展开后渲染走
   // `effectiveOutput()` —— cache 命中优先，否则用 exec.output（兼容老后端 / 回滚）。
+  //
+  // LRU 上限：长会话连续展开多 tool 时上限 200，超出按插入顺序（Map 迭代顺序）
+  // 淘汰最旧项。命中时把 key 重新 set 到尾部，保持最近使用排序。
+  const OUTPUT_CACHE_LIMIT = 200;
   let outputCache: Map<string, ToolOutput> = $state(new Map());
 
   function effectiveExec(exec: ToolExecution): ToolExecution {
@@ -185,6 +189,11 @@
       const out = await getToolOutput(sessionId, sessionId, exec.toolUseId);
       const next = new Map(outputCache);
       next.set(exec.toolUseId, out);
+      while (next.size > OUTPUT_CACHE_LIMIT) {
+        const firstKey = next.keys().next().value;
+        if (firstKey === undefined) break;
+        next.delete(firstKey);
+      }
       outputCache = next;
     } catch (e) {
       console.warn("[perf] getToolOutput failed", exec.toolUseId, e);
@@ -431,7 +440,7 @@
 
       <!-- AI -->
       {:else if chunk.kind === "ai"}
-        {@const di = buildDisplayItems(chunk)}
+        {@const di = buildDisplayItemsCached(chunk)}
         {@const summaryText = buildSummary(di.items)}
         {@const toolsVisible = isChunkToolsVisible(i)}
         {@const interruptions = chunk.semanticSteps.filter((s) => s.kind === "interruption")}
