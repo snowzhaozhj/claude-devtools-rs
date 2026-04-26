@@ -1,15 +1,11 @@
 # claude-devtools-rs
 
-[claude-devtools](../claude-devtools)（Electron 原版）的 Rust 端口，
-Tauri 2 + Svelte 5 桌面应用。13 个数据层 capability + 6 个 UI 行为 spec 均已实现；
-首个 release `v0.1.0` 已发（当前 `v0.1.1`），后续迭代不再直接在 `main` 上开发。
-用户视角的安装 / 开发 / 发布流程见 `README.md`，本文件是 contributor 专用的约定和陷阱手册。
+[claude-devtools](../claude-devtools)（Electron 原版）的 Rust 端口，Tauri + Svelte 桌面应用。
+用户视角的安装 / 开发 / 发布流程见 `README.md`；本文件是 contributor 专用的约定与陷阱手册。
 
 ## Parent repo
 
-The TypeScript source is at `/Users/zhaohejie/RustroverProjects/claude-devtools`.
-It is the historical reference only；所有行为契约以 `openspec/specs/` 为准。
-TS 侧的 7 个 impl-bug 已全部在 Rust port 中修复（详见 `openspec/followups.md`）。
+TS 原版位于同级目录 `../claude-devtools`，仅作历史参考；**所有行为契约以 `openspec/specs/` 为准**。已知 TS impl-bug 见 `openspec/followups.md`——按 spec 走，**不复刻** TS 的 bug。
 
 ## Workspace layout
 
@@ -30,7 +26,7 @@ claude-devtools-rs/
 ├── ui/                       # Svelte 5 + Vite 前端
 ├── src-tauri/                # Tauri 2 Rust 后端 (excluded from workspace)
 ├── openspec/
-│   ├── specs/                # 13 data specs + 6 UI specs (authoritative)
+│   ├── specs/                # 主 spec（行为契约真相源）
 │   ├── followups.md          # TS impl-bugs to fix, not replicate
 │   └── README.md             # workflow + capability map
 └── .claude/rules/rust.md     # Rust coding conventions
@@ -38,14 +34,14 @@ claude-devtools-rs/
 
 ## Capability → crate map
 
-13/13 全部 done。Capability→crate 映射：`cdt-parse`(session-parsing)、`cdt-analyze`(chunk-building/tool-linking/context-tracking/team-metadata)、`cdt-discover`(project-discovery/session-search)、`cdt-watch`(file-watching)、`cdt-config`(configuration-management/notification-triggers)、`cdt-ssh`(ssh-remote-context)、`cdt-api`(ipc-data-api/http-data-api)。详见 `openspec/changes/archive/`。
+`cdt-parse`(session-parsing)、`cdt-analyze`(chunk-building / tool-linking / context-tracking / team-metadata)、`cdt-discover`(project-discovery / session-search)、`cdt-watch`(file-watching)、`cdt-config`(configuration-management / notification-triggers)、`cdt-ssh`(ssh-remote-context)、`cdt-api`(ipc-data-api / http-data-api)。详见 `openspec/README.md`。
 
 ## UI 层 (Tauri 2 + Svelte 5)
 
 ### 架构
 
 - `ui/`：Svelte 5 + Vite 前端；`src-tauri/`：Tauri 2 Rust 后端（独立 Cargo.toml，excluded from workspace），通过 path deps 引用 `crates/`
-- Tauri IPC commands 直接调用 `LocalDataApi`（不走 HTTP）。当前 **22 个 commands**（见 `src-tauri/src/lib.rs` 的 `invoke_handler!`，权威清单 = `crates/cdt-api/tests/ipc_contract.rs::EXPECTED_TAURI_COMMANDS`）：session（list_projects / list_sessions / get_session_detail / get_subagent_trace / get_image_asset / get_tool_output / search_sessions）、config（get_config / update_config）、通知（get_notifications / mark_notification_read / delete_notification / mark_all_notifications_read / clear_notifications / add_trigger / remove_trigger）、agents（read_agent_configs）、pin/hide（pin_session / unpin_session / hide_session / unhide_session / get_project_session_prefs）。`list_sessions_sync` 是 `LocalDataApi` 公开方法但不在 invoke_handler（仅供 HTTP server）
+- Tauri IPC commands 直接调用 `LocalDataApi`（不走 HTTP）。command 权威清单 = `crates/cdt-api/tests/ipc_contract.rs::EXPECTED_TAURI_COMMANDS`，`src-tauri/src/lib.rs::invoke_handler!` 与之同步。`list_sessions_sync` 是 `LocalDataApi` 公开方法但不在 invoke_handler（仅供 HTTP server）
 - **Trigger CRUD 走独立方法**：`LocalDataApi::add_trigger()` / `remove_trigger()` 是非 trait 公开方法（独立 `impl` 块），不在 `DataApi` trait 中
 
 ### 布局与组件
@@ -73,27 +69,12 @@ claude-devtools-rs/
 - Vite HMR 只更新前端；后端改动需 `pkill -f claude-devtools-tauri && cargo tauri dev` 重启
 - `npm run check --prefix ui` 必须从项目根目录执行，从 `src-tauri/` 目录跑会找不到 `package.json`
 - Tauri `setup` 里启动后台 task 用 `tauri::async_runtime::spawn`，不要裸 `tokio::spawn`；订阅后端 `broadcast::Receiver` 转 `emit(...)` 是典型模式（见 `src-tauri/src/lib.rs` 的 FileWatcher + notifier bridge）
-- **桌面通知 / 系统托盘**：`tauri-plugin-notification`（`src-tauri/Cargo.toml` + `capabilities/default.json` 加 `notification:default`）+ `TrayIconBuilder::with_id("main-tray")`（`setup` 里构建，icon 取 `app.default_window_icon()`）。后端从 Rust 发通知用 `app_handle.notification().builder().title(..).body(..).sound("default").show()`；前端 Dock badge 用 `getCurrentWindow().setBadgeCount()`（macOS 独占）。参见 commit `f546b88`。
+- **桌面通知 / 系统托盘**：`tauri-plugin-notification`（`src-tauri/Cargo.toml` + `capabilities/default.json` 加 `notification:default`）+ `TrayIconBuilder::with_id("main-tray")`（`setup` 里构建，icon 取 `app.default_window_icon()`）。后端从 Rust 发通知用 `app_handle.notification().builder().title(..).body(..).sound("default").show()`；前端 Dock badge 用 `getCurrentWindow().setBadgeCount()`（macOS 独占）。
 - **`devtools` feature 不要进 release**：`src-tauri/Cargo.toml` 的 `tauri = { features = [...] }` **不要**写 `"devtools"`——加了之后 release bundle 会带 web inspector。tauri 2 在 debug 构建自动启 inspector 不依赖 feature，`cargo tauri dev` 照旧能开。调用 `window.open_devtools()` 必须用 `#[cfg(debug_assertions)]` **编译时** gate（不是 `if cfg!(debug_assertions)` 运行时宏）——后者 release 构建里会因 `open_devtools` API 不存在（它本身就有 `#[cfg(any(debug_assertions, feature = "devtools"))]`）而编译失败。
 
 ## Common commands
 
-所有任务通过 `just` 跑（见 `justfile`）。首次执行 `brew install just` 安装（若未装）。
-
-```bash
-just                     # 列出所有 recipes
-just build               # workspace build
-just build-tauri         # src-tauri build（独立 manifest）
-just test                # Rust + 前端全测（cdt-watch 自动单线程补跑避 FSEvents flake）
-just test-crate cdt-analyze   # 单 crate 测试
-just lint                # workspace + src-tauri clippy 严格模式
-just fmt                 # cargo fmt --all
-just check-ui            # svelte-check + tsc
-just dev                 # cargo tauri dev
-just spec-validate       # openspec validate --all --strict
-just preflight           # fmt + lint + test + spec-validate（提交前一把梭）
-just bootstrap           # npm install --prefix ui（首次）
-```
+所有任务通过 `just` 跑——首次安装 `brew install just`，跑 `just` 列出所有 recipes（真相源在 `justfile`）。最常用：`just preflight`（fmt + lint + test + spec-validate 一把梭）、`just dev`（启动桌面应用）、`just test-crate <name>`（单 crate）。
 
 直接跑 `cargo xxx` 仍可用，但注意：`cd src-tauri/` 后 Bash tool 的 cwd 会持久化，后续 `cargo test --workspace` 会误入 tauri 子 manifest——优先用 `just` 或 `--manifest-path`。
 
@@ -164,26 +145,25 @@ just bootstrap           # npm install --prefix ui（首次）
 ## 发布与分支策略
 
 - `main` 是发布分支，**不直接提交**。日常走 `feat/xxx` / `fix/xxx` 分支 → PR → merge（详见 README）
-- 版本号同步在三处：`Cargo.toml`（workspace）、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`
-- 打 `vX.Y.Z` tag 触发 `.github/workflows/release.yml` —— macOS arm64/x64 + Linux + Windows 矩阵构建 Tauri bundle 到 Draft Release
-- 发布前跑 `just release-check`（版本三处一致 + 工作树干净 + preflight）
+- 版本号同步在三处：`Cargo.toml`（workspace）、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`；`just release-check` 跑一致性校验
+- 打 `vX.Y.Z` tag 触发 `.github/workflows/release.yml` —— macOS / Linux / Windows 矩阵构建 Tauri bundle 到 Draft Release
 
 ## 性能回归监测
 
-大会话首屏优化历经多轮 IPC 瘦身：lazy markdown render（`session-detail-lazy-render`）→ subagent.messages 懒加载（`subagent-messages-lazy-load`，砍 60%）→ image base64 OMIT + `asset://` 懒加载（`session-detail-image-asset-cache`，砍 71-88%）→ response.content OMIT（`session-detail-response-content-omit`，砍 40%）→ tool_exec.output 懒加载（`session-detail-tool-output-lazy-load`）→ tool_output OMIT 携带 size 元数据消除 token 抖动（`tool-output-omit-preserve-size`）。
-"模式"沉淀为 Conventions 的 **IPC payload 瘦身模式**；具体 phase 实现查 `git log --grep="feat(perf)"`。
-回归入口：`cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture` —— 输出各阶段后端耗时 + 字段级 payload breakdown + raw vs IPC OMIT 对比。
-后端探针：`tracing::info!(target: "cdt_api::perf", ...)`；前端：`[perf]` console.info。
+大会话首屏卡顿走 IPC payload 瘦身路径，"模式"沉淀在 Conventions 的 **IPC payload 瘦身模式**条；历次 phase 实现查 `git log --grep="feat(perf)"`。
 
-## 测试金字塔（frontend-test-infrastructure 沉淀）
+- 回归入口：`cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture` —— 输出各阶段后端耗时 + 字段级 payload breakdown + raw vs IPC OMIT 对比
+- 后端探针：`tracing::info!(target: "cdt_api::perf", ...)`；前端：`[perf]` console.info
+
+## 测试金字塔
 
 四层职责互斥，命中改动类型用对应层（详见 `openspec/specs/frontend-test-pyramid/spec.md`）：
 
 | 层 | 跑命令 | 覆盖 | 何时改 |
 |---|---|---|---|
-| Rust IPC contract test | `cargo test -p cdt-api --test ipc_contract` | 22 个 Tauri command 序列化字段名 / `xxxOmitted` 命名 / enum tag 值 | 改 `LocalDataApi` 公开方法返回字段时 SHALL 同步 |
-| Vitest 单测 + mockIPC | `just test-ui-unit`（= `npm run test:unit --prefix ui`） | 纯函数 / store 状态机 / mockIPC 完整性（22 command + 4 listen） | 加纯函数 / 改 store 时 |
-| Playwright user story | `just test-e2e`（= `npm run test:e2e --prefix ui`） | 浏览器真渲染 + 键鼠事件 + 跨组件状态联动（5 spec/11 用例） | 改 UI 行为 / 跨组件交互时 |
+| Rust IPC contract test | `cargo test -p cdt-api --test ipc_contract` | Tauri command 序列化字段名 / `xxxOmitted` 命名 / enum tag 值 | 改 `LocalDataApi` 公开方法返回字段时 SHALL 同步 |
+| Vitest 单测 + mockIPC | `just test-ui-unit` | 纯函数 / store 状态机 / mockIPC 完整性 | 加纯函数 / 改 store 时 |
+| Playwright user story | `just test-e2e` | 浏览器真渲染 + 键鼠事件 + 跨组件状态联动 | 改 UI 行为 / 跨组件交互时 |
 | 手动 `just dev` | `cargo tauri dev` 桌面窗口 | 真 Tauri IPC + 平台 API（通知 / 托盘 / setBadgeCount） | 发版前 smoke + 涉及 Tauri-only API 时 |
 
 ### IPC 字段改动 checklist（硬约束）
@@ -209,8 +189,7 @@ just bootstrap           # npm install --prefix ui（首次）
 
 ## What to do first in a fresh session
 
-1. `cargo build --workspace` + `just test` 确认回归绿
-2. `just dev` 启动桌面应用验证当前状态
-3. UI 功能迭代：**行为契约改动**（IPC 字段 / 后端算法 / 状态判定 / 数据流语义）走 openspec（`/opsx:propose` → `/opsx:apply` → `/opsx:archive`，design.md 必备）；**纯视觉对齐 / 单点样式修复 / Trigger CRUD 等**直接写 + PR，不走 openspec。判断不准默认走 openspec（成本是写一份 proposal + delta，收益是契约清晰）。
-4. 开新工作前先 `git checkout -b feat/<slug>`，不要直接在 `main` 上写代码
-5. 性能 / 卡顿排查：用"性能回归监测"段的入口，**先看数据再定方向**
+1. 开新工作前先 `git checkout -b feat/<slug>`，**不要**直接在 `main` 上写代码
+2. UI 功能迭代分流：**行为契约改动**（IPC 字段 / 后端算法 / 状态判定 / 数据流语义）走 openspec（`/opsx:propose` → `/opsx:apply` → `/opsx:archive`，design.md 必备）；**纯视觉对齐 / 单点样式修复 / Trigger CRUD 等**直接写 + PR。判断不准默认走 openspec
+3. 性能 / 卡顿排查：用"性能回归监测"段的入口，**先看数据再定方向**
+4. 提交前跑 `just preflight` 把 fmt / lint / test / spec-validate 一把梭
