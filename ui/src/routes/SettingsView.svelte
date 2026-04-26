@@ -351,20 +351,20 @@
           {#if showAddForm}
             <div class="add-form">
               <div class="form-row">
-                <label class="form-label">名称</label>
-                <input class="form-input" type="text" placeholder="如：编译错误检测" bind:value={newName} />
+                <label class="form-label" for="trigger-name-input">名称</label>
+                <input id="trigger-name-input" class="form-input" type="text" placeholder="如：编译错误检测" bind:value={newName} />
               </div>
               <div class="form-row">
-                <label class="form-label">模式</label>
-                <select class="form-select" bind:value={newMode}>
+                <label class="form-label" for="trigger-mode-select">模式</label>
+                <select id="trigger-mode-select" class="form-select" bind:value={newMode}>
                   <option value="error_status">错误检测（工具执行失败时触发）</option>
                   <option value="content_match">内容匹配（匹配关键词/正则时触发）</option>
                   <option value="token_threshold">Token 超限（token 用量超阈值时触发）</option>
                 </select>
               </div>
               <div class="form-row">
-                <label class="form-label">颜色</label>
-                <input class="form-color" type="color" bind:value={newColor} />
+                <label class="form-label" for="trigger-color-input">颜色</label>
+                <input id="trigger-color-input" class="form-color" type="color" bind:value={newColor} />
               </div>
               <button class="form-submit" onclick={handleAddTrigger} disabled={!newName.trim() || addingTrigger}>
                 {addingTrigger ? "添加中..." : "添加触发器"}

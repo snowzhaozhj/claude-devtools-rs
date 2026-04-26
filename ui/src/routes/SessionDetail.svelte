@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
   import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications, getToolContextTokens, estimateTokens } from "../lib/toolHelpers";
   import { buildDisplayItemsCached, buildSummary } from "../lib/displayItemBuilder";
@@ -57,8 +57,9 @@
     };
   }
 
-  // per-tab UI 状态（从 tabStore 恢复）
-  let uiState = getTabUIState(tabId);
+  // per-tab UI 状态（从 tabStore 恢复）—— tabId 在组件生命周期内不会变（切 tab 走 destroy/recreate），
+  // 用 untrack 显式声明只读初始值，消 Svelte 5 state_referenced_locally warning
+  let uiState = getTabUIState(untrack(() => tabId));
   let expandedItems: Set<string> = $state(new Set(uiState.expandedItems));
   let expandedChunks: Set<number> = $state(new Set(uiState.expandedChunks));
   let searchVisible = $state(uiState.searchVisible);
@@ -81,7 +82,7 @@
     }
   }
 
-  const fileChangeKey = `session-detail-${tabId}`;
+  const fileChangeKey = `session-detail-${untrack(() => tabId)}`;
 
   async function refreshDetail() {
     const wasAtBottom = !!conversationEl
