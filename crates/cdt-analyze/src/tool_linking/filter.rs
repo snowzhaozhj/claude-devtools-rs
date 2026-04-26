@@ -41,6 +41,7 @@ mod tests {
             result_agent_id: None,
             output_omitted: false,
             output_bytes: None,
+            teammate_spawn: None,
         }
     }
 

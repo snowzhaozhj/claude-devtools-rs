@@ -174,6 +174,7 @@ mod tests {
             tool_executions: Vec::new(),
             subagents: Vec::new(),
             slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
         }
     }
 
@@ -213,6 +214,7 @@ mod tests {
             result_agent_id: None,
             output_omitted: false,
             output_bytes: None,
+            teammate_spawn: None,
         });
         let user = UserChunk {
             uuid: "u1".into(),

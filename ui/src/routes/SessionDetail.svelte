@@ -12,6 +12,8 @@
   import { registerHandler, unregisterHandler, dedupeRefresh } from "../lib/fileChangeStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
+  import TeammateMessageItem from "../components/TeammateMessageItem.svelte";
+  import { getTeamColorSet } from "../lib/teamColors";
   import SearchBar from "../components/SearchBar.svelte";
   import ContextPanel from "../components/ContextPanel.svelte";
   import OngoingBanner from "../components/OngoingBanner.svelte";
@@ -41,7 +43,7 @@
     }
     return lazyObserver;
   }
-  function attachMarkdown(text: string, kind: "user" | "ai" | "system" | "thinking" | "output" | "slash") {
+  function attachMarkdown(text: string, kind: "user" | "ai" | "system" | "thinking" | "output" | "slash" | "teammate") {
     return (el: HTMLElement) => {
       const obs = ensureObserver();
       if (!obs) return;
@@ -579,6 +581,26 @@
                     </BaseItem>
                   {:else if item.type === "subagent"}
                     <SubagentCard process={item.process} rootSessionId={sessionId} />
+                  {:else if item.type === "teammate_message"}
+                    <TeammateMessageItem
+                      teammateMessage={item.teammateMessage}
+                      attachBody={attachMarkdown(item.teammateMessage.body, "teammate")}
+                      rootSessionId={sessionId}
+                    />
+                  {:else if item.type === "teammate_spawn"}
+                    {@const colors = getTeamColorSet(item.color)}
+                    <div class="teammate-spawn-row">
+                      <span class="teammate-spawn-dot" style:background-color={colors.border}></span>
+                      <span
+                        class="teammate-spawn-badge"
+                        style:background-color={colors.badge}
+                        style:color={colors.text}
+                        style:border-color="{colors.border}40"
+                      >
+                        {item.name}
+                      </span>
+                      <span class="teammate-spawn-label">Teammate spawned</span>
+                    </div>
                   {/if}
                 {/each}
               </div>
@@ -643,6 +665,33 @@
     flex-direction: column;
     height: 100%;
     overflow: hidden;
+  }
+
+  /* ── Teammate spawn 极简单行（对齐原版 LinkedToolItem.tsx::isTeammateSpawned）── */
+  .teammate-spawn-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+  }
+  .teammate-spawn-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .teammate-spawn-badge {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    padding: 1px 6px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    flex-shrink: 0;
+  }
+  .teammate-spawn-label {
+    font-size: 12px;
+    color: var(--card-icon-muted);
   }
 
   /* ── States ── */

@@ -23,7 +23,7 @@ pub mod watch_event;
 
 pub use chunk::{
     AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep, SlashCommand,
-    SystemChunk, UserChunk,
+    SystemChunk, TeammateMessage, UserChunk,
 };
 pub use context::{
     ClaudeMdContextInjection, ClaudeMdFileInfo, ClaudeMdScope, CompactionTokenDelta,
@@ -43,14 +43,14 @@ pub use project::{
 };
 pub use search::{SearchHit, SearchSessionsResult, SessionSearchResult};
 pub use tokens::{estimate_content_tokens, estimate_tokens};
-pub use tool_execution::{ToolExecution, ToolOutput};
+pub use tool_execution::{TeammateSpawnInfo, ToolExecution, ToolOutput};
 pub use watch_event::{FileChangeEvent, TodoChangeEvent};
 
 pub mod prelude {
     //! 给消费方用的再导出集合。
     pub use super::chunk::{
         AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep, SystemChunk,
-        UserChunk,
+        TeammateMessage, UserChunk,
     };
     pub use super::message::{
         ContentBlock, HardNoiseReason, ImageSource, MessageCategory, MessageContent, MessageType,
@@ -60,5 +60,5 @@ pub mod prelude {
     pub use super::project::{
         Project, RepositoryGroup, RepositoryIdentity, Session, SessionMetadata, Worktree,
     };
-    pub use super::tool_execution::{ToolExecution, ToolOutput};
+    pub use super::tool_execution::{TeammateSpawnInfo, ToolExecution, ToolOutput};
 }

@@ -12,6 +12,7 @@ import type {
   ToolExecution,
   SubagentProcess,
   SlashCommand,
+  TeammateMessage,
 } from "./api";
 
 // ---------------------------------------------------------------------------
@@ -45,26 +46,55 @@ export interface SlashItem {
   slash: SlashCommand;
 }
 
+export interface TeammateMessageDisplayItem {
+  type: "teammate_message";
+  teammateMessage: TeammateMessage;
+}
+
+export interface TeammateSpawnDisplayItem {
+  type: "teammate_spawn";
+  /** 队友名（如 "member-1"），用于 badge 文字。 */
+  name: string;
+  /** 队友色（teamColors 调色板键）。 */
+  color: string | null;
+  /** 来源 tool_use_id，用于稳定 key。 */
+  toolUseId: string;
+  /** 来源 tool 名（如 "Agent"），UI 不展示但保留供调试。 */
+  toolName: string;
+}
+
 export type DisplayItem =
   | ThinkingItem
   | ToolItem
   | OutputItem
   | SubagentItem
-  | SlashItem;
+  | SlashItem
+  | TeammateMessageDisplayItem
+  | TeammateSpawnDisplayItem;
 
 // ---------------------------------------------------------------------------
 // buildDisplayItems
 // ---------------------------------------------------------------------------
 
 /**
- * 从 AIChunk 的 semanticSteps + toolExecutions + subagents + slashCommands
- * 构建统一 DisplayItem 列表。
+ * 从 AIChunk 的 semanticSteps + toolExecutions + subagents + slashCommands +
+ * teammateMessages 构建统一 DisplayItem 列表。
  *
- * - slash 命令排最前
- * - 按 semanticSteps 出现顺序排列
+ * 排序策略（对齐原版 `displayItemBuilder.ts::sortDisplayItemsChronologically`）：
+ * - slash 命令排最前（与 AI turn 整体绑定，不参与时序排序）
+ * - 其余 items 全部按 timestamp 稳定排序穿插：thinking / text / tool /
+ *   subagent / teammate_message / teammate_spawn 各自携带 timestamp，按 ISO
+ *   字符串排序即可（同 ts 保留 push 顺序）
  * - 最后一个 text step 被识别为 last output 并跳过（由外部始终可见地渲染）
- * - tool_execution step 无匹配 ToolExecution 则跳过
- * - subagent_spawn step 无匹配 Process 则跳过
+ *
+ * teammate_spawn 替换：tool_execution 的 ToolExecution 检测到 `teammateSpawn`
+ * 字段非空时，转化为 `teammate_spawn` DisplayItem（极简单行渲染替代 tool item），
+ * 对齐原版 `LinkedToolItem.tsx::isTeammateSpawned`。
+ *
+ * teammate reply 的 `replyToToolUseId` 仅作为 chip 文本展示（哪条 SendMessage
+ * 触发的回信），**不**决定渲染位置——位置由 timestamp 决定。这样即使没有
+ * SendMessage 配对（teammate 主动发言），卡片也能按时序自然穿插，不会全部
+ * 堆在 turn 末尾。
  */
 export function buildDisplayItems(chunk: AIChunk): {
   items: DisplayItem[];
@@ -98,22 +128,22 @@ export function buildDisplayItems(chunk: AIChunk): {
     if (sub.parentTaskId) taskIdsWithSubagents.add(sub.parentTaskId);
   }
 
-  const items: DisplayItem[] = [];
-
-  // slash 命令排最前
-  for (const slash of chunk.slashCommands ?? []) {
-    items.push({ type: "slash", slash });
-  }
-
-  // 按 semanticSteps 顺序构建
+  // 累积"待排序池"：[(timestamp, item)]——最后整体稳定排序穿插。
+  const pool: Array<{ ts: string; order: number; item: DisplayItem }> = [];
+  let order = 0;
   let lastOutput: OutputItem | null = null;
 
+  // semanticSteps 顺序构建（thinking / text / tool / subagent）
   for (let i = 0; i < chunk.semanticSteps.length; i++) {
     const step = chunk.semanticSteps[i];
 
     switch (step.kind) {
       case "thinking":
-        items.push({ type: "thinking", text: step.text, timestamp: step.timestamp });
+        pool.push({
+          ts: step.timestamp,
+          order: order++,
+          item: { type: "thinking", text: step.text, timestamp: step.timestamp },
+        });
         break;
 
       case "text":
@@ -121,7 +151,11 @@ export function buildDisplayItems(chunk: AIChunk): {
           // 记录 last output，不放入 items
           lastOutput = { type: "output", text: step.text, timestamp: step.timestamp };
         } else {
-          items.push({ type: "output", text: step.text, timestamp: step.timestamp });
+          pool.push({
+            ts: step.timestamp,
+            order: order++,
+            item: { type: "output", text: step.text, timestamp: step.timestamp },
+          });
         }
         break;
 
@@ -133,18 +167,69 @@ export function buildDisplayItems(chunk: AIChunk): {
         if (exec.toolName === "Task" && taskIdsWithSubagents.has(exec.toolUseId)) {
           break;
         }
-        items.push({ type: "tool", execution: exec });
+        // teammate_spawn 检测：tool_result.toolUseResult.status === "teammate_spawned"
+        // 时由后端预算落到 exec.teammateSpawn，这里把整条 tool item 替换成
+        // 极简 teammate_spawn DisplayItem（对齐原版 LinkedToolItem.tsx）。
+        if (exec.teammateSpawn) {
+          pool.push({
+            ts: step.timestamp,
+            order: order++,
+            item: {
+              type: "teammate_spawn",
+              name: exec.teammateSpawn.name,
+              color: exec.teammateSpawn.color ?? null,
+              toolUseId: exec.toolUseId,
+              toolName: exec.toolName,
+            },
+          });
+        } else {
+          pool.push({
+            ts: step.timestamp,
+            order: order++,
+            item: { type: "tool", execution: exec },
+          });
+        }
         break;
       }
 
       case "subagent_spawn": {
         const sub = subMap.get(step.placeholderId);
         if (sub) {
-          items.push({ type: "subagent", process: sub });
+          pool.push({
+            ts: step.timestamp,
+            order: order++,
+            item: { type: "subagent", process: sub },
+          });
         }
         break;
       }
     }
+  }
+
+  // teammate messages 按 timestamp 加入待排序池
+  for (const tm of chunk.teammateMessages ?? []) {
+    pool.push({
+      ts: tm.timestamp,
+      order: order++,
+      item: { type: "teammate_message", teammateMessage: tm },
+    });
+  }
+
+  // 稳定排序：先 timestamp 升序，同 ts 保留 push 顺序
+  pool.sort((a, b) => {
+    if (a.ts < b.ts) return -1;
+    if (a.ts > b.ts) return 1;
+    return a.order - b.order;
+  });
+
+  const items: DisplayItem[] = [];
+
+  // slash 命令排最前（不参与时序排序）
+  for (const slash of chunk.slashCommands ?? []) {
+    items.push({ type: "slash", slash });
+  }
+  for (const entry of pool) {
+    items.push(entry.item);
   }
 
   return { items, lastOutput };
@@ -174,7 +259,12 @@ export function buildDisplayItemsFromChunks(chunks: Chunk[]): DisplayItem[] {
 
 /**
  * 统计 DisplayItem 列表中各类型数量，生成 header summary 字符串。
- * 顺序：tool → slash → message → subagent → thinking
+ *
+ * 对齐原版 `claude-devtools/src/renderer/utils/displaySummary.ts`：
+ * - team 成员（`process.team` 非空的 subagent）按 unique `memberName` 计入
+ *   `teammates`，**不**计入 `subagents`（避免一个队友同时出现两个统计）
+ * - `teammate_message` 单独计为 "N teammate messages"
+ * - 拼接顺序：thinking → tool calls → messages → teammates → subagents → slashes → teammate messages
  */
 export function buildSummary(items: DisplayItem[]): string {
   let tools = 0;
@@ -182,6 +272,8 @@ export function buildSummary(items: DisplayItem[]): string {
   let messages = 0;
   let subagents = 0;
   let thinkings = 0;
+  let teammateMessages = 0;
+  const teammateNames = new Set<string>();
 
   for (const item of items) {
     switch (item.type) {
@@ -195,19 +287,38 @@ export function buildSummary(items: DisplayItem[]): string {
         messages++;
         break;
       case "subagent":
-        subagents++;
+        // team 成员单独计 teammate；非 team subagent 才走 subagent 计数
+        if (item.process.team) {
+          teammateNames.add(item.process.team.memberName);
+        } else {
+          subagents++;
+        }
         break;
       case "thinking":
         thinkings++;
+        break;
+      case "teammate_message":
+        teammateMessages++;
+        break;
+      case "teammate_spawn":
+        // teammate spawn 卡片按 unique name 计入 teammates（与 SubagentItem
+        // 含 team 字段的统计同语义）。
+        teammateNames.add(item.name);
         break;
     }
   }
 
   const parts: string[] = [];
-  if (tools > 0) parts.push(`${tools} tool call${tools > 1 ? "s" : ""}`);
-  if (slashes > 0) parts.push(`${slashes} slash${slashes > 1 ? "es" : ""}`);
-  if (messages > 0) parts.push(`${messages} message${messages > 1 ? "s" : ""}`);
-  if (subagents > 0) parts.push(`${subagents} subagent${subagents > 1 ? "s" : ""}`);
   if (thinkings > 0) parts.push(`${thinkings} thinking`);
+  if (tools > 0) parts.push(`${tools} tool call${tools > 1 ? "s" : ""}`);
+  if (messages > 0) parts.push(`${messages} message${messages > 1 ? "s" : ""}`);
+  if (teammateNames.size > 0) {
+    parts.push(`${teammateNames.size} teammate${teammateNames.size > 1 ? "s" : ""}`);
+  }
+  if (subagents > 0) parts.push(`${subagents} subagent${subagents > 1 ? "s" : ""}`);
+  if (slashes > 0) parts.push(`${slashes} slash${slashes > 1 ? "es" : ""}`);
+  if (teammateMessages > 0) {
+    parts.push(`${teammateMessages} teammate message${teammateMessages > 1 ? "s" : ""}`);
+  }
   return parts.join(", ");
 }

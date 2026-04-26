@@ -15,25 +15,45 @@
 //!         - 否则 → flush buffer，产出 `UserChunk`；
 //! 3. 末尾 flush。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cdt_core::{
     AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, ContentBlock, MessageCategory,
-    MessageContent, ParsedMessage, SemanticStep, SlashCommand, SystemChunk, ToolExecution,
-    UserChunk,
+    MessageContent, ParsedMessage, SemanticStep, SlashCommand, SystemChunk, TeammateMessage,
+    ToolExecution, UserChunk,
 };
 
 use cdt_core::SubagentCandidate;
 
 use super::metrics::aggregate_metrics;
 use super::semantic::extract_semantic_steps;
-use crate::team::is_teammate_message;
+use crate::team::{
+    detect_noise, detect_resend, is_teammate_message, link_teammate_to_send_message,
+    parse_all_teammate_attrs,
+};
 use crate::tool_linking::{
     Resolution, ResolvedTask, filter_resolved_tasks, pair_tool_executions, resolve_subagents,
 };
 
 const STDOUT_OPEN: &str = "<local-command-stdout>";
 const STDOUT_CLOSE: &str = "</local-command-stdout>";
+
+/// Teammate 消息嵌入 `AIChunk` 的回滚开关。
+///
+/// `true`（默认）：teammate user 消息不产 `UserChunk`，转化为 [`TeammateMessage`]
+/// 注入到下一个 flush 出的 `AIChunk.teammate_messages`，并向后扫描 `SendMessage`
+/// 配对 `reply_to_tool_use_id`。
+///
+/// `false`：退回旧行为——teammate user 消息直接 `continue` 丢弃，
+/// `AIChunk.teammate_messages` 永远为空（`skip_serializing_if` 让 IPC payload 兼容）。
+///
+/// Spec：`openspec/specs/chunk-building/spec.md` §`Embed teammate messages into AIChunk`。
+const EMBED_TEAMMATES: bool = true;
+
+/// `TeammateMessage.token_count` 缺失 `usage` 时的字符 → token 启发式除数。
+///
+/// 与既有 `cdt_core::estimate_tokens` 的 4 字符/token 估算口径一致。
+const TEAMMATE_BODY_CHARS_PER_TOKEN: u64 = 4;
 
 pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
     let linking = pair_tool_executions(messages);
@@ -49,6 +69,8 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
     let mut out: Vec<Chunk> = Vec::new();
     let mut buffer: Vec<AssistantResponse> = Vec::new();
     let mut pending_slashes: Vec<SlashCommand> = Vec::new();
+    let mut pending_teammates: Vec<TeammateMessage> = Vec::new();
+    let mut used_send_message_ids: HashSet<String> = HashSet::new();
 
     chunk_loop(
         messages,
@@ -56,6 +78,8 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
         &mut out,
         &mut executions_by_assistant,
         &mut pending_slashes,
+        &mut pending_teammates,
+        &mut used_send_message_ids,
         &follow_ups,
     );
 
@@ -64,7 +88,10 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
         &mut out,
         &mut executions_by_assistant,
         &mut pending_slashes,
+        &mut pending_teammates,
+        &mut used_send_message_ids,
     );
+    drain_trailing_teammates(&mut out, &mut pending_teammates, &mut used_send_message_ids);
     out
 }
 
@@ -102,12 +129,15 @@ fn build_slash_follow_up_map(messages: &[ParsedMessage]) -> HashMap<String, Stri
 
 /// 主循环：遍历消息序列产出 chunk，被 `build_chunks` 和
 /// `build_chunks_with_subagents` 共用。
+#[allow(clippy::too_many_arguments)]
 fn chunk_loop(
     messages: &[ParsedMessage],
     buffer: &mut Vec<AssistantResponse>,
     out: &mut Vec<Chunk>,
     executions_by_assistant: &mut HashMap<String, Vec<ToolExecution>>,
     pending_slashes: &mut Vec<SlashCommand>,
+    pending_teammates: &mut Vec<TeammateMessage>,
+    used_send_message_ids: &mut HashSet<String>,
     follow_ups: &HashMap<String, String>,
 ) {
     for msg in messages {
@@ -128,7 +158,14 @@ fn chunk_loop(
                 });
             }
             MessageCategory::Compact => {
-                flush_buffer(buffer, out, executions_by_assistant, pending_slashes);
+                flush_buffer(
+                    buffer,
+                    out,
+                    executions_by_assistant,
+                    pending_slashes,
+                    pending_teammates,
+                    used_send_message_ids,
+                );
                 out.push(Chunk::Compact(CompactChunk {
                     uuid: msg.uuid.clone(),
                     timestamp: msg.timestamp,
@@ -138,8 +175,15 @@ fn chunk_loop(
                 }));
             }
             MessageCategory::User => {
-                // Teammate 消息不产出 `UserChunk`（spec: team-coordination-metadata）
+                // Teammate 消息不产出 `UserChunk`（spec: team-coordination-metadata）。
+                // EMBED_TEAMMATES=true 时 push 到 pending_teammates 等下一次 flush 注入；
+                // EMBED_TEAMMATES=false 时退回旧"丢弃"行为（直接 continue）。
                 if is_teammate_message(msg) {
+                    if EMBED_TEAMMATES {
+                        // 一条 user 消息可能含 N 个 <teammate-message> 块，每块各产
+                        // 一条 TeammateMessage（多 block 修复，对齐原版）。
+                        pending_teammates.extend(build_pending_teammates(msg));
+                    }
                     continue;
                 }
                 // `is_meta` 消息是 skill prompt / system-reminder 注入，
@@ -161,7 +205,14 @@ fn chunk_loop(
                     if let Some(instructions) = follow_ups.get(&msg.uuid) {
                         slash.instructions = Some(instructions.clone());
                     }
-                    flush_buffer(buffer, out, executions_by_assistant, pending_slashes);
+                    flush_buffer(
+                        buffer,
+                        out,
+                        executions_by_assistant,
+                        pending_slashes,
+                        pending_teammates,
+                        used_send_message_ids,
+                    );
                     out.push(Chunk::User(UserChunk {
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
@@ -173,7 +224,14 @@ fn chunk_loop(
                     continue;
                 }
                 if let Some(stdout) = extract_local_command_stdout(&msg.content) {
-                    flush_buffer(buffer, out, executions_by_assistant, pending_slashes);
+                    flush_buffer(
+                        buffer,
+                        out,
+                        executions_by_assistant,
+                        pending_slashes,
+                        pending_teammates,
+                        used_send_message_ids,
+                    );
                     out.push(Chunk::System(SystemChunk {
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
@@ -188,7 +246,14 @@ fn chunk_loop(
                         append_tool_results(last, &msg.content);
                     }
                 } else {
-                    flush_buffer(buffer, out, executions_by_assistant, pending_slashes);
+                    flush_buffer(
+                        buffer,
+                        out,
+                        executions_by_assistant,
+                        pending_slashes,
+                        pending_teammates,
+                        used_send_message_ids,
+                    );
                     // 普通用户输入会"打断" slash → AIChunk 的紧邻关系：
                     // 对齐原版 extractPrecedingSlashInfo 只看紧邻前一个 UserGroup 的语义，
                     // 未被 AIChunk 消费的 slash 在此抛弃，不会跨过这条 user 挂到后续 AI。
@@ -206,7 +271,14 @@ fn chunk_loop(
                 // 先 flush 已有 assistant buffer 产出 AIChunk；再把
                 // Interruption 追加到最后一个 AIChunk 的 semantic_steps。
                 // 没有前驱 AIChunk 时丢弃（对齐原版：孤立中断不产出新 chunk）。
-                flush_buffer(buffer, out, executions_by_assistant, pending_slashes);
+                flush_buffer(
+                    buffer,
+                    out,
+                    executions_by_assistant,
+                    pending_slashes,
+                    pending_teammates,
+                    used_send_message_ids,
+                );
                 append_interruption_to_last_ai(out, msg);
             }
             // `System` 这个 variant 在 parser 端被 hard-noise 前置拦截，
@@ -214,6 +286,129 @@ fn chunk_loop(
             MessageCategory::System | MessageCategory::HardNoise(_) => {}
         }
     }
+}
+
+/// 解析 teammate user 消息为 N 条 [`TeammateMessage`]——一条 user 消息可能含
+/// 多个 `<teammate-message>` 块（典型场景：team 启动阶段把多个 `idle_notification`
+/// 拼到同一条消息），需要各自产出独立卡片。
+///
+/// 多 block 时 uuid 加 `-N` 后缀去重，避免下游 `{#each}` key 冲突；
+/// timestamp 共享原 user msg 的时间戳（chunk-building 不强求微秒区分，UI
+/// timestamp 排序时同 ts 按出现顺序稳定排列即可）。
+///
+/// 属性解析失败（无效 teammate 标签）返回空 Vec，主循环直接丢弃。
+fn build_pending_teammates(msg: &ParsedMessage) -> Vec<TeammateMessage> {
+    let all = parse_all_teammate_attrs(msg);
+    if all.is_empty() {
+        return Vec::new();
+    }
+    let multiple = all.len() > 1;
+    all.into_iter()
+        .enumerate()
+        .map(|(idx, attrs)| {
+            let body = attrs.body.trim().to_owned();
+            let is_noise = detect_noise(&body, &attrs.teammate_id);
+            let is_resend = detect_resend(attrs.summary.as_deref(), &body);
+            // 多 block 时 token 估算用 body 字符数（无法切分原 usage）；单 block 走原逻辑。
+            let token_count = if multiple {
+                let chars = body.chars().count() as u64;
+                if chars == 0 {
+                    None
+                } else {
+                    Some(chars.div_ceil(TEAMMATE_BODY_CHARS_PER_TOKEN))
+                }
+            } else {
+                estimate_teammate_tokens(msg, &body)
+            };
+            let uuid = if multiple {
+                format!("{}-{idx}", msg.uuid)
+            } else {
+                msg.uuid.clone()
+            };
+            TeammateMessage {
+                uuid,
+                teammate_id: attrs.teammate_id,
+                color: attrs.color,
+                summary: attrs.summary,
+                body,
+                timestamp: msg.timestamp,
+                reply_to_tool_use_id: None,
+                token_count,
+                is_noise,
+                is_resend,
+            }
+        })
+        .collect()
+}
+
+/// teammate body 灌入主 session 的 token 估算：
+/// 优先取 `msg.usage.input_tokens` 真实值；缺失时退化到 body 字符数 ÷ 4 启发式。
+fn estimate_teammate_tokens(msg: &ParsedMessage, body: &str) -> Option<u64> {
+    if let Some(usage) = msg.usage.as_ref() {
+        if usage.input_tokens > 0 {
+            return Some(usage.input_tokens);
+        }
+    }
+    let chars = body.chars().count() as u64;
+    if chars == 0 {
+        return None;
+    }
+    Some(chars.div_ceil(TEAMMATE_BODY_CHARS_PER_TOKEN))
+}
+
+/// 主循环结束时把仍在 `pending_teammates` 中的条目追加到最后一个 `AIChunk`。
+///
+/// `out` 末尾不是 `AIChunk`（或全为空、或没有任何 `AIChunk`）时静默丢弃，
+/// 与 chunk-building spec 的 orphan teammate 边界规则一致。
+fn drain_trailing_teammates(
+    out: &mut [Chunk],
+    pending_teammates: &mut Vec<TeammateMessage>,
+    used_send_message_ids: &mut HashSet<String>,
+) {
+    if pending_teammates.is_empty() {
+        return;
+    }
+    let last_ai_idx = out.iter().rposition(|c| matches!(c, Chunk::Ai(_)));
+    let Some(idx) = last_ai_idx else {
+        // 没有任何 AIChunk → 丢弃 trailing teammates，避免 panic。
+        pending_teammates.clear();
+        return;
+    };
+    // 给 link 用的 candidate chain：last AI + 此前最近 N-1 个（最近优先）。
+    let mut linked: Vec<TeammateMessage> = Vec::with_capacity(pending_teammates.len());
+    for mut tm in pending_teammates.drain(..) {
+        let link_target =
+            link_against_chunks(&tm.teammate_id, out, idx, used_send_message_ids, None);
+        tm.reply_to_tool_use_id = link_target;
+        linked.push(tm);
+    }
+    if let Chunk::Ai(ai) = &mut out[idx] {
+        ai.teammate_messages.extend(linked);
+    }
+}
+
+/// 收集 `out[..=until_idx]` 中"最近优先"的最多 `LOOKBACK_LIMIT` 个 `AIChunk` 引用，
+/// 可选叠加一个尚未 push 的 `pending_chunk`（放在最前），调 [`link_teammate_to_send_message`]。
+fn link_against_chunks<'a>(
+    teammate_id: &str,
+    emitted: &'a [Chunk],
+    until_idx: usize,
+    used: &mut HashSet<String>,
+    pending_chunk: Option<&'a AIChunk>,
+) -> Option<String> {
+    let mut chain: Vec<&AIChunk> = Vec::new();
+    if let Some(p) = pending_chunk {
+        chain.push(p);
+    }
+    for chunk in emitted[..=until_idx].iter().rev() {
+        if chain.len() >= crate::team::reply_link::LOOKBACK_LIMIT {
+            break;
+        }
+        if let Chunk::Ai(ai) = chunk {
+            chain.push(ai);
+        }
+    }
+    link_teammate_to_send_message(teammate_id, &chain, used)
 }
 
 /// 把 `Interruption` 消息追加为最后一个 `AIChunk` 的 `SemanticStep::Interruption`。
@@ -274,6 +469,8 @@ pub fn build_chunks_with_subagents(
     let mut out: Vec<Chunk> = Vec::new();
     let mut buffer: Vec<AssistantResponse> = Vec::new();
     let mut pending_slashes: Vec<SlashCommand> = Vec::new();
+    let mut pending_teammates: Vec<TeammateMessage> = Vec::new();
+    let mut used_send_message_ids: HashSet<String> = HashSet::new();
 
     chunk_loop(
         messages,
@@ -281,6 +478,8 @@ pub fn build_chunks_with_subagents(
         &mut out,
         &mut executions_by_assistant,
         &mut pending_slashes,
+        &mut pending_teammates,
+        &mut used_send_message_ids,
         &follow_ups,
     );
 
@@ -289,7 +488,10 @@ pub fn build_chunks_with_subagents(
         &mut out,
         &mut executions_by_assistant,
         &mut pending_slashes,
+        &mut pending_teammates,
+        &mut used_send_message_ids,
     );
+    drain_trailing_teammates(&mut out, &mut pending_teammates, &mut used_send_message_ids);
 
     // 把 resolved subagent Process 分配到对应 AIChunk
     attach_subagents_to_chunks(&mut out, &resolved, &task_to_assistant);
@@ -356,8 +558,12 @@ fn flush_buffer(
     out: &mut Vec<Chunk>,
     executions_by_assistant: &mut HashMap<String, Vec<ToolExecution>>,
     pending_slashes: &mut Vec<SlashCommand>,
+    pending_teammates: &mut Vec<TeammateMessage>,
+    used_send_message_ids: &mut HashSet<String>,
 ) {
     if buffer.is_empty() {
+        // buffer 空但 pending teammate 非空（极少见）：保留 pending 给下一轮 flush
+        // 配对，drain_trailing_teammates 兜底。
         return;
     }
     let responses = std::mem::take(buffer);
@@ -377,7 +583,7 @@ fn flush_buffer(
         }
     }
     let slash_commands = std::mem::take(pending_slashes);
-    out.push(Chunk::Ai(AIChunk {
+    let mut new_chunk = AIChunk {
         timestamp,
         duration_ms,
         responses,
@@ -386,7 +592,36 @@ fn flush_buffer(
         tool_executions,
         subagents: Vec::new(),
         slash_commands,
-    }));
+        teammate_messages: Vec::new(),
+    };
+
+    // 把 pending teammate 注入新构造的 AIChunk：先按"自身 + 历史 N-1 个"配对
+    // reply_to_tool_use_id，再 move 到 new_chunk.teammate_messages。
+    if !pending_teammates.is_empty() {
+        let drained: Vec<TeammateMessage> = std::mem::take(pending_teammates);
+        let last_emitted_idx = out.iter().rposition(|c| matches!(c, Chunk::Ai(_)));
+        let mut linked: Vec<TeammateMessage> = Vec::with_capacity(drained.len());
+        for mut tm in drained {
+            let link_target = if let Some(idx) = last_emitted_idx {
+                link_against_chunks(
+                    &tm.teammate_id,
+                    out,
+                    idx,
+                    used_send_message_ids,
+                    Some(&new_chunk),
+                )
+            } else {
+                // out 中无 AIChunk：仅在 new_chunk 自身扫描
+                let chain: Vec<&AIChunk> = vec![&new_chunk];
+                link_teammate_to_send_message(&tm.teammate_id, &chain, used_send_message_ids)
+            };
+            tm.reply_to_tool_use_id = link_target;
+            linked.push(tm);
+        }
+        new_chunk.teammate_messages = linked;
+    }
+
+    out.push(Chunk::Ai(new_chunk));
 }
 
 /// 从 isMeta 消息内容中提取 slash 命令信息。
@@ -1397,5 +1632,187 @@ mod tests {
                 "[Request interrupted by user B]"
             ]
         );
+    }
+
+    // ---- teammate-message-rendering ----
+    //
+    // Spec：`openspec/specs/chunk-building/spec.md`
+    // §`Embed teammate messages into AIChunk` 全部 5 个 Scenario。
+    //
+    // 注意：`EMBED_TEAMMATES = false` 的回退路径走 const 早绑定，runtime 测试
+    // 不可达；切换常量后跑这些测试即可验证回退（断言会反向：teammate 不再嵌入）。
+
+    fn teammate_user(uuid: &str, n: i64, body: &str) -> ParsedMessage {
+        let xml = format!(
+            r#"<teammate-message teammate_id="alice" color="blue" summary="hi">{body}</teammate-message>"#
+        );
+        ParsedMessage {
+            content: MessageContent::Text(xml),
+            ..blank_message(uuid, n)
+        }
+    }
+
+    fn teammate_user_to(uuid: &str, n: i64, recipient: &str, body: &str) -> ParsedMessage {
+        let xml = format!(
+            r#"<teammate-message teammate_id="{recipient}" color="green" summary="ok">{body}</teammate-message>"#
+        );
+        ParsedMessage {
+            content: MessageContent::Text(xml),
+            ..blank_message(uuid, n)
+        }
+    }
+
+    fn send_message_assistant(uuid: &str, n: i64, recipient: &str) -> ParsedMessage {
+        assistant(
+            uuid,
+            n,
+            &[ContentBlock::ToolUse {
+                id: format!("tu-{uuid}"),
+                name: "SendMessage".into(),
+                input: serde_json::json!({ "recipient": recipient, "content": "do work" }),
+            }],
+        )
+    }
+
+    #[test]
+    fn teammate_message_does_not_produce_user_chunk() {
+        // 流：user → assistant → teammate-message → assistant
+        // 期望：UserChunk(u1) + AIChunk(a1) + AIChunk(a2 with teammate)
+        let msgs = vec![
+            user("u1", 0, "real user"),
+            assistant("a1", 1, &[ContentBlock::Text { text: "ack".into() }]),
+            teammate_user("tm1", 2, "queen reply"),
+            assistant("a2", 3, &[ContentBlock::Text { text: "got".into() }]),
+        ];
+        let chunks = build_chunks(&msgs);
+        // 没有任何 UserChunk 来自 teammate；只有 u1 那条
+        let user_chunks: Vec<_> = chunks
+            .iter()
+            .filter(|c| matches!(c, Chunk::User(_)))
+            .collect();
+        assert_eq!(user_chunks.len(), 1, "teammate 不应产 UserChunk");
+        let Chunk::User(only_user) = user_chunks[0] else {
+            panic!()
+        };
+        assert_eq!(only_user.uuid, "u1");
+    }
+
+    #[test]
+    fn teammate_message_embedded_into_ai_chunk_with_reply_to() {
+        // 流：assistant(SendMessage→alice) → teammate(alice) → assistant("got it")
+        // teammate 不打断 assistant buffer 合并，a1 + a2 合并到同一 AIChunk；
+        // teammate 嵌入合并 AIChunk.teammate_messages，按 reply_to_tool_use_id 配对
+        // 到 a1 的 SendMessage tool_use_id。前端 displayItemBuilder 按 reply_to 把
+        // teammate 卡片紧贴对应 SendMessage 渲染，与原版 TS displayItem 维度一致。
+        let msgs = vec![
+            send_message_assistant("a1", 1, "alice"),
+            teammate_user("tm1", 2, "alice reply body"),
+            assistant("a2", 3, &[ContentBlock::Text { text: "got".into() }]),
+        ];
+        let chunks = build_chunks(&msgs);
+        let ai_chunks: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| {
+                if let Chunk::Ai(ai) = c {
+                    Some(ai)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            ai_chunks.len(),
+            1,
+            "teammate 不打断连续 assistant 合并，a1+a2 应合并到同一 AIChunk"
+        );
+        let ai = ai_chunks[0];
+        assert_eq!(ai.responses.len(), 2);
+        assert_eq!(ai.teammate_messages.len(), 1);
+        let tm = &ai.teammate_messages[0];
+        assert_eq!(tm.teammate_id, "alice");
+        assert_eq!(tm.summary.as_deref(), Some("hi"));
+        assert_eq!(tm.body, "alice reply body");
+        assert_eq!(tm.reply_to_tool_use_id.as_deref(), Some("tu-a1"));
+        assert!(!tm.is_noise);
+        assert!(!tm.is_resend);
+    }
+
+    #[test]
+    fn trailing_teammate_attaches_to_last_ai_chunk() {
+        // 流：assistant(SendMessage→alice) → teammate(alice)（无后续 assistant）
+        let msgs = vec![
+            send_message_assistant("a1", 1, "alice"),
+            teammate_user("tm1", 2, "trailing reply"),
+        ];
+        let chunks = build_chunks(&msgs);
+        // 仅一个 AIChunk（a1），teammate 追加到它身上
+        let ai_chunks: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| {
+                if let Chunk::Ai(ai) = c {
+                    Some(ai)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(ai_chunks.len(), 1);
+        assert_eq!(ai_chunks[0].teammate_messages.len(), 1);
+        let tm = &ai_chunks[0].teammate_messages[0];
+        // 自身 SendMessage 在同 AIChunk 内 → 配对成功
+        assert_eq!(tm.reply_to_tool_use_id.as_deref(), Some("tu-a1"));
+    }
+
+    #[test]
+    fn orphan_teammate_with_no_ai_chunk_is_silently_dropped() {
+        // 全 teammate 无任何 assistant
+        let msgs = vec![
+            teammate_user("tm1", 0, "lone reply 1"),
+            teammate_user_to("tm2", 1, "bob", "lone reply 2"),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert!(
+            chunks.is_empty(),
+            "全 teammate 无 AIChunk 时 chunks 应为空（teammate 不再产 UserChunk，无去处即丢弃）"
+        );
+    }
+
+    #[test]
+    fn multiple_teammates_grouped_under_their_send_message() {
+        // 流：a1(SendMessage→alice) → a2(SendMessage→bob) → tm(alice) → tm(bob) → a3
+        let msgs = vec![
+            send_message_assistant("a1", 1, "alice"),
+            send_message_assistant("a2", 2, "bob"),
+            teammate_user_to("tm-alice", 3, "alice", "alice body"),
+            teammate_user_to("tm-bob", 4, "bob", "bob body"),
+            assistant(
+                "a3",
+                5,
+                &[ContentBlock::Text {
+                    text: "done".into(),
+                }],
+            ),
+        ];
+        let chunks = build_chunks(&msgs);
+        let ai_chunks: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| {
+                if let Chunk::Ai(ai) = c {
+                    Some(ai)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // 全部 a1 / a2 / a3 是连续 assistant（teammate 不打断）→ 合并到 1 个 AIChunk
+        assert_eq!(ai_chunks.len(), 1);
+        // 两条 teammate 都嵌入这个合并 AIChunk
+        assert_eq!(ai_chunks[0].teammate_messages.len(), 2);
+        let alice = &ai_chunks[0].teammate_messages[0];
+        let bob = &ai_chunks[0].teammate_messages[1];
+        assert_eq!(alice.teammate_id, "alice");
+        assert_eq!(bob.teammate_id, "bob");
+        assert_eq!(alice.reply_to_tool_use_id.as_deref(), Some("tu-a1"));
+        assert_eq!(bob.reply_to_tool_use_id.as_deref(), Some("tu-a2"));
     }
 }

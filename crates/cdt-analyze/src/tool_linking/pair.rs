@@ -85,6 +85,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         .and_then(|v| v.get("agentId"))
                         .and_then(|v| v.as_str())
                         .map(str::to_owned);
+                    let teammate_spawn = extract_teammate_spawn(msg.tool_use_result.as_ref());
                     executions.push(ToolExecution {
                         tool_use_id: tool_use_id.clone(),
                         tool_name: pu.tool_name.clone(),
@@ -97,6 +98,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         result_agent_id,
                         output_omitted: false,
                         output_bytes: None,
+                        teammate_spawn,
                     });
                 }
             }
@@ -120,6 +122,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                     result_agent_id: None,
                     output_omitted: false,
                     output_bytes: None,
+                    teammate_spawn: None,
                 });
             }
         }
@@ -139,6 +142,26 @@ fn classify_output(content: &serde_json::Value) -> ToolOutput {
             value: other.clone(),
         },
     }
+}
+
+/// 从 user 消息顶层 `toolUseResult` 抽取 teammate spawn 元数据。
+///
+/// 当 `toolUseResult.status == "teammate_spawned"` 时，提取 `name` 与 `color`
+/// 字段封装为 [`cdt_core::TeammateSpawnInfo`]。其它情况返回 `None`。
+///
+/// 对齐原版 `claude-devtools/src/main/services/discovery/SubagentResolver.ts`
+/// 与 `LinkedToolItem.tsx::isTeammateSpawned` 检测条件。
+fn extract_teammate_spawn(
+    tool_use_result: Option<&serde_json::Value>,
+) -> Option<cdt_core::TeammateSpawnInfo> {
+    let v = tool_use_result?;
+    let status = v.get("status").and_then(|s| s.as_str())?;
+    if status != "teammate_spawned" {
+        return None;
+    }
+    let name = v.get("name").and_then(|s| s.as_str())?.to_owned();
+    let color = v.get("color").and_then(|s| s.as_str()).map(str::to_owned);
+    Some(cdt_core::TeammateSpawnInfo { name, color })
 }
 
 #[cfg(test)]
@@ -315,5 +338,116 @@ mod tests {
             ToolOutput::Text { text } => assert_eq!(text, "file contents"),
             other => panic!("expected Text, got {other:?}"),
         }
+    }
+
+    // ---- teammate_spawn 检测（与 LinkedToolItem.tsx::isTeammateSpawned 对齐）----
+
+    fn user_with_result_and_top(
+        uuid: &str,
+        n: i64,
+        id: &str,
+        content: serde_json::Value,
+        tool_use_result: serde_json::Value,
+    ) -> ParsedMessage {
+        ParsedMessage {
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: id.into(),
+                content,
+                is_error: false,
+            }]),
+            tool_use_result: Some(tool_use_result),
+            ..blank(uuid, n)
+        }
+    }
+
+    #[test]
+    fn teammate_spawn_status_populates_field() {
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "tu-spawn", "Agent"),
+            user_with_result_and_top(
+                "u1",
+                2,
+                "tu-spawn",
+                serde_json::json!("ok"),
+                serde_json::json!({
+                    "status": "teammate_spawned",
+                    "name": "member-1",
+                    "color": "blue",
+                }),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        let e = r
+            .executions
+            .iter()
+            .find(|e| e.tool_use_id == "tu-spawn")
+            .unwrap();
+        let spawn = e
+            .teammate_spawn
+            .as_ref()
+            .expect("teammate_spawn should be Some");
+        assert_eq!(spawn.name, "member-1");
+        assert_eq!(spawn.color.as_deref(), Some("blue"));
+    }
+
+    #[test]
+    fn teammate_spawn_without_color_is_some() {
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "tu-spawn", "Agent"),
+            user_with_result_and_top(
+                "u1",
+                2,
+                "tu-spawn",
+                serde_json::json!("ok"),
+                serde_json::json!({"status": "teammate_spawned", "name": "member-2"}),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        let spawn = r.executions[0].teammate_spawn.as_ref().unwrap();
+        assert_eq!(spawn.name, "member-2");
+        assert!(spawn.color.is_none());
+    }
+
+    #[test]
+    fn other_status_leaves_teammate_spawn_none() {
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "t1", "Bash"),
+            user_with_result_and_top(
+                "u1",
+                2,
+                "t1",
+                serde_json::json!("done"),
+                serde_json::json!({"status": "ok"}),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert!(r.executions[0].teammate_spawn.is_none());
+    }
+
+    #[test]
+    fn missing_top_level_tool_use_result_leaves_none() {
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "t1", "Bash"),
+            user_with_result("u1", 2, "t1", serde_json::json!("done"), false),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert!(r.executions[0].teammate_spawn.is_none());
+    }
+
+    #[test]
+    fn teammate_spawned_status_without_name_is_none() {
+        // status 命中但 name 缺失 → 视为不完整，teammate_spawn = None
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "t1", "Agent"),
+            user_with_result_and_top(
+                "u1",
+                2,
+                "t1",
+                serde_json::json!("ok"),
+                serde_json::json!({"status": "teammate_spawned"}),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert!(r.executions[0].teammate_spawn.is_none());
     }
 }
