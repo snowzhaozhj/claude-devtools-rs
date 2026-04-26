@@ -45,7 +45,7 @@ claude-devtools-rs/
 ### 架构
 
 - `ui/`：Svelte 5 + Vite 前端；`src-tauri/`：Tauri 2 Rust 后端（独立 Cargo.toml，excluded from workspace），通过 path deps 引用 `crates/`
-- Tauri IPC commands 直接调用 `LocalDataApi`（不走 HTTP）。当前 16 个 commands（见 `src-tauri/src/lib.rs` 的 `invoke_handler!`）：session CRUD（list_projects / list_sessions / get_session_detail / search_sessions）、config（get_config / update_config）、通知（get_notifications / mark_notification_read / add_trigger / remove_trigger）、agents（read_agent_configs）、pin/hide（pin_session / unpin_session / hide_session / unhide_session / get_project_session_prefs）
+- Tauri IPC commands 直接调用 `LocalDataApi`（不走 HTTP）。当前 **22 个 commands**（见 `src-tauri/src/lib.rs` 的 `invoke_handler!`，权威清单 = `crates/cdt-api/tests/ipc_contract.rs::EXPECTED_TAURI_COMMANDS`）：session（list_projects / list_sessions / get_session_detail / get_subagent_trace / get_image_asset / get_tool_output / search_sessions）、config（get_config / update_config）、通知（get_notifications / mark_notification_read / delete_notification / mark_all_notifications_read / clear_notifications / add_trigger / remove_trigger）、agents（read_agent_configs）、pin/hide（pin_session / unpin_session / hide_session / unhide_session / get_project_session_prefs）。`list_sessions_sync` 是 `LocalDataApi` 公开方法但不在 invoke_handler（仅供 HTTP server）
 - **Trigger CRUD 走独立方法**：`LocalDataApi::add_trigger()` / `remove_trigger()` 是非 trait 公开方法（独立 `impl` 块），不在 `DataApi` trait 中
 
 ### 布局与组件
@@ -175,6 +175,38 @@ just bootstrap           # npm install --prefix ui（首次）
 "模式"沉淀为 Conventions 的 **IPC payload 瘦身模式**；具体 phase 实现查 `git log --grep="feat(perf)"`。
 回归入口：`cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture` —— 输出各阶段后端耗时 + 字段级 payload breakdown + raw vs IPC OMIT 对比。
 后端探针：`tracing::info!(target: "cdt_api::perf", ...)`；前端：`[perf]` console.info。
+
+## 测试金字塔（frontend-test-infrastructure 沉淀）
+
+四层职责互斥，命中改动类型用对应层（详见 `openspec/specs/frontend-test-pyramid/spec.md`）：
+
+| 层 | 跑命令 | 覆盖 | 何时改 |
+|---|---|---|---|
+| Rust IPC contract test | `cargo test -p cdt-api --test ipc_contract` | 22 个 Tauri command 序列化字段名 / `xxxOmitted` 命名 / enum tag 值 | 改 `LocalDataApi` 公开方法返回字段时 SHALL 同步 |
+| Vitest 单测 + mockIPC | `just test-ui-unit`（= `npm run test:unit --prefix ui`） | 纯函数 / store 状态机 / mockIPC 完整性（22 command + 4 listen） | 加纯函数 / 改 store 时 |
+| Playwright user story | `just test-e2e`（= `npm run test:e2e --prefix ui`） | 浏览器真渲染 + 键鼠事件 + 跨组件状态联动（5 spec/11 用例） | 改 UI 行为 / 跨组件交互时 |
+| 手动 `just dev` | `cargo tauri dev` 桌面窗口 | 真 Tauri IPC + 平台 API（通知 / 托盘 / setBadgeCount） | 发版前 smoke + 涉及 Tauri-only API 时 |
+
+### IPC 字段改动 checklist（硬约束）
+
+改 `LocalDataApi` 公开方法返回字段时，SHALL 同一 PR 内同步：
+- (a) `crates/cdt-api/tests/ipc_contract.rs`：加 / 改对应 contract test，断言新字段 camelCase 形态
+- (b) `ui/src/lib/api.ts`：interface 字段同步
+- (c) `ui/src/lib/__fixtures__/*.ts`：fixture 数据按新形态填
+- (d) 加新 Tauri command 时，同步更新 `EXPECTED_TAURI_COMMANDS`（`cdt-api/tests/ipc_contract.rs`）+ `KNOWN_TAURI_COMMANDS`（`ui/src/lib/tauriMock.ts`）+ `src-tauri/src/lib.rs::invoke_handler!`
+
+### 浏览器调试入口
+
+不开 Tauri 窗口也能调 UI：`npm run dev --prefix ui` 起 vite，浏览器访问 `http://localhost:5173/?mock=1&fixture=multi-project-rich`。fixture 有 `empty` / `single-project` / `multi-project-rich` 三种，详见 `ui/src/lib/__fixtures__/`。**仅 dev 启用**，production bundle 完全不含 mockIPC（vite DCE 验证见 `tauriMock.bundle.test.ts`）。
+
+### 测试基础设施陷阱
+
+- **vitest `globals: false` 是硬约束**：设 `globals: true` 后 Playwright runner 报「test.describe was called in a file imported by configuration file」——vitest 通过 vite plugin 注入全局 `test`/`describe`，污染 Playwright transform 链。`ui/vitest.config.ts` MUST 保持 `globals: false`，vitest 测试显式 `import { test, describe, expect } from 'vitest'`
+- **production bundle DCE 整块包**：消除 mockIPC chunk 必须 `if (import.meta.env.DEV) { ... await import('./lib/tauriMock'); ... }` 整块包，**不能**用 `if (!DEV) return; ...` 早期 return——后者 vite 仍把 dynamic import chunk 输出到 dist。验证：`rm -rf ui/dist && npm run build --prefix ui && ls ui/dist/assets | grep -iE "mock|fixture"` 应空
+- **bundle test 强制 `NODE_ENV=production`**：`tauriMock.bundle.test.ts` 调 `execSync('npm run build', { env: { ...process.env, NODE_ENV: 'production' } })`——否则 vitest 父进程 `NODE_ENV=test` 传染给子进程，vite build 不替换 `import.meta.env.DEV`，DCE 失效。bundle test 默认 skip，CI / 本地手动用 `RUN_BUNDLE_TESTS=1 npm run test:unit --prefix ui`
+- **vite optimizer cache 多 spec 跑后污染 Playwright**：连续 `npx playwright test` 后再跑可能报「test.describe in config」假错；`rm -rf ui/node_modules/.vite ui/node_modules/.cache` 清掉即恢复。CI 上 reuseExistingServer=false 不受影响
+- **Playwright 绕过 UI 直接调 store**：`TabBar` 仅在 `pane.tabs.length > 0` 时渲染——空状态点不到「设置」/「通知」title 按钮。`main.ts` dev-only 暴露 `window.__cdtTest = { openSettingsTab, openNotificationsTab, openTab, setActiveTab }`，spec 用 `page.evaluate(() => window.__cdtTest.openSettingsTab())` 绕过 sidebar virtualization 时序 flake。production bundle 由 `if (DEV)` 块 DCE，不暴露
+- **vitest 测 svelte store 模块级 `$state`**：模块级 `$state` 跨 vitest test 不 reset（每个 test 都拿同一个模块实例）。两种处理：(a) 渐进 assertion 不 reset（推荐，store 单测语义自洽即可）；(b) `vi.resetModules()` + dynamic import 强制重载（复杂，仅在 reset 必要时用）
 
 ## What to do first in a fresh session
 

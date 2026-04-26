@@ -54,9 +54,21 @@ just dev                    # 启动桌面应用 dev 模式
 | `just lint` | clippy 严格模式（workspace + src-tauri） |
 | `just fmt` | rustfmt |
 | `just check-ui` | svelte-check + tsc |
+| `just test-ui-unit` | 前端 vitest 单测（store / mockIPC / IPC contract 镜像） |
+| `just test-ui` | vitest + svelte-check |
+| `just test-e2e` | Playwright user story 测试（启 vite + chromium） |
 | `just spec-validate` | OpenSpec 严格校验 |
-| `just preflight` | fmt + lint + test + spec-validate 一把梭 |
+| `just preflight` | fmt + lint + test + test-ui-unit + spec-validate 一把梭 |
 | `just release-check` | 发布前检查（版本一致 + 工作树干净 + preflight） |
+
+### 浏览器调试 UI（不开 Tauri 窗口）
+
+```bash
+npm run dev --prefix ui
+# 浏览器打开 http://localhost:5173/?mock=1&fixture=multi-project-rich
+```
+
+`?mock=1` 启用 dev-only mockIPC，所有 22 个 Tauri command 走 fixture 数据；fixture 选项见 `ui/src/lib/__fixtures__/`（`empty` / `single-project` / `multi-project-rich`）。production bundle 完全不含 mockIPC（vite DCE 验证）。
 
 ## 项目结构
 
