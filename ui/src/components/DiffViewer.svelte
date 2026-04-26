@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getLanguageFromPath, getFileName, shortenPath } from "../lib/toolHelpers";
+  import { highlightCode } from "../lib/render";
 
   interface Props {
     fileName: string;
@@ -14,8 +15,7 @@
   interface DiffLine {
     type: "added" | "removed" | "context";
     content: string;
-    oldNum: number | null;
-    newNum: number | null;
+    lineNumber: number;
   }
 
   function computeLCS(a: string[], b: string[]): number[][] {
@@ -31,29 +31,37 @@
     return dp;
   }
 
+  /**
+   * 生成 diff 行序列，行号按出现顺序 1..N 自然编号（对齐原版
+   * `claude-devtools/src/renderer/components/chat/viewers/DiffViewer.tsx::generateDiff`，
+   * 单列 gutter 而非 old/new 双列）。
+   */
   function generateDiff(oldText: string, newText: string): DiffLine[] {
     const oldLines = oldText.split("\n");
     const newLines = newText.split("\n");
     const dp = computeLCS(oldLines, newLines);
-    const result: DiffLine[] = [];
+    const temp: DiffLine[] = [];
 
     let i = oldLines.length, j = newLines.length;
-    let oldNum = i, newNum = j;
-
     while (i > 0 || j > 0) {
       if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-        result.push({ type: "context", content: oldLines[i - 1], oldNum: oldNum--, newNum: newNum-- });
+        temp.push({ type: "context", content: oldLines[i - 1], lineNumber: 0 });
         i--; j--;
       } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-        result.push({ type: "added", content: newLines[j - 1], oldNum: null, newNum: newNum-- });
+        temp.push({ type: "added", content: newLines[j - 1], lineNumber: 0 });
         j--;
       } else {
-        result.push({ type: "removed", content: oldLines[i - 1], oldNum: oldNum--, newNum: null });
+        temp.push({ type: "removed", content: oldLines[i - 1], lineNumber: 0 });
         i--;
       }
     }
 
-    return result.reverse();
+    temp.reverse();
+    let lineNumber = 1;
+    for (const line of temp) {
+      line.lineNumber = lineNumber++;
+    }
+    return temp;
   }
 
   const diffLines = $derived(generateDiff(oldString, newString));
@@ -67,6 +75,12 @@
   });
   const language = $derived(getLanguageFromPath(fileName));
   const shortName = $derived(getFileName(fileName));
+
+  /** 单行高亮：空行或纯空白行直接返回不可见占位，避免 hljs 在空字符串上做无谓工作。 */
+  function highlightLine(content: string): string {
+    if (content === "") return "";
+    return highlightCode(content, language);
+  }
 </script>
 
 <div class="diff-viewer">
@@ -94,10 +108,9 @@
           class:diff-line-added={line.type === "added"}
           class:diff-line-removed={line.type === "removed"}
         >
-          <span class="diff-gutter diff-gutter-old">{line.oldNum ?? ""}</span>
-          <span class="diff-gutter diff-gutter-new">{line.newNum ?? ""}</span>
+          <span class="diff-gutter">{line.lineNumber}</span>
           <span class="diff-prefix">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
-          <span class="diff-content">{line.content || " "}</span>
+          <span class="diff-content">{#if line.content === ""}&nbsp;{:else}{@html highlightLine(line.content)}{/if}</span>
         </div>
       {/each}
     </div>
@@ -205,6 +218,10 @@
     padding-right: 8px;
   }
 
-  .diff-line-added .diff-content { color: var(--diff-added-text); }
-  .diff-line-removed .diff-content { color: var(--diff-removed-text); }
+  /* 不强制覆盖 hljs token 颜色——保留语法高亮，行 +/- 由 .diff-line-* 的背景区分 */
+  .diff-content :global(.hljs) {
+    background: transparent;
+    padding: 0;
+    color: inherit;
+  }
 </style>

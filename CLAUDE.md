@@ -99,7 +99,7 @@ claude-devtools-rs/
   - **Slash 双产出 + 紧邻约束**：slash user 消息既要产 `UserChunk`（UI 气泡）又要挂到下一个 `AIChunk.slash_commands`；`instructions` 来自 `is_meta=true + parent_uuid=slash.uuid` 的 follow-up；普通 user 消息产 `UserChunk` 前必须 `pending_slashes.clear()`。TS 原版通过"只看紧邻前 UserGroup"实现，勿回退。
   - **Interruption 分类**：`[Request interrupted by user` 起首的 user 消息是 `MessageCategory::Interruption`（**非** hard noise），产 `SemanticStep::Interruption` 追加到前一 AIChunk。TS 侧曾当 hard noise 过滤，port 已反向修复，勿回退。
   - **Teammate-message 多 block + 嵌入 AIChunk**：`<teammate-message teammate_id="..." ...>body</teammate-message>` 的 user 消息**不**产 `UserChunk`，转化为 N 条（一条 user msg 含多块时各产一条）`TeammateMessage` 注入下一个 flush 出的 `AIChunk.teammate_messages`。**禁止**用朴素 `text.find('>')` + `strip_suffix("</teammate-message>")` 解析——多 block 时会把所有块的 body 串成一段丢失。SHALL 用 `cdt-analyze::team::detection::parse_all_teammate_attrs`（global regex）。回滚开关 `EMBED_TEAMMATES: bool` 在 `chunk::builder` 顶部。
-- **Svelte 5 `$effect` 依赖陷阱**：`$effect` 中读取的所有响应式变量自动成为依赖。若需要在 effect 中读取但不触发重跑的变量，用 `untrack(() => variable)` 包裹。典型场景：session 切换 effect 中清理搜索状态。
+- **Svelte 5 `$effect` / props 顶层初始化的 untrack**：`$effect` 中读取的所有响应式变量自动成为依赖；**模块顶层用 props 取初始值**（如 `let uiState = getTabUIState(tabId)` / `const key = \`session-detail-${tabId}\``）也会触发 `state_referenced_locally` warning。两类场景都用 `import { untrack } from "svelte"` + `untrack(() => variable)` 包裹（前者抑制重跑，后者声明只读初始值）。典型 props 初始化场景：tabId 在组件生命周期内不变（切 tab 走 destroy/recreate），但 Svelte 5 仍要求显式声明。
 - **Svelte 5 `<button>` 嵌套禁止**：`<button>` 内不能嵌套 `<button>`，浏览器会修复 DOM 结构导致 Svelte 假设失效。用 `<span role="button" tabindex="-1">` 替代。
 - **Settings 乐观更新模式**：config 修改不能依赖 `updateConfig` 返回值刷新 UI，应先乐观更新本地 `$state`，异步调 API，失败时回滚（重新 `getConfig`）。
 - **Svelte 5 `@const` 位置限制**：`{@const}` 只能是 `{#if}`/`{:else}`/`{#each}`/`{#snippet}`/`<Component>` 的直接子级，不能放在 `<div>` 等 HTML 元素内。需要在块开头集中声明。
@@ -195,4 +195,4 @@ claude-devtools-rs/
 2. UI 功能迭代分流：**行为契约改动**（IPC 字段 / 后端算法 / 状态判定 / 数据流语义）走 openspec（`/opsx:propose` → `/opsx:apply` → `/opsx:archive`，design.md 必备）；**纯视觉对齐 / 单点样式修复 / Trigger CRUD 等**直接写 + PR。判断不准默认走 openspec
 3. 性能 / 卡顿排查：用"性能回归监测"段的入口，**先看数据再定方向**
 4. 提交前跑 `just preflight` 把 fmt / lint / test / spec-validate 一把梭
-5. **行为契约 / 性能 / 算法 / 并发**类 PR push 之后调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑 codex 异构二审找深逻辑 bug，再走既有 `/code-review` 落 PR comment——两者互补不重复。判断规则与 prompt 模板见 `.claude/rules/codex-usage.md`。**纯样式 / docs / chore** 跳过 codex 二审，只跑 `/code-review` 即可
+5. **行为契约 / 性能 / 算法 / 并发**类 PR push 之后调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑 codex 异构二审找深逻辑 bug；**纯样式 / docs / chore** 跑 `/code-review` 走多 agent + PR comment 落地。两者**二选一**——codex 已审就跳过 `/code-review`（避免重复审同一份代码），反之亦然。判断规则与 prompt 模板见 `.claude/rules/codex-usage.md`

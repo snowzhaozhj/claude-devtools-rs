@@ -20,9 +20,9 @@ claude-devtools-rs 的二审与协同推理优先用 **codex（GPT-5.4 异构推
 - 纯视觉对齐 / 单点样式修复 / Trigger CRUD
 - bump version / docs / chore
 
-### 何时两个都跑
+### 不要重复跑
 
-- 重大 PR（spec 改动 + 行为契约 + 跨多 capability）：**先 codex 二审找深逻辑 bug，再 `/code-review` 走 CLAUDE.md adherence + 落 PR comment**
+codex 与 `/code-review` **二选一**——codex 已审过的 PR 不再跑 `/code-review`（重复审同一份代码意义不大），反之亦然。重大 PR 默认走 codex 二审就够，CLAUDE.md adherence 由 codex 自检 + clippy / svelte-check / preflight 兜底；想要 PR comment 历史可视化的 chore / docs 类才用 `/code-review`。
 
 ### codex 二审的 prompt 模板（用 Agent 调用 codex:codex-rescue）
 
@@ -121,7 +121,7 @@ codex:codex-rescue 调一次 ≈ 几十秒到几分钟 + GPT-5.4 token 消耗。
 
 ## 与既有 /code-review 的关系
 
-- `/code-review`（Anthropic 官方插件）：纯 Claude 多 agent 审 + gh PR comment 落地，强项是 CLAUDE.md adherence + 历史 PR 评论关联
+- `/code-review`（Anthropic 官方插件）：纯 Claude 多 agent 审 + gh PR comment 落地，强项是 PR 评论历史可视化
 - codex 二审：异构推理 + 深逻辑边界，强项是"我自己写的代码"的盲点
 
-**互补不重复**：行为契约 / 性能 PR 走 codex 二审 + 之后 `/code-review` 落 PR comment；纯样式 / docs 只跑 `/code-review` 即可。
+**二选一不重复**：行为契约 / 性能 / 算法 / 并发 PR 走 codex 二审；纯样式 / docs / chore 走 `/code-review`。同一份代码不要两个都跑——codex 异构推理已覆盖 CLAUDE.md adherence + 深逻辑，再跑 `/code-review` 是浪费 token；反之 `/code-review` 跑过的也不必再 codex 二审（除非发现深逻辑可疑点单独 rescue）。
