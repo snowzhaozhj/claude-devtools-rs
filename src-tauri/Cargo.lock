@@ -584,7 +584,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-analyze"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "cdt-core",
  "cdt-parse",
@@ -598,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-api"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -624,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-config"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "cdt-core",
  "cdt-discover",
@@ -643,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-discover"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "cdt-core",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-parse"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "cdt-core",
  "chrono",
@@ -685,7 +685,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-ssh"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "cdt-core",
@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-watch"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "cdt-core",
  "dirs",
@@ -765,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "claude-devtools-tauri"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "cdt-api",
  "cdt-config",
