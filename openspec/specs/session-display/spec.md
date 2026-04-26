@@ -2,8 +2,10 @@
 
 ## Purpose
 
-定义会话详情页面的渲染规则：Chunk 类型渲染、AI 组展开/折叠行为、语义步骤（SemanticStep）和工具执行的展示逻辑。本 spec 聚焦前端渲染行为，数据结构由 `chunk-building` 和 `tool-execution-linking` spec 定义。
+定义会话详情页面（SessionDetail）的渲染规则：Chunk 类型渲染、AI 组展开 / 折叠行为、语义步骤（SemanticStep）与工具执行的展示逻辑、Subagent 卡片彩色标识体系、teammate 消息按时序穿插、Markdown / Mermaid / 代码高亮、Context Panel 双视图、CLAUDE.md 目录树、自动刷新与 Ongoing banner、`OMIT_*` 路径下的懒加载（subagent trace / image asset / tool output / lazy markdown）。本 spec 聚焦前端渲染行为，数据结构由 `chunk-building`、`tool-execution-linking`、`team-coordination-metadata`、`ipc-data-api` spec 定义。
+
 ## Requirements
+
 ### Requirement: 按 Chunk 类型渲染对话流
 
 SessionDetail SHALL 按顺序渲染 chunks 数组中的每个 Chunk。不同 kind 的 Chunk SHALL 使用不同的视觉布局。

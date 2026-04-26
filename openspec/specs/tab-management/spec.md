@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定义桌面应用的多 Tab 管理行为：Tab 生命周期（打开/关闭/切换）、per-tab 状态隔离、session 数据缓存、多 Pane 分屏与 tab 跨 pane 拖拽/resize。Tab 持久化为后续扩展。
+定义桌面应用的多 Tab 管理行为：Tab 生命周期（打开 / 关闭 / 切换）、per-tab UI 状态隔离、session 数据缓存、多 Pane 分屏（最多 4 pane）、tab 跨 pane 拖拽与 pane 宽度 resize。Sidebar 高亮 SHALL 始终跟随 focused pane 的 activeTab。Tab 跨进程持久化留作后续扩展。
 
 ## Requirements
 

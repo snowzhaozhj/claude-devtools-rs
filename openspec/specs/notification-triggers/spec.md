@@ -1,108 +1,110 @@
 # notification-triggers Specification
 
 ## Purpose
-TBD - created by archiving change rust-rewrite-baseline. Update Purpose after archive.
+
+定义工具错误检测、通知 trigger 评估、regex 安全校验、历史回放预览、通知持久化的全流程规则，以及订阅 `file-watching` 的后台 pipeline 在文件追加时自动产 `DetectedError` 并去重持久化的契约。本 capability 由系统托盘 / dock badge / 通知中心 UI 共同消费。
+
 ## Requirements
+
 ### Requirement: Detect errors from tool executions
 
-The system SHALL detect tool execution errors by inspecting `tool_result` blocks for `is_error=true` flag and by matching configured error patterns against tool output content. The `is_error` flag check MUST take precedence over content pattern matching. Each produced `DetectedError` SHALL carry a deterministic id derived from the underlying `(session_id, file_path, line_number, tool_use_id, trigger_id, message)` tuple so that re-detection of the same occurrence yields the same id.
+系统 SHALL 通过检查 `tool_result` 块的 `is_error=true` 标记以及把配置的 error pattern 与工具输出做匹配两种方式来识别工具执行错误。`is_error` 标记检查 MUST 优先于 content pattern 匹配。每条产出的 `DetectedError` SHALL 携带由 `(session_id, file_path, line_number, tool_use_id, trigger_id, message)` 元组派生出的确定性 id，确保对同一次发生的重复检测得到相同 id。
 
 #### Scenario: Tool result flagged `is_error`
-- **WHEN** a `tool_result` block has `is_error=true` and the trigger mode is `error_status` with `require_error=true`
-- **THEN** a `DetectedError` record SHALL be produced with the tool name, message uuid, output preview, trigger id, and trigger color
-- **AND** if the error message matches any ignore pattern, the error SHALL be suppressed
+- **WHEN** 一个 `tool_result` 块带 `is_error=true`，且 trigger 模式为 `error_status` 配 `require_error=true`
+- **THEN** SHALL 产出一条 `DetectedError`，附工具名、消息 uuid、输出预览、trigger id、trigger color
+- **AND** 若错误消息命中任意 ignore pattern，则该错误 SHALL 被压制
 
 #### Scenario: Tool output matches configured error pattern
-- **WHEN** a tool output contains a substring matching a configured regex error pattern and the trigger mode is `content_match`
-- **THEN** a `DetectedError` record SHALL be produced
+- **WHEN** 工具输出含命中已配置 regex error pattern 的子串，且 trigger 模式为 `content_match`
+- **THEN** SHALL 产出一条 `DetectedError`
 
 #### Scenario: Token threshold exceeded
-- **WHEN** a trigger mode is `token_threshold` and a tool execution's estimated token count exceeds the configured threshold
-- **THEN** a `DetectedError` record SHALL be produced for each exceeding tool_use block, with token count details
+- **WHEN** 一个 trigger 模式为 `token_threshold`，且某次工具执行的估算 token 数超过配置阈值
+- **THEN** SHALL 为每个超限的 tool_use 块产出一条 `DetectedError`，附 token 数详情
 
 #### Scenario: Deterministic id across rescans
-- **WHEN** `create_detected_error` is invoked twice with identical parameters (same session, line, tool_use_id, trigger_id, message)
-- **THEN** both invocations SHALL return records whose `id` field is byte-for-byte equal
+- **WHEN** 用相同参数（同一 session、line、tool_use_id、trigger_id、message）两次调用 `create_detected_error`
+- **THEN** 两次返回记录的 `id` 字段 SHALL 字节级相等
 
 ### Requirement: Evaluate notification triggers against new messages
 
-The system SHALL evaluate all user-configured enabled triggers against each newly ingested message and produce `DetectedError` records when triggers match.
+系统 SHALL 对每条新摄入的消息评估所有用户配置的已启用 trigger，命中时产出 `DetectedError` 记录。
 
 #### Scenario: Trigger with literal keyword
-- **WHEN** a trigger is configured with a `content_match` pattern "ERROR" and a new assistant message contains "ERROR"
-- **THEN** a `DetectedError` SHALL be produced carrying the trigger id, session id, and matched preview
+- **WHEN** 一个 trigger 配 `content_match` 模式 `"ERROR"`，且新到达的 assistant 消息含 `"ERROR"`
+- **THEN** SHALL 产出一条 `DetectedError`，附 trigger id、session id、命中预览
 
 #### Scenario: Trigger with regex pattern
-- **WHEN** a trigger is configured with a regex pattern
-- **THEN** the system SHALL apply the regex (case-insensitive) to the message content and produce a `DetectedError` on match
+- **WHEN** 一个 trigger 配 regex 模式
+- **THEN** 系统 SHALL 对消息内容应用该 regex（大小写不敏感），命中时产出 `DetectedError`
 
 #### Scenario: Trigger scoped to specific tool names
-- **WHEN** a trigger specifies `tool_name = "Bash"` and a matching Bash `tool_result` appears
-- **THEN** the `DetectedError` SHALL fire; matches in other tools SHALL NOT fire this trigger
+- **WHEN** 一个 trigger 指定 `tool_name = "Bash"`，且出现匹配的 Bash `tool_result`
+- **THEN** `DetectedError` SHALL 触发；其它工具的命中 SHALL NOT 触发该 trigger
 
 #### Scenario: Ignore patterns suppress matches
-- **WHEN** a trigger matches but the matched content also matches one of the trigger's `ignore_patterns`
-- **THEN** the match SHALL be suppressed and no `DetectedError` produced
+- **WHEN** trigger 命中但命中内容也匹配该 trigger 的 `ignore_patterns` 之一
+- **THEN** 该匹配 SHALL 被压制，不产 `DetectedError`
 
 ### Requirement: Validate regex patterns safely
 
-The system SHALL validate user-provided regex patterns before use, rejecting patterns known to cause catastrophic backtracking within a fixed time budget.
+系统 SHALL 在使用前校验用户提交的 regex 模式，对在固定时间预算内已知会引发 catastrophic backtracking 的模式予以拒绝。
 
 #### Scenario: Pathological regex submitted
-- **WHEN** a user submits a regex that exceeds the validation time budget on a test string
-- **THEN** the system SHALL reject the regex and return a validation error, not apply it
+- **WHEN** 用户提交的 regex 在测试字符串上超过校验时间预算
+- **THEN** 系统 SHALL 拒绝该 regex 并返回 validation error，不应用它
 
 #### Scenario: Regex cache bounded
-- **WHEN** more than 500 unique regex patterns are compiled
-- **THEN** the oldest cached entry SHALL be evicted (LRU policy)
+- **WHEN** 编译过的不同 regex 模式数超过 500
+- **THEN** 最旧的缓存条目 SHALL 被淘汰（LRU 策略）
 
 ### Requirement: Test triggers against historical sessions
 
-The system SHALL let a caller test a trigger configuration against existing session data and return the list of historical messages that would have matched, without persisting any notification.
+系统 SHALL 允许调用方拿一个 trigger 配置在已有 session 数据上做回放测试，返回历史上会被命中的消息列表，且不持久化任何通知。
 
 #### Scenario: Preview a new trigger
-- **WHEN** a user previews a new trigger against the last 30 days of sessions
-- **THEN** the system SHALL return all would-have-matched messages with session id, timestamp, and preview
+- **WHEN** 用户对一个新 trigger 在过去 30 天的 session 上做预览
+- **THEN** 系统 SHALL 返回所有 would-have-matched 消息，附 session id、timestamp、命中预览
 
 ### Requirement: Persist and expose notifications
 
-The system SHALL persist emitted notifications to `~/.claude/claude-devtools-notifications.json` with read/unread state and expose them with paging and mark-as-read operations. The persistence layer SHALL deduplicate incoming notifications by their `id`, treating re-submission of an existing id as a no-op that does not change stored state or counts.
+系统 SHALL 把已触发的通知持久化到 `~/.claude/claude-devtools-notifications.json`，附读 / 未读状态，并支持分页与 mark-as-read 操作。持久化层 SHALL 按 `id` 去重：同 id 的二次写入视为 no-op，不改动已存状态与计数。
 
 #### Scenario: Mark notification as read
-- **WHEN** a caller marks a notification id as read
-- **THEN** the notification state SHALL update, the unread count SHALL decrement, and the new state SHALL survive process restarts
+- **WHEN** 调用方把某 notification id 标为已读
+- **THEN** 通知状态 SHALL 更新、未读数 SHALL 减 1，新状态 SHALL 跨进程重启保留
 
 #### Scenario: Auto-prune on startup
-- **WHEN** the stored notification count exceeds 100
-- **THEN** the system SHALL remove the oldest notifications to bring the count to 100
+- **WHEN** 已存通知数超过 100
+- **THEN** 系统 SHALL 删除最旧的若干条，使总数不超过 100
 
 #### Scenario: Paged retrieval
-- **WHEN** a caller requests notifications with limit and offset
-- **THEN** the system SHALL return the requested page, total count, unread count, and `has_more` flag
+- **WHEN** 调用方按 limit 与 offset 请求通知
+- **THEN** 系统 SHALL 返回该页通知 + total 数 + 未读数 + `has_more` 标记
 
 #### Scenario: Same-id submission is idempotent
-- **WHEN** `add_notification` is called twice with `DetectedError` records sharing the same deterministic `id`
-- **THEN** the store SHALL retain exactly one entry, the unread count SHALL increase by at most one, and the second call SHALL return a signal (e.g. `Ok(false)`) indicating the write was a duplicate
+- **WHEN** `add_notification` 用两条同 `id` 的 `DetectedError` 各调用一次
+- **THEN** 存储 SHALL 恰好保留一条，未读数 SHALL 至多增加 1，第二次调用 SHALL 返回表示重复写入的信号（例如 `Ok(false)`）
 
 ### Requirement: Automatic background notification pipeline
 
-The system SHALL run a background pipeline that subscribes to `file-watching` change events, re-parses the affected session file, evaluates all enabled triggers against the parsed messages, and persists newly detected errors through `NotificationManager` without requiring any UI action.
+系统 SHALL 运行一个后台 pipeline：订阅 `file-watching` 的变更事件、重新解析受影响的 session 文件、对解析得到的消息评估所有已启用 trigger、把新检测到的 `DetectedError` 经 `NotificationManager` 持久化，全程 SHALL NOT 依赖任何 UI 操作。
 
 #### Scenario: New JSONL line with tool error triggers detection
-- **WHEN** a `.jsonl` session file is appended with a new assistant message containing a `tool_result` with `is_error=true`
-- **AND** the user has an enabled `error_status` trigger with `require_error=true`
-- **THEN** the pipeline SHALL produce a `DetectedError`, persist it via `NotificationManager::add_notification`, and publish it on the pipeline's `DetectedError` broadcast channel
+- **WHEN** 一个 `.jsonl` session 文件追加了一条新 assistant 消息，含 `is_error=true` 的 `tool_result`
+- **AND** 用户启用了 `error_status` trigger 配 `require_error=true`
+- **THEN** pipeline SHALL 产出一条 `DetectedError`、经 `NotificationManager::add_notification` 持久化、并把它发到 pipeline 的 `DetectedError` broadcast 通道
 
 #### Scenario: Duplicate detection across rescans is suppressed
-- **WHEN** the same session file change triggers detection more than once (e.g. because of another unrelated append causing a re-scan)
-- **AND** the `DetectedError` computed for the same `(session_id, line_number, tool_use_id, trigger_id, message)` tuple is produced again
-- **THEN** `NotificationManager` SHALL recognize the existing id and skip persistence, and the pipeline SHALL NOT re-broadcast the duplicate on the `DetectedError` channel
+- **WHEN** 同一次 session 文件变更触发了多次检测（例如另一次无关 append 引发的重扫）
+- **AND** 同一 `(session_id, line_number, tool_use_id, trigger_id, message)` 元组对应的 `DetectedError` 又被产出一次
+- **THEN** `NotificationManager` SHALL 识别已存在的 id 并跳过持久化，pipeline SHALL NOT 在 `DetectedError` 通道上重发该重复事件
 
 #### Scenario: Deleted file events are ignored
-- **WHEN** the `FileChangeEvent` carries `deleted: true`
-- **THEN** the pipeline SHALL NOT attempt to parse the missing file and SHALL NOT produce any `DetectedError`
+- **WHEN** `FileChangeEvent` 携带 `deleted: true`
+- **THEN** pipeline SHALL NOT 尝试解析已不存在的文件，SHALL NOT 产出任何 `DetectedError`
 
 #### Scenario: Empty trigger set is a no-op
-- **WHEN** the user has no enabled triggers configured
-- **THEN** the pipeline SHALL receive file change events but SHALL NOT call `detect_errors` nor write any notification
-
+- **WHEN** 用户没有任何已启用 trigger
+- **THEN** pipeline SHALL 仍接收 file change 事件，但 SHALL NOT 调用 `detect_errors`，SHALL NOT 写入通知

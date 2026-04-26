@@ -1,103 +1,106 @@
 # configuration-management Specification
 
 ## Purpose
-TBD - created by archiving change rust-rewrite-baseline. Update Purpose after archive.
+
+管理应用配置文件 `~/.claude/claude-devtools-config.json` 的持久化、加载、字段更新与校验，扫描八种作用域下的 CLAUDE.md 文件并估算 token，对会话内 `@path` mention 引用做安全解析（防越权 / 防符号链接逃逸 / 拒绝敏感文件）。本 capability 由前端设置面板和 context-tracking 共同消费。
+
 ## Requirements
+
 ### Requirement: Persist application configuration
 
-The system SHALL persist application configuration (triggers, UI preferences, pinned sessions, HTTP server port, SSH hosts, feature toggles) to a user-scoped configuration file (`~/.claude/claude-devtools-config.json`) and load it on startup.
+系统 SHALL 把应用配置（triggers、UI 偏好、pinned sessions、HTTP 端口、SSH hosts、feature toggles）持久化到用户级配置文件 `~/.claude/claude-devtools-config.json`，并在启动时加载。
 
 #### Scenario: First launch with no config file
-- **WHEN** the configuration file does not exist on startup
-- **THEN** the system SHALL materialize a default configuration, persist it, and continue
+- **WHEN** 启动时配置文件不存在
+- **THEN** 系统 SHALL 物化默认配置、持久化、继续运行
 
 #### Scenario: Corrupted config file
-- **WHEN** the configuration file exists but cannot be parsed
-- **THEN** the system SHALL rename the corrupted file to `<path>.bak.<unix_timestamp_ms>`, log a warning with the backup path, load defaults, persist the fresh config, and continue
+- **WHEN** 配置文件存在但无法解析
+- **THEN** 系统 SHALL 把损坏文件重命名为 `<path>.bak.<unix_timestamp_ms>`，记录带备份路径的 warn 日志，加载默认配置，持久化新配置，继续运行
 
 #### Scenario: Partial config with missing fields
-- **WHEN** the configuration file parses successfully but is missing some fields
-- **THEN** the system SHALL merge with defaults to fill missing fields, preserving existing values
+- **WHEN** 配置文件解析成功但缺少部分字段
+- **THEN** 系统 SHALL 与默认配置合并以补齐缺失字段，保留已有值
 
 ### Requirement: Expose config read and update operations
 
-The system SHALL expose operations to read the current configuration, update a field, add a trigger, remove a trigger, pin/unpin a session, and open the config file in an external editor.
+系统 SHALL 暴露读取当前配置、更新单个字段、增删 trigger、pin/unpin session、用外部编辑器打开配置文件这些操作。
 
 #### Scenario: Update a single config field
-- **WHEN** a caller updates the HTTP port to a new value
-- **THEN** the new value SHALL be persisted and returned on the next read
+- **WHEN** 调用方把 HTTP 端口更新为新值
+- **THEN** 新值 SHALL 被持久化，下次读取时返回该值
 
 #### Scenario: Add a new trigger
-- **WHEN** a caller adds a trigger via the add-trigger operation
-- **THEN** the trigger SHALL be persisted with a generated id and appear in subsequent reads
+- **WHEN** 调用方通过 add-trigger 操作新增一个 trigger
+- **THEN** 该 trigger SHALL 被持久化（携带生成的 id），后续读取可见
 
 ### Requirement: Read CLAUDE.md files
 
-The system SHALL read CLAUDE.md files from eight scopes and return each file's path, existence flag, character count, and estimated token count (`char_count / 4`).
+系统 SHALL 从八种作用域读取 CLAUDE.md 文件，每个文件返回路径、是否存在标记、字符数与估算 token 数（`char_count / 4`）。
 
 #### Scenario: All eight scopes enumerated
-- **WHEN** a caller requests CLAUDE.md files for a given project root
-- **THEN** the system SHALL check these scopes in order:
-  1. `enterprise` — platform-specific path (macOS: `/Library/Application Support/ClaudeCode/CLAUDE.md`)
-  2. `user` — `<claude_base>/CLAUDE.md`
-  3. `project` — `<project_root>/CLAUDE.md`
-  4. `project-alt` — `<project_root>/.claude/CLAUDE.md`
-  5. `project-rules` — `<project_root>/.claude/rules/**/*.md`（递归收集，合并统计）
-  6. `project-local` — `<project_root>/CLAUDE.local.md`
-  7. `user-rules` — `<claude_base>/rules/**/*.md`（递归收集，合并统计）
-  8. `auto-memory` — `<claude_base>/projects/<encoded_project_root>/memory/MEMORY.md`（仅前 200 行）
+- **WHEN** 调用方请求指定 project root 的 CLAUDE.md 文件
+- **THEN** 系统 SHALL 按以下顺序检查八个作用域：
+  1. `enterprise` —— 平台特定路径（macOS：`/Library/Application Support/ClaudeCode/CLAUDE.md`）
+  2. `user` —— `<claude_base>/CLAUDE.md`
+  3. `project` —— `<project_root>/CLAUDE.md`
+  4. `project-alt` —— `<project_root>/.claude/CLAUDE.md`
+  5. `project-rules` —— `<project_root>/.claude/rules/**/*.md`（递归收集，合并统计）
+  6. `project-local` —— `<project_root>/CLAUDE.local.md`
+  7. `user-rules` —— `<claude_base>/rules/**/*.md`（递归收集，合并统计）
+  8. `auto-memory` —— `<claude_base>/projects/<encoded_project_root>/memory/MEMORY.md`（仅前 200 行）
 
 #### Scenario: Only global CLAUDE.md exists
-- **WHEN** the user has a global CLAUDE.md but the project has none
-- **THEN** the result SHALL contain one entry with scope `user` marked as exists, and all other scopes marked as not exists
+- **WHEN** 用户有全局 CLAUDE.md 但项目没有
+- **THEN** 结果 SHALL 含一个 `user` 作用域条目标记为存在，其它作用域全部标记为不存在
 
 #### Scenario: All three original scopes present
-- **WHEN** global, project, and cwd CLAUDE.md all exist
-- **THEN** the result SHALL contain entries for `user`, `project`, and `project-alt` (if present) all marked as exists
+- **WHEN** global、project、cwd 三处 CLAUDE.md 同时存在
+- **THEN** 结果 SHALL 包含 `user`、`project`、`project-alt`（若存在）三个条目，全部标记为存在
 
 #### Scenario: File not readable
-- **WHEN** a CLAUDE.md file exists but cannot be read (permission denied)
-- **THEN** the system SHALL return that scope with `exists: false` and zero counts, and log the error
+- **WHEN** CLAUDE.md 存在但无法读取（例如 permission denied）
+- **THEN** 系统 SHALL 该作用域返回 `exists: false` 并 zero counts，记录错误日志
 
 ### Requirement: Resolve and read mentioned files safely
 
-The system SHALL resolve `@path` mentions relative to a session's cwd and read file contents, rejecting paths that escape the allowed roots.
+系统 SHALL 把 `@path` mention 解析为相对于当前 session cwd 的路径并读取文件内容，拒绝逃逸到允许根之外的路径。
 
 #### Scenario: Valid in-project mention
-- **WHEN** a mention `@src/foo.ts` resolves inside the session's project root
-- **THEN** the file SHALL be read and returned with its resolved absolute path, character count, and estimated token count
+- **WHEN** mention `@src/foo.ts` 解析后位于 session 的 project root 内
+- **THEN** 文件 SHALL 被读取并返回，附带绝对路径、字符数、估算 token 数
 
 #### Scenario: Path traversal attempt
-- **WHEN** a mention resolves outside the allowed roots (e.g., `@../../etc/passwd`)
-- **THEN** the read SHALL be rejected with a validation error
+- **WHEN** mention 解析到允许根之外（例如 `@../../etc/passwd`）
+- **THEN** 读取 SHALL 被拒绝并返回 validation error
 
 #### Scenario: Sensitive file blocked
-- **WHEN** a mention resolves to a path matching a sensitive file pattern (`.ssh/`, `.env`, `.aws/`, private keys, etc.)
-- **THEN** the read SHALL be rejected even if within allowed directories
+- **WHEN** mention 解析后命中敏感文件模式（`.ssh/`、`.env`、`.aws/`、私钥等）
+- **THEN** 读取 SHALL 被拒绝，即使路径在允许目录内
 
 #### Scenario: Symlink escape
-- **WHEN** a mention resolves within the project root but the symlink target is outside
-- **THEN** the system SHALL canonicalize the path and reject if the real path is outside allowed roots
+- **WHEN** mention 解析路径在 project root 内但符号链接目标在外部
+- **THEN** 系统 SHALL canonicalize 路径，若真实路径在允许根外则拒绝
 
 #### Scenario: Token limit exceeded
-- **WHEN** a mentioned file's estimated token count exceeds the caller-specified maximum
-- **THEN** the read SHALL return null/None
+- **WHEN** 被引用文件估算 token 数超过调用方指定的最大值
+- **THEN** 读取 SHALL 返回 `null` / `None`
 
 ### Requirement: Validate configuration fields before persistence
 
-The system SHALL validate incoming configuration updates (e.g., HTTP port range, regex patterns, file paths) and reject invalid updates with a descriptive error rather than persisting bad state.
+系统 SHALL 对传入的配置更新做校验（HTTP 端口范围、regex 模式、文件路径等），非法值 SHALL 被拒绝并附错误说明，不写入坏状态。
 
 #### Scenario: Invalid port number
-- **WHEN** a caller attempts to set the HTTP port to a value outside 1024–65535
-- **THEN** the update SHALL be rejected with a validation error and the stored value SHALL remain unchanged
+- **WHEN** 调用方把 HTTP 端口设为 1024–65535 之外的值
+- **THEN** 更新 SHALL 被拒绝并返回 validation error，已存储值 SHALL 保持不变
 
 #### Scenario: Invalid regex pattern
-- **WHEN** a caller provides a regex pattern longer than 100 characters or containing dangerous constructs (nested quantifiers, etc.)
-- **THEN** the pattern SHALL be rejected with a descriptive error
+- **WHEN** 调用方提交长度超过 100 字符的 regex 或含危险结构（嵌套量词等）
+- **THEN** 该 regex SHALL 被拒绝并返回错误说明
 
 #### Scenario: Invalid `claude_root_path`
-- **WHEN** a caller sets `claude_root_path` to a non-absolute or empty path
-- **THEN** the value SHALL be normalized to `None`
+- **WHEN** 调用方把 `claude_root_path` 设为非绝对或空路径
+- **THEN** 该值 SHALL 被规范化为 `None`
 
 ### Requirement: Update notifications SHALL accept full triggers replacement
 
@@ -106,7 +109,7 @@ The system SHALL validate incoming configuration updates (e.g., HTTP port range,
 #### Scenario: triggers 字段被整体替换并落盘
 
 - **WHEN** 调用方向 `update_config` IPC 发送 `section="notifications", data={ "triggers": [<新数组>] }`
-- **THEN** `ConfigManager` SHALL 将 `config.notifications.triggers` 替换为该数组、同步 `TriggerManager::triggers`、写入磁盘
+- **THEN** `ConfigManager` SHALL 把 `config.notifications.triggers` 替换为该数组、同步 `TriggerManager::triggers`、写入磁盘
 - **AND** 下一次调用 `get_enabled_triggers()` SHALL 返回新数组中 `enabled=true` 的子集
 
 #### Scenario: 非法 trigger 拒绝整组写入
@@ -114,11 +117,10 @@ The system SHALL validate incoming configuration updates (e.g., HTTP port range,
 - **WHEN** 新 triggers 数组中任意一条经 `validate_trigger` 返回 `valid=false`
 - **THEN** `update_notifications` SHALL 返回 `ConfigError::validation` 携带该 trigger id 与失败原因
 - **AND** `self.config.notifications.triggers` 与 `TriggerManager::triggers` SHALL 保持修改前状态（不部分写入）
-- **AND** 磁盘文件 SHALL 不被更新
+- **AND** 磁盘文件 SHALL NOT 被更新
 
 #### Scenario: 未知通知键发出 warn 但不报错
 
-- **WHEN** payload 中含除 `enabled / soundEnabled / includeSubagentErrors / snoozeMinutes / triggers` 外的其它键（例如 `fooBar`）
+- **WHEN** payload 中含除 `enabled` / `soundEnabled` / `includeSubagentErrors` / `snoozeMinutes` / `triggers` 之外的其它键（例如 `fooBar`）
 - **THEN** 该键 SHALL 被忽略，操作仍返回成功
 - **AND** 日志 SHALL 以 `warn` 级别包含被忽略的键名
-

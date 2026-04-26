@@ -2,8 +2,10 @@
 
 ## Purpose
 
-定义 Sidebar 的导航行为：项目选择、会话列表展示（日期分组/排序/过滤）、与 Tab 系统的联动、会话 Pin/Hide、右键菜单、宽度拖拽调整。多选/批量操作为后续扩展。
+定义 Sidebar 的导航行为：项目选择、会话列表展示（日期分组 / 排序 / 过滤）、与 Tab 系统的联动、会话 Pin / Hide、右键菜单、宽度拖拽调整。同时覆盖骨架快速渲染、`session-metadata-update` 增量 patch、虚拟滚动等性能机制。多选 / 批量操作留作后续扩展。
+
 ## Requirements
+
 ### Requirement: 项目选择
 
 Sidebar 顶部 SHALL 提供项目选择器。选择项目后 SHALL 自动加载该项目的会话列表。

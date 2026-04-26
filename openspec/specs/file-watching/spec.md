@@ -1,57 +1,59 @@
 # file-watching Specification
 
 ## Purpose
-TBD - created by archiving change rust-rewrite-baseline. Update Purpose after archive.
+
+监视 `~/.claude/projects/` 与 `~/.claude/todos/` 文件系统变化，以 debounce 后的 broadcast 通道把 `file-change` / `todo-change` 事件分发给多类订阅者（Tauri IPC 层、HTTP SSE、in-process 通知 pipeline），使前端 UI 与后台服务能够实时感知会话与待办变更。
+
 ## Requirements
+
 ### Requirement: Watch Claude projects directory for session changes
 
-The system SHALL watch `~/.claude/projects/` recursively and emit change events when `.jsonl` session files are created, modified, or deleted.
+系统 SHALL 递归监视 `~/.claude/projects/`，在 `.jsonl` 会话文件创建、修改、删除时发出变更事件。
 
 #### Scenario: New session file created
-- **WHEN** a new `.jsonl` file appears in a watched project directory
-- **THEN** subscribers SHALL receive a `file-change` event carrying the project id and session id within the debounce window
+- **WHEN** 一个新的 `.jsonl` 文件出现在被监视的项目目录下
+- **THEN** 订阅者 SHALL 在 debounce 窗口内收到一条 `file-change` 事件，携带 project id 与 session id
 
 #### Scenario: Existing session file appended
-- **WHEN** an existing `.jsonl` file is appended
-- **THEN** subscribers SHALL receive a `file-change` event for that session
+- **WHEN** 已存在的 `.jsonl` 文件被追加内容
+- **THEN** 订阅者 SHALL 收到对应 session 的 `file-change` 事件
 
 #### Scenario: Session file deleted
-- **WHEN** a `.jsonl` file is deleted
-- **THEN** subscribers SHALL receive a `file-change` event with a delete indicator
+- **WHEN** `.jsonl` 文件被删除
+- **THEN** 订阅者 SHALL 收到带删除指示的 `file-change` 事件
 
 ### Requirement: Watch Claude todos directory
 
-The system SHALL watch `~/.claude/todos/` for `.json` file changes and emit `todo-change` events with the affected session id.
+系统 SHALL 监视 `~/.claude/todos/` 下 `.json` 文件变化，并发出携带 session id 的 `todo-change` 事件。
 
 #### Scenario: Todo file updated
-- **WHEN** `~/.claude/todos/<sessionId>.json` is updated
-- **THEN** subscribers SHALL receive a `todo-change` event carrying the session id
+- **WHEN** `~/.claude/todos/<sessionId>.json` 被更新
+- **THEN** 订阅者 SHALL 收到携带该 session id 的 `todo-change` 事件
 
 ### Requirement: Debounce rapid file events
 
-The system SHALL debounce rapid successive change events on the same file within a 100ms window, emitting a single coalesced event.
+系统 SHALL 把同一文件在 100ms 窗口内的连续变更事件合并为一条事件后发出。
 
 #### Scenario: Burst of writes
-- **WHEN** a file receives 5 write events within 30ms
-- **THEN** subscribers SHALL receive exactly one `file-change` event for that file after the debounce window
+- **WHEN** 一个文件在 30ms 内发生 5 次写事件
+- **THEN** 订阅者 SHALL 在 debounce 窗口结束后**恰好**收到一条 `file-change` 事件
 
 ### Requirement: Survive transient filesystem errors
 
-The system SHALL log and ignore transient errors (permission denied, temporary lock) without terminating the watcher.
+系统 SHALL 记录并忽略瞬时错误（permission denied、临时锁占用），不终止 watcher。
 
 #### Scenario: Temporary permission error on one file
-- **WHEN** the watcher encounters a permission error while stat-ing one file
-- **THEN** the watcher SHALL log the error and continue watching other files
+- **WHEN** watcher 对单个文件 stat 时遇到权限错误
+- **THEN** watcher SHALL 记录错误并继续监视其他文件
 
 ### Requirement: Broadcast events to multiple subscribers
 
-The system SHALL deliver each emitted event to all active subscribers (Electron renderer via IPC, HTTP clients via SSE, and in-process background services such as the notification pipeline) without duplication.
+系统 SHALL 把每条已发出的事件无差别地分发给所有当前活跃的订阅者（Electron renderer 经 IPC、HTTP 客户端经 SSE、in-process 后台服务如通知 pipeline），不重复也不遗漏。
 
 #### Scenario: Two subscribers present
-- **WHEN** one file change triggers an event and two subscribers are active
-- **THEN** both subscribers SHALL receive the event exactly once each
+- **WHEN** 一次文件变更触发事件且当前有两个订阅者
+- **THEN** 两个订阅者 SHALL 各自**恰好**收到一次该事件
 
 #### Scenario: Notification pipeline subscribes alongside IPC consumers
-- **WHEN** the notification pipeline calls `subscribe_files()` at startup and the Tauri IPC layer also holds a subscription
-- **THEN** both subscribers SHALL independently receive every debounced `FileChangeEvent`, and neither subscriber's lag SHALL delay delivery to the other
-
+- **WHEN** 通知 pipeline 启动时调用 `subscribe_files()`，同时 Tauri IPC 层也持有一个订阅
+- **THEN** 两个订阅者 SHALL 独立收到每一次 debounce 后的 `FileChangeEvent`，且任一订阅者的滞后 SHALL NOT 影响另一订阅者的投递
