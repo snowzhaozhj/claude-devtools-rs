@@ -2,42 +2,29 @@ schema: spec-driven
 
 context: |
   claude-devtools-rs 是 TypeScript Electron 应用 claude-devtools 的 Rust 端口，
-  当前形态为 Tauri 2 + Svelte 5 桌面应用。13 个数据层 capability + 6 个 UI
-  行为 spec 已全部实现，首个 release v0.1.0 已发，当前 v0.1.1。
+  现为 Tauri + Svelte 桌面应用。TS 原版位于同级目录 ../claude-devtools，仅作
+  历史参考；所有行为契约以本仓库 `openspec/specs/` 下的主 spec 为准。
 
-  TS 原版位于同级目录 ../claude-devtools，仅作历史参考；所有行为契约以本仓库
-  openspec/specs/ 下的主 spec 为准。已知的 TS 实现 bug 见 openspec/followups.md
-  —— 实现时按 spec 走，**不**复刻 TS 的 bug。
+  已知的 TS 实现 bug 见 `openspec/followups.md` —— 实现时按 spec 走，**不**
+  复刻 TS 的 bug；若某个 change 在修这类 bug，在 proposal 与 tasks 中显式点名。
 
-  当前阶段以"修订已有 capability"为主：IPC 字段语义 / 后端算法 / 状态判定 /
-  数据 omit 策略 / Tauri command 协议等行为契约级改动 SHALL 走 change delta
-  流程（`/opsx:propose` → `/opsx:apply` → `/opsx:archive`）。新增全新 UI
-  行为 spec 可直接写入 `openspec/specs/<name>/spec.md`，不需 change delta。
-
-  技术栈：Rust 1.85+（edition 2024），workspace 9 个 crate；tokio（仅在 I/O
-  叶子 crate）、serde、thiserror、tracing；前端 Svelte 5 + Vite + Tauri 2。
-
-  语言：简体中文。所有 OpenSpec 产出物（proposal / design / tasks /
-  spec delta / 主 spec Purpose 段）一律用简体中文撰写；SHALL / MUST / WHEN /
-  THEN / AND / OR / NOT 等 RFC2119 关键词、代码标识符、文件路径、技术术语
-  （IPC / JSONL / Tauri 等）保留英文并用 backtick 引用。
+  语言：简体中文。所有 OpenSpec 产出物（proposal / design / tasks / spec delta
+  / 主 spec Purpose 段）一律用简体中文撰写；SHALL / MUST / WHEN / THEN /
+  AND / OR / NOT 等 RFC2119 关键词、代码标识符、文件路径、技术术语保留英文
+  并用 backtick 引用。
 
 rules:
   proposal:
     - 一个 change 聚焦单一 capability（或紧耦合的少量 capability 组）
-    - 若该 change 修复了 followups.md 中的 impl-bug，在 proposal 与 tasks 中显式点名
     - design.md 不是可选项——任何 change 都需 D1 / D2 / ... 决策记录，让 reviewer 能从设计层评估
   specs:
     - Requirement / Scenario 的描述使用简体中文；RFC2119 关键词保留英文
     - 代码标识符、文件路径、技术术语用 backtick 引用保留英文
-    - Requirement body 第一段必须含 SHALL 或 MUST，否则 `openspec validate --strict` 会拒
-    - 每个 Requirement 至少含一个 Scenario，Scenario 标题用恰好 4 个 #
-    - 禁止直接 Edit `openspec/specs/<cap>/spec.md`——主 spec 是 archive 的产出物，不是输入源；修改已有 spec 走 `openspec/changes/<slug>/specs/<cap>/spec.md` delta
+    - 禁止直接 Edit `openspec/specs/<cap>/spec.md`——主 spec 是 archive 的产出物，不是输入源；任何修改走 `openspec/changes/<slug>/specs/<cap>/spec.md` delta
     - 主 spec 的 `## Purpose` 段必须是有意义的中文摘要（说明 capability 职责 + 数据流位置），不允许残留 `TBD - created by archiving change ...` 占位
   tasks:
     - tasks 按 capability 对应的 owning crate 分组（capability → crate 映射见 CLAUDE.md）
-    - 完成阶段跑 `just preflight`（fmt + lint + test + spec-validate）作为提交前一把梭
   archive:
     - archive 内的 proposal / design / tasks / spec delta 全部冻结，禁止事后 Edit；如需修订同一 capability 行为，开新 change 走 delta
     - 引用一个已归档 change 时只写 `change <slug>`，不写 `archive YYYY-MM-DD-<slug>` 也不写 archive 路径——日期前缀只是文件系统位置，不是引用单位
-    - archive 多个修改同一 Requirement 的 change 时按创建顺序（先老后新）执行，避免后 archive 的 change 用旧 delta body 覆盖新内容
+    - 多 change 修改同一 Requirement 时按创建顺序（先老后新）archive，避免后 archive 的 change 用旧 delta body 覆盖新内容
