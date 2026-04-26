@@ -800,6 +800,84 @@ async fn get_config_returns_camelcase_top_level_sections() {
 }
 
 #[tokio::test]
+async fn get_config_display_section_exposes_font_fields_camelcase() {
+    let (api, _tmp) = setup_api().await;
+    let config = api.get_config().await.unwrap();
+    let display = &config["display"];
+    assert!(display.is_object(), "display SHALL 为 object");
+    // 默认值：fontSans / fontMono 都是 None → 序列化后 skip（与 skipped_update_version 一致）
+    // 但 update 后 None 显式存在；这里只断言 camelCase 字段名永不出现 snake_case
+    assert!(
+        display.get("font_sans").is_none(),
+        "MUST 不出现 snake_case font_sans"
+    );
+    assert!(
+        display.get("font_mono").is_none(),
+        "MUST 不出现 snake_case font_mono"
+    );
+}
+
+#[tokio::test]
+async fn update_config_display_accepts_null_to_clear_font_sans() {
+    let (api, _tmp) = setup_api().await;
+    let req = ConfigUpdateRequest {
+        section: "display".into(),
+        data: json!({ "fontSans": null }),
+    };
+    api.update_config(&req)
+        .await
+        .expect("display fontSans=null SHALL 反序列化成功");
+
+    let cfg = api.get_config().await.unwrap();
+    // fontSans 为 None 时 skip_serializing → 字段不在响应中即等价于 null
+    assert!(cfg["display"].get("fontSans").is_none());
+}
+
+#[tokio::test]
+async fn update_config_display_accepts_custom_font_mono_string() {
+    let (api, _tmp) = setup_api().await;
+    let custom = "\"Fira Code\", monospace";
+    let req = ConfigUpdateRequest {
+        section: "display".into(),
+        data: json!({ "fontMono": custom }),
+    };
+    api.update_config(&req)
+        .await
+        .expect("display fontMono 字符串 SHALL 反序列化成功");
+
+    let cfg = api.get_config().await.unwrap();
+    assert_eq!(cfg["display"]["fontMono"], json!(custom));
+}
+
+#[tokio::test]
+async fn update_config_display_whitespace_font_normalizes_to_null() {
+    let (api, _tmp) = setup_api().await;
+    // 先设非空值
+    let set_req = ConfigUpdateRequest {
+        section: "display".into(),
+        data: json!({ "fontSans": "Arial" }),
+    };
+    api.update_config(&set_req).await.unwrap();
+    assert_eq!(
+        api.get_config().await.unwrap()["display"]["fontSans"],
+        json!("Arial")
+    );
+
+    // 再设全空白
+    let clear_req = ConfigUpdateRequest {
+        section: "display".into(),
+        data: json!({ "fontSans": "   " }),
+    };
+    api.update_config(&clear_req).await.unwrap();
+
+    let cfg = api.get_config().await.unwrap();
+    assert!(
+        cfg["display"].get("fontSans").is_none(),
+        "全空白 SHALL 归一化为 None（序列化后字段缺失）"
+    );
+}
+
+#[tokio::test]
 async fn update_config_with_invalid_section_returns_error() {
     let (api, _tmp) = setup_api().await;
     let req = ConfigUpdateRequest {

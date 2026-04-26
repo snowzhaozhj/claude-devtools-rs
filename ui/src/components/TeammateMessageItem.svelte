@@ -274,7 +274,7 @@
   }
 
   .tm-tokens {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     color: var(--card-icon-muted);
     flex-shrink: 0;

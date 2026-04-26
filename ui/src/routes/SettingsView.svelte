@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { getConfig, updateConfig, addTrigger, removeTrigger, checkForUpdate, type AppConfig, type NotificationTrigger, type CheckUpdateResult } from "../lib/api";
   import { applyTheme } from "../lib/theme";
+  import { applyFonts } from "../lib/fonts";
   import SettingsToggle from "../lib/components/SettingsToggle.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { updateStore } from "../lib/updateStore.svelte";
@@ -10,7 +11,15 @@
   let loading = $state(true);
   let error: string | null = $state(null);
   let saveError: string | null = $state(null);
-  let activeSection: "general" | "notifications" | "about" = $state("general");
+  let activeSection: "general" | "display" | "notifications" | "about" = $state("general");
+
+  // Display 段字体输入的本地编辑态（避免每次 keystroke 调 IPC）
+  let fontSansInput = $state("");
+  let fontMonoInput = $state("");
+
+  // 默认字体栈占位符（与 ui/src/app.css 默认 token、TS 原版对齐；仅作 placeholder 提示用，不影响实际默认行为）
+  const FONT_SANS_PLACEHOLDER = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", sans-serif`;
+  const FONT_MONO_PLACEHOLDER = `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
 
   // About / 更新 section 状态
   let appVersion = $state("");
@@ -27,6 +36,8 @@
   onMount(async () => {
     try {
       config = await getConfig();
+      fontSansInput = config.display?.fontSans ?? "";
+      fontMonoInput = config.display?.fontMono ?? "";
     } catch (e) {
       error = String(e);
     } finally {
@@ -36,6 +47,49 @@
       appVersion = await getVersion();
     } catch { /* mock 模式或非 Tauri 环境静默 */ }
   });
+
+  /** 提交字体字段：trim 后空字符串归一化为 null；乐观更新 + 失败回滚 */
+  async function commitFont(key: "fontSans" | "fontMono", raw: string) {
+    if (!config) return;
+    saveError = null;
+    const trimmed = raw.trim();
+    const value: string | null = trimmed === "" ? null : trimmed;
+    const prevDisplay = config.display ?? {};
+    config = { ...config, display: { ...prevDisplay, [key]: value } };
+    applyFonts(config);
+    try {
+      await updateConfig("display", { [key]: value });
+    } catch (e) {
+      saveError = `保存失败: ${e}`;
+      try {
+        config = await getConfig();
+        fontSansInput = config.display?.fontSans ?? "";
+        fontMonoInput = config.display?.fontMono ?? "";
+        applyFonts(config);
+      } catch { /* ignore */ }
+    }
+  }
+
+  async function resetFontsToDefault() {
+    if (!config) return;
+    saveError = null;
+    const prevDisplay = config.display ?? {};
+    config = { ...config, display: { ...prevDisplay, fontSans: null, fontMono: null } };
+    fontSansInput = "";
+    fontMonoInput = "";
+    applyFonts(config);
+    try {
+      await updateConfig("display", { fontSans: null, fontMono: null });
+    } catch (e) {
+      saveError = `重置失败: ${e}`;
+      try {
+        config = await getConfig();
+        fontSansInput = config.display?.fontSans ?? "";
+        fontMonoInput = config.display?.fontMono ?? "";
+        applyFonts(config);
+      } catch { /* ignore */ }
+    }
+  }
 
   async function updateUpdater(key: "autoUpdateCheckEnabled" | "skippedUpdateVersion", value: unknown) {
     if (!config) return;
@@ -167,6 +221,7 @@
     <h2 class="settings-title">设置</h2>
     <div class="settings-tabs">
       <button class="section-tab" class:section-tab-active={activeSection === "general"} onclick={() => activeSection = "general"}>常规</button>
+      <button class="section-tab" class:section-tab-active={activeSection === "display"} onclick={() => activeSection = "display"}>显示</button>
       <button class="section-tab" class:section-tab-active={activeSection === "notifications"} onclick={() => activeSection = "notifications"}>通知</button>
       <button class="section-tab" class:section-tab-active={activeSection === "about"} onclick={() => activeSection = "about"}>关于 / 更新</button>
     </div>
@@ -216,6 +271,44 @@
               onChange={(v) => updateGeneral("autoExpandAiGroups", v)}
               ariaLabel="自动展开 AI 组"
             />
+          </div>
+        </div>
+
+      {:else if activeSection === "display"}
+        <div class="section">
+          <h3 class="section-title">显示</h3>
+          <p class="subsection-desc">自定义 UI 字体；留空使用应用默认字体栈。改动立即生效，无需重启。</p>
+
+          <div class="font-row">
+            <label class="font-label" for="font-sans-input">界面字体（sans-serif）</label>
+            <input
+              id="font-sans-input"
+              class="form-input font-input"
+              type="text"
+              placeholder={FONT_SANS_PLACEHOLDER}
+              bind:value={fontSansInput}
+              onblur={() => commitFont("fontSans", fontSansInput)}
+              onkeydown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            />
+            <span class="font-hint">示例：<code>"Inter", "PingFang SC", sans-serif</code></span>
+          </div>
+
+          <div class="font-row">
+            <label class="font-label" for="font-mono-input">等宽字体（monospace）</label>
+            <input
+              id="font-mono-input"
+              class="form-input font-input"
+              type="text"
+              placeholder={FONT_MONO_PLACEHOLDER}
+              bind:value={fontMonoInput}
+              onblur={() => commitFont("fontMono", fontMonoInput)}
+              onkeydown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            />
+            <span class="font-hint">示例：<code>"JetBrains Mono", "Fira Code", monospace</code></span>
+          </div>
+
+          <div class="font-row">
+            <button class="add-btn" onclick={resetFontsToDefault}>恢复默认字体</button>
           </div>
         </div>
 
@@ -409,4 +502,12 @@
   .trigger-delete { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: 4px; background: transparent; color: var(--color-text-muted); font-size: 14px; cursor: pointer; flex-shrink: 0; transition: background 0.1s, color 0.1s; }
   .trigger-delete:hover { background: rgba(229, 62, 62, 0.15); color: var(--tool-result-error-text); }
   .empty-triggers { padding: 16px 12px; color: var(--color-text-muted); font-size: 13px; text-align: center; line-height: 1.5; }
+
+  /* Display 段字体输入 */
+  .font-row { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 6px; background: var(--color-surface-raised, var(--color-surface)); margin-bottom: 8px; }
+  .font-label { font-size: 13px; color: var(--color-text); }
+  .font-input { width: 100%; padding: 6px 10px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); color: var(--color-text); font: inherit; font-size: 12px; font-family: var(--font-mono); outline: none; }
+  .font-input:focus { border-color: var(--color-border-emphasis); }
+  .font-hint { font-size: 11px; color: var(--color-text-muted); }
+  .font-hint code { font-family: var(--font-mono); font-size: 11px; }
 </style>

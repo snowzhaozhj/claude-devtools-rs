@@ -361,6 +361,14 @@ export interface GeneralConfig {
   autoExpandAiGroups: boolean;
 }
 
+export interface DisplayConfig {
+  showTimestamps?: boolean;
+  compactMode?: boolean;
+  syntaxHighlighting?: boolean;
+  fontSans?: string | null;
+  fontMono?: string | null;
+}
+
 export interface UpdaterConfig {
   autoUpdateCheckEnabled: boolean;
   skippedUpdateVersion?: string | null;
@@ -369,6 +377,7 @@ export interface UpdaterConfig {
 export interface AppConfig {
   notifications: NotificationConfig;
   general: GeneralConfig;
+  display?: DisplayConfig;
   updater?: UpdaterConfig;
 }
 
