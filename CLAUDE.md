@@ -2,7 +2,7 @@
 
 [claude-devtools](../claude-devtools)（Electron 原版）的 Rust 端口，
 Tauri 2 + Svelte 5 桌面应用。13 个数据层 capability + 6 个 UI 行为 spec 均已实现；
-首个 release `v0.1.0` 已发，后续迭代不再直接在 `main` 上开发。
+首个 release `v0.1.0` 已发（当前 `v0.1.1`），后续迭代不再直接在 `main` 上开发。
 用户视角的安装 / 开发 / 发布流程见 `README.md`，本文件是 contributor 专用的约定和陷阱手册。
 
 ## Parent repo
@@ -112,10 +112,11 @@ just bootstrap           # npm install --prefix ui（首次）
 - **No cross-crate imports of internal modules** — go through each crate's public API.
 - **Serde camelCase**：所有面向前端（Tauri IPC）的 struct 必须 `#[serde(rename_all = "camelCase")]`；enum 用 `rename_all_fields = "camelCase"` 给字段、`rename_all = "snake_case"` 给 tag 值。例外：`TokenUsage` 保持 snake_case（与 Anthropic API 原始格式一致）。
 - **`ContextInjection` serde 格式**：`#[serde(tag = "category", rename_all = "kebab-case")]` 是 internally-tagged，JSON 为 `{ "category": "claude-md", "id": "...", ... }`（不是 `{ "ClaudeMd": {...} }`）。前端按 `inj.category` 字段 switch 匹配。
-- **chunk-building 语义契约**：`is_meta` / slash / interruption 三类消息的完整行为契约在 `openspec/specs/chunk-building/spec.md`（Scenario 级覆盖）。port 专属踩坑：
+- **chunk-building 语义契约**：`is_meta` / slash / interruption / teammate-message 四类消息的完整行为契约在 `openspec/specs/chunk-building/spec.md`（Scenario 级覆盖）。port 专属踩坑：
   - **`is_meta` 过滤**：跳过产 `UserChunk`，但 `tool_result` 仍合并到 assistant buffer（spec 待补）。
   - **Slash 双产出 + 紧邻约束**：slash user 消息既要产 `UserChunk`（UI 气泡）又要挂到下一个 `AIChunk.slash_commands`；`instructions` 来自 `is_meta=true + parent_uuid=slash.uuid` 的 follow-up；普通 user 消息产 `UserChunk` 前必须 `pending_slashes.clear()`。TS 原版通过"只看紧邻前 UserGroup"实现，勿回退。
   - **Interruption 分类**：`[Request interrupted by user` 起首的 user 消息是 `MessageCategory::Interruption`（**非** hard noise），产 `SemanticStep::Interruption` 追加到前一 AIChunk。TS 侧曾当 hard noise 过滤，port 已反向修复，勿回退。
+  - **Teammate-message 多 block + 嵌入 AIChunk**：`<teammate-message teammate_id="..." ...>body</teammate-message>` 的 user 消息**不**产 `UserChunk`，转化为 N 条（一条 user msg 含多块时各产一条）`TeammateMessage` 注入下一个 flush 出的 `AIChunk.teammate_messages`。**禁止**用朴素 `text.find('>')` + `strip_suffix("</teammate-message>")` 解析——多 block 时会把所有块的 body 串成一段丢失。SHALL 用 `cdt-analyze::team::detection::parse_all_teammate_attrs`（global regex）。回滚开关 `EMBED_TEAMMATES: bool` 在 `chunk::builder` 顶部。
 - **Svelte 5 `$effect` 依赖陷阱**：`$effect` 中读取的所有响应式变量自动成为依赖。若需要在 effect 中读取但不触发重跑的变量，用 `untrack(() => variable)` 包裹。典型场景：session 切换 effect 中清理搜索状态。
 - **Svelte 5 `<button>` 嵌套禁止**：`<button>` 内不能嵌套 `<button>`，浏览器会修复 DOM 结构导致 Svelte 假设失效。用 `<span role="button" tabindex="-1">` 替代。
 - **Settings 乐观更新模式**：config 修改不能依赖 `updateConfig` 返回值刷新 UI，应先乐观更新本地 `$state`，异步调 API，失败时回滚（重新 `getConfig`）。
@@ -127,6 +128,7 @@ just bootstrap           # npm install --prefix ui（首次）
 - **Tauri IPC 透传**：`src-tauri/src/lib.rs` 的 commands 返回 `serde_json::Value`，`cdt-api` 类型扩展字段（如 `SessionSummary` 加 `title`）自动透传，不需要改 Tauri 层。
 - **file-change 节流链**：后端 `cdt-watch::FileWatcher` debounce 100 ms；前端 `ui/src/lib/fileChangeStore::dedupeRefresh` 仅合并 in-flight 期间的并发调用，**不做时间节流**。活跃 Claude 会话高频写 JSONL 时会触发每几百 ms 一次 re-render——如需降频，给 `dedupeRefresh` 加 250 ms cooldown 或用 trailing debounce 包 handler。
 - **`LocalDataApi` 构造器扩展**：需要注入新基础设施（FileWatcher、SSH pool 等）时新增 `new_with_<xxx>()` 构造器，**不改** `new()` 签名——旧构造器被 `crates/cdt-api/tests/*.rs` 依赖，改签名会批量破坏集成测试。
+- **`cdt-core` 核心 struct 加字段先 grep 全构造点**：在 `AIChunk` / `ToolExecution` 等核心 struct 加非 `Option` 非 `#[serde(default)]` 字段会让 workspace 里所有 `Foo { ... }` 构造点编译失败（典型 `AIChunk` 11 处、`ToolExecution` 9 处）。`grep -rn "<StructName> {" crates --include="*.rs"` 先列全清单，一轮 Edit 全部补齐再 `cargo check`——避免 PostToolUse clippy hook 在单文件 Edit 间反复阻塞。新字段尽量 `Option<T> + #[serde(default, skip_serializing_if = "Option::is_none")]` 让加字段对老 fixture / 老前端无破坏。
 - **IPC vs HTTP 行为分叉**：trait 加默认方法 fallback 到通用版本，`LocalDataApi` 自己 override 真版本——HTTP 跑 LocalDataApi 拿完整结果，其他实现安全降级。例：`DataApi::list_sessions_sync` 默认调 `list_sessions`（骨架），LocalDataApi override 为同步全扫。
 - **后台任务 per-key 取消**：触发新一轮后台扫描前需 abort 同 key 的旧任务时，用 `Arc<std::sync::Mutex<HashMap<K, AbortHandle>>>`：spawn 后 `insert(key, handle.abort_handle())`；新调用进入先 `remove(key).map(|h| h.abort())`；任务尾部从 map 自清理。例见 `LocalDataApi::list_sessions` 的 `active_scans`。
 - **Svelte 5 `{@attach}` 挂副作用**：DOM 元素需要副作用 + cleanup（ResizeObserver、IntersectionObserver、scroll listener 等）时用 `{@attach (el) => { ...setup; return () => cleanup; }}`，比 `bind:this + onMount + onDestroy` 三段式更内聚。例见 `Sidebar.svelte::session-list` 容器挂 ResizeObserver。
@@ -152,6 +154,7 @@ just bootstrap           # npm install --prefix ui（首次）
     5. **archive 顺序坑（多 change 同 Requirement）**：`openspec archive <slug>` 用 delta 的 `MODIFIED Requirement` 完整 body **替换**主 spec 对应 Requirement，**不做三方合并**。如果你刚 archive 了 change A（修改 Req X），紧接着 archive 一个更老的 change B（也修改 Req X 但 delta 里没有 A 的内容），B 的 archive 会把 A 写入主 spec 的内容覆盖丢掉。规避：(a) 按 change 创建顺序 archive，先老后新；(b) 已经倒序 archive 时手工 diff 主 spec、把丢失的段落 merge 回去再 commit。本仓库 commit `1173885` 是案例。
     6. **行为契约级改动先 propose 再 apply**：涉及 IPC 字段语义 / 后端算法 / 状态判定 / 数据 omit 策略 / Tauri command 协议的改动，**先**写 `proposal.md` + `tasks.md`（空 checkbox）+ spec delta 并 `openspec validate <slug> --strict`，**再**动 code 边写边勾 checkbox，最后 archive。事后补 change 是已被否决的下策（reviewer 看 PR 时 spec 还旧、propose 阶段的设计取舍机会被跳过）。纯视觉对齐 / 文案 / SVG 路径仍按"小改动直接 commit"。判断不准默认走 openspec。
     7. **OpenSpec 工作流走 skill，不要手写**：开 change 用 `/opsx:propose <slug>` 一次生成 proposal + design + tasks + specs delta + validate；apply 用 `/opsx:apply <slug>` 按 tasks.md 推进；archive 用 `/opsx:archive <slug>`（或等价 CLI `openspec archive <slug> -y`）。**禁止**手 `mkdir openspec/changes/<slug>` + `Write` 三件套——易漏 design.md、易写错 delta 格式。`design.md` **不是可选项**——任何 change 都要写明 D1/D2/D3... 决策记录（候选方案 / 取舍 / 风险），让 reviewer 能从设计层评估。
+    8. **apply 阶段反转 design 决策时三处同步**：实测后发现原 design 决策不符合实际时（典型：change `teammate-message-rendering` 的 D5 把"按 reply_to 紧贴 SendMessage"反转成"按 timestamp 排序"），SHALL **同一个 commit** 内同步三处：(a) `design.md` 加 `### D<n>b: ...` 修订块（**不删原 D<n>**，保留决策审计）；(b) 对应 spec delta 的 Scenario 改写；(c) `proposal.md` 与 `tasks.md` 的描述。spec 改了但 proposal/tasks 仍写旧策略 = codex / 人审会发现脱节。
   - **spec delta 写法**：`ADDED/MODIFIED Requirement` 体的**第一段**必须含 `SHALL` 或 `MUST`，否则 `openspec validate --strict` 报 `must contain SHALL or MUST`；中文背景描述要放在规约句之后。
   - Subagent：`spec-fidelity-reviewer` 按 capability 审计 scenario→test 覆盖。
   - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
