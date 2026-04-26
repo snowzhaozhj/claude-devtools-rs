@@ -236,6 +236,77 @@ export function buildDisplayItems(chunk: AIChunk): {
 }
 
 // ---------------------------------------------------------------------------
+// buildDisplayItemsCached — 按内容指纹 memo
+//
+// SessionDetail.svelte 在 `{#each detail.chunks}` 循环里对每个 AIChunk 调一次
+// buildDisplayItems。Svelte 5 的 reactivity 会在 effect / derived 变化时重算
+// 整个 each block；file-change 触发的 detail 替换更让所有 chunk 重算一遍——
+// 即使其中绝大多数 chunk 内容完全没变（一次 JSONL 追加通常只动最后 1-2 个 chunk）。
+//
+// 用"内容指纹"作 key memo 结果：
+//   - 相同 (firstResponseUuid, semanticSteps.len, toolExecutions.len, lastStepTs,
+//     teammateMessages.len, slashCommands.len) 命中复用
+//   - 大会话（数百 chunk）file-change 时只会有最后 1-2 个 chunk 重新 build
+//
+// 缓存上限 500 条，超出按 FIFO 淘汰最早写入项（Map 迭代顺序）。
+// ---------------------------------------------------------------------------
+
+const DISPLAY_ITEMS_CACHE_LIMIT = 500;
+const displayItemsCache = new Map<
+  string,
+  { items: DisplayItem[]; lastOutput: OutputItem | null }
+>();
+
+/**
+ * chunk 内容指纹。除长度外还编码 toolExecutions / subagents 的"易变状态"：
+ * - tool: endTs（null→完成）/ isError / outputOmitted / output.kind / teammateSpawn
+ * - subagent: sessionId / isOngoing / endTs / messages.length（懒拉取后变化）
+ *
+ * 不能仅用长度——后端会就地更新 tool 状态（completion）和 subagent ongoing
+ * 标志位，长度不变但内容变化时若命中旧 cache 就会渲染 stale UI。
+ */
+function chunkDigest(chunk: AIChunk): string {
+  const firstUuid = chunk.responses[0]?.uuid ?? chunk.timestamp;
+  const stepsLen = chunk.semanticSteps.length;
+  const lastStepTs = chunk.semanticSteps[stepsLen - 1]?.timestamp ?? "";
+  const teamLen = chunk.teammateMessages?.length ?? 0;
+  const slashLen = chunk.slashCommands?.length ?? 0;
+
+  let toolsState = "";
+  for (const t of chunk.toolExecutions) {
+    toolsState += `${t.toolUseId}:${t.endTs ?? "_"}:${t.isError ? "E" : ""}:${t.outputOmitted ? "O" : ""}:${t.output?.kind ?? "_"}:${t.teammateSpawn ? "T" : ""};`;
+  }
+
+  let subsState = "";
+  for (const s of chunk.subagents) {
+    subsState += `${s.sessionId}:${s.isOngoing ? "1" : "0"}:${s.endTs ?? "_"}:${s.messages?.length ?? 0};`;
+  }
+
+  return `${firstUuid}|${stepsLen}|${lastStepTs}|${teamLen}|${slashLen}|${toolsState}|${subsState}`;
+}
+
+export function buildDisplayItemsCached(chunk: AIChunk): {
+  items: DisplayItem[];
+  lastOutput: OutputItem | null;
+} {
+  const key = chunkDigest(chunk);
+  const hit = displayItemsCache.get(key);
+  if (hit) return hit;
+  const result = buildDisplayItems(chunk);
+  displayItemsCache.set(key, result);
+  if (displayItemsCache.size > DISPLAY_ITEMS_CACHE_LIMIT) {
+    const firstKey = displayItemsCache.keys().next().value;
+    if (firstKey !== undefined) displayItemsCache.delete(firstKey);
+  }
+  return result;
+}
+
+/** 仅供测试：清理 memo 缓存。 */
+export function _resetDisplayItemsCacheForTest(): void {
+  displayItemsCache.clear();
+}
+
+// ---------------------------------------------------------------------------
 // buildSummary
 // ---------------------------------------------------------------------------
 
