@@ -39,6 +39,17 @@ test-crate CRATE:
 check-ui:
     npm run check --prefix ui
 
+# 前端 vitest 单测（含 mockIPC + store + theme + ipc-contract 镜像测）
+test-ui-unit:
+    npm run test:unit --prefix ui
+
+# 前端组合测试：vitest + svelte-check
+test-ui: test-ui-unit check-ui
+
+# Playwright user story 测试（启 vite dev + chromium 跑 5 spec 文件）
+test-e2e:
+    npm run test:e2e --prefix ui
+
 # ──────── Lint + Format ────────
 
 # clippy 严格模式（workspace + src-tauri 两个 manifest 都过）
@@ -62,8 +73,9 @@ spec-check CHANGE:
 
 # ──────── 综合 ────────
 
-# 提交前预检：fmt → lint → test → spec 校验（对齐 .claude/rules/opsx-apply-cadence.md）
-preflight: fmt lint test spec-validate
+# 提交前预检：fmt → lint → test → 前端 vitest → spec 校验（对齐 .claude/rules/opsx-apply-cadence.md）
+# e2e 不在 preflight 内（启动浏览器较慢，由 CI 跑）；本地手动 `just test-e2e` 验证
+preflight: fmt lint test test-ui-unit spec-validate
 
 # ──────── 发布 ────────
 

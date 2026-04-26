@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Playwright artifacts (spec frontend-test-pyramid §"Playwright baseline screenshot 不进 git")
+tests/e2e/__screenshots__/
+tests/e2e/**/*-snapshots/
+playwright-report/
+test-results/
+playwright/.cache/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
