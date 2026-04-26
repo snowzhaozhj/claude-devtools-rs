@@ -20,6 +20,8 @@ pub struct AppConfig {
     pub sessions: SessionsConfig,
     pub ssh: SshPersistConfig,
     pub http_server: HttpServerConfig,
+    #[serde(default)]
+    pub updater: UpdaterConfig,
 }
 
 // =============================================================================
@@ -221,6 +223,37 @@ pub struct HttpServerConfig {
 }
 
 // =============================================================================
+// Updater
+// =============================================================================
+
+/// 自动更新配置。
+///
+/// `auto_update_check_enabled` 控制启动后台静默检查；关闭时手动「检查更新」按钮仍可用。
+/// `skipped_update_version` 记录用户主动「跳过此版本」的目标版本号，启动检查命中即不弹横幅。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdaterConfig {
+    #[serde(default = "default_auto_update_check_enabled")]
+    pub auto_update_check_enabled: bool,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_update_version: Option<String>,
+}
+
+impl Default for UpdaterConfig {
+    fn default() -> Self {
+        Self {
+            auto_update_check_enabled: true,
+            skipped_update_version: None,
+        }
+    }
+}
+
+fn default_auto_update_check_enabled() -> bool {
+    true
+}
+
+// =============================================================================
 // Config section key
 // =============================================================================
 
@@ -233,6 +266,7 @@ pub enum ConfigSection {
     Sessions,
     Ssh,
     HttpServer,
+    Updater,
 }
 
 impl ConfigSection {
@@ -245,6 +279,7 @@ impl ConfigSection {
             "sessions" => Some(Self::Sessions),
             "ssh" => Some(Self::Ssh),
             "httpServer" => Some(Self::HttpServer),
+            "updater" => Some(Self::Updater),
             _ => None,
         }
     }

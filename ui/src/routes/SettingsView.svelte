@@ -1,14 +1,21 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getConfig, updateConfig, addTrigger, removeTrigger, type AppConfig, type NotificationTrigger } from "../lib/api";
+  import { getConfig, updateConfig, addTrigger, removeTrigger, checkForUpdate, type AppConfig, type NotificationTrigger, type CheckUpdateResult } from "../lib/api";
   import { applyTheme } from "../lib/theme";
   import SettingsToggle from "../lib/components/SettingsToggle.svelte";
+  import { getVersion } from "@tauri-apps/api/app";
+  import { updateStore } from "../lib/updateStore.svelte";
 
   let config: AppConfig | null = $state(null);
   let loading = $state(true);
   let error: string | null = $state(null);
   let saveError: string | null = $state(null);
-  let activeSection: "general" | "notifications" = $state("general");
+  let activeSection: "general" | "notifications" | "about" = $state("general");
+
+  // About / 更新 section 状态
+  let appVersion = $state("");
+  let checkInFlight = $state(false);
+  let checkResult: CheckUpdateResult | null = $state(null);
 
   // 新建 trigger 表单
   let showAddForm = $state(false);
@@ -25,7 +32,44 @@
     } finally {
       loading = false;
     }
+    try {
+      appVersion = await getVersion();
+    } catch { /* mock 模式或非 Tauri 环境静默 */ }
   });
+
+  async function updateUpdater(key: "autoUpdateCheckEnabled" | "skippedUpdateVersion", value: unknown) {
+    if (!config) return;
+    saveError = null;
+    const prev = config.updater ?? { autoUpdateCheckEnabled: true };
+    config = { ...config, updater: { ...prev, [key]: value } };
+    try {
+      await updateConfig("updater", { [key]: value });
+    } catch (e) {
+      saveError = `保存失败: ${e}`;
+      try { config = await getConfig(); } catch { /* ignore */ }
+    }
+  }
+
+  async function handleCheckUpdate() {
+    checkInFlight = true;
+    checkResult = null;
+    try {
+      checkResult = await checkForUpdate();
+      // 如果发现新版本，写入 store 让横幅展示（手动检查也走横幅交互）
+      if (checkResult.status === "available") {
+        updateStore.showAvailable({
+          currentVersion: checkResult.currentVersion,
+          newVersion: checkResult.newVersion,
+          notes: checkResult.notes,
+          signatureOk: checkResult.signatureOk,
+        });
+      }
+    } catch (e) {
+      checkResult = { status: "error", message: String(e) };
+    } finally {
+      checkInFlight = false;
+    }
+  }
 
   async function updateGeneral(key: string, value: unknown) {
     if (!config) return;
@@ -124,6 +168,7 @@
     <div class="settings-tabs">
       <button class="section-tab" class:section-tab-active={activeSection === "general"} onclick={() => activeSection = "general"}>常规</button>
       <button class="section-tab" class:section-tab-active={activeSection === "notifications"} onclick={() => activeSection = "notifications"}>通知</button>
+      <button class="section-tab" class:section-tab-active={activeSection === "about"} onclick={() => activeSection = "about"}>关于 / 更新</button>
     </div>
   </div>
 
@@ -255,6 +300,57 @@
             <div class="empty-triggers">暂无触发器。点击上方"+ 新建"创建第一个触发器。</div>
           {/if}
         </div>
+
+      {:else if activeSection === "about"}
+        <div class="section">
+          <h3 class="section-title">关于 / 更新</h3>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">启动时自动检查更新</span>
+              <span class="setting-desc">应用启动 5 秒后后台检查新版本；关闭后仍可手动检查</span>
+            </div>
+            <SettingsToggle
+              enabled={config.updater?.autoUpdateCheckEnabled ?? true}
+              onChange={(v) => updateUpdater("autoUpdateCheckEnabled", v)}
+              ariaLabel="启动时自动检查更新"
+            />
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">当前版本</span>
+              <span class="setting-desc">{appVersion || "—"}</span>
+            </div>
+            <button class="add-btn" onclick={handleCheckUpdate} disabled={checkInFlight}>
+              {checkInFlight ? "检查中..." : "检查更新"}
+            </button>
+          </div>
+
+          {#if checkResult}
+            <div class="check-result" class:check-error={checkResult.status === "error"}>
+              {#if checkResult.status === "up_to_date"}
+                已是最新版本 v{checkResult.currentVersion}
+              {:else if checkResult.status === "available"}
+                发现新版本 v{checkResult.newVersion}（横幅已展示，可在顶部更新）
+              {:else}
+                检查失败：{checkResult.message}
+              {/if}
+            </div>
+          {/if}
+
+          {#if config.updater?.skippedUpdateVersion}
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-label">已跳过版本</span>
+                <span class="setting-desc">v{config.updater.skippedUpdateVersion}（不再提示该版本）</span>
+              </div>
+              <button class="add-btn" onclick={() => updateUpdater("skippedUpdateVersion", null)}>
+                清除跳过
+              </button>
+            </div>
+          {/if}
+        </div>
       {/if}
     {/if}
   </div>
@@ -286,6 +382,11 @@
   .subsection-desc { font-size: 12px; color: var(--color-text-muted); margin: 4px 0 8px; line-height: 1.4; }
   .add-btn { padding: 4px 12px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); color: var(--color-text-secondary); font: inherit; font-size: 12px; cursor: pointer; transition: background 0.1s; }
   .add-btn:hover { background: var(--tool-item-hover-bg); }
+  .add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* 关于 / 更新 section */
+  .check-result { padding: 8px 12px; border-radius: 4px; background: var(--color-surface-raised, var(--color-surface)); border: 1px solid var(--color-border); color: var(--color-text-secondary); font-size: 12px; margin-top: 4px; }
+  .check-error { color: var(--tool-result-error-text); border-color: rgba(229, 62, 62, 0.4); }
 
   /* 新建表单 */
   .add-form { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 6px; background: var(--color-surface-raised, var(--color-surface)); border: 1px solid var(--color-border); margin-bottom: 8px; }

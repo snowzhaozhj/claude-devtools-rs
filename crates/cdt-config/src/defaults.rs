@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::types::{
     AppConfig, DisplayConfig, GeneralConfig, HttpServerConfig, NotificationConfig,
     NotificationTrigger, SessionsConfig, SshPersistConfig, TriggerContentType, TriggerMode,
-    TriggerTokenType,
+    TriggerTokenType, UpdaterConfig,
 };
 
 /// 默认 trigger 列表（内建，不可删除）。
@@ -114,5 +114,6 @@ pub fn default_config() -> AppConfig {
             enabled: false,
             port: 3456,
         },
+        updater: UpdaterConfig::default(),
     }
 }

@@ -361,9 +361,34 @@ export interface GeneralConfig {
   autoExpandAiGroups: boolean;
 }
 
+export interface UpdaterConfig {
+  autoUpdateCheckEnabled: boolean;
+  skippedUpdateVersion?: string | null;
+}
+
 export interface AppConfig {
   notifications: NotificationConfig;
   general: GeneralConfig;
+  updater?: UpdaterConfig;
+}
+
+// =============================================================================
+// 自动更新 IPC 类型
+// =============================================================================
+
+export type CheckUpdateResult =
+  | { status: "up_to_date"; currentVersion: string }
+  | {
+      status: "available";
+      currentVersion: string;
+      newVersion: string;
+      notes: string;
+      signatureOk: boolean;
+    }
+  | { status: "error"; message: string };
+
+export async function checkForUpdate(): Promise<CheckUpdateResult> {
+  return await invoke("check_for_update");
 }
 
 export async function getConfig(): Promise<AppConfig> {

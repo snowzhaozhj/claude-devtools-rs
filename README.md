@@ -126,6 +126,30 @@ git push origin v0.2.0
 
 CI 使用 [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action) 构建。
 
+### 应用内自动更新（首次发版前必读）
+
+应用集成了 `tauri-plugin-updater`，发版后老用户可以在应用内一键升级。要走通这条链路必须**一次性**完成密钥与 Secrets 配置：
+
+1. **本地生成 minisign 密钥对**（只做一次）：
+   ```bash
+   cargo install tauri-cli --version "^2.0.0"   # 已装可跳过
+   cargo tauri signer generate -w ~/.tauri/claude-devtools-rs.key
+   ```
+   会提示输入解锁密码，强烈建议设密码。命令产出 `claude-devtools-rs.key`（私钥）和 `claude-devtools-rs.key.pub`（公钥）。
+
+2. **公钥入库**：把 `.key.pub` 文件中 base64 内容（`untrusted comment:` 行下面的一串）填入 `src-tauri/tauri.conf.json::plugins.updater.pubkey`，commit 入 git。
+
+3. **私钥进 GitHub Secrets**（GitHub repo → Settings → Secrets and variables → Actions）：
+   - `TAURI_SIGNING_PRIVATE_KEY`：私钥**全文**（含 `untrusted comment:` 行）
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：解锁密码
+
+4. **私钥多副本备份**：私钥 + 密码同时存到密码管理器（1Password / Bitwarden）+ 物理介质（U 盘）。
+   ⚠️ **私钥一旦丢失，已发布版本的用户永远无法应用内升级**——只能引导他们到 GitHub Release 手动下载新公钥版本重装。**这是不可逆的灾难，务必慎重对待。**
+
+5. 发版按上面流程打 tag 即可：`tauri-action` 检测到 `TAURI_SIGNING_PRIVATE_KEY` env 后自动签所有 bundle、生成 `latest.json` manifest 并 attach 到 Draft Release。
+
+> **平台覆盖**：macOS / Windows / Linux AppImage 走应用内 in-place 替换 + 自启；Linux `.deb` 包不支持（Tauri 限制），用户需手动到 Release 下载新 .deb 重装。
+
 ## 开发者文档
 
 - **项目约定 / 架构要点**：[`CLAUDE.md`](./CLAUDE.md)

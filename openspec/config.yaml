@@ -20,8 +20,6 @@ rules:
   specs:
     - Requirement / Scenario 的描述使用简体中文；RFC2119 关键词保留英文
     - 代码标识符、文件路径、技术术语用 backtick 引用保留英文
-    - 禁止直接 Edit `openspec/specs/<cap>/spec.md`——主 spec 是 archive 的产出物，不是输入源；任何修改走 `openspec/changes/<slug>/specs/<cap>/spec.md` delta
-    - 主 spec 的 `## Purpose` 段必须是有意义的中文摘要（说明 capability 职责 + 数据流位置），不允许残留 `TBD - created by archiving change ...` 占位
   tasks:
     - tasks 按 capability 对应的 owning crate 分组（capability → crate 映射见 CLAUDE.md）
   archive:

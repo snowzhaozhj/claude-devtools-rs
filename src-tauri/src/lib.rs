@@ -11,6 +11,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_updater::UpdaterExt;
 
 struct AppData {
     api: Arc<LocalDataApi>,
@@ -301,6 +302,147 @@ async fn get_project_session_prefs(
     serde_json::to_value(&prefs).map_err(|e| e.to_string())
 }
 
+// =============================================================================
+// Auto Updater
+// =============================================================================
+
+/// 手动检查更新 IPC 返回结构。
+///
+/// 与 spec `app-auto-update::Requirement: 手动检查更新 IPC` 对齐：
+/// `status` 是 internally-tagged 的 enum tag，前端按 `result.status` switch。
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case", rename_all_fields = "camelCase")]
+enum CheckUpdateResult {
+    UpToDate {
+        current_version: String,
+    },
+    Available {
+        current_version: String,
+        new_version: String,
+        notes: String,
+        signature_ok: bool,
+    },
+    Error {
+        message: String,
+    },
+}
+
+#[tauri::command]
+async fn check_for_update(app: tauri::AppHandle) -> Result<CheckUpdateResult, String> {
+    let current_version = app.package_info().version.to_string();
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => {
+            return Ok(CheckUpdateResult::Error {
+                message: format!("updater init failed: {e}"),
+            });
+        }
+    };
+    match updater.check().await {
+        Ok(Some(update)) => Ok(CheckUpdateResult::Available {
+            current_version,
+            new_version: update.version.clone(),
+            notes: update.body.clone().unwrap_or_default(),
+            signature_ok: true,
+        }),
+        Ok(None) => Ok(CheckUpdateResult::UpToDate { current_version }),
+        Err(e) => Ok(CheckUpdateResult::Error {
+            message: e.to_string(),
+        }),
+    }
+}
+
+/// 启动后台静默检查的实现。
+///
+/// 节拍：读 config gate → 调 `updater().check()` → 与 `skipped_update_version` 比 semver
+/// → 命中跳过则 return；否则 emit `updater://available`。
+/// 任意环节失败均静默吞掉（启动检查不打扰用户），仅 `tracing::warn!` 记录。
+async fn run_startup_update_check(api: Arc<LocalDataApi>, app: tauri::AppHandle) {
+    let cfg = match api.get_config().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                target: "cdt_tauri::updater",
+                error = %e,
+                "failed to read config for updater gate"
+            );
+            return;
+        }
+    };
+    let auto_check = cfg
+        .get("updater")
+        .and_then(|u| u.get("autoUpdateCheckEnabled"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    if !auto_check {
+        tracing::debug!(
+            target: "cdt_tauri::updater",
+            "auto check disabled, skip startup check"
+        );
+        return;
+    }
+    let skipped_version = cfg
+        .get("updater")
+        .and_then(|u| u.get("skippedUpdateVersion"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::warn!(
+                target: "cdt_tauri::updater",
+                error = %e,
+                "failed to acquire updater"
+            );
+            return;
+        }
+    };
+
+    match updater.check().await {
+        Ok(Some(update)) => {
+            // 与 skipped_version 比较：仅当解析为合法 semver 且新版本 ≤ 跳过版本时才跳过
+            if let Some(skipped) = &skipped_version {
+                if let (Ok(skipped_v), Ok(new_v)) = (
+                    semver::Version::parse(skipped),
+                    semver::Version::parse(&update.version),
+                ) {
+                    if new_v <= skipped_v {
+                        tracing::info!(
+                            target: "cdt_tauri::updater",
+                            skipped_version = %skipped,
+                            new_version = %update.version,
+                            "new version skipped by user"
+                        );
+                        return;
+                    }
+                }
+            }
+            let payload = serde_json::json!({
+                "currentVersion": app.package_info().version.to_string(),
+                "newVersion": update.version,
+                "notes": update.body.clone().unwrap_or_default(),
+                "signatureOk": true,
+            });
+            let _ = app.emit("updater://available", payload);
+        }
+        Ok(None) => {
+            tracing::debug!(
+                target: "cdt_tauri::updater",
+                current_version = %app.package_info().version,
+                "no update available"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "cdt_tauri::updater",
+                error = %e,
+                "startup update check failed"
+            );
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -339,6 +481,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppData { api: api.clone() })
         .setup(move |app| {
             #[cfg(debug_assertions)]
@@ -443,6 +587,15 @@ pub fn run() {
                 }
             });
 
+            // 启动 5 秒后台静默检查更新
+            // 详见 openspec/specs/app-auto-update/spec.md `Requirement: 启动后台静默检查`
+            let api_for_updater = api.clone();
+            let app_handle_for_updater = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                run_startup_update_check(api_for_updater, app_handle_for_updater).await;
+            });
+
             // 把自动通知管线产出的 DetectedError 桥到前端 `notification-added` 事件
             // 同时按 config.notifications.{enabled,soundEnabled} 发 OS native 通知
             let mut error_rx = api.subscribe_detected_errors();
@@ -528,6 +681,7 @@ pub fn run() {
             hide_session,
             unhide_session,
             get_project_session_prefs,
+            check_for_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
