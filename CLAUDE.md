@@ -141,6 +141,7 @@ claude-devtools-rs/
   - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
   - MCP：`.mcp.json` 注册 GitHub MCP，需要 `GITHUB_PERSONAL_ACCESS_TOKEN` 环境变量。
 - **opsx:apply 推进节拍**：详见 `.claude/rules/opsx-apply-cadence.md`。核心：Edit → clippy → fmt → test → npm check → validate → 勾 checkbox → 文本总结，不得中途停手。
+- **codex 异构二审与全流程协同**：详见 `.claude/rules/codex-usage.md`。核心：行为契约 / 性能 / 算法 / 并发类改动 push 后调 `codex:codex-rescue` subagent 拿异构二审；卡 30+ 分钟主动 rescue；design 阶段重大决策、test 阶段 edge case 也可调；纯样式 / docs 跳过。**不**新建 `/codex-*` skill 重复封装，规则文档里已固化触发判断与 prompt 模板。
 - Detailed rules: `.claude/rules/rust.md`.
 
 ## 发布与分支策略
@@ -194,3 +195,4 @@ claude-devtools-rs/
 2. UI 功能迭代分流：**行为契约改动**（IPC 字段 / 后端算法 / 状态判定 / 数据流语义）走 openspec（`/opsx:propose` → `/opsx:apply` → `/opsx:archive`，design.md 必备）；**纯视觉对齐 / 单点样式修复 / Trigger CRUD 等**直接写 + PR。判断不准默认走 openspec
 3. 性能 / 卡顿排查：用"性能回归监测"段的入口，**先看数据再定方向**
 4. 提交前跑 `just preflight` 把 fmt / lint / test / spec-validate 一把梭
+5. **行为契约 / 性能 / 算法 / 并发**类 PR push 之后调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑 codex 异构二审找深逻辑 bug，再走既有 `/code-review` 落 PR comment——两者互补不重复。判断规则与 prompt 模板见 `.claude/rules/codex-usage.md`。**纯样式 / docs / chore** 跳过 codex 二审，只跑 `/code-review` 即可
