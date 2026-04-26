@@ -187,30 +187,167 @@ function stripAnsi(s: string): string {
   return s;
 }
 
-/** 根据工具名和 input 生成摘要文本 */
-export function getToolSummary(
-  toolName: string,
-  input: unknown
-): string {
+/**
+ * 根据工具名和 input 生成 BaseItem header 上的人类可读摘要文本。
+ * 移植自原版 `src/renderer/utils/toolRendering/toolSummaryHelpers.ts::getToolSummary`，
+ * 风格：filename + 关键参数（行数 / 行号范围 / 模式 / 主机名等），保持简短。
+ */
+export function getToolSummary(toolName: string, input: unknown): string {
   const i = input as Record<string, unknown> | null;
   if (!i) return "";
 
-  if (
-    ["Read", "Edit", "Write", "read_file", "edit_file", "write_file"].includes(
-      toolName
-    )
-  ) {
-    return shortenPath(String(i.file_path ?? i.filePath ?? ""));
+  switch (toolName) {
+    case "Edit":
+    case "edit_file": {
+      const filePath = readString(i.file_path ?? i.filePath);
+      if (!filePath) return "Edit";
+      const fileName = getFileName(filePath);
+      const oldString = readString(i.old_string ?? i.oldString);
+      const newString = readString(i.new_string ?? i.newString);
+      if (oldString && newString) {
+        const oldLines = oldString.split("\n").length;
+        const newLines = newString.split("\n").length;
+        if (oldLines === newLines) {
+          return `${fileName} - ${oldLines} ${pluralize("line", oldLines)}`;
+        }
+        return `${fileName} - ${oldLines} → ${newLines} lines`;
+      }
+      return fileName;
+    }
+
+    case "Read":
+    case "read_file": {
+      const filePath = readString(i.file_path ?? i.filePath);
+      if (!filePath) return "Read";
+      const fileName = getFileName(filePath);
+      const limit = readNumber(i.limit);
+      const offset = readNumber(i.offset);
+      if (limit) {
+        const start = offset ?? 1;
+        return `${fileName} - lines ${start}-${start + limit - 1}`;
+      }
+      return fileName;
+    }
+
+    case "Write":
+    case "write_file": {
+      const filePath = readString(i.file_path ?? i.filePath);
+      if (!filePath) return "Write";
+      const fileName = getFileName(filePath);
+      const content = readString(i.content);
+      if (content) {
+        const lineCount = content.split("\n").length;
+        return `${fileName} - ${lineCount} ${pluralize("line", lineCount)}`;
+      }
+      return fileName;
+    }
+
+    case "Bash":
+    case "bash": {
+      const description = readString(i.description);
+      if (description) return truncatePlain(description, 50);
+      const command = readString(i.command);
+      if (command) return truncatePlain(command, 50);
+      return "Bash";
+    }
+
+    case "Grep":
+    case "grep": {
+      const pattern = readString(i.pattern);
+      if (!pattern) return "Grep";
+      const patternStr = `"${truncatePlain(pattern, 30)}"`;
+      const glob = readString(i.glob);
+      const path = readString(i.path);
+      if (glob) return `${patternStr} in ${glob}`;
+      if (path) return `${patternStr} in ${getFileName(path)}`;
+      return patternStr;
+    }
+
+    case "Glob":
+    case "glob": {
+      const pattern = readString(i.pattern);
+      if (!pattern) return "Glob";
+      const patternStr = `"${truncatePlain(pattern, 30)}"`;
+      const path = readString(i.path);
+      if (path) return `${patternStr} in ${getFileName(path)}`;
+      return patternStr;
+    }
+
+    case "Task":
+    case "Agent": {
+      const prompt = readString(i.prompt);
+      const subagentType = readString(i.subagent_type ?? i.subagentType);
+      const description = readString(i.description);
+      const desc = description ?? prompt;
+      const typeStr = subagentType ? `${subagentType} - ` : "";
+      if (desc) return `${typeStr}${truncatePlain(desc, 40)}`;
+      return subagentType ?? "Task";
+    }
+
+    case "WebFetch": {
+      const url = readString(i.url);
+      if (!url) return "WebFetch";
+      try {
+        const u = new URL(url);
+        return truncatePlain(u.hostname + u.pathname, 50);
+      } catch {
+        return truncatePlain(url, 50);
+      }
+    }
+
+    case "WebSearch": {
+      const query = readString(i.query);
+      return query ? `"${truncatePlain(query, 40)}"` : "WebSearch";
+    }
+
+    case "TodoWrite": {
+      const todos = i.todos;
+      if (Array.isArray(todos)) {
+        return `${todos.length} ${pluralize("item", todos.length)}`;
+      }
+      return "TodoWrite";
+    }
+
+    case "NotebookEdit": {
+      const notebookPath = readString(i.notebook_path ?? i.notebookPath);
+      const editMode = readString(i.edit_mode ?? i.editMode);
+      if (notebookPath) {
+        const fileName = getFileName(notebookPath);
+        return editMode ? `${editMode} - ${fileName}` : fileName;
+      }
+      return "NotebookEdit";
+    }
+
+    default: {
+      // 未知工具：尝试常见字段
+      const nameField =
+        readString(i.name) ??
+        readString(i.path) ??
+        readString(i.file) ??
+        readString(i.query) ??
+        readString(i.command);
+      if (nameField) return truncatePlain(nameField, 50);
+      return "";
+    }
   }
-  if (["Bash", "bash"].includes(toolName)) {
-    const c = String(i.command ?? "");
-    return c.length > 60 ? c.slice(0, 60) + "…" : c;
-  }
-  if (["Grep", "grep"].includes(toolName)) return String(i.pattern ?? "");
-  if (["Glob", "glob"].includes(toolName)) return String(i.pattern ?? "");
-  if (toolName === "Agent")
-    return String(i.description ?? "").slice(0, 50);
-  return "";
+}
+
+function readString(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  const s = v.trim();
+  return s.length > 0 ? s : undefined;
+}
+
+function readNumber(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+function pluralize(word: string, n: number): string {
+  return n === 1 ? word : `${word}s`;
+}
+
+function truncatePlain(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max)}…`;
 }
 
 /** 判断工具状态 */
