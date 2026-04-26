@@ -21,6 +21,7 @@
   import { MAX_PANES } from "./lib/paneTypes";
   import { getConfig, getNotifications } from "./lib/api";
   import { applyTheme } from "./lib/theme";
+  import { applyFonts } from "./lib/fonts";
   import { loadAgentConfigs } from "./lib/agentConfigsStore.svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -130,7 +131,8 @@
     try {
       const config = await getConfig();
       applyTheme(config.general.theme);
-    } catch { /* 加载失败保持默认浅色 */ }
+      applyFonts(config);
+    } catch { /* 加载失败保持默认浅色 + 默认字体 */ }
     // 加载 agent configs 供 subagent 彩色 badge 使用
     await loadAgentConfigs();
     // 单例 listen("file-change") —— 路由组件通过 fileChangeStore 注册 handler

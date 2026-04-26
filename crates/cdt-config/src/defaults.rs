@@ -99,6 +99,8 @@ pub fn default_config() -> AppConfig {
             show_timestamps: true,
             compact_mode: false,
             syntax_highlighting: true,
+            font_sans: None,
+            font_mono: None,
         },
         sessions: SessionsConfig {
             pinned_sessions: HashMap::new(),

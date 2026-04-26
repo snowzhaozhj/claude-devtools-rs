@@ -152,6 +152,10 @@ pub struct DisplayConfig {
     pub show_timestamps: bool,
     pub compact_mode: bool,
     pub syntax_highlighting: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_sans: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_mono: Option<String>,
 }
 
 // =============================================================================

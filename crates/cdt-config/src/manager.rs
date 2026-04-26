@@ -302,21 +302,50 @@ impl ConfigManager {
     }
 
     /// 更新 display section。
+    ///
+    /// 校验语义为整次原子：先在 `candidate` 副本上应用所有字段并校验，全部通过才写入
+    /// `self.config.display` 并 save；任一字段非法则整次返回 error，已存值不变。
+    /// 字符串字段（`fontSans` / `fontMono`）trim 后空白或 JSON `null` 归一化为 `None`，
+    /// 长度 > 500 字符拒绝。
     pub async fn update_display(
         &mut self,
         updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        const FONT_FAMILY_MAX_LEN: usize = 500;
+
         if let Some(obj) = updates.as_object() {
+            let mut candidate = self.config.display.clone();
             for (k, v) in obj {
-                if let Some(b) = v.as_bool() {
-                    match k.as_str() {
-                        "showTimestamps" => self.config.display.show_timestamps = b,
-                        "compactMode" => self.config.display.compact_mode = b,
-                        "syntaxHighlighting" => self.config.display.syntax_highlighting = b,
-                        _ => {}
+                match k.as_str() {
+                    "showTimestamps" => {
+                        if let Some(b) = v.as_bool() {
+                            candidate.show_timestamps = b;
+                        }
+                    }
+                    "compactMode" => {
+                        if let Some(b) = v.as_bool() {
+                            candidate.compact_mode = b;
+                        }
+                    }
+                    "syntaxHighlighting" => {
+                        if let Some(b) = v.as_bool() {
+                            candidate.syntax_highlighting = b;
+                        }
+                    }
+                    "fontSans" => {
+                        candidate.font_sans =
+                            normalize_font_family_field(v, "fontSans", FONT_FAMILY_MAX_LEN)?;
+                    }
+                    "fontMono" => {
+                        candidate.font_mono =
+                            normalize_font_family_field(v, "fontMono", FONT_FAMILY_MAX_LEN)?;
+                    }
+                    other => {
+                        tracing::warn!(key = %other, "unknown display update key ignored");
                     }
                 }
             }
+            self.config.display = candidate;
         }
         self.save().await?;
         Ok(self.get_config())
@@ -581,6 +610,37 @@ impl ConfigManager {
         self.load().await?;
         Ok(self.get_config())
     }
+}
+
+/// 把传入的 JSON 值归一化为 `Option<String>` 用于 font-family 类字段：
+/// - `null` → `None`
+/// - 字符串 trim 后为空 → `None`
+/// - 字符串长度（trim 后）> `max_len` → validation error
+/// - 非字符串 / 非 null → validation error
+/// - 其余 → `Some(s.trim())`
+fn normalize_font_family_field(
+    value: &serde_json::Value,
+    field_name: &str,
+    max_len: usize,
+) -> Result<Option<String>, ConfigError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(s) = value.as_str() else {
+        return Err(ConfigError::validation(format!(
+            "display.{field_name} must be a string or null"
+        )));
+    };
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.len() > max_len {
+        return Err(ConfigError::validation(format!(
+            "display.{field_name} must be <= {max_len} characters"
+        )));
+    }
+    Ok(Some(trimmed.to_owned()))
 }
 
 /// 递归合并两个 JSON value（`base` 为默认值，`overlay` 为已加载值）。
@@ -881,6 +941,183 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.updater.auto_update_check_enabled);
+    }
+
+    #[tokio::test]
+    async fn display_font_fields_default_to_none_on_first_launch() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("fresh.json");
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        let cfg = mgr.get_config();
+        assert!(cfg.display.font_sans.is_none());
+        assert!(cfg.display.font_mono.is_none());
+    }
+
+    #[tokio::test]
+    async fn display_font_fields_forward_compatible_with_old_config() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 老配置：display 段缺失 fontSans / fontMono 字段
+        tokio::fs::write(
+            &path,
+            r#"{"display":{"showTimestamps":false,"compactMode":true,"syntaxHighlighting":true}}"#,
+        )
+        .await
+        .unwrap();
+
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        let cfg = mgr.get_config();
+        assert!(!cfg.display.show_timestamps, "已有字段保留");
+        assert!(cfg.display.compact_mode, "已有字段保留");
+        assert!(cfg.display.font_sans.is_none(), "缺字段视为 None");
+        assert!(cfg.display.font_mono.is_none(), "缺字段视为 None");
+    }
+
+    #[tokio::test]
+    async fn display_set_custom_font_persists_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path.clone()));
+        mgr.load().await.unwrap();
+
+        let custom = "\"JetBrains Mono\", monospace";
+        mgr.update_display(serde_json::json!({ "fontMono": custom }))
+            .await
+            .unwrap();
+
+        // 重 load 验证持久化往返
+        let mut mgr2 = ConfigManager::new(Some(path));
+        mgr2.load().await.unwrap();
+        assert_eq!(mgr2.get_config().display.font_mono.as_deref(), Some(custom));
+    }
+
+    #[tokio::test]
+    async fn display_whitespace_value_normalizes_to_none() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path.clone()));
+        mgr.load().await.unwrap();
+
+        // 先设一个值，再设全空白
+        mgr.update_display(serde_json::json!({ "fontSans": "Arial" }))
+            .await
+            .unwrap();
+        mgr.update_display(serde_json::json!({ "fontSans": "   " }))
+            .await
+            .unwrap();
+
+        assert!(mgr.get_config().display.font_sans.is_none());
+        // 持久化层不应包含 fontSans 键（None 序列化省略）
+        let disk = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(!disk.contains("fontSans"));
+    }
+
+    #[tokio::test]
+    async fn display_explicit_null_clears_value() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        mgr.update_display(serde_json::json!({ "fontSans": "Arial" }))
+            .await
+            .unwrap();
+        assert!(mgr.get_config().display.font_sans.is_some());
+
+        mgr.update_display(serde_json::json!({ "fontSans": null }))
+            .await
+            .unwrap();
+        assert!(mgr.get_config().display.font_sans.is_none());
+    }
+
+    #[tokio::test]
+    async fn display_oversized_font_value_rejected_and_keeps_old() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        let original = "\"Fira Code\", monospace";
+        mgr.update_display(serde_json::json!({ "fontMono": original }))
+            .await
+            .unwrap();
+
+        let huge = "x".repeat(501);
+        let err = mgr
+            .update_display(serde_json::json!({ "fontMono": huge }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+
+        assert_eq!(
+            mgr.get_config().display.font_mono.as_deref(),
+            Some(original),
+            "已存值在校验失败时保持不变"
+        );
+    }
+
+    #[tokio::test]
+    async fn display_atomic_batch_rejects_all_on_partial_invalid() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        // 先确保两个字段都有已知值
+        mgr.update_display(serde_json::json!({
+            "fontSans": "Arial",
+            "fontMono": "Menlo",
+        }))
+        .await
+        .unwrap();
+
+        // 同次 update：fontSans 合法，fontMono 超长 → 整次拒绝
+        let huge = "x".repeat(501);
+        let err = mgr
+            .update_display(serde_json::json!({
+                "fontSans": "\"JetBrains Mono\", monospace",
+                "fontMono": huge,
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+
+        let cfg = mgr.get_config();
+        assert_eq!(
+            cfg.display.font_sans.as_deref(),
+            Some("Arial"),
+            "fontSans 合法但因 fontMono 失败也不能写入（原子性）"
+        );
+        assert_eq!(
+            cfg.display.font_mono.as_deref(),
+            Some("Menlo"),
+            "fontMono 失败保持原值"
+        );
+    }
+
+    #[tokio::test]
+    async fn display_reset_to_defaults_clears_font_overrides() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        mgr.update_display(serde_json::json!({
+            "fontSans": "\"JetBrains Mono\", monospace",
+            "fontMono": "Menlo",
+        }))
+        .await
+        .unwrap();
+        assert!(mgr.get_config().display.font_sans.is_some());
+
+        mgr.reset_to_defaults().await.unwrap();
+        let cfg = mgr.get_config();
+        assert!(cfg.display.font_sans.is_none());
+        assert!(cfg.display.font_mono.is_none());
     }
 
     #[tokio::test]

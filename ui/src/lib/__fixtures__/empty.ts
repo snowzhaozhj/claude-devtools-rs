@@ -19,6 +19,10 @@ export const emptyFixture: Fixture = {
       defaultTab: 'sessions',
       autoExpandAiGroups: false,
     },
+    display: {
+      fontSans: null,
+      fontMono: null,
+    },
   },
   notifications: {
     notifications: [],

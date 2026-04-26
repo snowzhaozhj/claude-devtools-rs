@@ -125,9 +125,11 @@
   --highlight-bg-current: rgba(250, 204, 21, 0.8);
   --highlight-ring: rgba(202, 138, 4, 0.6);
 
-  /* Fonts */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'SF Mono', 'Fira Code', ui-monospace, Consolas, monospace;
+  /* Fonts —— 默认值与 TS 原版（claude-devtools/src/renderer/index.css）对齐 */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell',
+    'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 /* ═══════════════════════════════════════════════════════════════
