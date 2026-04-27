@@ -172,7 +172,25 @@ async fn get_session_detail_after_find_session_project_succeeds() {
         .expect("反查 + detail 复合路径 SHALL 成功");
     assert_eq!(detail.session_id, "sid-A");
     assert_eq!(detail.project_id, "-proj-A");
-    assert!(detail.chunks.is_array() || detail.chunks.is_object());
+
+    // 收紧断言：fixture 含 1 user + 1 assistant text，build_chunks_with_subagents
+    // 后 SHALL 产 2 个 chunk（user + ai）；context_injections SHALL 是 JSON
+    // array 形态（fixture 无 CLAUDE.md，应为空数组），证明 detail 真走过
+    // build_chunks → process_session_context_with_phases 完整路径。
+    let chunks = detail
+        .chunks
+        .as_array()
+        .expect("chunks SHALL 是 JSON array");
+    assert_eq!(
+        chunks.len(),
+        2,
+        "fixture 1 user + 1 assistant SHALL 产 2 chunks，实际 {}",
+        chunks.len()
+    );
+    assert!(
+        detail.context_injections.is_array(),
+        "context_injections SHALL 是 array（无 CLAUDE.md 时为空数组）"
+    );
 }
 
 #[tokio::test]
