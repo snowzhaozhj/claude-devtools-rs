@@ -146,9 +146,9 @@ claude-devtools-rs/
 
 ## 发布与分支策略
 
-- `main` 是发布分支，**不直接提交**。日常走 `feat/xxx` / `fix/xxx` 分支 → PR → merge（详见 README）
+- `main` 是发布分支，**不直接提交**（hook 会 deny）。日常走 `feat/xxx` / `fix/xxx` 分支 → PR → merge（详见 README）。**release commit 也走 PR**：开 `chore/release-X.Y.Z` 分支 → bump 三处版本号 → `just release-check`（**会顺带改 `Cargo.lock` / `src-tauri/Cargo.lock`**，需 amend 进 release commit 否则 release PR CI 上 lock 与 manifest 不一致）→ push + PR + merge → 在 main 上 `git tag vX.Y.Z && git push origin vX.Y.Z`
 - 版本号同步在三处：`Cargo.toml`（workspace）、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`；`just release-check` 跑一致性校验
-- 打 `vX.Y.Z` tag 触发 `.github/workflows/release.yml` —— macOS / Linux / Windows 矩阵构建 Tauri bundle 到 Draft Release
+- 打 `vX.Y.Z` tag 触发 `.github/workflows/release.yml` —— macOS / Linux / Windows 矩阵构建 Tauri bundle 到 Draft Release。**workflow 必须 `create-release` 前置 job + `build` matrix 用 `releaseId` 复用**——直接让 4 个 matrix job 各自带 `tagName/releaseDraft` 跑 `tauri-action` 会并发 race，同一 tag 下产出 4 个 draft 各自只含本平台 asset + 各自的 latest.json，**无法 publish**（v0.4.2 事故案例）。`tauri-action` 在给定 `releaseId` 时只上传 + merge `latest.json`，不再调 createRelease。
 
 ## 性能回归监测
 
