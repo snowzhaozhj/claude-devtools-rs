@@ -43,14 +43,47 @@ renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
 
 marked.setOptions({ renderer, async: false, breaks: true });
 
+class LRU<V> {
+  private map = new Map<string, V>();
+  constructor(private capacity: number) {}
+  get(key: string): V | undefined {
+    const v = this.map.get(key);
+    if (v === undefined) return undefined;
+    this.map.delete(key);
+    this.map.set(key, v);
+    return v;
+  }
+  set(key: string, value: V): void {
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    } else if (this.map.size >= this.capacity) {
+      const first = this.map.keys().next().value;
+      if (first !== undefined) this.map.delete(first);
+    }
+    this.map.set(key, value);
+  }
+}
+
+const highlightCache = new LRU<string>(4096);
+const markdownCache = new LRU<string>(256);
+
 export function renderMarkdown(text: string): string {
+  const cached = markdownCache.get(text);
+  if (cached !== undefined) return cached;
   const raw = marked.parse(text) as string;
-  return DOMPurify.sanitize(raw);
+  const sanitized = DOMPurify.sanitize(raw);
+  markdownCache.set(text, sanitized);
+  return sanitized;
 }
 
 export function highlightCode(code: string, lang: string = "json"): string {
-  if (hljs.getLanguage(lang)) {
-    return DOMPurify.sanitize(hljs.highlight(code, { language: lang }).value);
-  }
-  return DOMPurify.sanitize(hljs.highlightAuto(code).value);
+  const key = `${lang}\0${code}`;
+  const cached = highlightCache.get(key);
+  if (cached !== undefined) return cached;
+  const html = hljs.getLanguage(lang)
+    ? hljs.highlight(code, { language: lang }).value
+    : hljs.highlightAuto(code).value;
+  const sanitized = DOMPurify.sanitize(html);
+  highlightCache.set(key, sanitized);
+  return sanitized;
 }

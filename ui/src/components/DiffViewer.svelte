@@ -64,8 +64,29 @@
     return temp;
   }
 
-  const diffLines = $derived(generateDiff(oldString, newString));
-  const stats = $derived(() => {
+  // LRU 缓存 LCS 结果：file-change re-render 时同一 (oldString,newString) 不再重算。
+  // 用 length 前缀 + \0 分隔，避免 oldString 内含分隔符碰撞。
+  const diffCache = new Map<string, DiffLine[]>();
+  const DIFF_CACHE_CAP = 64;
+  function cachedDiff(o: string, n: string): DiffLine[] {
+    const key = `${o.length}\0${n.length}\0${o}\0${n}`;
+    const hit = diffCache.get(key);
+    if (hit !== undefined) {
+      diffCache.delete(key);
+      diffCache.set(key, hit);
+      return hit;
+    }
+    const result = generateDiff(o, n);
+    if (diffCache.size >= DIFF_CACHE_CAP) {
+      const first = diffCache.keys().next().value;
+      if (first !== undefined) diffCache.delete(first);
+    }
+    diffCache.set(key, result);
+    return result;
+  }
+
+  const diffLines = $derived(cachedDiff(oldString, newString));
+  const stats = $derived.by(() => {
     let added = 0, removed = 0;
     for (const l of diffLines) {
       if (l.type === "added") added++;
@@ -91,11 +112,11 @@
     </svg>
     <span class="diff-filename" title={fileName}>{shortenPath(fileName)}</span>
     <span class="diff-lang-tag">{language}</span>
-    {#if stats().added > 0}
-      <span class="diff-stat diff-stat-added">+{stats().added}</span>
+    {#if stats.added > 0}
+      <span class="diff-stat diff-stat-added">+{stats.added}</span>
     {/if}
-    {#if stats().removed > 0}
-      <span class="diff-stat diff-stat-removed">-{stats().removed}</span>
+    {#if stats.removed > 0}
+      <span class="diff-stat diff-stat-removed">-{stats.removed}</span>
     {/if}
   </div>
 
