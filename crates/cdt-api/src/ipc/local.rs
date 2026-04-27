@@ -501,11 +501,13 @@ impl DataApi for LocalDataApi {
         // 不要把这些段塞进一个汇总 log——分开打才能据此判断瓶颈走向。
         let t_total = std::time::Instant::now();
 
-        let projects_dir = path_decoder::get_projects_base_path();
-        let project_dir = projects_dir.join(project_id);
-
+        // 路径解析以 scanner 持有的 projects_dir 为准，让集成测试可用 tmp 目录。
+        // `path_decoder::get_projects_base_path()` 仅在 `ProjectScanner` 自身
+        // 用默认路径构造时返回真实 home，scanner 已经统一了入口。
         let t_locate = std::time::Instant::now();
         let scanner = self.scanner.lock().await;
+        let projects_dir = scanner.projects_dir().to_path_buf();
+        let project_dir = projects_dir.join(project_id);
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
             .await
@@ -657,6 +659,47 @@ impl DataApi for LocalDataApi {
         Ok(detail)
     }
 
+    async fn find_session_project(&self, session_id: &str) -> Result<Option<String>, ApiError> {
+        // FS 直扫覆盖默认 trait 实现（避免 O(项目数 × 会话数) 的全量
+        // list_sessions）。匹配三种结构：
+        //   - 主会话：`<projects_dir>/<encoded>/<session_id>.jsonl`
+        //   - legacy subagent：`<projects_dir>/<encoded>/agent-<session_id>.jsonl`
+        //   - 新结构 subagent：`<projects_dir>/<encoded>/<parent>/subagents/agent-<session_id>.jsonl`
+        // 与 `find_subagent_jsonl` + `get_session_detail` 的查找口径一致。
+        let projects_dir = {
+            let scanner = self.scanner.lock().await;
+            scanner.projects_dir().to_path_buf()
+        };
+        let Ok(mut entries) = tokio::fs::read_dir(&projects_dir).await else {
+            return Ok(None);
+        };
+        let main_filename = format!("{session_id}.jsonl");
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Ok(file_type) = entry.file_type().await else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let project_dir = entry.path();
+            // 主会话快路径
+            if tokio::fs::metadata(project_dir.join(&main_filename))
+                .await
+                .is_ok()
+            {
+                return Ok(entry.file_name().to_str().map(String::from));
+            }
+            // subagent 慢路径（与 `get_session_detail` fallback 一致）
+            if find_subagent_jsonl(&project_dir, session_id)
+                .await
+                .is_some()
+            {
+                return Ok(entry.file_name().to_str().map(String::from));
+            }
+        }
+        Ok(None)
+    }
+
     async fn get_subagent_trace(
         &self,
         root_session_id: &str,
@@ -784,12 +827,25 @@ impl DataApi for LocalDataApi {
     ) -> Result<Vec<SessionDetail>, ApiError> {
         let mut results = Vec::new();
         for sid in session_ids {
-            // 简化：尝试查找，找不到就跳过
-            match self.get_session_detail("", sid).await {
+            // 仅给 session_id 时先反查 project_id，再走标准 detail 路径。
+            // 找不到就放占位条目，调用方按 metadata.status 决定是否过滤。
+            let Ok(Some(project_id)) = self.find_session_project(sid).await else {
+                results.push(SessionDetail {
+                    session_id: sid.clone(),
+                    project_id: String::new(),
+                    chunks: serde_json::Value::Null,
+                    metrics: serde_json::Value::Null,
+                    metadata: serde_json::json!({"status": "not_found"}),
+                    context_injections: serde_json::Value::Array(Vec::new()),
+                    is_ongoing: false,
+                });
+                continue;
+            };
+            match self.get_session_detail(&project_id, sid).await {
                 Ok(detail) => results.push(detail),
                 Err(_) => results.push(SessionDetail {
                     session_id: sid.clone(),
-                    project_id: String::new(),
+                    project_id,
                     chunks: serde_json::Value::Null,
                     metrics: serde_json::Value::Null,
                     metadata: serde_json::json!({"status": "not_found"}),

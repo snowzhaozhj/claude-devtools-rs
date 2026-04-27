@@ -113,9 +113,15 @@ async fn get_session_detail(
     State(s): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // session detail 需要 project_id，这里简化为空字符串
-    // 完整实现会从 query param 或 path 中获取
-    let result = s.api.get_session_detail("", &session_id).await?;
+    // spec：`GET /api/sessions/:id` 不携带 project_id；先反查所属 project
+    // 再走 `DataApi::get_session_detail(project_id, session_id)` 标准路径。
+    // 反查未命中按 spec `Return safe defaults on lookup failures` 返 404。
+    let project_id = s
+        .api
+        .find_session_project(&session_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("session {session_id}")))?;
+    let result = s.api.get_session_detail(&project_id, &session_id).await?;
     Ok(Json(result))
 }
 

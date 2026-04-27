@@ -4,10 +4,12 @@
 //!
 //! 在 `/api` 前缀下镜像 `DataApi` trait 的全部操作。
 
+pub mod bridge;
 pub mod routes;
 pub mod sse;
 pub mod state;
 
+pub use bridge::spawn_event_bridge;
 pub use routes::build_router;
 pub use state::AppState;
 

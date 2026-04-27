@@ -55,6 +55,30 @@ pub trait DataApi: Send + Sync {
         session_id: &str,
     ) -> Result<SessionDetail, ApiError>;
 
+    /// 通过仅 `session_id` 反查所属 `project_id`。
+    ///
+    /// HTTP `GET /api/sessions/:id` 不携带 `project_id`，需要全局查找；同样
+    /// 用于 `get_sessions_by_ids` 这种只接受 session id 的批量入口。
+    ///
+    /// 默认实现遍历 `list_projects` + `list_sessions_sync`，复杂度
+    /// `O(项目数 × 会话数)`。`LocalDataApi` 提供基于 `scanner.projects_dir()`
+    /// 的 FS 直扫覆盖（更快，但不强依赖：远端实现保留默认 fallback 即可）。
+    /// `Ok(None)` 表示找不到。
+    async fn find_session_project(&self, session_id: &str) -> Result<Option<String>, ApiError> {
+        let projects = self.list_projects().await?;
+        for project in projects {
+            let pagination = PaginatedRequest {
+                page_size: usize::MAX,
+                cursor: None,
+            };
+            let resp = self.list_sessions_sync(&project.id, &pagination).await?;
+            if resp.items.iter().any(|s| s.session_id == session_id) {
+                return Ok(Some(project.id));
+            }
+        }
+        Ok(None)
+    }
+
     /// 批量获取会话。
     async fn get_sessions_by_ids(
         &self,

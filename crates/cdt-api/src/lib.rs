@@ -11,7 +11,7 @@ pub mod http;
 pub mod ipc;
 pub mod notifier;
 
-pub use http::{AppState, start_server};
+pub use http::{AppState, spawn_event_bridge, start_server};
 pub use ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, ContextInfo, DataApi, LocalDataApi,
     METADATA_SCAN_CONCURRENCY, PaginatedRequest, PaginatedResponse, ProjectInfo,

@@ -208,6 +208,7 @@ dependencies = [
  "cdt-config",
  "cdt-discover",
  "cdt-ssh",
+ "cdt-watch",
  "tokio",
  "tracing",
  "tracing-subscriber",
