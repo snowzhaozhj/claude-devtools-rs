@@ -9,8 +9,45 @@ permissions:
   contents: write
 
 jobs:
+  # 前置 job：在所有平台 build 跑前 atomically 创建一个 draft release，
+  # 输出 release_id 给 build matrix 复用。修掉历史并发 race condition——
+  # 之前 4 个 build job 各自 createRelease，结果一个 tag 下出现 4 个 draft
+  # 各只含本平台 asset + 各自的 latest.json，无法 publish（详见 v0.4.2 事故）。
+  create-release:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create-release.outputs.result }}
+    steps:
+      - uses: actions/github-script@v7
+        id: create-release
+        with:
+          script: |
+            const tag = process.env.GITHUB_REF_NAME;
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `Claude DevTools ${tag}`,
+              body: [
+                `## Claude DevTools ${tag}`,
+                ``,
+                `从下方 **Assets** 下载对应平台安装包：`,
+                ``,
+                `- macOS：\`.dmg\`（Apple Silicon / Intel）`,
+                `- Linux：\`.deb\` / \`.AppImage\``,
+                `- Windows：\`.msi\` / \`.exe\``,
+                ``,
+                `应用未代码签名，首次打开可能需要在系统设置放行。`,
+              ].join('\n'),
+              draft: true,
+              prerelease: false,
+            });
+            return data.id;
+
   build:
     name: Build (${{ matrix.label }})
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -85,18 +122,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: src-tauri
-          tagName: ${{ github.ref_name }}
-          releaseName: "Claude DevTools ${{ github.ref_name }}"
-          releaseBody: |
-            ## Claude DevTools ${{ github.ref_name }}
-
-            从下方 **Assets** 下载对应平台安装包：
-
-            - macOS：`.dmg`（Apple Silicon / Intel）
-            - Linux：`.deb` / `.AppImage`
-            - Windows：`.msi` / `.exe`
-
-            应用未代码签名，首次打开可能需要在系统设置放行。
-          releaseDraft: true
-          prerelease: false
+          # 复用前置 job 创建好的 draft，避免并发 race。tauri-action 在
+          # 给定 releaseId 时只上传 asset 并 merge latest.json，不会再调
+          # createRelease——根因修复见 fix/release-workflow-race。
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
