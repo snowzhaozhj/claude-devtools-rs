@@ -50,4 +50,4 @@
 - [x] 7.7 `openspec validate fix-http-session-detail-and-event-bridge --strict`
 - [x] 7.8 `openspec/followups.md` 加一条「SSE 增量补全 ssh-status / updater 事件源」（依赖 cdt-ssh / updater 加 broadcast 源；本 change 不解决）
 - [x] 7.9 commit + push（PR title `fix(cdt-api): http session detail global lookup + SSE event bridge`）
-- [ ] 7.10 push 后调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑 codex 异构二审（行为契约 + 并发桥接同时改，命中"必跑 codex"判据）；按反馈修完再 archive
+- [x] 7.10 push 后调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑 codex 异构二审（行为契约 + 并发桥接同时改，命中"必跑 codex"判据）；按反馈修完再 archive
