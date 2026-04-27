@@ -41,9 +41,8 @@
   style:flex={pane.widthFraction}
   onpointerdowncapture={onPointerDownCapture}
 >
-  {#if pane.tabs.length > 0}
-    <TabBar paneId={pane.id} />
-  {/if}
+  <!-- TabBar 始终渲染：即使无 tab 也要显示右侧"通知/设置"工具栏入口 -->
+  <TabBar paneId={pane.id} />
 
   <div class="pane-body">
     {#if activeTab?.type === "settings"}
@@ -59,7 +58,7 @@
         />
       {/key}
     {:else if isSolePane}
-      <DashboardView {onSelectProject} />
+      <DashboardView {selectedProjectId} {onSelectProject} />
     {:else}
       <div class="pane-empty">
         <span>此 Pane 暂无 Tab</span>
