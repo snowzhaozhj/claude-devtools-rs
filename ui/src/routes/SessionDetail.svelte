@@ -121,7 +121,11 @@
       // 还在跑的 Bash 完成后切回仍只看到输入；resume 老 session 后追加的
       // 内容看不到）。无差别后台静默拉一次最新 detail——chunk 用稳定 key，
       // 替换不会引起整列表 DOM 重建；后台 IPC 不阻塞 UI，CPU 开销可控。
-      void refreshDetail();
+      // **使用与 file-change handler 同 key 的 scheduleRefresh**：复用
+      // fileChangeStore 的 in-flight 去重 + leading/trailing 节流，避免本路
+      // background refresh 与紧随而至的 file-change refresh 并发触发两次
+      // IPC，旧返回覆盖新 detail（codex review 找到的 bug）。
+      scheduleRefresh(`detail:${projectId}|${sessionId}`, refreshDetail);
     } else {
       try {
         const t_ipc = performance.now();
