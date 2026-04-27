@@ -5,14 +5,34 @@
   import { FOLDER_GIT2_SVG } from "../lib/icons";
 
   interface Props {
+    selectedProjectId: string;
     onSelectProject: (id: string, name: string) => void;
   }
 
-  let { onSelectProject }: Props = $props();
+  let { selectedProjectId, onSelectProject }: Props = $props();
 
   let projects: ProjectInfo[] = $state([]);
   let loading = $state(true);
   let filterQuery = $state("");
+
+  // 点击当前已选项目时无 selectedProjectId 变化 → App 状态不更新，
+  // 用户感知不到反馈。给当前卡片打一个短暂 pulse class 触发 ring 动画，
+  // 让点击被"听到"。同时仍调 onSelectProject——若用户从 dashboard 点
+  // 当前选中项目，是想表达"切到这个项目的会话视图"，App 层面无 tab
+  // 时仍会触发 sidebar 滚动 + active 视觉刷新（即使 id 相同）。
+  let pulsingId = $state<string | null>(null);
+  let pulseTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function handleCardClick(project: ProjectInfo) {
+    if (project.id === selectedProjectId) {
+      pulsingId = project.id;
+      if (pulseTimer) clearTimeout(pulseTimer);
+      pulseTimer = setTimeout(() => {
+        pulsingId = null;
+      }, 480);
+    }
+    onSelectProject(project.id, project.displayName);
+  }
 
   onMount(async () => {
     try {
@@ -63,10 +83,14 @@
       </div>
     {:else}
       <div class="dash-grid">
-        {#each filtered as project}
+        {#each filtered as project (project.id)}
+          {@const isActive = project.id === selectedProjectId}
+          {@const isPulsing = project.id === pulsingId}
           <button
             class="dash-card"
-            onclick={() => onSelectProject(project.id, project.displayName)}
+            class:dash-card-active={isActive}
+            class:dash-card-pulse={isPulsing}
+            onclick={() => handleCardClick(project)}
           >
             <div class="dash-card-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -77,6 +101,9 @@
             <div class="dash-card-path">{shortenPath(project.path)}</div>
             <div class="dash-card-meta">
               {project.sessionCount} 个会话
+              {#if isActive}
+                <span class="dash-card-active-tag">当前</span>
+              {/if}
             </div>
           </button>
         {/each}
@@ -176,6 +203,7 @@
   }
 
   .dash-card {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -195,6 +223,44 @@
     border-color: var(--color-border-emphasis);
     background: var(--color-surface-raised);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  }
+
+  /* 当前选中项目卡片：左侧 3px accent + 边框加重 + 背景变色 */
+  .dash-card-active {
+    border-color: var(--color-border-emphasis);
+    background: var(--color-surface-raised);
+  }
+  .dash-card-active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 16px;
+    bottom: 16px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--color-border-emphasis);
+  }
+  .dash-card-active-tag {
+    margin-left: 6px;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--badge-neutral-bg);
+    color: var(--color-text-secondary);
+    letter-spacing: 0.02em;
+  }
+  /* 点击当前已选卡片时的脉冲反馈 */
+  .dash-card-pulse {
+    animation: dash-card-pulse 0.45s ease-out;
+  }
+  @keyframes dash-card-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45);
+    }
+    100% {
+      box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+    }
   }
 
   .dash-card-icon {

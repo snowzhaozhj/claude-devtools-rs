@@ -561,6 +561,7 @@
   }
 
   .session-item {
+    position: relative;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -582,8 +583,23 @@
     background: var(--tool-item-hover-bg);
   }
 
+  /* 选中态：左侧 3px accent stripe + 略加重背景，让用户一眼看到当前会话 */
   .session-item-active {
     background: var(--color-surface-raised);
+  }
+  .session-item-active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 4px;
+    bottom: 4px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--color-border-emphasis);
+  }
+  .session-item-active .session-title-text {
+    color: var(--color-text);
+    font-weight: 600;
   }
 
   .session-item-hidden {

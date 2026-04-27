@@ -116,6 +116,16 @@
       detail = cached;
       loading = false;
       console.info(`[perf] SessionDetail ${sessionId.slice(0, 8)} cached hit`);
+      // 切走再切回时 file-change handler 已 unmount，期间发生的文件追加事件
+      // 全部错过；cache 直接渲染会停留在"切走那一刻"的旧快照（典型表现：
+      // 还在跑的 Bash 完成后切回仍只看到输入；resume 老 session 后追加的
+      // 内容看不到）。无差别后台静默拉一次最新 detail——chunk 用稳定 key，
+      // 替换不会引起整列表 DOM 重建；后台 IPC 不阻塞 UI，CPU 开销可控。
+      // **使用与 file-change handler 同 key 的 scheduleRefresh**：复用
+      // fileChangeStore 的 in-flight 去重 + leading/trailing 节流，避免本路
+      // background refresh 与紧随而至的 file-change refresh 并发触发两次
+      // IPC，旧返回覆盖新 detail（codex review 找到的 bug）。
+      scheduleRefresh(`detail:${projectId}|${sessionId}`, refreshDetail);
     } else {
       try {
         const t_ipc = performance.now();
@@ -180,15 +190,17 @@
 
   function effectiveExec(exec: ToolExecution): ToolExecution {
     const cached = outputCache.get(exec.toolUseId);
-    if (!cached) return exec;
+    // missing 视为非 final 状态——只有 text/structured 才覆盖原 exec.output。
+    // 防御性兜底：即使过去版本写过 missing 进 cache，刷新后也不会被 stale 数据污染。
+    if (!cached || cached.kind === "missing") return exec;
     return { ...exec, output: cached };
   }
 
   async function ensureToolOutput(exec: ToolExecution): Promise<void> {
     if (!exec.outputOmitted) return;
     const cached = outputCache.get(exec.toolUseId);
-    if (cached) {
-      // 命中即升级到 LRU 末尾：delete + set 让 Map 迭代顺序反映"最近使用"。
+    if (cached && cached.kind !== "missing") {
+      // 命中 final 状态即升级到 LRU 末尾：delete + set 让 Map 迭代顺序反映"最近使用"。
       // 这里在 user-triggered toggle 路径上调（不在 render 路径），mutate
       // outputCache state 触发的重渲染就是"展开 tool"本身想要的，无副作用。
       const next = new Map(outputCache);
@@ -199,6 +211,11 @@
     }
     try {
       const out = await getToolOutput(sessionId, sessionId, exec.toolUseId);
+      if (out.kind === "missing") {
+        // 工具仍在跑（后端 trim 后 variant 为 missing/text 不区分，pull 回的就是当前真值）：
+        // 不写 cache 让下次 detail 刷新时重新尝试，避免 stale missing sticky 后再也补不上输出。
+        return;
+      }
       const next = new Map(outputCache);
       next.set(exec.toolUseId, out);
       while (next.size > OUTPUT_CACHE_LIMIT) {
@@ -212,6 +229,28 @@
       // 失败保持 exec.output 原样（空），ToolViewer 显示 broken/missing 状态
     }
   }
+
+  // detail 替换后（首次加载 / cache hit / file-change refresh）自动补拉所有
+  // 已展开 + outputOmitted 工具的最新 output——典型场景：用户提前展开一个
+  // 还在跑的 Bash，切走再切回 / 工具完成后 file-change 推送新 detail，没有
+  // 这层 effect 时 expandedItems 已包含 key 但不会再触发 toggle，OutputBlock
+  // 会一直显示空。ensureToolOutput 内部判断 cache 命中才走 IPC。
+  $effect(() => {
+    if (!detail) return;
+    const snapshot = detail;
+    untrack(() => {
+      snapshot.chunks.forEach((chunk, i) => {
+        if (chunk.kind !== "ai") return;
+        for (const exec of chunk.toolExecutions) {
+          if (!exec.outputOmitted) continue;
+          const key = `${i}-tool-${exec.toolUseId}`;
+          if (expandedItems.has(key)) {
+            void ensureToolOutput(exec);
+          }
+        }
+      });
+    });
+  });
 
   function toggle(key: string, exec?: ToolExecution) {
     const n = new Set(expandedItems);
