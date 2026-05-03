@@ -3,9 +3,7 @@
 ## Purpose
 
 定义会话详情页面（SessionDetail）的渲染规则：Chunk 类型渲染、AI 组展开 / 折叠行为、语义步骤（SemanticStep）与工具执行的展示逻辑、Subagent 卡片彩色标识体系、teammate 消息按时序穿插、Markdown / Mermaid / 代码高亮、Context Panel 双视图、CLAUDE.md 目录树、自动刷新与 Ongoing banner、`OMIT_*` 路径下的懒加载（subagent trace / image asset / tool output / lazy markdown）。本 spec 聚焦前端渲染行为，数据结构由 `chunk-building`、`tool-execution-linking`、`team-coordination-metadata`、`ipc-data-api` spec 定义。
-
 ## Requirements
-
 ### Requirement: 按 Chunk 类型渲染对话流
 
 SessionDetail SHALL 按顺序渲染 chunks 数组中的每个 Chunk。不同 kind 的 Chunk SHALL 使用不同的视觉布局。
@@ -498,7 +496,7 @@ Subagent 卡片 Header 与展开 Meta 行显示的模型名 MUST 通过 `parseMo
 
 ### Requirement: Lazy markdown rendering for first paint performance
 
-SessionDetail SHALL 把所有 markdown 内容（user prose / AI lastOutput / Thinking 展开体 / Output 展开体 / Slash instructions 展开体 / System pre 文本）的 `renderMarkdown` 调用延迟到节点进入视口（含 `200 px` rootMargin 余量）后再触发；视口外的对应区域 SHALL 仅渲染高度估算占位（背景色块），不调用 marked / highlight.js / DOMPurify。Mermaid block 的 `processMermaidBlocks` SHALL 在该 markdown 区真正渲染**之后**再被触发，不在占位阶段扫描。
+SessionDetail SHALL 把所有 markdown 内容（user prose / AI lastOutput / Thinking 展开体 / Output 展开体 / Slash instructions 展开体 / System pre 文本）的 `renderMarkdown` 调用延迟到节点进入视口（含 `200 px` rootMargin 余量）后再触发；视口外的对应区域 SHALL 仅渲染高度估算占位（背景色块），不调用 marked / highlight.js / DOMPurify。Mermaid block 的 `processMermaidBlocks` SHALL 在该 markdown 区真正渲染**之后**再被触发，不在占位阶段扫描。lazy markdown 控制器 MUST 对外暴露 `flushAll()` 同步方法，用于全文 DOM 操作场景（搜索 / 打印 / 导出）触发所有 pending 占位的强制渲染。
 
 #### Scenario: 视口外 markdown 不渲染
 
@@ -537,6 +535,20 @@ SessionDetail SHALL 把所有 markdown 内容（user prose / AI lastOutput / Thi
 
 - **WHEN** `lazyMarkdown.svelte.ts` 顶部常量 `LAZY_MARKDOWN_ENABLED = false`
 - **THEN** SessionDetail SHALL 退化为首屏直接渲染所有 markdown（旧行为），用于发现严重回归时一行切回
+
+#### Scenario: flushAll 强制渲染所有 pending 占位
+
+- **WHEN** 调用方对 lazy markdown 控制器调用 `flushAll()`
+- **THEN** 所有处于 pending 状态（已 `observe` 但未进入视口）的占位元素 SHALL 按 `observe` 注册顺序同步调用 `renderMarkdown(text)` 注入 HTML
+- **AND** 每个被 flush 的元素 SHALL 标记 `data-rendered="1"` 防重复
+- **AND** 控制器内部的 pending map SHALL 被清空，IntersectionObserver SHALL `unobserve` 这些元素
+- **AND** `flushAll` 是幂等的：再次调用时若无 pending 元素 SHALL 立即返回不做任何工作
+
+#### Scenario: flushAll 在回滚开关关闭时为 no-op
+
+- **WHEN** `LAZY_MARKDOWN_ENABLED = false` 时 SessionDetail 创建 lazy markdown 控制器并调用 `flushAll()`
+- **THEN** 该方法 SHALL 立即返回不做任何工作（因为该分支下 `observe()` 已在注册时同步渲染，不存在 pending 元素）
+- **AND** 接口签名 SHALL 与 enabled 分支一致，调用方无需分支判断
 
 ### Requirement: Skeleton placeholder while loading
 
