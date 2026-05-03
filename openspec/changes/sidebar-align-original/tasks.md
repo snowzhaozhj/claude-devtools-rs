@@ -71,7 +71,7 @@
 
 - [x] 11.1 `just preflight` 全绿（fmt + lint + test + spec-validate 一把梭）
 - [x] 11.2 `openspec validate sidebar-align-original --strict` 全绿
-- [ ] 11.3 codex:codex-rescue 二审（行为契约改动 + 跨多文件，按 `.claude/rules/codex-usage.md` 必跑）
-- [ ] 11.4 修复 codex 找到的所有 bug（含补单测）
+- [x] 11.3 codex:codex-rescue 二审（行为契约改动 + 跨多文件，按 `.claude/rules/codex-usage.md` 必跑）
+- [x] 11.4 修复 codex 找到的所有 bug（含补单测）—— 2 个 bug 全修：(a) SidebarHeader fallback 不再在 active 找到但 branch=null 时回退；(b) `active_scans` race 通过 generation token 修复
 - [ ] 11.5 archive：`/opsx:archive sidebar-align-original`
 - [ ] 11.6 commit + push + 开 PR

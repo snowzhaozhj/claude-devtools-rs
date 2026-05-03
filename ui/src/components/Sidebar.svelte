@@ -33,7 +33,7 @@
 
   interface Props {
     selectedProjectId: string;
-    activeSessionId: string;
+    activeSessionId: string | null;
     onSelectProject: (id: string, name: string) => void;
     onSelectSession: (sessionId: string, label: string) => void;
   }

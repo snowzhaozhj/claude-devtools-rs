@@ -12,7 +12,7 @@
     projects: ProjectInfo[];
     selectedProjectId: string;
     sessions: SessionSummary[];
-    activeSessionId: string;
+    activeSessionId: string | null;
     onSelectProject: (id: string, name: string) => void;
     onToggleCollapsed: () => void;
   }
@@ -44,12 +44,15 @@
     projects.find(p => p.id === selectedProjectId)?.displayName ?? "选择项目"
   );
 
-  // 优先 active session 的 gitBranch，无 active 时回退 sessions[0]（按 timestamp desc）
-  // 详见 openspec/specs/sidebar-navigation/spec.md §"项目 git 分支只读栏"
+  // 优先 active session 的 gitBranch；只有 active 不存在或不在列表时才回退到
+  // sessions[0]（按 timestamp desc）。active 存在但其 gitBranch=null（骨架态/
+  // 非 git 项目）时 SHALL 显示 active 自身的 null（即不渲染该栏），不要回退到
+  // 别的 session 的 branch（codex 二审找到的 bug）。
+  // 详见 openspec/specs/sidebar-navigation/spec.md §"项目 git 分支只读栏"。
   const branch = $derived.by<string | null>(() => {
     if (activeSessionId) {
       const active = sessions.find(s => s.sessionId === activeSessionId);
-      if (active?.gitBranch) return active.gitBranch;
+      if (active) return active.gitBranch;
     }
     return sessions[0]?.gitBranch ?? null;
   });

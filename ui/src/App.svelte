@@ -175,7 +175,7 @@
     {#if !getSidebarCollapsed()}
       <Sidebar
         {selectedProjectId}
-        activeSessionId={activeTab?.sessionId ?? ""}
+        activeSessionId={activeTab?.sessionId ?? null}
         onSelectProject={selectProject}
         onSelectSession={selectSession}
       />
