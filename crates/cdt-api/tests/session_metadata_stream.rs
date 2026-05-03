@@ -206,6 +206,76 @@ async fn repeated_list_sessions_aborts_previous_scan() {
     );
 }
 
+#[tokio::test]
+async fn concurrent_list_sessions_does_not_orphan_scan() {
+    // 并发调用同 project 的 list_sessions 不能让任一 task 变成"孤儿"——
+    // 即第二次 list_sessions 进入时 SHALL 能 abort 当前 in-flight scan，
+    // 后续 list_sessions 也 SHALL 能 abort 第二次的 scan。
+    //
+    // 回归 codex 二审第二轮发现的 race：spawn 与 insert 之间 lock 释放，
+    // A 的 spawn → B abort/spawn/insert → A 晚到 insert 覆盖 B 的 entry，
+    // 后续 C 无法 abort B 的 task。修复后 abort/spawn/insert 在同一 sync
+    // lock 下原子完成，event 总数依然受 2*N 上界约束。
+    use cdt_api::DataApi;
+    use std::sync::Arc as StdArc;
+
+    let titles: Vec<String> = (0..16).map(|i| format!("title-{i}")).collect();
+    let title_refs: Vec<&str> = titles.iter().map(String::as_str).collect();
+    let (api, _tmp, project_id, _session_ids) = build_api_with_fixtures(&title_refs).await;
+    let api = StdArc::new(api);
+
+    let mut rx = api.subscribe_session_metadata();
+    let pagination = PaginatedRequest {
+        page_size: 50,
+        cursor: None,
+    };
+
+    // join_all 三个并发 list_sessions（同 project）
+    let api_a = api.clone();
+    let pid_a = project_id.clone();
+    let pag_a = pagination.clone();
+    let api_b = api.clone();
+    let pid_b = project_id.clone();
+    let pag_b = pagination.clone();
+    let api_c = api.clone();
+    let pid_c = project_id.clone();
+
+    let _ = tokio::join!(
+        async move { api_a.list_sessions(&pid_a, &pag_a).await.unwrap() },
+        async move { api_b.list_sessions(&pid_b, &pag_b).await.unwrap() },
+        async move { api_c.list_sessions(&pid_c, &pagination).await.unwrap() },
+    );
+
+    // 收集 update 事件；至多 3*N（最坏情况三次都全跑完）；race 修复后实际
+    // 应远低于该上限（前 2 次基本被 abort）。
+    let mut total = 0_usize;
+    let max_expected = titles.len() * 3;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        match timeout(deadline - now, rx.recv()).await {
+            Ok(Ok(upd)) => {
+                assert_eq!(upd.project_id, project_id);
+                total += 1;
+                assert!(
+                    total <= max_expected,
+                    "received more than 3*N updates ({total}); orphan scan 未被 abort"
+                );
+            }
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    assert!(
+        total >= titles.len(),
+        "expected at least N={} updates from final scan, got {total}",
+        titles.len()
+    );
+}
+
 #[test]
 fn metadata_scan_concurrency_is_eight() {
     // spec ipc-data-api §"Emit session metadata updates" 要求并发度受

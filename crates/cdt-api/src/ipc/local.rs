@@ -482,34 +482,34 @@ impl DataApi for LocalDataApi {
         let (page, next_cursor, total, page_jobs, dir) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
-        // 取消同 project 的旧扫描，避免事件串扰
-        if let Ok(mut scans) = self.active_scans.lock() {
-            if let Some(entry) = scans.remove(project_id) {
-                entry.handle.abort();
-            }
-        }
-
         if !page_jobs.is_empty() {
             let tx = self.session_metadata_tx.clone();
             let project_id_owned = project_id.to_owned();
             let active_scans = self.active_scans.clone();
             let pid_for_cleanup = project_id_owned.clone();
-            // 每轮 scan 分配唯一 generation；cleanup 时只在 entry.generation
-            // 仍等于自己的 generation 时才 remove，避免旧 task 误删新 handle
-            // （codex 二审 race）。
-            let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
 
-            let handle = tokio::spawn(scan_metadata_for_page(
-                project_id_owned,
-                dir,
-                page_jobs,
-                tx,
-                active_scans.clone(),
-                pid_for_cleanup,
-                my_generation,
-            ));
-
+            // abort 旧 + 分配 generation + spawn + insert **全部**在同一把
+            // sync lock 内完成。`tokio::spawn` 不会 await，sync lock 保持
+            // 期间调用是安全的。这样并发 list_sessions(同 project) 的两个
+            // 调用 A/B 会顺序进入临界区，避免：A 的 spawn 与 insert 之间
+            // B 完整 abort/spawn/insert 后 A 的 insert 覆盖 B 的 entry，导致
+            // 后续 C 无法 abort B 的孤立 task（codex 二审第二轮 race）。
             if let Ok(mut scans) = self.active_scans.lock() {
+                if let Some(old) = scans.remove(project_id) {
+                    old.handle.abort();
+                }
+                let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
+
+                let handle = tokio::spawn(scan_metadata_for_page(
+                    project_id_owned,
+                    dir,
+                    page_jobs,
+                    tx,
+                    active_scans.clone(),
+                    pid_for_cleanup,
+                    my_generation,
+                ));
+
                 scans.insert(
                     project_id.to_owned(),
                     ScanEntry {
