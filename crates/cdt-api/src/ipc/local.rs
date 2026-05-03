@@ -344,6 +344,7 @@ impl LocalDataApi {
                 message_count: 0,
                 title: None,
                 is_ongoing: false,
+                git_branch: None,
             });
             page_jobs.push((s.id, jsonl_path));
         }
@@ -392,6 +393,7 @@ async fn scan_metadata_for_page(
                 title: meta.title,
                 message_count: meta.message_count,
                 is_ongoing: meta.is_ongoing,
+                git_branch: meta.git_branch,
             });
         });
     }
@@ -440,6 +442,7 @@ impl DataApi for LocalDataApi {
             summary.title = meta.title;
             summary.message_count = meta.message_count;
             summary.is_ongoing = meta.is_ongoing;
+            summary.git_branch = meta.git_branch;
         }
 
         Ok(PaginatedResponse {

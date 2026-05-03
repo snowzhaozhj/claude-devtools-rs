@@ -31,6 +31,7 @@ function buildSession(
   isOngoing: boolean,
   messageCount: number,
   offsetMin: number,
+  gitBranch: string | null = null,
 ) {
   return {
     sessionId,
@@ -39,6 +40,7 @@ function buildSession(
     messageCount,
     title,
     isOngoing,
+    gitBranch,
   }
 }
 
@@ -77,14 +79,14 @@ const PROJECTS = [
 
 // rust-port 项目：一个 ongoing session + 两个完成 session
 const rustSessions = [
-  buildSession('mock-rich-rust', 'sess-rust-active', 'IPC 字段重构', true, 42, 0),
-  buildSession('mock-rich-rust', 'sess-rust-2', '修复 watcher flake', false, 18, -60),
-  buildSession('mock-rich-rust', 'sess-rust-3', '加 contract test', false, 25, -180),
+  buildSession('mock-rich-rust', 'sess-rust-active', 'IPC 字段重构', true, 42, 0, 'feat/frontend-test-infrastructure'),
+  buildSession('mock-rich-rust', 'sess-rust-2', '修复 watcher flake', false, 18, -60, 'main'),
+  buildSession('mock-rich-rust', 'sess-rust-3', '加 contract test', false, 25, -180, 'main'),
 ]
 
 const tsSessions = [
-  buildSession('mock-rich-ts', 'sess-ts-1', 'TS 原版回归', false, 12, -30),
-  buildSession('mock-rich-ts', 'sess-ts-2', '比对 chunk-building', false, 8, -90),
+  buildSession('mock-rich-ts', 'sess-ts-1', 'TS 原版回归', false, 12, -30, 'main'),
+  buildSession('mock-rich-ts', 'sess-ts-2', '比对 chunk-building', false, 8, -90, 'main'),
 ]
 
 const docsSessions = [

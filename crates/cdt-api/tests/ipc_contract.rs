@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use cdt_api::{
     ConfigUpdateRequest, DataApi, LocalDataApi, PaginatedRequest, PaginatedResponse, ProjectInfo,
-    ProjectSessionPrefs, SearchRequest, SessionSummary,
+    ProjectSessionPrefs, SearchRequest, SessionMetadataUpdate, SessionSummary,
 };
 use cdt_config::{
     ConfigManager, NotificationManager, NotificationTrigger, TriggerContentType, TriggerMode,
@@ -160,6 +160,7 @@ fn session_summary_serializes_camelcase_with_optional_title() {
         message_count: 12,
         title: Some("hello".into()),
         is_ongoing: true,
+        git_branch: Some("feat/x".into()),
     };
     let json = serde_json::to_value(&s).unwrap();
     assert_eq!(json["sessionId"], json!("sess-1"));
@@ -167,16 +168,53 @@ fn session_summary_serializes_camelcase_with_optional_title() {
     assert_eq!(json["messageCount"], json!(12));
     assert_eq!(json["isOngoing"], json!(true));
     assert_eq!(json["title"], json!("hello"));
+    assert_eq!(json["gitBranch"], json!("feat/x"));
+    assert!(
+        json.get("git_branch").is_none(),
+        "MUST 不出现 snake_case 字段名"
+    );
 
-    // Skeleton variant (title=None)
+    // Skeleton variant (title=None / git_branch=None)
     let skeleton = SessionSummary {
         title: None,
         is_ongoing: false,
+        git_branch: None,
         ..s
     };
     let json = serde_json::to_value(&skeleton).unwrap();
     assert_eq!(json["title"], json!(null), "Option<String> None → null");
     assert_eq!(json["isOngoing"], json!(false));
+    assert_eq!(json["gitBranch"], json!(null));
+}
+
+#[test]
+fn session_metadata_update_serializes_camelcase_with_git_branch() {
+    let u = SessionMetadataUpdate {
+        project_id: "proj-1".into(),
+        session_id: "sess-1".into(),
+        title: Some("hello".into()),
+        message_count: 7,
+        is_ongoing: true,
+        git_branch: Some("feat/x".into()),
+    };
+    let json = serde_json::to_value(&u).unwrap();
+    assert_eq!(json["projectId"], json!("proj-1"));
+    assert_eq!(json["sessionId"], json!("sess-1"));
+    assert_eq!(json["title"], json!("hello"));
+    assert_eq!(json["messageCount"], json!(7));
+    assert_eq!(json["isOngoing"], json!(true));
+    assert_eq!(json["gitBranch"], json!("feat/x"));
+    assert!(
+        json.get("git_branch").is_none(),
+        "MUST 不出现 snake_case 字段名"
+    );
+
+    let none_branch = SessionMetadataUpdate {
+        git_branch: None,
+        ..u
+    };
+    let json = serde_json::to_value(&none_branch).unwrap();
+    assert_eq!(json["gitBranch"], json!(null));
 }
 
 #[test]

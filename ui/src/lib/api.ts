@@ -26,6 +26,13 @@ export interface SessionSummary {
   messageCount: number;
   title: string | null;
   isOngoing: boolean;
+  /**
+   * 会话最后一条消息所在的 git 分支。骨架态为 null，由
+   * `session-metadata-update` 异步 patch 填充。详见
+   * `openspec/specs/ipc-data-api/spec.md` §"Expose git branch on
+   * session summary and metadata updates"。
+   */
+  gitBranch: string | null;
 }
 
 /**
@@ -38,6 +45,7 @@ export interface SessionMetadataUpdate {
   title: string | null;
   messageCount: number;
   isOngoing: boolean;
+  gitBranch: string | null;
 }
 
 export interface PaginatedResponse<T> {

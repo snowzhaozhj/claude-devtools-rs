@@ -21,6 +21,7 @@
     getShowHidden, toggleShowHidden,
     getHiddenCount,
     loadProjectPrefs,
+    toggleSidebarCollapsed,
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
@@ -116,6 +117,7 @@
                 title: payload.title,
                 messageCount: payload.messageCount,
                 isOngoing: payload.isOngoing,
+                gitBranch: payload.gitBranch,
               }
             : s,
         );
@@ -166,13 +168,18 @@
     return next.map((skel) => {
       const old = prevMap.get(skel.sessionId);
       if (!old) return skel;
-      const hasMeta = old.title !== null || old.messageCount > 0 || old.isOngoing;
+      const hasMeta =
+        old.title !== null ||
+        old.messageCount > 0 ||
+        old.isOngoing ||
+        old.gitBranch !== null;
       if (!hasMeta) return skel;
       return {
         ...skel,
         title: old.title,
         messageCount: old.messageCount,
         isOngoing: old.isOngoing,
+        gitBranch: old.gitBranch,
       };
     });
   }
@@ -331,7 +338,10 @@
   <SidebarHeader
     {projects}
     {selectedProjectId}
+    {sessions}
+    {activeSessionId}
     {onSelectProject}
+    onToggleCollapsed={toggleSidebarCollapsed}
   />
 
   <!-- Session filter + count -->
@@ -630,33 +640,34 @@
 
   .session-meta {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
+    line-height: 1.2;
   }
 
   .session-msg-count {
     display: inline-flex;
     align-items: center;
-    gap: 3px;
-    font-size: 11px;
+    gap: 2px;
+    font-size: 10px;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
   }
 
   .meta-icon {
-    width: 11px;
-    height: 11px;
+    width: 10px;
+    height: 10px;
     flex-shrink: 0;
   }
 
   .session-meta-sep {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--color-text-muted);
     opacity: 0.5;
   }
 
   .session-time {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
   }

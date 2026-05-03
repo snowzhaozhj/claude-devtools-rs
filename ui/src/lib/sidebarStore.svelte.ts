@@ -27,6 +27,26 @@ export function setSidebarWidth(w: number): void {
 }
 
 // ---------------------------------------------------------------------------
+// 折叠/展开（内存级，重启回归默认 false）
+//
+// 详见 openspec/specs/sidebar-navigation/spec.md §"侧栏折叠/展开"。
+// ---------------------------------------------------------------------------
+
+let sidebarCollapsed: boolean = $state(false);
+
+export function getSidebarCollapsed(): boolean {
+  return sidebarCollapsed;
+}
+
+export function setSidebarCollapsed(v: boolean): void {
+  sidebarCollapsed = v;
+}
+
+export function toggleSidebarCollapsed(): void {
+  sidebarCollapsed = !sidebarCollapsed;
+}
+
+// ---------------------------------------------------------------------------
 // Pin / Hide（per-project，持久化到后端 config）
 // ---------------------------------------------------------------------------
 

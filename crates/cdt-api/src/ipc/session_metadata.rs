@@ -28,6 +28,10 @@ pub struct SessionMetadata {
     /// 会话是否仍在进行。计算方式见
     /// `cdt_analyze::check_messages_ongoing`。
     pub is_ongoing: bool,
+    /// 会话最后一条携带 `git_branch` 的消息行所记录的分支名。
+    /// 与原版 `claude-devtools/src/renderer/utils/sessionExporter.ts:304`
+    /// 的 `session.gitBranch` 取值方式一致——反映会话最后所在 git 分支。
+    pub git_branch: Option<String>,
 }
 
 /// 扫描标题时读取的最大行数（与原版 `maxLines: 200` 对齐）。
@@ -42,6 +46,7 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
             title: None,
             message_count: 0,
             is_ongoing: false,
+            git_branch: None,
         };
     };
 
@@ -54,6 +59,8 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
     let mut awaiting_ai = false;
     let mut line_number: usize = 0;
     let mut all_messages: Vec<cdt_core::ParsedMessage> = Vec::new();
+    // 取最后一条非空 git_branch（与原版 sessionExporter.ts 取值一致）
+    let mut last_git_branch: Option<String> = None;
 
     while let Ok(Some(line)) = lines.next_line().await {
         line_number += 1;
@@ -64,6 +71,12 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
         let Ok(Some(msg)) = parse_entry_at(&line, line_number) else {
             continue;
         };
+
+        if let Some(branch) = &msg.git_branch {
+            if !branch.is_empty() {
+                last_git_branch = Some(branch.clone());
+            }
+        }
 
         // --- 消息计数（与原版配对逻辑对齐）---
         if msg.category == MessageCategory::User && !msg.is_meta {
@@ -123,6 +136,7 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
         title,
         message_count,
         is_ongoing,
+        git_branch: last_git_branch,
     }
 }
 
@@ -378,5 +392,68 @@ mod tests {
         let text = r"prefix<teammate-message>inner</teammate-message>suffix";
         let result = sanitize_for_title(text);
         assert_eq!(result, "prefixsuffix");
+    }
+
+    // ---- git_branch extraction ----
+    //
+    // Spec：`openspec/specs/ipc-data-api/spec.md`
+    // §`Expose git branch on session summary and metadata updates`。
+
+    fn write_jsonl(dir: &std::path::Path, lines: &[&str]) -> std::path::PathBuf {
+        let path = dir.join("s.jsonl");
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        path
+    }
+
+    fn user_line(uuid: &str, ts: &str, branch: Option<&str>) -> String {
+        let branch_field = branch.map_or(String::new(), |b| format!(r#""gitBranch":"{b}","#));
+        format!(
+            r#"{{"type":"user","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp",{branch_field}"message":{{"role":"user","content":"hi"}}}}"#
+        )
+    }
+
+    #[tokio::test]
+    async fn extract_takes_last_non_empty_git_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_line("u1", "2026-05-03T10:00:00.000Z", Some("main")),
+                &user_line("u2", "2026-05-03T10:01:00.000Z", None),
+                &user_line("u3", "2026-05-03T10:02:00.000Z", Some("feat/x")),
+                &user_line("u4", "2026-05-03T10:03:00.000Z", Some("feat/y")),
+                &user_line("u5", "2026-05-03T10:04:00.000Z", None),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.git_branch.as_deref(), Some("feat/y"));
+    }
+
+    #[tokio::test]
+    async fn extract_returns_none_when_no_git_branch_anywhere() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_line("u1", "2026-05-03T10:00:00.000Z", None),
+                &user_line("u2", "2026-05-03T10:01:00.000Z", None),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert!(meta.git_branch.is_none());
+    }
+
+    #[tokio::test]
+    async fn extract_skips_empty_string_git_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_line("u1", "2026-05-03T10:00:00.000Z", Some("main")),
+                &user_line("u2", "2026-05-03T10:01:00.000Z", Some("")),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.git_branch.as_deref(), Some("main"));
     }
 }

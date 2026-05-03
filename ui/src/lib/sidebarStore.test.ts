@@ -5,7 +5,13 @@
 
 import { describe, expect, test } from 'vitest'
 
-import { getSidebarWidth, setSidebarWidth } from './sidebarStore.svelte'
+import {
+  getSidebarCollapsed,
+  getSidebarWidth,
+  setSidebarCollapsed,
+  setSidebarWidth,
+  toggleSidebarCollapsed,
+} from './sidebarStore.svelte'
 
 describe('sidebar width clamp', () => {
   test('正常值原样保留', () => {
@@ -28,5 +34,23 @@ describe('sidebar width clamp', () => {
     expect(getSidebarWidth()).toBe(200)
     setSidebarWidth(500)
     expect(getSidebarWidth()).toBe(500)
+  })
+})
+
+describe('sidebar collapsed toggle', () => {
+  test('toggleSidebarCollapsed 切换状态', () => {
+    setSidebarCollapsed(false)
+    expect(getSidebarCollapsed()).toBe(false)
+    toggleSidebarCollapsed()
+    expect(getSidebarCollapsed()).toBe(true)
+    toggleSidebarCollapsed()
+    expect(getSidebarCollapsed()).toBe(false)
+  })
+
+  test('setSidebarCollapsed 显式 setter', () => {
+    setSidebarCollapsed(true)
+    expect(getSidebarCollapsed()).toBe(true)
+    setSidebarCollapsed(false)
+    expect(getSidebarCollapsed()).toBe(false)
   })
 })

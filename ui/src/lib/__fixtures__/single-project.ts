@@ -91,6 +91,7 @@ export const singleProjectFixture: Fixture = {
         messageCount: 2,
         title: '帮我看一下这个 bug',
         isOngoing: false,
+        gitBranch: 'main',
       },
     ],
   },
