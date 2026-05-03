@@ -107,4 +107,11 @@ fn is_user_chunk_message(msg: &ParsedMessage) -> bool {
 
 ## Open Questions
 
-无。
+**已知 deviation（不在本 change 修，留作 followup）**：codex 三审第二轮指出
+`cdt-parse/src/noise.rs::is_interrupt_marker` 用 `text.trim().starts_with(INTERRUPT_PREFIX)`，
+对前导空白容忍；原版 `messages.ts:201-205` 数组 content 的 interruption 判定
+**不** trim。后果：array 单 Text block 带前导空白起首 `[Request interrupted by user`
+的消息，本仓会归 `MessageCategory::Interruption`（messageCount 不计入），原版
+`isParsedUserChunkMessage` 仍会计入。修法需要改 cdt-parse 行为，会牵连
+chunk-building / context-tracking / session_state 多个 capability 的 Interruption
+处理；scope 超出本 change，留 followup（未来若用户实测发现差异再修）。

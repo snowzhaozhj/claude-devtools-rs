@@ -52,10 +52,14 @@ const SYSTEM_OUTPUT_TAG_PREFIXES: &[&str] = &[
 /// hard noise / interrupt / synthetic 由 cdt-parse 分类剥离到别的
 /// `MessageCategory`；剩余 `MessageCategory::User` 中本函数再过滤：
 /// - `is_meta = true` → 排除
-/// - teammate-message（`<teammate-message ...>...</teammate-message>` 起首）→ 排除
-/// - Text 起首匹配 `SYSTEM_OUTPUT_TAG_PREFIXES`（非空 stdout/stderr/caveat 等）→ 排除
-/// - Blocks 不含任何 `Text` / `Image` block（纯 `tool_result`-only 的"工具结果回传"行）→ 排除
-/// - Blocks 中任一 Text block 起首匹配 `SYSTEM_OUTPUT_TAG_PREFIXES` → 排除
+/// - 任一 Text block / Text content 中含 `<teammate-message teammate_id="...">` → 排除
+///   （复用 `cdt_analyze::contains_teammate_message`，其 regex 要求 `teammate_id` 属性，
+///   与原版 `isParsedTeammateMessage` 行为一致；用户写的纯字面量
+///   `<teammate-message>note</teammate-message>` 不会误判）
+/// - Text 起首（trim 前导空白后）匹配 `SYSTEM_OUTPUT_TAG_PREFIXES` → 排除
+/// - Blocks 不含任何 `Text` / `Image` block（纯 `tool_result`-only "工具结果回传"行）→ 排除
+/// - Blocks 中任一 Text block **不**经 trim 直接 `starts_with` `SYSTEM_OUTPUT_TAG_PREFIXES`
+///   → 排除（与原版 `messages.ts:211-216` 对 array text block 不 trim 一致）
 ///
 /// 详见 `openspec/specs/sidebar-navigation/spec.md` §"会话项展示"。
 fn is_user_chunk_message(msg: &ParsedMessage) -> bool {
@@ -65,7 +69,7 @@ fn is_user_chunk_message(msg: &ParsedMessage) -> bool {
     if msg.is_meta {
         return false;
     }
-    if is_teammate_message_content(&msg.content) {
+    if cdt_analyze::contains_teammate_message(msg) {
         return false;
     }
     match &msg.content {
@@ -85,7 +89,10 @@ fn is_user_chunk_message(msg: &ParsedMessage) -> bool {
             }
             for block in blocks {
                 if let ContentBlock::Text { text } = block {
-                    if starts_with_system_output_tag(text.trim_start()) {
+                    // 原版 messages.ts:213 对 array text block 用 textBlock.text.startsWith(tag)，
+                    // 不做 trim——保持与原版一致以避免 messageCount 与原版差异
+                    // （codex 二审第二轮发现的 bug）。
+                    if starts_with_system_output_tag(text) {
                         return false;
                     }
                 }
@@ -99,20 +106,6 @@ fn starts_with_system_output_tag(text: &str) -> bool {
     SYSTEM_OUTPUT_TAG_PREFIXES
         .iter()
         .any(|tag| text.starts_with(tag))
-}
-
-/// 检查 user 消息是否为 teammate-message——首个 Text block（或 Text content）
-/// trim 后以 `<teammate-message` 起首。chunk-building 会把这种消息抽出嵌入
-/// `AIChunk.teammate_messages`，不产 `UserChunk`，故消息计数 SHALL NOT 计入。
-fn is_teammate_message_content(content: &MessageContent) -> bool {
-    let probe: Option<&str> = match content {
-        MessageContent::Text(s) => Some(s.as_str()),
-        MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
-            ContentBlock::Text { text } => Some(text.as_str()),
-            _ => None,
-        }),
-    };
-    probe.is_some_and(|t| t.trim_start().starts_with("<teammate-message"))
 }
 
 /// 扫描 JSONL 文件，提取标题和消息计数。
@@ -675,6 +668,77 @@ mod tests {
         );
         let meta = extract_session_metadata(&path).await;
         // teammate-message 不产 UserChunk → 不计入；u1 + a1 = 2
+        assert_eq!(meta.message_count, 2);
+    }
+
+    // ---- codex 二轮回归 ----
+    //
+    // 修 commit 29f6389 中三处与原版 isParsedUserChunkMessage 不一致：
+
+    #[tokio::test]
+    async fn message_count_blocks_text_block_does_not_trim_before_tag_match() {
+        // codex bug 1：Blocks 中 Text block 检查 system tag 时**不**应 trim_start，
+        // 与原版 messages.ts:213 `textBlock.text.startsWith(tag)` 一致。
+        // 反例：text 以 " \n<local-command-stdout>..." 起首——原版**不** trim 数组
+        // 内 text，所以 startsWith 不命中 → 计入；本仓修前会 trim 后命中 → 漏算。
+        let tmp = tempfile::tempdir().unwrap();
+        let blocks =
+            r#"[{"type":"text","text":" \n<local-command-stdout>x</local-command-stdout>"}]"#;
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_blocks_line("u1", "2026-05-03T10:00:00.000Z", blocks),
+                &assistant_line("a1", "2026-05-03T10:00:01.000Z"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        // Blocks 内 text block 前导空白不影响 system-tag 匹配（原版不 trim 数组内 text），
+        // 所以这条计入；u1 + a1 = 2
+        assert_eq!(meta.message_count, 2);
+    }
+
+    #[tokio::test]
+    async fn message_count_excludes_teammate_in_non_first_text_block() {
+        // codex bug 2：teammate 检测应遍历**所有** Text block，不只是首个。
+        // 反例：blocks = [text "prefix", text "<teammate-message ...>...</teammate-message>"]
+        // 原版 isParsedTeammateMessage 用 content.some(...) 命中第二个 → 排除；
+        // 本仓修前只看首个 block "prefix" 不命中 → 多算。
+        let tmp = tempfile::tempdir().unwrap();
+        let blocks = r#"[{"type":"text","text":"prefix"},{"type":"text","text":"<teammate-message teammate_id=\"alice\" summary=\"x\">body</teammate-message>"}]"#;
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u0", "2026-05-03T10:00:00.000Z", "hi"),
+                &assistant_line("a0", "2026-05-03T10:00:01.000Z"),
+                &user_blocks_line("u1", "2026-05-03T10:00:02.000Z", blocks),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        // 含 teammate 的 user 行（第二 block）不计入；u0 + a0 = 2
+        assert_eq!(meta.message_count, 2);
+    }
+
+    #[tokio::test]
+    async fn message_count_includes_literal_teammate_tag_without_id_attr() {
+        // codex bug 3：teammate 检测应要求 `teammate_id="..."` 属性
+        // （原版 regex `^<teammate-message\s+teammate_id="([^"]+)"`）。
+        // 反例：用户在文本中写字面量 `<teammate-message>note</teammate-message>`
+        // （没 teammate_id 属性，是普通文本里的标签字面量）原版 regex 不匹配
+        // → 计入；本仓修前用 `starts_with("<teammate-message")` 误判 → 漏算。
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line(
+                    "u1",
+                    "2026-05-03T10:00:00.000Z",
+                    "<teammate-message>note</teammate-message>",
+                ),
+                &assistant_line("a1", "2026-05-03T10:00:01.000Z"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        // 字面量 teammate tag（无 teammate_id 属性）= 普通用户文本 → 计入；u1 + a1 = 2
         assert_eq!(meta.message_count, 2);
     }
 }

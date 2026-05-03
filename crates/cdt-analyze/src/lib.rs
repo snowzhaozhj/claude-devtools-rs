@@ -40,3 +40,4 @@ pub use tool_linking::{
 };
 
 pub mod team;
+pub use team::contains_teammate_message;
