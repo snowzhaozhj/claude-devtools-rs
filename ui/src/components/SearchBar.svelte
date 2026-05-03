@@ -6,9 +6,23 @@
     visible: boolean;
     containerEl: HTMLElement | null;
     onClose: () => void;
+    /**
+     * 在 `doSearch` 调用 `highlightMatches` 之前同步触发，用于让调用方
+     * 准备容器（典型：lazy markdown 全量 hydrate）。详见
+     * `openspec/specs/ui-search/spec.md` `Cmd+F 激活会话内搜索` Requirement。
+     */
+    onBeforeSearch?: () => void;
+    /**
+     * 调用方在容器内容变化时（典型：file-change 自动刷新替换 detail）
+     * 递增此值。SearchBar 在 `visible && query` 状态下检测到 `contentVersion`
+     * 变化时 SHALL 自动重跑 `doSearch` 同步索引。详见
+     * `openspec/specs/ui-search/spec.md` `Cmd+F 激活会话内搜索` Requirement
+     * `file-change 后自动重搜同步索引` Scenario。
+     */
+    contentVersion?: number;
   }
 
-  let { visible, containerEl, onClose }: Props = $props();
+  let { visible, containerEl, onClose, onBeforeSearch, contentVersion = 0 }: Props = $props();
 
   let inputEl: HTMLInputElement | undefined = $state();
   let query = $state("");
@@ -24,6 +38,7 @@
       currentIndex = 0;
       return;
     }
+    onBeforeSearch?.();
     totalMatches = highlightMatches(containerEl, query);
     currentIndex = totalMatches > 0 ? 0 : -1;
     if (totalMatches > 0) {
@@ -75,6 +90,15 @@
       inputEl.focus();
       inputEl.select();
     }
+  });
+
+  // 内容版本号变化时（典型：file-change 自动刷新插入新 chunk）
+  // 自动重搜，让 totalMatches 与新内容同步。doSearch 内部会调
+  // onBeforeSearch（hydrate 新 chunk）+ clearHighlights + highlightMatches。
+  // visible / query 短路在 doSearch 内由 `if (!query) return` 兜底。
+  $effect(() => {
+    contentVersion;
+    if (visible && query) doSearch();
   });
 
   onDestroy(() => {

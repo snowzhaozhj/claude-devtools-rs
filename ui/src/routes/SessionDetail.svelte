@@ -64,6 +64,9 @@
   let expandedChunks: Set<number> = $state(new Set(uiState.expandedChunks));
   let searchVisible = $state(uiState.searchVisible);
   let contextPanelVisible = $state(uiState.contextPanelVisible);
+  // SearchBar 内容版本号：refreshDetail 替换 detail 后递增，让 SearchBar
+  // 在 visible+query 状态下自动重搜，避免 file-change 后 mark 索引过期。
+  let searchContentVersion = $state(0);
 
   function toggleChunk(idx: number) {
     const n = new Set(expandedChunks);
@@ -92,6 +95,8 @@
       const d = await getSessionDetail(projectId, sessionId);
       detail = d;
       setCachedSession(tabId, d);
+      // 通知 SearchBar 内容已变（新增 chunk / 重新 hydrate），触发自动重搜
+      searchContentVersion++;
       if (wasAtBottom) {
         await tick();
         if (conversationEl) {
@@ -420,6 +425,8 @@
     visible={searchVisible}
     containerEl={conversationEl ?? null}
     onClose={() => searchVisible = false}
+    onBeforeSearch={() => lazyObserver?.flushAll()}
+    contentVersion={searchContentVersion}
   />
 
   <!-- Content area (conversation + optional context panel) -->
