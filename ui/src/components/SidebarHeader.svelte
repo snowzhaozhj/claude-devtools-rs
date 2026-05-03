@@ -1,18 +1,15 @@
 <script lang="ts">
-  import type { ProjectInfo, SessionSummary } from "../lib/api";
+  import type { ProjectInfo } from "../lib/api";
   import {
     CHEVRON_DOWN,
     CHECK_SVG,
     FOLDER_GIT2_SVG,
-    GIT_BRANCH_SVG,
     PANEL_LEFT_SVG,
   } from "../lib/icons";
 
   interface Props {
     projects: ProjectInfo[];
     selectedProjectId: string;
-    sessions: SessionSummary[];
-    activeSessionId: string | null;
     onSelectProject: (id: string, name: string) => void;
     onToggleCollapsed: () => void;
   }
@@ -20,8 +17,6 @@
   let {
     projects,
     selectedProjectId,
-    sessions,
-    activeSessionId,
     onSelectProject,
     onToggleCollapsed,
   }: Props = $props();
@@ -43,19 +38,6 @@
   const selectedName = $derived(
     projects.find(p => p.id === selectedProjectId)?.displayName ?? "选择项目"
   );
-
-  // 优先 active session 的 gitBranch；只有 active 不存在或不在列表时才回退到
-  // sessions[0]（按 timestamp desc）。active 存在但其 gitBranch=null（骨架态/
-  // 非 git 项目）时 SHALL 显示 active 自身的 null（即不渲染该栏），不要回退到
-  // 别的 session 的 branch（codex 二审找到的 bug）。
-  // 详见 openspec/specs/sidebar-navigation/spec.md §"项目 git 分支只读栏"。
-  const branch = $derived.by<string | null>(() => {
-    if (activeSessionId) {
-      const active = sessions.find(s => s.sessionId === activeSessionId);
-      if (active) return active.gitBranch;
-    }
-    return sessions[0]?.gitBranch ?? null;
-  });
 </script>
 
 <div class="sidebar-header">
@@ -84,15 +66,6 @@
       </svg>
     </button>
   </div>
-
-  {#if branch}
-    <div class="branch-row">
-      <svg class="branch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        {@html GIT_BRANCH_SVG}
-      </svg>
-      <span class="branch-name">{branch}</span>
-    </div>
-  {/if}
 
   {#if dropdownOpen}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -224,31 +197,6 @@
   .collapse-btn svg {
     width: 16px;
     height: 16px;
-  }
-
-  /* git 分支只读栏 */
-  .branch-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 12px 8px;
-    color: var(--color-text-muted);
-    overflow: hidden;
-  }
-
-  .branch-icon {
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-    color: rgba(52, 211, 153, 0.85);
-  }
-
-  .branch-name {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .dropdown-backdrop {

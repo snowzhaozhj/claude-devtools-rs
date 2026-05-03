@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime};
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use cdt_core::message::{MessageCategory, MessageContent};
+use cdt_core::message::{ContentBlock, MessageCategory, MessageContent, ParsedMessage};
 use cdt_parse::parse_entry_at;
 
 /// 文件 mtime 距 now 超过此阈值则即便消息序列结构上为 ongoing 也强制判 done。
@@ -36,6 +36,84 @@ pub struct SessionMetadata {
 
 /// 扫描标题时读取的最大行数（与原版 `maxLines: 200` 对齐）。
 const TITLE_MAX_LINES: usize = 200;
+
+/// 原版 `SYSTEM_OUTPUT_TAGS`（`messageTags.ts`）：以这些标签起首的 user
+/// 内容是命令输出 / 系统注入，不算用户输入。
+const SYSTEM_OUTPUT_TAG_PREFIXES: &[&str] = &[
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+    "<local-command-caveat>",
+    "<system-reminder>",
+];
+
+/// 是否计入 `messageCount` 的真实 user-chunk 消息——对齐原版
+/// `claude-devtools/src/main/types/messages.ts::isParsedUserChunkMessage`。
+///
+/// hard noise / interrupt / synthetic 由 cdt-parse 分类剥离到别的
+/// `MessageCategory`；剩余 `MessageCategory::User` 中本函数再过滤：
+/// - `is_meta = true` → 排除
+/// - teammate-message（`<teammate-message ...>...</teammate-message>` 起首）→ 排除
+/// - Text 起首匹配 `SYSTEM_OUTPUT_TAG_PREFIXES`（非空 stdout/stderr/caveat 等）→ 排除
+/// - Blocks 不含任何 `Text` / `Image` block（纯 `tool_result`-only 的"工具结果回传"行）→ 排除
+/// - Blocks 中任一 Text block 起首匹配 `SYSTEM_OUTPUT_TAG_PREFIXES` → 排除
+///
+/// 详见 `openspec/specs/sidebar-navigation/spec.md` §"会话项展示"。
+fn is_user_chunk_message(msg: &ParsedMessage) -> bool {
+    if msg.category != MessageCategory::User {
+        return false;
+    }
+    if msg.is_meta {
+        return false;
+    }
+    if is_teammate_message_content(&msg.content) {
+        return false;
+    }
+    match &msg.content {
+        MessageContent::Text(s) => {
+            let trimmed = s.trim_start();
+            if trimmed.is_empty() {
+                return false;
+            }
+            !starts_with_system_output_tag(trimmed)
+        }
+        MessageContent::Blocks(blocks) => {
+            let has_user_content = blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Text { .. } | ContentBlock::Image { .. }));
+            if !has_user_content {
+                return false;
+            }
+            for block in blocks {
+                if let ContentBlock::Text { text } = block {
+                    if starts_with_system_output_tag(text.trim_start()) {
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+    }
+}
+
+fn starts_with_system_output_tag(text: &str) -> bool {
+    SYSTEM_OUTPUT_TAG_PREFIXES
+        .iter()
+        .any(|tag| text.starts_with(tag))
+}
+
+/// 检查 user 消息是否为 teammate-message——首个 Text block（或 Text content）
+/// trim 后以 `<teammate-message` 起首。chunk-building 会把这种消息抽出嵌入
+/// `AIChunk.teammate_messages`，不产 `UserChunk`，故消息计数 SHALL NOT 计入。
+fn is_teammate_message_content(content: &MessageContent) -> bool {
+    let probe: Option<&str> = match content {
+        MessageContent::Text(s) => Some(s.as_str()),
+        MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        }),
+    };
+    probe.is_some_and(|t| t.trim_start().starts_with("<teammate-message"))
+}
 
 /// 扫描 JSONL 文件，提取标题和消息计数。
 ///
@@ -78,8 +156,10 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
             }
         }
 
-        // --- 消息计数（与原版配对逻辑对齐）---
-        if msg.category == MessageCategory::User && !msg.is_meta {
+        // --- 消息计数（对齐原版 isParsedUserChunkMessage 过滤；详见
+        //     `is_user_chunk_message` doc 与 spec sidebar-navigation
+        //     §"会话项展示"）---
+        if is_user_chunk_message(&msg) {
             message_count += 1;
             awaiting_ai = true;
         } else if awaiting_ai
@@ -455,5 +535,146 @@ mod tests {
         );
         let meta = extract_session_metadata(&path).await;
         assert_eq!(meta.git_branch.as_deref(), Some("main"));
+    }
+
+    // ---- messageCount: isParsedUserChunkMessage parity ----
+    //
+    // Spec：`openspec/specs/sidebar-navigation/spec.md` §"会话项展示"
+    //   消息计数语义：对齐原版 `isParsedUserChunkMessage` 过滤逻辑。
+
+    fn assistant_line(uuid: &str, ts: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"assistant","model":"claude-sonnet","content":[{{"type":"text","text":"answer"}}]}}}}"#
+        )
+    }
+
+    fn assistant_tool_use_line(uuid: &str, ts: &str, tool_id: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"assistant","model":"claude-sonnet","content":[{{"type":"tool_use","id":"{tool_id}","name":"Bash","input":{{"command":"ls"}}}}]}}}}"#
+        )
+    }
+
+    fn user_tool_result_line(uuid: &str, ts: &str, tool_id: &str) -> String {
+        format!(
+            r#"{{"type":"user","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"{tool_id}","content":"ok"}}]}}}}"#
+        )
+    }
+
+    fn user_text_line(uuid: &str, ts: &str, text: &str) -> String {
+        let escaped = text.replace('"', "\\\"");
+        format!(
+            r#"{{"type":"user","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"user","content":"{escaped}"}}}}"#
+        )
+    }
+
+    fn user_blocks_line(uuid: &str, ts: &str, content_json: &str) -> String {
+        format!(
+            r#"{{"type":"user","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"user","content":{content_json}}}}}"#
+        )
+    }
+
+    #[tokio::test]
+    async fn message_count_excludes_tool_result_only_user_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-05-03T10:00:00.000Z", "hi"),
+                &assistant_tool_use_line("a1", "2026-05-03T10:00:01.000Z", "tu1"),
+                &user_tool_result_line("u2", "2026-05-03T10:00:02.000Z", "tu1"),
+                &assistant_line("a2", "2026-05-03T10:00:03.000Z"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        // 真实 user-chunk 1 条 + 配对 assistant 1 条 = 2；tool_result-only 行不计入
+        assert_eq!(meta.message_count, 2);
+    }
+
+    #[tokio::test]
+    async fn message_count_includes_text_plus_tool_result_mixed_user_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mixed_blocks = r#"[{"type":"text","text":"please continue"},{"type":"tool_result","tool_use_id":"tu1","content":"ok"}]"#;
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_blocks_line("u1", "2026-05-03T10:00:00.000Z", mixed_blocks),
+                &assistant_line("a1", "2026-05-03T10:00:01.000Z"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        // text + tool_result 混合 → 含 text block → 计入
+        assert_eq!(meta.message_count, 2);
+    }
+
+    #[tokio::test]
+    async fn message_count_includes_image_only_user_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let image_blocks = r#"[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAA"}}]"#;
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_blocks_line("u1", "2026-05-03T10:00:00.000Z", image_blocks),
+                &assistant_line("a1", "2026-05-03T10:00:01.000Z"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        // image block 也算用户输入 → 计入
+        assert_eq!(meta.message_count, 2);
+    }
+
+    #[tokio::test]
+    async fn message_count_excludes_is_meta_user_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let meta_line = r#"{"type":"user","uuid":"u1","timestamp":"2026-05-03T10:00:00.000Z","sessionId":"sid","cwd":"/tmp","isMeta":true,"message":{"role":"user","content":"system bootstrap"}}"#;
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                meta_line,
+                &user_text_line("u2", "2026-05-03T10:00:01.000Z", "hi"),
+                &assistant_line("a1", "2026-05-03T10:00:02.000Z"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        // isMeta=true user 行不计入；剩下真实 user + assistant = 2
+        assert_eq!(meta.message_count, 2);
+    }
+
+    #[tokio::test]
+    async fn message_count_excludes_non_empty_command_output_user_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-05-03T10:00:00.000Z", "/help"),
+                &user_text_line(
+                    "u2",
+                    "2026-05-03T10:00:01.000Z",
+                    "<local-command-stdout>some help text</local-command-stdout>",
+                ),
+                &assistant_line("a1", "2026-05-03T10:00:02.000Z"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        // 非空 stdout 起首的 user 行（cdt-parse 不归 noise，但语义是命令输出）
+        // SHALL NOT 计入；真实 slash command + 配对 assistant = 2
+        assert_eq!(meta.message_count, 2);
+    }
+
+    #[tokio::test]
+    async fn message_count_excludes_teammate_message_user_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let teammate_text =
+            r#"<teammate-message teammate_id=\"alice\" summary=\"x\">hello</teammate-message>"#;
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-05-03T10:00:00.000Z", "hi"),
+                &assistant_line("a1", "2026-05-03T10:00:01.000Z"),
+                &user_text_line("u2", "2026-05-03T10:00:02.000Z", teammate_text),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        // teammate-message 不产 UserChunk → 不计入；u1 + a1 = 2
+        assert_eq!(meta.message_count, 2);
     }
 }

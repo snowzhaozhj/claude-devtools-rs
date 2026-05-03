@@ -25,7 +25,7 @@
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
-  import { MESSAGE_SQUARE } from "../lib/icons";
+  import { MESSAGE_SQUARE, GIT_BRANCH_SVG } from "../lib/icons";
 
   // 虚拟滚动行高（实测 .session-item ≈ 44px：padding 8+8 + title 13×1.4 +
   // meta 11×1.4）；header 行高强制对齐 44 让单一 windowing 单元生效。
@@ -338,8 +338,6 @@
   <SidebarHeader
     {projects}
     {selectedProjectId}
-    {sessions}
-    {activeSessionId}
     {onSelectProject}
     onToggleCollapsed={toggleSidebarCollapsed}
   />
@@ -435,6 +433,13 @@
               </span>
               <span class="session-meta-sep">·</span>
               <span class="session-time">{formatTime(session.timestamp)}</span>
+              {#if session.gitBranch}
+                <span class="session-meta-sep">·</span>
+                <span class="session-branch" title={session.gitBranch}>
+                  <svg class="meta-icon session-branch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html GIT_BRANCH_SVG}</svg>
+                  <span class="session-branch-name">{session.gitBranch}</span>
+                </span>
+              {/if}
             </div>
           </button>
         {/if}
@@ -670,6 +675,27 @@
     font-size: 10px;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  .session-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 10px;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .session-branch-icon {
+    color: rgba(52, 211, 153, 0.7);
+  }
+
+  .session-branch-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Resize handle */

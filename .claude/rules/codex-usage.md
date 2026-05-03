@@ -58,6 +58,7 @@ codex 与 `/code-review` **二选一**——codex 已审过的 PR 不再跑 `/co
 - 全部修完再 push 第二个 commit（**不**事后处理，不留尾巴）
 - 单测同步覆盖每个修复的 bug（codex review 里要求"补单测"段）
 - commit message 标注 "修 codex review 找到的 N 个 bug"
+- **修完先跑第二轮 codex 验证才 push**（用同一 subagent，prompt 列出第一轮 bug + 我的修法 + 想让 codex 重点查的"修法是否真的解决"）。验证通过后再 commit + push；archive commit SHALL 是 codex 验证通过后才打的 PR 最后一个 commit。否则 PR 历史里挂着未验证的 fix，可能仍有 race / 边界 bug——本仓 PR #38 的 active_scans race 第一次修复就漏了 spawn/insert 之间的锁释放 window。
 
 ## 2. 实现卡住：rescue
 

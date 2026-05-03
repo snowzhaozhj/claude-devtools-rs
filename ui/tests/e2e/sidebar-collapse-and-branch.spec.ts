@@ -1,11 +1,11 @@
-// User story: 折叠/展开 sidebar + git 分支栏跟随 active session 切换
+// User story: 折叠/展开 sidebar + git 分支 chip 在每条 SessionItem 行内
 //
 // Spec：openspec/specs/sidebar-navigation/spec.md
-//   §"侧栏折叠/展开" / §"项目 git 分支只读栏"
+//   §"侧栏折叠/展开" / §"会话项展示"（含 git 分支 chip）
 
 import { expect, test } from '@playwright/test'
 
-test.describe('sidebar collapse and git branch row', () => {
+test.describe('sidebar collapse and git branch chip', () => {
   test('点折叠按钮 → sidebar 消失 → TabBar 展开按钮出现 → 点展开恢复', async ({ page }) => {
     await page.goto('/?mock=1&fixture=multi-project-rich')
 
@@ -50,25 +50,28 @@ test.describe('sidebar collapse and git branch row', () => {
     await expect(page.locator('aside.sidebar')).toHaveCount(1, { timeout: 2_000 })
   })
 
-  test('git 分支栏渲染 active session 的 gitBranch', async ({ page }) => {
+  test('git 分支 chip 在每条 SessionItem 行内显示', async ({ page }) => {
     await page.goto('/?mock=1&fixture=multi-project-rich')
-    await page.waitForFunction(() => '__cdtTest' in window, { timeout: 5_000 })
-    await page.getByText('rust-port').first().click()
+    await page.locator('.dash-card').filter({ hasText: 'rust-port' }).click()
 
-    // 默认无 active：fixture 第一条 session（按 timestamp desc）是 sess-rust-active，
-    // gitBranch = 'feat/frontend-test-infrastructure'
-    const branchRow = page.locator('.branch-row .branch-name').first()
-    await expect(branchRow).toContainText('feat/frontend-test-infrastructure', { timeout: 5_000 })
+    // SidebarHeader 不再有 .branch-row（已移到 SessionItem 行内）
+    await expect(page.locator('.branch-row')).toHaveCount(0)
 
-    // 切到 sess-rust-2（gitBranch=main）
-    await page.evaluate(() => {
-      ;(
-        window as unknown as {
-          __cdtTest: { openTab: (s: string, p: string, l: string) => void }
-        }
-      ).__cdtTest.openTab('sess-rust-2', 'mock-rich-rust', '修复 watcher flake')
-    })
+    // fixture 中：sess-rust-active gitBranch=feat/frontend-test-infrastructure，
+    // sess-rust-2 / sess-rust-3 gitBranch=main——每条 SessionItem 第二行 meta
+    // 末尾应有对应 .session-branch chip。
+    const branchNames = page.locator('aside.sidebar .session-branch-name')
+    await expect(branchNames.first()).toContainText(
+      /feat\/frontend-test-infrastructure|main/,
+      { timeout: 5_000 },
+    )
 
-    await expect(branchRow).toContainText('main', { timeout: 5_000 })
+    // 至少能看到不同的两个 branch（rust-port 项目下 active 在 feat 分支，
+    // 其他在 main）
+    const allBranchTexts = await branchNames.allInnerTexts()
+    const uniqueBranches = new Set(allBranchTexts.map((t) => t.trim()))
+    expect(uniqueBranches.size).toBeGreaterThanOrEqual(2)
+    expect(uniqueBranches).toContain('feat/frontend-test-infrastructure')
+    expect(uniqueBranches).toContain('main')
   })
 })
