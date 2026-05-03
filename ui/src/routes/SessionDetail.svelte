@@ -420,6 +420,7 @@
     visible={searchVisible}
     containerEl={conversationEl ?? null}
     onClose={() => searchVisible = false}
+    onBeforeSearch={() => lazyObserver?.flushAll()}
   />
 
   <!-- Content area (conversation + optional context panel) -->

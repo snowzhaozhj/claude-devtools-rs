@@ -6,9 +6,15 @@
     visible: boolean;
     containerEl: HTMLElement | null;
     onClose: () => void;
+    /**
+     * 在 `doSearch` 调用 `highlightMatches` 之前同步触发，用于让调用方
+     * 准备容器（典型：lazy markdown 全量 hydrate）。详见
+     * `openspec/specs/ui-search/spec.md` `Cmd+F 激活会话内搜索` Requirement。
+     */
+    onBeforeSearch?: () => void;
   }
 
-  let { visible, containerEl, onClose }: Props = $props();
+  let { visible, containerEl, onClose, onBeforeSearch }: Props = $props();
 
   let inputEl: HTMLInputElement | undefined = $state();
   let query = $state("");
@@ -24,6 +30,7 @@
       currentIndex = 0;
       return;
     }
+    onBeforeSearch?.();
     totalMatches = highlightMatches(containerEl, query);
     currentIndex = totalMatches > 0 ? 0 : -1;
     if (totalMatches > 0) {

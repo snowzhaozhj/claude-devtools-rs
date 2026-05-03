@@ -46,6 +46,13 @@ interface LazyMarkdownObserver {
     text: string,
     onRendered?: (el: HTMLElement) => void | Promise<void>,
   ): void;
+  /**
+   * 同步把所有 pending 占位渲染为真实 HTML，供搜索 / 打印 / 导出等需要
+   * 全文 DOM 的场景调用。幂等：无 pending 时立即返回。回滚分支为 no-op。
+   * 详见 `openspec/specs/session-display/spec.md`
+   * `Lazy markdown rendering for first paint performance` Requirement。
+   */
+  flushAll(): void;
   /** SessionDetail unmount 时调用。 */
   disconnect(): void;
 }
@@ -63,13 +70,18 @@ export function createLazyMarkdownObserver(
       observe(el, text, onRendered) {
         renderInto(el, text, onRendered);
       },
+      flushAll() {
+        // no-op：disabled 分支下 observe() 已在注册时同步渲染，不存在 pending
+      },
       disconnect() {
         // no-op
       },
     };
   }
 
-  const pending = new WeakMap<
+  // 用 Map 而非 WeakMap：flushAll 需要枚举 entries。observer 持有 IO 对元素的
+  // 强引用，元素不会被 GC，WeakMap 的内存收益在此场景为 0。
+  const pending = new Map<
     Element,
     { text: string; onRendered?: (el: HTMLElement) => void | Promise<void> }
   >();
@@ -95,8 +107,17 @@ export function createLazyMarkdownObserver(
       pending.set(el, { text, onRendered });
       io.observe(el);
     },
+    flushAll() {
+      if (pending.size === 0) return;
+      for (const [el, data] of pending) {
+        renderInto(el as HTMLElement, data.text, data.onRendered);
+        io.unobserve(el);
+      }
+      pending.clear();
+    },
     disconnect() {
       io.disconnect();
+      pending.clear();
     },
   };
 }
