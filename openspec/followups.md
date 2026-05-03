@@ -24,6 +24,23 @@
 - Rust port 时应配套加 scenario-level test
 - **Rust 实现**：`crates/cdt-parse/tests/parse_file.rs::{malformed_line_in_middle_is_skipped, two_adjacent_malformed_lines_both_skipped, empty_file_returns_empty_vec}` 覆盖全部三种异常路径；malformed 行通过 `tracing::warn!` 报告并跳过。
 
+### [deviation] is_interrupt_marker 对 array content 前导空白容忍——原版不 trim
+- Spec: `Classify hard noise messages` requirement（含 interrupt marker 检测）
+- 代码：`crates/cdt-parse/src/noise.rs::is_interrupt_marker` 调用 `extract_user_text`
+  拼接所有 Text block 后 `text.trim().starts_with(INTERRUPT_PREFIX)`
+- 原版差异：`claude-devtools/src/main/types/messages.ts:201-205` array content 单 Text
+  block 含 `[Request interrupted by user` 起首的 interruption 判定**不**做 trim；
+  string content 才 trim
+- 后果：array 单 Text block 带前导空白 + interrupt prefix 起首的消息，本仓归
+  `MessageCategory::Interruption`（messageCount 不计入），原版仍计入
+  `isParsedUserChunkMessage`
+- 触发概率：极低（前导空白 + interrupt 是边缘场景，CLI 写 JSONL 时不会带前导
+  空白）
+- 修法：要么改 cdt-parse 的 `is_interrupt_marker` 区分 string / array branch
+  trim 行为，要么在 cdt-api `is_user_chunk_message` 层重判。前者更彻底但牵连
+  chunk-building / context-tracking 的 Interruption 处理；后者更局部
+- 来源：codex 二审 PR #38 sidebar-meta-row-fix change 第三轮 review
+
 ---
 
 ## chunk-building
