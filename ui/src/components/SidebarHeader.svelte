@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import type { ProjectInfo } from "../lib/api";
   import {
     CHEVRON_DOWN,
@@ -22,6 +23,37 @@
   }: Props = $props();
   let dropdownOpen = $state(false);
 
+  // macOS 隐藏原生 title bar 后保留 traffic lights 浮在内容上层；header
+  // Row 1 兼任 drag region，左侧需为 traffic lights 让位 72px。其余平台
+  // 无 traffic lights，padding 与 drag region 不生效。
+  const isMac = typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh");
+
+  /**
+   * 主动接管 drag region 的 mousedown，preventDefault 阻止浏览器 native
+   * text selection（避免光标拖到下方时把会话标题一起选中），并按单击 /
+   * 双击分别调 startDragging / toggleMaximize。
+   *
+   * **不**用 `data-tauri-drag-region` —— Tauri 2 默认注入的 drag.js 在
+   * capture 阶段会 `stopImmediatePropagation`，导致本组件的 bubbling
+   * 阶段 onmousedown 拿不到事件、preventDefault 没机会跑，文本选择穿透
+   * 到下方列表 + 双击 maximize 在 NSWindow overlay 模式下静默失败。
+   * 直接自己监听 mousedown 完整接管 drag / maximize / 阻止选择。
+   */
+  async function handleDragRegionMouseDown(e: MouseEvent) {
+    if (e.button !== 0) return;
+    // 点击 button（含其内部 svg/span）时跳过让 onclick 正常工作；
+    // 其余 row 内空白（含 traffic light padding 区）都触发 drag/maximize
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button")) return;
+    e.preventDefault();
+    const win = getCurrentWindow();
+    if (e.detail === 2) {
+      await win.toggleMaximize();
+    } else {
+      await win.startDragging();
+    }
+  }
+
   function toggleDropdown() {
     dropdownOpen = !dropdownOpen;
   }
@@ -41,8 +73,16 @@
 </script>
 
 <div class="sidebar-header">
-  <div class="header-row">
-    <button class="project-selector" onclick={toggleDropdown}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="header-row"
+    class:header-row-mac={isMac}
+    onmousedown={handleDragRegionMouseDown}
+  >
+    <button
+      class="project-selector"
+      onclick={toggleDropdown}
+    >
       <span class="project-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           {@html FOLDER_GIT2_SVG}
@@ -102,14 +142,29 @@
 <style>
   .sidebar-header {
     position: relative;
-    padding: 8px 8px 0;
-    border-bottom: 1px solid var(--color-border);
   }
 
   .header-row {
     display: flex;
     align-items: center;
     gap: 4px;
+    height: 40px;
+    padding: 0 8px;
+    box-sizing: border-box;
+    /* border 直接由 row 持有 + box-sizing border-box 让 row 总高 = 40px；
+       否则 sidebar-header 自带 border-bottom + row height 40 = 41px，与
+       右侧 TabBar 40px 错位 1px（左右分隔线对不齐）。 */
+    border-bottom: 1px solid var(--color-border);
+    /* drag region 上 mousedown 会启动 native text selection；除 JS 层
+       preventDefault 兜底外这里也禁掉，避免光标拖到下方时选中会话标题。 */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* macOS 隐藏原生 title bar 后 traffic lights 浮在 webview 左上角，预留
+     72px 让位（对齐原版 HEADER_ROW1 + getTrafficLightPaddingForZoom(1)） */
+  .header-row-mac {
+    padding-left: 72px;
   }
 
   .project-selector {

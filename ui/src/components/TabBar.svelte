@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
     closeTab,
     getPaneById,
@@ -27,6 +28,12 @@
   let { paneId, isFirstPane = false }: Props = $props();
 
   const showExpandBtn = $derived(isFirstPane && getSidebarCollapsed());
+
+  // sidebar 折叠后 traffic lights 暴露在最左 pane 顶部（macOS 隐藏 title bar
+  // 时由 OS 浮绘在 webview 上）；对齐原版 TabBar.tsx 的 sidebarCollapsed
+  // && isLeftmostPane 时加 traffic light padding 让 expand 按钮和 tab 让位。
+  const isMac = typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh");
+  const reserveTrafficLightSpace = $derived(isMac && isFirstPane && getSidebarCollapsed());
 
   const pane = $derived(getPaneById(paneId));
   const tabs = $derived(pane?.tabs ?? []);
@@ -103,9 +110,31 @@
     if (dragSource && dragSource.paneId === paneId && dragSource.sourceIndex === index) return false;
     return true;
   }
+
+  // TabBar 顶部条整体作为 drag region：单击 + 拖移动窗口、双击 maximize；
+  // 点击 button / tab-item 等可交互子元素时跳过。对齐原版 TabBar.tsx 的
+  // `WebkitAppRegion: 'drag'` on isLeftmostPane 行为，但本仓所有 pane 顶
+  // 部条都启用 drag 让多 pane 拆分时也能拖动窗口。
+  async function handleTabBarMouseDown(e: MouseEvent) {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button, .tab-item")) return;
+    e.preventDefault();
+    const win = getCurrentWindow();
+    if (e.detail === 2) {
+      await win.toggleMaximize();
+    } else {
+      await win.startDragging();
+    }
+  }
 </script>
 
-<div class="tab-bar">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="tab-bar"
+  class:tab-bar-mac-collapsed={reserveTrafficLightSpace}
+  onmousedown={handleTabBarMouseDown}
+>
   {#if showExpandBtn}
     <button
       class="expand-sidebar-btn"
@@ -206,13 +235,24 @@
 
 <style>
   .tab-bar {
-    height: 36px;
-    min-height: 36px;
+    height: 40px;
+    min-height: 40px;
     display: flex;
     align-items: stretch;
     background: var(--color-bg-tertiary, var(--color-surface-sidebar));
     border-bottom: 1px solid var(--color-border);
     overflow: hidden;
+    /* border-box 让 border 含在 40px 总高内，对齐左侧 .header-row（也是
+       border-box + height 40），否则两者底部 border 错位 1px。 */
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* sidebar 折叠时 macOS traffic lights 占用最左 pane 顶部 72px，让 expand
+     按钮和 tab 列表往右挪避开（对齐原版 TabBar.tsx 同等逻辑） */
+  .tab-bar-mac-collapsed {
+    padding-left: 72px;
   }
 
   .expand-sidebar-btn {
