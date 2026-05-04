@@ -222,8 +222,14 @@ const compactChunk: CompactChunk = {
   uuid: 'c-active-1',
   timestamp: ts(0.6),
   durationMs: null,
-  summaryText: '对话已 compact',
+  summaryText: '对话已 compact。包含历史摘要 + 新一阶段的开篇上下文。',
   metrics: emptyMetrics(),
+  tokenDelta: {
+    preCompactionTokens: 30000,
+    postCompactionTokens: 5000,
+    delta: -25000,
+  },
+  phaseNumber: 2,
 }
 
 const richChunks: Chunk[] = [userChunk, systemChunk, aiChunk, aiChunkInterrupted, compactChunk]

@@ -250,6 +250,12 @@ export interface SystemChunk {
   metrics: ChunkMetrics;
 }
 
+export interface CompactionTokenDelta {
+  preCompactionTokens: number;
+  postCompactionTokens: number;
+  delta: number;
+}
+
 export interface CompactChunk {
   kind: "compact";
   uuid: string;
@@ -257,6 +263,17 @@ export interface CompactChunk {
   durationMs: number | null;
   summaryText: string;
   metrics: ChunkMetrics;
+  /**
+   * 该 compact 边界对应的 token 数差值。`cdt-api` 组装层基于 chunks 邻接 AI 的
+   * usage 派生填充；当 compact 之前/之后无 AI 或 AI usage 缺失时为 `null`/缺省。
+   * spec: ipc-data-api "Expose CompactChunk derived metadata in SessionDetail"
+   */
+  tokenDelta?: CompactionTokenDelta | null;
+  /**
+   * 该 compact 在 chunks 序列中的 1-based ordinal + 1（chunks 中第 i 个 compact
+   * → phase i+1，对齐原版 `groupTransformer.ts` `phaseCounter++`）。
+   */
+  phaseNumber?: number | null;
 }
 
 export type Chunk = UserChunk | AIChunk | SystemChunk | CompactChunk;

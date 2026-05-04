@@ -67,6 +67,8 @@ fn compact_chunk(uuid: &str, offset: i64) -> Chunk {
         duration_ms: None,
         summary_text: "summary of phase".into(),
         metrics: ChunkMetrics::zero(),
+        token_delta: None,
+        phase_number: None,
     })
 }
 
