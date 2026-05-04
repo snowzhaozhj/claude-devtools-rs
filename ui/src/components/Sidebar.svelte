@@ -492,7 +492,10 @@
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    border-bottom: 1px solid var(--color-border);
+    /* 不加 border-bottom：原版 sidebar 内只有 SidebarHeader 一条顶部
+       border，search filter bar 跟 list 之间靠 padding 视觉分隔即可。
+       加 border 会让 sidebar 内出现第二条横线，跟右侧 TabBar 唯一一
+       条横线对不齐（用户视觉上的「分隔线没齐平」）。 */
   }
 
   .session-filter-input {
