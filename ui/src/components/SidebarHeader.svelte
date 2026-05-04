@@ -4,7 +4,6 @@
   import {
     CHEVRON_DOWN,
     CHECK_SVG,
-    FOLDER_GIT2_SVG,
     PANEL_LEFT_SVG,
   } from "../lib/icons";
 
@@ -83,11 +82,6 @@
       class="project-selector"
       onclick={toggleDropdown}
     >
-      <span class="project-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          {@html FOLDER_GIT2_SVG}
-        </svg>
-      </span>
       <span class="project-name">{selectedName}</span>
       <span class="dropdown-arrow" class:dropdown-arrow-open={dropdownOpen}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -147,14 +141,21 @@
   .header-row {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     height: 40px;
     padding: 0 8px;
     box-sizing: border-box;
+    /* toolbar 背景层：用半透明黑色叠加在 sidebar 色上，亮暗 mode 都通用
+       且效果明显。叠加 8% 黑 = 浅色 sidebar #f2f1ef 上呈现 #dcdbd9，比
+       sidebar 深 ~14 点亮度，肉眼明确可见的"toolbar 带"。box-shadow inset
+       顶部加 1px 高光是 macOS toolbar 标志性的立体感（NSWindow toolbar 自带
+       的细高光），让 traffic lights 视觉上落在一个真正的"工具栏区域"里。 */
+    background: rgba(0, 0, 0, 0.05);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
     /* border 直接由 row 持有 + box-sizing border-box 让 row 总高 = 40px；
        否则 sidebar-header 自带 border-bottom + row height 40 = 41px，与
        右侧 TabBar 40px 错位 1px（左右分隔线对不齐）。 */
-    border-bottom: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border-emphasis);
     /* drag region 上 mousedown 会启动 native text selection；除 JS 层
        preventDefault 兜底外这里也禁掉，避免光标拖到下方时选中会话标题。 */
     user-select: none;
@@ -162,18 +163,26 @@
   }
 
   /* macOS 隐藏原生 title bar 后 traffic lights 浮在 webview 左上角，预留
-     72px 让位（对齐原版 HEADER_ROW1 + getTrafficLightPaddingForZoom(1)） */
+     左侧让位。72px 是 traffic lights group 宽 (52px) + 左右 padding 的
+     标准底线；再加 4px 让标题 hover button 的圆角不触碰最右侧绿点边缘。
+     padding 大了视觉上断成"traffic lights 一组、标题孤岛、collapse 孤岛"
+     三段；收紧到 76 让 toolbar 视觉密度连续，对齐 RustRover/macOS toolbar。 */
   .header-row-mac {
-    padding-left: 72px;
+    padding-left: 76px;
   }
 
+  /* macOS toolbar ghost-button 风格：默认透明、hover 才显微背景圆角，
+     与 traffic lights "可交互按钮" 同类。字号 14 + 字重 600 平衡 traffic
+     lights 视觉权重——之前 13/500 太轻被三个饱和圆点压制。hover 用
+     surface-overlay 而非 raised：因为 header-row 本身已是 raised 背景，
+     hover 必须更深一档（overlay）才能形成可见反馈。 */
   .project-selector {
-    flex: 1;
     min-width: 0;
-    display: flex;
+    flex-shrink: 1;
+    display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
+    gap: 6px;
+    padding: 4px 8px;
     background: none;
     border: none;
     border-radius: 6px;
@@ -181,29 +190,21 @@
     font: inherit;
     font-size: 14px;
     font-weight: 600;
+    /* line-height:1 锁字体 box 高 = 字号本身，让 inline-flex align:center
+       的视觉中心精确对齐 traffic lights 圆点中心（trafficLightPosition
+       y=12, group height 16, 圆心 Y=20；header-row 高 40，中心也是 Y=20）。 */
+    line-height: 1;
     cursor: pointer;
-    transition: background 0.1s;
+    transition: background 0.12s ease;
   }
 
   .project-selector:hover {
-    background: var(--tool-item-hover-bg);
-  }
-
-  .project-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--color-text-secondary);
-    flex-shrink: 0;
-  }
-
-  .project-icon svg {
-    width: 16px;
-    height: 16px;
+    /* header-row 已是 overlay，hover 用半透明深色叠加形成反馈，亮暗
+       mode 都通用——比再加新 token 更稳。 */
+    background: rgba(0, 0, 0, 0.06);
   }
 
   .project-name {
-    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -214,7 +215,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: var(--color-text-secondary);
+    color: var(--color-text-muted);
     flex-shrink: 0;
     transition: transform 0.15s ease;
   }
@@ -232,20 +233,19 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
+    margin-left: auto;
+    padding: 6px;
     flex-shrink: 0;
     background: none;
     border: none;
     border-radius: 6px;
     color: var(--color-text-muted);
     cursor: pointer;
-    transition: background 0.1s, color 0.1s;
+    transition: background 0.12s ease, color 0.12s ease;
   }
 
   .collapse-btn:hover {
-    background: var(--tool-item-hover-bg);
+    background: rgba(0, 0, 0, 0.06);
     color: var(--color-text-secondary);
   }
 
