@@ -90,26 +90,26 @@ const OMIT_TOOL_OUTPUT: bool = true;
 /// 的 `openspec/specs/ipc-data-api/spec.md` "Expose `CompactChunk` derived metadata in `SessionDetail`"。
 const COMPACT_DERIVED_ENABLED: bool = true;
 
+/// 累加一个 `TokenUsage` 的四类计数，溢出时返回 `None`（防御性，u64 总量
+/// 实际罕见溢出，但坏 JSONL 可能把 usage 字段填到极大值，避免 panic）。
+fn token_usage_total(u: &cdt_core::TokenUsage) -> Option<u64> {
+    u.input_tokens
+        .checked_add(u.output_tokens)?
+        .checked_add(u.cache_read_input_tokens)?
+        .checked_add(u.cache_creation_input_tokens)
+}
+
 fn ai_last_response_total_tokens(ai: &cdt_core::AIChunk) -> Option<u64> {
-    ai.responses.iter().rev().find_map(|r| {
-        r.usage.as_ref().map(|u| {
-            u.input_tokens
-                + u.output_tokens
-                + u.cache_read_input_tokens
-                + u.cache_creation_input_tokens
-        })
-    })
+    ai.responses
+        .iter()
+        .rev()
+        .find_map(|r| r.usage.as_ref().and_then(token_usage_total))
 }
 
 fn ai_first_response_total_tokens(ai: &cdt_core::AIChunk) -> Option<u64> {
-    ai.responses.iter().find_map(|r| {
-        r.usage.as_ref().map(|u| {
-            u.input_tokens
-                + u.output_tokens
-                + u.cache_read_input_tokens
-                + u.cache_creation_input_tokens
-        })
-    })
+    ai.responses
+        .iter()
+        .find_map(|r| r.usage.as_ref().and_then(token_usage_total))
 }
 
 fn find_last_ai_before(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core::AIChunk> {

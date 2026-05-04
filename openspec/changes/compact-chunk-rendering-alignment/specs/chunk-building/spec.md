@@ -2,14 +2,16 @@
 
 ### Requirement: CompactChunk carries optional derived metadata
 
-`CompactChunk`（`cdt-core::chunk::CompactChunk`）SHALL 提供两个可选派生字段，承载本会话内由 `ContextPhaseInfo` 关联出的 compaction 元数据：
+`CompactChunk`（`cdt-core::chunk::CompactChunk`）SHALL 提供两个可选派生槽位，让 IPC 组装层后置填充 compaction 元数据：
 
-- `tokenDelta: Option<CompactionTokenDelta>` —— compact 边界对应的 token 数差值（含 `preCompactionTokens` / `postCompactionTokens` / `delta`），来源为 `ContextPhaseInfo::compaction_token_deltas[chunk_uuid]`
-- `phaseNumber: Option<u32>` —— compact 之后第一个 `AIChunk` 所属的 phase 编号，来源为 `ContextPhaseInfo::ai_group_phase_map[next_ai_chunk.responses[0].uuid]`
+- `tokenDelta: Option<CompactionTokenDelta>` —— compact 边界对应的 token 数差值（含 `preCompactionTokens` / `postCompactionTokens` / `delta`）
+- `phaseNumber: Option<u32>` —— 该 compact 在 chunks 中的 phase 编号
+
+两个字段的**派生算法与数据来源**由 capability `ipc-data-api` 的 Requirement `Expose CompactChunk derived metadata in SessionDetail` 定义——派生层从 chunks 自身（邻接 AI 的 last/first response usage 与 chunks 顺序 compact ordinal）独立计算，**不**依赖 `ContextPhaseInfo`。本 capability 仅声明 `CompactChunk` 提供这两个 optional 槽位。
 
 两个字段均 SHALL 用 `#[serde(default, skip_serializing_if = "Option::is_none")]`——`None` 时序列化省略字段，让老 fixture / 老前端兼容。
 
-`cdt-analyze::chunk::builder` 在 emit `CompactChunk` 时 MUST 把这两个字段填 `None`——builder 算法层不依赖 `ContextPhaseInfo`，保持 `chunk-building` capability 既有契约（chunk emission 算法的输入仅是 `ParsedMessage` 流）。两个字段的真实值由组装层（`ipc-data-api`）后置填充，对应 spec delta 见 capability `ipc-data-api`。
+`cdt-analyze::chunk::builder` 在 emit `CompactChunk` 时 MUST 把这两个字段填 `None`——builder 算法层接收 `ParsedMessage` 流并 emit Chunk，**不**依赖任何 phase / token 派生数据源，保持 `chunk-building` capability 既有契约（chunk emission 算法行为不变）。两个字段的真实值由 IPC 组装层（`cdt-api`）在 chunks 全部产出后基于 chunks 自身派生填充。
 
 #### Scenario: Builder emits CompactChunk with derived fields as None
 
