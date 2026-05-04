@@ -172,6 +172,8 @@ fn chunk_loop(
                     duration_ms: None,
                     summary_text: extract_plain_text(&msg.content),
                     metrics: ChunkMetrics::zero(),
+                    token_delta: None,
+                    phase_number: None,
                 }));
             }
             MessageCategory::User => {

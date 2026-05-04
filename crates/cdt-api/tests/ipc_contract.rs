@@ -319,9 +319,64 @@ fn chunk_enum_system_and_compact_tags() {
         duration_ms: None,
         summary_text: "summary".into(),
         metrics: ChunkMetrics::default(),
+        token_delta: None,
+        phase_number: None,
     });
     assert_eq!(serde_json::to_value(&s).unwrap()["kind"], json!("system"));
     assert_eq!(serde_json::to_value(&c).unwrap()["kind"], json!("compact"));
+}
+
+/// 验 `CompactChunk.tokenDelta` / `phaseNumber` 在 `Some(...)` 时序列化
+/// 使用 camelCase 键名，且 `tokenDelta` 内层（`preCompactionTokens` 等）
+/// 也是 camelCase。spec: ipc-data-api "Token delta present" Scenario。
+#[test]
+fn compact_chunk_serializes_token_delta_and_phase_number_camelcase() {
+    let c = Chunk::Compact(CompactChunk {
+        uuid: "c1".into(),
+        timestamp: ts(),
+        duration_ms: None,
+        summary_text: "summary".into(),
+        metrics: ChunkMetrics::default(),
+        token_delta: Some(cdt_core::CompactionTokenDelta {
+            pre_compaction_tokens: 30_000,
+            post_compaction_tokens: 5_000,
+            delta: -25_000,
+        }),
+        phase_number: Some(3),
+    });
+    let v = serde_json::to_value(&c).unwrap();
+    assert_eq!(v["tokenDelta"]["preCompactionTokens"], 30_000);
+    assert_eq!(v["tokenDelta"]["postCompactionTokens"], 5_000);
+    assert_eq!(v["tokenDelta"]["delta"], -25_000);
+    assert_eq!(v["phaseNumber"], 3);
+    // 反向断言：snake_case 形态不存在
+    assert!(v["token_delta"].is_null());
+    assert!(v["phase_number"].is_null());
+}
+
+/// 验 `tokenDelta: None` AND `phaseNumber: None` 时序列化省略两个字段
+/// （`#[serde(skip_serializing_if = "Option::is_none")]` 行为）。spec:
+/// ipc-data-api "Token delta None" / "Phase number None" Scenarios。
+#[test]
+fn compact_chunk_omits_optional_derived_fields_when_none() {
+    let c = Chunk::Compact(CompactChunk {
+        uuid: "c1".into(),
+        timestamp: ts(),
+        duration_ms: None,
+        summary_text: "summary".into(),
+        metrics: ChunkMetrics::default(),
+        token_delta: None,
+        phase_number: None,
+    });
+    let v = serde_json::to_value(&c).unwrap();
+    assert!(
+        v.get("tokenDelta").is_none(),
+        "tokenDelta key should be omitted when None"
+    );
+    assert!(
+        v.get("phaseNumber").is_none(),
+        "phaseNumber key should be omitted when None"
+    );
 }
 
 #[test]

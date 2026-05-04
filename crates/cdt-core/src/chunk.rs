@@ -9,6 +9,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::context::CompactionTokenDelta;
 use crate::message::{MessageContent, TokenUsage, ToolCall};
 use crate::process::Process;
 use crate::tool_execution::ToolExecution;
@@ -210,6 +211,17 @@ pub struct CompactChunk {
     pub duration_ms: Option<i64>,
     pub summary_text: String,
     pub metrics: ChunkMetrics,
+    /// 该 compact 边界对应的 token 数差值。`cdt-analyze::chunk::builder` emit 时填 `None`，
+    /// 由 `cdt-api` 组装层基于 chunks 邻接 AI 的 last/first response usage 派生。
+    /// 序列化时按 `Option::is_none` 跳过，对老 fixture / 老前端兼容。
+    /// spec: `openspec/specs/ipc-data-api/spec.md` "Expose `CompactChunk` derived metadata in `SessionDetail`"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_delta: Option<CompactionTokenDelta>,
+    /// 该 compact 在 chunks 序列中的 1-based ordinal + 1（即 chunks 中第 i 个 compact → phase i+1），
+    /// 对齐原版 `groupTransformer.ts` 的 `phaseCounter++` 语义。`cdt-analyze::chunk::builder` emit
+    /// 时填 `None`，由 `cdt-api` 组装层按 chunks 顺序派生。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_number: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -469,6 +481,31 @@ mod tests {
             duration_ms: None,
             summary_text: "summary".into(),
             metrics: ChunkMetrics::zero(),
+            token_delta: None,
+            phase_number: None,
         }));
+    }
+
+    #[test]
+    fn compact_chunk_with_derived_camelcase_roundtrip() {
+        let c = CompactChunk {
+            uuid: "c1".into(),
+            timestamp: ts(),
+            duration_ms: None,
+            summary_text: "summary".into(),
+            metrics: ChunkMetrics::zero(),
+            token_delta: Some(CompactionTokenDelta {
+                pre_compaction_tokens: 30_000,
+                post_compaction_tokens: 5_000,
+                delta: -25_000,
+            }),
+            phase_number: Some(2),
+        };
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["tokenDelta"]["preCompactionTokens"], 30_000);
+        assert_eq!(v["tokenDelta"]["postCompactionTokens"], 5_000);
+        assert_eq!(v["tokenDelta"]["delta"], -25_000);
+        assert_eq!(v["phaseNumber"], 2);
+        roundtrip(&Chunk::Compact(c));
     }
 }

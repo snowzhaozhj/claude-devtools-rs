@@ -75,6 +75,111 @@ const OMIT_RESPONSE_CONTENT: bool = true;
 /// `session-detail-tool-output-lazy-load`。
 const OMIT_TOOL_OUTPUT: bool = true;
 
+/// `CompactChunk.token_delta` / `CompactChunk.phase_number` 派生开关。
+///
+/// `cdt-analyze::chunk::builder` emit `CompactChunk` 时填 `None`，由本文件
+/// `apply_compact_derived` 在 IPC 组装层基于 chunks 自身派生填充：phaseNumber
+/// 按 chunks 顺序 1-based ordinal 计算（对齐原版 `groupTransformer.ts`
+/// `phaseCounter++`），tokenDelta 通过 `find_last_ai_before` /
+/// `find_first_ai_after` 取邻接 AI 的 last/first response usage 总和算 delta
+/// （对齐原版 `findLastAiBefore` / `findFirstAiAfter`）。
+///
+/// 紧急回滚：把本常量改为 `false` 即让 `apply_compact_derived` 直接 return；
+/// 前端 fallback 路径（`tokenDelta` / `phaseNumber` 字段缺失时不渲染 Phase 徽章
+/// 与 token delta 行）自动接管。行为契约见 change `compact-chunk-rendering-alignment`
+/// 的 `openspec/specs/ipc-data-api/spec.md` "Expose `CompactChunk` derived metadata in `SessionDetail`"。
+const COMPACT_DERIVED_ENABLED: bool = true;
+
+fn ai_last_response_total_tokens(ai: &cdt_core::AIChunk) -> Option<u64> {
+    ai.responses.iter().rev().find_map(|r| {
+        r.usage.as_ref().map(|u| {
+            u.input_tokens
+                + u.output_tokens
+                + u.cache_read_input_tokens
+                + u.cache_creation_input_tokens
+        })
+    })
+}
+
+fn ai_first_response_total_tokens(ai: &cdt_core::AIChunk) -> Option<u64> {
+    ai.responses.iter().find_map(|r| {
+        r.usage.as_ref().map(|u| {
+            u.input_tokens
+                + u.output_tokens
+                + u.cache_read_input_tokens
+                + u.cache_creation_input_tokens
+        })
+    })
+}
+
+fn find_last_ai_before(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core::AIChunk> {
+    chunks[..i].iter().rev().find_map(|c| {
+        if let cdt_core::Chunk::Ai(ai) = c {
+            Some(ai)
+        } else {
+            None
+        }
+    })
+}
+
+fn find_first_ai_after(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core::AIChunk> {
+    chunks[i + 1..].iter().find_map(|c| {
+        if let cdt_core::Chunk::Ai(ai) = c {
+            Some(ai)
+        } else {
+            None
+        }
+    })
+}
+
+/// 派生 `CompactChunk` 的 `token_delta` / `phase_number` 两个可选字段。
+///
+/// 算法（D1c phaseNumber + D1d tokenDelta，详见 design.md 修订链）：
+///
+/// - 派生层**完全独立**于 `cdt_core::ContextPhaseInfo`——避开 cdt-analyze 内部
+///   `current_phase_compact_group_id` 在连续 compact 时被覆盖的问题
+/// - phaseNumber：按 chunks 顺序遍历，每遇 `Compact` 就 `compact_counter += 1`
+///   （从 1 起），赋 `Some(counter)`。chunks 中第 i 个 compact → phase i+1
+/// - tokenDelta：对每个 compact 独立查 `find_last_ai_before` /
+///   `find_first_ai_after`，分别取它们的 last/first response usage 总和算
+///   `post - pre`；任一缺值 → `None`
+///
+/// 两趟扫描避免可变借用冲突：Pass 1 不可变借用算 (delta, phase)，Pass 2 可变借用写入。
+fn apply_compact_derived(chunks: &mut [cdt_core::Chunk], enabled: bool) {
+    if !enabled {
+        return;
+    }
+    let mut compact_counter: u32 = 1;
+    let mut updates: Vec<(usize, Option<cdt_core::CompactionTokenDelta>, u32)> = Vec::new();
+    for (i, chunk) in chunks.iter().enumerate() {
+        if matches!(chunk, cdt_core::Chunk::Compact(_)) {
+            let delta = match (
+                find_last_ai_before(chunks, i).and_then(ai_last_response_total_tokens),
+                find_first_ai_after(chunks, i).and_then(ai_first_response_total_tokens),
+            ) {
+                (Some(pre), Some(post)) => {
+                    let pre_i = i64::try_from(pre).unwrap_or(i64::MAX);
+                    let post_i = i64::try_from(post).unwrap_or(i64::MAX);
+                    Some(cdt_core::CompactionTokenDelta {
+                        pre_compaction_tokens: pre,
+                        post_compaction_tokens: post,
+                        delta: post_i - pre_i,
+                    })
+                }
+                _ => None,
+            };
+            compact_counter += 1;
+            updates.push((i, delta, compact_counter));
+        }
+    }
+    for (i, delta, phase) in updates {
+        if let cdt_core::Chunk::Compact(c) = &mut chunks[i] {
+            c.token_delta = delta;
+            c.phase_number = Some(phase);
+        }
+    }
+}
+
 /// 遍历 chunks 内所有 `ContentBlock::Image`，把 `source.data` 替换为空字符串
 /// 并设 `source.data_omitted = true`。覆盖 `UserChunk.content`、
 /// `AIChunk.responses[].content` 与 `AIChunk.subagents[].messages[]` 嵌套层。
@@ -632,6 +737,12 @@ impl DataApi for LocalDataApi {
         // is_shutdown_only 已由 resolver 阶段填充，可独立渲染 header。
         let chunks_for_payload = {
             let mut cloned = chunks.clone();
+            // CompactChunk 派生 token_delta / phase_number 必须在 OMIT 之前跑——
+            // OMIT 不改 chunk 顺序也不改 responses[i].usage，前后顺序对算法本身
+            // 无影响；但放在 OMIT 之前更接近"chunks 落定 → 派生 metadata → 应用
+            // OMIT 瘦身"的清晰流水线。详见 change `compact-chunk-rendering-alignment`
+            // 的 design.md D1c+D1d。
+            apply_compact_derived(&mut cloned, COMPACT_DERIVED_ENABLED);
             // phase 3：image base64 OMIT 必须在 subagent OMIT 之前跑，否则
             // OMIT_SUBAGENT_MESSAGES=false 回滚路径下嵌套 messages 内的 image
             // 不会被裁。
@@ -2234,5 +2345,253 @@ mod tests {
             cand.is_ongoing,
             "tool_use → tool_result 但无后续 assistant 收尾应判 ongoing"
         );
+    }
+
+    // -------- apply_compact_derived 派生算法单测（11 个 Scenario）--------
+    // spec: openspec/specs/ipc-data-api/spec.md "Expose CompactChunk derived metadata in SessionDetail"
+    // design: change `compact-chunk-rendering-alignment` 的 D1c (phaseNumber)
+    // + D1d (tokenDelta)，派生层完全独立于 ContextPhaseInfo
+
+    fn ts_test() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-04-15T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    fn ai_chunk_with_usage(uuid: &str, total_tokens: u64) -> cdt_core::Chunk {
+        cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            timestamp: ts_test(),
+            duration_ms: None,
+            responses: vec![cdt_core::AssistantResponse {
+                uuid: uuid.into(),
+                timestamp: ts_test(),
+                content: cdt_core::MessageContent::Text(String::new()),
+                tool_calls: Vec::new(),
+                usage: Some(cdt_core::TokenUsage {
+                    input_tokens: total_tokens,
+                    output_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                }),
+                model: Some("claude-opus-4-7".into()),
+                content_omitted: false,
+            }],
+            metrics: cdt_core::ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: Vec::new(),
+            subagents: Vec::new(),
+            slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
+        })
+    }
+
+    fn ai_chunk_no_usage(uuid: &str) -> cdt_core::Chunk {
+        cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            timestamp: ts_test(),
+            duration_ms: None,
+            responses: vec![cdt_core::AssistantResponse {
+                uuid: uuid.into(),
+                timestamp: ts_test(),
+                content: cdt_core::MessageContent::Text(String::new()),
+                tool_calls: Vec::new(),
+                usage: None,
+                model: None,
+                content_omitted: false,
+            }],
+            metrics: cdt_core::ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: Vec::new(),
+            subagents: Vec::new(),
+            slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
+        })
+    }
+
+    fn compact_chunk_test(uuid: &str) -> cdt_core::Chunk {
+        cdt_core::Chunk::Compact(cdt_core::CompactChunk {
+            uuid: uuid.into(),
+            timestamp: ts_test(),
+            duration_ms: None,
+            summary_text: "summary".into(),
+            metrics: cdt_core::ChunkMetrics::zero(),
+            token_delta: None,
+            phase_number: None,
+        })
+    }
+
+    fn user_chunk_test(uuid: &str) -> cdt_core::Chunk {
+        cdt_core::Chunk::User(cdt_core::UserChunk {
+            uuid: uuid.into(),
+            timestamp: ts_test(),
+            duration_ms: None,
+            content: cdt_core::MessageContent::Text("user".into()),
+            metrics: cdt_core::ChunkMetrics::zero(),
+        })
+    }
+
+    fn system_chunk_test(uuid: &str) -> cdt_core::Chunk {
+        cdt_core::Chunk::System(cdt_core::SystemChunk {
+            uuid: uuid.into(),
+            timestamp: ts_test(),
+            duration_ms: None,
+            content_text: "sys".into(),
+            metrics: cdt_core::ChunkMetrics::zero(),
+        })
+    }
+
+    fn extract_compact(chunks: &[cdt_core::Chunk], idx: usize) -> &cdt_core::CompactChunk {
+        if let cdt_core::Chunk::Compact(c) = &chunks[idx] {
+            c
+        } else {
+            panic!("expected compact at index {idx}")
+        }
+    }
+
+    #[test]
+    fn derive_token_delta_computed_from_neighboring_ai() {
+        let mut chunks = vec![
+            ai_chunk_with_usage("ai-1", 30_000),
+            compact_chunk_test("c-1"),
+            ai_chunk_with_usage("ai-2", 5_000),
+        ];
+        apply_compact_derived(&mut chunks, true);
+        let c = extract_compact(&chunks, 1);
+        assert_eq!(
+            c.token_delta,
+            Some(cdt_core::CompactionTokenDelta {
+                pre_compaction_tokens: 30_000,
+                post_compaction_tokens: 5_000,
+                delta: -25_000,
+            })
+        );
+    }
+
+    #[test]
+    fn derive_token_delta_none_when_no_ai_before() {
+        let mut chunks = vec![
+            user_chunk_test("u-1"),
+            compact_chunk_test("c-1"),
+            ai_chunk_with_usage("ai-1", 5_000),
+        ];
+        apply_compact_derived(&mut chunks, true);
+        assert_eq!(extract_compact(&chunks, 1).token_delta, None);
+    }
+
+    #[test]
+    fn derive_token_delta_none_when_no_ai_after() {
+        let mut chunks = vec![
+            ai_chunk_with_usage("ai-1", 30_000),
+            compact_chunk_test("c-1"),
+        ];
+        apply_compact_derived(&mut chunks, true);
+        assert_eq!(extract_compact(&chunks, 1).token_delta, None);
+    }
+
+    #[test]
+    fn derive_token_delta_none_when_ai_lacks_usage() {
+        let mut chunks = vec![
+            ai_chunk_no_usage("ai-1"),
+            compact_chunk_test("c-1"),
+            ai_chunk_with_usage("ai-2", 5_000),
+        ];
+        apply_compact_derived(&mut chunks, true);
+        assert_eq!(extract_compact(&chunks, 1).token_delta, None);
+    }
+
+    /// **D1d 关键修复证据**：连续 `A → B → AI` 时两个 compact 都拿到相同
+    /// tokenDelta（不会因 cdt-analyze 内部 `current_phase_compact_group_id`
+    /// 覆盖问题让 c-1 拿到 None）。spec: "Consecutive compacts share identical
+    /// token delta" Scenario。
+    #[test]
+    fn derive_consecutive_compacts_share_identical_token_delta() {
+        let mut chunks = vec![
+            ai_chunk_with_usage("ai-1", 30_000),
+            compact_chunk_test("c-1"),
+            compact_chunk_test("c-2"),
+            ai_chunk_with_usage("ai-2", 5_000),
+        ];
+        apply_compact_derived(&mut chunks, true);
+        let c1 = extract_compact(&chunks, 1).token_delta;
+        let c2 = extract_compact(&chunks, 2).token_delta;
+        assert_eq!(c1, c2, "consecutive compacts should share identical delta");
+        assert_eq!(
+            c1,
+            Some(cdt_core::CompactionTokenDelta {
+                pre_compaction_tokens: 30_000,
+                post_compaction_tokens: 5_000,
+                delta: -25_000,
+            })
+        );
+    }
+
+    #[test]
+    fn derive_phase_number_assigned_by_ordinal() {
+        let mut chunks = vec![
+            user_chunk_test("u-1"),
+            ai_chunk_with_usage("ai-1", 100),
+            compact_chunk_test("c-1"),
+            ai_chunk_with_usage("ai-2", 50),
+        ];
+        apply_compact_derived(&mut chunks, true);
+        // chunks 中第 1 个 compact → counter 1→2 → phase 2
+        assert_eq!(extract_compact(&chunks, 2).phase_number, Some(2));
+    }
+
+    /// **D1c 关键修复证据**：连续 compact 各得各的 phase（不会因 phases 数组
+    /// 不完整问题让 c-1 拿到 None 或与 c-2 共享同一 phase）。
+    #[test]
+    fn derive_consecutive_compacts_get_distinct_phase_numbers() {
+        let mut chunks = vec![
+            ai_chunk_with_usage("ai-1", 100),
+            compact_chunk_test("c-1"),
+            compact_chunk_test("c-2"),
+            ai_chunk_with_usage("ai-2", 50),
+        ];
+        apply_compact_derived(&mut chunks, true);
+        assert_eq!(extract_compact(&chunks, 1).phase_number, Some(2));
+        assert_eq!(extract_compact(&chunks, 2).phase_number, Some(3));
+    }
+
+    #[test]
+    fn derive_phase_number_stable_when_compact_at_end() {
+        let mut chunks = vec![
+            ai_chunk_with_usage("ai-1", 100),
+            compact_chunk_test("c-1"),
+            ai_chunk_with_usage("ai-2", 50),
+            compact_chunk_test("c-2"),
+        ];
+        apply_compact_derived(&mut chunks, true);
+        assert_eq!(extract_compact(&chunks, 1).phase_number, Some(2));
+        assert_eq!(extract_compact(&chunks, 3).phase_number, Some(3));
+    }
+
+    #[test]
+    fn derive_compact_followed_only_by_user_and_system() {
+        let mut chunks = vec![
+            ai_chunk_with_usage("ai-1", 100),
+            compact_chunk_test("c-1"),
+            user_chunk_test("u-1"),
+            system_chunk_test("s-1"),
+        ];
+        apply_compact_derived(&mut chunks, true);
+        // phaseNumber 派生与"compact 之后必须 AIChunk"无关
+        assert_eq!(extract_compact(&chunks, 1).phase_number, Some(2));
+        // tokenDelta 需要 first_ai_after，不存在时 None
+        assert_eq!(extract_compact(&chunks, 1).token_delta, None);
+    }
+
+    #[test]
+    fn derive_disabled_returns_all_none() {
+        let mut chunks = vec![
+            ai_chunk_with_usage("ai-1", 30_000),
+            compact_chunk_test("c-1"),
+            compact_chunk_test("c-2"),
+            ai_chunk_with_usage("ai-2", 5_000),
+        ];
+        apply_compact_derived(&mut chunks, false);
+        for idx in [1, 2] {
+            assert_eq!(extract_compact(&chunks, idx).token_delta, None);
+            assert_eq!(extract_compact(&chunks, idx).phase_number, None);
+        }
     }
 }

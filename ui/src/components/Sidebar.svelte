@@ -657,6 +657,8 @@
     font-size: 10px;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .meta-icon {
@@ -675,6 +677,8 @@
     font-size: 10px;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .session-branch {
@@ -685,6 +689,7 @@
     color: var(--color-text-muted);
     font-family: var(--font-mono);
     min-width: 0;
+    flex-shrink: 1;
     overflow: hidden;
   }
 

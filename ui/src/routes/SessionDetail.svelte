@@ -3,7 +3,8 @@
   import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
   import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications, getToolContextTokens, estimateTokens } from "../lib/toolHelpers";
   import { buildDisplayItemsCached, buildSummary } from "../lib/displayItemBuilder";
-  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG, ALERT_TRIANGLE_SVG } from "../lib/icons";
+  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, LAYERS, CLOCK_SVG, USER_SVG, ALERT_TRIANGLE_SVG } from "../lib/icons";
+  import { formatTokensCompact } from "../lib/formatters";
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
@@ -62,6 +63,15 @@
   let uiState = getTabUIState(untrack(() => tabId));
   let expandedItems: Set<string> = $state(new Set(uiState.expandedItems));
   let expandedChunks: Set<number> = $state(new Set(uiState.expandedChunks));
+  // Compact 折叠状态——per-chunk 局部 UI state（D4：默认折叠，切 tab 走 destroy/recreate
+  // 重置为默认值，对齐原版 CompactBoundary.tsx 的 useState(false)，**不**进 tabStore 持久化）
+  let expandedCompacts: Set<string> = $state(new Set());
+
+  function toggleCompact(uuid: string) {
+    const n = new Set(expandedCompacts);
+    if (n.has(uuid)) n.delete(uuid); else n.add(uuid);
+    expandedCompacts = n;
+  }
   let searchVisible = $state(uiState.searchVisible);
   let contextPanelVisible = $state(uiState.contextPanelVisible);
   // SearchBar 内容版本号：refreshDetail 替换 detail 后递增，让 SearchBar
@@ -694,31 +704,60 @@
           </div>
         </div>
 
-      <!-- System -->
+      <!-- System (对齐原版 SystemChatGroup.tsx：左对齐 + max-w 85% + rounded-2xl rounded-bl-sm 气泡) -->
       {:else if chunk.kind === "system"}
         {@const sysText = cleanDisplayText(chunk.contentText)}
         {#if sysText}
           <div class="msg-row msg-row-system-left">
-            <div class="system-header">
-              <svg class="system-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={TERMINAL}/></svg>
-              <span class="system-label">System</span>
-              <span class="system-time">{ftime(chunk.timestamp)}</span>
+            <div class="system-block">
+              <div class="system-header">
+                <svg class="system-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={TERMINAL}/></svg>
+                <span class="system-label">System</span>
+                <span class="system-meta-sep">·</span>
+                <span class="system-time">{ftime(chunk.timestamp)}</span>
+              </div>
+              <pre class="system-pre">{sysText}</pre>
             </div>
-            <pre class="system-pre">{sysText}</pre>
           </div>
         {/if}
 
-      <!-- Compact -->
+      <!-- Compact (对齐原版 CompactBoundary.tsx：折叠头 + ChevronRight + Layers
+           + token delta + Phase 徽章 + 时间，amber 风格背景；展开 markdown) -->
       {:else if chunk.kind === "compact"}
         {@const compactText = cleanDisplayText(chunk.summaryText)}
-        {#if compactText}
-          <div class="msg-row msg-row-system">
-            <div class="msg-system">
-              <span class="system-label">Compact</span>
-            </div>
-            <div class="system-content">{compactText}</div>
+        {@const isCompactExpanded = expandedCompacts.has(chunk.uuid)}
+        {@const td = chunk.tokenDelta}
+        <div class="msg-row msg-row-compact">
+          <div class="compact-block">
+            <button
+              type="button"
+              class="compact-button"
+              class:compact-button-expanded={isCompactExpanded}
+              onclick={() => toggleCompact(chunk.uuid)}
+              aria-expanded={isCompactExpanded}
+              aria-label="Toggle compacted content"
+            >
+              <svg class="compact-chevron" class:compact-chevron-rotate={isCompactExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
+              <svg class="compact-layers-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={LAYERS}/></svg>
+              <span class="compact-label">Compacted</span>
+              {#if td}
+                <span class="compact-token-delta">
+                  {formatTokensCompact(td.preCompactionTokens)} → {formatTokensCompact(td.postCompactionTokens)}
+                  <span class="compact-token-freed">({formatTokensCompact(Math.abs(td.delta))} freed)</span>
+                </span>
+              {/if}
+              {#if chunk.phaseNumber != null}
+                <span class="compact-phase-badge">Phase {chunk.phaseNumber}</span>
+              {/if}
+              <span class="compact-time">{ftime(chunk.timestamp)}</span>
+            </button>
+            {#if isCompactExpanded && compactText}
+              <div class="compact-expanded">
+                <div class="prose lazy-md compact-content" {@attach attachMarkdown(compactText, "system")}></div>
+              </div>
+            {/if}
           </div>
-        {/if}
+        </div>
       {/if}
     {/each}
   </div>
@@ -1139,22 +1178,28 @@
   }
 
   /* ── System ── */
-  .msg-row-system {
-    flex-direction: column;
-    align-items: center;
-    padding: 8px 0;
-  }
-
   .msg-row-system-left {
     padding: 8px 0;
+    justify-content: flex-start;
+  }
+
+  .system-block {
     max-width: 85%;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .system-header {
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-bottom: 4px;
+  }
+
+  .system-meta-sep {
+    color: var(--color-text-muted);
+    opacity: 0.5;
+    font-size: 11px;
   }
 
   .system-icon {
@@ -1173,18 +1218,124 @@
   .system-time { color: var(--color-text-muted); font-size: 11px; }
 
   .system-pre {
-    font-size: 12px;
+    font-size: 13px;
     font-family: var(--font-mono);
     color: var(--chat-system-text);
     background: var(--chat-system-bg);
-    border-radius: 12px;
-    padding: 10px 14px;
+    /* rounded-2xl rounded-bl-sm：右下角小，左下角小，让气泡在左侧贴一个尖角 */
+    border-radius: 16px 16px 16px 4px;
+    padding: 12px 16px;
     margin: 0;
     white-space: pre-wrap;
     overflow-x: auto;
     max-height: 384px;
     overflow-y: auto;
-    line-height: 1.5;
+    line-height: 1.55;
+  }
+
+  /* ── Compact (对齐原版 CompactBoundary.tsx：amber 风格折叠 button + 展开 markdown) ── */
+  .msg-row-compact {
+    padding: 16px 0;
+    justify-content: stretch;
+  }
+
+  .compact-block {
+    width: 100%;
+  }
+
+  .compact-button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 16px;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+    border-radius: 8px;
+    color: #d97706;
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
+    transition: background 0.15s, border-color 0.15s;
+  }
+
+  .compact-button:hover {
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.35);
+  }
+
+  :global([data-theme="dark"]) .compact-button {
+    color: #fbbf24;
+  }
+
+  .compact-chevron {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    transition: transform 0.2s;
+  }
+  .compact-chevron-rotate {
+    transform: rotate(90deg);
+  }
+
+  .compact-layers-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
+
+  .compact-label {
+    font-size: 13px;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .compact-token-delta {
+    margin-left: 8px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .compact-token-freed {
+    color: #4ade80;
+  }
+
+  .compact-phase-badge {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(99, 102, 241, 0.15);
+    color: #818cf8;
+    font-size: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .compact-time {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+
+  .compact-expanded {
+    margin-top: 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .compact-content {
+    max-height: 384px;
+    overflow-y: auto;
+    padding: 12px 16px;
+    border-left: 2px solid var(--chat-ai-border, var(--color-border));
+    font-size: 13px;
   }
 
   /* ── Prose (markdown) ── */
