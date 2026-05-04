@@ -9,6 +9,7 @@
     "core:default",
     "core:window:allow-set-badge-count",
     "core:window:allow-set-badge-label",
+    "core:window:allow-start-dragging",
     "core:window:allow-toggle-maximize",
     "notification:default",
     "updater:default",
