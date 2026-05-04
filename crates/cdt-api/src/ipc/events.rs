@@ -39,4 +39,9 @@ pub struct SessionMetadataUpdate {
     pub title: Option<String>,
     pub message_count: usize,
     pub is_ongoing: bool,
+    /// 会话最后一条消息所在的 git 分支（若 JSONL 行携带 `git_branch`）。
+    /// 详见 `openspec/specs/ipc-data-api/spec.md`
+    /// §"Expose git branch on session summary and metadata updates"。
+    #[serde(default)]
+    pub git_branch: Option<String>,
 }

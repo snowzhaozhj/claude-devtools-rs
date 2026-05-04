@@ -18,9 +18,11 @@
     onSelectProject: (id: string, name: string) => void;
     /** 本 pane 是否是唯一 pane；决定空状态要不要显示 Dashboard */
     isSolePane: boolean;
+    /** 本 pane 是否是最左 pane；折叠 sidebar 时只在最左 pane 显示展开按钮 */
+    isFirstPane: boolean;
   }
 
-  let { pane, selectedProjectId, onSelectProject, isSolePane }: Props = $props();
+  let { pane, selectedProjectId, onSelectProject, isSolePane, isFirstPane }: Props = $props();
 
   const focused = $derived(getFocusedPaneId() === pane.id);
   const activeTab = $derived(
@@ -42,7 +44,7 @@
   onpointerdowncapture={onPointerDownCapture}
 >
   <!-- TabBar 始终渲染：即使无 tab 也要显示右侧"通知/设置"工具栏入口 -->
-  <TabBar paneId={pane.id} />
+  <TabBar paneId={pane.id} {isFirstPane} />
 
   <div class="pane-body">
     {#if activeTab?.type === "settings"}

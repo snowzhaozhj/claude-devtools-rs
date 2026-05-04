@@ -29,6 +29,27 @@ export const SETTINGS =
 /** Lucide chevron-down — 下拉箭头（单 path） */
 export const CHEVRON_DOWN = "M6 9l6 6 6-6";
 
+/** Lucide git-branch — 分支显示（多段，使用 {@html}） */
+export const GIT_BRANCH_SVG = `
+<line x1="6" x2="6" y1="3" y2="15"/>
+<circle cx="18" cy="6" r="3"/>
+<circle cx="6" cy="18" r="3"/>
+<path d="M18 9a9 9 0 0 1-9 9"/>
+`;
+
+/** Lucide panel-left — 侧栏折叠/展开按钮（多段，使用 {@html}） */
+export const PANEL_LEFT_SVG = `
+<rect width="18" height="18" x="3" y="3" rx="2"/>
+<path d="M9 3v18"/>
+`;
+
+/** Lucide alert-triangle — interruption 警告 icon（多段，使用 {@html}） */
+export const ALERT_TRIANGLE_SVG = `
+<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+<path d="M12 9v4"/>
+<path d="M12 17h.01"/>
+`;
+
 /** Lucide corner-down-left — 单 path 折返箭头（用于 reply-to chip） */
 export const CORNER_DOWN_LEFT = "M9 10l-5 5 5 5M20 4v7a4 4 0 0 1-4 4H4";
 

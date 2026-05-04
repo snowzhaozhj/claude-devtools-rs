@@ -26,6 +26,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { initFileChangeStore } from "./lib/fileChangeStore.svelte";
+  import { getSidebarCollapsed, toggleSidebarCollapsed } from "./lib/sidebarStore.svelte";
 
   let selectedProjectId: string = $state("");
   let selectedProjectName: string = $state("");
@@ -51,6 +52,14 @@
     if (e.key === "k") {
       e.preventDefault();
       commandPaletteOpen = !commandPaletteOpen;
+      return;
+    }
+
+    // Cmd/Ctrl + B → 切换 sidebar 折叠/展开
+    // 详见 openspec/specs/sidebar-navigation/spec.md §"侧栏折叠/展开"
+    if (e.key === "b") {
+      e.preventDefault();
+      toggleSidebarCollapsed();
       return;
     }
 
@@ -163,12 +172,14 @@
 <div class="app-root">
   <UpdateBanner />
   <div class="app-layout">
-    <Sidebar
-      {selectedProjectId}
-      activeSessionId={activeTab?.sessionId ?? ""}
-      onSelectProject={selectProject}
-      onSelectSession={selectSession}
-    />
+    {#if !getSidebarCollapsed()}
+      <Sidebar
+        {selectedProjectId}
+        activeSessionId={activeTab?.sessionId ?? null}
+        onSelectProject={selectProject}
+        onSelectSession={selectSession}
+      />
+    {/if}
 
     <div class="main-area">
       <PaneContainer

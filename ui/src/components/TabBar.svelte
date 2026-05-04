@@ -15,13 +15,18 @@
   import { beginDrag, getDragSource, getHit, isDragging } from "../lib/dragSession.svelte";
   import { getNotifications } from "../lib/api";
   import TabContextMenu from "./TabContextMenu.svelte";
-  import { BELL, SETTINGS, FILE_TEXT_SVG } from "../lib/icons";
+  import { BELL, SETTINGS, FILE_TEXT_SVG, PANEL_LEFT_SVG } from "../lib/icons";
+  import { getSidebarCollapsed, toggleSidebarCollapsed } from "../lib/sidebarStore.svelte";
 
   interface Props {
     paneId: string;
+    /** 本 pane 是否是最左 pane；只在最左 pane + 折叠态显示展开按钮 */
+    isFirstPane?: boolean;
   }
 
-  let { paneId }: Props = $props();
+  let { paneId, isFirstPane = false }: Props = $props();
+
+  const showExpandBtn = $derived(isFirstPane && getSidebarCollapsed());
 
   const pane = $derived(getPaneById(paneId));
   const tabs = $derived(pane?.tabs ?? []);
@@ -101,6 +106,18 @@
 </script>
 
 <div class="tab-bar">
+  {#if showExpandBtn}
+    <button
+      class="expand-sidebar-btn"
+      title="展开侧栏 (⌘B)"
+      aria-label="展开侧栏"
+      onclick={toggleSidebarCollapsed}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        {@html PANEL_LEFT_SVG}
+      </svg>
+    </button>
+  {/if}
   <div class="tab-list" role="tablist">
     {#each tabs as tab, index (tab.id)}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -196,6 +213,30 @@
     background: var(--color-bg-tertiary, var(--color-surface-sidebar));
     border-bottom: 1px solid var(--color-border);
     overflow: hidden;
+  }
+
+  .expand-sidebar-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    border-right: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+  }
+
+  .expand-sidebar-btn:hover {
+    background: var(--tool-item-hover-bg);
+    color: var(--color-text-secondary);
+  }
+
+  .expand-sidebar-btn svg {
+    width: 16px;
+    height: 16px;
   }
 
   .tab-list {

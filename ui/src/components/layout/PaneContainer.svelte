@@ -21,6 +21,7 @@
       {selectedProjectId}
       {onSelectProject}
       isSolePane={layout.panes.length === 1}
+      isFirstPane={idx === 0}
     />
     {#if idx < layout.panes.length - 1}
       <PaneResizeHandle leftPaneId={pane.id} {containerEl} />

@@ -60,6 +60,12 @@ pub struct SessionSummary {
     /// on session item"。
     #[serde(default)]
     pub is_ongoing: bool,
+    /// 会话最后一条消息所在的 git 分支（若 JSONL 行携带 `git_branch`）。
+    /// 骨架阶段为 `None`，由后台 metadata scan 通过 `session-metadata-update`
+    /// 异步 patch。详见 `openspec/specs/ipc-data-api/spec.md`
+    /// §"Expose git branch on session summary and metadata updates"。
+    #[serde(default)]
+    pub git_branch: Option<String>,
 }
 
 /// 会话详情。

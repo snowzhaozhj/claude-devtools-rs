@@ -3,7 +3,7 @@
   import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
   import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications, getToolContextTokens, estimateTokens } from "../lib/toolHelpers";
   import { buildDisplayItemsCached, buildSummary } from "../lib/displayItemBuilder";
-  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG } from "../lib/icons";
+  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, CLOCK_SVG, USER_SVG, ALERT_TRIANGLE_SVG } from "../lib/icons";
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
@@ -683,7 +683,12 @@
                 <div class="prose lazy-md" {@attach attachMarkdown(di.lastOutput.text, "ai")}></div>
               {/if}
               {#each interruptions as _interrupt}
-                <div class="interruption-block">Session interrupted by user</div>
+                <div class="interruption-block">
+                  <svg class="interruption-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    {@html ALERT_TRIANGLE_SVG}
+                  </svg>
+                  <span>Request interrupted by user</span>
+                </div>
               {/each}
             </div>
           </div>
@@ -1266,22 +1271,26 @@
     font-size: 13px;
   }
 
-  /* Interruption 块：红色提示 "Session interrupted by user" */
+  /* Interruption 横幅：amber/warning 风格，对齐原版 LastOutputDisplay
+     —— lucide AlertTriangle icon + warning amber 配色，居中横幅。 */
   .interruption-block {
     margin-top: 8px;
-    padding: 6px 10px;
-    border-radius: 6px;
-    background: var(--color-danger-bg, rgba(239, 68, 68, 0.08));
-    border: 1px solid var(--color-danger-border, rgba(239, 68, 68, 0.3));
-    color: var(--color-danger-text, #ef4444);
-    font-size: 12px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    background: var(--color-warning-bg, rgba(245, 158, 11, 0.1));
+    border: 1px solid var(--color-warning-border, rgba(245, 158, 11, 0.3));
+    color: var(--color-warning-text, #f59e0b);
+    font-size: 13px;
     line-height: 1.4;
-    display: inline-flex;
+    display: flex;
+    width: 100%;
     align-items: center;
-    gap: 6px;
+    justify-content: center;
+    gap: 8px;
   }
-  .interruption-block::before {
-    content: "⛔";
-    font-size: 12px;
+  .interruption-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
   }
 </style>

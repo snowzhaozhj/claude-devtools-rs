@@ -66,6 +66,37 @@ pub fn is_teammate_message(msg: &ParsedMessage) -> bool {
     extract_text(msg).is_some_and(|t| TEAMMATE_MSG_RE.is_match(t.trim_start()))
 }
 
+/// 检测消息是否**包含任意 teammate-message 块**。
+///
+/// 遍历所有 Text block 检查 trim 后起首是否匹配 `TEAMMATE_MSG_RE`（要求
+/// `<teammate-message\s+teammate_id="..."` opening tag）。
+///
+/// 与 [`is_teammate_message`] 的区别：后者 `MessageContent::Blocks` 只看
+/// `blocks.len() == 1` 的首个 Text block；多 block（一条 user 消息含若干
+/// 普通 text + 一个 teammate-message）会漏判。本函数对齐原版
+/// `claude-devtools/src/main/types/messages.ts::isParsedTeammateMessage`
+/// 的 `content.some(b => REGEX.test(b.text.trim()))` 语义。
+///
+/// 不用 `TEAMMATE_BLOCK_RE`（要求闭合标签）的原因：(a) 否则
+/// `"prefix <teammate-message teammate_id=...>...</...>"`（用户在普通文本中
+/// 引用 teammate block 字面量）会被误判；(b) 起首是 teammate opening 但
+/// 未闭合的也会漏判。
+pub fn contains_teammate_message(msg: &ParsedMessage) -> bool {
+    if msg.message_type != MessageType::User {
+        return false;
+    }
+    match &msg.content {
+        MessageContent::Text(s) => TEAMMATE_MSG_RE.is_match(s.trim()),
+        MessageContent::Blocks(blocks) => blocks.iter().any(|b| {
+            if let cdt_core::ContentBlock::Text { text } = b {
+                TEAMMATE_MSG_RE.is_match(text.trim())
+            } else {
+                false
+            }
+        }),
+    }
+}
+
 /// 解析 teammate 消息的属性（兼容入口：仅返回首个 block）。
 ///
 /// 多 block 场景请用 [`parse_all_teammate_attrs`]。

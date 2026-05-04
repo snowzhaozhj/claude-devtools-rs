@@ -11,7 +11,8 @@ pub mod reply_link;
 pub mod summary;
 
 pub use detection::{
-    TeammateAttrs, is_teammate_message, parse_all_teammate_attrs, parse_teammate_attrs,
+    TeammateAttrs, contains_teammate_message, is_teammate_message, parse_all_teammate_attrs,
+    parse_teammate_attrs,
 };
 pub use enrichment::extract_team_meta_from_task;
 pub use noise::{detect_noise, detect_resend};

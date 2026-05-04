@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use tokio::sync::{Mutex, Semaphore, broadcast};
@@ -161,6 +162,15 @@ fn apply_tool_output_omit(chunks: &mut [cdt_core::Chunk]) {
 /// 条 update，一些缓冲足以容纳订阅者短暂卡顿。
 const METADATA_BROADCAST_CAPACITY: usize = 256;
 
+/// 单条 active scan 注册项：generation 作为版本号让 cleanup 时只在
+/// 自己仍是当前注册的 scan 时才 remove，避免旧 task 误删新 handle
+/// （codex 二审找到的 race，详见 `scan_metadata_for_page`）。
+#[derive(Debug)]
+struct ScanEntry {
+    generation: u64,
+    handle: AbortHandle,
+}
+
 /// 本地文件系统 `DataApi` 实现。
 pub struct LocalDataApi {
     scanner: Mutex<ProjectScanner>,
@@ -177,7 +187,10 @@ pub struct LocalDataApi {
     session_metadata_tx: broadcast::Sender<SessionMetadataUpdate>,
     /// 当前 per-project 进行中的元数据扫描句柄。`list_sessions` 调用前会
     /// abort 同 project 的旧扫描，避免事件串扰（详见 design.md decision 4）。
-    active_scans: Arc<std::sync::Mutex<HashMap<String, AbortHandle>>>,
+    active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
+    /// 单调递增的 scan generation 计数器，用于 `active_scans` 的 race-free
+    /// cleanup（详见 `scan_metadata_for_page`）。
+    scan_generation: Arc<AtomicU64>,
     /// `get_image_asset` 落盘 cache 目录。由 Tauri host 通过
     /// `new_with_image_cache` 注入 `app_cache_dir().join("cdt-images")`；
     /// `None` 时 `get_image_asset` fallback 到 `data:` URI（默认构造路径
@@ -206,6 +219,7 @@ impl LocalDataApi {
             error_tx: None,
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            scan_generation: Arc::new(AtomicU64::new(0)),
             image_cache_dir: None,
         }
     }
@@ -262,6 +276,7 @@ impl LocalDataApi {
             error_tx: Some(error_tx),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            scan_generation: Arc::new(AtomicU64::new(0)),
             image_cache_dir: None,
         }
     }
@@ -344,6 +359,7 @@ impl LocalDataApi {
                 message_count: 0,
                 title: None,
                 is_ongoing: false,
+                git_branch: None,
             });
             page_jobs.push((s.id, jsonl_path));
         }
@@ -363,15 +379,18 @@ impl LocalDataApi {
 /// `SessionMetadataUpdate`。并发度受 `METADATA_SCAN_CONCURRENCY` 限流。
 ///
 /// 任务结束时（无论正常完成还是被 abort）从 `active_scans` 移除自己的
-/// `AbortHandle`。`broadcast::send` 在无订阅者时返回 `Err`，本函数静默
-/// 忽略——元数据更新本质上是 fire-and-forget。
+/// 注册项——但**仅当 entry 的 generation 与自己 spawn 时持有的一致**才 remove，
+/// 避免旧 task 在新 task 已注册后的 cleanup 误删新 handle（codex 二审 race）。
+/// `broadcast::send` 在无订阅者时返回 `Err`，本函数静默忽略——元数据更新
+/// 本质上是 fire-and-forget。
 async fn scan_metadata_for_page(
     project_id: String,
     dir: std::path::PathBuf,
     page_jobs: Vec<(String, std::path::PathBuf)>,
     tx: broadcast::Sender<SessionMetadataUpdate>,
-    active_scans: Arc<std::sync::Mutex<HashMap<String, AbortHandle>>>,
+    active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
     cleanup_key: String,
+    my_generation: u64,
 ) {
     let _ = dir; // dir 当前由 page_jobs 内的 jsonl_path 携带，保留参数为未来扩展（如懒构造路径）
     let semaphore = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
@@ -392,6 +411,7 @@ async fn scan_metadata_for_page(
                 title: meta.title,
                 message_count: meta.message_count,
                 is_ongoing: meta.is_ongoing,
+                git_branch: meta.git_branch,
             });
         });
     }
@@ -399,7 +419,11 @@ async fn scan_metadata_for_page(
     while set.join_next().await.is_some() {}
 
     if let Ok(mut scans) = active_scans.lock() {
-        scans.remove(&cleanup_key);
+        if let Some(entry) = scans.get(&cleanup_key) {
+            if entry.generation == my_generation {
+                scans.remove(&cleanup_key);
+            }
+        }
     }
 }
 
@@ -440,6 +464,7 @@ impl DataApi for LocalDataApi {
             summary.title = meta.title;
             summary.message_count = meta.message_count;
             summary.is_ongoing = meta.is_ongoing;
+            summary.git_branch = meta.git_branch;
         }
 
         Ok(PaginatedResponse {
@@ -457,30 +482,41 @@ impl DataApi for LocalDataApi {
         let (page, next_cursor, total, page_jobs, dir) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
-        // 取消同 project 的旧扫描，避免事件串扰
-        if let Ok(mut scans) = self.active_scans.lock() {
-            if let Some(handle) = scans.remove(project_id) {
-                handle.abort();
-            }
-        }
-
         if !page_jobs.is_empty() {
             let tx = self.session_metadata_tx.clone();
             let project_id_owned = project_id.to_owned();
             let active_scans = self.active_scans.clone();
             let pid_for_cleanup = project_id_owned.clone();
 
-            let handle = tokio::spawn(scan_metadata_for_page(
-                project_id_owned,
-                dir,
-                page_jobs,
-                tx,
-                active_scans.clone(),
-                pid_for_cleanup,
-            ));
-
+            // abort 旧 + 分配 generation + spawn + insert **全部**在同一把
+            // sync lock 内完成。`tokio::spawn` 不会 await，sync lock 保持
+            // 期间调用是安全的。这样并发 list_sessions(同 project) 的两个
+            // 调用 A/B 会顺序进入临界区，避免：A 的 spawn 与 insert 之间
+            // B 完整 abort/spawn/insert 后 A 的 insert 覆盖 B 的 entry，导致
+            // 后续 C 无法 abort B 的孤立 task（codex 二审第二轮 race）。
             if let Ok(mut scans) = self.active_scans.lock() {
-                scans.insert(project_id.to_owned(), handle.abort_handle());
+                if let Some(old) = scans.remove(project_id) {
+                    old.handle.abort();
+                }
+                let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
+
+                let handle = tokio::spawn(scan_metadata_for_page(
+                    project_id_owned,
+                    dir,
+                    page_jobs,
+                    tx,
+                    active_scans.clone(),
+                    pid_for_cleanup,
+                    my_generation,
+                ));
+
+                scans.insert(
+                    project_id.to_owned(),
+                    ScanEntry {
+                        generation: my_generation,
+                        handle: handle.abort_handle(),
+                    },
+                );
             }
         }
 
