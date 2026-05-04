@@ -3,9 +3,7 @@
 ## Purpose
 
 把 `ParsedMessage` 流转换为 `UserChunk` / `AIChunk` / `SystemChunk` / `CompactChunk` 四类独立 chunk：合并连续 assistant、按 sidechain / hard-noise 过滤、提取 SemanticStep（thinking / text / tool / subagent spawn / interruption）、识别 slash 命令、嵌入 teammate 消息、在 compact 边界处 flush 并产出 `CompactChunk`。本 capability 是数据 pipeline 的核心算法层，决定了前端 UI 的对话流外观。
-
 ## Requirements
-
 ### Requirement: Build independent chunks from classified messages
 
 系统 SHALL 把一段 `ParsedMessage` 序列转换为四类独立 chunk 的序列：`UserChunk`、`AIChunk`、`SystemChunk`、`CompactChunk`。chunk 之间 SHALL NOT 形成配对——`UserChunk` 不"拥有"其后的 `AIChunk`。连续的 assistant 消息 SHALL 被合并到同一个 `AIChunk.responses` 中，直到遇到真实用户消息、`SystemChunk` 对应的 `<local-command-stdout>` 消息、`CompactChunk` 对应的 compact summary 消息或输入末尾时 flush。
@@ -239,3 +237,35 @@ slash 命令消息（content 以 `<command-name>/xxx</command-name>` 起首的**
 #### Scenario: EMBED_TEAMMATES=false reverts to legacy drop behavior
 - **WHEN** 常量 `EMBED_TEAMMATES` 设为 `false`，chunk-building 跑过含 teammate 消息的 session
 - **THEN** 每条 teammate user 消息 SHALL 被跳过（旧 `continue` 行为），每条产出的 `AIChunk.teammate_messages` SHALL 为空
+
+### Requirement: CompactChunk carries optional derived metadata
+
+`CompactChunk`（`cdt-core::chunk::CompactChunk`）SHALL 提供两个可选派生槽位，让 IPC 组装层后置填充 compaction 元数据：
+
+- `tokenDelta: Option<CompactionTokenDelta>` —— compact 边界对应的 token 数差值（含 `preCompactionTokens` / `postCompactionTokens` / `delta`）
+- `phaseNumber: Option<u32>` —— 该 compact 在 chunks 中的 phase 编号
+
+两个字段的**派生算法与数据来源**由 capability `ipc-data-api` 的 Requirement `Expose CompactChunk derived metadata in SessionDetail` 定义——派生层从 chunks 自身（邻接 AI 的 last/first response usage 与 chunks 顺序 compact ordinal）独立计算，**不**依赖 `ContextPhaseInfo`。本 capability 仅声明 `CompactChunk` 提供这两个 optional 槽位。
+
+两个字段均 SHALL 用 `#[serde(default, skip_serializing_if = "Option::is_none")]`——`None` 时序列化省略字段，让老 fixture / 老前端兼容。
+
+`cdt-analyze::chunk::builder` 在 emit `CompactChunk` 时 MUST 把这两个字段填 `None`——builder 算法层接收 `ParsedMessage` 流并 emit Chunk，**不**依赖任何 phase / token 派生数据源，保持 `chunk-building` capability 既有契约（chunk emission 算法行为不变）。两个字段的真实值由 IPC 组装层（`cdt-api`）在 chunks 全部产出后基于 chunks 自身派生填充。
+
+#### Scenario: Builder emits CompactChunk with derived fields as None
+
+- **WHEN** `cdt-analyze::chunk::builder` 处理一条 `is_compact_summary == true` 的 `ParsedMessage`
+- **THEN** emit 的 `CompactChunk` SHALL 包含 `tokenDelta: None` AND `phaseNumber: None`
+- **AND** 既有 `summaryText` / `uuid` / `timestamp` / `metrics` 字段 SHALL 与既有 Requirement `Emit CompactChunks at compaction boundaries` 描述一致（不被本字段加影响）
+
+#### Scenario: CompactChunk serializes with optional fields omitted when None
+
+- **WHEN** 一个 `tokenDelta: None` AND `phaseNumber: None` 的 `CompactChunk` 被序列化为 JSON
+- **THEN** 输出的 JSON object SHALL **不包含** `tokenDelta` / `phaseNumber` key（由 `skip_serializing_if = "Option::is_none"` 控制）
+- **AND** 反序列化 JSON object 时缺这两个 key SHALL 等价于 `tokenDelta: None` AND `phaseNumber: None`（由 `serde(default)` 控制）
+
+#### Scenario: CompactChunk serializes derived fields as camelCase when present
+
+- **WHEN** `CompactChunk { tokenDelta: Some(delta), phaseNumber: Some(3), .. }` 被序列化为 JSON
+- **THEN** 输出 JSON SHALL 包含 key `tokenDelta`（驼峰，非 `token_delta`）AND `phaseNumber`（驼峰，非 `phase_number`）
+- **AND** `tokenDelta` value 为 `{"preCompactionTokens": ..., "postCompactionTokens": ..., "delta": ...}`，对齐既有 `CompactionTokenDelta` 的 camelCase 序列化
+

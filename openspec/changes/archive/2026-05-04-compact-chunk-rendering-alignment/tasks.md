@@ -103,6 +103,6 @@ codex 二审已定位的 4 处 `CompactChunk { ... }` 构造点（用 struct lit
 
 ## 13. codex 二审（行为契约改动 SHALL 跑）
 
-- [ ] 13.1 push 第一轮 commit 后调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 二审，prompt 列具体怀疑点（D1 派生算法边界、`apply_compact_derived` 调用时机是否在 OMIT 之前 / 之后、IPC contract test 是否真覆盖派生路径）
-- [ ] 13.2 codex 找到 bug：全部修完 + 单测覆盖，再调第二轮 codex 验证修法是否真解决
-- [ ] 13.3 codex 验证通过的 commit 才作为 PR 最后一个 commit；验证有 race / 边界仍未修干净 SHALL 不 push 到 PR
+- [x] 13.1 push 第一轮 commit 后调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 二审，prompt 列具体怀疑点（D1 派生算法边界、`apply_compact_derived` 调用时机是否在 OMIT 之前 / 之后、IPC contract test 是否真覆盖派生路径）
+- [x] 13.2 codex 找到 bug：全部修完 + 单测覆盖，再调第二轮 codex 验证修法是否真解决
+- [x] 13.3 codex 验证通过的 commit 才作为 PR 最后一个 commit；验证有 race / 边界仍未修干净 SHALL 不 push 到 PR
