@@ -34,11 +34,18 @@
   interface Props {
     selectedProjectId: string;
     activeSessionId: string | null;
+    collapsed?: boolean;
     onSelectProject: (id: string, name: string) => void;
     onSelectSession: (sessionId: string, label: string) => void;
   }
 
-  let { selectedProjectId, activeSessionId, onSelectProject, onSelectSession }: Props = $props();
+  let {
+    selectedProjectId,
+    activeSessionId,
+    collapsed = false,
+    onSelectProject,
+    onSelectSession,
+  }: Props = $props();
 
   let projects: ProjectInfo[] = $state([]);
   let sessions: SessionSummary[] = $state([]);
@@ -334,7 +341,13 @@
   const visibleSlice = $derived(flatItems.slice(vlist.startIndex(), vlist.endIndex()));
 </script>
 
-<aside class="sidebar" style:width="{sidebarWidth}px" style:min-width="{sidebarWidth}px">
+<aside
+  class="sidebar"
+  class:sidebar-collapsed={collapsed}
+  style:width="{collapsed ? 0 : sidebarWidth}px"
+  style:min-width="{collapsed ? 0 : sidebarWidth}px"
+  aria-hidden={collapsed}
+>
   <SidebarHeader
     {projects}
     {selectedProjectId}
@@ -383,7 +396,14 @@
     onscroll={vlist.onScroll}
     {@attach (el) => {
       vlist.bindScrollEl(el);
-      const ro = new ResizeObserver(() => vlist.setContainerHeight(el.clientHeight));
+      // height>0 guard：sidebar collapsed 时 width:0 + overflow:hidden 不会
+      // 改变 session-list 的 height（仍由 flex column 撑满），但兜底防御
+      // 任何 flex 计算 race 把 0 写入 vlist 导致 visibleSlice 清空——再展开
+      // 时空→填充会出现一帧白屏闪烁。
+      const ro = new ResizeObserver(() => {
+        const h = el.clientHeight;
+        if (h > 0) vlist.setContainerHeight(h);
+      });
       ro.observe(el);
       return () => {
         ro.disconnect();
@@ -485,6 +505,14 @@
     background: var(--color-surface-sidebar);
     border-right: 1px solid var(--color-border);
     overflow: hidden;
+  }
+
+  /* collapsed 时通过宽度归零隐藏（不用 display:none）——保留组件挂载，避免
+     销毁/重建造成的 ResizeObserver 重测量 + vlist 空→填充闪烁。border-right
+     在 width:0 时按 box-sizing 仍占 1px 视觉宽度，需要主动抑制。 */
+  .sidebar-collapsed {
+    border-right: none;
+    pointer-events: none;
   }
 
   .session-filter-bar {

@@ -172,14 +172,16 @@
 <div class="app-root">
   <UpdateBanner />
   <div class="app-layout">
-    {#if !getSidebarCollapsed()}
-      <Sidebar
-        {selectedProjectId}
-        activeSessionId={activeTab?.sessionId ?? null}
-        onSelectProject={selectProject}
-        onSelectSession={selectSession}
-      />
-    {/if}
+    <!-- 始终挂载 Sidebar（用 CSS width:0 收起，不用 {#if} 销毁/重建）：
+         避免每次 toggle 都 destroy → ResizeObserver 重测量 → vlist 空→填充
+         的视觉闪烁。展开按钮在 TabBar，关入口在 SidebarHeader collapse-btn。 -->
+    <Sidebar
+      {selectedProjectId}
+      activeSessionId={activeTab?.sessionId ?? null}
+      collapsed={getSidebarCollapsed()}
+      onSelectProject={selectProject}
+      onSelectSession={selectSession}
+    />
 
     <div class="main-area">
       <PaneContainer
