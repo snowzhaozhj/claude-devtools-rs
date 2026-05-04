@@ -6,7 +6,7 @@
 import { expect, test } from '@playwright/test'
 
 test.describe('sidebar collapse and git branch chip', () => {
-  test('点折叠按钮 → sidebar 消失 → TabBar 展开按钮出现 → 点展开恢复', async ({ page }) => {
+  test('点折叠按钮 → sidebar 隐藏 → TabBar 展开按钮出现 → 点展开恢复', async ({ page }) => {
     await page.goto('/?mock=1&fixture=multi-project-rich')
 
     // 选中 rust-port——用 dashboard 卡片定位，避免命中 sidebar header 触发 dropdown
@@ -23,7 +23,10 @@ test.describe('sidebar collapse and git branch chip', () => {
     await collapseBtn.click()
 
     // sidebar aside 应已不存在
-    await expect(page.locator('aside.sidebar')).toHaveCount(0, { timeout: 2_000 })
+    // sidebar 始终挂载（避免 destroy/recreate 闪烁），collapsed 时通过
+     // CSS width:0 + pointer-events:none 隐藏；用 .sidebar-collapsed class
+     // 断言折叠态而非 DOM count
+    await expect(page.locator('aside.sidebar')).toHaveClass(/sidebar-collapsed/, { timeout: 2_000 })
 
     // TabBar 最左侧的展开按钮出现
     const expandBtn = page.getByRole('button', { name: '展开侧栏' }).first()
@@ -33,7 +36,7 @@ test.describe('sidebar collapse and git branch chip', () => {
     await expandBtn.click()
 
     // sidebar 恢复
-    await expect(page.locator('aside.sidebar')).toHaveCount(1, { timeout: 2_000 })
+    await expect(page.locator('aside.sidebar')).not.toHaveClass(/sidebar-collapsed/, { timeout: 2_000 })
   })
 
   test('Cmd+B 快捷键切换折叠/展开', async ({ page }) => {
@@ -43,11 +46,14 @@ test.describe('sidebar collapse and git branch chip', () => {
 
     // 按 Meta+B → 折叠
     await page.keyboard.press('Meta+b')
-    await expect(page.locator('aside.sidebar')).toHaveCount(0, { timeout: 2_000 })
+    // sidebar 始终挂载（避免 destroy/recreate 闪烁），collapsed 时通过
+     // CSS width:0 + pointer-events:none 隐藏；用 .sidebar-collapsed class
+     // 断言折叠态而非 DOM count
+    await expect(page.locator('aside.sidebar')).toHaveClass(/sidebar-collapsed/, { timeout: 2_000 })
 
     // 再按一次 → 展开
     await page.keyboard.press('Meta+b')
-    await expect(page.locator('aside.sidebar')).toHaveCount(1, { timeout: 2_000 })
+    await expect(page.locator('aside.sidebar')).not.toHaveClass(/sidebar-collapsed/, { timeout: 2_000 })
   })
 
   test('git 分支 chip 在每条 SessionItem 行内显示', async ({ page }) => {
