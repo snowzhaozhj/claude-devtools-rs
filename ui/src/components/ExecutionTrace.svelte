@@ -2,7 +2,7 @@
   import type { DisplayItem } from "../lib/displayItemBuilder";
   import { getToolOutput, type ToolExecution, type ToolOutput } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
-  import { getToolSummary, getToolStatus, cleanDisplayText, getToolContextTokens, estimateTokens } from "../lib/toolHelpers";
+  import { getToolSummary, getToolStatus, getToolDurationMs, isToolPending, cleanDisplayText, getToolContextTokens, estimateTokens } from "../lib/toolHelpers";
   import { WRENCH, BRAIN, SLASH, MESSAGE_SQUARE } from "../lib/icons";
   import BaseItem from "./BaseItem.svelte";
   import SubagentCard from "./SubagentCard.svelte";
@@ -98,6 +98,8 @@
         summary={getToolSummary(exec.toolName, exec.input)}
         tokenCount={getToolContextTokens(exec)}
         status={getToolStatus(exec)}
+        durationMs={getToolDurationMs(exec)}
+        pendingLabel={isToolPending(exec) ? "pending" : undefined}
         isExpanded={expandedKeys.has(key)}
         onclick={() => toggle(key, exec)}
       >

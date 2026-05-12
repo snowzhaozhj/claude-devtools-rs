@@ -205,6 +205,7 @@ mod tests {
                 project_id: "p1".into(),
                 session_id: "s1".into(),
                 deleted: true,
+                project_list_changed: false,
             })
             .await;
         // 仅断言不 panic 且不 I/O
@@ -220,6 +221,7 @@ mod tests {
                 project_id: "does-not-exist".into(),
                 session_id: "s-nope".into(),
                 deleted: false,
+                project_list_changed: false,
             })
             .await;
 

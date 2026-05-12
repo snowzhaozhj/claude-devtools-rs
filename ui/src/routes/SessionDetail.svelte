@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
   import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
-  import { getToolSummary, getToolStatus, cleanDisplayText, parseTaskNotifications, getToolContextTokens, estimateTokens } from "../lib/toolHelpers";
+  import { getToolSummary, getToolStatus, getToolDurationMs, isToolPending, cleanDisplayText, parseTaskNotifications, getToolContextTokens, estimateTokens } from "../lib/toolHelpers";
   import { buildDisplayItemsCached, buildSummary } from "../lib/displayItemBuilder";
   import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, LAYERS, CLOCK_SVG, USER_SVG, ALERT_TRIANGLE_SVG } from "../lib/icons";
   import { formatTokensCompact } from "../lib/formatters";
@@ -333,14 +333,6 @@
     return `${m}m ${rs}s`;
   }
 
-  function toolDurationMs(exec: ToolExecution): number | undefined {
-    if (!exec.endTs) return undefined;
-    const start = Date.parse(exec.startTs);
-    const end = Date.parse(exec.endTs);
-    if (Number.isNaN(start) || Number.isNaN(end)) return undefined;
-    return Math.max(0, end - start);
-  }
-
   function utext(content: string | unknown[]): string {
     let raw = "";
     if (typeof content === "string") {
@@ -611,7 +603,8 @@
                       summary={getToolSummary(exec.toolName, exec.input)}
                       tokenCount={getToolContextTokens(exec)}
                       status={getToolStatus(exec)}
-                      durationMs={toolDurationMs(exec)}
+                      durationMs={getToolDurationMs(exec)}
+                      pendingLabel={isToolPending(exec) ? "pending" : undefined}
                       isExpanded={expandedItems.has(key)}
                       onclick={() => toggle(key, exec)}
                     >

@@ -43,6 +43,8 @@ fn spawn_file_bridge(
                     let _ = events_tx.send(PushEvent::FileChange {
                         project_id: event.project_id,
                         session_id: event.session_id,
+                        deleted: event.deleted,
+                        project_list_changed: event.project_list_changed,
                     });
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}

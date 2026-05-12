@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getLanguageFromPath, getFileName, shortenPath } from "../lib/toolHelpers";
   import { highlightCode } from "../lib/render";
+  import { generateDiff, type DiffLine } from "../lib/diff";
 
   interface Props {
     fileName: string;
@@ -9,60 +10,6 @@
   }
 
   let { fileName, oldString, newString }: Props = $props();
-
-  // ── LCS diff 算法 ──
-
-  interface DiffLine {
-    type: "added" | "removed" | "context";
-    content: string;
-    lineNumber: number;
-  }
-
-  function computeLCS(a: string[], b: string[]): number[][] {
-    const m = a.length, n = b.length;
-    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        dp[i][j] = a[i - 1] === b[j - 1]
-          ? dp[i - 1][j - 1] + 1
-          : Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
-    return dp;
-  }
-
-  /**
-   * 生成 diff 行序列，行号按出现顺序 1..N 自然编号（对齐原版
-   * `claude-devtools/src/renderer/components/chat/viewers/DiffViewer.tsx::generateDiff`，
-   * 单列 gutter 而非 old/new 双列）。
-   */
-  function generateDiff(oldText: string, newText: string): DiffLine[] {
-    const oldLines = oldText.split("\n");
-    const newLines = newText.split("\n");
-    const dp = computeLCS(oldLines, newLines);
-    const temp: DiffLine[] = [];
-
-    let i = oldLines.length, j = newLines.length;
-    while (i > 0 || j > 0) {
-      if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-        temp.push({ type: "context", content: oldLines[i - 1], lineNumber: 0 });
-        i--; j--;
-      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-        temp.push({ type: "added", content: newLines[j - 1], lineNumber: 0 });
-        j--;
-      } else {
-        temp.push({ type: "removed", content: oldLines[i - 1], lineNumber: 0 });
-        i--;
-      }
-    }
-
-    temp.reverse();
-    let lineNumber = 1;
-    for (const line of temp) {
-      line.lineNumber = lineNumber++;
-    }
-    return temp;
-  }
 
   // LRU 缓存 LCS 结果：file-change re-render 时同一 (oldString,newString) 不再重算。
   // 用 length 前缀 + \0 分隔，避免 oldString 内含分隔符碰撞。
@@ -129,7 +76,8 @@
           class:diff-line-added={line.type === "added"}
           class:diff-line-removed={line.type === "removed"}
         >
-          <span class="diff-gutter">{line.lineNumber}</span>
+          <span class="diff-gutter diff-gutter-old">{line.oldLineNumber ?? ""}</span>
+          <span class="diff-gutter diff-gutter-new">{line.newLineNumber ?? ""}</span>
           <span class="diff-prefix">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
           <span class="diff-content">{#if line.content === ""}&nbsp;{:else}{@html highlightLine(line.content)}{/if}</span>
         </div>
@@ -213,8 +161,8 @@
   }
 
   .diff-gutter {
-    width: 40px;
-    min-width: 40px;
+    width: 34px;
+    min-width: 34px;
     text-align: right;
     padding-right: 6px;
     color: var(--code-line-number);

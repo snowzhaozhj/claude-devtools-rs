@@ -419,6 +419,7 @@ mod tests {
             end_ts: Some(ts(n + 1)),
             source_assistant_uuid: "a1".into(),
             result_agent_id: None,
+            error_message: None,
             output_omitted: false,
             output_bytes: None,
             teammate_spawn: None,

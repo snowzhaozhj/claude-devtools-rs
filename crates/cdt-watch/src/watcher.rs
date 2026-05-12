@@ -9,8 +9,9 @@
 //! 端到端 `tests/file_watching.rs` 只做烟雾测，时序语义在下方 `mod tests`
 //! 用 `#[tokio::test(start_paused = true)]` 确定性覆盖。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -24,12 +25,24 @@ use crate::error::WatchError;
 const CHANNEL_CAPACITY: usize = 256;
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
+fn initial_projects(projects_dir: &Path) -> HashSet<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(projects_dir) else {
+        return HashSet::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
 /// 文件系统监听器，监听 projects 和 todos 目录变更。
 pub struct FileWatcher {
     file_tx: broadcast::Sender<FileChangeEvent>,
     todo_tx: broadcast::Sender<TodoChangeEvent>,
     projects_dir: PathBuf,
     todos_dir: PathBuf,
+    known_projects: Mutex<HashSet<PathBuf>>,
 }
 
 impl Default for FileWatcher {
@@ -57,11 +70,14 @@ impl FileWatcher {
     pub fn with_paths(projects_dir: PathBuf, todos_dir: PathBuf) -> Self {
         let (file_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
         let (todo_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+        let projects_dir = dunce::canonicalize(&projects_dir).unwrap_or(projects_dir);
+        let known_projects = initial_projects(&projects_dir);
         Self {
             file_tx,
             todo_tx,
-            projects_dir: dunce::canonicalize(&projects_dir).unwrap_or(projects_dir),
+            projects_dir,
             todos_dir: dunce::canonicalize(&todos_dir).unwrap_or(todos_dir),
+            known_projects: Mutex::new(known_projects),
         }
     }
 
@@ -128,14 +144,25 @@ impl FileWatcher {
     ///
     /// 路径格式：`<projects_dir>/<project_id>/<session_id>.jsonl`
     fn parse_project_event(&self, path: &Path, deleted: bool) -> Option<FileChangeEvent> {
-        let ext = path.extension()?;
-        if !ext.eq_ignore_ascii_case("jsonl") {
+        let rel = path.strip_prefix(&self.projects_dir).ok()?;
+        let components: Vec<_> = rel.components().collect();
+        if components.is_empty() {
             return None;
         }
 
-        let rel = path.strip_prefix(&self.projects_dir).ok()?;
-        let components: Vec<_> = rel.components().collect();
-        if components.len() < 2 {
+        if components.len() == 1 && !deleted && path.is_dir() {
+            let project_id = components[0].as_os_str().to_string_lossy().into_owned();
+            let project_list_changed = self.mark_project_seen(&project_id);
+            return Some(FileChangeEvent {
+                project_id,
+                session_id: String::new(),
+                deleted: false,
+                project_list_changed,
+            });
+        }
+
+        let ext = path.extension()?;
+        if !ext.eq_ignore_ascii_case("jsonl") || components.len() != 2 {
             return None;
         }
 
@@ -148,11 +175,21 @@ impl FileWatcher {
             .into_owned();
         let session_id = path.file_stem()?.to_string_lossy().into_owned();
 
+        let project_list_changed = !deleted && self.mark_project_seen(&project_id);
+
         Some(FileChangeEvent {
             project_id,
             session_id,
             deleted,
+            project_list_changed,
         })
+    }
+
+    fn mark_project_seen(&self, project_id: &str) -> bool {
+        self.known_projects
+            .lock()
+            .expect("known_projects mutex poisoned")
+            .insert(self.projects_dir.join(project_id))
     }
 
     /// 从 todos 目录下的路径解析 `TodoChangeEvent`。
@@ -454,6 +491,40 @@ mod tests {
         assert_eq!(event.project_id, "proj1");
         assert_eq!(event.session_id, "sess-abc");
         assert!(!event.deleted);
+        assert!(event.project_list_changed);
+    }
+
+    #[test]
+    fn existing_project_session_change_does_not_mark_project_list_changed() {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        let existing_project = projects_raw.join("proj1");
+        std::fs::create_dir_all(&existing_project).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
+
+        let event = watcher
+            .parse_project_event(&projects.join("proj1").join("sess-abc.jsonl"), false)
+            .expect("should parse");
+        assert!(!event.project_list_changed);
+    }
+
+    #[test]
+    fn parse_project_event_marks_new_top_level_project_directory() {
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let project_dir = projects.join("proj-new");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let event = watcher
+            .parse_project_event(&project_dir, false)
+            .expect("should parse");
+        assert_eq!(event.project_id, "proj-new");
+        assert_eq!(event.session_id, "");
+        assert!(!event.deleted);
+        assert!(event.project_list_changed);
     }
 
     #[test]
@@ -471,11 +542,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_project_event_requires_at_least_project_and_session() {
+    fn parse_project_event_requires_exactly_project_and_session() {
         let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
-        // projects/bare.jsonl —— 只有 1 层（没有 project_id 目录），应拒绝
         let bare = projects.join("bare.jsonl");
         assert!(watcher.parse_project_event(&bare, false).is_none());
+
+        let nested = projects.join("proj1").join("subagents").join("agent.jsonl");
+        assert!(watcher.parse_project_event(&nested, false).is_none());
+    }
+
+    #[test]
+    fn parse_project_event_rejects_deleted_top_level_project_directory() {
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let project_dir = projects.join("proj-deleted");
+        assert!(watcher.parse_project_event(&project_dir, true).is_none());
     }
 
     #[test]
@@ -515,6 +595,7 @@ mod tests {
         let file_event = file_rx.try_recv().expect("should have file event");
         assert_eq!(file_event.project_id, "proj1");
         assert_eq!(file_event.session_id, "sess-x");
+        assert!(file_event.project_list_changed);
 
         let todo_event = todo_rx.try_recv().expect("should have todo event");
         assert_eq!(todo_event.session_id, "sess-todo");

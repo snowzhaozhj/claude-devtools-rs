@@ -1,6 +1,9 @@
 <script lang="ts">
   import { highlightCode } from "../lib/render";
 
+  const highlightCache = new Map<string, string>();
+  const HIGHLIGHT_CACHE_CAP = 128;
+
   interface Props {
     code: string;
     lang?: string;
@@ -9,10 +12,29 @@
   }
 
   let { code, lang = "json", isError = false, maxHeight = 384 }: Props = $props();
+
+  function cachedHighlight(value: string, language: string): string {
+    const key = `${language}\0${value.length}\0${value}`;
+    const hit = highlightCache.get(key);
+    if (hit !== undefined) {
+      highlightCache.delete(key);
+      highlightCache.set(key, hit);
+      return hit;
+    }
+    const result = highlightCode(value, language);
+    if (highlightCache.size >= HIGHLIGHT_CACHE_CAP) {
+      const first = highlightCache.keys().next().value;
+      if (first !== undefined) highlightCache.delete(first);
+    }
+    highlightCache.set(key, result);
+    return result;
+  }
+
+  const highlighted = $derived(cachedHighlight(code, lang));
 </script>
 
 <div class="output-block" class:output-block-err={isError}>
-  <pre class="output-pre" style:max-height="{maxHeight}px"><code>{@html highlightCode(code, lang)}</code></pre>
+  <pre class="output-pre" style:max-height="{maxHeight}px"><code>{@html highlighted}</code></pre>
 </div>
 
 <style>

@@ -179,6 +179,18 @@ export function getToolOutputTokens(exec: ToolExecution): number {
   return 0;
 }
 
+export function getToolDurationMs(exec: ToolExecution): number | undefined {
+  if (!exec.endTs) return undefined;
+  const start = Date.parse(exec.startTs);
+  const end = Date.parse(exec.endTs);
+  if (Number.isNaN(start) || Number.isNaN(end)) return undefined;
+  return Math.max(0, end - start);
+}
+
+export function isToolPending(exec: ToolExecution): boolean {
+  return !exec.endTs || exec.output.kind === "missing";
+}
+
 /** 移除 ANSI 转义序列 */
 function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
@@ -359,12 +371,38 @@ export function getToolStatus(
   return "ok";
 }
 
+function findStringField(value: unknown, names: string[]): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  for (const name of names) {
+    const field = record[name];
+    if (typeof field === "string" && field.trim().length > 0) return field.trim();
+  }
+  for (const field of Object.values(record)) {
+    const nested = findStringField(field, names);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
 /** 将 ToolOutput 转为文本 */
 export function toolOutputText(output: ToolOutput): string {
   if (output.kind === "text") return output.text;
   if (output.kind === "structured")
     return JSON.stringify(output.value, null, 2);
   return "";
+}
+
+export function toolErrorText(exec: ToolExecution): string {
+  if (!exec.isError) return "";
+  const direct = exec.errorMessage?.trim();
+  if (direct) return direct;
+  if (exec.output.kind === "text") return cleanDisplayText(exec.output.text);
+  if (exec.output.kind === "structured") {
+    const extracted = findStringField(exec.output.value, ["error", "message", "stderr"]);
+    return extracted ?? JSON.stringify(exec.output.value, null, 2);
+  }
+  return "工具调用失败，但没有返回错误详情。";
 }
 
 /** 路径缩短：/Users/xxx → ~ */

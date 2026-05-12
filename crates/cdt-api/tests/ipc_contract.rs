@@ -523,6 +523,7 @@ fn tool_execution_output_omitted_field_name() {
         end_ts: None,
         source_assistant_uuid: "a1".into(),
         result_agent_id: None,
+        error_message: Some("boom".into()),
         teammate_spawn: None,
         output_omitted: true,
         output_bytes: Some(1024),
@@ -530,6 +531,7 @@ fn tool_execution_output_omitted_field_name() {
     let json = serde_json::to_value(&exec).unwrap();
     assert_eq!(json["outputOmitted"], json!(true));
     assert_eq!(json["outputBytes"], json!(1024));
+    assert_eq!(json["errorMessage"], json!("boom"));
     assert!(json.get("output_omitted").is_none());
     assert!(
         json.get("toolOutputOmitted").is_none(),

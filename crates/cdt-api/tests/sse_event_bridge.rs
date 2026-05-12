@@ -51,6 +51,7 @@ async fn file_change_forwarded_as_push_event() {
             project_id: "p1".into(),
             session_id: "s1".into(),
             deleted: false,
+            project_list_changed: false,
         })
         .unwrap();
 
@@ -62,9 +63,51 @@ async fn file_change_forwarded_as_push_event() {
         PushEvent::FileChange {
             project_id,
             session_id,
+            deleted,
+            project_list_changed,
         } => {
             assert_eq!(project_id, "p1");
             assert_eq!(session_id, "s1");
+            assert!(!deleted);
+            assert!(!project_list_changed);
+        }
+        other => panic!("expected FileChange, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn project_list_changed_forwarded_to_sse() {
+    let (events_tx, mut events_rx) = broadcast::channel::<PushEvent>(64);
+    let (file_tx, file_rx) = broadcast::channel::<FileChangeEvent>(16);
+    let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
+    let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
+
+    spawn_event_bridge(events_tx, file_rx, todo_rx, error_rx);
+
+    file_tx
+        .send(FileChangeEvent {
+            project_id: "p-new".into(),
+            session_id: String::new(),
+            deleted: false,
+            project_list_changed: true,
+        })
+        .unwrap();
+
+    let event = timeout(Duration::from_secs(2), events_rx.recv())
+        .await
+        .expect("recv timed out")
+        .expect("recv ok");
+    match event {
+        PushEvent::FileChange {
+            project_id,
+            session_id,
+            deleted,
+            project_list_changed,
+        } => {
+            assert_eq!(project_id, "p-new");
+            assert_eq!(session_id, "");
+            assert!(!deleted);
+            assert!(project_list_changed);
         }
         other => panic!("expected FileChange, got {other:?}"),
     }
@@ -157,6 +200,7 @@ async fn multiple_subscribers_each_receive_event_exactly_once() {
             project_id: "p".into(),
             session_id: "s".into(),
             deleted: false,
+            project_list_changed: false,
         })
         .unwrap();
 
@@ -187,6 +231,7 @@ async fn producer_continues_after_lagged_recv() {
             project_id: "p".into(),
             session_id: format!("burst-{i}"),
             deleted: false,
+            project_list_changed: false,
         });
     }
 
@@ -199,6 +244,7 @@ async fn producer_continues_after_lagged_recv() {
             project_id: "p".into(),
             session_id: "tail".into(),
             deleted: false,
+            project_list_changed: false,
         })
         .unwrap();
 

@@ -13,6 +13,9 @@ pub struct FileChangeEvent {
     pub session_id: String,
     /// 文件是否被删除。
     pub deleted: bool,
+    /// 项目列表是否可能已变化。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub project_list_changed: bool,
 }
 
 /// Todo 文件变更事件。

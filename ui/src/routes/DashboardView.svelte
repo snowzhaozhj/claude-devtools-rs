@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { listProjects, type ProjectInfo } from "../lib/api";
   import { shortenPath } from "../lib/toolHelpers";
   import { FOLDER_GIT2_SVG } from "../lib/icons";
+  import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
 
   interface Props {
     selectedProjectId: string;
@@ -34,14 +35,30 @@
     onSelectProject(project.id, project.displayName);
   }
 
-  onMount(async () => {
+  async function loadProjects(silent = false) {
+    if (!silent) loading = true;
     try {
       projects = await listProjects();
     } catch (e) {
       console.error("Failed to load projects:", e);
     } finally {
-      loading = false;
+      if (!silent) loading = false;
     }
+  }
+
+  onMount(async () => {
+    await loadProjects();
+    registerHandler("dashboard-projects", (payload) => {
+      if (!payload.projectListChanged) return;
+      scheduleRefresh("dashboard:projects", () =>
+        untrack(() => loadProjects(true)),
+      );
+    });
+  });
+
+  onDestroy(() => {
+    unregisterHandler("dashboard-projects");
+    cancelScheduledRefresh("dashboard:projects");
   });
 
   const filtered = $derived(

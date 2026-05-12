@@ -11,12 +11,13 @@
     tokenCount?: number;
     status?: "ok" | "error" | "pending" | "orphaned";
     durationMs?: number;
+    pendingLabel?: string;
     isExpanded: boolean;
     onclick: () => void;
     children?: Snippet;
   }
 
-  let { icon, svgIcon, label, summary, tokenCount, status, durationMs, isExpanded, onclick, children }: Props = $props();
+  let { icon, svgIcon, label, summary, tokenCount, status, durationMs, pendingLabel, isExpanded, onclick, children }: Props = $props();
 
   function formatTokens(n: number): string {
     if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
@@ -60,6 +61,8 @@
 
     {#if durationMs != null}
       <span class="base-item-duration">{formatDuration(durationMs)}</span>
+    {:else if pendingLabel}
+      <span class="base-item-duration base-item-duration-pending">{pendingLabel}</span>
     {/if}
 
     <span class="base-item-chevron" class:base-item-chevron-open={isExpanded}>
@@ -151,6 +154,10 @@
     color: var(--tool-item-muted);
     flex-shrink: 0;
     font-family: var(--font-mono);
+  }
+
+  .base-item-duration-pending {
+    color: var(--syntax-string);
   }
 
   .base-item-chevron {

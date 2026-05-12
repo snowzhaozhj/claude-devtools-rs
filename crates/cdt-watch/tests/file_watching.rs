@@ -20,9 +20,11 @@ use std::fs;
 use std::io::Write;
 use std::time::Duration;
 
+use cdt_core::FileChangeEvent;
 use cdt_watch::FileWatcher;
 use serial_test::serial;
 use tempfile::TempDir;
+use tokio::sync::broadcast;
 use tokio::time::timeout;
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(5);
@@ -35,6 +37,21 @@ fn setup_dirs() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
     fs::create_dir_all(&projects).unwrap();
     fs::create_dir_all(&todos).unwrap();
     (tmp, projects, todos)
+}
+
+async fn recv_session_event(
+    rx: &mut broadcast::Receiver<FileChangeEvent>,
+    session_id: &str,
+) -> FileChangeEvent {
+    loop {
+        let event = timeout(RECV_TIMEOUT, rx.recv())
+            .await
+            .expect("timed out waiting for session event")
+            .expect("channel closed");
+        if event.session_id == session_id {
+            return event;
+        }
+    }
 }
 
 /// Scenario: New session file created
@@ -60,13 +77,9 @@ async fn new_session_file_created() {
     // 写入新 .jsonl 文件
     fs::write(proj_dir.join("sess-abc.jsonl"), b"{}").unwrap();
 
-    let event = timeout(RECV_TIMEOUT, rx.recv())
-        .await
-        .expect("timed out waiting for event")
-        .expect("channel closed");
+    let event = recv_session_event(&mut rx, "sess-abc").await;
 
     assert_eq!(event.project_id, "proj1");
-    assert_eq!(event.session_id, "sess-abc");
     assert!(!event.deleted);
 
     handle.abort();
@@ -102,12 +115,8 @@ async fn existing_session_file_appended() {
     f.flush().unwrap();
     drop(f);
 
-    let event = timeout(RECV_TIMEOUT, rx.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
+    let event = recv_session_event(&mut rx, "sess-def").await;
 
-    assert_eq!(event.session_id, "sess-def");
     assert!(!event.deleted);
 
     handle.abort();
@@ -202,17 +211,11 @@ async fn two_subscribers_both_receive_event() {
 
     fs::write(proj_dir.join("sess-multi.jsonl"), b"{}").unwrap();
 
-    let ev1 = timeout(RECV_TIMEOUT, rx1.recv())
-        .await
-        .expect("rx1 timed out")
-        .expect("rx1 channel closed");
-    let ev2 = timeout(RECV_TIMEOUT, rx2.recv())
-        .await
-        .expect("rx2 timed out")
-        .expect("rx2 channel closed");
+    let ev1 = recv_session_event(&mut rx1, "sess-multi").await;
+    let ev2 = recv_session_event(&mut rx2, "sess-multi").await;
 
-    assert_eq!(ev1.session_id, "sess-multi");
-    assert_eq!(ev2.session_id, "sess-multi");
+    assert_eq!(ev1.project_id, "proj1");
+    assert_eq!(ev2.project_id, "proj1");
 
     handle.abort();
 }

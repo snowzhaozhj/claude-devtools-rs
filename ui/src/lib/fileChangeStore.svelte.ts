@@ -4,6 +4,7 @@ export interface FileChangePayload {
   projectId: string;
   sessionId: string;
   deleted: boolean;
+  projectListChanged?: boolean;
 }
 
 type Handler = (payload: FileChangePayload) => void;
