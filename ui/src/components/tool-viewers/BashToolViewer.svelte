@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ToolExecution } from "../../lib/api";
-  import { toolOutputText } from "../../lib/toolHelpers";
+  import { toolErrorText, toolOutputText } from "../../lib/toolHelpers";
   import OutputBlock from "../OutputBlock.svelte";
 
   interface Props {
@@ -11,7 +11,7 @@
 
   const input = $derived(exec.input as Record<string, unknown>);
   const command = $derived(String(input?.command ?? ""));
-  const outputStr = $derived(toolOutputText(exec.output));
+  const outputStr = $derived(exec.isError ? toolErrorText(exec) : toolOutputText(exec.output));
 </script>
 
 <div class="bash-viewer">

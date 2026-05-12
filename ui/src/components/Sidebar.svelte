@@ -96,14 +96,25 @@
 
   let metadataUnlisten: UnlistenFn | null = null;
 
-  onMount(async () => {
+  async function loadProjects(silent = false) {
+    if (!silent) projectsLoading = true;
     try {
-      projects = await listProjects();
-      if (projects.length > 0 && !selectedProjectId) {
-        onSelectProject(projects[0].id, projects[0].displayName);
+      const nextProjects = await listProjects();
+      projects = nextProjects;
+      const selectedExists = nextProjects.some((p) => p.id === selectedProjectId);
+      if (nextProjects.length > 0 && (!selectedProjectId || !selectedExists)) {
+        onSelectProject(nextProjects[0].id, nextProjects[0].displayName);
       }
     } catch (e) {
       console.error("Failed to load projects:", e);
+    } finally {
+      if (!silent) projectsLoading = false;
+    }
+  }
+
+  onMount(async () => {
+    try {
+      await loadProjects();
     } finally {
       projectsLoading = false;
     }
@@ -203,21 +214,21 @@
   // 重新注册让闭包捕获最新值
   $effect(() => {
     const currentProjectId = selectedProjectId;
-    if (!currentProjectId) {
-      unregisterHandler("sidebar");
-      return;
-    }
     registerHandler("sidebar", (payload) => {
-      if (payload.projectId !== currentProjectId) return;
+      if (payload.projectListChanged) {
+        scheduleRefresh("sidebar:projects", () =>
+          untrack(() => loadProjects(true)),
+        );
+      }
+      if (!currentProjectId || payload.projectId !== currentProjectId || !payload.sessionId) return;
       scheduleRefresh(`sidebar:${currentProjectId}`, () =>
         untrack(() => loadSessions(currentProjectId, true)),
       );
     });
     return () => {
       unregisterHandler("sidebar");
-      // 切 project 时取消旧 trailing，否则旧闭包会用旧 currentProjectId
-      // 调 loadSessions 覆盖新 project 的列表（codex review 找到的 bug）
-      cancelScheduledRefresh(`sidebar:${currentProjectId}`);
+      if (currentProjectId) cancelScheduledRefresh(`sidebar:${currentProjectId}`);
+      cancelScheduledRefresh("sidebar:projects");
     };
   });
 

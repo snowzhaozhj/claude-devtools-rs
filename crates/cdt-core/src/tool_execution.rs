@@ -68,6 +68,9 @@ pub struct ToolExecution {
     /// Subagent 匹配 Phase 1 优先读取此字段（比 content block 文本抽取更可靠）。
     #[serde(default)]
     pub result_agent_id: Option<String>,
+    /// 从 JSONL 顶层 `toolUseResult` 提取的失败原因。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
     #[serde(default)]
     pub output_omitted: bool,
     /// IPC OMIT 时记录的 output 原始字节长度。解析层 `None`；OMIT 层仅
@@ -144,6 +147,7 @@ mod tests {
             end_ts: Some(ts()),
             source_assistant_uuid: "a1".into(),
             result_agent_id: None,
+            error_message: None,
             output_omitted: false,
             output_bytes: None,
             teammate_spawn: None,
@@ -166,6 +170,7 @@ mod tests {
             end_ts: Some(ts()),
             source_assistant_uuid: "a1".into(),
             result_agent_id: None,
+            error_message: None,
             output_omitted: false,
             output_bytes: None,
             teammate_spawn: Some(TeammateSpawnInfo {
@@ -197,6 +202,7 @@ mod tests {
             end_ts: Some(ts()),
             source_assistant_uuid: "a1".into(),
             result_agent_id: None,
+            error_message: None,
             output_omitted: false,
             output_bytes: None,
             teammate_spawn: None,
@@ -232,6 +238,7 @@ mod tests {
             end_ts: Some(ts()),
             source_assistant_uuid: "a1".into(),
             result_agent_id: None,
+            error_message: None,
             output_omitted: true,
             output_bytes: Some(42),
             teammate_spawn: None,

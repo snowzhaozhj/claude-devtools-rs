@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ToolExecution } from "../../lib/api";
-  import { toolOutputText } from "../../lib/toolHelpers";
+  import { toolErrorText, toolOutputText } from "../../lib/toolHelpers";
   import OutputBlock from "../OutputBlock.svelte";
 
   interface Props {
@@ -10,7 +10,7 @@
   let { exec }: Props = $props();
 
   const inputStr = $derived(JSON.stringify(exec.input, null, 2));
-  const outputStr = $derived(toolOutputText(exec.output));
+  const outputStr = $derived(exec.isError ? toolErrorText(exec) : toolOutputText(exec.output));
 </script>
 
 <div class="default-viewer">

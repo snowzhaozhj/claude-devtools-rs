@@ -10,6 +10,8 @@ pub enum PushEvent {
     FileChange {
         project_id: String,
         session_id: String,
+        deleted: bool,
+        project_list_changed: bool,
     },
     /// Todo 文件变更。
     TodoChange {

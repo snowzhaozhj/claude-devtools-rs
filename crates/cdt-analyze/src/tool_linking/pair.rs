@@ -79,13 +79,17 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         continue;
                     }
                     pu.linked = true;
-                    let result_agent_id = msg
-                        .tool_use_result
-                        .as_ref()
+                    let tool_use_result = msg.tool_use_result.as_ref();
+                    let result_agent_id = tool_use_result
                         .and_then(|v| v.get("agentId"))
                         .and_then(|v| v.as_str())
                         .map(str::to_owned);
-                    let teammate_spawn = extract_teammate_spawn(msg.tool_use_result.as_ref());
+                    let error_message = if *is_error {
+                        extract_error_message(tool_use_result)
+                    } else {
+                        None
+                    };
+                    let teammate_spawn = extract_teammate_spawn(tool_use_result);
                     executions.push(ToolExecution {
                         tool_use_id: tool_use_id.clone(),
                         tool_name: pu.tool_name.clone(),
@@ -96,6 +100,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         end_ts: Some(msg.timestamp),
                         source_assistant_uuid: pu.source_assistant_uuid.clone(),
                         result_agent_id,
+                        error_message,
                         output_omitted: false,
                         output_bytes: None,
                         teammate_spawn,
@@ -120,6 +125,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                     end_ts: None,
                     source_assistant_uuid: pu.source_assistant_uuid,
                     result_agent_id: None,
+                    error_message: None,
                     output_omitted: false,
                     output_bytes: None,
                     teammate_spawn: None,
@@ -142,6 +148,19 @@ fn classify_output(content: &serde_json::Value) -> ToolOutput {
             value: other.clone(),
         },
     }
+}
+
+fn extract_error_message(tool_use_result: Option<&serde_json::Value>) -> Option<String> {
+    let v = tool_use_result?;
+    for key in ["message", "error", "stderr"] {
+        if let Some(s) = v.get(key).and_then(|value| value.as_str()) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+    None
 }
 
 /// 从 user 消息顶层 `toolUseResult` 抽取 teammate spawn 元数据。
@@ -349,15 +368,46 @@ mod tests {
         content: serde_json::Value,
         tool_use_result: serde_json::Value,
     ) -> ParsedMessage {
+        user_with_result_and_top_error(uuid, n, id, content, false, tool_use_result)
+    }
+
+    fn user_with_result_and_top_error(
+        uuid: &str,
+        n: i64,
+        id: &str,
+        content: serde_json::Value,
+        is_error: bool,
+        tool_use_result: serde_json::Value,
+    ) -> ParsedMessage {
         ParsedMessage {
             content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
                 tool_use_id: id.into(),
                 content,
-                is_error: false,
+                is_error,
             }]),
             tool_use_result: Some(tool_use_result),
             ..blank(uuid, n)
         }
+    }
+
+    #[test]
+    fn error_result_extracts_top_level_tool_use_result_message() {
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "t1", "Bash"),
+            user_with_result_and_top_error(
+                "u1",
+                2,
+                "t1",
+                serde_json::json!(null),
+                true,
+                serde_json::json!({"message": "command not found"}),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert_eq!(
+            r.executions[0].error_message.as_deref(),
+            Some("command not found")
+        );
     }
 
     #[test]

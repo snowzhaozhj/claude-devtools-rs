@@ -137,6 +137,7 @@ export interface ToolExecution {
   input: unknown;
   output: ToolOutput;
   isError: boolean;
+  errorMessage?: string | null;
   startTs: string;
   endTs: string | null;
   sourceAssistantUuid: string;
