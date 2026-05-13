@@ -288,6 +288,7 @@ export const multiProjectRichFixture: Fixture = {
       theme: 'system',
       defaultTab: 'sessions',
       autoExpandAiGroups: false,
+      sessionClickBehavior: 'replace',
     },
     display: {
       fontSans: null,

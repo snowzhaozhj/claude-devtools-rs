@@ -576,6 +576,23 @@ export function saveTabUIState(tabId: string, state: TabUIState): void {
   tabUIStates.set(tabId, state);
 }
 
+/**
+ * 查找 tabId 当前指向的 sessionId（用于跨 pane 找 tab）。
+ * 找不到（tab 已被关闭 / 不存在）返回 null。
+ *
+ * 给 SessionDetail.onDestroy 做 guard：openOrReplaceTab 保留 tabId 仅换 sessionId
+ * 时会触发旧 SessionDetail destroy，若它 onDestroy 无条件 saveTabUIState(tabId, ...)
+ * 会用旧 session 的 expanded / scroll 状态覆盖 openOrReplaceTab 刚 delete 的 slot，
+ * 新 SessionDetail mount 时 getTabUIState(tabId) 拿到的就是旧 session 残留。
+ */
+export function getTabSessionId(tabId: string): string | null {
+  for (const pane of paneLayout.panes) {
+    const t = pane.tabs.find((x) => x.id === tabId);
+    if (t) return t.sessionId;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Per-tab session 数据缓存
 // ---------------------------------------------------------------------------

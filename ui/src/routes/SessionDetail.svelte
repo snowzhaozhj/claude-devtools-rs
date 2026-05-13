@@ -9,7 +9,7 @@
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
   import { createLazyMarkdownObserver, estimatePlaceholderHeight } from "../lib/lazyMarkdown.svelte";
-  import { getTabUIState, saveTabUIState, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
+  import { getTabUIState, saveTabUIState, getTabSessionId, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
@@ -184,14 +184,19 @@
     cancelScheduledRefresh(`detail:${projectId}|${sessionId}`);
     lazyObserver?.disconnect();
     lazyObserver = null;
-    // 保存 per-tab UI 状态
-    saveTabUIState(tabId, {
-      expandedChunks: new Set(expandedChunks),
-      expandedItems: new Set(expandedItems),
-      searchVisible,
-      contextPanelVisible,
-      scrollTop: conversationEl?.scrollTop ?? 0,
-    });
+    // 保存 per-tab UI 状态 —— 但仅在 tab 仍指向当前 sessionId 时保存。
+    // openOrReplaceTab 会保留 tabId 仅换 sessionId 触发 destroy/recreate；
+    // 若此处无条件 save，旧 session 的状态会覆盖 openOrReplaceTab 刚清掉的 slot，
+    // 新 session mount 时 getTabUIState(tabId) 拿到的就是旧 session 残留（codex 二审 #1）。
+    if (getTabSessionId(tabId) === sessionId) {
+      saveTabUIState(tabId, {
+        expandedChunks: new Set(expandedChunks),
+        expandedItems: new Set(expandedItems),
+        searchVisible,
+        contextPanelVisible,
+        scrollTop: conversationEl?.scrollTop ?? 0,
+      });
+    }
   });
 
   // tool output 懒拉缓存：toolUseId → ToolOutput。仅当 exec.outputOmitted=true

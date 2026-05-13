@@ -18,6 +18,7 @@ export const emptyFixture: Fixture = {
       theme: 'system',
       defaultTab: 'sessions',
       autoExpandAiGroups: false,
+      sessionClickBehavior: 'replace',
     },
     display: {
       fontSans: null,

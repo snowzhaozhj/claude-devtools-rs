@@ -115,6 +115,7 @@ export const singleProjectFixture: Fixture = {
       theme: 'system',
       defaultTab: 'sessions',
       autoExpandAiGroups: false,
+      sessionClickBehavior: 'replace',
     },
     display: {
       fontSans: null,
