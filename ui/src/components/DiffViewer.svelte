@@ -187,10 +187,6 @@
     padding-right: 8px;
   }
 
-  /* 不强制覆盖 hljs token 颜色——保留语法高亮，行 +/- 由 .diff-line-* 的背景区分 */
-  .diff-content :global(.hljs) {
-    background: transparent;
-    padding: 0;
-    color: inherit;
-  }
+  /* hljs token 颜色 + .hljs 容器透明背景统一在 app.css 全局规则里。
+     行 +/- 由 .diff-line-* 的背景区分，token 颜色继承自全局 .hljs-* */
 </style>

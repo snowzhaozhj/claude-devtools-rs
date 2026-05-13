@@ -1399,15 +1399,7 @@
     font-weight: 600;
   }
 
-  /* Prose syntax tokens */
-  .prose :global(.hljs-string) { color: var(--syntax-string); }
-  .prose :global(.hljs-number) { color: var(--syntax-number); }
-  .prose :global(.hljs-keyword), .prose :global(.hljs-literal) { color: var(--syntax-keyword); }
-  .prose :global(.hljs-attr) { color: var(--code-filename); }
-  .prose :global(.hljs-comment) { color: var(--syntax-comment); }
-  .prose :global(.hljs-function), .prose :global(.hljs-title) { color: var(--syntax-function); }
-  .prose :global(.hljs-built_in) { color: var(--syntax-type); }
-  .prose :global(.hljs-type) { color: var(--syntax-type); }
+  /* Prose 内的 hljs token 颜色统一在 app.css 的 .hljs-* 全局规则里 */
 
   /* Thinking prose */
   .prose-thinking {
