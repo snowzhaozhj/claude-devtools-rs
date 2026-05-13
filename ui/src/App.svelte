@@ -27,6 +27,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { initFileChangeStore } from "./lib/fileChangeStore.svelte";
   import { getSidebarCollapsed, toggleSidebarCollapsed } from "./lib/sidebarStore.svelte";
+  import { attachExternalLinkInterceptor } from "./lib/externalLinks";
 
   let selectedProjectId: string = $state("");
   let selectedProjectName: string = $state("");
@@ -34,6 +35,7 @@
   let unlistenNotif: UnlistenFn | null = null;
   let unlistenNotifAdded: UnlistenFn | null = null;
   let unlistenUpdater: UnlistenFn | null = null;
+  let detachExternalLinks: (() => void) | null = null;
 
   async function onNotificationUpdate() {
     try {
@@ -128,6 +130,8 @@
 
   onMount(async () => {
     document.addEventListener("keydown", handleGlobalKeydown);
+    // 拦截 markdown 内的外链点击，走系统默认浏览器而非 webview 窗口内导航
+    detachExternalLinks = attachExternalLinkInterceptor();
     // 监听后端 notification-update 事件（mark-as-read 后刷新 badge）
     unlistenNotif = await listen("notification-update", onNotificationUpdate);
     // 监听自动通知管线新产生的通知：立即刷新 badge + 请求前台页面 reload 列表
@@ -155,6 +159,7 @@
     unlistenNotif?.();
     unlistenNotifAdded?.();
     unlistenUpdater?.();
+    detachExternalLinks?.();
   });
 
   const activeTab = $derived(getActiveTab());

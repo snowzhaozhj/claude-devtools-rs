@@ -13,6 +13,7 @@
     "core:window:allow-toggle-maximize",
     "notification:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    "opener:allow-open-url"
   ]
 }
