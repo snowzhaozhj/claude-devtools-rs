@@ -139,6 +139,55 @@ Sidebar.svelte loadProjects()           → repositoryGroups: $state<RepositoryG
 - worktree 排序：`is_main_worktree` 优先，再按 `most_recent_session` 倒序（已在 `WorktreeGrouper::group_by_repository` line 144-152 实现）
 - active worktree 选中态：`sidebarStore.activeWorktreeId` 取代原 `activeProjectId`（store 改动尽量小）
 
+### D1b: 性能预算更新（codex 二审反馈）
+
+D1 原文给的"50 projects × 100 µs ≈ 5 ms"无代码证据，真实成本主要是 `read_dir` 而非 `metadata`，高频 session 详情刷新会重复全量扫描。修订：
+
+- 不在本 change 内强保证 5 ms 预算；改为加 release benchmark `cargo test --release -p cdt-api --test perf_get_session_detail` 已有 `cdt_api::perf` tracing 探针，跨目录扫描的 `total_ms` 也会落到该探针 —— 实测后若 P95 > 100 ms，再决定按 repo 兄弟目录限扫或建反向索引（D1 原 B/C 候选方案）
+- `LocalDataApi` 不缓存扫描结果跨调用 —— 每次 `get_session_detail` 重新 `read_dir`。OS dentry cache 命中后 read_dir 通常 < 1 ms / 目录；冷启动场景靠 OS 自身 page cache 兜底
+
+### D2b: 旧结构跨目录的显式风险（codex 二审反馈）
+
+D2 假设"旧结构 jsonl 全在主 `project_dir`"无代码证据。修订：把它降级为**显式风险**而非确定结论：
+
+- 若有用户的旧结构 subagent jsonl 写到非主 `project_dir`（理论可能但实测罕见），本 change 不覆盖
+- 不加可开关的"旧结构跨目录慢扫" —— 跨目录扫旧结构需要 parse 每个 jsonl 检查 `parentUuid`，成本 O(N_projects × N_old_agent_files)，与本 change 性能目标冲突
+- 替代方案：未来若收到用户反馈，开 follow-up change 加反向索引（启动期一次性扫描建 `parent_session_id → path` 映射）
+
+### D3b: WorktreeGrouper 不进 LocalDataApi 字段（codex 二审反馈）
+
+D3 原文要求"`LocalDataApi` 字段为 `WorktreeGrouper<LocalGitIdentityResolver>` 且测试注入 `FakeGitIdentityResolver`" —— 类型不成立（concrete struct vs 泛型字段）。修订：
+
+- `LocalDataApi` **不**新增 `worktree_grouper` 字段
+- `list_repository_groups` 内部每次 `let grouper = WorktreeGrouper::new(LocalGitIdentityResolver::new()); grouper.group_by_repository(scanner.scan().await).await` —— grouper 是无状态轻量对象，重新构造成本可忽略
+- 测试路径用 `LocalDataApi::list_projects` + 单独跑 `WorktreeGrouper::new(FakeGitIdentityResolver).group_by_repository(...)`，分组逻辑由 `crates/cdt-discover/src/worktree_grouper.rs` 内的单测覆盖；IPC 集成测试仅断言"无 git 元数据时返单成员 group"等不依赖真 git 的场景
+- 跳过 D3 原方案 `new_with_worktree_grouper` 构造器；保留 D3 既有的 `new_with_*` 扩展约定不受影响
+
+### D4b: dev-only URL fallback 的真实生效范围（codex 二审反馈）
+
+D4 原文写"dev-only URL 参数 `?mode=flat`" —— 在 production Tauri 窗口加载的是本地 `dist/index.html`，URL params 不随 webview 实例化传入。修订：
+
+- URL 参数 fallback **仅在 vite dev server 下有效**（`npm run dev --prefix ui` → `http://localhost:5173/?fixture=...&mode=flat`）
+- production Tauri 窗口**无任何 flat 模式入口**（对齐 design 总方向"永久 grouped"）
+- 不引入 config field / localStorage 开关 —— 不增加状态机复杂度
+- 若未来真有用户需求，开 follow-up change 加 config field（不在本 change 内）
+
+### D6b: Windows encode 边界 contract 单测（codex 二审反馈）
+
+D6 原文 fixture 用 `-ws-my-proj-wt-feat-x` 避 NTFS 禁用字符 —— 不覆盖真实 Windows encode 边界。修订：
+
+- 保留 fixture 命名（CLAUDE.md "Windows NTFS 目录名禁用字符" 硬约束）
+- 额外补**不落盘**的 `encode_path` / `decode_path` 在 Windows 路径下的 contract 单测：断言 `encode_path("C:\\Users\\me\\proj")` 产出含 `:` 的编码、`decode_path` 还原 `C:\Users\me\proj` 形态 —— 已在 `crates/cdt-discover/src/path_decoder.rs` 内单测覆盖（无需 disk IO），本 change 不重复
+
+### D7b: App.selectedProjectId 不重命名，沿用 worktree.id == projectId（codex 二审反馈）
+
+D7 原文"`sidebarStore.activeWorktreeId` 替换原 `activeProjectId`" —— 当前 UI 实际没有 `sidebarStore.activeProjectId`，选中态是 `App.selectedProjectId` 下传，影响范围被低估。修订：
+
+- **不重命名**任何已存在的 store 字段或 props（`App.selectedProjectId` / `Sidebar.svelte::loadSessions(projectId)` 等保持不变）
+- worktree 子项点击时，把对应 `worktree.id` 作为 `projectId` 注入 `App.selectedProjectId` —— `worktree.id` 与底层 `Project.id` 一一对应（`crates/cdt-core/src/project.rs::Worktree::id` 字段就是 `Project.id`，见 `WorktreeGrouper::group_by_repository` 构造逻辑）
+- `loadSessions(projectId)` 当 worktree 选中时拉的是该 worktree 自身的 sessions（兼容旧调用）；group 级合并 sessions 仍通过新 `getWorktreeSessions(group_id, ...)` IPC，用在 group 自身的"概览页" UI（如未来加"按时间合并 group 内所有 worktree sessions"视图）
+- `expandedGroupIds: Set<string>` 是 sidebar **新**增的 state，不冲突现有命名
+
 ## Risks / Trade-offs
 
 - **Risk 1**：fan-out 跨目录扫描在用户机器 project_dir 数量极大时（>200）首屏延迟可能超预算 —— **Mitigation**：tracing 探针记录真实分布，若实测 P95 > 100 ms 则 fallback 到反向索引（D1 备选方案）。回滚开关 `CROSS_PROJECT_SUBAGENT_SCAN: bool` 一键切回原行为。

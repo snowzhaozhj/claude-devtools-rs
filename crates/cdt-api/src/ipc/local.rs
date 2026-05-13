@@ -90,6 +90,23 @@ const OMIT_TOOL_OUTPUT: bool = true;
 /// 的 `openspec/specs/ipc-data-api/spec.md` "Expose `CompactChunk` derived metadata in `SessionDetail`"。
 const COMPACT_DERIVED_ENABLED: bool = true;
 
+/// 控制是否跨 `project_dir` 扫描 subagent JSONL。
+///
+/// 当主 session 在主 cwd 启动后，subagent 通过 `EnterWorktree` 把 cwd 切到
+/// `<repo>/.claude/worktrees/<slug>/`，Claude Code 会把 subagent JSONL 写到
+/// worktree cwd 编码出的另一个 `project_dir` 下（如
+/// `~/.claude/projects/-Users-...-claude-worktrees-<slug>/<rootSessionId>/subagents/`）。
+/// 默认 `true` 时，`scan_subagent_candidates_cross_project` /
+/// `find_subagent_jsonl_cross_project` / `locate_session_jsonl` 会遍历整个
+/// `projects_dir`，把所有 `{rootSessionId}/subagents/agent-*.jsonl` 收集为候选。
+///
+/// 紧急回滚：设为 `false` 时所有跨目录调用退化为只扫主 `project_dir`（原行为）；
+/// 旧结构 flat `agent-*.jsonl` 始终只扫主 `project_dir`（设计决策 D2）。
+/// 行为契约见 change `worktree-support-and-cross-project-subagent` 的
+/// `openspec/specs/ipc-data-api/spec.md` "Expose project and session queries"
+/// Requirement 内的"跨 `project_dir` 装载 subagent"段。
+const CROSS_PROJECT_SUBAGENT_SCAN: bool = true;
+
 /// 累加一个 `TokenUsage` 的四类计数，溢出时返回 `None`（防御性，u64 总量
 /// 实际罕见溢出，但坏 JSONL 可能把 usage 字段填到极大值，避免 panic）。
 fn token_usage_total(u: &cdt_core::TokenUsage) -> Option<u64> {
@@ -684,7 +701,11 @@ impl DataApi for LocalDataApi {
         let message_count = messages.len();
 
         let t_scan = std::time::Instant::now();
-        let candidates = scan_subagent_candidates(&project_dir, session_id).await;
+        let candidates = if CROSS_PROJECT_SUBAGENT_SCAN {
+            scan_subagent_candidates_cross_project(&projects_dir, &project_dir, session_id).await
+        } else {
+            scan_subagent_candidates(&project_dir, session_id).await
+        };
         let scan_ms = t_scan.elapsed().as_millis();
         let candidate_count = candidates.len();
 
@@ -852,35 +873,50 @@ impl DataApi for LocalDataApi {
         root_session_id: &str,
         subagent_session_id: &str,
     ) -> Result<serde_json::Value, ApiError> {
-        // 跨所有 project 找 root session 所在目录——`get_subagent_trace` 调用
-        // 方（Tauri command）只携带 sessionId，不带 projectId，所以这里需要
-        // scan。`scan_subagents_for` 在 cdt-discover 里有现成实现，但这里
-        // 直接复用 `find_subagent_jsonl` + `path_decoder` 即可保持简单。
+        // `get_subagent_trace` 调用方（Tauri command）只携带 sessionId，
+        // 不带 projectId，所以需跨 `projects_dir` 扫。优先按
+        // `{projects_dir}/*/{root_session_id}/subagents/agent-<sub>.jsonl`
+        // 全局扫（新结构）；旧结构 fallback 走"找到 root jsonl 所在 project_dir
+        // 后在该目录内查 flat agent jsonl"。
         let projects_dir = path_decoder::get_projects_base_path();
-        let Ok(mut entries) = tokio::fs::read_dir(&projects_dir).await else {
-            return Ok(serde_json::Value::Array(Vec::new()));
+        let new_structure_path = if CROSS_PROJECT_SUBAGENT_SCAN {
+            find_subagent_jsonl_cross_project(&projects_dir, root_session_id, subagent_session_id)
+                .await
+        } else {
+            None
         };
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let project_dir = entry.path();
-            // root session 自身存在 → 才在该 project 里查 subagent
-            let root_jsonl = project_dir.join(format!("{root_session_id}.jsonl"));
-            if tokio::fs::metadata(&root_jsonl).await.is_ok() {
-                if let Some(path) = find_subagent_jsonl(&project_dir, subagent_session_id).await {
-                    let messages = parse_file(&path)
-                        .await
-                        .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
-                    let mut msgs = messages;
-                    for m in &mut msgs {
-                        m.is_sidechain = false;
+        let path = if let Some(p) = new_structure_path {
+            p
+        } else {
+            // 旧结构兜底：找 root jsonl 所在 project_dir 后在该目录扫 flat。
+            let Ok(mut entries) = tokio::fs::read_dir(&projects_dir).await else {
+                return Ok(serde_json::Value::Array(Vec::new()));
+            };
+            let mut fallback: Option<std::path::PathBuf> = None;
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let project_dir = entry.path();
+                let root_jsonl = project_dir.join(format!("{root_session_id}.jsonl"));
+                if tokio::fs::metadata(&root_jsonl).await.is_ok() {
+                    if let Some(p) = find_subagent_jsonl(&project_dir, subagent_session_id).await {
+                        fallback = Some(p);
                     }
-                    let chunks = cdt_analyze::build_chunks(&msgs);
-                    return serde_json::to_value(&chunks)
-                        .map_err(|e| ApiError::internal(format!("{e}")));
+                    break;
                 }
-                break;
             }
+            let Some(p) = fallback else {
+                return Ok(serde_json::Value::Array(Vec::new()));
+            };
+            p
+        };
+        let messages = parse_file(&path)
+            .await
+            .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
+        let mut msgs = messages;
+        for m in &mut msgs {
+            m.is_sidechain = false;
         }
-        Ok(serde_json::Value::Array(Vec::new()))
+        let chunks = cdt_analyze::build_chunks(&msgs);
+        serde_json::to_value(&chunks).map_err(|e| ApiError::internal(format!("{e}")))
     }
 
     async fn get_image_asset(
@@ -1400,22 +1436,42 @@ fn format_data_uri(media_type: &str, base64_data: &str) -> String {
 
 /// 在 projects 根目录下定位 (`root_session_id`, `session_id`) 对应的 jsonl。
 ///
-/// `session_id == root_session_id` 时直接找 root jsonl；不等时去 root 同 project
-/// 的 `subagents/agent-<sub>.jsonl`（与 `find_subagent_jsonl` 同样支持新旧两种结构）。
+/// `session_id == root_session_id` 时直接找 root jsonl（在任一 `project_dir` 内）；
+/// 不等时跨 `projects_dir` 扫 `{project_dir}/{root_session_id}/subagents/agent-<sub>.jsonl`
+/// （新结构），命中即返；未命中再 fallback 到 root `project_dir` 内的 flat 旧结构。
 async fn locate_session_jsonl(
     projects_dir: &Path,
     root_session_id: &str,
     session_id: &str,
 ) -> Option<std::path::PathBuf> {
+    // 主 session 自身：扫 projects_dir 找到任一 project_dir 含 root jsonl 即返。
+    if session_id == root_session_id {
+        let mut entries = tokio::fs::read_dir(projects_dir).await.ok()?;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let root_jsonl = entry.path().join(format!("{root_session_id}.jsonl"));
+            if tokio::fs::metadata(&root_jsonl).await.is_ok() {
+                return Some(root_jsonl);
+            }
+        }
+        return None;
+    }
+
+    // subagent：优先跨 project_dir 扫新结构。
+    if CROSS_PROJECT_SUBAGENT_SCAN {
+        if let Some(p) =
+            find_subagent_jsonl_cross_project(projects_dir, root_session_id, session_id).await
+        {
+            return Some(p);
+        }
+    }
+
+    // 旧结构兜底：找含 root jsonl 的 project_dir 后扫该目录的 flat agent jsonl。
     let mut entries = tokio::fs::read_dir(projects_dir).await.ok()?;
     while let Ok(Some(entry)) = entries.next_entry().await {
         let project_dir = entry.path();
         let root_jsonl = project_dir.join(format!("{root_session_id}.jsonl"));
         if tokio::fs::metadata(&root_jsonl).await.is_err() {
             continue;
-        }
-        if session_id == root_session_id {
-            return Some(root_jsonl);
         }
         if let Some(p) = find_subagent_jsonl(&project_dir, session_id).await {
             return Some(p);
@@ -1521,13 +1577,154 @@ async fn find_subagent_jsonl(project_dir: &Path, session_id: &str) -> Option<std
     None
 }
 
+/// 跨 `projects_dir` 扫描 subagent 候选文件，构建 `SubagentCandidate` 列表。
+///
+/// 当 `CROSS_PROJECT_SUBAGENT_SCAN=true` 时，遍历 `projects_dir` 下所有 `project_dir`
+/// 探测 `{dir}/{root_session_id}/subagents/agent-*.jsonl`（新结构）；
+/// 旧结构 flat `{主_project_dir}/agent-*.jsonl` 仍只在主 `project_dir` 内扫
+/// （跨目录扫旧结构需要 parse 每个 jsonl 检查 parent，成本不可控，且实测旧结构
+/// 主要出现在主 cwd 启动的老 session，跨目录场景罕见）。
+///
+/// `main_project_dir` 用于旧结构扫描；新结构扫描仅依赖 `projects_dir`。
+///
+/// 跳过 `agent-acompact*` 前缀（compaction 类内部产物，不是真实 subagent）。
+async fn scan_subagent_candidates_cross_project(
+    projects_dir: &Path,
+    main_project_dir: &Path,
+    root_session_id: &str,
+) -> Vec<cdt_core::SubagentCandidate> {
+    let t_total = std::time::Instant::now();
+    let mut candidates = Vec::new();
+    let mut per_candidate_ms: Vec<u128> = Vec::new();
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut projects_scanned: usize = 0;
+    let mut dirs_with_subagents: usize = 0;
+
+    let Ok(mut entries) = tokio::fs::read_dir(projects_dir).await else {
+        return candidates;
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(file_type) = entry.file_type().await else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        projects_scanned += 1;
+        let new_dir = entry.path().join(root_session_id).join("subagents");
+        let Ok(mut sub_entries) = tokio::fs::read_dir(&new_dir).await else {
+            continue;
+        };
+        dirs_with_subagents += 1;
+        while let Ok(Some(sub_entry)) = sub_entries.next_entry().await {
+            let name = sub_entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !(name_str.starts_with("agent-")
+                && name_str.ends_with(".jsonl")
+                && !name_str.starts_with("agent-acompact"))
+            {
+                continue;
+            }
+            let t = std::time::Instant::now();
+            let Some(c) = parse_subagent_candidate(&sub_entry.path()).await else {
+                continue;
+            };
+            if !seen_ids.insert(c.session_id.clone()) {
+                continue;
+            }
+            per_candidate_ms.push(t.elapsed().as_millis());
+            candidates.push(c);
+        }
+    }
+
+    // 旧结构兜底：始终只扫主 project_dir，避免跨目录大量 parse 成本。
+    if let Ok(mut old_entries) = tokio::fs::read_dir(main_project_dir).await {
+        while let Ok(Some(entry)) = old_entries.next_entry().await {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !(name_str.starts_with("agent-")
+                && name_str.ends_with(".jsonl")
+                && !name_str.starts_with("agent-acompact"))
+            {
+                continue;
+            }
+            let t = std::time::Instant::now();
+            let Some(c) = parse_subagent_candidate(&entry.path()).await else {
+                continue;
+            };
+            if c.parent_session_id.as_deref() != Some(root_session_id) {
+                continue;
+            }
+            if !seen_ids.insert(c.session_id.clone()) {
+                continue;
+            }
+            per_candidate_ms.push(t.elapsed().as_millis());
+            candidates.push(c);
+        }
+    }
+
+    let total_ms = t_total.elapsed().as_millis();
+    if projects_scanned > 0 || !candidates.is_empty() {
+        let parse_total: u128 = per_candidate_ms.iter().sum();
+        let parse_max = per_candidate_ms.iter().max().copied().unwrap_or_default();
+        tracing::info!(
+            target: "cdt_api::perf",
+            session_id = %root_session_id,
+            projects_scanned,
+            dirs_with_subagents,
+            candidates_found = candidates.len(),
+            parse_total_ms = parse_total,
+            parse_max_ms = parse_max,
+            total_ms,
+            "scan_subagent_candidates_cross_project"
+        );
+    }
+
+    candidates
+}
+
+/// 跨 `projects_dir` 定位 subagent JSONL（新结构优先）。
+///
+/// 扫所有 `{projects_dir}/*/{root_session_id}/subagents/agent-{sub_session_id}.jsonl`，
+/// 命中即返。未命中且 `CROSS_PROJECT_SUBAGENT_SCAN=true` 时不再 fallback —— 调用方需要
+/// 额外回退路径时显式叠加调用 `find_subagent_jsonl(&main_project_dir, ...)` 兜旧结构。
+async fn find_subagent_jsonl_cross_project(
+    projects_dir: &Path,
+    root_session_id: &str,
+    sub_session_id: &str,
+) -> Option<std::path::PathBuf> {
+    let filename = format!("agent-{sub_session_id}.jsonl");
+    let Ok(mut entries) = tokio::fs::read_dir(projects_dir).await else {
+        return None;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(file_type) = entry.file_type().await else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let candidate = entry
+            .path()
+            .join(root_session_id)
+            .join("subagents")
+            .join(&filename);
+        if tokio::fs::metadata(&candidate).await.is_ok() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 /// 扫描 subagent 候选文件，构建 `SubagentCandidate` 列表。
 ///
 /// 扫描路径：
 /// - 新结构：`{project_dir}/{session_id}/subagents/agent-*.jsonl`
 /// - 旧结构：`{project_dir}/agent-*.jsonl`（需要读首行检查 parent session）
 ///
-/// 扫描失败时静默返回空列表（warn 日志）。
+/// 扫描失败时静默返回空列表（warn 日志）。本函数仅扫主 `project_dir`，
+/// 跨 `projects_dir` 的扫描走 `scan_subagent_candidates_cross_project`。
 async fn scan_subagent_candidates(
     project_dir: &Path,
     session_id: &str,
@@ -2596,5 +2793,161 @@ mod tests {
             assert_eq!(extract_compact(&chunks, idx).token_delta, None);
             assert_eq!(extract_compact(&chunks, idx).phase_number, None);
         }
+    }
+
+    // -------- cross-project subagent scan --------
+
+    /// 写一行 subagent JSONL（含 `sessionId` / `agentId` / `cwd` / `timestamp`）。
+    ///
+    /// 用于跨 `project_dir` 测试的 fixture：模拟"subagent 在 worktree cwd 里跑、JSONL
+    /// 写到 worktree 编码的 `project_dir` 下"的真实磁盘形态。
+    fn write_xproj_subagent_jsonl(
+        path: &std::path::Path,
+        root_session_id: &str,
+        agent_id: &str,
+        cwd: &str,
+    ) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        // 第一行：含 sessionId / agentId / cwd / parentUuid / type=user
+        let line = format!(
+            "{{\"type\":\"user\",\"sessionId\":\"{root_session_id}\",\"agentId\":\"{agent_id}\",\"parentUuid\":null,\"cwd\":\"{cwd}\",\"timestamp\":\"2026-04-26T10:00:00Z\",\"uuid\":\"u-1\",\"message\":{{\"role\":\"user\",\"content\":\"work hint\"}}}}\n"
+        );
+        std::fs::write(path, line).unwrap();
+    }
+
+    #[tokio::test]
+    async fn scan_cross_project_finds_subagent_in_sibling_project_dir() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+
+        // 主 project_dir（含主 session jsonl，但无 subagent 子目录）
+        let main_pd = projects_dir.join("-ws-my-proj");
+        std::fs::create_dir_all(&main_pd).unwrap();
+        std::fs::write(main_pd.join("root-uuid.jsonl"), b"").unwrap();
+
+        // worktree project_dir（含 subagent jsonl）
+        let wt_pd = projects_dir.join("-ws-my-proj-wt-feat-x");
+        let agent_path = wt_pd
+            .join("root-uuid")
+            .join("subagents")
+            .join("agent-sub-uuid.jsonl");
+        write_xproj_subagent_jsonl(
+            &agent_path,
+            "root-uuid",
+            "sub-uuid",
+            "/ws/my-proj/.claude/worktrees/feat-x",
+        );
+
+        let cands =
+            scan_subagent_candidates_cross_project(&projects_dir, &main_pd, "root-uuid").await;
+        assert_eq!(cands.len(), 1, "应找到 worktree pd 下的 subagent candidate");
+        assert_eq!(cands[0].session_id, "sub-uuid");
+    }
+
+    #[tokio::test]
+    async fn scan_cross_project_dedupes_same_agent_id() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+
+        // 两个 project_dir 各有同 agent_id 的 subagent jsonl —— 模拟同步副本
+        for slug in ["-ws-a", "-ws-b"] {
+            let path = projects_dir
+                .join(slug)
+                .join("root-uuid")
+                .join("subagents")
+                .join("agent-sub-uuid.jsonl");
+            write_xproj_subagent_jsonl(&path, "root-uuid", "sub-uuid", "/ws/x");
+        }
+
+        let main_pd = projects_dir.join("-ws-a");
+        let cands =
+            scan_subagent_candidates_cross_project(&projects_dir, &main_pd, "root-uuid").await;
+        assert_eq!(cands.len(), 1, "同 agent_id 跨目录重复应被 seen_ids 去重");
+    }
+
+    #[tokio::test]
+    async fn scan_cross_project_empty_when_no_match() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+        let main_pd = projects_dir.join("-ws-my-proj");
+        std::fs::create_dir_all(&main_pd).unwrap();
+
+        let cands =
+            scan_subagent_candidates_cross_project(&projects_dir, &main_pd, "missing-root").await;
+        assert!(cands.is_empty(), "无任何 subagent 时返空");
+    }
+
+    #[tokio::test]
+    async fn find_subagent_jsonl_cross_project_locates_sibling() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+
+        let wt_pd = projects_dir.join("-ws-wt-feat-y");
+        let agent_path = wt_pd
+            .join("root-uuid")
+            .join("subagents")
+            .join("agent-sub-uuid.jsonl");
+        write_xproj_subagent_jsonl(&agent_path, "root-uuid", "sub-uuid", "/ws/wt");
+
+        let found =
+            find_subagent_jsonl_cross_project(&projects_dir, "root-uuid", "sub-uuid").await;
+        assert_eq!(found, Some(agent_path));
+    }
+
+    #[tokio::test]
+    async fn find_subagent_jsonl_cross_project_returns_none_when_missing() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+        std::fs::create_dir_all(projects_dir.join("-ws-empty")).unwrap();
+
+        let found =
+            find_subagent_jsonl_cross_project(&projects_dir, "root-uuid", "sub-uuid").await;
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn locate_session_jsonl_finds_root_in_any_project_dir() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let pd = projects_dir.join("-ws-host");
+        std::fs::create_dir_all(&pd).unwrap();
+        let root_jsonl = pd.join("root-uuid.jsonl");
+        std::fs::write(&root_jsonl, b"").unwrap();
+
+        let found = locate_session_jsonl(&projects_dir, "root-uuid", "root-uuid").await;
+        assert_eq!(found, Some(root_jsonl));
+    }
+
+    #[tokio::test]
+    async fn locate_session_jsonl_finds_subagent_across_project_dirs() {
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+
+        // 主 pd 只含 root jsonl；subagent 在 worktree pd
+        let main_pd = projects_dir.join("-ws-main");
+        std::fs::create_dir_all(&main_pd).unwrap();
+        std::fs::write(main_pd.join("root-uuid.jsonl"), b"").unwrap();
+
+        let wt_pd = projects_dir.join("-ws-wt");
+        let agent_path = wt_pd
+            .join("root-uuid")
+            .join("subagents")
+            .join("agent-sub-uuid.jsonl");
+        write_xproj_subagent_jsonl(&agent_path, "root-uuid", "sub-uuid", "/ws/wt");
+
+        let found = locate_session_jsonl(&projects_dir, "root-uuid", "sub-uuid").await;
+        assert_eq!(
+            found,
+            Some(agent_path),
+            "subagent 在 worktree pd 时 locate_session_jsonl 应跨目录找到"
+        );
     }
 }
