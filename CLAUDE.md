@@ -104,6 +104,7 @@ claude-devtools-rs/
 - **Settings 乐观更新模式**：config 修改不能依赖 `updateConfig` 返回值刷新 UI，应先乐观更新本地 `$state`，异步调 API，失败时回滚（重新 `getConfig`）。
 - **Svelte 5 `@const` 位置限制**：`{@const}` 只能是 `{#if}`/`{:else}`/`{#each}`/`{#snippet}`/`<Component>` 的直接子级，不能放在 `<div>` 等 HTML 元素内。需要在块开头集中声明。
 - **前端渲染依赖**：`marked`（markdown→HTML）+ `highlight.js`（语法高亮，按需加载语言）+ `dompurify`（XSS 防护）+ `mermaid`（图表渲染，动态 import）。highlight.js 不引入预制主题 CSS，用 `app.css` 中自定义 Soft Charcoal token 颜色。
+- **hljs token 颜色单点维护**：`.hljs-*` token 颜色 SHALL 写在 `ui/src/app.css` 全局（与 `--syntax-*` CSS 变量绑定，浅/深主题自动切换）；组件内**不要**再写 `.<component> :global(.hljs-*) { color: ... }` 局部覆盖——历史上散在 5 处导致 DiffViewer 漏写、Edit 工具行 +/- 背景下 token 无色。`getLanguageFromPath`（`ui/src/lib/toolHelpers.ts`）优先级链路：精确特殊名（Dockerfile/Makefile）→ ext 真映射 → 前缀兜底（Dockerfile.dev）→ text；改动时不要破坏顺序，否则 `Jenkinsfile.kts`（Kotlin DSL）会被错认 groovy。
 - **原版 UI 参考**：前端文本清洗逻辑移植自 `../claude-devtools/src/shared/utils/contentSanitizer.ts`（`sanitizeDisplayContent`）。扩展 UI 功能时优先查原版 `src/renderer/` 和 `src/shared/` 对应实现，直接移植而非自己造轮子。
 - **port 状态判定要顺着 main 进程查兜底**：原版纯算法 ts（`sessionStateDetection.ts` / `tokenFormatting.ts` 等）只定结构性判定；最终落到 UI 的字段（`isOngoing` / `messageCount` / `gitBranch`...）常在 `src/main/services/discovery/ProjectScanner.ts` 等**调用方**叠加 mtime / count / threshold 兜底。port 时只看算法文件会漏，必须 grep 调用方"该字段被赋值的地方"——本仓 isOngoing 缺 5min `STALE_SESSION_THRESHOLD_MS` 的根因（见 change `session-ongoing-stale-check`）。
 - **Svelte 列表/详情自动刷新反闪烁三原则**：(1) `{#each}` 必须带稳定 key（AIChunk 用 `responses[0].uuid`，UserChunk/System/Compact 用 `uuid`，SessionSummary 用 `sessionId`），否则 file-change 刷新时整段 DOM 重建 + mermaid/highlight.js 重跑；(2) `loadX(..., silent = false)` 加 silent 参数，file-change handler 传 `silent=true` 保留旧列表直到新数据到达，**不要**经过"加载中..."中间态；(3) ongoing/interruption 等状态指示器嵌入已有 slot（如 `<OngoingBanner>` 替代最后 AIChunk 的 `lastOutput`，对齐原版 `LastOutputDisplay.tsx::isLastGroup && isSessionOngoing` 语义），**不要**作为独立节点追加到流尾部——否则显隐切换时 scrollHeight 跳变引发贴底滚动视觉抖动。
@@ -141,7 +142,7 @@ claude-devtools-rs/
   - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
   - MCP：`.mcp.json` 注册 GitHub MCP，需要 `GITHUB_PERSONAL_ACCESS_TOKEN` 环境变量。
 - **opsx:apply 推进节拍**：详见 `.claude/rules/opsx-apply-cadence.md`。核心：Edit → clippy → fmt → test → npm check → validate → 勾 checkbox → 文本总结，不得中途停手。
-- **codex 异构二审与全流程协同**：详见 `.claude/rules/codex-usage.md`。核心：行为契约 / 性能 / 算法 / 并发类改动 push 后调 `codex:codex-rescue` subagent 拿异构二审；卡 30+ 分钟主动 rescue；design 阶段重大决策、test 阶段 edge case 也可调；纯样式 / docs 跳过。**不**新建 `/codex-*` skill 重复封装，规则文档里已固化触发判断与 prompt 模板。
+- **codex 异构二审与全流程协同**：详见 `.claude/rules/codex-usage.md`。核心：**默认每个 PR push 后**都调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 拿异构二审；只有 bump version / docs / typo / CI 微调等明确豁免场景才跳过（跳过时 PR 描述里写明理由）。卡 30+ 分钟主动 rescue；design 阶段重大决策、test 阶段 edge case 也可调。**不**新建 `/codex-*` skill 重复封装，规则文档里已固化触发判断与 prompt 模板。
 - Detailed rules: `.claude/rules/rust.md`.
 
 ## 发布与分支策略
@@ -195,4 +196,4 @@ claude-devtools-rs/
 2. UI 功能迭代分流：**行为契约改动**（IPC 字段 / 后端算法 / 状态判定 / 数据流语义）走 openspec（`/opsx:propose` → `/opsx:apply` → `/opsx:archive`，design.md 必备）；**纯视觉对齐 / 单点样式修复 / Trigger CRUD 等**直接写 + PR。判断不准默认走 openspec
 3. 性能 / 卡顿排查：用"性能回归监测"段的入口，**先看数据再定方向**
 4. 提交前跑 `just preflight` 把 fmt / lint / test / spec-validate 一把梭
-5. **行为契约 / 性能 / 算法 / 并发**类 PR push 之后调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑 codex 异构二审找深逻辑 bug；**纯样式 / docs / chore** 跑 `/code-review` 走多 agent + PR comment 落地。两者**二选一**——codex 已审就跳过 `/code-review`（避免重复审同一份代码），反之亦然。判断规则与 prompt 模板见 `.claude/rules/codex-usage.md`
+5. **默认每个 PR push 后**都调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑 codex 异构二审。豁免：bump version / 纯 docs / typo / CI 配置微调（跳过时 PR 描述写明理由）。`/code-review` 不再常规跑，仅在想留多 agent 审计痕迹时手动调。判断规则与 prompt 模板见 `.claude/rules/codex-usage.md`

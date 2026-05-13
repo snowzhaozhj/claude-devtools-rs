@@ -11,6 +11,47 @@ import yaml from "highlight.js/lib/languages/yaml";
 import xml from "highlight.js/lib/languages/xml";
 import css from "highlight.js/lib/languages/css";
 import go from "highlight.js/lib/languages/go";
+import java from "highlight.js/lib/languages/java";
+import kotlin from "highlight.js/lib/languages/kotlin";
+import c from "highlight.js/lib/languages/c";
+import cpp from "highlight.js/lib/languages/cpp";
+import csharp from "highlight.js/lib/languages/csharp";
+import swift from "highlight.js/lib/languages/swift";
+import ruby from "highlight.js/lib/languages/ruby";
+import php from "highlight.js/lib/languages/php";
+import lua from "highlight.js/lib/languages/lua";
+import dart from "highlight.js/lib/languages/dart";
+import scala from "highlight.js/lib/languages/scala";
+import sql from "highlight.js/lib/languages/sql";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import makefile from "highlight.js/lib/languages/makefile";
+import perl from "highlight.js/lib/languages/perl";
+import r from "highlight.js/lib/languages/r";
+import powershell from "highlight.js/lib/languages/powershell";
+import ini from "highlight.js/lib/languages/ini";
+import protobuf from "highlight.js/lib/languages/protobuf";
+import graphql from "highlight.js/lib/languages/graphql";
+import http from "highlight.js/lib/languages/http";
+import diff from "highlight.js/lib/languages/diff";
+import properties from "highlight.js/lib/languages/properties";
+import nginx from "highlight.js/lib/languages/nginx";
+import plaintext from "highlight.js/lib/languages/plaintext";
+import objectivec from "highlight.js/lib/languages/objectivec";
+import less from "highlight.js/lib/languages/less";
+import elixir from "highlight.js/lib/languages/elixir";
+import erlang from "highlight.js/lib/languages/erlang";
+import haskell from "highlight.js/lib/languages/haskell";
+import ocaml from "highlight.js/lib/languages/ocaml";
+import fsharp from "highlight.js/lib/languages/fsharp";
+import vbnet from "highlight.js/lib/languages/vbnet";
+import julia from "highlight.js/lib/languages/julia";
+import nim from "highlight.js/lib/languages/nim";
+import nix from "highlight.js/lib/languages/nix";
+import coffeescript from "highlight.js/lib/languages/coffeescript";
+import groovy from "highlight.js/lib/languages/groovy";
+import gradle from "highlight.js/lib/languages/gradle";
+import cmake from "highlight.js/lib/languages/cmake";
+import latex from "highlight.js/lib/languages/latex";
 import DOMPurify from "dompurify";
 
 hljs.registerLanguage("json", json);
@@ -26,6 +67,50 @@ hljs.registerLanguage("html", xml);
 hljs.registerLanguage("css", css);
 hljs.registerLanguage("scss", css);
 hljs.registerLanguage("go", go);
+hljs.registerLanguage("java", java);
+hljs.registerLanguage("kotlin", kotlin);
+hljs.registerLanguage("c", c);
+hljs.registerLanguage("cpp", cpp);
+hljs.registerLanguage("csharp", csharp);
+hljs.registerLanguage("swift", swift);
+hljs.registerLanguage("ruby", ruby);
+hljs.registerLanguage("php", php);
+hljs.registerLanguage("lua", lua);
+hljs.registerLanguage("dart", dart);
+hljs.registerLanguage("scala", scala);
+hljs.registerLanguage("sql", sql);
+hljs.registerLanguage("dockerfile", dockerfile);
+hljs.registerLanguage("makefile", makefile);
+hljs.registerLanguage("perl", perl);
+hljs.registerLanguage("r", r);
+hljs.registerLanguage("powershell", powershell);
+hljs.registerLanguage("ini", ini);
+// toml 语法与 ini 高度兼容（hljs 官方按 alias 处理）
+hljs.registerLanguage("toml", ini);
+hljs.registerLanguage("protobuf", protobuf);
+hljs.registerLanguage("graphql", graphql);
+hljs.registerLanguage("http", http);
+hljs.registerLanguage("diff", diff);
+hljs.registerLanguage("properties", properties);
+hljs.registerLanguage("nginx", nginx);
+hljs.registerLanguage("plaintext", plaintext);
+hljs.registerLanguage("text", plaintext);
+hljs.registerLanguage("objectivec", objectivec);
+hljs.registerLanguage("less", less);
+hljs.registerLanguage("elixir", elixir);
+hljs.registerLanguage("erlang", erlang);
+hljs.registerLanguage("haskell", haskell);
+hljs.registerLanguage("ocaml", ocaml);
+hljs.registerLanguage("fsharp", fsharp);
+hljs.registerLanguage("vbnet", vbnet);
+hljs.registerLanguage("julia", julia);
+hljs.registerLanguage("nim", nim);
+hljs.registerLanguage("nix", nix);
+hljs.registerLanguage("coffeescript", coffeescript);
+hljs.registerLanguage("groovy", groovy);
+hljs.registerLanguage("gradle", gradle);
+hljs.registerLanguage("cmake", cmake);
+hljs.registerLanguage("latex", latex);
 
 const renderer = new marked.Renderer();
 renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
@@ -94,9 +179,9 @@ export function renderMarkdown(text: string): string {
 }
 
 export function highlightCode(code: string, lang: string = "json"): string {
-  // 未注册或 "text" 等不支持的语言：直接 escape，避免 hljs.highlightAuto
-  // 逐行做语言检测（多行 Read tool 输出 + 文本/未知扩展时 CPU 浪费）。
-  if (!hljs.getLanguage(lang)) {
+  // text / plaintext / 未注册语言：直接 escape，避免 hljs.highlight 跑无意义的纯文本规则
+  // 或对未知扩展跑 highlightAuto 逐行检测（多行 Read tool 输出会浪费 CPU）。
+  if (lang === "text" || lang === "plaintext" || !hljs.getLanguage(lang)) {
     return escapeHtml(code);
   }
   const cacheable = code.length <= HIGHLIGHT_CACHE_MAX_LEN;

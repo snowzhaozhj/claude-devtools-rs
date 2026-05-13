@@ -1,3 +1,9 @@
+[workspace]
+# 显式声明 src-tauri 为独立子 workspace（Tauri 官方模板默认行为）。
+# 必要性：git worktree 下 cargo 无法仅靠主仓库 root 的 exclude = ["src-tauri"]
+# 排除 worktree 副本里的 src-tauri，会向上爬到原仓库 root 报错。
+# 加上空块后 cargo 停在这里，主仓库 + 任意 worktree 都能 `cargo tauri dev`。
+
 [package]
 name = "claude-devtools-tauri"
 version = "0.4.5"

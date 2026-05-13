@@ -67,16 +67,5 @@
     border-color: rgba(239, 68, 68, 0.2);
   }
 
-  /* 语法高亮 token */
-  .output-pre :global(.hljs-string) { color: var(--syntax-string); }
-  .output-pre :global(.hljs-number) { color: var(--syntax-number); }
-  .output-pre :global(.hljs-keyword),
-  .output-pre :global(.hljs-literal) { color: var(--syntax-keyword); }
-  .output-pre :global(.hljs-attr) { color: var(--code-filename); }
-  .output-pre :global(.hljs-comment) { color: var(--syntax-comment); }
-  .output-pre :global(.hljs-function),
-  .output-pre :global(.hljs-title) { color: var(--syntax-function); }
-  .output-pre :global(.hljs-built_in) { color: var(--syntax-type); }
-  .output-pre :global(.hljs-type) { color: var(--syntax-type); }
-  .output-pre :global(.hljs-punctuation) { color: var(--color-text-muted); }
+  /* 语法高亮 token 颜色统一在 app.css 的 .hljs-* 全局规则里 */
 </style>

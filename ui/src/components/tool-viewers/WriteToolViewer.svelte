@@ -149,17 +149,7 @@
     user-select: none;
   }
 
-  /* hljs token 颜色：与 ReadToolViewer 保持一致 */
-  .write-code :global(.hljs-string) { color: var(--syntax-string); }
-  .write-code :global(.hljs-number) { color: var(--syntax-number); }
-  .write-code :global(.hljs-keyword),
-  .write-code :global(.hljs-literal) { color: var(--syntax-keyword); }
-  .write-code :global(.hljs-attr) { color: var(--code-filename); }
-  .write-code :global(.hljs-comment) { color: var(--syntax-comment); }
-  .write-code :global(.hljs-function),
-  .write-code :global(.hljs-title) { color: var(--syntax-function); }
-  .write-code :global(.hljs-built_in),
-  .write-code :global(.hljs-type) { color: var(--syntax-type); }
+  /* hljs token 颜色统一在 app.css 的 .hljs-* 全局规则里 */
 
   .md-preview {
     padding: 12px 16px;

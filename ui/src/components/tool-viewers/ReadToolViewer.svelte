@@ -272,15 +272,5 @@
     padding: 4px 8px;
   }
 
-  /* Syntax tokens */
-  .code-content :global(.hljs-string) { color: var(--syntax-string); }
-  .code-content :global(.hljs-number) { color: var(--syntax-number); }
-  .code-content :global(.hljs-keyword),
-  .code-content :global(.hljs-literal) { color: var(--syntax-keyword); }
-  .code-content :global(.hljs-attr) { color: var(--code-filename); }
-  .code-content :global(.hljs-comment) { color: var(--syntax-comment); }
-  .code-content :global(.hljs-function),
-  .code-content :global(.hljs-title) { color: var(--syntax-function); }
-  .code-content :global(.hljs-built_in) { color: var(--syntax-type); }
-  .code-content :global(.hljs-type) { color: var(--syntax-type); }
+  /* hljs token 颜色统一在 app.css 的 .hljs-* 全局规则里 */
 </style>

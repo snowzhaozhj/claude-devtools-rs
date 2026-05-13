@@ -419,44 +419,170 @@ export function truncate(
   return { text: text.slice(0, max), truncated: true };
 }
 
-/** 文件扩展名 → 语言 */
+/** 文件扩展名 → 语言（语言名必须与 render.ts 注册的 hljs 名一致）。 */
 const EXT_LANG: Record<string, string> = {
+  // JS / TS family
   ts: "typescript",
   tsx: "typescript",
+  mts: "typescript",
+  cts: "typescript",
   js: "javascript",
   jsx: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  coffee: "coffeescript",
+
+  // System languages
   rs: "rust",
-  py: "python",
   go: "go",
-  rb: "ruby",
+  c: "c",
+  h: "c",
+  cc: "cpp",
+  cpp: "cpp",
+  cxx: "cpp",
+  hpp: "cpp",
+  hh: "cpp",
+  hxx: "cpp",
+  m: "objectivec",
+  mm: "objectivec",
+  swift: "swift",
+  zig: "rust", // 兜底用 rust 风格 token——hljs 无原生 zig
+
+  // JVM
   java: "java",
   kt: "kotlin",
-  c: "c",
-  cpp: "cpp",
-  h: "c",
-  hpp: "cpp",
+  kts: "kotlin",
+  scala: "scala",
+  sc: "scala",
+  groovy: "groovy",
+  gradle: "gradle",
+
+  // .NET
   cs: "csharp",
-  swift: "swift",
+  vb: "vbnet",
+  fs: "fsharp",
+  fsx: "fsharp",
+
+  // Scripting
+  py: "python",
+  pyw: "python",
+  rb: "ruby",
+  erb: "ruby",
+  pl: "perl",
+  pm: "perl",
+  php: "php",
+  lua: "lua",
+  r: "r",
+  jl: "julia",
+  ex: "elixir",
+  exs: "elixir",
+  erl: "erlang",
+  hrl: "erlang",
+  hs: "haskell",
+  ml: "ocaml",
+  mli: "ocaml",
+  nim: "nim",
+  nix: "nix",
+  dart: "dart",
+
+  // Shell
   sh: "bash",
   bash: "bash",
   zsh: "bash",
+  fish: "bash",
+  ps1: "powershell",
+  psm1: "powershell",
+  // Windows batch (.bat/.cmd) 与 PowerShell 语法完全不同，强行用 powershell
+  // 规则 tokenize 会乱标，hljs 也无 batch 模块——降级 plaintext
+  bat: "plaintext",
+  cmd: "plaintext",
+
+  // Data / config
   json: "json",
+  jsonc: "json",
+  json5: "json",
   yaml: "yaml",
   yml: "yaml",
   toml: "toml",
+  ini: "ini",
+  cfg: "ini",
+  conf: "ini",
+  properties: "properties",
+  env: "properties",
+
+  // Markup / web
   xml: "xml",
   html: "html",
+  htm: "html",
+  svg: "xml",
   css: "css",
   scss: "scss",
-  sql: "sql",
-  md: "markdown",
+  sass: "scss",
+  less: "less",
   svelte: "html",
   vue: "html",
+  astro: "html",
+
+  // SQL
+  sql: "sql",
+
+  // Build / infra
+  dockerfile: "dockerfile",
+  containerfile: "dockerfile",
+  makefile: "makefile",
+  mk: "makefile",
+  cmake: "cmake",
+  proto: "protobuf",
+  graphql: "graphql",
+  gql: "graphql",
+  http: "http",
+  diff: "diff",
+  patch: "diff",
+  tex: "latex",
+  ltx: "latex",
+
+  // Misc
+  md: "markdown",
+  markdown: "markdown",
+  mdx: "markdown",
+  log: "plaintext",
+  txt: "plaintext",
+};
+
+/**
+ * 特殊文件名（无扩展名 / 全名匹配 / 前缀匹配）→ 语言。
+ * 既匹配精确名（`Dockerfile`、`Makefile`），也匹配 `<name>.<variant>` 前缀变体
+ * （`Dockerfile.dev`、`Containerfile.prod`、`Jenkinsfile.staging` 等）。
+ */
+const SPECIAL_NAME_LANG: Record<string, string> = {
+  dockerfile: "dockerfile",
+  containerfile: "dockerfile",
+  makefile: "makefile",
+  cmakelists: "cmake",
+  rakefile: "ruby",
+  gemfile: "ruby",
+  brewfile: "ruby",
+  vagrantfile: "ruby",
+  jenkinsfile: "groovy",
 };
 
 export function getLanguageFromPath(filePath: string): string {
-  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-  return EXT_LANG[ext] ?? "text";
+  const base = (filePath.split("/").pop() ?? "").toLowerCase();
+  // 1. 精确特殊名：Dockerfile / Makefile / Jenkinsfile 等无扩展名文件
+  const special = SPECIAL_NAME_LANG[base];
+  if (special) return special;
+  // 2. 普通扩展名：若 ext 在 EXT_LANG 里有真映射 → 优先 ext
+  //    （`Jenkinsfile.kts` 应该是 kotlin（Jenkins Kotlin DSL），不是 groovy；
+  //     ext 优先保证这类显式扩展名变体走真实语言而非默认 DSL 语言）
+  const dot = base.lastIndexOf(".");
+  const ext = dot >= 0 ? base.slice(dot + 1) : "";
+  if (ext && EXT_LANG[ext]) return EXT_LANG[ext];
+  // 3. 兜底前缀匹配：`Dockerfile.dev` / `Jenkinsfile.staging` 等无意义后缀的变体，
+  //    保留特殊名的语言（Kubernetes 项目 `Dockerfile.<stage>` 很常见）
+  for (const [name, lang] of Object.entries(SPECIAL_NAME_LANG)) {
+    if (base.startsWith(`${name}.`)) return lang;
+  }
+  return "text";
 }
 
 /** 文件名提取 */
