@@ -1,8 +1,12 @@
 // 全局拦截 markdown 渲染产出的 `<a href>` 点击：把 http/https/mailto 链接交给
 // 系统默认浏览器（走 tauri-plugin-opener），避免 webview 在窗口内导航且无回退。
 //
-// 浏览器 fallback：dev 模式跑 mockIPC（无 __TAURI_INTERNALS__）时退化到
-// `window.open(_blank)`，方便 vite dev 调试。
+// 设计取舍：Tauri webview 不支持多标签页，Cmd/Ctrl+click 与中键 click 走 webview
+// 默认行为同样陷入窗口内导航且无回退键 —— 所以一律拦截，统一交给系统浏览器。
+// 右键（button >= 2）不触发 click event（触发 contextmenu），此处放行属保险。
+//
+// mockIPC 浏览器调试：tauriMock 已 stub `plugin:opener|open_url` 走
+// `window.open`，所以 mock 环境下也无需特判 —— 走同一条路径。
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -11,19 +15,14 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 const EXTERNAL_PREFIX_RE = /^(https?:\/\/|mailto:)/i;
 
 function openExternal(url: string): void {
-  if ("__TAURI_INTERNALS__" in window) {
-    void openUrl(url).catch((err) => {
-      console.error("[externalLinks] openUrl failed:", err);
-    });
-  } else {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
+  void openUrl(url).catch((err) => {
+    console.error("[externalLinks] openUrl failed:", err);
+  });
 }
 
 function onDocumentClick(e: MouseEvent): void {
   if (e.defaultPrevented) return;
-  if (e.button !== 0) return;
-  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (e.button >= 2) return;
 
   const target = e.target;
   if (!(target instanceof Element)) return;

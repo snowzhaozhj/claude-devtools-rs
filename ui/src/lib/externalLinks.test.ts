@@ -1,4 +1,9 @@
-// externalLinks 单测：覆盖外链拦截 / 内部链接放行 / 修饰键放行 / 非主键放行。
+// externalLinks 单测：覆盖外链拦截 / 内部锚点放行 / 修饰键与中键拦截 / 右键放行。
+//
+// 注：Tauri webview 不支持多标签，修饰键 + 中键 click 默认行为同样陷入窗口内
+// 导航，因此一律拦截走 openUrl（codex review bug 1/2）。mockIPC 浏览器调试模式
+// 下 plugin:opener|open_url 由 tauriMock 拦截到 window.open，外部观察是
+// openUrl 被调用即可（mockIPC 链路属 tauriMock 自身测试范围）。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -11,23 +16,17 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
 import { attachExternalLinkInterceptor } from './externalLinks'
 
 let detach: (() => void) | null = null
-let windowOpenSpy: ReturnType<typeof vi.spyOn> | null = null
 
 beforeEach(() => {
   openUrlMock.mockReset()
   openUrlMock.mockResolvedValue(undefined)
   document.body.innerHTML = ''
   detach = attachExternalLinkInterceptor()
-  // 注入 __TAURI_INTERNALS__ 以走 Tauri 分支；按 case 删除可走 window.open fallback。
-  ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
-  windowOpenSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
 })
 
 afterEach(() => {
   detach?.()
   detach = null
-  delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
-  windowOpenSpy?.mockRestore()
 })
 
 function clickAnchor(href: string, init: MouseEventInit = {}): MouseEvent {
@@ -60,28 +59,22 @@ describe('attachExternalLinkInterceptor', () => {
     expect(openUrlMock).not.toHaveBeenCalled()
   })
 
-  test('lets modifier-key clicks pass through (user wants new tab / save as)', () => {
-    const event = clickAnchor('https://example.com', { metaKey: true })
-    expect(event.defaultPrevented).toBe(false)
-    expect(openUrlMock).not.toHaveBeenCalled()
-  })
-
-  test('ignores middle/right mouse buttons', () => {
-    const event = clickAnchor('https://example.com', { button: 1 })
-    expect(event.defaultPrevented).toBe(false)
-    expect(openUrlMock).not.toHaveBeenCalled()
-  })
-
-  test('falls back to window.open when no Tauri runtime', () => {
-    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
-    const event = clickAnchor('https://example.com/bar')
+  test('intercepts modifier-key clicks (Tauri 无多标签 fallback)', () => {
+    const event = clickAnchor('https://example.com/x', { metaKey: true })
     expect(event.defaultPrevented).toBe(true)
+    expect(openUrlMock).toHaveBeenCalledWith('https://example.com/x')
+  })
+
+  test('intercepts middle-click on external link', () => {
+    const event = clickAnchor('https://example.com/x', { button: 1 })
+    expect(event.defaultPrevented).toBe(true)
+    expect(openUrlMock).toHaveBeenCalledWith('https://example.com/x')
+  })
+
+  test('lets right-click pass through (browser fires contextmenu separately)', () => {
+    const event = clickAnchor('https://example.com/x', { button: 2 })
+    expect(event.defaultPrevented).toBe(false)
     expect(openUrlMock).not.toHaveBeenCalled()
-    expect(windowOpenSpy).toHaveBeenCalledWith(
-      'https://example.com/bar',
-      '_blank',
-      'noopener,noreferrer',
-    )
   })
 
   test('detach unregisters the listener', () => {
