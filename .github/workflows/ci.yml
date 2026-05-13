@@ -48,10 +48,15 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          # bump 跳出污染池：macOS 上历史 cache 中毒（cargo 二进制被覆盖成
-          # rustup-init 副本，报 unexpected argument 'clippy' / 'test'）。
-          # v0→v1（首次 bump），v1→v2（PR #57 时 test (macos-14) 再次中毒）。
-          prefix-key: v2-rust
+          # `cache-bin: false` 是彻底修法——不缓存 `~/.cargo/bin/`，避免 rustup
+          # "单 binary 多入口"设计（cargo/rustc/rustup/rustup-init 同一可执行
+          # 文件，靠 argv[0] 分发）在 cache restore 时被覆盖成 rustup-init stub，
+          # 报 `unexpected argument 'test' / 'clippy'`。toolchain 每次让
+          # dtolnay/rust-toolchain 干净装（~10s），只缓存 registry / git / target。
+          cache-bin: "false"
+          # prefix-key bump 跳出污染池：v0→v1（首次），v1→v2（PR #57），
+          # v2→v3（cache-bin: false 上线时清池，确保不再 hit 含 toolchain 的旧 cache）。
+          prefix-key: v3-rust
       - name: cargo clippy --workspace --all-targets
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -74,10 +79,15 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          # bump 跳出污染池：macOS 上历史 cache 中毒（cargo 二进制被覆盖成
-          # rustup-init 副本，报 unexpected argument 'clippy' / 'test'）。
-          # v0→v1（首次 bump），v1→v2（PR #57 时 test (macos-14) 再次中毒）。
-          prefix-key: v2-rust
+          # `cache-bin: false` 是彻底修法——不缓存 `~/.cargo/bin/`，避免 rustup
+          # "单 binary 多入口"设计（cargo/rustc/rustup/rustup-init 同一可执行
+          # 文件，靠 argv[0] 分发）在 cache restore 时被覆盖成 rustup-init stub，
+          # 报 `unexpected argument 'test' / 'clippy'`。toolchain 每次让
+          # dtolnay/rust-toolchain 干净装（~10s），只缓存 registry / git / target。
+          cache-bin: "false"
+          # prefix-key bump 跳出污染池：v0→v1（首次），v1→v2（PR #57），
+          # v2→v3（cache-bin: false 上线时清池，确保不再 hit 含 toolchain 的旧 cache）。
+          prefix-key: v3-rust
       - name: cargo test --workspace (cdt-watch excluded)
         run: cargo test --workspace --exclude cdt-watch --locked
       - name: cargo test -p cdt-watch (single-threaded)

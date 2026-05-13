@@ -4,6 +4,7 @@
   import CommandPalette from "./components/CommandPalette.svelte";
   import PaneContainer from "./components/layout/PaneContainer.svelte";
   import UpdateBanner from "./components/UpdateBanner.svelte";
+  import RosettaBanner from "./components/RosettaBanner.svelte";
   import { updateStore, type UpdateAvailablePayload } from "./lib/updateStore.svelte";
   import {
     openSessionTab,
@@ -21,7 +22,7 @@
     splitPane,
   } from "./lib/tabStore.svelte";
   import { MAX_PANES } from "./lib/paneTypes";
-  import { getConfig, getNotifications } from "./lib/api";
+  import { getConfig, getNotifications, isRunningUnderRosetta } from "./lib/api";
   import { applyTheme } from "./lib/theme";
   import { applyFonts } from "./lib/fonts";
   import { loadAgentConfigs } from "./lib/agentConfigsStore.svelte";
@@ -38,6 +39,8 @@
   let unlistenNotifAdded: UnlistenFn | null = null;
   let unlistenUpdater: UnlistenFn | null = null;
   let detachExternalLinks: (() => void) | null = null;
+  // macOS 上 Tauri 进程跑 Rosetta 翻译时为 true；其他平台 / 非 Rosetta 时永远 false
+  let rosettaWarningVisible = $state(false);
 
   async function onNotificationUpdate() {
     try {
@@ -158,6 +161,11 @@
     await initFileChangeStore();
     // 启动时同步一次 Dock badge（显示持久化的未读数）
     await onNotificationUpdate();
+    // Rosetta 翻译运行检测：Apple Silicon 上跑 Intel binary 时提示用户换 ARM 包。
+    // localStorage 内 banner dismissed 状态由 RosettaBanner 自身管理。
+    try {
+      rosettaWarningVisible = await isRunningUnderRosetta();
+    } catch { /* 调用失败静默：banner 默认不显示 */ }
   });
 
   onDestroy(() => {
@@ -188,6 +196,7 @@
 </script>
 
 <div class="app-root">
+  <RosettaBanner visible={rosettaWarningVisible} />
   <UpdateBanner />
   <div class="app-layout">
     <!-- 始终挂载 Sidebar（用 CSS width:0 收起，不用 {#if} 销毁/重建）：
