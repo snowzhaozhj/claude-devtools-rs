@@ -97,6 +97,21 @@
 - **验证数据**：session `46a25772-b57c-43bb-9ca6-f0292f9ca912` 下 `requestId=req_011Ca5q9ggoStFzstiaLR5Y1` 有 4 条记录（1 thinking + 1 text + 2 独立 tool_use），dedupe 后仅剩 1 条，丢失 2 个 Agent 调用。
 - **修复**：移除 `parse_file` 主路径上的 `dedupe_by_request_id` 调用；`dedupe_by_request_id` 函数保留在 `crates/cdt-parse/src/dedupe.rs` 供 metrics 计算按需使用。session-parsing spec 的 "Deduplicate streaming entries by requestId" requirement 已反转：SHALL NOT 在 parse_file 自动去重。回归测试 `crates/cdt-parse/tests/dedupe.rs::parse_file_does_not_dedupe_by_request_id`。
 
+### [deviation] subagent 关联不支持跨 project_dir（worktree / cwd 切换场景）
+
+- **背景**：2026-05-14 调研 change `subagent-ongoing-refresh-fix` 时定位。
+- **现象**：父 session JSONL 在 `~/.claude/projects/<encoded-A>/<sessionId>.jsonl`，subagent JSONL 在 `~/.claude/projects/<encoded-B>/<sessionId>/subagents/agent-<id>.jsonl`——两个不同 project_dir。前端 UI 永远显示 Agent 工具为 ToolItem（不能展开看明细），即使后端三阶段 fallback 全跑完也匹配不上 candidate。
+- **触发场景**：Claude Code 父 process 启动后 cwd 被切（典型：`EnterWorktree` 把 cwd 切到 worktree 副本）。Claude Code 把 subagent JSONL 写到**当前 cwd 编码**的 project_dir，**不是**父 session 的 project_dir。`subagent JSONL 首行` 的 `parentUuid` 为 `null`，无法通过 JSONL 内容反向定位父 session。
+- **现状**：`crates/cdt-api/src/ipc/local.rs::scan_subagent_candidates` 只扫 `<父 project_dir>/<sessionId>/subagents/`——硬编码同 project_dir 路径，跨 project_dir 不扫。
+- **关联线索**（值得一修）：
+  1. **目录结构**：`<some_other_project_dir>/<父 sessionId>/subagents/agent-*.jsonl`——父 sessionId 在路径里
+  2. **`agent-<id>.meta.json`** 含 `{"agentType","description"}`，description 与父 session 的 `Agent.tool_use.input.description` 完全相同
+- **修复路径**：
+  1. `scan_subagent_candidates` 扩展为跨 project_dir 扫描：先扫 `<父 project_dir>/<sessionId>/subagents/`（同 project，原逻辑），再遍历 `<projects_root>/*/<sessionId>/subagents/` 兜底
+  2. 或：parse 时记录 cwd / project_path 映射，从父 session JSONL 的 cwd 字段反推 subagent project_dir
+- **风险与代价**：每次 `get_session_detail` 多一层 list_dir 全 project 目录（~50 项），需评估对大 project 场景的 I/O 开销，可加 cache
+- **决策**：归当前 `subagent-ongoing-refresh-fix` 不在范围（已 archive）；开新 change `subagent-cross-project-link` 处理。
+
 ### [coverage-gap] Rust 匹配 `Task || Agent` 两个工具名，原版只匹配 `Task`
 - `resolver.rs` 的 Task filter 包含 `name == "Task" || name == "Agent"`
 - 原版只有 `name === "Task"`
