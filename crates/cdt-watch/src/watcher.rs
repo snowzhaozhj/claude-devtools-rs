@@ -142,7 +142,13 @@ impl FileWatcher {
 
     /// 从 projects 目录下的路径解析 `FileChangeEvent`。
     ///
-    /// 路径格式：`<projects_dir>/<project_id>/<session_id>.jsonl`
+    /// 支持两种 JSONL 路径形态：
+    /// - 主 session：`<projects_dir>/<project_id>/<session_id>.jsonl`（2 层 + .jsonl）
+    /// - 嵌套 subagent（spec `file-watching` "Route nested subagent JSONL changes
+    ///   to parent session" Requirement）：
+    ///   `<projects_dir>/<project_id>/<session_id>/subagents/agent-<sub_id>.jsonl`
+    ///   （4 层 + .jsonl，且第 3 段为 `subagents`、文件名 `agent-` 前缀但非
+    ///   `agent-acompact*`），路由到父 `(project_id, session_id)` 的事件。
     fn parse_project_event(&self, path: &Path, deleted: bool) -> Option<FileChangeEvent> {
         let rel = path.strip_prefix(&self.projects_dir).ok()?;
         let components: Vec<_> = rel.components().collect();
@@ -162,7 +168,30 @@ impl FileWatcher {
         }
 
         let ext = path.extension()?;
-        if !ext.eq_ignore_ascii_case("jsonl") || components.len() != 2 {
+        if !ext.eq_ignore_ascii_case("jsonl") {
+            return None;
+        }
+
+        // 嵌套 subagent 分支：4 层路径 `<project>/<session>/subagents/agent-*.jsonl`，
+        // 路由到父 `(project_id, session_id)`。`project_list_changed` 硬编码 `false`——
+        // 嵌套写入只是父 session 内部增量，不应触发 `DashboardView` / `Sidebar`
+        // 项目列表刷新（即便极端 race 下 `mark_project_seen` 第一次会返回 `true`）。
+        if components.len() == 4 && components[2].as_os_str().eq_ignore_ascii_case("subagents") {
+            let file_name = components[3].as_os_str().to_string_lossy();
+            if file_name.starts_with("agent-") && !file_name.starts_with("agent-acompact") {
+                let project_id = components[0].as_os_str().to_string_lossy().into_owned();
+                let session_id = components[1].as_os_str().to_string_lossy().into_owned();
+                return Some(FileChangeEvent {
+                    project_id,
+                    session_id,
+                    deleted,
+                    project_list_changed: false,
+                });
+            }
+            return None;
+        }
+
+        if components.len() != 2 {
             return None;
         }
 
@@ -612,5 +641,115 @@ mod tests {
 
         assert!(file_rx.try_recv().is_err());
         assert!(todo_rx.try_recv().is_err());
+    }
+
+    // --- 嵌套 subagent JSONL 路径路由（spec file-watching "Route nested subagent
+    //     JSONL changes to parent session" Requirement） ---
+
+    #[test]
+    fn parse_event_routes_nested_subagent_jsonl() {
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let nested = projects
+            .join("proj-A")
+            .join("sess-A")
+            .join("subagents")
+            .join("agent-sub-1.jsonl");
+        let event = watcher
+            .parse_project_event(&nested, false)
+            .expect("should route nested subagent jsonl to parent session");
+        assert_eq!(event.project_id, "proj-A");
+        assert_eq!(event.session_id, "sess-A");
+        assert!(!event.deleted);
+        assert!(!event.project_list_changed);
+    }
+
+    #[test]
+    fn parse_event_ignores_agent_acompact_in_subagents_dir() {
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let acompact = projects
+            .join("proj-A")
+            .join("sess-A")
+            .join("subagents")
+            .join("agent-acompact-x.jsonl");
+        assert!(watcher.parse_project_event(&acompact, false).is_none());
+    }
+
+    #[test]
+    fn parse_event_ignores_non_jsonl_under_subagents() {
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let notes = projects
+            .join("proj-A")
+            .join("sess-A")
+            .join("subagents")
+            .join("notes.txt");
+        assert!(watcher.parse_project_event(&notes, false).is_none());
+    }
+
+    #[test]
+    fn parse_event_ignores_non_agent_prefix_under_subagents() {
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let random = projects
+            .join("proj-A")
+            .join("sess-A")
+            .join("subagents")
+            .join("random.jsonl");
+        assert!(watcher.parse_project_event(&random, false).is_none());
+    }
+
+    #[test]
+    fn parse_event_keeps_legacy_two_level_behavior() {
+        // 旧结构 `<project>/agent-x.jsonl` 仍然按 stem 当 sessionId 处理（既有
+        // `Watch Claude projects directory for session changes` Requirement 的
+        // 2 层路径分支覆盖；本 change 不改其语义）。
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let legacy = projects.join("proj-A").join("agent-legacy.jsonl");
+        let event = watcher
+            .parse_project_event(&legacy, false)
+            .expect("legacy 2-level path should still parse");
+        assert_eq!(event.project_id, "proj-A");
+        assert_eq!(event.session_id, "agent-legacy");
+    }
+
+    #[test]
+    fn parse_event_routes_nested_subagent_delete_event() {
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let nested = projects
+            .join("proj-A")
+            .join("sess-A")
+            .join("subagents")
+            .join("agent-sub-1.jsonl");
+        let event = watcher
+            .parse_project_event(&nested, true)
+            .expect("delete should still route nested subagent jsonl");
+        assert!(event.deleted);
+        assert!(!event.project_list_changed);
+        assert_eq!(event.project_id, "proj-A");
+        assert_eq!(event.session_id, "sess-A");
+    }
+
+    #[test]
+    fn parse_event_nested_subagent_forces_project_list_changed_false() {
+        // codex 二审强制约束：嵌套分支即使 watcher 第一次见到 project_id（极端 race
+        // 下 mark_project_seen 调用会返回 true），emit 的 project_list_changed
+        // 仍 MUST 为 false——避免误触发项目列表 UI 刷新。
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let nested = projects
+            .join("proj-unseen")
+            .join("sess-X")
+            .join("subagents")
+            .join("agent-sub-9.jsonl");
+        // watcher 此前未见过 "proj-unseen"——如果嵌套分支错调 mark_project_seen
+        // 会写入 known_projects 并返回 true。我们检查两件事：
+        //   (a) emit 的 project_list_changed === false
+        //   (b) known_projects 仍未包含 "proj-unseen"
+        let event = watcher
+            .parse_project_event(&nested, false)
+            .expect("nested branch should emit");
+        assert!(!event.project_list_changed);
+        let known = watcher.known_projects.lock().unwrap();
+        assert!(
+            !known.contains(&projects.join("proj-unseen")),
+            "nested branch must NOT call mark_project_seen"
+        );
     }
 }

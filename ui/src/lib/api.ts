@@ -191,6 +191,14 @@ export interface SubagentProcess {
   isShutdownOnly?: boolean;
   /** true 表示 messages 已被 IPC 裁剪，需 getSubagentTrace 懒拉取。 */
   messagesOmitted?: boolean;
+  /**
+   * 裁剪前 messages 总长度（subagent build_chunks 后的 chunk 数）。
+   * OMIT 默认路径与 rollback 路径下都反映真实总数；前端 SubagentCard 用作
+   * ongoing 主动重拉的版本指纹之一。spec 见 `ipc-data-api` "Expose subagent
+   * messages total count" Requirement。老后端缺此字段时为 `undefined`，行为
+   * 退化（版本指纹常量，不主动重拉，仅按既有 lazy 路径展开拉一次）。
+   */
+  messagesTotalCount?: number;
 }
 
 export interface SlashCommand {

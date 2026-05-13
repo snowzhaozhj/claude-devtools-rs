@@ -92,6 +92,13 @@ pub struct Process {
     /// trace；`messagesOmitted=false` 时 `messages` 应已含完整 chunks。
     #[serde(default)]
     pub messages_omitted: bool,
+    /// 裁剪前的 `messages` 总长度（即 subagent `build_chunks` 后的 chunk 数）。
+    /// 在 OMIT 默认路径与 rollback 路径下行为一致——始终等于 `cand.messages.len()`，
+    /// 让前端 `SubagentCard` 在 `messagesOmitted=true` 时仍可用本字段作为
+    /// "messages 数量是否变化"的版本指纹，触发主动重拉 trace。spec 见
+    /// `openspec/specs/ipc-data-api/spec.md::Expose subagent messages total count`。
+    #[serde(default)]
+    pub messages_total_count: u32,
 }
 
 /// Resolver 的输入候选：一个已预装载的 subagent session 的轻量摘要。
@@ -166,6 +173,7 @@ mod tests {
             last_isolated_tokens: 0,
             is_shutdown_only: false,
             messages_omitted: false,
+            messages_total_count: 0,
         });
     }
 
@@ -193,6 +201,7 @@ mod tests {
             last_isolated_tokens: 4242,
             is_shutdown_only: false,
             messages_omitted: true,
+            messages_total_count: 7,
         });
     }
 
@@ -216,12 +225,14 @@ mod tests {
             last_isolated_tokens: 100,
             is_shutdown_only: true,
             messages_omitted: true,
+            messages_total_count: 5,
         };
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(v["headerModel"], serde_json::json!("opus4.7"));
         assert_eq!(v["lastIsolatedTokens"], serde_json::json!(100));
         assert_eq!(v["isShutdownOnly"], serde_json::json!(true));
         assert_eq!(v["messagesOmitted"], serde_json::json!(true));
+        assert_eq!(v["messagesTotalCount"], serde_json::json!(5));
     }
 
     #[test]

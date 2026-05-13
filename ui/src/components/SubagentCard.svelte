@@ -1,6 +1,54 @@
+<script module lang="ts">
+  import { getSubagentTrace as _fetchSubagentTrace } from "../lib/api";
+  import type { Chunk as _Chunk } from "../lib/api";
+
+  /**
+   * 模块级 inflight 去重：复用 key MUST 为 `${sessionId}|${version}` 联合 key
+   * （codex 二审强制约束，spec `session-display` "SubagentCard 在 ongoing 期间
+   * 主动重拉 trace" Requirement）。仅按 sessionId 复用会让旧版本 Promise 在版本
+   * 递增后被复用，把 stale trace 写入 `messagesLocal`。
+   *
+   * 测试用：`__resetSubagentTraceInflightForTest()` 清空 Map。
+   */
+  const inflightTrace = new Map<string, Promise<_Chunk[]>>();
+
+  /** 复用 key = `${sessionId}|${version}`。 */
+  function traceKey(sessionId: string, version: string): string {
+    return `${sessionId}|${version}`;
+  }
+
+  /**
+   * 拉取 subagent trace，按 `(sessionId, version)` 联合 key 复用 inflight Promise。
+   * 同 version 并发触发 SHALL 复用；跨 version 触发 SHALL 各自独立 Promise。
+   */
+  export function loadSubagentTrace(
+    rootSessionId: string,
+    sessionId: string,
+    version: string,
+  ): Promise<_Chunk[]> {
+    const key = traceKey(sessionId, version);
+    const existing = inflightTrace.get(key);
+    if (existing) return existing;
+    const p = (async () => {
+      try {
+        return await _fetchSubagentTrace(rootSessionId, sessionId);
+      } finally {
+        inflightTrace.delete(key);
+      }
+    })();
+    inflightTrace.set(key, p);
+    return p;
+  }
+
+  /** 仅供测试：清空 inflight Map。 */
+  export function __resetSubagentTraceInflightForTest(): void {
+    inflightTrace.clear();
+  }
+</script>
+
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { SubagentProcess, ContentBlock, ToolCall, Chunk } from "../lib/api";
-  import { getSubagentTrace } from "../lib/api";
   import { CHEVRON_RIGHT, TERMINAL } from "../lib/icons";
   import { getTeamColorSet, getSubagentTypeColorSet, type TeamColorSet } from "../lib/teamColors";
   import { getAgentConfigsByName } from "../lib/agentConfigsStore.svelte";
@@ -25,7 +73,6 @@
   let isTraceExpanded = $state(false);
 
   // Lazy trace cache：messages 在 IPC 已被裁空时通过 getSubagentTrace 拉取后填入。
-  // 同 SubagentCard 实例多次展开/折叠不重拉。
   let messagesLocal: Chunk[] | null = $state(null);
   let isLoadingTrace = $state(false);
 
@@ -33,21 +80,93 @@
   // （后端 OMIT_SUBAGENT_MESSAGES=false 或老后端时直接用 process.messages）。
   const effectiveMessages = $derived<Chunk[]>(messagesLocal ?? process.messages);
 
+  /**
+   * messages 版本指纹（spec `session-display` "SubagentCard 在 ongoing 期间
+   * 主动重拉 trace"）：`isOngoing|endTs|messagesTotalCount`。版本递增 + 已展开
+   * + ongoing 时主动重拉；老后端缺 `messagesTotalCount` 时该位为空串，版本指纹
+   * 保持常量，主动重拉自然不触发（退化为既有 lazy 路径）。
+   */
+  const messagesVersion = $derived(
+    `${process.isOngoing ? "1" : "0"}|${process.endTs ?? "_"}|${
+      process.messagesTotalCount ?? ""
+    }`,
+  );
+
   async function ensureMessages(): Promise<void> {
     if (messagesLocal != null) return;
     if (!process.messagesOmitted) {
-      // 老后端 / 回滚开关 false：messages 已是完整
-      messagesLocal = process.messages;
+      // 老后端 / 回滚开关 false：messages 已是完整。**不**写 messagesLocal——
+      // `effectiveMessages = messagesLocal ?? process.messages` 的 fallback
+      // 自动消费实时 `process.messages`，跟随父 detail 刷新替换 process 实例。
+      // 早期版本写 `messagesLocal = process.messages` 会让 rollback 路径下
+      // process 替换但 messagesVersion 三元组不变时 UI 永远卡在旧 trace
+      // （codex 二审 V2/V3 发现）。
       return;
     }
+    const fetchedVersion = untrack(() => messagesVersion);
     isLoadingTrace = true;
     try {
-      messagesLocal = await getSubagentTrace(rootSessionId, process.sessionId);
+      const chunks = await loadSubagentTrace(
+        rootSessionId,
+        process.sessionId,
+        fetchedVersion,
+      );
+      // race-check：严格按版本匹配才写入（codex 二审 C1）——若 pending 期间
+      // version 已跳变，SHALL NOT 把 stale trace 写进 messagesLocal；effect
+      // 会因 messagesVersion 变化、isExpanded=true 而发起新版本的 fetch
+      // 接管显示。早期版本用 `|| messagesLocal == null` 兜底会让 first-fetch
+      // 的 stale 结果固化（C1 描述的 race）。
+      const currentVersion = untrack(() => messagesVersion);
+      if (currentVersion === fetchedVersion) {
+        messagesLocal = chunks;
+      }
     } catch (e) {
       console.warn("getSubagentTrace failed:", e);
-      messagesLocal = []; // 失败也别一直 loading；显示空 trace
+      // codex 二审 C3：不要把 messagesLocal 写成空数组——保留 null 让下次
+      // toggleExpanded → ensureMessages 能重新尝试（empty array 命中
+      // `if (messagesLocal != null) return;` 永久封堵重试入口）。
+      // UI 在 messagesLocal=null 时通过 effectiveMessages fallback 到
+      // process.messages（已被 OMIT 裁剪为空），视觉上仍是空 trace，
+      // 折叠重开即可重试。
     } finally {
       isLoadingTrace = false;
+    }
+  }
+
+  /**
+   * spec `session-display` "SubagentCard 在 ongoing 期间主动重拉 trace"：
+   * 用户已展开（`isExpanded=true`）且 messages 被裁剪时，版本指纹变化 SHALL
+   * 主动调 `getSubagentTrace` 重拉，无论 `messagesLocal` 当前是 null（首次展开
+   * 期间）还是已加载——`isExpanded` 才是"用户期待看到 trace"的真实信号，用
+   * `messagesLocal !== null` 判会让首次展开期间 version 跳变后新版本 fetch
+   * 不被触发（codex 二审 C1）。未展开时 `isExpanded=false` 自然短路，不发 IPC。
+   *
+   * 版本指纹翻转到 done（isOngoing=false + endTs 出现）也会命中此分支做一次
+   * final 重拉同步收尾态。
+   */
+  $effect(() => {
+    // 显式订阅版本指纹（其依赖：process.isOngoing / endTs / messagesTotalCount）
+    const version = messagesVersion;
+    untrack(() => {
+      if (!isExpanded) return; // 未展开 → 不主动 IPC
+      if (!process.messagesOmitted) return; // 完整 payload 不需要重拉
+      void refetchOnVersionChange(version);
+    });
+  });
+
+  async function refetchOnVersionChange(fetchedVersion: string): Promise<void> {
+    try {
+      const chunks = await loadSubagentTrace(
+        rootSessionId,
+        process.sessionId,
+        fetchedVersion,
+      );
+      const currentVersion = untrack(() => messagesVersion);
+      // race-check：fetch settle 时若版本又变了，丢弃本次结果，等更新版本接管
+      if (currentVersion !== fetchedVersion) return;
+      messagesLocal = chunks;
+    } catch (e) {
+      console.warn("subagent trace re-fetch failed:", e);
     }
   }
 

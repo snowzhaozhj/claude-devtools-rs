@@ -121,8 +121,10 @@ export function buildDisplayItems(chunk: AIChunk): {
     subMap.set(sub.sessionId, sub);
   }
 
-  // 收集已关联 subagent 的 Task `tool_use_id`，用于跳过重复的 Task 工具调用
-  // 渲染（对齐原版 displayItemBuilder.ts 的 `taskIdsWithSubagents` 过滤）。
+  // 收集已关联 subagent 的 `tool_use_id`，用于跳过重复的工具调用渲染
+  // （对齐原版 displayItemBuilder.ts 的 `taskIdsWithSubagents` 过滤）。
+  // 工具名集合 MUST 与后端 `cdt-parse::is_task` 一致——当前为 `{ "Task", "Agent" }`，
+  // 见 spec `session-display` "Subagent 卡片与 Task tool 就地交错渲染" Requirement。
   const taskIdsWithSubagents = new Set<string>();
   for (const sub of chunk.subagents) {
     if (sub.parentTaskId) taskIdsWithSubagents.add(sub.parentTaskId);
@@ -162,9 +164,15 @@ export function buildDisplayItems(chunk: AIChunk): {
       case "tool_execution": {
         const exec = execMap.get(step.toolUseId);
         if (!exec) break;
-        // 跳过已关联 subagent 的 Task tool_execution：subagent 卡片
-        // 本身就是该 Task 的可视代表，再渲染一次 Tool item 会重复。
-        if (exec.toolName === "Task" && taskIdsWithSubagents.has(exec.toolUseId)) {
+        // 跳过已关联 subagent 的 task 工具调用（Task / Agent 两类）：subagent
+        // 卡片本身就是该调用的可视代表，再渲染一次 Tool item 会重复。
+        // 工具名集合 MUST 与后端 `cdt-parse::is_task` 对齐——见 spec
+        // `session-display` "Subagent 卡片与 Task tool 就地交错渲染" 中
+        // "前端跳过判定的工具名集合 MUST 与后端 `cdt-parse::is_task` 保持一致"。
+        if (
+          (exec.toolName === "Task" || exec.toolName === "Agent") &&
+          taskIdsWithSubagents.has(exec.toolUseId)
+        ) {
           break;
         }
         // teammate_spawn 检测：tool_result.toolUseResult.status === "teammate_spawned"

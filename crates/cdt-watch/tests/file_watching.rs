@@ -219,3 +219,38 @@ async fn two_subscribers_both_receive_event() {
 
     handle.abort();
 }
+
+/// Scenario: Subagent JSONL 文件首次创建触发父 session 刷新（spec file-watching
+/// "Route nested subagent JSONL changes to parent session" Requirement）
+#[serial]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "FSEvents flaky on CI; run with --ignored locally"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nested_subagent_jsonl_created_triggers_parent_session_event() {
+    let (_tmp, projects, todos) = setup_dirs();
+    let parent_dir = projects.join("proj1").join("sess-parent");
+    let subagents_dir = parent_dir.join("subagents");
+    fs::create_dir_all(&subagents_dir).unwrap();
+
+    let watcher = FileWatcher::with_paths(projects, todos);
+    let mut rx = watcher.subscribe_files();
+
+    let handle = tokio::spawn(async move { watcher.start().await });
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    fs::write(subagents_dir.join("agent-sub-1.jsonl"), b"{}").unwrap();
+
+    // 嵌套 subagent 写入路由到父 session：session_id == "sess-parent"
+    let event = recv_session_event(&mut rx, "sess-parent").await;
+
+    assert_eq!(event.project_id, "proj1");
+    assert_eq!(event.session_id, "sess-parent");
+    assert!(!event.deleted);
+    // codex 二审强制约束：嵌套分支 project_list_changed 硬编码 false
+    assert!(!event.project_list_changed);
+
+    handle.abort();
+}

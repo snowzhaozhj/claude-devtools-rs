@@ -65,6 +65,7 @@ mod tests {
             last_isolated_tokens: 0,
             is_shutdown_only: false,
             messages_omitted: false,
+            messages_total_count: 0,
         }
     }
 
