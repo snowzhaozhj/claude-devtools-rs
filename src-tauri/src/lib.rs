@@ -327,6 +327,39 @@ enum CheckUpdateResult {
     },
 }
 
+/// macOS 上探测当前进程是否被 Rosetta 2 翻译执行。
+///
+/// 仅当 `sysctl.proc_translated` 返回 `1` 时认为正在 Rosetta 下；
+/// 任何 I/O 失败 / 非 macOS 平台均返回 `false`（保守不打扰用户）。
+///
+/// 用 `std::process::Command` 调系统 `sysctl` 二进制是为了避免引入 `libc`
+/// 依赖——本仓 src-tauri 已经避开 `libc` / `nix`，保持 Cargo 依赖最小化。
+fn detect_rosetta_translation() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("sysctl")
+            .args(["-n", "sysctl.proc_translated"])
+            .output()
+            .ok()
+            .and_then(|out| String::from_utf8(out.stdout).ok())
+            .map(|s| s.trim() == "1")
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// IPC：当前进程是否在 Rosetta 翻译下运行（Apple Silicon 上跑 x86_64 binary）。
+///
+/// 前端启动时调用一次：true 时提示用户改装 ARM 版本以获得原生性能。
+/// 非 macOS 平台始终 `false`。
+#[tauri::command]
+fn is_running_under_rosetta() -> bool {
+    detect_rosetta_translation()
+}
+
 #[tauri::command]
 async fn check_for_update(app: tauri::AppHandle) -> Result<CheckUpdateResult, String> {
     let current_version = app.package_info().version.to_string();
@@ -683,6 +716,7 @@ pub fn run() {
             unhide_session,
             get_project_session_prefs,
             check_for_update,
+            is_running_under_rosetta,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
