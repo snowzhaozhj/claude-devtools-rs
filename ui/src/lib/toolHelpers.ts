@@ -492,8 +492,10 @@ const EXT_LANG: Record<string, string> = {
   fish: "bash",
   ps1: "powershell",
   psm1: "powershell",
-  bat: "powershell",
-  cmd: "powershell",
+  // Windows batch (.bat/.cmd) 与 PowerShell 语法完全不同，强行用 powershell
+  // 规则 tokenize 会乱标，hljs 也无 batch 模块——降级 plaintext
+  bat: "plaintext",
+  cmd: "plaintext",
 
   // Data / config
   json: "json",
@@ -520,7 +522,6 @@ const EXT_LANG: Record<string, string> = {
   svelte: "html",
   vue: "html",
   astro: "html",
-  tsx_html: "html",
 
   // SQL
   sql: "sql",
@@ -549,8 +550,9 @@ const EXT_LANG: Record<string, string> = {
 };
 
 /**
- * 特殊文件名（无扩展名 / 全名匹配）→ 语言。
- * 例：`Dockerfile`、`Makefile` 等。
+ * 特殊文件名（无扩展名 / 全名匹配 / 前缀匹配）→ 语言。
+ * 既匹配精确名（`Dockerfile`、`Makefile`），也匹配 `<name>.<variant>` 前缀变体
+ * （`Dockerfile.dev`、`Containerfile.prod`、`Jenkinsfile.staging` 等）。
  */
 const SPECIAL_NAME_LANG: Record<string, string> = {
   dockerfile: "dockerfile",
@@ -566,12 +568,21 @@ const SPECIAL_NAME_LANG: Record<string, string> = {
 
 export function getLanguageFromPath(filePath: string): string {
   const base = (filePath.split("/").pop() ?? "").toLowerCase();
+  // 1. 精确特殊名：Dockerfile / Makefile / Jenkinsfile 等无扩展名文件
   const special = SPECIAL_NAME_LANG[base];
   if (special) return special;
-  // 处理 .dockerfile / .makefile 之类双段名：直接看末段扩展
+  // 2. 普通扩展名：若 ext 在 EXT_LANG 里有真映射 → 优先 ext
+  //    （`Jenkinsfile.kts` 应该是 kotlin（Jenkins Kotlin DSL），不是 groovy；
+  //     ext 优先保证这类显式扩展名变体走真实语言而非默认 DSL 语言）
   const dot = base.lastIndexOf(".");
   const ext = dot >= 0 ? base.slice(dot + 1) : "";
-  return EXT_LANG[ext] ?? "text";
+  if (ext && EXT_LANG[ext]) return EXT_LANG[ext];
+  // 3. 兜底前缀匹配：`Dockerfile.dev` / `Jenkinsfile.staging` 等无意义后缀的变体，
+  //    保留特殊名的语言（Kubernetes 项目 `Dockerfile.<stage>` 很常见）
+  for (const [name, lang] of Object.entries(SPECIAL_NAME_LANG)) {
+    if (base.startsWith(`${name}.`)) return lang;
+  }
+  return "text";
 }
 
 /** 文件名提取 */
