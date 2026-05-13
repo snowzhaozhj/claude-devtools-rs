@@ -189,6 +189,7 @@ claude-devtools-rs/
 - **vite optimizer cache 多 spec 跑后污染 Playwright**：连续 `npx playwright test` 后再跑可能报「test.describe in config」假错；`rm -rf ui/node_modules/.vite ui/node_modules/.cache` 清掉即恢复。CI 上 reuseExistingServer=false 不受影响
 - **Playwright 绕过 UI 直接调 store**：`TabBar` 仅在 `pane.tabs.length > 0` 时渲染——空状态点不到「设置」/「通知」title 按钮。`main.ts` dev-only 暴露 `window.__cdtTest = { openSettingsTab, openNotificationsTab, openTab, setActiveTab }`，spec 用 `page.evaluate(() => window.__cdtTest.openSettingsTab())` 绕过 sidebar virtualization 时序 flake。production bundle 由 `if (DEV)` 块 DCE，不暴露
 - **vitest 测 svelte store 模块级 `$state`**：模块级 `$state` 跨 vitest test 不 reset（每个 test 都拿同一个模块实例）。两种处理：(a) 渐进 assertion 不 reset（推荐，store 单测语义自洽即可）；(b) `vi.resetModules()` + dynamic import 强制重载（复杂，仅在 reset 必要时用）
+- **mockIPC 注入 `__TAURI_INTERNALS__`，UI 代码不能用它判 mock vs real**：`tauriMock.ts::setupMockIPC` 内部的 mockWindows + mockIPC 会注入 `__TAURI_INTERNALS__`，导致用 `if ('__TAURI_INTERNALS__' in window)` 做运行时分支的 UI 代码在 `?mock=1` 浏览器调试模式走错路径（如真去调 plugin API 然后抛错）。架构原则：plugin 命令的 mock 走 `tauriMock.ts::buildHandler` 加 case（如 `'plugin:opener|open_url'` → `window.open`），UI 代码统一调真 plugin API，IPC 层负责分流
 
 ## What to do first in a fresh session
 

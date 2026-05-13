@@ -255,6 +255,16 @@ function buildHandler(fx: Fixture) {
         return { status: 'upToDate', currentVersion: '0.2.0' }
       }
 
+      case 'plugin:opener|open_url': {
+        // 浏览器 mockIPC 调试模式下，把外链路由到 window.open(_blank)。
+        // 真 Tauri runtime 这条 IPC 由 tauri-plugin-opener 处理走系统浏览器。
+        const url = (rawPayload as { url?: string } | undefined)?.url
+        if (typeof url === 'string' && url.length > 0) {
+          window.open(url, '_blank', 'noopener,noreferrer')
+        }
+        return undefined
+      }
+
       default:
         // 兜底：未实现的 Tauri command。Tauri 内部 plugin 命令（plugin:event|*
         // 等）由 mockIPC 自身的 shouldMockEvents 处理，不会走到这里。
