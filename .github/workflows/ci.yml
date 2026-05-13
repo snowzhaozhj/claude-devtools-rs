@@ -48,9 +48,10 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          # bump 跳出污染池：macOS 上 v0 prefix 的 rust toolchain cache 中毒
-          # （cargo 二进制被覆盖成 rustup-init 副本，报 unexpected argument 'clippy'）
-          prefix-key: v1-rust
+          # bump 跳出污染池：macOS 上历史 cache 中毒（cargo 二进制被覆盖成
+          # rustup-init 副本，报 unexpected argument 'clippy' / 'test'）。
+          # v0→v1（首次 bump），v1→v2（PR #57 时 test (macos-14) 再次中毒）。
+          prefix-key: v2-rust
       - name: cargo clippy --workspace --all-targets
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -73,9 +74,10 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          # bump 跳出污染池：macOS 上 v0 prefix 的 rust toolchain cache 中毒
-          # （cargo 二进制被覆盖成 rustup-init 副本，报 unexpected argument 'clippy'）
-          prefix-key: v1-rust
+          # bump 跳出污染池：macOS 上历史 cache 中毒（cargo 二进制被覆盖成
+          # rustup-init 副本，报 unexpected argument 'clippy' / 'test'）。
+          # v0→v1（首次 bump），v1→v2（PR #57 时 test (macos-14) 再次中毒）。
+          prefix-key: v2-rust
       - name: cargo test --workspace (cdt-watch excluded)
         run: cargo test --workspace --exclude cdt-watch --locked
       - name: cargo test -p cdt-watch (single-threaded)
