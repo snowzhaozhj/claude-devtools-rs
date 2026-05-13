@@ -107,17 +107,23 @@
         process.sessionId,
         fetchedVersion,
       );
-      // race-check：拉到结果时若版本已变（pending 期间新版本通过 effect 触发了
-      // 新一轮 fetch），SHALL 不覆盖 messagesLocal——让新版本 Promise 接管。
+      // race-check：严格按版本匹配才写入（codex 二审 C1）——若 pending 期间
+      // version 已跳变，SHALL NOT 把 stale trace 写进 messagesLocal；effect
+      // 会因 messagesVersion 变化、isExpanded=true 而发起新版本的 fetch
+      // 接管显示。早期版本用 `|| messagesLocal == null` 兜底会让 first-fetch
+      // 的 stale 结果固化（C1 描述的 race）。
       const currentVersion = untrack(() => messagesVersion);
-      if (currentVersion === fetchedVersion || messagesLocal == null) {
+      if (currentVersion === fetchedVersion) {
         messagesLocal = chunks;
       }
     } catch (e) {
       console.warn("getSubagentTrace failed:", e);
-      if (messagesLocal == null) {
-        messagesLocal = []; // 失败也别一直 loading；显示空 trace
-      }
+      // codex 二审 C3：不要把 messagesLocal 写成空数组——保留 null 让下次
+      // toggleExpanded → ensureMessages 能重新尝试（empty array 命中
+      // `if (messagesLocal != null) return;` 永久封堵重试入口）。
+      // UI 在 messagesLocal=null 时通过 effectiveMessages fallback 到
+      // process.messages（已被 OMIT 裁剪为空），视觉上仍是空 trace，
+      // 折叠重开即可重试。
     } finally {
       isLoadingTrace = false;
     }
@@ -125,23 +131,21 @@
 
   /**
    * spec `session-display` "SubagentCard 在 ongoing 期间主动重拉 trace"：
-   * 已展开（messagesLocal !== null）且 ongoing 且版本指纹递增时主动重拉；
-   * 未展开时仅清 stale cache（messagesLocal === null 已是初始态），不发 IPC。
+   * 用户已展开（`isExpanded=true`）且 messages 被裁剪时，版本指纹变化 SHALL
+   * 主动调 `getSubagentTrace` 重拉，无论 `messagesLocal` 当前是 null（首次展开
+   * 期间）还是已加载——`isExpanded` 才是"用户期待看到 trace"的真实信号，用
+   * `messagesLocal !== null` 判会让首次展开期间 version 跳变后新版本 fetch
+   * 不被触发（codex 二审 C1）。未展开时 `isExpanded=false` 自然短路，不发 IPC。
    *
-   * 版本指纹翻转到 done（isOngoing=false + endTs 出现）会自然命中此分支
-   * 做一次 final 重拉同步收尾态。
+   * 版本指纹翻转到 done（isOngoing=false + endTs 出现）也会命中此分支做一次
+   * final 重拉同步收尾态。
    */
   $effect(() => {
-    // 显式订阅版本指纹
+    // 显式订阅版本指纹（其依赖：process.isOngoing / endTs / messagesTotalCount）
     const version = messagesVersion;
     untrack(() => {
-      if (messagesLocal === null) return; // 未展开 / 首次未拉过 → 不主动 IPC
+      if (!isExpanded) return; // 未展开 → 不主动 IPC
       if (!process.messagesOmitted) return; // 完整 payload 不需要重拉
-      if (!process.isOngoing) {
-        // 已 done 时仍允许"翻转那一次"重拉同步终态——但版本指纹的 isOngoing
-        // 字段刚从 1→0，effect 此刻才被触发；走一次重拉即可。再之后版本不
-        // 会再变（endTs 与 totalCount 都已稳定），effect 不再触发。
-      }
       void refetchOnVersionChange(version);
     });
   });

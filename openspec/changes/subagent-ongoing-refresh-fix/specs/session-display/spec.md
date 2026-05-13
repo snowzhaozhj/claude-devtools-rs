@@ -30,7 +30,11 @@ SessionDetail 渲染 `AIChunk` 时 MUST 按 `semantic_steps` 顺序依次输出 
 
 ### Requirement: SubagentCard 在 ongoing 期间主动重拉 trace
 
-SubagentCard MUST 监听 `(process.isOngoing, process.endTs, process.messagesTotalCount)` 三元组组成的版本指纹；当版本递增**且**该卡片处于已展开状态（用户曾触发过 `getSubagentTrace`，本地缓存 `messagesLocal` 非空）**且**`process.isOngoing === true` 时，SHALL 自动调用 `getSubagentTrace(rootSessionId, process.sessionId)` 重拉新 trace 并替换 `messagesLocal`。
+SubagentCard MUST 监听 `(process.isOngoing, process.endTs, process.messagesTotalCount)` 三元组组成的版本指纹；当版本变化**且**该卡片处于用户已展开状态（`isExpanded === true`，即用户已点击展开按钮）**且**`process.messagesOmitted === true` 时，SHALL 自动调用 `getSubagentTrace(rootSessionId, process.sessionId)` 重拉新 trace 并替换 `messagesLocal`。"已展开"判定 MUST 使用 `isExpanded` 而非 `messagesLocal !== null`——用 messagesLocal 判定会让首次展开期间（`ensureMessages` 的 `await` 进行中、`messagesLocal` 仍为 `null`）版本跳变后的新 fetch 不被触发，旧版本 fetch settle 后把 stale trace 写入 `messagesLocal`，UI 永久卡在旧快照（codex 二审 C1 发现）。
+
+首次展开触发的 `ensureMessages` 与 effect 的版本主动重拉之间 SHALL 通过严格版本匹配协作：`ensureMessages` 在 IPC settle 时 MUST 检查 `currentVersion === fetchedVersion`，不匹配时 SHALL NOT 写入 `messagesLocal`（保持 `null`），让 effect 已发起的新版本 fetch 接管显示。早期实现里 `currentVersion === fetchedVersion || messagesLocal == null` 兜底语义 SHALL NOT 出现——`|| null` 兜底是 C1 的根本机制。
+
+`getSubagentTrace` IPC 失败时 SHALL NOT 把 `messagesLocal` 写成空数组 `[]`——保留 `null` 让用户折叠重开时 `ensureMessages` 仍能命中 `messagesLocal == null` 通过 guard 重新尝试。早期实现把 `[]` 当作"显示空 trace"的兜底会让重试入口被永久封堵（codex 二审 C3 发现）。
 
 未展开的 SubagentCard SHALL NOT 因版本变化主动发 IPC（仅清本地 stale 缓存或保持 `null`，等待用户下次展开时按既有 lazy 路径拉取），避免 ongoing 大会话内 N 个未展开卡片每次父 refresh 都触发 IPC 风暴。
 
@@ -50,8 +54,21 @@ SubagentCard MUST 监听 `(process.isOngoing, process.endTs, process.messagesTot
 
 #### Scenario: 未展开卡片不主动重拉
 
-- **WHEN** SubagentCard 未展开（`messagesLocal === null`），`process.messagesTotalCount` 在多次父 refresh 中递增
+- **WHEN** SubagentCard 未展开（`isExpanded === false`），`process.messagesTotalCount` 在多次父 refresh 中递增
 - **THEN** SubagentCard SHALL NOT 发 `getSubagentTrace` IPC；用户首次展开时 SHALL 走既有 lazy 路径拉一次最新 trace
+
+#### Scenario: 首次展开期间版本跳变由 effect 接管（C1 修复）
+
+- **WHEN** 用户首次展开 SubagentCard：`isExpanded` 翻到 `true`，`ensureMessages` 启动 `getSubagentTrace`（版本 N，`messagesLocal` 仍为 `null`）
+- **AND** pending 期间父 session refresh 让 `process.messagesTotalCount` 递增到 N+1
+- **THEN** `$effect` SHALL 因 `isExpanded === true` 而触发新版本（N+1）的 `getSubagentTrace`，**不**因 `messagesLocal === null` 短路
+- **AND** 旧版本（N）的 Promise settle 时 SHALL 严格判 `currentVersion === fetchedVersion`，不匹配则**不**写入 `messagesLocal`（保持 `null`），由新版本 fetch 接管显示
+
+#### Scenario: IPC 失败后折叠重开能重试（C3 修复）
+
+- **WHEN** SubagentCard 已展开，`ensureMessages` 调 `getSubagentTrace` 但 IPC 抛错
+- **THEN** `messagesLocal` SHALL 保持 `null`（**不**写成 `[]`）；`isLoadingTrace` 复位为 `false`
+- **AND** 用户折叠（`isExpanded=false`）再展开（`isExpanded=true`）时，`ensureMessages` SHALL 因 `messagesLocal == null` 通过 guard 重新调 `getSubagentTrace`
 
 #### Scenario: 同 sessionId 同版本并发触发 inflight 复用
 
