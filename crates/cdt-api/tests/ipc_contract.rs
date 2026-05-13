@@ -556,6 +556,90 @@ fn image_source_data_omitted_field_name() {
     assert!(json.get("imageOmitted").is_none(), "MUST 不出现命名变体");
 }
 
+/// spec `ipc-data-api` "Expose subagent messages total count"：OMIT 默认路径下
+/// `messagesTotalCount` MUST 等于 subagent `build_chunks` 后的真实 chunk 数（即裁剪
+/// 前的 `messages.len()`），即使 `messages` 已被清空、`messagesOmitted=true`。
+#[test]
+fn subagent_messages_total_count_in_omit_path() {
+    // 模拟 IPC 裁剪后的 Process：messages 已被 apply_subagent_messages_omit 清空、
+    // messages_omitted=true，但 messages_total_count 仍是 resolver 阶段填好的原值。
+    let p = Process {
+        session_id: "sub-omit".into(),
+        root_task_description: None,
+        spawn_ts: ts(),
+        end_ts: None,
+        metrics: ChunkMetrics::default(),
+        team: None,
+        subagent_type: None,
+        messages: vec![],
+        main_session_impact: None,
+        is_ongoing: true,
+        duration_ms: None,
+        parent_task_id: Some("toolu-A".into()),
+        description: None,
+        header_model: None,
+        last_isolated_tokens: 0,
+        is_shutdown_only: false,
+        messages_omitted: true,
+        messages_total_count: 12, // 裁剪前真实 chunk 数
+    };
+    let json = serde_json::to_value(&p).unwrap();
+    assert_eq!(json["messagesOmitted"], json!(true));
+    assert_eq!(json["messagesTotalCount"], json!(12));
+    assert_eq!(json["messages"], json!([]));
+    assert!(
+        json["messagesTotalCount"].is_u64(),
+        "MUST 是无符号整数（u32 序列化为 JSON number）"
+    );
+}
+
+/// spec `ipc-data-api` "Expose subagent messages total count"：rollback 路径
+/// （`OMIT_SUBAGENT_MESSAGES=false`）下 `messagesTotalCount` MUST 仍等于
+/// `messages.len()`，与 OMIT 路径保持同字段语义。
+#[test]
+fn subagent_messages_total_count_in_rollback_path() {
+    use cdt_core::{AIChunk, Chunk};
+
+    let ai_chunk = Chunk::Ai(AIChunk {
+        timestamp: ts(),
+        duration_ms: None,
+        responses: vec![],
+        metrics: ChunkMetrics::default(),
+        semantic_steps: vec![],
+        tool_executions: vec![],
+        subagents: vec![],
+        slash_commands: vec![],
+        teammate_messages: vec![],
+    });
+
+    // 模拟 rollback 路径：messages 含完整 chunks、messages_omitted=false，
+    // messages_total_count 仍等于 messages.len()
+    let p = Process {
+        session_id: "sub-rollback".into(),
+        root_task_description: None,
+        spawn_ts: ts(),
+        end_ts: None,
+        metrics: ChunkMetrics::default(),
+        team: None,
+        subagent_type: None,
+        messages: vec![ai_chunk.clone(), ai_chunk.clone(), ai_chunk],
+        main_session_impact: None,
+        is_ongoing: false,
+        duration_ms: None,
+        parent_task_id: None,
+        description: None,
+        header_model: None,
+        last_isolated_tokens: 0,
+        is_shutdown_only: false,
+        messages_omitted: false,
+        messages_total_count: 3,
+    };
+    let json = serde_json::to_value(&p).unwrap();
+    assert_eq!(json["messagesOmitted"], json!(false));
+    assert_eq!(json["messagesTotalCount"], json!(3));
+    assert_eq!(json["messages"].as_array().unwrap().len(), 3);
+}
+
 #[test]
 fn process_messages_omitted_field_name() {
     let p = Process {
@@ -576,12 +660,17 @@ fn process_messages_omitted_field_name() {
         last_isolated_tokens: 0,
         is_shutdown_only: false,
         messages_omitted: true,
+        messages_total_count: 7,
     };
     let json = serde_json::to_value(&p).unwrap();
     assert_eq!(json["messagesOmitted"], json!(true));
     assert_eq!(json["sessionId"], json!("sub-1"));
     assert_eq!(json["subagentType"], json!("code-reviewer"));
+    // spec ipc-data-api "Expose subagent messages total count"：u32 字段，
+    // camelCase 形态，OMIT 与 rollback 路径下行为一致
+    assert_eq!(json["messagesTotalCount"], json!(7));
     assert!(json.get("messages_omitted").is_none());
+    assert!(json.get("messages_total_count").is_none());
     assert!(
         json.get("subagentMessagesOmitted").is_none(),
         "MUST 不出现命名变体"

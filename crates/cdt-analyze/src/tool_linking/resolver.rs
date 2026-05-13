@@ -210,6 +210,7 @@ fn candidate_to_process(
 ) -> Process {
     let (header_model, last_isolated_tokens, is_shutdown_only) =
         derive_subagent_header(&cand.messages);
+    let messages_total_count = u32::try_from(cand.messages.len()).unwrap_or(u32::MAX);
     Process {
         session_id: cand.session_id.clone(),
         root_task_description: task.task_description.clone(),
@@ -229,6 +230,8 @@ fn candidate_to_process(
         is_shutdown_only,
         // 由 IPC 层在裁剪时设 true；resolver 阶段始终 false（messages 还在）
         messages_omitted: false,
+        // 裁剪前的真实 chunk 总数，前端用作 ongoing 重拉版本指纹
+        messages_total_count,
     }
 }
 
@@ -437,6 +440,46 @@ mod tests {
             messages: Vec::new(),
             is_ongoing: false,
         }
+    }
+
+    /// spec tool-execution-linking "Resolve Task subagents with three-phase
+    /// fallback matching" + "Enrich subagent processes with team metadata" 的
+    /// `parent_task_id 回填` Scenario：Agent 工具与 Task 工具走同一关联流程，
+    /// 关联成功时 `parent_task_id` MUST 设为触发匹配的 Agent `tool_use_id`。
+    #[test]
+    fn agent_tool_links_via_result_based_with_parent_task_id() {
+        let agent_call = ToolCall {
+            id: "toolu-agent-1".into(),
+            name: "Agent".into(),
+            input: serde_json::json!({"description": "spawn helper"}),
+            is_task: true,
+            task_description: Some("spawn helper".into()),
+            task_subagent_type: None,
+        };
+        let mut agent_exec = exec(
+            "toolu-agent-1",
+            5,
+            ToolOutput::Structured {
+                value: serde_json::json!({"session_id": "agent-sub-7"}),
+            },
+        );
+        agent_exec.tool_name = "Agent".into();
+
+        let r = resolve_subagents(
+            &[agent_call],
+            &[agent_exec],
+            &[cand("agent-sub-7", "spawn helper", 6)],
+        );
+        let process = match &r[0].resolution {
+            Resolution::ResultBased { process } => process,
+            other => panic!("expected ResultBased for Agent tool, got {other:?}"),
+        };
+        assert_eq!(process.session_id, "agent-sub-7");
+        assert_eq!(
+            process.parent_task_id.as_deref(),
+            Some("toolu-agent-1"),
+            "Agent 工具关联成功后 parent_task_id MUST 回填为 Agent tool_use_id"
+        );
     }
 
     #[test]
