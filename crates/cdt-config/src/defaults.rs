@@ -94,6 +94,7 @@ pub fn default_config() -> AppConfig {
             claude_root_path: None,
             auto_expand_ai_groups: false,
             use_native_title_bar: false,
+            session_click_behavior: "replace".into(),
         },
         display: DisplayConfig {
             show_timestamps: true,

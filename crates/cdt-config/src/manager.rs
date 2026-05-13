@@ -283,7 +283,7 @@ impl ConfigManager {
                         let raw = v.as_str();
                         self.config.general.claude_root_path = normalize_claude_root_path(raw);
                     }
-                    "autoExpandAIGroups" => {
+                    "autoExpandAiGroups" => {
                         if let Some(b) = v.as_bool() {
                             self.config.general.auto_expand_ai_groups = b;
                         }
@@ -291,6 +291,20 @@ impl ConfigManager {
                     "useNativeTitleBar" => {
                         if let Some(b) = v.as_bool() {
                             self.config.general.use_native_title_bar = b;
+                        }
+                    }
+                    "sessionClickBehavior" => {
+                        if let Some(s) = v.as_str() {
+                            match s {
+                                "replace" | "new-tab" => {
+                                    s.clone_into(&mut self.config.general.session_click_behavior);
+                                }
+                                _ => {
+                                    return Err(ConfigError::validation(
+                                        "general.sessionClickBehavior must be one of: replace, new-tab",
+                                    ));
+                                }
+                            }
                         }
                     }
                     _ => {}

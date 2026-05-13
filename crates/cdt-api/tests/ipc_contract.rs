@@ -892,6 +892,13 @@ async fn get_config_returns_camelcase_top_level_sections() {
     assert!(config["notifications"]["triggers"].is_array());
     // notifications.soundEnabled 是 camelCase
     assert!(config["notifications"]["soundEnabled"].is_boolean());
+
+    // general.sessionClickBehavior 是 camelCase（默认 "replace"）
+    assert_eq!(
+        config["general"]["sessionClickBehavior"].as_str(),
+        Some("replace"),
+        "general.sessionClickBehavior MUST 默认序列化为 'replace'"
+    );
 }
 
 #[tokio::test]
@@ -909,6 +916,72 @@ async fn get_config_display_section_exposes_font_fields_camelcase() {
     assert!(
         display.get("font_mono").is_none(),
         "MUST 不出现 snake_case font_mono"
+    );
+}
+
+#[tokio::test]
+async fn update_config_general_auto_expand_ai_groups_round_trip() {
+    let (api, _tmp) = setup_api().await;
+    // 默认 false
+    assert_eq!(
+        api.get_config().await.unwrap()["general"]["autoExpandAiGroups"],
+        json!(false)
+    );
+    // 前端发送的 camelCase key 是 serde 默认产出形态（'ai' 不当作缩写大写）；
+    // 历史 bug：后端 dispatch 写成 `autoExpandAIGroups`，前端 toggle 实际从未持久化。
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "autoExpandAiGroups": true }),
+    })
+    .await
+    .expect("autoExpandAiGroups=true SHALL 接受");
+    assert_eq!(
+        api.get_config().await.unwrap()["general"]["autoExpandAiGroups"],
+        json!(true)
+    );
+}
+
+#[tokio::test]
+async fn update_config_general_session_click_behavior_round_trip() {
+    let (api, _tmp) = setup_api().await;
+    // 默认 "replace"
+    assert_eq!(
+        api.get_config().await.unwrap()["general"]["sessionClickBehavior"],
+        json!("replace")
+    );
+    // 改为 "new-tab" SHALL 持久化
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "sessionClickBehavior": "new-tab" }),
+    })
+    .await
+    .expect("general.sessionClickBehavior='new-tab' SHALL 接受");
+    assert_eq!(
+        api.get_config().await.unwrap()["general"]["sessionClickBehavior"],
+        json!("new-tab")
+    );
+    // 改回 "replace" 也 SHALL 生效
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "sessionClickBehavior": "replace" }),
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        api.get_config().await.unwrap()["general"]["sessionClickBehavior"],
+        json!("replace")
+    );
+    // 非法值 SHALL Err
+    let err = api
+        .update_config(&ConfigUpdateRequest {
+            section: "general".into(),
+            data: json!({ "sessionClickBehavior": "bogus" }),
+        })
+        .await
+        .expect_err("非法 sessionClickBehavior SHALL Err");
+    assert!(
+        err.to_string().contains("sessionClickBehavior"),
+        "Err message SHALL 提及字段名，实际：{err}"
     );
 }
 

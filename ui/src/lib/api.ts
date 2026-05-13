@@ -385,6 +385,8 @@ export interface GeneralConfig {
   theme: string;
   defaultTab: string;
   autoExpandAiGroups: boolean;
+  /** "replace" | "new-tab"，默认 "replace" */
+  sessionClickBehavior?: string;
 }
 
 export interface DisplayConfig {

@@ -139,6 +139,14 @@ pub struct GeneralConfig {
     pub claude_root_path: Option<String>,
     pub auto_expand_ai_groups: bool,
     pub use_native_title_bar: bool,
+    /// 点击 sidebar 会话项时的默认行为："replace" 替换当前 tab，"new-tab" 总开新 tab。
+    /// Cmd/Ctrl + 点击始终翻转该默认（对齐 Chrome 浏览器交互）。
+    #[serde(default = "default_session_click_behavior")]
+    pub session_click_behavior: String,
+}
+
+fn default_session_click_behavior() -> String {
+    "replace".to_string()
 }
 
 // =============================================================================
