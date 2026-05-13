@@ -3,6 +3,7 @@
   import { getConfig, updateConfig, addTrigger, removeTrigger, checkForUpdate, type AppConfig, type NotificationTrigger, type CheckUpdateResult } from "../lib/api";
   import { applyTheme } from "../lib/theme";
   import { applyFonts } from "../lib/fonts";
+  import { setSessionClickBehavior, type SessionClickBehavior } from "../lib/tabStore.svelte";
   import SettingsToggle from "../lib/components/SettingsToggle.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { updateStore } from "../lib/updateStore.svelte";
@@ -130,6 +131,9 @@
     saveError = null;
     config = { ...config, general: { ...config.general, [key]: value } };
     if (key === "theme") applyTheme(value as string);
+    if (key === "sessionClickBehavior" && (value === "replace" || value === "new-tab")) {
+      setSessionClickBehavior(value as SessionClickBehavior);
+    }
     try {
       await updateConfig("general", { [key]: value });
     } catch (e) {
@@ -271,6 +275,16 @@
               onChange={(v) => updateGeneral("autoExpandAiGroups", v)}
               ariaLabel="自动展开 AI 组"
             />
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">点击会话默认行为</span>
+              <span class="setting-desc">侧栏点击会话项时的默认动作；Cmd/Ctrl + 点击始终翻转该默认</span>
+            </div>
+            <select class="setting-select" onchange={(e) => updateGeneral("sessionClickBehavior", (e.target as HTMLSelectElement).value)}>
+              <option value="replace" selected={(config.general.sessionClickBehavior ?? "replace") === "replace"}>替换当前标签页</option>
+              <option value="new-tab" selected={config.general.sessionClickBehavior === "new-tab"}>每次开新标签页</option>
+            </select>
           </div>
         </div>
 

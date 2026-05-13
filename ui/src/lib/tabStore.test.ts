@@ -9,11 +9,17 @@ import {
   closeTab,
   getActiveTabId,
   getAllTabs,
+  getPaneLayout,
+  getSessionClickBehavior,
   getTabUIState,
+  openOrReplaceTab,
+  openSessionTab,
   openSettingsTab,
   openNotificationsTab,
+  openTab,
   saveTabUIState,
   setActiveTab,
+  setSessionClickBehavior,
 } from './tabStore.svelte'
 
 describe('singleton tab semantics', () => {
@@ -47,6 +53,98 @@ describe('active tab switching', () => {
 
   test('closeTab 不存在的 id 不抛错', () => {
     expect(() => closeTab('nonexistent-id')).not.toThrow()
+  })
+})
+
+describe('openOrReplaceTab 替换语义', () => {
+  test('focused pane active 是 session tab → 原地替换 sessionId/projectId/label', () => {
+    // 用 openTab 先制造一个 session tab + active
+    openTab('sess-A', 'proj-X', 'Label A')
+    const layoutBefore = getPaneLayout()
+    const paneBefore = layoutBefore.panes.find(
+      (p) => p.id === layoutBefore.focusedPaneId,
+    )!
+    const activeBefore = paneBefore.tabs.find(
+      (t) => t.id === paneBefore.activeTabId,
+    )!
+    expect(activeBefore.type).toBe('session')
+    expect(activeBefore.sessionId).toBe('sess-A')
+    const tabIdBefore = activeBefore.id
+    const tabsCountBefore = paneBefore.tabs.length
+
+    openOrReplaceTab('sess-B', 'proj-Y', 'Label B')
+
+    const layoutAfter = getPaneLayout()
+    const paneAfter = layoutAfter.panes.find(
+      (p) => p.id === layoutAfter.focusedPaneId,
+    )!
+    expect(paneAfter.tabs.length).toBe(tabsCountBefore) // 不新增 tab
+    const activeAfter = paneAfter.tabs.find((t) => t.id === tabIdBefore)!
+    // tabId 保留
+    expect(paneAfter.activeTabId).toBe(tabIdBefore)
+    // 内容已替换
+    expect(activeAfter.sessionId).toBe('sess-B')
+    expect(activeAfter.projectId).toBe('proj-Y')
+    expect(activeAfter.label).toBe('Label B')
+  })
+
+  test('session 已在任意 pane 打开 → focus 已存在不重复 / 不替换', () => {
+    openTab('sess-existing', 'proj-X', 'Existing')
+    openTab('sess-other', 'proj-X', 'Other') // 另开一个变成 active
+    const layoutBefore = getPaneLayout()
+    const paneBefore = layoutBefore.panes.find(
+      (p) => p.id === layoutBefore.focusedPaneId,
+    )!
+    const totalBefore = paneBefore.tabs.length
+
+    openOrReplaceTab('sess-existing', 'proj-X', 'Existing v2')
+
+    const layoutAfter = getPaneLayout()
+    const paneAfter = layoutAfter.panes.find(
+      (p) => p.id === layoutAfter.focusedPaneId,
+    )!
+    // 不新增 tab，激活的是已存在的 existing
+    expect(paneAfter.tabs.length).toBe(totalBefore)
+    const activeAfter = paneAfter.tabs.find((t) => t.id === paneAfter.activeTabId)!
+    expect(activeAfter.sessionId).toBe('sess-existing')
+    // 已存在 tab 不被替换为新 label
+    expect(activeAfter.label).toBe('Existing')
+  })
+})
+
+describe('openSessionTab 路由', () => {
+  test('forceNewTab 不论 behavior 都开新 tab', () => {
+    setSessionClickBehavior('replace')
+    expect(getSessionClickBehavior()).toBe('replace')
+    openTab('sess-base', 'proj-X', 'Base') // active 为 session tab
+    const beforeLen = getPaneLayout().panes.find(
+      (p) => p.id === getPaneLayout().focusedPaneId,
+    )!.tabs.length
+
+    openSessionTab('sess-new', 'proj-X', 'New', { forceNewTab: true })
+
+    const after = getPaneLayout().panes.find(
+      (p) => p.id === getPaneLayout().focusedPaneId,
+    )!
+    expect(after.tabs.length).toBe(beforeLen + 1)
+    const active = after.tabs.find((t) => t.id === after.activeTabId)!
+    expect(active.sessionId).toBe('sess-new')
+  })
+
+  test('behavior=new-tab 默认开新 tab', () => {
+    setSessionClickBehavior('new-tab')
+    openTab('sess-x', 'proj-X', 'X')
+    const beforeLen = getPaneLayout().panes.find(
+      (p) => p.id === getPaneLayout().focusedPaneId,
+    )!.tabs.length
+
+    openSessionTab('sess-fresh', 'proj-X', 'Fresh') // 默认走 new-tab
+
+    const after = getPaneLayout().panes.find(
+      (p) => p.id === getPaneLayout().focusedPaneId,
+    )!
+    expect(after.tabs.length).toBe(beforeLen + 1)
+    setSessionClickBehavior('replace') // 还原全局默认避免污染后续 test
   })
 })
 

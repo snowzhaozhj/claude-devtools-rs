@@ -52,7 +52,11 @@
     {:else if activeTab?.type === "notifications"}
       <NotificationsView />
     {:else if activeTab?.type === "session"}
-      {#key activeTab.id}
+      <!-- key 复合 tabId + sessionId：切 tab（tabId 变）或同 tab 替换会话（openOrReplaceTab
+           保留 tabId 仅换 sessionId/projectId）时都触发 destroy/recreate，确保 SessionDetail
+           的 onMount 数据加载重跑。SessionDetail 内部仍假设 tabId 生命周期内不变（成立——
+           重建后的新实例里 tabId 是新的固定值）。 -->
+      {#key `${activeTab.id}@${activeTab.sessionId}`}
         <SessionDetail
           tabId={activeTab.id}
           projectId={activeTab.projectId}

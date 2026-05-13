@@ -12,7 +12,7 @@
   import SidebarHeader from "./SidebarHeader.svelte";
   import SessionContextMenu from "./SessionContextMenu.svelte";
   import OngoingIndicator from "./OngoingIndicator.svelte";
-  import { openTab, openTabInNewPane, getPaneLayout } from "../lib/tabStore.svelte";
+  import { openTab, openOrReplaceTab, openTabInNewPane, getPaneLayout } from "../lib/tabStore.svelte";
   import { MAX_PANES } from "../lib/paneTypes";
   import {
     getSidebarWidth, setSidebarWidth,
@@ -36,7 +36,7 @@
     activeSessionId: string | null;
     collapsed?: boolean;
     onSelectProject: (id: string, name: string) => void;
-    onSelectSession: (sessionId: string, label: string) => void;
+    onSelectSession: (sessionId: string, label: string, event: MouseEvent) => void;
   }
 
   let {
@@ -440,7 +440,7 @@
             class:session-item-active={session.sessionId === activeSessionId}
             class:session-item-hidden={isHidden(selectedProjectId, session.sessionId)}
             style:height="{ITEM_HEIGHT}px"
-            onclick={() => onSelectSession(session.sessionId, sessionLabel(session))}
+            onclick={(e) => onSelectSession(session.sessionId, sessionLabel(session), e)}
             oncontextmenu={(e) => onContextMenu(e, session)}
           >
             <div class="session-title">
@@ -499,6 +499,7 @@
     isPinned={isPinned(selectedProjectId, ctx.session.sessionId)}
     isHidden={isHidden(selectedProjectId, ctx.session.sessionId)}
     {canSplit}
+    onOpenInCurrentTab={() => openOrReplaceTab(ctx.session.sessionId, selectedProjectId, sessionLabel(ctx.session))}
     onOpenInNewTab={() => openTab(ctx.session.sessionId, selectedProjectId, sessionLabel(ctx.session))}
     onOpenInNewPane={() => openTabInNewPane(ctx.session.sessionId, selectedProjectId, sessionLabel(ctx.session))}
     onTogglePin={() => togglePin(selectedProjectId, ctx.session.sessionId)}

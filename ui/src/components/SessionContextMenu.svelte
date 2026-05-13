@@ -8,6 +8,7 @@
     isPinned: boolean;
     isHidden: boolean;
     canSplit: boolean;
+    onOpenInCurrentTab: () => void;
     onOpenInNewTab: () => void;
     onOpenInNewPane: () => void;
     onTogglePin: () => void;
@@ -17,14 +18,14 @@
 
   let {
     x, y, sessionId, isPinned, isHidden, canSplit,
-    onOpenInNewTab, onOpenInNewPane, onTogglePin, onToggleHide, onClose,
+    onOpenInCurrentTab, onOpenInNewTab, onOpenInNewPane, onTogglePin, onToggleHide, onClose,
   }: Props = $props();
 
   let menuEl: HTMLDivElement | undefined = $state(undefined);
   let copyFeedback: string | null = $state(null);
 
   const MENU_WIDTH = 220;
-  const MENU_HEIGHT = 240;
+  const MENU_HEIGHT = 280;
   const clampedX = $derived(Math.min(x, window.innerWidth - MENU_WIDTH - 8));
   const clampedY = $derived(Math.min(y, window.innerHeight - MENU_HEIGHT - 8));
 
@@ -68,6 +69,9 @@
   bind:this={menuEl}
   style="left: {clampedX}px; top: {clampedY}px;"
 >
+  <button class="cm-item" onclick={() => doAction(onOpenInCurrentTab)}>
+    在当前标签页打开
+  </button>
   <button class="cm-item" onclick={() => doAction(onOpenInNewTab)}>
     在新标签页打开
   </button>

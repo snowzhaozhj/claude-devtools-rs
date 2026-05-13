@@ -61,6 +61,18 @@ let paneLayout: PaneLayout = $state({
 });
 let notificationUnreadCount: number = $state(0);
 
+/**
+ * Sidebar 会话项点击的默认行为偏好。
+ * - "replace"（默认）：替换当前 tab 内容，对齐 Chrome 普通点击 / 原版 SessionItem.handleClick
+ * - "new-tab"：每次开新 tab
+ * Cmd/Ctrl + 点击始终翻转该默认。
+ *
+ * 启动时由 App.svelte 从 backend config (`general.sessionClickBehavior`) 同步；
+ * SettingsView 修改时立即 setter 同步，无需等 reload。
+ */
+export type SessionClickBehavior = "replace" | "new-tab";
+let sessionClickBehavior: SessionClickBehavior = $state("replace");
+
 // per-tab UI 状态 / session 缓存按 tabId 索引，跨 pane 迁移不丢
 const tabUIStates = new Map<string, TabUIState>();
 const tabSessionCache = new Map<string, SessionDetail>();
@@ -123,6 +135,41 @@ export function getUnreadCount(): number {
 
 export function setUnreadCount(count: number): void {
   notificationUnreadCount = count;
+}
+
+export function getSessionClickBehavior(): SessionClickBehavior {
+  return sessionClickBehavior;
+}
+
+export function setSessionClickBehavior(value: SessionClickBehavior): void {
+  sessionClickBehavior = value;
+}
+
+/**
+ * 统一 sidebar / palette 等会话项的点击路由。
+ * - opts.forceNewTab: 总走 openTab（修饰键 Cmd/Ctrl + 点击 / "Open in New Tab" 菜单）
+ * - opts.forceReplace: 总走 openOrReplaceTab（"Open in Current Tab" 菜单）
+ * - 默认按 sessionClickBehavior preference 决定
+ */
+export function openSessionTab(
+  sessionId: string,
+  projectId: string,
+  label: string,
+  opts?: { forceNewTab?: boolean; forceReplace?: boolean },
+): void {
+  if (opts?.forceNewTab) {
+    openTab(sessionId, projectId, label);
+    return;
+  }
+  if (opts?.forceReplace) {
+    openOrReplaceTab(sessionId, projectId, label);
+    return;
+  }
+  if (sessionClickBehavior === "replace") {
+    openOrReplaceTab(sessionId, projectId, label);
+  } else {
+    openTab(sessionId, projectId, label);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +284,57 @@ export function openTab(
     activeTabId: tab.id,
   };
   paneLayout = updatePane(paneLayout, updated);
+}
+
+/**
+ * "在当前 tab 替换" 语义（对齐 Chrome 普通点击 + 原版 SessionItem `replaceActiveTab`）：
+ * - 若 session 已在任意 pane 打开 → focus 已存在 tab（去重，与 openTab 一致）
+ * - 否则 focused pane 当前 active 是 session tab → 原地替换其 sessionId/projectId/label，
+ *   tabId 保留，per-tab UI state / session 缓存按 tabId 清掉（旧会话视为已离开可丢弃）
+ * - 否则（active 是 settings/notifications/无 active）→ fallback 到 openTab 追加新 tab
+ */
+export function openOrReplaceTab(
+  sessionId: string,
+  projectId: string,
+  label: string,
+): void {
+  for (const pane of paneLayout.panes) {
+    const existing = pane.tabs.find(
+      (t) => t.type === "session" && t.sessionId === sessionId,
+    );
+    if (existing) {
+      paneLayout = updatePane(
+        { ...paneLayout, focusedPaneId: pane.id },
+        { ...pane, activeTabId: existing.id },
+      );
+      return;
+    }
+  }
+
+  const pane = focusedPane();
+  const activeTab =
+    pane.activeTabId !== null
+      ? pane.tabs.find((t) => t.id === pane.activeTabId)
+      : undefined;
+
+  if (activeTab && activeTab.type === "session") {
+    tabUIStates.delete(activeTab.id);
+    tabSessionCache.delete(activeTab.id);
+    const replaced: Tab = {
+      ...activeTab,
+      sessionId,
+      projectId,
+      label: shortLabel(label),
+      createdAt: Date.now(),
+    };
+    const newTabs = pane.tabs.map((t) =>
+      t.id === activeTab.id ? replaced : t,
+    );
+    paneLayout = updatePane(paneLayout, { ...pane, tabs: newTabs });
+    return;
+  }
+
+  openTab(sessionId, projectId, label);
 }
 
 function openSingletonTab(type: "settings" | "notifications", label: string): void {
@@ -476,6 +574,23 @@ export function getTabUIState(tabId: string): TabUIState {
 
 export function saveTabUIState(tabId: string, state: TabUIState): void {
   tabUIStates.set(tabId, state);
+}
+
+/**
+ * 查找 tabId 当前指向的 sessionId（用于跨 pane 找 tab）。
+ * 找不到（tab 已被关闭 / 不存在）返回 null。
+ *
+ * 给 SessionDetail.onDestroy 做 guard：openOrReplaceTab 保留 tabId 仅换 sessionId
+ * 时会触发旧 SessionDetail destroy，若它 onDestroy 无条件 saveTabUIState(tabId, ...)
+ * 会用旧 session 的 expanded / scroll 状态覆盖 openOrReplaceTab 刚 delete 的 slot，
+ * 新 SessionDetail mount 时 getTabUIState(tabId) 拿到的就是旧 session 残留。
+ */
+export function getTabSessionId(tabId: string): string | null {
+  for (const pane of paneLayout.panes) {
+    const t = pane.tabs.find((x) => x.id === tabId);
+    if (t) return t.sessionId;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

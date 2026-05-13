@@ -6,7 +6,9 @@
   import UpdateBanner from "./components/UpdateBanner.svelte";
   import { updateStore, type UpdateAvailablePayload } from "./lib/updateStore.svelte";
   import {
-    openTab,
+    openSessionTab,
+    setSessionClickBehavior,
+    type SessionClickBehavior,
     getActiveTab,
     getActiveTabId,
     getTabs,
@@ -145,6 +147,10 @@
       const config = await getConfig();
       applyTheme(config.general.theme);
       applyFonts(config);
+      const behavior = config.general.sessionClickBehavior;
+      if (behavior === "replace" || behavior === "new-tab") {
+        setSessionClickBehavior(behavior as SessionClickBehavior);
+      }
     } catch { /* 加载失败保持默认浅色 + 默认字体 */ }
     // 加载 agent configs 供 subagent 彩色 badge 使用
     await loadAgentConfigs();
@@ -169,8 +175,15 @@
     selectedProjectName = name;
   }
 
-  function selectSession(sessionId: string, label: string) {
-    openTab(sessionId, selectedProjectId, label || sessionId.slice(0, 12));
+  function selectSession(sessionId: string, label: string, event: MouseEvent) {
+    // Cmd/Ctrl + 点击翻转 sessionClickBehavior 默认（对齐 Chrome）
+    const forceNewTab = event.ctrlKey || event.metaKey;
+    openSessionTab(
+      sessionId,
+      selectedProjectId,
+      label || sessionId.slice(0, 12),
+      forceNewTab ? { forceNewTab: true } : undefined,
+    );
   }
 </script>
 
