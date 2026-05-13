@@ -95,8 +95,12 @@
   async function ensureMessages(): Promise<void> {
     if (messagesLocal != null) return;
     if (!process.messagesOmitted) {
-      // 老后端 / 回滚开关 false：messages 已是完整
-      messagesLocal = process.messages;
+      // 老后端 / 回滚开关 false：messages 已是完整。**不**写 messagesLocal——
+      // `effectiveMessages = messagesLocal ?? process.messages` 的 fallback
+      // 自动消费实时 `process.messages`，跟随父 detail 刷新替换 process 实例。
+      // 早期版本写 `messagesLocal = process.messages` 会让 rollback 路径下
+      // process 替换但 messagesVersion 三元组不变时 UI 永远卡在旧 trace
+      // （codex 二审 V2/V3 发现）。
       return;
     }
     const fetchedVersion = untrack(() => messagesVersion);
