@@ -875,7 +875,7 @@
   .conversation {
     flex: 1;
     min-width: 0;
-    overflow-y: auto;
+    overflow-y: scroll;
     overflow-x: hidden;
     scrollbar-gutter: stable;
     padding: 16px 24px 48px;
