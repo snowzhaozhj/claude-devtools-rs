@@ -38,7 +38,12 @@
 </div>
 
 <style>
+  .output-block {
+    min-width: 0;
+  }
+
   .output-pre {
+    min-width: 0;
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--color-text-secondary);
