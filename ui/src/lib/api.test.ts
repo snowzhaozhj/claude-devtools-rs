@@ -48,12 +48,12 @@ describe('listAllSessions', () => {
     expect(result.total).toBe(51)
   })
 
-  test('会话数量变化导致第二次仍有 nextCursor 时继续扩大请求', async () => {
+  test('按 cursor 累加多页且不从头重拉全量', async () => {
     const calls: Array<{ pageSize: number; cursor: string | null }> = []
     const responses = [
-      { items: Array.from({ length: 50 }, (_, i) => session(i)), nextCursor: '50', total: 51 },
-      { items: Array.from({ length: 51 }, (_, i) => session(i)), nextCursor: '51', total: 52 },
-      { items: Array.from({ length: 52 }, (_, i) => session(i)), nextCursor: null, total: 52 },
+      { items: Array.from({ length: 50 }, (_, i) => session(i)), nextCursor: '50', total: 120 },
+      { items: Array.from({ length: 50 }, (_, i) => session(i + 50)), nextCursor: '100', total: 120 },
+      { items: Array.from({ length: 20 }, (_, i) => session(i + 100)), nextCursor: null, total: 120 },
     ]
     mockIPC(vi.fn((cmd, payload) => {
       expect(cmd).toBe('list_sessions')
@@ -64,12 +64,16 @@ describe('listAllSessions', () => {
 
     const result = await listAllSessions('project-with-history')
 
-    expect(result.items).toHaveLength(52)
+    expect(result.items).toHaveLength(120)
+    expect(result.items.map((s) => s.sessionId)).toEqual(
+      Array.from({ length: 120 }, (_, i) => `sess-${i}`),
+    )
     expect(result.nextCursor).toBeNull()
+    expect(result.total).toBe(120)
     expect(calls).toEqual([
       { pageSize: 50, cursor: null },
-      { pageSize: 51, cursor: null },
-      { pageSize: 52, cursor: null },
+      { pageSize: 50, cursor: '50' },
+      { pageSize: 50, cursor: '100' },
     ])
   })
 })

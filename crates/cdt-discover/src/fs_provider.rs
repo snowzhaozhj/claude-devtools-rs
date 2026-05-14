@@ -49,6 +49,7 @@ impl EntryKind {
 pub struct DirEntry {
     pub name: String,
     pub kind: EntryKind,
+    pub metadata: Option<FsMetadata>,
 }
 
 /// `stat` 返回的最小 metadata。
@@ -79,6 +80,16 @@ pub trait FileSystemProvider: Send + Sync + 'static {
 
     async fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>, FsError>;
 
+    async fn read_dir_with_metadata(&self, path: &Path) -> Result<Vec<DirEntry>, FsError> {
+        let mut entries = self.read_dir(path).await?;
+        for entry in &mut entries {
+            if entry.kind.is_file() {
+                entry.metadata = Some(self.stat(&path.join(&entry.name)).await?);
+            }
+        }
+        Ok(entries)
+    }
+
     async fn read_to_string(&self, path: &Path) -> Result<String, FsError>;
 
     async fn stat(&self, path: &Path) -> Result<FsMetadata, FsError>;
@@ -96,6 +107,65 @@ impl LocalFileSystemProvider {
     #[must_use]
     pub fn new() -> Self {
         Self
+    }
+
+    async fn read_dir_entries(
+        &self,
+        path: &Path,
+        include_metadata: bool,
+    ) -> Result<Vec<DirEntry>, FsError> {
+        let mut read = tokio::fs::read_dir(path)
+            .await
+            .map_err(|e| wrap_io(path, e))?;
+        let mut out = Vec::new();
+        loop {
+            match read.next_entry().await {
+                Ok(Some(entry)) => {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    let file_type = match entry.file_type().await {
+                        Ok(ft) => ft,
+                        Err(err) => {
+                            tracing::warn!(path = %entry.path().display(), error = %err, "skip unreadable dir entry");
+                            continue;
+                        }
+                    };
+                    let kind = if file_type.is_dir() {
+                        EntryKind::Dir
+                    } else if file_type.is_file() {
+                        EntryKind::File
+                    } else if file_type.is_symlink() {
+                        EntryKind::Symlink
+                    } else {
+                        EntryKind::Other
+                    };
+                    let metadata = if include_metadata && kind.is_file() {
+                        match entry.metadata().await {
+                            Ok(meta) => Some(FsMetadata {
+                                size: meta.len(),
+                                mtime: meta.modified().unwrap_or(UNIX_EPOCH),
+                            }),
+                            Err(err) => {
+                                tracing::warn!(path = %entry.path().display(), error = %err, "dir entry metadata unavailable");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    out.push(DirEntry {
+                        name,
+                        kind,
+                        metadata,
+                    });
+                }
+                Ok(None) => break,
+                Err(err) => {
+                    tracing::warn!(path = %path.display(), error = %err, "error walking dir");
+                    break;
+                }
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -121,40 +191,11 @@ impl FileSystemProvider for LocalFileSystemProvider {
     }
 
     async fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>, FsError> {
-        let mut read = tokio::fs::read_dir(path)
-            .await
-            .map_err(|e| wrap_io(path, e))?;
-        let mut out = Vec::new();
-        loop {
-            match read.next_entry().await {
-                Ok(Some(entry)) => {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    let file_type = match entry.file_type().await {
-                        Ok(ft) => ft,
-                        Err(err) => {
-                            tracing::warn!(path = %entry.path().display(), error = %err, "skip unreadable dir entry");
-                            continue;
-                        }
-                    };
-                    let kind = if file_type.is_dir() {
-                        EntryKind::Dir
-                    } else if file_type.is_file() {
-                        EntryKind::File
-                    } else if file_type.is_symlink() {
-                        EntryKind::Symlink
-                    } else {
-                        EntryKind::Other
-                    };
-                    out.push(DirEntry { name, kind });
-                }
-                Ok(None) => break,
-                Err(err) => {
-                    tracing::warn!(path = %path.display(), error = %err, "error walking dir");
-                    break;
-                }
-            }
-        }
-        Ok(out)
+        self.read_dir_entries(path, false).await
+    }
+
+    async fn read_dir_with_metadata(&self, path: &Path) -> Result<Vec<DirEntry>, FsError> {
+        self.read_dir_entries(path, true).await
     }
 
     async fn read_to_string(&self, path: &Path) -> Result<String, FsError> {

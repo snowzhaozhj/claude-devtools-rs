@@ -106,7 +106,7 @@ impl ProjectScanner {
         if !self.fs.exists(&dir).await {
             return Ok(Vec::new());
         }
-        let entries = self.fs.read_dir(&dir).await?;
+        let entries = self.fs.read_dir_with_metadata(&dir).await?;
         let filter = self.registry.get_session_filter(project_id);
         let mut sessions: Vec<Session> = Vec::new();
         for entry in entries {
@@ -121,7 +121,10 @@ impl ProjectScanner {
                     continue;
                 }
             }
-            let stat = self.fs.stat(&dir.join(&entry.name)).await?;
+            let stat = match entry.metadata {
+                Some(metadata) => metadata,
+                None => self.fs.stat(&dir.join(&entry.name)).await?,
+            };
             sessions.push(Session {
                 id: id.to_string(),
                 last_modified: stat.mtime_ms(),
@@ -143,7 +146,7 @@ impl ProjectScanner {
 
     async fn scan_project_dir(&mut self, dir_name: &str) -> Result<Vec<Project>, DiscoverError> {
         let dir_path = self.projects_dir.join(dir_name);
-        let entries = self.fs.read_dir(&dir_path).await?;
+        let entries = self.fs.read_dir_with_metadata(&dir_path).await?;
         let mut session_stats: Vec<SessionStat> = Vec::new();
         for entry in entries {
             if !entry.kind.is_file() {
@@ -153,7 +156,10 @@ impl ProjectScanner {
                 continue;
             };
             let full = dir_path.join(&entry.name);
-            let stat = self.fs.stat(&full).await?;
+            let stat = match entry.metadata {
+                Some(metadata) => metadata,
+                None => self.fs.stat(&full).await?,
+            };
             session_stats.push(SessionStat {
                 id: id.to_string(),
                 path: full,
