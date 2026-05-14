@@ -314,10 +314,11 @@ export async function listSessions(
 }
 
 export async function listAllSessions(projectId: string): Promise<PaginatedResponse<SessionSummary>> {
-  const firstPage = await listSessions(projectId);
-  if (!firstPage.nextCursor) return firstPage;
-
-  return await listSessions(projectId, firstPage.total);
+  let result = await listSessions(projectId);
+  while (result.nextCursor) {
+    result = await listSessions(projectId, result.total);
+  }
+  return result;
 }
 
 export async function getSessionDetail(

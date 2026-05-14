@@ -1,5 +1,5 @@
-import { clearMocks } from '@tauri-apps/api/mocks'
-import { afterEach, describe, expect, test } from 'vitest'
+import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { listAllSessions } from './api'
 import { setupMockIPC } from './tauriMock'
@@ -46,5 +46,30 @@ describe('listAllSessions', () => {
     expect(result.items.map((s) => s.sessionId)).toEqual(sessions.map((s) => s.sessionId))
     expect(result.nextCursor).toBeNull()
     expect(result.total).toBe(51)
+  })
+
+  test('会话数量变化导致第二次仍有 nextCursor 时继续扩大请求', async () => {
+    const calls: Array<{ pageSize: number; cursor: string | null }> = []
+    const responses = [
+      { items: Array.from({ length: 50 }, (_, i) => session(i)), nextCursor: '50', total: 51 },
+      { items: Array.from({ length: 51 }, (_, i) => session(i)), nextCursor: '51', total: 52 },
+      { items: Array.from({ length: 52 }, (_, i) => session(i)), nextCursor: null, total: 52 },
+    ]
+    mockIPC(vi.fn((cmd, payload) => {
+      expect(cmd).toBe('list_sessions')
+      const args = payload as { pageSize: number; cursor: string | null }
+      calls.push({ pageSize: args.pageSize, cursor: args.cursor })
+      return responses.shift()
+    }))
+
+    const result = await listAllSessions('project-with-history')
+
+    expect(result.items).toHaveLength(52)
+    expect(result.nextCursor).toBeNull()
+    expect(calls).toEqual([
+      { pageSize: 50, cursor: null },
+      { pageSize: 51, cursor: null },
+      { pageSize: 52, cursor: null },
+    ])
   })
 })
