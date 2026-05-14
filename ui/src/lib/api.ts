@@ -33,6 +33,12 @@ export interface SessionSummary {
    * session summary and metadata updates"。
    */
   gitBranch: string | null;
+  /**
+   * 当 session 来自 `getWorktreeSessions(groupId)` 路径时，记录归属 worktree
+   * 的 project id。`listSessions(projectId)` 路径下 SHALL 为 undefined。
+   */
+  worktreeId?: string;
+  worktreeName?: string;
 }
 
 /**
@@ -297,8 +303,66 @@ export interface SessionDetail {
   isOngoing: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Repository groups / worktree（git 仓库聚合视图）
+// ---------------------------------------------------------------------------
+
+/**
+ * git repo 唯一身份。无 git 元数据时为 null。
+ */
+export interface RepositoryIdentity {
+  id: string;
+  name: string;
+}
+
+/**
+ * 一个 worktree —— 同 git 仓库的一个视图。`id` 与底层 `Project.id` 一致。
+ */
+export interface Worktree {
+  id: string;
+  path: string;
+  name: string;
+  gitBranch: string | null;
+  isMainWorktree: boolean;
+  sessions: string[];
+  createdAt: number | null;
+  mostRecentSession: number | null;
+}
+
+/**
+ * 一组共享 repo identity 的 worktree。无 git 时退化为单成员组。
+ */
+export interface RepositoryGroup {
+  id: string;
+  identity: RepositoryIdentity | null;
+  name: string;
+  worktrees: Worktree[];
+  mostRecentSession: number | null;
+  totalSessions: number;
+}
+
 export async function listProjects(): Promise<ProjectInfo[]> {
   return await invoke("list_projects");
+}
+
+export async function listRepositoryGroups(): Promise<RepositoryGroup[]> {
+  return await invoke("list_repository_groups");
+}
+
+/**
+ * 取得一个 RepositoryGroup 内所有 worktree 合并后的 session 列表（按 mtime 倒序）。
+ * 每条 SessionSummary 携带 `worktreeId` / `worktreeName` 表示归属 worktree。
+ */
+export async function getWorktreeSessions(
+  groupId: string,
+  pageSize: number = 50,
+  cursor?: string,
+): Promise<PaginatedResponse<SessionSummary>> {
+  return await invoke("get_worktree_sessions", {
+    groupId,
+    pageSize,
+    cursor: cursor ?? null,
+  });
 }
 
 export async function listSessions(

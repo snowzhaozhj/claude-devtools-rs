@@ -7,6 +7,7 @@ import type {
   GetNotificationsResult,
   PaginatedResponse,
   ProjectInfo,
+  RepositoryGroup,
   SessionDetail,
   SessionSummary,
 } from '../api'
@@ -37,6 +38,12 @@ export interface Fixture {
   agentConfigs: AgentConfig[]
   /** 搜索结果。search_sessions 返回（简单 mock：返回 sessions 子集）。 */
   searchResults: { sessionId: string; projectId: string; matches: number }[]
+  /**
+   * 可选 RepositoryGroup 列表。提供时 list_repository_groups 直接返回；
+   * 否则 mock 自动按 fixture.projects 构造单成员 group 列表（每个 project
+   * 退化为只含自己的 group）。
+   */
+  repositoryGroups?: RepositoryGroup[]
 }
 
 export type {
@@ -45,6 +52,7 @@ export type {
   GetNotificationsResult,
   PaginatedResponse,
   ProjectInfo,
+  RepositoryGroup,
   SessionDetail,
   SessionSummary,
 }

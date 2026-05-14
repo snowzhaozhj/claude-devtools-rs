@@ -1,14 +1,25 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import type { ProjectInfo } from "../lib/api";
+  import type { ProjectInfo, RepositoryGroup, Worktree } from "../lib/api";
   import {
     CHEVRON_DOWN,
     CHECK_SVG,
     PANEL_LEFT_SVG,
+    GIT_BRANCH_SVG,
   } from "../lib/icons";
+  import {
+    isGroupExpanded,
+    toggleGroupExpanded,
+    setGroupExpanded,
+  } from "../lib/sidebarStore.svelte";
 
   interface Props {
     projects: ProjectInfo[];
+    /**
+     * 按 git 仓库聚合的项目分组。空数组时回退到 `projects` 平铺渲染（兜底
+     * 路径，对齐 design.md D4b：dev `?mode=flat` 不进 production）。
+     */
+    repositoryGroups?: RepositoryGroup[];
     selectedProjectId: string;
     onSelectProject: (id: string, name: string) => void;
     onToggleCollapsed: () => void;
@@ -16,11 +27,30 @@
 
   let {
     projects,
+    repositoryGroups = [],
     selectedProjectId,
     onSelectProject,
     onToggleCollapsed,
   }: Props = $props();
   let dropdownOpen = $state(false);
+
+  // 打开 dropdown 时（仅 false → true 这一帧），自动展开"包含当前选中
+  // worktree"的 group，让用户立即看到当前位置——之后 dropdown 打开期间用
+  // 户的折叠/展开操作不被这条覆盖，避免点 chevron 折叠瞬间又被强制展开。
+  let lastDropdownOpen = $state(false);
+  $effect(() => {
+    if (dropdownOpen && !lastDropdownOpen) {
+      for (const g of repositoryGroups) {
+        if (
+          g.worktrees.length > 1 &&
+          g.worktrees.some((w) => w.id === selectedProjectId)
+        ) {
+          setGroupExpanded(g.id, true);
+        }
+      }
+    }
+    lastDropdownOpen = dropdownOpen;
+  });
 
   // macOS 隐藏原生 title bar 后保留 traffic lights 浮在内容上层；header
   // Row 1 兼任 drag region，左侧需为 traffic lights 让位 72px。其余平台
@@ -62,13 +92,32 @@
     dropdownOpen = false;
   }
 
+  function selectWorktree(wt: Worktree) {
+    onSelectProject(wt.id, wt.name);
+    dropdownOpen = false;
+  }
+
   function formatPath(path: string): string {
     return path.replace(/^\/Users\/[^/]+/, "~");
   }
 
-  const selectedName = $derived(
-    projects.find(p => p.id === selectedProjectId)?.displayName ?? "选择项目"
-  );
+  // 选中态展示名：优先在 repositoryGroups 内找 worktree.name，未命中时
+  // fallback 到 projects 平铺；无任何匹配时退回占位。
+  // 单 worktree group / 选中 main worktree → 只显示 group.name；
+  // 多 worktree group 且选中非 main → "group · wt"。
+  const selectedName = $derived.by(() => {
+    for (const g of repositoryGroups) {
+      const wt = g.worktrees.find((w) => w.id === selectedProjectId);
+      if (wt) {
+        if (g.worktrees.length <= 1 || wt.isMainWorktree) return g.name;
+        return `${g.name} · ${wt.name}`;
+      }
+    }
+    return projects.find((p) => p.id === selectedProjectId)?.displayName ?? "选择项目";
+  });
+
+  // 是否走 grouped 渲染。空数组（fallback）走老 flat 路径。
+  const useGroupedView = $derived(repositoryGroups.length > 0);
 </script>
 
 <div class="sidebar-header">
@@ -107,27 +156,108 @@
     <div class="dropdown-backdrop" onclick={() => dropdownOpen = false}></div>
     <div class="dropdown">
       <div class="dropdown-title">切换项目</div>
-      {#each projects as project}
-        {@const isActive = project.id === selectedProjectId}
-        <button
-          class="dropdown-item"
-          class:dropdown-item-active={isActive}
-          onclick={() => select(project)}
-        >
-          <div class="dropdown-item-info">
-            <span class="dropdown-item-name" class:dropdown-item-name-active={isActive}>{project.displayName}</span>
-            <span class="dropdown-item-path">{formatPath(project.path)}</span>
-          </div>
-          <span class="dropdown-item-count">{project.sessionCount}</span>
-          {#if isActive}
-            <svg class="dropdown-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              {@html CHECK_SVG}
-            </svg>
+
+      {#if useGroupedView}
+        {#each repositoryGroups as group (group.id)}
+          {#if group.worktrees.length === 1}
+            {@const wt = group.worktrees[0]}
+            {@const isActive = wt.id === selectedProjectId}
+            <button
+              class="dropdown-item"
+              class:dropdown-item-active={isActive}
+              onclick={() => selectWorktree(wt)}
+            >
+              <div class="dropdown-item-info">
+                <span class="dropdown-item-name" class:dropdown-item-name-active={isActive}>{group.name}</span>
+                <span class="dropdown-item-path">{formatPath(wt.path)}</span>
+              </div>
+              <span class="dropdown-item-count">{group.totalSessions}</span>
+              {#if isActive}
+                <svg class="dropdown-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  {@html CHECK_SVG}
+                </svg>
+              {/if}
+            </button>
+          {:else}
+            {@const expanded = isGroupExpanded(group.id)}
+            {@const hasActive = group.worktrees.some((w) => w.id === selectedProjectId)}
+            <button
+              class="dropdown-group-row"
+              class:dropdown-group-row-active={hasActive}
+              onclick={() => toggleGroupExpanded(group.id)}
+              aria-expanded={expanded}
+            >
+              <span class="dropdown-group-chevron" class:dropdown-group-chevron-open={expanded}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d={CHEVRON_DOWN} />
+                </svg>
+              </span>
+              <div class="dropdown-item-info">
+                <span class="dropdown-item-name" class:dropdown-item-name-active={hasActive}>{group.name}</span>
+              </div>
+              <span class="dropdown-group-badge" title="worktree 数量">{group.worktrees.length}</span>
+              <span class="dropdown-item-count">{group.totalSessions}</span>
+            </button>
+
+            {#if expanded}
+              {#each group.worktrees as wt (wt.id)}
+                {@const isActive = wt.id === selectedProjectId}
+                <button
+                  class="dropdown-item dropdown-item-worktree"
+                  class:dropdown-item-active={isActive}
+                  onclick={() => selectWorktree(wt)}
+                >
+                  <div class="dropdown-item-info">
+                    <span class="dropdown-item-name" class:dropdown-item-name-active={isActive}>
+                      {wt.isMainWorktree ? "main" : wt.name}
+                    </span>
+                    <span class="dropdown-item-path">{formatPath(wt.path)}</span>
+                  </div>
+                  {#if wt.gitBranch}
+                    <span class="dropdown-item-branch" title={wt.gitBranch}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        {@html GIT_BRANCH_SVG}
+                      </svg>
+                      <span class="dropdown-item-branch-text">{wt.gitBranch}</span>
+                    </span>
+                  {/if}
+                  <span class="dropdown-item-count">{wt.sessions.length}</span>
+                  {#if isActive}
+                    <svg class="dropdown-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      {@html CHECK_SVG}
+                    </svg>
+                  {/if}
+                </button>
+              {/each}
+            {/if}
           {/if}
-        </button>
-      {/each}
-      {#if projects.length === 0}
-        <div class="dropdown-empty">未发现项目</div>
+        {/each}
+        {#if repositoryGroups.length === 0}
+          <div class="dropdown-empty">未发现项目</div>
+        {/if}
+      {:else}
+        {#each projects as project}
+          {@const isActive = project.id === selectedProjectId}
+          <button
+            class="dropdown-item"
+            class:dropdown-item-active={isActive}
+            onclick={() => select(project)}
+          >
+            <div class="dropdown-item-info">
+              <span class="dropdown-item-name" class:dropdown-item-name-active={isActive}>{project.displayName}</span>
+              <span class="dropdown-item-path">{formatPath(project.path)}</span>
+            </div>
+            <span class="dropdown-item-count">{project.sessionCount}</span>
+            {#if isActive}
+              <svg class="dropdown-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                {@html CHECK_SVG}
+              </svg>
+            {/if}
+          </button>
+        {/each}
+        {#if projects.length === 0}
+          <div class="dropdown-empty">未发现项目</div>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -358,5 +488,89 @@
     text-align: center;
     color: var(--color-text-muted);
     font-size: 13px;
+  }
+
+  /* ----- grouped view ----- */
+
+  .dropdown-group-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 8px;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    color: var(--color-text);
+    transition: background 0.1s;
+  }
+
+  .dropdown-group-row:hover {
+    background: var(--tool-item-hover-bg);
+  }
+
+  .dropdown-group-row-active {
+    background: var(--color-surface-raised);
+  }
+
+  .dropdown-group-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-muted);
+    transition: transform 0.15s ease;
+  }
+
+  .dropdown-group-chevron svg {
+    width: 14px;
+    height: 14px;
+    transform: rotate(-90deg);
+    transition: transform 0.15s ease;
+  }
+
+  .dropdown-group-chevron-open svg {
+    transform: rotate(0deg);
+  }
+
+  .dropdown-group-badge {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-muted);
+    background: var(--color-surface-raised);
+  }
+
+  .dropdown-item-worktree {
+    padding-left: 28px;
+  }
+
+  .dropdown-item-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    max-width: 120px;
+    color: var(--color-text-muted);
+    font-size: 10px;
+  }
+
+  .dropdown-item-branch svg {
+    width: 11px;
+    height: 11px;
+    flex-shrink: 0;
+  }
+
+  .dropdown-item-branch-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>
