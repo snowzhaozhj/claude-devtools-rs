@@ -314,9 +314,9 @@
   }
 
   .cp-mode-active {
-    background: rgba(99, 102, 241, 0.18);
-    color: #818cf8;
-    border-color: rgba(99, 102, 241, 0.24);
+    background: color-mix(in oklch, var(--color-accent-indigo) 18%, transparent);
+    color: var(--color-accent-indigo);
+    border-color: color-mix(in oklch, var(--color-accent-indigo) 24%, transparent);
   }
 
   .cp-body {

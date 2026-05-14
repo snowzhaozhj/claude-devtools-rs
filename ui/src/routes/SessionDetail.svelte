@@ -999,8 +999,8 @@
     color: var(--color-text-muted);
   }
 
-  .task-notif-done .task-notif-icon { color: var(--badge-success-text, #22c55e); }
-  .task-notif-fail .task-notif-icon { color: var(--error-highlight-text, #ef4444); }
+  .task-notif-done .task-notif-icon { color: var(--color-success-bright); }
+  .task-notif-fail .task-notif-icon { color: var(--color-danger-bright); }
 
   .task-notif-body {
     min-width: 0;
@@ -1295,10 +1295,10 @@
     gap: 8px;
     width: 100%;
     padding: 10px 16px;
-    background: rgba(245, 158, 11, 0.08);
-    border: 1px solid rgba(245, 158, 11, 0.25);
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
     border-radius: 8px;
-    color: #d97706;
+    color: var(--color-warning-text);
     cursor: pointer;
     font-family: inherit;
     text-align: left;
@@ -1306,12 +1306,8 @@
   }
 
   .compact-button:hover {
-    background: rgba(245, 158, 11, 0.12);
-    border-color: rgba(245, 158, 11, 0.35);
-  }
-
-  :global([data-theme="dark"]) .compact-button {
-    color: #fbbf24;
+    background: color-mix(in oklch, var(--color-warning) 12%, transparent);
+    border-color: color-mix(in oklch, var(--color-warning) 35%, transparent);
   }
 
   .compact-chevron {
@@ -1347,15 +1343,15 @@
     font-variant-numeric: tabular-nums;
   }
   .compact-token-freed {
-    color: #4ade80;
+    color: var(--color-success);
   }
 
   .compact-phase-badge {
     flex-shrink: 0;
     padding: 1px 6px;
     border-radius: 4px;
-    background: rgba(99, 102, 241, 0.15);
-    color: #818cf8;
+    background: color-mix(in oklch, var(--color-accent-indigo) 15%, transparent);
+    color: var(--color-accent-indigo);
     font-size: 10px;
     font-weight: 500;
     white-space: nowrap;

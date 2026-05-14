@@ -124,3 +124,23 @@ export const USER_SVG = `
 <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
 <circle cx="12" cy="7" r="4"/>
 `;
+
+/** Lucide bell-off — 通知 empty state */
+export const BELL_OFF_SVG = `
+<path d="M8.7 3A6 6 0 0 1 18 8c0 2.5 1.5 5 2 5h-2"/>
+<path d="M16.5 16.5C15.8 16.8 14.9 17 14 17H3s3-2 3-9c0-.7.1-1.4.3-2"/>
+<path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+<line x1="2" y1="2" x2="22" y2="22"/>
+`;
+
+/** Lucide arrow-up — SearchBar prev */
+export const ARROW_UP_SVG = `
+<line x1="12" y1="19" x2="12" y2="5"/>
+<polyline points="5 12 12 5 19 12"/>
+`;
+
+/** Lucide arrow-down — SearchBar next */
+export const ARROW_DOWN_SVG = `
+<line x1="12" y1="5" x2="12" y2="19"/>
+<polyline points="19 12 12 19 5 12"/>
+`;

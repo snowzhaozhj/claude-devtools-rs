@@ -159,7 +159,7 @@
   }
 
   .base-item-duration-pending {
-    color: var(--syntax-string);
+    color: var(--color-accent-blue);
   }
 
   .base-item-chevron {

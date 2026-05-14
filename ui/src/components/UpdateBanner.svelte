@@ -4,6 +4,11 @@
 
   let notesExpanded = $state(false)
 
+  // macOS 隐藏 titlebar 时左上有 traffic light 控件，需要给 banner 左侧留出避让区；
+  // 其他平台不需要，padding 走默认 18px。
+  const trafficLightSafeArea =
+    typeof navigator !== 'undefined' && navigator.userAgent.includes('Macintosh') ? '84px' : '18px'
+
   const progressPercent = $derived(() => {
     if (updateStore.contentLength <= 0) return 0
     const p = (updateStore.downloaded / updateStore.contentLength) * 100
@@ -53,7 +58,12 @@
 </script>
 
 {#if updateStore.visible && updateStore.status !== 'idle'}
-  <div class="update-banner" role="region" aria-label="应用更新">
+  <div
+    class="update-banner"
+    role="region"
+    aria-label="应用更新"
+    style:--traffic-light-safe-area={trafficLightSafeArea}
+  >
     {#if updateStore.status === 'available'}
       <div class="banner-content">
         <div class="banner-header">
@@ -132,12 +142,14 @@
 
 <style>
   .update-banner {
-    --traffic-light-safe-area: 84px;
+    /* macOS 下窗口左上有 traffic light，App.svelte 通过 data-platform 给 root 注入此 token；
+       其他平台保持普通 padding。 */
+    --traffic-light-safe-area: 18px;
     position: relative;
-    padding: 12px 44px 12px max(18px, var(--traffic-light-safe-area));
-    background: color-mix(in oklch, var(--color-surface, #2d2d2d) 96%, var(--color-accent, #4a9eff));
-    border-bottom: 1px solid var(--color-border, #3a3a3a);
-    color: var(--color-text, #e5e5e5);
+    padding: 12px 44px 12px var(--traffic-light-safe-area);
+    background: var(--color-surface-raised);
+    border-bottom: 1px solid var(--color-border-emphasis);
+    color: var(--color-text);
     font-size: 13px;
     line-height: 1.4;
   }
@@ -167,20 +179,20 @@
 
   .banner-title {
     font-weight: 600;
-    color: var(--color-text, #e5e5e5);
+    color: var(--color-text);
   }
 
   .banner-title-error {
-    color: var(--color-error, #ff6b6b);
+    color: var(--color-danger);
   }
 
   .banner-version {
-    color: var(--color-text-secondary, #a0a0a0);
+    color: var(--color-text-secondary);
     font-size: 12px;
   }
 
   .banner-error-message {
-    color: var(--color-text-muted, #888);
+    color: var(--color-text-muted);
     font-size: 12px;
   }
 
@@ -188,16 +200,16 @@
     margin-left: auto;
     padding: 2px 8px;
     border-radius: 999px;
-    background: var(--color-surface-overlay, #232323);
-    border: 1px solid var(--color-border, #3a3a3a);
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border);
     font-variant-numeric: tabular-nums;
-    color: var(--color-text-secondary, #a0a0a0);
+    color: var(--color-text-secondary);
     font-size: 12px;
     white-space: nowrap;
   }
 
   .release-notes {
-    color: var(--color-text-secondary, #a0a0a0);
+    color: var(--color-text-secondary);
     font-size: 12px;
   }
 
@@ -209,8 +221,8 @@
     max-height: 160px;
     overflow-y: auto;
     padding: 6px 8px;
-    background: var(--color-surface-overlay, #232323);
-    border: 1px solid var(--color-border, #3a3a3a);
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border);
     border-radius: 4px;
   }
 
@@ -218,7 +230,7 @@
     margin-top: 4px;
     background: none;
     border: none;
-    color: var(--color-link, #6ab0ff);
+    color: var(--prose-link);
     font-size: 12px;
     cursor: pointer;
     padding: 0;
@@ -245,33 +257,34 @@
   }
 
   .btn-primary {
-    background: var(--color-accent, #4a9eff);
-    color: white;
-    border-color: var(--color-accent, #4a9eff);
+    background: var(--color-accent-blue);
+    color: var(--color-text-on-accent);
+    border-color: var(--color-accent-blue);
   }
 
   .btn-primary:hover {
-    background: var(--color-accent-hover, #5badff);
+    background: var(--color-accent-blue-hover);
+    border-color: var(--color-accent-blue-hover);
   }
 
   .btn-secondary {
     background: transparent;
-    color: var(--color-text-secondary, #a0a0a0);
-    border-color: var(--color-border-emphasis, #4a4a4a);
+    color: var(--color-text-secondary);
+    border-color: var(--color-border-emphasis);
   }
 
   .btn-secondary:hover {
-    background: var(--color-surface-hover, #353535);
+    background: var(--tool-item-hover-bg);
   }
 
   .btn-tertiary {
     background: transparent;
-    color: var(--color-text-muted, #888);
+    color: var(--color-text-muted);
     border-color: transparent;
   }
 
   .btn-tertiary:hover {
-    color: var(--color-text-secondary, #a0a0a0);
+    color: var(--color-text-secondary);
     text-decoration: underline;
   }
 
@@ -284,15 +297,15 @@
   .progress-bar-track {
     width: 100%;
     height: 8px;
-    background: var(--color-surface-overlay, #232323);
-    border: 1px solid var(--color-border, #3a3a3a);
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border);
     border-radius: 999px;
     overflow: hidden;
   }
 
   .progress-bar-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--color-accent, #4a9eff), color-mix(in oklch, var(--color-accent, #4a9eff) 76%, var(--color-text, #e5e5e5)));
+    background: var(--color-accent-blue);
     border-radius: 999px;
     transition: width 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   }
@@ -305,7 +318,7 @@
     height: 24px;
     background: none;
     border: none;
-    color: var(--color-text-muted, #888);
+    color: var(--color-text-muted);
     font-size: 18px;
     line-height: 1;
     cursor: pointer;
@@ -313,7 +326,7 @@
   }
 
   .banner-close:hover {
-    color: var(--color-text, #e5e5e5);
-    background: var(--color-surface-hover, #353535);
+    color: var(--color-text);
+    background: var(--tool-item-hover-bg);
   }
 </style>

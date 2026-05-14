@@ -480,7 +480,7 @@
     flex-shrink: 0;
     width: 14px;
     height: 14px;
-    color: #6366f1;
+    color: var(--color-accent-indigo);
   }
 
   .dropdown-empty {
