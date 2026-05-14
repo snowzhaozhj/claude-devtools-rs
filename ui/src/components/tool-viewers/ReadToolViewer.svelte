@@ -6,9 +6,10 @@
 
   interface Props {
     exec: ToolExecution;
+    outputLoading?: boolean;
   }
 
-  let { exec }: Props = $props();
+  let { exec, outputLoading = false }: Props = $props();
   let copied = $state(false);
 
   const input = $derived(exec.input as Record<string, unknown>);
@@ -85,7 +86,9 @@
     </button>
   </div>
 
-  {#if isMarkdown && viewMode === "preview"}
+  {#if outputLoading}
+    <div class="read-loading" aria-busy="true">Loading file content…</div>
+  {:else if isMarkdown && viewMode === "preview"}
     <!-- 用 strip 后的纯文本渲染：raw outputText 含 cat -n 前缀会让 markdown 标记失效 -->
     <div class="md-preview">{@html renderMarkdown(cleanText)}</div>
   {:else}
@@ -162,6 +165,15 @@
   .view-toggle:hover {
     color: var(--color-text);
     border-color: var(--color-text-muted);
+  }
+
+  .read-loading {
+    min-height: 120px;
+    padding: 12px 16px;
+    background: var(--code-bg);
+    color: var(--color-text-muted);
+    font-size: 12px;
+    font-style: italic;
   }
 
   .code-container {

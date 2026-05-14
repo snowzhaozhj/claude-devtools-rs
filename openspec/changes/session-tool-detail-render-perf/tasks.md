@@ -4,7 +4,7 @@
 - [x] 1.2 调整 ReadToolViewer，使较大输出展开时避免逐行同步调用重型 `highlightCode`。
 - [x] 1.3 调整 WriteToolViewer，使较大内容展开时避免逐行同步调用重型 `highlightCode`。
 - [x] 1.4 调整 DiffViewer/EditToolViewer，使 diff 行保留统一 diff 语义但不执行逐行重型语法高亮。
-- [x] 1.5 检查 SessionDetail 展开状态与输出缓存路径，减少与单个工具无关的派生重算。
+- [x] 1.5 检查 SessionDetail 展开状态与输出缓存路径，减少与单个工具无关的派生重算，并为 omitted Read 首次展开增加稳定加载占位。
 
 ## 2. 测试与验证
 

@@ -208,11 +208,18 @@
   const OUTPUT_CACHE_LIMIT = 200;
   let outputCache: Map<string, ToolOutput> = $state(new Map());
 
-  function effectiveExec(exec: ToolExecution): ToolExecution {
+  function cachedOutput(exec: ToolExecution): ToolOutput | undefined {
     const cached = outputCache.get(exec.toolUseId);
-    // missing 视为非 final 状态——只有 text/structured 才覆盖原 exec.output。
-    // 防御性兜底：即使过去版本写过 missing 进 cache，刷新后也不会被 stale 数据污染。
-    if (!cached || cached.kind === "missing") return exec;
+    return cached?.kind === "missing" ? undefined : cached;
+  }
+
+  function isOutputLoading(exec: ToolExecution): boolean {
+    return !!exec.outputOmitted && !cachedOutput(exec);
+  }
+
+  function effectiveExec(exec: ToolExecution): ToolExecution {
+    const cached = cachedOutput(exec);
+    if (!cached) return exec;
     return { ...exec, output: cached };
   }
 
@@ -615,7 +622,7 @@
                     >
                       {#snippet children()}
                         {#if isReadTool(exec)}
-                          <ReadToolViewer exec={eff} />
+                          <ReadToolViewer exec={eff} outputLoading={isOutputLoading(exec)} />
                         {:else if isEditTool(exec)}
                           <EditToolViewer exec={eff} />
                         {:else if isWriteTool(exec)}
