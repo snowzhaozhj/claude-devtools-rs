@@ -50,6 +50,7 @@
 
 <style>
   .write-viewer {
+    min-width: 0;
     border: 1px solid var(--diff-added-border);
     border-radius: 8px;
     overflow: hidden;
@@ -69,6 +70,11 @@
   }
 
   .write-path {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--diff-added-text);
@@ -76,6 +82,7 @@
   }
 
   .write-badge {
+    flex-shrink: 0;
     font-size: 9px;
     font-weight: 600;
     color: var(--diff-added-text);
@@ -86,10 +93,11 @@
   }
 
   .write-spacer {
-    flex: 1;
+    flex: 0 0 auto;
   }
 
   .view-toggle {
+    flex-shrink: 0;
     font-size: 11px;
     color: var(--color-text-muted);
     background: none;

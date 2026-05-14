@@ -98,6 +98,7 @@
 
 <style>
   .read-viewer {
+    min-width: 0;
     border: 1px solid var(--code-border);
     border-radius: 8px;
     overflow: hidden;
@@ -117,6 +118,11 @@
   }
 
   .file-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--code-filename);
@@ -124,6 +130,7 @@
   }
 
   .file-lang {
+    flex-shrink: 0;
     font-size: 10px;
     color: var(--tag-text);
     background: var(--tag-bg);
@@ -133,11 +140,12 @@
   }
 
   .file-spacer {
-    flex: 1;
+    flex: 0 0 auto;
   }
 
   .copy-btn,
   .view-toggle {
+    flex-shrink: 0;
     font-size: 11px;
     color: var(--color-text-muted);
     background: none;

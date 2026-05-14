@@ -868,12 +868,16 @@
     display: flex;
     overflow: hidden;
     min-height: 0;
+    min-width: 0;
   }
 
   /* ── Conversation ── */
   .conversation {
     flex: 1;
+    min-width: 0;
     overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
     padding: 16px 24px 48px;
     display: flex;
     flex-direction: column;
@@ -882,6 +886,7 @@
 
   .msg-row {
     display: flex;
+    min-width: 0;
   }
 
   .msg-spacer { flex: 1; min-width: 80px; }
@@ -995,6 +1000,8 @@
   .msg-ai-container {
     width: 100%;
     max-width: 95%;
+    min-width: 0;
+    overflow-x: hidden;
     border-left: 2px solid var(--chat-ai-border);
     padding-left: 12px;
   }
@@ -1076,6 +1083,7 @@
     flex-direction: column;
     gap: 2px;
     margin-bottom: 4px;
+    min-width: 0;
   }
 
   .ai-header-spacer { flex: 1; }
@@ -1173,6 +1181,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+    min-width: 0;
   }
 
   /* ── System ── */
