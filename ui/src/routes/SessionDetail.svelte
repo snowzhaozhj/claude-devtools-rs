@@ -1001,7 +1001,6 @@
     width: 100%;
     max-width: 95%;
     min-width: 0;
-    overflow-x: hidden;
     border-left: 2px solid var(--chat-ai-border);
     padding-left: 12px;
   }
