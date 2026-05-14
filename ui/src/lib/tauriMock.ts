@@ -46,6 +46,8 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'unhide_session',
   'get_project_session_prefs',
   'check_for_update',
+  'list_repository_groups',
+  'get_worktree_sessions',
 ] as const
 
 export { KNOWN_TAURI_COMMANDS }
@@ -76,6 +78,79 @@ function buildHandler(fx: Fixture) {
         const projectId = getArg<string>(payload, 'projectId') ?? ''
         const items = fx.sessions[projectId] ?? []
         return { items, nextCursor: null, total: items.length }
+      }
+
+      case 'list_repository_groups': {
+        if (fx.repositoryGroups) return fx.repositoryGroups
+        // fallback：每个 project 退化为单成员 group。
+        return fx.projects.map((p) => ({
+          id: p.id,
+          identity: null,
+          name: p.displayName,
+          worktrees: [
+            {
+              id: p.id,
+              path: p.path,
+              name: p.displayName,
+              gitBranch: null,
+              isMainWorktree: true,
+              sessions: (fx.sessions[p.id] ?? []).map((s) => s.sessionId),
+              createdAt: null,
+              mostRecentSession:
+                (fx.sessions[p.id] ?? []).reduce(
+                  (m, s) => (s.timestamp > m ? s.timestamp : m),
+                  0,
+                ) || null,
+            },
+          ],
+          mostRecentSession:
+            (fx.sessions[p.id] ?? []).reduce(
+              (m, s) => (s.timestamp > m ? s.timestamp : m),
+              0,
+            ) || null,
+          totalSessions: p.sessionCount,
+        }))
+      }
+
+      case 'get_worktree_sessions': {
+        const groupId = getArg<string>(payload, 'groupId') ?? ''
+        const groups =
+          fx.repositoryGroups ??
+          fx.projects.map((p) => ({
+            id: p.id,
+            identity: null,
+            name: p.displayName,
+            worktrees: [
+              {
+                id: p.id,
+                path: p.path,
+                name: p.displayName,
+                gitBranch: null,
+                isMainWorktree: true,
+                sessions: [],
+                createdAt: null,
+                mostRecentSession: null,
+              },
+            ],
+            mostRecentSession: null,
+            totalSessions: p.sessionCount,
+          }))
+        const group = groups.find((g) => g.id === groupId)
+        if (!group) {
+          return Promise.reject(
+            new Error(`[mockIPC] no RepositoryGroup fixture for ${groupId}`),
+          )
+        }
+        // 合并所有 worktree 的 sessions 并按 timestamp 倒序。
+        const merged = group.worktrees.flatMap((wt) =>
+          (fx.sessions[wt.id] ?? []).map((s) => ({
+            ...s,
+            worktreeId: wt.id,
+            worktreeName: wt.name,
+          })),
+        )
+        merged.sort((a, b) => b.timestamp - a.timestamp)
+        return { items: merged, nextCursor: null, total: merged.length }
       }
 
       case 'search_sessions':

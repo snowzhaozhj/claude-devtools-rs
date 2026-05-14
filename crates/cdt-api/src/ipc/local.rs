@@ -482,6 +482,8 @@ impl LocalDataApi {
                 title: None,
                 is_ongoing: false,
                 git_branch: None,
+                worktree_id: None,
+                worktree_name: None,
             });
             page_jobs.push((s.id, jsonl_path));
         }
@@ -1267,9 +1269,18 @@ impl DataApi for LocalDataApi {
         Ok(serde_json::json!({}))
     }
 
-    async fn get_worktree_sessions(&self, _group_id: &str) -> Result<serde_json::Value, ApiError> {
-        // 简化：worktree session 需要 WorktreeGrouper，暂返回空
-        Ok(serde_json::json!([]))
+    async fn list_repository_groups(&self) -> Result<Vec<cdt_core::RepositoryGroup>, ApiError> {
+        // D3b：grouper 无状态轻量，每次 lazy 构造，避免 LocalDataApi 字段污染。
+        let projects = {
+            let mut scanner = self.scanner.lock().await;
+            scanner
+                .scan()
+                .await
+                .map_err(|e| ApiError::internal(format!("scan error: {e}")))?
+        };
+        let grouper =
+            cdt_discover::WorktreeGrouper::new(cdt_discover::LocalGitIdentityResolver::new());
+        Ok(grouper.group_by_repository(projects).await)
     }
 }
 
@@ -2895,8 +2906,7 @@ mod tests {
             .join("agent-sub-uuid.jsonl");
         write_xproj_subagent_jsonl(&agent_path, "root-uuid", "sub-uuid", "/ws/wt");
 
-        let found =
-            find_subagent_jsonl_cross_project(&projects_dir, "root-uuid", "sub-uuid").await;
+        let found = find_subagent_jsonl_cross_project(&projects_dir, "root-uuid", "sub-uuid").await;
         assert_eq!(found, Some(agent_path));
     }
 
@@ -2907,8 +2917,7 @@ mod tests {
         std::fs::create_dir_all(&projects_dir).unwrap();
         std::fs::create_dir_all(projects_dir.join("-ws-empty")).unwrap();
 
-        let found =
-            find_subagent_jsonl_cross_project(&projects_dir, "root-uuid", "sub-uuid").await;
+        let found = find_subagent_jsonl_cross_project(&projects_dir, "root-uuid", "sub-uuid").await;
         assert!(found.is_none());
     }
 

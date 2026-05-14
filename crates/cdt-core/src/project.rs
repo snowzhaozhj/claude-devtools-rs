@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 /// `{baseDir}::{hash8}` —— 当同一编码目录下的 session 属于多个 `cwd`
 /// 时，port-project-discovery 会按 `cwd` 拆分为多个逻辑子工程。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: String,
     pub name: String,
@@ -29,6 +30,7 @@ pub struct Project {
 
 /// 单个 session 文件的 UI 元数据视图。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Session {
     pub id: String,
     pub last_modified: i64,
@@ -38,6 +40,7 @@ pub struct Session {
 
 /// `analyze_session_file_metadata` 返回的薄 metadata，本 port 只用 size / mtime。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionMetadata {
     pub session_id: String,
     pub size: u64,
@@ -47,6 +50,7 @@ pub struct SessionMetadata {
 /// git repo 的唯一身份，由 `WorktreeGrouper` 通过
 /// `git rev-parse --git-common-dir` 等命令解析。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepositoryIdentity {
     /// 稳定的 repo id（通常是 git-common-dir 的绝对路径）。
     pub id: String,
@@ -56,6 +60,7 @@ pub struct RepositoryIdentity {
 
 /// 一个 worktree —— 同一 `Project` 的 git 视图封装。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Worktree {
     pub id: String,
     pub path: PathBuf,
@@ -69,6 +74,7 @@ pub struct Worktree {
 
 /// 一组共享 repo identity 的 worktree。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepositoryGroup {
     pub id: String,
     pub identity: Option<RepositoryIdentity>,

@@ -224,6 +224,97 @@ pub trait DataApi: Send + Sync {
     /// 读取 agent 配置。
     async fn read_agent_configs(&self, project_root: &str) -> Result<serde_json::Value, ApiError>;
 
-    /// 获取 worktree 会话。
-    async fn get_worktree_sessions(&self, group_id: &str) -> Result<serde_json::Value, ApiError>;
+    // =========================================================================
+    // 仓库分组（worktree 聚合）
+    // =========================================================================
+
+    /// 列出按 git 仓库聚合的项目分组。
+    ///
+    /// 同一 git 仓库的多个 worktree SHALL 聚合到同一 `RepositoryGroup`；
+    /// 无 git 元数据的项目 SHALL 单独成组（`identity == None`）。
+    ///
+    /// 默认实现 fallback 到 `list_projects` 单成员 group 包装——任何远端实现
+    /// 没真接 `WorktreeGrouper` 时仍能给前端一致的形态。
+    async fn list_repository_groups(&self) -> Result<Vec<cdt_core::RepositoryGroup>, ApiError> {
+        let projects = self.list_projects().await?;
+        Ok(projects
+            .into_iter()
+            .map(|p| cdt_core::RepositoryGroup {
+                id: p.id.clone(),
+                identity: None,
+                name: p.display_name.clone(),
+                worktrees: vec![cdt_core::Worktree {
+                    id: p.id.clone(),
+                    path: std::path::PathBuf::from(&p.path),
+                    name: p.display_name.clone(),
+                    git_branch: None,
+                    is_main_worktree: true,
+                    sessions: Vec::new(),
+                    created_at: None,
+                    most_recent_session: None,
+                }],
+                most_recent_session: None,
+                total_sessions: p.session_count,
+            })
+            .collect())
+    }
+
+    /// 取得某个 `RepositoryGroup` 内所有 worktree 的合并 session 列表。
+    ///
+    /// 合并规则：先 fan-out 拉每个 worktree 的 sessions（用 `list_sessions_sync`），
+    /// 给每条加 `worktreeId` / `worktreeName` 字段，再按 `timestamp` 倒序合并，
+    /// 最后应用 `pagination`。
+    ///
+    /// 未命中 `group_id` 时 SHALL 返回 `not_found` 错误。
+    async fn get_worktree_sessions(
+        &self,
+        group_id: &str,
+        pagination: &PaginatedRequest,
+    ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
+        let groups = self.list_repository_groups().await?;
+        let group = groups
+            .into_iter()
+            .find(|g| g.id == group_id)
+            .ok_or_else(|| ApiError::not_found(format!("repository group {group_id}")))?;
+
+        let mut all: Vec<SessionSummary> = Vec::new();
+        for wt in &group.worktrees {
+            let inner = PaginatedRequest {
+                page_size: usize::MAX,
+                cursor: None,
+            };
+            let resp = self.list_sessions_sync(&wt.id, &inner).await?;
+            for mut s in resp.items {
+                s.worktree_id = Some(wt.id.clone());
+                s.worktree_name = Some(wt.name.clone());
+                all.push(s);
+            }
+        }
+        all.sort_by_key(|s| std::cmp::Reverse(s.timestamp));
+
+        let total = all.len();
+        let offset = pagination
+            .cursor
+            .as_deref()
+            .and_then(|c| c.parse::<usize>().ok())
+            .unwrap_or(0);
+        let page_size = pagination.page_size.max(1);
+        let end = offset.saturating_add(page_size).min(total);
+        let items = if offset < total {
+            all[offset..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        let next_cursor = if end < total {
+            Some(end.to_string())
+        } else {
+            None
+        };
+
+        Ok(PaginatedResponse {
+            items,
+            next_cursor,
+            total,
+        })
+    }
 }

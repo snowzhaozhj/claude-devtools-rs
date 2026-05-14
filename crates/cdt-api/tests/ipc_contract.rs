@@ -44,7 +44,7 @@ use cdt_core::tool_execution::{ToolExecution, ToolOutput};
 // =============================================================================
 
 /// 与 `src-tauri/src/lib.rs` 的 `invoke_handler!` 完全对齐的 Tauri command 列表。
-/// 长度断言 + 命名断言通过 `expected_tauri_commands_count_is_22` 用例守护。
+/// 长度断言 + 命名断言通过 `expected_tauri_commands_count_is_25` 用例守护。
 pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "list_projects",
     "list_sessions",
@@ -69,6 +69,8 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "unhide_session",
     "get_project_session_prefs",
     "check_for_update",
+    "list_repository_groups",
+    "get_worktree_sessions",
 ];
 
 /// 构造一个最小可用的 `LocalDataApi` 用于 contract test。
@@ -102,12 +104,12 @@ fn ts() -> chrono::DateTime<Utc> {
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_23() {
+fn expected_tauri_commands_count_is_25() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        23,
+        25,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 23 个 Tauri command"
+         以及本文件常量；当前 src-tauri 注册 25 个 Tauri command"
     );
 }
 
@@ -161,6 +163,8 @@ fn session_summary_serializes_camelcase_with_optional_title() {
         title: Some("hello".into()),
         is_ongoing: true,
         git_branch: Some("feat/x".into()),
+        worktree_id: None,
+        worktree_name: None,
     };
     let json = serde_json::to_value(&s).unwrap();
     assert_eq!(json["sessionId"], json!("sess-1"));
@@ -1328,5 +1332,124 @@ async fn get_project_session_prefs_empty_project_returns_default_shape() {
             .keys()
             .all(|k| k == "pinned" || k == "hidden"),
         "ProjectSessionPrefs SHALL 只含 pinned/hidden 两个 key"
+    );
+}
+
+// =============================================================================
+// Repository groups / worktree sessions
+// =============================================================================
+
+#[tokio::test]
+async fn list_repository_groups_returns_camelcase_array() {
+    let (api, _tmp) = setup_api().await;
+    let groups = api.list_repository_groups().await.unwrap();
+    let json = serde_json::to_value(&groups).unwrap();
+    assert!(json.is_array(), "list_repository_groups SHALL 返回数组");
+
+    // 即便空 projects 也应是 [] 而非 null
+    assert_eq!(json, json!([]));
+}
+
+#[tokio::test]
+async fn list_repository_groups_serializes_camelcase_when_non_empty() {
+    use cdt_core::{RepositoryGroup, Worktree};
+    let g = RepositoryGroup {
+        id: "g-1".into(),
+        identity: None,
+        name: "demo".into(),
+        worktrees: vec![Worktree {
+            id: "wt-1".into(),
+            path: std::path::PathBuf::from("/tmp/demo"),
+            name: "demo".into(),
+            git_branch: Some("main".into()),
+            is_main_worktree: true,
+            sessions: vec!["s-1".into()],
+            created_at: Some(1),
+            most_recent_session: Some(1_700_000_000),
+        }],
+        most_recent_session: Some(1_700_000_000),
+        total_sessions: 1,
+    };
+    let json = serde_json::to_value(&g).unwrap();
+    assert_eq!(json["id"], json!("g-1"));
+    assert_eq!(json["totalSessions"], json!(1));
+    assert_eq!(json["mostRecentSession"], json!(1_700_000_000_i64));
+    let wt = &json["worktrees"][0];
+    assert_eq!(wt["isMainWorktree"], json!(true));
+    assert_eq!(wt["gitBranch"], json!("main"));
+    assert_eq!(wt["mostRecentSession"], json!(1_700_000_000_i64));
+    assert!(
+        json.get("total_sessions").is_none()
+            && wt.get("is_main_worktree").is_none()
+            && wt.get("git_branch").is_none(),
+        "RepositoryGroup / Worktree MUST 不出现 snake_case 字段名"
+    );
+}
+
+#[tokio::test]
+async fn get_worktree_sessions_returns_paginated_response_shape() {
+    let (api, _tmp) = setup_api().await;
+    let pagination = PaginatedRequest {
+        page_size: 10,
+        cursor: None,
+    };
+    // 测试 setup 下没真实 group：未命中应返 not_found 错误。
+    let err = api
+        .get_worktree_sessions("nonexistent-group", &pagination)
+        .await
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("nonexistent-group") || msg.to_lowercase().contains("not"),
+        "未命中 SHALL 报告 not_found 含 group_id 标识，实际：{msg}"
+    );
+}
+
+#[tokio::test]
+async fn get_worktree_sessions_paginated_response_serializes_camelcase() {
+    let resp: PaginatedResponse<SessionSummary> = PaginatedResponse {
+        items: vec![SessionSummary {
+            session_id: "sess-1".into(),
+            project_id: "wt-1".into(),
+            timestamp: 1_700_000_000,
+            message_count: 0,
+            title: None,
+            is_ongoing: false,
+            git_branch: None,
+            worktree_id: Some("wt-1".into()),
+            worktree_name: Some("main".into()),
+        }],
+        next_cursor: Some("1".into()),
+        total: 5,
+    };
+    let json = serde_json::to_value(&resp).unwrap();
+    assert_eq!(json["nextCursor"], json!("1"));
+    assert_eq!(json["total"], json!(5));
+    let item = &json["items"][0];
+    assert_eq!(item["worktreeId"], json!("wt-1"));
+    assert_eq!(item["worktreeName"], json!("main"));
+    assert!(
+        item.get("worktree_id").is_none() && item.get("worktree_name").is_none(),
+        "SessionSummary 新增字段 MUST 走 camelCase"
+    );
+}
+
+#[test]
+fn session_summary_skips_worktree_fields_when_none() {
+    let s = SessionSummary {
+        session_id: "sess-1".into(),
+        project_id: "proj-1".into(),
+        timestamp: 0,
+        message_count: 0,
+        title: None,
+        is_ongoing: false,
+        git_branch: None,
+        worktree_id: None,
+        worktree_name: None,
+    };
+    let json = serde_json::to_value(&s).unwrap();
+    assert!(
+        json.get("worktreeId").is_none() && json.get("worktreeName").is_none(),
+        "worktreeId/Name 为 None 时 SHALL 不出现在序列化输出（skip_serializing_if）"
     );
 }

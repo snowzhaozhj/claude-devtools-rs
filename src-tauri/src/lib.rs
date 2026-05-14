@@ -303,6 +303,41 @@ async fn get_project_session_prefs(
 }
 
 // =============================================================================
+// Repository Groups / Worktree Sessions
+// =============================================================================
+
+#[tauri::command]
+async fn list_repository_groups(
+    data: State<'_, AppData>,
+) -> Result<serde_json::Value, String> {
+    let groups = data
+        .api
+        .list_repository_groups()
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&groups).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_worktree_sessions(
+    data: State<'_, AppData>,
+    group_id: String,
+    page_size: Option<usize>,
+    cursor: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let pagination = PaginatedRequest {
+        page_size: page_size.unwrap_or(50),
+        cursor,
+    };
+    let result = data
+        .api
+        .get_worktree_sessions(&group_id, &pagination)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&result).map_err(|e| e.to_string())
+}
+
+// =============================================================================
 // Auto Updater
 // =============================================================================
 
@@ -683,6 +718,8 @@ pub fn run() {
             unhide_session,
             get_project_session_prefs,
             check_for_update,
+            list_repository_groups,
+            get_worktree_sessions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

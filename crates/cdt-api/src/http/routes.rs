@@ -79,6 +79,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/mentioned-file", post(read_mentioned_file))
         // 辅助
         .route("/api/agent-configs", get(read_agent_configs))
+        .route("/api/repository-groups", get(list_repository_groups))
         .route(
             "/api/worktrees/{group_id}/sessions",
             get(get_worktree_sessions),
@@ -322,11 +323,17 @@ async fn read_agent_configs(
     Ok(Json(result))
 }
 
+async fn list_repository_groups(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let result = s.api.list_repository_groups().await?;
+    Ok(Json(result))
+}
+
 async fn get_worktree_sessions(
     State(s): State<AppState>,
     Path(group_id): Path<String>,
+    Query(pagination): Query<PaginatedRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let result = s.api.get_worktree_sessions(&group_id).await?;
+    let result = s.api.get_worktree_sessions(&group_id, &pagination).await?;
     Ok(Json(result))
 }
 
