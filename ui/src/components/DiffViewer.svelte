@@ -1,6 +1,5 @@
 <script lang="ts">
   import { getLanguageFromPath, getFileName, shortenPath } from "../lib/toolHelpers";
-  import { highlightCode } from "../lib/render";
   import { generateDiff, type DiffLine } from "../lib/diff";
 
   interface Props {
@@ -43,12 +42,6 @@
   });
   const language = $derived(getLanguageFromPath(fileName));
   const shortName = $derived(getFileName(fileName));
-
-  /** 单行高亮：空行或纯空白行直接返回不可见占位，避免 hljs 在空字符串上做无谓工作。 */
-  function highlightLine(content: string): string {
-    if (content === "") return "";
-    return highlightCode(content, language);
-  }
 </script>
 
 <div class="diff-viewer">
@@ -79,7 +72,7 @@
           <span class="diff-gutter diff-gutter-old">{line.oldLineNumber ?? ""}</span>
           <span class="diff-gutter diff-gutter-new">{line.newLineNumber ?? ""}</span>
           <span class="diff-prefix">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
-          <span class="diff-content">{#if line.content === ""}&nbsp;{:else}{@html highlightLine(line.content)}{/if}</span>
+          <span class="diff-content">{line.content || " "}</span>
         </div>
       {/each}
     </div>

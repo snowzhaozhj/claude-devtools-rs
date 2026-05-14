@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { ToolExecution } from "../../lib/api";
   import { toolOutputText, shortenPath, getLanguageFromPath, getFileName } from "../../lib/toolHelpers";
-  import { highlightCode, renderMarkdown } from "../../lib/render";
+  import { renderMarkdown } from "../../lib/render";
+  import { lightHighlightLine } from "../../lib/lightSyntax";
 
   interface Props {
     exec: ToolExecution;
@@ -90,7 +91,7 @@
   {:else}
     <!-- Code with line numbers (line numbers are CSS ::before, not part of clipboard text) -->
     <div class="code-container">
-      <pre class="code-content"><code>{#each parsedLines as p (p.num)}<span class="line" data-line={p.num}>{@html highlightCode(p.text, language)}
+      <pre class="code-content"><code>{#each parsedLines as p (p.num)}<span class="line" data-line={p.num}>{@html lightHighlightLine(p.text, language)}
 </span>{/each}</code></pre>
     </div>
   {/if}

@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { ToolExecution } from "../../lib/api";
   import { shortenPath, getLanguageFromPath } from "../../lib/toolHelpers";
-  import { highlightCode, renderMarkdown } from "../../lib/render";
+  import { renderMarkdown } from "../../lib/render";
+  import { lightHighlightLine } from "../../lib/lightSyntax";
 
   interface Props {
     exec: ToolExecution;
@@ -41,7 +42,7 @@
       <div class="md-preview">{@html renderMarkdown(content)}</div>
     {:else}
       <div class="write-code-container">
-        <pre class="write-code"><code>{#each lines as line, i}<span class="line" data-line={i + 1}>{@html highlightCode(line, language)}
+        <pre class="write-code"><code>{#each lines as line, i}<span class="line" data-line={i + 1}>{@html lightHighlightLine(line, language)}
 </span>{/each}</code></pre>
       </div>
     {/if}
