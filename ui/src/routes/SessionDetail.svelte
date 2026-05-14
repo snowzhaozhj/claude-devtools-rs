@@ -17,6 +17,7 @@
   import { getTeamColorSet } from "../lib/teamColors";
   import SearchBar from "../components/SearchBar.svelte";
   import ContextPanel from "../components/ContextPanel.svelte";
+  import { extractContext } from "../lib/contextExtractor";
   import OngoingBanner from "../components/OngoingBanner.svelte";
   import SessionDetailSkeleton from "../components/SessionDetailSkeleton.svelte";
   import ImageBlock from "../components/ImageBlock.svelte";
@@ -299,6 +300,9 @@
   // `LastOutputDisplay.tsx` 的 `isLastGroup && isSessionOngoing` 语义——
   // banner 占 lastOutput 坑位，不作为独立节点追加到对话流尾部，从而避免
   // ongoing 切换时 scrollHeight 跳变引起的闪烁。
+  const contextEntries = $derived(detail ? extractContext(detail) : []);
+  const contextCount = $derived(contextEntries.length);
+
   const lastAiIndex = $derived.by(() => {
     if (!detail) return -1;
     for (let i = detail.chunks.length - 1; i >= 0; i--) {
@@ -419,11 +423,13 @@
   <div class="top-bar">
     <span class="top-title">{firstUserTitle(detail.chunks)}</span>
     <div class="top-meta">
-      <button
-        class="top-badge"
-        class:top-badge-active={contextPanelVisible}
-        onclick={() => contextPanelVisible = !contextPanelVisible}
-      >Context ({detail.chunks.length})</button>
+      {#if contextCount > 0}
+        <button
+          class="top-badge"
+          class:top-badge-active={contextPanelVisible}
+          onclick={() => contextPanelVisible = !contextPanelVisible}
+        >Context ({contextCount})</button>
+      {/if}
     </div>
   </div>
 
@@ -760,8 +766,8 @@
     {/each}
   </div>
 
-  {#if contextPanelVisible}
-    <ContextPanel {detail} onClose={() => contextPanelVisible = false} />
+  {#if contextPanelVisible && contextCount > 0}
+    <ContextPanel entries={contextEntries} onClose={() => contextPanelVisible = false} />
   {/if}
   </div>
 {/if}
@@ -842,30 +848,33 @@
 
   .top-badge {
     font-size: 12px;
-    color: var(--color-text-muted);
-    background: var(--badge-neutral-bg);
-    padding: 2px 10px;
-    border-radius: 4px;
-    border: none;
+    color: var(--color-text-secondary);
+    background: var(--context-btn-bg, var(--color-surface-raised));
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--color-border-emphasis);
+    box-shadow: var(--shadow-sm, 0 2px 6px rgba(0, 0, 0, 0.08));
     cursor: pointer;
     font-family: inherit;
-    transition: background 0.1s, color 0.1s;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
   }
 
   .top-badge:hover {
-    background: var(--color-border);
-    color: var(--color-text-secondary);
+    background: var(--context-btn-bg-hover, var(--tool-item-hover-bg));
+    color: var(--color-text);
   }
 
   .top-badge-active {
-    background: var(--color-border-emphasis);
-    color: var(--color-text);
+    background: var(--context-btn-active-bg, var(--color-border-emphasis));
+    color: var(--context-btn-active-text, var(--color-text));
+    border-color: var(--color-border-emphasis);
   }
 
   /* ── Content area ── */
   .content-area {
     flex: 1;
     display: flex;
+    position: relative;
     overflow: hidden;
     min-height: 0;
     min-width: 0;
