@@ -271,6 +271,10 @@ pub trait DataApi: Send + Sync {
         group_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
+        if pagination.page_size == 0 {
+            return Err(ApiError::validation("pageSize must be > 0"));
+        }
+
         let groups = self.list_repository_groups().await?;
         let group = groups
             .into_iter()
@@ -298,8 +302,7 @@ pub trait DataApi: Send + Sync {
             .as_deref()
             .and_then(|c| c.parse::<usize>().ok())
             .unwrap_or(0);
-        let page_size = pagination.page_size.max(1);
-        let end = offset.saturating_add(page_size).min(total);
+        let end = offset.saturating_add(pagination.page_size).min(total);
         let items = if offset < total {
             all[offset..end].to_vec()
         } else {

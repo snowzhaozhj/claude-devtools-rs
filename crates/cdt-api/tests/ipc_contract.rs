@@ -1406,6 +1406,24 @@ async fn get_worktree_sessions_returns_paginated_response_shape() {
 }
 
 #[tokio::test]
+async fn get_worktree_sessions_rejects_zero_page_size() {
+    let (api, _tmp) = setup_api().await;
+    let pagination = PaginatedRequest {
+        page_size: 0,
+        cursor: None,
+    };
+    let err = api
+        .get_worktree_sessions("any-group", &pagination)
+        .await
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.to_lowercase().contains("pagesize") || msg.contains("page_size"),
+        "page_size=0 SHALL 报 validation_error 含 pageSize 字样，实际：{msg}"
+    );
+}
+
+#[tokio::test]
 async fn get_worktree_sessions_paginated_response_serializes_camelcase() {
     let resp: PaginatedResponse<SessionSummary> = PaginatedResponse {
         items: vec![SessionSummary {
