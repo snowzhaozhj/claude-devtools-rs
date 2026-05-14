@@ -4,12 +4,15 @@
 
   let notesExpanded = $state(false)
 
-  // 进度百分比，0..100；下载阶段且 contentLength > 0 时有效
   const progressPercent = $derived(() => {
     if (updateStore.contentLength <= 0) return 0
     const p = (updateStore.downloaded / updateStore.contentLength) * 100
     return Math.max(0, Math.min(100, Math.round(p)))
   })
+
+  const progressLabel = $derived(() =>
+    updateStore.contentLength > 0 ? `${progressPercent()}%` : '准备中'
+  )
 
   // 折叠 release notes：默认只显示前 ~120 字符
   const notesPreview = $derived(() =>
@@ -88,14 +91,16 @@
         </div>
       </div>
     {:else if updateStore.status === 'downloading'}
-      <div class="banner-content">
-        <div class="banner-header">
+      <div class="banner-content banner-content-progress">
+        <div class="banner-header banner-header-progress">
           <span class="banner-title">正在下载更新</span>
           <span class="banner-version">v{updateStore.newVersion}</span>
-          <span class="progress-percent">{progressPercent()}%</span>
+          <span class="progress-percent">{progressLabel()}</span>
         </div>
-        <div class="progress-bar-track">
-          <div class="progress-bar-fill" style:width="{progressPercent()}%"></div>
+        <div class="progress-row" aria-label="下载进度 {progressLabel()}">
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" style:width="{progressPercent()}%"></div>
+          </div>
         </div>
       </div>
     {:else if updateStore.status === 'downloaded'}
@@ -127,9 +132,10 @@
 
 <style>
   .update-banner {
+    --traffic-light-safe-area: 84px;
     position: relative;
-    padding: 10px 36px 10px 16px;
-    background: var(--color-surface, #2d2d2d);
+    padding: 12px 44px 12px max(18px, var(--traffic-light-safe-area));
+    background: color-mix(in oklch, var(--color-surface, #2d2d2d) 96%, var(--color-accent, #4a9eff));
     border-bottom: 1px solid var(--color-border, #3a3a3a);
     color: var(--color-text, #e5e5e5);
     font-size: 13px;
@@ -139,14 +145,24 @@
   .banner-content {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 7px;
+    max-width: 960px;
+  }
+
+  .banner-content-progress {
+    gap: 8px;
   }
 
   .banner-header {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     gap: 12px;
     flex-wrap: wrap;
+  }
+
+  .banner-header-progress {
+    align-items: center;
+    flex-wrap: nowrap;
   }
 
   .banner-title {
@@ -170,9 +186,14 @@
 
   .progress-percent {
     margin-left: auto;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--color-surface-overlay, #232323);
+    border: 1px solid var(--color-border, #3a3a3a);
     font-variant-numeric: tabular-nums;
     color: var(--color-text-secondary, #a0a0a0);
     font-size: 12px;
+    white-space: nowrap;
   }
 
   .release-notes {
@@ -254,26 +275,34 @@
     text-decoration: underline;
   }
 
+  .progress-row {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
   .progress-bar-track {
-    height: 4px;
-    background: var(--color-border, #3a3a3a);
-    border-radius: 2px;
+    width: 100%;
+    height: 8px;
+    background: var(--color-surface-overlay, #232323);
+    border: 1px solid var(--color-border, #3a3a3a);
+    border-radius: 999px;
     overflow: hidden;
   }
 
   .progress-bar-fill {
     height: 100%;
-    background: var(--color-accent, #4a9eff);
-    border-radius: 2px;
-    transition: width 0.2s ease-out;
+    background: linear-gradient(90deg, var(--color-accent, #4a9eff), color-mix(in oklch, var(--color-accent, #4a9eff) 76%, var(--color-text, #e5e5e5)));
+    border-radius: 999px;
+    transition: width 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .banner-close {
     position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 20px;
-    height: 20px;
+    top: 12px;
+    right: 12px;
+    width: 24px;
+    height: 24px;
     background: none;
     border: none;
     color: var(--color-text-muted, #888);

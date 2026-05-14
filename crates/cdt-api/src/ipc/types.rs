@@ -66,6 +66,15 @@ pub struct SessionSummary {
     /// §"Expose git branch on session summary and metadata updates"。
     #[serde(default)]
     pub git_branch: Option<String>,
+    /// 当 session 属于某 `RepositoryGroup` 内的 worktree 时，记录 worktree 的
+    /// project id（与 `Worktree.id == Project.id` 一致）。`list_sessions` /
+    /// `list_sessions_sync` 路径**不**填（默认 None），仅 `get_worktree_sessions`
+    /// 路径填，让前端按 worktree 过滤展示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<String>,
+    /// 同 `worktree_id`，记录 worktree 的人类展示名（`Worktree.name`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_name: Option<String>,
 }
 
 /// 会话详情。

@@ -44,6 +44,10 @@ function buildSession(
   }
 }
 
+// 注：mock-rich-rust-wt-feat 仅出现在 repositoryGroups 字段（作为
+// rust-port group 的 worktree 子项），**不**进 PROJECTS 数组——保留
+// listProjects() fallback 路径下"5 个 ProjectInfo"的语义稳定，避免破
+// 坏既有 e2e（startup-and-dashboard 等期望"5 个项目"）。
 const PROJECTS = [
   {
     id: 'mock-rich-rust',
@@ -82,6 +86,18 @@ const rustSessions = [
   buildSession('mock-rich-rust', 'sess-rust-active', 'IPC 字段重构', true, 42, 0, 'feat/frontend-test-infrastructure'),
   buildSession('mock-rich-rust', 'sess-rust-2', '修复 watcher flake', false, 18, -60, 'main'),
   buildSession('mock-rich-rust', 'sess-rust-3', '加 contract test', false, 25, -180, 'main'),
+]
+
+const rustWtFeatSessions = [
+  buildSession(
+    'mock-rich-rust-wt-feat',
+    'sess-rust-wt-1',
+    'worktree feat-x：实现按钮',
+    false,
+    14,
+    -45,
+    'feat/x',
+  ),
 ]
 
 const tsSessions = [
@@ -239,6 +255,7 @@ export const multiProjectRichFixture: Fixture = {
   projects: PROJECTS,
   sessions: {
     'mock-rich-rust': rustSessions,
+    'mock-rich-rust-wt-feat': rustWtFeatSessions,
     'mock-rich-ts': tsSessions,
     'mock-rich-docs': docsSessions,
     'mock-rich-experiment': experimentSessions,
@@ -340,5 +357,112 @@ export const multiProjectRichFixture: Fixture = {
   ],
   searchResults: [
     { sessionId: 'sess-rust-active', projectId: 'mock-rich-rust', matches: 3 },
+  ],
+  repositoryGroups: [
+    {
+      id: 'mock-rich-repo-rust',
+      identity: { id: 'mock-rich-repo-rust', name: 'rust-port' },
+      name: 'rust-port',
+      worktrees: [
+        {
+          id: 'mock-rich-rust',
+          path: '/Users/test/rust-port',
+          name: 'rust-port',
+          gitBranch: 'main',
+          isMainWorktree: true,
+          sessions: rustSessions.map((s) => s.sessionId),
+          createdAt: null,
+          mostRecentSession: rustSessions[0].timestamp,
+        },
+        {
+          id: 'mock-rich-rust-wt-feat',
+          path: '/Users/test/rust-port/.claude/worktrees/feat-x',
+          name: 'feat-x',
+          gitBranch: 'feat/x',
+          isMainWorktree: false,
+          sessions: rustWtFeatSessions.map((s) => s.sessionId),
+          createdAt: null,
+          mostRecentSession: rustWtFeatSessions[0].timestamp,
+        },
+      ],
+      mostRecentSession: rustSessions[0].timestamp,
+      totalSessions: rustSessions.length + rustWtFeatSessions.length,
+    },
+    {
+      id: 'mock-rich-ts',
+      identity: null,
+      name: 'claude-devtools',
+      worktrees: [
+        {
+          id: 'mock-rich-ts',
+          path: '/Users/test/claude-devtools',
+          name: 'claude-devtools',
+          gitBranch: null,
+          isMainWorktree: true,
+          sessions: tsSessions.map((s) => s.sessionId),
+          createdAt: null,
+          mostRecentSession: tsSessions[0].timestamp,
+        },
+      ],
+      mostRecentSession: tsSessions[0].timestamp,
+      totalSessions: tsSessions.length,
+    },
+    {
+      id: 'mock-rich-docs',
+      identity: null,
+      name: 'docs',
+      worktrees: [
+        {
+          id: 'mock-rich-docs',
+          path: '/Users/test/docs',
+          name: 'docs',
+          gitBranch: null,
+          isMainWorktree: true,
+          sessions: docsSessions.map((s) => s.sessionId),
+          createdAt: null,
+          mostRecentSession: docsSessions[0].timestamp,
+        },
+      ],
+      mostRecentSession: docsSessions[0].timestamp,
+      totalSessions: docsSessions.length,
+    },
+    {
+      id: 'mock-rich-experiment',
+      identity: null,
+      name: 'experiment',
+      worktrees: [
+        {
+          id: 'mock-rich-experiment',
+          path: '/Users/test/experiment',
+          name: 'experiment',
+          gitBranch: null,
+          isMainWorktree: true,
+          sessions: experimentSessions.map((s) => s.sessionId),
+          createdAt: null,
+          mostRecentSession: experimentSessions[0].timestamp,
+        },
+      ],
+      mostRecentSession: experimentSessions[0].timestamp,
+      totalSessions: experimentSessions.length,
+    },
+    {
+      id: 'mock-rich-archive',
+      identity: null,
+      name: 'archive',
+      worktrees: [
+        {
+          id: 'mock-rich-archive',
+          path: '/Users/test/archive',
+          name: 'archive',
+          gitBranch: null,
+          isMainWorktree: true,
+          sessions: archiveSessions.map((s) => s.sessionId),
+          createdAt: null,
+          mostRecentSession: archiveSessions[0].timestamp,
+        },
+      ],
+      mostRecentSession: archiveSessions[0].timestamp,
+      totalSessions: archiveSessions.length,
+    },
   ],
 }

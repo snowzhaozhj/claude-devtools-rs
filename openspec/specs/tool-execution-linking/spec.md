@@ -3,9 +3,7 @@
 ## Purpose
 
 把 assistant 消息中的 `tool_use` 块与 user 消息中的 `tool_result` 块按 `tool_use_id` 配对，产出 `ToolExecution` 记录（含 `is_error`、`output`、起止时间戳）；为 `Task` 工具调用通过三阶段 fallback 识别对应 subagent session 并把 Process 的 `team` 元数据、`subagent_type`、`messages`、`is_ongoing` 等字段填齐；为团队协作工具产出可读 summary。本 capability 是 chunk-building 与 UI subagent 卡片渲染的共享数据来源。
-
 ## Requirements
-
 ### Requirement: Pair tool_use with tool_result by id
 
 系统 SHALL 把每个 `tool_use` 块与同 `tool_use_id` 的 `tool_result` 块配对，无视两者间隔多少条消息。配对算法 SHALL 为纯同步函数，对输入消息单次遍历即可完成；无匹配的 `tool_use` SHALL 作为 orphan 保留，标记 `output = Missing` 且 `end_ts = None`，不抛错。
@@ -66,6 +64,8 @@
 
 未解析的 Task 调用 SHALL 保留为 `Resolution::Orphan`。候选集合的装载不属本 capability——它由下游能力（例如 `project-discovery` 与 `team-coordination-metadata`）负责预过滤后传入。
 
+**候选集合的装载范围**：当 caller 是 IPC 层（`ipc-data-api`），candidate 列表 SHALL 由 **跨 `project_dir`** 扫描得到——即同一 `projects_dir`（`~/.claude/projects/` 或 SSH 远端等价路径）下**所有** project 目录的 `{rootSessionId}/subagents/agent-*.jsonl`（新结构），合并去重后传入本 resolver。Resolver 自身行为不变（纯同步函数，对 candidate 来源无感知）。
+
 #### Scenario: teammate_spawned result links directly
 - **WHEN** 一个 `Task` 调用对应的 `ToolExecution` 的结构化 output 含 `teammate_spawned` hint 与 subagent session id，且该 session id 在 `candidates` 中存在
 - **THEN** 函数 SHALL 直接返回 `Resolution::ResultBased(Process)`，不再评估后续阶段
@@ -85,6 +85,12 @@
 #### Scenario: Unrelated candidate does not trigger positional match
 - **WHEN** Task 调用无 description 匹配，candidate 池含归属其它父 session 的 subagent，使等量 check 失败
 - **THEN** 函数 SHALL NOT 走 positional 链接，SHALL 返回 `Resolution::Orphan`
+
+#### Scenario: Subagent JSONL located in a different project directory
+- **WHEN** 主 session（rootSessionId = `S`）在 `project_dir = A`，且该 session 的某个 subagent JSONL 物理位于 `project_dir = B`（路径为 `B/S/subagents/agent-<subUuid>.jsonl`，例如 subagent 通过 EnterWorktree 把 cwd 切到 `<repo>/.claude/worktrees/<slug>/` 时 Claude Code 写入 B）
+- **AND** caller 在装载 candidate 列表时跨 `projects_dir` 扫描所有 project 目录的 `{S}/subagents/agent-*.jsonl`
+- **THEN** B 下的 subagent JSONL SHALL 被装载为 `SubagentCandidate` 并进入 resolver candidates 列表
+- **AND** 三阶段匹配 SHALL 正常对该 candidate 评估（不因物理目录差异退化）
 
 ### Requirement: Enrich subagent processes with team metadata
 
@@ -171,3 +177,4 @@ UI 端按此字段决定渲染：非空时把整条 `tool_execution` displayItem
 #### Scenario: Empty teammate_spawn omitted from IPC payload
 - **WHEN** `ToolExecution.teammate_spawn = None`
 - **THEN** 序列化 JSON SHALL 不含 `teammateSpawn` 键（由 `skip_serializing_if = "Option::is_none"` 控制）
+

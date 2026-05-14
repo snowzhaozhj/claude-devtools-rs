@@ -79,6 +79,7 @@
 
 <style>
   .base-item {
+    min-width: 0;
     border-radius: 4px;
     transition: background-color 0.2s;
   }
@@ -179,9 +180,12 @@
   }
 
   .base-item-content {
+    min-width: 0;
+    max-width: 100%;
     margin-left: 8px;
     margin-top: 8px;
     padding-left: 24px;
+    overflow-x: hidden;
     border-left: 2px solid var(--color-border);
   }
 </style>

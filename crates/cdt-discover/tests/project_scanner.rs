@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cdt_discover::{
-    FileSystemProvider, LocalFileSystemProvider, ProjectScanner, SubprojectRegistry,
+    FileSystemProvider, LocalFileSystemProvider, ProjectScanner, SubprojectRegistry, encode_path,
 };
 
 async fn write_session(dir: &Path, session_id: &str, cwd: &str) {
@@ -130,6 +130,68 @@ async fn composite_id_is_deterministic_across_registries() {
     assert_eq!(id1, id2);
     assert!(id1.starts_with("-tmp-x::"));
     assert_eq!(id1.len(), "-tmp-x::".len() + 8);
+}
+
+#[tokio::test]
+async fn scan_uses_cwd_beyond_head_window_for_local_files() {
+    let root = tempfile::tempdir().unwrap();
+    let projects_dir = root.path().join("projects");
+    let proj = projects_dir.join("-Users-alice-encoded");
+    tokio::fs::create_dir_all(&proj).await.unwrap();
+
+    let mut lines = Vec::new();
+    for idx in 0..25 {
+        lines.push(format!(
+            r#"{{"type":"user","uuid":"noise-{idx}","timestamp":"2026-01-01T00:00:00Z","message":{{"role":"user","content":"hi"}}}}"#,
+        ));
+    }
+    lines.push(
+        r#"{"type":"user","uuid":"real-cwd","cwd":"/Users/alice/real-worktree","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}"#
+            .to_string(),
+    );
+    tokio::fs::write(proj.join("s1.jsonl"), format!("{}\n", lines.join("\n")))
+        .await
+        .unwrap();
+
+    let fs: Arc<dyn FileSystemProvider> = Arc::new(LocalFileSystemProvider::new());
+    let mut scanner = ProjectScanner::new(fs, projects_dir);
+    let projects = scanner.scan().await.unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(
+        projects[0].path,
+        PathBuf::from("/Users/alice/real-worktree")
+    );
+}
+
+#[tokio::test]
+async fn historical_worktree_dir_without_cwd_keeps_parent_repo_path() {
+    let root = tempfile::tempdir().unwrap();
+    let projects_dir = root.path().join("projects");
+    let repo_cwd = "/Users/alice/claude-devtools-rs";
+    let repo_id = encode_path(repo_cwd);
+    let repo = projects_dir.join(&repo_id);
+    tokio::fs::create_dir_all(&repo).await.unwrap();
+    write_session(&repo, "main", repo_cwd).await;
+
+    let historical_id =
+        encode_path("/Users/alice/claude-devtools-rs/.claude/worktrees/rosetta-detect");
+    let proj = projects_dir.join(&historical_id);
+    tokio::fs::create_dir_all(&proj).await.unwrap();
+    tokio::fs::write(
+        proj.join("s1.jsonl"),
+        "{\"type\":\"user\",\"uuid\":\"u\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+    )
+    .await
+    .unwrap();
+
+    let fs: Arc<dyn FileSystemProvider> = Arc::new(LocalFileSystemProvider::new());
+    let mut scanner = ProjectScanner::new(fs, projects_dir);
+    let projects = scanner.scan().await.unwrap();
+    let historical = projects.iter().find(|p| p.id == historical_id).unwrap();
+    assert_eq!(
+        historical.path,
+        PathBuf::from("/Users/alice/claude-devtools-rs/.claude/worktrees/rosetta-detect")
+    );
 }
 
 #[tokio::test]
