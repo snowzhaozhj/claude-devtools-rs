@@ -7,7 +7,7 @@
 
 两处共同特征：**都没有 (mtime, size) 缓存**——同一个文件没变也会反复重 parse。
 
-- 引入跨平台 `FileSignature { mtime, size, identity }` 抽象（Unix `(dev, ino)` / Windows `(volume_serial, file_index)`），作为 cache key 防止"同 mtime+size 不同 inode 文件被 rename 替换"假命中（codex 异构二审 D1b 修订）
+- 引入跨平台 `FileSignature { mtime, size, identity }` 抽象。Unix 上 identity 是 `(dev, ino)`，作为 cache key 防止"同 mtime+size 不同 inode 文件被 rename 替换"假命中（codex 异构二审 D1b 修订）。Windows 与其它平台退化为 `None`（仅依赖 mtime+size），因 stable Rust 不暴露 Windows `file_index` API（D1f 修订）
 - 给 `NotificationPipeline` 加 `(project_id, session_id) → FileSignature` 缓存：`process_file_change` 入口先 stat，`FileSignature` 一致则跳过整个 parse + detect 流程
 - 给 `LocalDataApi` 加 `metadata_cache: Arc<Mutex<MetadataCache>>` 字段（**不**用全局 `OnceLock` 单例）；新增 `extract_session_metadata_cached(cache, path)` wrapper，文件未变时直接返回缓存的元数据；`extract_session_metadata` 自身保持纯函数签名不变（codex 异构二审 D3b 修订）
 - 缓存键失效：`FileSignature` 任一字段（mtime / size / identity）变化即重算；文件被 truncate / rename 替换也走重算分支

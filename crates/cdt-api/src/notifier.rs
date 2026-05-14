@@ -568,12 +568,7 @@ mod tests {
             size,
             #[cfg(unix)]
             identity: crate::cache_signature::FileIdentity::Unix { dev: 1, ino: size },
-            #[cfg(windows)]
-            identity: crate::cache_signature::FileIdentity::Windows {
-                volume_serial: 1,
-                file_index: size,
-            },
-            #[cfg(not(any(unix, windows)))]
+            #[cfg(not(unix))]
             identity: crate::cache_signature::FileIdentity::None,
         }
     }

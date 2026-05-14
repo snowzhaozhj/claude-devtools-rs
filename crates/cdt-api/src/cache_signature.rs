@@ -3,23 +3,33 @@
 //! 用于 notifier / metadata 缓存判定"文件是否真有变化"。`FileSignature` 字段
 //! byte-equal 视为命中；任一字段不一致走 cache miss。
 //!
-//! `identity` 维度（Unix `(dev, ino)` / Windows `(volume_serial, file_index)`）
-//! 用于检出 `inode` / `file_index` 变化（典型：rename 替换文件）。详见 change
-//! `multi-session-cpu-cache` design D1b/D1d：等价性是 best-effort，inode reuse
-//! 同时撞 mtime/size 的极端场景由后续 file-change 自然恢复。
+//! `identity` 维度（仅 Unix 上为 `(dev, ino)`；Windows 与其它平台退化为
+//! `None`）用于检出 `inode` 变化（典型：rename 替换文件）。详见 change
+//! `multi-session-cpu-cache` design D1b/D1d/D1f：
+//! - 等价性是 best-effort，inode reuse 同时撞 mtime/size 的极端场景由后续
+//!   file-change 自然恢复
+//! - Windows 上 `std::os::windows::fs::MetadataExt::file_index()` /
+//!   `volume_serial_number()` 是 unstable feature `windows_by_handle`，stable
+//!   Rust 不可用；退化为 `None` 让 Windows 仅依赖 mtime+size（D1f 修订）
 
 use std::fs::Metadata;
 use std::time::SystemTime;
 
-/// 文件身份维度 —— Unix 上是 `(dev, ino)`，Windows 上是
-/// `(volume_serial, file_index)`，其它平台退化为空。
+/// 文件身份维度 —— Unix 上是 `(dev, ino)`；Windows 与其它平台退化为 `None`。
+///
+/// Windows 退化原因：`std::os::windows::fs::MetadataExt::file_index()` /
+/// `volume_serial_number()` 是 unstable feature `windows_by_handle`，stable
+/// Rust 不可用。引入 windows-sys + `GetFileInformationByHandle` 的成本（unsafe
+/// FFI + 新依赖）超过 Windows 上 inode 检测的边际收益（详 design D1d/D1f）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileIdentity {
     #[cfg(unix)]
     Unix { dev: u64, ino: u64 },
-    #[cfg(windows)]
-    Windows { volume_serial: u32, file_index: u64 },
-    #[cfg(not(any(unix, windows)))]
+    /// Windows 与其它平台共享的退化 variant —— identity 维度不参与签名比对，
+    /// 等价性仅由 mtime+size 决定（best-effort）。
+    /// `allow(dead_code)`：在 Unix 平台上此 variant 不被 `from_metadata` 构造，
+    /// 但仍需保留以让跨 cfg 测试代码（如 `dummy_sig`）能引用。
+    #[allow(dead_code)]
     None,
 }
 
@@ -34,16 +44,9 @@ impl FileIdentity {
                 ino: meta.ino(),
             }
         }
-        #[cfg(windows)]
+        #[cfg(not(unix))]
         {
-            use std::os::windows::fs::MetadataExt;
-            Self::Windows {
-                volume_serial: meta.volume_serial_number().unwrap_or(0),
-                file_index: meta.file_index().unwrap_or(0),
-            }
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
+            let _ = meta;
             Self::None
         }
     }

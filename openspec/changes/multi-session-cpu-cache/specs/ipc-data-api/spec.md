@@ -6,7 +6,7 @@
 
 - `mtime`：文件最后修改时间
 - `size`：文件字节数
-- `identity`：文件身份 —— Unix `(dev, ino)` / Windows `(volume_serial, file_index)` / 其它平台退化为空
+- `identity`：文件身份 —— Unix `(dev, ino)`；Windows 与其它平台退化为空（详 design D1f）
 
 **等价性是 best-effort**：在常规 append-only 写入路径下，`FileSignature` 字段 byte-equal 即视为文件未变。inode reuse + mtime/size 三维同时撞车的极端场景可能假命中，由后续任何文件变化的 file-change 自然恢复。
 
@@ -32,10 +32,11 @@
 - **WHEN** 调用 metadata 缓存 wrapper 且 stat 拿到的 `mtime` 与缓存记录不同
 - **THEN** MUST 走原有 line-by-line 全文件扫描路径，并以新 `FileSignature` 与新结果覆盖缓存
 
-#### Scenario: 文件被 rename 替换（inode 变化）触发重扫
+#### Scenario: 文件被 rename 替换（inode 变化）触发重扫（仅 Unix）
 
-- **WHEN** 调用 metadata 缓存 wrapper 且 stat 拿到的 `identity`（Unix `(dev, ino)` / Windows `(volume_serial, file_index)`）与缓存记录不同 —— 即便 mtime 与 size 巧合相同
+- **WHEN** 调用 metadata 缓存 wrapper 且 stat 拿到的 `identity`（Unix `(dev, ino)`）与缓存记录不同 —— 即便 mtime 与 size 巧合相同
 - **THEN** MUST 走 cache miss 分支重新扫描
+- Windows 与其它平台 identity 退化为 `None`，此 Scenario 由 mtime/size 维度兜底（best-effort，详 design D1f）
 
 #### Scenario: 缓存命中后实时重算 stale 状态
 
