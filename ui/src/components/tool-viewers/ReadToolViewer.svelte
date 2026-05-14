@@ -2,6 +2,7 @@
   import type { ToolExecution } from "../../lib/api";
   import { toolOutputText, shortenPath, getLanguageFromPath, getFileName } from "../../lib/toolHelpers";
   import { highlightCode, renderMarkdown } from "../../lib/render";
+  import { lightHighlightLine } from "../../lib/lightSyntax";
 
   interface Props {
     exec: ToolExecution;
@@ -53,6 +54,8 @@
   const cleanText = $derived(
     parsedLines.length > 0 ? parsedLines.map((p) => p.text).join("\n") : outputText
   );
+  const useLightHighlight = $derived(parsedLines.length > 250 || cleanText.length > 40_000);
+  const highlightLine = $derived(useLightHighlight ? lightHighlightLine : highlightCode);
 
   /** 复制按钮：用 strip 后的纯文本。 */
   async function copyContent() {
@@ -90,7 +93,7 @@
   {:else}
     <!-- Code with line numbers (line numbers are CSS ::before, not part of clipboard text) -->
     <div class="code-container">
-      <pre class="code-content"><code>{#each parsedLines as p (p.num)}<span class="line" data-line={p.num}>{@html highlightCode(p.text, language)}
+      <pre class="code-content"><code>{#each parsedLines as p (p.num)}<span class="line" data-line={p.num}>{@html highlightLine(p.text, language)}
 </span>{/each}</code></pre>
     </div>
   {/if}

@@ -79,10 +79,14 @@
   // 在 visible+query 状态下自动重搜，避免 file-change 后 mark 索引过期。
   let searchContentVersion = $state(0);
 
-  function toggleChunk(idx: number) {
+  function toggleChunk(idx: number, chunk?: AIChunk) {
     const n = new Set(expandedChunks);
-    if (n.has(idx)) n.delete(idx); else n.add(idx);
+    const opening = !n.has(idx);
+    if (opening) n.add(idx); else n.delete(idx);
     expandedChunks = n;
+    if (opening && chunk) {
+      prefetchReadOutputs(chunk);
+    }
   }
 
   function isChunkToolsVisible(idx: number): boolean {
@@ -208,12 +212,24 @@
   // 淘汰最旧项。命中时把 key 重新 set 到尾部，保持最近使用排序。
   const OUTPUT_CACHE_LIMIT = 200;
   let outputCache: Map<string, ToolOutput> = $state(new Map());
+  const outputLoads = new Map<string, Promise<void>>();
+
+  function cachedOutput(exec: ToolExecution): ToolOutput | undefined {
+    const cached = outputCache.get(exec.toolUseId);
+    return cached?.kind === "missing" ? undefined : cached;
+  }
+
+  function isOutputLoading(exec: ToolExecution): boolean {
+    return !!exec.outputOmitted && !cachedOutput(exec);
+  }
+
+  function isOutputReady(exec: ToolExecution): boolean {
+    return !exec.outputOmitted || !!cachedOutput(exec);
+  }
 
   function effectiveExec(exec: ToolExecution): ToolExecution {
-    const cached = outputCache.get(exec.toolUseId);
-    // missing 视为非 final 状态——只有 text/structured 才覆盖原 exec.output。
-    // 防御性兜底：即使过去版本写过 missing 进 cache，刷新后也不会被 stale 数据污染。
-    if (!cached || cached.kind === "missing") return exec;
+    const cached = cachedOutput(exec);
+    if (!cached) return exec;
     return { ...exec, output: cached };
   }
 
@@ -221,33 +237,41 @@
     if (!exec.outputOmitted) return;
     const cached = outputCache.get(exec.toolUseId);
     if (cached && cached.kind !== "missing") {
-      // 命中 final 状态即升级到 LRU 末尾：delete + set 让 Map 迭代顺序反映"最近使用"。
-      // 这里在 user-triggered toggle 路径上调（不在 render 路径），mutate
-      // outputCache state 触发的重渲染就是"展开 tool"本身想要的，无副作用。
       const next = new Map(outputCache);
       next.delete(exec.toolUseId);
       next.set(exec.toolUseId, cached);
       outputCache = next;
       return;
     }
-    try {
-      const out = await getToolOutput(sessionId, sessionId, exec.toolUseId);
-      if (out.kind === "missing") {
-        // 工具仍在跑（后端 trim 后 variant 为 missing/text 不区分，pull 回的就是当前真值）：
-        // 不写 cache 让下次 detail 刷新时重新尝试，避免 stale missing sticky 后再也补不上输出。
-        return;
+    const existing = outputLoads.get(exec.toolUseId);
+    if (existing) return existing;
+    const load = (async () => {
+      try {
+        const out = await getToolOutput(sessionId, sessionId, exec.toolUseId);
+        if (out.kind === "missing") return;
+        const next = new Map(outputCache);
+        next.set(exec.toolUseId, out);
+        while (next.size > OUTPUT_CACHE_LIMIT) {
+          const firstKey = next.keys().next().value;
+          if (firstKey === undefined) break;
+          next.delete(firstKey);
+        }
+        outputCache = next;
+      } catch (e) {
+        console.warn("[perf] getToolOutput failed", exec.toolUseId, e);
+      } finally {
+        outputLoads.delete(exec.toolUseId);
       }
-      const next = new Map(outputCache);
-      next.set(exec.toolUseId, out);
-      while (next.size > OUTPUT_CACHE_LIMIT) {
-        const firstKey = next.keys().next().value;
-        if (firstKey === undefined) break;
-        next.delete(firstKey);
+    })();
+    outputLoads.set(exec.toolUseId, load);
+    return load;
+  }
+
+  function prefetchReadOutputs(chunk: AIChunk): void {
+    for (const exec of chunk.toolExecutions) {
+      if (isReadTool(exec) && exec.outputOmitted) {
+        void ensureToolOutput(exec);
       }
-      outputCache = next;
-    } catch (e) {
-      console.warn("[perf] getToolOutput failed", exec.toolUseId, e);
-      // 失败保持 exec.output 原样（空），ToolViewer 显示 broken/missing 状态
     }
   }
 
@@ -273,14 +297,21 @@
     });
   });
 
-  function toggle(key: string, exec?: ToolExecution) {
-    const n = new Set(expandedItems);
-    const opening = !n.has(key);
-    if (opening) n.add(key);
-    else n.delete(key);
-    expandedItems = n;
-    if (opening && exec) {
-      // fire-and-forget：UI 立即展开占位，IPC 完成后 outputCache 触发重渲染
+  async function toggle(key: string, exec?: ToolExecution) {
+    if (expandedItems.has(key)) {
+      const next = new Set(expandedItems);
+      next.delete(key);
+      expandedItems = next;
+      return;
+    }
+    if (exec && isReadTool(exec) && !isOutputReady(exec)) {
+      await ensureToolOutput(exec);
+      if (!isOutputReady(exec)) return;
+    }
+    const next = new Set(expandedItems);
+    next.add(key);
+    expandedItems = next;
+    if (exec && !isReadTool(exec)) {
       void ensureToolOutput(exec);
     }
   }
@@ -547,7 +578,7 @@
               {#if summaryText}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <span class="ai-tool-toggle" onclick={() => toggleChunk(i)}>
+                <span class="ai-tool-toggle" onclick={() => toggleChunk(i, chunk)}>
                   <span class="ai-tool-chevron" class:ai-tool-chevron-open={toolsVisible}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT} /></svg>
                   </span>

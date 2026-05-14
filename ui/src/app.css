@@ -467,7 +467,8 @@ mark[data-search-current] {
 }
 
 .hljs-comment,
-.hljs-quote {
+.hljs-quote,
+.syntax-comment {
   color: var(--syntax-comment);
   font-style: italic;
 }
@@ -476,22 +477,29 @@ mark[data-search-current] {
 .hljs-selector-tag,
 .hljs-literal,
 .hljs-meta-keyword,
-.hljs-doctag {
+.hljs-doctag,
+.syntax-keyword {
   color: var(--syntax-keyword);
+}
+
+.syntax-keyword {
+  font-weight: 500;
 }
 
 .hljs-string,
 .hljs-regexp,
 .hljs-addition,
 .hljs-attribute,
-.hljs-meta-string {
+.hljs-meta-string,
+.syntax-string {
   color: var(--syntax-string);
 }
 
 .hljs-number,
 .hljs-bullet,
 .hljs-link,
-.hljs-symbol {
+.hljs-symbol,
+.syntax-number {
   color: var(--syntax-number);
 }
 
@@ -501,7 +509,8 @@ mark[data-search-current] {
 .hljs-title.class_,
 .hljs-title.class_.inherited__,
 .hljs-template-tag,
-.hljs-template-variable {
+.hljs-template-variable,
+.syntax-type {
   color: var(--syntax-type);
 }
 
@@ -525,7 +534,8 @@ mark[data-search-current] {
 .hljs-operator,
 .hljs-punctuation,
 .hljs-tag,
-.hljs-tag .hljs-name {
+.hljs-tag .hljs-name,
+.syntax-operator {
   color: var(--syntax-operator);
 }
 
