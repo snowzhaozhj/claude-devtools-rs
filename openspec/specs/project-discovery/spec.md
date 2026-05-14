@@ -243,3 +243,37 @@ Worktree 排序 SHALL 按 `is_main_worktree` 优先（main 排前）、再按 `m
 - **AND** 该 worktree 的 `is_main_worktree` SHALL 为 false
 - **AND** 该 worktree 的 `git_branch` SHALL 为 `None`
 
+### Requirement: Project session enumeration minimizes per-file overhead
+
+Project session enumeration SHALL preserve sorted, paginated results while avoiding unnecessary repeated per-file filesystem metadata work during a single list operation. The implementation MUST keep `total`, `nextCursor`, and descending recency order consistent with the files present in the project directory at scan time.
+
+#### Scenario: Listing many sessions preserves recency order
+
+- **WHEN** a project directory contains many `.jsonl` session files with different modification times
+- **THEN** session enumeration returns sessions in descending recency order
+- **AND** the order is identical whether the caller requests all sessions at once or consumes them through cursor pagination
+
+#### Scenario: Pagination reports complete directory total
+
+- **WHEN** a caller requests a limited page of sessions from a project directory
+- **THEN** the response reports the total number of session files in that directory
+- **AND** `nextCursor` points to the next page only when more sessions remain
+
+### Requirement: Runtime project list refresh
+
+项目列表消费者 SHALL 能在收到项目刷新信号后重新扫描 `~/.claude/projects/` 并暴露新增项目。新增项目的显示名、路径、session 数与启动时全量扫描结果 MUST 使用同一 `project-discovery` 规则计算。
+
+#### Scenario: Newly added project appears after rescan
+
+- **WHEN** 应用启动后 `~/.claude/projects/` 下新增一个包含 `.jsonl` 会话的 project 目录
+- **AND** 项目列表消费者触发重新扫描
+- **THEN** 返回的 project 列表 SHALL 包含该新增 project
+- **AND** 该 project 的 displayName、path、sessionCount SHALL 与冷启动扫描结果一致
+
+#### Scenario: Rescan preserves existing project metadata
+
+- **WHEN** 项目列表刷新前已有 N 个 project
+- **AND** 新增一个 project 后触发重新扫描
+- **THEN** 刷新后的列表 SHALL 包含原 N 个 project 与新增 project
+- **AND** 原有 project 的 id SHALL 保持稳定
+
