@@ -1,15 +1,14 @@
 <script lang="ts">
   import type { ToolExecution } from "../../lib/api";
   import { toolOutputText, shortenPath, getLanguageFromPath, getFileName } from "../../lib/toolHelpers";
-  import { renderMarkdown } from "../../lib/render";
+  import { highlightCode, renderMarkdown } from "../../lib/render";
   import { lightHighlightLine } from "../../lib/lightSyntax";
 
   interface Props {
     exec: ToolExecution;
-    outputLoading?: boolean;
   }
 
-  let { exec, outputLoading = false }: Props = $props();
+  let { exec }: Props = $props();
   let copied = $state(false);
 
   const input = $derived(exec.input as Record<string, unknown>);
@@ -55,6 +54,8 @@
   const cleanText = $derived(
     parsedLines.length > 0 ? parsedLines.map((p) => p.text).join("\n") : outputText
   );
+  const useLightHighlight = $derived(parsedLines.length > 250 || cleanText.length > 40_000);
+  const highlightLine = $derived(useLightHighlight ? lightHighlightLine : highlightCode);
 
   /** 复制按钮：用 strip 后的纯文本。 */
   async function copyContent() {
@@ -86,15 +87,13 @@
     </button>
   </div>
 
-  {#if outputLoading}
-    <div class="read-loading" aria-busy="true">Loading file content…</div>
-  {:else if isMarkdown && viewMode === "preview"}
+  {#if isMarkdown && viewMode === "preview"}
     <!-- 用 strip 后的纯文本渲染：raw outputText 含 cat -n 前缀会让 markdown 标记失效 -->
     <div class="md-preview">{@html renderMarkdown(cleanText)}</div>
   {:else}
     <!-- Code with line numbers (line numbers are CSS ::before, not part of clipboard text) -->
     <div class="code-container">
-      <pre class="code-content"><code>{#each parsedLines as p (p.num)}<span class="line" data-line={p.num}>{@html lightHighlightLine(p.text, language)}
+      <pre class="code-content"><code>{#each parsedLines as p (p.num)}<span class="line" data-line={p.num}>{@html highlightLine(p.text, language)}
 </span>{/each}</code></pre>
     </div>
   {/if}
@@ -165,15 +164,6 @@
   .view-toggle:hover {
     color: var(--color-text);
     border-color: var(--color-text-muted);
-  }
-
-  .read-loading {
-    min-height: 120px;
-    padding: 12px 16px;
-    background: var(--code-bg);
-    color: var(--color-text-muted);
-    font-size: 12px;
-    font-style: italic;
   }
 
   .code-container {

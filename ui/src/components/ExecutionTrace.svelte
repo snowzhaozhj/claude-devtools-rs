@@ -33,33 +33,60 @@
   // tool output 懒拉缓存：toolUseId → ToolOutput。仅当 exec.outputOmitted=true
   // 且用户首次展开该 tool 时通过 getToolOutput IPC 拉取。
   let outputCache: Map<string, ToolOutput> = $state(new Map());
+  const outputLoads = new Map<string, Promise<void>>();
+
+  function cachedOutput(exec: ToolExecution): ToolOutput | undefined {
+    const cached = outputCache.get(exec.toolUseId);
+    return cached?.kind === "missing" ? undefined : cached;
+  }
+
+  function isOutputReady(exec: ToolExecution): boolean {
+    return !exec.outputOmitted || !!cachedOutput(exec);
+  }
 
   function effectiveExec(exec: ToolExecution): ToolExecution {
-    const cached = outputCache.get(exec.toolUseId);
+    const cached = cachedOutput(exec);
     if (!cached) return exec;
     return { ...exec, output: cached };
   }
 
   async function ensureToolOutput(exec: ToolExecution): Promise<void> {
     if (!exec.outputOmitted) return;
-    if (outputCache.has(exec.toolUseId)) return;
-    try {
-      const out = await getToolOutput(rootSessionId, traceSessionId, exec.toolUseId);
-      const next = new Map(outputCache);
-      next.set(exec.toolUseId, out);
-      outputCache = next;
-    } catch (e) {
-      console.warn("[perf] getToolOutput failed", exec.toolUseId, e);
-    }
+    if (cachedOutput(exec)) return;
+    const existing = outputLoads.get(exec.toolUseId);
+    if (existing) return existing;
+    const load = (async () => {
+      try {
+        const out = await getToolOutput(rootSessionId, traceSessionId, exec.toolUseId);
+        if (out.kind === "missing") return;
+        const next = new Map(outputCache);
+        next.set(exec.toolUseId, out);
+        outputCache = next;
+      } catch (e) {
+        console.warn("[perf] getToolOutput failed", exec.toolUseId, e);
+      } finally {
+        outputLoads.delete(exec.toolUseId);
+      }
+    })();
+    outputLoads.set(exec.toolUseId, load);
+    return load;
   }
 
-  function toggle(key: string, exec?: ToolExecution) {
-    const n = new Set(expandedKeys);
-    const opening = !n.has(key);
-    if (opening) n.add(key);
-    else n.delete(key);
-    expandedKeys = n;
-    if (opening && exec) {
+  async function toggle(key: string, exec?: ToolExecution) {
+    if (expandedKeys.has(key)) {
+      const next = new Set(expandedKeys);
+      next.delete(key);
+      expandedKeys = next;
+      return;
+    }
+    if (exec && isReadTool(exec) && !isOutputReady(exec)) {
+      await ensureToolOutput(exec);
+      if (!isOutputReady(exec)) return;
+    }
+    const next = new Set(expandedKeys);
+    next.add(key);
+    expandedKeys = next;
+    if (exec && !isReadTool(exec)) {
       void ensureToolOutput(exec);
     }
   }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ToolExecution } from "../../lib/api";
   import { shortenPath, getLanguageFromPath } from "../../lib/toolHelpers";
-  import { renderMarkdown } from "../../lib/render";
+  import { highlightCode, renderMarkdown } from "../../lib/render";
   import { lightHighlightLine } from "../../lib/lightSyntax";
 
   interface Props {
@@ -16,6 +16,8 @@
   const language = $derived(getLanguageFromPath(filePath));
   const isMarkdown = $derived(language === "markdown");
   const lines = $derived(content.split("\n"));
+  const useLightHighlight = $derived(lines.length > 250 || content.length > 40_000);
+  const highlightLine = $derived(useLightHighlight ? lightHighlightLine : highlightCode);
 
   // .md 默认 preview，可切 code（对齐原版 WriteToolViewer.tsx 第 59-62 行）
   let viewMode = $state<"preview" | "code">("preview");
@@ -42,7 +44,7 @@
       <div class="md-preview">{@html renderMarkdown(content)}</div>
     {:else}
       <div class="write-code-container">
-        <pre class="write-code"><code>{#each lines as line, i}<span class="line" data-line={i + 1}>{@html lightHighlightLine(line, language)}
+        <pre class="write-code"><code>{#each lines as line, i}<span class="line" data-line={i + 1}>{@html highlightLine(line, language)}
 </span>{/each}</code></pre>
       </div>
     {/if}
