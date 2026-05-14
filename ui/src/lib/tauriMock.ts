@@ -46,6 +46,7 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'unhide_session',
   'get_project_session_prefs',
   'check_for_update',
+  'is_running_under_rosetta',
   'list_repository_groups',
   'get_worktree_sessions',
 ] as const
@@ -311,6 +312,13 @@ function buildHandler(fx: Fixture) {
         const prefs = fx.prefs[projectId]
         if (prefs) prefs.hidden = prefs.hidden.filter((s) => s !== sessionId)
         return null
+      }
+
+      case 'is_running_under_rosetta': {
+        // 浏览器 dev 模式默认不弹 banner；?rosetta=1 时模拟 Rosetta 翻译，
+        // 便于在浏览器里调试 UI。
+        const params = new URLSearchParams(window.location.search)
+        return params.get('rosetta') === '1'
       }
 
       case 'check_for_update': {

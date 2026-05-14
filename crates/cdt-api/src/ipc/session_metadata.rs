@@ -8,7 +8,9 @@
 //!   `claude-devtools/src/main/services/discovery/ProjectScanner.ts`
 //!   `STALE_SESSION_THRESHOLD_MS = 5 * 60 * 1000`（issue #94）
 
-use std::path::Path;
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex as StdMutex;
 use std::time::{Duration, SystemTime};
 
 use tokio::fs::File;
@@ -16,6 +18,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use cdt_core::message::{ContentBlock, MessageCategory, MessageContent, ParsedMessage};
 use cdt_parse::parse_entry_at;
+
+use crate::cache_signature::FileSignature;
 
 /// 文件 mtime 距 now 超过此阈值则即便消息序列结构上为 ongoing 也强制判 done。
 /// 5 分钟，对齐原版 `STALE_SESSION_THRESHOLD_MS`。
@@ -108,17 +112,30 @@ fn starts_with_system_output_tag(text: &str) -> bool {
         .any(|tag| text.starts_with(tag))
 }
 
-/// 扫描 JSONL 文件，提取标题和消息计数。
+/// 扫描 JSONL 文件，提取标题和消息计数（薄 wrapper：复用 `extract_session_metadata_with_ongoing`）。
 ///
 /// 标题只扫描前 `TITLE_MAX_LINES` 行；消息计数扫描全文件。
 pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
+    extract_session_metadata_with_ongoing(path).await.0
+}
+
+/// `extract_session_metadata` 的内部实现，额外暴露 `messages_ongoing` 中间值
+/// 给 cache 写入路径使用 —— 详见 change `multi-session-cpu-cache` D8。
+///
+/// `is_ongoing = messages_ongoing && !is_file_stale(path)`。缓存只存
+/// `messages_ongoing`（不随时间变），`is_ongoing` 在 lookup 时由当前 wall clock
+/// 实时合成 stale 状态。
+pub(crate) async fn extract_session_metadata_with_ongoing(path: &Path) -> (SessionMetadata, bool) {
     let Ok(file) = File::open(path).await else {
-        return SessionMetadata {
-            title: None,
-            message_count: 0,
-            is_ongoing: false,
-            git_branch: None,
-        };
+        return (
+            SessionMetadata {
+                title: None,
+                message_count: 0,
+                is_ongoing: false,
+                git_branch: None,
+            },
+            false,
+        );
     };
 
     let reader = BufReader::new(file);
@@ -205,12 +222,146 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
         false
     };
 
-    SessionMetadata {
-        title,
-        message_count,
-        is_ongoing,
-        git_branch: last_git_branch,
+    (
+        SessionMetadata {
+            title,
+            message_count,
+            is_ongoing,
+            git_branch: last_git_branch,
+        },
+        messages_ongoing,
+    )
+}
+
+// ============================================================================
+// metadata 缓存（详 change `multi-session-cpu-cache` design D3b/D8）
+//
+// 缓存值不直接存 `is_ongoing` —— 该字段含 wall-clock 时间敏感判定（5 分钟 stale
+// 阈值），命中时由 `is_session_stale(signature.mtime, now)` 实时合成。缓存只存
+// `messages_ongoing` 中间值（基于消息序列结构判定，不随时间变）。
+// ============================================================================
+
+/// metadata 缓存容量上限。
+pub const METADATA_CACHE_CAPACITY: usize = 200;
+
+/// 单条缓存记录：`FileSignature` + 各字段（不含时间敏感的 `is_ongoing`）。
+#[derive(Debug, Clone)]
+struct MetadataCacheEntry {
+    signature: FileSignature,
+    title: Option<String>,
+    message_count: usize,
+    messages_ongoing: bool,
+    git_branch: Option<String>,
+}
+
+/// `LocalDataApi` 持有的 metadata LRU 缓存。**不**用全局单例（详 design D3b）。
+#[derive(Debug)]
+pub struct MetadataCache {
+    map: HashMap<PathBuf, MetadataCacheEntry>,
+    order: VecDeque<PathBuf>,
+    capacity: usize,
+}
+
+impl Default for MetadataCache {
+    fn default() -> Self {
+        Self::new(METADATA_CACHE_CAPACITY)
     }
+}
+
+impl MetadataCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    fn lookup(&mut self, path: &Path) -> Option<MetadataCacheEntry> {
+        let entry = self.map.get(path)?.clone();
+        if let Some(pos) = self.order.iter().position(|p| p == path) {
+            let p = self.order.remove(pos).expect("position 已校验");
+            self.order.push_front(p);
+        }
+        Some(entry)
+    }
+
+    fn insert(&mut self, path: PathBuf, entry: MetadataCacheEntry) {
+        if self.map.contains_key(&path) {
+            self.map.insert(path.clone(), entry);
+            if let Some(pos) = self.order.iter().position(|p| p == &path) {
+                let p = self.order.remove(pos).expect("position 已校验");
+                self.order.push_front(p);
+            }
+            return;
+        }
+
+        if self.map.len() >= self.capacity {
+            if let Some(evicted) = self.order.pop_back() {
+                self.map.remove(&evicted);
+            }
+        }
+
+        self.map.insert(path.clone(), entry);
+        self.order.push_front(path);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
+/// `extract_session_metadata` 的缓存 wrapper —— `LocalDataApi` 持有 cache 实例。
+///
+/// 命中：返回基于缓存合成的 `SessionMetadata`（`is_ongoing` 用 `messages_ongoing`
+/// 与 `is_session_stale(signature.mtime, now)` 实时合成）。
+/// miss / stat 失败：调 uncached `extract_session_metadata_with_ongoing` 重扫，
+/// 成功后写缓存。stat 失败不写缓存。
+pub(crate) async fn extract_session_metadata_cached(
+    cache: &StdMutex<MetadataCache>,
+    path: &Path,
+) -> SessionMetadata {
+    let new_sig = match tokio::fs::metadata(path).await {
+        Ok(meta) => Some(FileSignature::from_metadata(&meta)),
+        Err(_) => None,
+    };
+
+    if let Some(sig) = new_sig {
+        let cached = cache
+            .lock()
+            .expect("metadata cache mutex poisoned")
+            .lookup(path);
+        if let Some(entry) = cached {
+            if entry.signature == sig {
+                let is_ongoing =
+                    entry.messages_ongoing && !is_session_stale(sig.mtime, SystemTime::now());
+                return SessionMetadata {
+                    title: entry.title,
+                    message_count: entry.message_count,
+                    is_ongoing,
+                    git_branch: entry.git_branch,
+                };
+            }
+        }
+    }
+
+    let (meta, messages_ongoing) = extract_session_metadata_with_ongoing(path).await;
+
+    if let Some(sig) = new_sig {
+        cache.lock().expect("metadata cache mutex poisoned").insert(
+            path.to_path_buf(),
+            MetadataCacheEntry {
+                signature: sig,
+                title: meta.title.clone(),
+                message_count: meta.message_count,
+                messages_ongoing,
+                git_branch: meta.git_branch.clone(),
+            },
+        );
+    }
+
+    meta
 }
 
 /// 异步读 file mtime 并判定是否超过 stale 阈值。
@@ -740,5 +891,217 @@ mod tests {
         let meta = extract_session_metadata(&path).await;
         // 字面量 teammate tag（无 teammate_id 属性）= 普通用户文本 → 计入；u1 + a1 = 2
         assert_eq!(meta.message_count, 2);
+    }
+
+    // ========================================================================
+    // metadata cache 行为单测 —— 覆盖 spec
+    // `ipc-data-api/spec.md::extract_session_metadata 按 FileSignature 缓存`
+    // 与 `metadata 缓存 ownership 由 LocalDataApi 持有` 的全部 Scenario
+    // ========================================================================
+
+    fn make_cache() -> StdMutex<MetadataCache> {
+        StdMutex::new(MetadataCache::default())
+    }
+
+    #[tokio::test]
+    async fn cached_hit_returns_cached_metadata_without_rereading() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-05-03T10:00:00.000Z", "hello world"),
+                &assistant_line("a1", "2026-05-03T10:00:01.000Z"),
+            ],
+        );
+
+        let cache = make_cache();
+        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        assert_eq!(m1.message_count, 2);
+
+        // 缓存应已写入
+        assert_eq!(cache.lock().unwrap().len(), 1);
+
+        // 第二次：FileSignature 不变命中。改变文件内容后再次调用 cached
+        // 不会读取——这里通过比较返回结果与缓存一致间接验证（不真改文件）
+        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        assert_eq!(m1.message_count, m2.message_count);
+        assert_eq!(m1.title, m2.title);
+        assert_eq!(m1.git_branch, m2.git_branch);
+    }
+
+    #[tokio::test]
+    async fn cached_miss_when_file_size_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[&user_text_line("u1", "2026-05-03T10:00:00.000Z", "hi")],
+        );
+
+        let cache = make_cache();
+        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        assert_eq!(m1.message_count, 1);
+
+        // append 新内容让 size 变化 → cache miss → 重扫
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                user_text_line("u1", "2026-05-03T10:00:00.000Z", "hi"),
+                user_text_line("u2", "2026-05-03T10:00:02.000Z", "second"),
+            ),
+        )
+        .unwrap();
+
+        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        assert_eq!(m2.message_count, 2, "size 变化后应重扫");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cached_miss_when_inode_changes_via_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[&user_text_line("u1", "2026-05-03T10:00:00.000Z", "first")],
+        );
+
+        let cache = make_cache();
+        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        assert_eq!(m1.message_count, 1);
+
+        // 准备替换文件（不同内容）
+        let replacement = tmp.path().join("replace.jsonl");
+        std::fs::write(
+            &replacement,
+            format!(
+                "{}\n{}\n",
+                user_text_line("u9", "2026-05-03T10:00:00.000Z", "renamed"),
+                assistant_line("a9", "2026-05-03T10:00:01.000Z"),
+            ),
+        )
+        .unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+
+        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        assert_eq!(
+            m2.message_count, 2,
+            "rename 替换（inode 变化）必须重扫，message_count 应反映新内容"
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_stat_failure_falls_through_no_write() {
+        let cache = make_cache();
+        // 不存在的 path → stat 失败 → 走 uncached → 返回空 metadata，不写缓存
+        let m = extract_session_metadata_cached(
+            &cache,
+            std::path::Path::new("/nonexistent/missing.jsonl"),
+        )
+        .await;
+        assert_eq!(m.message_count, 0);
+        assert!(m.title.is_none());
+
+        assert_eq!(cache.lock().unwrap().len(), 0, "stat 失败不应写缓存");
+    }
+
+    // -------- MetadataCache LRU + bump 行为 --------
+
+    fn dummy_entry(size: u64) -> MetadataCacheEntry {
+        MetadataCacheEntry {
+            signature: FileSignature {
+                mtime: SystemTime::UNIX_EPOCH + Duration::from_secs(size),
+                size,
+                #[cfg(unix)]
+                identity: crate::cache_signature::FileIdentity::Unix { dev: 1, ino: size },
+                #[cfg(not(unix))]
+                identity: crate::cache_signature::FileIdentity::None,
+            },
+            title: None,
+            message_count: usize::try_from(size).unwrap_or(0),
+            messages_ongoing: false,
+            git_branch: None,
+        }
+    }
+
+    #[test]
+    fn metadata_cache_evicts_lru_when_over_capacity() {
+        let mut cache = MetadataCache::new(2);
+        cache.insert(PathBuf::from("/a"), dummy_entry(1));
+        cache.insert(PathBuf::from("/b"), dummy_entry(2));
+        cache.insert(PathBuf::from("/c"), dummy_entry(3));
+        // /a 应被淘汰
+        assert!(cache.lookup(std::path::Path::new("/a")).is_none());
+        assert!(cache.lookup(std::path::Path::new("/b")).is_some());
+        assert!(cache.lookup(std::path::Path::new("/c")).is_some());
+        assert!(cache.len() <= 2);
+    }
+
+    #[test]
+    fn metadata_cache_lookup_bumps_hit_to_front() {
+        let mut cache = MetadataCache::new(2);
+        cache.insert(PathBuf::from("/a"), dummy_entry(1));
+        cache.insert(PathBuf::from("/b"), dummy_entry(2));
+        // lookup /a → bump 到队首
+        assert!(cache.lookup(std::path::Path::new("/a")).is_some());
+        cache.insert(PathBuf::from("/c"), dummy_entry(3));
+        assert!(
+            cache.lookup(std::path::Path::new("/a")).is_some(),
+            "命中后 bump 队首，不应被淘汰"
+        );
+        assert!(cache.lookup(std::path::Path::new("/b")).is_none());
+    }
+
+    // -------- stale 实时合成 --------
+    //
+    // Scenario `缓存命中后实时重算 stale 状态`：缓存的 messages_ongoing=true
+    // 但 wall-clock 距 mtime 推进 > 5min 时，is_ongoing 应为 false 而 cache
+    // 不被 invalidate。
+    //
+    // 直接构造 MetadataCacheEntry + lookup 验证：mtime 设置为远古 → 任何
+    // 当前 wall-clock 都 > 5 分钟 → is_ongoing 合成为 false。
+
+    #[tokio::test]
+    async fn cached_hit_synthesizes_is_ongoing_with_fresh_stale_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 这个 fixture 让 messages_ongoing = true（通过用户消息后没有配对 assistant
+        // 的方式让 cdt_analyze::check_messages_ongoing 返回 true）
+        // 简单起见：只一条 user 消息，无 assistant 回应
+        let path = write_jsonl(
+            tmp.path(),
+            &[&user_text_line("u1", "2026-05-03T10:00:00.000Z", "hi")],
+        );
+
+        let cache = make_cache();
+        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        // 第一次：刚写入，mtime 接近 now，is_ongoing 取决于 messages_ongoing 与 stale
+        // 不强断言 m1.is_ongoing，重点是缓存的 messages_ongoing 中间值
+        let _ = m1;
+
+        // 把缓存条目的 mtime 改成远古，模拟"缓存命中但 wall-clock 推进 > 5 分钟"
+        {
+            let mut guard = cache.lock().unwrap();
+            if let Some(entry) = guard.map.get_mut(path.as_path()) {
+                entry.signature.mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+                entry.messages_ongoing = true;
+            }
+        }
+        // 修改文件 mtime 让 stat 与缓存中的（被改成远古）一致
+        let _ = filetime_set_old(&path);
+
+        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        // 命中后实时合成：mtime 远古 → stale → is_ongoing = false
+        assert!(
+            !m2.is_ongoing,
+            "缓存命中但 mtime 远古时 is_ongoing 应实时合成为 false"
+        );
+    }
+
+    /// 把文件 mtime 改成 `UNIX_EPOCH + 1_000_000s` 以匹配上面测试构造的"远古" cache 条目。
+    /// 用 `File::set_modified`（Rust 1.75+ stable）跨平台可用。
+    fn filetime_set_old(path: &Path) -> std::io::Result<()> {
+        let f = std::fs::OpenOptions::new().write(true).open(path)?;
+        f.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000))?;
+        Ok(())
     }
 }

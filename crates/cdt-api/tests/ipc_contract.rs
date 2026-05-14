@@ -44,7 +44,7 @@ use cdt_core::tool_execution::{ToolExecution, ToolOutput};
 // =============================================================================
 
 /// 与 `src-tauri/src/lib.rs` 的 `invoke_handler!` 完全对齐的 Tauri command 列表。
-/// 长度断言 + 命名断言通过 `expected_tauri_commands_count_is_25` 用例守护。
+/// 长度断言 + 命名断言通过 `expected_tauri_commands_count_is_26` 用例守护。
 pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "list_projects",
     "list_sessions",
@@ -69,6 +69,7 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "unhide_session",
     "get_project_session_prefs",
     "check_for_update",
+    "is_running_under_rosetta",
     "list_repository_groups",
     "get_worktree_sessions",
 ];
@@ -104,12 +105,12 @@ fn ts() -> chrono::DateTime<Utc> {
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_25() {
+fn expected_tauri_commands_count_is_26() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        25,
+        26,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 25 个 Tauri command"
+         以及本文件常量；当前 src-tauri 注册 26 个 Tauri command"
     );
 }
 

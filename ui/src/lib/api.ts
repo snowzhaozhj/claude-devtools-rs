@@ -500,6 +500,12 @@ export async function checkForUpdate(): Promise<CheckUpdateResult> {
   return await invoke("check_for_update");
 }
 
+// macOS 上探测当前 Tauri 进程是否被 Rosetta 翻译执行（Apple Silicon 装了 x86_64 包）。
+// 其他平台始终返回 false。
+export async function isRunningUnderRosetta(): Promise<boolean> {
+  return await invoke("is_running_under_rosetta");
+}
+
 export async function getConfig(): Promise<AppConfig> {
   return await invoke("get_config");
 }

@@ -26,7 +26,7 @@ use cdt_watch::FileWatcher;
 
 use super::error::ApiError;
 use super::events::SessionMetadataUpdate;
-use super::session_metadata::extract_session_metadata;
+use super::session_metadata::{MetadataCache, extract_session_metadata_cached};
 use super::traits::DataApi;
 use super::types::{
     ConfigUpdateRequest, ContextInfo, PaginatedRequest, PaginatedResponse, ProjectInfo,
@@ -318,6 +318,9 @@ pub struct LocalDataApi {
     /// `None` 时 `get_image_asset` fallback 到 `data:` URI（默认构造路径
     /// + 集成测试无 cache 目录依赖）。
     image_cache_dir: Option<std::path::PathBuf>,
+    /// session metadata LRU 缓存，跨 IPC / HTTP 路径复用。**不**走全局单例
+    /// （详 change `multi-session-cpu-cache` design D3b）；多实例 cache 隔离。
+    metadata_cache: Arc<std::sync::Mutex<MetadataCache>>,
 }
 
 impl LocalDataApi {
@@ -343,6 +346,7 @@ impl LocalDataApi {
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
             image_cache_dir: None,
+            metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
         }
     }
 
@@ -400,6 +404,7 @@ impl LocalDataApi {
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
             image_cache_dir: None,
+            metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
         }
     }
 
@@ -507,6 +512,7 @@ impl LocalDataApi {
 /// 避免旧 task 在新 task 已注册后的 cleanup 误删新 handle（codex 二审 race）。
 /// `broadcast::send` 在无订阅者时返回 `Err`，本函数静默忽略——元数据更新
 /// 本质上是 fire-and-forget。
+#[allow(clippy::too_many_arguments)]
 async fn scan_metadata_for_page(
     project_id: String,
     dir: std::path::PathBuf,
@@ -515,6 +521,7 @@ async fn scan_metadata_for_page(
     active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
     cleanup_key: String,
     my_generation: u64,
+    metadata_cache: Arc<std::sync::Mutex<MetadataCache>>,
 ) {
     let _ = dir; // dir 当前由 page_jobs 内的 jsonl_path 携带，保留参数为未来扩展（如懒构造路径）
     let semaphore = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
@@ -524,11 +531,12 @@ async fn scan_metadata_for_page(
         let permit_sem = semaphore.clone();
         let tx = tx.clone();
         let project_id = project_id.clone();
+        let cache = metadata_cache.clone();
         set.spawn(async move {
             let Ok(_permit) = permit_sem.acquire_owned().await else {
                 return;
             };
-            let meta = extract_session_metadata(&jsonl_path).await;
+            let meta = extract_session_metadata_cached(&cache, &jsonl_path).await;
             let _ = tx.send(SessionMetadataUpdate {
                 project_id,
                 session_id,
@@ -584,7 +592,7 @@ impl DataApi for LocalDataApi {
             self.list_sessions_skeleton(project_id, pagination).await?;
 
         for (summary, (_id, path)) in page.iter_mut().zip(page_jobs.iter()) {
-            let meta = extract_session_metadata(path).await;
+            let meta = extract_session_metadata_cached(&self.metadata_cache, path).await;
             summary.title = meta.title;
             summary.message_count = meta.message_count;
             summary.is_ongoing = meta.is_ongoing;
@@ -632,6 +640,7 @@ impl DataApi for LocalDataApi {
                     active_scans.clone(),
                     pid_for_cleanup,
                     my_generation,
+                    self.metadata_cache.clone(),
                 ));
 
                 scans.insert(
