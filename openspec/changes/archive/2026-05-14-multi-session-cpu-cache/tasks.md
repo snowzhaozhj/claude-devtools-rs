@@ -41,6 +41,6 @@
 - [x] 4.3 `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` 通过（src-tauri 独立 manifest——本 change 应不动 src-tauri）
 - [x] 4.4 `npm run check --prefix ui` 通过（无 ui 改动，trivially 通过）
 - [x] 4.5 `openspec validate multi-session-cpu-cache --strict` 通过
-- [ ] 4.6 手动 smoke：`just dev` 启动，多 session 同时活跃 5 分钟，对比 `top -pid <cdt>` 的 CPU% 与改动前（用户实测）
-- [ ] 4.7 codex 异构二审（实现完成后）：`Agent({ subagent_type: "codex:codex-rescue", ... })` 跑代码二审；发现 bug 修完再跑第二轮验证（按 CLAUDE.md `.claude/rules/codex-usage.md`）
-- [ ] 4.8 PR push 后再跑一轮 codex 二审，通过后 `/opsx:archive multi-session-cpu-cache`（archive commit 作为 PR 最后一个 commit）
+- [x] 4.6 手动 smoke：`just dev` 启动，多 session 同时活跃 5 分钟，对比 `top -pid <cdt>` 的 CPU% 与改动前（用户实测）
+- [x] 4.7 codex 异构二审（实现完成后）：`Agent({ subagent_type: "codex:codex-rescue", ... })` 跑代码二审；发现 bug 修完再跑第二轮验证（按 CLAUDE.md `.claude/rules/codex-usage.md`）
+- [x] 4.8 PR push 后再跑一轮 codex 二审，通过后 `/opsx:archive multi-session-cpu-cache`（archive commit 作为 PR 最后一个 commit）
