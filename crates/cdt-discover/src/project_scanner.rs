@@ -204,7 +204,10 @@ impl ProjectScanner {
                     bucket.session_ids.push(stat.id);
                 }
             } else {
-                let decoded = decode_path(dir_name);
+                let decoded = self
+                    .decode_historical_worktree_dir(dir_name)
+                    .await
+                    .unwrap_or_else(|| decode_path(dir_name));
                 let fallback = cwd_buckets
                     .entry(decoded.to_string_lossy().into_owned())
                     .or_insert_with(|| CwdBucket {
@@ -256,31 +259,86 @@ impl ProjectScanner {
     }
 
     async fn extract_session_cwd(&self, path: &Path) -> Option<String> {
-        let lines = self
+        let head = self
             .fs
             .read_lines_head(path, SESSION_HEAD_LINES)
             .await
             .ok()?;
-        for (idx, line) in lines.iter().enumerate() {
-            if line.is_empty() {
+        if let Some(cwd) = extract_cwd_from_lines(path, &head) {
+            return Some(cwd);
+        }
+        if self.fs.kind() == FsKind::Ssh {
+            return None;
+        }
+        let content = self.fs.read_to_string(path).await.ok()?;
+        extract_cwd_from_iter(path, content.lines())
+    }
+
+    async fn decode_historical_worktree_dir(&self, dir_name: &str) -> Option<PathBuf> {
+        let (repo_encoded, worktree_encoded) = dir_name
+            .split_once("-.claude-worktrees-")
+            .or_else(|| dir_name.split_once("--claude-worktrees-"))?;
+        if worktree_encoded.is_empty() {
+            return None;
+        }
+        let repo = self.extract_cwd_from_project_dir(repo_encoded).await?;
+        Some(
+            repo.join(".claude")
+                .join("worktrees")
+                .join(worktree_encoded),
+        )
+    }
+
+    async fn extract_cwd_from_project_dir(&self, dir_name: &str) -> Option<PathBuf> {
+        let dir = self.projects_dir.join(dir_name);
+        if !self.fs.exists(&dir).await {
+            return Some(decode_path(dir_name));
+        }
+        let entries = self.fs.read_dir(&dir).await.ok()?;
+        for entry in entries {
+            if !entry.kind.is_file()
+                || !Path::new(&entry.name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+            {
                 continue;
             }
-            match parse_entry_at(line, idx + 1) {
-                Ok(Some(msg)) => {
-                    if let Some(cwd) = msg.cwd {
-                        if !cwd.is_empty() {
-                            return Some(cwd);
-                        }
-                    }
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    tracing::debug!(path = %path.display(), line = idx + 1, error = ?err, "skip malformed line");
-                }
+            let path = dir.join(entry.name);
+            if let Some(cwd) = self.extract_session_cwd(&path).await {
+                return Some(PathBuf::from(cwd));
             }
         }
-        None
+        Some(decode_path(dir_name))
     }
+}
+
+fn extract_cwd_from_lines(path: &Path, lines: &[String]) -> Option<String> {
+    extract_cwd_from_iter(path, lines.iter().map(String::as_str))
+}
+
+fn extract_cwd_from_iter<'a>(
+    path: &Path,
+    lines: impl IntoIterator<Item = &'a str>,
+) -> Option<String> {
+    for (idx, line) in lines.into_iter().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        match parse_entry_at(line, idx + 1) {
+            Ok(Some(msg)) => {
+                if let Some(cwd) = msg.cwd {
+                    if !cwd.is_empty() {
+                        return Some(cwd);
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::debug!(path = %path.display(), line = idx + 1, error = ?err, "skip malformed line");
+            }
+        }
+    }
+    None
 }
 
 struct SessionStat {

@@ -107,9 +107,11 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
 
         let mut buckets: BTreeMap<String, Bucket> = BTreeMap::new();
         for project in projects {
-            let identity = self.git.resolve_identity(&project.path).await;
+            let identity = self.resolve_project_identity(&project).await;
             let branch = self.git.get_branch(&project.path).await;
-            let is_main = self.git.is_main_worktree(&project.path).await;
+            let is_main = self
+                .is_project_main_worktree(&project, identity.as_ref())
+                .await;
             let group_id = identity
                 .as_ref()
                 .map_or_else(|| project.id.clone(), |i| i.id.clone());
@@ -178,6 +180,43 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
         });
         groups
     }
+
+    async fn resolve_project_identity(&self, project: &Project) -> Option<RepositoryIdentity> {
+        if let Some(identity) = self.git.resolve_identity(&project.path).await {
+            return Some(identity);
+        }
+        let parent_repo = infer_parent_repo_from_worktree_path(&project.path)?;
+        self.git.resolve_identity(&parent_repo).await
+    }
+
+    async fn is_project_main_worktree(
+        &self,
+        project: &Project,
+        identity: Option<&RepositoryIdentity>,
+    ) -> bool {
+        if self.git.resolve_identity(&project.path).await.is_some() {
+            return self.git.is_main_worktree(&project.path).await;
+        }
+        identity.is_none()
+    }
+}
+
+fn infer_parent_repo_from_worktree_path(path: &Path) -> Option<PathBuf> {
+    let mut components = path.components().peekable();
+    let mut parent = PathBuf::new();
+    while let Some(component) = components.next() {
+        if component.as_os_str() == ".claude" {
+            let Some(next) = components.peek() else {
+                parent.push(component.as_os_str());
+                continue;
+            };
+            if next.as_os_str() == "worktrees" {
+                return Some(parent);
+            }
+        }
+        parent.push(component.as_os_str());
+    }
+    None
 }
 
 struct Bucket {
@@ -267,6 +306,42 @@ mod tests {
         assert!(group.worktrees[0].is_main_worktree);
         assert_eq!(group.worktrees[1].id, "wt1");
         assert_eq!(group.total_sessions, 2);
+    }
+
+    #[tokio::test]
+    async fn removed_claude_worktree_uses_parent_repo_identity() {
+        let identity = RepositoryIdentity {
+            id: "repo-1".into(),
+            name: "repo-1".into(),
+        };
+        let mut entries = HashMap::new();
+        entries.insert(
+            PathBuf::from("/repo"),
+            FakeGitEntry {
+                identity: Some(identity.clone()),
+                branch: Some("main".into()),
+                is_main: true,
+            },
+        );
+
+        let grouper = WorktreeGrouper::new(FakeGitIdentityResolver { entries });
+        let groups = grouper
+            .group_by_repository(vec![
+                proj("main", "/repo", 100),
+                proj("removed", "/repo/.claude/worktrees/old-feature", 50),
+            ])
+            .await;
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].worktrees.len(), 2);
+        assert_eq!(groups[0].identity, Some(identity));
+        let removed = groups[0]
+            .worktrees
+            .iter()
+            .find(|w| w.id == "removed")
+            .unwrap();
+        assert!(!removed.is_main_worktree);
+        assert_eq!(removed.git_branch, None);
     }
 
     #[tokio::test]
