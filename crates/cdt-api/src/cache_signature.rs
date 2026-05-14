@@ -1,0 +1,160 @@
+//! 文件身份签名 —— 跨平台 (mtime + size + identity) 三元组。
+//!
+//! 用于 notifier / metadata 缓存判定"文件是否真有变化"。`FileSignature` 字段
+//! byte-equal 视为命中；任一字段不一致走 cache miss。
+//!
+//! `identity` 维度（Unix `(dev, ino)` / Windows `(volume_serial, file_index)`）
+//! 用于检出 `inode` / `file_index` 变化（典型：rename 替换文件）。详见 change
+//! `multi-session-cpu-cache` design D1b/D1d：等价性是 best-effort，inode reuse
+//! 同时撞 mtime/size 的极端场景由后续 file-change 自然恢复。
+
+use std::fs::Metadata;
+use std::time::SystemTime;
+
+/// 文件身份维度 —— Unix 上是 `(dev, ino)`，Windows 上是
+/// `(volume_serial, file_index)`，其它平台退化为空。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileIdentity {
+    #[cfg(unix)]
+    Unix { dev: u64, ino: u64 },
+    #[cfg(windows)]
+    Windows { volume_serial: u32, file_index: u64 },
+    #[cfg(not(any(unix, windows)))]
+    None,
+}
+
+impl FileIdentity {
+    /// 从 `Metadata` 提取平台对应的 identity。
+    pub fn from_metadata(meta: &Metadata) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Self::Unix {
+                dev: meta.dev(),
+                ino: meta.ino(),
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            Self::Windows {
+                volume_serial: meta.volume_serial_number().unwrap_or(0),
+                file_index: meta.file_index().unwrap_or(0),
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            Self::None
+        }
+    }
+}
+
+/// 文件签名 —— mtime + size + identity 的组合。
+///
+/// `PartialEq` byte-equal 即视为"文件在常规 append-only 写入路径下未变"。
+/// 等价性是 best-effort：详 change `multi-session-cpu-cache` design D1d。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileSignature {
+    pub mtime: SystemTime,
+    pub size: u64,
+    pub identity: FileIdentity,
+}
+
+impl FileSignature {
+    /// 从 `std::fs::Metadata` 构造签名。`mtime` 取 `modified()`，失败时退化
+    /// 为 `UNIX_EPOCH`（保守判定，让缓存走 miss）。
+    pub fn from_metadata(meta: &Metadata) -> Self {
+        let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        Self {
+            mtime,
+            size: meta.len(),
+            identity: FileIdentity::from_metadata(meta),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    fn meta_for(path: &std::path::Path) -> Metadata {
+        std::fs::metadata(path).expect("metadata")
+    }
+
+    #[test]
+    fn same_file_yields_equal_signature() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("a.jsonl");
+        std::fs::write(&p, b"line1\n").unwrap();
+        let s1 = FileSignature::from_metadata(&meta_for(&p));
+        let s2 = FileSignature::from_metadata(&meta_for(&p));
+        assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn appending_changes_size_so_signature_differs() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("a.jsonl");
+        std::fs::write(&p, b"line1\n").unwrap();
+        let s1 = FileSignature::from_metadata(&meta_for(&p));
+
+        // append 让 size 变化（即便 mtime 巧合相同 size 也变了）
+        let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+        f.write_all(b"line2\n").unwrap();
+        f.sync_all().unwrap();
+        let s2 = FileSignature::from_metadata(&meta_for(&p));
+
+        assert_ne!(s1, s2, "size 变化必须让签名不同");
+        assert_ne!(s1.size, s2.size);
+    }
+
+    #[test]
+    fn truncate_makes_size_smaller_so_signature_differs() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("a.jsonl");
+        std::fs::write(&p, b"line1\nline2\n").unwrap();
+        let s1 = FileSignature::from_metadata(&meta_for(&p));
+
+        std::fs::write(&p, b"x\n").unwrap();
+        let s2 = FileSignature::from_metadata(&meta_for(&p));
+
+        assert_ne!(s1, s2);
+        assert!(s2.size < s1.size);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_replace_changes_inode_so_signature_differs() {
+        // file A 被 rename 替换：identity 维度（dev, ino）必然不同
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("a.jsonl");
+        std::fs::write(&p, b"original\n").unwrap();
+        let s1 = FileSignature::from_metadata(&meta_for(&p));
+
+        // 准备替换文件，写入相同尺寸
+        let replacement = tmp.path().join("a.replace");
+        std::fs::write(&replacement, b"original\n").unwrap();
+        std::fs::rename(&replacement, &p).unwrap();
+
+        let s2 = FileSignature::from_metadata(&meta_for(&p));
+        // identity（inode）必然不同；即便 size 相同也应让签名不同
+        assert_ne!(s1.identity, s2.identity, "rename 替换后 inode 必须不同");
+        assert_ne!(s1, s2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn different_files_have_different_identity() {
+        let tmp = TempDir::new().unwrap();
+        let a = tmp.path().join("a.jsonl");
+        let b = tmp.path().join("b.jsonl");
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::write(&b, b"x").unwrap();
+
+        let sa = FileSignature::from_metadata(&meta_for(&a));
+        let sb = FileSignature::from_metadata(&meta_for(&b));
+        assert_ne!(sa.identity, sb.identity);
+    }
+}

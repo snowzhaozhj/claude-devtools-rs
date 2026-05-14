@@ -80,6 +80,12 @@ impl NotificationManager {
 
     /// 添加通知，自动 prune + 保存。按 `error.id` 去重：若已存在同 id 记录，
     /// 直接返回 `Ok(false)` 不写入，不触发 save；新增成功返回 `Ok(true)`。
+    ///
+    /// 内存与磁盘的事务性：**save 失败时按 `error.id` 回滚** in-memory push，
+    /// 让内存状态与磁盘保持一致。否则 caller 见到 Err 重试时，由于 in-memory
+    /// dedup 命中 → 直接 `Ok(false)`，但磁盘上从未持久化过该通知，导致永久
+    /// 漏通知（codex 二审找到的下游 cache 配合 bug，详 change
+    /// `multi-session-cpu-cache` notifier cache）。
     pub async fn add_notification(&mut self, error: DetectedError) -> Result<bool, ConfigError> {
         if self.notifications.iter().any(|n| n.error.id == error.id) {
             return Ok(false);
@@ -90,14 +96,21 @@ impl NotificationManager {
             .unwrap_or_default()
             .as_millis();
 
+        let new_id = error.id.clone();
         self.notifications.push(StoredNotification {
             error,
             is_read: false,
             created_at: i64::try_from(now_ms).unwrap_or(i64::MAX),
         });
 
+        // prune 推到 save 之后：避免 save 失败回滚时还要再次 prune；按 id 回滚
+        // 比按索引更稳健（prune 内部 sort 会让索引位置失效）。
+        if let Err(e) = self.save().await {
+            // 回滚 in-memory push
+            self.notifications.retain(|n| n.error.id != new_id);
+            return Err(e);
+        }
         self.prune();
-        self.save().await?;
         Ok(true)
     }
 
@@ -331,6 +344,37 @@ mod tests {
         assert!(!second, "second add with same id should be dedup");
         assert_eq!(mgr.get_notifications(10, 0).total, 1);
         assert_eq!(mgr.get_unread_count(), 1);
+    }
+
+    /// 回归测试：save 失败时 in-memory push 必须回滚，避免后续 dedup 误命中
+    /// 导致永久漏通知（codex 二审找到的与 notifier cache 配合的 bug）。
+    #[tokio::test]
+    async fn add_notification_rollbacks_in_memory_when_save_fails() {
+        let dir = tempdir().unwrap();
+        // path 指向一个目录而非文件 → tokio::fs::write 必失败
+        let dir_as_file = dir.path().join("not_a_file");
+        std::fs::create_dir(&dir_as_file).unwrap();
+
+        let mut mgr = NotificationManager::new(Some(dir_as_file));
+        let err = make_error("retry-me");
+
+        // 第一次：push 进 vec → save Err → 回滚 → 返回 Err
+        let first = mgr.add_notification(err.clone()).await;
+        assert!(first.is_err(), "save 失败应让 add_notification 返回 Err");
+        assert_eq!(
+            mgr.get_notifications(10, 0).total,
+            0,
+            "save 失败后 in-memory vec 必须为空（已回滚）"
+        );
+
+        // 第二次同 id 重试：dedup 不应命中（vec 已回滚为空）→ 仍走完整 push +
+        // save 路径 → 仍 Err
+        let second = mgr.add_notification(err).await;
+        assert!(
+            second.is_err(),
+            "save 持续失败时 dedup 不应误命中，应继续重试并 Err"
+        );
+        assert_eq!(mgr.get_notifications(10, 0).total, 0);
     }
 
     #[tokio::test]
