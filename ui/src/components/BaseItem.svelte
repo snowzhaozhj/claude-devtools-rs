@@ -92,6 +92,7 @@
     border-radius: 4px;
     cursor: pointer;
     transition: background-color 0.1s;
+    min-width: 0;
   }
 
   .base-item-header:hover {
@@ -185,7 +186,6 @@
     margin-left: 8px;
     margin-top: 8px;
     padding-left: 24px;
-    overflow-x: hidden;
     border-left: 2px solid var(--color-border);
   }
 </style>

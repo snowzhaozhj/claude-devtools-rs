@@ -875,7 +875,7 @@
   .conversation {
     flex: 1;
     min-width: 0;
-    overflow-y: auto;
+    overflow-y: scroll;
     overflow-x: hidden;
     scrollbar-gutter: stable;
     padding: 16px 24px 48px;
@@ -1001,7 +1001,6 @@
     width: 100%;
     max-width: 95%;
     min-width: 0;
-    overflow-x: hidden;
     border-left: 2px solid var(--chat-ai-border);
     padding-left: 12px;
   }
