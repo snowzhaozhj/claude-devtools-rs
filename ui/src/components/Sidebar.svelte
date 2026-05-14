@@ -36,6 +36,7 @@
   // meta 11×1.4）；header 行高强制对齐 44 让单一 windowing 单元生效。
   const ITEM_HEIGHT = 44;
   const SESSION_PAGE_SIZE = 20;
+  const HISTORY_SCROLL_THRESHOLD = ITEM_HEIGHT * 2;
 
   interface Props {
     selectedProjectId: string;
@@ -60,6 +61,8 @@
   let sessionsLoading = $state(false);
   let sessionsLoadingMore = $state(false);
   let sessionsNextCursor: string | null = $state(null);
+  let browsingHistory = $state(false);
+  let hasDeferredSessionRefresh = $state(false);
   let filterQuery = $state("");
 
   // ---------------------------------------------------------------------------
@@ -190,13 +193,22 @@
     return mergeSessions(current, summaries);
   }
 
-  function mergeSessions(prev: SessionSummary[], next: SessionSummary[]): SessionSummary[] {
+  function mergeSessions(prev: SessionSummary[], next: SessionSummary[], sort = true): SessionSummary[] {
     const byId = new Map(prev.map((s) => [s.sessionId, s]));
+    const merged = [...prev];
     for (const item of next) {
       const old = byId.get(item.sessionId);
-      byId.set(item.sessionId, old ? mergeSilentMetadata([old], [item])[0] : item);
+      if (old) {
+        const updated = mergeSilentMetadata([old], [item])[0];
+        byId.set(item.sessionId, updated);
+        const idx = merged.findIndex((s) => s.sessionId === item.sessionId);
+        if (idx >= 0) merged[idx] = updated;
+      } else {
+        byId.set(item.sessionId, item);
+        merged.push(item);
+      }
     }
-    return [...byId.values()].sort((a, b) => b.timestamp - a.timestamp);
+    return sort ? merged.sort((a, b) => b.timestamp - a.timestamp) : merged;
   }
 
   async function loadSessions(projectId: string, silent = false) {
@@ -215,7 +227,8 @@
       if (projectId !== selectedProjectId) return;
       sessions = fresh;
       sessionsNextCursor = result.nextCursor;
-      queueMicrotask(() => maybeLoadMoreSessions());
+      hasDeferredSessionRefresh = false;
+      queueMicrotask(() => maybeLoadMoreSessions(true));
     } catch (e) {
       console.error("Failed to load sessions:", e);
       if (!silent && projectId === selectedProjectId) {
@@ -235,9 +248,8 @@
     try {
       const result = await listSessions(projectId, SESSION_PAGE_SIZE, cursor);
       if (projectId !== selectedProjectId || cursor !== sessionsNextCursor) return;
-      sessions = mergeSessions(sessions, result.items);
+      sessions = mergeSessions(sessions, result.items, false);
       sessionsNextCursor = result.nextCursor;
-      queueMicrotask(() => maybeLoadMoreSessions());
     } catch (e) {
       console.error("Failed to load more sessions:", e);
     } finally {
@@ -245,15 +257,25 @@
     }
   }
 
-  function maybeLoadMoreSessions() {
+  function maybeLoadMoreSessions(allowAutoFill = false) {
     const el = sessionListEl;
     if (!el || !sessionsNextCursor || sessionsLoading || sessionsLoadingMore) return;
     const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (remaining < ITEM_HEIGHT * 8) void loadMoreSessions();
+    const threshold = ITEM_HEIGHT * 8;
+    if (remaining < threshold && (allowAutoFill || browsingHistory)) void loadMoreSessions();
+  }
+
+  function refreshDeferredSessions() {
+    if (!selectedProjectId || !hasDeferredSessionRefresh) return;
+    hasDeferredSessionRefresh = false;
+    void loadSessions(selectedProjectId, true);
   }
 
   function onSessionListScroll(e: Event) {
     vlist.onScroll(e);
+    const el = e.currentTarget as HTMLElement | null;
+    browsingHistory = !!el && el.scrollTop > HISTORY_SCROLL_THRESHOLD;
+    if (!browsingHistory) refreshDeferredSessions();
     maybeLoadMoreSessions();
   }
 
@@ -305,6 +327,10 @@
         );
       }
       if (!currentProjectId || payload.projectId !== currentProjectId || !payload.sessionId) return;
+      if (browsingHistory) {
+        hasDeferredSessionRefresh = true;
+        return;
+      }
       scheduleRefresh(`sidebar:${currentProjectId}`, () =>
         untrack(() => loadSessions(currentProjectId, true)),
       );
@@ -461,6 +487,9 @@
         bind:value={filterQuery}
       />
       <span class="session-count-num">{visibleSessions.length}/{totalSessions}</span>
+      {#if hasDeferredSessionRefresh}
+        <button class="refresh-pending-btn" onclick={refreshDeferredSessions}>有更新</button>
+      {/if}
       {#if hiddenCount > 0}
         <button
           class="show-hidden-btn"
@@ -501,7 +530,7 @@
         const h = el.clientHeight;
         if (h > 0) {
           vlist.setContainerHeight(h);
-          maybeLoadMoreSessions();
+          maybeLoadMoreSessions(true);
         }
       });
       ro.observe(el);
@@ -663,6 +692,22 @@
     color: var(--color-text-muted);
     flex-shrink: 0;
     font-family: var(--font-mono);
+  }
+
+  .refresh-pending-btn {
+    flex-shrink: 0;
+    padding: 2px 6px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .refresh-pending-btn:hover {
+    color: var(--color-text);
+    border-color: var(--color-border-emphasis);
   }
 
   .show-hidden-btn {

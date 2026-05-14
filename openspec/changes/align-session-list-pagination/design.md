@@ -81,6 +81,16 @@ Dashboard 项目卡片只消费 project discovery / project summary 能力，不
 
 选择显式搜索能力。
 
+### D7: 历史浏览时稳定性优先于实时整表刷新
+
+用户滚动离开列表顶部浏览历史时，Sidebar SHALL 暂停 file-change 触发的 silent full refresh，只保留已加载 session 的 metadata patch；待用户回到顶部或点击“有更新”提示时再刷新第一页。分页加载更多时保持已加载顺序，只追加新页，不因 metadata 或补拉结果对整表重新排序。自动补页只用于首屏/resize 后填满容器，不在每次加载更多后连续追页。
+
+候选方案：
+- 锚点保持：实时性更强，但需要扩展虚拟列表 scrollTo/anchor 能力，时序风险更高。
+- 暂停刷新 + 追加稳定：符合浏览历史时“不要打断我”的体验，改动范围小。
+
+选择暂停刷新 + 追加稳定；顶部实时严格排序让位于历史浏览的滚动稳定性。
+
 ## Risks / Trade-offs
 
 - [Risk] 首屏不再包含旧页 session，用户滚动前看不到历史深处条目。→ Mitigation：保留 infinite scroll / load more，`hasMore` 明确驱动继续加载。
@@ -88,3 +98,4 @@ Dashboard 项目卡片只消费 project discovery / project summary 能力，不
 - [Risk] `total` 兼容字段与新语义冲突。→ Mitigation：spec 明确 UI 不依赖精确 `total`；实现期若类型允许，改为 `Option<usize>`，否则填当前已知下界并同步 contract test。
 - [Risk] metadata scan 只扫当前页后，旧页 metadata 直到加载该页才补齐。→ Mitigation：这是预期行为；测试覆盖“每次分页只推送该页 metadata”。
 - [Risk] 按 ids 补拉需要新增 IPC/trait 方法。→ Mitigation：方法语义窄，只按 session ids 返回 light summaries，不做全局搜索。
+- [Risk] 浏览历史时顶部 ongoing 更新延迟可见。→ Mitigation：显示“有更新”提示，用户点击或滚回顶部后刷新。
