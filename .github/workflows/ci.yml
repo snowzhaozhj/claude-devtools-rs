@@ -15,6 +15,18 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  openspec:
+    name: openspec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install OpenSpec
+        run: npm install -g @fission-ai/openspec
+      - name: Validate OpenSpec specs and changes
+        run: openspec validate --all --strict
+      - name: Check completed changes are archived
+        run: bash scripts/check-openspec-archives.sh
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest

@@ -67,6 +67,10 @@ fmt:
 spec-validate:
     openspec validate --all --strict
 
+# 阻止已完成但未归档的 active change 漏进 PR
+spec-archive-check:
+    bash scripts/check-openspec-archives.sh
+
 # 校验指定 change，例：`just spec-check 2026-04-17-auto-notification-pipeline`
 spec-check CHANGE:
     openspec validate {{CHANGE}} --strict
@@ -75,7 +79,7 @@ spec-check CHANGE:
 
 # 提交前预检：fmt → lint → test → 前端 vitest → spec 校验（对齐 .claude/rules/opsx-apply-cadence.md）
 # e2e 不在 preflight 内（启动浏览器较慢，由 CI 跑）；本地手动 `just test-e2e` 验证
-preflight: fmt lint test test-ui-unit spec-validate
+preflight: fmt lint test test-ui-unit spec-validate spec-archive-check
 
 # ──────── 发布 ────────
 
