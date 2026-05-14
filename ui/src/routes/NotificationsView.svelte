@@ -11,7 +11,7 @@
     type GetNotificationsResult,
   } from "../lib/api";
   import { openTab, setUnreadCount } from "../lib/tabStore.svelte";
-  import { CHECK_CHECK_SVG, CHECK_SVG, TRASH2_SVG, X_SVG } from "../lib/icons";
+  import { BELL_OFF_SVG, CHECK_CHECK_SVG, CHECK_SVG, TRASH2_SVG, X_SVG } from "../lib/icons";
 
   let notifications: StoredNotification[] = $state([]);
   let loading = $state(true);
@@ -191,7 +191,19 @@
       <div class="state-msg state-err">{error}</div>
     {:else if notifications.length === 0}
       <div class="empty-state">
-        <div class="empty-icon">🔔</div>
+        <svg
+          class="empty-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          {@html BELL_OFF_SVG}
+        </svg>
         <div class="empty-title">暂无通知</div>
         <div class="empty-desc">
           通知由触发器规则自动生成。当 Claude Code 会话中出现工具执行错误、
@@ -315,18 +327,18 @@
     cursor: not-allowed;
   }
   .header-action-danger {
-    background: rgba(229, 62, 62, 0.18);
-    border-color: rgba(229, 62, 62, 0.4);
-    color: #e53e3e;
+    background: color-mix(in oklch, var(--color-danger-bright) 18%, transparent);
+    border-color: color-mix(in oklch, var(--color-danger-bright) 40%, transparent);
+    color: var(--color-danger);
   }
   .header-action-danger:hover {
-    background: rgba(229, 62, 62, 0.28);
-    color: #e53e3e;
+    background: color-mix(in oklch, var(--color-danger-bright) 28%, transparent);
+    color: var(--color-danger);
   }
 
   .action-error {
     padding: 8px 24px;
-    background: rgba(229, 62, 62, 0.1);
+    background: var(--tool-result-error-bg);
     color: var(--tool-result-error-text);
     font-size: 13px;
   }
@@ -358,8 +370,10 @@
     text-align: center;
   }
   .empty-icon {
-    font-size: 36px;
-    opacity: 0.4;
+    width: 40px;
+    height: 40px;
+    color: var(--color-text-muted);
+    opacity: 0.5;
   }
   .empty-title {
     font-size: 15px;
@@ -459,7 +473,7 @@
     color: var(--color-text);
   }
   .notif-row-btn-delete:hover {
-    background: rgba(229, 62, 62, 0.15);
-    color: #e53e3e;
+    background: color-mix(in oklch, var(--color-danger-bright) 15%, transparent);
+    color: var(--color-danger);
   }
 </style>

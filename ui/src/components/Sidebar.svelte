@@ -789,7 +789,7 @@
   }
 
   .show-hidden-active {
-    color: #3b82f6;
+    color: var(--color-accent-blue);
   }
 
   .session-list {
@@ -886,7 +886,7 @@
 
   .pin-icon {
     flex-shrink: 0;
-    color: #3b82f6;
+    color: var(--color-accent-blue);
   }
 
   .session-meta {
@@ -940,7 +940,7 @@
   }
 
   .session-branch-icon {
-    color: rgba(52, 211, 153, 0.7);
+    color: var(--color-text-muted);
   }
 
   .session-branch-name {

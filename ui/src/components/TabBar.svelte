@@ -444,8 +444,8 @@
     min-width: 16px;
     height: 16px;
     border-radius: 8px;
-    background: #e53e3e;
-    color: #fff;
+    background: var(--color-danger-bright);
+    color: var(--color-text-on-accent);
     font-size: 10px;
     font-weight: 600;
     display: flex;
