@@ -1,20 +1,18 @@
 <script lang="ts">
-  import type { SessionDetail } from "../lib/api";
-  import { extractContext, groupByCategory, categoryLabel, CATEGORY_COLORS, type ContextCategory, type ContextEntry } from "../lib/contextExtractor";
+  import { groupByCategory, categoryLabel, CATEGORY_COLORS, type ContextCategory, type ContextEntry } from "../lib/contextExtractor";
   import DirectoryTree from "./DirectoryTree.svelte";
 
   interface Props {
-    detail: SessionDetail;
+    entries: ContextEntry[];
     onClose: () => void;
   }
 
-  let { detail, onClose }: Props = $props();
+  let { entries, onClose }: Props = $props();
 
   type ViewMode = "category" | "ranked";
   let viewMode: ViewMode = $state("category");
   let collapsedCategories: Set<ContextCategory> = $state(new Set());
 
-  const entries = $derived(extractContext(detail));
   const grouped = $derived(groupByCategory(entries));
   const totalTokens = $derived(entries.reduce((sum, e) => sum + e.estimatedTokens, 0));
   const rankedEntries = $derived([...entries].sort((a, b) => b.estimatedTokens - a.estimatedTokens));
@@ -40,27 +38,56 @@
     if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
     return String(n);
   }
+
+  function categoryTokens(items: ContextEntry[]): number {
+    return items.reduce((sum, e) => sum + e.estimatedTokens, 0);
+  }
 </script>
 
 <aside class="context-panel">
   <!-- Header -->
   <div class="cp-header">
-    <div class="cp-header-top">
-      <span class="cp-title">Context</span>
-      <span class="cp-stats">{entries.length} items · ~{fk(totalTokens)} tokens</span>
-      <button class="cp-close" onclick={onClose} title="关闭">✕</button>
+    <div class="cp-title-row">
+      <div class="cp-title-wrap">
+        <svg class="cp-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+          <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+          <path d="M10 9H8" />
+          <path d="M16 13H8" />
+          <path d="M16 17H8" />
+        </svg>
+        <span class="cp-title">Visible Context</span>
+        <span class="cp-count-badge">{entries.length}</span>
+      </div>
+      <button class="cp-close" onclick={onClose} title="关闭" aria-label="关闭 Context 面板">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 6 6 18" />
+          <path d="m6 6 12 12" />
+        </svg>
+      </button>
     </div>
-    <div class="cp-mode-bar">
+    <div class="cp-token-row">
+      <span class="cp-token-muted">Visible:</span>
+      <span class="cp-token-value">~{fk(totalTokens)}</span>
+    </div>
+    <div class="cp-mode-row">
+      <span class="cp-mode-label">View:</span>
       <button
         class="cp-mode-btn"
         class:cp-mode-active={viewMode === "category"}
         onclick={() => viewMode = "category"}
-      >Category</button>
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M3 12h18" /><path d="M3 18h18" /></svg>
+        Category
+      </button>
       <button
         class="cp-mode-btn"
         class:cp-mode-active={viewMode === "ranked"}
         onclick={() => viewMode = "ranked"}
-      >Ranked</button>
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 16 4 4 4-4" /><path d="M7 20V4" /><path d="M11 4h10" /><path d="M11 8h7" /><path d="M11 12h4" /></svg>
+        By Size
+      </button>
     </div>
   </div>
 
@@ -72,14 +99,16 @@
         {#if catEntries && catEntries.length > 0}
           {@const isCollapsed = collapsedCategories.has(cat)}
           <div class="cp-section">
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div class="cp-section-header" onclick={() => toggleCategory(cat)}>
-              <span class="cp-chevron" class:cp-chevron-open={!isCollapsed}>▸</span>
-              <span class="cp-section-label">{categoryLabel(cat)}</span>
-              <span class="cp-section-count">{catEntries.length}</span>
-              <span class="cp-section-tokens">~{fk(catEntries.reduce((s, e) => s + e.estimatedTokens, 0))}</span>
-            </div>
+            <button class="cp-section-header" onclick={() => toggleCategory(cat)} aria-expanded={!isCollapsed}>
+              <span class="cp-section-main">
+                <span class="cp-chevron" class:cp-chevron-open={!isCollapsed}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+                </span>
+                <span class="cp-section-label">{categoryLabel(cat)}</span>
+                <span class="cp-section-count">{catEntries.length}</span>
+              </span>
+              <span class="cp-section-tokens">~{fk(categoryTokens(catEntries))} tokens</span>
+            </button>
 
             {#if !isCollapsed}
               <div class="cp-section-items">
@@ -137,50 +166,91 @@
 
 <style>
   .context-panel {
-    width: 320px;
-    min-width: 320px;
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    width: min(320px, 100%);
+    min-width: 0;
+    max-width: 100%;
     height: 100%;
     display: flex;
     flex-direction: column;
     border-left: 1px solid var(--color-border);
-    background: var(--color-surface-sidebar);
+    background: var(--color-surface);
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
     overflow: hidden;
   }
 
   .cp-header {
     flex-shrink: 0;
     border-bottom: 1px solid var(--color-border);
+    padding: 12px 14px 10px;
   }
 
-  .cp-header-top {
+  .cp-title-row,
+  .cp-title-wrap,
+  .cp-token-row,
+  .cp-mode-row,
+  .cp-mode-btn,
+  .cp-section-main {
     display: flex;
     align-items: center;
+  }
+
+  .cp-title-row {
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .cp-title-wrap {
     gap: 8px;
-    padding: 10px 14px 6px;
+    min-width: 0;
+  }
+
+  .cp-title-icon {
+    width: 16px;
+    height: 16px;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
   }
 
   .cp-title {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 650;
     color: var(--color-text);
+    letter-spacing: 0.01em;
   }
 
-  .cp-stats {
-    flex: 1;
-    font-size: 11px;
-    color: var(--color-text-muted);
-    font-family: var(--font-mono);
+  .cp-count-badge,
+  .cp-section-count {
+    border-radius: 5px;
+    background: var(--color-surface-overlay, var(--badge-neutral-bg));
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    line-height: 1;
+    padding: 3px 6px;
   }
 
   .cp-close {
-    background: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    background: transparent;
     border: none;
-    color: var(--color-text-muted);
-    font-size: 14px;
+    color: var(--color-text-secondary);
     cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 4px;
+    padding: 0;
+    border-radius: 6px;
     transition: background 0.1s, color 0.1s;
+  }
+
+  .cp-close svg {
+    width: 16px;
+    height: 16px;
   }
 
   .cp-close:hover {
@@ -188,64 +258,128 @@
     color: var(--color-text);
   }
 
-  .cp-mode-bar {
-    display: flex;
+  .cp-token-row {
     gap: 4px;
-    padding: 4px 14px 8px;
+    justify-content: flex-start;
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--color-border-subtle, var(--color-border));
+    font-size: 12px;
+  }
+
+  .cp-token-muted {
+    color: var(--color-text-muted);
+  }
+
+  .cp-token-value {
+    color: var(--color-text-secondary);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cp-mode-row {
+    gap: 6px;
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--color-border-subtle, var(--color-border));
+  }
+
+  .cp-mode-label {
+    margin-right: 2px;
+    font-size: 10px;
+    color: var(--color-text-muted);
   }
 
   .cp-mode-btn {
-    font-size: 11px;
+    gap: 4px;
+    font-size: 10px;
     font-family: inherit;
     color: var(--color-text-muted);
-    background: none;
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    padding: 2px 10px;
+    background: var(--color-surface-overlay, var(--badge-neutral-bg));
+    border: 1px solid transparent;
+    border-radius: 5px;
+    padding: 3px 8px;
     cursor: pointer;
     transition: background 0.1s, color 0.1s, border-color 0.1s;
   }
 
+  .cp-mode-btn svg {
+    width: 10px;
+    height: 10px;
+  }
+
   .cp-mode-btn:hover {
-    background: var(--tool-item-hover-bg);
+    color: var(--color-text-secondary);
+    border-color: var(--color-border-subtle, var(--color-border));
   }
 
   .cp-mode-active {
-    background: var(--color-surface-raised);
-    color: var(--color-text);
-    border-color: var(--color-border-emphasis);
+    background: rgba(99, 102, 241, 0.18);
+    color: #818cf8;
+    border-color: rgba(99, 102, 241, 0.24);
   }
 
   .cp-body {
     flex: 1;
     overflow-y: auto;
-    padding: 8px 0;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+    padding: 12px 10px 18px 14px;
   }
 
   /* ── Category 视图 ── */
 
   .cp-section {
-    margin-bottom: 4px;
+    margin-bottom: 8px;
+    overflow: hidden;
+    border: 1px solid var(--color-border-subtle, var(--color-border));
+    border-radius: 8px;
+    background: var(--color-surface-raised);
   }
 
   .cp-section-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 14px;
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    padding: 8px 10px;
     cursor: pointer;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    text-align: left;
     transition: background 0.1s;
+  }
+
+  .cp-section-header[aria-expanded="true"] {
+    background: var(--color-surface-overlay, var(--tool-item-hover-bg));
   }
 
   .cp-section-header:hover {
     background: var(--tool-item-hover-bg);
   }
 
+  .cp-section-main {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
   .cp-chevron {
-    font-size: 10px;
-    color: var(--color-text-muted);
-    width: 12px;
+    display: inline-flex;
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
     transition: transform 0.15s ease;
+  }
+
+  .cp-chevron svg {
+    width: 14px;
+    height: 14px;
   }
 
   .cp-chevron-open {
@@ -253,42 +387,46 @@
   }
 
   .cp-section-label {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
-    color: var(--color-text-muted);
-    letter-spacing: 0.3px;
-    text-transform: uppercase;
+    color: var(--color-text);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.25;
   }
 
   .cp-section-count {
-    font-size: 10px;
-    color: var(--color-text-muted);
-    background: var(--badge-neutral-bg);
-    padding: 0 5px;
-    border-radius: 8px;
+    font-size: 11px;
+    flex-shrink: 0;
   }
 
   .cp-section-tokens {
-    font-size: 10px;
+    padding-left: 22px;
+    font-size: 11px;
     color: var(--color-text-muted);
     font-family: var(--font-mono);
-    margin-left: auto;
+    white-space: nowrap;
+    line-height: 1.2;
   }
 
   .cp-section-items {
-    padding: 0 8px 0 14px;
+    padding: 8px 10px 10px 28px;
+    border-top: 1px solid var(--color-border-subtle, var(--color-border));
+    background: color-mix(in srgb, var(--color-surface) 42%, transparent);
   }
 
   .cp-sub-label {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--color-text-muted);
-    padding: 8px 0 2px;
+    padding: 10px 0 4px;
     letter-spacing: 0.2px;
   }
 
   .cp-item {
-    padding: 6px 10px;
+    padding: 6px 8px;
     border-radius: 6px;
     transition: background 0.1s;
   }
@@ -298,24 +436,23 @@
   }
 
   .cp-item-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px;
   }
 
   .cp-item-label {
-    flex: 1;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--color-text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
     min-width: 0;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
   }
 
   .cp-item-tokens {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--color-text-muted);
     font-family: var(--font-mono);
     flex-shrink: 0;
@@ -325,52 +462,57 @@
     display: block;
     font-size: 11px;
     color: var(--color-text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    margin-top: 2px;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+    margin-top: 4px;
   }
 
   /* ── Ranked 视图 ── */
 
   .cp-ranked-list {
-    padding: 0 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .cp-ranked-item {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    gap: 6px;
-    padding: 5px 8px;
-    border-radius: 4px;
-    transition: background 0.1s;
+    gap: 8px;
+    padding: 7px 9px;
+    border: 1px solid var(--color-border-subtle, var(--color-border));
+    border-radius: 7px;
+    background: var(--color-surface-raised);
+    transition: background 0.1s, border-color 0.1s;
   }
 
   .cp-ranked-item:hover {
     background: var(--tool-item-hover-bg);
+    border-color: var(--color-border-emphasis);
   }
 
   .cp-cat-tag {
     font-size: 9px;
     font-weight: 600;
-    padding: 1px 6px;
-    border-radius: 3px;
+    padding: 2px 6px;
+    border-radius: 4px;
     flex-shrink: 0;
     letter-spacing: 0.2px;
   }
 
   .cp-ranked-label {
-    flex: 1;
     font-size: 12px;
     color: var(--color-text);
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    min-width: 0;
+    line-height: 1.3;
   }
 
   .cp-ranked-tokens {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--color-text-muted);
     font-family: var(--font-mono);
     flex-shrink: 0;
