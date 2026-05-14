@@ -97,19 +97,25 @@ async fn build_api_with_fixtures(titles: &[&str]) -> (LocalDataApi, TempDir, Str
 async fn list_sessions_returns_skeleton_and_emits_metadata_updates() {
     use cdt_api::DataApi;
 
-    let titles = vec!["重构 auth 模块", "修复 sidebar bug", "性能优化探索"];
+    let titles = vec![
+        "重构 auth 模块",
+        "修复 sidebar bug",
+        "性能优化探索",
+        "旧会话",
+    ];
     let (api, _tmp, project_id, session_ids) = build_api_with_fixtures(&titles).await;
 
     let mut rx = api.subscribe_session_metadata();
 
     let pagination = PaginatedRequest {
-        page_size: 50,
+        page_size: 3,
         cursor: None,
     };
     let resp = api.list_sessions(&project_id, &pagination).await.unwrap();
 
     // 骨架契约：title=None / message_count=0 / is_ongoing=false
-    assert_eq!(resp.items.len(), titles.len());
+    assert_eq!(resp.items.len(), 3);
+    assert_eq!(resp.next_cursor.as_deref(), Some("3"));
     for s in &resp.items {
         assert!(
             s.title.is_none(),
@@ -122,9 +128,14 @@ async fn list_sessions_returns_skeleton_and_emits_metadata_updates() {
         assert!(session_ids.contains(&s.session_id));
     }
 
-    // 异步收齐 N 条 update（最多等 5s）
+    let page_ids: std::collections::BTreeSet<_> =
+        resp.items.iter().map(|s| s.session_id.clone()).collect();
+    let all_ids: std::collections::BTreeSet<_> = session_ids.into_iter().collect();
+    let non_page_ids: Vec<_> = all_ids.difference(&page_ids).cloned().collect();
+
+    // 异步收齐当前页 update（最多等 5s）
     let mut received = std::collections::HashMap::new();
-    while received.len() < titles.len() {
+    while received.len() < resp.items.len() {
         let upd = timeout(Duration::from_secs(5), rx.recv())
             .await
             .expect("timed out waiting for SessionMetadataUpdate")
@@ -133,8 +144,8 @@ async fn list_sessions_returns_skeleton_and_emits_metadata_updates() {
         received.insert(upd.session_id.clone(), upd);
     }
 
-    // 元数据真值断言
-    for sid in &session_ids {
+    // 元数据真值断言：只扫描当前响应页
+    for sid in &page_ids {
         let upd = received.get(sid).expect("missing update for session");
         // title fixture 是中文文本，extract_session_metadata 会清洗后取前 200 字符
         assert!(
@@ -148,6 +159,12 @@ async fn list_sessions_returns_skeleton_and_emits_metadata_updates() {
         assert!(
             upd.is_ongoing,
             "fixture ends on assistant tool/text → is_ongoing should be true"
+        );
+    }
+    for sid in non_page_ids {
+        assert!(
+            !received.contains_key(&sid),
+            "non-page session {sid} should not be scanned"
         );
     }
 }

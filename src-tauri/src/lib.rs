@@ -43,6 +43,20 @@ async fn list_sessions(
 }
 
 #[tauri::command]
+async fn get_session_summaries_by_ids(
+    data: State<'_, AppData>,
+    project_id: String,
+    session_ids: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    let summaries = data
+        .api
+        .get_session_summaries_by_ids(&project_id, &session_ids)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&summaries).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_session_detail(
     data: State<'_, AppData>,
     project_id: String,
@@ -730,6 +744,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_projects,
             list_sessions,
+            get_session_summaries_by_ids,
             get_session_detail,
             get_subagent_trace,
             get_image_asset,

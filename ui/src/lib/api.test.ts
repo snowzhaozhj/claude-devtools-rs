@@ -1,7 +1,7 @@
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { listAllSessions } from './api'
+import { getSessionSummariesByIds, listAllSessions, listSessions } from './api'
 import { setupMockIPC } from './tauriMock'
 import { multiProjectRichFixture } from './__fixtures__'
 import type { Fixture } from './__fixtures__'
@@ -33,6 +33,37 @@ function fixtureWithSessions(sessions: SessionSummary[]): Fixture {
 
 afterEach(() => {
   clearMocks()
+})
+
+describe('listSessions', () => {
+  test('默认首屏 pageSize 为 20', async () => {
+    const calls: Array<{ pageSize: number; cursor: string | null }> = []
+    mockIPC(vi.fn((cmd, payload) => {
+      expect(cmd).toBe('list_sessions')
+      const args = payload as { pageSize: number; cursor: string | null }
+      calls.push({ pageSize: args.pageSize, cursor: args.cursor })
+      return { items: [], nextCursor: null, total: 0 }
+    }))
+
+    await listSessions('project-with-history')
+
+    expect(calls).toEqual([{ pageSize: 20, cursor: null }])
+  })
+})
+
+describe('getSessionSummariesByIds', () => {
+  test('按输入 id 顺序补拉存在的 light summaries 并忽略缺失项', async () => {
+    const sessions = [session(0), session(1), session(2)]
+    setupMockIPC(fixtureWithSessions(sessions))
+
+    const result = await getSessionSummariesByIds('project-with-history', [
+      'sess-2',
+      'sess-missing',
+      'sess-0',
+    ])
+
+    expect(result.map((s) => s.sessionId)).toEqual(['sess-2', 'sess-0'])
+  })
 })
 
 describe('listAllSessions', () => {

@@ -44,10 +44,11 @@ use cdt_core::tool_execution::{ToolExecution, ToolOutput};
 // =============================================================================
 
 /// 与 `src-tauri/src/lib.rs` 的 `invoke_handler!` 完全对齐的 Tauri command 列表。
-/// 长度断言 + 命名断言通过 `expected_tauri_commands_count_is_26` 用例守护。
+/// 长度断言 + 命名断言通过 `expected_tauri_commands_count_is_27` 用例守护。
 pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "list_projects",
     "list_sessions",
+    "get_session_summaries_by_ids",
     "get_session_detail",
     "get_subagent_trace",
     "get_image_asset",
@@ -105,12 +106,12 @@ fn ts() -> chrono::DateTime<Utc> {
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_26() {
+fn expected_tauri_commands_count_is_27() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        26,
+        27,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 26 个 Tauri command"
+         以及本文件常量；当前 src-tauri 注册 27 个 Tauri command"
     );
 }
 
@@ -812,7 +813,7 @@ fn notification_trigger_serializes_camelcase_with_omitted_options() {
 }
 
 // =============================================================================
-// API-level: 22 个 Tauri command 端到端调用
+// API-level: Tauri command 端到端调用
 // =============================================================================
 
 #[tokio::test]
@@ -907,6 +908,59 @@ async fn list_sessions_cursor_pages_cover_all_sessions_without_restarting() {
     assert_eq!(ids.len(), 120);
     assert_eq!(ids.first(), Some(&"s119"));
     assert_eq!(ids.last(), Some(&"s000"));
+}
+
+#[tokio::test]
+async fn list_sessions_rejects_zero_page_size() {
+    let (api, _tmp) = setup_api().await;
+    let err = api
+        .list_sessions(
+            "any-project",
+            &PaginatedRequest {
+                page_size: 0,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, cdt_api::ApiErrorCode::ValidationError);
+    assert!(err.message.contains("pageSize must be > 0"));
+}
+
+#[tokio::test]
+async fn get_session_summaries_by_ids_returns_light_summaries() {
+    let (api, tmp) = setup_api().await;
+    let project_id = "-tmp-summaries";
+    let project_dir = tmp.path().join("projects").join(project_id);
+    tokio::fs::create_dir_all(&project_dir).await.unwrap();
+    tokio::fs::write(project_dir.join("sid-new.jsonl"), b"{}\n")
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    tokio::fs::write(project_dir.join("sid-old.jsonl"), b"{}\n")
+        .await
+        .unwrap();
+
+    let summaries = api
+        .get_session_summaries_by_ids(
+            project_id,
+            &[
+                "sid-old".to_owned(),
+                "sid-missing".to_owned(),
+                "sid-new".to_owned(),
+            ],
+        )
+        .await
+        .unwrap();
+    let ids: Vec<_> = summaries.iter().map(|s| s.session_id.as_str()).collect();
+    assert_eq!(ids, vec!["sid-old", "sid-new"]);
+    assert!(summaries.iter().all(|s| s.project_id == project_id));
+    assert!(summaries.iter().all(|s| s.title.is_none()));
+    assert!(summaries.iter().all(|s| s.message_count == 0));
+
+    let json = serde_json::to_value(&summaries).unwrap();
+    assert_eq!(json[0]["sessionId"], json!("sid-old"));
+    assert!(json[0].get("session_id").is_none());
 }
 
 #[tokio::test]

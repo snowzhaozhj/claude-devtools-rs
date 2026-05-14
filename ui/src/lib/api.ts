@@ -60,6 +60,21 @@ export interface PaginatedResponse<T> {
   total: number;
 }
 
+export interface SessionSearchResult {
+  sessionId: string;
+  projectId: string;
+  sessionTitle: string;
+  totalMatches: number;
+}
+
+export interface SearchSessionsResult {
+  results: SessionSearchResult[];
+  totalMatches: number;
+  sessionsSearched: number;
+  query: string;
+  isPartial: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Chunk 类型（与 Rust cdt-core serde(tag="kind", rename_all="snake_case") 对齐）
 // ---------------------------------------------------------------------------
@@ -367,7 +382,7 @@ export async function getWorktreeSessions(
 
 export async function listSessions(
   projectId: string,
-  pageSize: number = 50,
+  pageSize: number = 20,
   cursor?: string
 ): Promise<PaginatedResponse<SessionSummary>> {
   return await invoke("list_sessions", {
@@ -386,6 +401,21 @@ export async function listAllSessions(projectId: string): Promise<PaginatedRespo
     items.push(...result.items);
   }
   return { ...result, items };
+}
+
+export async function getSessionSummariesByIds(
+  projectId: string,
+  sessionIds: string[],
+): Promise<SessionSummary[]> {
+  if (sessionIds.length === 0) return [];
+  return await invoke("get_session_summaries_by_ids", { projectId, sessionIds });
+}
+
+export async function searchSessions(
+  projectId: string,
+  query: string,
+): Promise<SearchSessionsResult> {
+  return await invoke("search_sessions", { projectId, query });
 }
 
 export async function getSessionDetail(

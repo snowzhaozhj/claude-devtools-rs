@@ -54,6 +54,30 @@ test.describe('command palette', () => {
     await expect(page.getByText('rust-port').first()).toBeVisible({ timeout: 3_000 })
   })
 
+  test('无搜索结果时键盘导航不报错', async ({ page }) => {
+    await page.goto('/?mock=1&fixture=multi-project-rich')
+    await page.waitForFunction(() => '__cdtTest' in window, { timeout: 5_000 })
+    await expect(page.getByPlaceholder('搜索项目...')).toBeVisible({ timeout: 5_000 })
+
+    await page.evaluate(() => {
+      const ev = new KeyboardEvent('keydown', {
+        key: 'k',
+        metaKey: true,
+        ctrlKey: true,
+        bubbles: true,
+      })
+      document.dispatchEvent(ev)
+    })
+    const input = page.getByPlaceholder('搜索项目或会话...')
+    await expect(input).toBeVisible({ timeout: 5_000 })
+
+    await input.fill('definitely-no-results')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+
+    await expect(input).toBeVisible()
+  })
+
   test('Esc 关闭 CommandPalette', async ({ page }) => {
     await page.goto('/?mock=1&fixture=multi-project-rich')
     await page.waitForFunction(() => '__cdtTest' in window, { timeout: 5_000 })

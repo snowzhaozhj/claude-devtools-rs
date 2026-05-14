@@ -46,6 +46,10 @@ pub fn build_router(state: AppState) -> Router {
         // 项目 + 会话
         .route("/api/projects", get(list_projects))
         .route("/api/projects/{project_id}/sessions", get(list_sessions))
+        .route(
+            "/api/projects/{project_id}/session-summaries/batch",
+            post(get_session_summaries_by_ids),
+        )
         .route("/api/sessions/{session_id}", get(get_session_detail))
         .route("/api/sessions/batch", post(get_sessions_by_ids))
         // 搜索
@@ -107,6 +111,18 @@ async fn list_sessions(
     // list_sessions 保留同步完整返回"）。IPC 路径的骨架化由 trait 方法
     // `list_sessions` 提供，这里显式走 `list_sessions_sync`。
     let result = s.api.list_sessions_sync(&project_id, &pagination).await?;
+    Ok(Json(result))
+}
+
+async fn get_session_summaries_by_ids(
+    State(s): State<AppState>,
+    Path(project_id): Path<String>,
+    Json(ids): Json<Vec<String>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let result = s
+        .api
+        .get_session_summaries_by_ids(&project_id, &ids)
+        .await?;
     Ok(Json(result))
 }
 

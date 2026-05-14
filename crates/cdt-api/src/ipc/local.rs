@@ -452,6 +452,10 @@ impl LocalDataApi {
         ),
         ApiError,
     > {
+        if pagination.page_size == 0 {
+            return Err(ApiError::validation("pageSize must be > 0"));
+        }
+
         let scanner = self.scanner.lock().await;
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
@@ -512,8 +516,8 @@ impl LocalDataApi {
 /// 避免旧 task 在新 task 已注册后的 cleanup 误删新 handle（codex 二审 race）。
 /// `broadcast::send` 在无订阅者时返回 `Err`，本函数静默忽略——元数据更新
 /// 本质上是 fire-and-forget。
-fn metadata_scan_key(project_id: &str, cursor: Option<&str>) -> String {
-    format!("{}:{}", project_id, cursor.unwrap_or("0"))
+fn metadata_scan_key(project_id: &str) -> String {
+    project_id.to_owned()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -622,7 +626,7 @@ impl DataApi for LocalDataApi {
             let tx = self.session_metadata_tx.clone();
             let project_id_owned = project_id.to_owned();
             let active_scans = self.active_scans.clone();
-            let scan_key = metadata_scan_key(project_id, pagination.cursor.as_deref());
+            let scan_key = metadata_scan_key(project_id);
             let key_for_cleanup = scan_key.clone();
 
             // abort 旧 + 分配 generation + spawn + insert **全部**在同一把
@@ -663,6 +667,51 @@ impl DataApi for LocalDataApi {
             next_cursor,
             total,
         })
+    }
+
+    async fn get_session_summaries_by_ids(
+        &self,
+        project_id: &str,
+        session_ids: &[String],
+    ) -> Result<Vec<SessionSummary>, ApiError> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let wanted: std::collections::BTreeSet<&str> =
+            session_ids.iter().map(String::as_str).collect();
+        let scanner = self.scanner.lock().await;
+        let sessions = scanner
+            .list_sessions(project_id, &std::collections::BTreeSet::new())
+            .await
+            .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?;
+        drop(scanner);
+
+        let mut by_id = sessions
+            .into_iter()
+            .filter(|session| wanted.contains(session.id.as_str()))
+            .map(|session| {
+                (
+                    session.id.clone(),
+                    SessionSummary {
+                        session_id: session.id,
+                        project_id: project_id.to_owned(),
+                        timestamp: session.last_modified,
+                        message_count: 0,
+                        title: None,
+                        is_ongoing: false,
+                        git_branch: None,
+                        worktree_id: None,
+                        worktree_name: None,
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+
+        Ok(session_ids
+            .iter()
+            .filter_map(|id| by_id.remove(id))
+            .collect())
     }
 
     async fn get_session_detail(

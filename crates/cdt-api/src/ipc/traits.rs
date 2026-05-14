@@ -55,6 +55,13 @@ pub trait DataApi: Send + Sync {
         session_id: &str,
     ) -> Result<SessionDetail, ApiError>;
 
+    /// 按 id 批量获取某项目下的轻量会话摘要。
+    async fn get_session_summaries_by_ids(
+        &self,
+        project_id: &str,
+        session_ids: &[String],
+    ) -> Result<Vec<SessionSummary>, ApiError>;
+
     /// 通过仅 `session_id` 反查所属 `project_id`。
     ///
     /// HTTP `GET /api/sessions/:id` 不携带 `project_id`，需要全局查找；同样

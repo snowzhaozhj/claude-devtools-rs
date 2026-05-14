@@ -25,6 +25,7 @@ let activeFixtureName: string | null = null
 const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'list_projects',
   'list_sessions',
+  'get_session_summaries_by_ids',
   'get_session_detail',
   'get_subagent_trace',
   'get_image_asset',
@@ -77,13 +78,23 @@ function buildHandler(fx: Fixture) {
 
       case 'list_sessions': {
         const projectId = getArg<string>(payload, 'projectId') ?? ''
-        const pageSize = getArg<number>(payload, 'pageSize') ?? 50
+        const pageSize = getArg<number>(payload, 'pageSize') ?? 20
         const offset = Number.parseInt(getArg<string>(payload, 'cursor') ?? '0', 10) || 0
         const allItems = fx.sessions[projectId] ?? []
         const items = allItems.slice(offset, offset + pageSize)
         const nextOffset = offset + items.length
         const nextCursor = nextOffset < allItems.length ? String(nextOffset) : null
         return { items, nextCursor, total: allItems.length }
+      }
+
+      case 'get_session_summaries_by_ids': {
+        const projectId = getArg<string>(payload, 'projectId') ?? ''
+        const sessionIds = getArg<string[]>(payload, 'sessionIds') ?? []
+        const byId = new Map((fx.sessions[projectId] ?? []).map((s) => [s.sessionId, s]))
+        return sessionIds.flatMap((id) => {
+          const summary = byId.get(id)
+          return summary ? [summary] : []
+        })
       }
 
       case 'list_repository_groups': {
@@ -159,8 +170,28 @@ function buildHandler(fx: Fixture) {
         return { items: merged, nextCursor: null, total: merged.length }
       }
 
-      case 'search_sessions':
-        return { results: fx.searchResults }
+      case 'search_sessions': {
+        const query = (getArg<string>(payload, 'query') ?? '').toLowerCase()
+        const results = fx.searchResults
+          .map((r) => {
+            const summary = (fx.sessions[r.projectId] ?? []).find((s) => s.sessionId === r.sessionId)
+            return {
+              sessionId: r.sessionId,
+              projectId: r.projectId,
+              sessionTitle: summary?.title ?? r.sessionId,
+              hits: [],
+              totalMatches: r.matches,
+            }
+          })
+          .filter((r) => r.sessionTitle.toLowerCase().includes(query) || r.sessionId.toLowerCase().includes(query))
+        return {
+          results,
+          totalMatches: results.reduce((sum, r) => sum + r.totalMatches, 0),
+          sessionsSearched: 0,
+          query,
+          isPartial: false,
+        }
+      }
 
       case 'get_session_detail': {
         const projectId = getArg<string>(payload, 'projectId') ?? ''
