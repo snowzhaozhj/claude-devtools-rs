@@ -3,7 +3,8 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import {
     listProjects,
-    listAllSessions,
+    listSessions,
+    getSessionSummariesByIds,
     listRepositoryGroups,
     type ProjectInfo,
     type RepositoryGroup,
@@ -21,6 +22,8 @@
     isPinned, togglePin,
     isHidden, toggleHide,
     getShowHidden, toggleShowHidden,
+    getPinnedIds,
+    getHiddenIds,
     getHiddenCount,
     loadProjectPrefs,
     toggleSidebarCollapsed,
@@ -32,6 +35,8 @@
   // 虚拟滚动行高（实测 .session-item ≈ 44px：padding 8+8 + title 13×1.4 +
   // meta 11×1.4）；header 行高强制对齐 44 让单一 windowing 单元生效。
   const ITEM_HEIGHT = 44;
+  const SESSION_PAGE_SIZE = 20;
+  const HISTORY_SCROLL_THRESHOLD = ITEM_HEIGHT * 2;
 
   interface Props {
     selectedProjectId: string;
@@ -54,6 +59,10 @@
   let sessions: SessionSummary[] = $state([]);
   let projectsLoading = $state(true);
   let sessionsLoading = $state(false);
+  let sessionsLoadingMore = $state(false);
+  let sessionsNextCursor: string | null = $state(null);
+  let browsingHistory = $state(false);
+  let hasDeferredSessionRefresh = $state(false);
   let filterQuery = $state("");
 
   // ---------------------------------------------------------------------------
@@ -98,6 +107,7 @@
   // ---------------------------------------------------------------------------
 
   let metadataUnlisten: UnlistenFn | null = null;
+  let sessionListEl: HTMLElement | null = null;
 
   async function loadProjects(silent = false) {
     if (!silent) projectsLoading = true;
@@ -175,34 +185,98 @@
     );
   });
 
-  /**
-   * 加载某 project 的会话列表。
-   *
-   * @param silent - 自动刷新（file-change）时传 true，保留现有列表直到新数据
-   *   到达后原地替换。否则每次 file-change 都会先切到"加载中..."再切回来，
-   *   引发整列表闪烁。仅首次加载 / 切项目时展示 loading。
-   *
-   * 注：后端 `list_sessions` 返回的是**骨架** SessionSummary（title=null /
-   *   messageCount=0 / isOngoing=false），元数据通过 `session-metadata-update`
-   *   事件随后 patch。silent 刷新时按 sessionId 把旧列表中已有真值的元数据
-   *   字段 merge 进新骨架，避免元数据瞬间闪回占位（详见 spec
-   *   sidebar-navigation §"file-change silent 刷新保留已获取元数据"）。
-   */
+  async function reconcilePinnedAndHidden(projectId: string, current: SessionSummary[]) {
+    const neededIds = [...new Set([...getPinnedIds(projectId), ...getHiddenIds(projectId)])]
+      .filter((id) => !current.some((s) => s.sessionId === id));
+    if (neededIds.length === 0) return current;
+    const summaries = await getSessionSummariesByIds(projectId, neededIds);
+    return mergeSessions(current, summaries);
+  }
+
+  function mergeSessions(prev: SessionSummary[], next: SessionSummary[], sort = true): SessionSummary[] {
+    const byId = new Map(prev.map((s) => [s.sessionId, s]));
+    const merged = [...prev];
+    for (const item of next) {
+      const old = byId.get(item.sessionId);
+      if (old) {
+        const updated = mergeSilentMetadata([old], [item])[0];
+        byId.set(item.sessionId, updated);
+        const idx = merged.findIndex((s) => s.sessionId === item.sessionId);
+        if (idx >= 0) merged[idx] = updated;
+      } else {
+        byId.set(item.sessionId, item);
+        merged.push(item);
+      }
+    }
+    return sort ? merged.sort((a, b) => b.timestamp - a.timestamp) : merged;
+  }
+
   async function loadSessions(projectId: string, silent = false) {
-    if (!projectId) { sessions = []; return; }
+    if (!projectId) {
+      sessions = [];
+      sessionsNextCursor = null;
+      return;
+    }
     if (!silent) sessionsLoading = true;
     try {
-      const result: PaginatedResponse<SessionSummary> = await listAllSessions(projectId);
-      const fresh = silent ? mergeSilentMetadata(sessions, result.items) : result.items;
+      await loadProjectPrefs(projectId);
+      const result: PaginatedResponse<SessionSummary> = await listSessions(projectId, SESSION_PAGE_SIZE);
+      if (projectId !== selectedProjectId) return;
+      let fresh = silent ? mergeSilentMetadata(sessions, result.items) : result.items;
+      fresh = await reconcilePinnedAndHidden(projectId, fresh);
+      if (projectId !== selectedProjectId) return;
       sessions = fresh;
+      sessionsNextCursor = result.nextCursor;
+      hasDeferredSessionRefresh = false;
+      queueMicrotask(() => maybeLoadMoreSessions(true));
     } catch (e) {
       console.error("Failed to load sessions:", e);
-      if (!silent) sessions = [];
+      if (!silent && projectId === selectedProjectId) {
+        sessions = [];
+        sessionsNextCursor = null;
+      }
     } finally {
-      // 拿到骨架即可渲染——元数据后续通过 session-metadata-update 增量 patch，
-      // 不再引入加载中中间态（spec sidebar-navigation §"骨架态不显示加载中遮罩"）
-      if (!silent) sessionsLoading = false;
+      if (!silent && projectId === selectedProjectId) sessionsLoading = false;
     }
+  }
+
+  async function loadMoreSessions() {
+    const projectId = selectedProjectId;
+    const cursor = sessionsNextCursor;
+    if (!projectId || !cursor || sessionsLoading || sessionsLoadingMore) return;
+    sessionsLoadingMore = true;
+    try {
+      const result = await listSessions(projectId, SESSION_PAGE_SIZE, cursor);
+      if (projectId !== selectedProjectId || cursor !== sessionsNextCursor) return;
+      sessions = mergeSessions(sessions, result.items, false);
+      sessionsNextCursor = result.nextCursor;
+    } catch (e) {
+      console.error("Failed to load more sessions:", e);
+    } finally {
+      if (projectId === selectedProjectId) sessionsLoadingMore = false;
+    }
+  }
+
+  function maybeLoadMoreSessions(allowAutoFill = false) {
+    const el = sessionListEl;
+    if (!el || !sessionsNextCursor || sessionsLoading || sessionsLoadingMore) return;
+    const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const threshold = ITEM_HEIGHT * 8;
+    if (remaining < threshold && (allowAutoFill || browsingHistory)) void loadMoreSessions();
+  }
+
+  function refreshDeferredSessions() {
+    if (!selectedProjectId || !hasDeferredSessionRefresh) return;
+    hasDeferredSessionRefresh = false;
+    void loadSessions(selectedProjectId, true);
+  }
+
+  function onSessionListScroll(e: Event) {
+    vlist.onScroll(e);
+    const el = e.currentTarget as HTMLElement | null;
+    browsingHistory = !!el && el.scrollTop > HISTORY_SCROLL_THRESHOLD;
+    if (!browsingHistory) refreshDeferredSessions();
+    maybeLoadMoreSessions();
   }
 
   /**
@@ -253,6 +327,10 @@
         );
       }
       if (!currentProjectId || payload.projectId !== currentProjectId || !payload.sessionId) return;
+      if (browsingHistory) {
+        hasDeferredSessionRefresh = true;
+        return;
+      }
       scheduleRefresh(`sidebar:${currentProjectId}`, () =>
         untrack(() => loadSessions(currentProjectId, true)),
       );
@@ -409,6 +487,9 @@
         bind:value={filterQuery}
       />
       <span class="session-count-num">{visibleSessions.length}/{totalSessions}</span>
+      {#if hasDeferredSessionRefresh}
+        <button class="refresh-pending-btn" onclick={refreshDeferredSessions}>有更新</button>
+      {/if}
       {#if hiddenCount > 0}
         <button
           class="show-hidden-btn"
@@ -437,8 +518,9 @@
 
   <div
     class="session-list"
-    onscroll={vlist.onScroll}
+    onscroll={onSessionListScroll}
     {@attach (el) => {
+      sessionListEl = el;
       vlist.bindScrollEl(el);
       // height>0 guard：sidebar collapsed 时 width:0 + overflow:hidden 不会
       // 改变 session-list 的 height（仍由 flex column 撑满），但兜底防御
@@ -446,11 +528,15 @@
       // 时空→填充会出现一帧白屏闪烁。
       const ro = new ResizeObserver(() => {
         const h = el.clientHeight;
-        if (h > 0) vlist.setContainerHeight(h);
+        if (h > 0) {
+          vlist.setContainerHeight(h);
+          maybeLoadMoreSessions(true);
+        }
       });
       ro.observe(el);
       return () => {
         ro.disconnect();
+        sessionListEl = null;
         vlist.bindScrollEl(null);
       };
     }}
@@ -509,6 +595,9 @@
         {/if}
       {/each}
       <div class="vlist-spacer" style:height="{vlist.bottomSpacer()}px"></div>
+      {#if sessionsLoadingMore}
+        <div class="sidebar-status sidebar-status-inline">加载更多...</div>
+      {/if}
     {/if}
   </div>
 
@@ -593,11 +682,32 @@
     color: var(--color-text-muted);
   }
 
+  .sidebar-status-inline {
+    padding: 8px 0;
+    font-size: 11px;
+  }
+
   .session-count-num {
     font-size: 11px;
     color: var(--color-text-muted);
     flex-shrink: 0;
     font-family: var(--font-mono);
+  }
+
+  .refresh-pending-btn {
+    flex-shrink: 0;
+    padding: 2px 6px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .refresh-pending-btn:hover {
+    color: var(--color-text);
+    border-color: var(--color-border-emphasis);
   }
 
   .show-hidden-btn {

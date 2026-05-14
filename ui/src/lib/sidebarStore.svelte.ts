@@ -103,6 +103,10 @@ export function getPinnedIds(projectId: string): string[] {
   return pinnedByProject[projectId] ?? [];
 }
 
+export function getHiddenIds(projectId: string): string[] {
+  return hiddenByProject[projectId] ?? [];
+}
+
 export function isPinned(projectId: string, sessionId: string): boolean {
   return (pinnedByProject[projectId] ?? []).includes(sessionId);
 }

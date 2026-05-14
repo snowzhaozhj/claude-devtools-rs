@@ -1,6 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { listProjects, listAllSessions, type ProjectInfo, type SessionSummary } from "../lib/api";
+  import {
+    listProjects,
+    listSessions,
+    searchSessions,
+    type ProjectInfo,
+    type SessionSearchResult,
+    type SessionSummary,
+  } from "../lib/api";
   import { openTab } from "../lib/tabStore.svelte";
   import { shortenPath } from "../lib/toolHelpers";
 
@@ -15,6 +22,8 @@
   let query = $state("");
   let projects: ProjectInfo[] = $state([]);
   let sessions: SessionSummary[] = $state([]);
+  let searchResults: SessionSearchResult[] = $state([]);
+  let searchSeq = 0;
   let selectedIndex = $state(0);
   let inputEl: HTMLInputElement | undefined = $state(undefined);
 
@@ -26,7 +35,7 @@
     try {
       projects = await listProjects();
       if (selectedProjectId) {
-        const r = await listAllSessions(selectedProjectId);
+        const r = await listSessions(selectedProjectId, 20);
         sessions = r.items;
       }
     } catch (e) {
@@ -49,14 +58,26 @@
   const filteredSessions = $derived.by(() => {
     if (!selectedProjectId) return [];
     const q = query.toLowerCase();
-    const list = q
-      ? sessions.filter(s =>
-          (s.title || s.sessionId).toLowerCase().includes(q))
-      : sessions;
-    return list.slice(0, MAX_SESSIONS);
+    if (q) return searchResults.slice(0, MAX_SESSIONS);
+    return sessions.slice(0, MAX_SESSIONS);
   });
 
   const totalResults = $derived(filteredProjects.length + filteredSessions.length);
+
+  $effect(() => {
+    const q = query.trim();
+    const projectId = selectedProjectId;
+    const seq = ++searchSeq;
+    if (!q || !projectId) {
+      searchResults = [];
+      return;
+    }
+    void searchSessions(projectId, q)
+      .then((result) => {
+        if (seq === searchSeq) searchResults = result.results;
+      })
+      .catch((e) => console.error("CommandPalette: failed to search sessions", e));
+  });
 
   // 查询变化 → 重置选中
   $effect(() => { query; selectedIndex = 0; });
@@ -70,12 +91,12 @@
     }
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      selectedIndex = Math.min(selectedIndex + 1, totalResults - 1);
+      if (totalResults > 0) selectedIndex = Math.min(selectedIndex + 1, totalResults - 1);
       return;
     }
     if (e.key === "ArrowUp") {
       e.preventDefault();
-      selectedIndex = Math.max(selectedIndex - 1, 0);
+      if (totalResults > 0) selectedIndex = Math.max(selectedIndex - 1, 0);
       return;
     }
     if (e.key === "Enter") {
@@ -84,18 +105,30 @@
     }
   }
 
+  function sessionTitle(session: SessionSummary | SessionSearchResult): string {
+    return "sessionTitle" in session
+      ? session.sessionTitle || session.sessionId.slice(0, 8)
+      : session.title || session.sessionId.slice(0, 8);
+  }
+
+  function sessionCount(session: SessionSummary | SessionSearchResult): number {
+    return "totalMatches" in session ? session.totalMatches : session.messageCount;
+  }
+
+  function openSession(session: SessionSummary | SessionSearchResult) {
+    openTab(session.sessionId, session.projectId, sessionTitle(session));
+    onClose();
+  }
+
   function selectByIndex(idx: number) {
+    if (idx < 0 || idx >= totalResults) return;
     if (idx < filteredProjects.length) {
       const p = filteredProjects[idx];
       onSelectProject(p.id, p.displayName);
       onClose();
     } else {
       const si = idx - filteredProjects.length;
-      if (si < filteredSessions.length) {
-        const s = filteredSessions[si];
-        openTab(s.sessionId, selectedProjectId, s.title || s.sessionId.slice(0, 8));
-        onClose();
-      }
+      if (si < filteredSessions.length) openSession(filteredSessions[si]);
     }
   }
 
@@ -151,12 +184,14 @@
         <button
           class="cp-item"
           class:cp-item-selected={flatIdx === selectedIndex}
-          onclick={() => { openTab(session.sessionId, selectedProjectId, session.title || session.sessionId.slice(0, 8)); onClose(); }}
+          onclick={() => openSession(session)}
         >
           <span class="cp-item-icon">◇</span>
-          <span class="cp-item-label">{session.title || session.sessionId.slice(0, 8) + "…"}</span>
-          <span class="cp-item-detail">C{session.messageCount || ""}</span>
-          <span class="cp-item-time">{formatTime(session.timestamp)}</span>
+          <span class="cp-item-label">{sessionTitle(session)}</span>
+          <span class="cp-item-detail">C{sessionCount(session) || ""}</span>
+          {#if "timestamp" in session}
+            <span class="cp-item-time">{formatTime(session.timestamp)}</span>
+          {/if}
         </button>
       {/each}
     {/if}

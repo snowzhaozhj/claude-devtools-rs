@@ -10,6 +10,7 @@ import { KNOWN_TAURI_COMMANDS, setupMockIPC } from './tauriMock'
 
 const ARGS_BY_CMD: Record<string, Record<string, unknown>> = {
   list_sessions: { projectId: 'mock-rich-rust', pageSize: 10, cursor: null },
+  get_session_summaries_by_ids: { projectId: 'mock-rich-rust', sessionIds: ['sess-rust-active'] },
   search_sessions: { projectId: 'mock-rich-rust', query: 'foo' },
   get_session_detail: { projectId: 'mock-rich-rust', sessionId: 'sess-rust-active' },
   get_subagent_trace: { rootSessionId: 'r', subagentSessionId: 's' },
