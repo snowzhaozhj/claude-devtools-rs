@@ -312,6 +312,33 @@ impl MetadataCache {
     }
 }
 
+/// `extract_session_metadata_cached` 的 lookup-only 变体：只查 cache + 校验
+/// `FileSignature`，miss 或 stat 失败返回 `None`，**不**触发扫描。
+///
+/// 用于 `list_sessions_skeleton` 的 fast-path：cache 命中时骨架阶段直接带元数据
+/// 返回，规避 `session-metadata-update` event 在前端 listener 注册前 fire-and-forget
+/// 丢失的 race（详见 fix `session-title-race` 修复说明）。
+pub(crate) async fn try_lookup_cached_metadata(
+    cache: &StdMutex<MetadataCache>,
+    path: &Path,
+) -> Option<SessionMetadata> {
+    let sig = FileSignature::from_metadata(&tokio::fs::metadata(path).await.ok()?);
+    let entry = cache
+        .lock()
+        .expect("metadata cache mutex poisoned")
+        .lookup(path)?;
+    if entry.signature != sig {
+        return None;
+    }
+    let is_ongoing = entry.messages_ongoing && !is_session_stale(sig.mtime, SystemTime::now());
+    Some(SessionMetadata {
+        title: entry.title,
+        message_count: entry.message_count,
+        is_ongoing,
+        git_branch: entry.git_branch,
+    })
+}
+
 /// `extract_session_metadata` 的缓存 wrapper —— `LocalDataApi` 持有 cache 实例。
 ///
 /// 命中：返回基于缓存合成的 `SessionMetadata`（`is_ongoing` 用 `messages_ongoing`
