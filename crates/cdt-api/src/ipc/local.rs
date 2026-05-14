@@ -29,8 +29,9 @@ use super::events::SessionMetadataUpdate;
 use super::session_metadata::{MetadataCache, extract_session_metadata_cached};
 use super::traits::DataApi;
 use super::types::{
-    ConfigUpdateRequest, ContextInfo, PaginatedRequest, PaginatedResponse, ProjectInfo,
-    ProjectSessionPrefs, SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
+    ConfigUpdateRequest, ContextInfo, MemoryFileContent, MemoryLayer, MemoryLayerKind,
+    PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
+    SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
 };
 use crate::notifier::NotificationPipeline;
 
@@ -421,6 +422,16 @@ impl LocalDataApi {
         }
     }
 
+    async fn project_memory_dir(&self, project_id: &str) -> Result<std::path::PathBuf, ApiError> {
+        let projects_dir = {
+            let scanner = self.scanner.lock().await;
+            scanner.projects_dir().to_path_buf()
+        };
+        let base_dir = cdt_discover::path_decoder::extract_base_dir(project_id);
+        validate_project_base_dir(base_dir)?;
+        Ok(projects_dir.join(base_dir).join("memory"))
+    }
+
     /// 订阅 `list_sessions` 后台扫描产出的元数据增量更新。
     ///
     /// 每次 `list_sessions(project_id)` 调用会异步并发扫描该页 session 的
@@ -712,6 +723,42 @@ impl DataApi for LocalDataApi {
             .iter()
             .filter_map(|id| by_id.remove(id))
             .collect())
+    }
+
+    async fn get_project_memory(&self, project_id: &str) -> Result<ProjectMemory, ApiError> {
+        let memory_dir = self.project_memory_dir(project_id).await?;
+        let layers = discover_memory_layers(&memory_dir).await?;
+        let default_file = layers
+            .iter()
+            .find(|layer| layer.kind == MemoryLayerKind::Index)
+            .or_else(|| layers.first())
+            .map(|layer| layer.file.clone());
+        Ok(ProjectMemory {
+            project_id: project_id.to_owned(),
+            has_memory: !layers.is_empty(),
+            count: layers.len(),
+            default_file,
+            layers,
+        })
+    }
+
+    async fn read_memory_file(
+        &self,
+        project_id: &str,
+        file: &str,
+    ) -> Result<MemoryFileContent, ApiError> {
+        let memory_dir = self.project_memory_dir(project_id).await?;
+        let safe_file = validate_memory_file_name(file)?;
+        let path = memory_dir.join(&safe_file);
+        let content = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| ApiError::not_found(format!("memory file {safe_file}: {e}")))?;
+        Ok(MemoryFileContent {
+            project_id: project_id.to_owned(),
+            file: safe_file,
+            file_path: path.to_string_lossy().into_owned(),
+            content,
+        })
     }
 
     async fn get_session_detail(
@@ -1459,6 +1506,141 @@ impl LocalDataApi {
     }
 }
 
+async fn discover_memory_layers(memory_dir: &Path) -> Result<Vec<MemoryLayer>, ApiError> {
+    let mut entries = match tokio::fs::read_dir(memory_dir).await {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(ApiError::internal(format!("read memory dir error: {e}"))),
+    };
+
+    let mut markdown_files = std::collections::BTreeSet::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| ApiError::internal(format!("read memory entry error: {e}")))?
+    {
+        let file_type = entry
+            .file_type()
+            .await
+            .map_err(|e| ApiError::internal(format!("read memory file type error: {e}")))?;
+        if !file_type.is_file() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if Path::new(&name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        {
+            markdown_files.insert(name);
+        }
+    }
+
+    let mut layers = Vec::new();
+    let mut indexed = std::collections::BTreeSet::new();
+    if markdown_files.contains("MEMORY.md") {
+        layers.push(MemoryLayer {
+            file: "MEMORY.md".to_owned(),
+            title: "Index".to_owned(),
+            hook: Some("MEMORY.md".to_owned()),
+            kind: MemoryLayerKind::Index,
+        });
+        let index_content = tokio::fs::read_to_string(memory_dir.join("MEMORY.md"))
+            .await
+            .map_err(|e| ApiError::internal(format!("read MEMORY.md error: {e}")))?;
+        for layer in parse_memory_index(&index_content, &markdown_files) {
+            indexed.insert(layer.file.clone());
+            layers.push(layer);
+        }
+    }
+
+    for file in markdown_files {
+        if file == "MEMORY.md" || indexed.contains(&file) {
+            continue;
+        }
+        let title = file.trim_end_matches(".md").replace(['_', '-'], " ");
+        layers.push(MemoryLayer {
+            file,
+            title,
+            hook: None,
+            kind: MemoryLayerKind::Orphan,
+        });
+    }
+
+    Ok(layers)
+}
+
+fn parse_memory_index(
+    content: &str,
+    markdown_files: &std::collections::BTreeSet<String>,
+) -> Vec<MemoryLayer> {
+    content
+        .lines()
+        .filter_map(|line| parse_memory_index_line(line, markdown_files))
+        .collect()
+}
+
+fn parse_memory_index_line(
+    line: &str,
+    markdown_files: &std::collections::BTreeSet<String>,
+) -> Option<MemoryLayer> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("- [") {
+        return None;
+    }
+    let title_start = trimmed.find('[')? + 1;
+    let title_end = trimmed[title_start..].find(']')? + title_start;
+    let after_title = &trimmed[title_end + 1..];
+    let file_start = after_title.find('(')? + 1;
+    let file_end = after_title[file_start..].find(')')? + file_start;
+    let file = &after_title[file_start..file_end];
+    let safe_file = validate_memory_file_name(file).ok()?;
+    if !markdown_files.contains(&safe_file) {
+        return None;
+    }
+    let hook = after_title[file_end + 1..]
+        .split_once('—')
+        .map(|(_, hook)| hook.trim().to_owned())
+        .filter(|hook| !hook.is_empty());
+    Some(MemoryLayer {
+        file: safe_file,
+        title: trimmed[title_start..title_end].trim().to_owned(),
+        hook,
+        kind: MemoryLayerKind::Entry,
+    })
+}
+
+fn validate_project_base_dir(base_dir: &str) -> Result<(), ApiError> {
+    let mut components = Path::new(base_dir).components();
+    let valid = matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+        && !matches!(base_dir, "." | "..");
+    if !valid {
+        return Err(ApiError::validation(
+            "project id must be an encoded project directory",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_memory_file_name(file: &str) -> Result<String, ApiError> {
+    let path = Path::new(file);
+    if path.is_absolute()
+        || path.components().count() != 1
+        || file.contains(['/', '\\', ':'])
+        || !path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        || file.is_empty()
+    {
+        return Err(ApiError::validation(
+            "memory file must be a local .md filename",
+        ));
+    }
+    Ok(file.to_owned())
+}
+
 /// 从文件系统扫描 CLAUDE.md 文件，构建 `ClaudeMdContextInjection` 列表。
 async fn build_claude_md_from_filesystem(project_root: &str) -> Vec<cdt_core::ContextInjection> {
     use cdt_config::claude_md::Scope;
@@ -1992,12 +2174,110 @@ mod tests {
     ///
     /// 其余 manager 用默认值即可——Pin/Hide 测试只关心 config 落盘。
     async fn build_api(config_path: std::path::PathBuf) -> LocalDataApi {
+        build_api_with_projects(config_path, std::path::PathBuf::from("/tmp")).await
+    }
+
+    async fn build_api_with_projects(
+        config_path: std::path::PathBuf,
+        projects_dir: std::path::PathBuf,
+    ) -> LocalDataApi {
         let mut config_mgr = ConfigManager::new(Some(config_path));
         config_mgr.load().await.unwrap();
         let notif_mgr = NotificationManager::new(None);
         let ssh_mgr = SshConnectionManager::new();
-        let scanner = ProjectScanner::new(local_handle(), std::path::PathBuf::from("/tmp"));
+        let scanner = ProjectScanner::new(local_handle(), projects_dir);
         LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr)
+    }
+
+    #[tokio::test]
+    async fn project_memory_discovers_index_entries_and_orphans() {
+        let dir = tempdir().unwrap();
+        let projects = dir.path().join("projects");
+        let memory = projects.join("proj-a").join("memory");
+        tokio::fs::create_dir_all(&memory).await.unwrap();
+        tokio::fs::write(
+            memory.join("MEMORY.md"),
+            "- [始终使用中文](feedback_chinese_language.md) — 对话/注释全部中文\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(memory.join("feedback_chinese_language.md"), "# 中文")
+            .await
+            .unwrap();
+        tokio::fs::write(memory.join("extra_note.md"), "# Extra")
+            .await
+            .unwrap();
+        tokio::fs::write(memory.join("ignored.json"), "{}")
+            .await
+            .unwrap();
+        let api = build_api_with_projects(dir.path().join("config.json"), projects).await;
+
+        let overview = api.get_project_memory("proj-a::session-1").await.unwrap();
+
+        assert!(overview.has_memory);
+        assert_eq!(overview.count, 3);
+        assert_eq!(overview.default_file.as_deref(), Some("MEMORY.md"));
+        assert_eq!(overview.layers[0].kind, MemoryLayerKind::Index);
+        assert_eq!(overview.layers[1].file, "feedback_chinese_language.md");
+        assert_eq!(overview.layers[1].kind, MemoryLayerKind::Entry);
+        assert_eq!(
+            overview.layers[1].hook.as_deref(),
+            Some("对话/注释全部中文")
+        );
+        assert_eq!(overview.layers[2].file, "extra_note.md");
+        assert_eq!(overview.layers[2].kind, MemoryLayerKind::Orphan);
+    }
+
+    #[tokio::test]
+    async fn project_memory_missing_dir_returns_empty() {
+        let dir = tempdir().unwrap();
+        let api =
+            build_api_with_projects(dir.path().join("config.json"), dir.path().join("projects"))
+                .await;
+
+        let overview = api.get_project_memory("proj-a").await.unwrap();
+
+        assert!(!overview.has_memory);
+        assert_eq!(overview.count, 0);
+        assert!(overview.default_file.is_none());
+        assert!(overview.layers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn read_memory_file_rejects_path_traversal_and_non_markdown() {
+        let dir = tempdir().unwrap();
+        let projects = dir.path().join("projects");
+        let memory = projects.join("proj-a").join("memory");
+        tokio::fs::create_dir_all(&memory).await.unwrap();
+        tokio::fs::write(memory.join("MEMORY.md"), "# Index")
+            .await
+            .unwrap();
+        let api = build_api_with_projects(dir.path().join("config.json"), projects).await;
+
+        let content = api
+            .read_memory_file("proj-a::session-1", "MEMORY.md")
+            .await
+            .unwrap();
+        assert_eq!(content.content, "# Index");
+        assert!(
+            api.read_memory_file("proj-a", "../config.json")
+                .await
+                .is_err()
+        );
+        assert!(api.read_memory_file("proj-a", "secret.json").await.is_err());
+        assert!(
+            api.read_memory_file("proj-a", r"C:\\secret.md")
+                .await
+                .is_err()
+        );
+        assert!(api.get_project_memory("../outside").await.is_err());
+        assert!(
+            api.read_memory_file("../outside", "MEMORY.md")
+                .await
+                .is_err()
+        );
+        assert!(api.get_project_memory("..").await.is_err());
+        assert!(api.read_memory_file(".", "MEMORY.md").await.is_err());
     }
 
     #[tokio::test]

@@ -18,12 +18,13 @@ async function maybeSetupMock(): Promise<void> {
     setupMockIPC(fixtureName)
     // dev/test 暴露关键 store 函数到 window，让 Playwright 能直接调
     // 而不用走完整 UI 路径（避免 virtualization / 异步渲染时序导致的 flake）。
-    const { openSettingsTab, openNotificationsTab, openTab, setActiveTab } =
+    const { openSettingsTab, openNotificationsTab, openMemoryTab, openTab, setActiveTab } =
       await import('./lib/tabStore.svelte')
     Object.assign(window, {
       __cdtTest: {
         openSettingsTab,
         openNotificationsTab,
+        openMemoryTab,
         openTab,
         setActiveTab,
       },

@@ -15,8 +15,8 @@ pub mod notifier;
 pub use http::{AppState, spawn_event_bridge, start_server};
 pub use ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, ContextInfo, DataApi, LocalDataApi,
-    METADATA_SCAN_CONCURRENCY, PaginatedRequest, PaginatedResponse, ProjectInfo,
-    ProjectSessionPrefs, PushEvent, SearchRequest, SessionDetail, SessionMetadataUpdate,
-    SessionSummary, SshConnectRequest,
+    METADATA_SCAN_CONCURRENCY, MemoryFileContent, MemoryLayer, MemoryLayerKind, PaginatedRequest,
+    PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs, PushEvent, SearchRequest,
+    SessionDetail, SessionMetadataUpdate, SessionSummary, SshConnectRequest,
 };
 pub use notifier::NotificationPipeline;

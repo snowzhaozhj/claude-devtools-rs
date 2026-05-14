@@ -166,3 +166,48 @@ pub struct ProjectSessionPrefs {
     /// 当前 project 被 hide 的 session id 列表（按 `hiddenAt` 倒序）。
     pub hidden: Vec<String>,
 }
+
+// =============================================================================
+// Memory
+// =============================================================================
+
+/// 项目 memory 概览。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectMemory {
+    pub project_id: String,
+    pub has_memory: bool,
+    pub count: usize,
+    pub default_file: Option<String>,
+    pub layers: Vec<MemoryLayer>,
+}
+
+/// 单个 memory layer。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryLayer {
+    pub file: String,
+    pub title: String,
+    #[serde(default)]
+    pub hook: Option<String>,
+    pub kind: MemoryLayerKind,
+}
+
+/// Memory layer 来源类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryLayerKind {
+    Index,
+    Entry,
+    Orphan,
+}
+
+/// 单个 memory 文件内容。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryFileContent {
+    pub project_id: String,
+    pub file: String,
+    pub file_path: String,
+    pub content: String,
+}

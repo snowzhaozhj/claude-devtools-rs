@@ -20,7 +20,7 @@ import {
 // Tab 数据模型
 // ---------------------------------------------------------------------------
 
-export type TabType = "session" | "settings" | "notifications";
+export type TabType = "session" | "settings" | "notifications" | "memory";
 
 export interface Tab {
   id: string;
@@ -371,6 +371,35 @@ export function openSettingsTab(): void {
 
 export function openNotificationsTab(): void {
   openSingletonTab("notifications", "Notifications");
+}
+
+export function openMemoryTab(projectId: string, label = "Memory"): void {
+  for (const pane of paneLayout.panes) {
+    const existing = pane.tabs.find(
+      (t) => t.type === "memory" && t.projectId === projectId,
+    );
+    if (existing) {
+      paneLayout = updatePane(
+        { ...paneLayout, focusedPaneId: pane.id },
+        { ...pane, activeTabId: existing.id },
+      );
+      return;
+    }
+  }
+  const tab: Tab = {
+    id: crypto.randomUUID(),
+    type: "memory",
+    sessionId: "",
+    projectId,
+    label: shortLabel(label),
+    createdAt: Date.now(),
+  };
+  const pane = focusedPane();
+  paneLayout = updatePane(paneLayout, {
+    ...pane,
+    tabs: [...pane.tabs, tab],
+    activeTabId: tab.id,
+  });
 }
 
 /**

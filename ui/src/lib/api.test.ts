@@ -1,7 +1,7 @@
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { getSessionSummariesByIds, listAllSessions, listSessions } from './api'
+import { getProjectMemory, getSessionSummariesByIds, listAllSessions, listSessions, readMemoryFile } from './api'
 import { setupMockIPC } from './tauriMock'
 import { multiProjectRichFixture } from './__fixtures__'
 import type { Fixture } from './__fixtures__'
@@ -63,6 +63,19 @@ describe('getSessionSummariesByIds', () => {
     ])
 
     expect(result.map((s) => s.sessionId)).toEqual(['sess-2', 'sess-0'])
+  })
+})
+
+describe('memory API', () => {
+  test('mockIPC 返回 project memory 和文件内容', async () => {
+    setupMockIPC(multiProjectRichFixture)
+
+    const memory = await getProjectMemory('mock-rich-rust')
+    const file = await readMemoryFile('mock-rich-rust', 'MEMORY.md')
+
+    expect(memory.count).toBe(3)
+    expect(memory.layers.map((layer) => layer.file)).toContain('feedback_chinese_language.md')
+    expect(file.content).toContain('始终使用中文')
   })
 })
 

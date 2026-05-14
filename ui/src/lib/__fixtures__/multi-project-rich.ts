@@ -295,6 +295,41 @@ export const multiProjectRichFixture: Fixture = {
   prefs: {
     'mock-rich-rust': { pinned: ['sess-rust-active'], hidden: ['sess-rust-3'] },
   },
+  memories: {
+    'mock-rich-rust': {
+      projectId: 'mock-rich-rust',
+      hasMemory: true,
+      count: 3,
+      defaultFile: 'MEMORY.md',
+      layers: [
+        { file: 'MEMORY.md', title: 'Index', hook: 'MEMORY.md', kind: 'index' },
+        {
+          file: 'feedback_chinese_language.md',
+          title: '始终使用中文',
+          hook: '对话/注释/文档全部简体中文',
+          kind: 'entry',
+        },
+        {
+          file: 'project_ui_todo.md',
+          title: 'UI 功能路线图',
+          hook: '剩余待办等痛点再做',
+          kind: 'orphan',
+        },
+      ],
+    },
+    'mock-rich-rust-wt-feat': {
+      projectId: 'mock-rich-rust-wt-feat',
+      hasMemory: false,
+      count: 0,
+      defaultFile: null,
+      layers: [],
+    },
+  },
+  memoryFiles: {
+    'mock-rich-rust:MEMORY.md': '- [始终使用中文](feedback_chinese_language.md) — 对话/注释/文档全部简体中文\n- [UI 功能路线图](project_ui_todo.md) — 剩余待办等痛点再做\n',
+    'mock-rich-rust:feedback_chinese_language.md': '# 始终使用中文\n\n对话、注释、文档和 OpenSpec 产物全部使用简体中文。\n',
+    'mock-rich-rust:project_ui_todo.md': '# UI 功能路线图\n\n- 数据层完成\n- Memory 查看功能对齐原版\n',
+  },
   config: {
     notifications: {
       enabled: true,

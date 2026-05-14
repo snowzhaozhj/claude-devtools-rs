@@ -6,8 +6,10 @@
     listSessions,
     getSessionSummariesByIds,
     listRepositoryGroups,
+    getProjectMemory,
     type ProjectInfo,
     type RepositoryGroup,
+    type ProjectMemory,
     type SessionSummary,
     type SessionMetadataUpdate,
     type PaginatedResponse,
@@ -15,7 +17,7 @@
   import SidebarHeader from "./SidebarHeader.svelte";
   import SessionContextMenu from "./SessionContextMenu.svelte";
   import OngoingIndicator from "./OngoingIndicator.svelte";
-  import { openTab, openOrReplaceTab, openTabInNewPane, getPaneLayout } from "../lib/tabStore.svelte";
+  import { openTab, openOrReplaceTab, openTabInNewPane, getPaneLayout, openMemoryTab } from "../lib/tabStore.svelte";
   import { MAX_PANES } from "../lib/paneTypes";
   import {
     getSidebarWidth, setSidebarWidth,
@@ -30,7 +32,7 @@
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
-  import { MESSAGE_SQUARE, GIT_BRANCH_SVG } from "../lib/icons";
+  import { MESSAGE_SQUARE, GIT_BRANCH_SVG, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
 
   // 虚拟滚动行高（实测 .session-item ≈ 44px：padding 8+8 + title 13×1.4 +
   // meta 11×1.4）；header 行高强制对齐 44 让单一 windowing 单元生效。
@@ -57,6 +59,7 @@
   let projects: ProjectInfo[] = $state([]);
   let repositoryGroups: RepositoryGroup[] = $state([]);
   let sessions: SessionSummary[] = $state([]);
+  let projectMemory: ProjectMemory | null = $state(null);
   let projectsLoading = $state(true);
   let sessionsLoading = $state(false);
   let sessionsLoadingMore = $state(false);
@@ -211,6 +214,20 @@
     return sort ? merged.sort((a, b) => b.timestamp - a.timestamp) : merged;
   }
 
+  async function loadProjectMemory(projectId: string) {
+    if (!projectId) {
+      projectMemory = null;
+      return;
+    }
+    try {
+      const memory = await getProjectMemory(projectId);
+      if (projectId === selectedProjectId) projectMemory = memory;
+    } catch (e) {
+      console.warn("Failed to load project memory:", e);
+      if (projectId === selectedProjectId) projectMemory = null;
+    }
+  }
+
   async function loadSessions(projectId: string, silent = false) {
     if (!projectId) {
       sessions = [];
@@ -311,6 +328,7 @@
   $effect(() => {
     if (selectedProjectId) {
       loadSessions(selectedProjectId);
+      void loadProjectMemory(selectedProjectId);
       // 首次访问此 project 时从后端拉取 pin/hide 持久化状态（幂等）
       void loadProjectPrefs(selectedProjectId);
     }
@@ -426,6 +444,7 @@
   const dateGroups = $derived(groupByDate(unpinnedSessions));
   const totalSessions = $derived(sessions.length);
   const hiddenCount = $derived(getHiddenCount(selectedProjectId));
+  const memoryCount = $derived.by(() => projectMemory ? projectMemory.count : 0);
   const sidebarWidth = $derived(getSidebarWidth());
 
   // ---------------------------------------------------------------------------
@@ -476,6 +495,18 @@
     {onSelectProject}
     onToggleCollapsed={toggleSidebarCollapsed}
   />
+
+  {#if selectedProjectId && memoryCount > 0}
+    <button
+      class="memory-entry"
+      onclick={() => openMemoryTab(selectedProjectId, "Memory")}
+    >
+      <svg class="memory-entry-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        {@html BOOK_OPEN_TEXT_SVG}
+      </svg>
+      <span>Memory ({memoryCount})</span>
+    </button>
+  {/if}
 
   <!-- Session filter + count -->
   {#if !sessionsLoading && selectedProjectId}
@@ -647,6 +678,35 @@
   .sidebar-collapsed {
     border-right: none;
     pointer-events: none;
+  }
+
+  .memory-entry {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: calc(100% - 16px);
+    margin: 8px;
+    padding: 9px 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--color-text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .memory-entry:hover {
+    background: var(--tool-item-hover-bg);
+  }
+
+  .memory-entry-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: var(--color-text-muted);
   }
 
   .session-filter-bar {

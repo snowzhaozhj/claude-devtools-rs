@@ -7,6 +7,7 @@ import type {
   GetNotificationsResult,
   PaginatedResponse,
   ProjectInfo,
+  ProjectMemory,
   RepositoryGroup,
   SessionDetail,
   SessionSummary,
@@ -30,6 +31,10 @@ export interface Fixture {
   sessionDetails: Record<string, SessionDetail>
   /** projectId → ProjectSessionPrefs。get_project_session_prefs 查找。 */
   prefs: Record<string, ProjectSessionPrefs>
+  /** projectId → ProjectMemory。get_project_memory 查找。 */
+  memories?: Record<string, ProjectMemory>
+  /** "<projectId>:<file>" → Markdown 内容。read_memory_file 查找。 */
+  memoryFiles?: Record<string, string>
   /** AppConfig。get_config / update_config 返回。 */
   config: AppConfig
   /** 通知列表。get_notifications 返回。 */
@@ -52,6 +57,7 @@ export type {
   GetNotificationsResult,
   PaginatedResponse,
   ProjectInfo,
+  ProjectMemory,
   RepositoryGroup,
   SessionDetail,
   SessionSummary,

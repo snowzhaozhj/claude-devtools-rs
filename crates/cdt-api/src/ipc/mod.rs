@@ -14,6 +14,7 @@ pub use events::{PushEvent, SessionMetadataUpdate};
 pub use local::{LocalDataApi, METADATA_SCAN_CONCURRENCY};
 pub use traits::DataApi;
 pub use types::{
-    ConfigUpdateRequest, ContextInfo, PaginatedRequest, PaginatedResponse, ProjectInfo,
-    ProjectSessionPrefs, SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
+    ConfigUpdateRequest, ContextInfo, MemoryFileContent, MemoryLayer, MemoryLayerKind,
+    PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
+    SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
 };
