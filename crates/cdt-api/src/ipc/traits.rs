@@ -8,8 +8,8 @@ use async_trait::async_trait;
 
 use super::error::ApiError;
 use super::types::{
-    ConfigUpdateRequest, ContextInfo, PaginatedRequest, PaginatedResponse, ProjectInfo,
-    SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
+    ConfigUpdateRequest, ContextInfo, MemoryFileContent, PaginatedRequest, PaginatedResponse,
+    ProjectInfo, ProjectMemory, SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
 };
 
 /// 数据 API 操作集。
@@ -61,6 +61,16 @@ pub trait DataApi: Send + Sync {
         project_id: &str,
         session_ids: &[String],
     ) -> Result<Vec<SessionSummary>, ApiError>;
+
+    /// 获取指定项目的 memory layers 概览。
+    async fn get_project_memory(&self, project_id: &str) -> Result<ProjectMemory, ApiError>;
+
+    /// 读取指定项目 memory 目录内的单个 Markdown 文件。
+    async fn read_memory_file(
+        &self,
+        project_id: &str,
+        file: &str,
+    ) -> Result<MemoryFileContent, ApiError>;
 
     /// 通过仅 `session_id` 反查所属 `project_id`。
     ///

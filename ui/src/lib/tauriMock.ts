@@ -27,6 +27,8 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'list_sessions',
   'get_session_summaries_by_ids',
   'get_session_detail',
+  'get_project_memory',
+  'read_memory_file',
   'get_subagent_trace',
   'get_image_asset',
   'get_tool_output',
@@ -205,6 +207,29 @@ function buildHandler(fx: Fixture) {
         return detail
       }
 
+      case 'get_project_memory': {
+        const projectId = getArg<string>(payload, 'projectId') ?? ''
+        return fx.memories?.[projectId] ?? {
+          projectId,
+          hasMemory: false,
+          count: 0,
+          defaultFile: null,
+          layers: [],
+        }
+      }
+
+      case 'read_memory_file': {
+        const projectId = getArg<string>(payload, 'projectId') ?? ''
+        const file = getArg<string>(payload, 'file') ?? ''
+        const content = fx.memoryFiles?.[`${projectId}:${file}`]
+        if (content === undefined) {
+          return Promise.reject(
+            new Error(`[mockIPC] no memory file fixture for ${projectId}:${file}`),
+          )
+        }
+        return { projectId, file, filePath: `/mock/${projectId}/memory/${file}`, content }
+      }
+
       case 'get_subagent_trace':
         return []
 
@@ -380,6 +405,14 @@ function buildHandler(fx: Fixture) {
         const url = (rawPayload as { url?: string } | undefined)?.url
         if (typeof url === 'string' && url.length > 0) {
           window.open(url, '_blank', 'noopener,noreferrer')
+        }
+        return undefined
+      }
+
+      case 'plugin:opener|open_path': {
+        const path = (rawPayload as { path?: string } | undefined)?.path
+        if (typeof path === 'string' && path.length > 0) {
+          window.dispatchEvent(new CustomEvent('__cdtMockOpenPath', { detail: path }))
         }
         return undefined
       }

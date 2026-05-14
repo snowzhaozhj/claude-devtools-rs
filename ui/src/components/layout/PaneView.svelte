@@ -4,6 +4,7 @@
   import SessionDetail from "../../routes/SessionDetail.svelte";
   import SettingsView from "../../routes/SettingsView.svelte";
   import NotificationsView from "../../routes/NotificationsView.svelte";
+  import MemoryView from "../../routes/MemoryView.svelte";
   import DashboardView from "../../routes/DashboardView.svelte";
   import {
     focusPane,
@@ -51,6 +52,8 @@
       <SettingsView />
     {:else if activeTab?.type === "notifications"}
       <NotificationsView />
+    {:else if activeTab?.type === "memory"}
+      <MemoryView projectId={activeTab.projectId} />
     {:else if activeTab?.type === "session"}
       <!-- key 复合 tabId + sessionId：切 tab（tabId 变）或同 tab 替换会话（openOrReplaceTab
            保留 tabId 仅换 sessionId/projectId）时都触发 destroy/recreate，确保 SessionDetail

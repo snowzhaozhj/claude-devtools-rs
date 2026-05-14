@@ -95,6 +95,16 @@ export const FILE_TEXT_SVG = `
 <path d="M10 9H8"/>
 `;
 
+/** Lucide book-open-text — Memory tab / sidebar icon（多段，使用 {@html}） */
+export const BOOK_OPEN_TEXT_SVG = `
+<path d="M12 7v14"/>
+<path d="M16 12h2"/>
+<path d="M16 8h2"/>
+<path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>
+<path d="M6 12h2"/>
+<path d="M6 8h2"/>
+`;
+
 /** Lucide folder-git-2 — 项目卡片/侧栏 icon（多段，使用 {@html}） */
 export const FOLDER_GIT2_SVG = `
 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v1"/>

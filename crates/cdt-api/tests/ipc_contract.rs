@@ -15,8 +15,9 @@
 use std::sync::Arc;
 
 use cdt_api::{
-    ConfigUpdateRequest, DataApi, LocalDataApi, PaginatedRequest, PaginatedResponse, ProjectInfo,
-    ProjectSessionPrefs, SearchRequest, SessionMetadataUpdate, SessionSummary,
+    ConfigUpdateRequest, DataApi, LocalDataApi, MemoryFileContent, MemoryLayer, MemoryLayerKind,
+    PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
+    SearchRequest, SessionMetadataUpdate, SessionSummary,
 };
 use cdt_config::{
     ConfigManager, NotificationManager, NotificationTrigger, TriggerContentType, TriggerMode,
@@ -50,6 +51,8 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "list_sessions",
     "get_session_summaries_by_ids",
     "get_session_detail",
+    "get_project_memory",
+    "read_memory_file",
     "get_subagent_trace",
     "get_image_asset",
     "get_tool_output",
@@ -106,12 +109,12 @@ fn ts() -> chrono::DateTime<Utc> {
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_27() {
+fn expected_tauri_commands_count_is_29() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        27,
+        29,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 27 个 Tauri command"
+         以及本文件常量；当前 src-tauri 注册 29 个 Tauri command"
     );
 }
 
@@ -153,6 +156,47 @@ fn project_info_serializes_camelcase() {
         "MUST 不出现 snake_case 字段名"
     );
     assert!(json.get("session_count").is_none());
+}
+
+#[test]
+fn project_memory_serializes_camelcase() {
+    let memory = ProjectMemory {
+        project_id: "proj-1".into(),
+        has_memory: true,
+        count: 2,
+        default_file: Some("MEMORY.md".into()),
+        layers: vec![MemoryLayer {
+            file: "MEMORY.md".into(),
+            title: "Index".into(),
+            hook: Some("MEMORY.md".into()),
+            kind: MemoryLayerKind::Index,
+        }],
+    };
+    let json = serde_json::to_value(&memory).unwrap();
+    assert_eq!(json["projectId"], json!("proj-1"));
+    assert_eq!(json["hasMemory"], json!(true));
+    assert_eq!(json["defaultFile"], json!("MEMORY.md"));
+    assert_eq!(json["layers"][0]["kind"], json!("index"));
+    assert!(json.get("project_id").is_none());
+    assert!(json.get("has_memory").is_none());
+    assert!(json.get("default_file").is_none());
+}
+
+#[test]
+fn memory_file_content_serializes_camelcase() {
+    let content = MemoryFileContent {
+        project_id: "proj-1".into(),
+        file: "MEMORY.md".into(),
+        file_path: "/mock/proj-1/memory/MEMORY.md".into(),
+        content: "# Memory".into(),
+    };
+    let json = serde_json::to_value(&content).unwrap();
+    assert_eq!(json["projectId"], json!("proj-1"));
+    assert_eq!(json["file"], json!("MEMORY.md"));
+    assert_eq!(json["filePath"], json!("/mock/proj-1/memory/MEMORY.md"));
+    assert_eq!(json["content"], json!("# Memory"));
+    assert!(json.get("project_id").is_none());
+    assert!(json.get("file_path").is_none());
 }
 
 #[test]

@@ -16,6 +16,7 @@ import {
   openSessionTab,
   openSettingsTab,
   openNotificationsTab,
+  openMemoryTab,
   openTab,
   saveTabUIState,
   setActiveTab,
@@ -39,6 +40,17 @@ describe('singleton tab semantics', () => {
     expect(
       getAllTabs().filter((t) => t.type === 'notifications').length,
     ).toBe(1)
+  })
+
+  test('openMemoryTab 按 projectId 单例并激活已有 tab', () => {
+    openMemoryTab('proj-memory-a')
+    const first = getAllTabs().find((t) => t.type === 'memory' && t.projectId === 'proj-memory-a')!
+    openMemoryTab('proj-memory-b')
+    openMemoryTab('proj-memory-a')
+    const memoryTabs = getAllTabs().filter((t) => t.type === 'memory')
+    expect(memoryTabs.filter((t) => t.projectId === 'proj-memory-a')).toHaveLength(1)
+    expect(memoryTabs.filter((t) => t.projectId === 'proj-memory-b')).toHaveLength(1)
+    expect(getActiveTabId()).toBe(first.id)
   })
 })
 

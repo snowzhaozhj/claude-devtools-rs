@@ -75,6 +75,30 @@ export interface SearchSessionsResult {
   isPartial: boolean;
 }
 
+export type MemoryLayerKind = "index" | "entry" | "orphan";
+
+export interface MemoryLayer {
+  file: string;
+  title: string;
+  hook: string | null;
+  kind: MemoryLayerKind;
+}
+
+export interface ProjectMemory {
+  projectId: string;
+  hasMemory: boolean;
+  count: number;
+  defaultFile: string | null;
+  layers: MemoryLayer[];
+}
+
+export interface MemoryFileContent {
+  projectId: string;
+  file: string;
+  filePath: string;
+  content: string;
+}
+
 // ---------------------------------------------------------------------------
 // Chunk 类型（与 Rust cdt-core serde(tag="kind", rename_all="snake_case") 对齐）
 // ---------------------------------------------------------------------------
@@ -423,6 +447,17 @@ export async function getSessionDetail(
   sessionId: string
 ): Promise<SessionDetail> {
   return await invoke("get_session_detail", { projectId, sessionId });
+}
+
+export async function getProjectMemory(projectId: string): Promise<ProjectMemory> {
+  return await invoke("get_project_memory", { projectId });
+}
+
+export async function readMemoryFile(
+  projectId: string,
+  file: string,
+): Promise<MemoryFileContent> {
+  return await invoke("read_memory_file", { projectId, file });
 }
 
 /**

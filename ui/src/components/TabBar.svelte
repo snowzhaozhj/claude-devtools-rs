@@ -16,7 +16,7 @@
   import { beginDrag, getDragSource, getHit, isDragging } from "../lib/dragSession.svelte";
   import { getNotifications } from "../lib/api";
   import TabContextMenu from "./TabContextMenu.svelte";
-  import { BELL, SETTINGS, FILE_TEXT_SVG, PANEL_LEFT_SVG } from "../lib/icons";
+  import { BELL, SETTINGS, FILE_TEXT_SVG, BOOK_OPEN_TEXT_SVG, PANEL_LEFT_SVG } from "../lib/icons";
   import { getSidebarCollapsed, toggleSidebarCollapsed } from "../lib/sidebarStore.svelte";
 
   interface Props {
@@ -176,6 +176,8 @@
               <path d={SETTINGS} />
             {:else if tab.type === "notifications"}
               <path d={BELL} />
+            {:else if tab.type === "memory"}
+              {@html BOOK_OPEN_TEXT_SVG}
             {:else}
               {@html FILE_TEXT_SVG}
             {/if}

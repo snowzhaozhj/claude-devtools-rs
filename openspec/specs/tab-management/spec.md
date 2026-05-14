@@ -3,9 +3,7 @@
 ## Purpose
 
 定义桌面应用的多 Tab 管理行为：Tab 生命周期（打开 / 关闭 / 切换）、per-tab UI 状态隔离、session 数据缓存、多 Pane 分屏（最多 4 pane）、tab 跨 pane 拖拽与 pane 宽度 resize。Sidebar 高亮 SHALL 始终跟随 focused pane 的 activeTab。Tab 跨进程持久化留作后续扩展。
-
 ## Requirements
-
 ### Requirement: 打开 session tab
 
 用户从 Sidebar 点击会话时，系统 SHALL 在当前 focused pane 内打开一个 session tab。若该 sessionId 已有打开的 tab（无论在哪个 pane），系统 SHALL 切换焦点到已有 tab 所在 pane 并激活该 tab 而非创建重复 tab。新 tab 的 label SHALL 为 session 标题（截断至 50 字符），id SHALL 为唯一标识符。
@@ -199,3 +197,20 @@ Sidebar 的会话高亮 SHALL 跟随 focused pane 的 activeTabId 对应的 sess
 #### Scenario: 视觉反馈
 - **WHEN** 鼠标悬停或拖动 resize handle
 - **THEN** handle SHALL 展示可拖拽视觉（例如更亮底色或 col-resize 光标）
+
+### Requirement: 打开 project-scoped Memory tab
+
+用户从 Sidebar 点击 Memory 入口时，系统 SHALL 在当前 focused pane 内打开该项目的 Memory tab。Memory tab SHALL 绑定 `projectId`，同一项目重复打开时 SHALL 复用已有 Memory tab；不同项目的 Memory tab SHALL 可以同时存在。
+
+#### Scenario: 首次打开 Memory tab
+- **WHEN** 用户点击当前项目 Sidebar 中的 Memory 入口
+- **THEN** 系统 SHALL 在 `focusedPaneId` 对应 pane 中创建 `type = "memory"` 的 tab，并设为该 pane 的 activeTabId
+
+#### Scenario: 重复打开同一项目 Memory tab
+- **WHEN** 用户再次点击同一项目的 Memory 入口
+- **THEN** 系统 SHALL 激活已有 Memory tab，而不是创建重复 tab
+
+#### Scenario: 不同项目 Memory tab 独立
+- **WHEN** 用户先打开 project A 的 Memory tab，再切换到 project B 并打开 Memory tab
+- **THEN** 系统 SHALL 创建另一个绑定 project B 的 Memory tab，不替换 project A 的 Memory tab
+
