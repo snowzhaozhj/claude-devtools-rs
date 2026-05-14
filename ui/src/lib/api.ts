@@ -377,6 +377,14 @@ export async function listSessions(
   });
 }
 
+export async function listAllSessions(projectId: string): Promise<PaginatedResponse<SessionSummary>> {
+  let result = await listSessions(projectId);
+  while (result.nextCursor) {
+    result = await listSessions(projectId, result.total);
+  }
+  return result;
+}
+
 export async function getSessionDetail(
   projectId: string,
   sessionId: string
