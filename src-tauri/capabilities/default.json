@@ -15,6 +15,11 @@
     "updater:default",
     "process:default",
     "opener:default",
-    "opener:allow-open-path"
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$HOME/.claude/projects/**" }
+      ]
+    }
   ]
 }

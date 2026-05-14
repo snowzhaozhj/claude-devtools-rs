@@ -10,7 +10,7 @@ export interface FrontmatterSplit {
   body: string;
 }
 
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+const FRONTMATTER_RE = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 function unquote(value: string): string {
   const trimmed = value.trim();
