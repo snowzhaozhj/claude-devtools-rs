@@ -3,7 +3,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import {
     listProjects,
-    listSessions,
+    listAllSessions,
     type ProjectInfo,
     type SessionSummary,
     type SessionMetadataUpdate,
@@ -160,7 +160,7 @@
     if (!projectId) { sessions = []; return; }
     if (!silent) sessionsLoading = true;
     try {
-      const result: PaginatedResponse<SessionSummary> = await listSessions(projectId);
+      const result: PaginatedResponse<SessionSummary> = await listAllSessions(projectId);
       const fresh = silent ? mergeSilentMetadata(sessions, result.items) : result.items;
       sessions = fresh;
     } catch (e) {

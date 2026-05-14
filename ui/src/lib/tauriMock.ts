@@ -75,8 +75,13 @@ function buildHandler(fx: Fixture) {
 
       case 'list_sessions': {
         const projectId = getArg<string>(payload, 'projectId') ?? ''
-        const items = fx.sessions[projectId] ?? []
-        return { items, nextCursor: null, total: items.length }
+        const pageSize = getArg<number>(payload, 'pageSize') ?? 50
+        const offset = Number.parseInt(getArg<string>(payload, 'cursor') ?? '0', 10) || 0
+        const allItems = fx.sessions[projectId] ?? []
+        const items = allItems.slice(offset, offset + pageSize)
+        const nextOffset = offset + items.length
+        const nextCursor = nextOffset < allItems.length ? String(nextOffset) : null
+        return { items, nextCursor, total: allItems.length }
       }
 
       case 'search_sessions':
@@ -292,8 +297,10 @@ function buildHandler(fx: Fixture) {
  *
  * 多次调用安全：每次都 clearMocks 后重新注入；fixture 切换走这条路径。
  */
-export function setupMockIPC(fixtureName?: string | null): void {
-  const fx = selectFixture(fixtureName)
+export function setupMockIPC(fixtureName?: string | Fixture | null): void {
+  const fx = typeof fixtureName === 'object' && fixtureName !== null
+    ? fixtureName
+    : selectFixture(fixtureName)
   activeFixtureName = fx.name
 
   // mockWindows 必须在 mockIPC 之前 / 同时——否则 getCurrentWindow() 等会失败

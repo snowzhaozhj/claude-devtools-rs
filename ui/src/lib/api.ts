@@ -313,6 +313,13 @@ export async function listSessions(
   });
 }
 
+export async function listAllSessions(projectId: string): Promise<PaginatedResponse<SessionSummary>> {
+  const firstPage = await listSessions(projectId);
+  if (!firstPage.nextCursor) return firstPage;
+
+  return await listSessions(projectId, firstPage.total);
+}
+
 export async function getSessionDetail(
   projectId: string,
   sessionId: string

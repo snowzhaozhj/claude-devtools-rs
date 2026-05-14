@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { listProjects, listSessions, type ProjectInfo, type SessionSummary } from "../lib/api";
+  import { listProjects, listAllSessions, type ProjectInfo, type SessionSummary } from "../lib/api";
   import { openTab } from "../lib/tabStore.svelte";
   import { shortenPath } from "../lib/toolHelpers";
 
@@ -26,7 +26,7 @@
     try {
       projects = await listProjects();
       if (selectedProjectId) {
-        const r = await listSessions(selectedProjectId);
+        const r = await listAllSessions(selectedProjectId);
         sessions = r.items;
       }
     } catch (e) {
