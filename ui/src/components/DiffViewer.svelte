@@ -88,6 +88,7 @@
 
 <style>
   .diff-viewer {
+    min-width: 0;
     border: 1px solid var(--code-border);
     border-radius: 6px;
     overflow: hidden;
