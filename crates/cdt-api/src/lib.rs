@@ -7,6 +7,7 @@
 //! - **http-data-api** — axum HTTP/SSE server under `/api` prefix,
 //!   mirrors the `DataApi` trait for web/remote clients.
 
+pub(crate) mod cache_signature;
 pub mod http;
 pub mod ipc;
 pub mod notifier;
