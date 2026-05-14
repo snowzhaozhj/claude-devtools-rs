@@ -123,7 +123,18 @@ const userChunk: UserChunk = {
   uuid: 'u-active-1',
   timestamp: ts(0),
   durationMs: null,
-  content: '帮我查一下 IPC 字段',
+  content: [
+    { type: 'text', text: '帮我查一下 IPC 字段' },
+    {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: 'image/png',
+        data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lw1rYQAAAABJRU5ErkJggg==',
+        dataOmitted: false,
+      },
+    },
+  ],
   metrics: emptyMetrics(),
 }
 
