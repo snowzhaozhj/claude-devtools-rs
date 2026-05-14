@@ -124,6 +124,36 @@ async fn list_sessions_filters_non_jsonl_and_sorts_by_mtime() {
 }
 
 #[tokio::test]
+async fn list_sessions_many_sessions_keep_order_across_cursor_pages() {
+    let root = tempfile::tempdir().unwrap();
+    let projects_dir = root.path().join("projects");
+    let proj = projects_dir.join("-tmp-many");
+    tokio::fs::create_dir_all(&proj).await.unwrap();
+
+    for idx in 0..12 {
+        write_session(&proj, &format!("s{idx:02}"), "/tmp/many").await;
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+
+    let fs: Arc<dyn FileSystemProvider> = Arc::new(LocalFileSystemProvider::new());
+    let mut scanner = ProjectScanner::new(fs, projects_dir);
+    scanner.scan().await.unwrap();
+
+    let pinned = BTreeSet::new();
+    let sessions = scanner.list_sessions("-tmp-many", &pinned).await.unwrap();
+    let all_ids: Vec<_> = sessions.iter().map(|s| s.id.as_str()).collect();
+    let paged_ids: Vec<_> = sessions
+        .chunks(5)
+        .flat_map(|chunk| chunk.iter().map(|s| s.id.as_str()))
+        .collect();
+
+    assert_eq!(sessions.len(), 12);
+    assert_eq!(all_ids, paged_ids);
+    assert_eq!(all_ids.first(), Some(&"s11"));
+    assert_eq!(all_ids.last(), Some(&"s00"));
+}
+
+#[tokio::test]
 async fn composite_id_is_deterministic_across_registries() {
     let id1 = SubprojectRegistry::compose_id("-tmp-x", Path::new("/tmp/x/sub-a"));
     let id2 = SubprojectRegistry::compose_id("-tmp-x", Path::new("/tmp/x/sub-a"));

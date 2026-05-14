@@ -847,6 +847,69 @@ async fn list_sessions_returns_paginated_response_shape() {
 }
 
 #[tokio::test]
+async fn list_sessions_cursor_pages_cover_all_sessions_without_restarting() {
+    let (api, tmp) = setup_api().await;
+    let project_id = "-tmp-many";
+    let project_dir = tmp.path().join("projects").join(project_id);
+    tokio::fs::create_dir_all(&project_dir).await.unwrap();
+
+    for idx in 0..120 {
+        let path = project_dir.join(format!("s{idx:03}.jsonl"));
+        tokio::fs::write(path, b"{}\n").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+
+    let first = api
+        .list_sessions(
+            project_id,
+            &PaginatedRequest {
+                page_size: 50,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+    let second = api
+        .list_sessions(
+            project_id,
+            &PaginatedRequest {
+                page_size: 50,
+                cursor: first.next_cursor.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let third = api
+        .list_sessions(
+            project_id,
+            &PaginatedRequest {
+                page_size: 50,
+                cursor: second.next_cursor.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let ids: Vec<_> = first
+        .items
+        .iter()
+        .chain(&second.items)
+        .chain(&third.items)
+        .map(|s| s.session_id.as_str())
+        .collect();
+
+    assert_eq!(first.total, 120);
+    assert_eq!(second.total, 120);
+    assert_eq!(third.total, 120);
+    assert_eq!(first.next_cursor.as_deref(), Some("50"));
+    assert_eq!(second.next_cursor.as_deref(), Some("100"));
+    assert_eq!(third.next_cursor, None);
+    assert_eq!(ids.len(), 120);
+    assert_eq!(ids.first(), Some(&"s119"));
+    assert_eq!(ids.last(), Some(&"s000"));
+}
+
+#[tokio::test]
 async fn list_sessions_sync_returns_paginated_response_shape() {
     // list_sessions_sync 是 LocalDataApi 公开方法（HTTP 路径用），不在 Tauri command
     // 列表中，但仍需契约守护。

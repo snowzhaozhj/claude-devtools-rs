@@ -378,11 +378,14 @@ export async function listSessions(
 }
 
 export async function listAllSessions(projectId: string): Promise<PaginatedResponse<SessionSummary>> {
-  let result = await listSessions(projectId);
+  const pageSize = 50;
+  let result = await listSessions(projectId, pageSize);
+  const items = [...result.items];
   while (result.nextCursor) {
-    result = await listSessions(projectId, result.total);
+    result = await listSessions(projectId, pageSize, result.nextCursor);
+    items.push(...result.items);
   }
-  return result;
+  return { ...result, items };
 }
 
 export async function getSessionDetail(

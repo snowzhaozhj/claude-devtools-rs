@@ -512,6 +512,10 @@ impl LocalDataApi {
 /// 避免旧 task 在新 task 已注册后的 cleanup 误删新 handle（codex 二审 race）。
 /// `broadcast::send` 在无订阅者时返回 `Err`，本函数静默忽略——元数据更新
 /// 本质上是 fire-and-forget。
+fn metadata_scan_key(project_id: &str, cursor: Option<&str>) -> String {
+    format!("{}:{}", project_id, cursor.unwrap_or("0"))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn scan_metadata_for_page(
     project_id: String,
@@ -618,7 +622,8 @@ impl DataApi for LocalDataApi {
             let tx = self.session_metadata_tx.clone();
             let project_id_owned = project_id.to_owned();
             let active_scans = self.active_scans.clone();
-            let pid_for_cleanup = project_id_owned.clone();
+            let scan_key = metadata_scan_key(project_id, pagination.cursor.as_deref());
+            let key_for_cleanup = scan_key.clone();
 
             // abort 旧 + 分配 generation + spawn + insert **全部**在同一把
             // sync lock 内完成。`tokio::spawn` 不会 await，sync lock 保持
@@ -627,7 +632,7 @@ impl DataApi for LocalDataApi {
             // B 完整 abort/spawn/insert 后 A 的 insert 覆盖 B 的 entry，导致
             // 后续 C 无法 abort B 的孤立 task（codex 二审第二轮 race）。
             if let Ok(mut scans) = self.active_scans.lock() {
-                if let Some(old) = scans.remove(project_id) {
+                if let Some(old) = scans.remove(&scan_key) {
                     old.handle.abort();
                 }
                 let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
@@ -638,13 +643,13 @@ impl DataApi for LocalDataApi {
                     page_jobs,
                     tx,
                     active_scans.clone(),
-                    pid_for_cleanup,
+                    key_for_cleanup,
                     my_generation,
                     self.metadata_cache.clone(),
                 ));
 
                 scans.insert(
-                    project_id.to_owned(),
+                    scan_key,
                     ScanEntry {
                         generation: my_generation,
                         handle: handle.abort_handle(),
