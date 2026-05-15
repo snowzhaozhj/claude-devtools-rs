@@ -32,6 +32,7 @@
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
+  import { applySilentRefresh, mergeSessions } from "../lib/sessionMerge";
   import { MESSAGE_SQUARE, GIT_BRANCH_SVG, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
 
   // 虚拟滚动行高（实测 .session-item ≈ 44px：padding 8+8 + title 13×1.4 +
@@ -203,24 +204,6 @@
     return mergeSessions(current, summaries);
   }
 
-  function mergeSessions(prev: SessionSummary[], next: SessionSummary[], sort = true): SessionSummary[] {
-    const byId = new Map(prev.map((s) => [s.sessionId, s]));
-    const merged = [...prev];
-    for (const item of next) {
-      const old = byId.get(item.sessionId);
-      if (old) {
-        const updated = mergeSilentMetadata([old], [item])[0];
-        byId.set(item.sessionId, updated);
-        const idx = merged.findIndex((s) => s.sessionId === item.sessionId);
-        if (idx >= 0) merged[idx] = updated;
-      } else {
-        byId.set(item.sessionId, item);
-        merged.push(item);
-      }
-    }
-    return sort ? merged.sort((a, b) => b.timestamp - a.timestamp) : merged;
-  }
-
   async function loadProjectMemory(projectId: string) {
     if (!projectId) {
       projectMemory = null;
@@ -246,11 +229,23 @@
       await loadProjectPrefs(projectId);
       const result: PaginatedResponse<SessionSummary> = await listSessions(projectId, SESSION_PAGE_SIZE);
       if (projectId !== selectedProjectId) return;
-      let fresh = silent ? mergeSilentMetadata(sessions, result.items) : result.items;
+      // silent 路径：合并到现有列表保留尾部 + 保留分页 cursor（避免 sessions 缩水
+      // 与计数跳变，spec sidebar-navigation §"会话元数据增量 patch"）。非 silent：
+      // 替换式加载第一页 + 取本次 cursor。
+      let fresh: SessionSummary[];
+      let nextCursor: string | null;
+      if (silent) {
+        const merged = applySilentRefresh(sessions, sessionsNextCursor, result.items);
+        fresh = merged.sessions;
+        nextCursor = merged.nextCursor;
+      } else {
+        fresh = result.items;
+        nextCursor = result.nextCursor;
+      }
       fresh = await reconcilePinnedAndHidden(projectId, fresh);
       if (projectId !== selectedProjectId) return;
       sessions = fresh;
-      sessionsNextCursor = result.nextCursor;
+      sessionsNextCursor = nextCursor;
       hasDeferredSessionRefresh = false;
       queueMicrotask(() => maybeLoadMoreSessions(true));
     } catch (e) {
@@ -301,35 +296,6 @@
     browsingHistory = !!el && el.scrollTop > HISTORY_SCROLL_THRESHOLD;
     if (!browsingHistory) refreshDeferredSessions();
     maybeLoadMoreSessions();
-  }
-
-  /**
-   * 按 sessionId 把旧 sessions 中**已 patch 过**的元数据字段（title 非 null
-   * / messageCount > 0 / isOngoing true 任一）merge 进新骨架，让 silent
-   * 刷新过程中已展示的元数据不被瞬间重置为占位。
-   */
-  function mergeSilentMetadata(
-    prev: SessionSummary[],
-    next: SessionSummary[],
-  ): SessionSummary[] {
-    const prevMap = new Map(prev.map((s) => [s.sessionId, s]));
-    return next.map((skel) => {
-      const old = prevMap.get(skel.sessionId);
-      if (!old) return skel;
-      const hasMeta =
-        old.title !== null ||
-        old.messageCount > 0 ||
-        old.isOngoing ||
-        old.gitBranch !== null;
-      if (!hasMeta) return skel;
-      return {
-        ...skel,
-        title: old.title,
-        messageCount: old.messageCount,
-        isOngoing: old.isOngoing,
-        gitBranch: old.gitBranch,
-      };
-    });
   }
 
   $effect(() => {
