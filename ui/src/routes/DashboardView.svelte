@@ -273,18 +273,19 @@
     color: var(--color-text-secondary);
     letter-spacing: 0.02em;
   }
-  /* 点击当前已选卡片时的脉冲反馈。CSS 自定义属性 --pulse-ring 让 @keyframes
-     使用 accent token 而非硬编码 hex；rgba(0..,0) → rgba(0..,0) 用于 0% transparent。 */
+  /* 点击当前已选卡片时的脉冲反馈。keyframes 直接用 color-mix(accent-blue ...)
+     跟随主题切换；旧 WebKitGTK 走 rgba fallback。 */
   .dash-card-pulse {
-    --pulse-ring: 59, 130, 246;
     animation: dash-card-pulse 0.45s ease-out;
   }
   @keyframes dash-card-pulse {
     0% {
-      box-shadow: 0 0 0 0 rgba(var(--pulse-ring), 0.45);
+      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45);
+      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 45%, transparent);
     }
     100% {
-      box-shadow: 0 0 0 10px rgba(var(--pulse-ring), 0);
+      box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+      box-shadow: 0 0 0 10px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
     }
   }
 

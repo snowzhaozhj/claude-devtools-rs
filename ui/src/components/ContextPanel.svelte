@@ -417,6 +417,8 @@
   .cp-section-items {
     padding: 8px 10px 10px 28px;
     border-top: 1px solid var(--color-border-subtle, var(--color-border));
+    /* surface 42% 半透铺底；旧 WebKitGTK 用 surface-raised 兜底（视觉接近） */
+    background: var(--color-surface-raised);
     background: color-mix(in srgb, var(--color-surface) 42%, transparent);
   }
 
