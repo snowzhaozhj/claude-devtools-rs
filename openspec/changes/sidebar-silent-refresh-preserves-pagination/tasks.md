@@ -12,6 +12,7 @@
   - `applySilentRefresh` 后 `result.nextCursor === prevCursor`，与 `firstPageItems.nextCursor` 无关（对应 Scenario "silent 刷新不重置分页 cursor"）
   - `applySilentRefresh` 后 prev 中已 patch 元数据（title 非 null）的 session 在合并后保留元数据，新骨架的 `title=null` 不会覆盖（既有 Scenario "file-change silent 刷新保留已获取元数据" 回归）
   - `mergeSessions` 排序稳定：构造 prev 中 timestamp 相同的两条 session，合并后顺序保持
+  - `applySilentRefresh` 后 prev 中所有 sessionId（含 prev 后部分页内容）SHALL 仍存在于 `result.sessions`，覆盖 Scenario "silent 刷新不丢失任何 prev sessionId"
 - [ ] 2.2 e2e 覆盖（可选）：若 Playwright 已有 sidebar 翻页 fixture，加一条 spec 用 `window.__cdtTest` API 模拟 silent refresh，断言 sidebar 计数不跳变；判断不便加 e2e 时跳过本步骤
 
 ## 3. preflight 与验证

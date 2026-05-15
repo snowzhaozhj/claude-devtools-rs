@@ -134,4 +134,36 @@ describe('applySilentRefresh', () => {
     const result = applySilentRefresh(prev, prevCursor, firstPage)
     expect(result.sessions.map((s) => s.sessionId)).toEqual(['s2', 's1'])
   })
+
+  test('prev 为空时透传 firstPage 不报错', () => {
+    const firstPage = [skel('s1', 1000), skel('s2', 500)]
+    const result = applySilentRefresh([], prevCursor, firstPage)
+    expect(result.sessions.map((s) => s.sessionId)).toEqual(['s1', 's2'])
+    expect(result.nextCursor).toBe(prevCursor)
+  })
+
+  test('firstPage 为空时保留 prev 与 cursor', () => {
+    const prev = [patched('s1', 1000, 'kept')]
+    const result = applySilentRefresh(prev, prevCursor, [])
+    expect(result.sessions).toEqual(prev)
+    expect(result.nextCursor).toBe(prevCursor)
+  })
+
+  test('silent 合并不丢失任何 prev sessionId（scrollTop 锚定保障）', () => {
+    const prev: SessionSummary[] = [
+      patched('p1-a', 5000, 'page1-a'),
+      patched('p1-b', 4500, 'page1-b'),
+      patched('p2-a', 3500, 'page2-a'),
+      patched('p2-b', 3000, 'page2-b'),
+      patched('p3-a', 2000, 'page3-a'),
+      patched('p3-b', 1500, 'page3-b'),
+    ]
+    // 第一页只覆盖 prev 前两条，prev 后四条（用户翻到的第二、三页内容）
+    // 在新第一页响应中完全缺席——bug 触发场景。
+    const firstPage = [skel('p1-a', 5000), skel('p1-b', 4500)]
+    const result = applySilentRefresh(prev, prevCursor, firstPage)
+    for (const prevSession of prev) {
+      expect(result.sessions.some((s) => s.sessionId === prevSession.sessionId)).toBe(true)
+    }
+  })
 })
