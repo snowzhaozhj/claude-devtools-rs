@@ -131,15 +131,16 @@
     border: 1px solid transparent;
   }
 
+  /* btn bg 用 hover 色满足 WCAG AA on-accent 文字对比，hover 用 accent-blue */
   .btn-primary {
-    background: var(--color-accent-blue);
+    background: var(--color-accent-blue-hover);
     color: var(--color-text-on-accent);
-    border-color: var(--color-accent-blue);
+    border-color: var(--color-accent-blue-hover);
   }
 
   .btn-primary:hover {
-    background: var(--color-accent-blue-hover);
-    border-color: var(--color-accent-blue-hover);
+    background: var(--color-accent-blue);
+    border-color: var(--color-accent-blue);
   }
 
   .btn-tertiary {

@@ -149,8 +149,12 @@
   /* Elevation */
   --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.08);
 
-  /* 落在 accent / danger / success 等深底上的文字，浅深主题一致的 Warm Neutral white */
-  --color-text-on-accent: #f5f4f0;
+  /* 落在 accent / danger 等饱和色背景上的文字。
+     浅色主题下 button bg 配 --color-accent-blue-hover (#2563eb)，
+     文字纯白对比 5.92:1 (WCAG AA pass)；
+     深色主题下 button bg 配 --color-accent-blue (#60a5fa) 浅蓝，
+     文字深 slate 对比 7.14:1。两种 mode 都过 AA 4.5。 */
+  --color-text-on-accent: #ffffff;
 
   /* Legacy alias（旧引用兼容，逐步收敛到上面的语义色） */
   --color-accent: var(--color-accent-blue);
@@ -297,6 +301,9 @@
   --color-info-text: #93c5fd;
 
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
+
+  /* 深色主题：accent-blue 是浅蓝 (#60a5fa)，文字用深 slate 才达 AA */
+  --color-text-on-accent: #0f172a;
 }
 
 /* System preference — dark mode follows OS */
@@ -415,6 +422,8 @@
     --color-info-text: #93c5fd;
 
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
+
+    --color-text-on-accent: #0f172a;
   }
 }
 

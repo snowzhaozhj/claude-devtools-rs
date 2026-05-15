@@ -327,11 +327,14 @@
     cursor: not-allowed;
   }
   .header-action-danger {
+    background: rgba(239, 68, 68, 0.18);
     background: color-mix(in oklch, var(--color-danger-bright) 18%, transparent);
+    border-color: rgba(239, 68, 68, 0.4);
     border-color: color-mix(in oklch, var(--color-danger-bright) 40%, transparent);
     color: var(--color-danger);
   }
   .header-action-danger:hover {
+    background: rgba(239, 68, 68, 0.28);
     background: color-mix(in oklch, var(--color-danger-bright) 28%, transparent);
     color: var(--color-danger);
   }
@@ -473,6 +476,7 @@
     color: var(--color-text);
   }
   .notif-row-btn-delete:hover {
+    background: rgba(239, 68, 68, 0.15);
     background: color-mix(in oklch, var(--color-danger-bright) 15%, transparent);
     color: var(--color-danger);
   }

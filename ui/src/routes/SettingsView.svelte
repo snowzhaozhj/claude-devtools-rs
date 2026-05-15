@@ -472,7 +472,7 @@
   .section-tab:hover { color: var(--color-text-secondary); }
   .section-tab-active { color: var(--color-text); border-bottom-color: var(--color-border-emphasis); }
   .settings-body { flex: 1; overflow-y: auto; padding: 20px 24px; }
-  .save-error { padding: 8px 12px; margin-bottom: 12px; border-radius: 6px; background: rgba(229, 62, 62, 0.1); color: var(--tool-result-error-text); font-size: 13px; }
+  .save-error { padding: 8px 12px; margin-bottom: 12px; border-radius: 6px; background: var(--tool-result-error-bg); color: var(--tool-result-error-text); font-size: 13px; }
   .state-msg { display: flex; align-items: center; justify-content: center; height: 200px; color: var(--color-text-muted); font-size: 14px; }
   .state-err { color: var(--tool-result-error-text); }
   .section { display: flex; flex-direction: column; gap: 4px; }
@@ -493,7 +493,11 @@
 
   /* 关于 / 更新 section */
   .check-result { padding: 8px 12px; border-radius: 4px; background: var(--color-surface-raised, var(--color-surface)); border: 1px solid var(--color-border); color: var(--color-text-secondary); font-size: 12px; margin-top: 4px; }
-  .check-error { color: var(--tool-result-error-text); border-color: rgba(229, 62, 62, 0.4); }
+  .check-error {
+    color: var(--tool-result-error-text);
+    border-color: rgba(239, 68, 68, 0.4);
+    border-color: color-mix(in oklch, var(--color-danger-bright) 40%, transparent);
+  }
 
   /* 新建表单 */
   .add-form { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 6px; background: var(--color-surface-raised, var(--color-surface)); border: 1px solid var(--color-border); margin-bottom: 8px; }
@@ -514,7 +518,11 @@
   .trigger-name { flex: 1; color: var(--color-text); }
   .trigger-mode { color: var(--color-text-muted); font-size: 11px; font-family: var(--font-mono); }
   .trigger-delete { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: 4px; background: transparent; color: var(--color-text-muted); font-size: 14px; cursor: pointer; flex-shrink: 0; transition: background 0.1s, color 0.1s; }
-  .trigger-delete:hover { background: rgba(229, 62, 62, 0.15); color: var(--tool-result-error-text); }
+  .trigger-delete:hover {
+    background: rgba(239, 68, 68, 0.15);
+    background: color-mix(in oklch, var(--color-danger-bright) 15%, transparent);
+    color: var(--tool-result-error-text);
+  }
   .empty-triggers { padding: 16px 12px; color: var(--color-text-muted); font-size: 13px; text-align: center; line-height: 1.5; }
 
   /* Display 段字体输入 */
