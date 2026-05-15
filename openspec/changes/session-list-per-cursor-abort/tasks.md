@@ -30,6 +30,6 @@
 
 ## 6. codex 设计 + 实现二审
 
-- [ ] 6.1 design.md 完成后调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 审 D1/D2/D3/D4 决策与 spec delta 是否漏 scenarios。
-- [ ] 6.2 实现 + 测试完成后再调一次 codex 审最终代码（spec → 实现 → 测试链条）。
-- [ ] 6.3 codex 找出的 bug 全修完且第二轮验证通过后才 push + PR。
+- [x] 6.1 design.md 完成后调 `codex review --commit <sha>` 审 D1/D2/D3/D4 决策与 spec delta 是否漏 scenarios。本环境 `Agent({ subagent_type: "codex:codex-rescue" })` 不可用，改走 codex CLI；first-pass 0 问题。
+- [x] 6.2 实现 + 测试完成后跑第二轮 codex review（`codex review --base main`）；self-review 找到 metadata scan semaphore 应共享而非 per-task 新建（后端 spec 约束 8 并发上限），第二轮 codex 仍 0 问题。
+- [x] 6.3 codex 二轮 + self-review 找到的 bug（semaphore 共享）已修完，`cargo test --workspace` 全过，准备 push + PR。
