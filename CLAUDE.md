@@ -158,6 +158,15 @@ claude-devtools-rs/
 - 版本号同步在三处：`Cargo.toml`（workspace）、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`；`just release-check` 跑一致性校验
 - 打 `vX.Y.Z` tag 触发 `.github/workflows/release.yml` —— macOS / Linux / Windows 矩阵构建 Tauri bundle 到 Draft Release。**workflow 必须 `create-release` 前置 job + `build` matrix 用 `releaseId` 复用**——直接让 4 个 matrix job 各自带 `tagName/releaseDraft` 跑 `tauri-action` 会并发 race，同一 tag 下产出 4 个 draft 各自只含本平台 asset + 各自的 latest.json，**无法 publish**（v0.4.2 事故案例）。`tauri-action` 在给定 `releaseId` 时只上传 + merge `latest.json`，不再调 createRelease。
 
+## 维护清理
+
+worktree 编译产物每个 ~6 G，merge PR 后忘清会快速吃光磁盘。半自动清理：
+
+- `just clean-worktrees`：dry-run，扫所有 `.claude/worktrees/*`，gh 查 PR 状态，列出已 merge 且工作树干净的候选 + 预计释放空间
+- `just clean-worktrees-apply`：真删 worktree + 本地分支（仅删 PR merged/closed && uncommitted=0 && unpushed=0 的；脏 worktree / 活跃分支保留）
+
+习惯：merge 任何 PR 后跑一次 `just clean-worktrees`；候选 OK 就 `--apply`。
+
 ## 性能回归监测
 
 大会话首屏卡顿走 IPC payload 瘦身路径，"模式"沉淀在 Conventions 的 **IPC payload 瘦身模式**条；历次 phase 实现查 `git log --grep="feat(perf)"`。
