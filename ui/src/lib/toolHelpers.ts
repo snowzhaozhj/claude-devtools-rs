@@ -191,6 +191,25 @@ export function isToolPending(exec: ToolExecution): boolean {
   return !exec.endTs || exec.output.kind === "missing";
 }
 
+/**
+ * 判断工具的展开 viewer 是否消费 `exec.output`。
+ *
+ * - Edit / Write viewer 仅渲染 `exec.input`（old/new string、写入内容），
+ *   `exec.output` 不被读 → 即便 `outputOmitted=true` 也无需先拉再展开。
+ * - Read / Bash / DefaultToolViewer 都会读 `exec.output`；当
+ *   `outputOmitted=true` 时 SHALL 先 IPC 拉到再加入 expanded set，否则
+ *   空 OUTPUT 区会被实际内容跳变替换（详见 change
+ *   `tool-output-ready-before-expand`）。
+ *
+ * 该函数被 `SessionDetail.toggle` 与 `ExecutionTrace.toggle` 共用，保证
+ * 主 trace 与嵌套 SubagentCard ExecutionTrace 行为一致。
+ */
+export function viewerUsesOutput(exec: ToolExecution): boolean {
+  if (exec.toolName === "Edit") return false;
+  if (exec.toolName === "Write" && !exec.isError) return false;
+  return true;
+}
+
 /** 移除 ANSI 转义序列 */
 function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex

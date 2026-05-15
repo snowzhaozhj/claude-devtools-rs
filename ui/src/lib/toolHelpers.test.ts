@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { ToolExecution } from './api'
-import { getLanguageFromPath, getToolDurationMs, isToolPending, toolErrorText } from './toolHelpers'
+import { getLanguageFromPath, getToolDurationMs, isToolPending, toolErrorText, viewerUsesOutput } from './toolHelpers'
 
 function exec(overrides: Partial<ToolExecution>): ToolExecution {
   return {
@@ -43,6 +43,33 @@ describe('toolHelpers', () => {
 
   test('toolErrorText 对无详情失败给出 fallback', () => {
     expect(toolErrorText(exec({ isError: true, output: { kind: 'missing' } }))).toBe('工具调用失败，但没有返回错误详情。')
+  })
+})
+
+describe('viewerUsesOutput', () => {
+  test('Read / Bash / Default 路径 viewer 消费 exec.output', () => {
+    expect(viewerUsesOutput(exec({ toolName: 'Read' }))).toBe(true)
+    expect(viewerUsesOutput(exec({ toolName: 'Bash' }))).toBe(true)
+    expect(viewerUsesOutput(exec({ toolName: 'bash' }))).toBe(true)
+    expect(viewerUsesOutput(exec({ toolName: 'Grep' }))).toBe(true)
+    expect(viewerUsesOutput(exec({ toolName: 'WebFetch' }))).toBe(true)
+  })
+
+  test('Edit viewer 仅渲染 input，不消费 output（成功 / 失败 路径都不等）', () => {
+    expect(viewerUsesOutput(exec({ toolName: 'Edit' }))).toBe(false)
+    expect(viewerUsesOutput(exec({ toolName: 'Edit', isError: true }))).toBe(false)
+  })
+
+  test('Write 成功路径渲染 input，不消费 output', () => {
+    expect(viewerUsesOutput(exec({ toolName: 'Write' }))).toBe(false)
+  })
+
+  test('Write isError=true 走 DefaultToolViewer，需要 output 显示错误详情', () => {
+    expect(viewerUsesOutput(exec({ toolName: 'Write', isError: true }))).toBe(true)
+  })
+
+  test('Read isError=true 走 DefaultToolViewer，仍消费 output', () => {
+    expect(viewerUsesOutput(exec({ toolName: 'Read', isError: true }))).toBe(true)
   })
 })
 
