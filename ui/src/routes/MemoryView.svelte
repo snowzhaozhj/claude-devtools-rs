@@ -223,7 +223,7 @@
     <section class="memory-content">
       <div class="memory-toolbar">
         <div class="current-file" title={filePath ?? selectedFile ?? ""}>
-          <span class="current-file-name">{selectedFile}</span>
+          <span class="current-file-name" data-testid="memory-current-file">{selectedFile}</span>
           {#if filePath}
             <span class="current-file-path">{filePath}</span>
           {/if}

@@ -417,6 +417,14 @@ function buildHandler(fx: Fixture) {
         return undefined
       }
 
+      case 'plugin:opener|reveal_item_in_dir': {
+        const paths = (rawPayload as { paths?: string[] } | undefined)?.paths
+        if (Array.isArray(paths) && paths.length > 0 && typeof paths[0] === 'string') {
+          window.dispatchEvent(new CustomEvent('__cdtMockRevealPath', { detail: paths[0] }))
+        }
+        return undefined
+      }
+
       default:
         // 兜底：未实现的 Tauri command。Tauri 内部 plugin 命令（plugin:event|*
         // 等）由 mockIPC 自身的 shouldMockEvents 处理，不会走到这里。
