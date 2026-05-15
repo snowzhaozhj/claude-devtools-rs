@@ -967,6 +967,7 @@
   .resize-handle:hover,
   .resize-handle-active,
   .resize-handle:focus-visible {
+    background: rgba(59, 130, 246, 0.5);
     background: color-mix(in oklch, var(--color-accent-blue) 50%, transparent);
     outline: none;
   }

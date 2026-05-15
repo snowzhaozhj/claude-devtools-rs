@@ -217,35 +217,32 @@
     {:else}
       <div class="notification-list">
         {#each notifications as notif (notif.id)}
-          <!-- 通知行内嵌已读 / 删除两个 button，所以行本体不能用 <button>（Svelte 5 禁止
-               button 嵌套）。改用 role="button" + tabindex 0 + keydown 处理 Enter/Space，
-               让键盘流用户也能打开会话。-->
-          <div
-            class="notification-row"
-            class:notification-unread={!notif.isRead}
-            role="button"
-            tabindex="0"
-            onclick={() => handleNavigate(notif)}
-            onkeydown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                void handleNavigate(notif);
-              }
-            }}
-          >
-            <span
-              class="notif-color"
-              style:background={notif.triggerColor || "var(--color-text-muted)"}
-            ></span>
-            <div class="notif-content">
-              {#if notif.triggerName}
-                <span class="notif-trigger">{notif.triggerName}</span>
-              {/if}
-              <span class="notif-message">
-                {notif.message.length > 100 ? notif.message.slice(0, 100) + "…" : notif.message}
+          <!-- ARIA：避免外层 role=button 嵌套真 button（不合规）。
+               外层 div 仅做布局，navigation 是独立 <button> 占主区，
+               mark-read / delete 与它平级。 -->
+          <div class="notification-row" class:notification-unread={!notif.isRead}>
+            <button
+              type="button"
+              class="notif-navigate-btn"
+              onclick={() => handleNavigate(notif)}
+              aria-label={notif.triggerName
+                ? `${notif.triggerName}: ${notif.message.slice(0, 80)}`
+                : notif.message.slice(0, 80)}
+            >
+              <span
+                class="notif-color"
+                style:background={notif.triggerColor || "var(--color-text-muted)"}
+              ></span>
+              <span class="notif-content">
+                {#if notif.triggerName}
+                  <span class="notif-trigger">{notif.triggerName}</span>
+                {/if}
+                <span class="notif-message">
+                  {notif.message.length > 100 ? notif.message.slice(0, 100) + "…" : notif.message}
+                </span>
               </span>
-            </div>
-            <span class="notif-time">{formatTime(notif.createdAt)}</span>
+              <span class="notif-time">{formatTime(notif.createdAt)}</span>
+            </button>
             {#if !notif.isRead}
               <button
                 class="notif-row-btn notif-row-btn-mark"
@@ -416,22 +413,39 @@
   .notification-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
+    gap: 4px;
+    padding: 4px;
     border-radius: 6px;
-    cursor: pointer;
     transition: background 0.1s;
     position: relative;
   }
-  .notification-row:hover {
+  .notification-row:has(.notif-navigate-btn:hover) {
     background: var(--tool-item-hover-bg);
-  }
-  .notification-row:focus-visible {
-    outline: 2px solid var(--color-accent-blue);
-    outline-offset: -2px;
   }
   .notification-unread {
     background: var(--color-surface-raised, var(--color-surface));
+  }
+
+  /* navigation 主区独立 button：占据全宽 + 透明背景 + reset；
+     hover/focus-visible 都通过外层 :has 反映到 .notification-row。 */
+  .notif-navigate-btn {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .notif-navigate-btn:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
   }
 
   .notif-color {
@@ -483,6 +497,7 @@
   }
   .notification-row:hover .notif-row-btn,
   .notification-row:focus-within .notif-row-btn,
+  .notification-row:has(.notif-navigate-btn:hover) .notif-row-btn,
   .notif-row-btn:focus-visible {
     opacity: 1;
   }
