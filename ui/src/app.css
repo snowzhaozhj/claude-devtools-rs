@@ -437,6 +437,16 @@
   box-sizing: border-box;
 }
 
+/* macOS WKWebView 默认开启 rubber-band overscroll，会让整个文档被往下拖；
+   Electron 原版默认禁用所以 TS 版本不需要处理。Tauri 必须显式关掉。 */
+html,
+body,
+#app {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   margin: 0;
   padding: 0;
