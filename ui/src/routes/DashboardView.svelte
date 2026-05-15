@@ -3,6 +3,7 @@
   import { listProjects, type ProjectInfo } from "../lib/api";
   import { shortenPath } from "../lib/toolHelpers";
   import { FOLDER_GIT2_SVG } from "../lib/icons";
+  import Skeleton from "../components/Skeleton.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
 
   interface Props {
@@ -92,8 +93,12 @@
     </div>
 
     <!-- 卡片网格 -->
-    {#if loading}
-      <div class="dash-status">加载中...</div>
+    {#if loading && projects.length === 0}
+      <div class="dash-grid" role="status" aria-busy="true" aria-label="正在加载项目">
+        {#each Array.from({ length: 6 }) as _, i (i)}
+          <Skeleton variant="card" height={132} />
+        {/each}
+      </div>
     {:else if filtered.length === 0}
       <div class="dash-status">
         {filterQuery ? "无匹配项目" : "未发现项目"}

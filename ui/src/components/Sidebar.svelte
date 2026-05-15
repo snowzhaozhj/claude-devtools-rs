@@ -17,6 +17,7 @@
   import SidebarHeader from "./SidebarHeader.svelte";
   import SessionContextMenu from "./SessionContextMenu.svelte";
   import OngoingIndicator from "./OngoingIndicator.svelte";
+  import SkeletonList from "./SkeletonList.svelte";
   import { openTab, openOrReplaceTab, openTabInNewPane, getPaneLayout, openMemoryTab } from "../lib/tabStore.svelte";
   import { MAX_PANES } from "../lib/paneTypes";
   import {
@@ -572,8 +573,8 @@
       };
     }}
   >
-    {#if projectsLoading || sessionsLoading}
-      <div class="sidebar-status">加载中...</div>
+    {#if (projectsLoading || sessionsLoading) && sessions.length === 0}
+      <SkeletonList count={8} rowHeight={48} gap={6} padding="4px 8px" label="正在加载会话列表" />
     {:else if sessions.length === 0}
       <div class="sidebar-status">暂无会话</div>
     {:else if visibleSessions.length === 0}
@@ -632,12 +633,40 @@
     {/if}
   </div>
 
-  <!-- Resize handle -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- Resize handle —— 用 role="separator" + aria 暴露给键盘流；
+       左右方向键调整宽度（10px 步长，与 sidebar 视觉密度匹配）。
+       WAI-ARIA 1.2 「Window Splitter」明确 focusable separator 是合法的
+       可交互控件（携带 aria-valuemin/max/now），但 svelte-check 仍把 separator
+       归类为 non-interactive，需要明确忽略两个 a11y 警告。 -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="resize-handle"
     class:resize-handle-active={isResizing}
+    role="separator"
+    tabindex="0"
+    aria-orientation="vertical"
+    aria-label="拖动调整侧栏宽度"
+    aria-valuemin={200}
+    aria-valuemax={500}
+    aria-valuenow={sidebarWidth}
     onmousedown={startResize}
+    onkeydown={(e) => {
+      const step = e.shiftKey ? 40 : 10;
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setSidebarWidth(sidebarWidth - step);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setSidebarWidth(sidebarWidth + step);
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        setSidebarWidth(200);
+      } else if (e.key === "End") {
+        e.preventDefault();
+        setSidebarWidth(500);
+      }
+    }}
   ></div>
 </aside>
 
@@ -963,7 +992,9 @@
   }
 
   .resize-handle:hover,
-  .resize-handle-active {
-    background: rgba(59, 130, 246, 0.5);
+  .resize-handle-active,
+  .resize-handle:focus-visible {
+    background: color-mix(in oklch, var(--color-accent-blue) 50%, transparent);
+    outline: none;
   }
 </style>

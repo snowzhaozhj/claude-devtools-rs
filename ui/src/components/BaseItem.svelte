@@ -32,9 +32,7 @@
 </script>
 
 <div class="base-item">
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="base-item-header" onclick={onclick}>
+  <button type="button" class="base-item-header" onclick={onclick} aria-expanded={isExpanded}>
     {#if svgIcon}
       <svg class="base-item-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={svgIcon}/></svg>
     {:else if icon}
@@ -65,10 +63,10 @@
       <span class="base-item-duration base-item-duration-pending">{pendingLabel}</span>
     {/if}
 
-    <span class="base-item-chevron" class:base-item-chevron-open={isExpanded}>
+    <span class="base-item-chevron" class:base-item-chevron-open={isExpanded} aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT} /></svg>
     </span>
-  </div>
+  </button>
 
   {#if isExpanded && children}
     <div class="base-item-content">
@@ -93,10 +91,21 @@
     cursor: pointer;
     transition: background-color 0.1s;
     min-width: 0;
+    width: 100%;
+    background: none;
+    border: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
   }
 
   .base-item-header:hover {
     background: var(--tool-item-hover-bg);
+  }
+
+  .base-item-header:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
   }
 
   .base-item-icon {

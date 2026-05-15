@@ -2,6 +2,8 @@
   import { openPath } from "@tauri-apps/plugin-opener";
   import { getProjectMemory, readMemoryFile, type MemoryLayer, type ProjectMemory } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
+  import Skeleton from "../components/Skeleton.svelte";
+  import SkeletonList from "../components/SkeletonList.svelte";
 
   interface Props {
     projectId: string;
@@ -132,8 +134,21 @@
 </script>
 
 <div class="memory-view">
-  {#if loading}
-    <div class="memory-status">加载 Memory...</div>
+  {#if loading && !memory}
+    <aside class="memory-layers">
+      <div class="layers-header">
+        <span>LAYERS</span>
+      </div>
+      <SkeletonList count={5} rowHeight={56} gap={6} padding="6px" label="正在加载 Memory 层" />
+    </aside>
+    <section class="memory-content">
+      <div class="memory-content-skeleton" role="status" aria-busy="true" aria-label="正在加载 Memory 文件">
+        <Skeleton variant="text" height={28} width="40%" />
+        <Skeleton variant="text" height={14} width="92%" />
+        <Skeleton variant="text" height={14} width="88%" />
+        <Skeleton variant="text" height={14} width="76%" />
+      </div>
+    </section>
   {:else if error && !memory}
     <div class="memory-status memory-error">{error}</div>
   {:else if !memory || memory.layers.length === 0}
@@ -171,20 +186,6 @@
           <span class="current-file-path">{selectedPathLabel}</span>
         </div>
         <div class="toolbar-actions">
-          <select
-            class="file-select"
-            value={selectedFile ?? ""}
-            disabled={contentLoading}
-            onchange={(e) => {
-              const file = e.currentTarget.value;
-              if (file) void loadFile(projectId, file);
-            }}
-            aria-label="选择 Memory 文件"
-          >
-            {#each memory.layers as layer (layer.file)}
-              <option value={layer.file}>{layer.file}</option>
-            {/each}
-          </select>
           <button
             class="toolbar-button"
             disabled={!filePath || contentLoading}
@@ -204,8 +205,14 @@
 
       {#if error}
         <div class="content-status memory-error">{error}</div>
-      {:else if contentLoading}
-        <div class="content-status">加载文件...</div>
+      {:else if contentLoading && !content}
+        <div class="memory-content-skeleton" role="status" aria-busy="true" aria-label="正在加载文件内容">
+          <Skeleton variant="text" height={28} width="40%" />
+          <Skeleton variant="text" height={14} width="92%" />
+          <Skeleton variant="text" height={14} width="88%" />
+          <Skeleton variant="text" height={14} width="76%" />
+          <Skeleton variant="text" height={14} width="84%" />
+        </div>
       {:else}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
         <article class="markdown-body" onclick={onMarkdownClick}>
@@ -393,7 +400,6 @@
     gap: 8px;
   }
 
-  .file-select,
   .toolbar-button {
     height: 30px;
     padding: 0 11px;
@@ -407,10 +413,6 @@
     transition: background 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out;
   }
 
-  .file-select {
-    max-width: 220px;
-  }
-
   .toolbar-button:hover:not(:disabled) {
     background: var(--color-surface-raised);
     color: var(--color-text);
@@ -420,6 +422,13 @@
   .toolbar-button:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .memory-content-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 42px 64px;
   }
 
   .markdown-body {

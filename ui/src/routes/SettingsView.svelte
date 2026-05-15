@@ -5,6 +5,7 @@
   import { applyFonts } from "../lib/fonts";
   import { setSessionClickBehavior, type SessionClickBehavior } from "../lib/tabStore.svelte";
   import SettingsToggle from "../lib/components/SettingsToggle.svelte";
+  import SkeletonList from "../components/SkeletonList.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { updateStore } from "../lib/updateStore.svelte";
 
@@ -236,8 +237,8 @@
       <div class="save-error">{saveError}</div>
     {/if}
 
-    {#if loading}
-      <div class="state-msg">加载中...</div>
+    {#if loading && !config}
+      <SkeletonList count={5} rowHeight={52} gap={10} padding="8px 24px" label="正在加载设置" />
     {:else if error}
       <div class="state-msg state-err">{error}</div>
     {:else if config}

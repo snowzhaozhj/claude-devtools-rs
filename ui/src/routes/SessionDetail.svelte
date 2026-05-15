@@ -576,14 +576,18 @@
               <span class="ai-label">Claude</span>
               <span class="ai-model">{aiModel(chunk)}</span>
               {#if summaryText}
-                <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <span class="ai-tool-toggle" onclick={() => toggleChunk(i, chunk)}>
+                <button
+                  type="button"
+                  class="ai-tool-toggle"
+                  onclick={() => toggleChunk(i, chunk)}
+                  aria-expanded={toolsVisible}
+                  aria-label={toolsVisible ? "折叠工具调用列表" : "展开工具调用列表"}
+                >
                   <span class="ai-tool-chevron" class:ai-tool-chevron-open={toolsVisible}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT} /></svg>
                   </span>
                   {summaryText}
-                </span>
+                </button>
               {/if}
               <span class="ai-header-spacer"></span>
               {#if totalTokens > 0}
@@ -1093,11 +1097,19 @@
     border-radius: 4px;
     transition: background 0.1s, color 0.1s;
     flex-shrink: 0;
+    background: none;
+    border: none;
+    font-family: inherit;
   }
 
   .ai-tool-toggle:hover {
     background: var(--tool-item-hover-bg);
     color: var(--color-text-secondary);
+  }
+
+  .ai-tool-toggle:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
   }
 
   .ai-tool-chevron {
