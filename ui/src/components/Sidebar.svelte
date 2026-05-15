@@ -66,6 +66,11 @@
   let sessionsLoading = $state(false);
   let sessionsLoadingMore = $state(false);
   let sessionsNextCursor: string | null = $state(null);
+  // 后端 `list_sessions` 响应的 `result.total`：项目维度 read_dir 后的全部 session
+  // 数。spec `sidebar-navigation/spec.md::会话总数显示口径` 要求 `totalSessions`
+  // 取本字段，**而非** `sessions.length`，避免翻页累加 20 → 40 → 60 跳变。
+  // 切 project 时 reset 为 0；非 silent + silent 路径都覆盖；loadMore 翻页**不**改。
+  let sessionsTotal = $state(0);
   let browsingHistory = $state(false);
   let hasDeferredSessionRefresh = $state(false);
   let filterQuery = $state("");
@@ -223,6 +228,7 @@
     if (!projectId) {
       sessions = [];
       sessionsNextCursor = null;
+      sessionsTotal = 0;
       return;
     }
     if (!silent) sessionsLoading = true;
@@ -247,6 +253,10 @@
       if (projectId !== selectedProjectId) return;
       sessions = fresh;
       sessionsNextCursor = nextCursor;
+      // spec sidebar-navigation §"会话总数显示口径"：silent / 非 silent 路径都用
+      // 后端 `result.total`（项目维度全量 session 计数）覆盖 `sessionsTotal`。
+      // loadMoreSessions 翻页路径**不**改 sessionsTotal。
+      sessionsTotal = result.total;
       hasDeferredSessionRefresh = false;
       queueMicrotask(() => maybeLoadMoreSessions(true));
     } catch (e) {
@@ -254,6 +264,7 @@
       if (!silent && projectId === selectedProjectId) {
         sessions = [];
         sessionsNextCursor = null;
+        sessionsTotal = 0;
       }
     } finally {
       if (!silent && projectId === selectedProjectId) sessionsLoading = false;
@@ -270,6 +281,9 @@
       if (projectId !== selectedProjectId || cursor !== sessionsNextCursor) return;
       sessions = mergeSessions(sessions, result.items, false);
       sessionsNextCursor = result.nextCursor;
+      // spec sidebar-navigation §"会话总数显示口径"：loadMore **不**改
+      // sessionsTotal——首次加载时已由 loadSessions 写入正确值；翻页累加期间
+      // total 不应变化。后续 silent 刷新会再用最新 result.total 覆盖。
     } catch (e) {
       console.error("Failed to load more sessions:", e);
     } finally {
@@ -416,7 +430,10 @@
   );
 
   const dateGroups = $derived(groupByDate(unpinnedSessions));
-  const totalSessions = $derived(sessions.length);
+  // 项目维度全量 session 计数。取后端 `list_sessions` 响应的 `result.total`
+  // （由 `sessionsTotal` 维护），非 `sessions.length`——后者会随 loadMore 累加
+  // 跳变。详见 spec `sidebar-navigation/spec.md::会话总数显示口径`。
+  const totalSessions = $derived(sessionsTotal);
   const hiddenCount = $derived(getHiddenCount(selectedProjectId));
   const memoryCount = $derived.by(() => projectMemory ? projectMemory.count : 0);
   const sidebarWidth = $derived(getSidebarWidth());

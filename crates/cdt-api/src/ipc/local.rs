@@ -310,8 +310,13 @@ pub struct LocalDataApi {
     /// `list_sessions` 后台元数据扫描的广播发送端。`subscribe_session_metadata()`
     /// 返回 receiver，Tauri host 桥接为前端 `session-metadata-update` 事件。
     session_metadata_tx: broadcast::Sender<SessionMetadataUpdate>,
-    /// 当前 per-project 进行中的元数据扫描句柄。`list_sessions` 调用前会
-    /// abort 同 project 的旧扫描，避免事件串扰（详见 design.md decision 4）。
+    /// 当前进行中的元数据扫描句柄。key 由 `metadata_scan_key(project_id, cursor)`
+    /// 编码为 `"{project_id}|{cursor}"`，让同 project 不同分页的扫描互不 abort。
+    /// `list_sessions` 调用前会 abort **同 (`project_id`, `cursor`)** 的旧扫描，
+    /// 避免重复触发同一页扫描造成的事件串扰；不同分页的扫描 SHALL 并存（详见
+    /// `openspec/specs/ipc-data-api/spec.md::Emit session metadata updates`
+    /// Scenario "同 projectId 同 cursor 的新扫描取消旧扫描" 与 "同 projectId
+    /// 不同 cursor 的扫描并存互不 abort"）。
     active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
     /// 单调递增的 scan generation 计数器，用于 `active_scans` 的 race-free
     /// cleanup（详见 `scan_metadata_for_page`）。
@@ -568,8 +573,14 @@ impl LocalDataApi {
 /// 避免旧 task 在新 task 已注册后的 cleanup 误删新 handle（codex 二审 race）。
 /// `broadcast::send` 在无订阅者时返回 `Err`，本函数静默忽略——元数据更新
 /// 本质上是 fire-and-forget。
-fn metadata_scan_key(project_id: &str) -> String {
-    project_id.to_owned()
+///
+/// `active_scans` 的 key 由 `(project_id, cursor)` 组合构成，让同 project 不同
+/// 分页的扫描相互独立——典型场景：page 1 / page 2 的并发扫描互不 abort（spec
+/// `ipc-data-api/spec.md::Emit session metadata updates` Scenario "同 projectId
+/// 不同 cursor 的扫描并存互不 abort"）。`|` 字符为 reserved 分隔符，当前 cursor
+/// 由 `(offset).to_string()` 生成（纯 ASCII 数字），不会与分隔符冲突。
+fn metadata_scan_key(project_id: &str, cursor: Option<&str>) -> String {
+    format!("{project_id}|{}", cursor.unwrap_or(""))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -678,7 +689,11 @@ impl DataApi for LocalDataApi {
             let tx = self.session_metadata_tx.clone();
             let project_id_owned = project_id.to_owned();
             let active_scans = self.active_scans.clone();
-            let scan_key = metadata_scan_key(project_id);
+            // (project_id, cursor) 双键：同 cursor 抢占 / 不同 cursor 并存
+            // （详见 spec `ipc-data-api/spec.md::Emit session metadata updates`
+            // Scenario "同 projectId 同 cursor 的新扫描取消旧扫描" 与
+            // "同 projectId 不同 cursor 的扫描并存互不 abort"）。
+            let scan_key = metadata_scan_key(project_id, pagination.cursor.as_deref());
             let key_for_cleanup = scan_key.clone();
 
             // abort 旧 + 分配 generation + spawn + insert **全部**在同一把
