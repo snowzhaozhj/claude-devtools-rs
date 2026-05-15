@@ -321,6 +321,14 @@ pub struct LocalDataApi {
     /// 单调递增的 scan generation 计数器，用于 `active_scans` 的 race-free
     /// cleanup（详见 `scan_metadata_for_page`）。
     scan_generation: Arc<AtomicU64>,
+    /// 后台元数据扫描共享的 `Semaphore`，所有 in-flight scan task 共享一个实例
+    /// 以保证全局并发上限为 `METADATA_SCAN_CONCURRENCY=8`。spec
+    /// `ipc-data-api/spec.md::Emit session metadata updates` Scenario "后台扫描
+    /// 并发度限制" 明确"同一时刻打开的 JSONL 文件句柄数 SHALL 不超过 8"——
+    /// 在改用 (`project_id`, `cursor`) 双键 abort 后，page 1 / page 2 / 多 project
+    /// 扫描会真并发执行，必须用 `Arc<Semaphore>` 在 task 间共享许可，避免每个
+    /// task 各自 new 一个 8 容量信号量加和成 16+ 并发。
+    metadata_scan_semaphore: Arc<Semaphore>,
     /// `get_image_asset` 落盘 cache 目录。由 Tauri host 通过
     /// `new_with_image_cache` 注入 `app_cache_dir().join("cdt-images")`；
     /// `None` 时 `get_image_asset` fallback 到 `data:` URI（默认构造路径
@@ -353,6 +361,7 @@ impl LocalDataApi {
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
+            metadata_scan_semaphore: Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY)),
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
         }
@@ -411,6 +420,7 @@ impl LocalDataApi {
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
+            metadata_scan_semaphore: Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY)),
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
         }
@@ -593,9 +603,14 @@ async fn scan_metadata_for_page(
     cleanup_key: String,
     my_generation: u64,
     metadata_cache: Arc<std::sync::Mutex<MetadataCache>>,
+    semaphore: Arc<Semaphore>,
 ) {
     let _ = dir; // dir 当前由 page_jobs 内的 jsonl_path 携带，保留参数为未来扩展（如懒构造路径）
-    let semaphore = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
+    // semaphore 由 caller 注入：所有 in-flight scan task 共享同一实例，保证全局
+    // 并发上限为 `METADATA_SCAN_CONCURRENCY=8`（spec `ipc-data-api/spec.md::Emit
+    // session metadata updates` Scenario "后台扫描并发度限制"）。先前实现每个
+    // task 各自 `Arc::new(Semaphore::new(...))` 在改双键 abort 后会让 page 1 +
+    // page 2 累加成 16+ 并发，违反上限。
     let mut set = JoinSet::new();
 
     for (session_id, jsonl_path) in page_jobs {
@@ -717,6 +732,7 @@ impl DataApi for LocalDataApi {
                     key_for_cleanup,
                     my_generation,
                     self.metadata_cache.clone(),
+                    self.metadata_scan_semaphore.clone(),
                 ));
 
                 scans.insert(
