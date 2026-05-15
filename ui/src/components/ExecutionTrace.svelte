@@ -2,7 +2,7 @@
   import type { DisplayItem } from "../lib/displayItemBuilder";
   import { getToolOutput, type ToolExecution, type ToolOutput } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
-  import { getToolSummary, getToolStatus, getToolDurationMs, isToolPending, cleanDisplayText, getToolContextTokens, estimateTokens } from "../lib/toolHelpers";
+  import { getToolSummary, getToolStatus, getToolDurationMs, isToolPending, cleanDisplayText, getToolContextTokens, estimateTokens, viewerUsesOutput } from "../lib/toolHelpers";
   import { WRENCH, BRAIN, SLASH, MESSAGE_SQUARE } from "../lib/icons";
   import BaseItem from "./BaseItem.svelte";
   import SubagentCard from "./SubagentCard.svelte";
@@ -79,16 +79,13 @@
       expandedKeys = next;
       return;
     }
-    if (exec && isReadTool(exec) && !isOutputReady(exec)) {
+    if (exec && viewerUsesOutput(exec) && !isOutputReady(exec)) {
       await ensureToolOutput(exec);
       if (!isOutputReady(exec)) return;
     }
     const next = new Set(expandedKeys);
     next.add(key);
     expandedKeys = next;
-    if (exec && !isReadTool(exec)) {
-      void ensureToolOutput(exec);
-    }
   }
 
   function isReadTool(exec: ToolExecution): boolean {
