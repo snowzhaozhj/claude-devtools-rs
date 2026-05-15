@@ -245,6 +245,8 @@ fn parse_gitlink_dir(content: &str, base: &Path) -> Option<PathBuf> {
 
 /// 解析 `HEAD` 文件内容：
 /// - `ref: refs/heads/<branch>` → `Some("<branch>")`
+/// - `ref: refs/tags/...` / `refs/remotes/...` 等**非分支引用** → `None`
+///   （tag / remote ref 不是分支名，sidebar 不应当成分支 chip 展示）
 /// - 裸 commit hash（detached HEAD）→ `None`（字面 "HEAD" 对用户无意义，
 ///   `sidebar-navigation` §"gitBranch 为 null SHALL NOT 渲染 chip" 让 UI 自动收起）
 /// - 空 / 解析失败 → `None`
@@ -260,8 +262,10 @@ fn parse_head_branch(content: &str) -> Option<String> {
                 return Some(branch.to_owned());
             }
         }
-        // 其它 ref 形态（refs/tags/... 等罕见）原样返回最后一段
-        return r.rsplit('/').next().map(str::to_owned);
+        // 其它 ref 形态（refs/tags/... / refs/remotes/... 等）—— 不是分支引用，
+        // codex 二审 Bug：原本 rsplit 拿最后一段当分支返回会让 `refs/tags/v1` 在
+        // sidebar 显示为 "v1" 分支 chip，对用户具误导性。一律返 None。
+        return None;
     }
     // detached HEAD：HEAD 文件是裸 commit hash。原版 Claude Code 在 detached
     // 时 JSONL 会把字面字符串 "HEAD" 写进 gitBranch 字段，我们这里同步返 None
@@ -863,6 +867,11 @@ mod tests {
         assert!(parse_head_branch("abc123\n").is_none());
         assert!(parse_head_branch("").is_none());
         assert!(parse_head_branch("   \n").is_none());
+        // 非分支引用 SHALL 返 None（不能把 tag / remote ref 当分支显示）
+        assert!(parse_head_branch("ref: refs/tags/v1.0.0\n").is_none());
+        assert!(parse_head_branch("ref: refs/remotes/origin/main\n").is_none());
+        // 空分支名也是非法
+        assert!(parse_head_branch("ref: refs/heads/\n").is_none());
     }
 
     #[test]
