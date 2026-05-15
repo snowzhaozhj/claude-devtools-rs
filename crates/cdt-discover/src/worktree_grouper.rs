@@ -173,12 +173,22 @@ async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool)> {
             Ok(meta) if meta.is_file() => {
                 let content = tokio::fs::read_to_string(&dot_git).await.ok()?;
                 let gitdir = parse_gitlink_dir(&content, &current)?;
-                // 区分 linked worktree（has `commondir` file）vs submodule（no `commondir`）
-                // git 约定：`<gitdir>/commondir` 内是 common dir 路径，相对则相对 `<gitdir>` 解析。
+                // 区分 linked worktree（has `commondir` file）vs submodule（no `commondir`）。
+                // git 约定：`<gitdir>/commondir` **文件存在**即表示这是 linked worktree，
+                // 内是 common dir 路径（相对则相对 `<gitdir>` 解析）。
+                //
+                // 错误细分（codex 二审第二轮 Bug 1）：
+                // - `NotFound` → submodule 路径，common = gitdir
+                // - 其他 IO 错误（如权限） → 视为不可读，整体返 None
+                // - 文件存在但内容 trim 后为空 → 非法 linked worktree，整体返 None
+                //   （不能 fallthrough 到 submodule，否则会把损坏的 linked worktree 误分类）
                 let commondir_file = gitdir.join("commondir");
-                if let Ok(common_content) = tokio::fs::read_to_string(&commondir_file).await {
-                    let raw = common_content.trim();
-                    if !raw.is_empty() {
+                match tokio::fs::read_to_string(&commondir_file).await {
+                    Ok(common_content) => {
+                        let raw = common_content.trim();
+                        if raw.is_empty() {
+                            return None;
+                        }
                         let common_path = Path::new(raw);
                         let common = if common_path.is_absolute() {
                             common_path.to_path_buf()
@@ -187,9 +197,15 @@ async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool)> {
                         };
                         return Some((gitdir, common, false));
                     }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // 没有 commondir 文件 → submodule 或独立 gitlink，common = gitdir
+                        return Some((gitdir.clone(), gitdir, true));
+                    }
+                    Err(_) => {
+                        // 其他 IO 错误（权限 / 损坏） → 跳过该项，不臆测语义
+                        return None;
+                    }
                 }
-                // 没有 commondir 文件 → submodule 或独立 gitlink，common = gitdir
-                return Some((gitdir.clone(), gitdir, true));
             }
             _ => {
                 if !current.pop() {
@@ -648,6 +664,105 @@ mod tests {
         assert_eq!(lookup.branch.as_deref(), Some("sub-branch"));
         // submodule 在自身视角是 main（不是 linked worktree）
         assert!(lookup.is_main_worktree);
+    }
+
+    /// 端到端验证 grouper：main worktree + linked worktree 跑完整 grouping，
+    /// 确认两者归到同一个 `RepositoryGroup`、不被 canonicalize 差异分裂。
+    ///
+    /// codex 二审第二轮 Bug 3：linked worktree 的 commondir 相对路径
+    /// （`../..`）在 macOS `/var` vs `/private/var` symlink 下 canonicalize
+    /// 行为可能与 main worktree 直接 canonicalize 不同——两个 identity.id
+    /// 字符串不等会让 grouper 分进两个 bucket，破坏 worktree 分组。
+    #[tokio::test]
+    async fn grouper_keeps_main_and_linked_worktree_in_one_bucket() {
+        let dir = tempdir().unwrap();
+        let main_repo = dir.path().join("main_repo");
+        let main_git = main_repo.join(".git");
+        let wt_git_dir = main_git.join("worktrees").join("feat");
+        tokio::fs::create_dir_all(&wt_git_dir).await.unwrap();
+        tokio::fs::write(main_git.join("HEAD"), "ref: refs/heads/main\n")
+            .await
+            .unwrap();
+        tokio::fs::write(wt_git_dir.join("HEAD"), "ref: refs/heads/feat\n")
+            .await
+            .unwrap();
+        // linked worktree 标志文件 `commondir`：内容 `../..` 指回 main `.git`
+        tokio::fs::write(wt_git_dir.join("commondir"), "../..\n")
+            .await
+            .unwrap();
+
+        let wt_dir = dir.path().join("feat_worktree");
+        tokio::fs::create_dir_all(&wt_dir).await.unwrap();
+        let gitlink = format!("gitdir: {}\n", wt_git_dir.display());
+        tokio::fs::write(wt_dir.join(".git"), gitlink)
+            .await
+            .unwrap();
+
+        let projects = vec![
+            Project {
+                id: "main".into(),
+                name: "main_repo".into(),
+                path: main_repo.clone(),
+                sessions: vec!["s1".into()],
+                most_recent_session: Some(100),
+                created_at: None,
+            },
+            Project {
+                id: "feat".into(),
+                name: "feat_worktree".into(),
+                path: wt_dir.clone(),
+                sessions: vec!["s2".into()],
+                most_recent_session: Some(200),
+                created_at: None,
+            },
+        ];
+        let grouper = WorktreeGrouper::new(LocalGitIdentityResolver::new());
+        let groups = grouper.group_by_repository(projects).await;
+
+        assert_eq!(
+            groups.len(),
+            1,
+            "main + linked worktree SHALL share one group, got {} groups: {:?}",
+            groups.len(),
+            groups.iter().map(|g| &g.id).collect::<Vec<_>>()
+        );
+        let group = &groups[0];
+        assert_eq!(group.worktrees.len(), 2);
+        // main worktree 排前
+        assert!(group.worktrees[0].is_main_worktree);
+        assert!(!group.worktrees[1].is_main_worktree);
+        assert_eq!(group.worktrees[0].git_branch.as_deref(), Some("main"));
+        assert_eq!(group.worktrees[1].git_branch.as_deref(), Some("feat"));
+    }
+
+    /// codex 二审第二轮 Bug 1 验证：commondir 文件存在但内容为空 → 非法
+    /// linked worktree，整体返 None（**不**误判为 submodule）。
+    #[tokio::test]
+    async fn fs_resolver_rejects_empty_commondir() {
+        let dir = tempdir().unwrap();
+        let main_git = dir.path().join("main").join(".git");
+        let wt_git_dir = main_git.join("worktrees").join("broken");
+        tokio::fs::create_dir_all(&wt_git_dir).await.unwrap();
+        tokio::fs::write(wt_git_dir.join("HEAD"), "ref: refs/heads/x\n")
+            .await
+            .unwrap();
+        // 损坏的 linked worktree：commondir 文件存在但内容空
+        tokio::fs::write(wt_git_dir.join("commondir"), "  \n")
+            .await
+            .unwrap();
+
+        let wt = dir.path().join("broken_wt");
+        tokio::fs::create_dir_all(&wt).await.unwrap();
+        let gitlink = format!("gitdir: {}\n", wt_git_dir.display());
+        tokio::fs::write(wt.join(".git"), gitlink).await.unwrap();
+
+        let resolver = LocalGitIdentityResolver::new();
+        let lookup = resolver.resolve_all(&wt).await;
+        // 整体返 default（identity None）——不臆测为 submodule 也不臆测为 linked
+        assert!(
+            lookup.identity.is_none(),
+            "empty commondir SHALL NOT be misclassified as submodule"
+        );
     }
 
     #[tokio::test]
