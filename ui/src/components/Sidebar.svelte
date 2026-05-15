@@ -249,14 +249,24 @@
       pendingMetadataUpdates.clear();
       return;
     }
-    if (!silent) sessionsLoading = true;
+    // 非 silent 路径（切 project / 首次加载）SHALL 在 await 之**前**清空 buffer：
+    // 后端 list_sessions 在 IPC return 之前已 spawn 扫描任务并可能 broadcast emit，
+    // listener 在 `await listSessions(...)` 阻塞期间收到的新 project update 必须
+    // 保留到 apply 时。clear 放 await 之后会把这些"早到的" update 一起清掉，
+    // 正是 race buffer 想修的核心 bug（codex 二审第三轮找到，详见 commit 6833ba8
+    // 之后的修订）。
+    if (!silent) {
+      pendingMetadataUpdates.clear();
+      sessionsLoading = true;
+    }
     try {
       await loadProjectPrefs(projectId);
       const result: PaginatedResponse<SessionSummary> = await listSessions(projectId, SESSION_PAGE_SIZE);
       if (projectId !== selectedProjectId) return;
       // silent 路径：合并到现有列表保留尾部 + 保留分页 cursor（避免 sessions 缩水
       // 与计数跳变，spec sidebar-navigation §"会话元数据增量 patch"）。非 silent：
-      // 替换式加载第一页 + 取本次 cursor。
+      // 替换式加载第一页 + 取本次 cursor（buffer 在 await 前已清空，仅含 await
+      // 期间到达的新 project update）。
       let fresh: SessionSummary[];
       let nextCursor: string | null;
       if (silent) {
@@ -264,10 +274,6 @@
         fresh = merged.sessions;
         nextCursor = merged.nextCursor;
       } else {
-        // 切 project / 首次加载：旧 buffer 已无意义，清空避免把旧 project 的
-        // pending 误 patch 到新 project 的 sessions（虽然 sessionId 不重叠概率
-        // 极低，但 buffer 持续累积是泄漏，正面解决）。
-        pendingMetadataUpdates.clear();
         fresh = result.items;
         nextCursor = result.nextCursor;
       }
