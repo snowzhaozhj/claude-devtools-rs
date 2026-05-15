@@ -142,6 +142,19 @@
       <SkeletonList count={5} rowHeight={56} gap={6} padding="6px" label="正在加载 Memory 层" />
     </aside>
     <section class="memory-content">
+      <!-- 用真 toolbar 结构（背景 / 边框 / 高度）占位，避免加载完成切到主分支时
+           layout 突然多出 52px toolbar 造成的 markdown 区域跳动。toolbar 内三块
+           skeleton 对齐 current-file 名 / path 标签 + Open / Copy 两按钮。 -->
+      <div class="memory-toolbar memory-toolbar-skeleton" aria-hidden="true">
+        <div class="current-file">
+          <Skeleton variant="text" height={14} width="120px" />
+          <Skeleton variant="text" height={11} width="200px" />
+        </div>
+        <div class="toolbar-actions">
+          <Skeleton variant="row" height={30} width="60px" />
+          <Skeleton variant="row" height={30} width="60px" />
+        </div>
+      </div>
       <div class="memory-content-skeleton" role="status" aria-busy="true" aria-label="正在加载 Memory 文件">
         <Skeleton variant="text" height={28} width="40%" />
         <Skeleton variant="text" height={14} width="92%" />

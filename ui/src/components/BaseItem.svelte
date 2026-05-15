@@ -15,9 +15,16 @@
     isExpanded: boolean;
     onclick: () => void;
     children?: Snippet;
+    /**
+     * 是否可展开（disclosure 形态）。默认 true：渲染为 `<button>` + chevron +
+     * `aria-expanded`。当某些 item（如 slash row）只是信息展示无可展内容时，
+     * 调用方应显式传 `collapsible={false}`，组件会改用 `<div>` 静态形态、
+     * 不暴露 disclosure 语义，避免给 screen reader 错误的"可展开"承诺。
+     */
+    collapsible?: boolean;
   }
 
-  let { icon, svgIcon, label, summary, tokenCount, status, durationMs, pendingLabel, isExpanded, onclick, children }: Props = $props();
+  let { icon, svgIcon, label, summary, tokenCount, status, durationMs, pendingLabel, isExpanded, onclick, children, collapsible = true }: Props = $props();
 
   function formatTokens(n: number): string {
     if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
@@ -32,43 +39,76 @@
 </script>
 
 <div class="base-item">
-  <button type="button" class="base-item-header" onclick={onclick} aria-expanded={isExpanded}>
-    {#if svgIcon}
-      <svg class="base-item-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={svgIcon}/></svg>
-    {:else if icon}
-      <span class="base-item-icon">{icon}</span>
-    {/if}
+  {#if collapsible}
+    <button type="button" class="base-item-header" onclick={onclick} aria-expanded={isExpanded}>
+      {#if svgIcon}
+        <svg class="base-item-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={svgIcon}/></svg>
+      {:else if icon}
+        <span class="base-item-icon">{icon}</span>
+      {/if}
 
-    <span class="base-item-label">{label}</span>
+      <span class="base-item-label">{label}</span>
 
-    {#if summary}
-      <span class="base-item-sep">-</span>
-      <span class="base-item-summary">{summary}</span>
-    {:else}
-      <span class="base-item-spacer"></span>
-    {/if}
+      {#if summary}
+        <span class="base-item-sep">-</span>
+        <span class="base-item-summary">{summary}</span>
+      {:else}
+        <span class="base-item-spacer"></span>
+      {/if}
 
-    {#if tokenCount != null && tokenCount > 0}
-      <!-- 对齐原版 BaseItem.tsx:150 "~{formatTokens(tokenCount)} {tokenLabel}" -->
-      <span class="base-item-tokens">~{formatTokens(tokenCount)} tokens</span>
-    {/if}
+      {#if tokenCount != null && tokenCount > 0}
+        <!-- 对齐原版 BaseItem.tsx:150 "~{formatTokens(tokenCount)} {tokenLabel}" -->
+        <span class="base-item-tokens">~{formatTokens(tokenCount)} tokens</span>
+      {/if}
 
-    {#if status}
-      <StatusDot {status} />
-    {/if}
+      {#if status}
+        <StatusDot {status} />
+      {/if}
 
-    {#if durationMs != null}
-      <span class="base-item-duration">{formatDuration(durationMs)}</span>
-    {:else if pendingLabel}
-      <span class="base-item-duration base-item-duration-pending">{pendingLabel}</span>
-    {/if}
+      {#if durationMs != null}
+        <span class="base-item-duration">{formatDuration(durationMs)}</span>
+      {:else if pendingLabel}
+        <span class="base-item-duration base-item-duration-pending">{pendingLabel}</span>
+      {/if}
 
-    <span class="base-item-chevron" class:base-item-chevron-open={isExpanded} aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT} /></svg>
-    </span>
-  </button>
+      <span class="base-item-chevron" class:base-item-chevron-open={isExpanded} aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT} /></svg>
+      </span>
+    </button>
+  {:else}
+    <div class="base-item-header base-item-header-static">
+      {#if svgIcon}
+        <svg class="base-item-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={svgIcon}/></svg>
+      {:else if icon}
+        <span class="base-item-icon">{icon}</span>
+      {/if}
 
-  {#if isExpanded && children}
+      <span class="base-item-label">{label}</span>
+
+      {#if summary}
+        <span class="base-item-sep">-</span>
+        <span class="base-item-summary">{summary}</span>
+      {:else}
+        <span class="base-item-spacer"></span>
+      {/if}
+
+      {#if tokenCount != null && tokenCount > 0}
+        <span class="base-item-tokens">~{formatTokens(tokenCount)} tokens</span>
+      {/if}
+
+      {#if status}
+        <StatusDot {status} />
+      {/if}
+
+      {#if durationMs != null}
+        <span class="base-item-duration">{formatDuration(durationMs)}</span>
+      {:else if pendingLabel}
+        <span class="base-item-duration base-item-duration-pending">{pendingLabel}</span>
+      {/if}
+    </div>
+  {/if}
+
+  {#if collapsible && isExpanded && children}
     <div class="base-item-content">
       {@render children()}
     </div>
@@ -106,6 +146,14 @@
   .base-item-header:focus-visible {
     outline: 2px solid var(--color-accent-blue);
     outline-offset: -2px;
+  }
+
+  /* collapsible=false 时的静态形态：无 hover、无 cursor pointer。 */
+  .base-item-header-static {
+    cursor: default;
+  }
+  .base-item-header-static:hover {
+    background: transparent;
   }
 
   .base-item-icon {
