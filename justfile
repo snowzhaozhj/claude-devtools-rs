@@ -114,3 +114,13 @@ release-check:
 release-build:
     npm run build --prefix ui
     cargo tauri build
+
+# ──────── 维护清理 ────────
+
+# 扫 worktree，列出已 merge 且工作树干净的可清理候选（dry-run）
+clean-worktrees:
+    bash scripts/clean-worktrees.sh
+
+# 真删可清理的 worktree + 本地分支
+clean-worktrees-apply:
+    bash scripts/clean-worktrees.sh --apply
