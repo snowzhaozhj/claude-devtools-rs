@@ -127,20 +127,18 @@
   }
 
   /** 给 navigation button 拼 aria-label：trigger name + message，整体 cap 到 160 char
-      避免用户配置的 triggerName 超长污染 screen reader 朗读。 */
+      避免用户配置的 triggerName 超长污染 screen reader 朗读。
+      slice 切到 cap-1 让加上省略号 "…" 后总长 = cap，避免 off-by-one。 */
+  function cap(s: string, max: number): string {
+    return s.length > max ? s.slice(0, max - 1) + "…" : s;
+  }
   function buildNavAriaLabel(notif: StoredNotification): string {
-    const maxLen = 160;
     const trigger = notif.triggerName?.trim() ?? "";
     const message = notif.message ?? "";
-    if (!trigger) {
-      return message.length > maxLen ? message.slice(0, maxLen) + "…" : message;
-    }
-    // 给 triggerName 留至多 40 char（足够大多数语义化命名），剩下给 message
-    const cappedTrigger = trigger.length > 40 ? trigger.slice(0, 40) + "…" : trigger;
-    const remaining = maxLen - cappedTrigger.length - 2; // "AB: "
-    const cappedMsg =
-      message.length > remaining ? message.slice(0, remaining) + "…" : message;
-    return `${cappedTrigger}: ${cappedMsg}`;
+    if (!trigger) return cap(message, 160);
+    const cappedTrigger = cap(trigger, 40);
+    const remaining = 160 - cappedTrigger.length - 2; // ": " 占 2
+    return `${cappedTrigger}: ${cap(message, remaining)}`;
   }
 
   function formatTime(ts: number): string {
