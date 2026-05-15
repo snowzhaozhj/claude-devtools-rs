@@ -132,6 +132,8 @@
     position: absolute;
     inset: 0;
     border: 0;
+    /* surface 88% 半透 scrim；旧 WebKitGTK 兜底用 rgba 黑色 modal 标准 */
+    background: rgba(0, 0, 0, 0.55);
     background: color-mix(in srgb, var(--color-surface) 88%, transparent);
     cursor: zoom-out;
   }
@@ -140,6 +142,7 @@
     max-width: min(100%, 1200px);
     max-height: 100%;
     border-radius: 6px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
     box-shadow: 0 24px 80px color-mix(in srgb, var(--color-text) 35%, transparent);
     object-fit: contain;
   }

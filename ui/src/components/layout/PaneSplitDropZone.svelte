@@ -47,6 +47,7 @@
     right: 0;
   }
   .pane-drop-zone.visible.hit {
+    background: rgba(0, 0, 0, 0.08);
     background: color-mix(in srgb, var(--color-text) 10%, transparent);
     border-left: 2px solid var(--color-border-emphasis);
   }

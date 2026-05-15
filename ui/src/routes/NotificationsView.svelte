@@ -126,6 +126,23 @@
     }
   }
 
+  /** 给 navigation button 拼 aria-label：trigger name + message，整体 cap 到 160 char
+      避免用户配置的 triggerName 超长污染 screen reader 朗读。 */
+  function buildNavAriaLabel(notif: StoredNotification): string {
+    const maxLen = 160;
+    const trigger = notif.triggerName?.trim() ?? "";
+    const message = notif.message ?? "";
+    if (!trigger) {
+      return message.length > maxLen ? message.slice(0, maxLen) + "…" : message;
+    }
+    // 给 triggerName 留至多 40 char（足够大多数语义化命名），剩下给 message
+    const cappedTrigger = trigger.length > 40 ? trigger.slice(0, 40) + "…" : trigger;
+    const remaining = maxLen - cappedTrigger.length - 2; // "AB: "
+    const cappedMsg =
+      message.length > remaining ? message.slice(0, remaining) + "…" : message;
+    return `${cappedTrigger}: ${cappedMsg}`;
+  }
+
   function formatTime(ts: number): string {
     if (!ts) return "";
     const d = new Date(ts);
@@ -225,9 +242,7 @@
               type="button"
               class="notif-navigate-btn"
               onclick={() => handleNavigate(notif)}
-              aria-label={notif.triggerName
-                ? `${notif.triggerName}: ${notif.message.slice(0, 80)}`
-                : notif.message.slice(0, 80)}
+              aria-label={buildNavAriaLabel(notif)}
             >
               <span
                 class="notif-color"
