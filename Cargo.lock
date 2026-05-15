@@ -253,6 +253,7 @@ dependencies = [
  "cdt-parse",
  "chrono",
  "dirs",
+ "futures",
  "lru",
  "serde",
  "serde_json",

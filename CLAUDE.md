@@ -167,11 +167,21 @@ worktree 编译产物每个 ~6 G，merge PR 后忘清会快速吃光磁盘。半
 
 习惯：merge 任何 PR 后跑一次 `just clean-worktrees`；候选 OK 就 `--apply`。
 
-## 性能回归监测
+## 性能（硬约束）
 
-大会话首屏卡顿走 IPC payload 瘦身路径，"模式"沉淀在 Conventions 的 **IPC payload 瘦身模式**条；历次 phase 实现查 `git log --grep="feat(perf)"`。
+本仓 Rust 重写原 TS 项目的根本动机就是性能。**详细预算 / 防回归规则 / 反模式 / bench 入口 / 历史事件 / 优化候选清单**全部沉淀在 `.claude/rules/perf.md`——任何涉及启动路径 / IPC / 后端算法 / 列表渲染的 PR 都 SHALL 读一遍那个文件并按规则评估 perf impact。
 
-- 回归入口：`cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture` —— 输出各阶段后端耗时 + 字段级 payload breakdown + raw vs IPC OMIT 对比
+核心条目（在 perf.md 全文里展开）：
+- **关键路径预算**（v0.4.8 基线，27 project × 534 session）：list_repository_groups < 200ms（基线 89ms）、list_projects < 150ms（87ms）、首屏 sidebar < 500ms、大会话 get_session_detail < 800ms（10k 消息）
+- **反模式严禁清单**：for-loop 串行 spawn 子进程 / 串行 file I/O / 每次 IPC 重扫不 cache / >1 MB payload 不瘦身 / sync `std::fs::*` 阻塞 worker
+- **PR 模板**：涉及 `cdt-discover/` / `cdt-api/src/ipc/` / `cdt-analyze/` 的 PR SHALL 在描述加 "Perf impact" 段贴 bench 数据
+- **codex 二审性能视角**：性能相关 PR 的 codex prompt SHALL 显式列 "for-loop spawn / 缺 cache / payload 重复"
+- **发版前 SHALL 跑** `perf_cold_scan` + `perf_get_session_detail` 对比基线
+- **大会话首屏卡顿走 IPC payload 瘦身路径**，"模式"沉淀在 Conventions 的 **IPC payload 瘦身模式**条；历次 phase 实现查 `git log --grep="feat(perf)"`
+
+bench 入口：
+- `cargo test -p cdt-api --release --test perf_cold_scan -- --ignored --nocapture` — 冷启动 list_repository_groups 链路
+- `cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture` — 大会话首次打开
 - 后端探针：`tracing::info!(target: "cdt_api::perf", ...)`；前端：`[perf]` console.info
 
 ## 测试金字塔

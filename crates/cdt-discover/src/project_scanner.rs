@@ -177,8 +177,28 @@ impl ProjectScanner {
         let mut unknown_cwd: Vec<SessionStat> = Vec::new();
 
         let ssh_mode = self.fs.kind() == FsKind::Ssh;
-        for stat in session_stats {
-            let cwd = self.extract_session_cwd(&stat.path).await;
+        // 并发提取每个 session 的 cwd。老路径串行 `for stat in session_stats`
+        // 对 N 个 jsonl 文件 head-read 累计 N × ~1ms，27 project × 534 session
+        // 实测累计 ~280ms。改并发后 tokio 可以同时打开多个文件，单 project
+        // 内的扫描接近 max(单文件 head 耗时) 而非 sum。
+        // SSH 模式保持顺序遍历——underlying provider 串行更稳，且只取第一个
+        // 命中 cwd 后理论可短路（当前实现实际仍跑完所有，留待 follow-up）。
+        let cwds: Vec<Option<String>> = if ssh_mode {
+            let mut out = Vec::with_capacity(session_stats.len());
+            for stat in &session_stats {
+                out.push(self.extract_session_cwd(&stat.path).await);
+            }
+            out
+        } else {
+            futures::future::join_all(
+                session_stats
+                    .iter()
+                    .map(|stat| self.extract_session_cwd(&stat.path)),
+            )
+            .await
+        };
+
+        for (stat, cwd) in session_stats.into_iter().zip(cwds) {
             match cwd {
                 Some(cwd) if !cwd.is_empty() => {
                     let bucket = cwd_buckets.entry(cwd.clone()).or_insert_with(|| CwdBucket {
@@ -190,10 +210,6 @@ impl ProjectScanner {
                     bucket.session_ids.push(stat.id.clone());
                     bucket.most_recent_ms = bucket.most_recent_ms.max(stat.mtime_ms);
                     bucket.created_ms = bucket.created_ms.min(stat.mtime_ms);
-                    if ssh_mode {
-                        // SSH 模式下只抽第一个 session 的 cwd，其余全部挂到同一个 bucket。
-                        // 注意：只要已经成功拿到一个 cwd，后面就不再读。
-                    }
                 }
                 _ => unknown_cwd.push(stat),
             }
