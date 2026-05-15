@@ -26,7 +26,9 @@ use cdt_watch::FileWatcher;
 
 use super::error::ApiError;
 use super::events::SessionMetadataUpdate;
-use super::session_metadata::{MetadataCache, extract_session_metadata_cached};
+use super::session_metadata::{
+    MetadataCache, extract_session_metadata_cached, try_lookup_cached_metadata,
+};
 use super::traits::DataApi;
 use super::types::{
     ConfigUpdateRequest, ContextInfo, MemoryFileContent, MemoryLayer, MemoryLayerKind,
@@ -492,20 +494,59 @@ impl LocalDataApi {
 
         let mut page = Vec::with_capacity(page_sessions.len());
         let mut page_jobs = Vec::with_capacity(page_sessions.len());
-        for s in page_sessions {
+        // Cache fast-path：命中条骨架阶段直接带 title / messageCount 返回，避免
+        // 完全依赖后台 broadcast emit（如果 emit 在前端 listener 注册前 fire-and-forget
+        // 丢失，列表项会卡在 title=null 永久 fallback 到 sessionId 前 8 字符）。
+        // 未命中条仍入 page_jobs 走后台扫描，扫完通过 broadcast 增量 patch。
+        //
+        // 并发执行 stat + cache lookup：caller 可传任意大 page_size（如
+        // `list_all_sessions` 路径 50 条/页），串行 stat 累计 ms 数随 page 线性
+        // 放大；用 `join_all` 让 tokio runtime 并发调度 stat。lookup 内部仅做
+        // sync mutex lock + map lookup，相互不会阻塞。并发上限用 `Semaphore`
+        // 卡到 `METADATA_SCAN_CONCURRENCY`，避免 caller 传超大 page_size 时
+        // 一次性把 tokio blocking pool 占满（codex 二审 Q3）。
+        let lookup_permit = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
+        let lookups = futures::future::join_all(page_sessions.iter().map(|s| {
+            let cache = self.metadata_cache.clone();
             let jsonl_path = dir.join(format!("{}.jsonl", s.id));
-            page.push(SessionSummary {
-                session_id: s.id.clone(),
-                project_id: project_id.to_owned(),
-                timestamp: s.last_modified,
-                message_count: 0,
-                title: None,
-                is_ongoing: false,
-                git_branch: None,
-                worktree_id: None,
-                worktree_name: None,
-            });
-            page_jobs.push((s.id, jsonl_path));
+            let permit_sem = lookup_permit.clone();
+            async move {
+                let _guard = permit_sem
+                    .acquire()
+                    .await
+                    .expect("lookup semaphore should not be closed");
+                let meta = try_lookup_cached_metadata(&cache, &jsonl_path).await;
+                (jsonl_path, meta)
+            }
+        }))
+        .await;
+        for (s, (jsonl_path, cached_meta)) in page_sessions.into_iter().zip(lookups) {
+            if let Some(meta) = cached_meta {
+                page.push(SessionSummary {
+                    session_id: s.id,
+                    project_id: project_id.to_owned(),
+                    timestamp: s.last_modified,
+                    message_count: meta.message_count,
+                    title: meta.title,
+                    is_ongoing: meta.is_ongoing,
+                    git_branch: meta.git_branch,
+                    worktree_id: None,
+                    worktree_name: None,
+                });
+            } else {
+                page.push(SessionSummary {
+                    session_id: s.id.clone(),
+                    project_id: project_id.to_owned(),
+                    timestamp: s.last_modified,
+                    message_count: 0,
+                    title: None,
+                    is_ongoing: false,
+                    git_branch: None,
+                    worktree_id: None,
+                    worktree_name: None,
+                });
+                page_jobs.push((s.id, jsonl_path));
+            }
         }
 
         let page_len = page.len();

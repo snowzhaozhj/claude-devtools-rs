@@ -158,12 +158,13 @@
   }
 
   onMount(async () => {
-    try {
-      await loadProjects();
-    } finally {
-      projectsLoading = false;
-    }
-
+    // 先注册 listener，再触发可能 emit 的 loadProjects 链路。否则
+    // `loadProjects → onSelectProject → 父组件 set selectedProjectId →
+    // $effect loadSessions → 后端 list_sessions spawn 扫描 → emit
+    // session-metadata-update` 会跑在 listener 注册之前，tauri emit
+    // 在无订阅者时 fire-and-forget 直接丢失，列表项卡在 title=null
+    // 永久 fallback 到 sessionId 前 8 字符（不稳定复现根因）。
+    //
     // 订阅后端元数据增量 patch；按 sessionId 定位 in-place 替换三个元数据字段，
     // 不改变 sessions 数组顺序与稳定 key，复用 DOM 节点不触发动画重启
     // （spec sidebar-navigation §"会话元数据增量 patch"）
@@ -186,6 +187,12 @@
         );
       },
     );
+
+    try {
+      await loadProjects();
+    } finally {
+      projectsLoading = false;
+    }
   });
 
   async function reconcilePinnedAndHidden(projectId: string, current: SessionSummary[]) {
