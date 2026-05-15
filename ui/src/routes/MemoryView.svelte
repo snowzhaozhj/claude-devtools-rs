@@ -280,7 +280,7 @@
                 openMenuOpen = !openMenuOpen;
               }}
             >
-              Open in… <span class="chevron">▾</span>
+              打开方式 <span class="chevron">▾</span>
             </button>
             {#if openMenuOpen}
               <div class="open-menu-list" role="menu">
@@ -543,6 +543,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
+    white-space: nowrap;
     transition: background 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out;
   }
 
