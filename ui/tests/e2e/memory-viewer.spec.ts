@@ -23,7 +23,7 @@ test.describe('memory viewer', () => {
     })
 
     await expect(page.getByText('当前项目没有 Memory。')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Open' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Open in/ })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Copy' })).toHaveCount(0)
   })
 
@@ -43,20 +43,21 @@ test.describe('memory viewer', () => {
     await page.getByRole('button', { name: /Memory \(3\)/ }).click()
 
     await expect(page.getByRole('tab', { name: /Memory/ })).toBeVisible({ timeout: 5_000 })
-    await expect(page.getByRole('heading', { name: 'Index' })).toBeVisible()
     await expect(page.getByText('feedback_chinese_language.md').first()).toBeVisible()
-    await page.getByRole('button', { name: 'Open' }).click()
+    await page.getByRole('button', { name: /Open in/ }).click()
+    await page.getByRole('menuitem', { name: '用默认应用打开' }).click()
     await expect(page.evaluate(() => (window as unknown as { __lastOpenedPath?: string }).__lastOpenedPath)).resolves.toContain('/mock/mock-rich-rust/memory/MEMORY.md')
 
     await page.getByRole('button', { name: /始终使用中文/ }).click()
 
     await expect(page.getByText('对话、注释、文档和 OpenSpec 产物全部使用简体中文。')).toBeVisible()
 
-    await page.getByLabel('选择 Memory 文件').selectOption('MEMORY.md')
+    await page.getByRole('button', { name: /MEMORY\.md/ }).click()
+    await expect(page.getByTestId('memory-current-file')).toHaveText('MEMORY.md')
     const urlBeforeLinkClick = page.url()
     await page.getByRole('link', { name: '始终使用中文' }).click()
 
-    await expect(page.getByLabel('选择 Memory 文件')).toHaveValue('feedback_chinese_language.md')
+    await expect(page.getByTestId('memory-current-file')).toHaveText('feedback_chinese_language.md')
     expect(page.url()).toBe(urlBeforeLinkClick)
 
     await page.getByRole('button', { name: 'Copy' }).click()

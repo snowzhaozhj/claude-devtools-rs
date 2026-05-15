@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { openPath } from "@tauri-apps/plugin-opener";
+  import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
   import { getProjectMemory, readMemoryFile, type MemoryLayer, type ProjectMemory } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
+  import { splitFrontmatter, type MemoryFrontmatter } from "../lib/memoryFrontmatter";
 
   interface Props {
     projectId: string;
@@ -17,6 +18,10 @@
   let contentLoading = $state(false);
   let error: string | null = $state(null);
   let copyState: "idle" | "copied" | "error" = $state("idle");
+  let openMenuOpen = $state(false);
+  let openMenuRoot: HTMLDivElement | null = $state(null);
+  let openActionState: "idle" | "ok" | "error" = $state("idle");
+  let openActionMessage = $state("");
   let memoryRequestId = 0;
   let fileRequestId = 0;
 
@@ -24,21 +29,32 @@
     if (!memory) return null;
     return memory.layers.find((layer: MemoryLayer) => layer.file === selectedFile) ?? null;
   });
-  const selectedPathLabel = $derived.by(() => {
-    if (filePath) return filePath.split(/[\\/]/).slice(-3).join("/");
-    return selectedFile ?? "";
-  });
-  const renderedContent = $derived(content ? renderMarkdown(content) : "");
-
-  function kindLabel(kind: MemoryLayer["kind"]): string {
-    if (kind === "index") return "index";
-    if (kind === "entry") return "linked";
-    return "file";
-  }
+  const split = $derived(content ? splitFrontmatter(content) : { frontmatter: null, body: "" });
+  const frontmatter: MemoryFrontmatter | null = $derived(split.frontmatter);
+  const renderedBody = $derived(split.body ? renderMarkdown(split.body) : "");
+  const metadataEntries = $derived(frontmatter ? Object.entries(frontmatter.metadata) : []);
 
   $effect(() => {
     if (!projectId) return;
     void loadMemory(projectId);
+  });
+
+  $effect(() => {
+    if (!openMenuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (openMenuRoot && !openMenuRoot.contains(e.target as Node)) {
+        openMenuOpen = false;
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") openMenuOpen = false;
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
   });
 
   async function loadMemory(id: string) {
@@ -68,6 +84,7 @@
     contentLoading = true;
     error = null;
     copyState = "idle";
+    openActionState = "idle";
     try {
       const result = await readMemoryFile(id, file);
       if (requestId !== fileRequestId || id !== projectId) return;
@@ -108,12 +125,45 @@
     if (file !== selectedFile) void loadFile(projectId, file);
   }
 
-  async function openCurrentFile() {
+  function flashOpenAction(state: "ok" | "error", message: string) {
+    openActionState = state;
+    openActionMessage = message;
+    window.setTimeout(() => {
+      openActionState = "idle";
+      openActionMessage = "";
+    }, 1600);
+  }
+
+  async function openWithDefault() {
+    openMenuOpen = false;
     if (!filePath) return;
     try {
       await openPath(filePath);
+      flashOpenAction("ok", "已用默认应用打开");
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      flashOpenAction("error", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function revealInFinder() {
+    openMenuOpen = false;
+    if (!filePath) return;
+    try {
+      await revealItemInDir(filePath);
+      flashOpenAction("ok", "已在文件管理器中显示");
+    } catch (e) {
+      flashOpenAction("error", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function copyPath() {
+    openMenuOpen = false;
+    if (!filePath) return;
+    try {
+      await navigator.clipboard.writeText(filePath);
+      flashOpenAction("ok", "路径已复制");
+    } catch (e) {
+      flashOpenAction("error", e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -128,6 +178,12 @@
     window.setTimeout(() => {
       copyState = "idle";
     }, 1200);
+  }
+
+  function kindLabel(kind: MemoryLayer["kind"]): string {
+    if (kind === "index") return "index";
+    if (kind === "entry") return "linked";
+    return "file";
   }
 </script>
 
@@ -167,31 +223,17 @@
     <section class="memory-content">
       <div class="memory-toolbar">
         <div class="current-file" title={filePath ?? selectedFile ?? ""}>
-          <span class="current-file-name">{selectedFile}</span>
-          <span class="current-file-path">{selectedPathLabel}</span>
+          <span class="current-file-name" data-testid="memory-current-file">{selectedFile}</span>
+          {#if filePath}
+            <span class="current-file-path">{filePath}</span>
+          {/if}
         </div>
         <div class="toolbar-actions">
-          <select
-            class="file-select"
-            value={selectedFile ?? ""}
-            disabled={contentLoading}
-            onchange={(e) => {
-              const file = e.currentTarget.value;
-              if (file) void loadFile(projectId, file);
-            }}
-            aria-label="选择 Memory 文件"
-          >
-            {#each memory.layers as layer (layer.file)}
-              <option value={layer.file}>{layer.file}</option>
-            {/each}
-          </select>
-          <button
-            class="toolbar-button"
-            disabled={!filePath || contentLoading}
-            onclick={openCurrentFile}
-          >
-            Open
-          </button>
+          {#if openActionState !== "idle"}
+            <span class="action-flash" class:action-flash-error={openActionState === "error"}>
+              {openActionMessage}
+            </span>
+          {/if}
           <button
             class="toolbar-button"
             disabled={!content || contentLoading}
@@ -199,6 +241,37 @@
           >
             {copyState === "copied" ? "已复制" : copyState === "error" ? "复制失败" : "Copy"}
           </button>
+          <div class="open-menu" bind:this={openMenuRoot}>
+            <button
+              class="toolbar-button"
+              disabled={!filePath || contentLoading}
+              aria-haspopup="menu"
+              aria-expanded={openMenuOpen}
+              onclick={(e) => {
+                e.stopPropagation();
+                openMenuOpen = !openMenuOpen;
+              }}
+            >
+              Open in… <span class="chevron">▾</span>
+            </button>
+            {#if openMenuOpen}
+              <div class="open-menu-list" role="menu">
+                <button class="open-menu-item" role="menuitem" onclick={revealInFinder}>
+                  <span class="item-label">在文件管理器中显示</span>
+                </button>
+                <button class="open-menu-item" role="menuitem" onclick={openWithDefault}>
+                  <span class="item-label">用默认应用打开</span>
+                </button>
+                <button
+                  class="open-menu-item open-menu-item-divider"
+                  role="menuitem"
+                  onclick={copyPath}
+                >
+                  <span class="item-label">复制路径</span>
+                </button>
+              </div>
+            {/if}
+          </div>
         </div>
       </div>
 
@@ -207,13 +280,43 @@
       {:else if contentLoading}
         <div class="content-status">加载文件...</div>
       {:else}
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
-        <article class="markdown-body" onclick={onMarkdownClick}>
-          {#if selectedLayer}
-            <h1>{selectedLayer.title}</h1>
-          {/if}
-          {@html renderedContent}
-        </article>
+        <div class="content-scroll">
+          <div class="content-inner">
+            {#if frontmatter}
+              <div class="frontmatter-card">
+                {#if frontmatter.name}
+                  <div class="fm-row">
+                    <span class="fm-label">name</span>
+                    <span class="fm-value fm-mono">{frontmatter.name}</span>
+                  </div>
+                {/if}
+                {#if frontmatter.description}
+                  <div class="fm-row">
+                    <span class="fm-label">description</span>
+                    <span class="fm-value fm-desc">{frontmatter.description}</span>
+                  </div>
+                {/if}
+                {#if metadataEntries.length > 0}
+                  <div class="fm-meta">
+                    {#each metadataEntries as [key, value] (key)}
+                      <span class="fm-chip">
+                        <span class="fm-label fm-label-inline">{key}</span>
+                        <span class="fm-mono fm-chip-value">{value}</span>
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
+            <article class="markdown-body" onclick={onMarkdownClick}>
+              {#if selectedLayer && !frontmatter}
+                <h1 class="layer-heading">{selectedLayer.title}</h1>
+              {/if}
+              {@html renderedBody}
+            </article>
+          </div>
+        </div>
       {/if}
     </section>
   {/if}
@@ -351,13 +454,13 @@
   }
 
   .memory-toolbar {
-    min-height: 52px;
+    min-height: 48px;
     flex-shrink: 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 18px;
-    padding: 8px 22px;
+    padding: 6px 18px;
     border-bottom: 1px solid var(--color-border);
     background: var(--color-surface);
   }
@@ -370,7 +473,7 @@
   }
 
   .current-file-name {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     line-height: 1.25;
     color: var(--color-text);
@@ -393,22 +496,20 @@
     gap: 8px;
   }
 
-  .file-select,
   .toolbar-button {
-    height: 30px;
-    padding: 0 11px;
+    height: 28px;
+    padding: 0 10px;
     border: 1px solid var(--color-border);
-    border-radius: 7px;
+    border-radius: 6px;
     background: transparent;
     color: var(--color-text-secondary);
     font: inherit;
     font-size: 12px;
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     transition: background 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out;
-  }
-
-  .file-select {
-    max-width: 220px;
   }
 
   .toolbar-button:hover:not(:disabled) {
@@ -422,34 +523,186 @@
     cursor: default;
   }
 
-  .markdown-body {
+  .chevron {
+    font-size: 10px;
+    line-height: 1;
+    color: var(--color-text-muted);
+  }
+
+  .action-flash {
+    font-size: 11px;
+    color: var(--color-text-muted);
+  }
+
+  .action-flash-error {
+    color: var(--color-error, #ef4444);
+  }
+
+  .open-menu {
+    position: relative;
+    display: inline-block;
+  }
+
+  .open-menu-list {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 30;
+    min-width: 200px;
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border-emphasis);
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  }
+
+  .open-menu-item {
+    width: 100%;
+    padding: 8px 12px;
+    background: transparent;
+    border: 0;
+    color: var(--color-text);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+  }
+
+  .open-menu-item-divider {
+    border-top: 1px solid var(--color-border);
+  }
+
+  .open-menu-item:hover {
+    background: var(--color-surface-raised);
+  }
+
+  .item-label {
+    flex: 1;
+  }
+
+  .content-scroll {
     flex: 1;
     min-height: 0;
     overflow: auto;
-    padding: 42px 64px;
-    font-size: 15px;
-    line-height: 1.7;
   }
 
-  .markdown-body > :global(*) {
-    max-width: 72ch;
+  .content-inner {
+    padding: 28px 56px 60px;
+    max-width: 920px;
+  }
+
+  .frontmatter-card {
+    margin-bottom: 18px;
+    padding: 10px 14px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-surface-overlay);
+    font-size: 12px;
+    color: var(--prose-body);
+  }
+
+  .fm-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 2px 0;
+  }
+
+  .fm-label {
+    flex-shrink: 0;
+    min-width: 5.2rem;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-text-muted);
+  }
+
+  .fm-label-inline {
+    min-width: 0;
+  }
+
+  .fm-value {
+    min-width: 0;
+    word-break: break-word;
+  }
+
+  .fm-mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text);
+  }
+
+  .fm-desc {
+    color: var(--color-text-secondary);
+    font-size: 12px;
+  }
+
+  .fm-meta {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--color-border);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+  }
+
+  .fm-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .fm-chip-value {
+    color: var(--color-text-secondary);
+  }
+
+  .markdown-body {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--prose-body);
+  }
+
+  .layer-heading {
+    margin: 0 0 14px;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--color-text);
   }
 
   .markdown-body :global(h1) {
-    margin: 0 0 20px;
-    font-size: 24px;
-    line-height: 1.2;
+    margin: 0 0 14px;
+    padding: 0;
+    border: 0;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--color-text);
   }
 
-  .markdown-body :global(h2),
+  .markdown-body :global(h2) {
+    margin: 22px 0 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
   .markdown-body :global(h3) {
-    margin: 24px 0 12px;
+    margin: 18px 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .markdown-body :global(hr) {
+    display: none;
   }
 
   .markdown-body :global(p),
   .markdown-body :global(ul),
   .markdown-body :global(ol) {
-    margin: 0 0 14px;
+    margin: 0 0 12px;
   }
 
   .markdown-body :global(pre) {
