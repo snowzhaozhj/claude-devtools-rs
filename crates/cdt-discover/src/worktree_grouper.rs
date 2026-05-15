@@ -153,7 +153,15 @@ async fn resolve_all_fs(path: &Path) -> Option<RepoLookup> {
 
 /// 向上 walk 找到 `.git`；返回 `(git_dir, common_dir, is_main_worktree)`。
 /// `.git` 是目录 → main，`git_dir == common_dir`。
-/// `.git` 是文件 → 解析 gitlink，`git_dir = <abs from gitlink>`、`common_dir = git_dir.parent().parent()`。
+/// `.git` 是文件（gitlink） → 进一步看 `<gitdir>/commondir`：
+///   - 文件存在 → linked worktree（git 标准约定）：`common_dir` 从该文件读取，`is_main=false`
+///   - 文件不存在 → submodule / 其它 gitlink 形态：`common_dir = gitdir`，`is_main=true`
+///     （codex 二审 Bug 1：submodule 的 `.git` 也是 gitlink，但其 common dir 是自身 gitdir，
+///     不是上两级，否则会把 submodule 错归到父仓库/错误的 common dir）
+///
+/// 已知 trade-off（claude session 场景下概率近 0，未实现）：
+/// - bare repo（用户 cd 进 bare repo 跑 claude）：当前返回 default 走非 git 路径
+/// - `GIT_COMMON_DIR` 环境变量覆盖：纯 fs 实现无感（旧 `git rev-parse` 会受环境变量覆盖）
 async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool)> {
     let mut current = start.to_path_buf();
     loop {
@@ -165,15 +173,23 @@ async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool)> {
             Ok(meta) if meta.is_file() => {
                 let content = tokio::fs::read_to_string(&dot_git).await.ok()?;
                 let gitdir = parse_gitlink_dir(&content, &current)?;
-                // worktree 的 gitdir 形如 `<common>/worktrees/<name>`；
-                // 取两级 parent 拿 common dir。submodule 等其他 gitlink 形态
-                // 不在 worktree 分组语义内（罕见）—— 当前实现仍按 worktree 处理，
-                // 与 git 命令的语义对齐。
-                let common = gitdir
-                    .parent()
-                    .and_then(Path::parent)
-                    .map_or_else(|| gitdir.clone(), Path::to_path_buf);
-                return Some((gitdir, common, false));
+                // 区分 linked worktree（has `commondir` file）vs submodule（no `commondir`）
+                // git 约定：`<gitdir>/commondir` 内是 common dir 路径，相对则相对 `<gitdir>` 解析。
+                let commondir_file = gitdir.join("commondir");
+                if let Ok(common_content) = tokio::fs::read_to_string(&commondir_file).await {
+                    let raw = common_content.trim();
+                    if !raw.is_empty() {
+                        let common_path = Path::new(raw);
+                        let common = if common_path.is_absolute() {
+                            common_path.to_path_buf()
+                        } else {
+                            gitdir.join(common_path)
+                        };
+                        return Some((gitdir, common, false));
+                    }
+                }
+                // 没有 commondir 文件 → submodule 或独立 gitlink，common = gitdir
+                return Some((gitdir.clone(), gitdir, true));
             }
             _ => {
                 if !current.pop() {
@@ -565,6 +581,12 @@ mod tests {
         tokio::fs::write(wt_git_dir.join("HEAD"), "ref: refs/heads/feat\n")
             .await
             .unwrap();
+        // linked worktree 的 gitdir 内必须有 `commondir` 文件指向 common git dir
+        // （git 标准约定，区分 linked worktree vs submodule）
+        let commondir_relative = "../..";
+        tokio::fs::write(wt_git_dir.join("commondir"), commondir_relative)
+            .await
+            .unwrap();
 
         // 附加 worktree 目录：`.git` 是 file，内容指向 wt_git_dir
         let wt = dir.path().join("feat");
@@ -585,6 +607,47 @@ mod tests {
             "identity should point to common .git dir, got {}",
             identity.id
         );
+    }
+
+    #[tokio::test]
+    async fn fs_resolver_treats_submodule_as_independent_repo() {
+        // codex 二审 Bug 1：submodule 的 `.git` 文件指向 `<parent>/.git/modules/<name>`，
+        // 但 **不含** `commondir` 文件——不应被误归到 parent worktree 的 common dir。
+        let dir = tempdir().unwrap();
+        let parent = dir.path().join("parent");
+        let parent_git = parent.join(".git");
+        let submodule_git_dir = parent_git.join("modules").join("sub");
+        tokio::fs::create_dir_all(&submodule_git_dir).await.unwrap();
+        tokio::fs::write(parent_git.join("HEAD"), "ref: refs/heads/main\n")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            submodule_git_dir.join("HEAD"),
+            "ref: refs/heads/sub-branch\n",
+        )
+        .await
+        .unwrap();
+        // 注意：submodule 的 gitdir 内 **不写** `commondir` 文件
+
+        let sub = parent.join("sub");
+        tokio::fs::create_dir_all(&sub).await.unwrap();
+        let gitlink = format!("gitdir: {}\n", submodule_git_dir.display());
+        tokio::fs::write(sub.join(".git"), gitlink).await.unwrap();
+
+        let resolver = LocalGitIdentityResolver::new();
+        let lookup = resolver.resolve_all(&sub).await;
+        let identity = lookup.identity.expect("submodule should resolve identity");
+        // submodule common dir 是其自身 gitdir（`.git/modules/sub`），
+        // 不是 parent 的 `.git`——否则会把 submodule 错归到父仓库 group
+        assert_eq!(
+            Path::new(&identity.id).file_name(),
+            Some(std::ffi::OsStr::new("sub")),
+            "submodule identity should point to its own gitdir, got {}",
+            identity.id
+        );
+        assert_eq!(lookup.branch.as_deref(), Some("sub-branch"));
+        // submodule 在自身视角是 main（不是 linked worktree）
+        assert!(lookup.is_main_worktree);
     }
 
     #[tokio::test]
