@@ -496,13 +496,13 @@
     width: 14px;
     height: 14px;
     flex-shrink: 0;
-    color: #22c55e;
+    color: var(--color-success-bright);
   }
   .sa-status-running {
     width: 14px;
     height: 14px;
     flex-shrink: 0;
-    color: #3b82f6;
+    color: var(--color-accent-blue);
     animation: spin 1s linear infinite;
   }
   @keyframes spin {

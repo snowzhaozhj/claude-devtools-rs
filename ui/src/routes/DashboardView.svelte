@@ -3,6 +3,7 @@
   import { listProjects, type ProjectInfo } from "../lib/api";
   import { shortenPath } from "../lib/toolHelpers";
   import { FOLDER_GIT2_SVG } from "../lib/icons";
+  import Skeleton from "../components/Skeleton.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
 
   interface Props {
@@ -92,8 +93,12 @@
     </div>
 
     <!-- 卡片网格 -->
-    {#if loading}
-      <div class="dash-status">加载中...</div>
+    {#if loading && projects.length === 0}
+      <div class="dash-grid" role="status" aria-busy="true" aria-label="正在加载项目">
+        {#each Array.from({ length: 6 }) as _, i (i)}
+          <Skeleton variant="card" height={132} />
+        {/each}
+      </div>
     {:else if filtered.length === 0}
       <div class="dash-status">
         {filterQuery ? "无匹配项目" : "未发现项目"}
@@ -165,8 +170,9 @@
   }
 
   .dash-search:focus {
-    border-color: #3b82f6;
+    border-color: var(--color-accent-blue);
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent-blue) 15%, transparent);
   }
 
   .dash-search::placeholder {
@@ -267,16 +273,19 @@
     color: var(--color-text-secondary);
     letter-spacing: 0.02em;
   }
-  /* 点击当前已选卡片时的脉冲反馈 */
+  /* 点击当前已选卡片时的脉冲反馈。keyframes 直接用 color-mix(accent-blue ...)
+     跟随主题切换；旧 WebKitGTK 走 rgba fallback。 */
   .dash-card-pulse {
     animation: dash-card-pulse 0.45s ease-out;
   }
   @keyframes dash-card-pulse {
     0% {
       box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45);
+      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 45%, transparent);
     }
     100% {
       box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+      box-shadow: 0 0 0 10px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
     }
   }
 

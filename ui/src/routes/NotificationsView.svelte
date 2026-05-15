@@ -11,7 +11,8 @@
     type GetNotificationsResult,
   } from "../lib/api";
   import { openTab, setUnreadCount } from "../lib/tabStore.svelte";
-  import { CHECK_CHECK_SVG, CHECK_SVG, TRASH2_SVG, X_SVG } from "../lib/icons";
+  import { BELL_OFF_SVG, CHECK_CHECK_SVG, CHECK_SVG, TRASH2_SVG, X_SVG } from "../lib/icons";
+  import SkeletonList from "../components/SkeletonList.svelte";
 
   let notifications: StoredNotification[] = $state([]);
   let loading = $state(true);
@@ -125,6 +126,21 @@
     }
   }
 
+  /** 给 navigation button 拼 aria-label：trigger name + message，整体 cap 到 160 char
+      避免用户配置的 triggerName 超长污染 screen reader 朗读。
+      slice 切到 cap-1 让加上省略号 "…" 后总长 = cap，避免 off-by-one。 */
+  function cap(s: string, max: number): string {
+    return s.length > max ? s.slice(0, max - 1) + "…" : s;
+  }
+  function buildNavAriaLabel(notif: StoredNotification): string {
+    const trigger = notif.triggerName?.trim() ?? "";
+    const message = notif.message ?? "";
+    if (!trigger) return cap(message, 160);
+    const cappedTrigger = cap(trigger, 40);
+    const remaining = 160 - cappedTrigger.length - 2; // ": " 占 2
+    return `${cappedTrigger}: ${cap(message, remaining)}`;
+  }
+
   function formatTime(ts: number): string {
     if (!ts) return "";
     const d = new Date(ts);
@@ -185,13 +201,25 @@
   {/if}
 
   <div class="notifications-body">
-    {#if loading}
-      <div class="state-msg">加载中...</div>
+    {#if loading && notifications.length === 0}
+      <SkeletonList count={6} rowHeight={68} gap={4} padding="0" label="正在加载通知" />
     {:else if error}
       <div class="state-msg state-err">{error}</div>
     {:else if notifications.length === 0}
       <div class="empty-state">
-        <div class="empty-icon">🔔</div>
+        <svg
+          class="empty-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          {@html BELL_OFF_SVG}
+        </svg>
         <div class="empty-title">暂无通知</div>
         <div class="empty-desc">
           通知由触发器规则自动生成。当 Claude Code 会话中出现工具执行错误、
@@ -204,26 +232,30 @@
     {:else}
       <div class="notification-list">
         {#each notifications as notif (notif.id)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div
-            class="notification-row"
-            class:notification-unread={!notif.isRead}
-            onclick={() => handleNavigate(notif)}
-          >
-            <span
-              class="notif-color"
-              style:background={notif.triggerColor || "var(--color-text-muted)"}
-            ></span>
-            <div class="notif-content">
-              {#if notif.triggerName}
-                <span class="notif-trigger">{notif.triggerName}</span>
-              {/if}
-              <span class="notif-message">
-                {notif.message.length > 100 ? notif.message.slice(0, 100) + "…" : notif.message}
+          <!-- ARIA：避免外层 role=button 嵌套真 button（不合规）。
+               外层 div 仅做布局，navigation 是独立 <button> 占主区，
+               mark-read / delete 与它平级。 -->
+          <div class="notification-row" class:notification-unread={!notif.isRead}>
+            <button
+              type="button"
+              class="notif-navigate-btn"
+              onclick={() => handleNavigate(notif)}
+              aria-label={buildNavAriaLabel(notif)}
+            >
+              <span
+                class="notif-color"
+                style:background={notif.triggerColor || "var(--color-text-muted)"}
+              ></span>
+              <span class="notif-content">
+                {#if notif.triggerName}
+                  <span class="notif-trigger">{notif.triggerName}</span>
+                {/if}
+                <span class="notif-message">
+                  {notif.message.length > 100 ? notif.message.slice(0, 100) + "…" : notif.message}
+                </span>
               </span>
-            </div>
-            <span class="notif-time">{formatTime(notif.createdAt)}</span>
+              <span class="notif-time">{formatTime(notif.createdAt)}</span>
+            </button>
             {#if !notif.isRead}
               <button
                 class="notif-row-btn notif-row-btn-mark"
@@ -315,18 +347,21 @@
     cursor: not-allowed;
   }
   .header-action-danger {
-    background: rgba(229, 62, 62, 0.18);
-    border-color: rgba(229, 62, 62, 0.4);
-    color: #e53e3e;
+    background: rgba(239, 68, 68, 0.18);
+    background: color-mix(in oklch, var(--color-danger-bright) 18%, transparent);
+    border-color: rgba(239, 68, 68, 0.4);
+    border-color: color-mix(in oklch, var(--color-danger-bright) 40%, transparent);
+    color: var(--color-danger);
   }
   .header-action-danger:hover {
-    background: rgba(229, 62, 62, 0.28);
-    color: #e53e3e;
+    background: rgba(239, 68, 68, 0.28);
+    background: color-mix(in oklch, var(--color-danger-bright) 28%, transparent);
+    color: var(--color-danger);
   }
 
   .action-error {
     padding: 8px 24px;
-    background: rgba(229, 62, 62, 0.1);
+    background: var(--tool-result-error-bg);
     color: var(--tool-result-error-text);
     font-size: 13px;
   }
@@ -358,8 +393,10 @@
     text-align: center;
   }
   .empty-icon {
-    font-size: 36px;
-    opacity: 0.4;
+    width: 40px;
+    height: 40px;
+    color: var(--color-text-muted);
+    opacity: 0.5;
   }
   .empty-title {
     font-size: 15px;
@@ -389,18 +426,39 @@
   .notification-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
+    gap: 4px;
+    padding: 4px;
     border-radius: 6px;
-    cursor: pointer;
     transition: background 0.1s;
     position: relative;
   }
-  .notification-row:hover {
+  .notification-row:has(.notif-navigate-btn:hover) {
     background: var(--tool-item-hover-bg);
   }
   .notification-unread {
     background: var(--color-surface-raised, var(--color-surface));
+  }
+
+  /* navigation 主区独立 button：占据全宽 + 透明背景 + reset；
+     hover/focus-visible 都通过外层 :has 反映到 .notification-row。 */
+  .notif-navigate-btn {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .notif-navigate-btn:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
   }
 
   .notif-color {
@@ -447,10 +505,12 @@
     color: var(--color-text-muted);
     cursor: pointer;
     flex-shrink: 0;
-    opacity: 0;
+    opacity: 0.55;
     transition: background 0.1s, color 0.1s, opacity 0.1s;
   }
   .notification-row:hover .notif-row-btn,
+  .notification-row:focus-within .notif-row-btn,
+  .notification-row:has(.notif-navigate-btn:hover) .notif-row-btn,
   .notif-row-btn:focus-visible {
     opacity: 1;
   }
@@ -459,7 +519,8 @@
     color: var(--color-text);
   }
   .notif-row-btn-delete:hover {
-    background: rgba(229, 62, 62, 0.15);
-    color: #e53e3e;
+    background: rgba(239, 68, 68, 0.15);
+    background: color-mix(in oklch, var(--color-danger-bright) 15%, transparent);
+    color: var(--color-danger);
   }
 </style>

@@ -114,6 +114,7 @@
         summary={item.slash.args ?? item.slash.message ?? ""}
         isExpanded={false}
         onclick={() => {}}
+        collapsible={false}
       />
     {:else if item.type === "tool"}
       {@const exec = item.execution}

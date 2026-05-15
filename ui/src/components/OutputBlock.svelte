@@ -70,6 +70,7 @@
     color: var(--tool-result-error-text);
     background: var(--tool-result-error-bg);
     border-color: rgba(239, 68, 68, 0.2);
+    border-color: color-mix(in oklch, var(--color-danger-bright) 20%, transparent);
   }
 
   /* 语法高亮 token 颜色统一在 app.css 的 .hljs-* 全局规则里 */

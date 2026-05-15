@@ -10,6 +10,7 @@
   } from "../lib/api";
   import { openTab } from "../lib/tabStore.svelte";
   import { shortenPath } from "../lib/toolHelpers";
+  import { FOLDER_GIT2_SVG, MESSAGE_SQUARE } from "../lib/icons";
 
   interface Props {
     selectedProjectId: string;
@@ -169,7 +170,19 @@
           class:cp-item-selected={i === selectedIndex}
           onclick={() => { onSelectProject(project.id, project.displayName); onClose(); }}
         >
-          <span class="cp-item-icon">◆</span>
+          <svg
+            class="cp-item-icon"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            {@html FOLDER_GIT2_SVG}
+          </svg>
           <span class="cp-item-label">{project.displayName}</span>
           <span class="cp-item-detail">{shortenPath(project.path)}</span>
           <span class="cp-item-badge">{project.sessionCount}</span>
@@ -186,9 +199,23 @@
           class:cp-item-selected={flatIdx === selectedIndex}
           onclick={() => openSession(session)}
         >
-          <span class="cp-item-icon">◇</span>
+          <svg
+            class="cp-item-icon"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d={MESSAGE_SQUARE} />
+          </svg>
           <span class="cp-item-label">{sessionTitle(session)}</span>
-          <span class="cp-item-detail">C{sessionCount(session) || ""}</span>
+          <span class="cp-item-detail" title="消息数量">
+            {#if sessionCount(session)}{sessionCount(session)} 条{/if}
+          </span>
           {#if "timestamp" in session}
             <span class="cp-item-time">{formatTime(session.timestamp)}</span>
           {/if}
@@ -289,11 +316,10 @@
   }
 
   .cp-item-icon {
-    font-size: 12px;
+    width: 14px;
+    height: 14px;
     color: var(--color-text-muted);
     flex-shrink: 0;
-    width: 16px;
-    text-align: center;
   }
 
   .cp-item-label {

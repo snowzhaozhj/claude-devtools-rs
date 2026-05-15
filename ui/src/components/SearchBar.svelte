@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { highlightMatches, clearHighlights, scrollToMatch } from "../lib/searchHighlight";
+  import { ARROW_UP_SVG, ARROW_DOWN_SVG, X_SVG } from "../lib/icons";
 
   interface Props {
     visible: boolean;
@@ -126,9 +127,32 @@
       {/if}
     </span>
 
-    <button class="search-nav-btn" onclick={prevMatch} disabled={totalMatches === 0} title="上一个 (Shift+Enter)">▲</button>
-    <button class="search-nav-btn" onclick={nextMatch} disabled={totalMatches === 0} title="下一个 (Enter)">▼</button>
-    <button class="search-close-btn" onclick={close} title="关闭 (Esc)">✕</button>
+    <button
+      class="search-nav-btn"
+      onclick={prevMatch}
+      disabled={totalMatches === 0}
+      aria-label="上一个匹配"
+      title="上一个 (Shift+Enter)"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html ARROW_UP_SVG}</svg>
+    </button>
+    <button
+      class="search-nav-btn"
+      onclick={nextMatch}
+      disabled={totalMatches === 0}
+      aria-label="下一个匹配"
+      title="下一个 (Enter)"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html ARROW_DOWN_SVG}</svg>
+    </button>
+    <button
+      class="search-close-btn"
+      onclick={close}
+      aria-label="关闭搜索"
+      title="关闭 (Esc)"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html X_SVG}</svg>
+    </button>
   </div>
 {/if}
 
@@ -179,7 +203,6 @@
     border: 1px solid var(--color-border);
     border-radius: 4px;
     color: var(--color-text-secondary);
-    font-size: 10px;
     width: 24px;
     height: 24px;
     display: flex;
@@ -188,6 +211,13 @@
     cursor: pointer;
     flex-shrink: 0;
     transition: background 0.1s, color 0.1s;
+    padding: 0;
+  }
+
+  .search-nav-btn svg,
+  .search-close-btn svg {
+    width: 12px;
+    height: 12px;
   }
 
   .search-nav-btn:hover,
@@ -199,9 +229,5 @@
   .search-nav-btn:disabled {
     opacity: 0.4;
     cursor: default;
-  }
-
-  .search-close-btn {
-    font-size: 12px;
   }
 </style>

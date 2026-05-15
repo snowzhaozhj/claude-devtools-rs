@@ -2,6 +2,8 @@
   // Rosetta 提示横幅：Apple Silicon Mac 上跑 x86_64 binary 时提示用户改装 ARM 版。
   // localStorage 持久化"不再提示"状态，避免每次启动都打扰。
 
+  import { ALERT_TRIANGLE_SVG } from "../lib/icons";
+
   const STORAGE_KEY = "cdt-rosetta-dismissed-v1";
   const RELEASE_URL =
     "https://github.com/snowzhaozhj/claude-devtools-rs/releases/latest";
@@ -38,7 +40,19 @@
   <div class="rosetta-banner" role="region" aria-label="架构不匹配提示">
     <div class="banner-content">
       <div class="banner-header">
-        <span class="banner-icon" aria-hidden="true">⚠️</span>
+        <svg
+          class="banner-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          {@html ALERT_TRIANGLE_SVG}
+        </svg>
         <span class="banner-title">检测到 Rosetta 翻译运行</span>
       </div>
       <div class="banner-body">
@@ -62,9 +76,9 @@
   .rosetta-banner {
     position: relative;
     padding: 10px 16px;
-    background: var(--color-surface, #2d2d2d);
-    border-bottom: 1px solid var(--color-warning, #d4a017);
-    color: var(--color-text, #e5e5e5);
+    background: var(--color-warning-bg);
+    border-bottom: 1px solid var(--color-warning-border);
+    color: var(--color-text);
     font-size: 13px;
     line-height: 1.4;
   }
@@ -82,21 +96,24 @@
   }
 
   .banner-icon {
-    font-size: 14px;
+    width: 16px;
+    height: 16px;
+    color: var(--color-warning-text);
+    flex-shrink: 0;
   }
 
   .banner-title {
     font-weight: 600;
-    color: var(--color-text, #e5e5e5);
+    color: var(--color-text);
   }
 
   .banner-body {
-    color: var(--color-text-secondary, #a0a0a0);
+    color: var(--color-text-secondary);
     font-size: 12px;
   }
 
   .banner-body strong {
-    color: var(--color-text, #e5e5e5);
+    color: var(--color-text);
   }
 
   .banner-actions {
@@ -114,24 +131,26 @@
     border: 1px solid transparent;
   }
 
+  /* btn bg 用 hover 色满足 WCAG AA on-accent 文字对比，hover 用 accent-blue */
   .btn-primary {
-    background: var(--color-accent, #4a9eff);
-    color: white;
-    border-color: var(--color-accent, #4a9eff);
+    background: var(--color-accent-blue-hover);
+    color: var(--color-text-on-accent);
+    border-color: var(--color-accent-blue-hover);
   }
 
   .btn-primary:hover {
-    background: var(--color-accent-hover, #5badff);
+    background: var(--color-accent-blue);
+    border-color: var(--color-accent-blue);
   }
 
   .btn-tertiary {
     background: transparent;
-    color: var(--color-text-muted, #888);
+    color: var(--color-text-muted);
     border-color: transparent;
   }
 
   .btn-tertiary:hover {
-    color: var(--color-text-secondary, #a0a0a0);
+    color: var(--color-text-secondary);
     text-decoration: underline;
   }
 </style>

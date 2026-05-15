@@ -314,9 +314,12 @@
   }
 
   .cp-mode-active {
+    /* rgba fallback 给旧 WebKitGTK（< 2.40）；现代浏览器走 color-mix。 */
     background: rgba(99, 102, 241, 0.18);
-    color: #818cf8;
+    background: color-mix(in oklch, var(--color-accent-indigo) 18%, transparent);
+    color: var(--color-accent-indigo);
     border-color: rgba(99, 102, 241, 0.24);
+    border-color: color-mix(in oklch, var(--color-accent-indigo) 24%, transparent);
   }
 
   .cp-body {
@@ -414,6 +417,8 @@
   .cp-section-items {
     padding: 8px 10px 10px 28px;
     border-top: 1px solid var(--color-border-subtle, var(--color-border));
+    /* surface 42% 半透铺底；旧 WebKitGTK 用 surface-raised 兜底（视觉接近） */
+    background: var(--color-surface-raised);
     background: color-mix(in srgb, var(--color-surface) 42%, transparent);
   }
 

@@ -576,14 +576,18 @@
               <span class="ai-label">Claude</span>
               <span class="ai-model">{aiModel(chunk)}</span>
               {#if summaryText}
-                <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <span class="ai-tool-toggle" onclick={() => toggleChunk(i, chunk)}>
+                <button
+                  type="button"
+                  class="ai-tool-toggle"
+                  onclick={() => toggleChunk(i, chunk)}
+                  aria-expanded={toolsVisible}
+                  aria-label={toolsVisible ? "折叠工具调用列表" : "展开工具调用列表"}
+                >
                   <span class="ai-tool-chevron" class:ai-tool-chevron-open={toolsVisible}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT} /></svg>
                   </span>
                   {summaryText}
-                </span>
+                </button>
               {/if}
               <span class="ai-header-spacer"></span>
               {#if totalTokens > 0}
@@ -999,8 +1003,8 @@
     color: var(--color-text-muted);
   }
 
-  .task-notif-done .task-notif-icon { color: var(--badge-success-text, #22c55e); }
-  .task-notif-fail .task-notif-icon { color: var(--error-highlight-text, #ef4444); }
+  .task-notif-done .task-notif-icon { color: var(--color-success-bright); }
+  .task-notif-fail .task-notif-icon { color: var(--color-danger-bright); }
 
   .task-notif-body {
     min-width: 0;
@@ -1093,11 +1097,19 @@
     border-radius: 4px;
     transition: background 0.1s, color 0.1s;
     flex-shrink: 0;
+    background: none;
+    border: none;
+    font-family: inherit;
   }
 
   .ai-tool-toggle:hover {
     background: var(--tool-item-hover-bg);
     color: var(--color-text-secondary);
+  }
+
+  .ai-tool-toggle:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
   }
 
   .ai-tool-chevron {
@@ -1295,10 +1307,10 @@
     gap: 8px;
     width: 100%;
     padding: 10px 16px;
-    background: rgba(245, 158, 11, 0.08);
-    border: 1px solid rgba(245, 158, 11, 0.25);
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
     border-radius: 8px;
-    color: #d97706;
+    color: var(--color-warning-text);
     cursor: pointer;
     font-family: inherit;
     text-align: left;
@@ -1307,11 +1319,9 @@
 
   .compact-button:hover {
     background: rgba(245, 158, 11, 0.12);
+    background: color-mix(in oklch, var(--color-warning) 12%, transparent);
     border-color: rgba(245, 158, 11, 0.35);
-  }
-
-  :global([data-theme="dark"]) .compact-button {
-    color: #fbbf24;
+    border-color: color-mix(in oklch, var(--color-warning) 35%, transparent);
   }
 
   .compact-chevron {
@@ -1347,7 +1357,7 @@
     font-variant-numeric: tabular-nums;
   }
   .compact-token-freed {
-    color: #4ade80;
+    color: var(--color-success);
   }
 
   .compact-phase-badge {
@@ -1355,7 +1365,8 @@
     padding: 1px 6px;
     border-radius: 4px;
     background: rgba(99, 102, 241, 0.15);
-    color: #818cf8;
+    background: color-mix(in oklch, var(--color-accent-indigo) 15%, transparent);
+    color: var(--color-accent-indigo);
     font-size: 10px;
     font-weight: 500;
     white-space: nowrap;
