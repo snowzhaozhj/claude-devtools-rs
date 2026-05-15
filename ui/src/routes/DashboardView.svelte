@@ -165,8 +165,9 @@
   }
 
   .dash-search:focus {
-    border-color: #3b82f6;
+    border-color: var(--color-accent-blue);
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent-blue) 15%, transparent);
   }
 
   .dash-search::placeholder {
@@ -267,16 +268,18 @@
     color: var(--color-text-secondary);
     letter-spacing: 0.02em;
   }
-  /* 点击当前已选卡片时的脉冲反馈 */
+  /* 点击当前已选卡片时的脉冲反馈。CSS 自定义属性 --pulse-ring 让 @keyframes
+     使用 accent token 而非硬编码 hex；rgba(0..,0) → rgba(0..,0) 用于 0% transparent。 */
   .dash-card-pulse {
+    --pulse-ring: 59, 130, 246;
     animation: dash-card-pulse 0.45s ease-out;
   }
   @keyframes dash-card-pulse {
     0% {
-      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45);
+      box-shadow: 0 0 0 0 rgba(var(--pulse-ring), 0.45);
     }
     100% {
-      box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+      box-shadow: 0 0 0 10px rgba(var(--pulse-ring), 0);
     }
   }
 

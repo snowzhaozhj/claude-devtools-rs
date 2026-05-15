@@ -256,15 +256,17 @@
     border: 1px solid transparent;
   }
 
+  /* btn bg 用 hover 色（浅 #2563eb / 深 #3b82f6）才能跟 --color-text-on-accent
+     文字达 WCAG AA ≥ 4.5；hover 状态再深一档（浅）/ 浅一档（深，反方向）。 */
   .btn-primary {
-    background: var(--color-accent-blue);
+    background: var(--color-accent-blue-hover);
     color: var(--color-text-on-accent);
-    border-color: var(--color-accent-blue);
+    border-color: var(--color-accent-blue-hover);
   }
 
   .btn-primary:hover {
-    background: var(--color-accent-blue-hover);
-    border-color: var(--color-accent-blue-hover);
+    background: var(--color-accent-blue);
+    border-color: var(--color-accent-blue);
   }
 
   .btn-secondary {

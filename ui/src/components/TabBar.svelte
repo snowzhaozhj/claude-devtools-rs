@@ -444,7 +444,7 @@
     min-width: 16px;
     height: 16px;
     border-radius: 8px;
-    background: var(--color-danger-bright);
+    background: var(--color-danger);
     color: var(--color-text-on-accent);
     font-size: 10px;
     font-weight: 600;

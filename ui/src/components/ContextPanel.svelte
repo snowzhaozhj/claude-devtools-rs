@@ -314,8 +314,11 @@
   }
 
   .cp-mode-active {
+    /* rgba fallback 给旧 WebKitGTK（< 2.40）；现代浏览器走 color-mix。 */
+    background: rgba(99, 102, 241, 0.18);
     background: color-mix(in oklch, var(--color-accent-indigo) 18%, transparent);
     color: var(--color-accent-indigo);
+    border-color: rgba(99, 102, 241, 0.24);
     border-color: color-mix(in oklch, var(--color-accent-indigo) 24%, transparent);
   }
 

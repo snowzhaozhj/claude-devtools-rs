@@ -1306,7 +1306,9 @@
   }
 
   .compact-button:hover {
+    background: rgba(245, 158, 11, 0.12);
     background: color-mix(in oklch, var(--color-warning) 12%, transparent);
+    border-color: rgba(245, 158, 11, 0.35);
     border-color: color-mix(in oklch, var(--color-warning) 35%, transparent);
   }
 
@@ -1350,6 +1352,7 @@
     flex-shrink: 0;
     padding: 1px 6px;
     border-radius: 4px;
+    background: rgba(99, 102, 241, 0.15);
     background: color-mix(in oklch, var(--color-accent-indigo) 15%, transparent);
     color: var(--color-accent-indigo);
     font-size: 10px;
