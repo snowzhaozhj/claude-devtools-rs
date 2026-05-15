@@ -194,8 +194,9 @@ export function isToolPending(exec: ToolExecution): boolean {
 /**
  * 判断工具的展开 viewer 是否消费 `exec.output`。
  *
- * - Edit / Write viewer 仅渲染 `exec.input`（old/new string、写入内容），
- *   `exec.output` 不被读 → 即便 `outputOmitted=true` 也无需先拉再展开。
+ * - Edit viewer 与成功态 Write viewer 仅渲染 `exec.input`
+ *   （old/new string、写入内容），`exec.output` 不被读 → 即便
+ *   `outputOmitted=true` 也无需先拉再展开。
  * - Read / Bash / DefaultToolViewer 都会读 `exec.output`；当
  *   `outputOmitted=true` 时 SHALL 先 IPC 拉到再加入 expanded set，否则
  *   空 OUTPUT 区会被实际内容跳变替换（详见 change
@@ -208,6 +209,22 @@ export function viewerUsesOutput(exec: ToolExecution): boolean {
   if (exec.toolName === "Edit") return false;
   if (exec.toolName === "Write" && !exec.isError) return false;
   return true;
+}
+
+/**
+ * 判断展开 AIChunk 时是否对该 tool 主动 prefetch `getToolOutput`。
+ *
+ * 仅 Read 工具命中 —— Read 文件常被多次反复看，prefetch 收益高；其他工具
+ * （Bash / DefaultToolViewer 路径）若一并 prefetch 会让一个含多 Bash 的
+ * AIChunk 展开瞬间触发并发 IPC，挤掉首屏交互（详见 change
+ * `tool-output-ready-before-expand` design D2）。
+ *
+ * SHALL NOT 静默扩展到 Bash/Default —— 这是被 spec
+ * "展开 AIChunk 不主动 prefetch Bash 与 Default" Scenario 守护的契约，
+ * vitest 直接覆盖本函数返回值。
+ */
+export function shouldPrefetchOnChunkExpand(exec: ToolExecution): boolean {
+  return exec.toolName === "Read" && !exec.isError && !!exec.outputOmitted;
 }
 
 /** 移除 ANSI 转义序列 */
@@ -608,4 +625,3 @@ export function getLanguageFromPath(filePath: string): string {
 export function getFileName(filePath: string): string {
   return filePath.split("/").pop() ?? filePath;
 }
-

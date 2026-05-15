@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { ToolExecution } from './api'
-import { getLanguageFromPath, getToolDurationMs, isToolPending, toolErrorText, viewerUsesOutput } from './toolHelpers'
+import { getLanguageFromPath, getToolDurationMs, isToolPending, shouldPrefetchOnChunkExpand, toolErrorText, viewerUsesOutput } from './toolHelpers'
 
 function exec(overrides: Partial<ToolExecution>): ToolExecution {
   return {
@@ -70,6 +70,28 @@ describe('viewerUsesOutput', () => {
 
   test('Read isError=true 走 DefaultToolViewer，仍消费 output', () => {
     expect(viewerUsesOutput(exec({ toolName: 'Read', isError: true }))).toBe(true)
+  })
+})
+
+describe('shouldPrefetchOnChunkExpand', () => {
+  test('Read 工具 outputOmitted 命中 prefetch', () => {
+    expect(shouldPrefetchOnChunkExpand(exec({ toolName: 'Read', outputOmitted: true }))).toBe(true)
+  })
+
+  test('Read 工具 outputOmitted=false 不再 prefetch（已有 output）', () => {
+    expect(shouldPrefetchOnChunkExpand(exec({ toolName: 'Read', outputOmitted: false }))).toBe(false)
+  })
+
+  test('Read 工具 isError=true 不 prefetch（走 DefaultToolViewer，由 toggle 单点拉）', () => {
+    expect(shouldPrefetchOnChunkExpand(exec({ toolName: 'Read', isError: true, outputOmitted: true }))).toBe(false)
+  })
+
+  test('Bash / Default / Write 工具 SHALL NOT 被 chunk 展开 prefetch（避免并发 IPC 卡顿）', () => {
+    expect(shouldPrefetchOnChunkExpand(exec({ toolName: 'Bash', outputOmitted: true }))).toBe(false)
+    expect(shouldPrefetchOnChunkExpand(exec({ toolName: 'Grep', outputOmitted: true }))).toBe(false)
+    expect(shouldPrefetchOnChunkExpand(exec({ toolName: 'WebFetch', outputOmitted: true }))).toBe(false)
+    expect(shouldPrefetchOnChunkExpand(exec({ toolName: 'Write', outputOmitted: true }))).toBe(false)
+    expect(shouldPrefetchOnChunkExpand(exec({ toolName: 'Edit', outputOmitted: true }))).toBe(false)
   })
 })
 
