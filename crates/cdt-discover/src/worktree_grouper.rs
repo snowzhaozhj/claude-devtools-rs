@@ -163,6 +163,14 @@ async fn resolve_all_fs(path: &Path) -> Option<RepoLookup> {
 /// - bare repo（用户 cd 进 bare repo 跑 claude）：当前返回 default 走非 git 路径
 /// - `GIT_COMMON_DIR` 环境变量覆盖：纯 fs 实现无感（旧 `git rev-parse` 会受环境变量覆盖）
 async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool)> {
+    // 入口先校验 start path 自身存在；否则向上 walk 时会越过已被 git prune 掉的
+    // worktree 目录（`<repo>/.claude/worktrees/<old-name>/`，path 已不存在），
+    // 最终撞到父 repo 的 `.git` 把它当成自身 working tree，于是显示父 repo
+    // 当前分支（典型为 `main`）。spec `project-discovery` §"历史 worktree
+    // path 解析 branch 失败 SHALL 为 None"硬要求此情况让 caller 走 fallback。
+    if tokio::fs::metadata(start).await.is_err() {
+        return None;
+    }
     let mut current = start.to_path_buf();
     loop {
         let dot_git = current.join(".git");
@@ -237,7 +245,8 @@ fn parse_gitlink_dir(content: &str, base: &Path) -> Option<PathBuf> {
 
 /// 解析 `HEAD` 文件内容：
 /// - `ref: refs/heads/<branch>` → `Some("<branch>")`
-/// - 裸 commit hash（detached HEAD）→ `Some("HEAD")` 对齐 `git rev-parse --abbrev-ref HEAD` 行为
+/// - 裸 commit hash（detached HEAD）→ `None`（字面 "HEAD" 对用户无意义，
+///   `sidebar-navigation` §"gitBranch 为 null SHALL NOT 渲染 chip" 让 UI 自动收起）
 /// - 空 / 解析失败 → `None`
 fn parse_head_branch(content: &str) -> Option<String> {
     let trimmed = content.trim();
@@ -254,8 +263,10 @@ fn parse_head_branch(content: &str) -> Option<String> {
         // 其它 ref 形态（refs/tags/... 等罕见）原样返回最后一段
         return r.rsplit('/').next().map(str::to_owned);
     }
-    // detached HEAD：git rev-parse --abbrev-ref HEAD 返 "HEAD"
-    Some("HEAD".to_owned())
+    // detached HEAD：HEAD 文件是裸 commit hash。原版 Claude Code 在 detached
+    // 时 JSONL 会把字面字符串 "HEAD" 写进 gitBranch 字段，我们这里同步返 None
+    // 让 UI 在无可读分支名时不渲染分支 chip。
+    None
 }
 
 /// 分组器。
@@ -765,6 +776,43 @@ mod tests {
         );
     }
 
+    /// spec `project-discovery` §"无法从历史 worktree path 解析 branch 时
+    /// SHALL 保持 None，MUST NOT 使用父 repo 当前 branch 伪造"。
+    ///
+    /// 历史 bug：被 git prune 掉的 worktree 目录（path 已不存在），
+    /// `locate_git_dirs` 会一路 pop 向上 walk，撞到父 repo 的 `.git` 后
+    /// 把它当成自身 working tree 返 `(parent_git, parent_git, is_main=true)`，
+    /// 进而把父 repo 当前分支（典型 `main`）当成该 worktree 的分支。
+    /// fix：入口 check start path 存在性，不存在直接 None 让 grouper fallback。
+    #[tokio::test]
+    async fn fs_resolver_returns_none_when_start_path_missing() {
+        let dir = tempdir().unwrap();
+        // 父 repo 真实存在
+        let main_repo = dir.path().join("main_repo");
+        let main_git = main_repo.join(".git");
+        tokio::fs::create_dir_all(&main_git).await.unwrap();
+        tokio::fs::write(main_git.join("HEAD"), "ref: refs/heads/main\n")
+            .await
+            .unwrap();
+
+        // 模拟被 prune 的 worktree path：嵌套在 main_repo 下但目录不存在
+        let pruned = main_repo.join(".claude").join("worktrees").join("gone");
+
+        let resolver = LocalGitIdentityResolver::new();
+        let lookup = resolver.resolve_all(&pruned).await;
+        // resolve_all 应直接走 default（identity=None），让 grouper 走 fallback
+        assert!(
+            lookup.identity.is_none(),
+            "missing path SHALL NOT inherit parent repo identity here, got {:?}",
+            lookup.identity
+        );
+        assert!(
+            lookup.branch.is_none(),
+            "missing path SHALL NOT inherit parent repo branch, got {:?}",
+            lookup.branch
+        );
+    }
+
     #[tokio::test]
     async fn fs_resolver_returns_default_for_non_git_dir() {
         let dir = tempdir().unwrap();
@@ -779,7 +827,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fs_resolver_detached_head_returns_head_sentinel() {
+    async fn fs_resolver_detached_head_returns_none() {
         let dir = tempdir().unwrap();
         let repo = dir.path().join("repo");
         let git = repo.join(".git");
@@ -791,8 +839,13 @@ mod tests {
 
         let resolver = LocalGitIdentityResolver::new();
         let lookup = resolver.resolve_all(&repo).await;
-        // 对齐 `git rev-parse --abbrev-ref HEAD` 在 detached 时返 "HEAD"
-        assert_eq!(lookup.branch.as_deref(), Some("HEAD"));
+        // detached HEAD 对用户无可读分支名，返 None 让 UI 不渲染分支 chip
+        assert!(
+            lookup.branch.is_none(),
+            "detached HEAD SHALL produce None branch, got {:?}",
+            lookup.branch
+        );
+        assert!(lookup.identity.is_some());
         assert!(lookup.is_main_worktree);
     }
 
@@ -806,8 +859,8 @@ mod tests {
             parse_head_branch("ref: refs/heads/feature/x\n").as_deref(),
             Some("feature/x")
         );
-        // detached HEAD
-        assert_eq!(parse_head_branch("abc123\n").as_deref(), Some("HEAD"));
+        // detached HEAD：裸 commit hash 返 None（字面 "HEAD" 对用户无意义）
+        assert!(parse_head_branch("abc123\n").is_none());
         assert!(parse_head_branch("").is_none());
         assert!(parse_head_branch("   \n").is_none());
     }

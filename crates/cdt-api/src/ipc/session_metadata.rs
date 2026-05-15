@@ -161,7 +161,13 @@ pub(crate) async fn extract_session_metadata_with_ongoing(path: &Path) -> (Sessi
         };
 
         if let Some(branch) = &msg.git_branch {
-            if !branch.is_empty() {
+            // 过滤字面 "HEAD" —— 原版 Claude Code 在 detached HEAD（worktree
+            // 检出某 commit / rebase 中等）状态下会把字面字符串 "HEAD" 写进
+            // JSONL 的 `gitBranch` 字段，对用户没有可读语义。与
+            // `worktree_grouper::parse_head_branch` detached → None 保持一致：
+            // 一律返 None 让 sidebar 隐藏分支 chip（spec sidebar-navigation §
+            // "gitBranch 为 null SHALL NOT 渲染该 chip"）。
+            if !branch.is_empty() && branch != "HEAD" {
                 last_git_branch = Some(branch.clone());
             }
         }
@@ -706,6 +712,38 @@ mod tests {
         );
         let meta = extract_session_metadata(&path).await;
         assert_eq!(meta.git_branch.as_deref(), Some("main"));
+    }
+
+    /// detached HEAD 时原版 Claude Code 把字面 "HEAD" 写进 `gitBranch` 字段，
+    /// 对用户无可读语义。extract 应跳过该值，与 `worktree_grouper::parse_head_branch`
+    /// detached → None 保持一致，避免会话列表显示 "HEAD" 当成分支名。
+    #[tokio::test]
+    async fn extract_skips_head_literal_git_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_line("u1", "2026-05-03T10:00:00.000Z", Some("main")),
+                &user_line("u2", "2026-05-03T10:01:00.000Z", Some("HEAD")),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        // 即便 "HEAD" 出现在最后一条非空 branch 位置，也 SHALL 跳过它，保留前面的 "main"
+        assert_eq!(meta.git_branch.as_deref(), Some("main"));
+    }
+
+    #[tokio::test]
+    async fn extract_returns_none_when_only_head_literal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_line("u1", "2026-05-03T10:00:00.000Z", Some("HEAD")),
+                &user_line("u2", "2026-05-03T10:01:00.000Z", Some("HEAD")),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert!(meta.git_branch.is_none());
     }
 
     // ---- messageCount: isParsedUserChunkMessage parity ----
