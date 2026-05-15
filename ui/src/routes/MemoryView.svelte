@@ -3,6 +3,8 @@
   import { getProjectMemory, readMemoryFile, type MemoryLayer, type ProjectMemory } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
   import { splitFrontmatter, type MemoryFrontmatter } from "../lib/memoryFrontmatter";
+  import Skeleton from "../components/Skeleton.svelte";
+  import SkeletonList from "../components/SkeletonList.svelte";
 
   interface Props {
     projectId: string;
@@ -188,8 +190,33 @@
 </script>
 
 <div class="memory-view">
-  {#if loading}
-    <div class="memory-status">加载 Memory...</div>
+  {#if loading && !memory}
+    <aside class="memory-layers">
+      <div class="layers-header">
+        <span>LAYERS</span>
+      </div>
+      <SkeletonList count={5} rowHeight={56} gap={6} padding="6px" label="正在加载 Memory 层" />
+    </aside>
+    <section class="memory-content">
+      <!-- 用真 toolbar 结构（背景 / 边框 / 高度）占位，避免加载完成切到主分支时
+           layout 突然多出 52px toolbar 造成的 markdown 区域跳动。 -->
+      <div class="memory-toolbar memory-toolbar-skeleton" aria-hidden="true">
+        <div class="current-file">
+          <Skeleton variant="text" height={14} width="120px" />
+          <Skeleton variant="text" height={11} width="200px" />
+        </div>
+        <div class="toolbar-actions">
+          <Skeleton variant="row" height={30} width="60px" />
+          <Skeleton variant="row" height={30} width="60px" />
+        </div>
+      </div>
+      <div class="memory-content-skeleton" role="status" aria-busy="true" aria-label="正在加载 Memory 文件">
+        <Skeleton variant="text" height={28} width="40%" />
+        <Skeleton variant="text" height={14} width="92%" />
+        <Skeleton variant="text" height={14} width="88%" />
+        <Skeleton variant="text" height={14} width="76%" />
+      </div>
+    </section>
   {:else if error && !memory}
     <div class="memory-status memory-error">{error}</div>
   {:else if !memory || memory.layers.length === 0}
@@ -277,8 +304,14 @@
 
       {#if error}
         <div class="content-status memory-error">{error}</div>
-      {:else if contentLoading}
-        <div class="content-status">加载文件...</div>
+      {:else if contentLoading && !content}
+        <div class="memory-content-skeleton" role="status" aria-busy="true" aria-label="正在加载文件内容">
+          <Skeleton variant="text" height={28} width="40%" />
+          <Skeleton variant="text" height={14} width="92%" />
+          <Skeleton variant="text" height={14} width="88%" />
+          <Skeleton variant="text" height={14} width="76%" />
+          <Skeleton variant="text" height={14} width="84%" />
+        </div>
       {:else}
         <div class="content-scroll">
           <div class="content-inner">
@@ -535,7 +568,7 @@
   }
 
   .action-flash-error {
-    color: var(--color-error, #ef4444);
+    color: var(--color-error);
   }
 
   .open-menu {
@@ -580,6 +613,13 @@
 
   .item-label {
     flex: 1;
+  }
+
+  .memory-content-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 28px 56px;
   }
 
   .content-scroll {

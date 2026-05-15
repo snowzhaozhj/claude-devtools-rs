@@ -12,6 +12,7 @@
   } from "../lib/api";
   import { openTab, setUnreadCount } from "../lib/tabStore.svelte";
   import { BELL_OFF_SVG, CHECK_CHECK_SVG, CHECK_SVG, TRASH2_SVG, X_SVG } from "../lib/icons";
+  import SkeletonList from "../components/SkeletonList.svelte";
 
   let notifications: StoredNotification[] = $state([]);
   let loading = $state(true);
@@ -185,8 +186,8 @@
   {/if}
 
   <div class="notifications-body">
-    {#if loading}
-      <div class="state-msg">加载中...</div>
+    {#if loading && notifications.length === 0}
+      <SkeletonList count={6} rowHeight={68} gap={4} padding="0" label="正在加载通知" />
     {:else if error}
       <div class="state-msg state-err">{error}</div>
     {:else if notifications.length === 0}
@@ -216,12 +217,21 @@
     {:else}
       <div class="notification-list">
         {#each notifications as notif (notif.id)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <!-- 通知行内嵌已读 / 删除两个 button，所以行本体不能用 <button>（Svelte 5 禁止
+               button 嵌套）。改用 role="button" + tabindex 0 + keydown 处理 Enter/Space，
+               让键盘流用户也能打开会话。-->
           <div
             class="notification-row"
             class:notification-unread={!notif.isRead}
+            role="button"
+            tabindex="0"
             onclick={() => handleNavigate(notif)}
+            onkeydown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                void handleNavigate(notif);
+              }
+            }}
           >
             <span
               class="notif-color"
@@ -416,6 +426,10 @@
   .notification-row:hover {
     background: var(--tool-item-hover-bg);
   }
+  .notification-row:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
+  }
   .notification-unread {
     background: var(--color-surface-raised, var(--color-surface));
   }
@@ -464,10 +478,11 @@
     color: var(--color-text-muted);
     cursor: pointer;
     flex-shrink: 0;
-    opacity: 0;
+    opacity: 0.55;
     transition: background 0.1s, color 0.1s, opacity 0.1s;
   }
   .notification-row:hover .notif-row-btn,
+  .notification-row:focus-within .notif-row-btn,
   .notif-row-btn:focus-visible {
     opacity: 1;
   }
