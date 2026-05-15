@@ -1,4 +1,33 @@
-import type { SessionSummary } from "./api";
+import type { SessionSummary, SessionMetadataUpdate } from "./api";
+
+/**
+ * 把 `pending` buffer 中匹配 sessionId 的 update 应用到 `arr` —— 兜底 listener
+ * 收到 `session-metadata-update` 时 `sessions` 数组还没扩展到那条 sessionId 的
+ * race（典型场景：page 2 的后台扫描 broadcast emit 早于 page 2 IPC return，前
+ * 端 `sessions.map` 找不到目标，update 静默丢失）。listener 把所有 update 写入
+ * pending buffer，sessions 写入后立即调本函数把 buffer 中已经在新 sessions 里
+ * 的 sessionId 一次性 patch 上去。
+ *
+ * 详见 spec `sidebar-navigation/spec.md::会话元数据增量 patch` Scenario "更新到
+ * 达时 sessions 还未包含 sessionId 时缓冲到 pending buffer"。
+ */
+export function applyPendingMetadata(
+  arr: SessionSummary[],
+  pending: Map<string, SessionMetadataUpdate>,
+): SessionSummary[] {
+  if (pending.size === 0) return arr;
+  return arr.map((s) => {
+    const upd = pending.get(s.sessionId);
+    if (!upd) return s;
+    return {
+      ...s,
+      title: upd.title,
+      messageCount: upd.messageCount,
+      isOngoing: upd.isOngoing,
+      gitBranch: upd.gitBranch,
+    };
+  });
+}
 
 /**
  * silent 刷新合并语义：把旧 sessions 中**已 patch 过**的元数据字段

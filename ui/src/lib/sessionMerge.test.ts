@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'vitest'
-import type { SessionSummary } from './api'
-import { applySilentRefresh, mergeSessions, mergeSilentMetadata } from './sessionMerge'
+import type { SessionMetadataUpdate, SessionSummary } from './api'
+import {
+  applyPendingMetadata,
+  applySilentRefresh,
+  mergeSessions,
+  mergeSilentMetadata,
+} from './sessionMerge'
 
 function skel(id: string, ts: number, overrides: Partial<SessionSummary> = {}): SessionSummary {
   return {
@@ -165,5 +170,93 @@ describe('applySilentRefresh', () => {
     for (const prevSession of prev) {
       expect(result.sessions.some((s) => s.sessionId === prevSession.sessionId)).toBe(true)
     }
+  })
+})
+
+function update(
+  sessionId: string,
+  title: string | null,
+  overrides: Partial<SessionMetadataUpdate> = {},
+): SessionMetadataUpdate {
+  return {
+    projectId: 'projectA',
+    sessionId,
+    title,
+    messageCount: title ? 12 : 0,
+    isOngoing: false,
+    gitBranch: null,
+    ...overrides,
+  }
+}
+
+describe('applyPendingMetadata', () => {
+  test('空 buffer 返回原数组（同引用语义）', () => {
+    const arr = [skel('s1', 1000)]
+    const empty = new Map<string, SessionMetadataUpdate>()
+    expect(applyPendingMetadata(arr, empty)).toBe(arr)
+  })
+
+  test('buffer 中匹配 sessionId 的 update 应用到对应条目，其他不变', () => {
+    const arr = [skel('s1', 1000), skel('s2', 2000), skel('s3', 3000)]
+    const buffer = new Map<string, SessionMetadataUpdate>([
+      ['s2', update('s2', '真标题', { messageCount: 42, isOngoing: true, gitBranch: 'main' })],
+    ])
+    const result = applyPendingMetadata(arr, buffer)
+    expect(result[0]).toEqual(arr[0])
+    expect(result[1]).toEqual({
+      sessionId: 's2',
+      projectId: 'projectA',
+      timestamp: 2000,
+      messageCount: 42,
+      title: '真标题',
+      isOngoing: true,
+      gitBranch: 'main',
+    })
+    expect(result[2]).toEqual(arr[2])
+  })
+
+  test('buffer 中 sessionId 不在 arr 时不抛错也不应用', () => {
+    const arr = [skel('s1', 1000)]
+    const buffer = new Map<string, SessionMetadataUpdate>([
+      ['s_new', update('s_new', '只在 buffer 的')],
+    ])
+    const result = applyPendingMetadata(arr, buffer)
+    expect(result).toEqual(arr)
+  })
+
+  test('race 兜底场景：listener 先收到 update，loadMoreSessions 后扩展 sessions 应用 buffer', () => {
+    // page 1 sessions
+    const page1 = [skel('p1-a', 5000), skel('p1-b', 4500)]
+    // listener 收到 page 2 的 s_new update（page 2 IPC return 之前）
+    const buffer = new Map<string, SessionMetadataUpdate>([
+      ['s_new', update('s_new', '后台先扫到的标题', { messageCount: 5 })],
+    ])
+    // 此时 sessions = page1，apply buffer → s_new 不在 page1 → 无变化
+    expect(applyPendingMetadata(page1, buffer)).toEqual(page1)
+
+    // page 2 IPC return：sessions 扩展到含 s_new
+    const expanded = mergeSessions(page1, [skel('s_new', 4000)], false)
+    expect(expanded.some((s) => s.sessionId === 's_new')).toBe(true)
+    // 立刻 apply buffer：s_new 应被 patch 上真实 title / messageCount
+    const finalSessions = applyPendingMetadata(expanded, buffer)
+    const newSession = finalSessions.find((s) => s.sessionId === 's_new')!
+    expect(newSession.title).toBe('后台先扫到的标题')
+    expect(newSession.messageCount).toBe(5)
+  })
+
+  test('buffer 中保留多个 update（不被 apply 后清空），后续 sessions 写入仍能复用', () => {
+    const buffer = new Map<string, SessionMetadataUpdate>([
+      ['a', update('a', 'A 标题')],
+      ['b', update('b', 'B 标题')],
+    ])
+    const arr1 = [skel('a', 1000)]
+    const result1 = applyPendingMetadata(arr1, buffer)
+    expect(result1[0].title).toBe('A 标题')
+    // buffer 仍含 b 的 update（apply 不删 entry）——后续 sessions 含 b 时仍生效
+    expect(buffer.has('b')).toBe(true)
+
+    const arr2 = [skel('a', 1000), skel('b', 500)]
+    const result2 = applyPendingMetadata(arr2, buffer)
+    expect(result2[1].title).toBe('B 标题')
   })
 })

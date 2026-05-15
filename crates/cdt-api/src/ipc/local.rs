@@ -310,12 +310,25 @@ pub struct LocalDataApi {
     /// `list_sessions` 后台元数据扫描的广播发送端。`subscribe_session_metadata()`
     /// 返回 receiver，Tauri host 桥接为前端 `session-metadata-update` 事件。
     session_metadata_tx: broadcast::Sender<SessionMetadataUpdate>,
-    /// 当前 per-project 进行中的元数据扫描句柄。`list_sessions` 调用前会
-    /// abort 同 project 的旧扫描，避免事件串扰（详见 design.md decision 4）。
+    /// 当前进行中的元数据扫描句柄。key 由 `metadata_scan_key(project_id, cursor)`
+    /// 编码为 `"{project_id}|{cursor}"`，让同 project 不同分页的扫描互不 abort。
+    /// `list_sessions` 调用前会 abort **同 (`project_id`, `cursor`)** 的旧扫描，
+    /// 避免重复触发同一页扫描造成的事件串扰；不同分页的扫描 SHALL 并存（详见
+    /// `openspec/specs/ipc-data-api/spec.md::Emit session metadata updates`
+    /// Scenario "同 projectId 同 cursor 的新扫描取消旧扫描" 与 "同 projectId
+    /// 不同 cursor 的扫描并存互不 abort"）。
     active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
     /// 单调递增的 scan generation 计数器，用于 `active_scans` 的 race-free
     /// cleanup（详见 `scan_metadata_for_page`）。
     scan_generation: Arc<AtomicU64>,
+    /// 后台元数据扫描共享的 `Semaphore`，所有 in-flight scan task 共享一个实例
+    /// 以保证全局并发上限为 `METADATA_SCAN_CONCURRENCY=8`。spec
+    /// `ipc-data-api/spec.md::Emit session metadata updates` Scenario "后台扫描
+    /// 并发度限制" 明确"同一时刻打开的 JSONL 文件句柄数 SHALL 不超过 8"——
+    /// 在改用 (`project_id`, `cursor`) 双键 abort 后，page 1 / page 2 / 多 project
+    /// 扫描会真并发执行，必须用 `Arc<Semaphore>` 在 task 间共享许可，避免每个
+    /// task 各自 new 一个 8 容量信号量加和成 16+ 并发。
+    metadata_scan_semaphore: Arc<Semaphore>,
     /// `get_image_asset` 落盘 cache 目录。由 Tauri host 通过
     /// `new_with_image_cache` 注入 `app_cache_dir().join("cdt-images")`；
     /// `None` 时 `get_image_asset` fallback 到 `data:` URI（默认构造路径
@@ -348,6 +361,7 @@ impl LocalDataApi {
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
+            metadata_scan_semaphore: Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY)),
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
         }
@@ -406,6 +420,7 @@ impl LocalDataApi {
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
+            metadata_scan_semaphore: Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY)),
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
         }
@@ -568,8 +583,14 @@ impl LocalDataApi {
 /// 避免旧 task 在新 task 已注册后的 cleanup 误删新 handle（codex 二审 race）。
 /// `broadcast::send` 在无订阅者时返回 `Err`，本函数静默忽略——元数据更新
 /// 本质上是 fire-and-forget。
-fn metadata_scan_key(project_id: &str) -> String {
-    project_id.to_owned()
+///
+/// `active_scans` 的 key 由 `(project_id, cursor)` 组合构成，让同 project 不同
+/// 分页的扫描相互独立——典型场景：page 1 / page 2 的并发扫描互不 abort（spec
+/// `ipc-data-api/spec.md::Emit session metadata updates` Scenario "同 projectId
+/// 不同 cursor 的扫描并存互不 abort"）。`|` 字符为 reserved 分隔符，当前 cursor
+/// 由 `(offset).to_string()` 生成（纯 ASCII 数字），不会与分隔符冲突。
+fn metadata_scan_key(project_id: &str, cursor: Option<&str>) -> String {
+    format!("{project_id}|{}", cursor.unwrap_or(""))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -582,9 +603,14 @@ async fn scan_metadata_for_page(
     cleanup_key: String,
     my_generation: u64,
     metadata_cache: Arc<std::sync::Mutex<MetadataCache>>,
+    semaphore: Arc<Semaphore>,
 ) {
     let _ = dir; // dir 当前由 page_jobs 内的 jsonl_path 携带，保留参数为未来扩展（如懒构造路径）
-    let semaphore = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
+    // semaphore 由 caller 注入：所有 in-flight scan task 共享同一实例，保证全局
+    // 并发上限为 `METADATA_SCAN_CONCURRENCY=8`（spec `ipc-data-api/spec.md::Emit
+    // session metadata updates` Scenario "后台扫描并发度限制"）。先前实现每个
+    // task 各自 `Arc::new(Semaphore::new(...))` 在改双键 abort 后会让 page 1 +
+    // page 2 累加成 16+ 并发，违反上限。
     let mut set = JoinSet::new();
 
     for (session_id, jsonl_path) in page_jobs {
@@ -678,7 +704,11 @@ impl DataApi for LocalDataApi {
             let tx = self.session_metadata_tx.clone();
             let project_id_owned = project_id.to_owned();
             let active_scans = self.active_scans.clone();
-            let scan_key = metadata_scan_key(project_id);
+            // (project_id, cursor) 双键：同 cursor 抢占 / 不同 cursor 并存
+            // （详见 spec `ipc-data-api/spec.md::Emit session metadata updates`
+            // Scenario "同 projectId 同 cursor 的新扫描取消旧扫描" 与
+            // "同 projectId 不同 cursor 的扫描并存互不 abort"）。
+            let scan_key = metadata_scan_key(project_id, pagination.cursor.as_deref());
             let key_for_cleanup = scan_key.clone();
 
             // abort 旧 + 分配 generation + spawn + insert **全部**在同一把
@@ -702,6 +732,7 @@ impl DataApi for LocalDataApi {
                     key_for_cleanup,
                     my_generation,
                     self.metadata_cache.clone(),
+                    self.metadata_scan_semaphore.clone(),
                 ));
 
                 scans.insert(

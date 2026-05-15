@@ -355,6 +355,148 @@ async fn concurrent_list_sessions_does_not_orphan_scan() {
     );
 }
 
+#[tokio::test]
+async fn list_sessions_different_cursor_scans_run_concurrently() {
+    // 回归 fix `session-list-per-cursor-abort`：spec `ipc-data-api/spec.md`
+    // §"Emit session metadata updates" Scenario "同 projectId 不同 cursor 的
+    // 扫描并存互不 abort"。
+    //
+    // 历史 bug：`active_scans` 用单 `project_id` 当 abort key，Sidebar 首次加载
+    // page 1 拿到骨架后立刻 `queueMicrotask(maybeLoadMoreSessions(true))` 自动
+    // 触发 page 2 → page 2 调用进入临界区时 abort 掉 page 1 的扫描 → page 1
+    // cache miss session 永远拿不到 title，UI 卡在短 hash 占位。
+    //
+    // 修复后 abort key 改为 `(project_id, cursor)`，page 1 与 page 2 的扫描
+    // 互不 abort；receiver SHALL 收到两页**所有** cache miss session 的 update
+    // （总数 = N，没有任何条因 abort 丢失）。
+    use cdt_api::DataApi;
+
+    // 每页 8 条 × 2 页 = 16 条 fixture
+    let titles: Vec<String> = (0..16).map(|i| format!("page-title-{i:02}")).collect();
+    let title_refs: Vec<&str> = titles.iter().map(String::as_str).collect();
+    let (api, _tmp, project_id, _session_ids) = build_api_with_fixtures(&title_refs).await;
+
+    let mut rx = api.subscribe_session_metadata();
+
+    let page1 = PaginatedRequest {
+        page_size: 8,
+        cursor: None,
+    };
+    let resp1 = api.list_sessions(&project_id, &page1).await.unwrap();
+    assert_eq!(resp1.items.len(), 8);
+    assert_eq!(
+        resp1.next_cursor.as_deref(),
+        Some("8"),
+        "page 1 next_cursor 应为 \"8\""
+    );
+
+    // 紧接着调 page 2（typical Sidebar `queueMicrotask(maybeLoadMoreSessions)` 路径）
+    let page2 = PaginatedRequest {
+        page_size: 8,
+        cursor: Some("8".to_owned()),
+    };
+    let resp2 = api.list_sessions(&project_id, &page2).await.unwrap();
+    assert_eq!(resp2.items.len(), 8);
+
+    // 收集所有 update：两页扫描互不 abort 时，updates 总数 SHALL 等于 N（page 1
+    // + page 2 全部 cache miss session）。bug 路径下 page 1 被 abort，updates
+    // 数会显著小于 N（甚至只有 page 2 的 8 条）。
+    let mut received: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while received.len() < titles.len() {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        match timeout(deadline - now, rx.recv()).await {
+            Ok(Ok(upd)) => {
+                assert_eq!(upd.project_id, project_id);
+                received.insert(upd.session_id);
+            }
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+
+    assert_eq!(
+        received.len(),
+        titles.len(),
+        "page 1 + page 2 应各自完整扫完，总 updates 数 = N={}，实际 {}（page 1 被 abort 时数量会少）",
+        titles.len(),
+        received.len()
+    );
+
+    // 验证 page 1 与 page 2 的 session 都收到了 update
+    let page1_ids: std::collections::HashSet<_> =
+        resp1.items.iter().map(|s| s.session_id.clone()).collect();
+    let page2_ids: std::collections::HashSet<_> =
+        resp2.items.iter().map(|s| s.session_id.clone()).collect();
+    for sid in &page1_ids {
+        assert!(
+            received.contains(sid),
+            "page 1 session {sid} 的 update 缺失（被 abort）"
+        );
+    }
+    for sid in &page2_ids {
+        assert!(
+            received.contains(sid),
+            "page 2 session {sid} 的 update 缺失"
+        );
+    }
+}
+
+#[tokio::test]
+async fn list_sessions_same_cursor_repeated_aborts_previous_scan() {
+    // spec `ipc-data-api/spec.md` §"Emit session metadata updates" Scenario
+    // "同 projectId 同 cursor 的新扫描取消旧扫描"。同 cursor=null 重复调用
+    // 时（典型场景：silent 刷新连续触发或快速重复点击），旧扫描 SHALL 被 abort，
+    // updates 总数 SHALL ≤ N（不会出现 2*N 全跑完的情况）。
+    //
+    // 与 `repeated_list_sessions_aborts_previous_scan` 区别：此处显式断言
+    // 同 cursor 抢占语义，避免被未来"放宽 abort"的修改无声破坏。
+    use cdt_api::DataApi;
+
+    let titles: Vec<String> = (0..16).map(|i| format!("same-{i:02}")).collect();
+    let title_refs: Vec<&str> = titles.iter().map(String::as_str).collect();
+    let (api, _tmp, project_id, _session_ids) = build_api_with_fixtures(&title_refs).await;
+
+    let mut rx = api.subscribe_session_metadata();
+    let pagination = PaginatedRequest {
+        page_size: 50,
+        cursor: None,
+    };
+
+    let _ = api.list_sessions(&project_id, &pagination).await.unwrap();
+    let _ = api.list_sessions(&project_id, &pagination).await.unwrap();
+
+    // 收集 updates；同 cursor 抢占下，2*N 是绝对上界
+    let mut total = 0_usize;
+    let max_expected = titles.len() * 2;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        match timeout(deadline - now, rx.recv()).await {
+            Ok(Ok(upd)) => {
+                assert_eq!(upd.project_id, project_id);
+                total += 1;
+                assert!(
+                    total <= max_expected,
+                    "received more than 2*N updates ({total}); same-cursor abort 未生效"
+                );
+            }
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    // 至少 N（最后一次扫完）；上界 2*N
+    assert!(
+        total >= titles.len(),
+        "expected at least N={} updates, got {total}",
+        titles.len()
+    );
+}
+
 #[test]
 fn metadata_scan_concurrency_is_eight() {
     // spec ipc-data-api §"Emit session metadata updates" 要求并发度受
