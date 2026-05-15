@@ -23,7 +23,7 @@ test.describe('memory viewer', () => {
     })
 
     await expect(page.getByText('当前项目没有 Memory。')).toBeVisible()
-    await expect(page.getByRole('button', { name: /Open in/ })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /打开方式/ })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Copy' })).toHaveCount(0)
   })
 
@@ -44,7 +44,7 @@ test.describe('memory viewer', () => {
 
     await expect(page.getByRole('tab', { name: /Memory/ })).toBeVisible({ timeout: 5_000 })
     await expect(page.getByText('feedback_chinese_language.md').first()).toBeVisible()
-    await page.getByRole('button', { name: /Open in/ }).click()
+    await page.getByRole('button', { name: /打开方式/ }).click()
     await page.getByRole('menuitem', { name: '用默认应用打开' }).click()
     await expect(page.evaluate(() => (window as unknown as { __lastOpenedPath?: string }).__lastOpenedPath)).resolves.toContain('/mock/mock-rich-rust/memory/MEMORY.md')
 
