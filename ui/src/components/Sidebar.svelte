@@ -33,7 +33,7 @@
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
-  import { applySilentRefresh, mergeSessions } from "../lib/sessionMerge";
+  import { applySilentRefresh, mergeSessions, applyPendingMetadata } from "../lib/sessionMerge";
   import { MESSAGE_SQUARE, GIT_BRANCH_SVG, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
 
   // 虚拟滚动行高（实测 .session-item ≈ 44px：padding 8+8 + title 13×1.4 +
@@ -71,6 +71,19 @@
   // 取本字段，**而非** `sessions.length`，避免翻页累加 20 → 40 → 60 跳变。
   // 切 project 时 reset 为 0；非 silent + silent 路径都覆盖；loadMore 翻页**不**改。
   let sessionsTotal = $state(0);
+
+  // listener 收到 `session-metadata-update` 时若 `sessions` 数组还没扩展到对应
+  // sessionId（典型 race：多 page 并存扫描 + 高速 broadcast emit + IPC return
+  // 还没落到 svelte state），patch 用的 `sessions.map` 找不到目标，update 静默
+  // 丢失——broadcast 不重发，session 永远卡在 sessionId 占位。
+  //
+  // 兜底：listener 始终把 update 写入此 buffer（per project，按 sessionId 覆盖
+  // 最新值），每次 `sessions = ...` 更新后调 `applyPendingMetadata` 把 buffer 中
+  // 已存在于新 sessions 的 sessionId 一次性 patch 上去。切 project 时清空 buffer。
+  //
+  // 详见 spec `sidebar-navigation/spec.md::会话元数据增量 patch` Scenario
+  // "更新到达时 sessions 数组还未包含 sessionId 时缓冲到 pending buffer"。
+  let pendingMetadataUpdates = new Map<string, SessionMetadataUpdate>();
   let browsingHistory = $state(false);
   let hasDeferredSessionRefresh = $state(false);
   let filterQuery = $state("");
@@ -181,6 +194,10 @@
         const payload = event.payload;
         // 切 project 期间残留的旧 project 事件忽略
         if (payload.projectId !== selectedProjectId) return;
+        // 始终先写 pending buffer（即使当前 sessions 已含此 sessionId 也覆盖，
+        // 让 update 是最终 source of truth）；buffer 在切 project / sessions 重置
+        // 时清空，避免 stale。详见上方 `pendingMetadataUpdates` doc-comment。
+        pendingMetadataUpdates.set(payload.sessionId, payload);
         sessions = sessions.map((s) =>
           s.sessionId === payload.sessionId
             ? {
@@ -229,6 +246,7 @@
       sessions = [];
       sessionsNextCursor = null;
       sessionsTotal = 0;
+      pendingMetadataUpdates.clear();
       return;
     }
     if (!silent) sessionsLoading = true;
@@ -246,12 +264,18 @@
         fresh = merged.sessions;
         nextCursor = merged.nextCursor;
       } else {
+        // 切 project / 首次加载：旧 buffer 已无意义，清空避免把旧 project 的
+        // pending 误 patch 到新 project 的 sessions（虽然 sessionId 不重叠概率
+        // 极低，但 buffer 持续累积是泄漏，正面解决）。
+        pendingMetadataUpdates.clear();
         fresh = result.items;
         nextCursor = result.nextCursor;
       }
       fresh = await reconcilePinnedAndHidden(projectId, fresh);
       if (projectId !== selectedProjectId) return;
-      sessions = fresh;
+      // sessions 写入后立即把 pending buffer 中已存在的 sessionId 应用上去——
+      // 兜底 broadcast 在 IPC return 之前到达时找不到目标的 race。
+      sessions = applyPendingMetadata(fresh, pendingMetadataUpdates);
       sessionsNextCursor = nextCursor;
       // spec sidebar-navigation §"会话总数显示口径"：silent / 非 silent 路径都用
       // 后端 `result.total`（项目维度全量 session 计数）覆盖 `sessionsTotal`。
@@ -265,6 +289,7 @@
         sessions = [];
         sessionsNextCursor = null;
         sessionsTotal = 0;
+        pendingMetadataUpdates.clear();
       }
     } finally {
       if (!silent && projectId === selectedProjectId) sessionsLoading = false;
@@ -279,7 +304,10 @@
     try {
       const result = await listSessions(projectId, SESSION_PAGE_SIZE, cursor);
       if (projectId !== selectedProjectId || cursor !== sessionsNextCursor) return;
-      sessions = mergeSessions(sessions, result.items, false);
+      // 翻页扩展 sessions 后立即把 pending buffer 应用上去——broadcast 可能在
+      // 这次 IPC return 之前已 emit 了新增 page 的 update，那些 update 此前
+      // sessions.map 找不到目标被 buffer 截胡。
+      sessions = applyPendingMetadata(mergeSessions(sessions, result.items, false), pendingMetadataUpdates);
       sessionsNextCursor = result.nextCursor;
       // spec sidebar-navigation §"会话总数显示口径"：loadMore **不**改
       // sessionsTotal——首次加载时已由 loadSessions 写入正确值；翻页累加期间
@@ -594,8 +622,8 @@
                   <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>
                 </svg>
               {/if}
-              <span class="session-title-text">
-                {session.title || session.sessionId.slice(0, 8) + "…"}
+              <span class="session-title-text" title={session.title || session.sessionId}>
+                {session.title || session.sessionId}
               </span>
             </div>
             <div class="session-meta">
