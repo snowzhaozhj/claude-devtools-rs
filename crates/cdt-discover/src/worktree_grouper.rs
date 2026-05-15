@@ -13,6 +13,32 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use cdt_core::{Project, RepositoryGroup, RepositoryIdentity, Worktree};
+use futures::future::join_all;
+
+/// 单 path 的 git 元数据合并结果。`LocalGitIdentityResolver` 用一次 `git rev-parse`
+/// 同时取回 `--git-common-dir` / `--git-dir` / `--abbrev-ref HEAD`——避免每个 project
+/// 串行 spawn 3 ~ 5 个 git 子进程（首屏冷启动主瓶颈）。trait 默认实现 fallback
+/// 到三个独立调用，让 SSH / Fake impl 不必改。
+///
+/// `is_main_worktree` 在 path 自身非 git 仓库时保守取 `true`（对齐老
+/// `LocalGitIdentityResolver::is_main_worktree` 失败保守 true 的行为）；fallback
+/// 借 parent identity 的场景由 caller 显式覆写为 `false`（附加 worktree）。
+#[derive(Debug, Clone)]
+pub struct RepoLookup {
+    pub identity: Option<RepositoryIdentity>,
+    pub branch: Option<String>,
+    pub is_main_worktree: bool,
+}
+
+impl Default for RepoLookup {
+    fn default() -> Self {
+        Self {
+            identity: None,
+            branch: None,
+            is_main_worktree: true,
+        }
+    }
+}
 
 /// 抽象 git 身份识别，使得 SSH 版本可以直接替换。
 #[async_trait]
@@ -20,9 +46,31 @@ pub trait GitIdentityResolver: Send + Sync {
     async fn resolve_identity(&self, path: &Path) -> Option<RepositoryIdentity>;
     async fn get_branch(&self, path: &Path) -> Option<String>;
     async fn is_main_worktree(&self, path: &Path) -> bool;
+
+    /// 一次取回 `identity` + `branch` + `is_main_worktree`。默认实现 fallback 到三个
+    /// 独立调用（Fake / SSH impl 走默认路径无需改造）；`LocalGitIdentityResolver`
+    /// override 为单次 `git rev-parse` 拿三个参数，大幅减少子进程 spawn 数量。
+    async fn resolve_all(&self, path: &Path) -> RepoLookup {
+        let identity = self.resolve_identity(path).await;
+        if identity.is_none() {
+            return RepoLookup::default();
+        }
+        let branch = self.get_branch(path).await;
+        let is_main = self.is_main_worktree(path).await;
+        RepoLookup {
+            identity,
+            branch,
+            is_main_worktree: is_main,
+        }
+    }
 }
 
-/// 本地实现：shell out 到 `git`。子进程失败（非 git 目录等）一律返回 `None`。
+/// 本地实现：**纯 fs**——0 个 git 子进程。
+///
+/// 历史上 `LocalGitIdentityResolver` 每个 project 串行 spawn 3~5 个
+/// `git rev-parse` 子进程，27 个 project 累计 ~3700ms 卡冷启动。改造
+/// 后所有元数据从 `.git` / `HEAD` 文件直接读取——子进程换 syscall，
+/// 数量级压缩到 ~50ms（详见 `perf_cold_scan` bench）。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct LocalGitIdentityResolver;
 
@@ -31,63 +79,183 @@ impl LocalGitIdentityResolver {
     pub fn new() -> Self {
         Self
     }
-
-    async fn run_git(path: &Path, args: &[&str]) -> Option<String> {
-        let output = tokio::process::Command::new("git")
-            .current_dir(path)
-            .args(args)
-            .output()
-            .await
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let stdout = String::from_utf8(output.stdout).ok()?;
-        let trimmed = stdout.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    }
 }
 
 #[async_trait]
 impl GitIdentityResolver for LocalGitIdentityResolver {
     async fn resolve_identity(&self, path: &Path) -> Option<RepositoryIdentity> {
-        let common_dir = Self::run_git(path, &["rev-parse", "--git-common-dir"]).await?;
-        // common_dir 可能是相对路径（相对于 path），规范化一下。
-        let abs = if Path::new(&common_dir).is_absolute() {
-            PathBuf::from(&common_dir)
-        } else {
-            path.join(&common_dir)
-        };
-        let canonical = tokio::fs::canonicalize(&abs).await.unwrap_or(abs);
-        let name = canonical.parent().and_then(|p| p.file_name()).map_or_else(
-            || canonical.to_string_lossy().into_owned(),
-            |s| s.to_string_lossy().into_owned(),
-        );
-        Some(RepositoryIdentity {
-            id: canonical.to_string_lossy().into_owned(),
-            name,
-        })
+        self.resolve_all(path).await.identity
     }
 
     async fn get_branch(&self, path: &Path) -> Option<String> {
-        Self::run_git(path, &["rev-parse", "--abbrev-ref", "HEAD"]).await
+        self.resolve_all(path).await.branch
     }
 
     async fn is_main_worktree(&self, path: &Path) -> bool {
-        let Some(git_dir) = Self::run_git(path, &["rev-parse", "--git-dir"]).await else {
-            return true;
-        };
-        let Some(common_dir) = Self::run_git(path, &["rev-parse", "--git-common-dir"]).await else {
-            return true;
-        };
-        // 主 worktree 的 `git-dir == git-common-dir`；附加 worktree 的 git-dir
-        // 指向 `common/worktrees/<name>`。
-        git_dir == common_dir
+        self.resolve_all(path).await.is_main_worktree
     }
+
+    /// **0 个 git 子进程**，纯 fs 直接读 `.git` / `HEAD`。
+    ///
+    /// 老 grouper 每个 project 串行 spawn 3 ~ 5 个 `git rev-parse` 子进程
+    /// (`resolve_identity` / `get_branch` / `is_main_worktree` 各调一次甚至重复调），
+    /// 27 project 累计 ~3700ms 卡冷启动首屏。Git 子进程是杀鸡用牛刀——
+    /// 我们要的三个值（git-common-dir / git-dir / HEAD ref）都直接落在
+    /// 文件系统里，单次 `metadata` + `read_to_string` 微秒级就能拿到，
+    /// 27 project 并发后总耗时降到 ~50ms 量级（详见 `perf_cold_scan` bench）。
+    ///
+    /// 算法：
+    /// 1. 从 `path` 向上 walk 直到找到 `.git` 条目（命中即 git working tree 内）
+    /// 2. `.git` 是目录 → main worktree：`common_dir = git_dir = <repo>/.git`
+    /// 3. `.git` 是文件（gitlink）→ 附加 worktree：parse `gitdir: <abs>` 取 `git_dir`，
+    ///    向上两级 `parent().parent()` 即 `common_dir`（`<common>/worktrees/<name>` → `<common>`）
+    /// 4. branch 来自 `<git_dir>/HEAD`，格式 `ref: refs/heads/<branch>` 或裸 commit hash（detached）
+    /// 5. `identity = canonical(common_dir)` 字符串，`name = canonical.parent().file_name()`
+    async fn resolve_all(&self, path: &Path) -> RepoLookup {
+        resolve_all_fs(path).await.unwrap_or_default()
+    }
+}
+
+/// 纯 fs 解析 `path` 的 git 元数据；失败任一步返 `None`，caller 走 `RepoLookup::default()`。
+async fn resolve_all_fs(path: &Path) -> Option<RepoLookup> {
+    let (git_dir, common_dir, is_main) = locate_git_dirs(path).await?;
+
+    let canonical_common = tokio::fs::canonicalize(&common_dir)
+        .await
+        .unwrap_or(common_dir);
+    // identity id / name 与原 `git rev-parse --git-common-dir` 路径等价：
+    // canonical 后取 parent.file_name 作为 repo name（main worktree 时
+    // `<repo>/.git` 的 parent 就是 `<repo>`，file_name 就是 repo 目录名）。
+    let name = canonical_common
+        .parent()
+        .and_then(|p| p.file_name())
+        .map_or_else(
+            || canonical_common.to_string_lossy().into_owned(),
+            |s| s.to_string_lossy().into_owned(),
+        );
+    let identity = RepositoryIdentity {
+        id: canonical_common.to_string_lossy().into_owned(),
+        name,
+    };
+
+    let head_path = git_dir.join("HEAD");
+    let branch = tokio::fs::read_to_string(&head_path)
+        .await
+        .ok()
+        .and_then(|s| parse_head_branch(&s));
+
+    Some(RepoLookup {
+        identity: Some(identity),
+        branch,
+        is_main_worktree: is_main,
+    })
+}
+
+/// 向上 walk 找到 `.git`；返回 `(git_dir, common_dir, is_main_worktree)`。
+/// `.git` 是目录 → main，`git_dir == common_dir`。
+/// `.git` 是文件（gitlink） → 进一步看 `<gitdir>/commondir`：
+///   - 文件存在 → linked worktree（git 标准约定）：`common_dir` 从该文件读取，`is_main=false`
+///   - 文件不存在 → submodule / 其它 gitlink 形态：`common_dir = gitdir`，`is_main=true`
+///     （codex 二审 Bug 1：submodule 的 `.git` 也是 gitlink，但其 common dir 是自身 gitdir，
+///     不是上两级，否则会把 submodule 错归到父仓库/错误的 common dir）
+///
+/// 已知 trade-off（claude session 场景下概率近 0，未实现）：
+/// - bare repo（用户 cd 进 bare repo 跑 claude）：当前返回 default 走非 git 路径
+/// - `GIT_COMMON_DIR` 环境变量覆盖：纯 fs 实现无感（旧 `git rev-parse` 会受环境变量覆盖）
+async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool)> {
+    let mut current = start.to_path_buf();
+    loop {
+        let dot_git = current.join(".git");
+        match tokio::fs::metadata(&dot_git).await {
+            Ok(meta) if meta.is_dir() => {
+                return Some((dot_git.clone(), dot_git, true));
+            }
+            Ok(meta) if meta.is_file() => {
+                let content = tokio::fs::read_to_string(&dot_git).await.ok()?;
+                let gitdir = parse_gitlink_dir(&content, &current)?;
+                // 区分 linked worktree（has `commondir` file）vs submodule（no `commondir`）。
+                // git 约定：`<gitdir>/commondir` **文件存在**即表示这是 linked worktree，
+                // 内是 common dir 路径（相对则相对 `<gitdir>` 解析）。
+                //
+                // 错误细分（codex 二审第二轮 Bug 1）：
+                // - `NotFound` → submodule 路径，common = gitdir
+                // - 其他 IO 错误（如权限） → 视为不可读，整体返 None
+                // - 文件存在但内容 trim 后为空 → 非法 linked worktree，整体返 None
+                //   （不能 fallthrough 到 submodule，否则会把损坏的 linked worktree 误分类）
+                let commondir_file = gitdir.join("commondir");
+                match tokio::fs::read_to_string(&commondir_file).await {
+                    Ok(common_content) => {
+                        let raw = common_content.trim();
+                        if raw.is_empty() {
+                            return None;
+                        }
+                        let common_path = Path::new(raw);
+                        let common = if common_path.is_absolute() {
+                            common_path.to_path_buf()
+                        } else {
+                            gitdir.join(common_path)
+                        };
+                        return Some((gitdir, common, false));
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // 没有 commondir 文件 → submodule 或独立 gitlink，common = gitdir
+                        return Some((gitdir.clone(), gitdir, true));
+                    }
+                    Err(_) => {
+                        // 其他 IO 错误（权限 / 损坏） → 跳过该项，不臆测语义
+                        return None;
+                    }
+                }
+            }
+            _ => {
+                if !current.pop() {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+/// 解析 `.git` 文件内容 `gitdir: <path>`；path 相对时按 `base` 拼。
+fn parse_gitlink_dir(content: &str, base: &Path) -> Option<PathBuf> {
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("gitdir:") {
+            let trimmed = rest.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let p = Path::new(trimmed);
+            return Some(if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                base.join(p)
+            });
+        }
+    }
+    None
+}
+
+/// 解析 `HEAD` 文件内容：
+/// - `ref: refs/heads/<branch>` → `Some("<branch>")`
+/// - 裸 commit hash（detached HEAD）→ `Some("HEAD")` 对齐 `git rev-parse --abbrev-ref HEAD` 行为
+/// - 空 / 解析失败 → `None`
+fn parse_head_branch(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix("ref:") {
+        let r = rest.trim();
+        if let Some(branch) = r.strip_prefix("refs/heads/") {
+            if !branch.is_empty() {
+                return Some(branch.to_owned());
+            }
+        }
+        // 其它 ref 形态（refs/tags/... 等罕见）原样返回最后一段
+        return r.rsplit('/').next().map(str::to_owned);
+    }
+    // detached HEAD：git rev-parse --abbrev-ref HEAD 返 "HEAD"
+    Some("HEAD".to_owned())
 }
 
 /// 分组器。
@@ -105,13 +273,42 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
             return Vec::new();
         }
 
+        // 并发解析每个 project 的 git 元数据：合并 `resolve_identity` + `get_branch`
+        // + `is_main_worktree` 为单次 `resolve_all`，再用 `join_all` 同时跑所有
+        // project。本仓首屏 27 project 实测：串行 5×27=135 spawn → 并发 27 spawn
+        // 大幅压低冷启动 grouper 阶段耗时（详见 `cdt-api/tests/perf_cold_scan.rs`）。
+        let lookups = join_all(projects.iter().map(|project| {
+            let project_path = project.path.clone();
+            async move {
+                let primary = self.git.resolve_all(&project_path).await;
+                if primary.identity.is_some() {
+                    return primary;
+                }
+                // path 自身已经不存在 / 不是 git 仓库时，尝试推断 parent repo——
+                // 例：被 prune 掉的 `.claude/worktrees/<name>` 仍能挂到 parent
+                // repo 的 group。borrow parent 的 identity，但 `branch` 与
+                // `is_main_worktree` 对原 path 不再适用（保持与老逻辑等价：
+                // identity 来自 fallback 时 is_main = false、branch = None）。
+                let Some(parent) = infer_parent_repo_from_worktree_path(&project_path) else {
+                    return primary;
+                };
+                let parent_lookup = self.git.resolve_all(&parent).await;
+                RepoLookup {
+                    identity: parent_lookup.identity,
+                    branch: None,
+                    is_main_worktree: false,
+                }
+            }
+        }))
+        .await;
+
         let mut buckets: BTreeMap<String, Bucket> = BTreeMap::new();
-        for project in projects {
-            let identity = self.resolve_project_identity(&project).await;
-            let branch = self.git.get_branch(&project.path).await;
-            let is_main = self
-                .is_project_main_worktree(&project, identity.as_ref())
-                .await;
+        for (project, lookup) in projects.into_iter().zip(lookups) {
+            let RepoLookup {
+                identity,
+                branch,
+                is_main_worktree: is_main,
+            } = lookup;
             let group_id = identity
                 .as_ref()
                 .map_or_else(|| project.id.clone(), |i| i.id.clone());
@@ -179,25 +376,6 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
                 .cmp(&a.most_recent_session.unwrap_or(0))
         });
         groups
-    }
-
-    async fn resolve_project_identity(&self, project: &Project) -> Option<RepositoryIdentity> {
-        if let Some(identity) = self.git.resolve_identity(&project.path).await {
-            return Some(identity);
-        }
-        let parent_repo = infer_parent_repo_from_worktree_path(&project.path)?;
-        self.git.resolve_identity(&parent_repo).await
-    }
-
-    async fn is_project_main_worktree(
-        &self,
-        project: &Project,
-        identity: Option<&RepositoryIdentity>,
-    ) -> bool {
-        if self.git.resolve_identity(&project.path).await.is_some() {
-            return self.git.is_main_worktree(&project.path).await;
-        }
-        identity.is_none()
     }
 }
 
@@ -354,5 +532,297 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].worktrees.len(), 1);
         assert!(groups[0].identity.is_none());
+    }
+
+    // =========================================================================
+    // 纯 fs `LocalGitIdentityResolver` 单元测试：无需真跑 `git init`，手工
+    // 构造 `.git` 目录/文件 + `HEAD` 模拟 git 元数据布局。
+    // =========================================================================
+
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn fs_resolver_detects_main_worktree() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let git = repo.join(".git");
+        tokio::fs::create_dir_all(&git).await.unwrap();
+        tokio::fs::write(git.join("HEAD"), "ref: refs/heads/main\n")
+            .await
+            .unwrap();
+
+        let resolver = LocalGitIdentityResolver::new();
+        let lookup = resolver.resolve_all(&repo).await;
+        assert!(lookup.identity.is_some());
+        assert_eq!(lookup.branch.as_deref(), Some("main"));
+        assert!(lookup.is_main_worktree);
+        // identity.id 是 canonical(.git) 路径——`.git` 是 hidden file 没 extension，
+        // 用 file_name 比对
+        let identity = lookup.identity.unwrap();
+        assert_eq!(
+            Path::new(&identity.id).file_name(),
+            Some(std::ffi::OsStr::new(".git"))
+        );
+        assert_eq!(identity.name, "repo");
+    }
+
+    #[tokio::test]
+    async fn fs_resolver_detects_subdir_inside_worktree() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let sub = repo.join("src").join("inner");
+        let git = repo.join(".git");
+        tokio::fs::create_dir_all(&sub).await.unwrap();
+        tokio::fs::create_dir_all(&git).await.unwrap();
+        tokio::fs::write(git.join("HEAD"), "ref: refs/heads/feature/x\n")
+            .await
+            .unwrap();
+
+        let resolver = LocalGitIdentityResolver::new();
+        let lookup = resolver.resolve_all(&sub).await;
+        assert_eq!(lookup.branch.as_deref(), Some("feature/x"));
+        assert!(lookup.is_main_worktree);
+    }
+
+    #[tokio::test]
+    async fn fs_resolver_detects_linked_worktree() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let main_git = repo.join(".git");
+        let wt_git_dir = main_git.join("worktrees").join("feat");
+        tokio::fs::create_dir_all(&wt_git_dir).await.unwrap();
+        tokio::fs::write(main_git.join("HEAD"), "ref: refs/heads/main\n")
+            .await
+            .unwrap();
+        tokio::fs::write(wt_git_dir.join("HEAD"), "ref: refs/heads/feat\n")
+            .await
+            .unwrap();
+        // linked worktree 的 gitdir 内必须有 `commondir` 文件指向 common git dir
+        // （git 标准约定，区分 linked worktree vs submodule）
+        let commondir_relative = "../..";
+        tokio::fs::write(wt_git_dir.join("commondir"), commondir_relative)
+            .await
+            .unwrap();
+
+        // 附加 worktree 目录：`.git` 是 file，内容指向 wt_git_dir
+        let wt = dir.path().join("feat");
+        tokio::fs::create_dir_all(&wt).await.unwrap();
+        let gitlink = format!("gitdir: {}\n", wt_git_dir.display());
+        tokio::fs::write(wt.join(".git"), gitlink).await.unwrap();
+
+        let resolver = LocalGitIdentityResolver::new();
+        let lookup = resolver.resolve_all(&wt).await;
+        assert!(lookup.identity.is_some());
+        assert_eq!(lookup.branch.as_deref(), Some("feat"));
+        assert!(!lookup.is_main_worktree);
+        // identity.id 应该指向 main repo 的 .git（common dir），不是 worktree-specific dir
+        let identity = lookup.identity.unwrap();
+        assert_eq!(
+            Path::new(&identity.id).file_name(),
+            Some(std::ffi::OsStr::new(".git")),
+            "identity should point to common .git dir, got {}",
+            identity.id
+        );
+    }
+
+    #[tokio::test]
+    async fn fs_resolver_treats_submodule_as_independent_repo() {
+        // codex 二审 Bug 1：submodule 的 `.git` 文件指向 `<parent>/.git/modules/<name>`，
+        // 但 **不含** `commondir` 文件——不应被误归到 parent worktree 的 common dir。
+        let dir = tempdir().unwrap();
+        let parent = dir.path().join("parent");
+        let parent_git = parent.join(".git");
+        let submodule_git_dir = parent_git.join("modules").join("sub");
+        tokio::fs::create_dir_all(&submodule_git_dir).await.unwrap();
+        tokio::fs::write(parent_git.join("HEAD"), "ref: refs/heads/main\n")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            submodule_git_dir.join("HEAD"),
+            "ref: refs/heads/sub-branch\n",
+        )
+        .await
+        .unwrap();
+        // 注意：submodule 的 gitdir 内 **不写** `commondir` 文件
+
+        let sub = parent.join("sub");
+        tokio::fs::create_dir_all(&sub).await.unwrap();
+        let gitlink = format!("gitdir: {}\n", submodule_git_dir.display());
+        tokio::fs::write(sub.join(".git"), gitlink).await.unwrap();
+
+        let resolver = LocalGitIdentityResolver::new();
+        let lookup = resolver.resolve_all(&sub).await;
+        let identity = lookup.identity.expect("submodule should resolve identity");
+        // submodule common dir 是其自身 gitdir（`.git/modules/sub`），
+        // 不是 parent 的 `.git`——否则会把 submodule 错归到父仓库 group
+        assert_eq!(
+            Path::new(&identity.id).file_name(),
+            Some(std::ffi::OsStr::new("sub")),
+            "submodule identity should point to its own gitdir, got {}",
+            identity.id
+        );
+        assert_eq!(lookup.branch.as_deref(), Some("sub-branch"));
+        // submodule 在自身视角是 main（不是 linked worktree）
+        assert!(lookup.is_main_worktree);
+    }
+
+    /// 端到端验证 grouper：main worktree + linked worktree 跑完整 grouping，
+    /// 确认两者归到同一个 `RepositoryGroup`、不被 canonicalize 差异分裂。
+    ///
+    /// codex 二审第二轮 Bug 3：linked worktree 的 commondir 相对路径
+    /// （`../..`）在 macOS `/var` vs `/private/var` symlink 下 canonicalize
+    /// 行为可能与 main worktree 直接 canonicalize 不同——两个 identity.id
+    /// 字符串不等会让 grouper 分进两个 bucket，破坏 worktree 分组。
+    #[tokio::test]
+    async fn grouper_keeps_main_and_linked_worktree_in_one_bucket() {
+        let dir = tempdir().unwrap();
+        let main_repo = dir.path().join("main_repo");
+        let main_git = main_repo.join(".git");
+        let wt_git_dir = main_git.join("worktrees").join("feat");
+        tokio::fs::create_dir_all(&wt_git_dir).await.unwrap();
+        tokio::fs::write(main_git.join("HEAD"), "ref: refs/heads/main\n")
+            .await
+            .unwrap();
+        tokio::fs::write(wt_git_dir.join("HEAD"), "ref: refs/heads/feat\n")
+            .await
+            .unwrap();
+        // linked worktree 标志文件 `commondir`：内容 `../..` 指回 main `.git`
+        tokio::fs::write(wt_git_dir.join("commondir"), "../..\n")
+            .await
+            .unwrap();
+
+        let wt_dir = dir.path().join("feat_worktree");
+        tokio::fs::create_dir_all(&wt_dir).await.unwrap();
+        let gitlink = format!("gitdir: {}\n", wt_git_dir.display());
+        tokio::fs::write(wt_dir.join(".git"), gitlink)
+            .await
+            .unwrap();
+
+        let projects = vec![
+            Project {
+                id: "main".into(),
+                name: "main_repo".into(),
+                path: main_repo.clone(),
+                sessions: vec!["s1".into()],
+                most_recent_session: Some(100),
+                created_at: None,
+            },
+            Project {
+                id: "feat".into(),
+                name: "feat_worktree".into(),
+                path: wt_dir.clone(),
+                sessions: vec!["s2".into()],
+                most_recent_session: Some(200),
+                created_at: None,
+            },
+        ];
+        let grouper = WorktreeGrouper::new(LocalGitIdentityResolver::new());
+        let groups = grouper.group_by_repository(projects).await;
+
+        assert_eq!(
+            groups.len(),
+            1,
+            "main + linked worktree SHALL share one group, got {} groups: {:?}",
+            groups.len(),
+            groups.iter().map(|g| &g.id).collect::<Vec<_>>()
+        );
+        let group = &groups[0];
+        assert_eq!(group.worktrees.len(), 2);
+        // main worktree 排前
+        assert!(group.worktrees[0].is_main_worktree);
+        assert!(!group.worktrees[1].is_main_worktree);
+        assert_eq!(group.worktrees[0].git_branch.as_deref(), Some("main"));
+        assert_eq!(group.worktrees[1].git_branch.as_deref(), Some("feat"));
+    }
+
+    /// codex 二审第二轮 Bug 1 验证：commondir 文件存在但内容为空 → 非法
+    /// linked worktree，整体返 None（**不**误判为 submodule）。
+    #[tokio::test]
+    async fn fs_resolver_rejects_empty_commondir() {
+        let dir = tempdir().unwrap();
+        let main_git = dir.path().join("main").join(".git");
+        let wt_git_dir = main_git.join("worktrees").join("broken");
+        tokio::fs::create_dir_all(&wt_git_dir).await.unwrap();
+        tokio::fs::write(wt_git_dir.join("HEAD"), "ref: refs/heads/x\n")
+            .await
+            .unwrap();
+        // 损坏的 linked worktree：commondir 文件存在但内容空
+        tokio::fs::write(wt_git_dir.join("commondir"), "  \n")
+            .await
+            .unwrap();
+
+        let wt = dir.path().join("broken_wt");
+        tokio::fs::create_dir_all(&wt).await.unwrap();
+        let gitlink = format!("gitdir: {}\n", wt_git_dir.display());
+        tokio::fs::write(wt.join(".git"), gitlink).await.unwrap();
+
+        let resolver = LocalGitIdentityResolver::new();
+        let lookup = resolver.resolve_all(&wt).await;
+        // 整体返 default（identity None）——不臆测为 submodule 也不臆测为 linked
+        assert!(
+            lookup.identity.is_none(),
+            "empty commondir SHALL NOT be misclassified as submodule"
+        );
+    }
+
+    #[tokio::test]
+    async fn fs_resolver_returns_default_for_non_git_dir() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("scratch");
+        tokio::fs::create_dir_all(&path).await.unwrap();
+        let resolver = LocalGitIdentityResolver::new();
+        let lookup = resolver.resolve_all(&path).await;
+        assert!(lookup.identity.is_none());
+        assert!(lookup.branch.is_none());
+        // default 保守 true（对齐老 is_main_worktree 失败保守 true 行为）
+        assert!(lookup.is_main_worktree);
+    }
+
+    #[tokio::test]
+    async fn fs_resolver_detached_head_returns_head_sentinel() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let git = repo.join(".git");
+        tokio::fs::create_dir_all(&git).await.unwrap();
+        // detached HEAD：HEAD 文件是裸 commit hash
+        tokio::fs::write(git.join("HEAD"), "abcdef1234567890\n")
+            .await
+            .unwrap();
+
+        let resolver = LocalGitIdentityResolver::new();
+        let lookup = resolver.resolve_all(&repo).await;
+        // 对齐 `git rev-parse --abbrev-ref HEAD` 在 detached 时返 "HEAD"
+        assert_eq!(lookup.branch.as_deref(), Some("HEAD"));
+        assert!(lookup.is_main_worktree);
+    }
+
+    #[test]
+    fn parse_head_branch_handles_common_formats() {
+        assert_eq!(
+            parse_head_branch("ref: refs/heads/main\n").as_deref(),
+            Some("main")
+        );
+        assert_eq!(
+            parse_head_branch("ref: refs/heads/feature/x\n").as_deref(),
+            Some("feature/x")
+        );
+        // detached HEAD
+        assert_eq!(parse_head_branch("abc123\n").as_deref(), Some("HEAD"));
+        assert!(parse_head_branch("").is_none());
+        assert!(parse_head_branch("   \n").is_none());
+    }
+
+    #[test]
+    fn parse_gitlink_dir_resolves_absolute_and_relative() {
+        let base = Path::new("/tmp/wt");
+        assert_eq!(
+            parse_gitlink_dir("gitdir: /repo/.git/worktrees/feat\n", base),
+            Some(PathBuf::from("/repo/.git/worktrees/feat"))
+        );
+        assert_eq!(
+            parse_gitlink_dir("gitdir: ../repo/.git/worktrees/feat\n", base),
+            Some(PathBuf::from("/tmp/wt/../repo/.git/worktrees/feat"))
+        );
+        assert!(parse_gitlink_dir("not a gitlink\n", base).is_none());
     }
 }

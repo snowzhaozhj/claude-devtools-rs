@@ -28,6 +28,7 @@ sha2 = { workspace = true }
 chrono = { workspace = true }
 lru = { workspace = true }
 dirs = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
