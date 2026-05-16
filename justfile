@@ -94,7 +94,9 @@ perf-check *ARGS:
 
 # ──────── 发布 ────────
 
-# 发布前检查：版本号三处一致 + 工作树干净 + preflight
+# 发布前检查：版本号三处一致 + preflight（含 cargo build 会顺带刷新 Cargo.lock）
+# bump 版本号后 SHALL 在 commit 前跑——preflight 编译会同步刷新两个 Cargo.lock，
+# 全部改动一次 commit 即可，不再需要"commit bump → check → amend lock"两步走
 release-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -109,16 +111,14 @@ release-check:
         echo "❌ 版本号三处不一致，请先同步"
         exit 1
     fi
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        echo ""
-        echo "❌ 工作树不干净，请先 commit 或 stash"
-        exit 1
-    fi
     echo ""
-    echo "✅ 版本一致 + 工作树干净，跑 preflight..."
+    echo "✅ 版本一致，跑 preflight..."
     just preflight
     echo ""
     echo "✅ release-check 通过；下一步："
+    echo "    git status  # 确认 Cargo.lock 已同步刷新"
+    echo "    git add -A && git commit -m \"chore(release): $ROOT_VER\""
+    echo "    git push + PR + wait-ci + merge"
     echo "    git tag v$ROOT_VER && git push origin v$ROOT_VER"
 
 # 本地全量构建 Tauri 安装包（验证 CI 前）；先 build 前端再 tauri build
