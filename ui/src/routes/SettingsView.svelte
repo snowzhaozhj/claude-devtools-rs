@@ -140,6 +140,9 @@
     }
     try {
       await updateConfig("general", { [key]: value });
+      if (key === "claudeRootPath") {
+        window.dispatchEvent(new CustomEvent("cdt-refresh-projects"));
+      }
     } catch (e) {
       saveError = `保存失败: ${e}`;
       try {

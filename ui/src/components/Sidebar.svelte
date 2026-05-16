@@ -130,6 +130,7 @@
   // ---------------------------------------------------------------------------
 
   let metadataUnlisten: UnlistenFn | null = null;
+  let refreshProjectsListener: (() => void) | null = null;
   let sessionListEl: HTMLElement | null = null;
 
   async function loadProjects(silent = false) {
@@ -211,6 +212,11 @@
         );
       },
     );
+
+    refreshProjectsListener = () => {
+      scheduleRefresh("sidebar:projects", () => untrack(() => loadProjects(true)));
+    };
+    window.addEventListener("cdt-refresh-projects", refreshProjectsListener);
 
     try {
       await loadProjects();
@@ -384,6 +390,10 @@
 
   onDestroy(() => {
     unregisterHandler("sidebar");
+    if (refreshProjectsListener) {
+      window.removeEventListener("cdt-refresh-projects", refreshProjectsListener);
+      refreshProjectsListener = null;
+    }
     metadataUnlisten?.();
     metadataUnlisten = null;
   });
