@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 跑所有 .claude/hooks/*.sh 单次模拟耗时，对比 .claude/rules/hooks-performance.md 预算。
+# 跑所有 .claude/hooks/*.sh 单次模拟耗时，对比 .claude/rules/perf.md "Hook 性能" 段 预算。
 #
 # 用法：
 #   bash scripts/bench-hooks.sh              # 默认：99% 路径（不命中关键模式）
@@ -70,4 +70,4 @@ done
 printf '%.0s-' {1..100}; echo ""
 printf "%-50s %12d\n" "TOTAL (累计开销 / Bash 或 Edit 工具调用)" "$total_ms"
 echo ""
-echo "预算依据：.claude/rules/hooks-performance.md"
+echo '预算依据：.claude/rules/perf.md "Hook 性能" 段'

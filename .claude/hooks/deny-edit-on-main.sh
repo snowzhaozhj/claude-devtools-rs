@@ -9,7 +9,7 @@
 #
 # 白名单：CLAUDE.md / README.md / LICENSE / justfile / .claude/ / .github/ / docs/ / openspec/changes/
 #
-# 性能预算（见 .claude/rules/hooks-performance.md）：
+# 性能预算（见 .claude/rules/perf.md "Hook 性能" 段）：
 # - feature 分支 99% 场景：.git/HEAD 直读后 case 放行，~5ms
 # - main 分支：jq 提取 file_path + 白名单匹配，~30ms
 set -euo pipefail

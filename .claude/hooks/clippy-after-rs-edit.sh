@@ -4,7 +4,7 @@
 #
 # 约定：只对 crates/<crate>/** 下的 .rs 文件触发。
 #
-# 性能预算（见 .claude/rules/hooks-performance.md）：
+# 性能预算（见 .claude/rules/perf.md "Hook 性能" 段）：
 # - 99% 命中（编辑 .ts / .svelte / .md 等）：case 预判 exit 0，~5ms
 # - 编辑 .rs 但不在 crates/：jq 提取后 exit 0，~30ms
 # - 编辑 crates/*.rs：跑 cargo clippy（业务必要开销）

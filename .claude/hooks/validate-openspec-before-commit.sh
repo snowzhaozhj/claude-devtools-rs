@@ -7,7 +7,7 @@
 # 2. tool_input.command 以 "git commit" 起头
 # 3. staged 至少有一个 openspec/changes/<name>/specs/**/*.md
 #
-# 性能预算（见 .claude/rules/hooks-performance.md）：
+# 性能预算（见 .claude/rules/perf.md "Hook 性能" 段）：
 # - 99% 命中：case 预判直接 exit 0，~5ms
 # - 1% 命中：jq 提取 + openspec validate
 set -euo pipefail
