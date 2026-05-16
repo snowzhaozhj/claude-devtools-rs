@@ -48,12 +48,24 @@ pub fn validate_claude_root_path(value: Option<&str>) -> Result<Option<String>, 
         ));
     }
 
+    if is_windows_drive_root(trimmed) {
+        return Ok(Some(trimmed.to_owned()));
+    }
+
     let stripped = trimmed.trim_end_matches(['/', '\\']);
     if stripped.is_empty() {
         return Ok(Some("/".into()));
     }
 
     Ok(Some(stripped.to_owned()))
+}
+
+fn is_windows_drive_root(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() == 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
 }
 
 /// 校验 section 名是否合法。
@@ -157,6 +169,15 @@ mod tests {
             normalize_claude_root_path(Some(r"C:\Users\alice\")),
             Some(r"C:\Users\alice".into())
         );
+    }
+
+    #[test]
+    fn normalize_path_windows_drive_root_keeps_separator() {
+        assert_eq!(
+            normalize_claude_root_path(Some(r"C:\")),
+            Some(r"C:\".into())
+        );
+        assert_eq!(normalize_claude_root_path(Some("D:/")), Some("D:/".into()));
     }
 
     #[test]
