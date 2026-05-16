@@ -288,6 +288,7 @@ mod tests {
 
     fn empty_ai() -> AIChunk {
         AIChunk {
+            chunk_id: "ai:a1:0".into(),
             timestamp: ts(),
             duration_ms: None,
             responses: Vec::<AssistantResponse>::new(),
@@ -407,6 +408,7 @@ mod tests {
     #[test]
     fn create_user_message_injection_handles_text_and_trims_preview() {
         let user = UserChunk {
+            chunk_id: "u1".into(),
             uuid: "u1".into(),
             timestamp: ts(),
             duration_ms: None,
@@ -427,6 +429,7 @@ mod tests {
     #[test]
     fn create_user_message_injection_returns_none_on_empty() {
         let user = UserChunk {
+            chunk_id: "u1".into(),
             uuid: "u1".into(),
             timestamp: ts(),
             duration_ms: None,

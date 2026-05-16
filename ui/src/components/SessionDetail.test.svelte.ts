@@ -59,9 +59,10 @@ function fixtureWithChunks(chunks: Chunk[]): Fixture {
   }
 }
 
-function aiChunk(uuid: string, timestamp: string, text: string): AIChunk {
+function aiChunk(uuid: string, ordinal: number, timestamp: string, text: string): AIChunk {
   return {
     kind: 'ai',
+    chunkId: `ai:${uuid}:${ordinal}`,
     timestamp,
     durationMs: null,
     responses: [{ uuid, timestamp, content: text, toolCalls: [], usage: null, model: 'claude-sonnet-4-6' }],
@@ -76,6 +77,7 @@ function aiChunk(uuid: string, timestamp: string, text: string): AIChunk {
 function compactChunk(): CompactChunk {
   return {
     kind: 'compact',
+    chunkId: 'compact-1',
     uuid: 'compact-1',
     timestamp: '2026-04-11T10:00:02Z',
     durationMs: null,
@@ -122,9 +124,9 @@ describe('SessionDetail smoke', () => {
   test('compact 后重复 AI response uuid 不会让 keyed each 崩溃', async () => {
     const duplicateUuid = 'replayed-assistant-uuid'
     setupMockIPC(fixtureWithChunks([
-      aiChunk(duplicateUuid, '2026-04-11T10:00:01Z', 'before compact'),
+      aiChunk(duplicateUuid, 0, '2026-04-11T10:00:01Z', 'before compact'),
       compactChunk(),
-      aiChunk(duplicateUuid, '2026-04-11T10:00:03Z', 'replayed after compact'),
+      aiChunk(duplicateUuid, 1, '2026-04-11T10:00:03Z', 'replayed after compact'),
     ]))
 
     const { container } = render(SessionDetail, {

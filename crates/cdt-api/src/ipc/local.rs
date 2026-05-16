@@ -2801,6 +2801,7 @@ mod tests {
 
     fn make_user_chunk_with_image(uuid: &str, data: &str) -> cdt_core::Chunk {
         cdt_core::Chunk::User(cdt_core::UserChunk {
+            chunk_id: uuid.into(),
             uuid: uuid.into(),
             timestamp: ts(),
             duration_ms: None,
@@ -2893,6 +2894,7 @@ mod tests {
     #[test]
     fn apply_image_omit_clears_assistant_response_image() {
         let ai = cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            chunk_id: "ai:r1:0".into(),
             timestamp: ts(),
             duration_ms: None,
             responses: vec![cdt_core::AssistantResponse {
@@ -2934,6 +2936,7 @@ mod tests {
 
     fn make_ai_chunk_with_text(text: &str, model: &str) -> cdt_core::Chunk {
         cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            chunk_id: "ai:r1:0".into(),
             timestamp: ts(),
             duration_ms: None,
             responses: vec![cdt_core::AssistantResponse {
@@ -2978,6 +2981,7 @@ mod tests {
         // 构造一个 AIChunk，含一个 subagent，subagent.messages 内嵌套一个 AIChunk
         let nested = make_ai_chunk_with_text("嵌套 subagent 内的回复", "claude-haiku-4-5");
         let parent = cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            chunk_id: "ai:parent-r:0".into(),
             timestamp: ts(),
             duration_ms: None,
             responses: vec![cdt_core::AssistantResponse {
@@ -3059,6 +3063,7 @@ mod tests {
 
     fn make_ai_chunk_with_tool(exec: cdt_core::ToolExecution) -> cdt_core::Chunk {
         cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            chunk_id: "ai:r1:0".into(),
             timestamp: ts(),
             duration_ms: None,
             responses: Vec::new(),
@@ -3153,6 +3158,7 @@ mod tests {
             },
         );
         let parent = cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            chunk_id: "ai:parent-r:0".into(),
             timestamp: ts(),
             duration_ms: None,
             responses: Vec::new(),
@@ -3346,6 +3352,7 @@ mod tests {
 
     fn ai_chunk_with_usage(uuid: &str, total_tokens: u64) -> cdt_core::Chunk {
         cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            chunk_id: format!("ai:{uuid}:0"),
             timestamp: ts_test(),
             duration_ms: None,
             responses: vec![cdt_core::AssistantResponse {
@@ -3373,6 +3380,7 @@ mod tests {
 
     fn ai_chunk_no_usage(uuid: &str) -> cdt_core::Chunk {
         cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            chunk_id: format!("ai:{uuid}:0"),
             timestamp: ts_test(),
             duration_ms: None,
             responses: vec![cdt_core::AssistantResponse {
@@ -3395,6 +3403,7 @@ mod tests {
 
     fn compact_chunk_test(uuid: &str) -> cdt_core::Chunk {
         cdt_core::Chunk::Compact(cdt_core::CompactChunk {
+            chunk_id: uuid.into(),
             uuid: uuid.into(),
             timestamp: ts_test(),
             duration_ms: None,
@@ -3407,6 +3416,7 @@ mod tests {
 
     fn user_chunk_test(uuid: &str) -> cdt_core::Chunk {
         cdt_core::Chunk::User(cdt_core::UserChunk {
+            chunk_id: uuid.into(),
             uuid: uuid.into(),
             timestamp: ts_test(),
             duration_ms: None,
@@ -3417,6 +3427,7 @@ mod tests {
 
     fn system_chunk_test(uuid: &str) -> cdt_core::Chunk {
         cdt_core::Chunk::System(cdt_core::SystemChunk {
+            chunk_id: uuid.into(),
             uuid: uuid.into(),
             timestamp: ts_test(),
             duration_ms: None,

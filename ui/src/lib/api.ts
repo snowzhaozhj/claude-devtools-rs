@@ -202,6 +202,7 @@ export interface ToolExecution {
 
 export interface UserChunk {
   kind: "user";
+  chunkId: string;
   uuid: string;
   timestamp: string;
   durationMs: number | null;
@@ -280,6 +281,7 @@ export interface TeammateMessage {
 
 export interface AIChunk {
   kind: "ai";
+  chunkId: string;
   timestamp: string;
   durationMs: number | null;
   responses: AssistantResponse[];
@@ -297,6 +299,7 @@ export interface AIChunk {
 
 export interface SystemChunk {
   kind: "system";
+  chunkId: string;
   uuid: string;
   timestamp: string;
   durationMs: number | null;
@@ -312,6 +315,7 @@ export interface CompactionTokenDelta {
 
 export interface CompactChunk {
   kind: "compact";
+  chunkId: string;
   uuid: string;
   timestamp: string;
   durationMs: number | null;
