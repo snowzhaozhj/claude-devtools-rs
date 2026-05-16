@@ -9,6 +9,7 @@
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
   import { createLazyMarkdownObserver, estimatePlaceholderHeight } from "../lib/lazyMarkdown.svelte";
+  import { createDynamicVirtualizer } from "../lib/dynamicVirtualizer.svelte";
   import { getTabUIState, saveTabUIState, getTabSessionId, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
@@ -29,6 +30,10 @@
 
   interface Props { tabId: string; projectId: string; sessionId: string; }
   let { tabId, projectId, sessionId }: Props = $props();
+
+  const CHUNK_VIRTUALIZATION_ENABLED = true;
+  const CHUNK_VIRTUALIZATION_MIN_COUNT = 80;
+  const CHUNK_OVERSCAN_PX = 1200;
 
   let detail: SessionDetail | null = $state(null);
   let loading = $state(true);
@@ -115,7 +120,7 @@
       if (wasAtBottom) {
         await tick();
         if (conversationEl) {
-          conversationEl.scrollTop = conversationEl.scrollHeight;
+          scrollConversationToEnd();
         }
       }
     } catch (e) {
@@ -170,6 +175,7 @@
     // 恢复滚动位置
     if (conversationEl && uiState.scrollTop > 0) {
       conversationEl.scrollTop = uiState.scrollTop;
+      chunkVirtualizer.bindScrollEl(conversationEl);
     }
 
     // 注册 file-change handler：命中当前 (projectId, sessionId) 时合并刷新
@@ -323,6 +329,113 @@
     return c.uuid;
   }
 
+  function estimateChunkHeight(chunk: Chunk, index: number): number {
+    if (chunk.kind === "user") {
+      const text = utext(chunk.content);
+      const images = uimages(chunk.content, chunk.uuid).length;
+      const tasks = parseTaskNotifications(chunk.content).length;
+      return 92 + estimatePlaceholderHeight(text, "user") + images * 220 + tasks * 64;
+    }
+    if (chunk.kind === "ai") {
+      const di = buildDisplayItemsCached(chunk);
+      const toolsHeight = expandedChunks.has(index) ? di.items.length * 48 : 0;
+      return 112 + estimatePlaceholderHeight(di.lastOutput?.text ?? "", "ai") + toolsHeight;
+    }
+    if (chunk.kind === "system") return 88 + estimatePlaceholderHeight(cleanDisplayText(chunk.contentText), "system");
+    return 72 + (expandedCompacts.has(chunk.uuid) ? estimatePlaceholderHeight(cleanDisplayText(chunk.summaryText), "system") : 0);
+  }
+
+  const chunkVirtualizer = createDynamicVirtualizer({
+    count: () => detail?.chunks.length ?? 0,
+    itemKey: (index) => {
+      const chunk = detail?.chunks[index];
+      return chunk ? chunkKey(chunk) : String(index);
+    },
+    estimateSize: (index) => {
+      const chunk = detail?.chunks[index];
+      if (!chunk) return 120;
+      return estimateChunkHeight(chunk, index);
+    },
+    overscanPx: CHUNK_OVERSCAN_PX,
+  });
+
+  const virtualized = $derived.by(() => {
+    const snapshot = detail;
+    return !!snapshot && CHUNK_VIRTUALIZATION_ENABLED && snapshot.chunks.length >= CHUNK_VIRTUALIZATION_MIN_COUNT && !searchVisible;
+  });
+
+  const renderedChunks = $derived.by(() => {
+    const snapshot = detail;
+    if (!snapshot) return [];
+    if (!virtualized) {
+      return snapshot.chunks.map((chunk, index) => ({
+        chunk,
+        index,
+        key: chunkKey(chunk),
+      }));
+    }
+    return chunkVirtualizer.virtualItems().map((item) => ({
+      chunk: snapshot.chunks[item.index],
+      index: item.index,
+      key: item.key,
+    }));
+  });
+
+  function bindConversation(el: HTMLElement) {
+    conversationEl = el;
+    chunkVirtualizer.bindScrollEl(el);
+    let frame = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        chunkVirtualizer.setViewportHeight(el.clientHeight);
+      });
+    });
+    ro.observe(el);
+    return () => {
+      cancelAnimationFrame(frame);
+      ro.disconnect();
+    };
+  }
+
+  function measureVirtualRow(index: number) {
+    return (el: HTMLElement) => {
+      if (!virtualized) return;
+      let frame = 0;
+      const measure = () => {
+        chunkVirtualizer.measure(index, el.getBoundingClientRect().height + 4);
+      };
+      const ro = new ResizeObserver(() => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(measure);
+      });
+      ro.observe(el);
+      measure();
+      return () => {
+        cancelAnimationFrame(frame);
+        ro.disconnect();
+      };
+    };
+  }
+
+  function handleConversationScroll(event: Event) {
+    chunkVirtualizer.onScroll(event);
+  }
+
+  function scrollConversationToEnd() {
+    if (!conversationEl) return;
+    if (virtualized) chunkVirtualizer.scrollToEnd();
+    else conversationEl.scrollTop = conversationEl.scrollHeight;
+  }
+
+  $effect(() => {
+    const signature = `${sessionId}:${detail?.chunks.map(chunkKey).join("|") ?? ""}`;
+    untrack(() => {
+      void signature;
+      chunkVirtualizer.resetMeasurements();
+    });
+  });
+
   // 最后一个 AIChunk 的索引。ongoing=true 时它的 lastOutput 位置被
   // `<OngoingBanner />` 替代；结束后换回真正的内容。对齐原版
   // `LastOutputDisplay.tsx` 的 `isLastGroup && isSessionOngoing` 语义——
@@ -473,8 +586,14 @@
   <!-- Content area (conversation + optional context panel) -->
   <div class="content-area">
   <!-- Conversation -->
-  <div class="conversation" bind:this={conversationEl}>
-    {#each detail.chunks as chunk, i (chunkKey(chunk))}
+  <div class="conversation" {@attach bindConversation} onscroll={handleConversationScroll} data-virtualized={virtualized}>
+    {#if virtualized}
+      <div class="virtual-spacer" style:height={`${chunkVirtualizer.topSpacer()}px`}></div>
+    {/if}
+    {#each renderedChunks as row (row.key)}
+      {@const chunk = row.chunk}
+      {@const i = row.index}
+      <div class="virtual-row" data-chunk-index={i} {@attach measureVirtualRow(i)}>
 
       <!-- User -->
       {#if chunk.kind === "user"}
@@ -795,7 +914,11 @@
           </div>
         </div>
       {/if}
+      </div>
     {/each}
+    {#if virtualized}
+      <div class="virtual-spacer" style:height={`${chunkVirtualizer.bottomSpacer()}px`}></div>
+    {/if}
   </div>
 
   {#if contextPanelVisible && contextCount > 0}
@@ -922,7 +1045,16 @@
     padding: 16px 24px 48px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+  }
+
+  .virtual-row {
+    min-width: 0;
+    margin-bottom: 4px;
+  }
+
+  .virtual-spacer {
+    flex: 0 0 auto;
+    min-height: 0;
   }
 
   .msg-row {

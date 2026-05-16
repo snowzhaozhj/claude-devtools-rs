@@ -6,12 +6,14 @@
 // 任务约定放在 components/ 目录便于扫描视图。
 
 import { describe, expect, test, afterEach, beforeEach, vi } from 'vitest'
-import { render, cleanup, waitFor } from '@testing-library/svelte'
+import { render, cleanup, waitFor, fireEvent } from '@testing-library/svelte'
 import { clearMocks } from '@tauri-apps/api/mocks'
 
 import SessionDetail from '../routes/SessionDetail.svelte'
 import { setupMockIPC } from '../lib/tauriMock'
 import { singleProjectFixture } from '../lib/__fixtures__'
+import type { Chunk, UserChunk } from '../lib/api'
+import type { Fixture } from '../lib/__fixtures__/types'
 
 class IntersectionObserverStub {
   observe() {}
@@ -24,7 +26,16 @@ class IntersectionObserverStub {
 }
 
 class ResizeObserverStub {
-  observe() {}
+  callback: ResizeObserverCallback
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback
+  }
+
+  observe(target: Element) {
+    this.callback([{ target, contentRect: target.getBoundingClientRect() } as ResizeObserverEntry], this as ResizeObserver)
+  }
+
   unobserve() {}
   disconnect() {}
 }
@@ -34,6 +45,7 @@ beforeEach(() => {
   setupMockIPC(singleProjectFixture)
   vi.stubGlobal('IntersectionObserver', IntersectionObserverStub)
   vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+  Element.prototype.scrollIntoView = vi.fn()
 })
 
 afterEach(() => {
@@ -44,6 +56,57 @@ afterEach(() => {
 
 const PROJECT_ID = singleProjectFixture.projects[0].id
 const SESSION_ID = singleProjectFixture.sessions[PROJECT_ID][0].sessionId
+
+function userChunk(index: number): UserChunk {
+  return {
+    kind: 'user',
+    uuid: `u-long-${index}`,
+    timestamp: `2026-04-11T10:${String(index % 60).padStart(2, '0')}:00Z`,
+    durationMs: null,
+    content: `long chunk ${index} ${index === 180 ? 'remote-search-needle' : ''}`,
+    metrics: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      toolCount: 0,
+      costUsd: null,
+    },
+  }
+}
+
+function longSessionFixture(): Fixture {
+  const projectId = 'mock-long-proj'
+  const sessionId = 'mock-long-sess'
+  const chunks: Chunk[] = Array.from({ length: 200 }, (_, index) => userChunk(index))
+  return {
+    ...singleProjectFixture,
+    name: 'long-session',
+    projects: [{ id: projectId, path: '/Users/test/long-proj', displayName: 'long-proj', sessionCount: 1 }],
+    sessions: {
+      [projectId]: [{
+        sessionId,
+        projectId,
+        timestamp: 1_712_822_400_000,
+        messageCount: chunks.length,
+        title: 'long session',
+        isOngoing: false,
+        gitBranch: 'main',
+      }],
+    },
+    sessionDetails: {
+      [`${projectId}:${sessionId}`]: {
+        sessionId,
+        projectId,
+        chunks,
+        metrics: {},
+        metadata: {},
+        contextInjections: [],
+        isOngoing: false,
+      },
+    },
+  }
+}
 
 describe('SessionDetail smoke', () => {
   test('给定合法 projectId/sessionId 渲染骨架，loading 完成后展示 top-bar', async () => {
@@ -89,6 +152,64 @@ describe('SessionDetail smoke', () => {
       // 要么 error 状态渲染（fixture 未命中 IPC 抛错），要么仍在 session-detail
       // 容器内（loading=false 后退化为空 conversation）。两种都视为"不崩"。
       expect(container.querySelector('.session-detail')).not.toBeNull()
+    })
+  })
+
+  test('长会话默认只挂载虚拟窗口内的 chunk row', async () => {
+    const fx = longSessionFixture()
+    const projectId = fx.projects[0].id
+    const sessionId = fx.sessions[projectId][0].sessionId
+    setupMockIPC(fx)
+
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId: 'tab-long-1',
+        projectId,
+        sessionId,
+      },
+    })
+
+    await waitFor(() => {
+      expect(container.querySelector('.conversation')).not.toBeNull()
+    })
+
+    const rows = container.querySelectorAll('.virtual-row')
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.length).toBeLessThan(200)
+    expect(container.querySelector('.conversation')?.getAttribute('data-virtualized')).toBe('true')
+    expect(container.querySelectorAll('.virtual-spacer').length).toBe(2)
+  })
+
+  test('搜索打开时长会话退回全量 DOM 以保留远端匹配', async () => {
+    const fx = longSessionFixture()
+    const projectId = fx.projects[0].id
+    const sessionId = fx.sessions[projectId][0].sessionId
+    setupMockIPC(fx)
+
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId: 'tab-long-search',
+        projectId,
+        sessionId,
+      },
+    })
+
+    await waitFor(() => {
+      expect(container.querySelector('.conversation')?.getAttribute('data-virtualized')).toBe('true')
+    })
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true }))
+
+    await waitFor(() => {
+      expect(container.querySelector('.conversation')?.getAttribute('data-virtualized')).toBe('false')
+    })
+    const input = container.querySelector('.search-input') as HTMLInputElement
+    await fireEvent.input(input, { target: { value: 'remote-search-needle' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('remote-search-needle')
+      expect(container.querySelectorAll('.virtual-row').length).toBe(200)
     })
   })
 })

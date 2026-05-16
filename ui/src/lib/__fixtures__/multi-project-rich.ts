@@ -84,6 +84,7 @@ const PROJECTS = [
 // rust-port 项目：一个 ongoing session + 两个完成 session
 const rustSessions = [
   buildSession('mock-rich-rust', 'sess-rust-active', 'IPC 字段重构', true, 42, 0, 'feat/frontend-test-infrastructure'),
+  buildSession('mock-rich-rust', 'sess-rust-long', '长会话滚动虚拟化', false, 200, -20, 'perf/session-detail'),
   buildSession('mock-rich-rust', 'sess-rust-2', '修复 watcher flake', false, 18, -60, 'main'),
   buildSession('mock-rich-rust', 'sess-rust-3', '加 contract test', false, 25, -180, 'main'),
 ]
@@ -261,6 +262,15 @@ const compactChunk: CompactChunk = {
 
 const richChunks: Chunk[] = [userChunk, systemChunk, aiChunk, aiChunkInterrupted, compactChunk]
 
+const longChunks: Chunk[] = Array.from({ length: 200 }, (_, index): UserChunk => ({
+  kind: 'user',
+  uuid: `u-long-${index}`,
+  timestamp: ts(index),
+  durationMs: null,
+  content: `long fixture chunk ${index}${index === 180 ? ' remote-search-needle' : ''}`,
+  metrics: emptyMetrics(),
+}))
+
 export const multiProjectRichFixture: Fixture = {
   name: 'multi-project-rich',
   projects: PROJECTS,
@@ -281,6 +291,15 @@ export const multiProjectRichFixture: Fixture = {
       metadata: { gitBranch: 'feat/frontend-test-infrastructure' },
       contextInjections: [],
       isOngoing: true,
+    },
+    'mock-rich-rust:sess-rust-long': {
+      sessionId: 'sess-rust-long',
+      projectId: 'mock-rich-rust',
+      chunks: longChunks,
+      metrics: {},
+      metadata: { gitBranch: 'perf/session-detail' },
+      contextInjections: [],
+      isOngoing: false,
     },
     'mock-rich-rust:sess-rust-2': {
       sessionId: 'sess-rust-2',
