@@ -677,13 +677,14 @@ impl DataApi for LocalDataApi {
         let (mut page, next_cursor, total, page_jobs, _dir) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
-        // 并发提取每条 session 的 metadata（与 async list_sessions 路径同口径——
-        // `METADATA_SCAN_CONCURRENCY=8` 共享 fd 上限，避免重启 ulimit 风险）。
-        // metadata cache 本身有内部锁，多 task 共享安全。结果按 page_jobs 顺序
-        // 一一映射回 page。
-        let semaphore = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
+        // 并发提取每条 session 的 metadata：复用 `self.metadata_scan_semaphore`
+        // 与 async `list_sessions` 共享同一把 8 容量信号量，保证 spec
+        // `ipc-data-api/spec.md::Emit session metadata updates` "后台扫描并发度
+        // 限制" Scenario 的全局 8 上限——HTTP 路径与 async 路径并发时也不会
+        // 累加成 16+ 并发。metadata cache 内部有锁，多 task 共享安全。结果按
+        // page_jobs 顺序一一映射回 page。
         let metas = futures::future::join_all(page_jobs.iter().map(|(_id, path)| {
-            let sem = semaphore.clone();
+            let sem = self.metadata_scan_semaphore.clone();
             let cache = self.metadata_cache.clone();
             let path = path.clone();
             async move {
