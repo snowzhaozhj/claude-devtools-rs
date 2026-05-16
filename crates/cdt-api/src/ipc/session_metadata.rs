@@ -146,7 +146,10 @@ pub(crate) async fn extract_session_metadata_with_ongoing(path: &Path) -> (Sessi
     let mut message_count: usize = 0;
     let mut awaiting_ai = false;
     let mut line_number: usize = 0;
-    let mut all_messages: Vec<cdt_core::ParsedMessage> = Vec::new();
+    // ongoing 流式判定状态机——逐行喂消息，避免在内存中保留全量 ParsedMessage Vec
+    // （详见 change `metadata-streaming-ongoing` 与 spec ipc-data-api §
+    // `extract_session_metadata` 流式判定 isOngoing 不收集全量消息向量）。
+    let mut ongoing_sm = cdt_analyze::IsOngoingStateMachine::new();
     // 取最后一条非空 git_branch（与原版 sessionExporter.ts 取值一致）
     let mut last_git_branch: Option<String> = None;
 
@@ -213,7 +216,7 @@ pub(crate) async fn extract_session_metadata_with_ongoing(path: &Path) -> (Sessi
             }
         }
 
-        all_messages.push(msg);
+        ongoing_sm.feed(&msg);
     }
 
     // 没有真实用户消息时用 slash 命令后备
@@ -221,7 +224,7 @@ pub(crate) async fn extract_session_metadata_with_ongoing(path: &Path) -> (Sessi
         title = command_fallback;
     }
 
-    let messages_ongoing = cdt_analyze::check_messages_ongoing(&all_messages);
+    let messages_ongoing = ongoing_sm.finalize();
     let is_ongoing = if messages_ongoing {
         !is_file_stale(path).await
     } else {
