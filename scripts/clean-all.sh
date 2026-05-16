@@ -54,6 +54,8 @@ fi
 is_removable_wt() {
   local target="$1"
   local wt
+  # macOS bash 3.2 + set -u 下空数组迭代会触发 unbound variable
+  [[ ${#removable_wts[@]} -eq 0 ]] && return 1
   for wt in "${removable_wts[@]}"; do
     [[ "$wt" == "$target" ]] && return 0
   done
@@ -126,12 +128,16 @@ if [[ "$APPLY" == "true" ]]; then
   bash "$SCRIPT_DIR/clean-worktrees.sh" --apply
   echo ""
   echo "→ (2)+(3) 删 cargo target"
-  for p in "${target_paths[@]}"; do
-    if [[ -d "$p" ]]; then
-      echo "  rm -rf $p"
-      rm -rf "$p"
-    fi
-  done
+  if [[ ${#target_paths[@]} -gt 0 ]]; then
+    for p in "${target_paths[@]}"; do
+      if [[ -d "$p" ]]; then
+        echo "  rm -rf $p"
+        rm -rf "$p"
+      fi
+    done
+  else
+    echo "  (无 cargo target 需清理)"
+  fi
   echo ""
   printf "✅ 完成；cargo target 已释放约 %d MB（merged worktree 释放量见上方 (1) 报告）\n" "$total_mb"
 else

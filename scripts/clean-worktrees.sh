@@ -30,6 +30,13 @@ COMMON_DIR="$(git rev-parse --git-common-dir)"
 MAIN_ROOT="$(cd "$(dirname "$COMMON_DIR")" && pwd)"
 CURRENT_WT="$(git rev-parse --show-toplevel)"
 
+# --list-removable 契约：stdout 仅输出 worktree 路径，一行一个。
+# 备份原 stdout 到 fd 3，把默认 stdout 改到 stderr——扫描期的报告 echo 全部走 stderr，
+# 真路径用 `echo "$wt" >&3` 显式写到 fd 3。
+if [[ "$LIST_ONLY" == "true" ]]; then
+  exec 3>&1 1>&2
+fi
+
 have_gh=true
 if ! command -v gh >/dev/null 2>&1; then
   have_gh=false
@@ -143,12 +150,15 @@ except Exception:
   fi
 done
 
-# --list-removable: 仅输出可删 worktree 路径，供脚本编排使用
+# --list-removable: 仅输出可删 worktree 路径到 fd 3（脚本顶部已 exec 3>&1 1>&2），供脚本编排使用
+# 注意 macOS bash 3.2 + set -u 下空数组 "${arr[@]}" 会触发 unbound variable，必须先判长度。
 if [[ "$LIST_ONLY" == "true" ]]; then
-  for entry in "${safe_remove[@]}"; do
-    IFS='|' read -r wt _ _ _ _ <<< "$entry"
-    echo "$wt"
-  done
+  if [[ ${#safe_remove[@]} -gt 0 ]]; then
+    for entry in "${safe_remove[@]}"; do
+      IFS='|' read -r wt _ _ _ _ <<< "$entry"
+      echo "$wt" >&3
+    done
+  fi
   exit 0
 fi
 
