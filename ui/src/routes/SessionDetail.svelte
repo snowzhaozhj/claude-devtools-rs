@@ -313,14 +313,11 @@
     expandedItems = next;
   }
 
-  // 为 `{#each detail.chunks}` 提供稳定 key。刷新时 chunks 数组整体被替换，
-  // 缺 key 会让 Svelte 按索引 diff — 导致所有 chunk 的 DOM 被视为新节点重建，
-  // 出现可见闪烁 + mermaid/highlight.js 重跑。用 UserChunk/System/Compact 的
-  // `uuid`，AIChunk 取第一条 response 的 `uuid`（AIChunk 结构无顶层 uuid，
-  // 但至少有一条 response）；都缺时回落到 timestamp。
-  function chunkKey(c: Chunk): string {
-    if (c.kind === "ai") return c.responses[0]?.uuid ?? c.timestamp;
-    return c.uuid;
+  // 为 `{#each detail.chunks}` 提供 key。base 保持刷新时尽量稳定，index 防御
+  // compact/replay 场景下 AI response uuid 重复导致 Svelte duplicate-key 崩溃。
+  function chunkKey(c: Chunk, index: number): string {
+    const base = c.kind === "ai" ? (c.responses[0]?.uuid ?? c.timestamp) : c.uuid;
+    return `${base}:${index}`;
   }
 
   // 最后一个 AIChunk 的索引。ongoing=true 时它的 lastOutput 位置被
@@ -474,7 +471,7 @@
   <div class="content-area">
   <!-- Conversation -->
   <div class="conversation" bind:this={conversationEl}>
-    {#each detail.chunks as chunk, i (chunkKey(chunk))}
+    {#each detail.chunks as chunk, i (chunkKey(chunk, i))}
 
       <!-- User -->
       {#if chunk.kind === "user"}
