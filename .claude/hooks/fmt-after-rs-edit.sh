@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
-# PostToolUse hook: 编辑 .rs 文件后自动 cargo fmt 格式化该文件，
-# 避免 CI 因格式问题失败。
+# PostToolUse hook: 编辑 .rs 文件后自动 cargo fmt 格式化该文件。
+#
+# 性能预算：99% 命中（非 .rs 编辑）case 预判 exit 0，~5ms
 set -euo pipefail
 
-file_path=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))" 2>/dev/null || true)
+input=$(</dev/stdin)
+
+# 快速预判
+case "$input" in
+  *'.rs"'*) ;;
+  *) exit 0 ;;
+esac
+
+file_path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null \
+  || printf '%s' "$input" | sed -nE 's/.*"file_path"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1)
 
 if [[ -z "$file_path" || "$file_path" != *.rs ]]; then
   exit 0

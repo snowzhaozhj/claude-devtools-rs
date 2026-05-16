@@ -171,3 +171,9 @@ bg-stop-all:
 bg-clean ID:
     -claude stop {{ID}} 2>&1
     claude rm {{ID}}
+
+# 跑所有 .claude/hooks/*.sh 单次模拟耗时，对比 .claude/rules/hooks-performance.md 预算
+# 用法：just bench-hooks       # cold path（99% 不命中关键模式）
+#       just bench-hooks --hot # hot path（命中关键模式跑真业务）
+bench-hooks *MODE:
+    @bash scripts/bench-hooks.sh {{MODE}}

@@ -1,33 +1,31 @@
 #!/usr/bin/env bash
-# PreToolUse hook on Bash: 在 `git push` 之前检查是否有"已完成但未 archive"的
-# openspec change。若有，阻断 push 让 Claude 先跑 `openspec archive`。
-#
-# 动机：opsx:apply 完成所有 task 后若直接 push，会触发 CI 的
-# `scripts/check-openspec-archives.sh` 拦截。本 hook 在 push **前**就拦下，
-# 避免 "push → CI 失败 → 修 → 重新 push" 的往返。
+# PreToolUse Bash hook: 在 `git push` 之前检查是否有"已完成但未 archive"的 openspec change，
+# 若有则阻断 push 让 Claude 先跑 openspec archive。
 #
 # 触发条件（全部满足才拦）：
-# 1. tool_name == "Bash"
-# 2. tool_input.command 含 `git push`
-# 3. `openspec list --json` 里至少一个 active change 满足
-#    `status == "complete"` 或 `completedTasks == totalTasks`
+# 1. settings.json matcher 已限制 tool_name == Bash（hook 内不再判）
+# 2. tool_input.command 含 "git push"（单词边界精确匹配）
+# 3. openspec list --json 至少一个 active change 满足 status=complete 或 completedTasks==totalTasks
 #
-# 选 PreToolUse Bash 而不是 Stop：
-# - 仅在 `git push` 关键节点触发，开销 < 每个 turn 跑一次的 Stop hook
-# - 在 push 前阻断 = 真正避免 CI 拦截往返；Stop 是事后提醒
-# - matcher 精准，不打扰普通对话或其他工具调用
+# 性能预算（见 .claude/rules/hooks-performance.md）：
+# - 99% 命中：case 预判直接 exit 0，~5ms
+# - 1% 命中：jq 提取 + openspec list
 set -euo pipefail
 
-input=$(cat)
+input=$(</dev/stdin)
 
-tool_name=$(printf '%s' "$input" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || true)
-if [[ "$tool_name" != "Bash" ]]; then
-  exit 0
-fi
+# 快速预判：不含 "git push" 直接放行
+case "$input" in
+  *'"command"'*'git push'*) ;;
+  *) exit 0 ;;
+esac
 
-command=$(printf '%s' "$input" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)
-# 匹配 `git push`（单词边界，避免误匹配 `git push-config` 之类不存在的子命令）
-if ! [[ "$command" =~ (^|[[:space:]&;|])git[[:space:]]+push([[:space:]&;|]|$) ]]; then
+# 严谨提取（jq 失败 fallback sed）
+command=$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null \
+  || printf '%s' "$input" | sed -nE 's/.*"command"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1)
+
+# 单词边界精确匹配 git push（避免误匹配 git push-config 等）
+if ! [[ "$command" =~ (^|[[:space:]&\;|])git[[:space:]]+push([[:space:]&\;|]|$) ]]; then
   exit 0
 fi
 
@@ -38,21 +36,10 @@ fi
 project_dir="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 cd "$project_dir"
 
-json=$(openspec list --json 2>/dev/null || echo '{"changes":[]}')
-
-completed=$(printf '%s' "$json" | python3 -c '
-import json, sys
-data = json.load(sys.stdin)
-out = []
-for change in data.get("changes", []):
-    name = change.get("name")
-    status = change.get("status")
-    completed_tasks = change.get("completedTasks")
-    total_tasks = change.get("totalTasks")
-    if name and (status == "complete" or (total_tasks is not None and completed_tasks == total_tasks)):
-        out.append(name)
-print("\n".join(out))
-' 2>/dev/null || true)
+# jq 解析 openspec list 输出（替代 python3，省 ~30ms）
+completed=$(openspec list --json 2>/dev/null \
+  | jq -r '.changes[] | select(.status == "complete" or (.totalTasks != null and .completedTasks == .totalTasks)) | .name' \
+  2>/dev/null || true)
 
 if [[ -z "$completed" ]]; then
   exit 0
