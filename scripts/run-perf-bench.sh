@@ -90,12 +90,6 @@ parse_time_output() {
     }
     os == "Linux" {
       # GNU time -v 输出：键值对，键以空白起首
-      if (match($0, /Elapsed \(wall clock\) time/)) {
-        # 行尾的时间串可能是 m:ss.xx 或 h:mm:ss
-        n = split($0, parts, ":")
-        # 取最后一段的实际时间表达
-        sub(/.*:[ ]*/, "", $0)  # 这种写法不可靠；改用 match
-      }
       if (match($0, /Elapsed.*: */)) {
         t = substr($0, RSTART + RLENGTH)
         gsub(/[ \t]+$/, "", t)
