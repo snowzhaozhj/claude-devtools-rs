@@ -632,7 +632,7 @@
                     </BaseItem>
                   {:else if item.type === "tool"}
                     {@const exec = item.execution}
-                    {@const key = `${i}-tool-${exec.toolUseId}`}
+                    {@const key = `${chunk.chunkId}-tool-${exec.toolUseId}`}
                     {@const eff = effectiveExec(exec)}
                     <BaseItem
                       svgIcon={WRENCH}
