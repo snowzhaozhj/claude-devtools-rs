@@ -14,11 +14,14 @@ use crate::defaults::default_config;
 use crate::error::ConfigError;
 use crate::trigger::{TriggerManager, merge_triggers, validate_trigger};
 use crate::types::{AppConfig, HiddenSession, NotificationTrigger, PinnedSession};
-use crate::validation::{normalize_claude_root_path, validate_http_port, validate_snooze_minutes};
+use crate::validation::{
+    normalize_claude_root_path, validate_claude_root_path, validate_http_port,
+    validate_snooze_minutes,
+};
 
 /// 默认配置文件路径：`~/.claude/claude-devtools-config.json`。
 fn default_config_path() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".claude").join("claude-devtools-config.json")
 }
 
@@ -156,13 +159,47 @@ impl ConfigManager {
                 .map_err(|e| ConfigError::io(parent, e))?;
         }
 
+        let tmp_path = self
+            .config_path
+            .with_extension(format!("{}.tmp", std::process::id()));
         let content = serde_json::to_string_pretty(config)?;
-        tokio::fs::write(&self.config_path, content)
-            .await
-            .map_err(|e| ConfigError::io(&self.config_path, e))?;
+
+        let write_result: Result<(), ConfigError> = async {
+            let file = tokio::fs::File::create(&tmp_path)
+                .await
+                .map_err(|e| ConfigError::io(&tmp_path, e))?;
+            let mut file = tokio::io::BufWriter::new(file);
+            tokio::io::AsyncWriteExt::write_all(&mut file, content.as_bytes())
+                .await
+                .map_err(|e| ConfigError::io(&tmp_path, e))?;
+            tokio::io::AsyncWriteExt::flush(&mut file)
+                .await
+                .map_err(|e| ConfigError::io(&tmp_path, e))?;
+            file.into_inner()
+                .sync_all()
+                .await
+                .map_err(|e| ConfigError::io(&tmp_path, e))?;
+            tokio::fs::rename(&tmp_path, &self.config_path)
+                .await
+                .map_err(|e| ConfigError::io(&self.config_path, e))?;
+            Ok(())
+        }
+        .await;
+
+        if write_result.is_err() {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+        }
+        write_result?;
 
         tracing::info!("Config saved");
         Ok(())
+    }
+
+    async fn commit_next_config(&mut self, next: AppConfig) -> Result<AppConfig, ConfigError> {
+        self.persist_config(&next).await?;
+        self.trigger_manager = TriggerManager::new(next.notifications.triggers.clone());
+        self.config = next;
+        Ok(self.get_config())
     }
 
     // =========================================================================
@@ -174,22 +211,23 @@ impl ConfigManager {
         &mut self,
         updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        let mut next = self.config.clone();
         if let Some(obj) = updates.as_object() {
             for (k, v) in obj {
                 match k.as_str() {
                     "enabled" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.notifications.enabled = b;
+                            next.notifications.enabled = b;
                         }
                     }
                     "soundEnabled" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.notifications.sound_enabled = b;
+                            next.notifications.sound_enabled = b;
                         }
                     }
                     "includeSubagentErrors" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.notifications.include_subagent_errors = b;
+                            next.notifications.include_subagent_errors = b;
                         }
                     }
                     "snoozeMinutes" => {
@@ -197,7 +235,7 @@ impl ConfigManager {
                             let minutes = u32::try_from(n)
                                 .map_err(|_| ConfigError::validation("snoozeMinutes overflow"))?;
                             validate_snooze_minutes(minutes)?;
-                            self.config.notifications.snooze_minutes = minutes;
+                            next.notifications.snooze_minutes = minutes;
                         }
                     }
                     "triggers" => {
@@ -217,8 +255,7 @@ impl ConfigManager {
                                 )));
                             }
                         }
-                        self.config.notifications.triggers.clone_from(&list);
-                        self.trigger_manager.set_triggers(list);
+                        next.notifications.triggers = list;
                     }
                     other => {
                         tracing::warn!(
@@ -229,8 +266,7 @@ impl ConfigManager {
                 }
             }
         }
-        self.save().await?;
-        Ok(self.get_config())
+        self.commit_next_config(next).await
     }
 
     /// 更新 general section。
@@ -238,24 +274,25 @@ impl ConfigManager {
         &mut self,
         updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        let mut candidate = self.config.general.clone();
         if let Some(obj) = updates.as_object() {
             for (k, v) in obj {
                 match k.as_str() {
                     "launchAtLogin" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.general.launch_at_login = b;
+                            candidate.launch_at_login = b;
                         }
                     }
                     "showDockIcon" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.general.show_dock_icon = b;
+                            candidate.show_dock_icon = b;
                         }
                     }
                     "theme" => {
                         if let Some(s) = v.as_str() {
                             match s {
                                 "dark" | "light" | "system" => {
-                                    s.clone_into(&mut self.config.general.theme);
+                                    s.clone_into(&mut candidate.theme);
                                 }
                                 _ => {
                                     return Err(ConfigError::validation(
@@ -269,7 +306,7 @@ impl ConfigManager {
                         if let Some(s) = v.as_str() {
                             match s {
                                 "dashboard" | "last-session" => {
-                                    s.clone_into(&mut self.config.general.default_tab);
+                                    s.clone_into(&mut candidate.default_tab);
                                 }
                                 _ => {
                                     return Err(ConfigError::validation(
@@ -280,24 +317,32 @@ impl ConfigManager {
                         }
                     }
                     "claudeRootPath" => {
-                        let raw = v.as_str();
-                        self.config.general.claude_root_path = normalize_claude_root_path(raw);
+                        let raw = if v.is_null() {
+                            None
+                        } else {
+                            Some(v.as_str().ok_or_else(|| {
+                                ConfigError::validation(
+                                    "general.claudeRootPath must be a string or null",
+                                )
+                            })?)
+                        };
+                        candidate.claude_root_path = validate_claude_root_path(raw)?;
                     }
                     "autoExpandAiGroups" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.general.auto_expand_ai_groups = b;
+                            candidate.auto_expand_ai_groups = b;
                         }
                     }
                     "useNativeTitleBar" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.general.use_native_title_bar = b;
+                            candidate.use_native_title_bar = b;
                         }
                     }
                     "sessionClickBehavior" => {
                         if let Some(s) = v.as_str() {
                             match s {
                                 "replace" | "new-tab" => {
-                                    s.clone_into(&mut self.config.general.session_click_behavior);
+                                    s.clone_into(&mut candidate.session_click_behavior);
                                 }
                                 _ => {
                                     return Err(ConfigError::validation(
@@ -311,8 +356,10 @@ impl ConfigManager {
                 }
             }
         }
-        self.save().await?;
-        Ok(self.get_config())
+
+        let mut next = self.config.clone();
+        next.general = candidate;
+        self.commit_next_config(next).await
     }
 
     /// 更新 display section。
@@ -327,8 +374,9 @@ impl ConfigManager {
     ) -> Result<AppConfig, ConfigError> {
         const FONT_FAMILY_MAX_LEN: usize = 500;
 
+        let mut next = self.config.clone();
         if let Some(obj) = updates.as_object() {
-            let mut candidate = self.config.display.clone();
+            let mut candidate = next.display.clone();
             for (k, v) in obj {
                 match k.as_str() {
                     "showTimestamps" => {
@@ -359,10 +407,9 @@ impl ConfigManager {
                     }
                 }
             }
-            self.config.display = candidate;
+            next.display = candidate;
         }
-        self.save().await?;
-        Ok(self.get_config())
+        self.commit_next_config(next).await
     }
 
     /// 更新 updater section。
@@ -374,19 +421,20 @@ impl ConfigManager {
         &mut self,
         updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        let mut next = self.config.clone();
         if let Some(obj) = updates.as_object() {
             for (k, v) in obj {
                 match k.as_str() {
                     "autoUpdateCheckEnabled" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.updater.auto_update_check_enabled = b;
+                            next.updater.auto_update_check_enabled = b;
                         }
                     }
                     "skippedUpdateVersion" => {
                         if v.is_null() {
-                            self.config.updater.skipped_update_version = None;
+                            next.updater.skipped_update_version = None;
                         } else if let Some(s) = v.as_str() {
-                            self.config.updater.skipped_update_version = Some(s.to_owned());
+                            next.updater.skipped_update_version = Some(s.to_owned());
                         }
                     }
                     other => {
@@ -398,8 +446,7 @@ impl ConfigManager {
                 }
             }
         }
-        self.save().await?;
-        Ok(self.get_config())
+        self.commit_next_config(next).await
     }
 
     /// 更新 `httpServer` section。
@@ -407,12 +454,13 @@ impl ConfigManager {
         &mut self,
         updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        let mut next = self.config.clone();
         if let Some(obj) = updates.as_object() {
             for (k, v) in obj {
                 match k.as_str() {
                     "enabled" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.http_server.enabled = b;
+                            next.http_server.enabled = b;
                         }
                     }
                     "port" => {
@@ -423,15 +471,14 @@ impl ConfigManager {
                                 )
                             })?;
                             validate_http_port(port)?;
-                            self.config.http_server.port = port;
+                            next.http_server.port = port;
                         }
                     }
                     _ => {}
                 }
             }
         }
-        self.save().await?;
-        Ok(self.get_config())
+        self.commit_next_config(next).await
     }
 
     // =========================================================================
@@ -450,15 +497,17 @@ impl ConfigManager {
         &mut self,
         trigger: NotificationTrigger,
     ) -> Result<AppConfig, ConfigError> {
-        self.config.notifications.triggers = self.trigger_manager.add(trigger)?;
-        self.save().await?;
-        Ok(self.get_config())
+        let mut trigger_manager = self.trigger_manager.clone();
+        let mut next = self.config.clone();
+        next.notifications.triggers = trigger_manager.add(trigger)?;
+        self.commit_next_config(next).await
     }
 
     pub async fn remove_trigger(&mut self, trigger_id: &str) -> Result<AppConfig, ConfigError> {
-        self.config.notifications.triggers = self.trigger_manager.remove(trigger_id)?;
-        self.save().await?;
-        Ok(self.get_config())
+        let mut trigger_manager = self.trigger_manager.clone();
+        let mut next = self.config.clone();
+        next.notifications.triggers = trigger_manager.remove(trigger_id)?;
+        self.commit_next_config(next).await
     }
 
     // =========================================================================
@@ -474,16 +523,16 @@ impl ConfigManager {
             .as_millis();
         let snoozed_until = i64::try_from(now_ms).unwrap_or(i64::MAX) + i64::from(m) * 60 * 1000;
 
-        self.config.notifications.snoozed_until = Some(snoozed_until);
-        self.save().await?;
-        Ok(self.get_config())
+        let mut next = self.config.clone();
+        next.notifications.snoozed_until = Some(snoozed_until);
+        self.commit_next_config(next).await
     }
 
     /// 清除 snooze。
     pub async fn clear_snooze(&mut self) -> Result<AppConfig, ConfigError> {
-        self.config.notifications.snoozed_until = None;
-        self.save().await?;
-        Ok(self.get_config())
+        let mut next = self.config.clone();
+        next.notifications.snoozed_until = None;
+        self.commit_next_config(next).await
     }
 
     /// 检查是否处于 snooze（自动清除过期的）。
@@ -515,8 +564,8 @@ impl ConfigManager {
         project_id: &str,
         session_id: &str,
     ) -> Result<(), ConfigError> {
-        let pins = self
-            .config
+        let mut next = self.config.clone();
+        let pins = next
             .sessions
             .pinned_sessions
             .entry(project_id.to_owned())
@@ -537,7 +586,7 @@ impl ConfigManager {
                 pinned_at: i64::try_from(now_ms).unwrap_or(i64::MAX),
             },
         );
-        self.save().await
+        self.commit_next_config(next).await.map(|_| ())
     }
 
     /// Unpin 一个 session。
@@ -546,12 +595,13 @@ impl ConfigManager {
         project_id: &str,
         session_id: &str,
     ) -> Result<(), ConfigError> {
-        if let Some(pins) = self.config.sessions.pinned_sessions.get_mut(project_id) {
+        let mut next = self.config.clone();
+        if let Some(pins) = next.sessions.pinned_sessions.get_mut(project_id) {
             pins.retain(|p| p.session_id != session_id);
             if pins.is_empty() {
-                self.config.sessions.pinned_sessions.remove(project_id);
+                next.sessions.pinned_sessions.remove(project_id);
             }
-            self.save().await?;
+            self.commit_next_config(next).await?;
         }
         Ok(())
     }
@@ -566,8 +616,8 @@ impl ConfigManager {
         project_id: &str,
         session_id: &str,
     ) -> Result<(), ConfigError> {
-        let hidden = self
-            .config
+        let mut next = self.config.clone();
+        let hidden = next
             .sessions
             .hidden_sessions
             .entry(project_id.to_owned())
@@ -588,7 +638,7 @@ impl ConfigManager {
                 hidden_at: i64::try_from(now_ms).unwrap_or(i64::MAX),
             },
         );
-        self.save().await
+        self.commit_next_config(next).await.map(|_| ())
     }
 
     /// 取消隐藏 session。
@@ -597,12 +647,13 @@ impl ConfigManager {
         project_id: &str,
         session_id: &str,
     ) -> Result<(), ConfigError> {
-        if let Some(hidden) = self.config.sessions.hidden_sessions.get_mut(project_id) {
+        let mut next = self.config.clone();
+        if let Some(hidden) = next.sessions.hidden_sessions.get_mut(project_id) {
             hidden.retain(|h| h.session_id != session_id);
             if hidden.is_empty() {
-                self.config.sessions.hidden_sessions.remove(project_id);
+                next.sessions.hidden_sessions.remove(project_id);
             }
-            self.save().await?;
+            self.commit_next_config(next).await?;
         }
         Ok(())
     }
@@ -613,10 +664,7 @@ impl ConfigManager {
 
     /// 重置为默认配置。
     pub async fn reset_to_defaults(&mut self) -> Result<AppConfig, ConfigError> {
-        self.config = default_config();
-        self.trigger_manager = TriggerManager::new(self.config.notifications.triggers.clone());
-        self.save().await?;
-        Ok(self.get_config())
+        self.commit_next_config(default_config()).await
     }
 
     /// 从磁盘重新加载。

@@ -532,6 +532,7 @@ export interface GeneralConfig {
   showDockIcon: boolean;
   theme: string;
   defaultTab: string;
+  claudeRootPath: string | null;
   autoExpandAiGroups: boolean;
   /** "replace" | "new-tab"，默认 "replace" */
   sessionClickBehavior?: string;

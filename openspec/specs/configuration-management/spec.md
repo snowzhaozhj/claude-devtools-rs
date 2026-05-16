@@ -6,11 +6,14 @@
 ## Requirements
 ### Requirement: Persist application configuration
 
-系统 SHALL 把应用配置（triggers、UI 偏好、pinned sessions、HTTP 端口、SSH hosts、feature toggles）持久化到用户级配置文件 `~/.claude/claude-devtools-config.json`，并在启动时加载。
+系统 SHALL 把应用配置（triggers、UI 偏好、pinned sessions、HTTP 端口、SSH hosts、feature toggles、Claude 数据根目录）持久化到用户级配置文件 `~/.claude/claude-devtools-config.json`，并在启动时加载。
+
+`general.claudeRootPath` SHALL 表示 Claude 数据根目录；当该字段为 `null` 时，系统 MUST 使用默认 home 下 `.claude`。该字段 SHALL 只控制 Claude 数据读取根目录，MUST NOT 改变 `claude-devtools-config.json` 自身的存储位置。
 
 #### Scenario: First launch with no config file
 - **WHEN** 启动时配置文件不存在
 - **THEN** 系统 SHALL 物化默认配置、持久化、继续运行
+- **AND** `general.claudeRootPath` SHALL 为 `null`
 
 #### Scenario: Corrupted config file
 - **WHEN** 配置文件存在但无法解析
@@ -19,6 +22,16 @@
 #### Scenario: Partial config with missing fields
 - **WHEN** 配置文件解析成功但缺少部分字段
 - **THEN** 系统 SHALL 与默认配置合并以补齐缺失字段，保留已有值
+
+#### Scenario: Custom Claude root persists
+- **WHEN** 调用方把 `general.claudeRootPath` 更新为绝对路径 `/data/claude-alt`
+- **THEN** 该值 SHALL 被持久化
+- **AND** 下次读取配置时 SHALL 返回同一绝对路径
+
+#### Scenario: Clearing Claude root restores default
+- **WHEN** 调用方把已配置的 `general.claudeRootPath` 更新为 `null`
+- **THEN** 该值 SHALL 被持久化为 `null`
+- **AND** 后续 Claude 数据读取 SHALL 回退到默认 home 下 `.claude`
 
 ### Requirement: Expose config read and update operations
 
@@ -34,7 +47,7 @@
 
 ### Requirement: Read CLAUDE.md files
 
-系统 SHALL 从八种作用域读取 CLAUDE.md 文件，每个文件返回路径、是否存在标记、字符数与估算 token 数（`char_count / 4`）。
+系统 SHALL 从八种作用域读取 CLAUDE.md 文件，每个文件返回路径、是否存在标记、字符数与估算 token 数（`char_count / 4`）。全局用户作用域、用户 rules 与 auto-memory 作用域 SHALL 使用当前 Claude root；当前 Claude root 来自 `general.claudeRootPath`，为空时使用默认 home 下 `.claude`。
 
 #### Scenario: All eight scopes enumerated
 - **WHEN** 调用方请求指定 project root 的 CLAUDE.md 文件
@@ -59,6 +72,12 @@
 #### Scenario: File not readable
 - **WHEN** CLAUDE.md 存在但无法读取（例如 permission denied）
 - **THEN** 系统 SHALL 该作用域返回 `exists: false` 并 zero counts，记录错误日志
+
+#### Scenario: Custom Claude root scopes
+- **WHEN** 当前 Claude root 为 `/data/claude-alt`
+- **AND** `/data/claude-alt/CLAUDE.md` 与 `/data/claude-alt/rules/rule.md` 存在
+- **THEN** `user` 与 `user-rules` 作用域 SHALL 从 `/data/claude-alt` 读取
+- **AND** 系统 SHALL NOT 从默认 `~/.claude` 读取这些作用域
 
 ### Requirement: Resolve and read mentioned files safely
 
@@ -97,8 +116,13 @@
 - **THEN** 该 regex SHALL 被拒绝并返回错误说明
 
 #### Scenario: Invalid `claude_root_path`
-- **WHEN** 调用方把 `claude_root_path` 设为非绝对或空路径
-- **THEN** 该值 SHALL 被规范化为 `None`
+- **WHEN** 调用方把 `claude_root_path` 设为非绝对路径
+- **THEN** 更新 SHALL 被拒绝并返回 validation error
+- **AND** 已存储值 SHALL 保持不变
+
+#### Scenario: Empty `claude_root_path` clears override
+- **WHEN** 调用方把 `claude_root_path` 设为 `null` 或仅空白字符串
+- **THEN** 系统 SHALL 将该值规范化为 `None`
 
 ### Requirement: Update notifications SHALL accept full triggers replacement
 

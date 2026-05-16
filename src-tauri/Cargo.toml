@@ -30,6 +30,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] }
 dirs = "6"
 semver = "1"

@@ -25,7 +25,10 @@ pub mod trigger_matcher;
 pub mod types;
 pub mod validation;
 
-pub use claude_md::{ClaudeMdFileInfo, Scope, read_all_claude_md_files, read_directory_claude_md};
+pub use claude_md::{
+    ClaudeMdFileInfo, Scope, read_all_claude_md_files, read_all_claude_md_files_with_base,
+    read_directory_claude_md,
+};
 pub use detected_error::{DetectedError, DetectedErrorContext};
 pub use error::ConfigError;
 pub use error_detector::{detect_errors, detect_errors_with_trigger};
@@ -39,4 +42,6 @@ pub use types::{
     AppConfig, ConfigSection, DisplayConfig, GeneralConfig, HttpServerConfig, NotificationConfig,
     NotificationTrigger, SessionsConfig, SshPersistConfig, TriggerContentType, TriggerMode,
 };
-pub use validation::{normalize_claude_root_path, validate_http_port, validate_section};
+pub use validation::{
+    normalize_claude_root_path, validate_claude_root_path, validate_http_port, validate_section,
+};

@@ -1,9 +1,5 @@
-# file-watching Specification
+## MODIFIED Requirements
 
-## Purpose
-
-监视 `~/.claude/projects/` 与 `~/.claude/todos/` 文件系统变化，以 debounce 后的 broadcast 通道把 `file-change` / `todo-change` 事件分发给多类订阅者（Tauri IPC 层、HTTP SSE、in-process 通知 pipeline），使前端 UI 与后台服务能够实时感知会话与待办变更。
-## Requirements
 ### Requirement: Watch Claude projects directory for session changes
 
 系统 SHALL 递归监视当前 Claude root 下的 `projects` 目录，在 `.jsonl` 会话文件创建、修改、删除时发出变更事件。当前 Claude root SHALL 来自 `general.claudeRootPath`；当该字段为 `null` 时，系统 SHALL 监视默认 home 下 `.claude/projects/`。
@@ -37,75 +33,6 @@
 - **WHEN** 当前 Claude root 配置为 `/data/claude-alt`
 - **THEN** watcher SHALL 监视 `/data/claude-alt/todos/`
 - **AND** watcher SHALL NOT 监视默认 `~/.claude/todos/`
-
-### Requirement: Debounce rapid file events
-
-系统 SHALL 把同一文件在 100ms 窗口内的连续变更事件合并为一条事件后发出。
-
-#### Scenario: Burst of writes
-- **WHEN** 一个文件在 30ms 内发生 5 次写事件
-- **THEN** 订阅者 SHALL 在 debounce 窗口结束后**恰好**收到一条 `file-change` 事件
-
-### Requirement: Survive transient filesystem errors
-
-系统 SHALL 记录并忽略瞬时错误（permission denied、临时锁占用），不终止 watcher。
-
-#### Scenario: Temporary permission error on one file
-- **WHEN** watcher 对单个文件 stat 时遇到权限错误
-- **THEN** watcher SHALL 记录错误并继续监视其他文件
-
-### Requirement: Broadcast events to multiple subscribers
-
-系统 SHALL 把每条已发出的事件无差别地分发给所有当前活跃的订阅者（Electron renderer 经 IPC、HTTP 客户端经 SSE、in-process 后台服务如通知 pipeline），不重复也不遗漏。
-
-#### Scenario: Two subscribers present
-- **WHEN** 一次文件变更触发事件且当前有两个订阅者
-- **THEN** 两个订阅者 SHALL 各自**恰好**收到一次该事件
-
-#### Scenario: Notification pipeline subscribes alongside IPC consumers
-- **WHEN** 通知 pipeline 启动时调用 `subscribe_files()`，同时 Tauri IPC 层也持有一个订阅
-- **THEN** 两个订阅者 SHALL 独立收到每一次 debounce 后的 `FileChangeEvent`，且任一订阅者的滞后 SHALL NOT 影响另一订阅者的投递
-
-### Requirement: Route nested subagent JSONL changes to parent session
-
-系统 SHALL 把形如 `<projects_dir>/<project_id>/<session_id>/subagents/agent-<sub_session_id>.jsonl` 的嵌套 subagent JSONL 写入路由为父 `(project_id, session_id)` 的 `FileChangeEvent`，复用与父 session JSONL 相同的 broadcast channel 与 payload schema。`agent-acompact*.jsonl` 与非 `agent-*.jsonl` 命名的文件 SHALL NOT 触发 `FileChangeEvent`。旧结构 `<projects_dir>/<project_id>/agent-*.jsonl`（无父 session 目录嵌套）不在本 Requirement 范围。
-
-嵌套分支 emit 的 `FileChangeEvent.project_list_changed` MUST 固定为 `false`，**不**走既有 2 层路径的 `!deleted && mark_project_seen(project_id)` 派生逻辑。理由：嵌套 subagent 写入只是"父 session 内部增量"信号，不应当让前端 `DashboardView` / `Sidebar` 误以为新项目出现而刷新整个项目列表（极端 race 下若父 session JSONL 尚未触发过事件而子 session 已写入，`mark_project_seen` 会返回 `true`，必须显式短路）。
-
-#### Scenario: Subagent JSONL 文件追加触发父 session 刷新
-
-- **WHEN** `<projects_dir>/p1/sess-A/subagents/agent-sub-1.jsonl` 被追加内容
-- **THEN** 订阅者 SHALL 在 debounce 窗口结束后收到一条 `FileChangeEvent { project_id: "p1", session_id: "sess-A", deleted: false, project_list_changed: false }`
-
-#### Scenario: 嵌套分支强制 project_list_changed=false
-
-- **WHEN** `<projects_dir>/p2/sess-B/subagents/agent-sub-9.jsonl` 是 watcher 第一次看到 `p2` 项目（父 session JSONL 此前未触发过任何事件）
-- **THEN** 即使内部 `mark_project_seen("p2")` 第一次会返回 `true`，emit 的 `FileChangeEvent.project_list_changed` SHALL 为 `false`（嵌套分支硬编码 `false`，不从 `mark_project_seen` 派生），避免前端误以为有新项目出现并刷新整个项目列表
-
-#### Scenario: Subagent JSONL 文件首次创建触发父 session 刷新
-
-- **WHEN** `<projects_dir>/p1/sess-A/subagents/agent-sub-2.jsonl` 首次出现
-- **THEN** 订阅者 SHALL 收到 `FileChangeEvent { project_id: "p1", session_id: "sess-A", deleted: false, .. }`，与父 session JSONL 写入的事件 schema 完全一致
-
-#### Scenario: Subagent JSONL 文件删除触发父 session 刷新
-
-- **WHEN** `<projects_dir>/p1/sess-A/subagents/agent-sub-1.jsonl` 被删除
-- **THEN** 订阅者 SHALL 收到 `FileChangeEvent { project_id: "p1", session_id: "sess-A", deleted: true, .. }`
-
-#### Scenario: agent-acompact 文件被忽略
-
-- **WHEN** `<projects_dir>/p1/sess-A/subagents/agent-acompact-xyz.jsonl` 被写入
-- **THEN** 订阅者 SHALL NOT 收到任何 `FileChangeEvent`
-
-#### Scenario: 非 agent- 前缀文件被忽略
-
-- **WHEN** `<projects_dir>/p1/sess-A/subagents/notes.txt` 或 `<projects_dir>/p1/sess-A/subagents/random.jsonl` 被写入
-- **THEN** 订阅者 SHALL NOT 收到 `FileChangeEvent`
-
-#### Scenario: 旧结构 agent-*.jsonl 不进入本 Requirement 的嵌套判定分支
-
-- **WHEN** `<projects_dir>/p1/agent-sub-3.jsonl`（旧结构 2 层路径，无 `<session_id>/subagents/` 嵌套）被写入
-- **THEN** 本 Requirement 的"嵌套 subagent → 父 session"路由 SHALL NOT 触发；该路径 SHALL 由既有 `Watch Claude projects directory for session changes` Requirement 的 2 层判定处理（按 `agent-sub-3` 作为 `session_id` 发出 `FileChangeEvent`），其语义不属本 change 改动范围
 
 ### Requirement: Watch project directory additions
 
@@ -153,4 +80,3 @@
 
 - **WHEN** watcher 收到当前 Claude root 下 `projects/project-a/subagents/agent-a.jsonl` 的变化
 - **THEN** `file-watching` SHALL NOT 把 `project-a/subagents` 当成 project id 发出 session `file-change`
-
