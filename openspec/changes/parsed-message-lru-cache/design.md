@@ -121,6 +121,21 @@ tokio::spawn(async move {
 
 读后端实现：`FileChangeEvent` 字段是 `project_id` / `session_id` / `deleted: bool`（见 `crates/cdt-watch/`）。无论 `deleted` 是 `true` 还是 `false`，cache invalidate 都是"remove 该 path entry"——不需要区分；下次 lookup 时若文件已删，stat 失败走 fall-through（不写 cache），与 `MetadataCache` 路径一致。
 
+### D9c: 反转决策 —— invalidate task 必须 stat + signature 比对再 remove
+
+D9 原方案是"收到事件 → 直接 `cache.remove(path)`"。第一轮 CI 暴露此方案缺陷：
+
+- CI（Linux/inotify）watcher 启动期对刚创建的 watch dir 会偶发一条 "spurious" `FileChangeEvent`，但文件内容 / mtime / size 实际未变
+- 直接 `remove` 会错杀仍有效的 cache 条目，导致下一次 hot path lookup 不必要重 parse —— 不影响正确性但浪费 CPU
+- 测试 `cache_persists_without_file_change`（验证"无文件改动时 cache 持久"语义）因此在 CI 上 race fail
+
+修订：invalidate task SHALL 先 `tokio::fs::metadata(&path)` 拿当前 `FileSignature` 与 cache 中记录比对：
+- **一致** → 视为 spurious 事件，不 remove
+- **不一致** → 真正改动，remove
+- **stat 失败**（文件被删）→ 保守 remove
+
+代价：每条 file-change 事件多一次 stat syscall（~50µs）。换来 spurious 事件不再错杀有效 cache、且无需任何"启动期 sleep"魔法数字。新增 `ParsedMessageCache::remove_if_signature_mismatch(path, current_sig) -> bool` 把比对原子化在 lock 内。spec delta `parsed-message 缓存按 file-change 广播主动失效` 已同步反映新语义（含 Scenarios "文件真改后 file-change 广播主动 invalidate" / "spurious file-change 事件 SHALL NOT 错杀有效 cache" / "文件被删时 stat 失败走保守 remove"）。
+
 ## Risks / Trade-offs
 
 - **[内存最坏上界] 极端场景 cache 占用 ~500 MB** → cap 设 50；后续 perf bench 真观察到吃紧再加 byte cap（follow-up）。日常 dev 工作集 50–100 MB

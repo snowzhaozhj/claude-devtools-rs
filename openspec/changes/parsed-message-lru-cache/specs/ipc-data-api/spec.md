@@ -64,23 +64,37 @@ miss 路径 MUST 调用 `parse_file(path)`：成功时把结果包装为 `Arc::n
 
 ### Requirement: parsed-message 缓存按 file-change 广播主动失效
 
-`LocalDataApi::new_with_watcher(...)` 构造路径 SHALL 在 spawn 自动通知管线的同时，额外 spawn 一个后台 task，订阅 `FileWatcher::subscribe_files()` 广播，对每条 `FileChangeEvent` 按 `projects_dir / extract_base_dir(project_id) / "{session_id}.jsonl"` 推算出 cache key 并 `remove` 对应 entry。该失效路径与 `FileChangeEvent.deleted` 字段无关——文件被删 / 改 / 新建都同样按"剔除该 path entry"处理，下次 lookup 时 stat 自然决定走 cache miss 或返回兜底值。
+`LocalDataApi::new_with_watcher(...)` 构造路径 SHALL 在 spawn 自动通知管线的同时，额外 spawn 一个后台 task，订阅 `FileWatcher::subscribe_files()` 广播，对每条 `FileChangeEvent` 按 `projects_dir / project_id / "{session_id}.jsonl"` 推算出 cache key。
+
+**stat 校验语义**：收到事件后 task MUST 先 `tokio::fs::metadata(&path)` 拿当前 `FileSignature`，与 cache 中记录的 signature 比对：
+- 两者一致 → SHALL NOT 移除（视为 spurious watcher 事件——典型场景：CI 上 inotify 启动期对刚创建的 watch dir 偶发"无内容变化"事件、metadata-only touch、跨平台 backend 行为差异等。若无 stat 比对会错杀仍有效的 cache，导致下次 hot path 不必要重 parse）
+- 两者不一致 → MUST `remove(path)` 让下次 lookup 重 parse
+- `tokio::fs::metadata` 失败（文件被删 / 权限）→ MUST `remove(path)` 保守剔除——反正下次 hot path lookup 也会 stat fail 走原兜底（`empty_data_uri()` / `ToolOutput::Missing`），提前清掉不影响正确性
+
+该失效路径与 `FileChangeEvent.deleted` 字段无关——文件被删 / 改 / 新建都同样进入"stat → 比对 signature → 决定 remove"流程。
 
 `LocalDataApi::new()` 构造路径（无 watcher）SHALL NOT 启动该订阅 task；此场景仅依赖被动 `FileSignature` 失效路径兜底——与 `MetadataCache` 在 `new()` 路径下的行为对齐。
 
 broadcast lag（`broadcast::Receiver::recv` 返回 `Err(RecvError::Lagged)`）时 SHALL 静默继续 loop——lag 仅代表事件激增，下次 lookup 由被动 `FileSignature` mismatch 兜底，不影响正确性。channel close（`Err(RecvError::Closed)`）时 task SHALL 退出。
 
-#### Scenario: file-change 广播按 session JSONL 路径主动 invalidate
+#### Scenario: 文件真改后 file-change 广播主动 invalidate
 
 - **WHEN** `LocalDataApi` 由 `new_with_watcher` 构造且缓存中已有 `<projects_dir>/<encoded_project>/<sid>.jsonl` 的 parsed-message 条目
-- **AND** `FileWatcher` 广播一条 `FileChangeEvent { project_id, session_id: sid, deleted: false }`
-- **THEN** 后台 invalidate task MUST 从 cache 中 remove 该 path 对应的条目，使下一次 `get_tool_output` / `get_image_asset` 走 cache miss + 重 parse
+- **AND** session JSONL 文件被追加 / 重写（mtime+size 变化）
+- **AND** `FileWatcher` 广播一条对应 `FileChangeEvent`
+- **THEN** 后台 invalidate task MUST 先 stat 拿当前 `FileSignature`、与 cache 记录比对、发现不一致后 remove 该 path 对应的条目，使下一次 `get_tool_output` / `get_image_asset` 走 cache miss + 重 parse
 
-#### Scenario: `FileChangeEvent.deleted=true` 同样剔除条目
+#### Scenario: spurious file-change 事件 SHALL NOT 错杀有效 cache
 
 - **WHEN** 缓存中已有某 session 的 parsed-message 条目
-- **AND** `FileWatcher` 广播一条 `FileChangeEvent { ..., deleted: true }`
-- **THEN** 后台 invalidate task MUST remove 该条目，与 `deleted=false` 的处理无差异；下次 lookup 时 stat 失败由 `get_tool_output` / `get_image_asset` 的原有兜底处理
+- **AND** `FileWatcher` 因 backend 行为发出了一条 `FileChangeEvent`，但目标文件内容 / mtime / size 实际未变（典型 CI inotify 启动期 spurious 事件）
+- **THEN** invalidate task MUST stat 拿当前 `FileSignature` 与 cache 记录比对，发现两者一致后 SHALL NOT remove 条目；后续 lookup MUST 仍命中 cache
+
+#### Scenario: 文件被删时 stat 失败走保守 remove
+
+- **WHEN** 缓存中已有某 session 的 parsed-message 条目
+- **AND** `FileWatcher` 广播 `FileChangeEvent { ..., deleted: true }` 之后文件已不存在
+- **THEN** invalidate task 的 `tokio::fs::metadata(&path)` 失败，task MUST 调 `remove(path)` 保守剔除条目
 
 #### Scenario: `new()` 构造不启动 invalidate 订阅
 

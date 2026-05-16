@@ -18,7 +18,6 @@ use cdt_config::{
 };
 use cdt_discover::{
     LocalFileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
-    path_decoder,
 };
 use cdt_parse::parse_file;
 use cdt_ssh::{ActiveContext, SshConnectionManager, parse_ssh_config_file, resolve_host};
@@ -626,7 +625,13 @@ fn metadata_scan_key(project_id: &str, cursor: Option<&str>) -> String {
 
 /// 启动一个后台 task，订阅 `FileWatcher::subscribe_files()` 广播，对每条
 /// `FileChangeEvent` 按 `projects_dir / project_id / "{session_id}.jsonl"`
-/// 推算主 session JSONL 路径并从 parsed-message cache 中 remove。
+/// 推算主 session JSONL 路径，**stat 比对当前 `FileSignature` 与 cache 中记录**，
+/// 仅在 signature 不一致时才从 parsed-message cache 中 remove。
+///
+/// 这层 stat 比对避免 watcher spurious 事件（CI 上 inotify 启动期对刚创建的
+/// watch dir 偶发"无内容变化"事件、metadata-only touch 等）错杀有效 cache。
+/// stat 失败（文件被删 / 权限）走保守 `remove` —— 反正下次 lookup 也 stat fail，
+/// 提前清掉 cache entry 不影响正确性。
 ///
 /// 行为契约：spec `ipc-data-api/spec.md` §"parsed-message 缓存按 file-change
 /// 广播主动失效"。`broadcast::Receiver::recv` 返回 `Lagged` 时静默 continue
@@ -641,6 +646,7 @@ fn spawn_parsed_msg_cache_invalidator(
     mut rx: broadcast::Receiver<cdt_core::FileChangeEvent>,
     projects_dir: std::path::PathBuf,
 ) {
+    use crate::cache_signature::FileSignature;
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -652,10 +658,23 @@ fn spawn_parsed_msg_cache_invalidator(
                     let path = projects_dir
                         .join(&evt.project_id)
                         .join(format!("{}.jsonl", evt.session_id));
-                    cache
-                        .lock()
-                        .expect("parsed message cache mutex poisoned")
-                        .remove(&path);
+                    match tokio::fs::metadata(&path).await {
+                        Ok(meta) => {
+                            let current_sig = FileSignature::from_metadata(&meta);
+                            cache
+                                .lock()
+                                .expect("parsed message cache mutex poisoned")
+                                .remove_if_signature_mismatch(&path, &current_sig);
+                        }
+                        Err(_) => {
+                            // 文件已删或 stat 失败：保守 remove，反正下次 lookup
+                            // 也会 stat fail，提前清掉不影响正确性。
+                            cache
+                                .lock()
+                                .expect("parsed message cache mutex poisoned")
+                                .remove(&path);
+                        }
+                    }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     // lag 仅代表事件激增；下次 lookup 由被动 FileSignature 兜底
@@ -1156,10 +1175,18 @@ impl DataApi for LocalDataApi {
         // `{projects_dir}/*/{root_session_id}/subagents/agent-<sub>.jsonl`
         // 全局扫（新结构）；旧结构 fallback 走"找到 root jsonl 所在 project_dir
         // 后在该目录内查 flat agent jsonl"。
-        let projects_dir = path_decoder::get_projects_base_path();
+        //
+        // 用 `&self.projects_dir`（构造时从 scanner 取）而非全局
+        // `path_decoder::get_projects_base_path()`，与 `get_tool_output` /
+        // `get_image_asset` / `spawn_parsed_msg_cache_invalidator` 共用同一 base
+        // path（codex 三轮二审找到的同款 bug）。
         let new_structure_path = if CROSS_PROJECT_SUBAGENT_SCAN {
-            find_subagent_jsonl_cross_project(&projects_dir, root_session_id, subagent_session_id)
-                .await
+            find_subagent_jsonl_cross_project(
+                &self.projects_dir,
+                root_session_id,
+                subagent_session_id,
+            )
+            .await
         } else {
             None
         };
@@ -1167,7 +1194,7 @@ impl DataApi for LocalDataApi {
             p
         } else {
             // 旧结构兜底：找 root jsonl 所在 project_dir 后在该目录扫 flat。
-            let Ok(mut entries) = tokio::fs::read_dir(&projects_dir).await else {
+            let Ok(mut entries) = tokio::fs::read_dir(&self.projects_dir).await else {
                 return Ok(serde_json::Value::Array(Vec::new()));
             };
             let mut fallback: Option<std::path::PathBuf> = None;

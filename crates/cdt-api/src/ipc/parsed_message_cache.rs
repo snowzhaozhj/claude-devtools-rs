@@ -81,14 +81,32 @@ impl ParsedMessageCache {
         self.order.push_front(path);
     }
 
-    /// 主动从缓存移除 `path` 条目（由 file-watcher 广播 invalidate 路径调用）。
-    /// 不在 cache 中时 no-op。
+    /// 主动从缓存移除 `path` 条目。不在 cache 中时 no-op。
     pub fn remove(&mut self, path: &Path) {
         if self.map.remove(path).is_some() {
             if let Some(pos) = self.order.iter().position(|p| p == path) {
                 let _ = self.order.remove(pos);
             }
         }
+    }
+
+    /// 仅在 cache 中 `path` 条目的 `FileSignature` 与 `current_sig` 不一致时
+    /// 才 remove。用于 file-watcher 广播 invalidate 路径——避免 spurious 事件
+    /// （如 CI 上 inotify 启动期对刚创建的 watch dir 偶发的"无内容变化"事件、
+    /// metadata-only touch 等）错杀有效 cache。返回是否真的发生了 remove。
+    pub fn remove_if_signature_mismatch(
+        &mut self,
+        path: &Path,
+        current_sig: &FileSignature,
+    ) -> bool {
+        let Some(entry) = self.map.get(path) else {
+            return false;
+        };
+        if entry.signature == *current_sig {
+            return false;
+        }
+        self.remove(path);
+        true
     }
 
     /// 当前缓存条目数。`LocalDataApi::parsed_msg_cache_len`（仅
@@ -224,6 +242,45 @@ mod tests {
         cache.insert(PathBuf::from("/a"), dummy_entry(1));
         cache.remove(Path::new("/nonexistent"));
         assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn remove_if_signature_mismatch_keeps_entry_when_sig_matches() {
+        // spurious watcher event 场景：cache 里的 signature 与当前文件 stat
+        // 完全一致 → 不应 remove。
+        let mut cache = ParsedMessageCache::new(2);
+        let entry = dummy_entry(7);
+        let same_sig = entry.signature;
+        cache.insert(PathBuf::from("/x"), entry);
+        let removed = cache.remove_if_signature_mismatch(Path::new("/x"), &same_sig);
+        assert!(!removed, "signature 一致时不应 remove");
+        assert!(cache.lookup(Path::new("/x")).is_some());
+    }
+
+    #[test]
+    fn remove_if_signature_mismatch_removes_when_sig_changes() {
+        let mut cache = ParsedMessageCache::new(2);
+        cache.insert(PathBuf::from("/x"), dummy_entry(1));
+        let new_sig = FileSignature {
+            mtime: SystemTime::UNIX_EPOCH + Duration::from_secs(999),
+            size: 999,
+            #[cfg(unix)]
+            identity: FileIdentity::Unix { dev: 2, ino: 999 },
+            #[cfg(not(unix))]
+            identity: FileIdentity::None,
+        };
+        let removed = cache.remove_if_signature_mismatch(Path::new("/x"), &new_sig);
+        assert!(removed, "signature 不一致时应 remove");
+        assert!(cache.lookup(Path::new("/x")).is_none());
+    }
+
+    #[test]
+    fn remove_if_signature_mismatch_noop_when_absent() {
+        let mut cache = ParsedMessageCache::new(2);
+        let any_sig = dummy_entry(5).signature;
+        let removed = cache.remove_if_signature_mismatch(Path::new("/missing"), &any_sig);
+        assert!(!removed);
+        assert_eq!(cache.len(), 0);
     }
 
     fn write_jsonl(dir: &Path, lines: &[&str]) -> PathBuf {
