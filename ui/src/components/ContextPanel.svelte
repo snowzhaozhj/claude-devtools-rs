@@ -114,10 +114,14 @@
               <div class="cp-section-items">
                 {#if cat === "claudemd" && claudeMdEntries.length > 0}
                   <!-- CLAUDE.md 用 DirectoryTree -->
-                  <DirectoryTree entries={claudeMdEntries} />
+                  <div class="cp-context-group">
+                    <div class="cp-sub-label">Loaded instruction files</div>
+                    <DirectoryTree entries={claudeMdEntries} />
+                  </div>
                   {#if mentionedFileEntries.length > 0}
-                    <div class="cp-sub-label">Mentioned Files</div>
-                    {#each mentionedFileEntries as entry}
+                    <div class="cp-context-group cp-context-group-spaced">
+                      <div class="cp-sub-label">Mentioned files</div>
+                      {#each mentionedFileEntries as entry}
                       <div class="cp-item">
                         <div class="cp-item-row">
                           <span class="cp-item-label">{entry.label}</span>
@@ -125,7 +129,8 @@
                         </div>
                         <span class="cp-item-preview">{entry.preview}</span>
                       </div>
-                    {/each}
+                      {/each}
+                    </div>
                   {/if}
                 {:else}
                   {#each catEntries as entry}
@@ -422,12 +427,23 @@
     background: color-mix(in srgb, var(--color-surface) 42%, transparent);
   }
 
+  .cp-context-group {
+    min-width: 0;
+  }
+
+  .cp-context-group-spaced {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--color-border-subtle, var(--color-border));
+  }
+
   .cp-sub-label {
-    font-size: 11px;
+    margin-bottom: 5px;
+    font-size: 10px;
     font-weight: 600;
     color: var(--color-text-muted);
-    padding: 10px 0 4px;
-    letter-spacing: 0.2px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
   .cp-item {
