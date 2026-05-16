@@ -562,8 +562,11 @@ pub fn run() {
         let mut notif_mgr = NotificationManager::new(None);
         let _ = notif_mgr.load().await;
 
+        let claude_root_path = config_mgr.get_config().general.claude_root_path.clone();
+        let claude_root = claude_root_path.as_deref().map(std::path::Path::new);
         let fs = local_handle();
-        let projects_dir = path_decoder::get_projects_base_path();
+        let projects_dir = path_decoder::projects_base_path_for(claude_root);
+        let todos_dir = path_decoder::todos_base_path_for(claude_root);
         let scanner = ProjectScanner::new(fs, projects_dir.clone());
         let ssh_mgr = SshConnectionManager::new();
 
@@ -574,10 +577,7 @@ pub fn run() {
         // `HOMEDRIVE+HOMEPATH` 场景下两条解析链可能给出不同 PathBuf，导致 watcher
         // 监听目录 A 但 API cache key 用目录 B，invalidate 永远 miss（codex 二轮
         // 二审找到的 bug）。
-        let watcher = Arc::new(FileWatcher::with_paths(
-            projects_dir.clone(),
-            path_decoder::get_todos_base_path(),
-        ));
+        let watcher = Arc::new(FileWatcher::with_paths(projects_dir.clone(), todos_dir));
         // phase 3 image asset cache：用 OS 标准 cache 目录 + app 子目录。
         // dirs::cache_dir() 同步且跨平台，无需 Tauri app handle。
         let image_cache_dir = dirs::cache_dir()
@@ -603,6 +603,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppData { api: api.clone() })
         .setup(move |app| {
             #[cfg(debug_assertions)]

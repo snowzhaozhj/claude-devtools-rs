@@ -104,6 +104,15 @@ fn ts() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 4, 11, 0, 0, 0).unwrap()
 }
 
+async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, text: &str) {
+    let line = format!(
+        r#"{{"type":"user","uuid":"{session_id}","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":"{text}"}}}}"#,
+    );
+    tokio::fs::write(dir.join(format!("{session_id}.jsonl")), format!("{line}\n"))
+        .await
+        .unwrap();
+}
+
 // =============================================================================
 // Meta 测：command 列表完整性
 // =============================================================================
@@ -1194,6 +1203,56 @@ async fn update_config_general_auto_expand_ai_groups_round_trip() {
         api.get_config().await.unwrap()["general"]["autoExpandAiGroups"],
         json!(true)
     );
+}
+
+#[tokio::test]
+async fn update_config_general_claude_root_path_reconfigures_local_api() {
+    let (api, tmp) = setup_api().await;
+    let custom_root = tmp.path().join("claude-alt");
+    let custom_projects = custom_root.join("projects");
+    let project_dir = custom_projects.join("-Users-alice-custom");
+    tokio::fs::create_dir_all(&project_dir).await.unwrap();
+    write_user_session(
+        &project_dir,
+        "sess-custom",
+        "/Users/alice/custom",
+        "custom_root_keyword",
+    )
+    .await;
+
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "claudeRootPath": custom_root.to_string_lossy() }),
+    })
+    .await
+    .expect("claudeRootPath SHALL 接受绝对路径");
+
+    let projects = api.list_projects().await.unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].id, "-Users-alice-custom");
+
+    let search = api
+        .search(&SearchRequest {
+            query: "custom_root_keyword".into(),
+            project_id: Some("-Users-alice-custom".into()),
+            session_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(search["results"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn update_config_general_claude_root_path_rejects_relative_path() {
+    let (api, _tmp) = setup_api().await;
+    let err = api
+        .update_config(&ConfigUpdateRequest {
+            section: "general".into(),
+            data: json!({ "claudeRootPath": "relative/path" }),
+        })
+        .await
+        .expect_err("relative claudeRootPath SHALL be rejected");
+    assert!(err.to_string().contains("absolute path"));
 }
 
 #[tokio::test]

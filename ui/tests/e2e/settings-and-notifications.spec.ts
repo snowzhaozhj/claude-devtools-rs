@@ -36,6 +36,26 @@ test.describe('settings + notifications', () => {
     await expect(page.getByText('启用通知')).toBeVisible()
   })
 
+  test('Settings 常规分区可保存并恢复 Claude 数据根目录', async ({ page }) => {
+    await gotoWithMockReady(page)
+    await page.evaluate(() => {
+      ;(window as unknown as { __cdtTest: { openSettingsTab: () => void } }).__cdtTest.openSettingsTab()
+    })
+
+    const input = page.getByRole('textbox', { name: 'Claude 数据根目录' })
+    await expect(input).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByRole('button', { name: '恢复默认' })).toBeDisabled()
+
+    await input.fill('/tmp/claude-alt')
+    await page.getByRole('button', { name: '保存手动输入' }).click()
+    await expect(input).toHaveValue('/tmp/claude-alt')
+    await expect(page.getByRole('button', { name: '恢复默认' })).toBeEnabled()
+
+    await page.getByRole('button', { name: '恢复默认' }).click()
+    await expect(input).toHaveValue('')
+    await expect(page.getByRole('button', { name: '恢复默认' })).toBeDisabled()
+  })
+
   test('打开 Notifications tab → 看到通知列表与 unread 计数', async ({ page }) => {
     await gotoWithMockReady(page)
     await page.evaluate(() => {

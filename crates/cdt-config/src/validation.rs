@@ -19,7 +19,7 @@ pub fn validate_http_port(port: u16) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// 标准化 `claude_root_path`：空/非绝对路径 → `None`，去尾斜杠。
+/// 标准化 `claude_root_path`：空路径 → `None`，绝对路径去尾斜杠。
 ///
 /// 跨平台识别三种绝对路径形式（`Path::is_absolute()` 只认当前平台的风格，
 /// Windows 上会拒绝 POSIX `/foo/bar`，但用户可能在 Windows 端配置 SSH 远端
@@ -29,24 +29,31 @@ pub fn validate_http_port(port: u16) -> Result<(), ConfigError> {
 /// 2. Windows 盘符：`[A-Za-z]:` 后接 `/` 或 `\`
 /// 3. UNC：以 `\\` 或 `//` 开头
 pub fn normalize_claude_root_path(value: Option<&str>) -> Option<String> {
-    let raw = value?;
+    validate_claude_root_path(value).ok().flatten()
+}
+
+/// 校验并标准化 `claude_root_path`，用于用户更新路径。
+pub fn validate_claude_root_path(value: Option<&str>) -> Result<Option<String>, ConfigError> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     if !looks_like_absolute_path(trimmed) {
-        return None;
+        return Err(ConfigError::validation(
+            "general.claudeRootPath must be an absolute path or null",
+        ));
     }
 
-    // 去尾斜杠（保留根目录 `/`）
-    let s = trimmed.to_owned();
-    let stripped = s.trim_end_matches(['/', '\\']);
+    let stripped = trimmed.trim_end_matches(['/', '\\']);
     if stripped.is_empty() {
-        return Some("/".into());
+        return Ok(Some("/".into()));
     }
 
-    Some(stripped.to_owned())
+    Ok(Some(stripped.to_owned()))
 }
 
 /// 校验 section 名是否合法。
@@ -111,6 +118,19 @@ mod tests {
         assert!(normalize_claude_root_path(Some("foo\\bar")).is_none());
         // 盘符后缺分隔符也不算合法
         assert!(normalize_claude_root_path(Some("C:relative")).is_none());
+    }
+
+    #[test]
+    fn validate_path_relative_rejected() {
+        assert!(validate_claude_root_path(Some("relative/path")).is_err());
+        assert!(validate_claude_root_path(Some("foo\\bar")).is_err());
+        assert!(validate_claude_root_path(Some("C:relative")).is_err());
+    }
+
+    #[test]
+    fn validate_path_empty_clears() {
+        assert_eq!(validate_claude_root_path(Some("  ")).unwrap(), None);
+        assert_eq!(validate_claude_root_path(None).unwrap(), None);
     }
 
     #[test]

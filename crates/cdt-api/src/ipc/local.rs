@@ -3,7 +3,7 @@
 //! 组装底层 crate 调用，作为默认的数据 API 实现。
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -13,11 +13,12 @@ use tokio::task::{AbortHandle, JoinSet};
 
 use cdt_analyze::build_chunks_with_subagents;
 use cdt_config::{
-    ConfigManager, DetectedError, NotificationManager, read_all_claude_md_files,
+    ConfigManager, DetectedError, NotificationManager, read_all_claude_md_files_with_base,
     read_mentioned_file as config_read_mentioned_file, validate_file_path,
 };
 use cdt_discover::{
     LocalFileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
+    local_handle,
 };
 use cdt_parse::parse_file;
 use cdt_ssh::{ActiveContext, SshConnectionManager, parse_ssh_config_file, resolve_host};
@@ -299,7 +300,7 @@ struct ScanEntry {
 /// 本地文件系统 `DataApi` 实现。
 pub struct LocalDataApi {
     scanner: Mutex<ProjectScanner>,
-    searcher: SessionSearcher<LocalFileSystemProvider>,
+    searcher: Mutex<SessionSearcher<LocalFileSystemProvider>>,
     config_mgr: Arc<Mutex<ConfigManager>>,
     notif_mgr: Arc<Mutex<NotificationManager>>,
     ssh_mgr: Mutex<SshConnectionManager>,
@@ -343,12 +344,8 @@ pub struct LocalDataApi {
     /// design D2/D3；行为契约见 spec `ipc-data-api/spec.md`
     /// §"`get_tool_output` 与 `get_image_asset` 走 parsed-message LRU 缓存"。
     parsed_msg_cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
-    /// 缓存 scanner 的 `projects_dir`，让 `get_tool_output` / `get_image_asset`
-    /// hot path 与 `spawn_parsed_msg_cache_invalidator` 共享同一 base path，
-    /// 避免 cache key 不一致（codex 二审 bug：原 hot path 用
-    /// `path_decoder::get_projects_base_path()`、invalidate 用构造时传入的
-    /// `projects_dir`，testbed/SSH/symlink 等场景下 key 不同 → 主动失效永远 miss）。
-    projects_dir: std::path::PathBuf,
+    /// 当前 projects root；随 `general.claudeRootPath` 运行时重配。
+    projects_dir: Mutex<PathBuf>,
 }
 
 impl LocalDataApi {
@@ -360,15 +357,15 @@ impl LocalDataApi {
     ) -> Self {
         let fs = std::sync::Arc::new(LocalFileSystemProvider::new());
         let cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
-        let searcher = SessionSearcher::new(fs, cache);
         let (session_metadata_tx, _) =
             broadcast::channel::<SessionMetadataUpdate>(METADATA_BROADCAST_CAPACITY);
         // 在 move scanner 进 Mutex 前先 clone projects_dir，让 hot path /
         // invalidate task 共享同一 base path（详上方字段 doc）。
         let projects_dir = scanner.projects_dir().to_path_buf();
+        let searcher = SessionSearcher::new(fs, cache, projects_dir.clone());
         Self {
             scanner: Mutex::new(scanner),
-            searcher,
+            searcher: Mutex::new(searcher),
             config_mgr: Arc::new(Mutex::new(config_mgr)),
             notif_mgr: Arc::new(Mutex::new(notif_mgr)),
             ssh_mgr: Mutex::new(ssh_mgr),
@@ -380,7 +377,7 @@ impl LocalDataApi {
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
             parsed_msg_cache: Arc::new(std::sync::Mutex::new(ParsedMessageCache::default())),
-            projects_dir,
+            projects_dir: Mutex::new(projects_dir),
         }
     }
 
@@ -409,7 +406,7 @@ impl LocalDataApi {
     ) -> Self {
         let fs = std::sync::Arc::new(LocalFileSystemProvider::new());
         let cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
-        let searcher = SessionSearcher::new(fs, cache);
+        let searcher = SessionSearcher::new(fs, cache, projects_dir.clone());
 
         let config_mgr = Arc::new(Mutex::new(config_mgr));
         let notif_mgr = Arc::new(Mutex::new(notif_mgr));
@@ -440,7 +437,7 @@ impl LocalDataApi {
 
         Self {
             scanner: Mutex::new(scanner),
-            searcher,
+            searcher: Mutex::new(searcher),
             config_mgr,
             notif_mgr,
             ssh_mgr: Mutex::new(ssh_mgr),
@@ -452,7 +449,7 @@ impl LocalDataApi {
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
             parsed_msg_cache,
-            projects_dir,
+            projects_dir: Mutex::new(projects_dir),
         }
     }
 
@@ -467,6 +464,30 @@ impl LocalDataApi {
             let (_tx, rx) = broadcast::channel::<DetectedError>(1);
             rx
         }
+    }
+
+    async fn claude_base_path(&self) -> PathBuf {
+        let mgr = self.config_mgr.lock().await;
+        mgr.get_config()
+            .general
+            .claude_root_path
+            .as_deref()
+            .map_or_else(
+                cdt_discover::path_decoder::get_claude_base_path,
+                PathBuf::from,
+            )
+    }
+
+    async fn reconfigure_claude_root(&self, claude_root_path: Option<&str>) {
+        let claude_root = claude_root_path.map(PathBuf::from);
+        let projects_dir =
+            cdt_discover::path_decoder::projects_base_path_for(claude_root.as_deref());
+        let fs = std::sync::Arc::new(LocalFileSystemProvider::new());
+        let cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
+
+        *self.scanner.lock().await = ProjectScanner::new(local_handle(), projects_dir.clone());
+        *self.searcher.lock().await = SessionSearcher::new(fs, cache, projects_dir.clone());
+        *self.projects_dir.lock().await = projects_dir;
     }
 
     async fn project_memory_dir(&self, project_id: &str) -> Result<std::path::PathBuf, ApiError> {
@@ -1018,7 +1039,8 @@ impl DataApi for LocalDataApi {
 
         let t_ctx = std::time::Instant::now();
         let project_root = messages.iter().find_map(|m| m.cwd.as_deref()).unwrap_or("");
-        let initial_claude_md = build_claude_md_from_filesystem(project_root).await;
+        let claude_base = self.claude_base_path().await;
+        let initial_claude_md = build_claude_md_from_filesystem(project_root, &claude_base).await;
         let empty_cmd = std::collections::HashMap::new();
         let empty_mf = std::collections::HashMap::new();
         let token_dicts = cdt_analyze::context::TokenDictionaries::new(
@@ -1176,17 +1198,11 @@ impl DataApi for LocalDataApi {
         // 全局扫（新结构）；旧结构 fallback 走"找到 root jsonl 所在 project_dir
         // 后在该目录内查 flat agent jsonl"。
         //
-        // 用 `&self.projects_dir`（构造时从 scanner 取）而非全局
-        // `path_decoder::get_projects_base_path()`，与 `get_tool_output` /
-        // `get_image_asset` / `spawn_parsed_msg_cache_invalidator` 共用同一 base
-        // path（codex 三轮二审找到的同款 bug）。
+        // 使用当前 `projects_dir`，避免 root 切换后继续扫描旧目录。
+        let projects_dir = self.projects_dir.lock().await.clone();
         let new_structure_path = if CROSS_PROJECT_SUBAGENT_SCAN {
-            find_subagent_jsonl_cross_project(
-                &self.projects_dir,
-                root_session_id,
-                subagent_session_id,
-            )
-            .await
+            find_subagent_jsonl_cross_project(&projects_dir, root_session_id, subagent_session_id)
+                .await
         } else {
             None
         };
@@ -1194,7 +1210,7 @@ impl DataApi for LocalDataApi {
             p
         } else {
             // 旧结构兜底：找 root jsonl 所在 project_dir 后在该目录扫 flat。
-            let Ok(mut entries) = tokio::fs::read_dir(&self.projects_dir).await else {
+            let Ok(mut entries) = tokio::fs::read_dir(&projects_dir).await else {
                 return Ok(serde_json::Value::Array(Vec::new()));
             };
             let mut fallback: Option<std::path::PathBuf> = None;
@@ -1240,10 +1256,9 @@ impl DataApi for LocalDataApi {
         };
 
         // 定位 jsonl：root 自己 or `<root>/subagents/agent-<sub>.jsonl`。
-        // 用 `self.projects_dir`（构造时从 scanner 取）确保与
-        // `spawn_parsed_msg_cache_invalidator` 的 base path 一致（codex 二审 bug 1）。
+        let projects_dir = self.projects_dir.lock().await.clone();
         let Some(jsonl_path) =
-            locate_session_jsonl(&self.projects_dir, root_session_id, session_id).await
+            locate_session_jsonl(&projects_dir, root_session_id, session_id).await
         else {
             tracing::warn!(target: "cdt_api::image", root_session_id, session_id, "jsonl not found");
             return Ok(empty_data_uri());
@@ -1279,10 +1294,9 @@ impl DataApi for LocalDataApi {
         session_id: &str,
         tool_use_id: &str,
     ) -> Result<cdt_core::ToolOutput, ApiError> {
-        // 用 `self.projects_dir`（构造时从 scanner 取）确保与
-        // `spawn_parsed_msg_cache_invalidator` 的 base path 一致（codex 二审 bug 1）。
+        let projects_dir = self.projects_dir.lock().await.clone();
         let Some(jsonl_path) =
-            locate_session_jsonl(&self.projects_dir, root_session_id, session_id).await
+            locate_session_jsonl(&projects_dir, root_session_id, session_id).await
         else {
             tracing::warn!(target: "cdt_api::tool_output", root_session_id, session_id, "jsonl not found");
             return Ok(cdt_core::ToolOutput::Missing);
@@ -1374,6 +1388,8 @@ impl DataApi for LocalDataApi {
 
         let result = self
             .searcher
+            .lock()
+            .await
             .search_sessions(project_id, &request.query, max_results, &config)
             .await
             .map_err(|e| ApiError::internal(format!("search error: {e}")))?;
@@ -1410,6 +1426,10 @@ impl DataApi for LocalDataApi {
             }
         };
         let config = result.map_err(|e| ApiError::internal(format!("{e}")))?;
+        if request.section == "general" && request.data.get("claudeRootPath").is_some() {
+            self.reconfigure_claude_root(config.general.claude_root_path.as_deref())
+                .await;
+        }
         serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
     }
 
@@ -1555,7 +1575,9 @@ impl DataApi for LocalDataApi {
         &self,
         project_root: &str,
     ) -> Result<serde_json::Value, ApiError> {
-        let result = read_all_claude_md_files(Path::new(project_root)).await;
+        let claude_base = self.claude_base_path().await;
+        let result =
+            read_all_claude_md_files_with_base(Path::new(project_root), &claude_base).await;
         serde_json::to_value(&result).map_err(|e| ApiError::internal(format!("{e}")))
     }
 
@@ -1867,10 +1889,13 @@ fn validate_memory_file_name(file: &str) -> Result<String, ApiError> {
 }
 
 /// 从文件系统扫描 CLAUDE.md 文件，构建 `ClaudeMdContextInjection` 列表。
-async fn build_claude_md_from_filesystem(project_root: &str) -> Vec<cdt_core::ContextInjection> {
+async fn build_claude_md_from_filesystem(
+    project_root: &str,
+    claude_base: &Path,
+) -> Vec<cdt_core::ContextInjection> {
     use cdt_config::claude_md::Scope;
 
-    let files = read_all_claude_md_files(Path::new(project_root)).await;
+    let files = read_all_claude_md_files_with_base(Path::new(project_root), claude_base).await;
     files
         .into_iter()
         .filter(|(_, info)| info.exists)

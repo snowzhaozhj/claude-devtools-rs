@@ -15,7 +15,6 @@ use cdt_core::{SearchHit, SearchSessionsResult, SessionSearchResult};
 
 use crate::error::DiscoverError;
 use crate::fs_provider::{FileSystemProvider, FsKind};
-use crate::path_decoder::get_projects_base_path;
 use crate::search_cache::{CacheEntry, SearchTextCache};
 use crate::search_extract::{SearchableEntry, extract_searchable_entries};
 
@@ -57,11 +56,20 @@ impl SearchConfig {
 pub struct SessionSearcher<F: FileSystemProvider> {
     fs: Arc<F>,
     cache: Arc<Mutex<SearchTextCache>>,
+    projects_dir: PathBuf,
 }
 
 impl<F: FileSystemProvider> SessionSearcher<F> {
-    pub fn new(fs: Arc<F>, cache: Arc<Mutex<SearchTextCache>>) -> Self {
-        Self { fs, cache }
+    pub fn new(
+        fs: Arc<F>,
+        cache: Arc<Mutex<SearchTextCache>>,
+        projects_dir: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            fs,
+            cache,
+            projects_dir: projects_dir.into(),
+        }
     }
 
     /// 搜索单个 session 文件。
@@ -100,8 +108,7 @@ impl<F: FileSystemProvider> SessionSearcher<F> {
         max_results: usize,
         config: &SearchConfig,
     ) -> Result<SearchSessionsResult, DiscoverError> {
-        let base = get_projects_base_path();
-        let project_dir = base.join(project_id);
+        let project_dir = self.projects_dir.join(project_id);
 
         let mut files = self.list_session_files(&project_dir).await?;
         // 按 mtime 降序

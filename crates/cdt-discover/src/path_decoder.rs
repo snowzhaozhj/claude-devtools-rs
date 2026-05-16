@@ -200,22 +200,38 @@ pub fn is_valid_encoded_path(name: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-') || c.is_whitespace())
 }
 
+/// `~/.claude/` —— 根据 home 目录动态解析。
+#[must_use]
+pub fn get_claude_base_path() -> PathBuf {
+    home_dir().unwrap_or_else(fallback_home).join(".claude")
+}
+
+/// Claude root 下的 `projects/`。
+#[must_use]
+pub fn projects_base_path_for(claude_root_path: Option<&Path>) -> PathBuf {
+    claude_root_path
+        .map_or_else(get_claude_base_path, Path::to_path_buf)
+        .join("projects")
+}
+
+/// Claude root 下的 `todos/`。
+#[must_use]
+pub fn todos_base_path_for(claude_root_path: Option<&Path>) -> PathBuf {
+    claude_root_path
+        .map_or_else(get_claude_base_path, Path::to_path_buf)
+        .join("todos")
+}
+
 /// `~/.claude/projects/` —— 根据 home 目录动态解析。
 #[must_use]
 pub fn get_projects_base_path() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(fallback_home)
-        .join(".claude")
-        .join("projects")
+    projects_base_path_for(None)
 }
 
 /// `~/.claude/todos/` —— 动态解析。
 #[must_use]
 pub fn get_todos_base_path() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(fallback_home)
-        .join(".claude")
-        .join("todos")
+    todos_base_path_for(None)
 }
 
 /// Home 目录四级 fallback（对齐 TS `pathDecoder.ts::getHomeDir`）：
@@ -449,6 +465,22 @@ mod tests {
         assert_eq!(
             resolve_home_dir(env, fallback),
             Some(PathBuf::from("/fallback/home"))
+        );
+    }
+
+    #[test]
+    fn projects_base_path_uses_custom_claude_root() {
+        assert_eq!(
+            projects_base_path_for(Some(Path::new("/data/claude-alt"))),
+            PathBuf::from("/data/claude-alt/projects")
+        );
+    }
+
+    #[test]
+    fn todos_base_path_uses_custom_claude_root() {
+        assert_eq!(
+            todos_base_path_for(Some(Path::new("/data/claude-alt"))),
+            PathBuf::from("/data/claude-alt/todos")
         );
     }
 }

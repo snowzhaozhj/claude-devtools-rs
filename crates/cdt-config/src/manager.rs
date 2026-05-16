@@ -14,7 +14,10 @@ use crate::defaults::default_config;
 use crate::error::ConfigError;
 use crate::trigger::{TriggerManager, merge_triggers, validate_trigger};
 use crate::types::{AppConfig, HiddenSession, NotificationTrigger, PinnedSession};
-use crate::validation::{normalize_claude_root_path, validate_http_port, validate_snooze_minutes};
+use crate::validation::{
+    normalize_claude_root_path, validate_claude_root_path, validate_http_port,
+    validate_snooze_minutes,
+};
 
 /// 默认配置文件路径：`~/.claude/claude-devtools-config.json`。
 fn default_config_path() -> PathBuf {
@@ -280,8 +283,8 @@ impl ConfigManager {
                         }
                     }
                     "claudeRootPath" => {
-                        let raw = v.as_str();
-                        self.config.general.claude_root_path = normalize_claude_root_path(raw);
+                        let raw = if v.is_null() { None } else { v.as_str() };
+                        self.config.general.claude_root_path = validate_claude_root_path(raw)?;
                     }
                     "autoExpandAiGroups" => {
                         if let Some(b) = v.as_bool() {

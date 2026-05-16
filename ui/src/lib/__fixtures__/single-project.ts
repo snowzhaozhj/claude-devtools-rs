@@ -114,6 +114,7 @@ export const singleProjectFixture: Fixture = {
       showDockIcon: true,
       theme: 'system',
       defaultTab: 'sessions',
+      claudeRootPath: null,
       autoExpandAiGroups: false,
       sessionClickBehavior: 'replace',
     },

@@ -38,14 +38,23 @@ fn write_session(tmp: &TempDir, project_id: &str, session_id: &str, lines: &[Str
     std::fs::write(path, lines.join("\n")).unwrap();
 }
 
-fn make_searcher() -> (
+fn make_searcher_with_projects_dir(
+    projects_dir: impl Into<std::path::PathBuf>,
+) -> (
     SessionSearcher<LocalFileSystemProvider>,
     Arc<Mutex<SearchTextCache>>,
 ) {
     let fs = Arc::new(LocalFileSystemProvider::new());
     let cache = Arc::new(Mutex::new(SearchTextCache::new()));
-    let searcher = SessionSearcher::new(fs, Arc::clone(&cache));
+    let searcher = SessionSearcher::new(fs, Arc::clone(&cache), projects_dir);
     (searcher, cache)
+}
+
+fn make_searcher() -> (
+    SessionSearcher<LocalFileSystemProvider>,
+    Arc<Mutex<SearchTextCache>>,
+) {
+    make_searcher_with_projects_dir("/unused-projects-dir")
 }
 
 /// Scenario: Query matches text in multiple messages
@@ -144,6 +153,33 @@ async fn project_search_multiple_sessions() {
         }
     }
     assert_eq!(match_count, 4);
+}
+
+/// Scenario: Project search uses custom Claude root
+#[tokio::test]
+async fn project_search_uses_injected_projects_root() {
+    let tmp = TempDir::new().unwrap();
+    let custom_projects = tmp.path().join("custom-root/projects");
+    std::fs::create_dir_all(custom_projects.join("proj1")).unwrap();
+    std::fs::write(
+        custom_projects.join("proj1/sess1.jsonl"),
+        make_user_line("u1", "custom root target_keyword"),
+    )
+    .unwrap();
+
+    let (searcher, _) = make_searcher_with_projects_dir(&custom_projects);
+    let result = searcher
+        .search_sessions(
+            "proj1",
+            "target_keyword",
+            10,
+            &cdt_discover::session_search::SearchConfig::default(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.results.len(), 1);
+    assert_eq!(result.results[0].session_id, "sess1");
 }
 
 /// Scenario: Search term appears only inside a hard-noise system-reminder

@@ -8,6 +8,7 @@
   import SkeletonList from "../components/SkeletonList.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { updateStore } from "../lib/updateStore.svelte";
+  import { open } from "@tauri-apps/plugin-dialog";
 
   let config: AppConfig | null = $state(null);
   let loading = $state(true);
@@ -18,6 +19,7 @@
   // Display 段字体输入的本地编辑态（避免每次 keystroke 调 IPC）
   let fontSansInput = $state("");
   let fontMonoInput = $state("");
+  let claudeRootInput = $state("");
 
   // 默认字体栈占位符（与 ui/src/app.css 默认 token、TS 原版对齐；仅作 placeholder 提示用，不影响实际默认行为）
   const FONT_SANS_PLACEHOLDER = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", sans-serif`;
@@ -40,6 +42,7 @@
       config = await getConfig();
       fontSansInput = config.display?.fontSans ?? "";
       fontMonoInput = config.display?.fontMono ?? "";
+      claudeRootInput = config.general.claudeRootPath ?? "";
     } catch (e) {
       error = String(e);
     } finally {
@@ -139,7 +142,34 @@
       await updateConfig("general", { [key]: value });
     } catch (e) {
       saveError = `保存失败: ${e}`;
-      try { config = await getConfig(); applyTheme(config.general.theme); } catch { /* ignore */ }
+      try {
+        config = await getConfig();
+        claudeRootInput = config.general.claudeRootPath ?? "";
+        applyTheme(config.general.theme);
+      } catch { /* ignore */ }
+    }
+  }
+
+  async function commitClaudeRoot() {
+    const value = claudeRootInput.trim() === "" ? null : claudeRootInput.trim();
+    await updateGeneral("claudeRootPath", value);
+    if (config) claudeRootInput = config.general.claudeRootPath ?? "";
+  }
+
+  async function resetClaudeRoot() {
+    claudeRootInput = "";
+    await updateGeneral("claudeRootPath", null);
+  }
+
+  async function chooseClaudeRoot() {
+    saveError = null;
+    try {
+      const selected = await open({ directory: true, multiple: false, title: "选择 Claude 数据根目录" });
+      if (typeof selected !== "string") return;
+      claudeRootInput = selected;
+      await updateGeneral("claudeRootPath", selected);
+    } catch (e) {
+      saveError = `选择目录失败: ${e}`;
     }
   }
 
@@ -265,6 +295,25 @@
               <option value="dashboard" selected={config.general.defaultTab === "dashboard"}>仪表盘</option>
               <option value="last-session" selected={config.general.defaultTab === "last-session"}>上次会话</option>
             </select>
+          </div>
+          <div class="setting-row setting-row-stack">
+            <div class="setting-info">
+              <span class="setting-label">Claude 数据根目录</span>
+              <span class="setting-desc">留空使用默认目录；项目来自该目录下的 <code>projects</code>，待办来自 <code>todos</code></span>
+            </div>
+            <div class="path-control">
+              <input
+                class="form-input path-input"
+                type="text"
+                placeholder="默认 ~/.claude"
+                aria-label="Claude 数据根目录"
+                bind:value={claudeRootInput}
+                onkeydown={(e) => { if (e.key === "Enter") commitClaudeRoot(); }}
+              />
+              <button class="add-btn" onclick={chooseClaudeRoot}>选择目录</button>
+              <button class="secondary-btn" onclick={commitClaudeRoot}>保存手动输入</button>
+              <button class="secondary-btn" onclick={resetClaudeRoot} disabled={config.general.claudeRootPath === null}>恢复默认</button>
+            </div>
           </div>
           <div class="setting-row">
             <div class="setting-info">
@@ -479,11 +528,17 @@
   .section { display: flex; flex-direction: column; gap: 4px; }
   .section-title { font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 12px; }
   .setting-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-radius: 6px; background: var(--color-surface-raised, var(--color-surface)); }
+  .setting-row-stack { align-items: stretch; flex-direction: column; gap: 8px; }
   .setting-info { display: flex; flex-direction: column; gap: 2px; }
   .setting-label { font-size: 13px; color: var(--color-text); }
   .setting-desc { font-size: 11px; color: var(--color-text-muted); }
   .setting-select { padding: 5px 10px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-surface); color: var(--color-text); font: inherit; font-size: 12px; cursor: pointer; outline: none; }
   .setting-select:focus { border-color: var(--color-border-emphasis); }
+  .path-control { display: flex; align-items: center; gap: 8px; }
+  .path-input { min-width: 0; font-family: var(--font-mono); }
+  .secondary-btn { padding: 4px 12px; border: 1px solid var(--color-border); border-radius: 4px; background: transparent; color: var(--color-text-muted); font: inherit; font-size: 12px; cursor: pointer; transition: background 0.1s; }
+  .secondary-btn:hover:not(:disabled) { background: var(--tool-item-hover-bg); }
+  .secondary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   /* Trigger 区域 */
   .trigger-header { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; }
   .subsection-title { font-size: 13px; font-weight: 600; color: var(--color-text-secondary); margin: 0; }
