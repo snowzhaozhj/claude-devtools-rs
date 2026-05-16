@@ -147,7 +147,11 @@ fn is_shutdown_response(name: &str, input: &serde_json::Value) -> bool {
 ///
 /// 公开 API 不变（spec `ipc-data-api/spec.md` §`extract_session_metadata 公开签名保持纯函数语义`
 /// 间接保护）。内部委托给 `IsOngoingStateMachine`——空序列返回 `false`。
-#[must_use]
+//
+// 不加 `#[must_use]`：本仓 workspace `unused_must_use = "deny"`，给一个**已存在的**
+// `pub` 函数追加 `#[must_use]` 会让忽略返回值的下游调用从编译通过变为 deny lint，
+// 等价源级破坏。新增的 SM 接口 `IsOngoingStateMachine::new` / `finalize` 因为是
+// 新 API 不受此约束。
 pub fn check_messages_ongoing(messages: &[ParsedMessage]) -> bool {
     let mut sm = IsOngoingStateMachine::new();
     for msg in messages {
@@ -531,6 +535,128 @@ mod tests {
         ]
     }
 
+    // ---- codex 二审建议补充：4 类 multi-block / 混合场景 fixture ----
+
+    fn fixture_multi_tooluse_text_mixed() -> Vec<ParsedMessage> {
+        // 一条 assistant message 含多 ToolUse + 多 Text 混合：按块顺序处理后
+        // 末位 block 决定 ongoing。这里末位是 Text（非空）→ ending → false
+        vec![assistant_blocks(
+            "a1",
+            1,
+            vec![
+                ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "Bash".into(),
+                    input: serde_json::json!({}),
+                },
+                ContentBlock::Text {
+                    text: "step 1 done".into(),
+                },
+                ContentBlock::ToolUse {
+                    id: "t2".into(),
+                    name: "Read".into(),
+                    input: serde_json::json!({}),
+                },
+                ContentBlock::Text {
+                    text: "all done.".into(),
+                },
+            ],
+        )]
+    }
+
+    fn fixture_thinking_only() -> Vec<ParsedMessage> {
+        // assistant message 只含非空 Thinking → AI 活动 → ongoing=true
+        vec![assistant_blocks(
+            "a1",
+            1,
+            vec![ContentBlock::Thinking {
+                thinking: "let me think...".into(),
+                signature: String::new(),
+            }],
+        )]
+    }
+
+    fn fixture_shutdown_plus_other_tool_results() -> Vec<ParsedMessage> {
+        // user message 含混合 ToolResult：一个匹配 shutdown 的 + 一个普通的。
+        // 按块顺序：第一个匹配 shutdown → ongoing=false；第二个普通 → ongoing=true。
+        // 末位 block 决定 → ongoing=true（普通 ToolResult）。
+        vec![
+            assistant_blocks(
+                "a1",
+                1,
+                vec![
+                    ContentBlock::ToolUse {
+                        id: "t-shutdown".into(),
+                        name: "SendMessage".into(),
+                        input: serde_json::json!({"type":"shutdown_response","approve":true}),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "t-bash".into(),
+                        name: "Bash".into(),
+                        input: serde_json::json!({}),
+                    },
+                ],
+            ),
+            user_blocks(
+                "u1",
+                2,
+                vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "t-shutdown".into(),
+                        content: serde_json::json!("ok"),
+                        is_error: false,
+                    },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "t-bash".into(),
+                        content: serde_json::json!("ls output"),
+                        is_error: false,
+                    },
+                ],
+            ),
+        ]
+    }
+
+    fn fixture_rejection_multi_tool_results() -> Vec<ParsedMessage> {
+        // is_rejection=true 的 user message 含多 ToolResult：所有 ToolResult 都
+        // 应归 Interruption (ending) → 末位也是 ending → ongoing=false
+        let mut rej = user_blocks(
+            "u1",
+            2,
+            vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: serde_json::json!("..."),
+                    is_error: false,
+                },
+                ContentBlock::ToolResult {
+                    tool_use_id: "t2".into(),
+                    content: serde_json::json!("..."),
+                    is_error: false,
+                },
+            ],
+        );
+        rej.tool_use_result = Some(serde_json::Value::String("User rejected tool use".into()));
+        vec![
+            assistant_blocks(
+                "a1",
+                1,
+                vec![
+                    ContentBlock::ToolUse {
+                        id: "t1".into(),
+                        name: "Bash".into(),
+                        input: serde_json::json!({}),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "t2".into(),
+                        name: "Read".into(),
+                        input: serde_json::json!({}),
+                    },
+                ],
+            ),
+            rej,
+        ]
+    }
+
     fn run_sm(messages: &[ParsedMessage]) -> bool {
         let mut sm = IsOngoingStateMachine::new();
         for msg in messages {
@@ -564,6 +690,36 @@ mod tests {
             assert_eq!(sm, oracle, "SM vs oracle mismatch for fixture {name}");
             assert_eq!(sm, expected, "expected mismatch for fixture {name}");
             // 同时验证公开 API check_messages_ongoing 也走 SM 路径
+            assert_eq!(check_messages_ongoing(&msgs), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn round_trip_multi_block_mixed_fixtures() {
+        // 覆盖 codex 二审建议的 4 类 multi-block / 混合场景。
+        let cases: Vec<(&str, Vec<ParsedMessage>, bool)> = vec![
+            (
+                "multi_tooluse_text_mixed",
+                fixture_multi_tooluse_text_mixed(),
+                false, // 末位 Text → ending
+            ),
+            ("thinking_only", fixture_thinking_only(), true),
+            (
+                "shutdown_plus_other_tool_results",
+                fixture_shutdown_plus_other_tool_results(),
+                true, // 末位是普通 ToolResult → AI 活动
+            ),
+            (
+                "rejection_multi_tool_results",
+                fixture_rejection_multi_tool_results(),
+                false, // 所有 ToolResult 都归 Interruption
+            ),
+        ];
+        for (name, msgs, expected) in cases {
+            let sm = run_sm(&msgs);
+            let oracle = run_oracle(&msgs);
+            assert_eq!(sm, oracle, "SM vs oracle mismatch for fixture {name}");
+            assert_eq!(sm, expected, "expected mismatch for fixture {name}");
             assert_eq!(check_messages_ongoing(&msgs), expected, "{name}");
         }
     }
