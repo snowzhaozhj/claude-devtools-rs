@@ -126,3 +126,48 @@ clean-worktrees:
 # 真删可清理的 worktree + 本地分支
 clean-worktrees-apply:
     bash scripts/clean-worktrees.sh --apply
+
+# ──────── Background 任务分派 ────────
+#
+# 详见 .claude/rules/bg-task-dispatch.md（拆分判断框架 + bg vs subagent 选择 + 6 个踩坑）
+# prompt 模板：.claude/templates/bg-pr-pipeline.md（通用填空）
+
+# 起一个 background claude session 跑 PR 流水线
+# 用法：just bg-pr <name> <prompt-file>
+# 例：  just bg-pr "PR-alpha" .claude/perf-prompts/pr-alpha.md
+bg-pr NAME PROMPT_FILE:
+    @echo "起 background session：{{NAME}}（prompt: {{PROMPT_FILE}}）"
+    @(cd {{justfile_directory()}} && \
+      claude --bg --name "{{NAME}}" --effort high \
+        "$(cat {{PROMPT_FILE}})")
+
+# 列所有 background session 状态摘要（grep result:/needs input:/failed:）
+bg-status:
+    #!/usr/bin/env bash
+    set -e
+    if [ ! -d ~/.claude/jobs ]; then echo "(no bg sessions)"; exit 0; fi
+    for id_dir in ~/.claude/jobs/*/; do
+        id=$(basename "$id_dir")
+        echo "=== $id ==="
+        if claude logs "$id" 2>/dev/null | tr -d '\033' | sed -E 's/\[[0-9;]*[a-zA-Z]//g' | grep -aE "result:|needs input:|failed:" | tail -3; then
+            :
+        else
+            echo "  (running 或 logs 未提炼到状态)"
+        fi
+        echo
+    done
+
+# 停所有 background session（不删 worktree）
+bg-stop-all:
+    #!/usr/bin/env bash
+    set -e
+    if [ ! -d ~/.claude/jobs ]; then echo "(no bg sessions)"; exit 0; fi
+    for id_dir in ~/.claude/jobs/*/; do
+        id=$(basename "$id_dir")
+        claude stop "$id" 2>&1 | head -1
+    done
+
+# 停 + 删某个 bg session 的 worktree（用法：just bg-clean <id>）
+bg-clean ID:
+    -claude stop {{ID}} 2>&1
+    claude rm {{ID}}
