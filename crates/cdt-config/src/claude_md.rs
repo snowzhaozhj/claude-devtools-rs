@@ -364,7 +364,7 @@ mod tests {
     async fn auto_memory_uses_custom_claude_base() {
         let dir = tempdir().unwrap();
         let claude_base = dir.path().join("claude-alt");
-        let project = dir.path().join("proj");
+        let project = PathBuf::from("/workspace/proj");
         let encoded = encode_path(&project.to_string_lossy());
         let memory_dir = claude_base.join("projects").join(encoded).join("memory");
         tokio::fs::create_dir_all(&memory_dir).await.unwrap();
