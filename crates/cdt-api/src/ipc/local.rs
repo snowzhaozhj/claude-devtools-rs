@@ -18,7 +18,6 @@ use cdt_config::{
 };
 use cdt_discover::{
     LocalFileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
-    path_decoder,
 };
 use cdt_parse::parse_file;
 use cdt_ssh::{ActiveContext, SshConnectionManager, parse_ssh_config_file, resolve_host};
@@ -26,6 +25,7 @@ use cdt_watch::FileWatcher;
 
 use super::error::ApiError;
 use super::events::SessionMetadataUpdate;
+use super::parsed_message_cache::{ParsedMessageCache, extract_parsed_messages_cached};
 use super::session_metadata::{
     MetadataCache, extract_session_metadata_cached, try_lookup_cached_metadata,
 };
@@ -337,6 +337,18 @@ pub struct LocalDataApi {
     /// session metadata LRU 缓存，跨 IPC / HTTP 路径复用。**不**走全局单例
     /// （详 change `multi-session-cpu-cache` design D3b）；多实例 cache 隔离。
     metadata_cache: Arc<std::sync::Mutex<MetadataCache>>,
+    /// parsed-message LRU 缓存：按 `(jsonl_path, FileSignature)` 缓存
+    /// `parse_file` 结果，让 `get_tool_output` / `get_image_asset` 命中时
+    /// 跳过整文件 line-by-line parse。详 change `parsed-message-lru-cache`
+    /// design D2/D3；行为契约见 spec `ipc-data-api/spec.md`
+    /// §"`get_tool_output` 与 `get_image_asset` 走 parsed-message LRU 缓存"。
+    parsed_msg_cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
+    /// 缓存 scanner 的 `projects_dir`，让 `get_tool_output` / `get_image_asset`
+    /// hot path 与 `spawn_parsed_msg_cache_invalidator` 共享同一 base path，
+    /// 避免 cache key 不一致（codex 二审 bug：原 hot path 用
+    /// `path_decoder::get_projects_base_path()`、invalidate 用构造时传入的
+    /// `projects_dir`，testbed/SSH/symlink 等场景下 key 不同 → 主动失效永远 miss）。
+    projects_dir: std::path::PathBuf,
 }
 
 impl LocalDataApi {
@@ -351,6 +363,9 @@ impl LocalDataApi {
         let searcher = SessionSearcher::new(fs, cache);
         let (session_metadata_tx, _) =
             broadcast::channel::<SessionMetadataUpdate>(METADATA_BROADCAST_CAPACITY);
+        // 在 move scanner 进 Mutex 前先 clone projects_dir，让 hot path /
+        // invalidate task 共享同一 base path（详上方字段 doc）。
+        let projects_dir = scanner.projects_dir().to_path_buf();
         Self {
             scanner: Mutex::new(scanner),
             searcher,
@@ -364,6 +379,8 @@ impl LocalDataApi {
             metadata_scan_semaphore: Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY)),
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
+            parsed_msg_cache: Arc::new(std::sync::Mutex::new(ParsedMessageCache::default())),
+            projects_dir,
         }
     }
 
@@ -403,12 +420,23 @@ impl LocalDataApi {
             config_mgr.clone(),
             notif_mgr.clone(),
             error_tx.clone(),
-            projects_dir,
+            projects_dir.clone(),
         );
         tokio::spawn(pipeline.run());
 
         let (session_metadata_tx, _) =
             broadcast::channel::<SessionMetadataUpdate>(METADATA_BROADCAST_CAPACITY);
+
+        // parsed-message cache 主动失效路径：订阅 file-change 广播，按
+        // `(project_id, session_id)` 推算主 session JSONL 路径并从 cache 中
+        // remove。详 change `parsed-message-lru-cache` design D9；spec
+        // `ipc-data-api/spec.md` §"parsed-message 缓存按 file-change 广播主动失效"。
+        let parsed_msg_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
+        spawn_parsed_msg_cache_invalidator(
+            parsed_msg_cache.clone(),
+            watcher.subscribe_files(),
+            projects_dir.clone(),
+        );
 
         Self {
             scanner: Mutex::new(scanner),
@@ -423,6 +451,8 @@ impl LocalDataApi {
             metadata_scan_semaphore: Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY)),
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
+            parsed_msg_cache,
+            projects_dir,
         }
     }
 
@@ -591,6 +621,68 @@ impl LocalDataApi {
 /// 由 `(offset).to_string()` 生成（纯 ASCII 数字），不会与分隔符冲突。
 fn metadata_scan_key(project_id: &str, cursor: Option<&str>) -> String {
     format!("{project_id}|{}", cursor.unwrap_or(""))
+}
+
+/// 启动一个后台 task，订阅 `FileWatcher::subscribe_files()` 广播，对每条
+/// `FileChangeEvent` 按 `projects_dir / project_id / "{session_id}.jsonl"`
+/// 推算主 session JSONL 路径，**stat 比对当前 `FileSignature` 与 cache 中记录**，
+/// 仅在 signature 不一致时才从 parsed-message cache 中 remove。
+///
+/// 这层 stat 比对避免 watcher spurious 事件（CI 上 inotify 启动期对刚创建的
+/// watch dir 偶发"无内容变化"事件、metadata-only touch 等）错杀有效 cache。
+/// stat 失败（文件被删 / 权限）走保守 `remove` —— 反正下次 lookup 也 stat fail，
+/// 提前清掉 cache entry 不影响正确性。
+///
+/// 行为契约：spec `ipc-data-api/spec.md` §"parsed-message 缓存按 file-change
+/// 广播主动失效"。`broadcast::Receiver::recv` 返回 `Lagged` 时静默 continue
+/// （下次 lookup 由被动 `FileSignature` mismatch 兜底）；`Closed` 时退出 loop。
+///
+/// **限制**（详 design D9 risks）：subagent JSONL 路径
+/// （`<project>/<session>/subagents/agent-*.jsonl`）的失效仅靠被动签名兜底——
+/// `FileChangeEvent` 把嵌套 subagent 改动路由到父 `session_id`，本 task 无法
+/// 还原具体 `agent-<sub_id>.jsonl` 路径。
+fn spawn_parsed_msg_cache_invalidator(
+    cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
+    mut rx: broadcast::Receiver<cdt_core::FileChangeEvent>,
+    projects_dir: std::path::PathBuf,
+) {
+    use crate::cache_signature::FileSignature;
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(evt) => {
+                    // 顶层 dir-create 事件 session_id 为空，无主 JSONL 路径可推算，跳过。
+                    if evt.session_id.is_empty() {
+                        continue;
+                    }
+                    let path = projects_dir
+                        .join(&evt.project_id)
+                        .join(format!("{}.jsonl", evt.session_id));
+                    match tokio::fs::metadata(&path).await {
+                        Ok(meta) => {
+                            let current_sig = FileSignature::from_metadata(&meta);
+                            cache
+                                .lock()
+                                .expect("parsed message cache mutex poisoned")
+                                .remove_if_signature_mismatch(&path, &current_sig);
+                        }
+                        Err(_) => {
+                            // 文件已删或 stat 失败：保守 remove，反正下次 lookup
+                            // 也会 stat fail，提前清掉不影响正确性。
+                            cache
+                                .lock()
+                                .expect("parsed message cache mutex poisoned")
+                                .remove(&path);
+                        }
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    // lag 仅代表事件激增；下次 lookup 由被动 FileSignature 兜底
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1083,10 +1175,18 @@ impl DataApi for LocalDataApi {
         // `{projects_dir}/*/{root_session_id}/subagents/agent-<sub>.jsonl`
         // 全局扫（新结构）；旧结构 fallback 走"找到 root jsonl 所在 project_dir
         // 后在该目录内查 flat agent jsonl"。
-        let projects_dir = path_decoder::get_projects_base_path();
+        //
+        // 用 `&self.projects_dir`（构造时从 scanner 取）而非全局
+        // `path_decoder::get_projects_base_path()`，与 `get_tool_output` /
+        // `get_image_asset` / `spawn_parsed_msg_cache_invalidator` 共用同一 base
+        // path（codex 三轮二审找到的同款 bug）。
         let new_structure_path = if CROSS_PROJECT_SUBAGENT_SCAN {
-            find_subagent_jsonl_cross_project(&projects_dir, root_session_id, subagent_session_id)
-                .await
+            find_subagent_jsonl_cross_project(
+                &self.projects_dir,
+                root_session_id,
+                subagent_session_id,
+            )
+            .await
         } else {
             None
         };
@@ -1094,7 +1194,7 @@ impl DataApi for LocalDataApi {
             p
         } else {
             // 旧结构兜底：找 root jsonl 所在 project_dir 后在该目录扫 flat。
-            let Ok(mut entries) = tokio::fs::read_dir(&projects_dir).await else {
+            let Ok(mut entries) = tokio::fs::read_dir(&self.projects_dir).await else {
                 return Ok(serde_json::Value::Array(Vec::new()));
             };
             let mut fallback: Option<std::path::PathBuf> = None;
@@ -1140,21 +1240,23 @@ impl DataApi for LocalDataApi {
         };
 
         // 定位 jsonl：root 自己 or `<root>/subagents/agent-<sub>.jsonl`。
-        let projects_dir = path_decoder::get_projects_base_path();
+        // 用 `self.projects_dir`（构造时从 scanner 取）确保与
+        // `spawn_parsed_msg_cache_invalidator` 的 base path 一致（codex 二审 bug 1）。
         let Some(jsonl_path) =
-            locate_session_jsonl(&projects_dir, root_session_id, session_id).await
+            locate_session_jsonl(&self.projects_dir, root_session_id, session_id).await
         else {
             tracing::warn!(target: "cdt_api::image", root_session_id, session_id, "jsonl not found");
             return Ok(empty_data_uri());
         };
 
         // parse 整个文件 → 找 chunk_uuid → 取 block_index 的 image。
-        let messages = match parse_file(&jsonl_path).await {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(target: "cdt_api::image", error = %e, "parse failed");
-                return Ok(empty_data_uri());
-            }
+        // 走 parsed-message LRU cache：命中时复用 Arc<Vec<ParsedMessage>>，
+        // 跳过整文件 line-by-line parse；详 change `parsed-message-lru-cache`。
+        let Some(messages) =
+            extract_parsed_messages_cached(&self.parsed_msg_cache, &jsonl_path).await
+        else {
+            tracing::warn!(target: "cdt_api::image", "parse failed or stat error; returning empty data URI");
+            return Ok(empty_data_uri());
         };
         let Some((data_b64, media_type)) =
             find_image_block_in_messages(&messages, &chunk_uuid, block_index)
@@ -1177,23 +1279,28 @@ impl DataApi for LocalDataApi {
         session_id: &str,
         tool_use_id: &str,
     ) -> Result<cdt_core::ToolOutput, ApiError> {
-        let projects_dir = path_decoder::get_projects_base_path();
+        // 用 `self.projects_dir`（构造时从 scanner 取）确保与
+        // `spawn_parsed_msg_cache_invalidator` 的 base path 一致（codex 二审 bug 1）。
         let Some(jsonl_path) =
-            locate_session_jsonl(&projects_dir, root_session_id, session_id).await
+            locate_session_jsonl(&self.projects_dir, root_session_id, session_id).await
         else {
             tracing::warn!(target: "cdt_api::tool_output", root_session_id, session_id, "jsonl not found");
             return Ok(cdt_core::ToolOutput::Missing);
         };
 
-        let messages = match parse_file(&jsonl_path).await {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(target: "cdt_api::tool_output", error = %e, "parse failed");
-                return Ok(cdt_core::ToolOutput::Missing);
-            }
+        // 走 parsed-message LRU cache：命中时复用 Arc<Vec<ParsedMessage>>，
+        // 跳过整文件 line-by-line parse；详 change `parsed-message-lru-cache`。
+        let Some(messages) =
+            extract_parsed_messages_cached(&self.parsed_msg_cache, &jsonl_path).await
+        else {
+            tracing::debug!(target: "cdt_api::tool_output", "parse failed or stat error; returning Missing");
+            return Ok(cdt_core::ToolOutput::Missing);
         };
 
-        // build_chunks 后线性 scan tool_executions 找 tool_use_id 匹配
+        // build_chunks 后线性 scan tool_executions 找 tool_use_id 匹配。
+        // build_chunks 当前不缓存——见 change `parsed-message-lru-cache` design D2/D6
+        // Non-Goals 与决策记录：先缓存 parse 一层（200-400ms 大头），后续若 perf 数据
+        // 表明 build_chunks（100-200ms）也是瓶颈再补 cache 一层。
         let chunks = cdt_analyze::build_chunks(&messages);
         for chunk in &chunks {
             if let cdt_core::Chunk::Ai(ai) = chunk {
@@ -1492,6 +1599,31 @@ impl DataApi for LocalDataApi {
 // =============================================================================
 
 impl LocalDataApi {
+    /// 测试 helper：返回 parsed-message cache 当前条目数。仅 integration test
+    /// 用来验证 file-change 广播 invalidate 路径生效（见 change
+    /// `parsed-message-lru-cache`）。
+    ///
+    /// 仅在 `test-utils` feature 启用时编译——release / 默认构建 SHALL NOT
+    /// 含此 API（codex 二审 bug 2：`#[doc(hidden)] pub` 只隐藏文档不限制调用）。
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn parsed_msg_cache_len(&self) -> usize {
+        self.parsed_msg_cache
+            .lock()
+            .expect("parsed message cache mutex poisoned")
+            .len()
+    }
+
+    /// 测试 helper：触发 parsed-message cache 对 `path` 的 `extract` 写入。
+    ///
+    /// 仅在 `test-utils` feature 启用时编译。
+    #[cfg(any(test, feature = "test-utils"))]
+    pub async fn prime_parsed_msg_cache_for_test(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<Arc<Vec<cdt_core::ParsedMessage>>> {
+        extract_parsed_messages_cached(&self.parsed_msg_cache, path).await
+    }
+
     /// 添加 trigger，返回更新后的 `AppConfig`。
     pub async fn add_trigger(
         &self,

@@ -101,6 +101,8 @@ jobs:
           # v2→v3（cache-bin: false 上线时清池，确保不再 hit 含 toolchain 的旧 cache）。
           prefix-key: v3-rust
       - name: cargo test --workspace (cdt-watch excluded)
-        run: cargo test --workspace --exclude cdt-watch --locked
+        # `cdt-api/test-utils` feature 启用集成测试访问 cache 内部状态的 helper
+        # （详 change `parsed-message-lru-cache`）；release/默认构建不含。
+        run: cargo test --workspace --exclude cdt-watch --features cdt-api/test-utils --locked
       - name: cargo test -p cdt-watch (single-threaded)
         run: cargo test -p cdt-watch --locked -- --test-threads=1

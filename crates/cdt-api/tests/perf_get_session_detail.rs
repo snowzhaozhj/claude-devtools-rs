@@ -352,3 +352,88 @@ fn accumulate_user_content(content: &cdt_core::MessageContent, b: &mut PayloadBr
         }
     }
 }
+
+/// 验证 `get_tool_output` 的 parsed-message LRU cache hit 路径：
+/// 第一次调用触发 cache miss + 完整 parse；第二次（同 session，不同
+/// `tool_use_id`）命中 cache，应显著快于第一次。
+///
+/// 跑法：
+/// ```sh
+/// cargo test --release -p cdt-api --test perf_get_session_detail \
+///   -- perf_get_tool_output_cache_hit_path --ignored --nocapture
+/// ```
+///
+/// 行为契约：spec `ipc-data-api/spec.md` §"`get_tool_output` 与
+/// `get_image_asset` 走 parsed-message LRU 缓存"。详 change
+/// `parsed-message-lru-cache` design D2/D3。
+#[tokio::test]
+#[ignore = "perf bench, requires real ~/.claude/projects/ data"]
+async fn perf_get_tool_output_cache_hit_path() {
+    let projects = projects_dir();
+    if !projects.exists() {
+        eprintln!("跳过：{} 不存在", projects.display());
+        return;
+    }
+
+    let project_id = "-Users-zhaohejie-RustroverProjects-Project-claude-devtools-rs";
+    let project_dir = projects.join(project_id);
+    if !project_dir.exists() {
+        eprintln!("跳过：{} 不存在", project_dir.display());
+        return;
+    }
+
+    // 选一个最大 fixture 让 cache 收益最明显
+    let sid = "46a25772-b57c-43bb-9ca6-f0292f9ca912";
+    let jsonl = project_dir.join(format!("{sid}.jsonl"));
+    if !jsonl.exists() {
+        eprintln!("跳过：{} 不存在", jsonl.display());
+        return;
+    }
+
+    let config_dir = tempfile::tempdir().expect("tempdir");
+    let mut config_mgr = ConfigManager::new(Some(config_dir.path().join("config.json")));
+    config_mgr.load().await.expect("config load");
+    let api = LocalDataApi::new(
+        ProjectScanner::new(local_handle(), projects.clone()),
+        config_mgr,
+        NotificationManager::new(None),
+        SshConnectionManager::new(),
+    );
+    std::mem::forget(config_dir);
+
+    // 用一个不存在的 tool_use_id 让 build_chunks 后线性扫不到——cache miss / hit
+    // 行为与真实 tool_use_id 一致（hot path 全路径执行），只是末端返回 Missing。
+    // 重复 5 次模拟 "用户连续展开 5 个 tool"：第一次 cache miss + 完整 parse + build_chunks，
+    // 后续 4 次 cache hit 跳过 parse。
+    eprintln!("=== get_tool_output cache hit path ({sid}) ===");
+
+    let mut timings = Vec::new();
+    for i in 0..5 {
+        let t = Instant::now();
+        let _ = api
+            .get_tool_output(sid, sid, &format!("nonexistent-{i}"))
+            .await
+            .expect("get_tool_output");
+        timings.push(t.elapsed().as_millis());
+    }
+
+    eprintln!("call timings (ms): {timings:?}");
+    let first = timings[0];
+    let avg_rest: u128 = timings[1..].iter().sum::<u128>() / (timings.len() as u128 - 1);
+    // 仅打印估算，cast 截断 mantissa 不影响诊断精度
+    #[allow(clippy::cast_precision_loss)]
+    let speedup = (first as f64) / (avg_rest.max(1) as f64);
+    eprintln!(
+        "first={first}ms (cache miss + full parse + build_chunks)\n\
+         avg of subsequent 4={avg_rest}ms (cache hit, parse skipped)\n\
+         speedup={speedup:.1}x",
+    );
+
+    // 软断言：第二次起应明显快于第一次（>= 4x）；环境 flake 下取 2x 兜底
+    if avg_rest > 0 {
+        assert!(
+            first >= avg_rest * 2,
+            "cache hit 应显著快于 miss：first={first}ms, avg_rest={avg_rest}ms"
+        );
+    }
+}
