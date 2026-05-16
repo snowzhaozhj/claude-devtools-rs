@@ -74,7 +74,11 @@ export function createDynamicVirtualizer(opts: DynamicVirtualizerOpts): DynamicV
 
     const startOffset = Math.max(0, scrollTop - overscanPx);
     const endOffset = Math.min(totalSize, scrollTop + viewportHeight + overscanPx);
-    const startIndex = Math.min(count - 1, lowerBound(offsets, startOffset));
+    const startLowerBound = lowerBound(offsets, startOffset);
+    const startIndex = Math.min(
+      count - 1,
+      Math.max(0, offsets[startLowerBound] === startOffset ? startLowerBound : startLowerBound - 1),
+    );
     let endIndex = Math.min(count - 1, lowerBound(offsets, endOffset));
     if (offsets[endIndex] < endOffset) endIndex = Math.min(count - 1, endIndex + 1);
 

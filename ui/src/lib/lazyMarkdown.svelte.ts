@@ -45,7 +45,7 @@ interface LazyMarkdownObserver {
     el: HTMLElement,
     text: string,
     onRendered?: (el: HTMLElement) => void | Promise<void>,
-  ): void;
+  ): () => void;
   /**
    * 同步把所有 pending 占位渲染为真实 HTML，供搜索 / 打印 / 导出等需要
    * 全文 DOM 的场景调用。幂等：无 pending 时立即返回。回滚分支为 no-op。
@@ -69,6 +69,7 @@ export function createLazyMarkdownObserver(
     return {
       observe(el, text, onRendered) {
         renderInto(el, text, onRendered);
+        return () => {};
       },
       flushAll() {
         // no-op：disabled 分支下 observe() 已在注册时同步渲染，不存在 pending
@@ -103,9 +104,13 @@ export function createLazyMarkdownObserver(
 
   return {
     observe(el, text, onRendered) {
-      if (el.dataset.rendered === "1") return;
+      if (el.dataset.rendered === "1") return () => {};
       pending.set(el, { text, onRendered });
       io.observe(el);
+      return () => {
+        pending.delete(el);
+        io.unobserve(el);
+      };
     },
     flushAll() {
       if (pending.size === 0) return;

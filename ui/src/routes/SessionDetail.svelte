@@ -39,6 +39,7 @@
   let loading = $state(true);
   let error: string | null = $state(null);
   let conversationEl: HTMLElement | undefined = $state();
+  let pendingStickToBottom = false;
 
   // Lazy markdown observer：root 必须是 conversation 容器；mount 时创建，
   // unmount 时 disconnect。observer 创建于 conversationEl 首次绑定后
@@ -56,7 +57,7 @@
       if (!obs) return;
       // 占位高度估算：进入视口前 min-height 控制 layout 稳定
       el.style.minHeight = `${estimatePlaceholderHeight(text, kind)}px`;
-      obs.observe(el, text, async (rendered) => {
+      return obs.observe(el, text, async (rendered) => {
         // 渲染完成后清理 min-height（让真实高度接管），并扫该子树的 mermaid block
         rendered.style.minHeight = "";
         await processMermaidBlocks(rendered);
@@ -118,6 +119,7 @@
       // 通知 SearchBar 内容已变（新增 chunk / 重新 hydrate），触发自动重搜
       searchContentVersion++;
       if (wasAtBottom) {
+        pendingStickToBottom = true;
         await tick();
         if (conversationEl) {
           scrollConversationToEnd();
@@ -404,6 +406,7 @@
       let frame = 0;
       const measure = () => {
         chunkVirtualizer.measure(index, el.getBoundingClientRect().height + 4);
+        stickToBottomAfterMeasurement(index);
       };
       const ro = new ResizeObserver(() => {
         cancelAnimationFrame(frame);
@@ -426,6 +429,14 @@
     if (!conversationEl) return;
     if (virtualized) chunkVirtualizer.scrollToEnd();
     else conversationEl.scrollTop = conversationEl.scrollHeight;
+  }
+
+  function stickToBottomAfterMeasurement(index: number) {
+    if (!pendingStickToBottom || !detail || index !== detail.chunks.length - 1) return;
+    requestAnimationFrame(() => {
+      scrollConversationToEnd();
+      pendingStickToBottom = false;
+    });
   }
 
   $effect(() => {

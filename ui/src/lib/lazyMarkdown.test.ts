@@ -126,6 +126,20 @@ describe('createLazyMarkdownObserver.flushAll', () => {
     expect(el.innerHTML).toBe('<p>已存在</p>')
   })
 
+  test('observe 返回 cleanup，未渲染节点卸载时从 pending 和 IO 中移除', () => {
+    const root = makePlaceholder()
+    const observer = createLazyMarkdownObserver(root)
+    const el = makePlaceholder()
+
+    const cleanup = observer.observe(el, 'will unmount')
+    cleanup()
+    observer.flushAll()
+
+    expect(lastObserver?.unobserved).toContain(el)
+    expect(el.dataset.rendered).toBeUndefined()
+    expect(el.innerHTML).toBe('')
+  })
+
   test('disconnect 后 pending 清空，避免内存泄漏', () => {
     const root = makePlaceholder()
     const observer = createLazyMarkdownObserver(root)

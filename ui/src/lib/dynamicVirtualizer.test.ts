@@ -31,6 +31,15 @@ describe('createDynamicVirtualizer', () => {
     expect(v.bottomSpacer()).toBe(1100)
   })
 
+  test('startOffset 落在 row 内部时包含覆盖该 offset 的 row', () => {
+    const v = createVirtualizer()
+    const el = makeScroller(300, 475)
+    v.bindScrollEl(el)
+
+    expect(v.virtualItems()[0].index).toBe(4)
+    expect(v.topSpacer()).toBe(400)
+  })
+
   test('实测高度覆盖估算并更新总高度', () => {
     const v = createVirtualizer(3)
     const el = makeScroller(200)
