@@ -71,7 +71,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
     let mut pending_slashes: Vec<SlashCommand> = Vec::new();
     let mut pending_teammates: Vec<TeammateMessage> = Vec::new();
     let mut used_send_message_ids: HashSet<String> = HashSet::new();
-    let mut ai_chunk_ordinals: HashMap<String, usize> = HashMap::new();
+    let mut used_chunk_ids: HashSet<String> = HashSet::new();
 
     chunk_loop(
         messages,
@@ -81,7 +81,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
         &mut pending_slashes,
         &mut pending_teammates,
         &mut used_send_message_ids,
-        &mut ai_chunk_ordinals,
+        &mut used_chunk_ids,
         &follow_ups,
     );
 
@@ -92,7 +92,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
         &mut pending_slashes,
         &mut pending_teammates,
         &mut used_send_message_ids,
-        &mut ai_chunk_ordinals,
+        &mut used_chunk_ids,
     );
     drain_trailing_teammates(&mut out, &mut pending_teammates, &mut used_send_message_ids);
     out
@@ -141,7 +141,7 @@ fn chunk_loop(
     pending_slashes: &mut Vec<SlashCommand>,
     pending_teammates: &mut Vec<TeammateMessage>,
     used_send_message_ids: &mut HashSet<String>,
-    ai_chunk_ordinals: &mut HashMap<String, usize>,
+    used_chunk_ids: &mut HashSet<String>,
     follow_ups: &HashMap<String, String>,
 ) {
     for msg in messages {
@@ -169,10 +169,10 @@ fn chunk_loop(
                     pending_slashes,
                     pending_teammates,
                     used_send_message_ids,
-                    ai_chunk_ordinals,
+                    used_chunk_ids,
                 );
                 out.push(Chunk::Compact(CompactChunk {
-                    chunk_id: msg.uuid.clone(),
+                    chunk_id: next_non_ai_chunk_id(&msg.uuid, used_chunk_ids),
                     uuid: msg.uuid.clone(),
                     timestamp: msg.timestamp,
                     duration_ms: None,
@@ -220,10 +220,10 @@ fn chunk_loop(
                         pending_slashes,
                         pending_teammates,
                         used_send_message_ids,
-                        ai_chunk_ordinals,
+                        used_chunk_ids,
                     );
                     out.push(Chunk::User(UserChunk {
-                        chunk_id: msg.uuid.clone(),
+                        chunk_id: next_non_ai_chunk_id(&msg.uuid, used_chunk_ids),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -241,10 +241,10 @@ fn chunk_loop(
                         pending_slashes,
                         pending_teammates,
                         used_send_message_ids,
-                        ai_chunk_ordinals,
+                        used_chunk_ids,
                     );
                     out.push(Chunk::System(SystemChunk {
-                        chunk_id: msg.uuid.clone(),
+                        chunk_id: next_non_ai_chunk_id(&msg.uuid, used_chunk_ids),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -265,14 +265,14 @@ fn chunk_loop(
                         pending_slashes,
                         pending_teammates,
                         used_send_message_ids,
-                        ai_chunk_ordinals,
+                        used_chunk_ids,
                     );
                     // 普通用户输入会"打断" slash → AIChunk 的紧邻关系：
                     // 对齐原版 extractPrecedingSlashInfo 只看紧邻前一个 UserGroup 的语义，
                     // 未被 AIChunk 消费的 slash 在此抛弃，不会跨过这条 user 挂到后续 AI。
                     pending_slashes.clear();
                     out.push(Chunk::User(UserChunk {
-                        chunk_id: msg.uuid.clone(),
+                        chunk_id: next_non_ai_chunk_id(&msg.uuid, used_chunk_ids),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -292,7 +292,7 @@ fn chunk_loop(
                     pending_slashes,
                     pending_teammates,
                     used_send_message_ids,
-                    ai_chunk_ordinals,
+                    used_chunk_ids,
                 );
                 append_interruption_to_last_ai(out, msg);
             }
@@ -486,7 +486,7 @@ pub fn build_chunks_with_subagents(
     let mut pending_slashes: Vec<SlashCommand> = Vec::new();
     let mut pending_teammates: Vec<TeammateMessage> = Vec::new();
     let mut used_send_message_ids: HashSet<String> = HashSet::new();
-    let mut ai_chunk_ordinals: HashMap<String, usize> = HashMap::new();
+    let mut used_chunk_ids: HashSet<String> = HashSet::new();
 
     chunk_loop(
         messages,
@@ -496,7 +496,7 @@ pub fn build_chunks_with_subagents(
         &mut pending_slashes,
         &mut pending_teammates,
         &mut used_send_message_ids,
-        &mut ai_chunk_ordinals,
+        &mut used_chunk_ids,
         &follow_ups,
     );
 
@@ -507,7 +507,7 @@ pub fn build_chunks_with_subagents(
         &mut pending_slashes,
         &mut pending_teammates,
         &mut used_send_message_ids,
-        &mut ai_chunk_ordinals,
+        &mut used_chunk_ids,
     );
     drain_trailing_teammates(&mut out, &mut pending_teammates, &mut used_send_message_ids);
 
@@ -590,17 +590,55 @@ fn find_ai_chunk_for_task<'a>(
     assistant_match
 }
 
+/// 为 `AIChunk` 生成稳定唯一 `chunk_id`。
+///
+/// 形态 `ai:<base>:<n>`（`base = responses[0].uuid`，`n` 从 0 起），并在
+/// `used_chunk_ids` 已含相同 candidate 时继续递增 `n` 直到不撞。这层 set 校验
+/// 是 codex 二审 PR #116 提的 robustness 兜底——理论上 `ai:` 前缀已与裸 uuid
+/// 隔离 namespace，set 检查只在"上游 uuid 极端含 `ai:<base>:<n>` 形态"的 corner
+/// case 下生效，但确保 spec "MUST 唯一" 硬约束在所有上游输入下都成立。
 fn next_ai_chunk_id(
     responses: &[AssistantResponse],
-    ordinals: &mut HashMap<String, usize>,
+    used_chunk_ids: &mut HashSet<String>,
 ) -> String {
     let base = responses
         .first()
         .map_or_else(|| "empty".to_owned(), |response| response.uuid.clone());
-    let ordinal = ordinals.entry(base.clone()).or_default();
-    let chunk_id = format!("ai:{base}:{ordinal}");
-    *ordinal += 1;
-    chunk_id
+    let mut n: usize = 0;
+    loop {
+        let candidate = format!("ai:{base}:{n}");
+        if used_chunk_ids.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// 为 `UserChunk` / `SystemChunk` / `CompactChunk` 生成稳定唯一 `chunk_id`。
+///
+/// 首次出现某 `uuid` → 返回裸 `uuid`（保持与历史 `chunk_id` 字节级一致，前端
+/// `expandedItems` 等已缓存状态不失效）；
+/// 后续出现同 `uuid` → 返回 `<uuid>:<n>`（`n` 从 1 起），消歧。
+///
+/// `used_chunk_ids` 是 build 阶段的全局 set——`next_ai_chunk_id` 和本函数共用，
+/// 任何 candidate 已被占用时继续递增后缀直到不撞，保证 spec "MUST 唯一" 硬
+/// 约束在 `<uuid>` 与 `<uuid>:<n>` 跨形态撞车的 corner case（codex 二审 PR
+/// #116 Bug 2）下也成立。
+///
+/// Spec：`openspec/specs/ipc-data-api/spec.md` §`Stable chunk identifiers in
+/// SessionDetail`。
+fn next_non_ai_chunk_id(uuid: &str, used_chunk_ids: &mut HashSet<String>) -> String {
+    if used_chunk_ids.insert(uuid.to_owned()) {
+        return uuid.to_owned();
+    }
+    let mut n: usize = 1;
+    loop {
+        let candidate = format!("{uuid}:{n}");
+        if used_chunk_ids.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 fn flush_buffer(
@@ -610,7 +648,7 @@ fn flush_buffer(
     pending_slashes: &mut Vec<SlashCommand>,
     pending_teammates: &mut Vec<TeammateMessage>,
     used_send_message_ids: &mut HashSet<String>,
-    ai_chunk_ordinals: &mut HashMap<String, usize>,
+    used_chunk_ids: &mut HashSet<String>,
 ) {
     if buffer.is_empty() {
         // buffer 空但 pending teammate 非空（极少见）：保留 pending 给下一轮 flush
@@ -618,7 +656,7 @@ fn flush_buffer(
         return;
     }
     let responses = std::mem::take(buffer);
-    let chunk_id = next_ai_chunk_id(&responses, ai_chunk_ordinals);
+    let chunk_id = next_ai_chunk_id(&responses, used_chunk_ids);
     let metrics = aggregate_metrics(&responses);
     let semantic_steps = extract_semantic_steps(&responses);
     let timestamp = responses.first().map(|r| r.timestamp).unwrap_or_default();
@@ -966,6 +1004,78 @@ mod tests {
             .collect();
         assert_eq!(first_ids, vec!["ai:dup:0", "ai:dup:1"]);
         assert_eq!(second_ids, first_ids);
+    }
+
+    #[test]
+    fn duplicate_user_uuid_gets_stable_unique_chunk_ids() {
+        // 模拟 `claude --bg` 启动 bg session 时把初始 prompt 以同 uuid
+        // 回放到主 session JSONL 的场景（line 6 vs line 1077 真实命中）。
+        let msgs = vec![
+            user("u-dup", 1, "first input"),
+            assistant("a1", 2, &[ContentBlock::Text { text: "ack".into() }]),
+            user("u-dup", 3, "bg replay"),
+        ];
+        let first = build_chunks(&msgs);
+        let second = build_chunks(&msgs);
+        let user_ids: Vec<_> = first
+            .iter()
+            .filter_map(|chunk| match chunk {
+                Chunk::User(u) => Some(u.chunk_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_ids, vec!["u-dup", "u-dup:1"]);
+        let all_ids: Vec<_> = first.iter().map(chunk_id_of).collect();
+        let uniq: std::collections::HashSet<_> = all_ids.iter().copied().collect();
+        assert_eq!(
+            uniq.len(),
+            all_ids.len(),
+            "all chunk_ids must be unique within one return",
+        );
+        let second_user_ids: Vec<_> = second
+            .iter()
+            .filter_map(|chunk| match chunk {
+                Chunk::User(u) => Some(u.chunk_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(second_user_ids, user_ids);
+    }
+
+    #[test]
+    fn user_uuid_collides_with_suffix_form_still_unique() {
+        // Codex CR PR #116 Bug 2 兜底：uuid="abc" 与 uuid="abc:1" 同 session 出现时，
+        // 朴素 `<uuid>` + `<uuid>:<n>` 策略会撞——`abc` 第二次出现产 `abc:1`，
+        // 与已有 uuid=`abc:1` 第一次产出的 `abc:1` 撞。
+        // 正确行为：基于全局 used_chunk_ids set，撞了继续递增到不撞。
+        let msgs = vec![
+            user("abc", 1, "first"),
+            assistant("a1", 2, &[ContentBlock::Text { text: "ack".into() }]),
+            user("abc:1", 3, "uses suffix form as own uuid"),
+            assistant("a2", 4, &[ContentBlock::Text { text: "ack".into() }]),
+            user("abc", 5, "abc again"),
+        ];
+        let chunks = build_chunks(&msgs);
+        let user_ids: Vec<_> = chunks
+            .iter()
+            .filter_map(|c| match c {
+                Chunk::User(u) => Some(u.chunk_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_ids, vec!["abc", "abc:1", "abc:2"]);
+        let all_ids: Vec<_> = chunks.iter().map(chunk_id_of).collect();
+        let uniq: std::collections::HashSet<_> = all_ids.iter().copied().collect();
+        assert_eq!(uniq.len(), all_ids.len());
+    }
+
+    fn chunk_id_of(c: &Chunk) -> &str {
+        match c {
+            Chunk::Ai(x) => &x.chunk_id,
+            Chunk::User(x) => &x.chunk_id,
+            Chunk::System(x) => &x.chunk_id,
+            Chunk::Compact(x) => &x.chunk_id,
+        }
     }
 
     #[test]
