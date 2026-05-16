@@ -33,6 +33,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Install Linux deps
@@ -51,7 +53,19 @@ jobs:
         run: |
           jq -e '.thresholds and .benches and (.benches | length > 0)' tests/perf-baseline.json \
             || { echo "baseline JSON 不合法"; exit 1; }
-      - name: 跑 perf bench
+      - name: 跑 base perf bench
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          rm -rf target/perf-base
+          mkdir -p target/perf-base
+          git archive "${{ github.event.pull_request.base.sha }}" | tar -x -C target/perf-base
+          cp scripts/run-perf-bench.sh target/perf-base/scripts/run-perf-bench.sh
+          cp crates/cdt-api/tests/perf_fixture.rs target/perf-base/crates/cdt-api/tests/perf_fixture.rs
+          cp crates/cdt-api/tests/perf_cold_scan.rs target/perf-base/crates/cdt-api/tests/perf_cold_scan.rs
+          cp crates/cdt-api/tests/perf_get_session_detail.rs target/perf-base/crates/cdt-api/tests/perf_get_session_detail.rs
+          (cd target/perf-base && CDT_PERF_USE_FIXTURE=1 bash scripts/run-perf-bench.sh --runs 3 --out ../perf-report-base.json)
+      - name: 跑 PR perf bench
         id: bench
         run: |
           set +e
@@ -65,7 +79,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: perf-report-${{ github.run_id }}
-          path: target/perf-report.json
+          path: |
+            target/perf-report.json
+            target/perf-report-base.json
           retention-days: 30
       - name: 渲染 PR 评论
         if: github.event_name == 'pull_request' && always()
@@ -81,6 +97,9 @@ jobs:
               return;
             }
             const report = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const basePath = 'target/perf-report-base.json';
+            const baseReport = fs.existsSync(basePath) ? JSON.parse(fs.readFileSync(basePath, 'utf8')) : null;
+            const baseByName = new Map((baseReport?.results || []).map(r => [r.name, r]));
             const exitCode = process.env.PERF_EXIT_CODE || '?';
 
             const MARKER = '<!-- perf-gate-bot -->';
@@ -91,27 +110,31 @@ jobs:
             const measuredCount = results.filter(r => r.status === 'measured').length;
             const verdict = failed.length === 0 ? 'PASS' : 'FAIL';
 
-            const fmtDeltaMeaning = (m, lowerIsBetter = true) => {
-              if (!m || m.delta_pct == null) return '无 baseline 对比';
-              const abs = Math.abs(m.delta_pct);
-              if (m.delta_pct === 0) return '与 baseline 持平';
-              if (lowerIsBetter) return m.delta_pct < 0 ? `比 baseline 少 ${abs}%` : `比 baseline 多 ${abs}%`;
-              return m.delta_pct < 0 ? `比 baseline 低 ${abs}%` : `比 baseline 高 ${abs}%`;
+            const pctDelta = (actual, base) => {
+              if (actual == null || base == null || base === 0) return null;
+              return Math.round(((actual - base) / base) * 1000) / 10;
             };
-            const fmtMs = (m) => m ? `${m.actual} ms<br/>${fmtDeltaMeaning(m)}` : '—';
-            const fmtRatio = (m) => m ? `${m.actual}<br/>上限 ${m.threshold_max}` : '—';
-            const fmtRss = (m) => {
+            const fmtMainDelta = (actual, base, lowerIsBetter = true) => {
+              const delta = pctDelta(actual, base);
+              if (delta == null) return '无 main 对比';
+              const abs = Math.abs(delta);
+              if (delta === 0) return '与 main 持平';
+              if (lowerIsBetter) return delta < 0 ? `比 main 快/少 ${abs}%` : `比 main 慢/多 ${abs}%`;
+              return delta < 0 ? `比 main 低 ${abs}%` : `比 main 高 ${abs}%`;
+            };
+            const fmtMs = (m, baseMetric) => m ? `${m.actual} ms<br/>${fmtMainDelta(m.actual, baseMetric?.actual)}` : '—';
+            const fmtRatio = (m, baseMetric) => m ? `${m.actual}<br/>${fmtMainDelta(m.actual, baseMetric?.actual, false)}` : '—';
+            const fmtRss = (m, baseMetric) => {
               if (!m || m.actual == null) return '—';
-              return `${(m.actual / 1024).toFixed(1)} MB<br/>${fmtDeltaMeaning(m)}`;
+              return `${(m.actual / 1024).toFixed(1)} MB<br/>${fmtMainDelta(m.actual, baseMetric?.actual)}`;
             };
             const fmtDetailCell = (m, unit = '', lowerIsBetter = true) => {
               if (m == null) return '—';
               if (typeof m === 'object' && 'actual' in m) {
                 const actual = unit ? `${m.actual} ${unit}` : `${m.actual}`;
-                const delta = m.delta_pct != null ? ` · ${fmtDeltaMeaning(m, lowerIsBetter)}` : '';
                 const threshold = m.threshold_pct != null ? ` · 允许最多 +${m.threshold_pct}%`
                   : m.threshold_max != null ? ` · 上限 ${m.threshold_max}` : '';
-                return `${actual}${delta}<br/>baseline ${m.baseline ?? '—'}${unit ? ` ${unit}` : ''}${threshold}${m.fail ? ' · FAIL' : ''}`;
+                return `${actual}<br/>预算线 ${m.baseline ?? '—'}${unit ? ` ${unit}` : ''}${threshold}${m.fail ? ' · FAIL' : ''}`;
               }
               return String(m);
             };
@@ -132,7 +155,7 @@ jobs:
 
             let body = `${MARKER}\n## 性能基准报告\n\n`;
             body += `**结论：${verdict}** — ${measuredCount}/${results.length} 项已实测，${failed.length} 项失败 · 重复次数 \`${report.runs}\` · 系统 \`${report.os}\` · 脚本退出码 \`${exitCode}\`\n\n`;
-            body += `> CI 使用 \`CDT_PERF_USE_FIXTURE=1\` 生成临时 Claude projects corpus 后实测；任何 \`skipped\` 都会让 gate 失败。表格里的“baseline”是仓库记录的性能预算基线，百分比表示本次实测相对 baseline 的变化。\n\n`;
+            body += `> CI 使用 \`CDT_PERF_USE_FIXTURE=1\` 生成临时 Claude projects corpus。摘要里的百分比是本 PR 相对 main 分支同一 fixture 实测的变化；折叠详情里的“预算线”来自 \`tests/perf-baseline.json\`，只用于 gate。\n\n`;
 
             if (failed.length) {
               body += `### 需要处理\n`;              for (const r of failed) {
@@ -148,19 +171,19 @@ jobs:
             }
 
             body += `### 摘要\n\n`;
-            body += `| 基准项 | 结论 | 实际耗时 | CPU 消耗 | 峰值内存 | CPU/耗时 | 关键业务信号 |\n`;
+            body += `| 基准项 | 结论 | 实际耗时（vs main） | CPU 消耗（vs main） | 峰值内存（vs main） | CPU/耗时（vs main） | 关键业务信号 |\n`;
             body += `|---|---:|---:|---:|---:|---:|---|\n`;
             for (const r of results) {
               if (r.status !== 'measured') {
                 body += `| \`${r.name}\` | ${statusLabel(r)} | — | — | — | — | ${r.reason || r.error || '—'} |\n`;
                 continue;
               }
-              body += `| \`${r.name}\` | ${statusLabel(r)} | ${fmtMs(r.metrics.wall_ms)} | ${fmtMs(r.metrics.user_ms)} | ${fmtRss(r.metrics.max_rss_kb)} | ${fmtRatio(r.metrics.user_real_ratio)} | ${fmtKeySignal(r)} |\n`;
+              const base = baseByName.get(r.name);
+              body += `| \`${r.name}\` | ${statusLabel(r)} | ${fmtMs(r.metrics.wall_ms, base?.metrics?.wall_ms)} | ${fmtMs(r.metrics.user_ms, base?.metrics?.user_ms)} | ${fmtRss(r.metrics.max_rss_kb, base?.metrics?.max_rss_kb)} | ${fmtRatio(r.metrics.user_real_ratio, base?.metrics?.user_real_ratio)} | ${fmtKeySignal(r)} |\n`;
             }
             body += '\n';
 
-            body += `<details>\n<summary>完整指标（actual / baseline / gate）</summary>\n\n`;
-            for (const r of results) {
+            body += `<details>\n<summary>完整指标（实测 / 预算线 / gate）</summary>\n\n`;            for (const r of results) {
               body += `#### \`${r.name}\` — ${statusLabel(r)}\n\n`;
               if (r.status === 'skipped') {
                 body += `> ${r.reason || 'skipped'}\n\n`;
@@ -170,8 +193,7 @@ jobs:
                 body += `> ${r.error || 'error'}\n\n`;
                 continue;
               }
-              body += `| 指标 | 含义 | 实测 / baseline / gate |\n|---|---|---|\n`;
-              body += `| 实际耗时 | 用户感知 wall time，越低越好 | ${fmtDetailCell(r.metrics.wall_ms, 'ms')} |\n`;
+              body += `| 指标 | 含义 | 实测 / 预算线 / gate |\n|---|---|---|\n`;              body += `| 实际耗时 | 用户感知 wall time，越低越好 | ${fmtDetailCell(r.metrics.wall_ms, 'ms')} |\n`;
               body += `| CPU 消耗 | 进程 user time，越低越省电 | ${fmtDetailCell(r.metrics.user_ms, 'ms')} |\n`;
               body += `| sys time | 系统调用时间，仅供诊断 | ${fmtDetailCell(r.metrics.sys_ms, 'ms')} |\n`;
               body += `| 峰值内存 | max RSS，越低越好 | ${fmtDetailCell(r.metrics.max_rss_kb, 'KB')} |\n`;
