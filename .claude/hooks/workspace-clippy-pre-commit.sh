@@ -50,11 +50,17 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 log_file=$(mktemp)
+# 失败时把日志移到 /tmp/cdt-clippy-fail-<pid>.log 保留给用户排查，
+# 成功时清理。trap 只兜底失败-退出路径（如 cargo crash）防泄漏临时文件。
+persist_log="/tmp/cdt-clippy-fail-$$.log"
 trap 'rm -f "$log_file"' EXIT
 
 if cargo clippy --workspace --all-targets -- -D warnings >"$log_file" 2>&1; then
   exit 0
 fi
+
+# 把日志固化到 persist_log，trap 仍清理原 mktemp 文件（已被 cp 走）
+cp "$log_file" "$persist_log" 2>/dev/null || true
 
 {
   echo "[workspace-clippy-pre-commit] 阻塞 git commit：cargo clippy --workspace 报错。"
@@ -63,7 +69,7 @@ fi
   tail -50 "$log_file"
   echo "========================"
   echo
-  echo "修复 clippy warning 后重新提交。完整日志：$log_file"
+  echo "修复 clippy warning 后重新提交。完整日志：$persist_log（已固化，下次 hook 触发会被覆盖）"
   echo "（注：本 hook 只在 Claude 显式跑 git commit 时触发；git rebase / cherry-pick 不命中。）"
 } >&2
 

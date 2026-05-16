@@ -41,9 +41,10 @@ fi
 # 含 fix 子串的非-fix commit 误命中。锚定到 -m "fix( / -m "fix: / -m 'fix( / -m 'fix:
 # 才是真正的 conventional-commits fix-prefix。
 #
-# HEREDOC 形式 `git commit -m "$(cat <<'EOF' ... fix(xxx): ... EOF)"`：
-# command 文本里 fix( 出现在 EOF 块首行；锚定 "\nfix(" 或 EOF 后紧跟 fix
-# 在简单匹配里难做且不常见——HEREDOC 形式 fix commit 这里**漏报**而非误报，可接受。
+# **已知漏报**：HEREDOC 形式 `git commit -m "$(cat <<'EOF' ... fix(xxx): ... EOF)"`
+# command 文本里 fix( 出现在 EOF 块首行，本 regex 锚定 `-m "fix(`，不匹配 `$(cat`
+# 中间隔层 → **不会触发警告**。warn-only 容忍漏报；如需补全，可在 regex 链上
+# 加 `cat[[:space:]]*<<.+fix[\(:]`，但实测 HEREDOC fix commit 很少见，保留漏报。
 if ! [[ "$command" =~ -m[[:space:]]+[\'\"]fix[\(:] ]]; then
   exit 0
 fi

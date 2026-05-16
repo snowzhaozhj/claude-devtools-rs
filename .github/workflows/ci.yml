@@ -30,6 +30,8 @@ jobs:
   ipc-sync:
     name: ipc command sync
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
       - name: Check Tauri command sync (3 sources)
