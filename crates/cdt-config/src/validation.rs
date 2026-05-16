@@ -129,6 +129,7 @@ mod tests {
         assert!(normalize_claude_root_path(Some("relative/path")).is_none());
         assert!(normalize_claude_root_path(Some("foo\\bar")).is_none());
         // 盘符后缺分隔符也不算合法
+        assert!(normalize_claude_root_path(Some("C:")).is_none());
         assert!(normalize_claude_root_path(Some("C:relative")).is_none());
     }
 
@@ -136,6 +137,7 @@ mod tests {
     fn validate_path_relative_rejected() {
         assert!(validate_claude_root_path(Some("relative/path")).is_err());
         assert!(validate_claude_root_path(Some("foo\\bar")).is_err());
+        assert!(validate_claude_root_path(Some("C:")).is_err());
         assert!(validate_claude_root_path(Some("C:relative")).is_err());
     }
 
