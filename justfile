@@ -83,6 +83,11 @@ spec-check CHANGE:
 # e2e 不在 preflight 内（启动浏览器较慢，由 CI 跑）；本地手动 `just test-e2e` 验证
 preflight: fmt lint test test-ui-unit spec-validate spec-archive-check
 
+# 四维性能 baseline gate：跑两个 bench 取 min-of-5 对比 tests/perf-baseline.json
+# 涉及关键路径的 PR push 前 SHALL 跑；CI 上同名 workflow 仅作 smoke 校验（详 .claude/rules/perf.md "CI 自动 gate"）
+perf-check *ARGS:
+    bash scripts/run-perf-bench.sh {{ARGS}}
+
 # ──────── 发布 ────────
 
 # 发布前检查：版本号三处一致 + 工作树干净 + preflight

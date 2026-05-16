@@ -1,0 +1,172 @@
+name: perf
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+# GH 2024 起默认 GITHUB_TOKEN 不再隐式带 issues:write / pull-requests:write，
+# 必须显式声明，否则 actions/github-script 的 createComment / updateComment
+# 报 403 Resource not accessible by integration。
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+# CI 上 GH ubuntu runner 无 `~/.claude/projects/` corpus，两个 bench 都会
+# 内部 skip——本 workflow 作为 smoke 校验：
+#   1. perf-baseline.json schema 合法 + script 编译运行无误
+#   2. bench binary 在 release 模式能编 + 能跑
+#   3. JSON 报告生成、PR comment 流程通畅
+# 真实四维 gate 由 dev 在本地跑（`bash scripts/run-perf-bench.sh`），
+# 是 PR push 前的硬约束（详 .claude/rules/perf.md "CI 自动 gate" 段）。
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  perf:
+    name: perf bench (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev jq
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: "false"
+          # 与 ci.yml 同步用 v3-rust prefix-key——共享同一 cache pool 避免重复编译
+          # cdt-* crates；shared-key 让 perf job 复用 test job 已编好的 deps。
+          prefix-key: v3-rust
+          shared-key: perf-${{ runner.os }}
+      - name: 校验 baseline JSON schema
+        run: |
+          jq -e '.thresholds and .benches and (.benches | length > 0)' tests/perf-baseline.json \
+            || { echo "baseline JSON 不合法"; exit 1; }
+      - name: 跑 perf bench
+        id: bench
+        run: |
+          set +e
+          bash scripts/run-perf-bench.sh --runs 3 --out target/perf-report.json
+          ec=$?
+          set -e
+          # CI smoke 模式：bench 内部 skip（无 corpus）→ exit 0 视为 pass
+          # 真回归（exit 1）也透出，作为信号但不 fail-build——避免 noisy runner 假阳性
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          if [[ $ec -eq 2 ]]; then exit 2; fi  # 用法/环境错（jq 缺 / baseline 损坏）直接 fail
+      - name: 上传 perf 报告 artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-report-${{ github.run_id }}
+          path: target/perf-report.json
+          retention-days: 30
+      - name: 渲染 PR 评论
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v8
+        env:
+          PERF_EXIT_CODE: ${{ steps.bench.outputs.exit_code }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'target/perf-report.json';
+            if (!fs.existsSync(path)) {
+              core.info('perf-report.json 未生成，跳过评论');
+              return;
+            }
+            const report = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const exitCode = process.env.PERF_EXIT_CODE || '?';
+
+            const MARKER = '<!-- perf-gate-bot -->';
+            const fmtCell = (m, fail) => {
+              if (m == null) return '—';
+              const e = fail === true ? ' ❌' : '';
+              if (typeof m === 'object' && 'actual' in m) {
+                const delta = (m.delta_pct != null) ? ` (Δ${m.delta_pct}%)` : '';
+                const thr = (m.threshold_pct != null) ? ` / +${m.threshold_pct}%`
+                          : (m.threshold_max != null) ? ` / ≤${m.threshold_max}` : '';
+                return `${m.actual}${delta}<br/>base ${m.baseline ?? '—'}${thr}${m.fail ? ' ❌' : ''}`;
+              }
+              return String(m);
+            };
+
+            let body = `${MARKER}\n## ⏱ 性能 bench 报告\n\n`;
+            body += `- runner OS: \`${report.os}\` · runs: ${report.runs} · script exit: \`${exitCode}\`\n`;
+            body += `- 注：CI runner 无 \`~/.claude/projects/\` corpus，benches 通常 \`skipped\`（smoke 校验）。真实四维 gate 由 dev 本地跑。\n\n`;
+
+            for (const r of (report.results || [])) {
+              body += `### \`${r.name}\` — ${r.status}\n\n`;
+              if (r.status === 'skipped') {
+                body += `> ${r.reason || 'skipped'}\n\n`;
+                continue;
+              }
+              if (r.status === 'error') {
+                body += `> ❌ ${r.error}\n\n`;
+                continue;
+              }
+              body += `| 维度 | actual / Δ / threshold |\n|---|---|\n`;
+              body += `| wall | ${fmtCell(r.metrics.wall_ms)} |\n`;
+              body += `| user | ${fmtCell(r.metrics.user_ms)} |\n`;
+              body += `| sys (info) | ${fmtCell(r.metrics.sys_ms)} |\n`;
+              body += `| max_rss | ${fmtCell(r.metrics.max_rss_kb)} KB |\n`;
+              body += `| user/real | ${fmtCell(r.metrics.user_real_ratio)} |\n`;
+              if (r.internal && Object.keys(r.internal).length) {
+                body += `\n**internal**: \`${JSON.stringify(r.internal)}\`\n`;
+              }
+              if (r.regressions && r.regressions.length) {
+                body += `\n**❌ 回归**:\n` + r.regressions.map(x => `- ${x}`).join('\n') + '\n';
+              }
+              body += '\n';
+            }
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            try {
+              const comments = [];
+              for (let page = 1; ; page++) {
+                const { data } = await github.rest.issues.listComments({
+                  owner, repo, issue_number, per_page: 100, page,
+                });
+                comments.push(...data);
+                if (data.length < 100) break;
+              }
+              const existing = comments.find(c => c.body && c.body.startsWith(MARKER));
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner, repo, comment_id: existing.id, body,
+                });
+                core.info(`updated comment ${existing.id}`);
+              } else {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number, body,
+                });
+                core.info('created new perf comment');
+              }
+            } catch (error) {
+              // 永久性客户端错误（400/401/403）= 配置 bug，SHALL fatal：
+              //   400 参数构造错（PR 模板写错了）
+              //   401 认证 token 错 / permissions 块缺失
+              //   403 "Resource not accessible by integration"（permissions
+              //       缺失，第一轮 CI 已踩过）
+              // 偶发/可恢复错误走 warning：
+              //   422 GH 既用于 validation 也用于 spam 检测，无法静态区分（spam
+              //       是运行时偶发不是 bug），保留 warning 避免假阳性
+              //   404 评论被人删 / 5xx GH 服务波动
+              const status = error.status || error.response?.status;
+              if (status === 400 || status === 401 || status === 403) {
+                core.setFailed(`PR 评论发布失败（配置错 status=${status}）：${error.message}`);
+              } else {
+                core.warning(`PR 评论发布失败（status=${status ?? '?'}），跳过：${error.message}`);
+              }
+            }

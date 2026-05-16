@@ -37,8 +37,47 @@ claude-devtools-rs 是**桌面辅助工具**，不是用户主线（IDE / 浏览
 - `cdt-api/tests/perf_cold_scan.rs` — 冷启动 scan + grouper
 - `cdt-api/tests/perf_get_session_detail.rs` — 大会话首次打开
 - `/perf-bench` skill — 自动跑 + 解析 + verdict
+- `bash scripts/run-perf-bench.sh` — 四维 baseline gate runner（`--bench <name>` 单跑 / `--runs N` 调样本数 / 报告写到 `target/perf-report.json`）
 
 新增关键路径 SHALL 加对应 bench + 把基线填进上表。**每次会话开始 + 用户问"为什么慢" + 发版前** SHALL 先跑 bench 拿数据再讨论方向。
+
+## CI 自动 gate
+
+`.github/workflows/perf.yml` 在每个 PR + push to main 跑 `scripts/run-perf-bench.sh`，校验：
+1. `tests/perf-baseline.json` schema 合法（`thresholds` + `benches` 非空）
+2. 两个 bench binary 能编译 + 能跑
+3. 报告 JSON 生成成功，PR 评论 update（不刷屏，按 `<!-- perf-gate-bot -->` marker 找现有 comment 更新）
+
+**CI runner 无 `~/.claude/projects/` corpus**——两个 bench 在 CI 都会内部 `if !projects.exists() { return }` 跳过，本工作流仅作为 **smoke 校验**（baseline schema + script + binary 链路通畅）。**真实四维 gate 由 dev 在本地跑**——PR push 前 SHALL 跑 `bash scripts/run-perf-bench.sh`，命中阈值即拒；这是硬约束。
+
+### 阈值（与 perf.md 顶部"回归阈值"段一致）
+
+- **wall_ms** +20%（process 级 wall clock；min-of-N 抑噪 → 本机 macOS 跑 5 次取 min）
+- **user_ms** +50%（容许 real 同步降的情况，仅在 real 没同步降时才真回归——细则见顶部段）
+- **max_rss_kb** +30%
+- **user/real ratio** ≤ 1.0 绝对值（>1.0 = 多核打满 → 桌面辅助工具不可接受）
+- **sys_ms** info-only 不 gate（与 wall 强相关，单独报告辅助诊断）
+
+### 噪声策略
+
+process 级 wall 在 macOS / Linux 共享 CPU 环境下变异可达 5×（FS cache + 其他进程）。`scripts/run-perf-bench.sh` 用 **min-of-N** 聚合（默认 N=5）——min 代表"算法真实最佳能力"，噪声只在 min 之上加波动；新代码若引入算法回归，min 必然变大。`median` / `max` 用作 perf gate 会被 OS 噪声污染导致假阳性。
+
+baseline 取本机 min-of-5 观测值的 ~1.5-2× 作为容噪上界（详 `tests/perf-baseline.json` 每个 bench 的 `$comment` 字段），threshold +20% 再放一层。
+
+### update baseline
+
+故意改变性能基线时（典型：硬件更换、Rust toolchain 升级、刻意算法 trade-off、加新 bench），手动改 `tests/perf-baseline.json` 对应字段，**commit message 写明理由**（why this changed），并在 PR 描述 "Perf impact" 段对比改前 / 改后基线。
+
+模板：
+```
+chore(perf): bump perf_cold_scan baseline 500ms → 600ms
+
+理由：v0.5.0 引入 git rev-parse fallback（PR #N），ProjectScanner 新增
+一次同步 fs::read 调用，wall +~80ms 是预期 trade-off（换得跨平台一致行为）。
+本地 min-of-5 重新观测：320ms → 410ms，base 上调到 600ms 容噪。
+```
+
+**禁止**为了"让 CI 过"而调高 baseline——baseline = 算法真实成本，不是"避免 fail 的阈值"。真有性能回归需在 PR 里明示并讨论 trade-off。
 
 ## PR Perf impact 模板（强制）
 

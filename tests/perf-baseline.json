@@ -1,0 +1,48 @@
+{
+  "$schema_version": "1",
+  "$comment": "四维性能基线 + 回归阈值。本文件是 scripts/run-perf-bench.sh 的真相源。手动 update baseline 时 commit message SHALL 写明理由（典型：硬件更换、依赖升级、刻意 trade-off）。详 .claude/rules/perf.md 'CI 自动 gate' 段。",
+  "thresholds": {
+    "$comment": "任一维度超阈值即 fail。基于 perf.md 的硬约束：wall+20% / user+50% / RSS+30% / user-real-ratio>1.0。",
+    "wall_ms_pct": 20,
+    "user_ms_pct": 50,
+    "max_rss_kb_pct": 30,
+    "user_real_ratio_max": 1.0
+  },
+  "benches": {
+    "perf_cold_scan": {
+      "$comment": "list_repository_groups 等价链路：ProjectScanner::scan + WorktreeGrouper::group_by_repository。本地 macOS 30 project × 541 session 的 min-of-5 观测：wall ~190-360ms / user ~90-110ms / sys ~480-560ms / max_rss ~34-44 MB。基线取 min 观测的 ~2x 容噪，threshold +20% 再放一层——同时仍能 catch 真正的算法回归（如 spawn 子进程串行化）。",
+      "binary": "perf_cold_scan",
+      "test_filter": "measure_cold_scan",
+      "platform_scope": "local",
+      "metrics": {
+        "wall_ms": 500,
+        "user_ms": 150,
+        "sys_ms": 700,
+        "max_rss_kb": 50000,
+        "user_real_ratio": 0.6
+      },
+      "internal_metrics": {
+        "$comment": "stdout 抓的 in-process 时间（毫秒），噪声远小于 process 级 wall——常规观测 53-107ms。该层未参与自动 gate，仅在报告里展示；若想加 gate 需要在 script 里把 internal_metrics 也接入 check_metric 流程。",
+        "cold_total_ms": 100
+      }
+    },
+    "perf_get_session_detail": {
+      "$comment": "bench_get_session_detail_large_sessions（3 个 session，最大 1221 msgs / 96 chunks / 14 subs）。本地 macOS min-of-5 观测：wall ~220-300ms / user ~130-150ms / sys ~50-90ms / max_rss ~105-110 MB。max RSS 含全部 3 sample 累计驻留 + LRU cache。",
+      "binary": "perf_get_session_detail",
+      "test_filter": "bench_get_session_detail_large_sessions",
+      "platform_scope": "local",
+      "metrics": {
+        "wall_ms": 500,
+        "user_ms": 250,
+        "sys_ms": 100,
+        "max_rss_kb": 140000,
+        "user_real_ratio": 0.7
+      },
+      "internal_metrics": {
+        "$comment": "最大 sample (1221 msgs) 的 get_session_detail IPC 时间 + payload。",
+        "largest_ipc_ms": 100,
+        "largest_payload_kb": 1500
+      }
+    }
+  }
+}
