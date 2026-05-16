@@ -677,8 +677,26 @@ impl DataApi for LocalDataApi {
         let (mut page, next_cursor, total, page_jobs, _dir) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
-        for (summary, (_id, path)) in page.iter_mut().zip(page_jobs.iter()) {
-            let meta = extract_session_metadata_cached(&self.metadata_cache, path).await;
+        // 并发提取每条 session 的 metadata：复用 `self.metadata_scan_semaphore`
+        // 与 async `list_sessions` 共享同一把 8 容量信号量，保证 spec
+        // `ipc-data-api/spec.md::Emit session metadata updates` "后台扫描并发度
+        // 限制" Scenario 的全局 8 上限——HTTP 路径与 async 路径并发时也不会
+        // 累加成 16+ 并发。metadata cache 内部有锁，多 task 共享安全。结果按
+        // page_jobs 顺序一一映射回 page。
+        let metas = futures::future::join_all(page_jobs.iter().map(|(_id, path)| {
+            let sem = self.metadata_scan_semaphore.clone();
+            let cache = self.metadata_cache.clone();
+            let path = path.clone();
+            async move {
+                let _permit = sem.acquire_owned().await.ok()?;
+                Some(extract_session_metadata_cached(&cache, &path).await)
+            }
+        }))
+        .await;
+        for (summary, maybe_meta) in page.iter_mut().zip(metas) {
+            let Some(meta) = maybe_meta else {
+                continue;
+            };
             summary.title = meta.title;
             summary.message_count = meta.message_count;
             summary.is_ongoing = meta.is_ongoing;
@@ -940,33 +958,36 @@ impl DataApi for LocalDataApi {
         // 展开时通过 `get_subagent_trace` 懒拉取。把 messages 抠空 + 设
         // `messages_omitted=true`；header_model / last_isolated_tokens /
         // is_shutdown_only 已由 resolver 阶段填充，可独立渲染 header。
+        // ctx_result 已只持有 owned 数据（不借 chunks），此后 chunks 在本函数内
+        // 不再被读取，可直接 move 进 OMIT pipeline 原地修改，省 1 次 Vec<Chunk>
+        // 深拷贝（实测 1221 msg 会话 ~5-15ms + 数 MB 瞬态堆）。
         let chunks_for_payload = {
-            let mut cloned = chunks.clone();
+            let mut chunks = chunks;
             // CompactChunk 派生 token_delta / phase_number 必须在 OMIT 之前跑——
             // OMIT 不改 chunk 顺序也不改 responses[i].usage，前后顺序对算法本身
             // 无影响；但放在 OMIT 之前更接近"chunks 落定 → 派生 metadata → 应用
             // OMIT 瘦身"的清晰流水线。详见 change `compact-chunk-rendering-alignment`
             // 的 design.md D1c+D1d。
-            apply_compact_derived(&mut cloned, COMPACT_DERIVED_ENABLED);
+            apply_compact_derived(&mut chunks, COMPACT_DERIVED_ENABLED);
             // phase 3：image base64 OMIT 必须在 subagent OMIT 之前跑，否则
             // OMIT_SUBAGENT_MESSAGES=false 回滚路径下嵌套 messages 内的 image
             // 不会被裁。
             if OMIT_IMAGE_DATA {
-                apply_image_omit(&mut cloned);
+                apply_image_omit(&mut chunks);
             }
             // phase 4：response.content OMIT 同样在 subagent OMIT 之前跑，
             // 覆盖 OMIT_SUBAGENT_MESSAGES=false 回滚路径下嵌套 messages 内的
             // AIChunk.responses[].content。
             if OMIT_RESPONSE_CONTENT {
-                apply_response_content_omit(&mut cloned);
+                apply_response_content_omit(&mut chunks);
             }
             // phase 5：tool_exec.output OMIT 同上，覆盖嵌套 messages 内的
             // tool_executions[].output。
             if OMIT_TOOL_OUTPUT {
-                apply_tool_output_omit(&mut cloned);
+                apply_tool_output_omit(&mut chunks);
             }
             if OMIT_SUBAGENT_MESSAGES {
-                for c in &mut cloned {
+                for c in &mut chunks {
                     if let cdt_core::Chunk::Ai(ai) = c {
                         for sub in &mut ai.subagents {
                             sub.messages = Vec::new();
@@ -975,7 +996,7 @@ impl DataApi for LocalDataApi {
                     }
                 }
             }
-            cloned
+            chunks
         };
         let detail = SessionDetail {
             session_id: session_id.to_owned(),
@@ -1925,43 +1946,69 @@ async fn scan_subagent_candidates_cross_project(
     let mut candidates = Vec::new();
     let mut per_candidate_ms: Vec<u128> = Vec::new();
     let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut projects_scanned: usize = 0;
     let mut dirs_with_subagents: usize = 0;
 
-    let Ok(mut entries) = tokio::fs::read_dir(projects_dir).await else {
-        return candidates;
-    };
-
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let Ok(file_type) = entry.file_type().await else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-        projects_scanned += 1;
-        let new_dir = entry.path().join(root_session_id).join("subagents");
-        let Ok(mut sub_entries) = tokio::fs::read_dir(&new_dir).await else {
-            continue;
-        };
-        dirs_with_subagents += 1;
-        while let Ok(Some(sub_entry)) = sub_entries.next_entry().await {
-            let name = sub_entry.file_name();
-            let name_str = name.to_string_lossy();
-            if !(name_str.starts_with("agent-")
-                && name_str.ends_with(".jsonl")
-                && !name_str.starts_with("agent-acompact"))
-            {
-                continue;
-            }
-            let t = std::time::Instant::now();
-            let Some(c) = parse_subagent_candidate(&sub_entry.path()).await else {
+    // 第一遍：收集所有 project_dir entry path（顺序快，单 read_dir）。
+    let mut project_dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(mut entries) = tokio::fs::read_dir(projects_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Ok(file_type) = entry.file_type().await else {
                 continue;
             };
+            if !file_type.is_dir() {
+                continue;
+            }
+            project_dirs.push(entry.path());
+        }
+    }
+    let projects_scanned = project_dirs.len();
+
+    // 第二遍：每个 project 并发探测 `<dir>/<root_session_id>/subagents/agent-*.jsonl`，
+    // 用 Semaphore 限流 `METADATA_SCAN_CONCURRENCY=8` 路（与 metadata 扫描同口径，
+    // 避免低核数机器上短脉冲 CPU 峰值过高，也压住打开 fd 数量）。
+    // 单 task 内部仍顺序遍历 sub_entries，保证某 project 内候选顺序稳定。
+    // 整体 task 顺序由 `join_all` 保证（与 project_dirs 同序），最终落到 candidates
+    // 的顺序与原串行版本一致。
+    let semaphore = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
+    let scan_tasks = project_dirs.into_iter().map(|project_path| {
+        let sem = semaphore.clone();
+        let root_session_id = root_session_id.to_owned();
+        async move {
+            let _permit = sem.acquire_owned().await.ok()?;
+            let new_dir = project_path.join(&root_session_id).join("subagents");
+            let mut sub_entries = tokio::fs::read_dir(&new_dir).await.ok()?;
+            let mut local: Vec<(cdt_core::SubagentCandidate, u128)> = Vec::new();
+            while let Ok(Some(sub_entry)) = sub_entries.next_entry().await {
+                let name = sub_entry.file_name();
+                let name_str = name.to_string_lossy();
+                if !(name_str.starts_with("agent-")
+                    && name_str.ends_with(".jsonl")
+                    && !name_str.starts_with("agent-acompact"))
+                {
+                    continue;
+                }
+                let t = std::time::Instant::now();
+                if let Some(c) = parse_subagent_candidate(&sub_entry.path()).await {
+                    local.push((c, t.elapsed().as_millis()));
+                }
+            }
+            Some(local)
+        }
+    });
+    let results = futures::future::join_all(scan_tasks).await;
+    for maybe_local in results {
+        let Some(local) = maybe_local else {
+            continue;
+        };
+        if local.is_empty() {
+            continue;
+        }
+        dirs_with_subagents += 1;
+        for (c, ms) in local {
             if !seen_ids.insert(c.session_id.clone()) {
                 continue;
             }
-            per_candidate_ms.push(t.elapsed().as_millis());
+            per_candidate_ms.push(ms);
             candidates.push(c);
         }
     }
