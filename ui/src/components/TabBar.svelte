@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
     closeTab,
@@ -9,12 +8,10 @@
     openNotificationsTab,
     openSettingsTab,
     setActiveTab,
-    setUnreadCount,
     splitPane,
   } from "../lib/tabStore.svelte";
   import { MAX_PANES } from "../lib/paneTypes";
   import { beginDrag, getDragSource, getHit, isDragging } from "../lib/dragSession.svelte";
-  import { getNotifications } from "../lib/api";
   import TabContextMenu from "./TabContextMenu.svelte";
   import { BELL, SETTINGS, FILE_TEXT_SVG, BOOK_OPEN_TEXT_SVG, PANEL_LEFT_SVG } from "../lib/icons";
   import { getSidebarCollapsed, toggleSidebarCollapsed } from "../lib/sidebarStore.svelte";
@@ -45,27 +42,6 @@
 
   // 拖拽状态由 dragSession（模块级）统一管理；TabBar 只触发 beginDrag
   // + 根据 hit 派生 drop indicator 视觉
-
-  // 30 秒轮询 unreadCount
-  let pollTimer: ReturnType<typeof setInterval>;
-
-  async function refreshUnreadCount() {
-    try {
-      const result = await getNotifications(1, 0);
-      setUnreadCount(result.unreadCount);
-    } catch {
-      /* 静默失败 */
-    }
-  }
-
-  onMount(() => {
-    refreshUnreadCount();
-    pollTimer = setInterval(refreshUnreadCount, 30000);
-  });
-
-  onDestroy(() => {
-    clearInterval(pollTimer);
-  });
 
   function handleClose(e: Event, tabId: string) {
     e.stopPropagation();
