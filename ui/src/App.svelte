@@ -15,19 +15,18 @@
     getTabs,
     setActiveTab,
     closeTab,
-    setUnreadCount,
     getPaneLayout,
     getFocusedPaneId,
     focusPane,
     splitPane,
   } from "./lib/tabStore.svelte";
   import { MAX_PANES } from "./lib/paneTypes";
-  import { getConfig, getNotifications, isRunningUnderRosetta } from "./lib/api";
+  import { getConfig, isRunningUnderRosetta } from "./lib/api";
+  import { refreshUnreadCount } from "./lib/notificationStore.svelte";
   import { applyTheme } from "./lib/theme";
   import { applyFonts } from "./lib/fonts";
   import { loadAgentConfigs } from "./lib/agentConfigsStore.svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { initFileChangeStore } from "./lib/fileChangeStore.svelte";
   import { getSidebarCollapsed, toggleSidebarCollapsed } from "./lib/sidebarStore.svelte";
   import { attachExternalLinkInterceptor } from "./lib/externalLinks";
@@ -39,17 +38,13 @@
   let unlistenNotifAdded: UnlistenFn | null = null;
   let unlistenUpdater: UnlistenFn | null = null;
   let detachExternalLinks: (() => void) | null = null;
+  let notificationPollTimer: ReturnType<typeof setInterval> | undefined;
   // macOS 上 Tauri 进程跑 Rosetta 翻译时为 true；其他平台 / 非 Rosetta 时永远 false
   let rosettaWarningVisible = $state(false);
 
   async function onNotificationUpdate() {
     try {
-      const r = await getNotifications(1, 0);
-      setUnreadCount(r.unreadCount);
-      // 同步 macOS Dock badge（Windows 不支持，会静默失败）
-      try {
-        await getCurrentWindow().setBadgeCount(r.unreadCount > 0 ? r.unreadCount : undefined);
-      } catch { /* 非 macOS 平台静默 */ }
+      await refreshUnreadCount();
     } catch { /* 静默 */ }
   }
 
@@ -161,6 +156,7 @@
     await initFileChangeStore();
     // 启动时同步一次 Dock badge（显示持久化的未读数）
     await onNotificationUpdate();
+    notificationPollTimer = setInterval(onNotificationUpdate, 30000);
     // Rosetta 翻译运行检测：Apple Silicon 上跑 Intel binary 时提示用户换 ARM 包。
     // localStorage 内 banner dismissed 状态由 RosettaBanner 自身管理。
     try {
@@ -174,6 +170,7 @@
     unlistenNotifAdded?.();
     unlistenUpdater?.();
     detachExternalLinks?.();
+    if (notificationPollTimer) clearInterval(notificationPollTimer);
   });
 
   const activeTab = $derived(getActiveTab());
