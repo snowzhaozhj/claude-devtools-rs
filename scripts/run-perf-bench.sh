@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 性能基准 runner + baseline gate。
+# Bug fixes: agg_min zero-filter, GNU time RSS unit, skip detection hardening, PR comment pagination
 #
 # 用法：
 #   scripts/run-perf-bench.sh                       # 跑全部 bench，对比 tests/perf-baseline.json
@@ -14,7 +15,8 @@
 #
 # OS 处理：
 #   - macOS: /usr/bin/time -lp，maxRSS 单位 bytes
-#   - Linux: /usr/bin/time -v，maxRSS 单位 kbytes（GNU time 5.x 一直如此）
+#   - Linux: /usr/bin/time -v，maxRSS 单位 kbytes；GNU time <= 1.9
+#     可能把 getrusage 的 kbytes 误乘 1024 输出（Debian #807441），脚本会探测并折算。
 #
 # CI 行为：bench 内部 `if !projects_dir.exists() { return }`——CI runner 无
 # ~/.claude/projects 时 bench 立即 ok 但不输出 perf 行，本脚本检测到无
@@ -55,6 +57,16 @@ case "$OS" in
   *) echo "不支持的 OS: $OS" >&2; exit 2 ;;
 esac
 
+GNU_TIME_RSS_DIVISOR=1
+if [[ "$OS" == "Linux" ]]; then
+  # GNU time <= 1.9 在 Linux 上存在 RSS 单位 bug：getrusage 已返回 kbytes，
+  # 但部分版本又乘以 1024 后按 "(kbytes)" 输出。来源：Debian #807441。
+  GNU_TIME_VERSION=$((/usr/bin/time --version 2>&1 || true) | awk 'match($0, /[0-9]+([.][0-9]+)?/) { print substr($0, RSTART, RLENGTH); exit }')
+  if [[ -n "$GNU_TIME_VERSION" ]] && awk -v v="$GNU_TIME_VERSION" 'BEGIN { split(v, p, "."); exit !(p[1] < 1 || (p[1] == 1 && (p[2] + 0) <= 9)) }'; then
+    GNU_TIME_RSS_DIVISOR=1024
+  fi
+fi
+
 mkdir -p "$(dirname "$OUT_REPORT")"
 
 # ============================================================================
@@ -63,7 +75,8 @@ mkdir -p "$(dirname "$OUT_REPORT")"
 parse_time_output() {
   local time_log="$1"
   local os="$2"
-  awk -v os="$os" '
+  local rss_divisor="${3:-1}"
+  awk -v os="$os" -v rss_divisor="$rss_divisor" '
     function to_ms(s,   n) { n = s + 0; return int(n * 1000 + 0.5) }
     function hms_to_ms(t,   parts, h, m, s, n) {
       n = split(t, parts, ":")
@@ -105,10 +118,13 @@ parse_time_output() {
         sys = to_ms(substr($0, RSTART + RLENGTH)); next
       }
       if (match($0, /Maximum resident set size \(kbytes\): */)) {
-        rss = substr($0, RSTART + RLENGTH) + 0; next
+        n = substr($0, RSTART + RLENGTH) + 0
+        if (rss_divisor > 1) n = n / rss_divisor
+        rss = int(n + 0.5); next
       }
     }
     END {
+      if (wall <= 0 || user < 0 || sys < 0 || rss <= 0) exit 1
       printf "{\"wall_ms\":%d,\"user_ms\":%d,\"sys_ms\":%d,\"max_rss_kb\":%d}\n", wall, user, sys, rss
     }
   ' "$time_log"
@@ -167,7 +183,15 @@ parse_internal_metrics() {
 # 在 noisy runner 假阳性概率"），min-of-N 是公认的稳定指标。
 # ============================================================================
 agg_min() {
-  printf '%s\n' "$@" | sort -n | head -n 1
+  printf '%s\n' "$@" | awk '
+    $1 + 0 > 0 {
+      if (!seen || $1 < min) min = $1
+      seen = 1
+    }
+    END {
+      if (seen) print min
+      else print 0
+    }'
 }
 
 # ============================================================================
@@ -227,11 +251,24 @@ run_bench() {
       skipped=1
     fi
 
-    local parsed; parsed=$(parse_time_output "$time_log" "$OS")
-    walls+=("$(echo "$parsed" | jq '.wall_ms')")
-    users+=("$(echo "$parsed" | jq '.user_ms')")
-    syss+=("$(echo "$parsed" | jq '.sys_ms')")
-    rsss+=("$(echo "$parsed" | jq '.max_rss_kb')")
+    local parsed
+    if ! parsed=$(parse_time_output "$time_log" "$OS" "$GNU_TIME_RSS_DIVISOR") || [[ -z "$parsed" ]]; then
+      skipped=1
+      continue
+    fi
+    local wall user sys rss
+    wall=$(echo "$parsed" | jq '.wall_ms')
+    user=$(echo "$parsed" | jq '.user_ms')
+    sys=$(echo "$parsed" | jq '.sys_ms')
+    rss=$(echo "$parsed" | jq '.max_rss_kb')
+    if [[ "$wall" -le 0 || "$user" -le 0 || "$sys" -lt 0 || "$rss" -le 0 ]]; then
+      skipped=1
+      continue
+    fi
+    walls+=("$wall")
+    users+=("$user")
+    syss+=("$sys")
+    rsss+=("$rss")
     internals+=("$(parse_internal_metrics "$out_log" "$binary")")
   done
 
