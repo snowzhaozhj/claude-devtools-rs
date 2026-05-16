@@ -91,24 +91,27 @@ jobs:
             const measuredCount = results.filter(r => r.status === 'measured').length;
             const verdict = failed.length === 0 ? 'PASS' : 'FAIL';
 
-            const fmtDelta = (m) => {
-              if (!m || m.delta_pct == null) return '—';
-              return `${m.delta_pct > 0 ? '+' : ''}${m.delta_pct}%`;
+            const fmtDeltaMeaning = (m, lowerIsBetter = true) => {
+              if (!m || m.delta_pct == null) return '无 baseline 对比';
+              const abs = Math.abs(m.delta_pct);
+              if (m.delta_pct === 0) return '与 baseline 持平';
+              if (lowerIsBetter) return m.delta_pct < 0 ? `比 baseline 少 ${abs}%` : `比 baseline 多 ${abs}%`;
+              return m.delta_pct < 0 ? `比 baseline 低 ${abs}%` : `比 baseline 高 ${abs}%`;
             };
-            const fmtMs = (m) => m ? `${m.actual} ms (${fmtDelta(m)})` : '—';
-            const fmtRatio = (m) => m ? `${m.actual} / ≤${m.threshold_max}` : '—';
+            const fmtMs = (m) => m ? `${m.actual} ms<br/>${fmtDeltaMeaning(m)}` : '—';
+            const fmtRatio = (m) => m ? `${m.actual}<br/>上限 ${m.threshold_max}` : '—';
             const fmtRss = (m) => {
               if (!m || m.actual == null) return '—';
-              return `${(m.actual / 1024).toFixed(1)} MB (${fmtDelta(m)})`;
+              return `${(m.actual / 1024).toFixed(1)} MB<br/>${fmtDeltaMeaning(m)}`;
             };
-            const fmtDetailCell = (m, unit = '') => {
+            const fmtDetailCell = (m, unit = '', lowerIsBetter = true) => {
               if (m == null) return '—';
               if (typeof m === 'object' && 'actual' in m) {
                 const actual = unit ? `${m.actual} ${unit}` : `${m.actual}`;
-                const delta = m.delta_pct != null ? ` · ${fmtDelta(m)}` : '';
-                const threshold = m.threshold_pct != null ? ` · gate +${m.threshold_pct}%`
-                  : m.threshold_max != null ? ` · gate ≤${m.threshold_max}` : '';
-                return `${actual}${delta}<br/>base ${m.baseline ?? '—'}${unit ? ` ${unit}` : ''}${threshold}${m.fail ? ' · FAIL' : ''}`;
+                const delta = m.delta_pct != null ? ` · ${fmtDeltaMeaning(m, lowerIsBetter)}` : '';
+                const threshold = m.threshold_pct != null ? ` · 允许最多 +${m.threshold_pct}%`
+                  : m.threshold_max != null ? ` · 上限 ${m.threshold_max}` : '';
+                return `${actual}${delta}<br/>baseline ${m.baseline ?? '—'}${unit ? ` ${unit}` : ''}${threshold}${m.fail ? ' · FAIL' : ''}`;
               }
               return String(m);
             };
@@ -127,13 +130,12 @@ jobs:
               return (r.regressions && r.regressions.length) ? 'FAIL (regression)' : 'PASS';
             };
 
-            let body = `${MARKER}\n## Performance bench report\n\n`;
-            body += `**Verdict: ${verdict}** — ${measuredCount}/${results.length} measured, ${failed.length} failing · runs \`${report.runs}\` · OS \`${report.os}\` · script exit \`${exitCode}\`\n\n`;
-            body += `> CI uses \`CDT_PERF_USE_FIXTURE=1\` to generate a temporary Claude projects corpus. Any \`skipped\` bench fails the gate.\n\n`;
+            let body = `${MARKER}\n## 性能基准报告\n\n`;
+            body += `**结论：${verdict}** — ${measuredCount}/${results.length} 项已实测，${failed.length} 项失败 · 重复次数 \`${report.runs}\` · 系统 \`${report.os}\` · 脚本退出码 \`${exitCode}\`\n\n`;
+            body += `> CI 使用 \`CDT_PERF_USE_FIXTURE=1\` 生成临时 Claude projects corpus 后实测；任何 \`skipped\` 都会让 gate 失败。表格里的“baseline”是仓库记录的性能预算基线，百分比表示本次实测相对 baseline 的变化。\n\n`;
 
             if (failed.length) {
-              body += `### Required action\n`;
-              for (const r of failed) {
+              body += `### 需要处理\n`;              for (const r of failed) {
                 if (r.status === 'skipped') {
                   body += `- \`${r.name}\`: skipped — ${r.reason || 'no reason reported'}\n`;
                 } else if (r.status === 'error') {
@@ -145,8 +147,8 @@ jobs:
               body += '\n';
             }
 
-            body += `### Summary\n\n`;
-            body += `| Bench | Status | Wall | CPU user | RSS | user/real | Key signal |\n`;
+            body += `### 摘要\n\n`;
+            body += `| 基准项 | 结论 | 实际耗时 | CPU 消耗 | 峰值内存 | CPU/耗时 | 关键业务信号 |\n`;
             body += `|---|---:|---:|---:|---:|---:|---|\n`;
             for (const r of results) {
               if (r.status !== 'measured') {
@@ -157,7 +159,7 @@ jobs:
             }
             body += '\n';
 
-            body += `<details>\n<summary>Full metrics</summary>\n\n`;
+            body += `<details>\n<summary>完整指标（actual / baseline / gate）</summary>\n\n`;
             for (const r of results) {
               body += `#### \`${r.name}\` — ${statusLabel(r)}\n\n`;
               if (r.status === 'skipped') {
@@ -168,12 +170,12 @@ jobs:
                 body += `> ${r.error || 'error'}\n\n`;
                 continue;
               }
-              body += `| Metric | Actual / delta / gate |\n|---|---|\n`;
-              body += `| wall | ${fmtDetailCell(r.metrics.wall_ms, 'ms')} |\n`;
-              body += `| user | ${fmtDetailCell(r.metrics.user_ms, 'ms')} |\n`;
-              body += `| sys (info) | ${fmtDetailCell(r.metrics.sys_ms, 'ms')} |\n`;
-              body += `| max RSS | ${fmtDetailCell(r.metrics.max_rss_kb, 'KB')} |\n`;
-              body += `| user/real | ${fmtDetailCell(r.metrics.user_real_ratio)} |\n`;
+              body += `| 指标 | 含义 | 实测 / baseline / gate |\n|---|---|---|\n`;
+              body += `| 实际耗时 | 用户感知 wall time，越低越好 | ${fmtDetailCell(r.metrics.wall_ms, 'ms')} |\n`;
+              body += `| CPU 消耗 | 进程 user time，越低越省电 | ${fmtDetailCell(r.metrics.user_ms, 'ms')} |\n`;
+              body += `| sys time | 系统调用时间，仅供诊断 | ${fmtDetailCell(r.metrics.sys_ms, 'ms')} |\n`;
+              body += `| 峰值内存 | max RSS，越低越好 | ${fmtDetailCell(r.metrics.max_rss_kb, 'KB')} |\n`;
+              body += `| CPU/耗时 | user ÷ wall，越高代表越占 CPU | ${fmtDetailCell(r.metrics.user_real_ratio, '', false)} |\n`;
               if (r.internal && Object.keys(r.internal).length) {
                 body += `\ninternal: \`${JSON.stringify(r.internal)}\`\n`;
               }
