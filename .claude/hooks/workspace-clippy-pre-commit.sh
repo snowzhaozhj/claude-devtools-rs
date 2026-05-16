@@ -50,16 +50,16 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 log_file=$(mktemp)
-# 失败时把日志移到 /tmp/cdt-clippy-fail-<pid>.log 保留给用户排查，
-# 成功时清理。trap 只兜底失败-退出路径（如 cargo crash）防泄漏临时文件。
-persist_log="/tmp/cdt-clippy-fail-$$.log"
+# 失败时把日志 cp 到固定路径，每次失败覆盖（不带 pid，避免累积）。
+# trap 兜底清理 mktemp 临时文件，保证不论哪条退出路径都不泄漏。
+persist_log="/tmp/cdt-clippy-fail.log"
 trap 'rm -f "$log_file"' EXIT
 
 if cargo clippy --workspace --all-targets -- -D warnings >"$log_file" 2>&1; then
   exit 0
 fi
 
-# 把日志固化到 persist_log，trap 仍清理原 mktemp 文件（已被 cp 走）
+# 失败：cp 到固定路径供用户排查
 cp "$log_file" "$persist_log" 2>/dev/null || true
 
 {
@@ -69,7 +69,7 @@ cp "$log_file" "$persist_log" 2>/dev/null || true
   tail -50 "$log_file"
   echo "========================"
   echo
-  echo "修复 clippy warning 后重新提交。完整日志：$persist_log（已固化，下次 hook 触发会被覆盖）"
+  echo "修复 clippy warning 后重新提交。完整日志：$persist_log（每次失败覆盖，仅保留最新）"
   echo "（注：本 hook 只在 Claude 显式跑 git commit 时触发；git rebase / cherry-pick 不命中。）"
 } >&2
 
