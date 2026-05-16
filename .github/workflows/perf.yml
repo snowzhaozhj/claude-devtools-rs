@@ -84,46 +84,102 @@ jobs:
             const exitCode = process.env.PERF_EXIT_CODE || '?';
 
             const MARKER = '<!-- perf-gate-bot -->';
-            const fmtCell = (m, fail) => {
+            const results = report.results || [];
+            const failed = results.filter(r =>
+              r.status !== 'measured' || (r.regressions && r.regressions.length > 0)
+            );
+            const measuredCount = results.filter(r => r.status === 'measured').length;
+            const verdict = failed.length === 0 ? 'PASS' : 'FAIL';
+
+            const fmtDelta = (m) => {
+              if (!m || m.delta_pct == null) return '—';
+              return `${m.delta_pct > 0 ? '+' : ''}${m.delta_pct}%`;
+            };
+            const fmtMs = (m) => m ? `${m.actual} ms (${fmtDelta(m)})` : '—';
+            const fmtRatio = (m) => m ? `${m.actual} / ≤${m.threshold_max}` : '—';
+            const fmtRss = (m) => {
+              if (!m || m.actual == null) return '—';
+              return `${(m.actual / 1024).toFixed(1)} MB (${fmtDelta(m)})`;
+            };
+            const fmtDetailCell = (m, unit = '') => {
               if (m == null) return '—';
-              const e = fail === true ? ' ❌' : '';
               if (typeof m === 'object' && 'actual' in m) {
-                const delta = (m.delta_pct != null) ? ` (Δ${m.delta_pct}%)` : '';
-                const thr = (m.threshold_pct != null) ? ` / +${m.threshold_pct}%`
-                          : (m.threshold_max != null) ? ` / ≤${m.threshold_max}` : '';
-                return `${m.actual}${delta}<br/>base ${m.baseline ?? '—'}${thr}${m.fail ? ' ❌' : ''}`;
+                const actual = unit ? `${m.actual} ${unit}` : `${m.actual}`;
+                const delta = m.delta_pct != null ? ` · ${fmtDelta(m)}` : '';
+                const threshold = m.threshold_pct != null ? ` · gate +${m.threshold_pct}%`
+                  : m.threshold_max != null ? ` · gate ≤${m.threshold_max}` : '';
+                return `${actual}${delta}<br/>base ${m.baseline ?? '—'}${unit ? ` ${unit}` : ''}${threshold}${m.fail ? ' · FAIL' : ''}`;
               }
               return String(m);
             };
+            const fmtKeySignal = (r) => {
+              const internal = r.internal || {};
+              if (internal.cold_total_ms != null) return `cold total ${internal.cold_total_ms} ms`;
+              if (internal.largest_payload_kb != null || internal.largest_ipc_ms != null) {
+                const payload = internal.largest_payload_kb != null ? `${internal.largest_payload_kb} KB` : '—';
+                const ipc = internal.largest_ipc_ms != null ? `${internal.largest_ipc_ms} ms` : '—';
+                return `payload ${payload}, IPC ${ipc}`;
+              }
+              return Object.keys(internal).length ? `\`${JSON.stringify(internal)}\`` : '—';
+            };
+            const statusLabel = (r) => {
+              if (r.status !== 'measured') return `FAIL (${r.status})`;
+              return (r.regressions && r.regressions.length) ? 'FAIL (regression)' : 'PASS';
+            };
 
-            let body = `${MARKER}\n## ⏱ 性能 bench 报告\n\n`;
-            body += `- runner OS: \`${report.os}\` · runs: ${report.runs} · script exit: \`${exitCode}\`\n`;
-            body += `- 注：CI 使用 \`CDT_PERF_USE_FIXTURE=1\` 生成临时 Claude projects corpus 后真实测量；若出现 \`skipped\` 视为失败。\n\n`;
+            let body = `${MARKER}\n## Performance bench report\n\n`;
+            body += `**Verdict: ${verdict}** — ${measuredCount}/${results.length} measured, ${failed.length} failing · runs \`${report.runs}\` · OS \`${report.os}\` · script exit \`${exitCode}\`\n\n`;
+            body += `> CI uses \`CDT_PERF_USE_FIXTURE=1\` to generate a temporary Claude projects corpus. Any \`skipped\` bench fails the gate.\n\n`;
 
-            for (const r of (report.results || [])) {
-              body += `### \`${r.name}\` — ${r.status}\n\n`;
+            if (failed.length) {
+              body += `### Required action\n`;
+              for (const r of failed) {
+                if (r.status === 'skipped') {
+                  body += `- \`${r.name}\`: skipped — ${r.reason || 'no reason reported'}\n`;
+                } else if (r.status === 'error') {
+                  body += `- \`${r.name}\`: error — ${r.error || 'unknown error'}\n`;
+                } else {
+                  for (const item of (r.regressions || [])) body += `- \`${r.name}\`: ${item}\n`;
+                }
+              }
+              body += '\n';
+            }
+
+            body += `### Summary\n\n`;
+            body += `| Bench | Status | Wall | CPU user | RSS | user/real | Key signal |\n`;
+            body += `|---|---:|---:|---:|---:|---:|---|\n`;
+            for (const r of results) {
+              if (r.status !== 'measured') {
+                body += `| \`${r.name}\` | ${statusLabel(r)} | — | — | — | — | ${r.reason || r.error || '—'} |\n`;
+                continue;
+              }
+              body += `| \`${r.name}\` | ${statusLabel(r)} | ${fmtMs(r.metrics.wall_ms)} | ${fmtMs(r.metrics.user_ms)} | ${fmtRss(r.metrics.max_rss_kb)} | ${fmtRatio(r.metrics.user_real_ratio)} | ${fmtKeySignal(r)} |\n`;
+            }
+            body += '\n';
+
+            body += `<details>\n<summary>Full metrics</summary>\n\n`;
+            for (const r of results) {
+              body += `#### \`${r.name}\` — ${statusLabel(r)}\n\n`;
               if (r.status === 'skipped') {
                 body += `> ${r.reason || 'skipped'}\n\n`;
                 continue;
               }
               if (r.status === 'error') {
-                body += `> ❌ ${r.error}\n\n`;
+                body += `> ${r.error || 'error'}\n\n`;
                 continue;
               }
-              body += `| 维度 | actual / Δ / threshold |\n|---|---|\n`;
-              body += `| wall | ${fmtCell(r.metrics.wall_ms)} |\n`;
-              body += `| user | ${fmtCell(r.metrics.user_ms)} |\n`;
-              body += `| sys (info) | ${fmtCell(r.metrics.sys_ms)} |\n`;
-              body += `| max_rss | ${fmtCell(r.metrics.max_rss_kb)} KB |\n`;
-              body += `| user/real | ${fmtCell(r.metrics.user_real_ratio)} |\n`;
+              body += `| Metric | Actual / delta / gate |\n|---|---|\n`;
+              body += `| wall | ${fmtDetailCell(r.metrics.wall_ms, 'ms')} |\n`;
+              body += `| user | ${fmtDetailCell(r.metrics.user_ms, 'ms')} |\n`;
+              body += `| sys (info) | ${fmtDetailCell(r.metrics.sys_ms, 'ms')} |\n`;
+              body += `| max RSS | ${fmtDetailCell(r.metrics.max_rss_kb, 'KB')} |\n`;
+              body += `| user/real | ${fmtDetailCell(r.metrics.user_real_ratio)} |\n`;
               if (r.internal && Object.keys(r.internal).length) {
-                body += `\n**internal**: \`${JSON.stringify(r.internal)}\`\n`;
-              }
-              if (r.regressions && r.regressions.length) {
-                body += `\n**❌ 回归**:\n` + r.regressions.map(x => `- ${x}`).join('\n') + '\n';
+                body += `\ninternal: \`${JSON.stringify(r.internal)}\`\n`;
               }
               body += '\n';
             }
+            body += `</details>\n\n`;
 
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
