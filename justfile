@@ -77,11 +77,15 @@ spec-archive-check:
 spec-check CHANGE:
     openspec validate {{CHANGE}} --strict
 
+# 校验三处 Tauri command 清单 1:1 同步
+ipc-sync-check:
+    bash scripts/check-ipc-command-sync.sh
+
 # ──────── 综合 ────────
 
-# 提交前预检：fmt → lint → test → 前端 vitest → spec 校验（对齐 .claude/rules/opsx-apply-cadence.md）
+# 提交前预检：fmt → lint → test → 前端 vitest → spec 校验 → IPC 三处同步
 # e2e 不在 preflight 内（启动浏览器较慢，由 CI 跑）；本地手动 `just test-e2e` 验证
-preflight: fmt lint test test-ui-unit spec-validate spec-archive-check
+preflight: fmt lint test test-ui-unit spec-validate spec-archive-check ipc-sync-check
 
 # ──────── 发布 ────────
 

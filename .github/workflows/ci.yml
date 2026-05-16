@@ -27,6 +27,14 @@ jobs:
       - name: Check completed changes are archived
         run: bash scripts/check-openspec-archives.sh
 
+  ipc-sync:
+    name: ipc command sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check Tauri command sync (3 sources)
+        run: bash scripts/check-ipc-command-sync.sh
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
