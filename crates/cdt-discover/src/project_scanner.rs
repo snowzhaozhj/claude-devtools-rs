@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use cdt_core::{Project, Session};
 use cdt_parse::parse_entry_at;
+use futures::stream::{FuturesUnordered, StreamExt};
+use tokio::sync::Semaphore;
 
 use crate::error::DiscoverError;
 use crate::fs_provider::{FileSystemProvider, FsKind};
@@ -28,11 +30,26 @@ use crate::subproject_registry::SubprojectRegistry;
 /// 扫描 session 头时读取的最大行数。
 const SESSION_HEAD_LINES: usize = 20;
 
+/// 顶层 project 目录并发扫描的上限。
+///
+/// 每个 project 内部的 `extract_session_cwd` 已经走 `join_all` 并发——但**不只**
+/// 受顶层 `PROJECT_SCAN_CONCURRENCY` 控制：单 project 内可能有 N 个 session
+/// 同时 in-flight。最终的 fd 上限闸门是 `FILE_READ_CONCURRENCY` Semaphore，顶层
+/// 限速主要为了控制 in-memory 中间结构（`session_stats` vec / `cwd_buckets`）的并发数。
+const PROJECT_SCAN_CONCURRENCY: usize = 8;
+
+/// 共享的文件读取并发上限。所有 `extract_session_cwd` 调用——无论来自哪个
+/// project——在真正调用底层 `read_lines_head` / `read_to_string` 之前必须先持
+/// 一份 permit。这是真正防止"8 project × N session 叠乘超过 macOS 默认 256
+/// fd 上限"的硬闸门。64 在并发收益（远多于 cpu 核数）与系统稳定性之间取折中。
+const FILE_READ_CONCURRENCY: usize = 64;
+
 pub struct ProjectScanner {
     fs: Arc<dyn FileSystemProvider>,
     projects_dir: PathBuf,
     registry: SubprojectRegistry,
     path_resolver: ProjectPathResolver,
+    read_semaphore: Arc<Semaphore>,
 }
 
 impl ProjectScanner {
@@ -44,6 +61,7 @@ impl ProjectScanner {
             projects_dir,
             registry: SubprojectRegistry::new(),
             path_resolver,
+            read_semaphore: Arc::new(Semaphore::new(FILE_READ_CONCURRENCY)),
         }
     }
 
@@ -75,13 +93,53 @@ impl ProjectScanner {
             .collect();
 
         let mut all_projects = Vec::new();
-        for dir_name in dirs {
-            match self.scan_project_dir(&dir_name).await {
-                Ok(mut projects) => all_projects.append(&mut projects),
-                Err(err) => {
-                    tracing::warn!(dir = %dir_name, error = ?err, "skip unreadable project dir");
+        let mut all_pending: Vec<PendingRegistration> = Vec::new();
+
+        // SSH 模式保持顺序遍历（远端 ssh provider 串行更稳）；本地走并发上限受
+        // `PROJECT_SCAN_CONCURRENCY` 控制的 buffer_unordered。`scan_project_dir`
+        // 本身只读 fs（`&self`），不再 mutate `self.registry`，把待注册条目作为
+        // pending 返回，统一在主 task 里 sequential register 保持 ID 计算确定性。
+        if self.fs.kind() == FsKind::Ssh {
+            for dir_name in dirs {
+                match self.scan_project_dir(&dir_name).await {
+                    Ok((projects, pending)) => {
+                        all_projects.extend(projects);
+                        all_pending.extend(pending);
+                    }
+                    Err(err) => {
+                        tracing::warn!(dir = %dir_name, error = ?err, "skip unreadable project dir");
+                    }
                 }
             }
+        } else {
+            let mut futs = FuturesUnordered::new();
+            let mut iter = dirs.into_iter();
+            for _ in 0..PROJECT_SCAN_CONCURRENCY {
+                if let Some(dir_name) = iter.next() {
+                    futs.push(Self::scan_with_name(self, dir_name));
+                } else {
+                    break;
+                }
+            }
+            while let Some((dir_name, result)) = futs.next().await {
+                match result {
+                    Ok((projects, pending)) => {
+                        all_projects.extend(projects);
+                        all_pending.extend(pending);
+                    }
+                    Err(err) => {
+                        tracing::warn!(dir = %dir_name, error = ?err, "skip unreadable project dir");
+                    }
+                }
+                if let Some(next_dir) = iter.next() {
+                    futs.push(Self::scan_with_name(self, next_dir));
+                }
+            }
+        }
+
+        for entry in all_pending {
+            self.registry
+                .register(&entry.base_dir, &entry.cwd, entry.session_ids);
         }
 
         all_projects.sort_by(|a, b| {
@@ -90,6 +148,17 @@ impl ProjectScanner {
                 .cmp(&a.most_recent_session.unwrap_or(0))
         });
         Ok(all_projects)
+    }
+
+    async fn scan_with_name(
+        &self,
+        dir_name: String,
+    ) -> (
+        String,
+        Result<(Vec<Project>, Vec<PendingRegistration>), DiscoverError>,
+    ) {
+        let result = self.scan_project_dir(&dir_name).await;
+        (dir_name, result)
     }
 
     /// 列出某个 project 的所有 session（带 mtime / size）。
@@ -144,7 +213,10 @@ impl ProjectScanner {
         &self.path_resolver
     }
 
-    async fn scan_project_dir(&mut self, dir_name: &str) -> Result<Vec<Project>, DiscoverError> {
+    async fn scan_project_dir(
+        &self,
+        dir_name: &str,
+    ) -> Result<(Vec<Project>, Vec<PendingRegistration>), DiscoverError> {
         let dir_path = self.projects_dir.join(dir_name);
         let entries = self.fs.read_dir_with_metadata(&dir_path).await?;
         let mut session_stats: Vec<SessionStat> = Vec::new();
@@ -167,7 +239,7 @@ impl ProjectScanner {
             });
         }
         if session_stats.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
 
         session_stats.sort_by_key(|s| std::cmp::Reverse(s.mtime_ms));
@@ -247,6 +319,7 @@ impl ProjectScanner {
         }
 
         let mut projects = Vec::with_capacity(cwd_buckets.len());
+        let mut pending = Vec::new();
         let bucket_count = cwd_buckets.len();
         for (_key, mut bucket) in cwd_buckets {
             // Session id list 已经按 mtime 插入顺序（降序）排好。
@@ -254,7 +327,13 @@ impl ProjectScanner {
             let id = if bucket_count > 1 {
                 let session_set: BTreeSet<String> = sessions.iter().cloned().collect();
                 let owned_ids: Vec<String> = session_set.into_iter().collect();
-                self.registry.register(dir_name, &bucket.cwd, owned_ids)
+                let composite = SubprojectRegistry::compose_id(dir_name, &bucket.cwd);
+                pending.push(PendingRegistration {
+                    base_dir: dir_name.to_string(),
+                    cwd: bucket.cwd.clone(),
+                    session_ids: owned_ids,
+                });
+                composite
             } else {
                 dir_name.to_string()
             };
@@ -277,10 +356,14 @@ impl ProjectScanner {
                 .unwrap_or(0)
                 .cmp(&a.most_recent_session.unwrap_or(0))
         });
-        Ok(projects)
+        Ok((projects, pending))
     }
 
     async fn extract_session_cwd(&self, path: &Path) -> Option<String> {
+        // permit 在真正发起 fd-密集型 fs 读之前 acquire——并发顶层 8 project ×
+        // 各自 join_all 的子 future 在这里排队，确保全局 in-flight read 数量
+        // 不超过 `FILE_READ_CONCURRENCY`，否则会撞 macOS 默认 256 fd 软上限。
+        let _permit = self.read_semaphore.acquire().await.ok()?;
         let head = self
             .fs
             .read_lines_head(path, SESSION_HEAD_LINES)
@@ -367,6 +450,17 @@ struct SessionStat {
     id: String,
     path: PathBuf,
     mtime_ms: i64,
+}
+
+/// 单个 project 扫描产出的待注册 composite subproject 条目。
+///
+/// 由 `scan_project_dir` 收集后返回给 `scan`，最终由 scan 主 task 在收到所有
+/// project 结果后顺序注册——`scan_project_dir` 自身不再 mutate `self.registry`，
+/// 这是把签名从 `&mut self` 改成 `&self` 让顶层 `buffer_unordered` 并发跑的前提。
+struct PendingRegistration {
+    base_dir: String,
+    cwd: PathBuf,
+    session_ids: Vec<String>,
 }
 
 struct CwdBucket {
