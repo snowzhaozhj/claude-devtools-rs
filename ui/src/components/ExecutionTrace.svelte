@@ -188,7 +188,7 @@
   .execution-trace {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
   }
   .nested {
     font-size: 13px;
