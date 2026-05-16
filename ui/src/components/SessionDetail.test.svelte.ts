@@ -12,6 +12,8 @@ import { clearMocks } from '@tauri-apps/api/mocks'
 import SessionDetail from '../routes/SessionDetail.svelte'
 import { setupMockIPC } from '../lib/tauriMock'
 import { singleProjectFixture } from '../lib/__fixtures__'
+import type { Fixture } from '../lib/__fixtures__'
+import type { AIChunk, Chunk, CompactChunk } from '../lib/api'
 
 class IntersectionObserverStub {
   observe() {}
@@ -45,6 +47,43 @@ afterEach(() => {
 const PROJECT_ID = singleProjectFixture.projects[0].id
 const SESSION_ID = singleProjectFixture.sessions[PROJECT_ID][0].sessionId
 
+function fixtureWithChunks(chunks: Chunk[]): Fixture {
+  return {
+    ...singleProjectFixture,
+    sessionDetails: {
+      [`${PROJECT_ID}:${SESSION_ID}`]: {
+        ...singleProjectFixture.sessionDetails[`${PROJECT_ID}:${SESSION_ID}`],
+        chunks,
+      },
+    },
+  }
+}
+
+function aiChunk(uuid: string, timestamp: string, text: string): AIChunk {
+  return {
+    kind: 'ai',
+    timestamp,
+    durationMs: null,
+    responses: [{ uuid, timestamp, content: text, toolCalls: [], usage: null, model: 'claude-sonnet-4-6' }],
+    metrics: { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, toolCount: 0, costUsd: null },
+    semanticSteps: [{ kind: 'text', text, timestamp }],
+    toolExecutions: [],
+    subagents: [],
+    slashCommands: [],
+  }
+}
+
+function compactChunk(): CompactChunk {
+  return {
+    kind: 'compact',
+    uuid: 'compact-1',
+    timestamp: '2026-04-11T10:00:02Z',
+    durationMs: null,
+    summaryText: 'compact summary',
+    metrics: { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, toolCount: 0, costUsd: null },
+  }
+}
+
 describe('SessionDetail smoke', () => {
   test('给定合法 projectId/sessionId 渲染骨架，loading 完成后展示 top-bar', async () => {
     const { container } = render(SessionDetail, {
@@ -77,6 +116,27 @@ describe('SessionDetail smoke', () => {
       expect(container.querySelector('.msg-row-user.msg-row-contained')).not.toBeNull()
       expect(container.querySelector('.msg-row-ai.msg-row-contained')).toBeNull()
       expect(container.querySelector('.msg-row-ai .ai-body.msg-row-contained')).not.toBeNull()
+    })
+  })
+
+  test('compact 后重复 AI response uuid 不会让 keyed each 崩溃', async () => {
+    const duplicateUuid = 'replayed-assistant-uuid'
+    setupMockIPC(fixtureWithChunks([
+      aiChunk(duplicateUuid, '2026-04-11T10:00:01Z', 'before compact'),
+      compactChunk(),
+      aiChunk(duplicateUuid, '2026-04-11T10:00:03Z', 'replayed after compact'),
+    ]))
+
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId: 'tab-smoke-duplicate-ai-key',
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('.msg-row').length).toBe(3)
     })
   })
 
