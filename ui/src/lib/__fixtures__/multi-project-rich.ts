@@ -120,6 +120,7 @@ const archiveSessions = [
 // 主 session（rust-port 的 active）含多种 chunk 类型
 const userChunk: UserChunk = {
   kind: 'user',
+  chunkId: 'u-active-1',
   uuid: 'u-active-1',
   timestamp: ts(0),
   durationMs: null,
@@ -140,6 +141,7 @@ const userChunk: UserChunk = {
 
 const systemChunk: SystemChunk = {
   kind: 'system',
+  chunkId: 's-active-1',
   uuid: 's-active-1',
   timestamp: ts(0.1),
   durationMs: null,
@@ -149,6 +151,7 @@ const systemChunk: SystemChunk = {
 
 const aiChunk: AIChunk = {
   kind: 'ai',
+  chunkId: 'ai:a-active-1:0',
   timestamp: ts(0.2),
   durationMs: 2200,
   responses: [
@@ -222,6 +225,7 @@ const aiChunk: AIChunk = {
 // 一个含 interruption 的 ai chunk
 const aiChunkInterrupted: AIChunk = {
   kind: 'ai',
+  chunkId: 'ai:a-active-2:0',
   timestamp: ts(0.5),
   durationMs: null,
   responses: [
@@ -246,6 +250,7 @@ const aiChunkInterrupted: AIChunk = {
 
 const compactChunk: CompactChunk = {
   kind: 'compact',
+  chunkId: 'c-active-1',
   uuid: 'c-active-1',
   timestamp: ts(0.6),
   durationMs: null,
@@ -388,6 +393,7 @@ export const multiProjectRichFixture: Fixture = {
       showDockIcon: true,
       theme: 'system',
       defaultTab: 'sessions',
+      claudeRootPath: null,
       autoExpandAiGroups: false,
       sessionClickBehavior: 'replace',
     },

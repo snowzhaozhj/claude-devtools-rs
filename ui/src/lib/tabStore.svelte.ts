@@ -32,7 +32,7 @@ export interface Tab {
 }
 
 export interface TabUIState {
-  expandedChunks: Set<number>;
+  expandedChunks: Set<string>;
   expandedItems: Set<string>;
   searchVisible: boolean;
   contextPanelVisible: boolean;

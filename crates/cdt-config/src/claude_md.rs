@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use cdt_discover::{encode_path, home_dir};
+use cdt_discover::{encode_path, path_decoder::get_claude_base_path};
 use serde::{Deserialize, Serialize};
 
 /// 单个 CLAUDE.md 文件的信息。
@@ -47,17 +47,6 @@ pub enum Scope {
 /// 估算 token 数：字符数 / 4（与 TS 一致）。
 fn estimate_tokens(content: &str) -> usize {
     content.len() / 4
-}
-
-/// Claude 基础路径（默认 `~/.claude`）。
-///
-/// 用 `cdt-discover::home_dir` 的四级 fallback，Windows native 也能定位到
-/// `%USERPROFILE%\.claude\`（裸 `dirs::home_dir()` 在 `HOMEDRIVE+HOMEPATH` 场景
-/// 下会返 None 导致 fallback 到 `.`，即当前目录，不符合 auto-memory 语义）。
-fn claude_base_path() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude")
 }
 
 /// 平台相关的 enterprise CLAUDE.md 路径。
@@ -162,9 +151,9 @@ async fn read_directory_md_files(dir: &Path) -> ClaudeMdFileInfo {
 }
 
 /// 读取 auto-memory 文件（仅前 200 行）。
-async fn read_auto_memory_file(project_root: &Path) -> ClaudeMdFileInfo {
+async fn read_auto_memory_file(project_root: &Path, claude_base: &Path) -> ClaudeMdFileInfo {
     let encoded = encode_path(&project_root.to_string_lossy());
-    let memory_path = claude_base_path()
+    let memory_path = claude_base
         .join("projects")
         .join(&encoded)
         .join("memory")
@@ -193,7 +182,14 @@ async fn read_auto_memory_file(project_root: &Path) -> ClaudeMdFileInfo {
 
 /// 读取所有 8 个 scope 的 CLAUDE.md 文件。
 pub async fn read_all_claude_md_files(project_root: &Path) -> BTreeMap<Scope, ClaudeMdFileInfo> {
-    let base = claude_base_path();
+    read_all_claude_md_files_with_base(project_root, &get_claude_base_path()).await
+}
+
+/// 用指定 Claude root 读取所有 8 个 scope 的 CLAUDE.md 文件。
+pub async fn read_all_claude_md_files_with_base(
+    project_root: &Path,
+    claude_base: &Path,
+) -> BTreeMap<Scope, ClaudeMdFileInfo> {
     let mut result = BTreeMap::new();
 
     // 1. enterprise
@@ -203,7 +199,10 @@ pub async fn read_all_claude_md_files(project_root: &Path) -> BTreeMap<Scope, Cl
     );
 
     // 2. user
-    result.insert(Scope::User, read_single_file(&base.join("CLAUDE.md")).await);
+    result.insert(
+        Scope::User,
+        read_single_file(&claude_base.join("CLAUDE.md")).await,
+    );
 
     // 3. project
     result.insert(
@@ -232,11 +231,14 @@ pub async fn read_all_claude_md_files(project_root: &Path) -> BTreeMap<Scope, Cl
     // 7. user-rules
     result.insert(
         Scope::UserRules,
-        read_directory_md_files(&base.join("rules")).await,
+        read_directory_md_files(&claude_base.join("rules")).await,
     );
 
     // 8. auto-memory
-    result.insert(Scope::AutoMemory, read_auto_memory_file(project_root).await);
+    result.insert(
+        Scope::AutoMemory,
+        read_auto_memory_file(project_root, claude_base).await,
+    );
 
     result
 }
@@ -332,5 +334,48 @@ mod tests {
         assert!(result.contains_key(&Scope::ProjectLocal));
         assert!(result.contains_key(&Scope::UserRules));
         assert!(result.contains_key(&Scope::AutoMemory));
+    }
+
+    #[tokio::test]
+    async fn read_all_uses_custom_claude_base_for_user_scopes() {
+        let dir = tempdir().unwrap();
+        let claude_base = dir.path().join("claude-alt");
+        let project = dir.path().join("proj");
+        tokio::fs::create_dir_all(claude_base.join("rules"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(&project).await.unwrap();
+        tokio::fs::write(claude_base.join("CLAUDE.md"), "user scope")
+            .await
+            .unwrap();
+        tokio::fs::write(claude_base.join("rules/rule.md"), "rule scope")
+            .await
+            .unwrap();
+
+        let result = read_all_claude_md_files_with_base(&project, &claude_base).await;
+
+        assert!(result[&Scope::User].exists);
+        assert!(result[&Scope::User].path.contains("claude-alt"));
+        assert!(result[&Scope::UserRules].exists);
+        assert!(result[&Scope::UserRules].path.contains("claude-alt"));
+    }
+
+    #[tokio::test]
+    async fn auto_memory_uses_custom_claude_base() {
+        let dir = tempdir().unwrap();
+        let claude_base = dir.path().join("claude-alt");
+        let project = PathBuf::from("/workspace/proj");
+        let encoded = encode_path(&project.to_string_lossy());
+        let memory_dir = claude_base.join("projects").join(encoded).join("memory");
+        tokio::fs::create_dir_all(&memory_dir).await.unwrap();
+        tokio::fs::write(memory_dir.join("MEMORY.md"), "remember me")
+            .await
+            .unwrap();
+
+        let result = read_all_claude_md_files_with_base(&project, &claude_base).await;
+
+        assert!(result[&Scope::AutoMemory].exists);
+        assert_eq!(result[&Scope::AutoMemory].char_count, "remember me".len());
+        assert!(result[&Scope::AutoMemory].path.contains("claude-alt"));
     }
 }

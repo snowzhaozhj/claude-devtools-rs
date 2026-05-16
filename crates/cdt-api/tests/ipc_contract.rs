@@ -104,6 +104,15 @@ fn ts() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 4, 11, 0, 0, 0).unwrap()
 }
 
+async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, text: &str) {
+    let line = format!(
+        r#"{{"type":"user","uuid":"{session_id}","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":"{text}"}}}}"#,
+    );
+    tokio::fs::write(dir.join(format!("{session_id}.jsonl")), format!("{line}\n"))
+        .await
+        .unwrap();
+}
+
 // =============================================================================
 // Meta 测：command 列表完整性
 // =============================================================================
@@ -323,6 +332,7 @@ fn project_session_prefs_serializes_camelcase() {
 #[test]
 fn chunk_enum_user_tag_is_user() {
     let chunk = Chunk::User(UserChunk {
+        chunk_id: "u1".into(),
         uuid: "u1".into(),
         timestamp: ts(),
         duration_ms: None,
@@ -331,11 +341,14 @@ fn chunk_enum_user_tag_is_user() {
     });
     let json = serde_json::to_value(&chunk).unwrap();
     assert_eq!(json["kind"], json!("user"), "Chunk::User → kind: user");
+    assert_eq!(json["chunkId"], json!("u1"));
+    assert!(json.get("chunk_id").is_none());
 }
 
 #[test]
 fn chunk_enum_ai_tag_is_ai_not_assistant() {
     let chunk = Chunk::Ai(AIChunk {
+        chunk_id: "ai:a1:0".into(),
         timestamp: ts(),
         duration_ms: None,
         responses: vec![],
@@ -352,11 +365,14 @@ fn chunk_enum_ai_tag_is_ai_not_assistant() {
         json!("ai"),
         "Chunk::Ai → kind: ai（不是 assistant）"
     );
+    assert_eq!(json["chunkId"], json!("ai:a1:0"));
+    assert!(json.get("chunk_id").is_none());
 }
 
 #[test]
 fn chunk_enum_system_and_compact_tags() {
     let s = Chunk::System(SystemChunk {
+        chunk_id: "s1".into(),
         uuid: "s1".into(),
         timestamp: ts(),
         duration_ms: None,
@@ -364,6 +380,7 @@ fn chunk_enum_system_and_compact_tags() {
         metrics: ChunkMetrics::default(),
     });
     let c = Chunk::Compact(CompactChunk {
+        chunk_id: "c1".into(),
         uuid: "c1".into(),
         timestamp: ts(),
         duration_ms: None,
@@ -372,8 +389,14 @@ fn chunk_enum_system_and_compact_tags() {
         token_delta: None,
         phase_number: None,
     });
-    assert_eq!(serde_json::to_value(&s).unwrap()["kind"], json!("system"));
-    assert_eq!(serde_json::to_value(&c).unwrap()["kind"], json!("compact"));
+    let system = serde_json::to_value(&s).unwrap();
+    let compact = serde_json::to_value(&c).unwrap();
+    assert_eq!(system["kind"], json!("system"));
+    assert_eq!(system["chunkId"], json!("s1"));
+    assert!(system.get("chunk_id").is_none());
+    assert_eq!(compact["kind"], json!("compact"));
+    assert_eq!(compact["chunkId"], json!("c1"));
+    assert!(compact.get("chunk_id").is_none());
 }
 
 /// 验 `CompactChunk.tokenDelta` / `phaseNumber` 在 `Some(...)` 时序列化
@@ -382,6 +405,7 @@ fn chunk_enum_system_and_compact_tags() {
 #[test]
 fn compact_chunk_serializes_token_delta_and_phase_number_camelcase() {
     let c = Chunk::Compact(CompactChunk {
+        chunk_id: "c1".into(),
         uuid: "c1".into(),
         timestamp: ts(),
         duration_ms: None,
@@ -410,6 +434,7 @@ fn compact_chunk_serializes_token_delta_and_phase_number_camelcase() {
 #[test]
 fn compact_chunk_omits_optional_derived_fields_when_none() {
     let c = Chunk::Compact(CompactChunk {
+        chunk_id: "c1".into(),
         uuid: "c1".into(),
         timestamp: ts(),
         duration_ms: None,
@@ -432,6 +457,7 @@ fn compact_chunk_omits_optional_derived_fields_when_none() {
 #[test]
 fn ai_chunk_serializes_camelcase_fields() {
     let chunk = AIChunk {
+        chunk_id: "ai:a1:0".into(),
         timestamp: ts(),
         duration_ms: Some(100),
         responses: vec![],
@@ -490,6 +516,7 @@ fn ai_chunk_serializes_camelcase_fields() {
 #[test]
 fn ai_chunk_empty_teammate_messages_omitted() {
     let chunk = AIChunk {
+        chunk_id: "ai:a1:0".into(),
         timestamp: ts(),
         duration_ms: None,
         responses: vec![],
@@ -651,6 +678,7 @@ fn subagent_messages_total_count_in_rollback_path() {
     use cdt_core::{AIChunk, Chunk};
 
     let ai_chunk = Chunk::Ai(AIChunk {
+        chunk_id: "ai:a1:0".into(),
         timestamp: ts(),
         duration_ms: None,
         responses: vec![],
@@ -1194,6 +1222,67 @@ async fn update_config_general_auto_expand_ai_groups_round_trip() {
         api.get_config().await.unwrap()["general"]["autoExpandAiGroups"],
         json!(true)
     );
+}
+
+#[tokio::test]
+async fn update_config_general_claude_root_path_reconfigures_local_api() {
+    let (api, tmp) = setup_api().await;
+    let custom_root = tmp.path().join("claude-alt");
+    let custom_projects = custom_root.join("projects");
+    let project_dir = custom_projects.join("-Users-alice-custom");
+    tokio::fs::create_dir_all(&project_dir).await.unwrap();
+    write_user_session(
+        &project_dir,
+        "sess-custom",
+        "/Users/alice/custom",
+        "custom_root_keyword",
+    )
+    .await;
+
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "claudeRootPath": custom_root.to_string_lossy() }),
+    })
+    .await
+    .expect("claudeRootPath SHALL 接受绝对路径");
+
+    let projects = api.list_projects().await.unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].id, "-Users-alice-custom");
+
+    let search = api
+        .search(&SearchRequest {
+            query: "custom_root_keyword".into(),
+            project_id: Some("-Users-alice-custom".into()),
+            session_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(search["results"].as_array().unwrap().len(), 1);
+
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "claudeRootPath": null }),
+    })
+    .await
+    .expect("claudeRootPath=null SHALL restore default");
+    assert_eq!(
+        api.get_config().await.unwrap()["general"]["claudeRootPath"],
+        json!(null)
+    );
+}
+
+#[tokio::test]
+async fn update_config_general_claude_root_path_rejects_relative_path() {
+    let (api, _tmp) = setup_api().await;
+    let err = api
+        .update_config(&ConfigUpdateRequest {
+            section: "general".into(),
+            data: json!({ "claudeRootPath": "relative/path" }),
+        })
+        .await
+        .expect_err("relative claudeRootPath SHALL be rejected");
+    assert!(err.to_string().contains("absolute path"));
 }
 
 #[tokio::test]

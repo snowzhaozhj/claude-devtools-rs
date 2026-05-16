@@ -85,6 +85,19 @@ candidate：(a) 直接 path；(b) 经过 `pnpm exec`。
 
 **采用 a**。`npm → pnpm` 是命令字面替换，行为契约（vitest 跑、playwright 跑、bundle DCE）不变；新增 Requirement 反而割裂"测试金字塔"语义。每个被影响的 Requirement 完整重写，body 保留 SHALL/MUST 句不变，仅 Scenario WHEN 子句的命令字符串改写。
 
+### D8: release.yml 的 tauri-action **不**加 `tauriScript: pnpm tauri`
+
+candidate：(a) 加 `tauriScript: pnpm tauri`（要求 `@tauri-apps/cli` 进 ui/devDep）；(b) 不动，让 tauri-action 自己装 tauri CLI
+
+**采用 b**。理由：
+
+- 本仓的 `@tauri-apps/cli` **不在** `ui/package.json` 也**不在** `src-tauri/Cargo.toml`——tauri-action 在 `projectPath: src-tauri` 下找不到 `package.json`，自动 fallback 用 `npm install -g @tauri-apps/cli` 装 GitHub runner 全局 binary
+- 这一步 npm install 与 ui/ 下的 pnpm 链路**正交**——前端 dist 在前一步 `pnpm --dir ui run build` 已产出到 `ui/dist/`，tauri-action 后续只跑 `tauri build` 编译 Rust + 打 bundle，不再碰前端依赖
+- 本仓 v0.4.x 系列（v0.4.0 - v0.4.10）全部 release 成功，证明该链路稳定。pnpm 切换不引入新风险
+- 如果加 `tauriScript: pnpm tauri` 就**必须**同步把 `@tauri-apps/cli` 加进 ui/devDep——额外 80 MB+ 装依赖换不到任何收益（pnpm 与 npm 装的都是同一个 binary）
+
+风险点：tauri-action v0+ 内部实现若日后变更（如要求 `package.json` 必须存在并指定 packageManager），需在 PR fail 时回头加 `tauriScript`。本仓首个 release（本 PR merge 后）跑通验证 D8 决策有效。
+
 ## Risks / Trade-offs
 
 - **R1**：贡献者首次开工没装 pnpm 会报 `command not found`。**缓解**：README 第一步强调，配合 hook `svelte-check-after-edit.sh` 在 `pnpm` 找不到时优雅 fallback（待定，先看 hook 测试是否需要）。

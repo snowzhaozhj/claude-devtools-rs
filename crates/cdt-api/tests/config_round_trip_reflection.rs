@@ -111,6 +111,24 @@ async fn general_config_all_fields_round_trip() {
 }
 
 #[tokio::test]
+async fn general_config_rejects_non_string_claude_root_path() {
+    let (mut mgr, _tmp) = setup_manager().await;
+    mgr.update_general(json!({ "claudeRootPath": "/tmp/cdt-test-claude-root" }))
+        .await
+        .expect("set initial root");
+
+    let res = mgr.update_general(json!({ "claudeRootPath": 42 })).await;
+    assert!(
+        res.is_err(),
+        "update_general MUST reject non-string claudeRootPath values"
+    );
+    assert_eq!(
+        mgr.get_config().general.claude_root_path.as_deref(),
+        Some("/tmp/cdt-test-claude-root")
+    );
+}
+
+#[tokio::test]
 async fn general_config_rejects_invalid_enum_values() {
     let (mut mgr, _tmp) = setup_manager().await;
 

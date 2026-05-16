@@ -63,7 +63,7 @@
   // 用 untrack 显式声明只读初始值，消 Svelte 5 state_referenced_locally warning
   let uiState = getTabUIState(untrack(() => tabId));
   let expandedItems: Set<string> = $state(new Set(uiState.expandedItems));
-  let expandedChunks: Set<number> = $state(new Set(uiState.expandedChunks));
+  let expandedChunks: Set<string> = $state(new Set(uiState.expandedChunks));
   // Compact 折叠状态——per-chunk 局部 UI state（D4：默认折叠，切 tab 走 destroy/recreate
   // 重置为默认值，对齐原版 CompactBoundary.tsx 的 useState(false)，**不**进 tabStore 持久化）
   let expandedCompacts: Set<string> = $state(new Set());
@@ -79,18 +79,18 @@
   // 在 visible+query 状态下自动重搜，避免 file-change 后 mark 索引过期。
   let searchContentVersion = $state(0);
 
-  function toggleChunk(idx: number, chunk?: AIChunk) {
+  function toggleChunk(chunk: AIChunk) {
     const n = new Set(expandedChunks);
-    const opening = !n.has(idx);
-    if (opening) n.add(idx); else n.delete(idx);
+    const opening = !n.has(chunk.chunkId);
+    if (opening) n.add(chunk.chunkId); else n.delete(chunk.chunkId);
     expandedChunks = n;
-    if (opening && chunk) {
+    if (opening) {
       prefetchReadOutputs(chunk);
     }
   }
 
-  function isChunkToolsVisible(idx: number): boolean {
-    return expandedChunks.has(idx);
+  function isChunkToolsVisible(chunk: AIChunk): boolean {
+    return expandedChunks.has(chunk.chunkId);
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -288,7 +288,7 @@
         if (chunk.kind !== "ai") return;
         for (const exec of chunk.toolExecutions) {
           if (!exec.outputOmitted) continue;
-          const key = `${i}-tool-${exec.toolUseId}`;
+          const key = `${chunk.chunkId}-tool-${exec.toolUseId}`;
           if (expandedItems.has(key)) {
             void ensureToolOutput(exec);
           }
@@ -313,11 +313,8 @@
     expandedItems = next;
   }
 
-  // 为 `{#each detail.chunks}` 提供 key。base 保持刷新时尽量稳定，index 防御
-  // compact/replay 场景下 AI response uuid 重复导致 Svelte duplicate-key 崩溃。
-  function chunkKey(c: Chunk, index: number): string {
-    const base = c.kind === "ai" ? (c.responses[0]?.uuid ?? c.timestamp) : c.uuid;
-    return `${base}:${index}`;
+  function chunkKey(c: Chunk): string {
+    return c.chunkId;
   }
 
   // 最后一个 AIChunk 的索引。ongoing=true 时它的 lastOutput 位置被
@@ -471,7 +468,7 @@
   <div class="content-area">
   <!-- Conversation -->
   <div class="conversation" bind:this={conversationEl}>
-    {#each detail.chunks as chunk, i (chunkKey(chunk, i))}
+    {#each detail.chunks as chunk, i (chunkKey(chunk))}
 
       <!-- User -->
       {#if chunk.kind === "user"}
@@ -538,7 +535,7 @@
       {:else if chunk.kind === "ai"}
         {@const di = buildDisplayItemsCached(chunk)}
         {@const summaryText = buildSummary(di.items)}
-        {@const toolsVisible = isChunkToolsVisible(i)}
+        {@const toolsVisible = isChunkToolsVisible(chunk)}
         {@const interruptions = chunk.semanticSteps.filter((s) => s.kind === "interruption")}
         <!--
           对齐原版 AIChatGroup.tsx:234-248 "Get the LAST assistant message's
@@ -573,7 +570,7 @@
                 <button
                   type="button"
                   class="ai-tool-toggle"
-                  onclick={() => toggleChunk(i, chunk)}
+                  onclick={() => toggleChunk(chunk)}
                   aria-expanded={toolsVisible}
                   aria-label={toolsVisible ? "折叠工具调用列表" : "展开工具调用列表"}
                 >
@@ -616,7 +613,7 @@
               <div class="ai-tools-section msg-row-contained">
                 {#each di.items as item, di_idx}
                   {#if item.type === "slash"}
-                    {@const slashKey = `${i}-slash-${di_idx}`}
+                    {@const slashKey = `${chunk.chunkId}-slash-${di_idx}`}
                     {@const hasInstructions = !!item.slash.instructions}
                     <BaseItem
                       svgIcon={SLASH}
@@ -635,7 +632,7 @@
                     </BaseItem>
                   {:else if item.type === "tool"}
                     {@const exec = item.execution}
-                    {@const key = `${i}-tool-${exec.toolUseId}`}
+                    {@const key = `${chunk.chunkId}-tool-${exec.toolUseId}`}
                     {@const eff = effectiveExec(exec)}
                     <BaseItem
                       svgIcon={WRENCH}
@@ -663,7 +660,7 @@
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "thinking"}
-                    {@const key = `${i}-think-${di_idx}`}
+                    {@const key = `${chunk.chunkId}-think-${di_idx}`}
                     <BaseItem
                       svgIcon={BRAIN}
                       label="Thinking"
@@ -676,7 +673,7 @@
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "output"}
-                    {@const key = `${i}-output-${di_idx}`}
+                    {@const key = `${chunk.chunkId}-output-${di_idx}`}
                     <BaseItem
                       svgIcon={MESSAGE_SQUARE}
                       label="Output"

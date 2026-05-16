@@ -555,47 +555,38 @@ async fn run_startup_update_check(api: Arc<LocalDataApi>, app: tauri::AppHandle)
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-    let (api, watcher) = rt.block_on(async {
+    let api = rt.block_on(async {
         let mut config_mgr = ConfigManager::new(None);
         let _ = config_mgr.load().await;
 
         let mut notif_mgr = NotificationManager::new(None);
         let _ = notif_mgr.load().await;
 
+        let claude_root_path = config_mgr.get_config().general.claude_root_path.clone();
+        let claude_root = claude_root_path.as_deref().map(std::path::Path::new);
         let fs = local_handle();
-        let projects_dir = path_decoder::get_projects_base_path();
+        let projects_dir = path_decoder::projects_base_path_for(claude_root);
+        let todos_dir = path_decoder::todos_base_path_for(claude_root);
         let scanner = ProjectScanner::new(fs, projects_dir.clone());
         let ssh_mgr = SshConnectionManager::new();
 
-        // 用 `with_paths` 而非 `new()`：让 watcher 与 LocalDataApi.scanner /
-        // parsed_msg_cache 共享同一 projects_dir 解析路径——`FileWatcher::new()`
-        // 走 `dirs::home_dir()`，而 path_decoder 是四级 fallback
-        // (HOME → USERPROFILE → HOMEDRIVE+HOMEPATH → dirs)。Windows
-        // `HOMEDRIVE+HOMEPATH` 场景下两条解析链可能给出不同 PathBuf，导致 watcher
-        // 监听目录 A 但 API cache key 用目录 B，invalidate 永远 miss（codex 二轮
-        // 二审找到的 bug）。
-        let watcher = Arc::new(FileWatcher::with_paths(
-            projects_dir.clone(),
-            path_decoder::get_todos_base_path(),
-        ));
         // phase 3 image asset cache：用 OS 标准 cache 目录 + app 子目录。
         // dirs::cache_dir() 同步且跨平台，无需 Tauri app handle。
         let image_cache_dir = dirs::cache_dir()
             .map(|d| d.join("claude-devtools-rs").join("cdt-images"));
+        let watcher = FileWatcher::with_paths(projects_dir.clone(), todos_dir);
         let mut api_inner = LocalDataApi::new_with_watcher(
             scanner,
             config_mgr,
             notif_mgr,
             ssh_mgr,
-            watcher.as_ref(),
+            &watcher,
             projects_dir,
         );
         if let Some(dir) = image_cache_dir {
             api_inner = api_inner.with_image_cache(dir);
         }
-        let api = Arc::new(api_inner);
-
-        (api, watcher)
+        Arc::new(api_inner)
     });
 
     tauri::Builder::default()
@@ -603,6 +594,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppData { api: api.clone() })
         .setup(move |app| {
             #[cfg(debug_assertions)]
@@ -664,18 +656,9 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // 启动 FileWatcher：监听 `~/.claude/projects/` + `~/.claude/todos/`，
-            // 将 file 变更广播给自动通知管线
-            let watcher_for_task = watcher.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(err) = watcher_for_task.start().await {
-                    log::warn!("FileWatcher terminated: {err}");
-                }
-            });
-
-            // 把 FileWatcher 的 FileChangeEvent 桥到前端 `file-change` 事件，
-            // 让 SessionDetail 与 Sidebar 自动刷新。
-            let mut file_rx = watcher.subscribe_files();
+            // 把 LocalDataApi 的稳定 FileChangeEvent 广播桥到前端 `file-change` 事件。
+            // Claude root 运行时重配会重建内部 watcher，但此订阅保持有效。
+            let mut file_rx = api.subscribe_file_changes();
             let app_handle_for_files = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {

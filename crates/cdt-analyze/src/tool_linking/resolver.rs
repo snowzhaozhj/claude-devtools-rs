@@ -715,6 +715,7 @@ mod tests {
         use cdt_core::{AIChunk, Chunk, ChunkMetrics};
         use chrono::TimeZone;
         let chunk = Chunk::Ai(AIChunk {
+            chunk_id: "ai:a:0".into(),
             timestamp: chrono::Utc.timestamp_opt(0, 0).unwrap(),
             duration_ms: None,
             responses: vec![],
@@ -742,6 +743,7 @@ mod tests {
 
     fn ai_chunk(model: Option<&str>, usage: Option<cdt_core::TokenUsage>) -> Chunk {
         Chunk::Ai(cdt_core::AIChunk {
+            chunk_id: "ai:a:0".into(),
             timestamp: ts(0),
             duration_ms: None,
             responses: vec![cdt_core::AssistantResponse {
@@ -796,6 +798,7 @@ mod tests {
             input: serde_json::json!({"type": "shutdown_response"}),
         };
         let chunk = Chunk::Ai(cdt_core::AIChunk {
+            chunk_id: "ai:a:0".into(),
             timestamp: ts(0),
             duration_ms: None,
             responses: vec![cdt_core::AssistantResponse {
