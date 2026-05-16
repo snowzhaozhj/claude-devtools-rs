@@ -25,6 +25,35 @@ fn temp_config_path() -> (TempDir, PathBuf) {
     (dir, path)
 }
 
+#[tokio::test]
+async fn failed_general_save_does_not_mutate_in_memory_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = canonical(dir.path()).join("config.json");
+    let mut mgr = ConfigManager::new(Some(config_path));
+    mgr.load().await.expect("load defaults from missing file");
+
+    std::fs::remove_dir_all(dir.path()).expect("remove parent dir before save");
+    std::fs::write(dir.path(), b"not a directory").expect("replace parent with file");
+
+    let before = mgr.get_config();
+    let custom_root = canonical(Path::new("/"));
+    let err = mgr
+        .update_general(serde_json::json!({
+            "theme": "dark",
+            "claudeRootPath": custom_root.to_string_lossy(),
+        }))
+        .await
+        .expect_err("writing config under a file parent must fail");
+    assert!(matches!(err, ConfigError::Io { .. }));
+
+    let after = mgr.get_config();
+    assert_eq!(after.general.theme, before.general.theme);
+    assert_eq!(
+        after.general.claude_root_path,
+        before.general.claude_root_path
+    );
+}
+
 /// (1) 多 section 写盘 → 新 manager 重读 → 字段一致
 #[tokio::test]
 async fn round_trip_general_display_updater_triggers_persists_after_reload() {

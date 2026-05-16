@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use tokio::sync::{Mutex, Semaphore, broadcast};
-use tokio::task::{AbortHandle, JoinSet};
+use tokio::task::{AbortHandle, JoinHandle, JoinSet};
 
 use cdt_analyze::build_chunks_with_subagents;
 use cdt_config::{
@@ -308,6 +308,11 @@ pub struct LocalDataApi {
     /// 构造下存在；`new()` 构造返回 `None`，此时 `subscribe_detected_errors`
     /// 返回一条永不发消息的 receiver（caller 代码统一）。
     error_tx: Option<broadcast::Sender<DetectedError>>,
+    /// File watcher 稳定广播发送端。root 重配时内部 watcher 会重建，但 host
+    /// 订阅这条稳定 channel，避免继续绑在旧 watcher 的 receiver 上。
+    file_tx: Option<broadcast::Sender<cdt_core::FileChangeEvent>>,
+    todo_tx: Option<broadcast::Sender<cdt_core::TodoChangeEvent>>,
+    watcher_tasks: Mutex<Vec<JoinHandle<()>>>,
     /// `list_sessions` 后台元数据扫描的广播发送端。`subscribe_session_metadata()`
     /// 返回 receiver，Tauri host 桥接为前端 `session-metadata-update` 事件。
     session_metadata_tx: broadcast::Sender<SessionMetadataUpdate>,
@@ -370,6 +375,9 @@ impl LocalDataApi {
             notif_mgr: Arc::new(Mutex::new(notif_mgr)),
             ssh_mgr: Mutex::new(ssh_mgr),
             error_tx: None,
+            file_tx: None,
+            todo_tx: None,
+            watcher_tasks: Mutex::new(Vec::new()),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
@@ -410,15 +418,8 @@ impl LocalDataApi {
         let config_mgr = Arc::new(Mutex::new(config_mgr));
         let notif_mgr = Arc::new(Mutex::new(notif_mgr));
         let (error_tx, _) = broadcast::channel::<DetectedError>(256);
-
-        let pipeline = NotificationPipeline::new(
-            watcher.subscribe_files(),
-            config_mgr.clone(),
-            notif_mgr.clone(),
-            error_tx.clone(),
-            projects_dir.clone(),
-        );
-        tokio::spawn(pipeline.run());
+        let (file_tx, _) = broadcast::channel::<cdt_core::FileChangeEvent>(256);
+        let (todo_tx, _) = broadcast::channel::<cdt_core::TodoChangeEvent>(256);
 
         let (session_metadata_tx, _) =
             broadcast::channel::<SessionMetadataUpdate>(METADATA_BROADCAST_CAPACITY);
@@ -428,11 +429,23 @@ impl LocalDataApi {
         // remove。详 change `parsed-message-lru-cache` design D9；spec
         // `ipc-data-api/spec.md` §"parsed-message 缓存按 file-change 广播主动失效"。
         let parsed_msg_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
-        spawn_parsed_msg_cache_invalidator(
+        let watcher_tasks = Mutex::new(spawn_watcher_runtime(
+            FileWatcher::with_paths(
+                projects_dir.clone(),
+                todos_dir_from_projects_dir(&projects_dir),
+            ),
+            config_mgr.clone(),
+            notif_mgr.clone(),
+            WatcherRuntimeChannels {
+                errors: error_tx.clone(),
+                files: file_tx.clone(),
+                todos: todo_tx.clone(),
+            },
             parsed_msg_cache.clone(),
-            watcher.subscribe_files(),
             projects_dir.clone(),
-        );
+        ));
+
+        let _ = watcher;
 
         Self {
             scanner: Mutex::new(scanner),
@@ -441,6 +454,9 @@ impl LocalDataApi {
             notif_mgr,
             ssh_mgr: Mutex::new(ssh_mgr),
             error_tx: Some(error_tx),
+            file_tx: Some(file_tx),
+            todo_tx: Some(todo_tx),
+            watcher_tasks,
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
@@ -462,6 +478,24 @@ impl LocalDataApi {
             tx.subscribe()
         } else {
             let (_tx, rx) = broadcast::channel::<DetectedError>(1);
+            rx
+        }
+    }
+
+    pub fn subscribe_file_changes(&self) -> broadcast::Receiver<cdt_core::FileChangeEvent> {
+        if let Some(tx) = &self.file_tx {
+            tx.subscribe()
+        } else {
+            let (_tx, rx) = broadcast::channel::<cdt_core::FileChangeEvent>(1);
+            rx
+        }
+    }
+
+    pub fn subscribe_todo_changes(&self) -> broadcast::Receiver<cdt_core::TodoChangeEvent> {
+        if let Some(tx) = &self.todo_tx {
+            tx.subscribe()
+        } else {
+            let (_tx, rx) = broadcast::channel::<cdt_core::TodoChangeEvent>(1);
             rx
         }
     }
@@ -492,10 +526,32 @@ impl LocalDataApi {
             }
             active.clear();
         }
-        self.root_generation.fetch_add(1, Ordering::SeqCst);
-
         *self.scanner.lock().await = ProjectScanner::new(local_handle(), projects_dir.clone());
-        *self.projects_dir.lock().await = projects_dir;
+        *self.projects_dir.lock().await = projects_dir.clone();
+
+        if let (Some(error_tx), Some(file_tx), Some(todo_tx)) =
+            (&self.error_tx, &self.file_tx, &self.todo_tx)
+        {
+            let mut tasks = self.watcher_tasks.lock().await;
+            for task in tasks.drain(..) {
+                task.abort();
+            }
+            let claude_root = claude_root_path.map(PathBuf::from);
+            let todos_dir = cdt_discover::path_decoder::todos_base_path_for(claude_root.as_deref());
+            *tasks = spawn_watcher_runtime(
+                FileWatcher::with_paths(projects_dir.clone(), todos_dir),
+                self.config_mgr.clone(),
+                self.notif_mgr.clone(),
+                WatcherRuntimeChannels {
+                    errors: error_tx.clone(),
+                    files: file_tx.clone(),
+                    todos: todo_tx.clone(),
+                },
+                self.parsed_msg_cache.clone(),
+                projects_dir,
+            );
+        }
+        self.root_generation.fetch_add(1, Ordering::SeqCst);
     }
 
     async fn project_memory_dir(&self, project_id: &str) -> Result<std::path::PathBuf, ApiError> {
@@ -544,13 +600,13 @@ impl LocalDataApi {
             return Err(ApiError::validation("pageSize must be > 0"));
         }
 
-        let root_generation = self.root_generation.load(Ordering::SeqCst);
         let scanner = self.scanner.lock().await;
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
             .await
             .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?;
         let projects_dir = scanner.projects_dir().to_path_buf();
+        let root_generation = self.root_generation.load(Ordering::SeqCst);
         drop(scanner);
 
         let offset = pagination
@@ -654,6 +710,85 @@ fn metadata_scan_key(project_id: &str, cursor: Option<&str>) -> String {
     format!("{project_id}|{}", cursor.unwrap_or(""))
 }
 
+fn todos_dir_from_projects_dir(projects_dir: &Path) -> PathBuf {
+    projects_dir.parent().map_or_else(
+        || projects_dir.join(".."),
+        |claude_root| claude_root.join("todos"),
+    )
+}
+
+struct WatcherRuntimeChannels {
+    errors: broadcast::Sender<DetectedError>,
+    files: broadcast::Sender<cdt_core::FileChangeEvent>,
+    todos: broadcast::Sender<cdt_core::TodoChangeEvent>,
+}
+
+fn spawn_watcher_runtime(
+    watcher: FileWatcher,
+    config_mgr: Arc<Mutex<ConfigManager>>,
+    notif_mgr: Arc<Mutex<NotificationManager>>,
+    channels: WatcherRuntimeChannels,
+    parsed_msg_cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
+    projects_dir: PathBuf,
+) -> Vec<JoinHandle<()>> {
+    let watcher = Arc::new(watcher);
+    let watcher_for_start = watcher.clone();
+    let start_task = tokio::spawn(async move {
+        if let Err(err) = watcher_for_start.start().await {
+            tracing::warn!(error = %err, "FileWatcher terminated");
+        }
+    });
+
+    let mut bridge_rx = watcher.subscribe_files();
+    let bridge_task = tokio::spawn(async move {
+        loop {
+            match bridge_rx.recv().await {
+                Ok(event) => {
+                    let _ = channels.files.send(event);
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    let mut todo_rx = watcher.subscribe_todos();
+    let todo_bridge_task = tokio::spawn(async move {
+        loop {
+            match todo_rx.recv().await {
+                Ok(event) => {
+                    let _ = channels.todos.send(event);
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    let pipeline = NotificationPipeline::new(
+        watcher.subscribe_files(),
+        config_mgr,
+        notif_mgr,
+        channels.errors,
+        projects_dir.clone(),
+    );
+    let notifier_task = tokio::spawn(pipeline.run());
+
+    let invalidator_task = spawn_parsed_msg_cache_invalidator(
+        parsed_msg_cache,
+        watcher.subscribe_files(),
+        projects_dir,
+    );
+
+    vec![
+        start_task,
+        bridge_task,
+        todo_bridge_task,
+        notifier_task,
+        invalidator_task,
+    ]
+}
+
 /// 启动一个后台 task，订阅 `FileWatcher::subscribe_files()` 广播，对每条
 /// `FileChangeEvent` 按 `projects_dir / project_id / "{session_id}.jsonl"`
 /// 推算主 session JSONL 路径，**stat 比对当前 `FileSignature` 与 cache 中记录**，
@@ -676,7 +811,7 @@ fn spawn_parsed_msg_cache_invalidator(
     cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
     mut rx: broadcast::Receiver<cdt_core::FileChangeEvent>,
     projects_dir: std::path::PathBuf,
-) {
+) -> JoinHandle<()> {
     use crate::cache_signature::FileSignature;
     tokio::spawn(async move {
         loop {
@@ -713,7 +848,7 @@ fn spawn_parsed_msg_cache_invalidator(
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }
-    });
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

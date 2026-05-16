@@ -21,7 +21,7 @@ use crate::validation::{
 
 /// 默认配置文件路径：`~/.claude/claude-devtools-config.json`。
 fn default_config_path() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".claude").join("claude-devtools-config.json")
 }
 
@@ -241,24 +241,25 @@ impl ConfigManager {
         &mut self,
         updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        let mut candidate = self.config.general.clone();
         if let Some(obj) = updates.as_object() {
             for (k, v) in obj {
                 match k.as_str() {
                     "launchAtLogin" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.general.launch_at_login = b;
+                            candidate.launch_at_login = b;
                         }
                     }
                     "showDockIcon" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.general.show_dock_icon = b;
+                            candidate.show_dock_icon = b;
                         }
                     }
                     "theme" => {
                         if let Some(s) = v.as_str() {
                             match s {
                                 "dark" | "light" | "system" => {
-                                    s.clone_into(&mut self.config.general.theme);
+                                    s.clone_into(&mut candidate.theme);
                                 }
                                 _ => {
                                     return Err(ConfigError::validation(
@@ -272,7 +273,7 @@ impl ConfigManager {
                         if let Some(s) = v.as_str() {
                             match s {
                                 "dashboard" | "last-session" => {
-                                    s.clone_into(&mut self.config.general.default_tab);
+                                    s.clone_into(&mut candidate.default_tab);
                                 }
                                 _ => {
                                     return Err(ConfigError::validation(
@@ -283,24 +284,32 @@ impl ConfigManager {
                         }
                     }
                     "claudeRootPath" => {
-                        let raw = if v.is_null() { None } else { v.as_str() };
-                        self.config.general.claude_root_path = validate_claude_root_path(raw)?;
+                        let raw = if v.is_null() {
+                            None
+                        } else {
+                            Some(v.as_str().ok_or_else(|| {
+                                ConfigError::validation(
+                                    "general.claudeRootPath must be a string or null",
+                                )
+                            })?)
+                        };
+                        candidate.claude_root_path = validate_claude_root_path(raw)?;
                     }
                     "autoExpandAiGroups" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.general.auto_expand_ai_groups = b;
+                            candidate.auto_expand_ai_groups = b;
                         }
                     }
                     "useNativeTitleBar" => {
                         if let Some(b) = v.as_bool() {
-                            self.config.general.use_native_title_bar = b;
+                            candidate.use_native_title_bar = b;
                         }
                     }
                     "sessionClickBehavior" => {
                         if let Some(s) = v.as_str() {
                             match s {
                                 "replace" | "new-tab" => {
-                                    s.clone_into(&mut self.config.general.session_click_behavior);
+                                    s.clone_into(&mut candidate.session_click_behavior);
                                 }
                                 _ => {
                                     return Err(ConfigError::validation(
@@ -314,7 +323,11 @@ impl ConfigManager {
                 }
             }
         }
-        self.save().await?;
+
+        let mut next = self.config.clone();
+        next.general = candidate;
+        self.persist_config(&next).await?;
+        self.config = next;
         Ok(self.get_config())
     }
 
