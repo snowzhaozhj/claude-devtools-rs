@@ -46,7 +46,6 @@
     justify-content: center;
     overflow: hidden;
     background: var(--color-surface);
-    animation: skel-fade-in 0.4s ease-out both;
   }
 
   .skel-inner {
@@ -114,9 +113,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .skel-root {
-      animation: none;
-    }
     .skel-line::after {
       animation: none;
     }
