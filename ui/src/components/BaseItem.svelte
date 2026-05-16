@@ -120,6 +120,7 @@
     min-width: 0;
     border-radius: 4px;
     transition: background-color 0.2s;
+    overflow: hidden;
   }
 
   .base-item-header {
@@ -238,10 +239,12 @@
   }
 
   .base-item-content {
+    display: flow-root;
     min-width: 0;
     max-width: 100%;
     margin-left: 8px;
     margin-top: 8px;
+    margin-bottom: 8px;
     padding-left: 24px;
     border-left: 2px solid var(--color-border);
   }
