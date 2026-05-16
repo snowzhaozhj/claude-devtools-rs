@@ -1,136 +1,99 @@
 # 性能基线 + 预算 + 防回归
 
-claude-devtools-rs 用 Rust 重写原 TS 项目的根本动机就是性能。本文是**硬约束**——任何 PR 都要参照此规则做性能影响评估。
+claude-devtools-rs 是**桌面辅助工具**，不是用户主线（IDE / 浏览器 / 编辑器）。开着不应感知它存在：风扇不起转、电池不掉、不抢其他 app 的 CPU。本文是**硬约束**——任何 PR 都参照评估。
+
+## 核心：低消耗 + 高性能（四维齐看）
+
+性能不只是 wall time。串行改并发即使 real 砍半，user time 暴涨多核打满 / RSS 涨百兆，定位就崩了。**任何性能改动 SHALL 同时验证**：
+
+1. **wall time（real）** — 用户感知耗时
+2. **user/sys time** — CPU 实际工作量
+3. **user/real ratio** — 进程平均占用核数（**非系统 CPU 百分比**；`0.5` ≈ 8 核机 6%、`1.0` = 单核满载 ≈ 12.5%、`4.0` = 4 核满载 ≈ 50% 风扇起转）
+4. **max RSS + peak memory** — 进程内存峰值
+
+测量统一命令：`/usr/bin/time -lp <bench-cmd>`（macOS）/ `/usr/bin/time -v`（Linux）。系统 CPU 人工看 Activity Monitor 或 `top -pid $(pgrep claude-devtools-tauri)`。
 
 ## 性能预算（关键路径）
 
-这些是冷启动 / 首屏 / 大会话三条关键路径的上限。**违反需要 follow-up 修复**，不能合并 PR 时降低预算。
+基线 v0.4.10（2026-05-16，30 project × 538 session）。**回归 > 阈值即拒**。
 
-| 关键路径 | 测量方式 | 预算 | 基线（v0.4.8，2026-05-15，27 project × 534 session）|
-|---|---|---|---|
-| **冷启动 list_repository_groups** | `cargo test -p cdt-api --release --test perf_cold_scan -- --ignored --nocapture`，看 `cold total` | **< 200ms** | scan=87ms + grouper=2ms = **89ms** |
-| **冷启动 list_projects** | 上同，看 `cold scan` | **< 150ms** | 87ms |
-| **首屏 sidebar 可见列表** | 桌面应用启动到 sidebar 首条 session 渲染（人工秒表） | **< 500ms** | 待测 |
-| **大会话 get_session_detail** | `cargo test -p cdt-api --release --test perf_get_session_detail -- --ignored --nocapture`，看各阶段 + payload | 各阶段总 **< 800ms（10k 消息会话）** | 详见 perf-bench skill 输出 |
-| **Tauri IPC payload** | 后端 emit JSON size | 单次返回 **< 1 MB**（>1MB 须走瘦身模式） | — |
-| **Tauri IPC 端到端吞吐** | 实测 webview 端 JSON.parse 完成 | ≈ **6.5 KB/ms**（含反序列化） | — |
+| 路径 | wall 预算 | CPU 预算（user/real） | RSS 预算 | 当前基线 |
+|---|---|---|---|---|
+| 冷启动 list_repository_groups | < 200ms（bench 内）| ≤ 0.5（爆发期 ≤ 1.5）| < 80 MB | bench 95ms · 整进程 user/real=**0.13** / RSS 59MB |
+| 冷启动 list_projects | < 150ms | 同上 | 同上 | 87-93ms |
+| 大会话 get_session_detail（1221 msg）| < 800ms（10k 消息）| ≤ 0.5 | < 200 MB | 60-74ms · user/real=**0.17** / RSS 120MB |
+| 首屏 sidebar 可见列表 | < 500ms | — | — | 待测 |
+| Tauri IPC payload | < 1 MB（>1MB 须瘦身）| — | — | — |
 
-**计算逻辑**：基线允许的回归 **≤ 20%**。超出 20% 视为性能 bug，PR 不合并。
+**辅助工具系统 CPU 阈值**（人工 Activity Monitor 验，涉及 watcher / scanner / 后台 task 的 PR 必测）：
+- **idle 稳态 < 2%**（8 核 < 0.16 核）— 开着没操作几乎不可见
+- **后台扫描峰值 < 10%** 短时间（< 1s）— file change / fs event 触发
+- **用户交互峰值 < 15%** < 200ms — 点 sidebar / 切 tab / 展开 tool / 搜索 / 改设置 等单次 IPC
 
-## 现有 perf bench 入口
+**回归阈值**（任一即拒）：wall +20% / user +50%（real 没同步降）/ RSS +30% / **bench user/real > 1.0 长时间**（short burst < 50ms 放宽到 ≤ 1.5 但需证明无替代）/ user/real 跨过 0.5 且 real 降 < 30%
 
-每个关键路径都有 bench tool（`#[ignore]` 不进 CI，手动跑作为定位 + 基线对比）：
+## bench 入口
 
-- `cdt-api/tests/perf_cold_scan.rs::measure_cold_scan` — 冷启动 scan + grouper 链路
-- `cdt-api/tests/perf_get_session_detail.rs::measure_get_session_detail` — 大会话首次打开
-- `/perf-bench` skill — 自动跑 + 解析 + 给 "瘦身/不瘦身" verdict
+- `cdt-api/tests/perf_cold_scan.rs` — 冷启动 scan + grouper
+- `cdt-api/tests/perf_get_session_detail.rs` — 大会话首次打开
+- `/perf-bench` skill — 自动跑 + 解析 + verdict
 
-**新增关键路径时**：SHALL 加对应 bench（参照上述模板）+ 把基线数据填进本文预算表。
+新增关键路径 SHALL 加对应 bench + 把基线填进上表。**每次会话开始 + 用户问"为什么慢" + 发版前** SHALL 先跑 bench 拿数据再讨论方向。
 
-## 防回归硬约束
+## PR Perf impact 模板（强制）
 
-### 1. PR 影响评估（强制）
+涉及 `cdt-discover/` / `cdt-api/src/ipc/` / `cdt-analyze/` / `tauri.conf.json` / 引入子进程 spawn / hot loop file I/O / hot loop JSON parse 的 PR，SHALL 在描述里贴：
 
-涉及以下任一文件 / 行为的 PR，**SHALL** 在 PR 描述里加 "Perf impact" 段并跑相应 bench 给数据：
-
-- `cdt-discover/` 任何文件（启动 + sidebar 列表必经路径）
-- `cdt-api/src/ipc/local.rs` / `session_metadata.rs` / `cache_signature.rs`（IPC 数据流核心）
-- `cdt-analyze/` 任何 `build_chunks` / context tracking 路径
-- 引入 `tokio::process::Command` / `Command::new` 子进程 spawn（成本极高）
-- 在 hot loop 里加 `tokio::fs::read_to_string` 全文件读 / `JSON.parse` 大对象
-- 改 `tauri.conf.json` / `src-tauri/Cargo.toml` features（影响 bundle / startup binary size）
-
-模板：
 ```markdown
 ## Perf impact
-- 关键路径：[冷启动 / get_session_detail / ...]
-- 基线：xxx ms
-- 本 PR 后：yyy ms（±zz%）
-- 数据来源：`cargo test -p cdt-api --release --test perf_cold_scan -- --ignored --nocapture` 输出
+- 关键路径：[xxx]
+- wall：基线 a ms → 本 PR b ms（±%）
+- user：c.cc s → d.dd s（±%）
+- sys：e.ee s → f.ff s（±%）
+- max RSS：N MB → M MB（±%）
+- user/real：0.xx → 0.yy
+- 数据：/usr/bin/time -lp <cmd> 输出
 ```
 
-豁免：纯 docs / 注释 / typo / CI 配置改动可不写。
+四维缺一可拒。豁免：纯 docs / 注释 / typo / CI 配置。
 
-### 2. 反模式清单（**严禁**引入）
+## 反模式清单（**严禁**引入，违反即拒）
 
-历史血泪经验，违反任一即拒：
+**wall time 类**：
+- for-loop 内串行 spawn 子进程 / 串行 file I/O — 用 `join_all` + `Semaphore` 并发；优先看能否换纯 fs 调用
+- 每次 IPC 重扫文件 / 重算 chunk — 必须按 `FileSignature` 内存 cache（参照 `MetadataCache`）
+- async fn 里调 `std::fs::*` / `Command::output().wait()` — 阻塞 tokio worker，用 tokio 异步版
+- 算法 O(N²) 在 N > 100 时 — list / merge / sort 看复杂度
+- IPC payload > 1 MB 不瘦身 — 走 `OMIT_XXX const + xxxOmitted: bool + get_xxx_lazy IPC` 模式（见 CLAUDE.md Conventions）
 
-- **for-loop 内串行 spawn 子进程**：spawn 单次 cold 5–15ms，N 个串行就是 N×。如果真要 spawn N 个用 `futures::future::join_all` 并发，且优先看能不能换纯 fs / lib 调用
-- **for-loop 内串行 file I/O**：`for x { tokio::fs::read_to_string(x).await }` 等价上一条。用 `join_all` 并发 + 加 `Semaphore` 限流
-- **每次 IPC 都重扫文件 / 重算 chunk**：必须有按 `FileSignature` 的内存 cache（参照 `MetadataCache`）
-- **冷启动路径同步阻塞 I/O**：`std::fs::*` / `Command::output().wait()` 都会阻塞 tokio worker；用 `tokio::fs::*` / `Command::output().await`
-- **每次返回全量 JSON 而不分页 / lazy**：>1 MB payload SHALL 走"IPC payload 瘦身模式"（参照 CLAUDE.md Conventions）
-- **`spawn` 创建新 tokio runtime 当作并发原语**：runtime 是重对象，PR 评审看到当 bug
-- **不走 cache fast-path 的 IPC**：详见 `ipc-data-api/spec.md::list_sessions cache 命中`
-- **算法 O(N²) 在 N > 100 时**：list / merge / sort 都要看复杂度——本仓 27 project × 534 session 不算大
+**CPU 类**（与 wall time 同等重要）：
+- CPU-bound 路径串行改并发不限流 — `Semaphore` 限到 ≤ CPU 核数 / 4（桌面避免抢其他 app）；判断 I/O-bound vs CPU-bound 看 baseline `user/real`（< 0.3 强 I/O / > 0.7 CPU-bound）
+- 加完并发不测 user time — 必须四维齐看
+- hot loop 隐式 `clone()` 大对象（`Vec<ChatMessage>` / `String` / `HashMap` / `SessionDetail`）— 优先 `Arc<>` / `&` / `mem::take`
+- 同步循环里 `serde_json::from_str` / `to_string` 大 JSON
 
-### 3. 新功能性能验收
+**内存类**：
+- 加 cache 仅设 count cap 不设 byte cap — 必须 `current_bytes: AtomicUsize` + `max_bytes` 双闸门
+- 永久持有全量 `Vec` 的 Map — 加 LRU + TTL；流式状态机替代收集后判一次（见 metadata-streaming-ongoing change）
+- IPC 整页 base64 inline — 走 `asset://` URL 或 lazy IPC
+- `broadcast::channel(N)` capacity 过大 — 默认 128 起步，新加 subscriber 时 grep 退订路径防泄漏
 
-任何**新增 capability / 改后端算法 / 加 IPC 字段** 的 PR：
-- SHALL 在 spec 里加一条 **性能 SHALL**（如 "list_xxx 在 N=500 时 SHALL < 100ms"）
-- SHALL 加对应 bench 覆盖该 SHALL
-- SHALL 在 PR 描述贴 bench 输出
+## codex 二审性能视角
 
-事后补不算——和 "openspec 行为契约级改动先 propose 再 apply" 同样原则。
+性能相关 PR 的 codex prompt SHALL 显式列：
+- for-loop spawn / 串行 await（应 join_all + 限流）
+- hot path 缺 cache / 重复 IPC payload 字段
+- `Semaphore` 限流是否合理（CPU-bound ≤ 核数/4，I/O-bound 16-32）
+- hot path 隐式大对象 clone（能 Arc / & / mem::take 替代吗）
+- 新 cache 有 byte cap 否；broadcast capacity 是否过大；subscriber 退订路径是否漏
+- 算法复杂度评估；PR 描述四维 perf 数据是否齐全
 
-### 4. codex 二审增加性能视角
+## 历史性能事件（详见 `git log --grep="feat(perf)\|perf("`）
 
-`.claude/rules/codex-usage.md` 已规定每个 PR push 后默认调 codex。**性能相关 PR** 的 codex prompt SHALL 显式列：
+- **2026-05-16** perf-deep-audit — 4 PR 并行：cdt-api 三处 in-place + 并发 / cdt-discover 顶层并发 + cache byte cap / parsed-message LRU cache / metadata streaming
+- **2026-05-15** perf/cold-start-list-sessions — list_repository_groups 4030ms→89ms（45×）；spawn `git rev-parse` 改纯 fs 读 `.git/HEAD`
+- **2026-05-14** multi-session-cpu-cache + session-list-cache-fast-path — list_sessions 全 cache 命中
+- **2026-04-19** session-detail-image-asset-cache — image base64 inline 改 `asset://` URL
+- **2026-04-29 ~ 05-12** 5 轮 IPC payload 瘦身（OMIT_XXX 模式）
 
-```
-重点查：
-- 是否有 for-loop 内 spawn / 串行 await（应该 join_all）
-- 是否有 hot path 缺 cache（按 FileSignature key）
-- 是否有重复 IPC payload 字段（应该 omit 或 lazy）
-- 算法复杂度评估
-```
-
-## 主动定期跑
-
-**每发版前** SHALL 跑以下 bench 并对比上一次基线：
-
-```sh
-# 冷启动
-cargo test -p cdt-api --release --test perf_cold_scan -- --ignored --nocapture
-
-# 大会话
-cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture
-```
-
-把数据贴到 release PR 描述，方便回溯。
-
-**每次会话开始 + 用户问 "为什么慢"** SHALL 先跑 bench 拿数据再讨论方向，不靠直觉。
-
-## 历史性能事件（学习材料）
-
-按时间倒序：
-
-- **2026-05-15** `perf/cold-start-list-sessions` — list_repository_groups 4030ms → 89ms（45x）
-  - 根因：`LocalGitIdentityResolver` 每 project 串行 spawn 3–5 个 `git rev-parse` 子进程
-  - 修法：纯 fs 实现，从 `.git` / `HEAD` 文件直接读取，0 个 git 子进程
-  - 教训：**有文件可读时绝不 spawn 子进程**——syscall 比 process spawn 快 1000 倍
-
-- **2026-05-14** `multi-session-cpu-cache` + `session-list-cache-fast-path` — list_sessions 全 cache 命中路径
-  - 根因：每次 IPC 全部 session 都重扫 JSONL
-  - 修法：按 `FileSignature` LRU cache + fast-path 跳过 broadcast 路径
-
-- **2026-04-19** `session-detail-image-asset-cache` — 大会话 image 反复 base64
-  - 根因：每次 `get_session_detail` 把所有 image block base64 inline
-  - 修法：image 落盘 cache + 走 `asset://` URL
-
-- **2026-04-29 ~ 05-12** 5 轮 IPC payload 瘦身（详见 `feedback_align_with_original.md` 上下文）
-  - 根因：default-cap / response content 全量塞 IPC
-  - 修法：`OMIT_XXX const + xxxOmitted: bool + get_xxx_lazy IPC` 模式
-
-## 后续性能优化候选清单
-
-按收益排序，开 follow-up issue 或 openspec change 处理：
-
-1. **scan() 顶层 project 目录并发**：当前 `for dir_name in dirs` 顺序处理 27 dir，可改 `join_all` 并发——预期 scan 87ms → ~30ms
-2. **head N 行 cwd 抽取的 fallback `read_to_string` 全文件去掉**：大会话 fixture 卡几十 ms，spec 没强制 Local 也要 fallback（SSH 已禁用）
-3. **持久化 cwd / git 元数据 cache**：跨进程 cache 让"冷冷启动"也命中（首次 install 后第二次启动直接零扫）
-4. **sidebar 列表渲染 `{#each}` 的虚拟滚动 lazy mount**：列表项 > 200 时有微卡顿（现实只有 500 也很流畅，但需要 budget 限定）
-5. **chunk-building 复杂度 audit**：`build_chunks_with_subagents` 对 10k 消息会话耗时是否 O(N²)？需 bench 验
-6. **WorktreeGrouper 进程内 cache**：当前实现已经很快（2ms），但同进程多次调（如 sidebar refresh）每次重扫——加 in-memory cache 完全避免重复
-
-每条候选都 SHALL 走 openspec propose + 加 bench 验证 + 给数据。
+**关键教训**：有文件可读时绝不 spawn 子进程（syscall 比 process spawn 快 1000×）；hot path SHALL cache by signature；并发不限流不如串行。
