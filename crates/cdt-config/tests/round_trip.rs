@@ -54,6 +54,31 @@ async fn failed_general_save_does_not_mutate_in_memory_config() {
     );
 }
 
+#[tokio::test]
+async fn failed_general_save_preserves_existing_config_file() {
+    let (_dir, path) = temp_config_path();
+    let mut mgr = ConfigManager::new(Some(path.clone()));
+    mgr.load().await.expect("load defaults from missing file");
+    mgr.update_general(serde_json::json!({ "theme": "light" }))
+        .await
+        .expect("write baseline config");
+    let baseline = std::fs::read_to_string(&path).expect("read baseline config");
+
+    let tmp_path = path.with_extension(format!("{}.tmp", std::process::id()));
+    std::fs::create_dir(&tmp_path).expect("block temp file creation");
+
+    let err = mgr
+        .update_general(serde_json::json!({ "theme": "dark" }))
+        .await
+        .expect_err("temp file creation must fail");
+    assert!(matches!(err, ConfigError::Io { .. }));
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read config after failed save"),
+        baseline
+    );
+    assert_eq!(mgr.get_config().general.theme, "light");
+}
+
 /// (1) 多 section 写盘 → 新 manager 重读 → 字段一致
 #[tokio::test]
 async fn round_trip_general_display_updater_triggers_persists_after_reload() {
@@ -310,6 +335,47 @@ async fn save_interrupted_truncated_config_falls_back_to_defaults() {
 
 /// (5) `add_trigger` / `remove_trigger`（独立 impl 块、非 `DataApi` trait 方法）
 /// 往返：新增 → 持久化 → 新 manager 加载 → 字段一致；删除内建 → 拒绝；删除自定义 → 成功
+#[tokio::test]
+async fn failed_trigger_save_does_not_mutate_trigger_manager() {
+    let (_dir, path) = temp_config_path();
+    let mut mgr = ConfigManager::new(Some(path.clone()));
+    mgr.load().await.unwrap();
+    let before_count = mgr.get_triggers().len();
+
+    let tmp_path = path.with_extension(format!("{}.tmp", std::process::id()));
+    std::fs::create_dir(&tmp_path).expect("block temp file creation");
+
+    let trigger = NotificationTrigger {
+        id: "custom-failed-save".into(),
+        name: "Failed Save".into(),
+        enabled: true,
+        content_type: TriggerContentType::ToolResult,
+        mode: TriggerMode::ErrorStatus,
+        tool_name: None,
+        is_builtin: None,
+        ignore_patterns: None,
+        require_error: Some(true),
+        match_field: None,
+        match_pattern: None,
+        token_threshold: None,
+        token_type: None,
+        repository_ids: None,
+        color: None,
+    };
+
+    let err = mgr
+        .add_trigger(trigger)
+        .await
+        .expect_err("blocked temp path must fail save");
+    assert!(matches!(err, ConfigError::Io { .. }));
+    assert_eq!(mgr.get_triggers().len(), before_count);
+    assert!(
+        mgr.get_triggers()
+            .iter()
+            .all(|t| t.id != "custom-failed-save")
+    );
+}
+
 #[tokio::test]
 async fn trigger_crud_round_trip_through_independent_methods() {
     let (_dir, path) = temp_config_path();
