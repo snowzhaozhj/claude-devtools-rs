@@ -12,4 +12,4 @@
 - [x] 2.3 `cargo fmt --all`
 - [x] 2.4 `openspec validate watcher-dir-create-no-mark-consume --strict` 通过
 - [x] 2.5 `just preflight` 全绿
-- [ ] 2.6 push 分支 + 开 PR + codex 二审
+- [x] 2.6 push 分支 + 开 PR + codex 二审（PR #91，结论：无问题）
