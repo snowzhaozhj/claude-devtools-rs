@@ -423,6 +423,10 @@
 
   function handleConversationScroll(event: Event) {
     chunkVirtualizer.onScroll(event);
+    const target = event.currentTarget as HTMLElement | null;
+    if (target && target.scrollTop + target.clientHeight < target.scrollHeight - 16) {
+      pendingStickToBottom = false;
+    }
   }
 
   function scrollConversationToEnd() {
@@ -434,8 +438,7 @@
   function stickToBottomAfterMeasurement(index: number) {
     if (!pendingStickToBottom || !detail || index !== detail.chunks.length - 1) return;
     requestAnimationFrame(() => {
-      scrollConversationToEnd();
-      pendingStickToBottom = false;
+      if (pendingStickToBottom) scrollConversationToEnd();
     });
   }
 
