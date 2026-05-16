@@ -1964,11 +1964,12 @@ async fn scan_subagent_candidates_cross_project(
     let projects_scanned = project_dirs.len();
 
     // 第二遍：每个 project 并发探测 `<dir>/<root_session_id>/subagents/agent-*.jsonl`，
-    // 用 Semaphore 限流 16 路（避免同时打开太多 fd 触发 ulimit）。
+    // 用 Semaphore 限流 `METADATA_SCAN_CONCURRENCY=8` 路（与 metadata 扫描同口径，
+    // 避免低核数机器上短脉冲 CPU 峰值过高，也压住打开 fd 数量）。
     // 单 task 内部仍顺序遍历 sub_entries，保证某 project 内候选顺序稳定。
     // 整体 task 顺序由 `join_all` 保证（与 project_dirs 同序），最终落到 candidates
     // 的顺序与原串行版本一致。
-    let semaphore = Arc::new(Semaphore::new(16));
+    let semaphore = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
     let scan_tasks = project_dirs.into_iter().map(|project_path| {
         let sem = semaphore.clone();
         let root_session_id = root_session_id.to_owned();
