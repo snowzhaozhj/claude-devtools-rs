@@ -482,7 +482,7 @@
         {@const images = uimages(chunk.content, chunk.uuid)}
         {@const taskNotifications = parseTaskNotifications(chunk.content)}
         {#if text || images.length > 0 || taskNotifications.length > 0}
-          <div class="msg-row msg-row-user">
+          <div class="msg-row msg-row-user msg-row-contained">
             <div class="msg-spacer"></div>
             <div class="msg-bubble msg-bubble-user">
               <div class="msg-bubble-header">
@@ -555,7 +555,7 @@
         {@const headerCacheRead = lastUsage?.cache_read_input_tokens ?? 0}
         {@const headerCacheCreation = lastUsage?.cache_creation_input_tokens ?? 0}
         {@const totalTokens = headerInputTokens + headerOutputTokens + headerCacheRead + headerCacheCreation}
-        <div class="msg-row msg-row-ai">
+        <div class="msg-row msg-row-ai msg-row-contained">
           <div class="msg-ai-container">
             <!-- AI header -->
             <div class="ai-header-row">
@@ -744,7 +744,7 @@
       {:else if chunk.kind === "system"}
         {@const sysText = cleanDisplayText(chunk.contentText)}
         {#if sysText}
-          <div class="msg-row msg-row-system-left">
+          <div class="msg-row msg-row-system-left msg-row-contained">
             <div class="system-block">
               <div class="system-header">
                 <svg class="system-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={TERMINAL}/></svg>
@@ -763,7 +763,7 @@
         {@const compactText = cleanDisplayText(chunk.summaryText)}
         {@const isCompactExpanded = expandedCompacts.has(chunk.uuid)}
         {@const td = chunk.tokenDelta}
-        <div class="msg-row msg-row-compact">
+        <div class="msg-row msg-row-compact msg-row-contained">
           <div class="compact-block">
             <button
               type="button"
@@ -928,6 +928,12 @@
   .msg-row {
     display: flex;
     min-width: 0;
+  }
+
+  .msg-row-contained {
+    content-visibility: auto;
+    contain: layout style;
+    contain-intrinsic-size: auto 220px;
   }
 
   .msg-spacer { flex: 1; min-width: 80px; }
