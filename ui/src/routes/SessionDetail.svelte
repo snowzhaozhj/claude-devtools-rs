@@ -555,7 +555,7 @@
         {@const headerCacheRead = lastUsage?.cache_read_input_tokens ?? 0}
         {@const headerCacheCreation = lastUsage?.cache_creation_input_tokens ?? 0}
         {@const totalTokens = headerInputTokens + headerOutputTokens + headerCacheRead + headerCacheCreation}
-        <div class="msg-row msg-row-ai msg-row-contained">
+        <div class="msg-row msg-row-ai">
           <div class="msg-ai-container">
             <!-- AI header -->
             <div class="ai-header-row">
@@ -616,7 +616,7 @@
 
             <!-- Display items (toggle visibility) -->
             {#if toolsVisible}
-              <div class="ai-tools-section">
+              <div class="ai-tools-section msg-row-contained">
                 {#each di.items as item, di_idx}
                   {#if item.type === "slash"}
                     {@const slashKey = `${i}-slash-${di_idx}`}
@@ -720,7 +720,7 @@
             {/if}
 
             <!-- Last output (always visible) -->
-            <div class="ai-body">
+            <div class="ai-body msg-row-contained">
               {#if i === lastAiIndex && detail.isOngoing}
                 <!-- 对齐原版 LastOutputDisplay：最后 AI 组在 ongoing 时
                      banner 占 lastOutput 位置，结束后换回真正的内容 -->

@@ -63,7 +63,7 @@ describe('SessionDetail smoke', () => {
     expect(container.querySelector('.conversation')).not.toBeNull()
   })
 
-  test('IPC 返回的 chunks 至少渲染一个带 containment class 的 msg-row', async () => {
+  test('IPC 返回的 chunks 渲染 containment 边界且不包住 AI header', async () => {
     const { container } = render(SessionDetail, {
       props: {
         tabId: 'tab-smoke-2',
@@ -74,7 +74,9 @@ describe('SessionDetail smoke', () => {
     await waitFor(() => {
       const rows = container.querySelectorAll('.msg-row')
       expect(rows.length).toBeGreaterThan(0)
-      expect(container.querySelector('.msg-row-contained')).not.toBeNull()
+      expect(container.querySelector('.msg-row-user.msg-row-contained')).not.toBeNull()
+      expect(container.querySelector('.msg-row-ai.msg-row-contained')).toBeNull()
+      expect(container.querySelector('.msg-row-ai .ai-body.msg-row-contained')).not.toBeNull()
     })
   })
 
