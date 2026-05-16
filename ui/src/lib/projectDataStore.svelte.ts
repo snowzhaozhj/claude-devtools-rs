@@ -7,6 +7,7 @@ import {
 
 export interface ProjectData {
   projects: ProjectInfo[];
+  worktreeProjects: ProjectInfo[];
   repositoryGroups: RepositoryGroup[];
 }
 
@@ -14,31 +15,57 @@ let data: ProjectData | null = $state(null);
 let loading: boolean = $state(false);
 let error: unknown = $state(null);
 let inflight: Promise<ProjectData> | null = null;
+let refreshAfterInflight = false;
+
+function projectFromWorktree(worktree: RepositoryGroup["worktrees"][number], displayName = worktree.name): ProjectInfo {
+  return {
+    id: worktree.id,
+    path: worktree.path,
+    displayName,
+    sessionCount: worktree.sessions.length,
+  };
+}
 
 function flattenRepositoryGroups(groups: RepositoryGroup[]): ProjectInfo[] {
-  return groups.flatMap((group) =>
-    group.worktrees.map((worktree) => ({
-      id: worktree.id,
-      path: worktree.path,
-      displayName: worktree.name,
-      sessionCount: worktree.sessions.length,
-    })),
-  );
+  return groups
+    .flatMap((group) => group.worktrees)
+    .sort((a, b) => (b.mostRecentSession ?? 0) - (a.mostRecentSession ?? 0))
+    .map((worktree) => projectFromWorktree(worktree));
+}
+
+function summarizeRepositoryGroups(groups: RepositoryGroup[]): ProjectInfo[] {
+  return [...groups]
+    .sort((a, b) => (b.mostRecentSession ?? 0) - (a.mostRecentSession ?? 0))
+    .map((group) => {
+      const mainWorktree = group.worktrees.find((worktree) => worktree.isMainWorktree) ?? group.worktrees[0];
+      return {
+        ...projectFromWorktree(mainWorktree, group.name),
+        sessionCount: group.totalSessions,
+      };
+    });
+}
+
+async function fallbackProjectData(): Promise<ProjectData> {
+  const projects = await listProjects();
+  return {
+    repositoryGroups: [],
+    projects,
+    worktreeProjects: projects,
+  };
 }
 
 async function fetchProjectData(): Promise<ProjectData> {
   try {
     const repositoryGroups = await listRepositoryGroups();
+    if (repositoryGroups.length === 0) return await fallbackProjectData();
     return {
       repositoryGroups,
-      projects: flattenRepositoryGroups(repositoryGroups),
+      projects: summarizeRepositoryGroups(repositoryGroups),
+      worktreeProjects: flattenRepositoryGroups(repositoryGroups),
     };
   } catch (groupError) {
     console.warn("listRepositoryGroups failed, fallback to listProjects:", groupError);
-    return {
-      repositoryGroups: [],
-      projects: await listProjects(),
-    };
+    return await fallbackProjectData();
   }
 }
 
@@ -55,14 +82,16 @@ export function getProjectDataError(): unknown {
 }
 
 export function loadProjectData(options: { refresh?: boolean } = {}): Promise<ProjectData> {
-  if (inflight) return inflight;
+  if (inflight) {
+    if (options.refresh) refreshAfterInflight = true;
+    return inflight;
+  }
   if (!options.refresh && data) return Promise.resolve(data);
 
   loading = true;
   error = null;
 
-  let request: Promise<ProjectData>;
-  request = (async () => {
+  inflight = (async () => {
     try {
       const next = await fetchProjectData();
       data = next;
@@ -73,9 +102,12 @@ export function loadProjectData(options: { refresh?: boolean } = {}): Promise<Pr
     } finally {
       inflight = null;
       loading = false;
+      if (refreshAfterInflight) {
+        refreshAfterInflight = false;
+        void loadProjectData({ refresh: true });
+      }
     }
   })();
 
-  inflight = request;
-  return request;
+  return inflight;
 }

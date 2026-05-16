@@ -136,9 +136,9 @@
     try {
       const result = await loadProjectData({ refresh: silent });
       repositoryGroups = result.repositoryGroups;
-      projects = result.projects;
-      const selectedExists = result.projects.some((p) => p.id === selectedProjectId);
-      if (result.projects.length > 0 && (!selectedProjectId || !selectedExists)) {
+      projects = result.worktreeProjects;
+      const selectedExists = result.worktreeProjects.some((p) => p.id === selectedProjectId);
+      if (result.worktreeProjects.length > 0 && (!selectedProjectId || !selectedExists)) {
         // 默认选中"最近活动 group 的 main worktree"（spec sidebar-navigation
         // §"活跃 worktree 选中状态"）：repositoryGroups 已按 mostRecentSession
         // 倒序，worktrees 已 main 优先排序——直接取第一个 group 的 [0]。
@@ -146,7 +146,7 @@
         if (first) {
           onSelectProject(first.id, first.name);
         } else {
-          onSelectProject(result.projects[0].id, result.projects[0].displayName);
+          onSelectProject(result.worktreeProjects[0].id, result.worktreeProjects[0].displayName);
         }
       }
     } catch (e) {

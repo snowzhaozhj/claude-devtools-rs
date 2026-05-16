@@ -9,13 +9,15 @@ afterEach(() => {
 })
 
 describe('notificationStore', () => {
-  test('并发刷新复用同一次 getNotifications 请求', async () => {
+  test('并发刷新复用同一次 getNotifications 请求，并在完成后补跑 dirty refresh', async () => {
     const calls: string[] = []
+    const responses = [
+      { notifications: [], total: 0, totalCount: 0, unreadCount: 7, hasMore: false },
+      { notifications: [], total: 0, totalCount: 0, unreadCount: 8, hasMore: false },
+    ]
     mockIPC(vi.fn((cmd) => {
       calls.push(cmd)
-      if (cmd === 'get_notifications') {
-        return { notifications: [], total: 0, totalCount: 0, unreadCount: 7, hasMore: false }
-      }
+      if (cmd === 'get_notifications') return responses.shift()
       throw new Error(`unexpected command: ${cmd}`)
     }))
 
@@ -23,10 +25,10 @@ describe('notificationStore', () => {
       refreshUnreadCount(),
       refreshUnreadCount(),
     ])
+    await vi.waitFor(() => expect(getUnreadCount()).toBe(8))
 
     expect(first).toBe(7)
     expect(second).toBe(7)
-    expect(getUnreadCount()).toBe(7)
-    expect(calls).toEqual(['get_notifications'])
+    expect(calls).toEqual(['get_notifications', 'get_notifications'])
   })
 })
