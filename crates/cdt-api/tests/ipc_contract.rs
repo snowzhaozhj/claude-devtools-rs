@@ -1240,6 +1240,17 @@ async fn update_config_general_claude_root_path_reconfigures_local_api() {
         .await
         .unwrap();
     assert_eq!(search["results"].as_array().unwrap().len(), 1);
+
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "claudeRootPath": null }),
+    })
+    .await
+    .expect("claudeRootPath=null SHALL restore default");
+    assert_eq!(
+        api.get_config().await.unwrap()["general"]["claudeRootPath"],
+        json!(null)
+    );
 }
 
 #[tokio::test]

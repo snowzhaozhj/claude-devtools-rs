@@ -300,7 +300,7 @@ struct ScanEntry {
 /// 本地文件系统 `DataApi` 实现。
 pub struct LocalDataApi {
     scanner: Mutex<ProjectScanner>,
-    searcher: Mutex<SessionSearcher<LocalFileSystemProvider>>,
+    search_cache: Arc<Mutex<SearchTextCache>>,
     config_mgr: Arc<Mutex<ConfigManager>>,
     notif_mgr: Arc<Mutex<NotificationManager>>,
     ssh_mgr: Mutex<SshConnectionManager>,
@@ -355,17 +355,15 @@ impl LocalDataApi {
         notif_mgr: NotificationManager,
         ssh_mgr: SshConnectionManager,
     ) -> Self {
-        let fs = std::sync::Arc::new(LocalFileSystemProvider::new());
-        let cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
+        let search_cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
         let (session_metadata_tx, _) =
             broadcast::channel::<SessionMetadataUpdate>(METADATA_BROADCAST_CAPACITY);
         // 在 move scanner 进 Mutex 前先 clone projects_dir，让 hot path /
         // invalidate task 共享同一 base path（详上方字段 doc）。
         let projects_dir = scanner.projects_dir().to_path_buf();
-        let searcher = SessionSearcher::new(fs, cache, projects_dir.clone());
         Self {
             scanner: Mutex::new(scanner),
-            searcher: Mutex::new(searcher),
+            search_cache,
             config_mgr: Arc::new(Mutex::new(config_mgr)),
             notif_mgr: Arc::new(Mutex::new(notif_mgr)),
             ssh_mgr: Mutex::new(ssh_mgr),
@@ -404,9 +402,7 @@ impl LocalDataApi {
         watcher: &FileWatcher,
         projects_dir: std::path::PathBuf,
     ) -> Self {
-        let fs = std::sync::Arc::new(LocalFileSystemProvider::new());
-        let cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
-        let searcher = SessionSearcher::new(fs, cache, projects_dir.clone());
+        let search_cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
 
         let config_mgr = Arc::new(Mutex::new(config_mgr));
         let notif_mgr = Arc::new(Mutex::new(notif_mgr));
@@ -437,7 +433,7 @@ impl LocalDataApi {
 
         Self {
             scanner: Mutex::new(scanner),
-            searcher: Mutex::new(searcher),
+            search_cache,
             config_mgr,
             notif_mgr,
             ssh_mgr: Mutex::new(ssh_mgr),
@@ -482,11 +478,19 @@ impl LocalDataApi {
         let claude_root = claude_root_path.map(PathBuf::from);
         let projects_dir =
             cdt_discover::path_decoder::projects_base_path_for(claude_root.as_deref());
-        let fs = std::sync::Arc::new(LocalFileSystemProvider::new());
-        let cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
+        {
+            let mut active = self
+                .active_scans
+                .lock()
+                .expect("active_scans lock poisoned");
+            for entry in active.values() {
+                entry.handle.abort();
+            }
+            active.clear();
+        }
+        self.scan_generation.fetch_add(1, Ordering::SeqCst);
 
         *self.scanner.lock().await = ProjectScanner::new(local_handle(), projects_dir.clone());
-        *self.searcher.lock().await = SessionSearcher::new(fs, cache, projects_dir.clone());
         *self.projects_dir.lock().await = projects_dir;
     }
 
@@ -1386,10 +1390,13 @@ impl DataApi for LocalDataApi {
             .as_deref()
             .ok_or_else(|| ApiError::validation("project_id is required for search"))?;
 
-        let result = self
-            .searcher
-            .lock()
-            .await
+        let projects_dir = self.projects_dir.lock().await.clone();
+        let searcher = SessionSearcher::new(
+            std::sync::Arc::new(LocalFileSystemProvider::new()),
+            self.search_cache.clone(),
+            projects_dir,
+        );
+        let result = searcher
             .search_sessions(project_id, &request.query, max_results, &config)
             .await
             .map_err(|e| ApiError::internal(format!("search error: {e}")))?;
