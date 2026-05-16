@@ -78,11 +78,12 @@ UUID 标准格式不含 `:` 也不会以 `ai:` 开头，真实数据几乎不会
 
 - **[Risk] 前端缓存的 chunk_id（`expandedItems` 等）失效**：仅对"重复 uuid 的 chunk"——这些本就因 duplicate key 错误无法稳定渲染，无有效缓存可保。首次出现的 chunk 字节级不变。✓ 可接受。
 - **[Risk] 测试覆盖不够**：`crates/cdt-analyze/src/chunk/builder.rs` 既有 `duplicate_assistant_response_uuid_gets_stable_unique_chunk_ids` 测试覆盖 AI，需镜像加一个 user 重复 uuid 的测试。→ 见 tasks.md。
-- **[Risk] AI chunk_id 与 user 裸 uuid 同 namespace 撞**：AI 的 chunk_id 总是 `ai:<base>:<n>` 形态（带 `ai:` 前缀），与裸 uuid 永远不会撞。零风险。
+- **[Risk] AI chunk_id 与 user 裸 uuid 同 namespace 撞**：原结论"AI 的 chunk_id 总是 `ai:<base>:<n>` 形态、与裸 uuid 永远不会撞、零风险"在 codex CR 时被证伪——见 D1b：极端情况下上游 uuid 形态可能为 `ai:<base>:<n>` 触发跨 namespace 撞。修订后由全局 `used_chunk_ids` HashSet 兜底，余下风险见 D1b 末段。
 - **[Trade-off] 不消除 JSONL 上游的重复 uuid 写入**：那是 Claude Code 本身的策略，端口只能下游 robust。✓ spec 与代码一致即可。
+- **[Trade-off] 不修 image asset lookup 的同 uuid 歧义**：`ui/src/routes/SessionDetail.svelte::uimages` 仍用 `chunk.uuid` 生成 `blockId`，后端 `find_image_block_in_messages` 用 `find` 取首条同 uuid 消息。在本 change 触发的 duplicate-uuid 场景（`claude --bg` 启动时 line 6 vs line 1077 真实命中）下，两条同 uuid 消息 content 字节级一致（已实测），`find` 取第一条不会拿错图。`expandedCompacts` 改 `chunkId` 是因为它是 per-chunk-instance UI state（两个同 uuid chunk 的展开应独立），而 `image asset` 是 per-message-content（图片资源跟随消息身份 uuid，而非 chunk 渲染分组），两者不是同质问题，故本 PR 不修。**Followup**（非阻塞）：若未来上游 JSONL 出现两条同 uuid 但 content 不一致的极端情况，需把 blockId 编码切到 `chunkId:index` 并在后端按 chunkId 重新反查消息位置。
 
 ## Migration Plan
 
-无运行时迁移——只增加一个内存 HashMap。已有 chunk_id 首次出现形态不变。
+无运行时迁移——只增加一个内存 `HashSet<String>`（codex CR 后从两个 HashMap 合并而来，见 D1b）。已有 chunk_id 首次出现形态不变。
 
 回滚策略：单 PR 内可 revert。
