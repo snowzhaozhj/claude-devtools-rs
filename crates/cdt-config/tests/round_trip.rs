@@ -105,21 +105,29 @@ async fn round_trip_general_display_updater_triggers_persists_after_reload() {
         .map(|t| (t.id.as_str(), t))
         .collect();
     assert!(by_id.contains_key("custom-roundtrip"));
-    for builtin_id in BUILTIN_TRIGGER_IDS {
+    let expected_builtins = builtin_trigger_ids();
+    assert!(
+        !expected_builtins.is_empty(),
+        "defaults should declare at least one builtin"
+    );
+    for builtin_id in &expected_builtins {
         assert!(
-            by_id.contains_key(builtin_id),
+            by_id.contains_key(builtin_id.as_str()),
             "builtin trigger {builtin_id} must survive partial-config merge"
         );
     }
     assert!(by_id["custom-roundtrip"].enabled);
 }
 
-/// `defaults.rs::default_triggers` 的全量 builtin id 列表（任一变动需同步本常量）。
-const BUILTIN_TRIGGER_IDS: &[&str] = &[
-    "builtin-bash-command",
-    "builtin-tool-result-error",
-    "builtin-high-token-usage",
-];
+/// 运行时拉取 `defaults::default_triggers()` 里所有 `is_builtin` 为真的 id。
+/// 不硬编码常量——defaults.rs 增删 builtin 时本测试自动同步覆盖面。
+fn builtin_trigger_ids() -> Vec<String> {
+    cdt_config::defaults::default_triggers()
+        .into_iter()
+        .filter(NotificationTrigger::is_builtin)
+        .map(|t| t.id)
+        .collect()
+}
 
 /// (2) 损坏 JSON → 不 panic，加载默认值，原文件被重命名为 `<path>.bak.<ts>`
 #[tokio::test]
@@ -346,16 +354,16 @@ async fn trigger_crud_round_trip_through_independent_methods() {
             .all(|t| t.id != "custom-perf-spike"),
         "removed trigger must not reappear after reload"
     );
-    // 全部 3 个 builtin 仍在（不止抽查一条）
+    // 全部 builtin 仍在（动态从 defaults 拉取 id，不止抽查一条）
     let surviving_ids: std::collections::HashSet<&str> = after_remove
         .notifications
         .triggers
         .iter()
         .map(|t| t.id.as_str())
         .collect();
-    for builtin_id in BUILTIN_TRIGGER_IDS {
+    for builtin_id in &builtin_trigger_ids() {
         assert!(
-            surviving_ids.contains(builtin_id),
+            surviving_ids.contains(builtin_id.as_str()),
             "builtin {builtin_id} must survive custom-trigger removal"
         );
     }
