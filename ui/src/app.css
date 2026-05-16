@@ -125,6 +125,11 @@
   --highlight-bg-current: rgba(250, 204, 21, 0.8);
   --highlight-ring: rgba(202, 138, 4, 0.6);
 
+  /* Skeleton (loading placeholder). 浅色用偏暖灰，shimmer 用暗叠加。
+     对齐原版 claude-devtools `:root` 的 --skeleton-base + .skeleton-shimmer。 */
+  --skel-base: #d6d8de;
+  --skel-shimmer: rgba(0, 0, 0, 0.06);
+
   /* ─── Semantic accents（语义色统一入口）───
      新组件 SHALL 使用这些 token，不要再写硬编码 hex。
      accent-blue 表达 focus / link / selection；
@@ -304,6 +309,9 @@
 
   /* 深色主题：accent-blue 是浅蓝 (#60a5fa)，文字用深 slate 才达 AA */
   --color-text-on-accent: #0f172a;
+
+  --skel-base: #2c2e35;
+  --skel-shimmer: rgba(255, 255, 255, 0.08);
 }
 
 /* System preference — dark mode follows OS */
@@ -424,6 +432,35 @@
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
 
     --color-text-on-accent: #0f172a;
+
+    --skel-base: #2c2e35;
+    --skel-shimmer: rgba(255, 255, 255, 0.08);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Skeleton shimmer (loading placeholder)
+   配合 ui/src/components/Skeleton.svelte / SessionDetailSkeleton.svelte。
+   keyframe 在全局：组件 scope 的 ::after 伪元素引用同名 keyframe 即可。
+   ═══════════════════════════════════════════════════════════════ */
+
+@keyframes skel-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes skel-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 

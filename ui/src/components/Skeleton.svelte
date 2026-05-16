@@ -1,7 +1,11 @@
 <!--
-  通用 loading 骨架占位。模式对齐 SessionDetailSkeleton：
-  静态背景 + opacity 0.5、无 shimmer 动画（避免与 OngoingIndicator 等 ping 视觉竞争）。
-  variant="row" → sidebar/notification 列表条目；"card" → dashboard 项目卡 / setting row；"text" → 段落行。
+  通用 loading 骨架占位。带 shimmer 横扫 + fade-in 入场动画，对齐原版
+  claude-devtools `.skeleton-shimmer` 与 `.skeleton-card` 视觉模式——
+  避免静态色块给用户"挂起"的感觉。
+
+  variant="row" → sidebar/notification 列表条目；"card" → dashboard 项目卡 /
+  setting row；"text" → 段落行。shimmer 走 transform GPU 加速；
+  `prefers-reduced-motion: reduce` 下退化为静态色块。
 -->
 
 <script lang="ts">
@@ -37,8 +41,9 @@
 
 <style>
   .skel {
-    background: var(--color-border);
-    opacity: 0.5;
+    position: relative;
+    overflow: hidden;
+    background: var(--skel-base, var(--color-border));
     flex-shrink: 0;
   }
   .skel-row {
@@ -49,5 +54,27 @@
   }
   .skel-text {
     border-radius: 3px;
+  }
+
+  .skel::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--skel-shimmer, rgba(0, 0, 0, 0.06)) 50%,
+      transparent 100%
+    );
+    animation: skel-shimmer 1.4s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skel::after {
+      animation: none;
+    }
   }
 </style>
