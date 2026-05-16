@@ -10,6 +10,14 @@ concurrency:
   group: perf-${{ github.ref }}
   cancel-in-progress: true
 
+# GH 2024 起默认 GITHUB_TOKEN 不再隐式带 issues:write / pull-requests:write，
+# 必须显式声明，否则 actions/github-script 的 createComment / updateComment
+# 报 403 Resource not accessible by integration。
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 # CI 上 GH ubuntu runner 无 `~/.claude/projects/` corpus，两个 bench 都会
 # 内部 skip——本 workflow 作为 smoke 校验：
 #   1. perf-baseline.json schema 合法 + script 编译运行无误
