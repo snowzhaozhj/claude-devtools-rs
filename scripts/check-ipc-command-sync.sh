@@ -14,9 +14,17 @@
 #
 # 反 corner case：
 #   - 多行 macro 块（generate_handler 跨行）—— awk 状态机扫描区间
-#   - 行内 `// xxx`、`/* xxx */` 单行注释 —— 提取前剥离
-#   - 整行注释（`// list_xxx,`）—— 跳过以注释起头的行
+#   - 行内 `// xxx`、单行 `/* xxx */` 注释 —— 提取前剥离
+#   - 整行注释（`// list_xxx,`）—— 注释剥离后变空行，被正则过滤
 #   - 行尾逗号、尾随空格 —— 正则容错
+#   - 重复 token —— `sort -u` 去重后参与 diff（Rust generate_handler 编译器
+#     本就拒绝重复 ident，三处文件实际不可能有真重复）
+#
+# 已知限制（trade-off）：
+#   - **跨行块注释** `/* line1\nline2 */` 内出现 token 会被误提——三处文件实际
+#     无该用法；若未来引入，需要给 awk 加 `/\*` ... `*/` 状态机
+#   - **list_sessions_sync 例外**：题面声明它仅供 HTTP server 不进 invoke_handler，
+#     脚本断言它**不应出现**在任一三处，出现即 FATAL（防止误增）
 set -euo pipefail
 
 project_dir="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
