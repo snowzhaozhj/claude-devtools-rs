@@ -15,8 +15,8 @@
 #
 # OS 处理：
 #   - macOS: /usr/bin/time -lp，maxRSS 单位 bytes
-#   - Linux: /usr/bin/time -v，maxRSS 单位 kbytes；GNU time <= 1.9
-#     可能把 getrusage 的 kbytes 误乘 1024 输出（Debian #807441），脚本会探测并折算。
+#   - Linux: /usr/bin/time -v，maxRSS 单位 kbytes；若极旧/未修补 time
+#     误把 kbytes 放大成 bytes 量级，脚本只在异常大值时折算。
 #
 # CI 行为：bench 内部 `if !projects_dir.exists() { return }`——CI runner 无
 # ~/.claude/projects 时 bench 立即 ok 但不输出 perf 行，本脚本检测到无
@@ -57,15 +57,7 @@ case "$OS" in
   *) echo "不支持的 OS: $OS" >&2; exit 2 ;;
 esac
 
-GNU_TIME_RSS_DIVISOR=1
-if [[ "$OS" == "Linux" ]]; then
-  # GNU time <= 1.9 在 Linux 上存在 RSS 单位 bug：getrusage 已返回 kbytes，
-  # 但部分版本又乘以 1024 后按 "(kbytes)" 输出。来源：Debian #807441。
-  GNU_TIME_VERSION=$((/usr/bin/time --version 2>&1 || true) | awk 'match($0, /[0-9]+([.][0-9]+)?/) { print substr($0, RSTART, RLENGTH); exit }')
-  if [[ -n "$GNU_TIME_VERSION" ]] && awk -v v="$GNU_TIME_VERSION" 'BEGIN { split(v, p, "."); exit !(p[1] < 1 || (p[1] == 1 && (p[2] + 0) <= 9)) }'; then
-    GNU_TIME_RSS_DIVISOR=1024
-  fi
-fi
+GNU_TIME_RSS_SANITY_KB=$((16 * 1024 * 1024))
 
 mkdir -p "$(dirname "$OUT_REPORT")"
 
@@ -75,8 +67,8 @@ mkdir -p "$(dirname "$OUT_REPORT")"
 parse_time_output() {
   local time_log="$1"
   local os="$2"
-  local rss_divisor="${3:-1}"
-  awk -v os="$os" -v rss_divisor="$rss_divisor" '
+  local rss_sanity_kb="${3:-16777216}"
+  awk -v os="$os" -v rss_sanity_kb="$rss_sanity_kb" '
     function to_ms(s,   n) { n = s + 0; return int(n * 1000 + 0.5) }
     function hms_to_ms(t,   parts, h, m, s, n) {
       n = split(t, parts, ":")
@@ -119,7 +111,9 @@ parse_time_output() {
       }
       if (match($0, /Maximum resident set size \(kbytes\): */)) {
         n = substr($0, RSTART + RLENGTH) + 0
-        if (rss_divisor > 1) n = n / rss_divisor
+        # Debian/Ubuntu 的 GNU time 1.9 已修正 maxRSS 单位；只对明显异常的
+        # 旧输出做兜底，避免把正常 30MB 误折成 30KB。
+        if (n > rss_sanity_kb) n = n / 1024
         rss = int(n + 0.5); next
       }
     }
@@ -252,7 +246,7 @@ run_bench() {
     fi
 
     local parsed
-    if ! parsed=$(parse_time_output "$time_log" "$OS" "$GNU_TIME_RSS_DIVISOR") || [[ -z "$parsed" ]]; then
+    if ! parsed=$(parse_time_output "$time_log" "$OS" "$GNU_TIME_RSS_SANITY_KB") || [[ -z "$parsed" ]]; then
       skipped=1
       continue
     fi
