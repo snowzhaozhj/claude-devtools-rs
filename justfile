@@ -19,7 +19,7 @@ dev:
 
 # 首次 clone 后的一次性依赖安装
 bootstrap:
-    npm install --prefix ui
+    pnpm --dir ui install
 
 # ──────── 测试 ────────
 
@@ -39,18 +39,18 @@ test-crate CRATE:
 
 # 前端 svelte-check + tsc
 check-ui:
-    npm run check --prefix ui
+    pnpm --dir ui run check
 
 # 前端 vitest 单测（含 mockIPC + store + theme + ipc-contract 镜像测）
 test-ui-unit:
-    npm run test:unit --prefix ui
+    pnpm --dir ui run test:unit
 
 # 前端组合测试：vitest + svelte-check
 test-ui: test-ui-unit check-ui
 
 # Playwright user story 测试（启 vite dev + chromium 跑 5 spec 文件）
 test-e2e:
-    npm run test:e2e --prefix ui
+    pnpm --dir ui run test:e2e
 
 # ──────── Lint + Format ────────
 
@@ -123,7 +123,7 @@ release-check:
 
 # 本地全量构建 Tauri 安装包（验证 CI 前）；先 build 前端再 tauri build
 release-build:
-    npm run build --prefix ui
+    pnpm --dir ui run build
     cargo tauri build
 
 # ──────── 维护清理 ────────

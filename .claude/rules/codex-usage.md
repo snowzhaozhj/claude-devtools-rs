@@ -19,7 +19,7 @@ push 第一个 commit 之后**默认调** `Agent({ subagent_type: "codex:codex-r
 
 只有以下场景**可以**跳过——但跳过时仍要在 PR 描述里写一句 "未跑 codex（理由：xxx）" 留痕：
 
-- **bump version / 改 Cargo.lock / npm lockfile**：纯版本号字面改动，无逻辑
+- **bump version / 改 Cargo.lock / pnpm-lock.yaml**：纯版本号字面改动，无逻辑
 - **docs / README / CLAUDE.md / 规则文件改动**：纯文本，无代码语义
 - **单点 typo 修复 / 单点 i18n 文案改**：1-2 行字符串替换
 - **CI / GitHub Actions 配置微调**：仅触发条件 / cache key 等，无新 step

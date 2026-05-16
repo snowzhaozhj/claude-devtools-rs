@@ -10,7 +10,7 @@ port 内任何多步改动必须按固定流水线推进，**不得**把 PostToo
 2. `cargo clippy --workspace --all-targets -- -D warnings` 汇总校验（**不是**靠 hook 单文件回显）
 3. `cargo fmt --all`
 4. `cargo test -p <crate>`（或 `--workspace`）
-5. `npm run check --prefix ui`（如改了 `ui/` 下的文件）
+5. `pnpm --dir ui run check`（如改了 `ui/` 下的文件）
 6. `openspec validate <change> --strict`（如有 openspec change）
 7. 勾 `openspec/changes/<change>/tasks.md` 的**业务**checkbox（**不勾**发布尾段 N.1-N.4）
 
