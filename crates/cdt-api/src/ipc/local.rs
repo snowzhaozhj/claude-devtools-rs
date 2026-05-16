@@ -532,6 +532,7 @@ impl LocalDataApi {
             usize,
             Vec<(String, std::path::PathBuf)>,
             std::path::PathBuf,
+            u64,
         ),
         ApiError,
     > {
@@ -539,6 +540,7 @@ impl LocalDataApi {
             return Err(ApiError::validation("pageSize must be > 0"));
         }
 
+        let root_generation = self.scan_generation.load(Ordering::SeqCst);
         let scanner = self.scanner.lock().await;
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
@@ -626,7 +628,7 @@ impl LocalDataApi {
             None
         };
 
-        Ok((page, next_cursor, total, page_jobs, dir))
+        Ok((page, next_cursor, total, page_jobs, dir, root_generation))
     }
 }
 
@@ -791,7 +793,7 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (mut page, next_cursor, total, page_jobs, _dir) =
+        let (mut page, next_cursor, total, page_jobs, _dir, _root_generation) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
         // 并发提取每条 session 的 metadata：复用 `self.metadata_scan_semaphore`
@@ -832,10 +834,10 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (page, next_cursor, total, page_jobs, dir) =
+        let (page, next_cursor, total, page_jobs, dir, root_generation) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
-        if !page_jobs.is_empty() {
+        if !page_jobs.is_empty() && root_generation == self.scan_generation.load(Ordering::SeqCst) {
             let tx = self.session_metadata_tx.clone();
             let project_id_owned = project_id.to_owned();
             let active_scans = self.active_scans.clone();
