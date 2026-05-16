@@ -68,9 +68,9 @@
   // 重置为默认值，对齐原版 CompactBoundary.tsx 的 useState(false)，**不**进 tabStore 持久化）
   let expandedCompacts: Set<string> = $state(new Set());
 
-  function toggleCompact(uuid: string) {
+  function toggleCompact(chunkId: string) {
     const n = new Set(expandedCompacts);
-    if (n.has(uuid)) n.delete(uuid); else n.add(uuid);
+    if (n.has(chunkId)) n.delete(chunkId); else n.add(chunkId);
     expandedCompacts = n;
   }
   let searchVisible = $state(uiState.searchVisible);
@@ -755,7 +755,7 @@
            + token delta + Phase 徽章 + 时间，amber 风格背景；展开 markdown) -->
       {:else if chunk.kind === "compact"}
         {@const compactText = cleanDisplayText(chunk.summaryText)}
-        {@const isCompactExpanded = expandedCompacts.has(chunk.uuid)}
+        {@const isCompactExpanded = expandedCompacts.has(chunk.chunkId)}
         {@const td = chunk.tokenDelta}
         <div class="msg-row msg-row-compact msg-row-contained">
           <div class="compact-block">
@@ -763,7 +763,7 @@
               type="button"
               class="compact-button"
               class:compact-button-expanded={isCompactExpanded}
-              onclick={() => toggleCompact(chunk.uuid)}
+              onclick={() => toggleCompact(chunk.chunkId)}
               aria-expanded={isCompactExpanded}
               aria-label="Toggle compacted content"
             >

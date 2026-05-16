@@ -30,10 +30,21 @@
 候选方案：
 
 - **A. 全局共享一个 `chunk_id_ordinals: HashMap<String, usize>`（含 AI）**：所有 chunk 都走同一计数器。优点：统一；缺点：要重做 `AIChunk` 现有 `ai:<base>:<n>` 形态（兼容性破坏），且 AI 的 base 已带 `ai:` 前缀本身就不会与裸 uuid 撞，没有真撞车风险。
-- **B. user/system/compact 三类共用一个 `non_ai_chunk_ordinals: HashMap<String, usize>`，AI 沿用 `ai_chunk_ordinals`（已存在）**：✓ 选这条。**理由**：(1) AI 已带 `ai:` 命名空间隔离，与 user/system/compact 的裸 uuid 永远不会跨 kind 撞；(2) 三类非 AI 的 uuid 都直接来自 JSONL `msg.uuid`，是同一命名空间，应共享计数器（防止 user uuid 与 system uuid 撞——理论上不应发生，但 robust 兜底零成本）；(3) 改动最小，只新增一个 HashMap + 一个 helper。
-- **C. 每个 kind 独立 ordinals map**：三个 HashMap。优点：分类清晰；缺点：浪费——三类共享同一 uuid 命名空间，分三个 map 没语义价值，跨 kind 撞车反而漏检。
+- **B. user/system/compact 三类共用一个 `non_ai_chunk_ordinals: HashMap<String, usize>`，AI 沿用 `ai_chunk_ordinals`（已存在）**：原始决策。理由：(1) AI 已带 `ai:` 命名空间隔离；(2) 三类非 AI 共享同一 uuid 命名空间；(3) 改动最小。
+- **C. 每个 kind 独立 ordinals map**：三个 HashMap。浪费——三类共享同一 uuid 命名空间。
 
-决策：**B**。新增 `non_ai_chunk_ordinals: HashMap<String, usize>`，与 `ai_chunk_ordinals` 平级穿在 build pipeline 中。
+原始决策：**B**。
+
+### D1b: codex CR 二审推翻 D1，改用全局 `used_chunk_ids: HashSet<String>`
+
+D1（方案 B）的两个朴素 HashMap ordinal counter 在 codex CR 时被发现存在两类 corner case bug：
+
+- **Bug 1**：user/system/compact 的 uuid 若极端形态为 `ai:<base>:<n>`（例如上游 JSONL 异常），首次产 chunk_id 直接等于 uuid，会与 AI chunk 的 `ai:<base>:<n>` 撞车——AI / 非 AI 跨 kind 撞。
+- **Bug 2**：同 session 内既有 `uuid == "abc"` 又有 `uuid == "abc:1"`，朴素 counter 让前者第二次出现产 `"abc:1"`，与后者首次出现产的 `"abc:1"` 撞——`<uuid>` 形态与 `<uuid>:<n>` 形态跨形态撞。
+
+修订决策：**用一个共享 `used_chunk_ids: HashSet<String>` 取代两个 HashMap**，`next_ai_chunk_id` 与 `next_non_ai_chunk_id` 都从这个 set 取/插：candidate 已被占用时继续递增 ordinal 直到不撞。理由：(1) 解决 Bug 1+2 的根因——任何 candidate 都必须先与全局已分配集合校验，单点 enforcement；(2) 既有 AI 测试 `["ai:dup:0", "ai:dup:1"]` 仍 pass——set 第一次插入 `ai:dup:0` 成功、第二次插入 `ai:dup:0` 失败 → 递增到 `ai:dup:1` 成功；(3) 实现上简化——一个 set 取代两个 HashMap，helper 内部 while loop ≤ 10 行；(4) 与 `used_send_message_ids: HashSet<String>` 风格一致。
+
+UUID 标准格式不含 `:` 也不会以 `ai:` 开头，真实数据几乎不会触发 Bug 1+2，但 spec 已声明 `chunkId` MUST 唯一 是硬约束——`used_chunk_ids` 是 robustness 兜底，O(1) 摊销开销可忽略。
 
 ### D2: 后缀形态 `<uuid>` / `<uuid>:1` / `<uuid>:2`
 
