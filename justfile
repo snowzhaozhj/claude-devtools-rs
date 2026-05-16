@@ -87,6 +87,11 @@ ipc-sync-check:
 # e2e 不在 preflight 内（启动浏览器较慢，由 CI 跑）；本地手动 `just test-e2e` 验证
 preflight: fmt lint test test-ui-unit spec-validate spec-archive-check ipc-sync-check
 
+# 四维性能 baseline gate：跑两个 bench 取 min-of-5 对比 tests/perf-baseline.json
+# 涉及关键路径的 PR push 前 SHALL 跑；CI 上同名 workflow 仅作 smoke 校验（详 .claude/rules/perf.md "CI 自动 gate"）
+perf-check *ARGS:
+    bash scripts/run-perf-bench.sh {{ARGS}}
+
 # ──────── 发布 ────────
 
 # 发布前检查：版本号三处一致 + 工作树干净 + preflight
@@ -175,3 +180,9 @@ bg-stop-all:
 bg-clean ID:
     -claude stop {{ID}} 2>&1
     claude rm {{ID}}
+
+# 跑所有 .claude/hooks/*.sh 单次模拟耗时，对比 .claude/rules/hooks-performance.md 预算
+# 用法：just bench-hooks       # cold path（99% 不命中关键模式）
+#       just bench-hooks --hot # hot path（命中关键模式跑真业务）
+bench-hooks *MODE:
+    @bash scripts/bench-hooks.sh {{MODE}}
