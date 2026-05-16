@@ -826,7 +826,7 @@
     font-weight: 500;
     letter-spacing: 0.03em;
     padding: 1px 6px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     border: 1px solid transparent;
     flex-shrink: 0;
   }
@@ -877,12 +877,12 @@
     color: var(--color-text-secondary);
     background: var(--context-btn-bg, var(--color-surface-raised));
     padding: 6px 10px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--color-border-emphasis);
     box-shadow: var(--shadow-sm, 0 2px 6px rgba(0, 0, 0, 0.08));
     cursor: pointer;
     font-family: inherit;
-    transition: background 0.1s, color 0.1s, border-color 0.1s;
+    transition: var(--bubble-transition);
   }
 
   .top-badge:hover {
@@ -944,8 +944,8 @@
 
   .msg-bubble {
     max-width: 75%;
-    border-radius: 12px;
-    padding: 10px 14px;
+    border-radius: var(--radius-bubble);
+    padding: var(--bubble-padding-l0);
   }
 
   .msg-bubble-user {
@@ -981,20 +981,22 @@
   }
 
   .msg-avatar-user svg {
-    width: 13px;
-    height: 13px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
   }
 
-  /* task-notification 卡片：移植自原版 UserChatGroup.tsx 末尾的 task notif 渲染 */
+  /* task-notification 行：嵌在 User bubble 内部，padding 故意比 banner 紧，
+     避免与 user bubble 自己的 10/14 padding 形成双层 frame 视觉肥肿。
+     视觉权重让位给主消息文本。 */
   .task-notif {
     display: flex;
     align-items: flex-start;
-    gap: 10px;
-    padding: 6px 12px;
+    gap: 8px;
+    padding: 6px 10px;
     margin-top: 6px;
-    border-radius: 8px;
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
+    border-radius: var(--radius-xs);
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border-subtle);
   }
 
   .task-notif-icon {
@@ -1067,8 +1069,8 @@
   }
 
   .ai-avatar svg {
-    width: 16px;
-    height: 16px;
+    width: var(--bubble-icon-lg);
+    height: var(--bubble-icon-lg);
   }
 
   .ai-label {
@@ -1083,7 +1085,7 @@
     color: var(--color-text-muted);
     background: var(--badge-neutral-bg);
     padding: 1px 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     font-family: var(--font-mono);
     flex-shrink: 0;
   }
@@ -1096,8 +1098,8 @@
     color: var(--color-text-muted);
     cursor: pointer;
     padding: 2px 8px;
-    border-radius: 4px;
-    transition: background 0.1s, color 0.1s;
+    border-radius: var(--radius-xs);
+    transition: var(--bubble-transition);
     flex-shrink: 0;
     background: none;
     border: none;
@@ -1122,8 +1124,8 @@
   }
 
   .ai-tool-chevron svg {
-    width: 11px;
-    height: 11px;
+    width: var(--bubble-icon-sm);
+    height: var(--bubble-icon-sm);
   }
 
   .ai-tool-chevron-open {
@@ -1167,7 +1169,7 @@
     z-index: 20;
     min-width: 160px;
     padding: 8px 10px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--card-bg);
     border: 1px solid var(--card-border);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
@@ -1263,8 +1265,8 @@
   }
 
   .system-icon {
-    width: 14px;
-    height: 14px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     color: var(--color-text-muted);
     flex-shrink: 0;
   }
@@ -1282,9 +1284,9 @@
     font-family: var(--font-mono);
     color: var(--chat-system-text);
     background: var(--chat-system-bg);
-    /* rounded-2xl rounded-bl-sm：右下角小，左下角小，让气泡在左侧贴一个尖角 */
-    border-radius: 16px 16px 16px 4px;
-    padding: 12px 16px;
+    /* 审计工具非聊天 app——鸟尾尖角对识别系统消息没增量，去掉后与 L0 同尺度 */
+    border-radius: var(--radius-bubble);
+    padding: var(--bubble-padding-l0);
     margin: 0;
     white-space: pre-wrap;
     overflow-x: auto;
@@ -1306,17 +1308,17 @@
   .compact-button {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--bubble-header-gap);
     width: 100%;
-    padding: 10px 16px;
+    padding: var(--bubble-banner-padding);
     background: var(--color-warning-bg);
     border: 1px solid var(--color-warning-border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     color: var(--color-warning-text);
     cursor: pointer;
     font-family: inherit;
     text-align: left;
-    transition: background 0.15s, border-color 0.15s;
+    transition: var(--bubble-transition);
   }
 
   .compact-button:hover {
@@ -1327,8 +1329,8 @@
   }
 
   .compact-chevron {
-    width: 16px;
-    height: 16px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     flex-shrink: 0;
     transition: transform 0.2s;
   }
@@ -1337,8 +1339,8 @@
   }
 
   .compact-layers-icon {
-    width: 16px;
-    height: 16px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     flex-shrink: 0;
   }
 
@@ -1365,7 +1367,7 @@
   .compact-phase-badge {
     flex-shrink: 0;
     padding: 1px 6px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     background: rgba(99, 102, 241, 0.15);
     background: color-mix(in oklch, var(--color-accent-indigo) 15%, transparent);
     color: var(--color-accent-indigo);
@@ -1385,7 +1387,7 @@
   .compact-expanded {
     margin-top: 8px;
     border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     overflow: hidden;
   }
 
@@ -1421,14 +1423,14 @@
     background: var(--prose-code-bg);
     color: var(--prose-code-text);
     padding: 1px 5px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     font-family: var(--font-mono);
     font-size: 0.87em;
   }
   .prose :global(pre) {
     background: var(--prose-pre-bg);
     border: 1px solid var(--prose-pre-border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 12px 14px;
     overflow-x: auto;
     margin: 0.6em 0;
@@ -1477,8 +1479,8 @@
      —— lucide AlertTriangle icon + warning amber 配色，居中横幅。 */
   .interruption-block {
     margin-top: 8px;
-    padding: 8px 16px;
-    border-radius: 8px;
+    padding: var(--bubble-banner-padding);
+    border-radius: var(--radius-md);
     background: var(--color-warning-bg, rgba(245, 158, 11, 0.1));
     border: 1px solid var(--color-warning-border, rgba(245, 158, 11, 0.3));
     color: var(--color-warning-text, #f59e0b);
@@ -1488,11 +1490,11 @@
     width: 100%;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: var(--bubble-header-gap);
   }
   .interruption-icon {
-    width: 16px;
-    height: 16px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     flex-shrink: 0;
   }
 </style>

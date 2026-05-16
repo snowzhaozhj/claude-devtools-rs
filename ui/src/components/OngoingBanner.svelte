@@ -15,9 +15,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
-    padding: 12px 16px;
-    border-radius: 10px;
+    gap: var(--bubble-header-gap);
+    padding: var(--bubble-banner-padding);
+    border-radius: var(--radius-md);
     background: var(--color-info-bg, rgba(59, 130, 246, 0.1));
     border: 1px solid var(--color-info-border, rgba(59, 130, 246, 0.3));
     color: var(--color-info-text, #3b82f6);
@@ -26,8 +26,8 @@
   }
 
   .spinner {
-    width: 14px;
-    height: 14px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     border-radius: 50%;
     border: 2px solid currentColor;
     border-right-color: transparent;

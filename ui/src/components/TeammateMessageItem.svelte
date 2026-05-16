@@ -83,7 +83,7 @@
   <div
     class="tm-card"
     class:tm-resent={teammateMessage.isResend}
-    style:border-left-color={colorSet.border}
+    style:border-color="{colorSet.border}55"
   >
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -175,9 +175,11 @@
 
 <style>
   .tm-card {
-    border-radius: 6px;
+    border-radius: var(--radius-md);
+    /* team-color border 由父元素 inline style 注入（淡化 55%），
+       team 标识由头部 dot + tm-badge + tm-msg-icon 三重承担，
+       禁止再加 border-left side-stripe 装饰（DESIGN.md / impeccable absolute ban）。 */
     border: 1px solid var(--card-border);
-    border-left: 3px solid var(--card-border);
     background: var(--card-bg);
     overflow: hidden;
     transition: opacity 0.2s;
@@ -189,10 +191,10 @@
   .tm-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: var(--bubble-header-gap);
+    padding: var(--bubble-header-padding-l1);
     cursor: pointer;
-    transition: background-color 0.1s;
+    transition: var(--bubble-transition);
   }
   .tm-header:hover {
     background: var(--card-header-hover);
@@ -203,8 +205,8 @@
   }
 
   .tm-chevron {
-    width: 14px;
-    height: 14px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     flex-shrink: 0;
     color: var(--card-icon-muted);
     transition: transform 0.15s ease;
@@ -214,8 +216,8 @@
   }
 
   .tm-msg-icon {
-    width: 14px;
-    height: 14px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     flex-shrink: 0;
   }
 
@@ -224,7 +226,7 @@
     font-weight: 500;
     letter-spacing: 0.03em;
     padding: 1px 6px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     border: 1px solid transparent;
     flex-shrink: 0;
   }
@@ -282,7 +284,7 @@
   }
 
   .tm-body {
-    padding: 12px;
+    padding: var(--bubble-body-padding-l1);
   }
 
   .tm-noise {
