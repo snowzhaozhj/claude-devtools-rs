@@ -154,15 +154,18 @@ jobs:
                 core.info('created new perf comment');
               }
             } catch (error) {
-              // 仅 401 认证失败视为 fatal 配置错误（典型：permissions block 被
-              // 误删），其他状态码（包括 422 spam/abuse 检测、403 rate-limit、
-              // 404 评论被删、5xx GH 端波动）都走 warning——这些是运行时偶发
-              // 不是程序 bug，不该阻断 bench 主流程（bench 数据已 upload artifact）。
-              // GH issues API 422 既出现在 validation failure 也出现在 spam
-              // 检测，无法静态区分，所以放弃在这里区分一律 warning。
+              // 永久性客户端错误（400/401/403）= 配置 bug，SHALL fatal：
+              //   400 参数构造错（PR 模板写错了）
+              //   401 认证 token 错 / permissions 块缺失
+              //   403 "Resource not accessible by integration"（permissions
+              //       缺失，第一轮 CI 已踩过）
+              // 偶发/可恢复错误走 warning：
+              //   422 GH 既用于 validation 也用于 spam 检测，无法静态区分（spam
+              //       是运行时偶发不是 bug），保留 warning 避免假阳性
+              //   404 评论被人删 / 5xx GH 服务波动
               const status = error.status || error.response?.status;
-              if (status === 401) {
-                core.setFailed(`PR 评论发布失败（认证 401，检查 permissions block）：${error.message}`);
+              if (status === 400 || status === 401 || status === 403) {
+                core.setFailed(`PR 评论发布失败（配置错 status=${status}）：${error.message}`);
               } else {
                 core.warning(`PR 评论发布失败（status=${status ?? '?'}），跳过：${error.message}`);
               }
