@@ -80,6 +80,25 @@ describe('SessionDetail smoke', () => {
     })
   })
 
+  test('含 mermaid 的 contained 区域通过 CSS 关闭 content-visibility', async () => {
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId: 'tab-smoke-3',
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+    await waitFor(() => {
+      expect(container.querySelector('.msg-row-contained')).not.toBeNull()
+    })
+
+    const contained = container.querySelector('.msg-row-contained') as HTMLElement
+    contained.innerHTML = '<div class="mermaid-block"></div>'
+    const computed = getComputedStyle(contained)
+    expect(computed.contentVisibility).toBe('visible')
+    expect(computed.contain).toBe('none')
+  })
+
   test('未知 sessionId 不崩，进入 error 分支或保留骨架', async () => {
     const { container } = render(SessionDetail, {
       props: {

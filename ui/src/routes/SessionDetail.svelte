@@ -936,6 +936,11 @@
     contain-intrinsic-size: auto 220px;
   }
 
+  :global(.msg-row-contained:has(.mermaid-block)) {
+    content-visibility: visible;
+    contain: none;
+  }
+
   .msg-spacer { flex: 1; min-width: 80px; }
 
   /* ── User bubble ── */
