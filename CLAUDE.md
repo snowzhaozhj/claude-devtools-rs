@@ -67,7 +67,7 @@ claude-devtools-rs/
 - `src-tauri/` 必须在 workspace `Cargo.toml` 的 `exclude` 列表里；`beforeDevCommand` 从 `src-tauri/` 目录执行，路径用 `../ui`
 - 浏览器直接访问 `localhost:5173` 会报 `invoke` undefined——必须通过 `cargo tauri dev` 的窗口测试
 - Vite HMR 只更新前端；后端改动需 `pkill -f claude-devtools-tauri && cargo tauri dev` 重启
-- `npm run check --prefix ui` 必须从项目根目录执行，从 `src-tauri/` 目录跑会找不到 `package.json`
+- `pnpm --dir ui run check` 必须从项目根目录执行，从 `src-tauri/` 目录跑会找不到 `package.json`
 - Tauri `setup` 里启动后台 task 用 `tauri::async_runtime::spawn`，不要裸 `tokio::spawn`；订阅后端 `broadcast::Receiver` 转 `emit(...)` 是典型模式（见 `src-tauri/src/lib.rs` 的 FileWatcher + notifier bridge）
 - **桌面通知 / 系统托盘**：`tauri-plugin-notification`（`src-tauri/Cargo.toml` + `capabilities/default.json` 加 `notification:default`）+ `TrayIconBuilder::with_id("main-tray")`（`setup` 里构建，icon 取 `app.default_window_icon()`）。后端从 Rust 发通知用 `app_handle.notification().builder().title(..).body(..).sound("default").show()`；前端 Dock badge 用 `getCurrentWindow().setBadgeCount()`（macOS 独占）。
 - **`devtools` feature 不要进 release**：`src-tauri/Cargo.toml` 的 `tauri = { features = [...] }` **不要**写 `"devtools"`——加了之后 release bundle 会带 web inspector。tauri 2 在 debug 构建自动启 inspector 不依赖 feature，`cargo tauri dev` 照旧能开。调用 `window.open_devtools()` 必须用 `#[cfg(debug_assertions)]` **编译时** gate（不是 `if cfg!(debug_assertions)` 运行时宏）——后者 release 构建里会因 `open_devtools` API 不存在（它本身就有 `#[cfg(any(debug_assertions, feature = "devtools"))]`）而编译失败。
@@ -84,7 +84,7 @@ claude-devtools-rs/
 - `TempDir` 返回 `/var/...` 但 `notify`/FSEvents 返回 `/private/var/...`（symlink canonicalization）。涉及路径比较时必须 `canonicalize()`。
 - `notify-debouncer-mini` 的 timer 不受 `tokio::time::pause()` 控制，测试不确定。优先用 `notify` 裸接 + 自实现 tokio debounce。
 - `cdt-watch` 的 `tests/file_watching.rs` 在 macOS 跑 flaky（FSEvents 时序依赖）；`just test` 单线程补跑也可能 5/6 timeout（**不只是** `burst_of_writes_debounced`）。判断是否真回归：`cargo test -p cdt-watch <test_name>` 单 case 跑——单跑能通过即视为环境 flake，可继续 archive；改 watcher 行为时才需要纠结全套通过。
-- **worktree rebase 后 ui 依赖可能变**：origin/main 合并的 PR 若加新 npm 依赖（典型 `tauri-plugin-opener` 这类），worktree 的 `ui/node_modules` 没装会让 `svelte-check` / `vitest` 报 "Cannot find module"。修法：rebase 后跑 `npm install --prefix ui` 重装。`cargo` 依赖走 workspace lockfile 自动同步，**只有 ui 依赖**有这坑。
+- **worktree rebase 后 ui 依赖可能变**：origin/main 合并的 PR 若加新 ui 依赖（典型 `tauri-plugin-opener` 这类），worktree 的 `ui/node_modules` 没装会让 `svelte-check` / `vitest` 报 "Cannot find module"。修法：rebase 后跑 `pnpm --dir ui install` 重装（pnpm hardlink + global store，lockfile 未变时近瞬时；变了也只下载差量）。`cargo` 依赖走 workspace lockfile 自动同步，**只有 ui 依赖**有这坑。
 
 ## Conventions
 
@@ -148,7 +148,7 @@ claude-devtools-rs/
   - Subagent：`spec-fidelity-reviewer` 按 capability 审计 scenario→test 覆盖。
   - Skill：`/ts-parity-check <capability>` 对比 TS 源与 Rust 端口 + followups。
   - MCP：`.mcp.json` 注册 GitHub MCP，需要 `GITHUB_PERSONAL_ACCESS_TOKEN` 环境变量。
-- **opsx:apply 推进节拍**：详见 `.claude/rules/opsx-apply-cadence.md`。核心：Edit → clippy → fmt → test → npm check → validate → 勾 checkbox → 文本总结，不得中途停手。
+- **opsx:apply 推进节拍**：详见 `.claude/rules/opsx-apply-cadence.md`。核心：Edit → clippy → fmt → test → pnpm check → validate → 勾 checkbox → 文本总结，不得中途停手。
 - **codex 异构二审与全流程协同**：详见 `.claude/rules/codex-usage.md`。核心：**默认每个 PR push 后**都调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 拿异构二审；只有 bump version / docs / typo / CI 微调等明确豁免场景才跳过（跳过时 PR 描述里写明理由）。卡 30+ 分钟主动 rescue；design 阶段重大决策、test 阶段 edge case 也可调。**不**新建 `/codex-*` skill 重复封装，规则文档里已固化触发判断与 prompt 模板。
 - Detailed rules: `.claude/rules/rust.md`.
 
@@ -205,14 +205,14 @@ bench 入口：
 
 ### 浏览器调试入口
 
-不开 Tauri 窗口也能调 UI：`npm run dev --prefix ui` 起 vite，浏览器访问 `http://localhost:5173/?mock=1&fixture=multi-project-rich`。fixture 有 `empty` / `single-project` / `multi-project-rich` 三种，详见 `ui/src/lib/__fixtures__/`。**仅 dev 启用**，production bundle 完全不含 mockIPC（vite DCE 验证见 `tauriMock.bundle.test.ts`）。
+不开 Tauri 窗口也能调 UI：`pnpm --dir ui run dev` 起 vite，浏览器访问 `http://localhost:5173/?mock=1&fixture=multi-project-rich`。fixture 有 `empty` / `single-project` / `multi-project-rich` 三种，详见 `ui/src/lib/__fixtures__/`。**仅 dev 启用**，production bundle 完全不含 mockIPC（vite DCE 验证见 `tauriMock.bundle.test.ts`）。
 
 ### 测试基础设施陷阱
 
 - **vitest `globals: false` 是硬约束**：设 `globals: true` 后 Playwright runner 报「test.describe was called in a file imported by configuration file」——vitest 通过 vite plugin 注入全局 `test`/`describe`，污染 Playwright transform 链。`ui/vitest.config.ts` MUST 保持 `globals: false`，vitest 测试显式 `import { test, describe, expect } from 'vitest'`
-- **production bundle DCE 整块包**：消除 mockIPC chunk 必须 `if (import.meta.env.DEV) { ... await import('./lib/tauriMock'); ... }` 整块包，**不能**用 `if (!DEV) return; ...` 早期 return——后者 vite 仍把 dynamic import chunk 输出到 dist。验证：`rm -rf ui/dist && npm run build --prefix ui && ls ui/dist/assets | grep -iE "mock|fixture"` 应空
-- **bundle test 强制 `NODE_ENV=production`**：`tauriMock.bundle.test.ts` 调 `execSync('npm run build', { env: { ...process.env, NODE_ENV: 'production' } })`——否则 vitest 父进程 `NODE_ENV=test` 传染给子进程，vite build 不替换 `import.meta.env.DEV`，DCE 失效。bundle test 默认 skip，CI / 本地手动用 `RUN_BUNDLE_TESTS=1 npm run test:unit --prefix ui`
-- **vite optimizer cache 多 spec 跑后污染 Playwright**：连续 `npx playwright test` 后再跑可能报「test.describe in config」假错；`rm -rf ui/node_modules/.vite ui/node_modules/.cache` 清掉即恢复。CI 上 reuseExistingServer=false 不受影响
+- **production bundle DCE 整块包**：消除 mockIPC chunk 必须 `if (import.meta.env.DEV) { ... await import('./lib/tauriMock'); ... }` 整块包，**不能**用 `if (!DEV) return; ...` 早期 return——后者 vite 仍把 dynamic import chunk 输出到 dist。验证：`rm -rf ui/dist && pnpm --dir ui run build && ls ui/dist/assets | grep -iE "mock|fixture"` 应空
+- **bundle test 强制 `NODE_ENV=production`**：`tauriMock.bundle.test.ts` 调 `execSync('pnpm run build', { env: { ...process.env, NODE_ENV: 'production' } })`——否则 vitest 父进程 `NODE_ENV=test` 传染给子进程，vite build 不替换 `import.meta.env.DEV`，DCE 失效。bundle test 默认 skip，CI / 本地手动用 `RUN_BUNDLE_TESTS=1 pnpm --dir ui run test:unit`
+- **vite optimizer cache 多 spec 跑后污染 Playwright**：连续 `pnpm exec playwright test` 后再跑可能报「test.describe in config」假错；`rm -rf ui/node_modules/.vite ui/node_modules/.cache` 清掉即恢复。CI 上 reuseExistingServer=false 不受影响
 - **Playwright 绕过 UI 直接调 store**：`TabBar` 仅在 `pane.tabs.length > 0` 时渲染——空状态点不到「设置」/「通知」title 按钮。`main.ts` dev-only 暴露 `window.__cdtTest = { openSettingsTab, openNotificationsTab, openTab, setActiveTab }`，spec 用 `page.evaluate(() => window.__cdtTest.openSettingsTab())` 绕过 sidebar virtualization 时序 flake。production bundle 由 `if (DEV)` 块 DCE，不暴露
 - **vitest 测 svelte store 模块级 `$state`**：模块级 `$state` 跨 vitest test 不 reset（每个 test 都拿同一个模块实例）。两种处理：(a) 渐进 assertion 不 reset（推荐，store 单测语义自洽即可）；(b) `vi.resetModules()` + dynamic import 强制重载（复杂，仅在 reset 必要时用）
 - **Playwright `reuseExistingServer: true` 本地缓存 fixture 内存 state**：fixture module 的 `fx.config` 等 mutable state 在 vite dev server 进程内存里——上一轮 e2e 改完 config 后下一轮跑会拿到串用 state（典型表现：刚改完 fixture 跑 e2e 莫名 fail，单 worker 跑反而过）。**改 fixture 后 SHALL `pkill -f vite` 强制 fresh webServer**，或临时 `reuseExistingServer: false` 跑一遍。CI 上 `process.env.CI` 自动 fresh，不受影响。

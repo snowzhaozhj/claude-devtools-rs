@@ -36,13 +36,15 @@
 
 ## 从源码构建
 
-依赖：Rust stable（`rust-toolchain.toml` 锁 1.85+）、Node.js 20+、[just](https://github.com/casey/just)。
+依赖：Rust stable（`rust-toolchain.toml` 锁 1.85+）、Node.js 20+、[pnpm](https://pnpm.io/) 8+、[just](https://github.com/casey/just)。
 
 ```bash
-brew install just           # 没装 just 先装
-just bootstrap              # 首次装前端依赖
+brew install just pnpm      # 没装 just / pnpm 先装
+just bootstrap              # 首次装前端依赖（走 pnpm install）
 just dev                    # 启动桌面应用 dev 模式
 ```
+
+> 本仓用 pnpm（不是 npm）管前端依赖。lockfile 为 `ui/pnpm-lock.yaml`。worktree 切换 / rebase 后跑 `pnpm --dir ui install` 同步依赖；lockfile 未变时近乎瞬时（hardlink 校验）。
 
 常用 recipe（完整列表 `just` 或 `just -l`）：
 
@@ -64,7 +66,7 @@ just dev                    # 启动桌面应用 dev 模式
 ### 浏览器调试 UI（不开 Tauri 窗口）
 
 ```bash
-npm run dev --prefix ui
+pnpm --dir ui run dev
 # 浏览器打开 http://localhost:5173/?mock=1&fixture=multi-project-rich
 ```
 

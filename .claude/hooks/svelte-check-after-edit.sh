@@ -33,7 +33,7 @@ case "$rel" in
 esac
 
 cd "$project_dir/ui"
-if ! output=$(npx svelte-check --tsconfig ./tsconfig.app.json 2>&1); then
+if ! output=$(pnpm exec svelte-check --tsconfig ./tsconfig.app.json 2>&1); then
   {
     echo "svelte-check failed after editing $rel:"
     echo "$output" | tail -30

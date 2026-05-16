@@ -3,7 +3,7 @@
 // frontend-test-pyramid §"Production bundle 不含 mockIPC 代码" Scenario）。
 //
 // 默认 skip——build 慢且与单元测节奏不匹配。CI / 显式想跑时设
-// RUN_BUNDLE_TESTS=1：`RUN_BUNDLE_TESTS=1 npm run test:unit --prefix ui`。
+// RUN_BUNDLE_TESTS=1：`RUN_BUNDLE_TESTS=1 pnpm --dir ui run test:unit`。
 
 import { execSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -21,7 +21,7 @@ describe('production bundle', () => {
       const uiRoot = resolve(HERE, '../../')
       // 显式 NODE_ENV=production，避免 vitest 父进程把 NODE_ENV=test 传染给
       // 子进程的 vite build——后者会让 import.meta.env.DEV 不被替换为 false。
-      execSync('npm run build', {
+      execSync('pnpm run build', {
         cwd: uiRoot,
         stdio: 'pipe',
         env: { ...process.env, NODE_ENV: 'production' },

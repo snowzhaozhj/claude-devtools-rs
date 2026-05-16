@@ -3,9 +3,7 @@
 ## Purpose
 
 定义前端测试基础设施的四层金字塔：Rust IPC contract test 守护字段形状、Vitest 单测覆盖纯函数与 store、Playwright 跑 user story 级浏览器集成测试、`mockIPC + Vite dev server` 提供 dev/test 环境的假后端。各层职责互斥不重叠，配合 production bundle 的 mockIPC DCE 校验，让 UI 改动可以在不开 Tauri 窗口的浏览器环境下完成大部分回归。
-
 ## Requirements
-
 ### Requirement: 测试金字塔分四层且职责互斥
 
 系统 SHALL 通过四层测试基础设施守护前端质量，每层职责互斥不重叠：（1）`mockIPC + Vite dev server` 提供 dev/test 环境的假后端；（2）`Playwright + Chromium` 跑 user story 级浏览器集成测试；（3）`Vitest + jsdom` 跑纯函数和 store 单元测试；（4）`crates/cdt-api/tests/ipc_contract.rs` 守护 IPC 字段形状契约。任何一层都 MUST 不被其他层替代。
@@ -69,7 +67,7 @@
 
 #### Scenario: Production bundle 不含 mockIPC 代码
 
-- **WHEN** 跑 `npm run build --prefix ui`
+- **WHEN** 跑 `pnpm --dir ui build`
 - **THEN** 产出的 `dist/assets/*.js` MUST 不包含字符串 `mockIPC` / `__fixtures__` / fixture 文件中的虚构项目名
 - **AND** 此约束 SHALL 由专门 vitest 用例 `tauriMock.bundle.test.ts` grep 产物文件断言
 
@@ -87,7 +85,7 @@
 
 #### Scenario: 主路径覆盖完整
 
-- **WHEN** CI 跑 `npx playwright test --project chromium`
+- **WHEN** CI 跑 `pnpm exec playwright test --project chromium`
 - **THEN** 上述 5 个 spec 文件 SHALL 全部存在并通过
 - **AND** 每个 spec 至少包含 1 个 `expect(...)` 断言
 
@@ -105,11 +103,11 @@
 
 ### Requirement: Playwright baseline screenshot 不进 git
 
-Playwright 配置 SHALL 不要求 baseline screenshot 文件提交到 git。CI MUST 用 `--update-snapshots` 模式跑，失败时上传 `playwright-report/` 和 screenshots 作为 GitHub Actions artifact 供人审。本地开发 MUST 用 `npx playwright test --update-snapshots` 重新生成 baseline。
+Playwright 配置 SHALL 不要求 baseline screenshot 文件提交到 git。CI MUST 用 `--update-snapshots` 模式跑，失败时上传 `playwright-report/` 和 screenshots 作为 GitHub Actions artifact 供人审。本地开发 MUST 用 `pnpm exec playwright test --update-snapshots` 重新生成 baseline。
 
 #### Scenario: gitignore 覆盖 Playwright 产物
 
-- **WHEN** 跑 `npx playwright test`
+- **WHEN** 跑 `pnpm exec playwright test`
 - **THEN** 生成的 `ui/tests/e2e/__screenshots__/`、`ui/playwright-report/`、`ui/test-results/` SHALL 被 `ui/.gitignore` 忽略
 - **AND** `git status` MUST 不显示这些路径为 untracked
 
@@ -183,12 +181,12 @@ Playwright 配置 SHALL 不要求 baseline screenshot 文件提交到 git。CI M
 #### Scenario: 本地 just recipe
 
 - **WHEN** 维护者在仓库根目录跑 `just test-ui`
-- **THEN** SHALL 顺序执行 `npm run test:unit --prefix ui`（vitest）+ `npm run check --prefix ui`（svelte-check）
-- **AND** 跑 `just test-e2e` SHALL 执行 `npm run test:e2e --prefix ui`（playwright）
+- **THEN** SHALL 顺序执行 `pnpm --dir ui test:unit`（vitest）+ `pnpm --dir ui check`（svelte-check）
+- **AND** 跑 `just test-e2e` SHALL 执行 `pnpm --dir ui test:e2e`（playwright）
 
 #### Scenario: CI 时间预算
 
 - **WHEN** frontend-test job 完成
-- **THEN** 总耗时 SHALL 不超过 5 分钟（含 npm ci + chromium 安装的缓存命中场景）
+- **THEN** 总耗时 SHALL 不超过 5 分钟（含 `pnpm install --frozen-lockfile` + chromium 安装的缓存命中场景）
 - **AND** 缓存未命中场景下 SHALL 不超过 8 分钟
 
