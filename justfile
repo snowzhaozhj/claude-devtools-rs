@@ -27,8 +27,10 @@ bootstrap:
 test: test-rust check-ui
 
 # Rust workspace + cdt-watch 单线程补跑（FSEvents 并发 flaky，--test-threads=1 稳定）
+# `cdt-api/test-utils` feature 启用集成测试访问 cache 内部状态的 helper（详
+# change `parsed-message-lru-cache`）；release/默认构建不含。
 test-rust:
-    cargo test --workspace --exclude cdt-watch
+    cargo test --workspace --exclude cdt-watch --features cdt-api/test-utils
     cargo test -p cdt-watch -- --test-threads=1
 
 # 单 crate 测试，例：`just test-crate cdt-analyze`

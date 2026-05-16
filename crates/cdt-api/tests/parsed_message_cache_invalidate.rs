@@ -3,10 +3,16 @@
 //! 行为契约：`openspec/specs/ipc-data-api/spec.md` §"parsed-message 缓存按
 //! file-change 广播主动失效"。
 //!
-//! 注：`get_tool_output` / `get_image_asset` hot path 当前用
-//! `path_decoder::get_projects_base_path()` 推算 JSONL 路径——本测试用
+//! 注：`get_tool_output` / `get_image_asset` hot path 推算的 JSONL 路径与
+//! `LocalDataApi.projects_dir` 字段（构造时从 scanner 拿）一致；本测试用
 //! `prime_parsed_msg_cache_for_test` helper 在 tempdir 路径下直接走 cache 写入，
 //! 然后验证 watcher 广播触发的 invalidate task 是否剔除条目。
+//!
+//! 本测试依赖 `test-utils` feature 暴露的 `parsed_msg_cache_len` /
+//! `prime_parsed_msg_cache_for_test` helper（详 codex 二审 bug 2）；默认构建
+//! 不编译这些 API，所以本测试文件也需要 feature gate。
+
+#![cfg(feature = "test-utils")]
 
 use std::sync::Arc;
 use std::time::Duration;

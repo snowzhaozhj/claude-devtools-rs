@@ -32,7 +32,7 @@
 
 ## 6. 发布
 
-- [ ] 6.1 push 分支 + 开 PR
+- [x] 6.1 push 分支 + 开 PR
 - [ ] 6.2 wait-ci 全绿
 - [ ] 6.3 codex 二审通过（如发现 bug：修 → push → 回到 6.2 重跑；可循环 M 次）
 - [ ] 6.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）

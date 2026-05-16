@@ -344,6 +344,12 @@ pub struct LocalDataApi {
     /// design D2/D3；行为契约见 spec `ipc-data-api/spec.md`
     /// §"`get_tool_output` 与 `get_image_asset` 走 parsed-message LRU 缓存"。
     parsed_msg_cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
+    /// 缓存 scanner 的 `projects_dir`，让 `get_tool_output` / `get_image_asset`
+    /// hot path 与 `spawn_parsed_msg_cache_invalidator` 共享同一 base path，
+    /// 避免 cache key 不一致（codex 二审 bug：原 hot path 用
+    /// `path_decoder::get_projects_base_path()`、invalidate 用构造时传入的
+    /// `projects_dir`，testbed/SSH/symlink 等场景下 key 不同 → 主动失效永远 miss）。
+    projects_dir: std::path::PathBuf,
 }
 
 impl LocalDataApi {
@@ -358,6 +364,9 @@ impl LocalDataApi {
         let searcher = SessionSearcher::new(fs, cache);
         let (session_metadata_tx, _) =
             broadcast::channel::<SessionMetadataUpdate>(METADATA_BROADCAST_CAPACITY);
+        // 在 move scanner 进 Mutex 前先 clone projects_dir，让 hot path /
+        // invalidate task 共享同一 base path（详上方字段 doc）。
+        let projects_dir = scanner.projects_dir().to_path_buf();
         Self {
             scanner: Mutex::new(scanner),
             searcher,
@@ -372,6 +381,7 @@ impl LocalDataApi {
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
             parsed_msg_cache: Arc::new(std::sync::Mutex::new(ParsedMessageCache::default())),
+            projects_dir,
         }
     }
 
@@ -426,7 +436,7 @@ impl LocalDataApi {
         spawn_parsed_msg_cache_invalidator(
             parsed_msg_cache.clone(),
             watcher.subscribe_files(),
-            projects_dir,
+            projects_dir.clone(),
         );
 
         Self {
@@ -443,6 +453,7 @@ impl LocalDataApi {
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
             parsed_msg_cache,
+            projects_dir,
         }
     }
 
@@ -1202,9 +1213,10 @@ impl DataApi for LocalDataApi {
         };
 
         // 定位 jsonl：root 自己 or `<root>/subagents/agent-<sub>.jsonl`。
-        let projects_dir = path_decoder::get_projects_base_path();
+        // 用 `self.projects_dir`（构造时从 scanner 取）确保与
+        // `spawn_parsed_msg_cache_invalidator` 的 base path 一致（codex 二审 bug 1）。
         let Some(jsonl_path) =
-            locate_session_jsonl(&projects_dir, root_session_id, session_id).await
+            locate_session_jsonl(&self.projects_dir, root_session_id, session_id).await
         else {
             tracing::warn!(target: "cdt_api::image", root_session_id, session_id, "jsonl not found");
             return Ok(empty_data_uri());
@@ -1240,9 +1252,10 @@ impl DataApi for LocalDataApi {
         session_id: &str,
         tool_use_id: &str,
     ) -> Result<cdt_core::ToolOutput, ApiError> {
-        let projects_dir = path_decoder::get_projects_base_path();
+        // 用 `self.projects_dir`（构造时从 scanner 取）确保与
+        // `spawn_parsed_msg_cache_invalidator` 的 base path 一致（codex 二审 bug 1）。
         let Some(jsonl_path) =
-            locate_session_jsonl(&projects_dir, root_session_id, session_id).await
+            locate_session_jsonl(&self.projects_dir, root_session_id, session_id).await
         else {
             tracing::warn!(target: "cdt_api::tool_output", root_session_id, session_id, "jsonl not found");
             return Ok(cdt_core::ToolOutput::Missing);
@@ -1562,7 +1575,10 @@ impl LocalDataApi {
     /// 测试 helper：返回 parsed-message cache 当前条目数。仅 integration test
     /// 用来验证 file-change 广播 invalidate 路径生效（见 change
     /// `parsed-message-lru-cache`）。
-    #[doc(hidden)]
+    ///
+    /// 仅在 `test-utils` feature 启用时编译——release / 默认构建 SHALL NOT
+    /// 含此 API（codex 二审 bug 2：`#[doc(hidden)] pub` 只隐藏文档不限制调用）。
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn parsed_msg_cache_len(&self) -> usize {
         self.parsed_msg_cache
             .lock()
@@ -1570,12 +1586,10 @@ impl LocalDataApi {
             .len()
     }
 
-    /// 测试 helper：触发 parsed-message cache 对 `path` 的 `extract` 写入。仅
-    /// integration test 用来在不依赖 `path_decoder::get_projects_base_path()`
-    /// 的前提下验证 file-change broadcast invalidate 路径（hot path
-    /// `get_tool_output` / `get_image_asset` 当前用真实 home 目录推算 JSONL
-    /// 路径，无法直接走 tempdir）。
-    #[doc(hidden)]
+    /// 测试 helper：触发 parsed-message cache 对 `path` 的 `extract` 写入。
+    ///
+    /// 仅在 `test-utils` feature 启用时编译。
+    #[cfg(any(test, feature = "test-utils"))]
     pub async fn prime_parsed_msg_cache_for_test(
         &self,
         path: &std::path::Path,

@@ -91,7 +91,9 @@ impl ParsedMessageCache {
         }
     }
 
-    /// 当前缓存条目数（测试 helper / 监控接口；O(1)）。
+    /// 当前缓存条目数。`LocalDataApi::parsed_msg_cache_len`（仅
+    /// `test-utils` feature 下编译）会用到；默认构建下没人调，加 `allow`。
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.map.len()
     }

@@ -10,6 +10,11 @@ description = "Data API facade: IPC trait surface + HTTP/SSE server (owns ipc-da
 [lints]
 workspace = true
 
+[features]
+# 仅供集成测试启用的 helpers（如 parsed-message cache 内部状态访问）；
+# release / 默认构建 SHALL NOT 含这些 API。
+test-utils = []
+
 [dependencies]
 cdt-core = { workspace = true }
 cdt-parse = { workspace = true }
