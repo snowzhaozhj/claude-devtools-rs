@@ -142,13 +142,21 @@ clean-worktrees-apply:
 # prompt 模板：.claude/templates/bg-pr-pipeline.md（通用填空）
 
 # 起一个 background claude session 跑 PR 流水线
-# 用法：just bg-pr <name> <prompt-file>
-# 例：  just bg-pr "PR-alpha" .claude/perf-prompts/pr-alpha.md
-bg-pr NAME PROMPT_FILE:
-    @echo "起 background session：{{NAME}}（prompt: {{PROMPT_FILE}}）"
-    @(cd {{justfile_directory()}} && \
-      claude --bg --name "{{NAME}}" --effort high \
-        "$(cat {{PROMPT_FILE}})")
+# 用法（两种皆可，推荐 inline）：
+#   just bg-pr <name> '<inline prompt>'        # 短任务直接 inline
+#   just bg-pr <name> <path-to-prompt-file>    # 长任务 / 想留审计 trail 落文件
+# PROMPT 是文件路径还是 inline 字符串由 `[ -f "$PROMPT" ]` 自动判断
+bg-pr NAME PROMPT:
+    #!/usr/bin/env bash
+    set -e
+    cd "{{justfile_directory()}}"
+    if [ -f "{{PROMPT}}" ]; then
+        echo "起 bg session：{{NAME}}（prompt 文件: {{PROMPT}}）"
+        claude --bg --name "{{NAME}}" --effort high "$(cat {{PROMPT}})"
+    else
+        echo "起 bg session：{{NAME}}（inline prompt）"
+        claude --bg --name "{{NAME}}" --effort high "{{PROMPT}}"
+    fi
 
 # 列所有 background session 状态摘要（grep result:/needs input:/failed:）
 bg-status:

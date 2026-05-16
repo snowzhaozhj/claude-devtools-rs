@@ -38,16 +38,21 @@
 
 ## 启动样板
 
-一行 just recipe（推荐）：
+推荐 **inline prompt**（简单任务不必落文件）：
 ```bash
-just bg-pr <name> .claude/perf-prompts/<prompt-file>.md
+just bg-pr <name> '<inline prompt with placeholders filled>'
 ```
 
-或裸命令（subshell 隔离主 session cwd）：
+长 prompt / 想留审计追溯时落文件：
 ```bash
-(cd /path/to/repo-root && \
-  claude --bg --name "<PR 名>" --effort high \
-    "$(cat .claude/perf-prompts/<prompt-file>.md)")
+just bg-pr <name> .claude/perf-prompts/<name>.md
+```
+
+`bg-pr` recipe 通过 `[ -f "$PROMPT" ]` 自动判断 PROMPT 是文件还是 inline 字符串。
+
+裸命令（subshell 隔离主 session cwd）：
+```bash
+(cd /path/to/repo-root && claude --bg --name "<name>" --effort high "<prompt>")
 ```
 
 监控 / 清理：
@@ -57,15 +62,15 @@ just bg-stop-all      # 停所有
 just bg-clean <id>    # 停 + 删 worktree
 ```
 
-prompt 模板：`.claude/templates/bg-pr-pipeline.md`（通用，填空即用，不绑业务）。
+prompt 骨架：`.claude/templates/bg-pr-pipeline.md`（占位符 ~20 行；**不要**在 prompt 里重抄 `.claude/rules` / `CLAUDE.md` 内容——bg session 自己会读）。
 
 ## 已踩坑速查
 
 详见 `~/.claude/projects/<encoded>/memory/feedback_bg_claude_dispatch.md`。简版 6 条：
 
 1. **不要加 `--permission-mode bypassPermissions`**——classifier 拒，需 explicit 授权；默认模式已能跑完整流水线
-2. **prompt 文件 SHALL 在 `.claude/*` 子目录下**——hook 拦 main 分支 Edit `/tmp/*` 等非白名单路径
+2. **inline prompt 优先；落文件时 SHALL 在 `.claude/*` 子目录下**——hook 拦 main 分支 Edit `/tmp/*` 等非白名单路径
 3. **prompt 一次写全**——bg session 起后无法非交互注入指令（`claude attach` 是 TUI 不接 stdin）
-4. **prompt 漏维度 = 所有 PR 都漏**——SHALL 用模板填空，硬约束默认带上不省略
+4. **prompt 漏维度 = 所有 PR 都漏**——用 `.claude/templates/bg-pr-pipeline.md` 骨架填空，但**不要**重抄规则（bg session 自己读 `.claude/rules`）。一次写全任务 + 怀疑点 + 走不走 openspec
 5. **log 是 ANSI 流难解析**——用 `just bg-status` 提炼摘要不直接读 raw log
 6. **不要 merge 留用户**——bg 跑到 codex + wait-ci 全绿即止，merge 是 destructive shared state 留用户拍板
