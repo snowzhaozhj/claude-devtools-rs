@@ -21,7 +21,7 @@
     const root: TreeNode = { name: "", path: "", isFile: false, tokens: 0, children: new Map() };
 
     for (const item of items) {
-      const p = (item.path ?? "").replace(/^\/Users\/[^/]+/, "~");
+      const p = (item.path ?? "").replace(/^\/Users\/[^/]+\/?/, "");
       const parts = p.split("/").filter(Boolean);
       let current = root;
 
@@ -81,19 +81,36 @@
   {@const nodePath = parentPath ? `${parentPath}/${node.name}` : node.name}
 
   {#if node.isFile}
-    <div class="dt-file" style:padding-left="{depth * 12}px">
-      <span class="dt-file-name">{node.name}</span>
+    <div class="dt-file" class:dt-nested={depth > 0} style:--dt-depth={String(depth)}>
+      <span class="dt-file-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+          <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+        </svg>
+      </span>
+      <span class="dt-file-name" title={node.path || node.name}>{node.name}</span>
       {#if node.tokens > 0}
         <span class="dt-tokens">~{fk(node.tokens)}</span>
       {/if}
     </div>
   {:else if node.name}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="dt-dir" style:padding-left="{depth * 12}px" onclick={() => toggleDir(nodePath)}>
-      <span class="dt-chevron" class:dt-chevron-open={!collapsed.has(nodePath)}>▸</span>
-      <span class="dt-dir-name">{node.name}/</span>
-    </div>
+    <button
+      type="button"
+      class="dt-dir"
+      class:dt-dir-expanded={!collapsed.has(nodePath)}
+      class:dt-nested={depth > 0}
+      style:--dt-depth={String(depth)}
+      onclick={() => toggleDir(nodePath)}
+      aria-expanded={!collapsed.has(nodePath)}
+    >
+      <span class="dt-chevron" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m9 18 6-6-6-6" />
+        </svg>
+      </span>
+      <span class="dt-dir-name">{node.name}</span>
+      <span class="dt-dir-count">{children.length}</span>
+    </button>
   {/if}
 
   {#if !node.name || !collapsed.has(nodePath)}
@@ -109,50 +126,124 @@
 
 <style>
   .directory-tree {
+    min-width: 0;
     font-size: 12px;
     font-family: var(--font-mono);
+    line-height: 1.35;
+  }
+
+  .dt-file,
+  .dt-dir {
+    position: relative;
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    padding: 3px 6px 3px calc(var(--dt-depth, 0) * 14px + 4px);
+    border-radius: 5px;
   }
 
   .dt-file {
-    display: flex;
+    color: var(--color-text-secondary);
+  }
+
+  .dt-file::before,
+  .dt-dir::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--dt-depth, 0) * 14px - 6px);
+    top: 0;
+    bottom: 0;
+    display: none;
+    border-left: 1px solid var(--color-border-subtle, var(--color-border));
+  }
+
+  .dt-nested::before {
+    display: block;
+  }
+
+  .dt-file:hover,
+  .dt-dir:hover {
+    background: var(--tool-item-hover-bg);
+  }
+
+  .dt-file-icon,
+  .dt-chevron {
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 2px 0;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-muted);
+  }
+
+  .dt-file-icon svg,
+  .dt-chevron svg {
+    width: 13px;
+    height: 13px;
   }
 
   .dt-file-name {
-    color: var(--color-text);
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-secondary);
+    font-weight: 400;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .dt-tokens {
-    font-size: 10px;
     color: var(--color-text-muted);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
   }
 
   .dt-dir {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
     cursor: pointer;
+    transition: background 0.1s, color 0.1s;
   }
 
-  .dt-dir:hover {
-    opacity: 0.8;
+  .dt-dir:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: 1px;
   }
 
   .dt-chevron {
-    font-size: 9px;
-    color: var(--color-text-muted);
-    width: 10px;
-    transition: transform 0.15s ease;
+    transition: transform 0.15s ease, color 0.1s;
   }
 
-  .dt-chevron-open {
+  .dt-dir-expanded .dt-chevron {
+    color: var(--color-text-secondary);
     transform: rotate(90deg);
   }
 
   .dt-dir-name {
+    min-width: 0;
+    overflow: hidden;
     color: var(--color-text-muted);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dt-dir-expanded .dt-dir-name {
+    color: var(--color-text-secondary);
+  }
+
+  .dt-dir-count {
+    border-radius: 4px;
+    background: var(--color-surface-overlay, var(--badge-neutral-bg));
+    color: var(--color-text-muted);
+    font-size: 10px;
+    line-height: 1;
+    padding: 2px 4px;
+    font-variant-numeric: tabular-nums;
   }
 </style>

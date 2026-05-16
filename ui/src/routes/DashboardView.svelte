@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
-  import { listProjects, type ProjectInfo } from "../lib/api";
+  import { type ProjectInfo } from "../lib/api";
+  import { loadProjectData } from "../lib/projectDataStore.svelte";
   import { shortenPath } from "../lib/toolHelpers";
   import { FOLDER_GIT2_SVG } from "../lib/icons";
   import Skeleton from "../components/Skeleton.svelte";
@@ -39,7 +40,7 @@
   async function loadProjects(silent = false) {
     if (!silent) loading = true;
     try {
-      projects = await listProjects();
+      projects = (await loadProjectData({ refresh: silent })).projects;
     } catch (e) {
       console.error("Failed to load projects:", e);
     } finally {

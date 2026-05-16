@@ -2,10 +2,8 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import {
-    listProjects,
     listSessions,
     getSessionSummariesByIds,
-    listRepositoryGroups,
     getProjectMemory,
     type ProjectInfo,
     type RepositoryGroup,
@@ -14,6 +12,7 @@
     type SessionMetadataUpdate,
     type PaginatedResponse,
   } from "../lib/api";
+  import { loadProjectData } from "../lib/projectDataStore.svelte";
   import SidebarHeader from "./SidebarHeader.svelte";
   import SessionContextMenu from "./SessionContextMenu.svelte";
   import OngoingIndicator from "./OngoingIndicator.svelte";
@@ -135,39 +134,19 @@
   async function loadProjects(silent = false) {
     if (!silent) projectsLoading = true;
     try {
-      // 优先 listRepositoryGroups（grouped 视图）；任何失败 fallback 到
-      // listProjects 平铺，保持 sidebar 在 worktree-grouper 出错或老后端
-      // 上仍能工作。
-      let nextProjects: ProjectInfo[];
-      try {
-        const groups = await listRepositoryGroups();
-        repositoryGroups = groups;
-        // 派生扁平 projects 列表，每个 worktree 都暴露为一个 ProjectInfo，
-        // 兼容下游 selectedProjectId / loadSessions 既有路径（D7b）。
-        nextProjects = groups.flatMap((g) =>
-          g.worktrees.map((w) => ({
-            id: w.id,
-            path: w.path,
-            displayName: w.name,
-            sessionCount: w.sessions.length,
-          })),
-        );
-      } catch (gErr) {
-        console.warn("listRepositoryGroups failed, fallback to listProjects:", gErr);
-        repositoryGroups = [];
-        nextProjects = await listProjects();
-      }
-      projects = nextProjects;
-      const selectedExists = nextProjects.some((p) => p.id === selectedProjectId);
-      if (nextProjects.length > 0 && (!selectedProjectId || !selectedExists)) {
+      const result = await loadProjectData({ refresh: silent });
+      repositoryGroups = result.repositoryGroups;
+      projects = result.worktreeProjects;
+      const selectedExists = result.worktreeProjects.some((p) => p.id === selectedProjectId);
+      if (result.worktreeProjects.length > 0 && (!selectedProjectId || !selectedExists)) {
         // 默认选中"最近活动 group 的 main worktree"（spec sidebar-navigation
         // §"活跃 worktree 选中状态"）：repositoryGroups 已按 mostRecentSession
         // 倒序，worktrees 已 main 优先排序——直接取第一个 group 的 [0]。
-        const first = repositoryGroups[0]?.worktrees?.[0];
+        const first = result.repositoryGroups[0]?.worktrees?.[0];
         if (first) {
           onSelectProject(first.id, first.name);
         } else {
-          onSelectProject(nextProjects[0].id, nextProjects[0].displayName);
+          onSelectProject(result.worktreeProjects[0].id, result.worktreeProjects[0].displayName);
         }
       }
     } catch (e) {

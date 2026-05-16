@@ -120,9 +120,7 @@ renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
     return `<div class="mermaid-block" data-code="${encoded}"><pre><code class="hljs">${DOMPurify.sanitize(text)}</code></pre></div>`;
   }
   const language = lang && hljs.getLanguage(lang) ? lang : undefined;
-  const highlighted = language
-    ? hljs.highlight(text, { language }).value
-    : hljs.highlightAuto(text).value;
+  const highlighted = language ? hljs.highlight(text, { language }).value : escapeHtml(text);
   return `<pre><code class="hljs">${highlighted}</code></pre>`;
 };
 

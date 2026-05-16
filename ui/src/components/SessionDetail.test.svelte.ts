@@ -102,7 +102,7 @@ describe('SessionDetail smoke', () => {
     expect(container.querySelector('.conversation')).not.toBeNull()
   })
 
-  test('IPC 返回的 chunks 至少渲染一个 msg-row', async () => {
+  test('IPC 返回的 chunks 渲染 containment 边界且不包住 AI header', async () => {
     const { container } = render(SessionDetail, {
       props: {
         tabId: 'tab-smoke-2',
@@ -113,6 +113,9 @@ describe('SessionDetail smoke', () => {
     await waitFor(() => {
       const rows = container.querySelectorAll('.msg-row')
       expect(rows.length).toBeGreaterThan(0)
+      expect(container.querySelector('.msg-row-user.msg-row-contained')).not.toBeNull()
+      expect(container.querySelector('.msg-row-ai.msg-row-contained')).toBeNull()
+      expect(container.querySelector('.msg-row-ai .ai-body.msg-row-contained')).not.toBeNull()
     })
   })
 
@@ -135,6 +138,25 @@ describe('SessionDetail smoke', () => {
     await waitFor(() => {
       expect(container.querySelectorAll('.msg-row').length).toBe(3)
     })
+  })
+
+  test('含 mermaid 的 contained 区域通过 CSS 关闭 content-visibility', async () => {
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId: 'tab-smoke-3',
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+    await waitFor(() => {
+      expect(container.querySelector('.msg-row-contained')).not.toBeNull()
+    })
+
+    const contained = container.querySelector('.msg-row-contained') as HTMLElement
+    contained.innerHTML = '<div class="mermaid-block"></div>'
+    const computed = getComputedStyle(contained)
+    expect(computed.contentVisibility).toBe('visible')
+    expect(computed.contain).toBe('none')
   })
 
   test('未知 sessionId 不崩，进入 error 分支或保留骨架', async () => {

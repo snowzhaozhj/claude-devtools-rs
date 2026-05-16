@@ -9,8 +9,8 @@
 #   scripts/run-perf-bench.sh --runs 8              # 每个 bench 跑 8 次取 min（默认 5）
 #
 # 退出码：
-#   0 - 全部 bench 通过 OR 跳过（无 corpus 数据）
-#   1 - 至少一个 bench 超阈值
+#   0 - 全部 bench 通过
+#   1 - 至少一个 bench 超阈值 / 执行失败 / 被跳过
 #   2 - 用法/环境错误（jq 缺失 / baseline JSON 无效）
 #
 # OS 处理：
@@ -18,10 +18,9 @@
 #   - Linux: /usr/bin/time -v，maxRSS 单位 kbytes；若极旧/未修补 time
 #     误把 kbytes 放大成 bytes 量级，脚本只在异常大值时折算。
 #
-# CI 行为：bench 内部 `if !projects_dir.exists() { return }`——CI runner 无
-# ~/.claude/projects 时 bench 立即 ok 但不输出 perf 行，本脚本检测到无
-# perf 数据时标 "skipped"，CI 视为 pass（smoke 校验 binary 能编 / 能跑）。
-# 真实 gate 由 dev 在本地跑（有真实数据），是 PR push 前的硬约束。
+# CI 行为：workflow 设置 `CDT_PERF_USE_FIXTURE=1`，bench 会生成临时
+# Claude projects corpus 后真实测量。若 bench 仍被跳过，本脚本返回 1，避免
+# "无数据但成功" 的虚假 perf gate。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -91,12 +90,6 @@ parse_time_output() {
     }
     os == "Linux" {
       # GNU time -v 输出：键值对，键以空白起首
-      if (match($0, /Elapsed \(wall clock\) time/)) {
-        # 行尾的时间串可能是 m:ss.xx 或 h:mm:ss
-        n = split($0, parts, ":")
-        # 取最后一段的实际时间表达
-        sub(/.*:[ ]*/, "", $0)  # 这种写法不可靠；改用 match
-      }
       if (match($0, /Elapsed.*: */)) {
         t = substr($0, RSTART + RLENGTH)
         gsub(/[ \t]+$/, "", t)
@@ -269,7 +262,7 @@ run_bench() {
   if [[ "$skipped" == "1" ]]; then
     jq -n --arg name "$name" \
       --argjson runs "$RUNS" \
-      '{name: $name, status: "skipped", reason: "bench 内部跳过（~/.claude/projects 无真实 corpus）", runs: $runs}'
+      '{name: $name, status: "skipped", reason: "bench 未产出 perf 数据；本地请确认 ~/.claude/projects 存在，CI 请确认 CDT_PERF_USE_FIXTURE=1", runs: $runs}'
     return
   fi
 
@@ -397,6 +390,7 @@ jq -r '.results[] |
 # 判定 exit code
 HAS_REGRESSION=$(jq '[.results[] | select(.status == "measured") | .regressions | length] | add // 0' "$OUT_REPORT")
 HAS_ERROR=$(jq '[.results[] | select(.status == "error")] | length' "$OUT_REPORT")
+HAS_SKIPPED=$(jq '[.results[] | select(.status == "skipped")] | length' "$OUT_REPORT")
 
 echo ""
 echo "报告路径：$OUT_REPORT"
@@ -405,10 +399,14 @@ if [[ "$HAS_ERROR" -gt 0 ]]; then
   echo "❌ 至少一个 bench 执行失败" >&2
   exit 1
 fi
+if [[ "$HAS_SKIPPED" -gt 0 ]]; then
+  echo "❌ 至少一个 bench 被跳过，perf gate 无有效数据" >&2
+  exit 1
+fi
 if [[ "$HAS_REGRESSION" -gt 0 ]]; then
   echo "❌ 检测到性能回归（共 $HAS_REGRESSION 条）" >&2
   exit 1
 fi
 
-echo "✓ 全部 bench 通过 / 跳过"
+echo "✓ 全部 bench 通过"
 exit 0
