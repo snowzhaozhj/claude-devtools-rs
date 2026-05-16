@@ -17,6 +17,7 @@ use std::sync::Arc;
 use cdt_core::{Project, Session};
 use cdt_parse::parse_entry_at;
 use futures::stream::{FuturesUnordered, StreamExt};
+use tokio::sync::Semaphore;
 
 use crate::error::DiscoverError;
 use crate::fs_provider::{FileSystemProvider, FsKind};
@@ -31,16 +32,24 @@ const SESSION_HEAD_LINES: usize = 20;
 
 /// 顶层 project 目录并发扫描的上限。
 ///
-/// 每个 project 内部的 `extract_session_cwd` 已经走 `join_all` 并发（最多打开
-/// 该 project 全部 session 的 fd），顶层再放大 N 倍会撞 macOS 默认 256 fd 上限。
-/// 取 8：8 × 平均 ~20 session ≈ 160 in-flight，留足余量给系统其他句柄。
+/// 每个 project 内部的 `extract_session_cwd` 已经走 `join_all` 并发——但**不只**
+/// 受顶层 `PROJECT_SCAN_CONCURRENCY` 控制：单 project 内可能有 N 个 session
+/// 同时 in-flight。最终的 fd 上限闸门是 `FILE_READ_CONCURRENCY` Semaphore，顶层
+/// 限速主要为了控制 in-memory 中间结构（`session_stats` vec / `cwd_buckets`）的并发数。
 const PROJECT_SCAN_CONCURRENCY: usize = 8;
+
+/// 共享的文件读取并发上限。所有 `extract_session_cwd` 调用——无论来自哪个
+/// project——在真正调用底层 `read_lines_head` / `read_to_string` 之前必须先持
+/// 一份 permit。这是真正防止"8 project × N session 叠乘超过 macOS 默认 256
+/// fd 上限"的硬闸门。64 在并发收益（远多于 cpu 核数）与系统稳定性之间取折中。
+const FILE_READ_CONCURRENCY: usize = 64;
 
 pub struct ProjectScanner {
     fs: Arc<dyn FileSystemProvider>,
     projects_dir: PathBuf,
     registry: SubprojectRegistry,
     path_resolver: ProjectPathResolver,
+    read_semaphore: Arc<Semaphore>,
 }
 
 impl ProjectScanner {
@@ -52,6 +61,7 @@ impl ProjectScanner {
             projects_dir,
             registry: SubprojectRegistry::new(),
             path_resolver,
+            read_semaphore: Arc::new(Semaphore::new(FILE_READ_CONCURRENCY)),
         }
     }
 
@@ -350,6 +360,10 @@ impl ProjectScanner {
     }
 
     async fn extract_session_cwd(&self, path: &Path) -> Option<String> {
+        // permit 在真正发起 fd-密集型 fs 读之前 acquire——并发顶层 8 project ×
+        // 各自 join_all 的子 future 在这里排队，确保全局 in-flight read 数量
+        // 不超过 `FILE_READ_CONCURRENCY`，否则会撞 macOS 默认 256 fd 软上限。
+        let _permit = self.read_semaphore.acquire().await.ok()?;
         let head = self
             .fs
             .read_lines_head(path, SESSION_HEAD_LINES)
