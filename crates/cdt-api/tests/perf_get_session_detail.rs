@@ -12,7 +12,7 @@
 //! dev-dep；`LocalDataApi` 内部的 tracing event 测试里抓不到）。
 //!
 //! 不进 CI、不算回归——只是定位工具。
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
 use cdt_analyze::{build_chunks_with_subagents, check_messages_ongoing};
@@ -22,9 +22,7 @@ use cdt_discover::{ProjectScanner, local_handle};
 use cdt_parse::parse_file;
 use cdt_ssh::SshConnectionManager;
 
-fn projects_dir() -> PathBuf {
-    cdt_discover::get_projects_base_path()
-}
+mod perf_fixture;
 
 /// 复刻 `LocalDataApi::scan_subagent_candidates` 的扫描逻辑，但不调
 /// `parse_subagent_candidate`——只数文件 + 累加每个 subagent jsonl 的
@@ -87,24 +85,21 @@ async fn scan_and_parse_subagents(
 #[tokio::test]
 #[ignore = "perf bench, requires real ~/.claude/projects/ data"]
 async fn bench_get_session_detail_large_sessions() {
-    let projects = projects_dir();
+    let projects_dir = perf_fixture::resolve_projects_dir();
+    let projects = projects_dir.path();
     if !projects.exists() {
         eprintln!("跳过：{} 不存在", projects.display());
         return;
     }
 
-    let project_id = "-Users-zhaohejie-RustroverProjects-Project-claude-devtools-rs";
+    let project_id = perf_fixture::PERF_PROJECT_ID;
     let project_dir = projects.join(project_id);
     if !project_dir.exists() {
         eprintln!("跳过：{} 不存在", project_dir.display());
         return;
     }
 
-    let samples = [
-        "4cdfdf06-400d-417d-84c6-4b9fefae06a8",
-        "7826d1b8-99d9-48ef-8c64-49fcb65b40da",
-        "46a25772-b57c-43bb-9ca6-f0292f9ca912",
-    ];
+    let samples = perf_fixture::PERF_SESSION_IDS;
 
     // 同时构造一个 LocalDataApi，验证 get_session_detail 实际经过 IPC
     // 裁剪后的 payload 大小（与底层裸跑数据对比，看 OMIT_SUBAGENT_MESSAGES
@@ -113,7 +108,7 @@ async fn bench_get_session_detail_large_sessions() {
     let mut config_mgr = ConfigManager::new(Some(config_dir.path().join("config.json")));
     config_mgr.load().await.expect("config load");
     let api = LocalDataApi::new(
-        ProjectScanner::new(local_handle(), projects.clone()),
+        ProjectScanner::new(local_handle(), projects.to_path_buf()),
         config_mgr,
         NotificationManager::new(None),
         SshConnectionManager::new(),
@@ -124,13 +119,17 @@ async fn bench_get_session_detail_large_sessions() {
         "=== Session detail timings (parse / scan_subagents / build / serialize / total) ==="
     );
 
+    let mut measured_samples = 0;
+    let mut attached_subagents = 0;
     for sid in samples {
         let jsonl = project_dir.join(format!("{sid}.jsonl"));
-        if !jsonl.exists() {
-            eprintln!("[skip] {sid}: jsonl 不存在");
-            continue;
-        }
+        assert!(
+            jsonl.exists(),
+            "perf sample jsonl SHALL exist: {}",
+            jsonl.display()
+        );
 
+        measured_samples += 1;
         let total = Instant::now();
 
         let t_parse = Instant::now();
@@ -151,6 +150,13 @@ async fn bench_get_session_detail_large_sessions() {
         let t_build = Instant::now();
         let _ongoing = check_messages_ongoing(&messages);
         let chunks = build_chunks_with_subagents(&messages, &candidates);
+        attached_subagents += chunks
+            .iter()
+            .filter_map(|chunk| match chunk {
+                cdt_core::Chunk::Ai(ai) => Some(ai.subagents.len()),
+                _ => None,
+            })
+            .sum::<usize>();
         let build_ms = t_build.elapsed().as_millis();
 
         let t_serde = Instant::now();
@@ -224,7 +230,6 @@ async fn bench_get_session_detail_large_sessions() {
 
         // 经过 LocalDataApi::get_session_detail 的真实 IPC 路径——含
         // OMIT_SUBAGENT_MESSAGES 裁剪。对比 raw payload 看减肥效果。
-        let project_id = "-Users-zhaohejie-RustroverProjects-Project-claude-devtools-rs";
         let t_ipc = Instant::now();
         let detail = api
             .get_session_detail(project_id, sid)
@@ -238,6 +243,15 @@ async fn bench_get_session_detail_large_sessions() {
             ipc_ms,
         );
     }
+
+    assert!(
+        measured_samples > 0,
+        "perf bench SHALL measure at least one sample"
+    );
+    assert!(
+        attached_subagents > 0,
+        "perf fixture SHALL attach at least one subagent to an AIChunk"
+    );
 }
 
 #[derive(Default)]
@@ -369,13 +383,14 @@ fn accumulate_user_content(content: &cdt_core::MessageContent, b: &mut PayloadBr
 #[tokio::test]
 #[ignore = "perf bench, requires real ~/.claude/projects/ data"]
 async fn perf_get_tool_output_cache_hit_path() {
-    let projects = projects_dir();
+    let projects_dir = perf_fixture::resolve_projects_dir();
+    let projects = projects_dir.path();
     if !projects.exists() {
         eprintln!("跳过：{} 不存在", projects.display());
         return;
     }
 
-    let project_id = "-Users-zhaohejie-RustroverProjects-Project-claude-devtools-rs";
+    let project_id = perf_fixture::PERF_PROJECT_ID;
     let project_dir = projects.join(project_id);
     if !project_dir.exists() {
         eprintln!("跳过：{} 不存在", project_dir.display());
@@ -383,7 +398,7 @@ async fn perf_get_tool_output_cache_hit_path() {
     }
 
     // 选一个最大 fixture 让 cache 收益最明显
-    let sid = "46a25772-b57c-43bb-9ca6-f0292f9ca912";
+    let sid = perf_fixture::PERF_SESSION_IDS[2];
     let jsonl = project_dir.join(format!("{sid}.jsonl"));
     if !jsonl.exists() {
         eprintln!("跳过：{} 不存在", jsonl.display());
@@ -394,7 +409,7 @@ async fn perf_get_tool_output_cache_hit_path() {
     let mut config_mgr = ConfigManager::new(Some(config_dir.path().join("config.json")));
     config_mgr.load().await.expect("config load");
     let api = LocalDataApi::new(
-        ProjectScanner::new(local_handle(), projects.clone()),
+        ProjectScanner::new(local_handle(), projects.to_path_buf()),
         config_mgr,
         NotificationManager::new(None),
         SshConnectionManager::new(),
