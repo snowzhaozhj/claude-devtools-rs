@@ -567,7 +567,17 @@ pub fn run() {
         let scanner = ProjectScanner::new(fs, projects_dir.clone());
         let ssh_mgr = SshConnectionManager::new();
 
-        let watcher = Arc::new(FileWatcher::new());
+        // 用 `with_paths` 而非 `new()`：让 watcher 与 LocalDataApi.scanner /
+        // parsed_msg_cache 共享同一 projects_dir 解析路径——`FileWatcher::new()`
+        // 走 `dirs::home_dir()`，而 path_decoder 是四级 fallback
+        // (HOME → USERPROFILE → HOMEDRIVE+HOMEPATH → dirs)。Windows
+        // `HOMEDRIVE+HOMEPATH` 场景下两条解析链可能给出不同 PathBuf，导致 watcher
+        // 监听目录 A 但 API cache key 用目录 B，invalidate 永远 miss（codex 二轮
+        // 二审找到的 bug）。
+        let watcher = Arc::new(FileWatcher::with_paths(
+            projects_dir.clone(),
+            path_decoder::get_todos_base_path(),
+        ));
         // phase 3 image asset cache：用 OS 标准 cache 目录 + app 子目录。
         // dirs::cache_dir() 同步且跨平台，无需 Tauri app handle。
         let image_cache_dir = dirs::cache_dir()
