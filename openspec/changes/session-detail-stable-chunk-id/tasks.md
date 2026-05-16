@@ -31,7 +31,7 @@
 ## 5. OpenSpec 与发布尾段
 
 - [x] 5.1 运行 `openspec validate session-detail-stable-chunk-id --strict`
-- [ ] 5.2 push 分支 + 开 PR
+- [x] 5.2 push 分支 + 开 PR
 - [ ] 5.3 wait-ci 全绿
 - [ ] 5.4 codex 二审通过（如发现 bug：修 → push → 回到 5.3 重跑）
 - [ ] 5.5 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
