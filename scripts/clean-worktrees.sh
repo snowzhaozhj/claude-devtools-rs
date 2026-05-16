@@ -3,16 +3,19 @@
 # 检查 PR 状态 + uncommitted/unpushed，列出可安全删除的候选。
 #
 # 用法：
-#   bash scripts/clean-worktrees.sh           # dry-run（默认）
-#   bash scripts/clean-worktrees.sh --apply   # 真删 worktree + 本地分支
+#   bash scripts/clean-worktrees.sh                  # dry-run（默认）
+#   bash scripts/clean-worktrees.sh --apply          # 真删 worktree + 本地分支
+#   bash scripts/clean-worktrees.sh --list-removable # 仅输出可删 worktree 路径（一行一个，供 clean-all.sh 调用）
 
 set -euo pipefail
 
 APPLY=false
+LIST_ONLY=false
 case "${1:-}" in
   --apply) APPLY=true ;;
+  --list-removable) LIST_ONLY=true ;;
   -h|--help)
-    sed -n '2,9p' "$0"
+    sed -n '2,10p' "$0"
     exit 0
     ;;
   '') ;;
@@ -112,6 +115,15 @@ print(d[0]["state"].lower() if d else "none")' 2>/dev/null || echo "unknown")
     active+=("$name|$size_h|PR=$pr_state uncommitted=$uncommitted unpushed=$unpushed")
   fi
 done
+
+# --list-removable: 仅输出可删 worktree 路径，供脚本编排使用
+if [[ "$LIST_ONLY" == "true" ]]; then
+  for entry in "${safe_remove[@]}"; do
+    IFS='|' read -r wt _ _ _ _ <<< "$entry"
+    echo "$wt"
+  done
+  exit 0
+fi
 
 # 报告
 if [[ ${#safe_remove[@]} -gt 0 ]]; then

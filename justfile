@@ -132,6 +132,14 @@ clean-worktrees:
 clean-worktrees-apply:
     bash scripts/clean-worktrees.sh --apply
 
+# 一键清理：merged worktree + 主仓 cargo target + 活跃 worktree 里的 cargo target（dry-run）
+clean-all:
+    bash scripts/clean-all.sh
+
+# 一键真删（merged worktree + 所有 cargo target）；下次 cargo/tauri 命令需重编译
+clean-all-apply:
+    bash scripts/clean-all.sh --apply
+
 # ──────── Background 任务分派 ────────
 #
 # 详见 .claude/rules/bg-task-dispatch.md（拆分判断框架 + bg vs subagent 选择 + 6 个踩坑）
