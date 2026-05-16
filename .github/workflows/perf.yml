@@ -64,12 +64,12 @@ jobs:
           cp crates/cdt-api/tests/perf_fixture.rs target/perf-base/crates/cdt-api/tests/perf_fixture.rs
           cp crates/cdt-api/tests/perf_cold_scan.rs target/perf-base/crates/cdt-api/tests/perf_cold_scan.rs
           cp crates/cdt-api/tests/perf_get_session_detail.rs target/perf-base/crates/cdt-api/tests/perf_get_session_detail.rs
-          (cd target/perf-base && CDT_PERF_USE_FIXTURE=1 bash scripts/run-perf-bench.sh --runs 3 --out ../perf-report-base.json)
+          (cd target/perf-base && CDT_PERF_USE_FIXTURE=1 bash scripts/run-perf-bench.sh --runs 5 --out ../perf-report-base.json)
       - name: 跑 PR perf bench
         id: bench
         run: |
           set +e
-          bash scripts/run-perf-bench.sh --runs 3 --out target/perf-report.json
+          bash scripts/run-perf-bench.sh --runs 5 --out target/perf-report.json
           ec=$?
           set -e
           echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
@@ -114,19 +114,25 @@ jobs:
               if (actual == null || base == null || base === 0) return null;
               return Math.round(((actual - base) / base) * 1000) / 10;
             };
-            const fmtMainDelta = (actual, base, lowerIsBetter = true) => {
-              const delta = pctDelta(actual, base);
-              if (delta == null) return '无 main 对比';
-              const abs = Math.abs(delta);
-              if (delta === 0) return '与 main 持平';
-              if (lowerIsBetter) return delta < 0 ? `比 main 快/少 ${abs}%` : `比 main 慢/多 ${abs}%`;
-              return delta < 0 ? `比 main 低 ${abs}%` : `比 main 高 ${abs}%`;
+            const signed = (n, unit = '') => `${n > 0 ? '+' : ''}${n}${unit}`;
+            const fmtCompare = (actual, base, unit, noiseAbs, lowerIsBetter = true) => {
+              if (actual == null) return '—';
+              if (base == null) return `${actual}${unit}<br/>无 main 对比`;
+              const absDelta = Math.round((actual - base) * 10) / 10;
+              const percent = pctDelta(actual, base);
+              const inNoise = Math.abs(absDelta) <= noiseAbs;
+              const direction = inNoise ? '噪声内' : lowerIsBetter
+                ? (absDelta < 0 ? '更好' : '更差')
+                : (absDelta < 0 ? '更低' : '更高');
+              return `${base}${unit} → ${actual}${unit}<br/>Δ ${signed(absDelta, unit)} (${signed(percent, '%')}) · ${direction}`;
             };
-            const fmtMs = (m, baseMetric) => m ? `${m.actual} ms<br/>${fmtMainDelta(m.actual, baseMetric?.actual)}` : '—';
-            const fmtRatio = (m, baseMetric) => m ? `${m.actual}<br/>${fmtMainDelta(m.actual, baseMetric?.actual, false)}` : '—';
+            const fmtMs = (m, baseMetric) => m ? fmtCompare(m.actual, baseMetric?.actual, ' ms', 20) : '—';
+            const fmtRatio = (m, baseMetric) => m ? fmtCompare(m.actual, baseMetric?.actual, '', 0.1, false) : '—';
             const fmtRss = (m, baseMetric) => {
               if (!m || m.actual == null) return '—';
-              return `${(m.actual / 1024).toFixed(1)} MB<br/>${fmtMainDelta(m.actual, baseMetric?.actual)}`;
+              const actualMb = Math.round((m.actual / 1024) * 10) / 10;
+              const baseMb = baseMetric?.actual == null ? null : Math.round((baseMetric.actual / 1024) * 10) / 10;
+              return fmtCompare(actualMb, baseMb, ' MB', 2);
             };
             const fmtDetailCell = (m, unit = '', lowerIsBetter = true) => {
               if (m == null) return '—';
@@ -155,7 +161,7 @@ jobs:
 
             let body = `${MARKER}\n## 性能基准报告\n\n`;
             body += `**结论：${verdict}** — ${measuredCount}/${results.length} 项已实测，${failed.length} 项失败 · 重复次数 \`${report.runs}\` · 系统 \`${report.os}\` · 脚本退出码 \`${exitCode}\`\n\n`;
-            body += `> CI 使用 \`CDT_PERF_USE_FIXTURE=1\` 生成临时 Claude projects corpus。摘要里的百分比是本 PR 相对 main 分支同一 fixture 实测的变化；折叠详情里的“预算线”来自 \`tests/perf-baseline.json\`，只用于 gate。\n\n`;
+            body += `> CI 使用 \`CDT_PERF_USE_FIXTURE=1\` 生成临时 Claude projects corpus，并在同一 job 内分别测 main 和本 PR。摘要表显示 \`main → PR\` 的绝对值、绝对差值和百分比；wall/user 小于 20ms、RSS 小于 2MB、CPU/耗时小于 0.1 的变化标为“噪声内”。折叠详情里的“预算线”来自 \`tests/perf-baseline.json\`，只用于 gate。\n\n`;
 
             if (failed.length) {
               body += `### 需要处理\n`;              for (const r of failed) {
@@ -171,8 +177,7 @@ jobs:
             }
 
             body += `### 摘要\n\n`;
-            body += `| 基准项 | 结论 | 实际耗时（vs main） | CPU 消耗（vs main） | 峰值内存（vs main） | CPU/耗时（vs main） | 关键业务信号 |\n`;
-            body += `|---|---:|---:|---:|---:|---:|---|\n`;
+            body += `| 基准项 | 结论 | 实际耗时 main → PR | CPU 消耗 main → PR | 峰值内存 main → PR | CPU/耗时 main → PR | 关键业务信号 |\n`;            body += `|---|---:|---:|---:|---:|---:|---|\n`;
             for (const r of results) {
               if (r.status !== 'measured') {
                 body += `| \`${r.name}\` | ${statusLabel(r)} | — | — | — | — | ${r.reason || r.error || '—'} |\n`;
