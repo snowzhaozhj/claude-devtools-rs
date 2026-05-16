@@ -158,12 +158,18 @@ impl FileWatcher {
 
         if components.len() == 1 && !deleted && path.is_dir() {
             let project_id = components[0].as_os_str().to_string_lossy().into_owned();
-            let project_list_changed = self.mark_project_seen(&project_id);
+            // 顶层 dir-create 事件硬编码 `project_list_changed=true` 但**不**调
+            // `mark_project_seen` —— 首次 mark 由紧随而来的第一条 jsonl 事件
+            // 独占消耗，使该 jsonl 事件仍能 emit `project_list_changed=true`。
+            // 否则 dir-create 触发的 scan 在空目录下被 `project-discovery` 跳过，
+            // 后续 jsonl 又降级为 `false`，前端永不重扫。详见 spec
+            // `file-watching::Watch project directory additions` 的
+            // "dir-create followed by first jsonl" Scenario。
             return Some(FileChangeEvent {
                 project_id,
                 session_id: String::new(),
                 deleted: false,
-                project_list_changed,
+                project_list_changed: true,
             });
         }
 
@@ -554,6 +560,80 @@ mod tests {
         assert_eq!(event.session_id, "");
         assert!(!event.deleted);
         assert!(event.project_list_changed);
+
+        // dir-create 分支 MUST NOT 把 project_id 写入 known_projects——
+        // 首次 mark 留给紧随的第一条 jsonl 事件独占消耗。
+        let known = watcher.known_projects.lock().unwrap();
+        assert!(
+            !known.contains(&project_dir),
+            "dir-create MUST NOT call mark_project_seen"
+        );
+    }
+
+    /// dir-create + 紧随的 first-jsonl 组合：两次 emit 都 `project_list_changed=true`。
+    ///
+    /// 验证 spec `file-watching::Watch project directory additions` 的
+    /// "dir-create followed by first jsonl" Scenario。bug fix 前 dir-create
+    /// 调 `mark_project_seen` 消耗了首次标记，导致 jsonl 事件降级为 `false`，
+    /// 前端 `Sidebar.svelte` handler 不再触发 `loadProjects(true)`，sidebar 永不刷新。
+    #[test]
+    fn parse_project_event_dir_create_does_not_consume_mark() {
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let project_dir = projects.join("proj-fresh");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let dir_event = watcher
+            .parse_project_event(&project_dir, false)
+            .expect("dir-create should emit");
+        assert_eq!(dir_event.project_id, "proj-fresh");
+        assert_eq!(dir_event.session_id, "");
+        assert!(
+            dir_event.project_list_changed,
+            "dir-create SHALL emit project_list_changed=true"
+        );
+
+        let jsonl_path = project_dir.join("sess-first.jsonl");
+        let jsonl_event = watcher
+            .parse_project_event(&jsonl_path, false)
+            .expect("first jsonl should emit");
+        assert_eq!(jsonl_event.project_id, "proj-fresh");
+        assert_eq!(jsonl_event.session_id, "sess-first");
+        assert!(
+            jsonl_event.project_list_changed,
+            "first jsonl SHALL emit project_list_changed=true \
+             (dir-create must not have consumed mark_project_seen)"
+        );
+
+        // 此刻 known_projects 才包含该 project（jsonl 分支独占首次 insert）
+        let known = watcher.known_projects.lock().unwrap();
+        assert!(
+            known.contains(&project_dir),
+            "first jsonl SHALL claim mark_project_seen"
+        );
+    }
+
+    /// dir-only 场景：dir-create 后永不写 jsonl，`known_projects` 保持不含该 project。
+    ///
+    /// 这是上一个测试的补充——验证 dir-create 不写 `known_projects` 是无条件成立的，
+    /// 不依赖紧随 jsonl 的存在。这样未来该 project 第一次出现 jsonl 时仍能
+    /// emit `project_list_changed=true`。
+    #[test]
+    fn parse_project_event_dir_create_does_not_write_known_projects() {
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let project_dir = projects.join("proj-never-written");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let event = watcher
+            .parse_project_event(&project_dir, false)
+            .expect("dir-create should emit");
+        assert!(event.project_list_changed);
+
+        let known = watcher.known_projects.lock().unwrap();
+        assert!(
+            !known.contains(&project_dir),
+            "dir-only path MUST NOT pre-mark project_id; first jsonl event \
+             retains the right to emit project_list_changed=true"
+        );
     }
 
     #[test]

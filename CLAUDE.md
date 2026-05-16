@@ -225,3 +225,4 @@ bench 入口：
 3. 性能 / 卡顿排查：用"性能回归监测"段的入口，**先看数据再定方向**
 4. 提交前跑 `just preflight` 把 fmt / lint / test / spec-validate 一把梭
 5. **默认每个 PR push 后**都调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑 codex 异构二审。豁免：bump version / 纯 docs / typo / CI 配置微调（跳过时 PR 描述写明理由）。`/code-review` 不再常规跑，仅在想留多 agent 审计痕迹时手动调。判断规则与 prompt 模板见 `.claude/rules/codex-usage.md`。**codex CR 可能多轮**：design 找到 bug → 修 → implementation codex CR 又找到 → 修 → 修法验证 codex CR 还能找到（PR #58 跑了 3 轮）；每轮都用 `SendMessage` 接续同一 agentId 复用 context，不要起新 agent 重头读
+6. **PR push 后 SHALL `/wait-ci` 直到全绿**——`scripts/check-openspec-archives.sh` 等 CI-only check 不会被本地 `just preflight` 拦下（典型：opsx change 漏 archive、release lockfile 没同步）。CI 红了 SHALL 自己 `gh run view --log-failed` 定位 + 修 + 再 push，不要宣称"完成"就走人。完整发布尾段（push → wait-ci → codex → archive）流水线见 `.claude/rules/opsx-apply-cadence.md` "发布尾段"段
