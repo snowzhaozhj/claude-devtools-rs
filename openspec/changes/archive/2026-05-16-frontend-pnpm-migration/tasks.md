@@ -43,6 +43,6 @@
 ## 7. 发布
 
 - [x] 7.1 push 分支 + 开 PR
-- [ ] 7.2 wait-ci 全绿
-- [ ] 7.3 codex 二审通过（如发现 bug：修 → push → 回到 7.2 重跑；可循环 M 次）
-- [ ] 7.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
+- [x] 7.2 wait-ci 全绿
+- [x] 7.3 codex 二审通过（如发现 bug：修 → push → 回到 7.2 重跑；可循环 M 次）
+- [x] 7.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
