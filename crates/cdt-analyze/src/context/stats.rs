@@ -166,6 +166,7 @@ mod tests {
 
     fn empty_ai() -> AIChunk {
         AIChunk {
+            chunk_id: "ai:a1:0".into(),
             timestamp: ts(),
             duration_ms: None,
             responses: Vec::<AssistantResponse>::new(),
@@ -218,6 +219,7 @@ mod tests {
             teammate_spawn: None,
         });
         let user = UserChunk {
+            chunk_id: "u1".into(),
             uuid: "u1".into(),
             timestamp: ts(),
             duration_ms: None,

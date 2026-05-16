@@ -71,6 +71,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
     let mut pending_slashes: Vec<SlashCommand> = Vec::new();
     let mut pending_teammates: Vec<TeammateMessage> = Vec::new();
     let mut used_send_message_ids: HashSet<String> = HashSet::new();
+    let mut ai_chunk_ordinals: HashMap<String, usize> = HashMap::new();
 
     chunk_loop(
         messages,
@@ -80,6 +81,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
         &mut pending_slashes,
         &mut pending_teammates,
         &mut used_send_message_ids,
+        &mut ai_chunk_ordinals,
         &follow_ups,
     );
 
@@ -90,6 +92,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
         &mut pending_slashes,
         &mut pending_teammates,
         &mut used_send_message_ids,
+        &mut ai_chunk_ordinals,
     );
     drain_trailing_teammates(&mut out, &mut pending_teammates, &mut used_send_message_ids);
     out
@@ -138,6 +141,7 @@ fn chunk_loop(
     pending_slashes: &mut Vec<SlashCommand>,
     pending_teammates: &mut Vec<TeammateMessage>,
     used_send_message_ids: &mut HashSet<String>,
+    ai_chunk_ordinals: &mut HashMap<String, usize>,
     follow_ups: &HashMap<String, String>,
 ) {
     for msg in messages {
@@ -165,8 +169,10 @@ fn chunk_loop(
                     pending_slashes,
                     pending_teammates,
                     used_send_message_ids,
+                    ai_chunk_ordinals,
                 );
                 out.push(Chunk::Compact(CompactChunk {
+                    chunk_id: msg.uuid.clone(),
                     uuid: msg.uuid.clone(),
                     timestamp: msg.timestamp,
                     duration_ms: None,
@@ -214,8 +220,10 @@ fn chunk_loop(
                         pending_slashes,
                         pending_teammates,
                         used_send_message_ids,
+                        ai_chunk_ordinals,
                     );
                     out.push(Chunk::User(UserChunk {
+                        chunk_id: msg.uuid.clone(),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -233,8 +241,10 @@ fn chunk_loop(
                         pending_slashes,
                         pending_teammates,
                         used_send_message_ids,
+                        ai_chunk_ordinals,
                     );
                     out.push(Chunk::System(SystemChunk {
+                        chunk_id: msg.uuid.clone(),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -255,12 +265,14 @@ fn chunk_loop(
                         pending_slashes,
                         pending_teammates,
                         used_send_message_ids,
+                        ai_chunk_ordinals,
                     );
                     // 普通用户输入会"打断" slash → AIChunk 的紧邻关系：
                     // 对齐原版 extractPrecedingSlashInfo 只看紧邻前一个 UserGroup 的语义，
                     // 未被 AIChunk 消费的 slash 在此抛弃，不会跨过这条 user 挂到后续 AI。
                     pending_slashes.clear();
                     out.push(Chunk::User(UserChunk {
+                        chunk_id: msg.uuid.clone(),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -280,6 +292,7 @@ fn chunk_loop(
                     pending_slashes,
                     pending_teammates,
                     used_send_message_ids,
+                    ai_chunk_ordinals,
                 );
                 append_interruption_to_last_ai(out, msg);
             }
@@ -473,6 +486,7 @@ pub fn build_chunks_with_subagents(
     let mut pending_slashes: Vec<SlashCommand> = Vec::new();
     let mut pending_teammates: Vec<TeammateMessage> = Vec::new();
     let mut used_send_message_ids: HashSet<String> = HashSet::new();
+    let mut ai_chunk_ordinals: HashMap<String, usize> = HashMap::new();
 
     chunk_loop(
         messages,
@@ -482,6 +496,7 @@ pub fn build_chunks_with_subagents(
         &mut pending_slashes,
         &mut pending_teammates,
         &mut used_send_message_ids,
+        &mut ai_chunk_ordinals,
         &follow_ups,
     );
 
@@ -492,6 +507,7 @@ pub fn build_chunks_with_subagents(
         &mut pending_slashes,
         &mut pending_teammates,
         &mut used_send_message_ids,
+        &mut ai_chunk_ordinals,
     );
     drain_trailing_teammates(&mut out, &mut pending_teammates, &mut used_send_message_ids);
 
@@ -555,6 +571,19 @@ fn attach_subagents_to_chunks(
     }
 }
 
+fn next_ai_chunk_id(
+    responses: &[AssistantResponse],
+    ordinals: &mut HashMap<String, usize>,
+) -> String {
+    let base = responses
+        .first()
+        .map_or_else(|| "empty".to_owned(), |response| response.uuid.clone());
+    let ordinal = ordinals.entry(base.clone()).or_default();
+    let chunk_id = format!("ai:{base}:{ordinal}");
+    *ordinal += 1;
+    chunk_id
+}
+
 fn flush_buffer(
     buffer: &mut Vec<AssistantResponse>,
     out: &mut Vec<Chunk>,
@@ -562,6 +591,7 @@ fn flush_buffer(
     pending_slashes: &mut Vec<SlashCommand>,
     pending_teammates: &mut Vec<TeammateMessage>,
     used_send_message_ids: &mut HashSet<String>,
+    ai_chunk_ordinals: &mut HashMap<String, usize>,
 ) {
     if buffer.is_empty() {
         // buffer 空但 pending teammate 非空（极少见）：保留 pending 给下一轮 flush
@@ -569,6 +599,7 @@ fn flush_buffer(
         return;
     }
     let responses = std::mem::take(buffer);
+    let chunk_id = next_ai_chunk_id(&responses, ai_chunk_ordinals);
     let metrics = aggregate_metrics(&responses);
     let semantic_steps = extract_semantic_steps(&responses);
     let timestamp = responses.first().map(|r| r.timestamp).unwrap_or_default();
@@ -586,6 +617,7 @@ fn flush_buffer(
     }
     let slash_commands = std::mem::take(pending_slashes);
     let mut new_chunk = AIChunk {
+        chunk_id,
         timestamp,
         duration_ms,
         responses,
@@ -866,6 +898,45 @@ mod tests {
             panic!("expected AIChunk");
         };
         assert_eq!(ai.responses.len(), 3);
+    }
+
+    #[test]
+    fn duplicate_assistant_response_uuid_gets_stable_unique_chunk_ids() {
+        let msgs = vec![
+            assistant(
+                "dup",
+                1,
+                &[ContentBlock::Text {
+                    text: "first".into(),
+                }],
+            ),
+            user("u1", 2, "separator"),
+            assistant(
+                "dup",
+                3,
+                &[ContentBlock::Text {
+                    text: "second".into(),
+                }],
+            ),
+        ];
+        let first = build_chunks(&msgs);
+        let second = build_chunks(&msgs);
+        let first_ids: Vec<_> = first
+            .iter()
+            .filter_map(|chunk| match chunk {
+                Chunk::Ai(ai) => Some(ai.chunk_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let second_ids: Vec<_> = second
+            .iter()
+            .filter_map(|chunk| match chunk {
+                Chunk::Ai(ai) => Some(ai.chunk_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(first_ids, vec!["ai:dup:0", "ai:dup:1"]);
+        assert_eq!(second_ids, first_ids);
     }
 
     #[test]

@@ -17,6 +17,7 @@ function makeAIChunk(
 ): AIChunk {
   return {
     kind: 'ai',
+    chunkId: `ai:${uuid}:0`,
     timestamp: '2026-04-26T00:00:00Z',
     durationMs: null,
     responses: [
@@ -225,6 +226,7 @@ describe('buildDisplayItems — task tool 去重与 Agent 工具识别（R3）',
     }
     return {
       kind: 'ai',
+      chunkId: 'ai:r-1:0',
       timestamp: ts,
       durationMs: null,
       responses: [

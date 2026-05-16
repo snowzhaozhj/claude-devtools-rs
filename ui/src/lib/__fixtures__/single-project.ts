@@ -7,6 +7,7 @@ const TS = '2026-04-11T10:00:00Z'
 
 const userChunk: UserChunk = {
   kind: 'user',
+  chunkId: 'u1',
   uuid: 'u1',
   timestamp: TS,
   durationMs: null,
@@ -23,6 +24,7 @@ const userChunk: UserChunk = {
 
 const aiChunk: AIChunk = {
   kind: 'ai',
+  chunkId: 'ai:a1:0',
   timestamp: '2026-04-11T10:00:05Z',
   durationMs: 1500,
   responses: [

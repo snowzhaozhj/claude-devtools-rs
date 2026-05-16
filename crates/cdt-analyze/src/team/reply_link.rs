@@ -70,6 +70,7 @@ mod tests {
 
     fn empty_ai() -> AIChunk {
         AIChunk {
+            chunk_id: "ai:a1:0".into(),
             timestamp: ts(),
             duration_ms: None,
             responses: Vec::<AssistantResponse>::new(),

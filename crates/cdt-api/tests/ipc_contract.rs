@@ -323,6 +323,7 @@ fn project_session_prefs_serializes_camelcase() {
 #[test]
 fn chunk_enum_user_tag_is_user() {
     let chunk = Chunk::User(UserChunk {
+        chunk_id: "u1".into(),
         uuid: "u1".into(),
         timestamp: ts(),
         duration_ms: None,
@@ -331,11 +332,14 @@ fn chunk_enum_user_tag_is_user() {
     });
     let json = serde_json::to_value(&chunk).unwrap();
     assert_eq!(json["kind"], json!("user"), "Chunk::User → kind: user");
+    assert_eq!(json["chunkId"], json!("u1"));
+    assert!(json.get("chunk_id").is_none());
 }
 
 #[test]
 fn chunk_enum_ai_tag_is_ai_not_assistant() {
     let chunk = Chunk::Ai(AIChunk {
+        chunk_id: "ai:a1:0".into(),
         timestamp: ts(),
         duration_ms: None,
         responses: vec![],
@@ -352,11 +356,14 @@ fn chunk_enum_ai_tag_is_ai_not_assistant() {
         json!("ai"),
         "Chunk::Ai → kind: ai（不是 assistant）"
     );
+    assert_eq!(json["chunkId"], json!("ai:a1:0"));
+    assert!(json.get("chunk_id").is_none());
 }
 
 #[test]
 fn chunk_enum_system_and_compact_tags() {
     let s = Chunk::System(SystemChunk {
+        chunk_id: "s1".into(),
         uuid: "s1".into(),
         timestamp: ts(),
         duration_ms: None,
@@ -364,6 +371,7 @@ fn chunk_enum_system_and_compact_tags() {
         metrics: ChunkMetrics::default(),
     });
     let c = Chunk::Compact(CompactChunk {
+        chunk_id: "c1".into(),
         uuid: "c1".into(),
         timestamp: ts(),
         duration_ms: None,
@@ -372,8 +380,14 @@ fn chunk_enum_system_and_compact_tags() {
         token_delta: None,
         phase_number: None,
     });
-    assert_eq!(serde_json::to_value(&s).unwrap()["kind"], json!("system"));
-    assert_eq!(serde_json::to_value(&c).unwrap()["kind"], json!("compact"));
+    let system = serde_json::to_value(&s).unwrap();
+    let compact = serde_json::to_value(&c).unwrap();
+    assert_eq!(system["kind"], json!("system"));
+    assert_eq!(system["chunkId"], json!("s1"));
+    assert!(system.get("chunk_id").is_none());
+    assert_eq!(compact["kind"], json!("compact"));
+    assert_eq!(compact["chunkId"], json!("c1"));
+    assert!(compact.get("chunk_id").is_none());
 }
 
 /// 验 `CompactChunk.tokenDelta` / `phaseNumber` 在 `Some(...)` 时序列化
@@ -382,6 +396,7 @@ fn chunk_enum_system_and_compact_tags() {
 #[test]
 fn compact_chunk_serializes_token_delta_and_phase_number_camelcase() {
     let c = Chunk::Compact(CompactChunk {
+        chunk_id: "c1".into(),
         uuid: "c1".into(),
         timestamp: ts(),
         duration_ms: None,
@@ -410,6 +425,7 @@ fn compact_chunk_serializes_token_delta_and_phase_number_camelcase() {
 #[test]
 fn compact_chunk_omits_optional_derived_fields_when_none() {
     let c = Chunk::Compact(CompactChunk {
+        chunk_id: "c1".into(),
         uuid: "c1".into(),
         timestamp: ts(),
         duration_ms: None,
@@ -432,6 +448,7 @@ fn compact_chunk_omits_optional_derived_fields_when_none() {
 #[test]
 fn ai_chunk_serializes_camelcase_fields() {
     let chunk = AIChunk {
+        chunk_id: "ai:a1:0".into(),
         timestamp: ts(),
         duration_ms: Some(100),
         responses: vec![],
@@ -490,6 +507,7 @@ fn ai_chunk_serializes_camelcase_fields() {
 #[test]
 fn ai_chunk_empty_teammate_messages_omitted() {
     let chunk = AIChunk {
+        chunk_id: "ai:a1:0".into(),
         timestamp: ts(),
         duration_ms: None,
         responses: vec![],
@@ -651,6 +669,7 @@ fn subagent_messages_total_count_in_rollback_path() {
     use cdt_core::{AIChunk, Chunk};
 
     let ai_chunk = Chunk::Ai(AIChunk {
+        chunk_id: "ai:a1:0".into(),
         timestamp: ts(),
         duration_ms: None,
         responses: vec![],

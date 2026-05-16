@@ -25,6 +25,7 @@ fn ts(offset_seconds: i64) -> DateTime<Utc> {
 
 fn user_chunk(uuid: &str, text: &str, offset: i64) -> Chunk {
     Chunk::User(UserChunk {
+        chunk_id: uuid.into(),
         uuid: uuid.into(),
         timestamp: ts(offset),
         duration_ms: None,
@@ -40,6 +41,7 @@ fn ai_chunk(
     tools: Vec<ToolExecution>,
 ) -> Chunk {
     Chunk::Ai(AIChunk {
+        chunk_id: format!("ai:{uuid}:0"),
         timestamp: ts(offset),
         duration_ms: None,
         responses: vec![AssistantResponse {
@@ -62,6 +64,7 @@ fn ai_chunk(
 
 fn compact_chunk(uuid: &str, offset: i64) -> Chunk {
     Chunk::Compact(CompactChunk {
+        chunk_id: uuid.into(),
         uuid: uuid.into(),
         timestamp: ts(offset),
         duration_ms: None,
