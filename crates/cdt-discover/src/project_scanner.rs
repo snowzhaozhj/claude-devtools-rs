@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use cdt_core::{Project, Session};
 use cdt_parse::parse_entry_at;
+use futures::stream::{FuturesUnordered, StreamExt};
 
 use crate::error::DiscoverError;
 use crate::fs_provider::{FileSystemProvider, FsKind};
@@ -27,6 +28,13 @@ use crate::subproject_registry::SubprojectRegistry;
 
 /// 扫描 session 头时读取的最大行数。
 const SESSION_HEAD_LINES: usize = 20;
+
+/// 顶层 project 目录并发扫描的上限。
+///
+/// 每个 project 内部的 `extract_session_cwd` 已经走 `join_all` 并发（最多打开
+/// 该 project 全部 session 的 fd），顶层再放大 N 倍会撞 macOS 默认 256 fd 上限。
+/// 取 8：8 × 平均 ~20 session ≈ 160 in-flight，留足余量给系统其他句柄。
+const PROJECT_SCAN_CONCURRENCY: usize = 8;
 
 pub struct ProjectScanner {
     fs: Arc<dyn FileSystemProvider>,
@@ -75,13 +83,53 @@ impl ProjectScanner {
             .collect();
 
         let mut all_projects = Vec::new();
-        for dir_name in dirs {
-            match self.scan_project_dir(&dir_name).await {
-                Ok(mut projects) => all_projects.append(&mut projects),
-                Err(err) => {
-                    tracing::warn!(dir = %dir_name, error = ?err, "skip unreadable project dir");
+        let mut all_pending: Vec<PendingRegistration> = Vec::new();
+
+        // SSH 模式保持顺序遍历（远端 ssh provider 串行更稳）；本地走并发上限受
+        // `PROJECT_SCAN_CONCURRENCY` 控制的 buffer_unordered。`scan_project_dir`
+        // 本身只读 fs（`&self`），不再 mutate `self.registry`，把待注册条目作为
+        // pending 返回，统一在主 task 里 sequential register 保持 ID 计算确定性。
+        if self.fs.kind() == FsKind::Ssh {
+            for dir_name in dirs {
+                match self.scan_project_dir(&dir_name).await {
+                    Ok((projects, pending)) => {
+                        all_projects.extend(projects);
+                        all_pending.extend(pending);
+                    }
+                    Err(err) => {
+                        tracing::warn!(dir = %dir_name, error = ?err, "skip unreadable project dir");
+                    }
                 }
             }
+        } else {
+            let mut futs = FuturesUnordered::new();
+            let mut iter = dirs.into_iter();
+            for _ in 0..PROJECT_SCAN_CONCURRENCY {
+                if let Some(dir_name) = iter.next() {
+                    futs.push(Self::scan_with_name(self, dir_name));
+                } else {
+                    break;
+                }
+            }
+            while let Some((dir_name, result)) = futs.next().await {
+                match result {
+                    Ok((projects, pending)) => {
+                        all_projects.extend(projects);
+                        all_pending.extend(pending);
+                    }
+                    Err(err) => {
+                        tracing::warn!(dir = %dir_name, error = ?err, "skip unreadable project dir");
+                    }
+                }
+                if let Some(next_dir) = iter.next() {
+                    futs.push(Self::scan_with_name(self, next_dir));
+                }
+            }
+        }
+
+        for entry in all_pending {
+            self.registry
+                .register(&entry.base_dir, &entry.cwd, entry.session_ids);
         }
 
         all_projects.sort_by(|a, b| {
@@ -90,6 +138,17 @@ impl ProjectScanner {
                 .cmp(&a.most_recent_session.unwrap_or(0))
         });
         Ok(all_projects)
+    }
+
+    async fn scan_with_name(
+        &self,
+        dir_name: String,
+    ) -> (
+        String,
+        Result<(Vec<Project>, Vec<PendingRegistration>), DiscoverError>,
+    ) {
+        let result = self.scan_project_dir(&dir_name).await;
+        (dir_name, result)
     }
 
     /// 列出某个 project 的所有 session（带 mtime / size）。
@@ -144,7 +203,10 @@ impl ProjectScanner {
         &self.path_resolver
     }
 
-    async fn scan_project_dir(&mut self, dir_name: &str) -> Result<Vec<Project>, DiscoverError> {
+    async fn scan_project_dir(
+        &self,
+        dir_name: &str,
+    ) -> Result<(Vec<Project>, Vec<PendingRegistration>), DiscoverError> {
         let dir_path = self.projects_dir.join(dir_name);
         let entries = self.fs.read_dir_with_metadata(&dir_path).await?;
         let mut session_stats: Vec<SessionStat> = Vec::new();
@@ -167,7 +229,7 @@ impl ProjectScanner {
             });
         }
         if session_stats.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
 
         session_stats.sort_by_key(|s| std::cmp::Reverse(s.mtime_ms));
@@ -247,6 +309,7 @@ impl ProjectScanner {
         }
 
         let mut projects = Vec::with_capacity(cwd_buckets.len());
+        let mut pending = Vec::new();
         let bucket_count = cwd_buckets.len();
         for (_key, mut bucket) in cwd_buckets {
             // Session id list 已经按 mtime 插入顺序（降序）排好。
@@ -254,7 +317,13 @@ impl ProjectScanner {
             let id = if bucket_count > 1 {
                 let session_set: BTreeSet<String> = sessions.iter().cloned().collect();
                 let owned_ids: Vec<String> = session_set.into_iter().collect();
-                self.registry.register(dir_name, &bucket.cwd, owned_ids)
+                let composite = SubprojectRegistry::compose_id(dir_name, &bucket.cwd);
+                pending.push(PendingRegistration {
+                    base_dir: dir_name.to_string(),
+                    cwd: bucket.cwd.clone(),
+                    session_ids: owned_ids,
+                });
+                composite
             } else {
                 dir_name.to_string()
             };
@@ -277,7 +346,7 @@ impl ProjectScanner {
                 .unwrap_or(0)
                 .cmp(&a.most_recent_session.unwrap_or(0))
         });
-        Ok(projects)
+        Ok((projects, pending))
     }
 
     async fn extract_session_cwd(&self, path: &Path) -> Option<String> {
@@ -367,6 +436,17 @@ struct SessionStat {
     id: String,
     path: PathBuf,
     mtime_ms: i64,
+}
+
+/// 单个 project 扫描产出的待注册 composite subproject 条目。
+///
+/// 由 `scan_project_dir` 收集后返回给 `scan`，最终由 scan 主 task 在收到所有
+/// project 结果后顺序注册——`scan_project_dir` 自身不再 mutate `self.registry`，
+/// 这是把签名从 `&mut self` 改成 `&self` 让顶层 `buffer_unordered` 并发跑的前提。
+struct PendingRegistration {
+    base_dir: String,
+    cwd: PathBuf,
+    session_ids: Vec<String>,
 }
 
 struct CwdBucket {
