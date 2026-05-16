@@ -136,3 +136,16 @@ chore(perf): bump perf_cold_scan baseline 500ms → 600ms
 - **2026-04-29 ~ 05-12** 5 轮 IPC payload 瘦身（OMIT_XXX 模式）
 
 **关键教训**：有文件可读时绝不 spawn 子进程（syscall 比 process spawn 快 1000×）；hot path SHALL cache by signature；并发不限流不如串行。
+
+## Hook 性能（每个 Bash 工具调用串行跑）
+
+预算：cold path（99% 调用 exit 0）单 hook < 60ms / 总和 < 250ms。验证：`just bench-hooks`。
+
+硬约束：
+- matcher 已 gate `tool_name` → hook 内不要重判
+- 99% 路径用 `case "$input" in ...) ;; *) exit 0 ;; esac` 预判（bash 内置 0 fork）
+- JSON 解析用 `jq`（25ms）不用 `python3`（60ms），失败 fallback `sed`
+- 读 stdin 用 `$(</dev/stdin)` 不用 `$(cat)`（省 25ms cat 子进程）
+- 重命令（git / openspec / cargo）在所有快速路径后最后一步才跑
+
+物理下限 ~56ms（bash 3.2 启动 28 + stdin 读 25 + init 3）。再低需装 bash 5.x。

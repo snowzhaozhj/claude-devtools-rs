@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
-# PostToolUse hook: 在编辑/写入 ui/ 下的 .svelte/.ts 文件后跑 svelte-check，
-# 让类型错误当场暴露。
+# PostToolUse hook: 编辑 ui/ 下的 .svelte / .ts 文件后跑 svelte-check 让类型错误当场暴露。
+#
+# 性能预算：99% 命中（非 .svelte / .ts 编辑）case 预判 exit 0，~5ms
 set -euo pipefail
 
-file_path=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))" 2>/dev/null || true)
+input=$(</dev/stdin)
+
+# 快速预判：不含 .svelte 或 .ts 后缀直接放行
+case "$input" in
+  *'.svelte"'*|*'.ts"'*) ;;
+  *) exit 0 ;;
+esac
+
+file_path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null \
+  || printf '%s' "$input" | sed -nE 's/.*"file_path"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1)
 
 if [[ -z "$file_path" ]]; then
   exit 0
