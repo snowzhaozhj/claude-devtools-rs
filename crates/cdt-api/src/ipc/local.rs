@@ -322,6 +322,8 @@ pub struct LocalDataApi {
     /// 单调递增的 scan generation 计数器，用于 `active_scans` 的 race-free
     /// cleanup（详见 `scan_metadata_for_page`）。
     scan_generation: Arc<AtomicU64>,
+    /// Claude root generation，仅在 `general.claudeRootPath` 切换时递增。
+    root_generation: Arc<AtomicU64>,
     /// 后台元数据扫描共享的 `Semaphore`，所有 in-flight scan task 共享一个实例
     /// 以保证全局并发上限为 `METADATA_SCAN_CONCURRENCY=8`。spec
     /// `ipc-data-api/spec.md::Emit session metadata updates` Scenario "后台扫描
@@ -371,6 +373,7 @@ impl LocalDataApi {
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
+            root_generation: Arc::new(AtomicU64::new(0)),
             metadata_scan_semaphore: Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY)),
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
@@ -441,6 +444,7 @@ impl LocalDataApi {
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
+            root_generation: Arc::new(AtomicU64::new(0)),
             metadata_scan_semaphore: Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY)),
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
@@ -488,7 +492,7 @@ impl LocalDataApi {
             }
             active.clear();
         }
-        self.scan_generation.fetch_add(1, Ordering::SeqCst);
+        self.root_generation.fetch_add(1, Ordering::SeqCst);
 
         *self.scanner.lock().await = ProjectScanner::new(local_handle(), projects_dir.clone());
         *self.projects_dir.lock().await = projects_dir;
@@ -540,7 +544,7 @@ impl LocalDataApi {
             return Err(ApiError::validation("pageSize must be > 0"));
         }
 
-        let root_generation = self.scan_generation.load(Ordering::SeqCst);
+        let root_generation = self.root_generation.load(Ordering::SeqCst);
         let scanner = self.scanner.lock().await;
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
@@ -723,6 +727,8 @@ async fn scan_metadata_for_page(
     my_generation: u64,
     metadata_cache: Arc<std::sync::Mutex<MetadataCache>>,
     semaphore: Arc<Semaphore>,
+    root_generation: Arc<AtomicU64>,
+    expected_root_generation: u64,
 ) {
     let _ = dir; // dir 当前由 page_jobs 内的 jsonl_path 携带，保留参数为未来扩展（如懒构造路径）
     // semaphore 由 caller 注入：所有 in-flight scan task 共享同一实例，保证全局
@@ -737,11 +743,15 @@ async fn scan_metadata_for_page(
         let tx = tx.clone();
         let project_id = project_id.clone();
         let cache = metadata_cache.clone();
+        let root_generation = root_generation.clone();
         set.spawn(async move {
             let Ok(_permit) = permit_sem.acquire_owned().await else {
                 return;
             };
             let meta = extract_session_metadata_cached(&cache, &jsonl_path).await;
+            if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+                return;
+            }
             let _ = tx.send(SessionMetadataUpdate {
                 project_id,
                 session_id,
@@ -837,7 +847,7 @@ impl DataApi for LocalDataApi {
         let (page, next_cursor, total, page_jobs, dir, root_generation) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
-        if !page_jobs.is_empty() && root_generation == self.scan_generation.load(Ordering::SeqCst) {
+        if !page_jobs.is_empty() && root_generation == self.root_generation.load(Ordering::SeqCst) {
             let tx = self.session_metadata_tx.clone();
             let project_id_owned = project_id.to_owned();
             let active_scans = self.active_scans.clone();
@@ -870,6 +880,8 @@ impl DataApi for LocalDataApi {
                     my_generation,
                     self.metadata_cache.clone(),
                     self.metadata_scan_semaphore.clone(),
+                    self.root_generation.clone(),
+                    root_generation,
                 ));
 
                 scans.insert(
