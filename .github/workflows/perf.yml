@@ -18,16 +18,13 @@ permissions:
   pull-requests: write
   issues: write
 
-# CI 上 GH ubuntu runner 无 `~/.claude/projects/` corpus，两个 bench 都会
-# 内部 skip——本 workflow 作为 smoke 校验：
-#   1. perf-baseline.json schema 合法 + script 编译运行无误
-#   2. bench binary 在 release 模式能编 + 能跑
-#   3. JSON 报告生成、PR comment 流程通畅
-# 真实四维 gate 由 dev 在本地跑（`bash scripts/run-perf-bench.sh`），
-# 是 PR push 前的硬约束（详 .claude/rules/perf.md "CI 自动 gate" 段）。
+# CI runner 没有真实 `~/.claude/projects/` corpus，因此 perf tests 通过
+# `CDT_PERF_USE_FIXTURE=1` 生成临时 Claude projects fixture 后真实测量。
+# 若 bench 被跳过，脚本返回失败，避免"无数据但成功"的虚假 perf gate。
 
 env:
   CARGO_TERM_COLOR: always
+  CDT_PERF_USE_FIXTURE: "1"
 
 jobs:
   perf:
@@ -61,10 +58,8 @@ jobs:
           bash scripts/run-perf-bench.sh --runs 3 --out target/perf-report.json
           ec=$?
           set -e
-          # CI smoke 模式：bench 内部 skip（无 corpus）→ exit 0 视为 pass
-          # 真回归（exit 1）也透出，作为信号但不 fail-build——避免 noisy runner 假阳性
           echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
-          if [[ $ec -eq 2 ]]; then exit 2; fi  # 用法/环境错（jq 缺 / baseline 损坏）直接 fail
+          exit "$ec"
       - name: 上传 perf 报告 artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -103,7 +98,7 @@ jobs:
 
             let body = `${MARKER}\n## ⏱ 性能 bench 报告\n\n`;
             body += `- runner OS: \`${report.os}\` · runs: ${report.runs} · script exit: \`${exitCode}\`\n`;
-            body += `- 注：CI runner 无 \`~/.claude/projects/\` corpus，benches 通常 \`skipped\`（smoke 校验）。真实四维 gate 由 dev 本地跑。\n\n`;
+            body += `- 注：CI 使用 \`CDT_PERF_USE_FIXTURE=1\` 生成临时 Claude projects corpus 后真实测量；若出现 \`skipped\` 视为失败。\n\n`;
 
             for (const r of (report.results || [])) {
               body += `### \`${r.name}\` — ${r.status}\n\n`;

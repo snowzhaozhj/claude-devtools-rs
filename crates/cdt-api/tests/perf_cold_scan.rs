@@ -13,26 +13,29 @@ use std::time::Instant;
 use cdt_discover::fs_provider::FileSystemProvider;
 use cdt_discover::{
     LocalFileSystemProvider, LocalGitIdentityResolver, ProjectScanner, WorktreeGrouper,
-    get_projects_base_path,
 };
+
+mod perf_fixture;
 
 // 用 default runtime（Tauri 生产也是 default multi-thread），不强制 worker_threads；
 // 让 bench 数据贴近真实启动场景。
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "依赖本机 ~/.claude/projects 真实数据，作为冷启动性能定位工具"]
 async fn measure_cold_scan() {
-    let dir = get_projects_base_path();
+    let projects_dir = perf_fixture::resolve_projects_dir();
+    let dir = projects_dir.path();
     if !dir.exists() {
         eprintln!("[perf] skip: {} not exists", dir.display());
         return;
     }
     let fs: Arc<dyn FileSystemProvider> = Arc::new(LocalFileSystemProvider::new());
-    let mut scanner = ProjectScanner::new(fs, dir.clone());
+    let mut scanner = ProjectScanner::new(fs, dir.to_path_buf());
 
     let t0 = Instant::now();
     let projects = scanner.scan().await.expect("scan ok");
     let cold_scan = t0.elapsed().as_millis();
     let total_sessions: usize = projects.iter().map(|p| p.sessions.len()).sum();
+    assert!(total_sessions > 0, "perf corpus SHALL contain sessions");
     let project_count = projects.len();
     println!("[perf] cold scan={cold_scan}ms projects={project_count} sessions={total_sessions}");
 
