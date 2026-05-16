@@ -72,6 +72,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
     let mut pending_teammates: Vec<TeammateMessage> = Vec::new();
     let mut used_send_message_ids: HashSet<String> = HashSet::new();
     let mut ai_chunk_ordinals: HashMap<String, usize> = HashMap::new();
+    let mut non_ai_chunk_ordinals: HashMap<String, usize> = HashMap::new();
 
     chunk_loop(
         messages,
@@ -82,6 +83,7 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
         &mut pending_teammates,
         &mut used_send_message_ids,
         &mut ai_chunk_ordinals,
+        &mut non_ai_chunk_ordinals,
         &follow_ups,
     );
 
@@ -142,6 +144,7 @@ fn chunk_loop(
     pending_teammates: &mut Vec<TeammateMessage>,
     used_send_message_ids: &mut HashSet<String>,
     ai_chunk_ordinals: &mut HashMap<String, usize>,
+    non_ai_chunk_ordinals: &mut HashMap<String, usize>,
     follow_ups: &HashMap<String, String>,
 ) {
     for msg in messages {
@@ -172,7 +175,7 @@ fn chunk_loop(
                     ai_chunk_ordinals,
                 );
                 out.push(Chunk::Compact(CompactChunk {
-                    chunk_id: msg.uuid.clone(),
+                    chunk_id: next_non_ai_chunk_id(&msg.uuid, non_ai_chunk_ordinals),
                     uuid: msg.uuid.clone(),
                     timestamp: msg.timestamp,
                     duration_ms: None,
@@ -223,7 +226,7 @@ fn chunk_loop(
                         ai_chunk_ordinals,
                     );
                     out.push(Chunk::User(UserChunk {
-                        chunk_id: msg.uuid.clone(),
+                        chunk_id: next_non_ai_chunk_id(&msg.uuid, non_ai_chunk_ordinals),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -244,7 +247,7 @@ fn chunk_loop(
                         ai_chunk_ordinals,
                     );
                     out.push(Chunk::System(SystemChunk {
-                        chunk_id: msg.uuid.clone(),
+                        chunk_id: next_non_ai_chunk_id(&msg.uuid, non_ai_chunk_ordinals),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -272,7 +275,7 @@ fn chunk_loop(
                     // 未被 AIChunk 消费的 slash 在此抛弃，不会跨过这条 user 挂到后续 AI。
                     pending_slashes.clear();
                     out.push(Chunk::User(UserChunk {
-                        chunk_id: msg.uuid.clone(),
+                        chunk_id: next_non_ai_chunk_id(&msg.uuid, non_ai_chunk_ordinals),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -487,6 +490,7 @@ pub fn build_chunks_with_subagents(
     let mut pending_teammates: Vec<TeammateMessage> = Vec::new();
     let mut used_send_message_ids: HashSet<String> = HashSet::new();
     let mut ai_chunk_ordinals: HashMap<String, usize> = HashMap::new();
+    let mut non_ai_chunk_ordinals: HashMap<String, usize> = HashMap::new();
 
     chunk_loop(
         messages,
@@ -497,6 +501,7 @@ pub fn build_chunks_with_subagents(
         &mut pending_teammates,
         &mut used_send_message_ids,
         &mut ai_chunk_ordinals,
+        &mut non_ai_chunk_ordinals,
         &follow_ups,
     );
 
@@ -600,6 +605,29 @@ fn next_ai_chunk_id(
     let ordinal = ordinals.entry(base.clone()).or_default();
     let chunk_id = format!("ai:{base}:{ordinal}");
     *ordinal += 1;
+    chunk_id
+}
+
+/// 为 `UserChunk` / `SystemChunk` / `CompactChunk` 生成稳定唯一 `chunk_id`。
+///
+/// 首次出现某 `uuid` → 返回裸 `uuid`（保持与历史 `chunk_id` 字节级一致，前端
+/// `expandedItems` 等已缓存状态不失效）；
+/// 后续出现同 `uuid` → 返回 `<uuid>:<n>`（`n` 从 1 起），消歧。
+///
+/// 与 `next_ai_chunk_id` 共同保证 `get_session_detail` 返回内所有 `chunkId`
+/// 唯一——AI chunk 走独立 `ai:` 命名空间，三类非 AI chunk 共享同一 uuid 命名
+/// 空间因此共享同一计数器。
+///
+/// Spec：`openspec/specs/ipc-data-api/spec.md` §`Stable chunk identifiers in
+/// SessionDetail`。
+fn next_non_ai_chunk_id(uuid: &str, ordinals: &mut HashMap<String, usize>) -> String {
+    let count = ordinals.entry(uuid.to_owned()).or_default();
+    let chunk_id = if *count == 0 {
+        uuid.to_owned()
+    } else {
+        format!("{uuid}:{count}")
+    };
+    *count += 1;
     chunk_id
 }
 
@@ -966,6 +994,51 @@ mod tests {
             .collect();
         assert_eq!(first_ids, vec!["ai:dup:0", "ai:dup:1"]);
         assert_eq!(second_ids, first_ids);
+    }
+
+    #[test]
+    fn duplicate_user_uuid_gets_stable_unique_chunk_ids() {
+        // 模拟 `claude --bg` 启动 bg session 时把初始 prompt 以同 uuid
+        // 回放到主 session JSONL 的场景（line 6 vs line 1077 真实命中）。
+        let msgs = vec![
+            user("u-dup", 1, "first input"),
+            assistant("a1", 2, &[ContentBlock::Text { text: "ack".into() }]),
+            user("u-dup", 3, "bg replay"),
+        ];
+        let first = build_chunks(&msgs);
+        let second = build_chunks(&msgs);
+        let user_ids: Vec<_> = first
+            .iter()
+            .filter_map(|chunk| match chunk {
+                Chunk::User(u) => Some(u.chunk_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_ids, vec!["u-dup", "u-dup:1"]);
+        let all_ids: Vec<_> = first.iter().map(chunk_id_of).collect();
+        let uniq: std::collections::HashSet<_> = all_ids.iter().copied().collect();
+        assert_eq!(
+            uniq.len(),
+            all_ids.len(),
+            "all chunk_ids must be unique within one return",
+        );
+        let second_user_ids: Vec<_> = second
+            .iter()
+            .filter_map(|chunk| match chunk {
+                Chunk::User(u) => Some(u.chunk_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(second_user_ids, user_ids);
+    }
+
+    fn chunk_id_of(c: &Chunk) -> &str {
+        match c {
+            Chunk::Ai(x) => &x.chunk_id,
+            Chunk::User(x) => &x.chunk_id,
+            Chunk::System(x) => &x.chunk_id,
+            Chunk::Compact(x) => &x.chunk_id,
+        }
     }
 
     #[test]
