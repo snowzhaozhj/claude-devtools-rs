@@ -4,6 +4,8 @@
   import { applyTheme } from "../lib/theme";
   import { applyFonts } from "../lib/fonts";
   import { setSessionClickBehavior, type SessionClickBehavior } from "../lib/tabStore.svelte";
+  import { setTimeFormat } from "../lib/displayPrefs.svelte";
+  import type { TimeFormat } from "../lib/api";
   import SettingsToggle from "../lib/components/SettingsToggle.svelte";
   import SettingsGroup from "../lib/components/SettingsGroup.svelte";
   import SettingsField from "../lib/components/SettingsField.svelte";
@@ -172,6 +174,26 @@
       checkResult = { status: "error", message: String(e) };
     } finally {
       checkInFlight = false;
+    }
+  }
+
+  async function updateTimeFormat(value: TimeFormat) {
+    if (!config) return;
+    saveError = null;
+    const prevDisplay = config.display ?? {};
+    config = { ...config, display: { ...prevDisplay, timeFormat: value } };
+    setTimeFormat(value);
+    try {
+      await updateConfig("display", { timeFormat: value });
+    } catch (e) {
+      saveError = `保存失败: ${e}`;
+      try {
+        config = await getConfig();
+        const fallback = config.display?.timeFormat ?? "24h";
+        setTimeFormat(fallback);
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -460,6 +482,19 @@
             </SettingsField>
           </SettingsGroup>
         {:else if activeSection === "display"}
+          <SettingsGroup title="时间显示" description="影响会话详情等绝对时间戳的渲染">
+            <SettingsField label="时间格式" description="切换 24 小时制 / 12 小时制（带上午/下午）">
+              {#snippet control()}
+                <select
+                  class="control-select"
+                  onchange={(e) => updateTimeFormat((e.target as HTMLSelectElement).value as TimeFormat)}
+                >
+                  <option value="24h" selected={(config!.display?.timeFormat ?? "24h") === "24h"}>24 小时制</option>
+                  <option value="12h" selected={(config!.display?.timeFormat ?? "24h") === "12h"}>12 小时制</option>
+                </select>
+              {/snippet}
+            </SettingsField>
+          </SettingsGroup>
           <SettingsGroup
             title="界面字体"
             description="留空使用应用默认字体栈，改动立即生效，无需重启"

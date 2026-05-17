@@ -25,6 +25,7 @@
   import { refreshUnreadCount } from "./lib/notificationStore.svelte";
   import { applyTheme } from "./lib/theme";
   import { applyFonts } from "./lib/fonts";
+  import { setTimeFormat } from "./lib/displayPrefs.svelte";
   import { loadAgentConfigs } from "./lib/agentConfigsStore.svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { initFileChangeStore } from "./lib/fileChangeStore.svelte";
@@ -149,7 +150,11 @@
       if (behavior === "replace" || behavior === "new-tab") {
         setSessionClickBehavior(behavior as SessionClickBehavior);
       }
-    } catch { /* 加载失败保持默认浅色 + 默认字体 */ }
+      const tf = config.display?.timeFormat;
+      if (tf === "24h" || tf === "12h") {
+        setTimeFormat(tf);
+      }
+    } catch { /* 加载失败保持默认浅色 + 默认字体 + 24h 时间 */ }
     // 加载 agent configs 供 subagent 彩色 badge 使用
     await loadAgentConfigs();
     // 单例 listen("file-change") —— 路由组件通过 fileChangeStore 注册 handler

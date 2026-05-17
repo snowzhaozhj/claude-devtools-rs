@@ -102,6 +102,7 @@ pub fn default_config() -> AppConfig {
             syntax_highlighting: true,
             font_sans: None,
             font_mono: None,
+            time_format: crate::types::TimeFormat::default(),
         },
         sessions: SessionsConfig {
             pinned_sessions: HashMap::new(),

@@ -153,6 +153,19 @@ fn default_session_click_behavior() -> String {
 // Display
 // =============================================================================
 
+/// 时间格式偏好：`"24h"` 24 小时制（默认），`"12h"` 12 小时制（带上午/下午）。
+///
+/// 详见 `openspec/specs/configuration-management/spec.md` §"Display config exposes
+/// time format preference"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TimeFormat {
+    #[default]
+    #[serde(rename = "24h")]
+    H24,
+    #[serde(rename = "12h")]
+    H12,
+}
+
 /// 展示偏好。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -164,6 +177,9 @@ pub struct DisplayConfig {
     pub font_sans: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_mono: Option<String>,
+    /// 时间格式偏好，默认 `TimeFormat::H24`。旧配置文件缺字段时 serde 走 Default。
+    #[serde(default)]
+    pub time_format: TimeFormat,
 }
 
 // =============================================================================

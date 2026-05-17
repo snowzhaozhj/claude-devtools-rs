@@ -4,7 +4,8 @@
   import { getToolSummary, getToolStatus, getToolDurationMs, isToolPending, cleanDisplayText, parseTaskNotifications, getToolContextTokens, estimateTokens, viewerUsesOutput, shouldPrefetchOnChunkExpand } from "../lib/toolHelpers";
   import { buildDisplayItemsCached, buildSummary } from "../lib/displayItemBuilder";
   import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, LAYERS, CLOCK_SVG, USER_SVG, ALERT_TRIANGLE_SVG } from "../lib/icons";
-  import { formatTokensCompact } from "../lib/formatters";
+  import { formatClock, formatTokensCompact } from "../lib/formatters";
+  import { getTimeFormat } from "../lib/displayPrefs.svelte";
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
@@ -368,9 +369,7 @@
   }
 
   function ftime(ts: string): string {
-    try {
-      return new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
-    } catch { return ""; }
+    return formatClock(ts, getTimeFormat() === "12h");
   }
 
   function fduration(ms: number): string {

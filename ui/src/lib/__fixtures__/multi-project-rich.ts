@@ -400,6 +400,7 @@ export const multiProjectRichFixture: Fixture = {
     display: {
       fontSans: null,
       fontMono: null,
+      timeFormat: '24h',
     },
   },
   notifications: {

@@ -123,6 +123,7 @@ export const singleProjectFixture: Fixture = {
     display: {
       fontSans: null,
       fontMono: null,
+      timeFormat: '24h',
     },
   },
   notifications: {

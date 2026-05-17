@@ -542,12 +542,17 @@ export interface GeneralConfig {
   sessionClickBehavior?: string;
 }
 
+/** 时间格式偏好；详见 `openspec/specs/configuration-management/spec.md`。 */
+export type TimeFormat = "24h" | "12h";
+
 export interface DisplayConfig {
   showTimestamps?: boolean;
   compactMode?: boolean;
   syntaxHighlighting?: boolean;
   fontSans?: string | null;
   fontMono?: string | null;
+  /** "24h" | "12h"，默认 "24h"。旧后端缺字段时前端 fallback "24h"。 */
+  timeFormat?: TimeFormat;
 }
 
 export interface UpdaterConfig {

@@ -1330,6 +1330,68 @@ async fn update_config_general_session_click_behavior_round_trip() {
 }
 
 #[tokio::test]
+async fn update_config_display_time_format_round_trip() {
+    let (api, _tmp) = setup_api().await;
+    // 默认 "24h"
+    assert_eq!(
+        api.get_config().await.unwrap()["display"]["timeFormat"],
+        json!("24h"),
+        "display.timeFormat MUST 默认序列化为 '24h'"
+    );
+    // 改为 "12h" SHALL 持久化
+    api.update_config(&ConfigUpdateRequest {
+        section: "display".into(),
+        data: json!({ "timeFormat": "12h" }),
+    })
+    .await
+    .expect("display.timeFormat='12h' SHALL 接受");
+    assert_eq!(
+        api.get_config().await.unwrap()["display"]["timeFormat"],
+        json!("12h")
+    );
+    // 改回 "24h" 也 SHALL 生效
+    api.update_config(&ConfigUpdateRequest {
+        section: "display".into(),
+        data: json!({ "timeFormat": "24h" }),
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        api.get_config().await.unwrap()["display"]["timeFormat"],
+        json!("24h")
+    );
+    // 非法字符串 SHALL Err 且已存储值不变
+    let err = api
+        .update_config(&ConfigUpdateRequest {
+            section: "display".into(),
+            data: json!({ "timeFormat": "bogus" }),
+        })
+        .await
+        .expect_err("非法 timeFormat SHALL Err");
+    assert!(
+        err.to_string().contains("timeFormat"),
+        "Err message SHALL 提及字段名，实际：{err}"
+    );
+    assert_eq!(
+        api.get_config().await.unwrap()["display"]["timeFormat"],
+        json!("24h"),
+        "拒绝非法值后 timeFormat SHALL 保持 '24h' 不变"
+    );
+    // 非字符串（如 bool）也 SHALL Err
+    let err = api
+        .update_config(&ConfigUpdateRequest {
+            section: "display".into(),
+            data: json!({ "timeFormat": true }),
+        })
+        .await
+        .expect_err("非字符串 timeFormat SHALL Err");
+    assert!(
+        err.to_string().contains("timeFormat"),
+        "Err message SHALL 提及字段名，实际：{err}"
+    );
+}
+
+#[tokio::test]
 async fn update_config_display_accepts_null_to_clear_font_sans() {
     let (api, _tmp) = setup_api().await;
     let req = ConfigUpdateRequest {

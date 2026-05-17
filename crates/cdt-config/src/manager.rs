@@ -402,6 +402,22 @@ impl ConfigManager {
                         candidate.font_mono =
                             normalize_font_family_field(v, "fontMono", FONT_FAMILY_MAX_LEN)?;
                     }
+                    "timeFormat" => {
+                        let Some(s) = v.as_str() else {
+                            return Err(ConfigError::validation(
+                                "display.timeFormat must be a string: \"24h\" or \"12h\"",
+                            ));
+                        };
+                        candidate.time_format = match s {
+                            "24h" => crate::types::TimeFormat::H24,
+                            "12h" => crate::types::TimeFormat::H12,
+                            _ => {
+                                return Err(ConfigError::validation(
+                                    "display.timeFormat must be one of: 24h, 12h",
+                                ));
+                            }
+                        };
+                    }
                     other => {
                         tracing::warn!(key = %other, "unknown display update key ignored");
                     }

@@ -24,6 +24,7 @@ export const emptyFixture: Fixture = {
     display: {
       fontSans: null,
       fontMono: null,
+      timeFormat: '24h',
     },
   },
   notifications: {
