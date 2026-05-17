@@ -6,7 +6,14 @@
 
 - **chrome 三层**：`UnifiedTitleBar`（顶部 44 px，macOS 内部 80 px 让位 traffic light，含 ProjectSwitcher / UpdateStatusPill / RosettaStatusIcon / 通知 / 设置）+ Sidebar（200~500 px 可拖拽）+ TabBar（pane 内独立，仅 tab 列表，**不再**含通知/设置/traffic-light padding）+ Main。
 - **页面**：SessionDetail、SettingsView、NotificationsView、DashboardView（项目卡片网格，替代空状态）。Tab 类型 4 种：session / settings / notifications / memory（后三者单例）。
-- **核心组件**：BaseItem、StatusDot、OutputBlock、SearchBar（Cmd+F）、CommandPalette（Cmd+K）、ContextPanel（Category/Ranked + DirectoryTree）、DiffViewer（LCS 行级 diff）、SessionContextMenu（右键 5 项）、Tool Viewer（Read/Edit/Write/Bash/Default）、UpdatePopover、ProjectSwitcher。
+- **chrome 组件细节**（change `unified-title-bar`）：
+  - `UnifiedTitleBar.svelte` 四 zone flex（platform-padding · left-center · drag-flex · status）
+  - `ProjectSwitcher.svelte`：项目下拉 + grouped worktree 视图
+  - `UpdateStatusPill.svelte`：**5 态机** `idle / available / downloading / downloaded / error` + 环形进度
+  - `UpdatePopover.svelte`：**三按钮**（立即更新 / 稍后提醒 / 跳过此版本）+ release notes + outside-click / Esc 关闭 + **D3b idle race**（idle 态时 popover 自动关）
+  - `RosettaStatusIcon.svelte`：黄三角 icon + tooltip + **Shift-click 永久 dismiss**
+  - TabBar active indicator：用 `box-shadow: inset 0 -2px 0` **不**再 border-bottom 避免与行底 border 重影（D8）
+- **内容组件**：BaseItem、StatusDot、OutputBlock、SearchBar（Cmd+F）、CommandPalette（Cmd+K）、ContextPanel（Category/Ranked + DirectoryTree）、DiffViewer（LCS 行级 diff）、SessionContextMenu（右键 5 项）、DirectoryTree（递归目录树）、Tool Viewer（Read/Edit/Write/Bash/Default）。
 - **图标**：`ui/src/lib/icons.ts` 导出 lucide 风格 SVG path 常量，BaseItem 通过 `svgIcon` prop 渲染。
 
 ## 状态与主题
@@ -16,8 +23,9 @@
 
 ## 数据流（前端侧）
 
-- **session 元数据**：后端 emit `session-metadata-update`，前端 `listen()` 按 sessionId in-place patch（不要替换 SessionSummary 实例引用，会触发整行 DOM 重建）。
-- **通知**：后端 emit `notification-update`，前端 `listen()` 立即刷 badge + TabBar 每 30 秒轮询 unreadCount 兜底。
+- **Context Panel**：后端 `cdt-api` → `cdt-analyze::context::process_session_context_with_phases` → `ContextInjection[]`；CLAUDE.md 来源通过 `cdt-config::read_all_claude_md_files` 文件系统扫描。
+- **session 元数据**：`list_sessions` IPC 返回**骨架** SessionSummary（`title=null` / `messageCount=0` / `isOngoing=false`），后台 `JoinSet + Semaphore(8)` 并发扫描，每条通过 `subscribe_session_metadata()` broadcast → Tauri emit `session-metadata-update` → Sidebar 按 sessionId **in-place patch**（不要替换 SessionSummary 实例引用，会触发整行 DOM 重建）。HTTP 路径走 `list_sessions_sync` 保留同步完整返回。
+- **通知**：后端 `mark_notification_read` 后 `app.emit("notification-update")` 推送；前端 `listen()` 立即刷 badge + TabBar 每 30 秒轮询 unreadCount 兜底。
 - **file-change 节流链**：后端 `cdt-watch::FileWatcher` debounce 100 ms；前端 `ui/src/lib/fileChangeStore::dedupeRefresh` 仅合并 in-flight 期间的并发调用，**不做时间节流**。高频写 JSONL 会每几百 ms re-render——如需降频加 250 ms cooldown 或 trailing debounce。
 
 ## Svelte 5 陷阱（high frequency 全部踩过）

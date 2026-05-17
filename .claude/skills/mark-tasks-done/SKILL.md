@@ -1,20 +1,22 @@
 ---
 name: mark-tasks-done
-description: 批量勾选 `openspec/changes/<name>/tasks.md` 指定 section 范围内的 `- [ ]` → `- [x]`，跳过"下次 port 同步位点 / future notes / 备忘"等非活动节。**仅**用于"补勾被遗漏的批量 checkbox"场景（比如一次性收尾一个早期就完成但忘了勾的 change），不是 `/opsx:apply` 默认节拍的一部分——后者按 `.claude/rules/opsx-apply-cadence.md` 要求"完一项 TaskUpdate 一项"逐个勾。用户显式 `/mark-tasks-done <change> [--sections N-M]` 或"把 port-foo 的任务批量勾上 / 一次性勾完"时触发。
+description: 批量勾选 `openspec/changes/<name>/tasks.md` 指定 section 范围内的 `- [ ]` → `- [x]`，跳过"下次 port 同步位点 / future notes / 备忘"等非活动节。**仅**在用户**显式发起命令**时触发：`/mark-tasks-done <change> [--sections N-M]` 或"把 port-foo 的任务勾上 / 把 port-foo 的任务批量勾上 / 一次性勾完 port-foo"等明确点名 change 的指令。**不是** `/opsx:apply` 默认节拍的一部分——后者按 `.claude/rules/opsx-apply-cadence.md` 要求"完一项 TaskUpdate 一项"逐个勾，模型禁止在 apply 流程中自主调用本 skill。
 disable-model-invocation: true
 ---
 
 # mark-tasks-done
 
-模型不能自主调用——勾选是有副作用的修改动作，且与 opsx-apply-cadence 的"每勾一项 = TaskUpdate 一项"节拍冲突，必须用户明示批量勾才进。
+模型不能自主调用——勾选是有副作用的修改动作，且与 opsx-apply-cadence 的"每勾一项 = TaskUpdate 一项"节拍冲突，必须用户**显式点名 change** 才进。
 
 **典型使用场景**（用户明确这么说时才用）：
+- "把 port-foo 的任务勾上" / "把 port-foo 的任务批量勾上"——显式指定 change
+- "一次性勾完 port-foo" / "/mark-tasks-done port-foo"
 - 早期完成但忘记勾的 change，临 archive 前发现 tasks.md 还是空 checkbox
 - 多人协作时别人完成了某节但没勾，自己补勾
 
 **不适用场景**（用 TaskUpdate / 逐项 Edit 代替）：
-- `/opsx:apply` 推进中正常勾——按节拍走
-- 用户没明示"批量"或"一次性"——单项勾用 Edit 即可
+- `/opsx:apply` 推进中正常勾——按节拍走，模型禁止在 apply 中调本 skill
+- 用户没点名具体 change（只说"勾一下任务"）——单项勾用 Edit 即可，多 change 不确定的让用户先明确
 
 ## 输入
 
