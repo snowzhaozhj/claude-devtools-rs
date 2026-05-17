@@ -111,16 +111,21 @@ describe('createLazyMarkdownObserver.flushAll', () => {
     expect(onRendered).toHaveBeenCalledWith(el)
   })
 
-  test('已标记 data-rendered 的元素不重复 observe，flushAll 时也跳过', () => {
+  test('已标记 data-rendered 的元素不重复渲染，但仍触发 onRendered 清理钩子', () => {
     const root = makePlaceholder()
     const observer = createLazyMarkdownObserver(root)
     const el = makePlaceholder()
     el.dataset.rendered = '1'
     el.innerHTML = '<p>已存在</p>'
+    el.style.minHeight = '220px'
 
-    observer.observe(el, '# new')
+    observer.observe(el, '# new', (rendered) => {
+      rendered.style.minHeight = ''
+    })
 
     expect(lastObserver?.observed.length).toBe(0)
+    expect(el.innerHTML).toBe('<p>已存在</p>')
+    expect(el.style.minHeight).toBe('')
 
     observer.flushAll()
     expect(el.innerHTML).toBe('<p>已存在</p>')

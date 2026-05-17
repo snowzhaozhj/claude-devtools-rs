@@ -103,7 +103,12 @@ export function createLazyMarkdownObserver(
 
   return {
     observe(el, text, onRendered) {
-      if (el.dataset.rendered === "1") return;
+      if (el.dataset.rendered === "1") {
+        if (onRendered) {
+          void Promise.resolve(onRendered(el));
+        }
+        return;
+      }
       pending.set(el, { text, onRendered });
       io.observe(el);
     },
