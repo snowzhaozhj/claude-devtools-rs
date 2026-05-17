@@ -107,6 +107,10 @@ export function extractSlashInfo(content: string): SlashInfo | null {
 /**
  * 清洗 JSONL 原始内容为可显示文本。
  * 逻辑与原版 `sanitizeDisplayContent` 对齐，额外处理 ANSI 转义码。
+ *
+ * 末尾 `stripInvisible` 干掉零宽 / 不可见控制字符（ZWSP / ZWNJ / ZWJ / BOM /
+ * `<!-- -->` HTML 注释）——否则 `<system-reminder>` 等噪声 tag 清洗完只剩零宽
+ * 字符时，调用方仅看 `text.length > 0` 会让 UI 渲染出"空椭圆"气泡。
  */
 export function cleanDisplayText(text: string): string {
   if (!text) return "";
@@ -114,7 +118,7 @@ export function cleanDisplayText(text: string): string {
   // 命令输出 → 直接返回内容
   if (isCommandOutputContent(text)) {
     const output = extractCommandOutput(text);
-    if (output) return stripAnsi(output);
+    if (output) return stripInvisible(stripAnsi(output));
   }
 
   // slash 命令 → 返回 "/name args" 格式
@@ -136,7 +140,31 @@ export function cleanDisplayText(text: string): string {
     .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/gi, "");
   s = s.replace(TASK_OUTPUT_INSTRUCTION_PATTERN, "");
 
-  return stripAnsi(s).trim();
+  return stripInvisible(stripAnsi(s));
+}
+
+/**
+ * 判断输入清洗 HTML 注释 + 不可见控制符 + trim 后是否为空——空则返回 ""，
+ * 否则**原样返回 trim 后的原文**（保留 HTML 注释 + ZWJ / BiDi 控制符）。
+ *
+ * 拆分"判空"与"渲染"——cleanDisplayText 的返回值会被直接传给 attachMarkdown
+ * 渲染 prose；如果在这里 strip HTML 注释，markdown code block 里的合法注释
+ * （如 ```html\n<!-- example -->\n```）会被静默删掉破坏用户内容。同理 ZWJ 不全局删
+ * 否则 emoji 合字 \u{1F468}\u200D\u{1F469}\u200D\u{1F467} 会被掰散。
+ *
+ * 修 codex CR Bug 1（PR #126 r1） + Bug 3（PR #126 r2）。
+ */
+function stripInvisible(s: string): string {
+  // 不可见控制符并集：
+  //   ZWSP \u200B / ZWNJ \u200C / ZWJ \u200D / LRM \u200E / RLM \u200F
+  //   LRE \u202A / RLE \u202B / PDF \u202C / LRO \u202D / RLO \u202E
+  //   WJ  \u2060 / LRI \u2066 / RLI \u2067 / FSI \u2068 / PDI \u2069 / BOM \uFEFF
+  const visibleCheck = s
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g, "")
+    .trim();
+  if (visibleCheck === "") return "";
+  return s.trim();
 }
 
 /**

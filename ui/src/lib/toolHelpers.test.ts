@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { ToolExecution } from './api'
-import { getLanguageFromPath, getToolDurationMs, isToolPending, shouldPrefetchOnChunkExpand, toolErrorText, viewerUsesOutput } from './toolHelpers'
+import { cleanDisplayText, getLanguageFromPath, getToolDurationMs, isToolPending, shouldPrefetchOnChunkExpand, toolErrorText, viewerUsesOutput } from './toolHelpers'
 
 function exec(overrides: Partial<ToolExecution>): ToolExecution {
   return {
@@ -141,3 +141,48 @@ describe('getLanguageFromPath', () => {
     expect(getLanguageFromPath('dockerfile')).toBe('dockerfile')
   })
 })
+
+describe('cleanDisplayText 空内容防空气泡', () => {
+  test('纯噪声 tag → ""', () => {
+    expect(cleanDisplayText('<system-reminder>noise</system-reminder>')).toBe('')
+    expect(cleanDisplayText('<task-notification><task-id>x</task-id></task-notification>')).toBe('')
+  })
+
+  test('零宽 / BiDi 控制符 / BOM 单独存在或夹杂空白 → ""', () => {
+    expect(cleanDisplayText('\u200B')).toBe('')
+    expect(cleanDisplayText('\u200B\u200C\u200D')).toBe('')
+    expect(cleanDisplayText('\uFEFF')).toBe('')
+    expect(cleanDisplayText('  \u2060  ')).toBe('')
+    expect(cleanDisplayText('<system-reminder>x</system-reminder>\u200B ')).toBe('')
+    // BiDi 控制符（LRM/RLM/LRE/RLE/PDF/LRO/RLO/LRI/RLI/FSI/PDI）单独存在视觉等同空
+    expect(cleanDisplayText('\u200E\u200F')).toBe('')
+    expect(cleanDisplayText('\u202A\u202B\u202C\u202D\u202E')).toBe('')
+    expect(cleanDisplayText('\u2066\u2067\u2068\u2069')).toBe('')
+  })
+
+  test('HTML 注释单独存在 → ""，但内容里夹注释保留原文', () => {
+    expect(cleanDisplayText('<!-- placeholder -->')).toBe('')
+    expect(cleanDisplayText(' <!-- a --> \n <!-- b --> ')).toBe('')
+    // 含可见字符时 HTML 注释保留——拆分判空与渲染（修 codex CR Bug 3，PR #126 r2）。
+    // 否则 markdown code block 里 `<!-- example -->` 会被静默删破坏用户内容。
+    expect(cleanDisplayText('hello <!-- side note -->')).toBe('hello <!-- side note -->')
+    expect(cleanDisplayText('```html\n<!-- keep -->\n```')).toBe('```html\n<!-- keep -->\n```')
+  })
+
+  test('正常内容保留（含 ZWJ emoji 合字 / BiDi 嵌入）', () => {
+    expect(cleanDisplayText('hello')).toBe('hello')
+    expect(cleanDisplayText('  text  ')).toBe('text')
+    // 含可见字符的内容整体保留——不再强行全局 strip 不可见控制符，
+    // 否则 emoji ZWJ 合字（如 family \u{1F468}\u200D\u{1F469}\u200D\u{1F467}）会被掰散，
+    // RTL 文本里嵌入的 LRM/RLM 也会改变阅读方向。修 codex CR Bug 1（PR #126 r1）。
+    expect(cleanDisplayText('hi\u200Bworld')).toBe('hi\u200Bworld')
+    expect(cleanDisplayText('\u{1F468}\u200D\u{1F469}\u200D\u{1F467}')).toBe(
+      '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}'
+    )
+    expect(cleanDisplayText('a\u200Eb')).toBe('a\u200Eb')
+  })
+
+  test('空 stdout 命令 → ""', () => {
+    expect(cleanDisplayText('<local-command-stdout></local-command-stdout>')).toBe('')
+    expect(cleanDisplayText('<local-command-stdout>\u200B</local-command-stdout>')).toBe('')
+  })})

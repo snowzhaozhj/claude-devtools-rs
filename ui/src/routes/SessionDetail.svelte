@@ -706,6 +706,7 @@
         {@const interruptions = chunk.semanticSteps.filter((s) => s.kind === "interruption")}
         {@const isLastAi = i === lastAiIndex}
         {@const isLiveTail = isLastAi && detail.isOngoing}
+        {@const lastOutputText = cleanDisplayText(di.lastOutput?.text ?? "")}
         <!--
           对齐原版 AIChatGroup.tsx:234-248 "Get the LAST assistant message's
           usage (represents current context window snapshot)"——Anthropic API
@@ -718,6 +719,16 @@
         {@const headerCacheRead = lastUsage?.cache_read_input_tokens ?? 0}
         {@const headerCacheCreation = lastUsage?.cache_creation_input_tokens ?? 0}
         {@const aiTotalTokens = headerInputTokens + headerOutputTokens + headerCacheRead + headerCacheCreation}
+        <!-- hasAiContent 兜底：token-only chunk（context snapshot 有价值）也要保 header，
+             不能让"无 items + 无 lastOutput + 无 interruption"的 chunk 把 token 数据丢掉。
+             修 codex CR Bug 2（PR #126 r1）。 -->
+        {@const hasAiContent =
+          di.items.length > 0 ||
+          lastOutputText !== "" ||
+          interruptions.length > 0 ||
+          isLiveTail ||
+          aiTotalTokens > 0}
+        {#if hasAiContent}
         <div
           class="msg-row msg-row-ai"
           class:msg-row-anchor-hit={highlightedChunkId === chunk.chunkId}
@@ -911,8 +922,8 @@
                 <!-- 对齐原版 LastOutputDisplay：最后 AI 组在 ongoing 时
                      banner 占 lastOutput 位置，结束后换回真正的内容 -->
                 <OngoingBanner />
-              {:else if di.lastOutput}
-                <div class="prose lazy-md" {@attach attachMarkdown(di.lastOutput.text, "ai")}></div>
+              {:else if lastOutputText}
+                <div class="prose lazy-md" {@attach attachMarkdown(lastOutputText, "ai")}></div>
               {/if}
               {#each interruptions as _interrupt}
                 <div class="interruption-block">
@@ -925,6 +936,7 @@
             </div>
           </div>
         </div>
+        {/if}
 
       <!-- System (对齐原版 SystemChatGroup.tsx：左对齐 + max-w 85% + rounded-2xl rounded-bl-sm 气泡) -->
       {:else if chunk.kind === "system"}
