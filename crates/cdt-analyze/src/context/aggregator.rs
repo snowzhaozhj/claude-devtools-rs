@@ -6,6 +6,11 @@
 //!
 //! 设计决策见 `openspec/changes/port-context-tracking/design.md` §决策 4。
 
+use std::borrow::Cow;
+use std::sync::LazyLock;
+
+use regex::Regex;
+
 use cdt_core::{
     AIChunk, ContextInjection, MessageContent, SemanticStep, TaskCoordinationBreakdown,
     TaskCoordinationInjection, TaskCoordinationKind, ThinkingTextBreakdown, ThinkingTextInjection,
@@ -243,8 +248,7 @@ fn user_chunk_text(user: &UserChunk) -> String {
 /// 噪声标签（含内容）：preview 显示前应剥离，否则截断 80 字符时残缺
 /// 标签（如 `<task-notification><task-id>...`）会原文露给用户。
 ///
-/// 与 `cdt-api::ipc::session_metadata::sanitize_for_title` 列表一致；
-/// teammate-message 由 `is_user_chunk_message` 在源头过滤，这里不重复处理。
+/// 与 `cdt-api::ipc::session_metadata::sanitize_for_title` 列表一致。
 const PREVIEW_NOISE_TAGS: &[&str] = &[
     "system-reminder",
     "local-command-caveat",
@@ -256,19 +260,60 @@ const PREVIEW_NOISE_TAGS: &[&str] = &[
     "local-command-stderr",
 ];
 
+/// sanitize 全清空后 preview 显示的占位符，避免 UI 同框出现
+/// "(空 preview, 大 token)" 矛盾——告诉用户这条 turn 是系统注入而非
+/// 自己的输入。
+const PREVIEW_PLACEHOLDER_SYSTEM_ONLY: &str = "(含系统注入)";
+
+/// 每个噪声标签的完整闭合块 regex；`replace_all` 单趟 O(N) 替代旧
+/// `find + replace_range` 的 O(N²) 循环，长 `<system-reminder>` 注入
+/// 场景下不卡 UI。
+static NOISE_BLOCK_RES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    PREVIEW_NOISE_TAGS
+        .iter()
+        .map(|tag| {
+            Regex::new(&format!(r"<{tag}>[\s\S]*?</{tag}>"))
+                .expect("noise block regex should compile")
+        })
+        .collect()
+});
+
+/// `<teammate-message teammate_id="..." ...>body</teammate-message>` 块。
+///
+/// teammate 块对用户而言已由 `SendMessage` 卡片渲染，preview 露原文标签字面
+/// 是噪声；按"剥离整段（含 body）"处理。原始 `create_user_message_injection`
+/// 的上游（`stats.rs` 直接遍历 `Chunk::User`）并未走
+/// `is_user_chunk_message` gate，所以"normal text + teammate-message 块"
+/// 的混合消息会进到这里，必须自己剥离。
+///
+/// 算法与 `cdt-analyze::team::detection::TEAMMATE_BLOCK_RE` 同源——此处独立
+/// 定义而非跨模块共享，因为 detection 那侧 captures 含 attrs，本处只需 match。
+static TEAMMATE_NOISE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"<teammate-message\s+teammate_id="[^"]+"[^>]*>[\s\S]*?</teammate-message>"#)
+        .expect("teammate noise regex should compile")
+});
+
+/// 未闭合噪声标签兜底：闭合块 regex 替换完后剩下的开 tag 一定是未闭合
+/// （否则会被前两轮匹配掉），从首次匹配处截到末尾。
+static UNCLOSED_NOISE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    let mut alts: Vec<String> = PREVIEW_NOISE_TAGS.iter().map(|t| format!("{t}>")).collect();
+    alts.push(r"teammate-message\s".to_string());
+    let pattern = format!(r"<(?:{})", alts.join("|"));
+    Regex::new(&pattern).expect("unclosed noise regex should compile")
+});
+
 fn sanitize_preview(text: &str) -> String {
-    let mut s = text.to_string();
-    for tag in PREVIEW_NOISE_TAGS {
-        let open = format!("<{tag}>");
-        let close = format!("</{tag}>");
-        while let Some(start) = s.find(&open) {
-            if let Some(rel_end) = s[start..].find(&close) {
-                s.replace_range(start..start + rel_end + close.len(), "");
-            } else {
-                s.truncate(start);
-                break;
-            }
+    let mut s: Cow<'_, str> = Cow::Borrowed(text);
+    for re in NOISE_BLOCK_RES.iter() {
+        if re.is_match(&s) {
+            s = Cow::Owned(re.replace_all(&s, "").into_owned());
         }
+    }
+    if TEAMMATE_NOISE_RE.is_match(&s) {
+        s = Cow::Owned(TEAMMATE_NOISE_RE.replace_all(&s, "").into_owned());
+    }
+    if let Some(m) = UNCLOSED_NOISE_RE.find(&s) {
+        s = Cow::Owned(s[..m.start()].to_string());
     }
     s.trim().to_string()
 }
@@ -276,8 +321,13 @@ fn sanitize_preview(text: &str) -> String {
 /// 从 `UserChunk` 产出 `user-message` injection。
 ///
 /// token 估计走原文（含噪声标签——其字符确实占 Claude 上下文窗口），
-/// 但 `text_preview` 先剥离 `<task-notification>` 等系统标签再截 80 字符，
-/// 避免 UI context 面板显示残缺标签（如 `<task-notification><task-id>...`）。
+/// 但 `text_preview` 先剥离 `<task-notification>` / `<system-reminder>` /
+/// `<teammate-message ...>` 等系统标签再截 80 字符，避免 UI context 面板
+/// 显示残缺标签字面量（如 `<task-notification><task-id>...`）。
+///
+/// sanitize 后为空时（整条消息全是系统注入）显示
+/// [`PREVIEW_PLACEHOLDER_SYSTEM_ONLY`] 占位符，避免 UI 同框出现
+/// "空 preview + 大 token" 矛盾。
 #[must_use]
 pub(super) fn create_user_message_injection(
     user: &UserChunk,
@@ -294,8 +344,14 @@ pub(super) fn create_user_message_injection(
         return None;
     }
     let sanitized = sanitize_preview(&text);
-    let preview: String = sanitized.chars().take(80).collect();
-    let preview = if sanitized.chars().count() > 80 {
+    let preview_source = if sanitized.is_empty() {
+        PREVIEW_PLACEHOLDER_SYSTEM_ONLY
+    } else {
+        sanitized.as_str()
+    };
+    let char_count = preview_source.chars().count();
+    let preview: String = preview_source.chars().take(80).collect();
+    let preview = if char_count > 80 {
         format!("{preview}…")
     } else {
         preview
@@ -516,11 +572,9 @@ mod tests {
         let ContextInjection::UserMessage(x) = inj else {
             panic!("expected UserMessage");
         };
-        assert_eq!(
-            x.text_preview, "",
-            "未闭合的 <task-notification> 应整段剥离: {:?}",
-            x.text_preview
-        );
+        // 未闭合 <task-notification> 整段剥离 → sanitize 空 → 显示占位符
+        // （而非空字符串，避免 UI 显示 "Turn N + 大 token" 而无任何内容线索）
+        assert_eq!(x.text_preview, "(含系统注入)");
     }
 
     #[test]
@@ -544,5 +598,48 @@ mod tests {
             panic!("expected UserMessage");
         };
         assert_eq!(x.text_preview, "tail");
+    }
+
+    #[test]
+    fn preview_strips_teammate_message_block_with_attributes() {
+        let raw = r#"prefix text <teammate-message teammate_id="alice" color="blue" summary="hi">实际正文</teammate-message> suffix"#;
+        let user = user_with_text(raw);
+        let inj = create_user_message_injection(&user, 0, "ai-0").unwrap();
+        let ContextInjection::UserMessage(x) = inj else {
+            panic!("expected UserMessage");
+        };
+        assert_eq!(
+            x.text_preview, "prefix text  suffix",
+            "teammate-message 整块（含 body）应剥离"
+        );
+    }
+
+    #[test]
+    fn preview_uses_placeholder_when_message_is_entirely_system_injection() {
+        let raw = "<system-reminder>".to_string() + &"x".repeat(2000) + "</system-reminder>";
+        let user = user_with_text(&raw);
+        let inj = create_user_message_injection(&user, 0, "ai-0").unwrap();
+        let ContextInjection::UserMessage(x) = inj else {
+            panic!("expected UserMessage");
+        };
+        assert_eq!(
+            x.text_preview, "(含系统注入)",
+            "全噪声消息 preview 应为占位符而非空字符串"
+        );
+        assert!(
+            x.estimated_tokens > 0,
+            "token 估计仍走原文以保留 context 统计"
+        );
+    }
+
+    #[test]
+    fn preview_handles_mixed_noise_kinds_in_one_message() {
+        let raw = r#"<system-reminder>r1</system-reminder>真实输入<task-notification><task-id>t</task-id></task-notification><teammate-message teammate_id="a">tm</teammate-message>尾巴"#;
+        let user = user_with_text(raw);
+        let inj = create_user_message_injection(&user, 0, "ai-0").unwrap();
+        let ContextInjection::UserMessage(x) = inj else {
+            panic!("expected UserMessage");
+        };
+        assert_eq!(x.text_preview, "真实输入尾巴");
     }
 }
