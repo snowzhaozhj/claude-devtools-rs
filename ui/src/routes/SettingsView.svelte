@@ -52,8 +52,11 @@
   let newColor = $state("#e53e3e");
   let addingTrigger = $state(false);
 
-  /** 跟踪 viewport 是否窄屏，用于切 nav 方向 + 同步 aria-orientation */
-  let isNarrowViewport = $state(false);
+  /** 跟踪 viewport 是否窄屏，用于切 nav 方向 + 同步 aria-orientation。
+   *  初值直接读 matchMedia，避免首帧 CSS（已横排）与 ARIA（仍 vertical）错配。 */
+  let isNarrowViewport = $state(
+    typeof window !== "undefined" && window.matchMedia?.("(max-width: 720px)").matches === true,
+  );
 
   const sections: Array<{ id: SectionId; label: string; description: string; icon: string }> = [
     { id: "general", label: "常规", description: "主题、启动行为、数据目录", icon: SLIDERS_HORIZONTAL_SVG },
