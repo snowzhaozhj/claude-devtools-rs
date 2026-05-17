@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ContextPhase } from "../../lib/api";
+  import Dropdown, { type DropdownOption } from "../../lib/components/Dropdown.svelte";
 
   interface Props {
     phases: ContextPhase[];
@@ -9,26 +10,35 @@
 
   let { phases, selected, onChange }: Props = $props();
 
-  // 当 phases.length <= 1 时父组件不应渲染 PhaseSelector；这里再 guard 一次。
   const showSelector = $derived(phases.length > 1);
 
-  function handleChange(e: Event) {
-    const v = (e.target as HTMLSelectElement).value;
+  const options = $derived<DropdownOption[]>([
+    { value: "latest", label: "Latest" },
+    ...phases.map((p) => ({
+      value: String(p.phaseNumber),
+      label: `Phase ${p.phaseNumber}`,
+    })),
+  ]);
+
+  const currentValue = $derived(selected === null ? "latest" : String(selected));
+
+  function handleChange(v: string) {
     onChange(v === "latest" ? null : Number(v));
   }
 </script>
 
 {#if showSelector}
   <div class="ps-row">
-    <label class="ps-label" for="phase-selector">Phase:</label>
-    <select id="phase-selector" class="ps-select" onchange={handleChange}>
-      <option value="latest" selected={selected === null}>Latest</option>
-      {#each phases as p (p.phaseNumber)}
-        <option value={String(p.phaseNumber)} selected={selected === p.phaseNumber}>
-          Phase {p.phaseNumber}
-        </option>
-      {/each}
-    </select>
+    <span class="ps-label">Phase:</span>
+    <div class="ps-control">
+      <Dropdown
+        value={currentValue}
+        {options}
+        onChange={handleChange}
+        ariaLabel="Phase selector"
+        size="sm"
+      />
+    </div>
   </div>
 {/if}
 
@@ -47,22 +57,12 @@
     color: var(--color-text-muted);
   }
 
-  .ps-select {
+  .ps-control {
     flex: 1;
-    background: var(--color-surface-overlay, var(--badge-neutral-bg));
-    color: var(--color-text-secondary);
-    border: 1px solid transparent;
-    border-radius: 5px;
-    padding: 3px 6px;
-    font-size: 11px;
-    font-family: inherit;
-    cursor: pointer;
-    transition: border-color 0.1s;
+    display: flex;
   }
 
-  .ps-select:hover,
-  .ps-select:focus {
-    border-color: var(--color-border, var(--color-border-subtle));
-    outline: none;
+  .ps-control :global(.dd-anchor) {
+    flex: 1;
   }
 </style>

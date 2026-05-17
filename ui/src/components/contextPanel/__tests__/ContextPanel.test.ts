@@ -86,17 +86,19 @@ describe("ContextPanel", () => {
       },
     });
 
-    await fireEvent.change(screen.getByLabelText("Phase:"), { target: { value: "1" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Phase selector" }));
+    await fireEvent.click(screen.getByRole("option", { name: "Phase 1" }));
     expect(screen.getByText("LocalDataApi 的 list_sessions 用 camelCase 还是 snake_case？")).toBeInTheDocument();
     expect(screen.queryByText("ContextPanel.svelte")).not.toBeInTheDocument();
 
-    await fireEvent.change(screen.getByLabelText("Phase:"), { target: { value: "3" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Phase selector" }));
+    await fireEvent.click(screen.getByRole("option", { name: "Phase 3" }));
     expect(screen.getByText("本 phase 无 injection")).toBeInTheDocument();
   });
 
   test("shows phase selector only for multi-phase detail", () => {
     const { rerender } = renderPanel();
-    expect(screen.getByLabelText("Phase:")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Phase selector" })).toBeInTheDocument();
 
     void rerender({
       detail: {
@@ -114,6 +116,6 @@ describe("ContextPanel", () => {
       onNavigateToUserGroup: vi.fn(),
     });
 
-    expect(screen.queryByLabelText("Phase:")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Phase selector" })).not.toBeInTheDocument();
   });
 });

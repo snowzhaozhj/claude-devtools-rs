@@ -49,12 +49,11 @@ test.describe('sidebar 点击会话行为', () => {
       ;(window as unknown as { __cdtTest: { openSettingsTab: () => void } })
         .__cdtTest.openSettingsTab()
     })
-    // 改成 "new-tab"
-    const select = page.locator('select.control-select').filter({
-      has: page.locator('option[value="new-tab"]'),
-    })
-    await expect(select).toBeVisible()
-    await select.selectOption('new-tab')
+    // 改成 "每次开新标签页"
+    const ddAnchor = page.getByRole('button', { name: '点击会话默认行为' })
+    await expect(ddAnchor).toBeVisible()
+    await ddAnchor.click()
+    await page.getByRole('option', { name: '每次开新标签页' }).click()
 
     // 关 Settings tab（点 tab-close 按钮）
     await page
@@ -71,9 +70,7 @@ test.describe('sidebar 点击会话行为', () => {
       ;(window as unknown as { __cdtTest: { openSettingsTab: () => void } })
         .__cdtTest.openSettingsTab()
     })
-    const selectAfter = page.locator('select.control-select').filter({
-      has: page.locator('option[value="new-tab"]'),
-    })
-    await expect(selectAfter).toHaveValue('new-tab')
+    const ddAnchorAfter = page.getByRole('button', { name: '点击会话默认行为' })
+    await expect(ddAnchorAfter).toContainText('每次开新标签页')
   })
 })
