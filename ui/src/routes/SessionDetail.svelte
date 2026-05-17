@@ -53,10 +53,6 @@
     return (el: HTMLElement) => {
       const obs = ensureObserver();
       if (!obs) return;
-      if (el.dataset.rendered === "1") {
-        el.style.minHeight = "";
-        return;
-      }
       // 占位高度估算：进入视口前 min-height 控制 layout 稳定
       el.style.minHeight = `${estimatePlaceholderHeight(text, kind)}px`;
       obs.observe(el, text, async (rendered) => {
