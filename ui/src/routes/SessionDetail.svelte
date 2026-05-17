@@ -1788,18 +1788,31 @@
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
-  /* outline 风格 chip：透明背景 + outline border + 加粗文字。
-     浅色 #15803d 在 surface #f9f9f7 上对比度 ~5.28:1（AA pass）；
-     旧版填充 12% bg 把对比度拉到 ~4.05:1 (codex 二审 bug 2)。 */
+  /* "freed" 标记：dot + bold text 装饰，不依赖 border 做组件边界。
+     codex 二审 bug 2 + 二轮回归：原填充 chip 浅色对比 4.05:1（< AA 4.5）；
+     outline 风格修复后深色 border 仅 2.77:1（< WCAG 1.4.11 non-text 3:1）。
+     dot 与文字均用 var(--color-success) currentColor，浅色 4.76:1（AA pass，
+     按 sRGB），深色 9.58:1，绕开 border 对比度问题，且更符合 product
+     register 的"克制"——VS Code git diff 风的 IDE 标记，而非营销 chip。 */
   .compact-token-freed {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     color: var(--color-success);
     font-weight: 700;
-    padding: 1px 8px;
-    border-radius: 9999px;
-    background: transparent;
-    border: 1.5px solid color-mix(in oklch, var(--color-success) 42%, transparent);
-    font-size: 11.5px;
-    letter-spacing: 0.01em;
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    padding: 0 2px;
+  }
+  .compact-token-freed::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-success) 14%, transparent);
   }
 
   .compact-phase-badge {
