@@ -155,10 +155,16 @@
 <div class="cp-dialog" onkeydown={handleKeyDown}>
   <input
     class="cp-input"
-    type="text"
+    type="search"
     placeholder="搜索项目或会话..."
     bind:this={inputEl}
     bind:value={query}
+    autocomplete="off"
+    autocorrect="off"
+    autocapitalize="off"
+    spellcheck="false"
+    enterkeyhint="search"
+    aria-label="命令面板搜索"
   />
 
   <div class="cp-results">
@@ -274,6 +280,12 @@
 
   .cp-input::placeholder {
     color: var(--color-text-muted);
+  }
+
+  .cp-input::-webkit-search-cancel-button,
+  .cp-input::-webkit-search-decoration {
+    appearance: none;
+    -webkit-appearance: none;
   }
 
   .cp-results {

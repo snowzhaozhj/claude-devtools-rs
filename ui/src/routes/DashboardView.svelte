@@ -78,9 +78,15 @@
     <div class="dash-search-wrap">
       <input
         class="dash-search"
-        type="text"
+        type="search"
         placeholder="搜索项目..."
         bind:value={filterQuery}
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        enterkeyhint="search"
+        aria-label="搜索项目"
       />
       <kbd class="dash-kbd">⌘K</kbd>
     </div>
@@ -140,9 +146,16 @@
     display: flex;
     justify-content: center;
     height: 100%;
-    overflow-y: auto;
+    /* 强制 overflow-y: scroll 永久占用 6px 滚动条位（app.css 全局定义），
+       filter 后内容变短 → 滚动条「消失」→ 可用宽度跳变的抖动彻底消除。
+       配合 scrollbar-gutter: stable both-edges 让新 WebKit 上左右对称居中；
+       老 WebKit 不识别 both-edges 也只是右边占 6px、轻微左偏，不会再抖动。
+       `auto` → `scroll` 是关键修复：scrollbar-gutter 在 Safari < 18.2 部分
+       不生效，scroll 模式才是跨平台彻底解。 */
+    overflow-y: scroll;
     overflow-x: hidden;
     padding: 48px 24px;
+    scrollbar-gutter: stable both-edges;
   }
 
   .dashboard-inner {
@@ -167,17 +180,26 @@
     padding: 12px 16px;
     padding-right: 60px;
     outline: none;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    /* 只 transition border-color：box-shadow 走动画时 blur 会拖尾 0.15s 才消失，
+       且和 grid 重排同时进行视觉上像在"晃"。focus 时直接出 ring，blur 直接收。 */
+    transition: border-color 0.15s;
   }
 
   .dash-search:focus {
     border-color: var(--color-accent-blue);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
-    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent-blue) 15%, transparent);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 18%, transparent);
   }
 
   .dash-search::placeholder {
     color: var(--color-text-muted);
+  }
+
+  /* type=search 在 WebKit 下渲染原生 clear 按钮，与 ⌘K kbd 视觉冲突，隐藏掉。 */
+  .dash-search::-webkit-search-cancel-button,
+  .dash-search::-webkit-search-decoration {
+    appearance: none;
+    -webkit-appearance: none;
   }
 
   .dash-kbd {
