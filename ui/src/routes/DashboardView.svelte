@@ -78,9 +78,15 @@
     <div class="dash-search-wrap">
       <input
         class="dash-search"
-        type="text"
+        type="search"
         placeholder="搜索项目..."
         bind:value={filterQuery}
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        enterkeyhint="search"
+        aria-label="搜索项目"
       />
       <kbd class="dash-kbd">⌘K</kbd>
     </div>
@@ -143,6 +149,11 @@
     overflow-y: auto;
     overflow-x: hidden;
     padding: 48px 24px;
+    /* 滚动条预留 stable 槽位：filter 后内容高度变化时不再瞬时增/减出可用宽度，
+       避免输入框与卡片网格左右晃动。`both-edges` 让左右两侧都预留居中对称；
+       老 WebKit 不识别 both-edges 时回落到只 stable（仍解决晃动，只是轻微偏左）。 */
+    scrollbar-gutter: stable;
+    scrollbar-gutter: stable both-edges;
   }
 
   .dashboard-inner {
@@ -172,12 +183,19 @@
 
   .dash-search:focus {
     border-color: var(--color-accent-blue);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
-    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent-blue) 15%, transparent);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 18%, transparent);
   }
 
   .dash-search::placeholder {
     color: var(--color-text-muted);
+  }
+
+  /* type=search 在 WebKit 下渲染原生 clear 按钮，与 ⌘K kbd 视觉冲突，隐藏掉。 */
+  .dash-search::-webkit-search-cancel-button,
+  .dash-search::-webkit-search-decoration {
+    appearance: none;
+    -webkit-appearance: none;
   }
 
   .dash-kbd {

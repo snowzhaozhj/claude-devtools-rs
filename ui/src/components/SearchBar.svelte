@@ -112,11 +112,17 @@
     <input
       bind:this={inputEl}
       class="search-input"
-      type="text"
+      type="search"
       placeholder="搜索…"
       bind:value={query}
       oninput={onInput}
       onkeydown={onKeydown}
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck="false"
+      enterkeyhint="search"
+      aria-label="会话内搜索"
     />
 
     <span class="search-count">
@@ -186,6 +192,13 @@
 
   .search-input::placeholder {
     color: var(--color-text-muted);
+  }
+
+  /* 隐藏 WebKit 原生 clear 按钮，UI 自带关闭按钮。 */
+  .search-input::-webkit-search-cancel-button,
+  .search-input::-webkit-search-decoration {
+    appearance: none;
+    -webkit-appearance: none;
   }
 
   .search-count {
