@@ -1,7 +1,6 @@
 <!--
-  通用 loading 骨架占位。带 shimmer 横扫 + fade-in 入场动画，对齐原版
-  claude-devtools `.skeleton-shimmer` 与 `.skeleton-card` 视觉模式——
-  避免静态色块给用户"挂起"的感觉。
+  通用 loading 骨架占位。带 shimmer 横扫动画，对齐原版 claude-devtools
+  `.skeleton-shimmer` 视觉模式——避免静态色块给用户"挂起"的感觉。
 
   variant="row" → sidebar/notification 列表条目；"card" → dashboard 项目卡 /
   setting row；"text" → 段落行。shimmer 走 transform GPU 加速；
