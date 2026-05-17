@@ -14,6 +14,10 @@ export interface ProjectData {
 let data: ProjectData | null = $state(null);
 let loading: boolean = $state(false);
 let error: unknown = $state(null);
+// 首次 `loadProjectData` 完成前为 false。`isProjectDataLoading()` 在 initialized
+// 之前一律返回 true，避免首帧调用者（如 `UnifiedTitleBar` 的 ProjectSwitcher）
+// 在 `loading=false + data=null` 的 1 帧窗口内误显"无项目"（codex PR #140 二审）。
+let initialized: boolean = $state(false);
 let inflight: Promise<ProjectData> | null = null;
 let refreshAfterInflight = false;
 
@@ -74,7 +78,7 @@ export function getProjectData(): ProjectData | null {
 }
 
 export function isProjectDataLoading(): boolean {
-  return loading;
+  return !initialized || loading;
 }
 
 export function getProjectDataError(): unknown {
@@ -102,6 +106,7 @@ export function loadProjectData(options: { refresh?: boolean } = {}): Promise<Pr
     } finally {
       inflight = null;
       loading = false;
+      initialized = true;
       if (refreshAfterInflight) {
         refreshAfterInflight = false;
         void loadProjectData({ refresh: true });

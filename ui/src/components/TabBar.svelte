@@ -4,38 +4,30 @@
     closeTab,
     getPaneById,
     getPaneLayout,
-    getUnreadCount,
-    openNotificationsTab,
-    openSettingsTab,
     setActiveTab,
     splitPane,
   } from "../lib/tabStore.svelte";
   import { MAX_PANES } from "../lib/paneTypes";
   import { beginDrag, getDragSource, getHit, isDragging } from "../lib/dragSession.svelte";
   import TabContextMenu from "./TabContextMenu.svelte";
-  import { BELL, SETTINGS, FILE_TEXT_SVG, BOOK_OPEN_TEXT_SVG, PANEL_LEFT_SVG } from "../lib/icons";
-  import { getSidebarCollapsed, toggleSidebarCollapsed } from "../lib/sidebarStore.svelte";
+  import { BELL, SETTINGS, FILE_TEXT_SVG, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
 
   interface Props {
     paneId: string;
-    /** 本 pane 是否是最左 pane；只在最左 pane + 折叠态显示展开按钮 */
+    /**
+     * 本 pane 是否是最左 pane。chrome 现在持有 sidebar 折叠/展开入口与 traffic
+     * light 避让，TabBar 不再为此特殊处理。保留 prop 以兼容现有调用方与未来扩展。
+     */
     isFirstPane?: boolean;
   }
 
-  let { paneId, isFirstPane = false }: Props = $props();
-
-  const showExpandBtn = $derived(isFirstPane && getSidebarCollapsed());
-
-  // sidebar 折叠后 traffic lights 暴露在最左 pane 顶部（macOS 隐藏 title bar
-  // 时由 OS 浮绘在 webview 上）；对齐原版 TabBar.tsx 的 sidebarCollapsed
-  // && isLeftmostPane 时加 traffic light padding 让 expand 按钮和 tab 让位。
-  const isMac = typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh");
-  const reserveTrafficLightSpace = $derived(isMac && isFirstPane && getSidebarCollapsed());
+  // 保留 isFirstPane 以兼容现有调用方；本组件目前不使用它
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  let { paneId, isFirstPane: _isFirstPane = false }: Props = $props();
 
   const pane = $derived(getPaneById(paneId));
   const tabs = $derived(pane?.tabs ?? []);
   const activeTabId = $derived(pane?.activeTabId ?? null);
-  const unreadCount = $derived(getUnreadCount());
   const dragSource = $derived(getDragSource());
   const dragActive = $derived(isDragging());
   const hit = $derived(getHit());
@@ -108,21 +100,8 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="tab-bar"
-  class:tab-bar-mac-collapsed={reserveTrafficLightSpace}
   onmousedown={handleTabBarMouseDown}
 >
-  {#if showExpandBtn}
-    <button
-      class="expand-sidebar-btn"
-      title="展开侧栏 (⌘B)"
-      aria-label="展开侧栏"
-      onclick={toggleSidebarCollapsed}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        {@html PANEL_LEFT_SVG}
-      </svg>
-    </button>
-  {/if}
   <div class="tab-list" role="tablist">
     {#each tabs as tab, index (tab.id)}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -176,21 +155,6 @@
     {/each}
   </div>
 
-  <div class="tab-actions">
-    <button class="tab-action-btn" onclick={() => openNotificationsTab()} title="通知">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d={BELL} />
-      </svg>
-      {#if unreadCount > 0}
-        <span class="badge">{unreadCount > 99 ? "99+" : unreadCount}</span>
-      {/if}
-    </button>
-    <button class="tab-action-btn" onclick={() => openSettingsTab()} title="设置">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d={SETTINGS} />
-      </svg>
-    </button>
-  </div>
 </div>
 
 {#if ctxMenu}
@@ -227,36 +191,6 @@
     -webkit-user-select: none;
   }
 
-  /* sidebar 折叠时 macOS traffic lights 占用最左 pane 顶部 72px，让 expand
-     按钮和 tab 列表往右挪避开（对齐原版 TabBar.tsx 同等逻辑） */
-  .tab-bar-mac-collapsed {
-    padding-left: 72px;
-  }
-
-  .expand-sidebar-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    flex-shrink: 0;
-    background: none;
-    border: none;
-    border-right: 1px solid var(--color-border);
-    color: var(--color-text-muted);
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s;
-  }
-
-  .expand-sidebar-btn:hover {
-    background: var(--tool-item-hover-bg);
-    color: var(--color-text-secondary);
-  }
-
-  .expand-sidebar-btn svg {
-    width: 16px;
-    height: 16px;
-  }
-
   .tab-list {
     display: flex;
     align-items: stretch;
@@ -289,7 +223,10 @@
     /* 禁用 WKWebView 原生 drag：pointer 方案不需要它，开启反而会
        让系统以为用户在往应用外拖，派发跨应用 copy 导致 drop 丢失。 */
     -webkit-user-drag: none;
-    transition: background 0.1s, color 0.1s, opacity 0.1s;
+    /* box-shadow 一并 transition：active indicator 从 box-shadow 改造而来
+       （change unified-title-bar D8），否则 active 切换时 indicator 突现 / 消失
+       无过渡，与原 border-bottom: 2px 的视觉感不一致 */
+    transition: background 0.1s, color 0.1s, opacity 0.1s, box-shadow 0.1s;
     flex-shrink: 0;
     /* 为 drop-target 左边缘 indicator 预留定位上下文 */
     position: relative;
@@ -306,10 +243,21 @@
     color: var(--color-text-secondary);
   }
 
+  /* 明确 focus-visible 位置：active indicator 用 inset box-shadow 后，浏览器
+     默认 outline 会与 indicator 在 tab 底部叠加视觉混乱，显式声明 outline 用
+     -2px offset 让 ring 内嵌 tab 不与 indicator 重叠（codex PR 二审 #6） */
+  .tab-item:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
+  }
+
+  /* active indicator 改 inset shadow 渲染在 tab 内部，不参与外部 border 计算
+     —— 避免与 .tab-bar 行底 1 px border 拼缝产生重影 / 视觉加粗（详见
+     change unified-title-bar design D8） */
   .tab-item-active {
     background: var(--color-bg-primary, var(--color-surface));
     color: var(--color-text);
-    border-bottom: 2px solid var(--color-border-emphasis);
+    box-shadow: inset 0 -2px 0 var(--color-border-emphasis);
   }
 
   /* 正在被拖动的 tab：半透明，对齐原版 opacity 0.3 */
@@ -376,58 +324,5 @@
   .tab-close:hover {
     background: var(--color-border);
     color: var(--color-text);
-  }
-
-  .tab-actions {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    padding: 0 8px;
-    flex-shrink: 0;
-    border-left: 1px solid var(--color-border);
-  }
-
-  .tab-action-btn {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: none;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s;
-    padding: 0;
-  }
-
-  .tab-action-btn:hover {
-    background: var(--color-surface-raised);
-    color: var(--color-text);
-  }
-
-  .tab-action-btn svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  .badge {
-    position: absolute;
-    top: 2px;
-    right: 0;
-    min-width: 16px;
-    height: 16px;
-    border-radius: 8px;
-    background: var(--color-danger);
-    color: var(--color-text-on-accent);
-    font-size: 10px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 4px;
-    line-height: 1;
   }
 </style>

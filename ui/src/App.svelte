@@ -3,9 +3,14 @@
   import Sidebar from "./components/Sidebar.svelte";
   import CommandPalette from "./components/CommandPalette.svelte";
   import PaneContainer from "./components/layout/PaneContainer.svelte";
-  import UpdateBanner from "./components/UpdateBanner.svelte";
-  import RosettaBanner from "./components/RosettaBanner.svelte";
+  import UnifiedTitleBar from "./components/UnifiedTitleBar.svelte";
   import { updateStore, type UpdateAvailablePayload } from "./lib/updateStore.svelte";
+  import {
+    loadProjectData,
+    getProjectData,
+    isProjectDataLoading,
+  } from "./lib/projectDataStore.svelte";
+  import type { ProjectInfo, RepositoryGroup } from "./lib/api";
   import {
     openSessionTab,
     setSessionClickBehavior,
@@ -42,6 +47,22 @@
   let notificationPollTimer: ReturnType<typeof setInterval> | undefined;
   // macOS 上 Tauri 进程跑 Rosetta 翻译时为 true；其他平台 / 非 Rosetta 时永远 false
   let rosettaWarningVisible = $state(false);
+
+  // UnifiedTitleBar 内 ProjectSwitcher 数据源——与 Sidebar 共享 loadProjectData
+  // cache（projectDataStore 内部 in-flight dedupe + memoize），重复调用近瞬时
+  let projects: ProjectInfo[] = $state([]);
+  let repositoryGroups: RepositoryGroup[] = $state([]);
+  // 首屏 projects 还在 fetch 时 ProjectSwitcher 应显示"加载中…"，避免一闪
+  // "无项目"再切到真名（codex PR 二审 #7）
+  const projectsLoading = $derived(isProjectDataLoading());
+
+  async function refreshChromeProjects() {
+    try {
+      const result = await loadProjectData({ refresh: false });
+      projects = result.worktreeProjects;
+      repositoryGroups = result.repositoryGroups;
+    } catch { /* 静默：Sidebar 内有更详细的错误处理 + UI 反馈 */ }
+  }
 
   async function onNotificationUpdate() {
     try {
@@ -169,10 +190,24 @@
     await onNotificationUpdate();
     notificationPollTimer = setInterval(onNotificationUpdate, 30000);
     // Rosetta 翻译运行检测：Apple Silicon 上跑 Intel binary 时提示用户换 ARM 包。
-    // localStorage 内 banner dismissed 状态由 RosettaBanner 自身管理。
+    // localStorage 内 dismissed 状态由 RosettaStatusIcon 自身管理。
     try {
       rosettaWarningVisible = await isRunningUnderRosetta();
-    } catch { /* 调用失败静默：banner 默认不显示 */ }
+    } catch { /* 调用失败静默：icon 默认不显示 */ }
+
+    // 首次加载 chrome 内 ProjectSwitcher 数据；后续由 Sidebar 触发的
+    // loadProjectData 经 projectDataStore 内 cache 自动同步（同一模块级 data
+    // 引用），App 这边 $effect 监听 getProjectData() 同步本地副本
+    await refreshChromeProjects();
+  });
+
+  // Sidebar 也调 loadProjectData，模块级 cache 更新后这边通过 effect 同步
+  $effect(() => {
+    const cached = getProjectData();
+    if (cached) {
+      projects = cached.worktreeProjects;
+      repositoryGroups = cached.repositoryGroups;
+    }
   });
 
   onDestroy(() => {
@@ -204,12 +239,18 @@
 </script>
 
 <div class="app-root">
-  <RosettaBanner visible={rosettaWarningVisible} />
-  <UpdateBanner />
+  <UnifiedTitleBar
+    {projects}
+    {repositoryGroups}
+    {selectedProjectId}
+    projectsLoading={projectsLoading}
+    onSelectProject={selectProject}
+    rosettaVisible={rosettaWarningVisible}
+  />
   <div class="app-layout">
     <!-- 始终挂载 Sidebar（用 CSS width:0 收起，不用 {#if} 销毁/重建）：
          避免每次 toggle 都 destroy → ResizeObserver 重测量 → vlist 空→填充
-         的视觉闪烁。展开按钮在 TabBar，关入口在 SidebarHeader collapse-btn。 -->
+         的视觉闪烁。展开/收起入口现在统一在 UnifiedTitleBar 折叠按钮。 -->
     <Sidebar
       {selectedProjectId}
       activeSessionId={activeTab?.sessionId ?? null}

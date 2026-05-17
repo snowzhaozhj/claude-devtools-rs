@@ -46,9 +46,10 @@ claude-devtools-rs/
 
 ### 布局与组件
 
-- **布局**：Sidebar（可拖拽宽度 200~500px）+ TabBar + Main 三层。无 tab 时显示 Dashboard 项目概览。Tab 支持 session / settings / notifications 三种类型（settings/notifications 为单例 tab）
+- **布局**：`UnifiedTitleBar`（窗口顶部 44 px 单条 chrome；macOS 内部 80 px platform-padding 避让 traffic lights；右侧 status zone 含 Rosetta icon + Update pill + 通知 + 设置）+ Sidebar（可拖拽宽度 200~500 px）+ TabBar（pane 内独立，仅承载 tab 列表，**不再**含通知/设置/traffic-light padding） + Main。无 tab 时显示 Dashboard 项目概览。Tab 支持 session / settings / notifications / memory 四种类型
 - **页面**：SessionDetail、SettingsView、NotificationsView、DashboardView（项目卡片网格，替代空状态）
-- **组件**：BaseItem、StatusDot、OutputBlock、SearchBar（Cmd+F）、CommandPalette（Cmd+K 全局搜索）、ContextPanel（Category/Ranked 双视图 + DirectoryTree）、DiffViewer（LCS 行级 diff）、DirectoryTree（递归目录树）、SessionContextMenu（右键菜单 5 项）、SidebarHeader、TabBar（bell+齿轮+未读 badge 30s 轮询）、Tool Viewer（Read/Edit/Write/Bash/Default）
+- **chrome 组件**（change `unified-title-bar`）：`UnifiedTitleBar.svelte` 四 zone flex（platform-padding · left-center · drag-flex · status）+ `ProjectSwitcher.svelte`（项目下拉 + grouped worktree 视图）+ `UpdateStatusPill.svelte`（5 态机 idle/available/downloading/downloaded/error + 环形进度）+ `UpdatePopover.svelte`（三按钮立即更新/稍后提醒/跳过此版本 + release notes + outside-click/Esc 关闭 + D3b idle race popover 自动关）+ `RosettaStatusIcon.svelte`（黄三角 icon + tooltip + Shift-click 永久 dismiss）
+- **内容组件**：BaseItem、StatusDot、OutputBlock、SearchBar（Cmd+F）、CommandPalette（Cmd+K 全局搜索）、ContextPanel（Category/Ranked 双视图 + DirectoryTree）、DiffViewer（LCS 行级 diff）、DirectoryTree（递归目录树）、SessionContextMenu（右键菜单 5 项）、TabBar（仅 tab 列表 + active indicator 用 `box-shadow: inset 0 -2px 0` 不再 border-bottom 避免与行底 border 重影 D8）、Tool Viewer（Read/Edit/Write/Bash/Default）
 - **SVG 图标**：`ui/src/lib/icons.ts` 导出 lucide 风格 SVG path 常量，BaseItem 通过 `svgIcon` prop 渲染
 
 ### 状态与主题
