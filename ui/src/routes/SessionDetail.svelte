@@ -1542,13 +1542,16 @@
     transition: color 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
+  /* live thread rail：用 60% 蓝 + 40% emphasis 灰混色，保留"live"识别
+     但不再全饱和——3px 全长 border 用满 accent-blue 会把眼睛锁在 rail 上
+     而不是消息内容，与 product register 的"克制工作台"风格冲突。 */
   .msg-ai-container-live {
-    border-left-color: var(--color-accent-blue);
+    border-left-color: color-mix(in oklch, var(--color-accent-blue) 60%, var(--color-border-emphasis));
   }
 
   .msg-ai-container-live::before {
-    color: var(--color-accent-blue);
-    opacity: 0.85;
+    color: color-mix(in oklch, var(--color-accent-blue) 60%, var(--color-border-emphasis));
+    opacity: 0.5;
   }
 
   /* 左外侧 timeline node：执行轨迹的"节点" */
@@ -1565,12 +1568,14 @@
     transition: border-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  /* 形态分化 + 静态化：timeline live node 用 outline 形态（蓝色 2.5px
-     border + 透明填充），与 OngoingBanner 的 filled dot ping 完全区分；
-     保留 surface 隔离环避免与 timeline 主线条粘连。
+  /* 形态分化 + 静态化 + 弱化：timeline live node 用 outline 形态
+     （2px 边框，与 thread rail 同款 60% 混色），与 OngoingBanner 的
+     filled dot ping 完全区分；保留 surface 隔离环避免与 timeline
+     主线条粘连。
      详见 DESIGN.md `The Static-vs-Live Shape Rule` 与 `One Live Signal Rule`。 */
   .ai-thread-node-live {
-    border-color: var(--color-accent-blue);
+    border-width: 2px;
+    border-color: color-mix(in oklch, var(--color-accent-blue) 60%, var(--color-border-emphasis));
     background: var(--color-surface);
     box-shadow: 0 0 0 2px var(--color-surface);
   }
