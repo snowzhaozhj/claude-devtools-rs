@@ -1,6 +1,20 @@
-# opsx:apply 推进节拍（硬约束）
+# PR 推进节拍（硬约束）
 
 port 内任何多步改动必须按固定流水线推进，**不得**把 PostToolUse clippy hook 的沉默当作"可以停手"的信号。
+
+本文覆盖 **所有 PR**——既包括 openspec change 走 `/opsx:apply` 的（含 N.4 archive），也包括"直接 commit"的常规 PR（纯视觉对齐 / 单点 bug / Trigger CRUD / docs 等）。两条路径**只在 N.4 是否需要 archive 上分叉**，前面 N.1-N.3 完全相同。
+
+## 默认契约：提需求 = 默认走完整流水线
+
+用户首条 message 含**开工信号词且未含明确停手词** → SHALL 默认一路推到底：
+
+```
+preflight → 实现 → 本地验证 → commit → push → PR → codex 二审 → wait-ci 全绿 → (openspec change 才有的) archive → 文本总结
+```
+
+**开工信号词 / 停手词的权威定义**：见 `.claude/skills/preflight/SKILL.md::Q4` 的「触发词表（本节是项目内唯一权威源）」段。本文不维护副本——历史上同一概念三处独立维护改一处漏两处的坑见 commit b77fdd7 的 codex 二审报告。
+
+判断准则：**做完业务改动不接续走 N.1+ 是已被否决的下策**——把"该不该 push"的决策权丢给用户当监工，违背"自动化"原则。如果不确定，按 preflight Q4 给的终点走；preflight 没跑就先跑 preflight。
 
 ## 节拍
 
@@ -16,9 +30,14 @@ port 内任何多步改动必须按固定流水线推进，**不得**把 PostToo
 4. `cargo test -p <crate>`（或 `--workspace`）
 5. `pnpm --dir ui run check`（如改了 `ui/` 下的文件）
 6. `openspec validate <change> --strict`（如有 openspec change）
-7. 勾 `openspec/changes/<change>/tasks.md` 的**业务**checkbox（**不勾**发布尾段 N.1-N.4）
+7. 勾任务清单的业务项——按"本 PR 改动是否涉及 `openspec/changes/<slug>/tasks.md`"判别：
+   - **改动包含 `openspec/changes/<slug>/tasks.md`**（含 hybrid：主代码不走 openspec 但顺手勾了已有 change 的 task）：按 openspec 路径勾 `openspec/changes/<slug>/tasks.md` 的业务 checkbox（**不勾**发布尾段 N.1-N.4）
+   - **改动不涉及任何 openspec change 的 tasks.md**：用 `TaskUpdate` 把 `TaskCreate` 入队的业务任务标 completed
+   - **禁止**在常规 PR 里偷偷改 openspec change 文件而不走 openspec 路径——hybrid 场景 SHALL 升级到 openspec 路径（含发布尾段 N.4 archive）
 
-### 发布尾段（任何 openspec change 的 PR SHALL 在 tasks.md 末尾固定预留 4 项）
+### 发布尾段
+
+**openspec change 的 PR** SHALL 在 tasks.md 末尾固定预留 N.1-N.4：
 
 ```markdown
 ## N. 发布
@@ -29,12 +48,22 @@ port 内任何多步改动必须按固定流水线推进，**不得**把 PostToo
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
 ```
 
+**常规 PR（非 openspec change）** 没有 tasks.md，但**仍 SHALL 走 N.1-N.3**——把它们当作 `TaskCreate` 队列里的最后三项手工维护：
+
+```
+N.1 push 分支 + 开 PR
+N.2 wait-ci 全绿
+N.3 codex 二审通过
+```
+
+只是省掉 N.4。两条路径在前 N.1-N.3 上**完全等价**——业务推进段做完不能停在"本地全绿"那一刻，必须接续推完。
+
 按以下顺序勾 + 操作，**禁止**跳步：
 
 8. 勾 N.1 → `git push -u origin <branch>` + `gh pr create`
 9. 勾 N.2 前先 wait-ci 全绿（用 `/wait-ci <pr>` 或后台 `gh pr checks <pr>` until-loop）；红了 SHALL 自己 `gh run view --log-failed` 定位 + 修 + 再 push 后重新等绿
 10. 勾 N.3 前调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑异构二审（按 `.claude/rules/codex-usage.md` 模板）；codex 报 bug → 修 → push → 回到 step 9 wait-ci 再走一轮 codex 验证；通过才勾 N.3
-11. **N.4 是原子操作**——直接跑 `openspec archive <slug> -y`（一步同时完成"mv 目录到 `changes/archive/<date>-<slug>/`"+"sync delta 回主 spec"），随后 `git add -A` + `git commit -m "chore(opsx): archive <slug>"` + push。**不要**先单独 commit "勾 N.4" 再跑 archive——会触发 CI 拦截窗口（详见下方"循环依赖如何避免"）
+11. **N.4 是原子操作**——直接跑 `openspec archive <slug> -y`（一步同时完成"mv 目录到 `changes/archive/<date>-<slug>/`"+"sync delta 回主 spec"），随后 `git add -A` + `git commit -m "chore(opsx): archive <slug>"` + push。**不要**先单独 commit "勾 N.4" 再跑 archive——会触发 CI 拦截窗口（详见下方"循环依赖如何避免"）。**常规 PR 跳过此步直接到 step 13**
 12. archive commit 推上去后再走一次 wait-ci 全绿
 13. 发最终文本总结
 

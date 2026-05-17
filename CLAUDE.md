@@ -223,6 +223,7 @@ bench 入口：
 
 ## What to do first in a fresh session
 
+0. **识别开工信号 SHALL 第一时间跑 preflight**：用户首条 message 含**开工信号词且未含停手词** → SHALL `Skill(preflight)` 跑 4 件套自检（分支 / OpenSpec / Explore / 流水线终点）；**不要**跳过 preflight 直接 Edit/Bash。开工信号词 / 停手词的权威定义见 `.claude/skills/preflight/SKILL.md::Q4` 的「触发词表（本节是项目内唯一权威源）」段（本文不维护副本，避免分叉）。跳过 preflight = 跳过"提需求 = 默认走到 codex+CI 全绿"的契约，是已被否决的下策（本条来自 PR #139 反思——业务改完忘走 N.1-N.3 让用户监工）
 1. 开新工作前先 `git fetch origin main && git checkout -b feat/<slug>`，**不要**直接在 `main` 上写代码——`fetch` 是硬约束：EnterWorktree 默认 `worktree.baseRef=fresh` 用本地 origin/main 指针，不 fetch → 从过期 SHA 起 → PR 一上来 conflict（PR #122 案例：本地 origin/main 落后 24h+，错过 #119/#120/#121，PR 上来就 dirty 多走一轮 merge + push）
 2. UI 功能迭代分流：**行为契约改动**（IPC 字段 / 后端算法 / 状态判定 / 数据流语义）走 openspec（`/opsx:propose` → `/opsx:apply` → `/opsx:archive`，design.md 必备）；**纯视觉对齐 / 单点样式修复 / Trigger CRUD 等**直接写 + PR。判断不准默认走 openspec。**视觉/规范级 UI 任务**（"样式优化 / 重新设计 / 统一规范 / polish / a11y / typography / 调整 UX / 重写组件视觉"等关键词）SHALL 在动手前先 invoke `impeccable` skill 拿 PRODUCT.md + DESIGN.md 上下文与设计禁令（side-stripe ban / hero-metric / glass / 渐变文字等），避免靠肌肉记忆出 AI slop
 3. 性能 / 卡顿排查：用"性能回归监测"段的入口，**先看数据再定方向**

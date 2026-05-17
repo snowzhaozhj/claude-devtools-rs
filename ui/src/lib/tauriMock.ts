@@ -396,7 +396,7 @@ function buildHandler(fx: Fixture) {
             signatureOk: true,
           }
         }
-        return { status: 'upToDate', currentVersion: '0.2.0' }
+        return { status: 'up_to_date', currentVersion: '0.2.0' }
       }
 
       case 'plugin:opener|open_url': {
