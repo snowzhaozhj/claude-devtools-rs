@@ -8,6 +8,7 @@
   import {
     loadProjectData,
     getProjectData,
+    isProjectDataLoading,
   } from "./lib/projectDataStore.svelte";
   import type { ProjectInfo, RepositoryGroup } from "./lib/api";
   import {
@@ -51,6 +52,9 @@
   // cache（projectDataStore 内部 in-flight dedupe + memoize），重复调用近瞬时
   let projects: ProjectInfo[] = $state([]);
   let repositoryGroups: RepositoryGroup[] = $state([]);
+  // 首屏 projects 还在 fetch 时 ProjectSwitcher 应显示"加载中…"，避免一闪
+  // "无项目"再切到真名（codex PR 二审 #7）
+  const projectsLoading = $derived(isProjectDataLoading());
 
   async function refreshChromeProjects() {
     try {
@@ -239,6 +243,7 @@
     {projects}
     {repositoryGroups}
     {selectedProjectId}
+    projectsLoading={projectsLoading}
     onSelectProject={selectProject}
     rosettaVisible={rosettaWarningVisible}
   />

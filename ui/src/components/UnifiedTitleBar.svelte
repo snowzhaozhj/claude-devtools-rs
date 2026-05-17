@@ -16,6 +16,7 @@
     selectedProjectId: string;
     onSelectProject: (id: string, name: string) => void;
     rosettaVisible: boolean;
+    projectsLoading?: boolean;
   }
 
   let {
@@ -24,6 +25,7 @@
     selectedProjectId,
     onSelectProject,
     rosettaVisible,
+    projectsLoading = false,
   }: Props = $props();
 
   // macOS 隐藏原生 title bar，traffic light 浮绘在 chrome 左上 (12, 20)；
@@ -51,6 +53,7 @@
       {repositoryGroups}
       {selectedProjectId}
       {onSelectProject}
+      loading={projectsLoading}
     />
 
     <button

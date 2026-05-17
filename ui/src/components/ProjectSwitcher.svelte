@@ -16,6 +16,9 @@
     repositoryGroups?: RepositoryGroup[];
     selectedProjectId: string;
     onSelectProject: (id: string, name: string) => void;
+    /** projectDataStore 首次 fetch 时为 true；为 true 且无 projects 时显示
+     *  "加载中…" 而非 "无项目"，避免视觉闪烁（codex PR #140 二审 #7） */
+    loading?: boolean;
   }
 
   let {
@@ -23,6 +26,7 @@
     repositoryGroups = [],
     selectedProjectId,
     onSelectProject,
+    loading = false,
   }: Props = $props();
 
   let dropdownOpen = $state(false);
@@ -72,18 +76,28 @@
 
   const useGroupedView = $derived(repositoryGroups.length > 0);
   const hasAny = $derived(useGroupedView ? repositoryGroups.length > 0 : projects.length > 0);
+
+  // 首屏 loading 且无数据时显示 placeholder 而非 "无项目"；按钮保持 disabled
+  // 防止误开空 dropdown
+  const placeholderText = $derived.by(() => {
+    if (hasAny) return selectedName;
+    if (loading) return "加载中…";
+    return "无项目";
+  });
 </script>
 
 <div class="project-switcher">
   <button
     class="project-selector"
+    class:project-selector-loading={!hasAny && loading}
     data-tauri-drag-region="false"
     onclick={toggleDropdown}
     disabled={!hasAny}
     aria-haspopup="listbox"
     aria-expanded={dropdownOpen}
+    aria-busy={loading && !hasAny}
   >
-    <span class="project-name">{hasAny ? selectedName : "无项目"}</span>
+    <span class="project-name">{placeholderText}</span>
     <span class="dropdown-arrow" class:dropdown-arrow-open={dropdownOpen}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d={CHEVRON_DOWN} />
@@ -236,6 +250,16 @@
   .project-selector:disabled {
     color: var(--color-text-muted);
     cursor: default;
+  }
+
+  .project-selector-loading {
+    /* 微弱呼吸提示数据正在加载，避免静默"无项目"误导 */
+    animation: pulse-text 1.4s ease-in-out infinite;
+  }
+
+  @keyframes pulse-text {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 0.85; }
   }
 
   .project-name {

@@ -223,7 +223,10 @@
     /* 禁用 WKWebView 原生 drag：pointer 方案不需要它，开启反而会
        让系统以为用户在往应用外拖，派发跨应用 copy 导致 drop 丢失。 */
     -webkit-user-drag: none;
-    transition: background 0.1s, color 0.1s, opacity 0.1s;
+    /* box-shadow 一并 transition：active indicator 从 box-shadow 改造而来
+       （change unified-title-bar D8），否则 active 切换时 indicator 突现 / 消失
+       无过渡，与原 border-bottom: 2px 的视觉感不一致 */
+    transition: background 0.1s, color 0.1s, opacity 0.1s, box-shadow 0.1s;
     flex-shrink: 0;
     /* 为 drop-target 左边缘 indicator 预留定位上下文 */
     position: relative;
@@ -238,6 +241,14 @@
   .tab-item:hover {
     background: var(--tool-item-hover-bg);
     color: var(--color-text-secondary);
+  }
+
+  /* 明确 focus-visible 位置：active indicator 用 inset box-shadow 后，浏览器
+     默认 outline 会与 indicator 在 tab 底部叠加视觉混乱，显式声明 outline 用
+     -2px offset 让 ring 内嵌 tab 不与 indicator 重叠（codex PR 二审 #6） */
+  .tab-item:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
   }
 
   /* active indicator 改 inset shadow 渲染在 tab 内部，不参与外部 border 计算
