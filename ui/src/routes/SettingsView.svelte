@@ -52,6 +52,9 @@
   let newColor = $state("#e53e3e");
   let addingTrigger = $state(false);
 
+  /** 跟踪 viewport 是否窄屏，用于切 nav 方向 + 同步 aria-orientation */
+  let isNarrowViewport = $state(false);
+
   const sections: Array<{ id: SectionId; label: string; description: string; icon: string }> = [
     { id: "general", label: "常规", description: "主题、启动行为、数据目录", icon: SLIDERS_HORIZONTAL_SVG },
     { id: "display", label: "显示", description: "界面字体与视觉密度", icon: MONITOR_SVG },
@@ -75,6 +78,15 @@
     } catch {
       /* mock 模式或非 Tauri 环境静默 */
     }
+  });
+
+  $effect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia("(max-width: 720px)");
+    isNarrowViewport = mq.matches;
+    const onChange = (e: MediaQueryListEvent) => (isNarrowViewport = e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
   });
 
   async function commitFont(key: "fontSans" | "fontMono", raw: string) {
@@ -297,7 +309,7 @@
 <div class="settings-view">
   <nav class="settings-nav" aria-label="设置分类">
     <h2 class="nav-title">设置</h2>
-    <ul class="nav-list" role="tablist" aria-orientation="vertical">
+    <ul class="nav-list" role="tablist" aria-orientation={isNarrowViewport ? "horizontal" : "vertical"}>
       {#each sections as section (section.id)}
         <li role="none">
           <button
