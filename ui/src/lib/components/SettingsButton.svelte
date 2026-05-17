@@ -11,6 +11,8 @@
     ariaLabel?: string;
     title?: string;
     onClick?: (e: MouseEvent) => void;
+    /** callback ref：拿内部 button 元素，用于焦点管理等。 */
+    buttonRef?: (el: HTMLButtonElement | null) => void;
     icon?: Snippet;
     children?: Snippet;
   }
@@ -24,12 +26,20 @@
     ariaLabel,
     title,
     onClick,
+    buttonRef,
     icon,
     children,
   }: Props = $props();
+
+  let btnEl: HTMLButtonElement | null = $state(null);
+  $effect(() => {
+    buttonRef?.(btnEl);
+    return () => buttonRef?.(null);
+  });
 </script>
 
 <button
+  bind:this={btnEl}
   {type}
   {disabled}
   {title}

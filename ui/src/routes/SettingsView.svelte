@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { getConfig, updateConfig, addTrigger, removeTrigger, checkForUpdate, type AppConfig, type NotificationTrigger, type CheckUpdateResult } from "../lib/api";
   import { applyTheme } from "../lib/theme";
   import { applyFonts } from "../lib/fonts";
@@ -48,6 +48,8 @@
   let appVersion = $state("");
   let checkInFlight = $state(false);
   let checkResult: CheckUpdateResult | null = $state(null);
+  /** 关闭 banner 后焦点回归的目标按钮（"检查更新"），避免焦点丢到 body。 */
+  let checkUpdateBtnEl: HTMLButtonElement | null = $state(null);
 
   let showAddForm = $state(false);
   let newName = $state("");
@@ -179,8 +181,11 @@
     }
   }
 
-  function dismissCheckResult() {
+  async function dismissCheckResult() {
     checkResult = null;
+    // banner DOM 卸载后焦点会丢到 body；显式还给触发按钮，键盘用户不丢上下文
+    await tick();
+    checkUpdateBtnEl?.focus();
   }
 
   async function updateTimeFormat(value: TimeFormat) {
@@ -677,7 +682,12 @@
                 <div class="about-app-version">版本 {appVersion || "—"}</div>
               </div>
             </div>
-            <SettingsButton variant="primary" disabled={checkInFlight} onClick={handleCheckUpdate}>
+            <SettingsButton
+              variant="primary"
+              disabled={checkInFlight}
+              onClick={handleCheckUpdate}
+              buttonRef={(el) => (checkUpdateBtnEl = el)}
+            >
               {#snippet icon()}
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html DOWNLOAD_CLOUD_SVG}</svg>
               {/snippet}
