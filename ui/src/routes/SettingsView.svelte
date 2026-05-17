@@ -960,6 +960,7 @@
     gap: 12px;
     padding: 12px 16px;
     background: var(--color-surface);
+    transition: var(--transition-base);
   }
   .trigger-row:hover {
     background: var(--tool-item-hover-bg);

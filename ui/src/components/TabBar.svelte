@@ -244,7 +244,7 @@
     border-right: 1px solid var(--color-border);
     color: var(--color-text-muted);
     cursor: pointer;
-    transition: background 0.1s, color 0.1s;
+    transition: background-color 0.12s ease, color 0.1s;
   }
 
   .expand-sidebar-btn:hover {
@@ -289,7 +289,7 @@
     /* 禁用 WKWebView 原生 drag：pointer 方案不需要它，开启反而会
        让系统以为用户在往应用外拖，派发跨应用 copy 导致 drop 丢失。 */
     -webkit-user-drag: none;
-    transition: background 0.1s, color 0.1s, opacity 0.1s;
+    transition: background-color 0.12s ease, color 0.1s, opacity 0.1s;
     flex-shrink: 0;
     /* 为 drop-target 左边缘 indicator 预留定位上下文 */
     position: relative;
@@ -370,7 +370,7 @@
     cursor: pointer;
     flex-shrink: 0;
     padding: 0;
-    transition: background 0.1s, color 0.1s;
+    transition: background-color 0.12s ease, color 0.1s;
   }
 
   .tab-close:hover {
@@ -399,7 +399,7 @@
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    transition: background 0.1s, color 0.1s;
+    transition: background-color 0.12s ease, color 0.1s;
     padding: 0;
   }
 

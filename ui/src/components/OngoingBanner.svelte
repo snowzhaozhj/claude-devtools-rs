@@ -43,8 +43,9 @@
     border-radius: 50%;
     background: var(--color-accent-blue);
     flex-shrink: 0;
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 50%, transparent);
-    animation: ongoing-ping 1.6s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+    /* 静态光环替代 ping scale 动画——sweep bar 已表达 streaming
+       进度，避免与 pulse 重复传递同一信号导致视觉过载。 */
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 24%, transparent);
   }
 
   .ongoing-label {

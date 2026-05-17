@@ -738,6 +738,7 @@
     font-weight: 600;
     text-align: left;
     cursor: pointer;
+    transition: var(--transition-base);
   }
 
   .memory-entry:hover {
@@ -823,7 +824,7 @@
     color: var(--color-text-muted);
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 0.1s, color 0.1s;
+    transition: background-color 0.12s ease, color 0.1s;
   }
 
   .show-hidden-btn:hover {
@@ -879,7 +880,7 @@
     color: var(--color-text);
     text-align: left;
     box-sizing: border-box;
-    transition: background 0.1s, opacity 0.15s;
+    transition: background-color 0.12s ease, opacity 0.15s;
   }
 
   .session-item:hover {
@@ -1000,7 +1001,7 @@
     height: 100%;
     cursor: col-resize;
     background: transparent;
-    transition: background 0.15s;
+    transition: background-color 0.15s ease;
     z-index: 5;
   }
 

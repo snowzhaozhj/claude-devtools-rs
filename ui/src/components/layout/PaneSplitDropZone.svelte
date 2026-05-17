@@ -35,7 +35,7 @@
     width: 48px;
     pointer-events: none;
     z-index: 10;
-    transition: background 0.1s;
+    transition: background-color 0.12s ease;
   }
   .pane-drop-zone.visible {
     pointer-events: auto;

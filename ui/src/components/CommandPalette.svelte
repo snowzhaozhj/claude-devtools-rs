@@ -304,7 +304,7 @@
     color: var(--color-text);
     text-align: left;
     cursor: pointer;
-    transition: background 0.08s;
+    transition: background-color 0.12s ease;
   }
 
   .cp-item:hover {

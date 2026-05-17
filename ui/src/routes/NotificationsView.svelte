@@ -336,7 +336,7 @@
     font: inherit;
     font-size: 12px;
     cursor: pointer;
-    transition: background 0.1s, color 0.1s, border-color 0.15s;
+    transition: background-color 0.12s ease, color 0.1s, border-color 0.15s;
   }
   .header-action-btn:hover:not(:disabled) {
     background: var(--tool-item-hover-bg);
@@ -429,7 +429,7 @@
     gap: 4px;
     padding: 4px;
     border-radius: 6px;
-    transition: background 0.1s;
+    transition: background-color 0.12s ease;
     position: relative;
   }
   .notification-row:has(.notif-navigate-btn:hover) {
@@ -506,7 +506,7 @@
     cursor: pointer;
     flex-shrink: 0;
     opacity: 0.55;
-    transition: background 0.1s, color 0.1s, opacity 0.1s;
+    transition: background-color 0.12s ease, color 0.1s, opacity 0.1s;
   }
   .notification-row:hover .notif-row-btn,
   .notification-row:focus-within .notif-row-btn,

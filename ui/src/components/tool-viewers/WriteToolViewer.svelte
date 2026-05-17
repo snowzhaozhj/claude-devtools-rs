@@ -65,7 +65,7 @@
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    border-bottom: 1px solid rgba(34, 197, 94, 0.2);
+    border-bottom: 1px solid var(--diff-added-border);
   }
 
   .write-icon {
@@ -89,7 +89,8 @@
     font-size: 9px;
     font-weight: 600;
     color: var(--diff-added-text);
-    background: rgba(34, 197, 94, 0.2);
+    background: var(--diff-added-bg);
+    border: 1px solid var(--diff-added-border);
     padding: 1px 6px;
     border-radius: 4px;
     letter-spacing: 0.5px;
@@ -198,7 +199,7 @@
   }
 
   .md-preview :global(pre) {
-    background: var(--code-bg, #1e1e1e);
+    background: var(--code-bg);
     border: 1px solid var(--code-border);
     border-radius: 4px;
     padding: 8px 12px;
@@ -219,7 +220,7 @@
   }
 
   .md-preview :global(a) {
-    color: var(--color-link, #4a9eff);
+    color: var(--prose-link);
     text-decoration: none;
   }
 

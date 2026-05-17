@@ -420,7 +420,7 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
-    transition: background 0.12s ease-out, border-color 0.12s ease-out;
+    transition: background-color 0.12s ease-out, border-color 0.12s ease-out;
   }
 
   .layer-item:hover {
@@ -544,7 +544,7 @@
     align-items: center;
     gap: 4px;
     white-space: nowrap;
-    transition: background 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out;
+    transition: background-color 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out;
   }
 
   .toolbar-button:hover:not(:disabled) {
@@ -603,6 +603,7 @@
     cursor: pointer;
     display: flex;
     align-items: center;
+    transition: var(--transition-base);
   }
 
   .open-menu-item-divider {

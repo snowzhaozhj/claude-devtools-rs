@@ -207,7 +207,7 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
-    transition: background 0.1s, color 0.1s;
+    transition: background-color 0.12s ease, color 0.1s;
   }
 
   .dt-dir:focus-visible {

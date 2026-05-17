@@ -90,7 +90,7 @@
     flex-shrink: 0;
     background: transparent;
     cursor: col-resize;
-    transition: background 0.15s;
+    transition: background-color 0.15s ease;
     position: relative;
   }
   .pane-resize-handle:hover,

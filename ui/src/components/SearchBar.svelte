@@ -210,7 +210,7 @@
     justify-content: center;
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 0.1s, color 0.1s;
+    transition: background-color 0.12s ease, color 0.1s;
     padding: 0;
   }
 

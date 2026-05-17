@@ -250,7 +250,7 @@
     cursor: pointer;
     padding: 0;
     border-radius: 6px;
-    transition: background 0.1s, color 0.1s;
+    transition: background-color 0.12s ease, color 0.1s;
   }
 
   .cp-close svg {
@@ -305,7 +305,7 @@
     border-radius: 5px;
     padding: 3px 8px;
     cursor: pointer;
-    transition: background 0.1s, color 0.1s, border-color 0.1s;
+    transition: background-color 0.12s ease, color 0.1s, border-color 0.1s;
   }
 
   .cp-mode-btn svg {
@@ -357,7 +357,7 @@
     color: inherit;
     font-family: inherit;
     text-align: left;
-    transition: background 0.1s;
+    transition: background-color 0.12s ease;
   }
 
   .cp-section-header[aria-expanded="true"] {
@@ -449,7 +449,7 @@
   .cp-item {
     padding: 6px 8px;
     border-radius: 6px;
-    transition: background 0.1s;
+    transition: background-color 0.12s ease;
   }
 
   .cp-item:hover {
@@ -505,7 +505,7 @@
     border: 1px solid var(--color-border-subtle, var(--color-border));
     border-radius: 7px;
     background: var(--color-surface-raised);
-    transition: background 0.1s, border-color 0.1s;
+    transition: background-color 0.12s ease, border-color 0.1s;
   }
 
   .cp-ranked-item:hover {

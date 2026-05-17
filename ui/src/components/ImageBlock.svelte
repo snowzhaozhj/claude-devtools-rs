@@ -171,10 +171,10 @@
     align-items: center;
     justify-content: center;
     gap: 0.25rem;
-    background: var(--color-surface-2, #1f2937);
-    border: 1px dashed var(--color-border, #374151);
+    background: var(--color-surface-raised);
+    border: 1px dashed var(--color-border);
     border-radius: 4px;
-    color: var(--color-text-muted, #9ca3af);
+    color: var(--color-text-muted);
     font-size: 0.75rem;
   }
   .placeholder-label {

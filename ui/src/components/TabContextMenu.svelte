@@ -101,7 +101,7 @@
     color: var(--color-text);
     text-align: left;
     cursor: pointer;
-    transition: background 0.1s;
+    transition: background-color 0.12s ease;
   }
   .cm-item:hover:not(.cm-item-disabled) {
     background: var(--tool-item-hover-bg);

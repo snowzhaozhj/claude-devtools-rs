@@ -69,7 +69,6 @@
   .output-block-err .output-pre {
     color: var(--tool-result-error-text);
     background: var(--tool-result-error-bg);
-    border-color: rgba(239, 68, 68, 0.2);
     border-color: color-mix(in oklch, var(--color-danger-bright) 20%, transparent);
   }
 

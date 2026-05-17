@@ -216,6 +216,15 @@
 
   --bubble-transition: background-color 0.12s ease, border-color 0.12s ease;
 
+  /* ─── 通用 hover/focus 过渡 token（新组件 SHALL 引用）───
+     与 DESIGN.md §5 motion 100–200ms 一致；
+     用 `background-color` 而非 `background` 简写，避免影响 background-image。
+     旧 `--bubble-transition` 保留作消息流上下文别名。 */
+  --transition-base:
+    background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  --transition-shadow:
+    box-shadow 0.12s ease, outline-color 0.12s ease;
+
   /* spinner stroke 与 --bubble-icon-md 联动：14px icon → 2px stroke 比例 ~14%
      视觉合适。若未来 icon-md 改值，按比例同步 stroke 以保视觉密度（codex 二审）。*/
   --bubble-spinner-stroke: 2px;
@@ -491,6 +500,50 @@
 *::before,
 *::after {
   box-sizing: border-box;
+}
+
+/* ─── 可点击控件统一行为 ───
+   1) `user-select: none` 防止单击/双击意外选中文字（用户体感「拖动失败」）；
+   2) `:focus-visible` 提供默认键盘焦点环（fallback；组件如已自定义 outline /
+      box-shadow，本规则因优先级低不会覆盖）。
+   注：输入区域 / .prose / pre / code / [contenteditable] **保留** text-select。 */
+button,
+[role="button"],
+[role="switch"],
+[role="tab"],
+[role="menuitem"],
+[role="menuitemcheckbox"],
+[role="option"] {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+button:focus-visible,
+[role="button"]:focus-visible,
+[role="switch"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="menuitemcheckbox"]:focus-visible,
+[role="option"]:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 1px;
+}
+
+/* 当前仓内尚未补全 role/tabindex 的 div onclick 高频点击行——一次性兜底
+   `user-select: none`。后续 a11y 重构（语义化为 button + role + tabindex）后，
+   这些 class 自然会被上方全局 `button`/`[role="*"]` 规则接管，可移除此节。 */
+.cp-item,
+.cm-item,
+.session-item,
+.memory-entry,
+.dash-card,
+.sa-header,
+.sa-trace-header,
+.tm-header,
+.cp-mode-btn,
+.cp-section-header {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* macOS WKWebView 默认开启 rubber-band overscroll，会让整个文档被往下拖；

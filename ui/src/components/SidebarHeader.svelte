@@ -325,7 +325,7 @@
        y=12, group height 16, 圆心 Y=20；header-row 高 40，中心也是 Y=20）。 */
     line-height: 1;
     cursor: pointer;
-    transition: background 0.12s ease;
+    transition: background-color 0.12s ease;
   }
 
   .project-selector:hover {
@@ -371,7 +371,7 @@
     border-radius: 6px;
     color: var(--color-text-muted);
     cursor: pointer;
-    transition: background 0.12s ease, color 0.12s ease;
+    transition: background-color 0.12s ease, color 0.12s ease;
   }
 
   .collapse-btn:hover {
@@ -428,7 +428,7 @@
     text-align: left;
     font: inherit;
     color: var(--color-text);
-    transition: background 0.1s;
+    transition: background-color 0.12s ease;
   }
 
   .dropdown-item:hover {
@@ -506,7 +506,7 @@
     text-align: left;
     font: inherit;
     color: var(--color-text);
-    transition: background 0.1s;
+    transition: background-color 0.12s ease;
   }
 
   .dropdown-group-row:hover {

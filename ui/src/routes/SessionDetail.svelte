@@ -860,19 +860,24 @@
               aria-expanded={isCompactExpanded}
               aria-label="Toggle compacted content"
             >
-              <svg class="compact-chevron" class:compact-chevron-rotate={isCompactExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
-              <svg class="compact-layers-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={LAYERS}/></svg>
-              <span class="compact-label">Compacted</span>
+              <span class="compact-lead">
+                <svg class="compact-chevron" class:compact-chevron-rotate={isCompactExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={CHEVRON_RIGHT}/></svg>
+                <span class="compact-label">Compacted</span>
+              </span>
               {#if td}
-                <span class="compact-token-delta">
-                  {formatTokensCompact(td.preCompactionTokens)} → {formatTokensCompact(td.postCompactionTokens)}
-                  <span class="compact-token-freed">({formatTokensCompact(Math.abs(td.delta))} freed)</span>
+                <span class="compact-meta">
+                  <span class="compact-token-delta">
+                    {formatTokensCompact(td.preCompactionTokens)} → {formatTokensCompact(td.postCompactionTokens)}
+                  </span>
+                  <span class="compact-token-freed">{formatTokensCompact(Math.abs(td.delta))} freed</span>
                 </span>
               {/if}
-              {#if chunk.phaseNumber != null}
-                <span class="compact-phase-badge">Phase {chunk.phaseNumber}</span>
-              {/if}
-              <span class="compact-time">{ftime(chunk.timestamp)}</span>
+              <span class="compact-trail">
+                {#if chunk.phaseNumber != null}
+                  <span class="compact-phase-badge">Phase {chunk.phaseNumber}</span>
+                {/if}
+                <span class="compact-time">{ftime(chunk.timestamp)}</span>
+              </span>
             </button>
             {#if isCompactExpanded && compactText}
               <div class="compact-expanded">
@@ -1047,17 +1052,19 @@
     letter-spacing: 0.12em;
   }
 
+  /* 顶栏 LIVE 标记：唯一保留的"心跳"动画——告诉用户 session 还在流。
+     周期 1.6s → 2.4s，幅度 0.4 → 0.6，整体更克制；reduced-motion 抑制。 */
   .top-stat-live-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: currentColor;
-    animation: top-live-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    animation: top-live-pulse 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
 
   @keyframes top-live-pulse {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+    50% { opacity: 0.6; }
   }
 
   .top-meta {
@@ -1267,6 +1274,9 @@
       inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
 
+  /* user-avatar: 去 indigo 装饰（与 accent-blue 同色谱重复，导致用户感受到
+     的"深蓝 / 蓝并列割裂"）。改 neutral surface：avatar 是角色标识不是
+     status，符合 DESIGN.md 「Status Owns the Color Rule」。 */
   .user-avatar {
     width: 30px;
     height: 30px;
@@ -1275,10 +1285,9 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    color: var(--color-accent-indigo);
-    background: color-mix(in oklch, var(--color-accent-indigo) 8%, var(--color-surface));
-    border: 1px solid color-mix(in oklch, var(--color-accent-indigo) 32%, transparent);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    color: var(--color-text-secondary);
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border);
     margin-top: 2px;
   }
 
@@ -1399,27 +1408,18 @@
     transition: border-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
+  /* ai-thread 节点的 live 状态：原 pulse 动画与底部 OngoingBanner / 顶栏
+     LIVE 重复传递同一 "streaming" 信号。改为静态实心蓝点 + 静态光环
+     box-shadow（"亮着的节点"语义），避免 3 处动画叠加。 */
   .ai-thread-node-live {
     border-color: var(--color-accent-blue);
     background: var(--color-accent-blue);
-    animation: ai-thread-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-
-  @keyframes ai-thread-pulse {
-    0%, 100% {
-      box-shadow:
-        0 0 0 2px var(--color-surface),
-        0 0 0 4px color-mix(in oklch, var(--color-accent-blue) 40%, transparent);
-    }
-    50% {
-      box-shadow:
-        0 0 0 2px var(--color-surface),
-        0 0 0 7px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
-    }
+    box-shadow:
+      0 0 0 2px var(--color-surface),
+      0 0 0 4px color-mix(in oklch, var(--color-accent-blue) 28%, transparent);
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .ai-thread-node-live,
     .top-stat-live-dot {
       animation: none;
     }
@@ -1733,35 +1733,31 @@
     position: relative;
   }
 
+  /* compact-button: 三段 flex（lead / meta / trail），消除原 grid 5 列对
+     6 子元素的错位 + 字符乱飞观感。所有 inline 字段统一为 11px mono
+     uppercase 0.1em 字距（label / phase / time），token-delta 12px mono
+     tabular-nums；只有「freed」用 success 绿点突出节省量，其余 muted/
+     secondary，避免颜色割裂。 */
   .compact-button {
-    display: grid;
-    grid-template-columns: auto auto 1fr auto auto;
+    display: flex;
     align-items: center;
-    column-gap: 10px;
+    gap: 12px;
     width: 100%;
-    padding: 12px 16px;
-    background: linear-gradient(
-      90deg,
-      color-mix(in oklch, var(--color-warning) 9%, transparent) 0%,
-      color-mix(in oklch, var(--color-warning) 4%, transparent) 100%
-    );
-    border: 1px solid color-mix(in oklch, var(--color-warning) 32%, transparent);
+    padding: 10px 14px;
+    background: color-mix(in oklch, var(--color-warning) 6%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-warning) 26%, transparent);
     border-left-width: 3px;
-    border-radius: 10px;
+    border-radius: 8px;
     color: var(--color-warning-text);
     cursor: pointer;
     font-family: inherit;
     text-align: left;
-    transition: background 180ms ease, border-color 180ms ease, transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: var(--transition-base);
   }
 
   .compact-button:hover {
-    background: linear-gradient(
-      90deg,
-      color-mix(in oklch, var(--color-warning) 14%, transparent) 0%,
-      color-mix(in oklch, var(--color-warning) 7%, transparent) 100%
-    );
-    border-color: color-mix(in oklch, var(--color-warning) 45%, transparent);
+    background: color-mix(in oklch, var(--color-warning) 10%, transparent);
+    border-color: color-mix(in oklch, var(--color-warning) 38%, transparent);
   }
 
   .compact-button:focus-visible {
@@ -1769,22 +1765,40 @@
     outline-offset: 2px;
   }
 
-  .compact-chevron {
-    width: 14px;
-    height: 14px;
+  .compact-lead {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     flex-shrink: 0;
-    transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
-    opacity: 0.85;
+  }
+
+  .compact-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .compact-trail {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  .compact-chevron {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    opacity: 0.7;
   }
   .compact-chevron-rotate {
     transform: rotate(90deg);
-  }
-
-  .compact-layers-icon {
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-    opacity: 0.85;
   }
 
   .compact-label {
@@ -1792,69 +1806,60 @@
     font-weight: 700;
     font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0.14em;
-    flex-shrink: 0;
+    letter-spacing: 0.1em;
     color: var(--color-warning-text);
   }
 
   .compact-token-delta {
-    justify-self: center;
-    display: inline-flex;
-    align-items: baseline;
-    gap: 8px;
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    font-size: 12.5px;
+    font-size: 12px;
     color: var(--color-text-secondary);
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  /* "freed" 标记：dot + bold text 装饰，不依赖 border 做组件边界。
-     codex 二审 bug 2 + 二轮回归：原填充 chip 浅色对比 4.05:1（< AA 4.5）；
-     outline 风格修复后深色 border 仅 2.77:1（< WCAG 1.4.11 non-text 3:1）。
-     dot 与文字均用 var(--color-success) currentColor，浅色 4.76:1（AA pass，
-     按 sRGB），深色 9.58:1，绕开 border 对比度问题，且更符合 product
-     register 的"克制"——VS Code git diff 风的 IDE 标记，而非营销 chip。 */
+  /* "freed" 绿点 + 文字：保留 success 绿，因为它表达"释放了多少 token"
+     的正向语义，是 compact 组件唯一一个值得着色的数值。其余字段中性
+     色，与外框 warning 形成「容器 = warning / 内容值 = neutral / 收益值
+     = success」的语义分层。 */
   .compact-token-freed {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     color: var(--color-success);
-    font-weight: 700;
-    font-size: 12px;
-    letter-spacing: 0.02em;
-    padding: 0 2px;
+    font-weight: 600;
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
   }
   .compact-token-freed::before {
     content: "";
     display: inline-block;
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
     background: currentColor;
     flex-shrink: 0;
-    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-success) 14%, transparent);
   }
 
+  /* phase badge: 去 indigo 装饰（违反 Status Owns Color），改 neutral
+     mono uppercase。phase number 是元数据非状态，不应抢色彩注意力。 */
   .compact-phase-badge {
-    flex-shrink: 0;
-    padding: 2px 8px;
+    padding: 2px 7px;
     border-radius: 4px;
-    background: color-mix(in oklch, var(--color-accent-indigo) 14%, transparent);
-    color: var(--color-accent-indigo);
+    background: var(--badge-neutral-bg);
+    color: var(--badge-neutral-text);
     font-size: 10px;
     font-weight: 700;
     font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
     white-space: nowrap;
-    border: 1px solid color-mix(in oklch, var(--color-accent-indigo) 28%, transparent);
   }
 
   .compact-time {
-    flex-shrink: 0;
-    font-size: 10.5px;
+    font-size: 11px;
     color: var(--color-text-muted);
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
