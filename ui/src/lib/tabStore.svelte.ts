@@ -87,8 +87,17 @@ function focusedPane(): Pane {
   return p ?? paneLayout.panes[0];
 }
 
+/**
+ * Tab label 透传函数——SHALL NOT 做任何不可逆截断。
+ *
+ * 视觉截断由 TabBar.svelte 的 `.tab-label` CSS（`max-width` + `text-overflow:
+ * ellipsis`）完成；hover tooltip 由 `<button title={tab.label}>` 提供完整字符串。
+ *
+ * 详 spec `openspec/specs/tab-management/spec.md` §`打开 session tab` 与
+ * change `session-title-extraction-fix`（删除原 50 字 JS 截断造成的 hover 信息丢失）。
+ */
 function shortLabel(label: string): string {
-  return label.length > 50 ? label.slice(0, 50) + "…" : label;
+  return label;
 }
 
 // ---------------------------------------------------------------------------

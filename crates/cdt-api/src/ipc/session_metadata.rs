@@ -1,18 +1,22 @@
 //! 轻量 session 元数据提取：标题 + 消息计数。
 //!
-//! 与原版 `metadataExtraction.ts` 的 `analyzeSessionFileMetadata` 对齐：
-//! - 标题：第一条非 `is_meta`、非命令输出的 user 消息（清洗后截取前 200 字符）
-//! - 消息计数：user + 对应 assistant 轮次配对计数
-//! - `isOngoing`：`check_messages_ongoing` 结果再叠加 stale check（文件
-//!   mtime 距 now > 5 分钟视为 crashed/killed），对齐
-//!   `claude-devtools/src/main/services/discovery/ProjectScanner.ts`
-//!   `STALE_SESSION_THRESHOLD_MS = 5 * 60 * 1000`（issue #94）
+//! 标题语义见 spec `openspec/specs/ipc-data-api/spec.md`：
+//! - 跳过 `is_meta` / `<local-command-*>` 命令输出 / `[Request interrupted by user` 起首消息
+//! - 带非空 `<command-args>` 的 slash 直接作 title；空 / 无 args 的 slash 走 `command_fallback`
+//! - teammate-message 主导消息优先取 `summary` 属性；其它走 `sanitize_for_title`
+//! - `sanitize_for_title` 移除 8 个 system tag + `teammate-message` + `Read the output file…` 指令
+//! - 字符数 ≤ `TITLE_MAX_CHARS` (500，Unicode `char` 计数)
+//!
+//! 其它字段：
+//! - 消息计数：user + 对应 assistant 轮次配对计数，过滤规则对齐原版 `isParsedUserChunkMessage`
+//! - `isOngoing`：`check_messages_ongoing` + 文件 mtime stale check（5 分钟）
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex as StdMutex;
+use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
+use regex::Regex;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -24,6 +28,24 @@ use crate::cache_signature::FileSignature;
 /// 文件 mtime 距 now 超过此阈值则即便消息序列结构上为 ongoing 也强制判 done。
 /// 5 分钟，对齐原版 `STALE_SESSION_THRESHOLD_MS`。
 pub const STALE_SESSION_THRESHOLD: Duration = Duration::from_secs(5 * 60);
+
+/// `SessionSummary.title` 最大字符数（Unicode `char` 计数，非 byte）。
+/// 见 spec `ipc-data-api/spec.md` §`Title length is bounded by TITLE_MAX_CHARS constant`。
+pub const TITLE_MAX_CHARS: usize = 500;
+
+/// 中断消息字面量前缀。用户上一轮按 ESC 时 Claude Code 注入。
+/// 见 spec `ipc-data-api/spec.md` §`Sanitize title against interruption and task-output instructions`。
+const REQUEST_INTERRUPTED_PREFIX: &str = "[Request interrupted by user";
+
+/// `task-notification` 后系统注入的"读取输出文件"指令模式。
+/// 对齐 TS 原版 `contentSanitizer.ts::TASK_OUTPUT_INSTRUCTION_PATTERN`。
+fn task_output_instruction_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r" ?Read the output file to retrieve the result: \S+")
+            .expect("task-output regex 字面量合法")
+    })
+}
 
 /// 提取结果。
 pub struct SessionMetadata {
@@ -191,6 +213,8 @@ pub(crate) async fn extract_session_metadata_with_ongoing(path: &Path) -> (Sessi
         }
 
         // --- 标题提取（只在前 TITLE_MAX_LINES 行内）---
+        // spec：`ipc-data-api/spec.md` §`Title prefers slash command with non-empty args ...`
+        //                              §`Sanitize title against interruption and task-output instructions`
         if line_number <= TITLE_MAX_LINES
             && title.is_none()
             && msg.category == MessageCategory::User
@@ -198,19 +222,30 @@ pub(crate) async fn extract_session_metadata_with_ongoing(path: &Path) -> (Sessi
         {
             let text = extract_text(&msg.content);
             if !text.is_empty() {
+                let trimmed = text.trim_start();
                 if is_command_output(&text) {
                     // 跳过命令输出
+                } else if trimmed.starts_with(REQUEST_INTERRUPTED_PREFIX) {
+                    // 跳过用户中断标记（既不进 title 也不进 fallback）
                 } else if is_command_content(&text) {
-                    if command_fallback.is_none() {
-                        command_fallback = extract_command_display(&text);
+                    match extract_command_parts(&text) {
+                        Some((slash_name, args)) if !args.is_empty() => {
+                            // 带非空 args 的 slash 直接作 title
+                            let display = format!("{slash_name} {args}");
+                            title = Some(truncate_str(&display, TITLE_MAX_CHARS));
+                        }
+                        Some((slash_name, _)) if command_fallback.is_none() => {
+                            command_fallback = Some(slash_name);
+                        }
+                        _ => {}
                     }
                 } else if let Some(summary) = extract_teammate_summary_title(&text) {
                     // teammate-message 包裹的消息：优先取 `summary` 属性作为标题
-                    title = Some(truncate_str(&summary, 200));
+                    title = Some(truncate_str(&summary, TITLE_MAX_CHARS));
                 } else {
                     let sanitized = sanitize_for_title(&text);
                     if !sanitized.is_empty() {
-                        title = Some(truncate_str(&sanitized, 200));
+                        title = Some(truncate_str(&sanitized, TITLE_MAX_CHARS));
                     }
                 }
             }
@@ -444,17 +479,21 @@ fn is_command_output(content: &str) -> bool {
     content.starts_with("<local-command-stdout>") || content.starts_with("<local-command-stderr>")
 }
 
-/// 提取 slash 命令为 "/name args" 格式。
-fn extract_command_display(content: &str) -> Option<String> {
+/// 提取 slash 命令的 `(/name, args_trimmed)` 两部分。
+///
+/// - `/name`：永远带前导 `/`（即便原文 `<command-name>` 内未含 `/`）
+/// - `args_trimmed`：`<command-args>...</command-args>` 内容 trim 后的字符串；
+///   tag 缺失 / 自闭合 / 内容仅空白时 SHALL 返回空字符串
+///
+/// 返回 `None` 仅当 `<command-name>` tag 缺失或内容空。
+///
+/// 见 spec `ipc-data-api/spec.md` §`Title prefers slash command with non-empty args ...`。
+fn extract_command_parts(content: &str) -> Option<(String, String)> {
     let name = extract_tag_content(content, "command-name")?;
     let name = name.strip_prefix('/').unwrap_or(&name);
-    let display = format!("/{name}");
-    if let Some(args) = extract_tag_content(content, "command-args") {
-        if !args.is_empty() {
-            return Some(format!("{display} {args}"));
-        }
-    }
-    Some(display)
+    let slash_name = format!("/{name}");
+    let args = extract_tag_content(content, "command-args").unwrap_or_default();
+    Some((slash_name, args))
 }
 
 /// 从 `<tag>content</tag>` 提取 content。
@@ -518,6 +557,12 @@ fn sanitize_for_title(text: &str) -> String {
             break;
         }
     }
+    // task-notification 后系统注入的 "Read the output file to retrieve the result: <path>"
+    // 指令残留（task-notification tag 已剥），按正则全局移除。
+    // 见 spec `ipc-data-api/spec.md` §`Sanitize title against interruption and task-output instructions`。
+    let s = task_output_instruction_regex()
+        .replace_all(&s, "")
+        .into_owned();
     s.trim().to_string()
 }
 
@@ -1171,5 +1216,325 @@ mod tests {
         let f = std::fs::OpenOptions::new().write(true).open(path)?;
         f.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000))?;
         Ok(())
+    }
+
+    // ========================================================================
+    // change `session-title-extraction-fix` 新增 title 规则单测
+    // spec: openspec/specs/ipc-data-api/spec.md
+    //   §`Title prefers slash command with non-empty args ...`
+    //   §`Sanitize title against interruption and task-output instructions`
+    //   §`Title length is bounded by TITLE_MAX_CHARS constant`
+    //   §`Title algorithm changes do not invalidate MetadataCache`
+    // ========================================================================
+
+    fn slash_user_line(uuid: &str, ts: &str, name: &str, args: &str) -> String {
+        // 用 JSON Blocks 形式以避免双引号转义复杂；保持与原版 JSONL 兼容。
+        let content =
+            format!("<command-name>{name}</command-name><command-args>{args}</command-args>");
+        user_text_line(uuid, ts, &content)
+    }
+
+    #[tokio::test]
+    async fn slash_with_non_empty_args_used_as_title() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &slash_user_line(
+                    "u1",
+                    "2026-05-03T10:00:00.000Z",
+                    "/impeccable",
+                    "生成设计规范",
+                ),
+                &user_text_line("u2", "2026-05-03T10:00:01.000Z", "提一下PR"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.title.as_deref(), Some("/impeccable 生成设计规范"));
+    }
+
+    #[tokio::test]
+    async fn slash_with_empty_args_falls_back_to_next_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &slash_user_line("u1", "2026-05-03T10:00:00.000Z", "/clear", ""),
+                &user_text_line("u2", "2026-05-03T10:00:01.000Z", "今天的工作"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.title.as_deref(), Some("今天的工作"));
+    }
+
+    #[tokio::test]
+    async fn slash_without_args_tag_uses_fallback_when_no_other_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 无 <command-args> tag
+        let path = write_jsonl(
+            tmp.path(),
+            &[&user_text_line(
+                "u1",
+                "2026-05-03T10:00:00.000Z",
+                "<command-name>/help</command-name>",
+            )],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.title.as_deref(), Some("/help"));
+    }
+
+    #[tokio::test]
+    async fn interrupted_message_is_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line(
+                    "u1",
+                    "2026-05-03T10:00:00.000Z",
+                    "[Request interrupted by user during tooling cycle]",
+                ),
+                &user_text_line("u2", "2026-05-03T10:00:01.000Z", "继续"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.title.as_deref(), Some("继续"));
+    }
+
+    #[tokio::test]
+    async fn read_output_file_instruction_stripped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[&user_text_line(
+                "u1",
+                "2026-05-03T10:00:00.000Z",
+                "<task-notification>已完成</task-notification> Read the output file to retrieve the result: /tmp/result.txt",
+            )],
+        );
+        let meta = extract_session_metadata(&path).await;
+        let title = meta.title.unwrap_or_default();
+        assert!(
+            !title.contains("Read the output file"),
+            "title 不应含 Read the output file: {title:?}"
+        );
+        assert!(
+            !title.contains("/tmp/result.txt"),
+            "title 不应含路径: {title:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_output_file_multi_match_all_stripped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = "<task-notification>x</task-notification> Read the output file to retrieve the result: /a 中间文本 Read the output file to retrieve the result: /b";
+        let path = write_jsonl(
+            tmp.path(),
+            &[&user_text_line("u1", "2026-05-03T10:00:00.000Z", content)],
+        );
+        let meta = extract_session_metadata(&path).await;
+        let title = meta.title.unwrap_or_default();
+        assert!(
+            !title.contains("Read the output file"),
+            "多匹配均应移除: {title:?}"
+        );
+        assert!(!title.contains("/a"), "路径 /a 应被移除: {title:?}");
+        assert!(!title.contains("/b"), "路径 /b 应被移除: {title:?}");
+    }
+
+    #[tokio::test]
+    async fn slash_with_long_args_truncated_at_max_chars() {
+        let long_args: String = "测".repeat(700);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[&slash_user_line(
+                "u1",
+                "2026-05-03T10:00:00.000Z",
+                "/foo",
+                &long_args,
+            )],
+        );
+        let meta = extract_session_metadata(&path).await;
+        let title = meta.title.unwrap_or_default();
+        assert!(
+            title.chars().count() <= TITLE_MAX_CHARS,
+            "title 字符数 {} 应 <= {}",
+            title.chars().count(),
+            TITLE_MAX_CHARS
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_text_long_title_truncated_at_max_chars() {
+        let long_text: String = "字".repeat(700);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[&user_text_line(
+                "u1",
+                "2026-05-03T10:00:00.000Z",
+                &long_text,
+            )],
+        );
+        let meta = extract_session_metadata(&path).await;
+        let title = meta.title.unwrap_or_default();
+        assert!(
+            title.chars().count() <= TITLE_MAX_CHARS,
+            "title 字符数 {} 应 <= {}",
+            title.chars().count(),
+            TITLE_MAX_CHARS
+        );
+    }
+
+    // ---- 边界 / early-exit ----
+
+    #[tokio::test]
+    async fn slash_with_self_closing_command_args_treated_as_no_args() {
+        // 自闭合 `<command-args/>` —— `extract_tag_content` 只识别 `<tag>...</tag>`，
+        // 走"无 args"路径 → 进 fallback；有第二条 user → title = 第二条
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line(
+                    "u1",
+                    "2026-05-03T10:00:00.000Z",
+                    "<command-name>/foo</command-name><command-args/>",
+                ),
+                &user_text_line("u2", "2026-05-03T10:00:01.000Z", "真正的输入"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.title.as_deref(), Some("真正的输入"));
+    }
+
+    #[tokio::test]
+    async fn sanitized_to_only_whitespace_falls_back() {
+        // 第一条 user 仅含 system-reminder 标签 → sanitize 后空白 → 跳过 title
+        // 第二条 user 是真实输入 → 作 title
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line(
+                    "u1",
+                    "2026-05-03T10:00:00.000Z",
+                    "<system-reminder>internal</system-reminder>",
+                ),
+                &user_text_line("u2", "2026-05-03T10:00:01.000Z", "真实主题"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.title.as_deref(), Some("真实主题"));
+    }
+
+    #[tokio::test]
+    async fn title_once_set_does_not_get_overridden() {
+        // 第一条 user 已是有效 title T1；第二条 user T2、第三条带 args slash；
+        // title 应保持 T1（验证 `title.is_none()` early-exit gate）
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-05-03T10:00:00.000Z", "T1"),
+                &user_text_line("u2", "2026-05-03T10:00:01.000Z", "T2"),
+                &slash_user_line("u3", "2026-05-03T10:00:02.000Z", "/foo", "after-title-args"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.title.as_deref(), Some("T1"));
+    }
+
+    // ---- 缓存兼容性：算法变更不主动 invalidate ----
+    // spec: §`Title algorithm changes do not invalidate MetadataCache`
+
+    #[tokio::test]
+    async fn cache_hit_returns_legacy_title_without_recomputing() {
+        // 手动写入一个 cache entry，title 字段是"旧规则算出的"字面量；签名匹配
+        // 时 SHALL 直接返回该 title，不会被新算法覆盖。
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[&slash_user_line(
+                "u1",
+                "2026-05-03T10:00:00.000Z",
+                "/impeccable",
+                "新规则会用这串",
+            )],
+        );
+        let sig = FileSignature::from_metadata(&std::fs::metadata(&path).unwrap());
+
+        let cache = make_cache();
+        // 模拟旧版本缓存：title 写一个完全不同的字面量
+        cache.lock().unwrap().insert(
+            path.clone(),
+            MetadataCacheEntry {
+                signature: sig,
+                title: Some("旧规则算出的 title".to_string()),
+                message_count: 7,
+                messages_ongoing: false,
+                git_branch: None,
+            },
+        );
+
+        let m = extract_session_metadata_cached(&cache, &path).await;
+        assert_eq!(m.title.as_deref(), Some("旧规则算出的 title"));
+        assert_eq!(
+            m.message_count, 7,
+            "命中 cache 不重扫，message_count 来自 cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_miss_after_signature_change_uses_new_algorithm() {
+        // 先写入 cache 一个旧 title；append 文件让 signature 变化触发重扫；
+        // 重扫应用新算法（带 args slash 直接作 title）。
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[&user_text_line("u1", "2026-05-03T10:00:00.000Z", "old")],
+        );
+
+        let cache = make_cache();
+        // 第一次扫填入 cache
+        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        assert_eq!(m1.title.as_deref(), Some("old"));
+
+        // 把 cache 里的 title 篡改为模拟"按旧算法算出来的不同字面量"，签名仍匹配
+        {
+            let mut guard = cache.lock().unwrap();
+            if let Some(entry) = guard.map.get_mut(path.as_path()) {
+                entry.title = Some("legacy title from old algo".to_string());
+            }
+        }
+        // 命中：返回篡改后的旧 title
+        let m_legacy = extract_session_metadata_cached(&cache, &path).await;
+        assert_eq!(
+            m_legacy.title.as_deref(),
+            Some("legacy title from old algo")
+        );
+
+        // 现在 append 行让 signature 变化，触发重扫；新内容含带 args slash
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                user_text_line("u1", "2026-05-03T10:00:00.000Z", "old"),
+                slash_user_line("u2", "2026-05-03T10:00:02.000Z", "/impeccable", "新规则",),
+            ),
+        )
+        .unwrap();
+
+        let m_new = extract_session_metadata_cached(&cache, &path).await;
+        // 新扫描时第一条仍是 "old"（按 early-exit gate 它先被赋 title）。
+        // 关键 assertion：cache 已用 *新算法* 重算并写回，不再是 legacy 字面量
+        assert_ne!(
+            m_new.title.as_deref(),
+            Some("legacy title from old algo"),
+            "signature 变化后 SHALL 重扫，不再返回篡改后的旧 cache"
+        );
+        assert_eq!(m_new.title.as_deref(), Some("old"));
     }
 }

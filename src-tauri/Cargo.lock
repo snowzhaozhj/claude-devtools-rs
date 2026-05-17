@@ -621,6 +621,7 @@ dependencies = [
  "cdt-watch",
  "chrono",
  "futures",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.11.0",
