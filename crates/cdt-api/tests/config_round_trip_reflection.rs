@@ -148,7 +148,7 @@ async fn general_config_rejects_invalid_enum_values() {
 }
 
 // =============================================================================
-// DisplayConfig (5 字段；font_sans / font_mono 有 skip_serializing_if = "Option::is_none")
+// DisplayConfig (6 字段；font_sans / font_mono 有 skip_serializing_if = "Option::is_none")
 // =============================================================================
 
 const DISPLAY_EXPECTED_KEYS: &[&str] = &[
@@ -157,6 +157,7 @@ const DISPLAY_EXPECTED_KEYS: &[&str] = &[
     "syntaxHighlighting",
     "fontSans",
     "fontMono",
+    "timeFormat",
 ];
 
 #[tokio::test]
@@ -186,6 +187,7 @@ async fn display_config_all_fields_round_trip() {
         ("syntaxHighlighting", json!(false)),
         ("fontSans", json!("Arial")),
         ("fontMono", json!("Menlo")),
+        ("timeFormat", json!("12h")),
     ];
 
     let case_keys: HashSet<String> = cases.iter().map(|(k, _)| (*k).to_owned()).collect();

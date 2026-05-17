@@ -40,7 +40,8 @@ pub use trigger::{TriggerManager, TriggerValidationResult, merge_triggers, valid
 pub use trigger_matcher::{matches_ignore_patterns, matches_pattern};
 pub use types::{
     AppConfig, ConfigSection, DisplayConfig, GeneralConfig, HttpServerConfig, NotificationConfig,
-    NotificationTrigger, SessionsConfig, SshPersistConfig, TriggerContentType, TriggerMode,
+    NotificationTrigger, SessionsConfig, SshPersistConfig, TimeFormat, TriggerContentType,
+    TriggerMode,
 };
 pub use validation::{
     normalize_claude_root_path, validate_claude_root_path, validate_http_port, validate_section,
