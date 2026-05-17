@@ -1397,7 +1397,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .ai-thread-node-live {
+    .ai-thread-node-live,
+    .top-stat-live-dot {
       animation: none;
     }
     .msg-ai-container::before {
@@ -1787,14 +1788,18 @@
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
+  /* outline 风格 chip：透明背景 + outline border + 加粗文字。
+     浅色 #15803d 在 surface #f9f9f7 上对比度 ~5.28:1（AA pass）；
+     旧版填充 12% bg 把对比度拉到 ~4.05:1 (codex 二审 bug 2)。 */
   .compact-token-freed {
     color: var(--color-success);
     font-weight: 700;
     padding: 1px 8px;
     border-radius: 9999px;
-    background: color-mix(in oklch, var(--color-success) 12%, transparent);
-    border: 1px solid color-mix(in oklch, var(--color-success) 30%, transparent);
-    font-size: 11px;
+    background: transparent;
+    border: 1.5px solid color-mix(in oklch, var(--color-success) 42%, transparent);
+    font-size: 11.5px;
+    letter-spacing: 0.01em;
   }
 
   .compact-phase-badge {
