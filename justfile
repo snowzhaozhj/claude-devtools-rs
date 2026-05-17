@@ -126,6 +126,20 @@ release-build:
     pnpm --dir ui run build
     cargo tauri build
 
+# 失败即停 + 给清晰下一步提示；publish draft 留 agent / 用户决策（destructive shared state）
+# 散步骤手把手发版走 `release-runbook` skill
+# 端到端发版：bump → preflight → PR → wait-ci → merge → tag → 监控 release.yml → draft ready
+release version:
+    scripts/release.sh {{version}}
+
+# 同 just release，但 dry-run：只 echo 不执行 destructive 操作（push / merge / tag / ...）
+release-dry-run version:
+    scripts/release.sh --dry-run {{version}}
+
+# 续跑：脚本中途失败修完后跳过已完成步骤继续
+release-resume version:
+    scripts/release.sh --resume {{version}}
+
 # ──────── 维护清理 ────────
 
 # 扫 worktree，列出已 merge 且工作树干净的可清理候选（dry-run）

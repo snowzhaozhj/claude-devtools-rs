@@ -1,6 +1,6 @@
 ---
 name: release-runbook
-description: 完整发版流水线（preflight → bump → release-check → PR → wait-ci → merge → tag → 监控 release.yml → publish draft）+ v0.1.0–v0.5.3 已踩坑的 known-failures playbook（matrix race / Windows MSI 字母版本号 / minisign 链 / lock 不同步 / Gatekeeper / Linux .deb 升级限制）。**用户说 `/release-runbook X.Y.Z` 或"发版 / release / 发个 patch / bump 到 X.Y.Z / 发 vX"时都用这个 skill**，不要自己散步骤跑——历史上每个 step 都有踩过的坑。
+description: 完整发版流水线（preflight → bump → release-check → PR → wait-ci → merge → tag → 监控 release.yml → publish draft）+ v0.1.0–v0.5.3 已踩坑的 known-failures playbook（matrix race / Windows MSI 字母版本号 / minisign 链 / lock 不同步 / Gatekeeper / Linux .deb 升级限制）。**用户说 `/release-runbook X.Y.Z` 或"发版 / release / 发个 patch / bump 到 X.Y.Z / 发 vX"时都用这个 skill**——优先走 `just release X.Y.Z` 端到端脚本（0 agent token），脚本退出非 0 时本 skill 的散步骤是回退手册。
 ---
 
 # release-runbook
@@ -9,21 +9,36 @@ description: 完整发版流水线（preflight → bump → release-check → PR
 > 输出：步进式执行 + 每步状态报告
 > 修改：三处版本号 + Cargo.lock + src-tauri/Cargo.lock；不动业务代码
 
-## 一句话流程
+## 默认路径：`just release X.Y.Z`（端到端脚本）
 
+**首选**：`just release X.Y.Z` 一条命令端到端跑 bump → preflight → PR → wait-ci → squash merge → tag → push tag → 监控 release.yml → 验 4 平台 asset → 退出 0（draft ready）。整段流水线 0 agent token 介入。
+
+```bash
+just release 0.5.6              # 真实发版
+just release-dry-run 0.5.6      # 只 echo 不执行 destructive 操作
+just release-resume 0.5.6       # 中途失败修完后续跑
 ```
-preflight → 分支 → bump 三处 → just release-check (会改 lock) →
-amend lock 进同一 commit → push PR → /wait-ci → codex 二审 → merge →
-main 拉新 → tag vX.Y.Z → push tag → 监控 release.yml →
-4 平台 asset 全到位 → publish draft
-```
+
+脚本退出码：
+- `0` draft ready — agent / 用户检查 release notes 后跑 `gh release edit v$VER --draft=false` publish
+- `1` 入参错误 / 工作树脏 / 版本回退 / 字母版本号
+- `2` preflight 失败
+- `3` PR CI 红
+- `4` release.yml 红（命中 F1/F3/F4 — 需改 workflow 或 secret）
+- `5` release.yml 通过但 asset 不齐
+- `99` 未知错误
+
+**何时不走脚本**（散步骤手把手）：
+- 脚本退出非 0 且诊断不清楚——agent 接管按下面步骤定位
+- 用户显式说"散步骤跑 / 一步一停"
+- 发版流程本身要改（脚本走过一次后才能识别新坑）
 
 ## 何时用 release-engineer subagent vs 本 skill
 
-- **本 skill（手把手）**：日常 patch（0.x.y bump、单 hotfix）；要看清每一步、需要在某步停下沟通。
+- **本 skill（手把手）**：脚本失败回退；日常 patch（0.x.y bump、单 hotfix）；要看清每一步、需要在某步停下沟通。
 - **`release-engineer` subagent**（`Agent({ subagent_type: "release-engineer", ... })`）：大版本发版懒得手把手，subagent 在隔离 context 里自治推进，遇 known-failure 自动套 playbook fix，只在 playbook 不命中时回主对话升级。
 
-两者共享同一 playbook（F1-F7）；subagent 是把本 skill 跑到底的自动化版本。
+三者共享同一 playbook（F1-F7）；脚本是机械路径、subagent 是自治版本、本 skill 是回退手册。
 
 ## 何时用 bg dispatch
 
