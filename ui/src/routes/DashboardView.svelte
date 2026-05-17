@@ -1,11 +1,23 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
-  import { type ProjectInfo } from "../lib/api";
-  import { loadProjectData } from "../lib/projectDataStore.svelte";
+  import { loadProjectData, getProjectData, type ProjectData } from "../lib/projectDataStore.svelte";
+  import {
+    deriveDashboardProjects,
+    sortDashboardProjects,
+    filterDashboardProjects,
+    formatRelativeTime,
+    type DashboardProject,
+    type DashboardSortKey,
+  } from "../lib/dashboardProjects";
   import { shortenPath } from "../lib/toolHelpers";
-  import { FOLDER_GIT2_SVG } from "../lib/icons";
+  import { FOLDER_GIT2_SVG, GIT_BRANCH_SVG, CHEVRON_DOWN } from "../lib/icons";
   import Skeleton from "../components/Skeleton.svelte";
-  import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
+  import {
+    registerHandler,
+    unregisterHandler,
+    scheduleRefresh,
+    cancelScheduledRefresh,
+  } from "../lib/fileChangeStore.svelte";
 
   interface Props {
     selectedProjectId: string;
@@ -14,114 +26,282 @@
 
   let { selectedProjectId, onSelectProject }: Props = $props();
 
-  let projects: ProjectInfo[] = $state([]);
-  let loading = $state(true);
-  let filterQuery = $state("");
+  type ViewMode = "list" | "grid";
 
-  // 点击当前已选项目时无 selectedProjectId 变化 → App 状态不更新，
-  // 用户感知不到反馈。给当前卡片打一个短暂 pulse class 触发 ring 动画，
-  // 让点击被"听到"。同时仍调 onSelectProject——若用户从 dashboard 点
-  // 当前选中项目，是想表达"切到这个项目的会话视图"，App 层面无 tab
-  // 时仍会触发 sidebar 滚动 + active 视觉刷新（即使 id 相同）。
+  // 偏好持久化：list/grid 视图与排序方式都属于工作台级别偏好，应跨会话稳定。
+  // 启动时读 localStorage 一次；后续在 effect 里同步写。
+  const VIEW_STORAGE_KEY = "cdt:dashboard:view";
+  const SORT_STORAGE_KEY = "cdt:dashboard:sort";
+
+  function readView(): ViewMode {
+    if (typeof localStorage === "undefined") return "list";
+    const v = localStorage.getItem(VIEW_STORAGE_KEY);
+    return v === "grid" ? "grid" : "list";
+  }
+  function readSort(): DashboardSortKey {
+    if (typeof localStorage === "undefined") return "recent";
+    const v = localStorage.getItem(SORT_STORAGE_KEY);
+    return v === "sessions" || v === "name" ? v : "recent";
+  }
+
+  let viewMode: ViewMode = $state(readView());
+  let sortKey: DashboardSortKey = $state(readSort());
+  let filterQuery = $state("");
+  // 模块级 store 已 cache 时直接复用，避免冷启首屏闪一帧 skeleton；
+  // `untrack` 抑制 svelte-check `state_referenced_locally` 警告。
+  let projectData: ProjectData | null = $state(untrack(() => getProjectData()));
+  let loading = $state(untrack(() => projectData === null));
+  let searchEl: HTMLInputElement | undefined = $state();
+
+  // 点击当前已选项目时无 selectedProjectId 变化 → App 状态不更新；
+  // 给当前行/卡片打短暂 pulse 触发 ring 动画，让点击被"听到"。
   let pulsingId = $state<string | null>(null);
   let pulseTimer: ReturnType<typeof setTimeout> | undefined;
 
-  function handleCardClick(project: ProjectInfo) {
-    if (project.id === selectedProjectId) {
-      pulsingId = project.id;
+  function handleSelect(p: DashboardProject) {
+    if (p.id === selectedProjectId) {
+      pulsingId = p.id;
       if (pulseTimer) clearTimeout(pulseTimer);
       pulseTimer = setTimeout(() => {
         pulsingId = null;
       }, 480);
     }
-    onSelectProject(project.id, project.displayName);
+    onSelectProject(p.id, p.displayName);
   }
 
-  async function loadProjects(silent = false) {
-    if (!silent) loading = true;
+  async function loadData(silent = false) {
+    if (!silent && projectData === null) loading = true;
     try {
-      projects = (await loadProjectData({ refresh: silent })).projects;
+      projectData = await loadProjectData({ refresh: silent });
     } catch (e) {
-      console.error("Failed to load projects:", e);
+      console.error("Failed to load dashboard data:", e);
     } finally {
-      if (!silent) loading = false;
+      loading = false;
     }
   }
 
   onMount(async () => {
-    await loadProjects();
+    await loadData();
     registerHandler("dashboard-projects", (payload) => {
       if (!payload.projectListChanged) return;
-      scheduleRefresh("dashboard:projects", () =>
-        untrack(() => loadProjects(true)),
-      );
+      scheduleRefresh("dashboard:projects", () => untrack(() => loadData(true)));
     });
   });
 
   onDestroy(() => {
     unregisterHandler("dashboard-projects");
     cancelScheduledRefresh("dashboard:projects");
+    if (pulseTimer) clearTimeout(pulseTimer);
   });
 
-  const filtered = $derived(
-    filterQuery
-      ? projects.filter(p =>
-          p.displayName.toLowerCase().includes(filterQuery.toLowerCase()) ||
-          p.path.toLowerCase().includes(filterQuery.toLowerCase()))
-      : projects
+  $effect(() => {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(VIEW_STORAGE_KEY, viewMode);
+    }
+  });
+  $effect(() => {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(SORT_STORAGE_KEY, sortKey);
+    }
+  });
+
+  // Sidebar / Settings 路径触发的 store 刷新（如 SettingsView 改 claudeRootPath
+  // → cdt-refresh-projects → Sidebar.loadProjects → 写 store）需要在 Dashboard
+  // 这边同步本地副本，否则 Dashboard 会卡在 mount 时的旧值。
+  // 与 App.svelte 同款订阅模式（codex CR 反馈）。
+  $effect(() => {
+    const cached = getProjectData();
+    if (cached) projectData = cached;
+  });
+
+  const derivedProjects = $derived(deriveDashboardProjects(projectData));
+  const sorted = $derived(sortDashboardProjects(derivedProjects, sortKey));
+  const visible = $derived(filterDashboardProjects(sorted, filterQuery));
+
+  const sortLabel = $derived(
+    sortKey === "recent" ? "最近活动" : sortKey === "sessions" ? "会话数最多" : "字母序",
   );
+
+  // `/` 全局聚焦搜索（IDE 通用），仅当焦点不在 input/textarea 时生效。
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target as HTMLElement | null;
+    if (
+      t &&
+      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)
+    ) {
+      return;
+    }
+    e.preventDefault();
+    searchEl?.focus();
+    searchEl?.select();
+  }
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="dashboard">
   <div class="dashboard-inner">
     <!-- 搜索框 -->
     <div class="dash-search-wrap">
       <input
+        bind:this={searchEl}
         class="dash-search"
-        type="search"
+        type="text"
         placeholder="搜索项目..."
         bind:value={filterQuery}
-        autocomplete="off"
-        autocorrect="off"
-        autocapitalize="off"
-        spellcheck="false"
-        enterkeyhint="search"
-        aria-label="搜索项目"
       />
-      <kbd class="dash-kbd">⌘K</kbd>
+      <kbd class="dash-kbd" title="按 / 聚焦搜索">/</kbd>
     </div>
 
-    <!-- 标题 -->
-    <div class="dash-section-header">
-      <span class="dash-section-title">
-        {filterQuery ? "搜索结果" : "最近项目"}
-      </span>
-      <span class="dash-section-count">{filtered.length} 个项目</span>
-    </div>
+    <!-- ⌘K 独立提示 -->
+    <button
+      class="dash-cmdk-hint"
+      onclick={() => {
+        window.dispatchEvent(new CustomEvent("cdt-open-command-palette"));
+      }}
+    >
+      <kbd>⌘K</kbd>
+      <span>跨项目搜索会话 / 工具 / 文件</span>
+    </button>
 
-    <!-- 卡片网格 -->
-    {#if loading && projects.length === 0}
-      <div class="dash-grid" role="status" aria-busy="true" aria-label="正在加载项目">
-        {#each Array.from({ length: 6 }) as _, i (i)}
-          <Skeleton variant="card" height={132} />
-        {/each}
+    <!-- 工具栏：标题 + 排序 + 视图切换 -->
+    <div class="dash-toolbar">
+      <div class="dash-toolbar-title">
+        {#if filterQuery}
+          搜索结果 · {visible.length} / {sorted.length}
+        {:else}
+          {sorted.length} 个项目 · 按{sortLabel}排序
+        {/if}
       </div>
-    {:else if filtered.length === 0}
+
+      <div class="dash-toolbar-controls">
+        <label class="dash-sort">
+          <span class="dash-sort-label">排序</span>
+          <span class="dash-sort-select-wrap">
+            <select class="dash-sort-select" bind:value={sortKey}>
+              <option value="recent">最近活动</option>
+              <option value="sessions">会话数最多</option>
+              <option value="name">字母序</option>
+            </select>
+            <svg
+              class="dash-sort-chevron"
+              viewBox="0 0 24 24"
+              width="12"
+              height="12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d={CHEVRON_DOWN} />
+            </svg>
+          </span>
+        </label>
+
+        <div class="dash-view-toggle" role="group" aria-label="视图切换">
+          <button
+            class="dash-view-btn"
+            class:dash-view-btn-active={viewMode === "list"}
+            onclick={() => (viewMode = "list")}
+            aria-pressed={viewMode === "list"}
+            title="列表视图"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="8" y1="6" x2="21" y2="6" />
+              <line x1="8" y1="12" x2="21" y2="12" />
+              <line x1="8" y1="18" x2="21" y2="18" />
+              <line x1="3" y1="6" x2="3.01" y2="6" />
+              <line x1="3" y1="12" x2="3.01" y2="12" />
+              <line x1="3" y1="18" x2="3.01" y2="18" />
+            </svg>
+          </button>
+          <button
+            class="dash-view-btn"
+            class:dash-view-btn-active={viewMode === "grid"}
+            onclick={() => (viewMode = "grid")}
+            aria-pressed={viewMode === "grid"}
+            title="网格视图"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="7" />
+              <rect x="14" y="3" width="7" height="7" />
+              <rect x="3" y="14" width="7" height="7" />
+              <rect x="14" y="14" width="7" height="7" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 内容 -->
+    {#if loading && derivedProjects.length === 0}
+      {#if viewMode === "grid"}
+        <div class="dash-grid" role="status" aria-busy="true" aria-label="正在加载项目">
+          {#each Array.from({ length: 6 }) as _, i (i)}
+            <Skeleton variant="card" height={108} />
+          {/each}
+        </div>
+      {:else}
+        <div class="dash-list-skeleton" role="status" aria-busy="true" aria-label="正在加载项目">
+          {#each Array.from({ length: 8 }) as _, i (i)}
+            <Skeleton variant="card" height={52} />
+          {/each}
+        </div>
+      {/if}
+    {:else if visible.length === 0}
       <div class="dash-status">
         {filterQuery ? "无匹配项目" : "未发现项目"}
       </div>
+    {:else if viewMode === "list"}
+      <ul class="dash-list" role="list">
+        {#each visible as project (project.id)}
+          {@const isActive = project.id === selectedProjectId}
+          {@const isPulsing = project.id === pulsingId}
+          <li>
+            <button
+              class="dash-row"
+              class:dash-row-active={isActive}
+              class:dash-row-pulse={isPulsing}
+              onclick={() => handleSelect(project)}
+            >
+              <div class="dash-row-main">
+                <span class="dash-row-name">{project.displayName}</span>
+                {#if project.lastModified !== null}
+                  <span class="dash-row-time">{formatRelativeTime(project.lastModified)}</span>
+                {/if}
+                {#if project.worktreeCount > 1}
+                  <span class="dash-row-chip" title="{project.worktreeCount} 个 worktree">
+                    <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html GIT_BRANCH_SVG}</svg>
+                    {project.worktreeCount}
+                  </span>
+                {/if}
+                <span class="dash-row-sessions" title="{project.sessionCount} 个会话">
+                  💬 {project.sessionCount}
+                </span>
+                {#if isActive}
+                  <span class="dash-row-current">当前</span>
+                {/if}
+              </div>
+              <div class="dash-row-path">{shortenPath(project.path)}</div>
+            </button>
+          </li>
+        {/each}
+      </ul>
     {:else}
       <div class="dash-grid">
-        {#each filtered as project (project.id)}
+        {#each visible as project (project.id)}
           {@const isActive = project.id === selectedProjectId}
           {@const isPulsing = project.id === pulsingId}
           <button
             class="dash-card"
             class:dash-card-active={isActive}
             class:dash-card-pulse={isPulsing}
-            onclick={() => handleCardClick(project)}
+            onclick={() => handleSelect(project)}
           >
-            <div class="dash-card-icon">
+            <div class="dash-card-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 {@html FOLDER_GIT2_SVG}
               </svg>
@@ -129,9 +309,18 @@
             <div class="dash-card-name">{project.displayName}</div>
             <div class="dash-card-path">{shortenPath(project.path)}</div>
             <div class="dash-card-meta">
-              {project.sessionCount} 个会话
+              {#if project.lastModified !== null}
+                <span class="dash-card-time">{formatRelativeTime(project.lastModified)}</span>
+              {/if}
+              {#if project.worktreeCount > 1}
+                <span class="dash-card-chip" title="{project.worktreeCount} 个 worktree">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html GIT_BRANCH_SVG}</svg>
+                  {project.worktreeCount}
+                </span>
+              {/if}
+              <span class="dash-card-sessions">💬 {project.sessionCount}</span>
               {#if isActive}
-                <span class="dash-card-active-tag">当前</span>
+                <span class="dash-card-current">当前</span>
               {/if}
             </div>
           </button>
@@ -146,27 +335,22 @@
     display: flex;
     justify-content: center;
     height: 100%;
-    /* 强制 overflow-y: scroll 永久占用 6px 滚动条位（app.css 全局定义），
-       filter 后内容变短 → 滚动条「消失」→ 可用宽度跳变的抖动彻底消除。
-       配合 scrollbar-gutter: stable both-edges 让新 WebKit 上左右对称居中；
-       老 WebKit 不识别 both-edges 也只是右边占 6px、轻微左偏，不会再抖动。
-       `auto` → `scroll` 是关键修复：scrollbar-gutter 在 Safari < 18.2 部分
-       不生效，scroll 模式才是跨平台彻底解。 */
-    overflow-y: scroll;
+    overflow-y: auto;
     overflow-x: hidden;
     padding: 48px 24px;
-    scrollbar-gutter: stable both-edges;
   }
 
   .dashboard-inner {
     width: 100%;
-    max-width: 1100px;
+    max-width: 1200px;
     min-width: 0;
   }
 
+  /* ---------- 搜索 ---------- */
+
   .dash-search-wrap {
     position: relative;
-    margin-bottom: 32px;
+    margin-bottom: 8px;
   }
 
   .dash-search {
@@ -178,28 +362,18 @@
     border: 1px solid var(--color-border-emphasis);
     border-radius: 10px;
     padding: 12px 16px;
-    padding-right: 60px;
+    padding-right: 56px;
     outline: none;
-    /* 只 transition border-color：box-shadow 走动画时 blur 会拖尾 0.15s 才消失，
-       且和 grid 重排同时进行视觉上像在"晃"。focus 时直接出 ring，blur 直接收。 */
-    transition: border-color 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
 
   .dash-search:focus {
     border-color: var(--color-accent-blue);
-    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
-    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 18%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent-blue) 15%, transparent);
   }
 
   .dash-search::placeholder {
     color: var(--color-text-muted);
-  }
-
-  /* type=search 在 WebKit 下渲染原生 clear 按钮，与 ⌘K kbd 视觉冲突，隐藏掉。 */
-  .dash-search::-webkit-search-cancel-button,
-  .dash-search::-webkit-search-decoration {
-    appearance: none;
-    -webkit-appearance: none;
   }
 
   .dash-kbd {
@@ -216,30 +390,264 @@
     pointer-events: none;
   }
 
-  .dash-section-header {
+  /* ---------- ⌘K 提示 ---------- */
+
+  .dash-cmdk-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 24px;
+    padding: 4px 8px;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: color 0.12s, background 0.12s;
+  }
+
+  .dash-cmdk-hint:hover {
+    color: var(--color-text-secondary);
+    background: var(--tool-item-hover-bg);
+  }
+
+  .dash-cmdk-hint kbd {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--badge-neutral-bg);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--color-text-secondary);
+  }
+
+  /* ---------- 工具栏 ---------- */
+
+  .dash-toolbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
     margin-bottom: 12px;
+    flex-wrap: wrap;
   }
 
-  .dash-section-title {
+  .dash-toolbar-title {
     font-size: 13px;
     font-weight: 600;
     color: var(--color-text-secondary);
   }
 
-  .dash-section-count {
+  .dash-toolbar-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .dash-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: 12px;
     color: var(--color-text-muted);
   }
 
-  .dash-status {
-    text-align: center;
-    padding: 48px 0;
-    color: var(--color-text-muted);
-    font-size: 14px;
+  .dash-sort-select-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
   }
+
+  .dash-sort-select {
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 4px 24px 4px 8px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--color-text);
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.12s;
+  }
+
+  .dash-sort-select:hover,
+  .dash-sort-select:focus-visible {
+    border-color: var(--color-border-emphasis);
+  }
+
+  .dash-sort-chevron {
+    position: absolute;
+    right: 6px;
+    pointer-events: none;
+    color: var(--color-text-muted);
+  }
+
+  .dash-view-toggle {
+    display: inline-flex;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .dash-view-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    background: var(--color-surface);
+    border: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+
+  .dash-view-btn + .dash-view-btn {
+    border-left: 1px solid var(--color-border);
+  }
+
+  .dash-view-btn:hover {
+    color: var(--color-text-secondary);
+    background: var(--tool-item-hover-bg);
+  }
+
+  .dash-view-btn-active {
+    background: var(--color-surface-raised);
+    color: var(--color-text);
+  }
+
+  /* ---------- list 视图 ---------- */
+
+  .dash-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--color-surface);
+  }
+
+  .dash-list-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .dash-list > li + li {
+    border-top: 1px solid var(--color-border-subtle, var(--color-border));
+  }
+
+  .dash-row {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 14px;
+    background: transparent;
+    border: none;
+    text-align: left;
+    font: inherit;
+    color: var(--color-text);
+    cursor: pointer;
+    transition: background 0.12s;
+    min-width: 0;
+    position: relative;
+  }
+
+  .dash-row:hover {
+    background: var(--tool-item-hover-bg);
+  }
+
+  .dash-row-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .dash-row-name {
+    font-size: 14px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+
+  .dash-row-time {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  .dash-row-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--color-surface-overlay);
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .dash-row-chip svg {
+    flex-shrink: 0;
+  }
+
+  .dash-row-sessions {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .dash-row-current {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--badge-neutral-bg);
+    color: var(--color-text-secondary);
+    letter-spacing: 0.02em;
+    flex-shrink: 0;
+  }
+
+  .dash-row-path {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 选中态：raised bg + inset emphasis ring（无 side-stripe）。 */
+  .dash-row-active {
+    background: var(--color-surface-raised);
+    box-shadow: inset 0 0 0 1.5px var(--color-border-emphasis);
+  }
+
+  .dash-row-active:hover {
+    background: var(--color-surface-raised);
+  }
+
+  .dash-row-pulse {
+    animation: dash-pulse 0.45s ease-out;
+  }
+
+  /* ---------- grid 视图 ---------- */
 
   .dash-grid {
     display: grid;
@@ -261,55 +669,24 @@
     text-align: left;
     font: inherit;
     color: var(--color-text);
-    transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+    transition: border-color 0.15s, background 0.15s;
     min-width: 0;
   }
 
   .dash-card:hover {
     border-color: var(--color-border-emphasis);
     background: var(--color-surface-raised);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   }
 
-  /* 当前选中项目卡片：左侧 3px accent + 边框加重 + 背景变色 */
+  /* 选中态：raised + inset ring，去掉原来的 ::before 3px 装饰条。 */
   .dash-card-active {
-    border-color: var(--color-border-emphasis);
     background: var(--color-surface-raised);
+    box-shadow: inset 0 0 0 1.5px var(--color-border-emphasis);
+    border-color: var(--color-border-emphasis);
   }
-  .dash-card-active::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 16px;
-    bottom: 16px;
-    width: 3px;
-    border-radius: 2px;
-    background: var(--color-border-emphasis);
-  }
-  .dash-card-active-tag {
-    margin-left: 6px;
-    font-size: 10px;
-    font-weight: 500;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: var(--badge-neutral-bg);
-    color: var(--color-text-secondary);
-    letter-spacing: 0.02em;
-  }
-  /* 点击当前已选卡片时的脉冲反馈。keyframes 直接用 color-mix(accent-blue ...)
-     跟随主题切换；旧 WebKitGTK 走 rgba fallback。 */
+
   .dash-card-pulse {
-    animation: dash-card-pulse 0.45s ease-out;
-  }
-  @keyframes dash-card-pulse {
-    0% {
-      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45);
-      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 45%, transparent);
-    }
-    100% {
-      box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
-      box-shadow: 0 0 0 10px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
-    }
+    animation: dash-pulse 0.45s ease-out;
   }
 
   .dash-card-icon {
@@ -348,8 +725,68 @@
   }
 
   .dash-card-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
     font-size: 12px;
     color: var(--color-text-secondary);
-    margin-top: 4px;
+    margin-top: 6px;
+  }
+
+  .dash-card-time {
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-muted);
+  }
+
+  .dash-card-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--color-surface-overlay);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .dash-card-sessions {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .dash-card-current {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--badge-neutral-bg);
+    color: var(--color-text-secondary);
+    letter-spacing: 0.02em;
+  }
+
+  /* ---------- 共享 ---------- */
+
+  .dash-status {
+    text-align: center;
+    padding: 48px 0;
+    color: var(--color-text-muted);
+    font-size: 14px;
+  }
+
+  @keyframes dash-pulse {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 45%, transparent);
+    }
+    100% {
+      box-shadow: 0 0 0 10px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dash-row-pulse,
+    .dash-card-pulse {
+      animation: none;
+    }
   }
 </style>

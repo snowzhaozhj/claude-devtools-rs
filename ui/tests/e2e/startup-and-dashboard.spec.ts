@@ -12,14 +12,13 @@ test.describe('startup + dashboard', () => {
       page.getByRole('button', { name: /选择项目|rust-port|claude-devtools/ }).first(),
     ).toBeVisible()
 
-    // Dashboard 标题（搜索 placeholder + 「最近项目」section）
+    // Dashboard 标题（搜索 placeholder + toolbar 项目计数行）
     await expect(page.getByPlaceholder('搜索项目...')).toBeVisible()
-    await expect(page.getByText('最近项目')).toBeVisible()
 
-    // Fixture 5 个项目应至少看到 1 个项目名（Dashboard 卡片渲染）
+    // Fixture 5 个项目应至少看到 1 个项目名（Dashboard list/grid 渲染）
     await expect(page.getByText('rust-port').first()).toBeVisible()
 
-    // 项目计数（fixture 5 个项目）
+    // toolbar 计数行：fixture 5 个项目 · 按最近活动排序
     await expect(page.getByText(/5 个项目/)).toBeVisible()
 
     await expect(page).toHaveScreenshot('startup-dashboard.png')

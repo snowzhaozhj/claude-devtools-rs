@@ -150,8 +150,13 @@
     }
   }
 
+  const openCommandPalette = () => {
+    commandPaletteOpen = true;
+  };
+
   onMount(async () => {
     document.addEventListener("keydown", handleGlobalKeydown);
+    window.addEventListener("cdt-open-command-palette", openCommandPalette);
     // 拦截 markdown 内的外链点击，走系统默认浏览器而非 webview 窗口内导航
     detachExternalLinks = attachExternalLinkInterceptor();
     // 监听后端 notification-update 事件（mark-as-read 后刷新 badge）
@@ -212,6 +217,7 @@
 
   onDestroy(() => {
     document.removeEventListener("keydown", handleGlobalKeydown);
+    window.removeEventListener("cdt-open-command-palette", openCommandPalette);
     unlistenNotif?.();
     unlistenNotifAdded?.();
     unlistenUpdater?.();
