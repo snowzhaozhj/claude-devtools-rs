@@ -50,5 +50,20 @@
   },
   "worktree": {
     "symlinkDirectories": ["ui/node_modules"]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git fetch:*)",
+      "Bash(git checkout -b *)",
+      "Bash(git branch -m *)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr comment:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run list:*)"
+    ]
   }
 }

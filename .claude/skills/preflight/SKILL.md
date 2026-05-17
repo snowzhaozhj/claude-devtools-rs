@@ -1,12 +1,12 @@
 ---
 name: preflight
-description: 开工 30 秒自检——分支 / OpenSpec 适用性 / 探索方式三件套。用户 `/preflight` 或自然语言"开始干 / 帮我做 X"等开工信号时主动跑一遍，避免落入"在 main 直接编辑 / 跳过 OpenSpec / 不用 Explore subagent"三个高频 friction。
+description: 开工 30 秒自检——分支 / OpenSpec 适用性 / 探索方式 / 收尾流水线契约四件套。用户 `/preflight` 或自然语言开工信号（含动词 `优化 / 改 / 修 / 加 / 做 / 帮我 / 能不能 / 实现 / 重写 / 重构 / polish` 等）时主动跑一遍，避免落入"在 main 直接编辑 / 跳过 OpenSpec / 不用 Explore subagent / 中途停手不走完流水线"四个高频 friction。
 ---
 
 # preflight
 
-> 触发：`/preflight` 命令；或用户开工信号（"开始做 X / 帮我实现 Y / 先做 A 再做 B"）
-> 输出：3 个检查结果 + 给用户的简短确认问题
+> 触发：`/preflight` 命令；或用户首条 message 含开工动词（`优化 / 改 / 修 / 加 / 做 / 帮我 / 能不能 / 实现 / 重写 / 重构 / polish` 等）
+> 输出：4 个检查结果 + 给用户的简短确认问题
 > 不修改任何文件——只读 + 决策。
 
 ## 为什么有这个 skill
@@ -15,8 +15,9 @@ description: 开工 30 秒自检——分支 / OpenSpec 适用性 / 探索方式
 - "skipping branch creation" → 在 main 上编辑（已配 hook 拦截，但仍有路径白名单空隙）
 - "skipping OpenSpec evaluation" → 行为契约改动事后补 spec
 - "skipping Explore subagent" → 主动 grep / Read 污染主上下文
+- "中途停手不走完流水线" → 业务改完就停，让用户监工 commit / push / PR / codex / wait-ci，违反 CLAUDE.md "PR 默认走完整流水线"约定
 
-CLAUDE.md 第 1-2 条已经写了这套规则，但 Claude 在"看上去很急"的请求下会跳。这个 skill 强制把"跳"成本提前——开工先回答 3 个问题，再触工具。
+CLAUDE.md 第 1-2 条已经写了这套规则，但 Claude 在"看上去很急"的请求下会跳。这个 skill 强制把"跳"成本提前——开工先回答 4 个问题，再触工具。
 
 ## 工作步骤
 
@@ -64,6 +65,21 @@ ls openspec/changes/ 2>/dev/null | grep -v "^archive$"
 → 用 Explore：发 `Agent({ subagent_type: "Explore", prompt: ... })`，把上下文卸到子代理
 → 不用 Explore：目标文件已知（用户给了文件名 / 行号 / 明确符号），直接 Read
 
+**Q4. 流水线终点定在哪里？（默认全跑）**
+
+任何非纯问答任务的**默认终点**是：实现 → 本地验证 → commit → push → PR → codex 异构二审 → wait-ci 全绿 → 文本总结。openspec change 额外加 N.4 archive。
+
+**仅当**用户首条 message 含明确停手词才裁短流水线：
+
+| 用户原话片段 | 终点 |
+|---|---|
+| "先看下 / 先想下 / 先讨论 / 先评估" | 仅出方案，不动代码 |
+| "改了别 push / 改完先给我看 / 别提 PR / 暂缓 commit" | 实现 + 验证，停在本地 |
+| "提个 draft PR / 草稿 PR" | 走到 push + PR draft，不跑 codex / wait-ci |
+| （未明确）| 全跑到底（含 codex + wait-ci 全绿）|
+
+判断不准 → 全跑。"用户没说停 = 默认授权完整流水线"是项目 CLAUDE.md / .claude/rules/opsx-apply-cadence.md 的硬约束。
+
 ### Step 3：把结果给用户，等他确认后才进入实现
 
 格式（给用户的回复）：
@@ -74,18 +90,20 @@ ls openspec/changes/ 2>/dev/null | grep -v "^archive$"
 - 分支：<branch> ✅/❌
 - OpenSpec：<是/否>，理由：<一句>
 - Explore：<是/否>，理由：<一句>
+- 流水线终点：<完整 / 仅出方案 / 停本地 / draft PR>，理由：<一句>
 
 下一步：<具体行动>
 
 确认开始？
 ```
 
-用户回 "ok / 开始 / 嗯" 等明确信号 → 才发实质性 Edit/Write/Bash 工具。
+用户回 "ok / 开始 / 嗯 / 按你说的来" 等明确信号 → 才发实质性 Edit/Write/Bash 工具，并按 Q4 选定的终点一路推到底。
 
-用户给修正（"不用 OpenSpec / 直接做"）→ 按修正走。
+用户给修正（"不用 OpenSpec / 直接做 / 别 push"）→ 按修正走。
 
 ## 不要做
 
 - 不要 Edit/Write 任何文件（这是只读决策 skill）
-- 不要把 preflight 输出过长——3 行 + 1 个问题，不超 100 字
-- 不要在用户已经在 feature 分支 + 任务明显简单时把 preflight 当仪式跑——"分支没问题、不走 OpenSpec、不用 Explore"3 行带过就行
+- 不要把 preflight 输出过长——4 行 + 1 个问题，不超 120 字
+- 不要在用户已经在 feature 分支 + 任务明显简单时把 preflight 当仪式跑——"分支没问题、不走 OpenSpec、不用 Explore、终点完整"4 行带过就行
+- 不要在 preflight 报完后再"等等是不是要 commit / push"——Q4 已经定了终点，按终点走就行；用户中途说停才停

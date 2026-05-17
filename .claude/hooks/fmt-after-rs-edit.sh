@@ -22,8 +22,10 @@ fi
 project_dir="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 rel="${file_path#"$project_dir/"}"
 
-# 只对 crates/ 下的 .rs 文件触发
-if [[ "$rel" != crates/* ]]; then
+# 触发：crates/ 下的 workspace crate 或 src-tauri/ 下的独立 manifest
+# （src-tauri 不在 workspace，但 cargo fmt 单文件粒度跨 manifest 都工作；
+# 历史上 src-tauri 的 .rs 编辑没自动 fmt 是 PR #139 反思的根因之一）
+if [[ "$rel" != crates/* && "$rel" != src-tauri/* ]]; then
   exit 0
 fi
 
