@@ -88,21 +88,6 @@
     transform: translateX(-100%);
   }
 
-  @keyframes ongoing-ping {
-    0% {
-      transform: scale(0.85);
-      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 55%, transparent);
-    }
-    70% {
-      transform: scale(1);
-      box-shadow: 0 0 0 6px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
-    }
-    100% {
-      transform: scale(0.85);
-      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
-    }
-  }
-
   @keyframes ongoing-sweep {
     0% {
       transform: translateX(-100%);
@@ -113,9 +98,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .ongoing-pulse {
-      animation: none;
-    }
     .ongoing-sweep {
       animation: none;
       transform: translateX(0);
