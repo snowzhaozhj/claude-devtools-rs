@@ -105,6 +105,15 @@
     }
   });
 
+  // Sidebar / Settings 路径触发的 store 刷新（如 SettingsView 改 claudeRootPath
+  // → cdt-refresh-projects → Sidebar.loadProjects → 写 store）需要在 Dashboard
+  // 这边同步本地副本，否则 Dashboard 会卡在 mount 时的旧值。
+  // 与 App.svelte 同款订阅模式（codex CR 反馈）。
+  $effect(() => {
+    const cached = getProjectData();
+    if (cached) projectData = cached;
+  });
+
   const derivedProjects = $derived(deriveDashboardProjects(projectData));
   const sorted = $derived(sortDashboardProjects(derivedProjects, sortKey));
   const visible = $derived(filterDashboardProjects(sorted, filterQuery));
@@ -139,7 +148,7 @@
         bind:this={searchEl}
         class="dash-search"
         type="text"
-        placeholder="搜索项目…"
+        placeholder="搜索项目..."
         bind:value={filterQuery}
       />
       <kbd class="dash-kbd" title="按 / 聚焦搜索">/</kbd>

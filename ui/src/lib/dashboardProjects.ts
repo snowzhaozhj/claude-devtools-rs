@@ -40,7 +40,12 @@ export function deriveDashboardProjects(data: ProjectData | null): DashboardProj
       id: mainWorktree.id,
       path: mainWorktree.path,
       displayName: group.name,
-      sessionCount: group.totalSessions,
+      // 与 Sidebar 跳转后视图保持一致：点击 dashboard 行进入 sidebar 时
+      // selectedProjectId = mainWorktree.id，sidebar 只显示该 worktree 的
+      // sessions，所以 dashboard chip 也用 worktree.sessions.length，避免
+      // "dashboard 显示 5、点进去 sidebar 显示 1" 的认知错配。group 维度
+      // 聚合数留给未来支持 group 级选择再补（codex CR 反馈）。
+      sessionCount: mainWorktree.sessions.length,
       lastModified: group.mostRecentSession,
       worktreeCount: group.worktrees.length,
     };

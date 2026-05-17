@@ -5,8 +5,9 @@ import { expect, test } from '@playwright/test'
 
 async function selectRustProject(page: import('@playwright/test').Page) {
   await page.goto('/?mock=1&fixture=multi-project-rich')
-  // 通过 Dashboard 卡片精确选项目（避免误中 sidebar header chip 触发 dropdown）
-  await page.locator('.dash-card', { hasText: 'rust-port' }).click()
+  // 通过 Dashboard 行/卡片精确选项目（避免误中 sidebar header chip 触发 dropdown）
+  // list 默认走 .dash-row，grid 走 .dash-card——双 selector 兼容用户/CI 偏好。
+  await page.locator('.dash-row, .dash-card', { hasText: 'rust-port' }).first().click()
   // sidebar 出现 fixture 中 rust-port 的 session
   await expect(page.getByText('IPC 字段重构').first()).toBeVisible({ timeout: 5_000 })
 }

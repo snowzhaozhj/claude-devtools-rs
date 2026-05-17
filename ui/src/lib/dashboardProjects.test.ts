@@ -81,7 +81,7 @@ describe("deriveDashboardProjects", () => {
     });
   });
 
-  test("多 worktree group：选 isMainWorktree=true 作为 id，worktreeCount 反映总数", () => {
+  test("多 worktree group：选 isMainWorktree=true 作为 id，worktreeCount 反映总数，sessionCount 取 mainWorktree.sessions.length 而非聚合 totalSessions", () => {
     const data: ProjectData = {
       projects: [],
       worktreeProjects: [],
@@ -90,9 +90,9 @@ describe("deriveDashboardProjects", () => {
           id: "g2",
           name: "Big Repo",
           worktrees: [
-            wt({ id: "wt-feat", path: "/home/me/big-feat", name: "feat", isMainWorktree: false }),
+            wt({ id: "wt-feat", path: "/home/me/big-feat", name: "feat", isMainWorktree: false, sessions: ["sf1", "sf2"] }),
             wt({ id: "wt-main", path: "/home/me/big", name: "main", isMainWorktree: true, sessions: ["s1"] }),
-            wt({ id: "wt-exp", path: "/home/me/big-exp", name: "exp", isMainWorktree: false }),
+            wt({ id: "wt-exp", path: "/home/me/big-exp", name: "exp", isMainWorktree: false, sessions: ["se1", "se2"] }),
           ],
           mostRecentSession: 1_700_000_500_000,
           totalSessions: 5,
@@ -100,11 +100,13 @@ describe("deriveDashboardProjects", () => {
       ],
     };
     const out = deriveDashboardProjects(data);
+    // sessionCount=1 = wt-main.sessions.length，与 sidebar 跳转后展示一致；
+    // 总数 5（group.totalSessions）有意不暴露，避免 dashboard / sidebar 数字错配
     expect(out[0]).toMatchObject({
       id: "wt-main",
       path: "/home/me/big",
       displayName: "Big Repo",
-      sessionCount: 5,
+      sessionCount: 1,
       worktreeCount: 3,
     });
   });

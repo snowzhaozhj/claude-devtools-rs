@@ -9,8 +9,8 @@ test.describe('sidebar collapse and git branch chip', () => {
   test('点折叠按钮 → sidebar 隐藏 → TabBar 展开按钮出现 → 点展开恢复', async ({ page }) => {
     await page.goto('/?mock=1&fixture=multi-project-rich')
 
-    // 选中 rust-port——用 dashboard 卡片定位，避免命中 sidebar header 触发 dropdown
-    await page.locator('.dash-card').filter({ hasText: 'rust-port' }).click()
+    // 选中 rust-port——用 dashboard 行/卡片定位（list 默认 / grid 可选），避免命中 sidebar header
+    await page.locator('.dash-row, .dash-card').filter({ hasText: 'rust-port' }).first().click()
     await expect(
       page.getByRole('button', { name: /rust-port/ }).first(),
     ).toBeVisible({ timeout: 5_000 })
@@ -58,7 +58,7 @@ test.describe('sidebar collapse and git branch chip', () => {
 
   test('git 分支 chip 在每条 SessionItem 行内显示', async ({ page }) => {
     await page.goto('/?mock=1&fixture=multi-project-rich')
-    await page.locator('.dash-card').filter({ hasText: 'rust-port' }).click()
+    await page.locator('.dash-row, .dash-card').filter({ hasText: 'rust-port' }).first().click()
 
     // SidebarHeader 不再有 .branch-row（已移到 SessionItem 行内）
     await expect(page.locator('.branch-row')).toHaveCount(0)
