@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cdt_api::{ConfigUpdateRequest, DataApi, LocalDataApi, PaginatedRequest, SearchRequest};
 use cdt_config::{ConfigManager, NotificationManager, NotificationTrigger};
-use cdt_discover::{local_handle, path_decoder, ProjectScanner};
+use cdt_discover::{ProjectScanner, local_handle, path_decoder};
 use cdt_ssh::SshConnectionManager;
 use cdt_watch::FileWatcher;
 use tauri::{
@@ -148,10 +148,7 @@ async fn search_sessions(
         project_id: Some(project_id),
         session_id: None,
     };
-    data.api
-        .search(&request)
-        .await
-        .map_err(|e| e.to_string())
+    data.api.search(&request).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -348,9 +345,7 @@ async fn get_project_session_prefs(
 // =============================================================================
 
 #[tauri::command]
-async fn list_repository_groups(
-    data: State<'_, AppData>,
-) -> Result<serde_json::Value, String> {
+async fn list_repository_groups(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
     let groups = data
         .api
         .list_repository_groups()
@@ -387,7 +382,11 @@ async fn get_worktree_sessions(
 /// 与 spec `app-auto-update::Requirement: 手动检查更新 IPC` 对齐：
 /// `status` 是 internally-tagged 的 enum tag，前端按 `result.status` switch。
 #[derive(serde::Serialize)]
-#[serde(tag = "status", rename_all = "snake_case", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 enum CheckUpdateResult {
     UpToDate {
         current_version: String,
@@ -436,28 +435,86 @@ fn is_running_under_rosetta() -> bool {
     detect_rosetta_translation()
 }
 
+/// 手动检查更新的整体超时——超过即返回友好的"网络超时"文案。
+///
+/// 默认 plugin-updater 内部 reqwest 没设上限，山区 / 弱网 / DNS 超时叠加可达 30s+，
+/// 用户在设置页看到 spinner 转半天。8s 已经覆盖正常 GitHub release CDN 往返 + 双 DNS
+/// 兜底；超过即放弃，让用户手动重试。
+const CHECK_UPDATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// 启动后台检查的整体超时——非阻塞用户操作，但避免无限挂着 task。
+const STARTUP_UPDATE_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 把 plugin-updater / reqwest 原始错误映射成对用户友好的中文文案。
+///
+/// 原始错误（含完整 URL / reqwest 内部链路）只写入 tracing，**不**返回给前端——
+/// 截图反馈过完整 URL 直接 leak 到 banner 既不友好也暴露发行渠道细节。
+fn friendly_update_error(raw: &str) -> &'static str {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("deadline")
+        || lower.contains("operation timed out")
+    {
+        "网络超时，请稍后重试"
+    } else if lower.contains("dns")
+        || lower.contains("failed to lookup")
+        || lower.contains("name resolution")
+        || lower.contains("no such host")
+    {
+        "无法解析更新服务器域名，请检查网络"
+    } else if lower.contains("connect")
+        || lower.contains("connection")
+        || lower.contains("network")
+        || lower.contains("error sending request")
+        || lower.contains("tls")
+        || lower.contains("certificate")
+    {
+        "无法连接到更新服务器，请检查网络"
+    } else if lower.contains("404") || lower.contains("not found") {
+        "暂无可用版本信息"
+    } else {
+        "检查更新失败，请稍后重试"
+    }
+}
+
 #[tauri::command]
 async fn check_for_update(app: tauri::AppHandle) -> Result<CheckUpdateResult, String> {
     let current_version = app.package_info().version.to_string();
     let updater = match app.updater() {
         Ok(u) => u,
         Err(e) => {
+            tracing::warn!(target: "cdt_tauri::updater", error = %e, "updater init failed");
             return Ok(CheckUpdateResult::Error {
-                message: format!("updater init failed: {e}"),
+                message: friendly_update_error(&e.to_string()).to_string(),
             });
         }
     };
-    match updater.check().await {
-        Ok(Some(update)) => Ok(CheckUpdateResult::Available {
+    let result = tokio::time::timeout(CHECK_UPDATE_TIMEOUT, updater.check()).await;
+    match result {
+        Ok(Ok(Some(update))) => Ok(CheckUpdateResult::Available {
             current_version,
             new_version: update.version.clone(),
             notes: update.body.clone().unwrap_or_default(),
             signature_ok: true,
         }),
-        Ok(None) => Ok(CheckUpdateResult::UpToDate { current_version }),
-        Err(e) => Ok(CheckUpdateResult::Error {
-            message: e.to_string(),
-        }),
+        Ok(Ok(None)) => Ok(CheckUpdateResult::UpToDate { current_version }),
+        Ok(Err(e)) => {
+            tracing::warn!(target: "cdt_tauri::updater", error = %e, "manual update check failed");
+            Ok(CheckUpdateResult::Error {
+                message: friendly_update_error(&e.to_string()).to_string(),
+            })
+        }
+        Err(_) => {
+            tracing::warn!(
+                target: "cdt_tauri::updater",
+                timeout_secs = CHECK_UPDATE_TIMEOUT.as_secs(),
+                "manual update check timed out"
+            );
+            Ok(CheckUpdateResult::Error {
+                message: "网络超时，请稍后重试".to_string(),
+            })
+        }
     }
 }
 
@@ -508,7 +565,19 @@ async fn run_startup_update_check(api: Arc<LocalDataApi>, app: tauri::AppHandle)
         }
     };
 
-    match updater.check().await {
+    let check_outcome = tokio::time::timeout(STARTUP_UPDATE_CHECK_TIMEOUT, updater.check()).await;
+    let check_outcome = match check_outcome {
+        Ok(inner) => inner,
+        Err(_) => {
+            tracing::warn!(
+                target: "cdt_tauri::updater",
+                timeout_secs = STARTUP_UPDATE_CHECK_TIMEOUT.as_secs(),
+                "startup update check timed out"
+            );
+            return;
+        }
+    };
+    match check_outcome {
         Ok(Some(update)) => {
             // 与 skipped_version 比较：仅当解析为合法 semver 且新版本 ≤ 跳过版本时才跳过
             if let Some(skipped) = &skipped_version {
@@ -572,8 +641,8 @@ pub fn run() {
 
         // phase 3 image asset cache：用 OS 标准 cache 目录 + app 子目录。
         // dirs::cache_dir() 同步且跨平台，无需 Tauri app handle。
-        let image_cache_dir = dirs::cache_dir()
-            .map(|d| d.join("claude-devtools-rs").join("cdt-images"));
+        let image_cache_dir =
+            dirs::cache_dir().map(|d| d.join("claude-devtools-rs").join("cdt-images"));
         let watcher = FileWatcher::with_paths(projects_dir.clone(), todos_dir);
         let mut api_inner = LocalDataApi::new_with_watcher(
             scanner,
@@ -681,8 +750,8 @@ pub fn run() {
                 loop {
                     match metadata_rx.recv().await {
                         Ok(update) => {
-                            let _ = app_handle_for_metadata
-                                .emit("session-metadata-update", &update);
+                            let _ =
+                                app_handle_for_metadata.emit("session-metadata-update", &update);
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,

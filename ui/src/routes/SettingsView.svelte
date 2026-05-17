@@ -171,11 +171,16 @@
           signatureOk: checkResult.signatureOk,
         });
       }
-    } catch (e) {
-      checkResult = { status: "error", message: String(e) };
+    } catch {
+      // invoke 自身异常（IPC 通道断开等），不暴露原始错误链路
+      checkResult = { status: "error", message: "检查更新失败，请稍后重试" };
     } finally {
       checkInFlight = false;
     }
+  }
+
+  function dismissCheckResult() {
+    checkResult = null;
   }
 
   async function updateTimeFormat(value: TimeFormat) {
@@ -697,7 +702,7 @@
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html ALERT_CIRCLE_SVG}</svg>
                 {/if}
               </span>
-              <span>
+              <span class="banner-text">
                 {#if checkResult.status === "up_to_date"}
                   已是最新版本 v{checkResult.currentVersion}
                 {:else if checkResult.status === "available"}
@@ -706,6 +711,15 @@
                   检查失败：{checkResult.message}
                 {/if}
               </span>
+              <button
+                type="button"
+                class="banner-close"
+                aria-label="关闭"
+                title="关闭"
+                onclick={dismissCheckResult}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html X_SVG}</svg>
+              </button>
             </div>
           {/if}
 
@@ -918,6 +932,41 @@
     border-color: color-mix(in oklch, var(--color-accent-blue) 35%, var(--color-border));
     background: color-mix(in oklch, var(--color-accent-blue) 8%, var(--color-surface));
     color: var(--color-info-text);
+  }
+  .banner-text {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .banner-close {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin: -2px -4px 0 4px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    opacity: 0.7;
+    cursor: pointer;
+    transition: opacity 0.15s ease, background 0.15s ease;
+  }
+  .banner-close:hover {
+    opacity: 1;
+    background: color-mix(in oklch, currentColor 12%, transparent);
+  }
+  .banner-close:focus-visible {
+    opacity: 1;
+    outline: 2px solid color-mix(in oklch, currentColor 60%, transparent);
+    outline-offset: 1px;
+  }
+  .banner-close :global(svg) {
+    width: 14px;
+    height: 14px;
   }
 
   /* 统一控件 */
