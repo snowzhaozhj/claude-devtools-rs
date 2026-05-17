@@ -1,11 +1,11 @@
 ---
 name: port-dashboard
-description: 扫描 CLAUDE.md 的 Capability→crate 进度表、openspec/changes/archive/、openspec/followups.md 三处真相源，打印统一 port 看板，并高亮不一致（例如表里写 done 但 archive 里没记录；followups 里某条 TS impl-bug 在 CLAUDE.md 已标 ✓ 但 followups 本身仍是 pending）。
+description: 扫描 `openspec/changes/archive/` 与 `openspec/followups.md` 两处真相源，输出统一 port / followups 看板，并高亮不一致（archive 已 port 的 capability 在 followups 中还有未标 ✅ 的条目；某 followup 已写"已修"但找不到对应 archive）。**用户说 "看一下当前进度 / 我们做到哪了 / followups 还剩什么 / port 进度 / 哪些没修"或显式 `/port-dashboard` 时都用这个 skill**——不要自己 grep archive 后口算，容易漏 followup 章节。
 ---
 
 # port-dashboard
 
-当用户说 `/port-dashboard`、"看一下当前 port 进度"、"我们做到哪了" 时触发。新会话启动后若要判断接下来做哪个 port，也应该先跑一次这个 skill。
+claude-devtools-rs 的 port 阶段（13 个 capability）已全部归档（截至 2026-04-12），但 `openspec/followups.md` 持续记 TS 实现 bug / coverage gap / spec gap + 这些条目在 Rust port 后的处理状态。这个 skill 把两处真相源拉一遍，给用户一个"还有什么没消化"的看板。
 
 ## 输入
 
@@ -13,47 +13,50 @@ description: 扫描 CLAUDE.md 的 Capability→crate 进度表、openspec/change
 
 ## 工作步骤
 
-1. **读三处真相源**（只读，不改）：
-   - `CLAUDE.md` 里的 "## Capability → crate map" 表——每行一个 capability + `Port status` 列（done ✓ / done ✓ † / in progress / not started）。
-   - `openspec/changes/archive/` 目录下的子目录名，形如 `YYYY-MM-DD-port-<capability>`。每个子目录下 `proposal.md` 头几行即可获取完成日期与范围。
-   - `openspec/followups.md` 里所有 `[impl-bug?]` / `[coverage-gap]` / `[spec-gap]` 条目。每条已修的在原文会有 "✅ 已在 …修正" 标记；未修的没有。
+1. **读两处真相源**（只读，不改）：
+   - `openspec/changes/archive/` 子目录列表——形如 `YYYY-MM-DD-port-<capability>` 或 `YYYY-MM-DD-<slug>`（后期非 port 的 change 也走这里）。识别其中 `port-<capability>` 前缀的归档日期即为该 capability 的 port 完成日。
+   - `openspec/followups.md`——按 `^## <capability>` 切章节；每章节里每个 `^### \[<tag>\]` 条目（tag 为 `impl-bug?` / `coverage-gap` / `spec-gap` / `deviation` / `implicit`）。条目标题里出现"✅ 已在 ... 修正"或正文含"已修复"为"已修"；否则为"pending"。
 
-2. **构建看板**：按 CLAUDE.md 列出的 13 个 capability 顺序，每行聚合：
-   - Capability 名 + owning crate
-   - CLAUDE.md 表里的状态
-   - archive 里是否有对应 port 目录（有则给归档日期）
-   - 该 capability 对应的 followups 条目数（已修 / 剩余）
+2. **构建看板**（不要硬编码"13 个 capability"——按 followups.md 实际章节列）：
+
+   - 行 = followups.md 里的 `## <capability>` 章节（13 个 capability 之外可能还有 UI 实时刷新 / 性能 / Subagent / Windows / Implicit 等汇总章节）
+   - 列：
+     - Capability 名
+     - 对应 archive 里有几个 port-* 目录（0 / 1 / N）+ 最新日期
+     - followups 条目数（已修 ✅ / pending）
 
 3. **跨源一致性检查**（高亮不一致）：
-   - CLAUDE.md 写 `done` 但 archive 里没有对应 port 目录 → ⚠️ stale status
-   - archive 里有 port 目录但 CLAUDE.md 表里仍写 `not started` → ⚠️ missed update
-   - followups.md 某条涉及已 done 的 capability，但自身没有 "✅ 已修正" 标记 → ⚠️ followups gc 欠账
+   - 某 capability 有 archive 但 followups 章节里还有 pending → ⚠️ 落地不全
+   - 某 followup 标了"✅ 已在 ... 修正"但 `... ` 引用的 change slug 不在 archive 里 → ⚠️ 引用漂移
+   - followups 章节名拼写与 capability 不匹配（如 `team-coordination-metadata` vs `team-metadata`） → ⚠️ 命名漂移
 
-4. **输出**（markdown，不超过 40 行）：
+4. **输出**（markdown，≤ 50 行）：
+
    ```
    # Port Dashboard
    _scanned: <今天日期>_
 
-   | # | Capability | Crate | CLAUDE.md | Archive | Followups |
-   |---|---|---|---|---|---|
-   | 1 | session-parsing | cdt-parse | ✓ done | 2026-04-11 | 2✅ / 0 pending |
-   | 2 | chunk-building | cdt-analyze | ✓ done | 2026-04-11 | 1✅ / 0 pending |
-   | 3 | tool-execution-linking | cdt-analyze | ✓ done † | 2026-04-11 | 1✅ / 1 pending (Req 4 team enrichment) |
-   | 4 | project-discovery | cdt-discover | – | – | 1 pending (spec-gap path decode) |
-   ...
+   | Capability | Archive | Followups |
+   |---|---|---|
+   | session-parsing | 2026-04-11 | 3✅ / 0 pending |
+   | chunk-building | 2026-04-11 | 2✅ / 1 pending（[implicit] SemanticStepGrouper 粒度）|
+   | tool-execution-linking | 2026-04-11 | 1✅ / 1 pending（subagent 跨 project_dir）|
+   | ...
 
-   ## 进度
-   - 3/13 done, 0 in progress, 10 remaining
-   - 下一个推荐：<根据 CLAUDE.md "Remaining port order" 顶行>
+   ## 汇总
+   - 13/13 capability 已 port（archive 全覆盖）
+   - followups: N✅ / M pending
+   - pending 集中在：<列前 3 个 capability>
 
    ## 不一致警报
    - ⚠️ <若有>
-   - ✅ 三处真相源一致
+   - ✅ 两处真相源一致
    ```
 
 ## 硬性约束
 
-- 只读。不改 CLAUDE.md、不改 followups.md、不改 archive。
-- 如果发现不一致，**提议**修改（列出 diff），但不要自动应用——等用户说"修一下"再动手。
-- 输出严格 ≤ 40 行 markdown，不要展开每个 followup 的完整描述。
-- 不要运行 `cargo` 或 `openspec` CLI——三处真相源都是纯文本读取。
+- 只读。不改 followups.md、不改 archive。
+- 发现不一致只**提议**修改（列出 diff），不自动应用——等用户说"修一下"再动手。
+- 输出严格 ≤ 50 行 markdown，不要展开每个 followup 的完整描述（最多带条目标题）。
+- 不要运行 `cargo` 或 `openspec` CLI——两处真相源都是纯文本读取（archive 用 `ls`，followups 用 `Read` + `Grep`）。
+- 不要硬编码 capability 数量——按 followups.md 章节实际数走。如果 followups.md 章节比 archive 少，那是 followups 没全覆盖；反之是 followups 多记了汇总章节。两种情况都在"不一致警报"里报。

@@ -9,28 +9,28 @@ claude-devtools-rs 是**桌面辅助工具**，不是用户主线（IDE / 浏览
 1. **wall time（real）** — 用户感知耗时
 2. **user/sys time** — CPU 实际工作量
 3. **user/real ratio** — 进程平均占用核数（**非系统 CPU 百分比**；`0.5` ≈ 8 核机 6%、`1.0` = 单核满载 ≈ 12.5%、`4.0` = 4 核满载 ≈ 50% 风扇起转）
-4. **max RSS + peak memory** — 进程内存峰值
+4. **max RSS** — 进程内存峰值
 
-测量统一命令：`/usr/bin/time -lp <bench-cmd>`（macOS）/ `/usr/bin/time -v`（Linux）。系统 CPU 人工看 Activity Monitor 或 `top -pid $(pgrep claude-devtools-tauri)`。
+测量：`/usr/bin/time -lp <bench-cmd>`（macOS）/ `/usr/bin/time -v`（Linux）。系统 CPU 看 Activity Monitor 或 `top -pid $(pgrep claude-devtools-tauri)`。
 
-## 性能预算（关键路径）
+## 性能预算（基线 v0.4.10 · 2026-05-16 · 30 project × 538 session）
 
-基线 v0.4.10（2026-05-16，30 project × 538 session）。**回归 > 阈值即拒**。
+**回归 > 阈值即拒**。
 
-| 路径 | wall 预算 | CPU 预算（user/real） | RSS 预算 | 当前基线 |
+| 路径 | wall 预算 | CPU（user/real） | RSS 预算 | 当前基线 |
 |---|---|---|---|---|
-| 冷启动 list_repository_groups | < 200ms（bench 内）| ≤ 0.5（爆发期 ≤ 1.5）| < 80 MB | bench 95ms · 整进程 user/real=**0.13** / RSS 59MB |
+| 冷启动 list_repository_groups | < 200ms | ≤ 0.5（爆发 ≤ 1.5）| < 80 MB | bench 95ms · user/real=**0.13** / RSS 59MB |
 | 冷启动 list_projects | < 150ms | 同上 | 同上 | 87-93ms |
-| 大会话 get_session_detail（1221 msg）| < 800ms（10k 消息）| ≤ 0.5 | < 200 MB | 60-74ms · user/real=**0.17** / RSS 120MB |
+| 大会话 get_session_detail（10k 消息）| < 800ms | ≤ 0.5 | < 200 MB | 1221 msg → 60-74ms · user/real=**0.17** / RSS 120MB |
 | 首屏 sidebar 可见列表 | < 500ms | — | — | 待测 |
 | Tauri IPC payload | < 1 MB（>1MB 须瘦身）| — | — | — |
 
-**辅助工具系统 CPU 阈值**（人工 Activity Monitor 验，涉及 watcher / scanner / 后台 task 的 PR 必测）：
-- **idle 稳态 < 2%**（8 核 < 0.16 核）— 开着没操作几乎不可见
-- **后台扫描峰值 < 10%** 短时间（< 1s）— file change / fs event 触发
-- **用户交互峰值 < 15%** < 200ms — 点 sidebar / 切 tab / 展开 tool / 搜索 / 改设置 等单次 IPC
+**辅助工具系统 CPU 阈值**（人工 Activity Monitor 验，watcher / scanner / 后台 task PR 必测）：
+- idle 稳态 < 2%（8 核 < 0.16 核）
+- 后台扫描峰值 < 10% 短时间（< 1s）
+- 用户交互峰值 < 15% < 200ms
 
-**回归阈值**（任一即拒）：wall +20% / user +50%（real 没同步降）/ RSS +30% / **bench user/real > 1.0 长时间**（short burst < 50ms 放宽到 ≤ 1.5 但需证明无替代）/ user/real 跨过 0.5 且 real 降 < 30%
+**回归阈值**（任一即拒）：wall +20% / user +50%（real 没同步降）/ RSS +30% / bench user/real > 1.0 长时间（short burst < 50ms 放宽到 ≤ 1.5）/ user/real 跨过 0.5 且 real 降 < 30%
 
 ## bench 入口
 
@@ -39,45 +39,15 @@ claude-devtools-rs 是**桌面辅助工具**，不是用户主线（IDE / 浏览
 - `/perf-bench` skill — 自动跑 + 解析 + verdict
 - `bash scripts/run-perf-bench.sh` — 四维 baseline gate runner（`--bench <name>` 单跑 / `--runs N` 调样本数 / 报告写到 `target/perf-report.json`）
 
-新增关键路径 SHALL 加对应 bench + 把基线填进上表。**每次会话开始 + 用户问"为什么慢" + 发版前** SHALL 先跑 bench 拿数据再讨论方向。
+新增关键路径 SHALL 加对应 bench + 把基线填上表。**每次会话开始 + 用户问"为什么慢" + 发版前** SHALL 先跑 bench 拿数据再讨论方向。
 
 ## CI 自动 gate
 
-`.github/workflows/perf.yml` 在每个 PR + push to main 跑 `scripts/run-perf-bench.sh`，校验：
-1. `tests/perf-baseline.json` schema 合法（`thresholds` + `benches` 非空）
-2. 两个 bench binary 能编译 + 能跑
-3. 报告 JSON 生成成功，PR 评论 update（不刷屏，按 `<!-- perf-gate-bot -->` marker 找现有 comment 更新）
+`.github/workflows/perf.yml` 在每个 PR + push to main 跑 `scripts/run-perf-bench.sh` 校验 baseline schema + binary 链路通畅。
 
-**CI runner 无 `~/.claude/projects/` corpus**——两个 bench 在 CI 都会内部 `if !projects.exists() { return }` 跳过，本工作流仅作为 **smoke 校验**（baseline schema + script + binary 链路通畅）。**真实四维 gate 由 dev 在本地跑**——PR push 前 SHALL 跑 `bash scripts/run-perf-bench.sh`，命中阈值即拒；这是硬约束。
+**CI runner 无 `~/.claude/projects/` corpus**——两个 bench 在 CI 内部 `if !projects.exists() { return }` 跳过，本 workflow 仅作 **smoke 校验**。**真实四维 gate 由 dev 在本地跑**——PR push 前 SHALL 跑 `bash scripts/run-perf-bench.sh`。
 
-### 阈值（与 perf.md 顶部"回归阈值"段一致）
-
-- **wall_ms** +20%（process 级 wall clock；min-of-N 抑噪 → 本机 macOS 跑 5 次取 min）
-- **user_ms** +50%（容许 real 同步降的情况，仅在 real 没同步降时才真回归——细则见顶部段）
-- **max_rss_kb** +30%
-- **user/real ratio** ≤ 1.0 绝对值（>1.0 = 多核打满 → 桌面辅助工具不可接受）
-- **sys_ms** info-only 不 gate（与 wall 强相关，单独报告辅助诊断）
-
-### 噪声策略
-
-process 级 wall 在 macOS / Linux 共享 CPU 环境下变异可达 5×（FS cache + 其他进程）。`scripts/run-perf-bench.sh` 用 **min-of-N** 聚合（默认 N=5）——min 代表"算法真实最佳能力"，噪声只在 min 之上加波动；新代码若引入算法回归，min 必然变大。`median` / `max` 用作 perf gate 会被 OS 噪声污染导致假阳性。
-
-baseline 取本机 min-of-5 观测值的 ~1.5-2× 作为容噪上界（详 `tests/perf-baseline.json` 每个 bench 的 `$comment` 字段），threshold +20% 再放一层。
-
-### update baseline
-
-故意改变性能基线时（典型：硬件更换、Rust toolchain 升级、刻意算法 trade-off、加新 bench），手动改 `tests/perf-baseline.json` 对应字段，**commit message 写明理由**（why this changed），并在 PR 描述 "Perf impact" 段对比改前 / 改后基线。
-
-模板：
-```
-chore(perf): bump perf_cold_scan baseline 500ms → 600ms
-
-理由：v0.5.0 引入 git rev-parse fallback（PR #N），ProjectScanner 新增
-一次同步 fs::read 调用，wall +~80ms 是预期 trade-off（换得跨平台一致行为）。
-本地 min-of-5 重新观测：320ms → 410ms，base 上调到 600ms 容噪。
-```
-
-**禁止**为了"让 CI 过"而调高 baseline——baseline = 算法真实成本，不是"避免 fail 的阈值"。真有性能回归需在 PR 里明示并讨论 trade-off。
+噪声策略 + baseline 更新流程的详细说明见 `scripts/run-perf-bench.sh` 头部注释 + `tests/perf-baseline.json` 每个 bench 的 `$comment` 字段。核心：**min-of-N 抑噪**（默认 N=5），**禁止**为让 CI 过而调高 baseline——baseline = 算法真实成本。
 
 ## PR Perf impact 模板（强制）
 
@@ -99,21 +69,21 @@ chore(perf): bump perf_cold_scan baseline 500ms → 600ms
 ## 反模式清单（**严禁**引入，违反即拒）
 
 **wall time 类**：
-- for-loop 内串行 spawn 子进程 / 串行 file I/O — 用 `join_all` + `Semaphore` 并发；优先看能否换纯 fs 调用
-- 每次 IPC 重扫文件 / 重算 chunk — 必须按 `FileSignature` 内存 cache（参照 `MetadataCache`）
+- for-loop 串行 spawn 子进程 / 串行 file I/O — 用 `join_all` + `Semaphore` 并发；优先看能否换纯 fs 调用
+- 每次 IPC 重扫文件 / 重算 chunk — 按 `FileSignature` 内存 cache（参照 `MetadataCache`）
 - async fn 里调 `std::fs::*` / `Command::output().wait()` — 阻塞 tokio worker，用 tokio 异步版
-- 算法 O(N²) 在 N > 100 时 — list / merge / sort 看复杂度
-- IPC payload > 1 MB 不瘦身 — 走 `OMIT_XXX const + xxxOmitted: bool + get_xxx_lazy IPC` 模式（见 CLAUDE.md Conventions）
+- 算法 O(N²) 在 N > 100 时
+- IPC payload > 1 MB 不瘦身 — 走 `OMIT_XXX const + xxxOmitted: bool + get_xxx_lazy IPC` 模式（详 `src-tauri/CLAUDE.md::IPC payload 瘦身模式`）
 
 **CPU 类**（与 wall time 同等重要）：
-- CPU-bound 路径串行改并发不限流 — `Semaphore` 限到 ≤ CPU 核数 / 4（桌面避免抢其他 app）；判断 I/O-bound vs CPU-bound 看 baseline `user/real`（< 0.3 强 I/O / > 0.7 CPU-bound）
+- CPU-bound 路径串行改并发不限流 — `Semaphore` 限到 ≤ CPU 核数 / 4；判断 I/O-bound vs CPU-bound 看 baseline `user/real`（< 0.3 强 I/O / > 0.7 CPU-bound）
 - 加完并发不测 user time — 必须四维齐看
-- hot loop 隐式 `clone()` 大对象（`Vec<ChatMessage>` / `String` / `HashMap` / `SessionDetail`）— 优先 `Arc<>` / `&` / `mem::take`
+- hot loop 隐式 `clone()` 大对象 — 优先 `Arc<>` / `&` / `mem::take`
 - 同步循环里 `serde_json::from_str` / `to_string` 大 JSON
 
 **内存类**：
-- 加 cache 仅设 count cap 不设 byte cap — 必须 `current_bytes: AtomicUsize` + `max_bytes` 双闸门
-- 永久持有全量 `Vec` 的 Map — 加 LRU + TTL；流式状态机替代收集后判一次（见 metadata-streaming-ongoing change）
+- cache 仅设 count cap 不设 byte cap — 必须 `current_bytes: AtomicUsize` + `max_bytes` 双闸门
+- 永久持有全量 `Vec` 的 Map — 加 LRU + TTL；流式状态机替代收集后判一次
 - IPC 整页 base64 inline — 走 `asset://` URL 或 lazy IPC
 - `broadcast::channel(N)` capacity 过大 — 默认 128 起步，新加 subscriber 时 grep 退订路径防泄漏
 
@@ -122,20 +92,14 @@ chore(perf): bump perf_cold_scan baseline 500ms → 600ms
 性能相关 PR 的 codex prompt SHALL 显式列：
 - for-loop spawn / 串行 await（应 join_all + 限流）
 - hot path 缺 cache / 重复 IPC payload 字段
-- `Semaphore` 限流是否合理（CPU-bound ≤ 核数/4，I/O-bound 16-32）
-- hot path 隐式大对象 clone（能 Arc / & / mem::take 替代吗）
-- 新 cache 有 byte cap 否；broadcast capacity 是否过大；subscriber 退订路径是否漏
+- `Semaphore` 限流是否合理
+- hot path 隐式大对象 clone
+- 新 cache 有 byte cap 否；broadcast capacity 是否过大；subscriber 退订路径
 - 算法复杂度评估；PR 描述四维 perf 数据是否齐全
 
-## 历史性能事件（详见 `git log --grep="feat(perf)\|perf("`）
+## 历史与教训
 
-- **2026-05-16** perf-deep-audit — 4 PR 并行：cdt-api 三处 in-place + 并发 / cdt-discover 顶层并发 + cache byte cap / parsed-message LRU cache / metadata streaming
-- **2026-05-15** perf/cold-start-list-sessions — list_repository_groups 4030ms→89ms（45×）；spawn `git rev-parse` 改纯 fs 读 `.git/HEAD`
-- **2026-05-14** multi-session-cpu-cache + session-list-cache-fast-path — list_sessions 全 cache 命中
-- **2026-04-19** session-detail-image-asset-cache — image base64 inline 改 `asset://` URL
-- **2026-04-29 ~ 05-12** 5 轮 IPC payload 瘦身（OMIT_XXX 模式）
-
-**关键教训**：有文件可读时绝不 spawn 子进程（syscall 比 process spawn 快 1000×）；hot path SHALL cache by signature；并发不限流不如串行。
+历史优化轨迹：`git log --grep="feat(perf)\|perf("`。**关键教训**：有文件可读时绝不 spawn 子进程（syscall 比 process spawn 快 1000×）；hot path SHALL cache by signature；并发不限流不如串行。
 
 ## Hook 性能（每个 Bash 工具调用串行跑）
 
