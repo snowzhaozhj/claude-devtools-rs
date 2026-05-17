@@ -2,7 +2,7 @@
 
 ### Requirement: Expose context stats to display surfaces
 
-系统 SHALL 通过稳定的数据结构暴露每 turn context 统计、按类累计 token、phase 历史，使 UI badge、hover 细分、完整 context panel 可消费。`ContextInjection.aiGroupId` 字段 SHALL 与同一 `AIChunk.chunkId` 字节级相等（共享同一 ID 形态 `ai:<base>:<n>`），使 UI 可直接用 `aiGroupId` 在 DOM 中按 `data-chunk-id` 锚点定位对应 AIChunk，无需任何客户端映射层。
+系统 SHALL 通过稳定的数据结构暴露每 turn context 统计、按类累计 token、phase 历史，使 UI badge、hover 细分、完整 context panel 可消费。`ContextInjection.aiGroupId` 字段 SHALL 与同一 `AIChunk.chunkId` 字节级相等（共享同一 ID 形态 `<base>:<n>`，不含类型前缀），使 UI 可直接用 `aiGroupId` 在 DOM 中按 `data-chunk-id` 锚点定位对应 AIChunk，无需任何客户端映射层。
 
 #### Scenario: Query context stats for a specific turn
 
@@ -11,14 +11,14 @@
 
 #### Scenario: aiGroupId equals the corresponding AIChunk chunkId
 
-- **WHEN** 一个 turn 的 AI group 对应 `AIChunk { chunk_id: "ai:abc-uuid:0", responses: [...] }`，且该 turn 产出至少一条 `ContextInjection`（如 `ToolOutputInjection` / `ThinkingTextInjection` / `UserMessageInjection`）
-- **THEN** 所有由该 turn 产出的 injection 的 `aiGroupId` SHALL 等于 `"ai:abc-uuid:0"`（与 `AIChunk.chunk_id` 字节级相等）
-- **AND** 即使同会话内出现 `chunk_id` 冲突由 `next_ai_chunk_id` 递增解决（如 `"ai:abc-uuid:1"`），对应 turn 的 injection `aiGroupId` SHALL 同步使用递增后的值
+- **WHEN** 一个 turn 的 AI group 对应 `AIChunk { chunk_id: "abc-uuid:0", responses: [...] }`，且该 turn 产出至少一条 `ContextInjection`（如 `ToolOutputInjection` / `ThinkingTextInjection` / `UserMessageInjection`）
+- **THEN** 所有由该 turn 产出的 injection 的 `aiGroupId` SHALL 等于 `"abc-uuid:0"`（与 `AIChunk.chunk_id` 字节级相等）
+- **AND** 即使同会话内出现 `chunk_id` 冲突由 `next_ai_chunk_id` 递增解决（如 `"abc-uuid:1"`），对应 turn 的 injection `aiGroupId` SHALL 同步使用递增后的值
 
 #### Scenario: Empty-response AIChunk reuses its synthesized chunk_id
 
-- **WHEN** 某 AI group 对应 `AIChunk { responses: [], chunk_id: "ai:empty:0" }`（`next_ai_chunk_id` 已为空 response 生成稳定 ID）
-- **THEN** 该 turn 产出的 injections SHALL 复用 `chunk_id` 的值（`"ai:empty:0"`）
+- **WHEN** 某 AI group 对应 `AIChunk { responses: [], chunk_id: "empty:0" }`（`next_ai_chunk_id` 已为空 response 生成稳定 ID）
+- **THEN** 该 turn 产出的 injections SHALL 复用 `chunk_id` 的值（`"empty:0"`）
 - **AND** SHALL NOT 回退到 `responses[0].uuid` 或 `ai-<turn_index>` 等旧形态
 
 ## ADDED Requirements

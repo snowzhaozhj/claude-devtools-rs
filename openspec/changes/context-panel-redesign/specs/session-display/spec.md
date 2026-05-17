@@ -85,13 +85,13 @@ Category 视图中的 CLAUDE.md Files Section SHALL 按 `scope` 把文件分为 
 
 ### Requirement: Context Panel turn 锚点导航
 
-Context Panel 内每条 injection SHALL 提供一个跳转动作，把 SessionDetail 主视图滚动到对应 `AIChunk` 容器（按 `aiGroupId == chunkId` 匹配 `data-chunk-id` DOM 属性）。点击 `ToolOutputs` Section 内某条 tool breakdown SHALL 先确保该 chunk 展开（`expandedChunks` 含 `chunkId`），再滚到 chunk，再滚到该 tool 子节点（按 `data-tool-use-id == toolUseId` 匹配）。点击 `UserMessageInjection` SHALL 滚到该 turn 紧邻前的 `UserChunk`。
+Context Panel 内每条 injection SHALL 提供一个跳转动作，把 SessionDetail 主视图滚动到对应 `AIChunk` 容器（按 `aiGroupId == chunkId` 匹配 `data-chunk-id` DOM 属性）。点击 `ToolOutputs` Section 内某条 tool breakdown SHALL 先确保该 chunk 展开（`expandedChunks` 含 `chunkId`），再在目标 chunk 内查找该 tool 子节点（按 `data-tool-use-id == toolUseId` 匹配）并滚动到该子节点；若目标 chunk 内找不到 tool，则退化为滚到 chunk 本身。点击 `UserMessageInjection` SHALL 滚到该 turn 紧邻前的 `UserChunk`。
 
 #### Scenario: 点击 injection 滚到 AIChunk
 
 - **WHEN** 用户点击 Category 视图任一非 user-message Section 的 injection 行
 - **THEN** SHALL 把对应 `chunkId` 加入 `expandedChunks`（已在则跳过）
-- **AND** SHALL `await tick()` 一次后 `scrollIntoView({ block: "center", behavior: "smooth" })` 滚动到 `[data-chunk-id="<aiGroupId>"]` 节点
+- **AND** SHALL `await tick()` 一次后 `scrollIntoView({ block: "center", behavior: "smooth" })` 把 `[data-chunk-id="<aiGroupId>"]` 节点稳定滚动到 conversation 容器中部
 
 #### Scenario: 点击 tool breakdown 行展开并滚到 tool
 
