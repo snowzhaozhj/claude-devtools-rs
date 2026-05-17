@@ -118,19 +118,19 @@
 <style>
   .base-item {
     min-width: 0;
-    border-radius: 4px;
-    transition: background-color 0.2s;
+    border-radius: var(--radius-xs);
+    transition: var(--bubble-transition);
     overflow: hidden;
   }
 
   .base-item-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    border-radius: 4px;
+    gap: var(--bubble-header-gap);
+    padding: var(--bubble-padding-l2);
+    border-radius: var(--radius-xs);
     cursor: pointer;
-    transition: background-color 0.1s;
+    transition: var(--bubble-transition);
     min-width: 0;
     width: 100%;
     background: none;
@@ -166,8 +166,8 @@
   }
 
   .base-item-svg {
-    width: 14px;
-    height: 14px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     flex-shrink: 0;
     color: var(--tool-item-muted);
   }
@@ -204,7 +204,7 @@
     color: var(--tool-item-muted);
     background: var(--badge-neutral-bg);
     padding: 1px 6px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     flex-shrink: 0;
     font-family: var(--font-mono);
   }
@@ -230,8 +230,8 @@
   }
 
   .base-item-chevron svg {
-    width: 12px;
-    height: 12px;
+    width: var(--bubble-icon-sm);
+    height: var(--bubble-icon-sm);
   }
 
   .base-item-chevron-open {

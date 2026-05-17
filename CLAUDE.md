@@ -221,7 +221,7 @@ bench 入口：
 ## What to do first in a fresh session
 
 1. 开新工作前先 `git checkout -b feat/<slug>`，**不要**直接在 `main` 上写代码
-2. UI 功能迭代分流：**行为契约改动**（IPC 字段 / 后端算法 / 状态判定 / 数据流语义）走 openspec（`/opsx:propose` → `/opsx:apply` → `/opsx:archive`，design.md 必备）；**纯视觉对齐 / 单点样式修复 / Trigger CRUD 等**直接写 + PR。判断不准默认走 openspec
+2. UI 功能迭代分流：**行为契约改动**（IPC 字段 / 后端算法 / 状态判定 / 数据流语义）走 openspec（`/opsx:propose` → `/opsx:apply` → `/opsx:archive`，design.md 必备）；**纯视觉对齐 / 单点样式修复 / Trigger CRUD 等**直接写 + PR。判断不准默认走 openspec。**视觉/规范级 UI 任务**（"样式优化 / 重新设计 / 统一规范 / polish / a11y / typography / 调整 UX / 重写组件视觉"等关键词）SHALL 在动手前先 invoke `impeccable` skill 拿 PRODUCT.md + DESIGN.md 上下文与设计禁令（side-stripe ban / hero-metric / glass / 渐变文字等），避免靠肌肉记忆出 AI slop
 3. 性能 / 卡顿排查：用"性能回归监测"段的入口，**先看数据再定方向**
 4. 提交前跑 `just preflight` 把 fmt / lint / test / spec-validate 一把梭
 5. **默认每个 PR push 后**都调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑 codex 异构二审。豁免：bump version / 纯 docs / typo / CI 配置微调（跳过时 PR 描述写明理由）。`/code-review` 不再常规跑，仅在想留多 agent 审计痕迹时手动调。判断规则与 prompt 模板见 `.claude/rules/codex-usage.md`。**codex CR 可能多轮**：design 找到 bug → 修 → implementation codex CR 又找到 → 修 → 修法验证 codex CR 还能找到（PR #58 跑了 3 轮）；每轮都用 `SendMessage` 接续同一 agentId 复用 context，不要起新 agent 重头读
