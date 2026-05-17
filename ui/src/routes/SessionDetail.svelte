@@ -706,6 +706,13 @@
         {@const interruptions = chunk.semanticSteps.filter((s) => s.kind === "interruption")}
         {@const isLastAi = i === lastAiIndex}
         {@const isLiveTail = isLastAi && detail.isOngoing}
+        {@const lastOutputText = cleanDisplayText(di.lastOutput?.text ?? "")}
+        {@const hasAiContent =
+          di.items.length > 0 ||
+          lastOutputText !== "" ||
+          interruptions.length > 0 ||
+          isLiveTail}
+        {#if hasAiContent}
         <!--
           对齐原版 AIChatGroup.tsx:234-248 "Get the LAST assistant message's
           usage (represents current context window snapshot)"——Anthropic API
@@ -911,8 +918,8 @@
                 <!-- 对齐原版 LastOutputDisplay：最后 AI 组在 ongoing 时
                      banner 占 lastOutput 位置，结束后换回真正的内容 -->
                 <OngoingBanner />
-              {:else if di.lastOutput}
-                <div class="prose lazy-md" {@attach attachMarkdown(di.lastOutput.text, "ai")}></div>
+              {:else if lastOutputText}
+                <div class="prose lazy-md" {@attach attachMarkdown(lastOutputText, "ai")}></div>
               {/if}
               {#each interruptions as _interrupt}
                 <div class="interruption-block">
@@ -925,6 +932,7 @@
             </div>
           </div>
         </div>
+        {/if}
 
       <!-- System (对齐原版 SystemChatGroup.tsx：左对齐 + max-w 85% + rounded-2xl rounded-bl-sm 气泡) -->
       {:else if chunk.kind === "system"}

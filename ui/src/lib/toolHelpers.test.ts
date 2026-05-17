@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { ToolExecution } from './api'
-import { getLanguageFromPath, getToolDurationMs, isToolPending, shouldPrefetchOnChunkExpand, toolErrorText, viewerUsesOutput } from './toolHelpers'
+import { cleanDisplayText, getLanguageFromPath, getToolDurationMs, isToolPending, shouldPrefetchOnChunkExpand, toolErrorText, viewerUsesOutput } from './toolHelpers'
 
 function exec(overrides: Partial<ToolExecution>): ToolExecution {
   return {
@@ -139,5 +139,36 @@ describe('getLanguageFromPath', () => {
   test('大小写不敏感', () => {
     expect(getLanguageFromPath('FOO.JAVA')).toBe('java')
     expect(getLanguageFromPath('dockerfile')).toBe('dockerfile')
+  })
+})
+
+describe('cleanDisplayText 空内容防空气泡', () => {
+  test('纯噪声 tag → ""', () => {
+    expect(cleanDisplayText('<system-reminder>noise</system-reminder>')).toBe('')
+    expect(cleanDisplayText('<task-notification><task-id>x</task-id></task-notification>')).toBe('')
+  })
+
+  test('零宽字符 / BOM / WJ 单独存在或夹杂空白 → ""', () => {
+    expect(cleanDisplayText('\u200B')).toBe('')
+    expect(cleanDisplayText('\u200B\u200C\u200D')).toBe('')
+    expect(cleanDisplayText('\uFEFF')).toBe('')
+    expect(cleanDisplayText('  \u2060  ')).toBe('')
+    expect(cleanDisplayText('<system-reminder>x</system-reminder>\u200B ')).toBe('')
+  })
+
+  test('HTML 注释单独存在 → ""', () => {
+    expect(cleanDisplayText('<!-- placeholder -->')).toBe('')
+    expect(cleanDisplayText(' <!-- a --> \n <!-- b --> ')).toBe('')
+  })
+
+  test('正常内容保留', () => {
+    expect(cleanDisplayText('hello')).toBe('hello')
+    expect(cleanDisplayText('hi\u200Bworld')).toBe('hiworld')
+    expect(cleanDisplayText('  text  ')).toBe('text')
+  })
+
+  test('空 stdout 命令 → ""', () => {
+    expect(cleanDisplayText('<local-command-stdout></local-command-stdout>')).toBe('')
+    expect(cleanDisplayText('<local-command-stdout>\u200B</local-command-stdout>')).toBe('')
   })
 })

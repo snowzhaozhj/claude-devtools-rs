@@ -107,6 +107,10 @@ export function extractSlashInfo(content: string): SlashInfo | null {
 /**
  * 清洗 JSONL 原始内容为可显示文本。
  * 逻辑与原版 `sanitizeDisplayContent` 对齐，额外处理 ANSI 转义码。
+ *
+ * 末尾 `stripInvisible` 干掉零宽 / 不可见控制字符（ZWSP / ZWNJ / ZWJ / BOM /
+ * `<!-- -->` HTML 注释）——否则 `<system-reminder>` 等噪声 tag 清洗完只剩零宽
+ * 字符时，调用方仅看 `text.length > 0` 会让 UI 渲染出"空椭圆"气泡。
  */
 export function cleanDisplayText(text: string): string {
   if (!text) return "";
@@ -114,7 +118,7 @@ export function cleanDisplayText(text: string): string {
   // 命令输出 → 直接返回内容
   if (isCommandOutputContent(text)) {
     const output = extractCommandOutput(text);
-    if (output) return stripAnsi(output);
+    if (output) return stripInvisible(stripAnsi(output));
   }
 
   // slash 命令 → 返回 "/name args" 格式
@@ -136,7 +140,19 @@ export function cleanDisplayText(text: string): string {
     .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/gi, "");
   s = s.replace(TASK_OUTPUT_INSTRUCTION_PATTERN, "");
 
-  return stripAnsi(s).trim();
+  return stripInvisible(stripAnsi(s));
+}
+
+/**
+ * 去除零宽字符 / BOM / HTML 注释后 trim，再判一次 `[\s]` 全空则返回 ""。
+ * 用于消灭"看似有内容、渲染出来全空"的边界 case（user 空气泡 / AI 空 lastOutput）。
+ */
+function stripInvisible(s: string): string {
+  let out = s.replace(/<!--[\s\S]*?-->/g, "");
+  // ZWSP / ZWNJ / ZWJ / WJ (\u2060) / BOM (\uFEFF)
+  out = out.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "");
+  out = out.trim();
+  return out;
 }
 
 /**
