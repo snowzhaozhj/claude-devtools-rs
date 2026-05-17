@@ -23,16 +23,16 @@ test.describe('settings + notifications', () => {
       timeout: 5_000,
     })
 
-    // 默认 activeSection='general' → 看到「常规」h3 + 主题 setting
-    await expect(page.getByRole('heading', { name: '常规', level: 3 })).toBeVisible()
+    // 默认 activeSection='general' → 看到「常规」内容标题 + 主题 setting
+    await expect(page.getByRole('heading', { name: '常规', exact: true })).toBeVisible()
     await expect(page.getByText('主题').first()).toBeVisible()
 
-    // section tab 切换按钮（常规 / 通知）都在
-    await expect(page.getByRole('button', { name: '通知' })).toBeVisible()
+    // section nav 按钮（常规 / 显示 / 通知 / 关于）都在
+    await expect(page.getByRole('tab', { name: '通知' })).toBeVisible()
 
-    // 点切「通知」section → 看到 h3「通知」+「启用通知」label
-    await page.getByRole('button', { name: '通知' }).click()
-    await expect(page.getByRole('heading', { name: '通知', level: 3 })).toBeVisible()
+    // 点切「通知」section → 看到内容标题「通知」+「启用通知」label
+    await page.getByRole('tab', { name: '通知' }).click()
+    await expect(page.getByRole('heading', { name: '通知', exact: true })).toBeVisible()
     await expect(page.getByText('启用通知')).toBeVisible()
   })
 
@@ -89,10 +89,10 @@ test.describe('settings + notifications', () => {
     })
 
     // 触发器分区在「通知」section 下 → 先切过去
-    await page.getByRole('button', { name: '通知' }).click()
+    await page.getByRole('tab', { name: '通知' }).click()
 
     await expect(
-      page.getByText(/触发器监控会话中的工具错误/),
+      page.getByText(/监控会话中的工具错误/),
     ).toBeVisible({ timeout: 5_000 })
   })
 })
