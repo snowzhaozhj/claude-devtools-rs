@@ -548,9 +548,8 @@
   {@const lastActivity = lastActivityTs(detail.chunks)}
   {@const totalTokens = m.inputTokens + m.outputTokens}
 
-  <!-- Top bar：4px accent rail + 18px 标题 + 副标题密度行（chunks · tools · tokens · last activity） -->
-  <div class="top-bar" class:top-bar-ongoing={detail.isOngoing}>
-    <span class="top-rail" aria-hidden="true"></span>
+  <!-- Top bar：18px 标题 + 副标题密度行（chunks · tools · tokens · last activity） -->
+  <div class="top-bar">
     <div class="top-titles">
       <h1 class="top-title">{firstUserTitle(detail.chunks)}</h1>
       <div class="top-stats" aria-label="Session statistics">
@@ -1067,26 +1066,17 @@
   /* 顶部 border 移除：与上方 TabBar 行底 1 px border 紧贴会形成视觉加粗
      幻觉（左侧 tab 宽度的下划线与全宽 border 错位），详见 change
      unified-title-bar design D8 + app-chrome spec scenario
-     "SessionDetail 顶部不与 TabBar 行底 border 重叠"。 */
+     "SessionDetail 顶部不与 TabBar 行底 border 重叠"。
+     底部加 1 px border 与下方对话区做分隔。 */
   .top-bar {
     position: relative;
     display: flex;
     align-items: center;
-    padding: 14px 24px 14px 28px;
+    padding: 14px 24px;
     gap: 16px;
     flex-shrink: 0;
     background: var(--color-surface);
-  }
-
-  .top-rail {
-    position: absolute;
-    left: 16px;
-    top: 14px;
-    bottom: 14px;
-    width: 3px;
-    border-radius: 2px;
-    background: var(--color-border-emphasis);
-    transition: background 320ms cubic-bezier(0.16, 1, 0.3, 1);
+    border-bottom: 1px solid var(--color-border);
   }
 
   .top-titles {
