@@ -322,9 +322,11 @@
       <span class="sa-desc">{truncatedDesc}</span>
 
       {#if process.isOngoing}
-        <svg class="sa-status-running" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+        <span class="sa-status-running" aria-label="Subagent running" title="Subagent running">
+          <span class="sa-status-running-dot"></span>
+        </span>
       {:else}
-        <svg class="sa-status-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        <svg class="sa-status-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Subagent done"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
       {/if}
 
       <MetricsPill
@@ -498,16 +500,24 @@
     flex-shrink: 0;
     color: var(--color-success-bright);
   }
+  /* 形态分化 + 静态化：running 标记用 outline 空心圆，与 OngoingBanner
+     的 filled dot ping 形态完全区分；同时不与 OngoingBanner 抢屏。
+     详见 DESIGN.md `The Static-vs-Live Shape Rule` 与 `One Live Signal Rule`。 */
   .sa-status-running {
     width: var(--bubble-icon-md);
     height: var(--bubble-icon-md);
     flex-shrink: 0;
-    color: var(--color-accent-blue);
-    animation: spin 1s linear infinite;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+  .sa-status-running-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1.5px solid var(--color-accent-blue);
+    box-sizing: border-box;
   }
 
   .sa-duration {

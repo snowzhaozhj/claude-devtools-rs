@@ -910,7 +910,7 @@
             <!-- Last output (always visible).
                  ongoing=true 时 `.ai-body` 退出 `.msg-row-contained`——后者
                  用 `content-visibility: auto` 把离屏子树 layout/paint 跳过；
-                 OngoingBanner 的 ping/sweep CSS animation 离屏被 throttle
+                 OngoingBanner 的 dot ping CSS animation 离屏被 throttle
                  后会"半天才转一下"（#121 spinner 同源问题），即使 banner
                  滚回视口仍要等下一次 IO commit 才补帧。同 #108 给 mermaid-block
                  加的 :has 例外同源——animation/异步高度变化场景 SHALL 退出 contain。 -->
@@ -926,11 +926,13 @@
                 <div class="prose lazy-md" {@attach attachMarkdown(lastOutputText, "ai")}></div>
               {/if}
               {#each interruptions as _interrupt}
-                <div class="interruption-block">
-                  <svg class="interruption-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <div class="interruption-block" role="status">
+                  <svg class="interruption-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     {@html ALERT_TRIANGLE_SVG}
                   </svg>
-                  <span>Request interrupted by user</span>
+                  <span class="interruption-label">INTERRUPTED</span>
+                  <span class="interruption-text">Request interrupted by user</span>
+                  <span class="interruption-glyph" aria-hidden="true">↩</span>
                 </div>
               {/each}
             </div>
@@ -1090,9 +1092,10 @@
     transition: background 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
+  /* live top rail 弱化：用蓝色 + 透明度让暖白底透过来，不混灰避免脏色。
+     去掉外发光 box-shadow 减少视觉权重。 */
   .top-bar-ongoing .top-rail {
-    background: var(--color-accent-blue);
-    box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 25%, transparent);
+    background: color-mix(in oklch, var(--color-accent-blue) 55%, transparent);
   }
 
   .top-titles {
@@ -1172,17 +1175,16 @@
     letter-spacing: 0.12em;
   }
 
+  /* 形态分化：静态 LIVE chip dot 用 outline 空心圆，与 OngoingBanner
+     的 filled dot ping 形态完全区分——大脑不再把两类点归一组。
+     详见 DESIGN.md `The Static-vs-Live Shape Rule` 与 `One Live Signal Rule`。 */
   .top-stat-live-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: currentColor;
-    animation: top-live-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-
-  @keyframes top-live-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+    background: transparent;
+    border: 1.25px solid currentColor;
+    box-sizing: border-box;
   }
 
 
@@ -1266,13 +1268,16 @@
     line-height: 1.5;
   }
 
-  .top-badge:hover {
+  /* idle hover：限定 :not(.top-badge-active)，否则伪类特异性 (0,2,0)
+     会覆盖 .top-badge-active (0,1,0)，active+hover 时会退回灰底 —— 与
+     active 蓝态视觉脱节。 */
+  .top-badge:not(.top-badge-active):hover {
     background: var(--color-surface-raised);
     color: var(--color-text);
     border-color: var(--color-border);
   }
 
-  .top-badge:hover .top-badge-icon {
+  .top-badge:not(.top-badge-active):hover .top-badge-icon {
     color: var(--color-text-secondary);
   }
 
@@ -1281,20 +1286,38 @@
     outline-offset: 2px;
   }
 
+  /* Context 按钮 active 态：用 neutral 层级（更深 surface + emphasis
+     border + 主文本色），与 ai-tool-toggle tools-open 状态视觉语言
+     统一。蓝色留给 focus / live 等真的强调状态。详见 DESIGN.md
+     `Status Owns the Color Rule`——panel toggle 不属于 selection /
+     focus / 语义状态。 */
   .top-badge-active {
-    background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
-    color: var(--color-accent-blue);
-    border-color: color-mix(in oklch, var(--color-accent-blue) 35%, transparent);
+    background: var(--color-surface-overlay);
+    color: var(--color-text);
+    border-color: var(--color-border-emphasis);
+  }
+
+  /* active 态已经是最深 raised 层级（surface-overlay），hover 不再加深，
+     保持稳态——与桌面工具 (VS Code / IntelliJ) panel toggle 行为一致。
+     仍显式声明 :hover 规则覆盖通用 :not(.top-badge-active):hover 兜底。 */
+  .top-badge-active:hover {
+    background: var(--color-surface-overlay);
+    border-color: var(--color-border-emphasis);
+    color: var(--color-text);
   }
 
   .top-badge-active .top-badge-icon {
-    color: var(--color-accent-blue);
+    color: var(--color-text);
   }
 
   .top-badge-active .top-badge-count {
-    background: color-mix(in oklch, var(--color-accent-blue) 14%, transparent);
-    border-color: transparent;
-    color: var(--color-accent-blue);
+    background: var(--color-surface);
+    border-color: var(--color-border);
+    color: var(--color-text-secondary);
+  }
+
+  .top-badge-active:hover .top-badge-count {
+    background: var(--color-surface);
   }
 
   /* ── Content area ── */
@@ -1541,13 +1564,16 @@
     transition: color 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
+  /* live thread rail 弱化：用纯蓝 + 透明度（暖白底透过来），不混灰避免
+     脏色。3px 全长 border 用满 accent-blue 会把眼睛锁在 rail 上而不是
+     消息内容，与 product register 的"克制工作台"风格冲突。 */
   .msg-ai-container-live {
-    border-left-color: var(--color-accent-blue);
+    border-left-color: color-mix(in oklch, var(--color-accent-blue) 55%, transparent);
   }
 
   .msg-ai-container-live::before {
-    color: var(--color-accent-blue);
-    opacity: 0.85;
+    color: color-mix(in oklch, var(--color-accent-blue) 55%, transparent);
+    opacity: 1;
   }
 
   /* 左外侧 timeline node：执行轨迹的"节点" */
@@ -1564,30 +1590,17 @@
     transition: border-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
+  /* timeline live node：outline 形态 + 纯蓝 55% 透明度，与 thread rail
+     统一弱化语言；保留 surface 隔离环避免与 timeline 主线条粘连。
+     详见 DESIGN.md `The Static-vs-Live Shape Rule` 与 `One Live Signal Rule`。 */
   .ai-thread-node-live {
-    border-color: var(--color-accent-blue);
-    background: var(--color-accent-blue);
-    animation: ai-thread-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-
-  @keyframes ai-thread-pulse {
-    0%, 100% {
-      box-shadow:
-        0 0 0 2px var(--color-surface),
-        0 0 0 4px color-mix(in oklch, var(--color-accent-blue) 40%, transparent);
-    }
-    50% {
-      box-shadow:
-        0 0 0 2px var(--color-surface),
-        0 0 0 7px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
-    }
+    border-width: 2px;
+    border-color: color-mix(in oklch, var(--color-accent-blue) 55%, transparent);
+    background: var(--color-surface);
+    box-shadow: 0 0 0 2px var(--color-surface);
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .ai-thread-node-live,
-    .top-stat-live-dot {
-      animation: none;
-    }
     .msg-ai-container::before {
       display: none;
     }
@@ -1668,10 +1681,14 @@
     border-color: var(--color-border-emphasis);
   }
 
+  /* tools-open 选中态：用 neutral 层级（更深一档 surface + emphasis
+     border + 主文本色）+ chevron 90° 旋转表达"已展开"，把蓝色留给
+     focus / live 等真的强调状态。详见 DESIGN.md `Status Owns the
+     Color Rule`——展开/折叠不属于 selection / focus / 语义状态。 */
   .msg-ai-container-tools-open .ai-tool-toggle {
-    background: color-mix(in oklch, var(--color-accent-blue) 8%, transparent);
-    border-color: color-mix(in oklch, var(--color-accent-blue) 30%, transparent);
-    color: var(--color-accent-blue);
+    background: var(--color-surface-overlay);
+    border-color: var(--color-border-emphasis);
+    color: var(--color-text);
   }
 
   .ai-tool-toggle:focus-visible {
@@ -2117,29 +2134,48 @@
     font-size: 13px;
   }
 
-  /* Interruption：从独立 alert 横条 → 紧贴 AI body 的"流被掐断"标记
-     - 顶部 dotted amber line（流被切断的视觉）
-     - 文案左对齐，icon + "Interrupted by user" + 末尾 mono "↩"
-  */
+  /* Interruption：用户显式 Esc 操作，视觉权重高于普通工具行但低于 error。
+     从早期 1px dashed line → warning chip：浅 amber bg + 1px border + 实
+     icon + mono UPPERCASE label + sentence-case 文案 + 末尾 ↩ 锚定字符。
+     注意：DESIGN.md 禁 side-stripe，用 background tint 表达，不用左侧粗条。 */
   .interruption-block {
-    margin-top: 6px;
-    padding: 8px 0 4px;
-    border-top: 1px dashed color-mix(in oklch, var(--color-warning) 50%, transparent);
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
     color: var(--color-warning-text);
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.3;
-    font-family: var(--font-mono);
-    font-weight: 600;
-    letter-spacing: 0.04em;
     display: flex;
     width: 100%;
     align-items: center;
     gap: 8px;
   }
   .interruption-icon {
-    width: 13px;
-    height: 13px;
+    width: 14px;
+    height: 14px;
     flex-shrink: 0;
-    opacity: 0.85;
+    color: var(--color-warning-text);
+  }
+  .interruption-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: var(--color-warning-text);
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .interruption-text {
+    font-weight: 500;
+    flex: 1;
+    min-width: 0;
+  }
+  .interruption-glyph {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    opacity: 0.7;
+    flex-shrink: 0;
   }
 </style>
