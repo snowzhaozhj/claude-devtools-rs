@@ -582,12 +582,6 @@
             <span class="top-stat-num">{ftime(lastActivity)}</span>
           </span>
         {/if}
-        {#if detail.isOngoing}
-          <span class="top-stat-live" aria-label="Live">
-            <span class="top-stat-live-dot"></span>
-            LIVE
-          </span>
-        {/if}
       </div>
     </div>
     <div class="top-meta">
@@ -1092,12 +1086,6 @@
     transition: background 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  /* live top rail 弱化：用蓝色 + 透明度让暖白底透过来，不混灰避免脏色。
-     去掉外发光 box-shadow 减少视觉权重。 */
-  .top-bar-ongoing .top-rail {
-    background: color-mix(in oklch, var(--color-accent-blue) 55%, transparent);
-  }
-
   .top-titles {
     flex: 1;
     min-width: 0;
@@ -1158,33 +1146,6 @@
     color: var(--color-border-emphasis);
     font-weight: 600;
     user-select: none;
-  }
-
-  .top-stat-live {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    margin-left: 2px;
-    padding: 1px 7px 1px 6px;
-    border-radius: 9999px;
-    background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
-    color: var(--color-accent-blue);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-  }
-
-  /* 形态分化：静态 LIVE chip dot 用 outline 空心圆，与 OngoingBanner
-     的 filled dot ping 形态完全区分——大脑不再把两类点归一组。
-     详见 DESIGN.md `The Static-vs-Live Shape Rule` 与 `One Live Signal Rule`。 */
-  .top-stat-live-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: transparent;
-    border: 1.25px solid currentColor;
-    box-sizing: border-box;
   }
 
 
