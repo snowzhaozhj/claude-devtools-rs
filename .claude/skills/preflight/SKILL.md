@@ -69,14 +69,15 @@ ls openspec/changes/ 2>/dev/null | grep -v "^archive$"
 
 任何非纯问答任务的**默认终点**是：实现 → 本地验证 → commit → push → PR → codex 异构二审 → wait-ci 全绿 → 文本总结。openspec change 额外加 N.4 archive。
 
-**仅当**用户首条 message 含明确停手词才裁短流水线：
+**仅当**用户首条 message 含明确停手词才裁短流水线。表中中英文混列——项目以中文为主但用户偶尔用英文动词；匹配按子串 + 词义，大小写不敏感。
 
 | 用户原话片段（停手词） | 终点 |
 |---|---|
-| "先看下 / 先想下 / 先讨论 / 先评估 / 先评审 / 先调研" | 仅出方案，不动代码 |
-| "看看 / 看一眼 / 过一遍 / review 一下 / 审查 / 审阅 / 分析" 且**未**伴随"然后改 / 修 / 做"等动作动词 | 仅出方案，不动代码 |
-| "改了别 push / 改完先给我看 / 别提 PR / 暂缓 commit / 先在本地 / 先别动远端" | 实现 + 验证，停在本地 |
-| "提个 draft PR / 草稿 PR / draft 一个" | 走到 push + PR draft，不跑 codex / wait-ci |
+| "先看下 / 先想下 / 先讨论 / 先评估 / 先评审 / 先调研 / 先评一下" | 仅出方案，不动代码 |
+| "看看 / 看一眼 / 过一遍 / 瞄一眼 / review 一下 / 审查 / 审阅 / 分析 / take a look / poke around / walk me through" 且**未**伴随"然后改 / 修 / 做 / 落实 / 应用"等动作动词 | 仅出方案，不动代码 |
+| "解释一下 / 是什么意思 / 讲讲 / 说说 / 这是干嘛的 / what does X do / how does X work" | 仅出方案，不动代码（纯问答） |
+| "改了别 push / 改完先给我看 / 别提 PR / 暂缓 commit / 先在本地 / 先别动远端 / don't push yet" | 实现 + 验证，停在本地 |
+| "提个 draft PR / 草稿 PR / draft 一个 / open a draft" | 走到 push + PR draft，不跑 codex / wait-ci |
 | （未明确停手词）| 全跑到底（含 codex + wait-ci 全绿）|
 
 判断不准 → 全跑。"用户没说停 = 默认授权完整流水线"是项目 CLAUDE.md / .claude/rules/opsx-apply-cadence.md 的硬约束。
