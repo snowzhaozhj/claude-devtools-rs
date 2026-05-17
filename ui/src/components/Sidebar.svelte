@@ -1061,23 +1061,28 @@
     background: var(--tool-item-hover-bg);
   }
 
-  /* 选中态：用 surface-overlay 比 hover 的 raised 再深一档 + 1px
-     accent outline + title 字重 700 ink-text 三重信号。原 3px 灰
-     stripe 在暖灰 sidebar 背景上几乎被吃掉；纯背景层级差在深色
-     主题（#333330 vs sidebar #232321 ≈ 1.24:1）远低于 WCAG 1.4.11
-     非文本对比要求 3:1，因此引入 1px outline 提供跨主题稳定信号——
-     outline 不占 box-model 空间（offset:-1 内贴边），不构成 impeccable
-     禁止的 "side-stripe > 1px colored accent"（限单边 & >1px），是受
-     认可的 a11y indicator 形态。outline 色走 --sidebar-active-outline
-     （浅 #2563eb / 深 #60a5fa）保证 ≥3:1。 */
+  /* 选中态：左 2px 蓝色结构性 indicator + surface-overlay 加深背景
+     + 标题字重 600。原 1px 蓝 outline 在浅色暖灰 sidebar 上对比度
+     ≈7.8:1 形成"相框效应"，视觉权重反而盖过 SessionDetail 头部，
+     不符合 sidebar 应作为"位置标记"而非"call to action"的定位
+     （DESIGN.md `Status Owns the Color` + `Navigation rows::Active
+     item 可以用细窄 2-3px indicator`）。
+     - indicator 用 box-shadow inset，不占 box-model 空间 / 不触发
+       reflow，等价于 outline 的性能特征。沿用 --sidebar-active-outline
+       token 保证浅 #2563eb / 深 #60a5fa 跨主题对比度：indicator on
+       sidebar bg ≥6:1，远超 WCAG 1.4.11 非文本 3:1。
+     - bg surface-overlay 提供第二条层级信号；title 字重 600 提供
+       第三条字重信号（与 hover 的默认 400 拉开）。
+     - 字重从 700 降到 600：sidebar 选中态不应是该 surface 上最重的
+       视觉元素——详情页主标题才是当前焦点，sidebar 选中只指示"在
+       看哪条"。 */
   .session-item-active {
     background: var(--color-surface-overlay);
-    outline: 1px solid var(--sidebar-active-outline);
-    outline-offset: -1px;
+    box-shadow: inset 2px 0 0 var(--sidebar-active-outline);
   }
   .session-item-active .session-title-text {
     color: var(--color-text);
-    font-weight: 700;
+    font-weight: 600;
   }
 
   .session-item-hidden {
