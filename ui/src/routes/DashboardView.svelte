@@ -146,13 +146,15 @@
     display: flex;
     justify-content: center;
     height: 100%;
-    overflow-y: auto;
+    /* 强制 overflow-y: scroll 永久占用 6px 滚动条位（app.css 全局定义），
+       filter 后内容变短 → 滚动条「消失」→ 可用宽度跳变的抖动彻底消除。
+       配合 scrollbar-gutter: stable both-edges 让新 WebKit 上左右对称居中；
+       老 WebKit 不识别 both-edges 也只是右边占 6px、轻微左偏，不会再抖动。
+       `auto` → `scroll` 是关键修复：scrollbar-gutter 在 Safari < 18.2 部分
+       不生效，scroll 模式才是跨平台彻底解。 */
+    overflow-y: scroll;
     overflow-x: hidden;
     padding: 48px 24px;
-    /* 滚动条预留 stable 槽位：filter 后内容高度变化时不再瞬时增/减出可用宽度，
-       避免输入框与卡片网格左右晃动。`both-edges` 让左右两侧都预留居中对称；
-       老 WebKit 不识别 both-edges 时回落到只 stable（仍解决晃动，只是轻微偏左）。 */
-    scrollbar-gutter: stable;
     scrollbar-gutter: stable both-edges;
   }
 
