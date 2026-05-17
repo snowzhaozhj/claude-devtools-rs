@@ -757,7 +757,10 @@
      全局 token 体系；其他组件复用项目 token 不变。 */
   .sidebar {
     --sidebar-accent: #1d4ed8;
-    --sidebar-active-outline: var(--color-accent-blue-hover);
+    /* 持久选中 indicator 走暖中性色 —— Focus Blue 留给瞬时焦点 + ongoing/live
+       （DESIGN.md `The Persistent Selection Is Quiet Rule`）。indicator on
+       sidebar bg ≈4.5:1（浅）/ 5.2:1（深），≥WCAG 1.4.11 非文本 3:1。 */
+    --sidebar-active-indicator: var(--color-text-secondary);
     --sidebar-pinned: #4338ca;
     position: relative;
     height: 100%;
@@ -771,14 +774,12 @@
 
   :global([data-theme="dark"]) .sidebar {
     --sidebar-accent: #93c5fd;
-    --sidebar-active-outline: var(--color-accent-blue);
     --sidebar-pinned: #a5b4fc;
   }
 
   @media (prefers-color-scheme: dark) {
     :global([data-theme="system"]) .sidebar {
       --sidebar-accent: #93c5fd;
-      --sidebar-active-outline: var(--color-accent-blue);
       --sidebar-pinned: #a5b4fc;
     }
   }
@@ -1061,24 +1062,24 @@
     background: var(--tool-item-hover-bg);
   }
 
-  /* 选中态：左 2px 蓝色结构性 indicator + surface-overlay 加深背景
-     + 标题字重 600。原 1px 蓝 outline 在浅色暖灰 sidebar 上对比度
-     ≈7.8:1 形成"相框效应"，视觉权重反而盖过 SessionDetail 头部，
-     不符合 sidebar 应作为"位置标记"而非"call to action"的定位
-     （DESIGN.md `Status Owns the Color` + `Navigation rows::Active
-     item 可以用细窄 2-3px indicator`）。
-     - indicator 用 box-shadow inset，不占 box-model 空间 / 不触发
-       reflow，等价于 outline 的性能特征。沿用 --sidebar-active-outline
-       token 保证浅 #2563eb / 深 #60a5fa 跨主题对比度：indicator on
-       sidebar bg ≥6:1，远超 WCAG 1.4.11 非文本 3:1。
-     - bg surface-overlay 提供第二条层级信号；title 字重 600 提供
-       第三条字重信号（与 hover 的默认 400 拉开）。
-     - 字重从 700 降到 600：sidebar 选中态不应是该 surface 上最重的
-       视觉元素——详情页主标题才是当前焦点，sidebar 选中只指示"在
-       看哪条"。 */
+  /* 选中态：左 2px 暖中性 indicator + surface-overlay 加深背景 +
+     标题字重 600。**完全去蓝**——sidebar 列表选中是"持久态"（用户
+     切换后一直存在直到下次切换），不是"瞬时焦点"，不应使用 Focus
+     Blue。Focus Blue 留给瞬时焦点 + ongoing/live（DESIGN.md
+     `The Persistent Selection Is Quiet Rule` + `The Ongoing Owns
+     Blue Rule`）。历史迭代：原 1px 蓝 outline → 2px 蓝 indicator →
+     2px 暖中性 indicator —— 前两版蓝色都让选中行视觉权重持续盖过
+     SessionDetail 头部主标题；本版让 sidebar 完全脱离 Focus Blue
+     语义。
+     三通道信号（任两条 ≥3:1 即满足"持久选中"合规模式）：
+     - 暖中性 indicator (#6b6964 浅 / #a8a5a0 深) on sidebar bg
+       ≈4.5:1 / 5.2:1，超 WCAG 1.4.11 非文本 3:1。
+     - bg surface-overlay 比 hover 加深一档，提供 tonal layering。
+     - title 字重 600，与 hover 的默认 400 拉开。
+     box-shadow inset 不占 box-model 空间，不触发 reflow。 */
   .session-item-active {
     background: var(--color-surface-overlay);
-    box-shadow: inset 2px 0 0 var(--sidebar-active-outline);
+    box-shadow: inset 2px 0 0 var(--sidebar-active-indicator);
   }
   .session-item-active .session-title-text {
     color: var(--color-text);
