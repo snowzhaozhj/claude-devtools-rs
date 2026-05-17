@@ -10,14 +10,21 @@
     type DashboardSortKey,
   } from "../lib/dashboardProjects";
   import { shortenPath } from "../lib/toolHelpers";
-  import { FOLDER_GIT2_SVG, GIT_BRANCH_SVG, CHEVRON_DOWN } from "../lib/icons";
+  import { FOLDER_GIT2_SVG, GIT_BRANCH_SVG } from "../lib/icons";
   import Skeleton from "../components/Skeleton.svelte";
+  import Dropdown from "../lib/components/Dropdown.svelte";
   import {
     registerHandler,
     unregisterHandler,
     scheduleRefresh,
     cancelScheduledRefresh,
   } from "../lib/fileChangeStore.svelte";
+
+  const SORT_OPTIONS: { value: DashboardSortKey; label: string }[] = [
+    { value: "recent", label: "最近活动" },
+    { value: "sessions", label: "会话数最多" },
+    { value: "name", label: "字母序" },
+  ];
 
   interface Props {
     selectedProjectId: string;
@@ -142,14 +149,21 @@
 
 <div class="dashboard">
   <div class="dashboard-inner">
-    <!-- 搜索框 -->
+    <!-- 搜索框 —— 配齐 type=search + auto* + cancel-button 隐藏，避免 WKWebView
+         弹「A ×」自动大写浮窗 / 浏览器历史下拉。详见 ui/CLAUDE.md「UI 组件规范」。 -->
     <div class="dash-search-wrap">
       <input
         bind:this={searchEl}
         class="dash-search"
-        type="text"
+        type="search"
         placeholder="搜索项目..."
         bind:value={filterQuery}
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        enterkeyhint="search"
+        aria-label="搜索项目"
       />
       <kbd class="dash-kbd" title="按 / 聚焦搜索">/</kbd>
     </div>
@@ -176,30 +190,17 @@
       </div>
 
       <div class="dash-toolbar-controls">
-        <label class="dash-sort">
+        <div class="dash-sort">
           <span class="dash-sort-label">排序</span>
-          <span class="dash-sort-select-wrap">
-            <select class="dash-sort-select" bind:value={sortKey}>
-              <option value="recent">最近活动</option>
-              <option value="sessions">会话数最多</option>
-              <option value="name">字母序</option>
-            </select>
-            <svg
-              class="dash-sort-chevron"
-              viewBox="0 0 24 24"
-              width="12"
-              height="12"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d={CHEVRON_DOWN} />
-            </svg>
-          </span>
-        </label>
+          <Dropdown
+            size="sm"
+            minWidth={96}
+            value={sortKey}
+            options={SORT_OPTIONS}
+            onChange={(v) => (sortKey = v as DashboardSortKey)}
+            ariaLabel="排序方式"
+          />
+        </div>
 
         <div class="dash-view-toggle" role="group" aria-label="视图切换">
           <button
@@ -269,6 +270,11 @@
             >
               <div class="dash-row-main">
                 <span class="dash-row-name">{project.displayName}</span>
+                {#if isActive}
+                  <!-- 「当前」紧贴 name，active 切换时仅本 badge 出现/消失，
+                       不挤推右侧 time/worktree/💬N（dash-row-time 已 margin-left:auto）。 -->
+                  <span class="dash-row-current">当前</span>
+                {/if}
                 {#if project.lastModified !== null}
                   <span class="dash-row-time">{formatRelativeTime(project.lastModified)}</span>
                 {/if}
@@ -281,9 +287,6 @@
                 <span class="dash-row-sessions" title="{project.sessionCount} 个会话">
                   💬 {project.sessionCount}
                 </span>
-                {#if isActive}
-                  <span class="dash-row-current">当前</span>
-                {/if}
               </div>
               <div class="dash-row-path">{shortenPath(project.path)}</div>
             </button>
@@ -376,6 +379,14 @@
     color: var(--color-text-muted);
   }
 
+  /* 隐藏 type=search 在 WebKit 下的原生 clear 按钮，避免与 / kbd 视觉冲突 */
+  .dash-search::-webkit-search-cancel-button,
+  .dash-search::-webkit-search-decoration {
+    -webkit-appearance: none;
+    appearance: none;
+    display: none;
+  }
+
   .dash-kbd {
     position: absolute;
     right: 12px;
@@ -453,37 +464,8 @@
     color: var(--color-text-muted);
   }
 
-  .dash-sort-select-wrap {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-  }
-
-  .dash-sort-select {
-    appearance: none;
-    -webkit-appearance: none;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-    padding: 4px 24px 4px 8px;
-    font: inherit;
-    font-size: 12px;
-    color: var(--color-text);
-    cursor: pointer;
-    outline: none;
-    transition: border-color 0.12s;
-  }
-
-  .dash-sort-select:hover,
-  .dash-sort-select:focus-visible {
-    border-color: var(--color-border-emphasis);
-  }
-
-  .dash-sort-chevron {
-    position: absolute;
-    right: 6px;
-    pointer-events: none;
-    color: var(--color-text-muted);
+  .dash-sort-label {
+    line-height: 1;
   }
 
   .dash-view-toggle {

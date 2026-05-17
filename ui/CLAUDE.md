@@ -39,6 +39,11 @@
 - **scoped CSS root attribute 必须 `:global()`**：写 `[data-theme="dark"] .my-class` 会被 svelte-check 报 `css_unused_selector`——root html 的 `data-theme` 不在组件 scoped 范围。改 `:global([data-theme="dark"]) .my-class`。
 - **`content-visibility: auto` 父级 throttle 子树 CSS animation**：浏览器把离屏子树的 layout/paint/animation 跳过，spinner / ping / sweep / shimmer 离屏 + 回到视口会"半天才转一下"。修法：含持续 animation 的父容器 SHALL 退出 contain，如 `class:msg-row-contained={!hasAnimation}`。已发：#121 OngoingBanner spinner / #122 OngoingBanner ping+sweep。
 
+## UI 组件规范（防回归）
+
+- **下拉选择 SHALL 用 `lib/components/Dropdown.svelte`，禁止原生 `<select>`**：系统默认弹层会遮盖当前已选值（典型 macOS WKWebView），且跨平台样式不可控（chevron / 高度 / option hover 全是平台行为）。已有 5 处使用（SettingsView × 5、PhaseSelector）。PR #128 当时正是修这个 bug 才引入 `Dropdown`——PR #143 重写 Dashboard 时回退到原生 select 又踩了一次。SettingsView 风格用 `size="md"`（默认），工具栏 / inline 紧凑用 `size="sm" minWidth={...}`。
+- **搜索类 input SHALL 配齐 7 件套**：`type="search"` + `autocomplete="off"` + `autocorrect="off"` + `autocapitalize="off"` + `spellcheck="false"` + `enterkeyhint="search"` + `aria-label`，并加 CSS `::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }` 隐藏 WebKit 原生 clear 按钮。理由：macOS WKWebView 对小写字母自动弹「A ×」大写建议浮窗、浏览器 autocomplete 历史下拉、`type=search` 自带 clear 按钮会与 / kbd 等装饰冲突。已有 4 处合规（Sidebar / CommandPalette / SearchBar / DashboardView，均由 PR #138 统一处理），新加搜索框时**复制 DashboardView .dash-search 即可**。
+
 ## Settings 与 config 修改
 
 - **乐观更新模式**：config 修改不能依赖 `updateConfig` 返回值刷新 UI，应先乐观更新本地 `$state`，异步调 API，失败时回滚（重新 `getConfig`）。
