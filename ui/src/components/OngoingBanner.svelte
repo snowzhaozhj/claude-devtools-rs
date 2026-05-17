@@ -1,40 +1,32 @@
 <!--
-  OngoingBanner：嵌入最后一个 AIChunk 的 lastOutput 槽位，表达"流仍在进行"。
-  不再使用旋转 spinner（与 IDE 工具的稳态质感不符），改用 IDE-style
-  shimmer bar（横扫 1.6s）+ mono uppercase label，对齐 product register
-  下的"调试器进度指示器"语言，同时降低视觉噪音。
+  OngoingBanner：嵌入最后一个 AIChunk 的 lastOutput 槽位，作为 SessionDetail
+  的 primary "session 仍在进行" 指示器。
+
+  视觉决策（详见 DESIGN.md `The Ongoing Owns Blue Rule` 与 `One Live Signal Rule`）：
+  - 详情页一屏只允许一个动态 live 信号；该信号属于 dot ping
+  - 去掉早期版本的 shimmer sweep bar：bar 横扫 + dot ping 双层动画
+    会让眼睛被持续吸到 banner 上，违反 product register 的 "实时但不闪烁" 原则
+  - 仅保留 dot ping + STREAMING label + 文案，整体仍保持 IDE-style 稳态质感
 -->
 <script lang="ts">
 </script>
 
 <div class="ongoing" role="status" aria-live="polite">
-  <div class="ongoing-row">
-    <span class="ongoing-pulse" aria-hidden="true"></span>
-    <span class="ongoing-label">STREAMING</span>
-    <span class="ongoing-hint">Session is still in progress…</span>
-  </div>
-  <div class="ongoing-track" aria-hidden="true">
-    <span class="ongoing-sweep"></span>
-  </div>
+  <span class="ongoing-pulse" aria-hidden="true"></span>
+  <span class="ongoing-label">STREAMING</span>
+  <span class="ongoing-hint">Session is still in progress…</span>
 </div>
 
 <style>
   .ongoing {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 14px 12px;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
     border-radius: 8px;
     background: color-mix(in oklch, var(--color-accent-blue) 5%, transparent);
     border: 1px solid color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 6%, transparent);
     width: 100%;
-  }
-
-  .ongoing-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
   }
 
   .ongoing-pulse {
@@ -44,7 +36,7 @@
     background: var(--color-accent-blue);
     flex-shrink: 0;
     box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 50%, transparent);
-    animation: ongoing-ping 1.6s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+    animation: ongoing-ping 1.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
   }
 
   .ongoing-label {
@@ -66,27 +58,6 @@
     min-width: 0;
   }
 
-  .ongoing-track {
-    position: relative;
-    height: 2px;
-    border-radius: 2px;
-    overflow: hidden;
-    background: color-mix(in oklch, var(--color-accent-blue) 12%, transparent);
-  }
-
-  .ongoing-sweep {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      color-mix(in oklch, var(--color-accent-blue) 75%, transparent) 50%,
-      transparent 100%
-    );
-    animation: ongoing-sweep 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-    transform: translateX(-100%);
-  }
-
   @keyframes ongoing-ping {
     0% {
       transform: scale(0.85);
@@ -102,23 +73,9 @@
     }
   }
 
-  @keyframes ongoing-sweep {
-    0% {
-      transform: translateX(-100%);
-    }
-    100% {
-      transform: translateX(100%);
-    }
-  }
-
   @media (prefers-reduced-motion: reduce) {
     .ongoing-pulse {
       animation: none;
-    }
-    .ongoing-sweep {
-      animation: none;
-      transform: translateX(0);
-      opacity: 0.5;
     }
   }
 </style>

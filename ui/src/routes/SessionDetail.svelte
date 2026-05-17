@@ -899,7 +899,7 @@
             <!-- Last output (always visible).
                  ongoing=true 时 `.ai-body` 退出 `.msg-row-contained`——后者
                  用 `content-visibility: auto` 把离屏子树 layout/paint 跳过；
-                 OngoingBanner 的 ping/sweep CSS animation 离屏被 throttle
+                 OngoingBanner 的 dot ping CSS animation 离屏被 throttle
                  后会"半天才转一下"（#121 spinner 同源问题），即使 banner
                  滚回视口仍要等下一次 IO commit 才补帧。同 #108 给 mermaid-block
                  加的 :has 例外同源——animation/异步高度变化场景 SHALL 退出 contain。 -->
@@ -915,11 +915,13 @@
                 <div class="prose lazy-md" {@attach attachMarkdown(di.lastOutput.text, "ai")}></div>
               {/if}
               {#each interruptions as _interrupt}
-                <div class="interruption-block">
-                  <svg class="interruption-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <div class="interruption-block" role="status">
+                  <svg class="interruption-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     {@html ALERT_TRIANGLE_SVG}
                   </svg>
-                  <span>Request interrupted by user</span>
+                  <span class="interruption-label">INTERRUPTED</span>
+                  <span class="interruption-text">Request interrupted by user</span>
+                  <span class="interruption-glyph" aria-hidden="true">↩</span>
                 </div>
               {/each}
             </div>
@@ -1160,17 +1162,15 @@
     letter-spacing: 0.12em;
   }
 
+  /* 详情页一屏只允许一个动态 live 信号（OngoingBanner 的 dot ping）；
+     LIVE chip dot 改静态填充 + 半透明 halo，保持视觉识别但不参与脉冲。
+     详见 DESIGN.md `One Live Signal Rule`。 */
   .top-stat-live-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: currentColor;
-    animation: top-live-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-
-  @keyframes top-live-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 20%, transparent);
   }
 
 
@@ -1254,13 +1254,16 @@
     line-height: 1.5;
   }
 
-  .top-badge:hover {
+  /* idle hover：限定 :not(.top-badge-active)，否则伪类特异性 (0,2,0)
+     会覆盖 .top-badge-active (0,1,0)，active+hover 时会退回灰底 —— 与
+     active 蓝态视觉脱节。 */
+  .top-badge:not(.top-badge-active):hover {
     background: var(--color-surface-raised);
     color: var(--color-text);
     border-color: var(--color-border);
   }
 
-  .top-badge:hover .top-badge-icon {
+  .top-badge:not(.top-badge-active):hover .top-badge-icon {
     color: var(--color-text-secondary);
   }
 
@@ -1275,6 +1278,11 @@
     border-color: color-mix(in oklch, var(--color-accent-blue) 35%, transparent);
   }
 
+  .top-badge-active:hover {
+    background: color-mix(in oklch, var(--color-accent-blue) 16%, transparent);
+    border-color: color-mix(in oklch, var(--color-accent-blue) 48%, transparent);
+  }
+
   .top-badge-active .top-badge-icon {
     color: var(--color-accent-blue);
   }
@@ -1283,6 +1291,10 @@
     background: color-mix(in oklch, var(--color-accent-blue) 14%, transparent);
     border-color: transparent;
     color: var(--color-accent-blue);
+  }
+
+  .top-badge-active:hover .top-badge-count {
+    background: color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
   }
 
   /* ── Content area ── */
@@ -1552,30 +1564,18 @@
     transition: border-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
+  /* 详情页一屏只允许一个动态 live 信号；timeline live node 退为静态
+     蓝色填充 + 4px halo ring，不参与脉冲。详见 DESIGN.md
+     `One Live Signal Rule`。 */
   .ai-thread-node-live {
     border-color: var(--color-accent-blue);
     background: var(--color-accent-blue);
-    animation: ai-thread-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-
-  @keyframes ai-thread-pulse {
-    0%, 100% {
-      box-shadow:
-        0 0 0 2px var(--color-surface),
-        0 0 0 4px color-mix(in oklch, var(--color-accent-blue) 40%, transparent);
-    }
-    50% {
-      box-shadow:
-        0 0 0 2px var(--color-surface),
-        0 0 0 7px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
-    }
+    box-shadow:
+      0 0 0 2px var(--color-surface),
+      0 0 0 4px color-mix(in oklch, var(--color-accent-blue) 28%, transparent);
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .ai-thread-node-live,
-    .top-stat-live-dot {
-      animation: none;
-    }
     .msg-ai-container::before {
       display: none;
     }
@@ -2105,29 +2105,48 @@
     font-size: 13px;
   }
 
-  /* Interruption：从独立 alert 横条 → 紧贴 AI body 的"流被掐断"标记
-     - 顶部 dotted amber line（流被切断的视觉）
-     - 文案左对齐，icon + "Interrupted by user" + 末尾 mono "↩"
-  */
+  /* Interruption：用户显式 Esc 操作，视觉权重高于普通工具行但低于 error。
+     从早期 1px dashed line → warning chip：浅 amber bg + 1px border + 实
+     icon + mono UPPERCASE label + sentence-case 文案 + 末尾 ↩ 锚定字符。
+     注意：DESIGN.md 禁 side-stripe，用 background tint 表达，不用左侧粗条。 */
   .interruption-block {
-    margin-top: 6px;
-    padding: 8px 0 4px;
-    border-top: 1px dashed color-mix(in oklch, var(--color-warning) 50%, transparent);
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
     color: var(--color-warning-text);
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.3;
-    font-family: var(--font-mono);
-    font-weight: 600;
-    letter-spacing: 0.04em;
     display: flex;
     width: 100%;
     align-items: center;
     gap: 8px;
   }
   .interruption-icon {
-    width: 13px;
-    height: 13px;
+    width: 14px;
+    height: 14px;
     flex-shrink: 0;
-    opacity: 0.85;
+    color: var(--color-warning-text);
+  }
+  .interruption-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: var(--color-warning-text);
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .interruption-text {
+    font-weight: 500;
+    flex: 1;
+    min-width: 0;
+  }
+  .interruption-glyph {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    opacity: 0.7;
+    flex-shrink: 0;
   }
 </style>
