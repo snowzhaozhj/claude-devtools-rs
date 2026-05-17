@@ -160,9 +160,13 @@ describe('cleanDisplayText 空内容防空气泡', () => {
     expect(cleanDisplayText('\u2066\u2067\u2068\u2069')).toBe('')
   })
 
-  test('HTML 注释单独存在 → ""', () => {
+  test('HTML 注释单独存在 → ""，但内容里夹注释保留原文', () => {
     expect(cleanDisplayText('<!-- placeholder -->')).toBe('')
     expect(cleanDisplayText(' <!-- a --> \n <!-- b --> ')).toBe('')
+    // 含可见字符时 HTML 注释保留——拆分判空与渲染（修 codex CR Bug 3，PR #126 r2）。
+    // 否则 markdown code block 里 `<!-- example -->` 会被静默删破坏用户内容。
+    expect(cleanDisplayText('hello <!-- side note -->')).toBe('hello <!-- side note -->')
+    expect(cleanDisplayText('```html\n<!-- keep -->\n```')).toBe('```html\n<!-- keep -->\n```')
   })
 
   test('正常内容保留（含 ZWJ emoji 合字 / BiDi 嵌入）', () => {

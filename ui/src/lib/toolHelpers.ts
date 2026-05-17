@@ -144,25 +144,27 @@ export function cleanDisplayText(text: string): string {
 }
 
 /**
- * 去除零宽字符 / BiDi 控制符 / BOM / HTML 注释后 trim；若 trim 后**全空**则返回 ""，
- * 否则**还原**只剥 HTML 注释的版本（保留原文中的 ZWJ / BiDi 等可能影响 emoji 合字
- * 或 RTL 排版的控制符）。
+ * 判断输入清洗 HTML 注释 + 不可见控制符 + trim 后是否为空——空则返回 ""，
+ * 否则**原样返回 trim 后的原文**（保留 HTML 注释 + ZWJ / BiDi 控制符）。
  *
- * 用于消灭"看似有内容、渲染出来全空"的边界 case（user 空气泡 / AI 空 lastOutput），
- * 同时不破坏正文里的 emoji ZWJ 合字（如 family emoji `👨‍👩‍👧`）。
- * 修 codex CR Bug 1（PR #126 r1）。
+ * 拆分"判空"与"渲染"——cleanDisplayText 的返回值会被直接传给 attachMarkdown
+ * 渲染 prose；如果在这里 strip HTML 注释，markdown code block 里的合法注释
+ * （如 ```html\n<!-- example -->\n```）会被静默删掉破坏用户内容。同理 ZWJ 不全局删
+ * 否则 emoji 合字 \u{1F468}\u200D\u{1F469}\u200D\u{1F467} 会被掰散。
+ *
+ * 修 codex CR Bug 1（PR #126 r1） + Bug 3（PR #126 r2）。
  */
 function stripInvisible(s: string): string {
-  const noComments = s.replace(/<!--[\s\S]*?-->/g, "");
   // 不可见控制符并集：
   //   ZWSP \u200B / ZWNJ \u200C / ZWJ \u200D / LRM \u200E / RLM \u200F
   //   LRE \u202A / RLE \u202B / PDF \u202C / LRO \u202D / RLO \u202E
   //   WJ  \u2060 / LRI \u2066 / RLI \u2067 / FSI \u2068 / PDI \u2069 / BOM \uFEFF
-  const fullyStripped = noComments
+  const visibleCheck = s
+    .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g, "")
     .trim();
-  if (fullyStripped === "") return "";
-  return noComments.trim();
+  if (visibleCheck === "") return "";
+  return s.trim();
 }
 
 /**
