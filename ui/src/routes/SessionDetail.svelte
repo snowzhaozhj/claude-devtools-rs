@@ -793,7 +793,7 @@
 
             <!-- Display items (toggle visibility) -->
             {#if toolsVisible}
-              <div class="ai-tools-section msg-row-contained">
+              <div class="ai-tools-section">
                 {#each di.items as item, di_idx}
                   {#if item.type === "slash"}
                     {@const slashKey = `${chunk.chunkId}-slash-${di_idx}`}
@@ -1326,6 +1326,10 @@
   :global(.msg-row-contained:has(.mermaid-block)) {
     content-visibility: visible;
     contain: none;
+  }
+
+  :global(.lazy-md[data-rendered="1"]) {
+    min-height: 0 !important;
   }
 
   .msg-spacer { flex: 1; min-width: 80px; }

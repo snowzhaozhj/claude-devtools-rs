@@ -11,6 +11,7 @@ import { clearMocks } from '@tauri-apps/api/mocks'
 
 import SessionDetail from '../routes/SessionDetail.svelte'
 import { setupMockIPC } from '../lib/tauriMock'
+import { saveTabUIState } from '../lib/tabStore.svelte'
 import { singleProjectFixture } from '../lib/__fixtures__'
 import type { Fixture } from '../lib/__fixtures__'
 import type { AIChunk, Chunk, CompactChunk } from '../lib/api'
@@ -43,6 +44,7 @@ afterEach(() => {
   clearMocks()
   vi.unstubAllGlobals()
 })
+
 
 const PROJECT_ID = singleProjectFixture.projects[0].id
 const SESSION_ID = singleProjectFixture.sessions[PROJECT_ID][0].sessionId
@@ -118,6 +120,33 @@ describe('SessionDetail smoke', () => {
       expect(container.querySelector('.msg-row-user.msg-row-contained')).not.toBeNull()
       expect(container.querySelector('.msg-row-ai.msg-row-contained')).toBeNull()
       expect(container.querySelector('.msg-row-ai .ai-body.msg-row-contained')).not.toBeNull()
+    })
+  })
+
+
+  test('恢复展开状态时工具列表容器不使用 containment', async () => {
+    const tabId = 'tab-smoke-expanded-tools'
+    saveTabUIState(tabId, {
+      expandedChunks: new Set(['ai:a1:0']),
+      expandedItems: new Set(['ai:a1:0-tool-tu1']),
+      searchVisible: false,
+      contextPanelVisible: false,
+      scrollTop: 0,
+    })
+
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId,
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+
+    await waitFor(() => {
+      const toolsSection = container.querySelector('.ai-tools-section')
+      expect(toolsSection).not.toBeNull()
+      expect(toolsSection?.classList.contains('msg-row-contained')).toBe(false)
+      expect(toolsSection?.querySelector('.base-item-content')).not.toBeNull()
     })
   })
 
