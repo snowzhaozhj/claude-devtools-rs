@@ -29,14 +29,18 @@
     width: 100%;
   }
 
+  /* filled dot + ring ping，与所有其它位置的 outline 静态点形态对立——
+     形态差异让大脑把"唯一动态信号"与"识别用静态信号"分开，避免错觉
+     脉冲。dot 加大到 10px、ring spread 提到 8px、节律放慢到 2s，
+     提升 banner 信号强度但保持稳态质感。 */
   .ongoing-pulse {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     background: var(--color-accent-blue);
     flex-shrink: 0;
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 50%, transparent);
-    animation: ongoing-ping 1.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 55%, transparent);
+    animation: ongoing-ping 2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
   }
 
   .ongoing-label {
@@ -61,11 +65,11 @@
   @keyframes ongoing-ping {
     0% {
       transform: scale(0.85);
-      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 55%, transparent);
+      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 60%, transparent);
     }
     70% {
       transform: scale(1);
-      box-shadow: 0 0 0 6px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
+      box-shadow: 0 0 0 8px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
     }
     100% {
       transform: scale(0.85);

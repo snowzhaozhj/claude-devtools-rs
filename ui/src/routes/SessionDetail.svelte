@@ -1162,15 +1162,16 @@
     letter-spacing: 0.12em;
   }
 
-  /* 详情页一屏只允许一个动态 live 信号（OngoingBanner 的 dot ping）；
-     LIVE chip dot 改静态填充 + 半透明 halo，保持视觉识别但不参与脉冲。
-     详见 DESIGN.md `One Live Signal Rule`。 */
+  /* 形态分化：静态 LIVE chip dot 用 outline 空心圆，与 OngoingBanner
+     的 filled dot ping 形态完全区分——大脑不再把两类点归一组。
+     详见 DESIGN.md `The Static-vs-Live Shape Rule` 与 `One Live Signal Rule`。 */
   .top-stat-live-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: currentColor;
-    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 20%, transparent);
+    background: transparent;
+    border: 1.25px solid currentColor;
+    box-sizing: border-box;
   }
 
 
@@ -1564,15 +1565,14 @@
     transition: border-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  /* 详情页一屏只允许一个动态 live 信号；timeline live node 退为静态
-     蓝色填充 + 4px halo ring，不参与脉冲。详见 DESIGN.md
-     `One Live Signal Rule`。 */
+  /* 形态分化 + 静态化：timeline live node 用 outline 形态（蓝色 2.5px
+     border + 透明填充），与 OngoingBanner 的 filled dot ping 完全区分；
+     保留 surface 隔离环避免与 timeline 主线条粘连。
+     详见 DESIGN.md `The Static-vs-Live Shape Rule` 与 `One Live Signal Rule`。 */
   .ai-thread-node-live {
     border-color: var(--color-accent-blue);
-    background: var(--color-accent-blue);
-    box-shadow:
-      0 0 0 2px var(--color-surface),
-      0 0 0 4px color-mix(in oklch, var(--color-accent-blue) 28%, transparent);
+    background: var(--color-surface);
+    box-shadow: 0 0 0 2px var(--color-surface);
   }
 
   @media (prefers-reduced-motion: reduce) {

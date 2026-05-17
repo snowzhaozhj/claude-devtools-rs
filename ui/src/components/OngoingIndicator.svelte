@@ -49,12 +49,17 @@
     height: 10px;
   }
 
+  /* 形态分化：静态指示器用 outline 空心圆，与 OngoingBanner 的 filled
+     dot ping 形态完全区分——避免相同颜色 + halo 让大脑把两类点归一组、
+     被脉冲源"感染"产生节律错觉。详见 DESIGN.md `The Static-vs-Live
+     Shape Rule`。 */
   .dot-core {
     width: 100%;
     height: 100%;
     border-radius: 50%;
-    background: var(--color-accent-blue);
-    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
+    background: transparent;
+    border: 1.5px solid var(--color-accent-blue);
+    box-sizing: border-box;
   }
 
   .label {

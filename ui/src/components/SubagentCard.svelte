@@ -500,10 +500,9 @@
     flex-shrink: 0;
     color: var(--color-success-bright);
   }
-  /* "running" 标记不再使用 spinning icon——SessionDetail 同屏可能已有
-     OngoingBanner 的 dot ping，多个 infinite animation 同屏违反
-     DESIGN.md `The One Live Signal Rule`。改为静态蓝点 + 半透明 halo
-     ring，与 Sidebar OngoingIndicator 视觉语言保持一致。 */
+  /* 形态分化 + 静态化：running 标记用 outline 空心圆，与 OngoingBanner
+     的 filled dot ping 形态完全区分；同时不与 OngoingBanner 抢屏。
+     详见 DESIGN.md `The Static-vs-Live Shape Rule` 与 `One Live Signal Rule`。 */
   .sa-status-running {
     width: var(--bubble-icon-md);
     height: var(--bubble-icon-md);
@@ -516,8 +515,9 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--color-accent-blue);
-    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
+    background: transparent;
+    border: 1.5px solid var(--color-accent-blue);
+    box-sizing: border-box;
   }
 
   .sa-duration {
