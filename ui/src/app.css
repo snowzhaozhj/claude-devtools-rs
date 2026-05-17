@@ -135,7 +135,9 @@
 
   /* ─── Semantic accents（语义色统一入口）───
      新组件 SHALL 使用这些 token，不要再写硬编码 hex。
-     accent-blue 表达 focus / link / selection；
+     accent-blue 表达 focus / link / **瞬时** selection / ongoing live；
+       持久选中（sidebar / 文件树）不使用 accent-blue ——
+       见 DESIGN.md `The Persistent Selection Is Quiet Rule`。
      accent-indigo 表达 confirmed-state（switch、check）；
      success/danger/warning 表达执行结果与系统状态。
   */
