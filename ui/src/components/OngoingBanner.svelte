@@ -2,17 +2,20 @@
   OngoingBanner：嵌入最后一个 AIChunk 的 lastOutput 槽位，作为 SessionDetail
   的 primary "session 仍在进行" 指示器。
 
-  视觉决策（详见 DESIGN.md `The Ongoing Owns Blue Rule` 与 `One Live Signal Rule`）：
-  - 详情页一屏只允许一个动态 live 信号；该信号属于 dot ping
-  - 去掉早期版本的 shimmer sweep bar：bar 横扫 + dot ping 双层动画
-    会让眼睛被持续吸到 banner 上，违反 product register 的 "实时但不闪烁" 原则
-  - 仅保留 dot ping + STREAMING label + 文案，整体仍保持 IDE-style 稳态质感
+  视觉决策（详见 DESIGN.md `The Static-vs-Live Shape Rule` 与
+  `The One Live Signal Rule`）：
+  - 详情页一屏只允许一个动态 live 信号；该信号属于 circular spinner
+  - 改用 CSS border spinner（顶边 accent-blue + 其余 border 浅蓝 mask）+
+    1.2s linear infinite rotate——稳态恒速旋转是 IDE/调试器工具的
+    "白噪音"型 live 语言（VS Code / IntelliJ / GitHub Actions 同款），
+    眼睛会快速适应不再持续抢戏，比周期性 dot ping 的 attention spike
+    更适合"克制工作台"的 product register
 -->
 <script lang="ts">
 </script>
 
 <div class="ongoing" role="status" aria-live="polite">
-  <span class="ongoing-pulse" aria-hidden="true"></span>
+  <span class="ongoing-spinner" aria-hidden="true"></span>
   <span class="ongoing-label">STREAMING</span>
   <span class="ongoing-hint">Session is still in progress…</span>
 </div>
@@ -29,18 +32,18 @@
     width: 100%;
   }
 
-  /* filled dot + ring ping，与所有其它位置的 outline 静态点形态对立——
-     形态差异让大脑把"唯一动态信号"与"识别用静态信号"分开，避免错觉
-     脉冲。dot 加大到 10px、ring spread 提到 8px、节律放慢到 2s，
-     提升 banner 信号强度但保持稳态质感。 */
-  .ongoing-pulse {
-    width: 10px;
-    height: 10px;
+  /* 双层 border circular spinner：浅蓝静态环 + 蓝色顶弧旋转。
+     形态：圆环 + 旋转（白噪音），与所有其它位置的 outline 静态空心圆
+     在形态上自然分开。 */
+  .ongoing-spinner {
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
-    background: var(--color-accent-blue);
+    border: 2px solid color-mix(in oklch, var(--color-accent-blue) 18%, transparent);
+    border-top-color: var(--color-accent-blue);
     flex-shrink: 0;
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 55%, transparent);
-    animation: ongoing-ping 2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+    box-sizing: border-box;
+    animation: ongoing-spin 1.2s linear infinite;
   }
 
   .ongoing-label {
@@ -62,24 +65,16 @@
     min-width: 0;
   }
 
-  @keyframes ongoing-ping {
-    0% {
-      transform: scale(0.85);
-      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 60%, transparent);
-    }
-    70% {
-      transform: scale(1);
-      box-shadow: 0 0 0 8px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
-    }
-    100% {
-      transform: scale(0.85);
-      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
+  @keyframes ongoing-spin {
+    to {
+      transform: rotate(360deg);
     }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .ongoing-pulse {
+    .ongoing-spinner {
       animation: none;
+      /* reduced-motion 下保留可识别静态形态：顶弧蓝色仍可见，仅不旋转 */
     }
   }
 </style>
