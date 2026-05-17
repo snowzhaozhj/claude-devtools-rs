@@ -322,9 +322,11 @@
       <span class="sa-desc">{truncatedDesc}</span>
 
       {#if process.isOngoing}
-        <svg class="sa-status-running" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+        <span class="sa-status-running" aria-label="Subagent running" title="Subagent running">
+          <span class="sa-status-running-dot"></span>
+        </span>
       {:else}
-        <svg class="sa-status-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        <svg class="sa-status-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Subagent done"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
       {/if}
 
       <MetricsPill
@@ -498,16 +500,24 @@
     flex-shrink: 0;
     color: var(--color-success-bright);
   }
+  /* "running" 标记不再使用 spinning icon——SessionDetail 同屏可能已有
+     OngoingBanner 的 dot ping，多个 infinite animation 同屏违反
+     DESIGN.md `The One Live Signal Rule`。改为静态蓝点 + 半透明 halo
+     ring，与 Sidebar OngoingIndicator 视觉语言保持一致。 */
   .sa-status-running {
     width: var(--bubble-icon-md);
     height: var(--bubble-icon-md);
     flex-shrink: 0;
-    color: var(--color-accent-blue);
-    animation: spin 1s linear infinite;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+  .sa-status-running-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-accent-blue);
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
   }
 
   .sa-duration {
