@@ -278,7 +278,7 @@ static NOISE_BLOCK_RES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         .collect()
 });
 
-/// `<teammate-message teammate_id="..." ...>body</teammate-message>` 块。
+/// `<teammate-message ... teammate_id="..." ...>body</teammate-message>` 块。
 ///
 /// teammate 块对用户而言已由 `SendMessage` 卡片渲染，preview 露原文标签字面
 /// 是噪声；按"剥离整段（含 body）"处理。原始 `create_user_message_injection`
@@ -286,10 +286,11 @@ static NOISE_BLOCK_RES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 /// `is_user_chunk_message` gate，所以"normal text + teammate-message 块"
 /// 的混合消息会进到这里，必须自己剥离。
 ///
-/// 算法与 `cdt-analyze::team::detection::TEAMMATE_BLOCK_RE` 同源——此处独立
-/// 定义而非跨模块共享，因为 detection 那侧 captures 含 attrs，本处只需 match。
+/// `teammate_id` 用 `[^>]*?` 非贪婪允许任意 attr 顺序（如 `summary` /
+/// `color` 在前）；否则 main regex miss → `UNCLOSED_NOISE_RE` 兜底会把开
+/// tag 之后**包括 close tag 后面的真实文本**一起截掉。
 static TEAMMATE_NOISE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<teammate-message\s+teammate_id="[^"]+"[^>]*>[\s\S]*?</teammate-message>"#)
+    Regex::new(r#"<teammate-message\s+[^>]*?teammate_id="[^"]+"[^>]*>[\s\S]*?</teammate-message>"#)
         .expect("teammate noise regex should compile")
 });
 
@@ -641,5 +642,22 @@ mod tests {
             panic!("expected UserMessage");
         };
         assert_eq!(x.text_preview, "真实输入尾巴");
+    }
+
+    #[test]
+    fn preview_strips_teammate_message_when_teammate_id_is_not_first_attribute() {
+        // codex 第二轮发现：原 regex 要求 teammate_id 紧跟 `<teammate-message`，
+        // 若 summary / color 在前会 miss → UNCLOSED_NOISE_RE 兜底截掉块后真实
+        // 文本。修法：[^>]*? 允许 teammate_id 在任意 attr 位置。
+        let raw = r#"前文 <teammate-message summary="hi" teammate_id="alice" color="blue">body</teammate-message> 后文"#;
+        let user = user_with_text(raw);
+        let inj = create_user_message_injection(&user, 0, "ai-0").unwrap();
+        let ContextInjection::UserMessage(x) = inj else {
+            panic!("expected UserMessage");
+        };
+        assert_eq!(
+            x.text_preview, "前文  后文",
+            "teammate_id 不在第一位也应剥离整段，且不能误吃 close tag 后的文本",
+        );
     }
 }
