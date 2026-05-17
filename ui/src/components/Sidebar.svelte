@@ -339,6 +339,14 @@
     }
   });
 
+  // 切 project 自动清空 filter：filterQuery 是 project 维度的过滤，
+  // 在 A 项目输入 "fix" 后切到 B 项目时若不 reset，B 项目会卡在
+  // "无匹配会话" 的假空状态，需要用户额外手动清空 input 才能看到列表。
+  $effect(() => {
+    selectedProjectId;
+    untrack(() => { filterQuery = ""; });
+  });
+
   // 注册 file-change handler；依赖 selectedProjectId，切 project 时
   // 重新注册让闭包捕获最新值
   $effect(() => {
@@ -527,15 +535,30 @@
         enterkeyhint="search"
         aria-label="搜索会话"
       />
-      <span class="session-count-num">{visibleSessions.length}/{totalSessions}</span>
+      <span
+        class="session-count-num"
+        title="可见 {visibleSessions.length} / 总 {totalSessions}"
+      >{visibleSessions.length}</span>
       {#if hasDeferredSessionRefresh}
-        <button class="refresh-pending-btn" onclick={refreshDeferredSessions}>有更新</button>
+        <button
+          class="refresh-pending-btn"
+          onclick={refreshDeferredSessions}
+          title="加载列表更新"
+          aria-label="加载列表更新"
+        >
+          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-3-6.7L21 8"/>
+            <path d="M21 3v5h-5"/>
+          </svg>
+          <span>刷新</span>
+        </button>
       {/if}
       {#if hiddenCount > 0}
         <button
           class="show-hidden-btn"
           class:show-hidden-active={getShowHidden()}
-          title={getShowHidden() ? "隐藏已隐藏会话" : `显示 ${hiddenCount} 个隐藏会话`}
+          title={getShowHidden() ? `隐藏 ${hiddenCount} 个会话` : `展开 ${hiddenCount} 个隐藏会话`}
+          aria-label={getShowHidden() ? "隐藏已隐藏会话" : `显示 ${hiddenCount} 个隐藏会话`}
           onclick={toggleShowHidden}
         >
           {#if getShowHidden()}
@@ -552,6 +575,7 @@
               <path d="M1 1l22 22"/>
             </svg>
           {/if}
+          <span class="hidden-count-badge" aria-hidden="true">{hiddenCount}</span>
         </button>
       {/if}
     </div>
@@ -587,12 +611,30 @@
     {:else if sessions.length === 0}
       <div class="sidebar-status">暂无会话</div>
     {:else if visibleSessions.length === 0}
-      <div class="sidebar-status">无匹配会话</div>
+      <div class="sidebar-status">
+        <div class="sidebar-status-text">无匹配会话</div>
+        {#if filterQuery}
+          <button class="sidebar-status-link" onclick={() => { filterQuery = ""; }}>清除搜索</button>
+        {/if}
+      </div>
     {:else}
       <div class="vlist-spacer" style:height="{vlist.topSpacer()}px"></div>
       {#each visibleSlice as item (item.key)}
         {#if item.kind === "header"}
-          <div class="date-group-label" style:height="{ITEM_HEIGHT}px">{item.label}</div>
+          {@const isPinned = item.label === "PINNED"}
+          <div
+            class="date-group-label"
+            class:date-group-label-pinned={isPinned}
+            style:height="{ITEM_HEIGHT}px"
+          >
+            {#if isPinned}
+              <svg class="date-group-pin-icon" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 17v5"/>
+                <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>
+              </svg>
+            {/if}
+            <span>{item.label}</span>
+          </div>
         {:else}
           {@const session = item.session}
           <button
@@ -622,10 +664,8 @@
                 <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={MESSAGE_SQUARE} /></svg>
                 {session.messageCount || 0}
               </span>
-              <span class="session-meta-sep">·</span>
               <span class="session-time">{formatTime(session.timestamp)}</span>
               {#if session.gitBranch}
-                <span class="session-meta-sep">·</span>
                 <span class="session-branch" title={session.gitBranch}>
                   <svg class="meta-icon session-branch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html GIT_BRANCH_SVG}</svg>
                   <span class="session-branch-name">{session.gitBranch}</span>
@@ -761,19 +801,22 @@
   .session-filter-input {
     flex: 1;
     min-width: 0;
-    font-size: 12px;
+    font-size: 13px;
     font-family: inherit;
     color: var(--color-text);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 6px;
-    padding: 4px 8px;
+    padding: 6px 10px;
     outline: none;
-    transition: border-color 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
 
+  /* focus 用 accent-blue 边色 + 22% 同色 ring 让搜索框成为视觉焦点。
+     ring 仅 2px 不影响 sidebar 已有的紧凑度。 */
   .session-filter-input:focus {
-    border-color: var(--color-border-emphasis);
+    border-color: var(--color-accent-blue);
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
   }
 
   .session-filter-input::placeholder {
@@ -791,30 +834,51 @@
     font-size: 11px;
   }
 
+  /* "5" 单数字 + hover tooltip 显 "可见 5 / 总 127"。原本 "5/127"
+     永久占位无语义提示，新用户读不出含义，且和右侧按钮挤在一起。 */
   .session-count-num {
     font-size: 11px;
     color: var(--color-text-muted);
     flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
     font-family: var(--font-mono);
+    cursor: default;
   }
 
+  /* "刷新" 按钮使用 focus-blue 文字 + 同色细边召唤用户注意——它表达
+     "有新数据待加载" 这一**主动召唤**的交互意图，原灰色胶囊语义太弱。
+     focus-blue 是 DESIGN.md `The Ongoing Owns Blue Rule` 已分配给
+     "进行中 / 实时" 的颜色，"有更新待刷新" 属同语义类，复用不引入新色。 */
   .refresh-pending-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     flex-shrink: 0;
-    padding: 2px 6px;
-    border: 1px solid var(--color-border);
+    padding: 2px 8px;
+    border: 1px solid color-mix(in oklch, var(--color-accent-blue) 45%, transparent);
     border-radius: 999px;
-    background: var(--color-surface);
-    color: var(--color-text-muted);
+    background: color-mix(in oklch, var(--color-accent-blue) 8%, transparent);
+    color: var(--color-accent-blue);
+    font: inherit;
     font-size: 11px;
+    font-weight: 500;
+    line-height: 1.2;
     cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
   }
 
   .refresh-pending-btn:hover {
-    color: var(--color-text);
-    border-color: var(--color-border-emphasis);
+    background: color-mix(in oklch, var(--color-accent-blue) 14%, transparent);
+    border-color: var(--color-accent-blue);
+  }
+
+  .refresh-pending-btn:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: 1px;
   }
 
   .show-hidden-btn {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -836,6 +900,33 @@
     color: var(--color-accent-blue);
   }
 
+  /* hiddenCount 暴露在按钮右上角的小数字 badge：把"有 N 条隐藏"这一
+     关键信息从 hover title 提到视觉一级。默认 muted 不和 focus-blue
+     抢戏；按钮 active（展开隐藏）时和按钮一起转蓝形成颜色一致性。 */
+  .hidden-count-badge {
+    position: absolute;
+    top: -3px;
+    right: -4px;
+    min-width: 13px;
+    height: 13px;
+    padding: 0 3px;
+    border-radius: 7px;
+    background: var(--color-surface-overlay);
+    color: var(--color-text-secondary);
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 13px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    box-sizing: border-box;
+    pointer-events: none;
+  }
+
+  .show-hidden-active .hidden-count-badge {
+    background: color-mix(in oklch, var(--color-accent-blue) 22%, var(--color-surface));
+    color: var(--color-accent-blue);
+  }
+
   .session-list {
     flex: 1;
     overflow-y: auto;
@@ -843,10 +934,41 @@
   }
 
   .sidebar-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
     padding: 24px 12px;
     text-align: center;
     color: var(--color-text-muted);
     font-size: 13px;
+  }
+
+  .sidebar-status-text {
+    color: var(--color-text-muted);
+  }
+
+  /* 空状态指路链接：filter 输入了 typo 时让用户一键 reset，避免被
+     困在死路里。仅在 filterQuery 非空 → 出现"无匹配会话"时渲染。 */
+  .sidebar-status-link {
+    background: none;
+    border: none;
+    color: var(--color-accent-blue);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 4px;
+    transition: background 0.12s;
+  }
+
+  .sidebar-status-link:hover {
+    background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
+  }
+
+  .sidebar-status-link:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: 1px;
   }
 
   .vlist-spacer {
@@ -857,12 +979,26 @@
   .date-group-label {
     display: flex;
     align-items: flex-end;
+    gap: 5px;
     font-size: 11px;
     font-weight: 600;
     color: var(--color-text-muted);
     padding: 10px 8px 4px;
     letter-spacing: 0.3px;
     box-sizing: border-box;
+  }
+
+  /* PINNED 是用户主动标记的"我在意这条"行为，视觉上应区别于 TODAY /
+     YESTERDAY 这种被动时间分组。复用 DESIGN.md 已有 accent-indigo
+     token（switch-on / dropdown-check 同色），不引入新色。 */
+  .date-group-label-pinned {
+    color: var(--color-accent-indigo);
+  }
+
+  .date-group-pin-icon {
+    color: var(--color-accent-indigo);
+    flex-shrink: 0;
+    margin-bottom: 1px;
   }
 
   .session-item {
@@ -888,23 +1024,17 @@
     background: var(--tool-item-hover-bg);
   }
 
-  /* 选中态：左侧 3px accent stripe + 略加重背景，让用户一眼看到当前会话 */
+  /* 选中态：用 surface-overlay 比 hover 的 raised 再深一档形成可见
+     对比，并通过 title 字重 700 + ink-text 强化扫读识别度。原 3px
+     灰 stripe 在暖灰 sidebar 背景上几乎被吃掉，且 hover/active 都
+     是 raised 让两态视觉过近——本次重构去掉 stripe，靠两档背景差
+     +字重差建立"我在哪条"识别度。 */
   .session-item-active {
-    background: var(--color-surface-raised);
-  }
-  .session-item-active::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 4px;
-    bottom: 4px;
-    width: 3px;
-    border-radius: 2px;
-    background: var(--color-border-emphasis);
+    background: var(--color-surface-overlay);
   }
   .session-item-active .session-title-text {
     color: var(--color-text);
-    font-weight: 600;
+    font-weight: 700;
   }
 
   .session-item-hidden {
@@ -933,11 +1063,18 @@
     color: var(--color-accent-blue);
   }
 
+  /* meta 行（msgCount · time · branch）：原本用显式 "·" 分隔符（10px
+     muted opacity 0.5），视觉接近噪点；改用 14px gap 留白做分隔，
+     扫读三段权重更清晰，密度不变。msgCount 与 time 保持 flex-shrink:0
+     不让出空间，branch 用默认 flex-shrink:1 + overflow ellipsis 自然
+     吸收剩余宽度——容器变窄时 branch 优先被截断而非 msgCount/time
+     被压扁（msgCount/time 本来只有 ~22px 不值得参与收缩竞争）。 */
   .session-meta {
     display: flex;
-    gap: 8px;
+    gap: 14px;
     align-items: center;
     line-height: 1.2;
+    min-width: 0;
   }
 
   .session-msg-count {
@@ -957,12 +1094,6 @@
     flex-shrink: 0;
   }
 
-  .session-meta-sep {
-    font-size: 10px;
-    color: var(--color-text-muted);
-    opacity: 0.5;
-  }
-
   .session-time {
     font-size: 10px;
     color: var(--color-text-muted);
@@ -971,6 +1102,10 @@
     white-space: nowrap;
   }
 
+  /* branch 是 "我在哪个 worktree" 的核心线索；让它吸收 meta row 剩余
+     宽度，msgCount/time 不与之竞争（见 .session-meta 注释）。删除显式
+     "·" 分隔符后，每个分隔节省 ~14px 横向空间（原 8+6+8 = 22px → 现
+     14px gap），branch 比原本多 ~16px 可见区间。 */
   .session-branch {
     display: inline-flex;
     align-items: center;
