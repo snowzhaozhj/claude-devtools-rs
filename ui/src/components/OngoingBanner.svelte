@@ -67,41 +67,22 @@
     min-width: 0;
   }
 
+  /* track + fill：静态进度条替代 1.6s 横扫 sweep。
+     "STREAMING" 文字 + 静态蓝点 + 静态填充条三个信号已足够表达
+     "正在流"，持续横扫属于装饰性动画，按用户"所有持续在动的都砍"
+     原则去掉。 */
   .ongoing-track {
     position: relative;
     height: 2px;
     border-radius: 2px;
     overflow: hidden;
-    background: color-mix(in oklch, var(--color-accent-blue) 12%, transparent);
+    background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
   }
 
   .ongoing-sweep {
     position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      color-mix(in oklch, var(--color-accent-blue) 75%, transparent) 50%,
-      transparent 100%
-    );
-    animation: ongoing-sweep 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-    transform: translateX(-100%);
-  }
-
-  @keyframes ongoing-sweep {
-    0% {
-      transform: translateX(-100%);
-    }
-    100% {
-      transform: translateX(100%);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .ongoing-sweep {
-      animation: none;
-      transform: translateX(0);
-      opacity: 0.5;
-    }
+    inset: 0 65% 0 0;
+    background: color-mix(in oklch, var(--color-accent-blue) 55%, transparent);
+    border-radius: 2px;
   }
 </style>

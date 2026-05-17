@@ -1052,19 +1052,15 @@
     letter-spacing: 0.12em;
   }
 
-  /* 顶栏 LIVE 标记：唯一保留的"心跳"动画——告诉用户 session 还在流。
-     周期 1.6s → 2.4s，幅度 0.4 → 0.6，整体更克制；reduced-motion 抑制。 */
+  /* 顶栏 LIVE 标记：静态实心点 + 静态光环。
+     "LIVE" 文字 + 颜色（accent-blue） + 光环已足够表达活跃状态，
+     呼吸动画属于装饰性，按用户"所有持续在动的都砍"原则去掉。 */
   .top-stat-live-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: currentColor;
-    animation: top-live-pulse 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-
-  @keyframes top-live-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
   }
 
   .top-meta {
@@ -1420,9 +1416,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .top-stat-live-dot {
-      animation: none;
-    }
     .msg-ai-container::before {
       display: none;
     }
