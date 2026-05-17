@@ -144,15 +144,25 @@ export function cleanDisplayText(text: string): string {
 }
 
 /**
- * 去除零宽字符 / BOM / HTML 注释后 trim，再判一次 `[\s]` 全空则返回 ""。
- * 用于消灭"看似有内容、渲染出来全空"的边界 case（user 空气泡 / AI 空 lastOutput）。
+ * 去除零宽字符 / BiDi 控制符 / BOM / HTML 注释后 trim；若 trim 后**全空**则返回 ""，
+ * 否则**还原**只剥 HTML 注释的版本（保留原文中的 ZWJ / BiDi 等可能影响 emoji 合字
+ * 或 RTL 排版的控制符）。
+ *
+ * 用于消灭"看似有内容、渲染出来全空"的边界 case（user 空气泡 / AI 空 lastOutput），
+ * 同时不破坏正文里的 emoji ZWJ 合字（如 family emoji `👨‍👩‍👧`）。
+ * 修 codex CR Bug 1（PR #126 r1）。
  */
 function stripInvisible(s: string): string {
-  let out = s.replace(/<!--[\s\S]*?-->/g, "");
-  // ZWSP / ZWNJ / ZWJ / WJ (\u2060) / BOM (\uFEFF)
-  out = out.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "");
-  out = out.trim();
-  return out;
+  const noComments = s.replace(/<!--[\s\S]*?-->/g, "");
+  // 不可见控制符并集：
+  //   ZWSP \u200B / ZWNJ \u200C / ZWJ \u200D / LRM \u200E / RLM \u200F
+  //   LRE \u202A / RLE \u202B / PDF \u202C / LRO \u202D / RLO \u202E
+  //   WJ  \u2060 / LRI \u2066 / RLI \u2067 / FSI \u2068 / PDI \u2069 / BOM \uFEFF
+  const fullyStripped = noComments
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g, "")
+    .trim();
+  if (fullyStripped === "") return "";
+  return noComments.trim();
 }
 
 /**

@@ -707,12 +707,6 @@
         {@const isLastAi = i === lastAiIndex}
         {@const isLiveTail = isLastAi && detail.isOngoing}
         {@const lastOutputText = cleanDisplayText(di.lastOutput?.text ?? "")}
-        {@const hasAiContent =
-          di.items.length > 0 ||
-          lastOutputText !== "" ||
-          interruptions.length > 0 ||
-          isLiveTail}
-        {#if hasAiContent}
         <!--
           对齐原版 AIChatGroup.tsx:234-248 "Get the LAST assistant message's
           usage (represents current context window snapshot)"——Anthropic API
@@ -725,6 +719,16 @@
         {@const headerCacheRead = lastUsage?.cache_read_input_tokens ?? 0}
         {@const headerCacheCreation = lastUsage?.cache_creation_input_tokens ?? 0}
         {@const aiTotalTokens = headerInputTokens + headerOutputTokens + headerCacheRead + headerCacheCreation}
+        <!-- hasAiContent 兜底：token-only chunk（context snapshot 有价值）也要保 header，
+             不能让"无 items + 无 lastOutput + 无 interruption"的 chunk 把 token 数据丢掉。
+             修 codex CR Bug 2（PR #126 r1）。 -->
+        {@const hasAiContent =
+          di.items.length > 0 ||
+          lastOutputText !== "" ||
+          interruptions.length > 0 ||
+          isLiveTail ||
+          aiTotalTokens > 0}
+        {#if hasAiContent}
         <div
           class="msg-row msg-row-ai"
           class:msg-row-anchor-hit={highlightedChunkId === chunk.chunkId}
