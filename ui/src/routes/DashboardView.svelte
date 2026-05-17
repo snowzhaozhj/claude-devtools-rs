@@ -268,25 +268,32 @@
               class:dash-row-pulse={isPulsing}
               onclick={() => handleSelect(project)}
             >
+              <!-- 双 sub-flex：left(name + 当前 badge) | right(time + worktree + 💬N)
+                   用 justify-content: space-between 把右侧 metadata 永久推到行尾，
+                   不依赖 dash-row-time 的 margin-left:auto——避免 lastModified=null
+                   fallback 时右侧紧贴左侧（codex 二审发现）。
+                   active 切换时仅左 group 内 badge 显隐，右侧位置稳定。 -->
               <div class="dash-row-main">
-                <span class="dash-row-name">{project.displayName}</span>
-                {#if isActive}
-                  <!-- 「当前」紧贴 name，active 切换时仅本 badge 出现/消失，
-                       不挤推右侧 time/worktree/💬N（dash-row-time 已 margin-left:auto）。 -->
-                  <span class="dash-row-current">当前</span>
-                {/if}
-                {#if project.lastModified !== null}
-                  <span class="dash-row-time">{formatRelativeTime(project.lastModified)}</span>
-                {/if}
-                {#if project.worktreeCount > 1}
-                  <span class="dash-row-chip" title="{project.worktreeCount} 个 worktree">
-                    <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html GIT_BRANCH_SVG}</svg>
-                    {project.worktreeCount}
+                <div class="dash-row-main-left">
+                  <span class="dash-row-name">{project.displayName}</span>
+                  {#if isActive}
+                    <span class="dash-row-current">当前</span>
+                  {/if}
+                </div>
+                <div class="dash-row-main-right">
+                  {#if project.lastModified !== null}
+                    <span class="dash-row-time">{formatRelativeTime(project.lastModified)}</span>
+                  {/if}
+                  {#if project.worktreeCount > 1}
+                    <span class="dash-row-chip" title="{project.worktreeCount} 个 worktree">
+                      <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html GIT_BRANCH_SVG}</svg>
+                      {project.worktreeCount}
+                    </span>
+                  {/if}
+                  <span class="dash-row-sessions" title="{project.sessionCount} 个会话">
+                    💬 {project.sessionCount}
                   </span>
-                {/if}
-                <span class="dash-row-sessions" title="{project.sessionCount} 个会话">
-                  💬 {project.sessionCount}
-                </span>
+                </div>
               </div>
               <div class="dash-row-path">{shortenPath(project.path)}</div>
             </button>
@@ -549,8 +556,24 @@
   .dash-row-main {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 10px;
     min-width: 0;
+  }
+
+  .dash-row-main-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .dash-row-main-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
   }
 
   .dash-row-name {
@@ -568,7 +591,6 @@
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
     flex-shrink: 0;
-    margin-left: auto;
   }
 
   .dash-row-chip {
