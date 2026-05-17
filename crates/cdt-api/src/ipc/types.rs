@@ -88,8 +88,22 @@ pub struct SessionDetail {
     pub metadata: serde_json::Value,
     /// session 级别的 context injections（6 类结构化数据），
     /// 由 `process_session_context_with_phases` 计算。
+    /// 当前等同于 `injections_by_phase[最大 phaseNumber]`（latest phase），
+    /// 保留独立字段是为了让 `ContextPanel` 不切 phase 时直接消费、与旧前端兼容。
     #[serde(default)]
     pub context_injections: serde_json::Value,
+    /// 每 phase 完整 accumulated injections，key = `phaseNumber.to_string()`。
+    /// compact 后 Phase 1 的 injections 已 reset 不在 latest accumulated 内，
+    /// 这里独立保留以供 Phase Selector 切到旧 phase 时显示。
+    /// 见 spec `context-tracking` "Expose per-phase injections and phase metadata
+    /// via `SessionDetail` IPC"。
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub injections_by_phase: serde_json::Value,
+    /// session 级 phase 元数据（`ContextPhaseInfo` 序列化），含 `phases` /
+    /// `ai_group_phase_map` / `compaction_token_deltas` / `compaction_count`。
+    /// 前端 Phase Selector 按 `phases.length > 1` 决定显隐。
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub phase_info: serde_json::Value,
     /// 会话是否仍在进行。由 `cdt_analyze::check_messages_ongoing`
     /// 计算，值应与同 session 的 `SessionSummary.is_ongoing` 一致。
     #[serde(default)]

@@ -18,7 +18,10 @@
   import { getTeamColorSet } from "../lib/teamColors";
   import SearchBar from "../components/SearchBar.svelte";
   import ContextPanel from "../components/ContextPanel.svelte";
-  import { extractContext } from "../lib/contextExtractor";
+  import {
+    parseInjections,
+    selectActivePhaseInjections,
+  } from "../lib/contextExtractor";
   import OngoingBanner from "../components/OngoingBanner.svelte";
   import SessionDetailSkeleton from "../components/SessionDetailSkeleton.svelte";
   import ImageBlock from "../components/ImageBlock.svelte";
@@ -65,6 +68,9 @@
   let uiState = getTabUIState(untrack(() => tabId));
   let expandedItems: Set<string> = $state(new Set(uiState.expandedItems));
   let expandedChunks: Set<string> = $state(new Set(uiState.expandedChunks));
+  let highlightedChunkId: string | null = $state(null);
+  let highlightedToolUseId: string | null = $state(null);
+  let highlightTimer: ReturnType<typeof setTimeout> | null = null;
   // Compact 折叠状态——per-chunk 局部 UI state（D4：默认折叠，切 tab 走 destroy/recreate
   // 重置为默认值，对齐原版 CompactBoundary.tsx 的 useState(false)，**不**进 tabStore 持久化）
   let expandedCompacts: Set<string> = $state(new Set());
@@ -323,8 +329,89 @@
   // `LastOutputDisplay.tsx` 的 `isLastGroup && isSessionOngoing` 语义——
   // banner 占 lastOutput 坑位，不作为独立节点追加到对话流尾部，从而避免
   // ongoing 切换时 scrollHeight 跳变引起的闪烁。
-  const contextEntries = $derived(detail ? extractContext(detail) : []);
-  const contextCount = $derived(contextEntries.length);
+  // ContextPanel 的徽标 / Header count 用"Latest 视图"injection 数；Phase Selector
+  // 切到旧 phase 是 panel 内部状态，不影响顶栏徽标。
+  const contextInjectionsLatest = $derived(
+    detail ? selectActivePhaseInjections(detail, null) : [],
+  );
+  const contextCount = $derived(contextInjectionsLatest.length);
+
+  // Context Panel → SessionDetail 锚点跳转 helpers。
+  // spec: session-display "Context Panel turn 锚点导航"。
+  async function showAnchorHighlight(chunkId: string, toolUseId: string | null = null) {
+    if (highlightTimer) clearTimeout(highlightTimer);
+    highlightedChunkId = null;
+    highlightedToolUseId = null;
+    await tick();
+    highlightedChunkId = chunkId;
+    highlightedToolUseId = toolUseId;
+    highlightTimer = setTimeout(() => {
+      highlightedChunkId = null;
+      highlightedToolUseId = null;
+      highlightTimer = null;
+    }, 2200);
+  }
+
+  function scrollAnchorIntoView(target: HTMLElement | null | undefined) {
+    if (!target || !conversationEl) return;
+    const containerRect = conversationEl.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const targetCenter = targetRect.top - containerRect.top + conversationEl.scrollTop + targetRect.height / 2;
+    const nextTop = Math.max(0, targetCenter - conversationEl.clientHeight * 0.45);
+    conversationEl.scrollTo({ top: nextTop, behavior: "smooth" });
+  }
+
+  async function handleNavigateToChunk(chunkId: string) {
+    if (!expandedChunks.has(chunkId)) {
+      expandedChunks = new Set([...expandedChunks, chunkId]);
+    }
+    await tick();
+    const chunkEl = conversationEl?.querySelector<HTMLElement>(
+      `[data-chunk-id="${cssEscape(chunkId)}"]`,
+    );
+    scrollAnchorIntoView(chunkEl);
+    void showAnchorHighlight(chunkId);
+  }
+
+  async function handleNavigateToTool(chunkId: string, toolUseId: string) {
+    if (!expandedChunks.has(chunkId)) {
+      expandedChunks = new Set([...expandedChunks, chunkId]);
+    }
+    await tick();
+    await tick();
+    const chunkEl = conversationEl?.querySelector<HTMLElement>(
+      `[data-chunk-id="${cssEscape(chunkId)}"]`,
+    );
+    const toolEl = chunkEl?.querySelector<HTMLElement>(
+      `[data-tool-use-id="${cssEscape(toolUseId)}"]`,
+    );
+    scrollAnchorIntoView(toolEl ?? chunkEl);
+    void showAnchorHighlight(chunkId, toolEl ? toolUseId : null);
+  }
+
+  function handleNavigateToUserGroup(aiGroupId: string) {
+    if (!detail) return;
+    const aiIdx = detail.chunks.findIndex((c) => c.chunkId === aiGroupId);
+    if (aiIdx < 0) {
+      // 找不到对应 AIChunk，无法定位
+      return;
+    }
+    // 向前找紧邻的 UserChunk
+    for (let i = aiIdx - 1; i >= 0; i--) {
+      if (detail.chunks[i].kind === "user") {
+        void handleNavigateToChunk(detail.chunks[i].chunkId);
+        return;
+      }
+    }
+    // fallback：滚到 AIChunk 本身
+    void handleNavigateToChunk(aiGroupId);
+  }
+
+  /** 简化 CSS.escape：转义 querySelector 用的 `"` 与 `\`。chunkId / toolUseId 实际只
+   *  含字母数字 + `:` + `-`，不会有这些字符，但加 guard 以防上游 uuid 含特殊符号。 */
+  function cssEscape(s: string): string {
+    return s.replace(/["\\]/g, (m) => "\\" + m);
+  }
 
   const lastAiIndex = $derived.by(() => {
     if (!detail) return -1;
@@ -544,7 +631,11 @@
         {@const images = uimages(chunk.content, chunk.uuid)}
         {@const taskNotifications = parseTaskNotifications(chunk.content)}
         {#if text || images.length > 0 || taskNotifications.length > 0}
-          <div class="msg-row msg-row-user msg-row-contained">
+          <div
+            class="msg-row msg-row-user msg-row-contained"
+            class:msg-row-anchor-hit={highlightedChunkId === chunk.chunkId}
+            data-chunk-id={chunk.chunkId}
+          >
             <div class="msg-spacer"></div>
             <div class="user-stack">
               <!-- meta row 外置在 bubble 上方，右边缘紧贴 conversation 内右
@@ -627,7 +718,11 @@
         {@const headerCacheRead = lastUsage?.cache_read_input_tokens ?? 0}
         {@const headerCacheCreation = lastUsage?.cache_creation_input_tokens ?? 0}
         {@const aiTotalTokens = headerInputTokens + headerOutputTokens + headerCacheRead + headerCacheCreation}
-        <div class="msg-row msg-row-ai">
+        <div
+          class="msg-row msg-row-ai"
+          class:msg-row-anchor-hit={highlightedChunkId === chunk.chunkId}
+          data-chunk-id={chunk.chunkId}
+        >
           <div
             class="msg-ai-container"
             class:msg-ai-container-live={isLiveTail}
@@ -717,31 +812,36 @@
                     {@const exec = item.execution}
                     {@const key = `${chunk.chunkId}-tool-${exec.toolUseId}`}
                     {@const eff = effectiveExec(exec)}
-                    <BaseItem
-                      svgIcon={WRENCH}
-                      label={exec.toolName}
-                      summary={getToolSummary(exec.toolName, exec.input)}
-                      tokenCount={getToolContextTokens(exec)}
-                      status={getToolStatus(exec)}
-                      durationMs={getToolDurationMs(exec)}
-                      pendingLabel={isToolPending(exec) ? "pending" : undefined}
-                      isExpanded={expandedItems.has(key)}
-                      onclick={() => toggle(key, exec)}
+                    <div
+                      class:tool-anchor-hit={highlightedToolUseId === exec.toolUseId}
+                      data-tool-use-id={exec.toolUseId}
                     >
-                      {#snippet children()}
-                        {#if isReadTool(exec)}
-                          <ReadToolViewer exec={eff} />
-                        {:else if isEditTool(exec)}
-                          <EditToolViewer exec={eff} />
-                        {:else if isWriteTool(exec)}
-                          <WriteToolViewer exec={eff} />
-                        {:else if isBashTool(exec)}
-                          <BashToolViewer exec={eff} />
-                        {:else}
-                          <DefaultToolViewer exec={eff} />
-                        {/if}
-                      {/snippet}
-                    </BaseItem>
+                      <BaseItem
+                        svgIcon={WRENCH}
+                        label={exec.toolName}
+                        summary={getToolSummary(exec.toolName, exec.input)}
+                        tokenCount={getToolContextTokens(exec)}
+                        status={getToolStatus(exec)}
+                        durationMs={getToolDurationMs(exec)}
+                        pendingLabel={isToolPending(exec) ? "pending" : undefined}
+                        isExpanded={expandedItems.has(key)}
+                        onclick={() => toggle(key, exec)}
+                      >
+                        {#snippet children()}
+                          {#if isReadTool(exec)}
+                            <ReadToolViewer exec={eff} />
+                          {:else if isEditTool(exec)}
+                            <EditToolViewer exec={eff} />
+                          {:else if isWriteTool(exec)}
+                            <WriteToolViewer exec={eff} />
+                          {:else if isBashTool(exec)}
+                            <BashToolViewer exec={eff} />
+                          {:else}
+                            <DefaultToolViewer exec={eff} />
+                          {/if}
+                        {/snippet}
+                      </BaseItem>
+                    </div>
                   {:else if item.type === "thinking"}
                     {@const key = `${chunk.chunkId}-think-${di_idx}`}
                     <BaseItem
@@ -830,7 +930,11 @@
       {:else if chunk.kind === "system"}
         {@const sysText = cleanDisplayText(chunk.contentText)}
         {#if sysText}
-          <div class="msg-row msg-row-system-left msg-row-contained">
+          <div
+            class="msg-row msg-row-system-left msg-row-contained"
+            class:msg-row-anchor-hit={highlightedChunkId === chunk.chunkId}
+            data-chunk-id={chunk.chunkId}
+          >
             <div class="system-block">
               <div class="system-header">
                 <svg class="system-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={TERMINAL}/></svg>
@@ -849,7 +953,11 @@
         {@const compactText = cleanDisplayText(chunk.summaryText)}
         {@const isCompactExpanded = expandedCompacts.has(chunk.chunkId)}
         {@const td = chunk.tokenDelta}
-        <div class="msg-row msg-row-compact msg-row-contained">
+        <div
+          class="msg-row msg-row-compact msg-row-contained"
+          class:msg-row-anchor-hit={highlightedChunkId === chunk.chunkId}
+          data-chunk-id={chunk.chunkId}
+        >
           <div class="compact-block">
             <button
               type="button"
@@ -884,8 +992,14 @@
     {/each}
   </div>
 
-  {#if contextPanelVisible && contextCount > 0}
-    <ContextPanel entries={contextEntries} onClose={() => contextPanelVisible = false} />
+  {#if contextPanelVisible && contextCount > 0 && detail}
+    <ContextPanel
+      {detail}
+      onClose={() => (contextPanelVisible = false)}
+      onNavigateToChunk={handleNavigateToChunk}
+      onNavigateToTool={handleNavigateToTool}
+      onNavigateToUserGroup={handleNavigateToUserGroup}
+    />
   {/if}
   </div>
 {/if}
@@ -1057,6 +1171,46 @@
   @keyframes top-live-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
+  }
+
+
+  .msg-row-anchor-hit {
+    animation: anchor-target-pulse 2200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .tool-anchor-hit {
+    border-radius: 8px;
+    animation: anchor-tool-pulse 2200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes anchor-target-pulse {
+    0% {
+      background: color-mix(in oklch, var(--color-accent-blue) 16%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 48%, transparent);
+    }
+    55% {
+      background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 34%, transparent);
+    }
+    100% {
+      background: transparent;
+      box-shadow: inset 0 0 0 1px transparent;
+    }
+  }
+
+  @keyframes anchor-tool-pulse {
+    0% {
+      background: color-mix(in oklch, var(--color-accent-blue) 20%, transparent);
+      box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 48%, transparent);
+    }
+    55% {
+      background: color-mix(in oklch, var(--color-accent-blue) 12%, transparent);
+      box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 30%, transparent);
+    }
+    100% {
+      background: transparent;
+      box-shadow: 0 0 0 2px transparent;
+    }
   }
 
   .top-meta {

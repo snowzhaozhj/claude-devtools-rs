@@ -83,15 +83,43 @@ PR push 后
 
 ## 3. design 阶段：决策风险二审
 
-`/opsx:propose` 写完 design.md 之后，**行为契约 / 跨 capability / 性能** 类 change 调 codex 评：
+`/opsx:propose` 写完 design.md 之后、**进 `/opsx:apply` 之前**调 codex 评。**默认强制**——理由：propose 阶段定下的 D1/D2/... 决策在 apply 阶段会扩散成几十处代码改动，事后发现 design 漏洞代价远高于 propose 阶段拦下；codex 异构推理擅长抓"前端拿不到 Phase 1 数据"这类后端/前端数据流断裂、"字段名前后写错"这类文档不一致，是 claude 自检的盲点。
 
-- D1/D2/D3... 各决策的取舍 / 候选方案对比是否合理
-- 风险点是否漏列
-- spec delta 的 Scenario 是否可测试 / 是否漏边界
+**默认调（任一命中即调）**：
+- 涉及 IPC 字段语义改 / 新增 / 删除
+- 跨 ≥ 2 个 capability spec delta
+- 性能关键路径改动（启动 / IPC 大 payload / 后端算法 O(N²) / 列表渲染）
+- 状态机 / 节流 / 并发 / 缓存淘汰策略
+- UI 重大重构（拆 ≥ 3 个新组件 / 改 ≥ 2 个核心组件）
+- 含 BREAKING change 标注
 
-prompt 关键词："请审查 `openspec/changes/<slug>/design.md` 的决策合理性，特别是 D<n>，看候选方案对比是否漏掉了 [...]"。
+**可跳过（同时满足）**：
+- 单 capability + 单 Requirement 改动
+- 纯文案 / 纯样式 / 单点 bug 修复
+- 改动 ≤ 50 行预期 + 无新 IPC 字段
+- design.md 只有 D1 一个决策且 reviewer 看一眼就能验证
 
-不强制（design 阶段已经有 reviewer 角色——/opsx:explore 时的 thinking partner），但**重大决策**最好走一遍。
+**prompt 模板**（针对 design 阶段，与 PR push 后二审区分）：
+```
+背景：[一句话讲 change 解决什么问题 + slug]
+
+诊断：propose 阶段已写完 design / spec delta / tasks，进 apply 前需要异构二审。
+
+请审查的文件：[列文件路径]
+
+我的具体怀疑点：
+1. D<n> [具体决策] 有没有 [具体技术坑]
+2. spec delta 有没有漏 SHALL/MUST 句、漏 scenario 边界
+3. tasks.md 拆分有没有漏 IPC 字段 / 测试断言点 / fixture 同步
+4. [其它领域知识相关怀疑]
+
+约束：
+- 只报你确认是 bug、设计漏洞、或文档不严的；不要"建议优化"
+- 每个问题给：文件路径 + 行号（或章节）+ 现状 + 为什么是问题 + 修法
+- 中文，800 字以内
+```
+
+codex 报问题后**先修 design / spec / tasks 三处文档**，再 validate strict 过，再进 `/opsx:apply`。修完不需要再跑一轮 codex 验证（与 apply 后的 PR push 二审不同）——文档修改 reviewer 一眼能看出对错，循环成本不值。
 
 ## 4. test 阶段：edge case 测试用例
 

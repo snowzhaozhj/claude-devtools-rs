@@ -25,7 +25,7 @@ fn ts(offset_seconds: i64) -> DateTime<Utc> {
 
 fn user_chunk(uuid: &str, text: &str, offset: i64) -> Chunk {
     Chunk::User(UserChunk {
-        chunk_id: uuid.into(),
+        chunk_id: format!("{uuid}:0"),
         uuid: uuid.into(),
         timestamp: ts(offset),
         duration_ms: None,
@@ -41,7 +41,7 @@ fn ai_chunk(
     tools: Vec<ToolExecution>,
 ) -> Chunk {
     Chunk::Ai(AIChunk {
-        chunk_id: format!("ai:{uuid}:0"),
+        chunk_id: format!("{uuid}:0"),
         timestamp: ts(offset),
         duration_ms: None,
         responses: vec![AssistantResponse {
@@ -64,7 +64,7 @@ fn ai_chunk(
 
 fn compact_chunk(uuid: &str, offset: i64) -> Chunk {
     Chunk::Compact(CompactChunk {
-        chunk_id: uuid.into(),
+        chunk_id: format!("{uuid}:0"),
         uuid: uuid.into(),
         timestamp: ts(offset),
         duration_ms: None,
@@ -145,7 +145,7 @@ fn single_ai_group_with_tool_and_user_message_populates_stats() {
     let result = process_session_context_with_phases(&chunks, &params);
 
     assert_eq!(result.stats_map.len(), 1);
-    let stats = result.stats_map.get("a0").unwrap();
+    let stats = result.stats_map.get("a0:0").unwrap();
     assert_eq!(stats.new_injections.len(), 2);
     assert!(stats.total_estimated_tokens > 0);
     assert_eq!(
@@ -194,19 +194,19 @@ fn mid_compaction_produces_two_phases_and_token_delta() {
     let delta = result
         .phase_info
         .compaction_token_deltas
-        .get("c0")
-        .expect("delta exists for c0");
+        .get("c0:0")
+        .expect("delta exists for c0:0");
     assert_eq!(delta.pre_compaction_tokens, 1000);
     assert_eq!(delta.post_compaction_tokens, 600);
     assert_eq!(delta.delta, -400);
 
     let phase1 = &result.phase_info.phases[0];
     assert_eq!(phase1.phase_number, 1);
-    assert_eq!(phase1.first_ai_group_id, "a0");
+    assert_eq!(phase1.first_ai_group_id, "a0:0");
     let phase2 = &result.phase_info.phases[1];
     assert_eq!(phase2.phase_number, 2);
-    assert_eq!(phase2.first_ai_group_id, "a1");
-    assert_eq!(phase2.compact_group_id.as_deref(), Some("c0"));
+    assert_eq!(phase2.first_ai_group_id, "a1:0");
+    assert_eq!(phase2.compact_group_id.as_deref(), Some("c0:0"));
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn trailing_compaction_finalizes_last_phase_without_delta() {
 
     assert_eq!(result.phase_info.phases.len(), 1);
     assert!(result.phase_info.compaction_token_deltas.is_empty());
-    assert_eq!(result.phase_info.phases[0].first_ai_group_id, "a0");
+    assert_eq!(result.phase_info.phases[0].first_ai_group_id, "a0:0");
     assert_eq!(result.phase_info.phases[0].compact_group_id, None);
 }
 
@@ -252,7 +252,7 @@ fn claude_md_path_is_deduped_across_groups() {
     // 第一个 group 拿到 CLAUDE.md injection，第二个 group 不再拿到新 injection。
     let a0_new = result
         .stats_map
-        .get("a0")
+        .get("a0:0")
         .unwrap()
         .new_injections
         .iter()
@@ -260,7 +260,7 @@ fn claude_md_path_is_deduped_across_groups() {
         .count();
     let a1_new = result
         .stats_map
-        .get("a1")
+        .get("a1:0")
         .unwrap()
         .new_injections
         .iter()
@@ -282,7 +282,7 @@ fn missing_token_data_does_not_panic() {
     let result = process_session_context_with_phases(&chunks, &params);
     assert_eq!(result.stats_map.len(), 1);
     assert_eq!(
-        result.stats_map.get("a0").unwrap().total_estimated_tokens,
+        result.stats_map.get("a0:0").unwrap().total_estimated_tokens,
         0
     );
 }
@@ -298,7 +298,7 @@ fn context_stats_serializes_with_camel_case_fields() {
     ];
     let params = default_params(&cm, &dir, &mf, &[]);
     let result = process_session_context_with_phases(&chunks, &params);
-    let stats = result.stats_map.get("a0").unwrap();
+    let stats = result.stats_map.get("a0:0").unwrap();
     let v = serde_json::to_value(stats).unwrap();
     let obj = v.as_object().unwrap();
     assert!(obj.contains_key("tokensByCategory"));

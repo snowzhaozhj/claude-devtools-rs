@@ -313,6 +313,20 @@ export interface CompactionTokenDelta {
   delta: number;
 }
 
+export interface ContextPhase {
+  phaseNumber: number;
+  firstAiGroupId: string;
+  lastAiGroupId: string;
+  compactGroupId?: string | null;
+}
+
+export interface ContextPhaseInfo {
+  phases: ContextPhase[];
+  compactionCount: number;
+  aiGroupPhaseMap: Record<string, number>;
+  compactionTokenDeltas: Record<string, CompactionTokenDelta>;
+}
+
 export interface CompactChunk {
   kind: "compact";
   chunkId: string;
@@ -342,7 +356,16 @@ export interface SessionDetail {
   chunks: Chunk[];
   metrics: Record<string, unknown>;
   metadata: Record<string, unknown>;
+  /** Latest phase 的累计 injections（向后兼容；语义等价于 `injectionsByPhase[最大 phaseNumber]`）。 */
   contextInjections: unknown[];
+  /**
+   * 按 phase 切分的完整累计 injections，key = `phaseNumber.toString()`。
+   * Phase Selector 切到旧 phase 时直接读这里的对应数组。
+   * 老后端不返回此字段，前端 fallback 链：`injectionsByPhase[latest] ?? contextInjections ?? []`。
+   */
+  injectionsByPhase?: Record<string, unknown[]>;
+  /** session 级 phase 元数据；前端按 `phases.length > 1` 决定 Phase Selector 显隐。 */
+  phaseInfo?: ContextPhaseInfo;
   isOngoing: boolean;
 }
 

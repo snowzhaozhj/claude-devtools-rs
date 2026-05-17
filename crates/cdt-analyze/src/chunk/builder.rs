@@ -172,7 +172,7 @@ fn chunk_loop(
                     used_chunk_ids,
                 );
                 out.push(Chunk::Compact(CompactChunk {
-                    chunk_id: next_non_ai_chunk_id(&msg.uuid, used_chunk_ids),
+                    chunk_id: next_chunk_id(&msg.uuid, used_chunk_ids),
                     uuid: msg.uuid.clone(),
                     timestamp: msg.timestamp,
                     duration_ms: None,
@@ -223,7 +223,7 @@ fn chunk_loop(
                         used_chunk_ids,
                     );
                     out.push(Chunk::User(UserChunk {
-                        chunk_id: next_non_ai_chunk_id(&msg.uuid, used_chunk_ids),
+                        chunk_id: next_chunk_id(&msg.uuid, used_chunk_ids),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -244,7 +244,7 @@ fn chunk_loop(
                         used_chunk_ids,
                     );
                     out.push(Chunk::System(SystemChunk {
-                        chunk_id: next_non_ai_chunk_id(&msg.uuid, used_chunk_ids),
+                        chunk_id: next_chunk_id(&msg.uuid, used_chunk_ids),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -272,7 +272,7 @@ fn chunk_loop(
                     // 未被 AIChunk 消费的 slash 在此抛弃，不会跨过这条 user 挂到后续 AI。
                     pending_slashes.clear();
                     out.push(Chunk::User(UserChunk {
-                        chunk_id: next_non_ai_chunk_id(&msg.uuid, used_chunk_ids),
+                        chunk_id: next_chunk_id(&msg.uuid, used_chunk_ids),
                         uuid: msg.uuid.clone(),
                         timestamp: msg.timestamp,
                         duration_ms: None,
@@ -590,50 +590,24 @@ fn find_ai_chunk_for_task<'a>(
     assistant_match
 }
 
-/// 为 `AIChunk` 生成稳定唯一 `chunk_id`。
+/// 为任意 `Chunk` 生成稳定唯一 `chunk_id`，形态固定为 `<base>:<n>`（`n` 从 0
+/// 起）。AI base 取 `responses[0].uuid`（空 response fallback `"empty"`），
+/// User/System/Compact base 取 `msg.uuid`。`used_chunk_ids` 是 build 阶段的全局
+/// set，跨所有 chunk 类型共享，撞了递增 `n` 直到不撞。
 ///
-/// 形态 `ai:<base>:<n>`（`base = responses[0].uuid`，`n` 从 0 起），并在
-/// `used_chunk_ids` 已含相同 candidate 时继续递增 `n` 直到不撞。这层 set 校验
-/// 是 codex 二审 PR #116 提的 robustness 兜底——理论上 `ai:` 前缀已与裸 uuid
-/// 隔离 namespace，set 检查只在"上游 uuid 极端含 `ai:<base>:<n>` 形态"的 corner
-/// case 下生效，但确保 spec "MUST 唯一" 硬约束在所有上游输入下都成立。
-fn next_ai_chunk_id(
-    responses: &[AssistantResponse],
-    used_chunk_ids: &mut HashSet<String>,
-) -> String {
-    let base = responses
-        .first()
-        .map_or_else(|| "empty".to_owned(), |response| response.uuid.clone());
+/// 历史决策：早期 AI chunk 用 `ai:<base>:<n>` 加 `ai:` 前缀做"namespace
+/// 隔离"——但全局 set 已 collision-free 兜底，前缀对防撞无任何作用，是
+/// dead design。`context-panel-redesign` change（spec delta `chunk-building`
+/// MODIFIED Requirement "Stable chunk identifiers"）统一去掉。chunk type 通过
+/// `Chunk::kind()` / pattern match 区分，**不**靠 `chunk_id` 字面前缀。
+///
+/// spec：`openspec/specs/ipc-data-api/spec.md` §`Stable chunk identifiers in
+/// SessionDetail`；`openspec/specs/chunk-building/spec.md` §`Stable chunk_id
+/// format`。
+fn next_chunk_id(base: &str, used_chunk_ids: &mut HashSet<String>) -> String {
     let mut n: usize = 0;
     loop {
-        let candidate = format!("ai:{base}:{n}");
-        if used_chunk_ids.insert(candidate.clone()) {
-            return candidate;
-        }
-        n += 1;
-    }
-}
-
-/// 为 `UserChunk` / `SystemChunk` / `CompactChunk` 生成稳定唯一 `chunk_id`。
-///
-/// 首次出现某 `uuid` → 返回裸 `uuid`（保持与历史 `chunk_id` 字节级一致，前端
-/// `expandedItems` 等已缓存状态不失效）；
-/// 后续出现同 `uuid` → 返回 `<uuid>:<n>`（`n` 从 1 起），消歧。
-///
-/// `used_chunk_ids` 是 build 阶段的全局 set——`next_ai_chunk_id` 和本函数共用，
-/// 任何 candidate 已被占用时继续递增后缀直到不撞，保证 spec "MUST 唯一" 硬
-/// 约束在 `<uuid>` 与 `<uuid>:<n>` 跨形态撞车的 corner case（codex 二审 PR
-/// #116 Bug 2）下也成立。
-///
-/// Spec：`openspec/specs/ipc-data-api/spec.md` §`Stable chunk identifiers in
-/// SessionDetail`。
-fn next_non_ai_chunk_id(uuid: &str, used_chunk_ids: &mut HashSet<String>) -> String {
-    if used_chunk_ids.insert(uuid.to_owned()) {
-        return uuid.to_owned();
-    }
-    let mut n: usize = 1;
-    loop {
-        let candidate = format!("{uuid}:{n}");
+        let candidate = format!("{base}:{n}");
         if used_chunk_ids.insert(candidate.clone()) {
             return candidate;
         }
@@ -656,7 +630,10 @@ fn flush_buffer(
         return;
     }
     let responses = std::mem::take(buffer);
-    let chunk_id = next_ai_chunk_id(&responses, used_chunk_ids);
+    let base = responses
+        .first()
+        .map_or_else(|| "empty".to_owned(), |response| response.uuid.clone());
+    let chunk_id = next_chunk_id(&base, used_chunk_ids);
     let metrics = aggregate_metrics(&responses);
     let semantic_steps = extract_semantic_steps(&responses);
     let timestamp = responses.first().map(|r| r.timestamp).unwrap_or_default();
@@ -1002,7 +979,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(first_ids, vec!["ai:dup:0", "ai:dup:1"]);
+        assert_eq!(first_ids, vec!["dup:0", "dup:1"]);
         assert_eq!(second_ids, first_ids);
     }
 
@@ -1024,7 +1001,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(user_ids, vec!["u-dup", "u-dup:1"]);
+        assert_eq!(user_ids, vec!["u-dup:0", "u-dup:1"]);
         let all_ids: Vec<_> = first.iter().map(chunk_id_of).collect();
         let uniq: std::collections::HashSet<_> = all_ids.iter().copied().collect();
         assert_eq!(
@@ -1045,8 +1022,8 @@ mod tests {
     #[test]
     fn user_uuid_collides_with_suffix_form_still_unique() {
         // Codex CR PR #116 Bug 2 兜底：uuid="abc" 与 uuid="abc:1" 同 session 出现时，
-        // 朴素 `<uuid>` + `<uuid>:<n>` 策略会撞——`abc` 第二次出现产 `abc:1`，
-        // 与已有 uuid=`abc:1` 第一次产出的 `abc:1` 撞。
+        // 统一 `<base>:<n>` 形态下：`abc` 首次产 `abc:0`；uuid=`abc:1` 首次产
+        // `abc:1:0`；`abc` 第二次撞 `abc:0` 后递增到 `abc:1`。
         // 正确行为：基于全局 used_chunk_ids set，撞了继续递增到不撞。
         let msgs = vec![
             user("abc", 1, "first"),
@@ -1063,7 +1040,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(user_ids, vec!["abc", "abc:1", "abc:2"]);
+        assert_eq!(user_ids, vec!["abc:0", "abc:1:0", "abc:1"]);
         let all_ids: Vec<_> = chunks.iter().map(chunk_id_of).collect();
         let uniq: std::collections::HashSet<_> = all_ids.iter().copied().collect();
         assert_eq!(uniq.len(), all_ids.len());
