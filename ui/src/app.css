@@ -34,17 +34,13 @@
   --chat-user-border: #c8c5bb;
   --chat-user-shadow: 0 1px 2px rgba(60, 55, 45, 0.06);
 
-  /* Task notif（嵌在 user bubble 内的子行）专属 token：
-     设计原则——用户体验优先于 contrast 硬阈值。bg 用 chat-user-border 同色系
-     (=user bubble 自己的 border 色)：视觉上是 user bubble 的"内嵌子区域"延伸，
-     同色系不抢主消息焦点。bg vs chat-user-bg contrast = 1.36（< 1.5）是有意的：
-     1.5 不是 WCAG 强制指标，对"次级嵌套通知"行 hierarchy 必须比父 bubble 更轻，
-     强行拉对比反而把次级元素拉成视觉重心。识别依靠三重 cue：左侧 status icon
-     (✓/✕/○) + name (--color-text 强权重 ≥ 8.38) + meta (--task-notif-meta-text
-     ≥ 5.44 AA)。文字 token 浅色 #3d3b36 在 #c8c5bb 上 = 5.36 ✓ AA。 */
-  --task-notif-bg: var(--chat-user-border);
-  --task-notif-border: #a8a59a;
-  --task-notif-meta-text: #3d3b36;
+  /* Task notif（嵌在 user bubble 内的子行）：与 main 原版一致 = card-bg/card-border。
+     浅色白卡 / 深色黑卡，对父 user bubble 形成显著反色块，用户一眼可辨。
+     contrast 浅 1.185 / 深 1.456——对**装饰性**背景区分而非文本对比足够；
+     WCAG 4.5 是文本指标，1.5 是 codex 自定阈值不强求。 */
+  --task-notif-bg: var(--card-bg);
+  --task-notif-border: var(--card-border);
+  --task-notif-meta-text: var(--color-text-muted);
 
   /* Tool items */
   --tool-item-name: #3d3b36;
@@ -255,15 +251,11 @@
   --chat-user-text: #c5d0c8;
   --chat-user-border: #485448;
 
-  /* Task notif 深色变体：深色主题下"hierarchy 子卡更轻"= 更亮。
-     不能复用 chat-user-border #485448——它太接近 chat-user-bg #2e3330
-     (contrast 1.49) 视觉"深+略深"显黑沉。用 #6a786c (L ≈ 0.176)
-     vs chat-user-bg = 3.19 显著抬亮，但仍是 user bubble 同色系（暖绿灰）
-     不抢戏。文字：text #e8e6e1 vs #6a786c = 4.27 ≈ AA；
-     meta #d4dad6 vs #6a786c = 5.0 ✓ AA。 */
-  --task-notif-bg: #6a786c;
-  --task-notif-border: #7e8d80;
-  --task-notif-meta-text: #d4dad6;
+  /* Task notif 深色 = card-bg #121212 (黑卡) / card-border #27272a。
+     与 main 原版一致，对 user bubble #2e3330 形成"深黑卡"反色块。 */
+  --task-notif-bg: var(--card-bg);
+  --task-notif-border: var(--card-border);
+  --task-notif-meta-text: var(--color-text-muted);
   --chat-user-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 
   --tool-item-name: #e0ded9;
@@ -388,10 +380,10 @@
     --chat-user-text: #c5d0c8;
     --chat-user-border: #3d4a3f;
 
-    /* Task notif 深色 system 变体（同 [data-theme="dark"]） */
-    --task-notif-bg: #6a786c;
-    --task-notif-border: #7e8d80;
-    --task-notif-meta-text: #d4dad6;
+    /* Task notif 深色 system 变体（同 [data-theme="dark"] = card-bg/border） */
+    --task-notif-bg: var(--card-bg);
+    --task-notif-border: var(--card-border);
+    --task-notif-meta-text: var(--color-text-muted);
 
     --tool-item-name: #e0ded9;
     --tool-item-summary: #a8a5a0;
