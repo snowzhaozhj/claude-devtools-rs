@@ -303,9 +303,11 @@
           <button
             type="button"
             role="tab"
+            id="settings-tab-{section.id}"
             aria-label={section.label}
             aria-selected={activeSection === section.id}
-            aria-controls="settings-panel-{section.id}"
+            aria-controls="settings-panel"
+            tabindex={activeSection === section.id ? 0 : -1}
             class="nav-item"
             class:nav-item-active={activeSection === section.id}
             onclick={() => (activeSection = section.id)}
@@ -329,9 +331,9 @@
     </ul>
   </nav>
 
-  <div class="settings-content" id="settings-panel-{activeSection}" role="tabpanel" tabindex="-1" aria-labelledby="settings-panel-title-{activeSection}">
+  <div class="settings-content" id="settings-panel" role="tabpanel" tabindex="-1" aria-labelledby="settings-tab-{activeSection}">
     <header class="content-header">
-      <h1 class="content-title" id="settings-panel-title-{activeSection}">{sectionMeta.label}</h1>
+      <h1 class="content-title">{sectionMeta.label}</h1>
       <p class="content-subtitle">{sectionMeta.description}</p>
       {#if saveError}
         <div class="banner banner-error" role="alert">
@@ -1059,5 +1061,53 @@
     font-size: 12px;
     color: var(--color-text-secondary);
     font-family: var(--font-mono);
+  }
+
+  /* 窄 viewport：左 nav 改顶部 chip 横排 + 内容区放宽 padding */
+  @media (max-width: 720px) {
+    .settings-view {
+      flex-direction: column;
+    }
+    .settings-nav {
+      width: 100%;
+      padding: 12px 14px;
+      border-right: none;
+      border-bottom: 1px solid var(--color-border);
+      overflow-y: visible;
+    }
+    .nav-title {
+      margin: 0 6px 10px;
+    }
+    .nav-list {
+      flex-direction: row;
+      gap: 4px;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .nav-list::-webkit-scrollbar {
+      display: none;
+    }
+    .nav-item {
+      flex-shrink: 0;
+      padding: 6px 12px;
+    }
+    .nav-label-desc {
+      display: none;
+    }
+    .settings-content {
+      padding: 20px 16px 40px;
+      overflow-x: auto;
+    }
+    .content-header {
+      max-width: none;
+    }
+    .content-body {
+      max-width: none;
+    }
+    .about-hero {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 14px;
+    }
   }
 </style>
