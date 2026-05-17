@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getLanguageFromPath, getFileName, shortenPath } from "../lib/toolHelpers";
   import { generateDiff, type DiffLine } from "../lib/diff";
+  import { highlightCode } from "../lib/render";
 
   interface Props {
     fileName: string;
@@ -72,7 +73,7 @@
           <span class="diff-gutter diff-gutter-old">{line.oldLineNumber ?? ""}</span>
           <span class="diff-gutter diff-gutter-new">{line.newLineNumber ?? ""}</span>
           <span class="diff-prefix">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
-          <span class="diff-content">{line.content || " "}</span>
+          <span class="diff-content">{@html line.content ? highlightCode(line.content, language) : " "}</span>
         </div>
       {/each}
     </div>
