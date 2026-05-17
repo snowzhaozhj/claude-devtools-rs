@@ -558,7 +558,7 @@
           class="show-hidden-btn"
           class:show-hidden-active={getShowHidden()}
           title={getShowHidden() ? `隐藏 ${hiddenCount} 个会话` : `展开 ${hiddenCount} 个隐藏会话`}
-          aria-label={getShowHidden() ? "隐藏已隐藏会话" : `显示 ${hiddenCount} 个隐藏会话`}
+          aria-label={getShowHidden() ? `隐藏 ${hiddenCount} 个已隐藏会话` : `显示 ${hiddenCount} 个隐藏会话`}
           onclick={toggleShowHidden}
         >
           {#if getShowHidden()}
@@ -848,7 +848,12 @@
   /* "刷新" 按钮使用 focus-blue 文字 + 同色细边召唤用户注意——它表达
      "有新数据待加载" 这一**主动召唤**的交互意图，原灰色胶囊语义太弱。
      focus-blue 是 DESIGN.md `The Ongoing Owns Blue Rule` 已分配给
-     "进行中 / 实时" 的颜色，"有更新待刷新" 属同语义类，复用不引入新色。 */
+     "进行中 / 实时" 的颜色，"有更新待刷新" 属同语义类，复用不引入新色。
+
+     文字色用 `--color-accent-blue-hover`（浅色主题 #2563eb 深蓝 /
+     深色主题 #3b82f6 比 base #60a5fa 略深）配合 weight 600，保证
+     11px 小字在 8% blue 透明底上达到 WCAG AA 4.5:1 对比度——base
+     `--color-accent-blue` 在浅底上仅 ~3.3:1 不达标。 */
   .refresh-pending-btn {
     display: inline-flex;
     align-items: center;
@@ -858,10 +863,10 @@
     border: 1px solid color-mix(in oklch, var(--color-accent-blue) 45%, transparent);
     border-radius: 999px;
     background: color-mix(in oklch, var(--color-accent-blue) 8%, transparent);
-    color: var(--color-accent-blue);
+    color: var(--color-accent-blue-hover);
     font: inherit;
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 600;
     line-height: 1.2;
     cursor: pointer;
     transition: background 0.12s, border-color 0.12s;
@@ -1024,13 +1029,19 @@
     background: var(--tool-item-hover-bg);
   }
 
-  /* 选中态：用 surface-overlay 比 hover 的 raised 再深一档形成可见
-     对比，并通过 title 字重 700 + ink-text 强化扫读识别度。原 3px
-     灰 stripe 在暖灰 sidebar 背景上几乎被吃掉，且 hover/active 都
-     是 raised 让两态视觉过近——本次重构去掉 stripe，靠两档背景差
-     +字重差建立"我在哪条"识别度。 */
+  /* 选中态：用 surface-overlay 比 hover 的 raised 再深一档 + 1px
+     accent-blue outline + title 字重 700 ink-text 三重信号。原 3px
+     灰 stripe 在暖灰 sidebar 背景上几乎被吃掉；纯背景层级差在深色
+     主题（#333330 vs sidebar #232321 ≈ 1.24:1）远低于 WCAG 1.4.11
+     非文本对比要求 3:1，因此引入 1px outline 提供跨主题稳定的色相
+     信号——outline 不占 box-model 空间（offset:-1 内贴边），不构成
+     impeccable absolute-bans 禁止的 "side-stripe > 1px colored
+     accent"（限 single side & >1px），是受认可的 a11y indicator
+     形态。 */
   .session-item-active {
     background: var(--color-surface-overlay);
+    outline: 1px solid var(--color-accent-blue);
+    outline-offset: -1px;
   }
   .session-item-active .session-title-text {
     color: var(--color-text);
