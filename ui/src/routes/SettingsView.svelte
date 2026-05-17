@@ -10,6 +10,7 @@
   import SettingsGroup from "../lib/components/SettingsGroup.svelte";
   import SettingsField from "../lib/components/SettingsField.svelte";
   import SettingsButton from "../lib/components/SettingsButton.svelte";
+  import Dropdown from "../lib/components/Dropdown.svelte";
   import SkeletonList from "../components/SkeletonList.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { updateStore } from "../lib/updateStore.svelte";
@@ -392,15 +393,16 @@
           <SettingsGroup title="外观">
             <SettingsField label="主题" description="深色 / 浅色 / 跟随系统">
               {#snippet control()}
-                <select
-                  class="control-select"
-                  aria-label="主题"
-                  onchange={(e) => updateGeneral("theme", (e.target as HTMLSelectElement).value)}
-                >
-                  <option value="dark" selected={config!.general.theme === "dark"}>深色</option>
-                  <option value="light" selected={config!.general.theme === "light"}>浅色</option>
-                  <option value="system" selected={config!.general.theme === "system"}>跟随系统</option>
-                </select>
+                <Dropdown
+                  value={config!.general.theme}
+                  options={[
+                    { value: "dark", label: "深色" },
+                    { value: "light", label: "浅色" },
+                    { value: "system", label: "跟随系统" },
+                  ]}
+                  onChange={(v) => updateGeneral("theme", v)}
+                  ariaLabel="主题"
+                />
               {/snippet}
             </SettingsField>
           </SettingsGroup>
@@ -408,14 +410,15 @@
           <SettingsGroup title="启动与交互">
             <SettingsField label="默认打开页面" description="应用启动时显示的内容">
               {#snippet control()}
-                <select
-                  class="control-select"
-                  aria-label="默认打开页面"
-                  onchange={(e) => updateGeneral("defaultTab", (e.target as HTMLSelectElement).value)}
-                >
-                  <option value="dashboard" selected={config!.general.defaultTab === "dashboard"}>仪表盘</option>
-                  <option value="last-session" selected={config!.general.defaultTab === "last-session"}>上次会话</option>
-                </select>
+                <Dropdown
+                  value={config!.general.defaultTab}
+                  options={[
+                    { value: "dashboard", label: "仪表盘" },
+                    { value: "last-session", label: "上次会话" },
+                  ]}
+                  onChange={(v) => updateGeneral("defaultTab", v)}
+                  ariaLabel="默认打开页面"
+                />
               {/snippet}
             </SettingsField>
             <SettingsField
@@ -423,14 +426,15 @@
               description="侧栏点击会话项的默认动作；Cmd / Ctrl + 点击始终翻转该默认"
             >
               {#snippet control()}
-                <select
-                  class="control-select"
-                  aria-label="点击会话默认行为"
-                  onchange={(e) => updateGeneral("sessionClickBehavior", (e.target as HTMLSelectElement).value)}
-                >
-                  <option value="replace" selected={(config!.general.sessionClickBehavior ?? "replace") === "replace"}>替换当前标签页</option>
-                  <option value="new-tab" selected={config!.general.sessionClickBehavior === "new-tab"}>每次开新标签页</option>
-                </select>
+                <Dropdown
+                  value={config!.general.sessionClickBehavior ?? "replace"}
+                  options={[
+                    { value: "replace", label: "替换当前标签页" },
+                    { value: "new-tab", label: "每次开新标签页" },
+                  ]}
+                  onChange={(v) => updateGeneral("sessionClickBehavior", v)}
+                  ariaLabel="点击会话默认行为"
+                />
               {/snippet}
             </SettingsField>
             <SettingsField label="自动展开 AI 组" description="打开会话时自动展开工具执行区域">
@@ -485,13 +489,15 @@
           <SettingsGroup title="时间显示" description="影响会话详情等绝对时间戳的渲染">
             <SettingsField label="时间格式" description="切换 24 小时制 / 12 小时制（带上午/下午）">
               {#snippet control()}
-                <select
-                  class="control-select"
-                  onchange={(e) => updateTimeFormat((e.target as HTMLSelectElement).value as TimeFormat)}
-                >
-                  <option value="24h" selected={(config!.display?.timeFormat ?? "24h") === "24h"}>24 小时制</option>
-                  <option value="12h" selected={(config!.display?.timeFormat ?? "24h") === "12h"}>12 小时制</option>
-                </select>
+                <Dropdown
+                  value={config!.display?.timeFormat ?? "24h"}
+                  options={[
+                    { value: "24h", label: "24 小时制" },
+                    { value: "12h", label: "12 小时制" },
+                  ]}
+                  onChange={(v) => updateTimeFormat(v as TimeFormat)}
+                  ariaLabel="时间格式"
+                />
               {/snippet}
             </SettingsField>
           </SettingsGroup>
@@ -579,12 +585,17 @@
                   />
                 </div>
                 <div class="trigger-form-row">
-                  <label class="trigger-form-label" for="trigger-mode-select">模式</label>
-                  <select id="trigger-mode-select" class="control-select" bind:value={newMode}>
-                    <option value="error_status">错误检测（工具执行失败时触发）</option>
-                    <option value="content_match">内容匹配（匹配关键词或正则时触发）</option>
-                    <option value="token_threshold">Token 超限（token 用量超阈值时触发）</option>
-                  </select>
+                  <span class="trigger-form-label">模式</span>
+                  <Dropdown
+                    value={newMode}
+                    options={[
+                      { value: "error_status", label: "错误检测（工具执行失败时触发）" },
+                      { value: "content_match", label: "内容匹配（匹配关键词或正则时触发）" },
+                      { value: "token_threshold", label: "Token 超限（token 用量超阈值时触发）" },
+                    ]}
+                    onChange={(v) => (newMode = v)}
+                    ariaLabel="触发模式"
+                  />
                 </div>
                 <div class="trigger-form-row">
                   <label class="trigger-form-label" for="trigger-color-input">颜色</label>
@@ -910,8 +921,7 @@
   }
 
   /* 统一控件 */
-  .content-body :global(.control-input),
-  .content-body :global(.control-select) {
+  .content-body :global(.control-input) {
     flex: 1;
     height: 30px;
     padding: 0 10px;
@@ -924,12 +934,7 @@
     outline: none;
     transition: border-color 0.12s, box-shadow 0.12s;
   }
-  .content-body :global(.control-select) {
-    cursor: pointer;
-    min-width: 180px;
-  }
-  .content-body :global(.control-input:focus),
-  .content-body :global(.control-select:focus) {
+  .content-body :global(.control-input:focus) {
     border-color: var(--color-switch-on);
     box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-switch-on) 18%, transparent);
   }
