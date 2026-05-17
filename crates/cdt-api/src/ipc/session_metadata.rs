@@ -514,7 +514,13 @@ fn extract_tag_content(text: &str, tag: &str) -> Option<String> {
 ///
 /// `<teammate-message ...>...</teammate-message>` 的 attributes 形式靠
 /// 通用前缀匹配剥除（与无 attribute 的 7 个标签共享算法）。
+///
+/// `Read the output file to retrieve the result: <path>` 系统指令清洗 SHALL
+/// 仅在原文确实含 `<task-notification>` tag 时触发——避免误删用户在普通消息
+/// 中手写的同字面量（如教程引用）。详 codex 二审反馈与 spec
+/// `ipc-data-api/spec.md` §`Sanitize title against interruption and task-output instructions`。
 fn sanitize_for_title(text: &str) -> String {
+    let had_task_notification = text.contains("<task-notification>");
     let mut s = text.to_string();
     let tags = [
         "system-reminder",
@@ -558,11 +564,14 @@ fn sanitize_for_title(text: &str) -> String {
         }
     }
     // task-notification 后系统注入的 "Read the output file to retrieve the result: <path>"
-    // 指令残留（task-notification tag 已剥），按正则全局移除。
-    // 见 spec `ipc-data-api/spec.md` §`Sanitize title against interruption and task-output instructions`。
-    let s = task_output_instruction_regex()
-        .replace_all(&s, "")
-        .into_owned();
+    // 指令残留（task-notification tag 已被上面循环剥除），按正则移除。
+    // 仅在原文含 `<task-notification>` 时触发，防止用户在普通消息中手写同字面量被吞。
+    if had_task_notification {
+        let cleaned = task_output_instruction_regex()
+            .replace_all(&s, "")
+            .into_owned();
+        return cleaned.trim().to_string();
+    }
     s.trim().to_string()
 }
 
@@ -1321,6 +1330,31 @@ mod tests {
         assert!(
             !title.contains("/tmp/result.txt"),
             "title 不应含路径: {title:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_output_file_literal_in_user_text_not_stripped_without_task_notification() {
+        // 用户在普通消息中手写 "Read the output file..." 字面量（无 <task-notification>
+        // 标签上下文）SHALL NOT 被 sanitize 误吞。codex 二审反馈。
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[&user_text_line(
+                "u1",
+                "2026-05-03T10:00:00.000Z",
+                "参考一下教程：Read the output file to retrieve the result: /tutorial.txt",
+            )],
+        );
+        let meta = extract_session_metadata(&path).await;
+        let title = meta.title.unwrap_or_default();
+        assert!(
+            title.contains("Read the output file"),
+            "用户手写字面量 SHALL 保留: {title:?}"
+        );
+        assert!(
+            title.contains("/tutorial.txt"),
+            "用户手写路径 SHALL 保留: {title:?}"
         );
     }
 

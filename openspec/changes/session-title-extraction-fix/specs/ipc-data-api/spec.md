@@ -42,12 +42,12 @@
 `extract_session_metadata` 提取 `SessionSummary.title` 时 SHALL 跳过 / 清洗以下两类系统注入文本，避免它们污染 sidebar 标题：
 
 1. **`[Request interrupted by user` 起首消息**：trim 后的文本以该字面量起首时，整条 user 消息 SHALL 不参与 title 提取（既不进 `title` 也不进 `command_fallback`），扫描循环 SHALL 继续找下一条候选。
-2. **`Read the output file to retrieve the result: <path>` 指令残留**：`sanitize_for_title` 在已有 8 个 system tag + `teammate-message` 标签剥除后，SHALL 追加一次正则替换移除符合 `/ ?Read the output file to retrieve the result: \S+/g` 模式的所有匹配段（path 为非空白字符序列）。
+2. **`Read the output file to retrieve the result: <path>` 指令残留**：`sanitize_for_title` 在已有 8 个 system tag + `teammate-message` 标签剥除后，SHALL 追加一次正则替换移除符合 `/ ?Read the output file to retrieve the result: \S+/g` 模式的所有匹配段（path 为非空白字符序列）。该正则替换 SHALL 仅在**原文确实含 `<task-notification>` 字面 tag** 时触发，避免用户在普通消息中手写同字面量被误删（codex 二审反馈）。
 
 实现位置：
 
 - interrupted 过滤 SHALL 加在 `extract_session_metadata_with_ongoing` 内 `is_command_output(&text)` 判断同位置（前后均可），早于 `is_command_content` 与 `extract_teammate_summary_title`，以避免该字面量进入 `command_fallback` 与 teammate 路径。
-- "Read the output file" 移除 SHALL 在 `sanitize_for_title` 函数尾部、`trim().to_string()` 之前应用；正则 SHALL 用 `once_cell::sync::Lazy<Regex>` 进程级编译复用。
+- "Read the output file" 移除 SHALL 在 `sanitize_for_title` 函数尾部、`trim().to_string()` 之前应用；正则 SHALL 用进程级 `OnceLock<Regex>` 一次编译复用；触发 gate SHALL 用 `text.contains("<task-notification>")` 在剥 tag 前判定（剥完后判断会失败）。
 
 #### Scenario: Interrupted message is skipped during title extraction
 
@@ -64,8 +64,13 @@
 
 #### Scenario: Multiple Read-output instructions all stripped
 
-- **WHEN** session 第一条 user 消息含两段 `Read the output file to retrieve the result: /a` 与 `Read the output file to retrieve the result: /b`
+- **WHEN** session 第一条 user 消息 content 含 `<task-notification>...</task-notification>` 标签 + 两段 `Read the output file to retrieve the result: /a` 与 `Read the output file to retrieve the result: /b`
 - **THEN** `extract_session_metadata.title` 中两段 SHALL 全部被移除
+
+#### Scenario: User-written Read-output literal preserved when no task-notification tag present
+
+- **WHEN** session 第一条 user 消息 content 为 `参考一下教程：Read the output file to retrieve the result: /tutorial.txt`（无 `<task-notification>` 标签上下文）
+- **THEN** `extract_session_metadata.title` SHALL 含 `Read the output file to retrieve the result: /tutorial.txt` 子串（用户手写文本不被吞）
 
 ## MODIFIED Requirements
 

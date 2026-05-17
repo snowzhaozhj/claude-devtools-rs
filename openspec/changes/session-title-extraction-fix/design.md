@@ -78,13 +78,13 @@ JSONL → cdt-parse → ParsedMessage → cdt-api::session_metadata::extract_ses
 
 ### D3：sanitize_for_title 加 `Read the output file to retrieve the result: <path>` 移除
 
-**选择**：在 `sanitize_for_title` 现有 8 个 tag + teammate-message 移除循环之后，加一次正则 `re.replace_all(/ ?Read the output file to retrieve the result: \S+/g, "")`。
+**选择**：在 `sanitize_for_title` 现有 8 个 tag + teammate-message 移除循环之后，加一次正则 `re.replace_all(/ ?Read the output file to retrieve the result: \S+/g, "")`。**触发条件 SHALL** 限定为"原文确实含 `<task-notification>` 字面 tag"——剥 tag 前用 `text.contains("<task-notification>")` 提前判定（剥完后判断会失败）。
 
-**实现**：用 `once_cell::sync::Lazy<Regex>` 编译一次复用，避免每条消息重编译。
+**实现**：用 `std::sync::OnceLock<Regex>` 编译一次复用（stdlib，无需引入 `once_cell` crate）。
 
 **理由**：
 - `<task-notification>` 标签被 sanitize 剥后，其前置 " Read the output file..." 文本残留
-- TS 原版 `contentSanitizer.ts` 第 30 + 122 行 `TASK_OUTPUT_INSTRUCTION_PATTERN` 同样处理
+- TS 原版 `contentSanitizer.ts` 第 30 + 122 行 `TASK_OUTPUT_INSTRUCTION_PATTERN` 是**无条件 replace**，对用户在普通消息中手写同字面量（如教程引用）也会吞——本仓不复刻 TS 这点（codex apply 阶段二审反馈）
 - 仅作用于 title 提取路径（`sanitize_for_title`），不影响其他位置的内容展示
 
 ### D4：title 截断常量化 `TITLE_MAX_CHARS = 500`
