@@ -547,60 +547,60 @@
         {#if text || images.length > 0 || taskNotifications.length > 0}
           <div class="msg-row msg-row-user msg-row-contained">
             <div class="msg-spacer"></div>
-            <div class="user-stack">
-              <div class="user-meta">
-                <span class="user-meta-time">{ftime(chunk.timestamp)}</span>
-                <span class="user-meta-sep">·</span>
-                <span class="user-meta-name">You</span>
-              </div>
-              <div class="user-row">
-                <div class="msg-bubble msg-bubble-user">
-                  {#if text}
-                    <div class="prose lazy-md" {@attach attachMarkdown(text, "user")}></div>
-                  {/if}
-                  {#each images as img (img.blockId)}
-                    <ImageBlock
-                      source={img.source}
-                      rootSessionId={sessionId}
-                      sessionId={sessionId}
-                      blockId={img.blockId}
-                    />
-                  {/each}
-                  {#each taskNotifications as notif (notif.taskId)}
-                    {@const isFailed = notif.status === "failed" || notif.status === "error"}
-                    {@const isCompleted = notif.status === "completed"}
-                    {@const cmdMatch = /"([^"]+)"/.exec(notif.summary)}
-                    {@const cmdName = cmdMatch?.[1] ?? notif.summary}
-                    {@const exitMatch = /\(exit code (\d+)\)/.exec(notif.summary)}
-                    {@const exitCode = exitMatch?.[1]}
-                    {@const fileBase = notif.outputFile.split("/").pop() ?? ""}
-                    <div
-                      class="task-notif"
-                      class:task-notif-done={isCompleted}
-                      class:task-notif-fail={isFailed}
-                    >
-                      <span class="task-notif-icon" aria-hidden="true">
-                        {#if isFailed}✕{:else if isCompleted}✓{:else}○{/if}
-                      </span>
-                      <div class="task-notif-body">
-                        <div class="task-notif-name">{cmdName || notif.taskId}</div>
-                        <div class="task-notif-meta">
-                          <span class="task-notif-status">{notif.status}</span>
-                          {#if exitCode != null}
-                            <span>exit {exitCode}</span>
-                          {/if}
-                          {#if fileBase}
-                            <span class="task-notif-file">{fileBase}</span>
-                          {/if}
-                        </div>
+            <div class="user-row">
+              <div class="msg-bubble msg-bubble-user">
+                <!-- bubble 内行内 header：与 AI .ai-header-row 的 time 共线，
+                     避免外置 meta row 让 user/ai 时间垂直高度错位（用户反馈 #122）。 -->
+                <div class="user-bubble-header">
+                  <span class="user-bubble-name">You</span>
+                  <span class="user-bubble-sep">·</span>
+                  <span class="user-bubble-time">{ftime(chunk.timestamp)}</span>
+                </div>
+                {#if text}
+                  <div class="prose lazy-md" {@attach attachMarkdown(text, "user")}></div>
+                {/if}
+                {#each images as img (img.blockId)}
+                  <ImageBlock
+                    source={img.source}
+                    rootSessionId={sessionId}
+                    sessionId={sessionId}
+                    blockId={img.blockId}
+                  />
+                {/each}
+                {#each taskNotifications as notif (notif.taskId)}
+                  {@const isFailed = notif.status === "failed" || notif.status === "error"}
+                  {@const isCompleted = notif.status === "completed"}
+                  {@const cmdMatch = /"([^"]+)"/.exec(notif.summary)}
+                  {@const cmdName = cmdMatch?.[1] ?? notif.summary}
+                  {@const exitMatch = /\(exit code (\d+)\)/.exec(notif.summary)}
+                  {@const exitCode = exitMatch?.[1]}
+                  {@const fileBase = notif.outputFile.split("/").pop() ?? ""}
+                  <div
+                    class="task-notif"
+                    class:task-notif-done={isCompleted}
+                    class:task-notif-fail={isFailed}
+                  >
+                    <span class="task-notif-icon" aria-hidden="true">
+                      {#if isFailed}✕{:else if isCompleted}✓{:else}○{/if}
+                    </span>
+                    <div class="task-notif-body">
+                      <div class="task-notif-name">{cmdName || notif.taskId}</div>
+                      <div class="task-notif-meta">
+                        <span class="task-notif-status">{notif.status}</span>
+                        {#if exitCode != null}
+                          <span>exit {exitCode}</span>
+                        {/if}
+                        {#if fileBase}
+                          <span class="task-notif-file">{fileBase}</span>
+                        {/if}
                       </div>
                     </div>
-                  {/each}
-                </div>
-                <span class="user-avatar" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html USER_SVG}</svg>
-                </span>
+                  </div>
+                {/each}
               </div>
+              <span class="user-avatar" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html USER_SVG}</svg>
+              </span>
             </div>
           </div>
         {/if}
@@ -1179,49 +1179,12 @@
   .msg-spacer { flex: 1; min-width: 80px; }
 
   /* ── User bubble ──
-     时间外置上方（mono），bubble 与 28×28 圆形 avatar 横向排列；
-     bubble 字号略提（14.5px）+ inset top 高光 + 微 chiaroscuro shadow。
+     bubble 内行内 header（time + You）与 AI .ai-header-row 的右侧 time
+     共线，bubble 旁横向排列 30×30 indigo 圆形 avatar，bubble 字号
+     14.5px + inset top 高光 + 微 chiaroscuro shadow。
   */
   .msg-row-user {
     justify-content: flex-end;
-  }
-
-  .user-stack {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 4px;
-    max-width: 78%;
-    min-width: 0;
-  }
-
-  .user-meta {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding-right: 40px;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-variant-numeric: tabular-nums;
-    color: var(--color-text-muted);
-    line-height: 1.2;
-  }
-
-  .user-meta-time {
-    letter-spacing: 0.02em;
-  }
-
-  .user-meta-sep {
-    color: var(--color-border-emphasis);
-  }
-
-  .user-meta-name {
-    font-family: var(--font-sans);
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--color-text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
   }
 
   .user-row {
@@ -1229,6 +1192,38 @@
     align-items: flex-start;
     gap: 10px;
     min-width: 0;
+    max-width: 78%;
+  }
+
+  .user-bubble-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    line-height: 1.2;
+    color: var(--color-text-muted);
+  }
+
+  .user-bubble-name {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .user-bubble-sep {
+    color: var(--color-border-emphasis);
+    font-size: 11px;
+  }
+
+  .user-bubble-time {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    color: var(--color-text-muted);
   }
 
   .msg-bubble {
