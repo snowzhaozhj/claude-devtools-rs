@@ -34,11 +34,14 @@
   --chat-user-border: #c8c5bb;
   --chat-user-shadow: 0 1px 2px rgba(60, 55, 45, 0.06);
 
-  /* Task notif（嵌在 user bubble 内的子行）专属 bg/border：
-     SHALL 对 chat-user-bg 达到 ≥ 1.5 对比度（codex 二审硬阈值）。
-     浅色 #b8b5a9 (L 0.475) vs chat-user-bg #e8e6df (L 0.815) → 1.65 ✓ */
+  /* Task notif（嵌在 user bubble 内的子行）专属 bg/border + 内部文字 token：
+     SHALL 对 chat-user-bg ≥ 1.5（bg 识别）、内部文字 vs task-notif-bg ≥ 4.5（WCAG AA）。
+     浅色实测：bg #b8b5a9 vs chat-user-bg #e8e6df = 1.645；
+              text  #1c1b19 (color-text) vs #b8b5a9 = 8.36；
+              meta  #3d3b36 vs #b8b5a9 = 4.91。 */
   --task-notif-bg: #b8b5a9;
   --task-notif-border: #978f80;
+  --task-notif-meta-text: #3d3b36;
 
   /* Tool items */
   --tool-item-name: #3d3b36;
@@ -249,9 +252,11 @@
   --chat-user-text: #c5d0c8;
   --chat-user-border: #485448;
 
-  /* Task notif 深色变体：vs chat-user-bg #2e3330 (L 0.039) → #0a0a0a (L 0.0026) 1.71 ✓ */
+  /* Task notif 深色变体：bg #0a0a0a vs chat-user-bg #2e3330 = 1.539；
+     内部 text #e8e6e1 (color-text) vs #0a0a0a = 14.6；meta #a8a5a0 vs #0a0a0a = 8.40。 */
   --task-notif-bg: #0a0a0a;
   --task-notif-border: #2a2a27;
+  --task-notif-meta-text: #a8a5a0;
   --chat-user-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 
   --tool-item-name: #e0ded9;
@@ -379,6 +384,7 @@
     /* Task notif 深色 system 变体（同 [data-theme="dark"]） */
     --task-notif-bg: #0a0a0a;
     --task-notif-border: #2a2a27;
+    --task-notif-meta-text: #a8a5a0;
 
     --tool-item-name: #e0ded9;
     --tool-item-summary: #a8a5a0;

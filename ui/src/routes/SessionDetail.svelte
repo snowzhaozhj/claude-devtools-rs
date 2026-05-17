@@ -989,8 +989,10 @@
      (6/10 而非 banner 10/14) 避免与 user bubble 自己的 10/14 padding 形成
      双层 frame 视觉肥肿。bg 走专属 --task-notif-bg/border 而非 card-bg：
      card-bg vs chat-user-bg 实测浅 1.185 / 深 1.456 均 < 1.5 阈值人眼难辨
-     （codex 二审 V2 #1 实测）。专属 token 浅 #b8b5a9 vs chat-user-bg
-     #e8e6df = 1.65、深 #0a0a0a vs #2e3330 = 1.71，跨主题都 ≥ 1.5。 */
+     （codex V2 #1）。专属 token 浅 #b8b5a9 vs #e8e6df = 1.645、深 #0a0a0a
+     vs #2e3330 = 1.539（codex V3 修正深色实测值），跨主题都 ≥ 1.5。
+     内部文字用 --color-text + --task-notif-meta-text，于 task-notif-bg 上
+     WCAG AA ≥ 4.5（codex V3 #4）。 */
   .task-notif {
     display: flex;
     align-items: flex-start;
@@ -1021,7 +1023,7 @@
   .task-notif-name {
     font-size: 12px;
     font-weight: 500;
-    color: var(--color-text-secondary);
+    color: var(--color-text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1032,7 +1034,7 @@
     align-items: center;
     gap: 8px;
     font-size: 10px;
-    color: var(--color-text-muted);
+    color: var(--task-notif-meta-text);
   }
 
   .task-notif-status { text-transform: capitalize; }
