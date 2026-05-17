@@ -757,7 +757,10 @@
      全局 token 体系；其他组件复用项目 token 不变。 */
   .sidebar {
     --sidebar-accent: #1d4ed8;
-    --sidebar-active-outline: var(--color-accent-blue-hover);
+    /* 持久选中 indicator 走暖中性色 —— Focus Blue 留给瞬时焦点 + ongoing/live
+       （DESIGN.md `The Persistent Selection Is Quiet Rule`）。indicator on
+       sidebar bg ≈4.5:1（浅）/ 5.2:1（深），≥WCAG 1.4.11 非文本 3:1。 */
+    --sidebar-active-indicator: var(--color-text-secondary);
     --sidebar-pinned: #4338ca;
     position: relative;
     height: 100%;
@@ -771,14 +774,12 @@
 
   :global([data-theme="dark"]) .sidebar {
     --sidebar-accent: #93c5fd;
-    --sidebar-active-outline: var(--color-accent-blue);
     --sidebar-pinned: #a5b4fc;
   }
 
   @media (prefers-color-scheme: dark) {
     :global([data-theme="system"]) .sidebar {
       --sidebar-accent: #93c5fd;
-      --sidebar-active-outline: var(--color-accent-blue);
       --sidebar-pinned: #a5b4fc;
     }
   }
@@ -1061,23 +1062,28 @@
     background: var(--tool-item-hover-bg);
   }
 
-  /* 选中态：用 surface-overlay 比 hover 的 raised 再深一档 + 1px
-     accent outline + title 字重 700 ink-text 三重信号。原 3px 灰
-     stripe 在暖灰 sidebar 背景上几乎被吃掉；纯背景层级差在深色
-     主题（#333330 vs sidebar #232321 ≈ 1.24:1）远低于 WCAG 1.4.11
-     非文本对比要求 3:1，因此引入 1px outline 提供跨主题稳定信号——
-     outline 不占 box-model 空间（offset:-1 内贴边），不构成 impeccable
-     禁止的 "side-stripe > 1px colored accent"（限单边 & >1px），是受
-     认可的 a11y indicator 形态。outline 色走 --sidebar-active-outline
-     （浅 #2563eb / 深 #60a5fa）保证 ≥3:1。 */
+  /* 选中态：左 2px 暖中性 indicator + surface-overlay 加深背景 +
+     标题字重 600。**完全去蓝**——sidebar 列表选中是"持久态"（用户
+     切换后一直存在直到下次切换），不是"瞬时焦点"，不应使用 Focus
+     Blue。Focus Blue 留给瞬时焦点 + ongoing/live（DESIGN.md
+     `The Persistent Selection Is Quiet Rule` + `The Ongoing Owns
+     Blue Rule`）。历史迭代：原 1px 蓝 outline → 2px 蓝 indicator →
+     2px 暖中性 indicator —— 前两版蓝色都让选中行视觉权重持续盖过
+     SessionDetail 头部主标题；本版让 sidebar 完全脱离 Focus Blue
+     语义。
+     三通道信号（任两条 ≥3:1 即满足"持久选中"合规模式）：
+     - 暖中性 indicator (#6b6964 浅 / #a8a5a0 深) on sidebar bg
+       ≈4.5:1 / 5.2:1，超 WCAG 1.4.11 非文本 3:1。
+     - bg surface-overlay 比 hover 加深一档，提供 tonal layering。
+     - title 字重 600，与 hover 的默认 400 拉开。
+     box-shadow inset 不占 box-model 空间，不触发 reflow。 */
   .session-item-active {
     background: var(--color-surface-overlay);
-    outline: 1px solid var(--sidebar-active-outline);
-    outline-offset: -1px;
+    box-shadow: inset 2px 0 0 var(--sidebar-active-indicator);
   }
   .session-item-active .session-title-text {
     color: var(--color-text);
-    font-weight: 700;
+    font-weight: 600;
   }
 
   .session-item-hidden {
