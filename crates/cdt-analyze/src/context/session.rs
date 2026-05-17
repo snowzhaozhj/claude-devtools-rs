@@ -99,13 +99,15 @@ pub fn process_session_context_with_phases(
 
                 // start new phase
                 current_phase_number += 1;
-                current_phase_compact_group_id = Some(compact.uuid.clone());
+                // 用 chunk_id 而非 uuid——前端 ContextPanel 通过 chunk_id 在 DOM
+                // 锚定 compact 节点，delta map key 与之对齐才能反查。
+                current_phase_compact_group_id = Some(compact.chunk_id.clone());
                 current_phase_first_ai_group_id = None;
                 current_phase_last_ai_group_id = None;
                 // last_ai_group_before_compact 刻意不 reset
             }
             Chunk::Ai(ai) => {
-                let ai_group_id = ai_chunk_id(ai, turn_index);
+                let ai_group_id = ai_chunk_id(ai);
 
                 let result = compute_context_stats(&ComputeStatsParams {
                     ai_chunk: ai,
@@ -207,14 +209,16 @@ pub fn process_session_context_with_phases(
     }
 }
 
-/// 给 `AIChunk` 分配一个稳定的 id。
+/// 复用 `AIChunk.chunk_id`（由 `chunk/builder.rs::next_ai_chunk_id` 统一生成，
+/// 形如 `ai:<base>:<n>`，已通过全局 `used_chunk_ids: HashSet<String>` 做
+/// collision-free 兜底）。这让 `ContextInjection.aiGroupId` 与前端 chunk DOM
+/// 锚点 `data-chunk-id` 字节级相等，无需任何映射层。
 ///
-/// `AIChunk` 在 `cdt-core` 里目前不带 id 字段，这里用第一条 response 的
-/// uuid 作为 key；没有 response 时退化为 `ai-<turn_index>`。
-fn ai_chunk_id(ai: &AIChunk, turn_index: u32) -> String {
-    ai.responses
-        .first()
-        .map_or_else(|| format!("ai-{turn_index}"), |r| r.uuid.clone())
+/// spec：`openspec/specs/context-tracking/spec.md` — "Expose context stats to
+/// display surfaces" Requirement 的 `aiGroupId equals the corresponding AIChunk
+/// chunkId` Scenario。
+fn ai_chunk_id(ai: &AIChunk) -> String {
+    ai.chunk_id.clone()
 }
 
 fn assistant_total_tokens(resp: &AssistantResponse) -> Option<u64> {

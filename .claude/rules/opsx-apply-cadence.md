@@ -4,6 +4,10 @@ port 内任何多步改动必须按固定流水线推进，**不得**把 PostToo
 
 ## 节拍
 
+### Propose → Apply 之间：design 阶段 codex 二审（硬约束）
+
+`/opsx:propose` 写完 design.md / spec delta / tasks.md，validate strict 过之后，**进 `/opsx:apply` 之前** SHALL 按 `.claude/rules/codex-usage.md` 第 3 节判断条件决定是否调 codex 二审。任一命中即调（IPC 字段改 / 跨 capability / 性能关键 / 状态机 / UI 重构 / BREAKING）。codex 报问题 → 修 design / spec / tasks 三处文档 → re-validate strict → 才进 apply。**不要**靠 reviewer 在 PR 阶段发现 design 漏洞——那时代码已扩散，回炉成本是 design 阶段拦下的 10×。
+
 ### 业务推进段
 
 1. `Edit` 源文件（可并行）

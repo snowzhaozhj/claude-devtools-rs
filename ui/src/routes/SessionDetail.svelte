@@ -17,7 +17,10 @@
   import { getTeamColorSet } from "../lib/teamColors";
   import SearchBar from "../components/SearchBar.svelte";
   import ContextPanel from "../components/ContextPanel.svelte";
-  import { extractContext } from "../lib/contextExtractor";
+  import {
+    parseInjections,
+    selectActivePhaseInjections,
+  } from "../lib/contextExtractor";
   import OngoingBanner from "../components/OngoingBanner.svelte";
   import SessionDetailSkeleton from "../components/SessionDetailSkeleton.svelte";
   import ImageBlock from "../components/ImageBlock.svelte";
@@ -322,8 +325,70 @@
   // `LastOutputDisplay.tsx` 的 `isLastGroup && isSessionOngoing` 语义——
   // banner 占 lastOutput 坑位，不作为独立节点追加到对话流尾部，从而避免
   // ongoing 切换时 scrollHeight 跳变引起的闪烁。
-  const contextEntries = $derived(detail ? extractContext(detail) : []);
-  const contextCount = $derived(contextEntries.length);
+  // ContextPanel 的徽标 / Header count 用"Latest 视图"injection 数；Phase Selector
+  // 切到旧 phase 是 panel 内部状态，不影响顶栏徽标。
+  const contextInjectionsLatest = $derived(
+    detail ? selectActivePhaseInjections(detail, null) : [],
+  );
+  const contextCount = $derived(contextInjectionsLatest.length);
+
+  // Context Panel → SessionDetail 锚点跳转 helpers。
+  // spec: session-display "Context Panel turn 锚点导航"。
+  async function handleNavigateToChunk(chunkId: string) {
+    if (!expandedChunks.has(chunkId)) {
+      expandedChunks = new Set([...expandedChunks, chunkId]);
+    }
+    await tick();
+    const el = conversationEl?.querySelector<HTMLElement>(
+      `[data-chunk-id="${cssEscape(chunkId)}"]`,
+    );
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  async function handleNavigateToTool(chunkId: string, toolUseId: string) {
+    if (!expandedChunks.has(chunkId)) {
+      expandedChunks = new Set([...expandedChunks, chunkId]);
+    }
+    await tick();
+    // 二次 tick 等 tool 子节点渲染完
+    await tick();
+    const el = conversationEl?.querySelector<HTMLElement>(
+      `[data-tool-use-id="${cssEscape(toolUseId)}"]`,
+    );
+    if (el) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    } else {
+      // tool 节点找不到（如 OMIT 路径），退化为滚到 chunk
+      const chunkEl = conversationEl?.querySelector<HTMLElement>(
+        `[data-chunk-id="${cssEscape(chunkId)}"]`,
+      );
+      chunkEl?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }
+
+  function handleNavigateToUserGroup(aiGroupId: string) {
+    if (!detail) return;
+    const aiIdx = detail.chunks.findIndex((c) => c.chunkId === aiGroupId);
+    if (aiIdx < 0) {
+      // 找不到对应 AIChunk，无法定位
+      return;
+    }
+    // 向前找紧邻的 UserChunk
+    for (let i = aiIdx - 1; i >= 0; i--) {
+      if (detail.chunks[i].kind === "user") {
+        void handleNavigateToChunk(detail.chunks[i].chunkId);
+        return;
+      }
+    }
+    // fallback：滚到 AIChunk 本身
+    void handleNavigateToChunk(aiGroupId);
+  }
+
+  /** 简化 CSS.escape：转义 querySelector 用的 `"` 与 `\`。chunkId / toolUseId 实际只
+   *  含字母数字 + `:` + `-`，不会有这些字符，但加 guard 以防上游 uuid 含特殊符号。 */
+  function cssEscape(s: string): string {
+    return s.replace(/["\\]/g, (m) => "\\" + m);
+  }
 
   const lastAiIndex = $derived.by(() => {
     if (!detail) return -1;
@@ -545,7 +610,7 @@
         {@const images = uimages(chunk.content, chunk.uuid)}
         {@const taskNotifications = parseTaskNotifications(chunk.content)}
         {#if text || images.length > 0 || taskNotifications.length > 0}
-          <div class="msg-row msg-row-user msg-row-contained">
+          <div class="msg-row msg-row-user msg-row-contained" data-chunk-id={chunk.chunkId}>
             <div class="msg-spacer"></div>
             <div class="user-stack">
               <!-- meta row 外置在 bubble 上方，右边缘紧贴 conversation 内右
@@ -628,7 +693,7 @@
         {@const headerCacheRead = lastUsage?.cache_read_input_tokens ?? 0}
         {@const headerCacheCreation = lastUsage?.cache_creation_input_tokens ?? 0}
         {@const aiTotalTokens = headerInputTokens + headerOutputTokens + headerCacheRead + headerCacheCreation}
-        <div class="msg-row msg-row-ai">
+        <div class="msg-row msg-row-ai" data-chunk-id={chunk.chunkId}>
           <div
             class="msg-ai-container"
             class:msg-ai-container-live={isLiveTail}
@@ -718,31 +783,33 @@
                     {@const exec = item.execution}
                     {@const key = `${chunk.chunkId}-tool-${exec.toolUseId}`}
                     {@const eff = effectiveExec(exec)}
-                    <BaseItem
-                      svgIcon={WRENCH}
-                      label={exec.toolName}
-                      summary={getToolSummary(exec.toolName, exec.input)}
-                      tokenCount={getToolContextTokens(exec)}
-                      status={getToolStatus(exec)}
-                      durationMs={getToolDurationMs(exec)}
-                      pendingLabel={isToolPending(exec) ? "pending" : undefined}
-                      isExpanded={expandedItems.has(key)}
-                      onclick={() => toggle(key, exec)}
-                    >
-                      {#snippet children()}
-                        {#if isReadTool(exec)}
-                          <ReadToolViewer exec={eff} />
-                        {:else if isEditTool(exec)}
-                          <EditToolViewer exec={eff} />
-                        {:else if isWriteTool(exec)}
-                          <WriteToolViewer exec={eff} />
-                        {:else if isBashTool(exec)}
-                          <BashToolViewer exec={eff} />
-                        {:else}
-                          <DefaultToolViewer exec={eff} />
-                        {/if}
-                      {/snippet}
-                    </BaseItem>
+                    <div data-tool-use-id={exec.toolUseId}>
+                      <BaseItem
+                        svgIcon={WRENCH}
+                        label={exec.toolName}
+                        summary={getToolSummary(exec.toolName, exec.input)}
+                        tokenCount={getToolContextTokens(exec)}
+                        status={getToolStatus(exec)}
+                        durationMs={getToolDurationMs(exec)}
+                        pendingLabel={isToolPending(exec) ? "pending" : undefined}
+                        isExpanded={expandedItems.has(key)}
+                        onclick={() => toggle(key, exec)}
+                      >
+                        {#snippet children()}
+                          {#if isReadTool(exec)}
+                            <ReadToolViewer exec={eff} />
+                          {:else if isEditTool(exec)}
+                            <EditToolViewer exec={eff} />
+                          {:else if isWriteTool(exec)}
+                            <WriteToolViewer exec={eff} />
+                          {:else if isBashTool(exec)}
+                            <BashToolViewer exec={eff} />
+                          {:else}
+                            <DefaultToolViewer exec={eff} />
+                          {/if}
+                        {/snippet}
+                      </BaseItem>
+                    </div>
                   {:else if item.type === "thinking"}
                     {@const key = `${chunk.chunkId}-think-${di_idx}`}
                     <BaseItem
@@ -831,7 +898,7 @@
       {:else if chunk.kind === "system"}
         {@const sysText = cleanDisplayText(chunk.contentText)}
         {#if sysText}
-          <div class="msg-row msg-row-system-left msg-row-contained">
+          <div class="msg-row msg-row-system-left msg-row-contained" data-chunk-id={chunk.chunkId}>
             <div class="system-block">
               <div class="system-header">
                 <svg class="system-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={TERMINAL}/></svg>
@@ -850,7 +917,7 @@
         {@const compactText = cleanDisplayText(chunk.summaryText)}
         {@const isCompactExpanded = expandedCompacts.has(chunk.chunkId)}
         {@const td = chunk.tokenDelta}
-        <div class="msg-row msg-row-compact msg-row-contained">
+        <div class="msg-row msg-row-compact msg-row-contained" data-chunk-id={chunk.chunkId}>
           <div class="compact-block">
             <button
               type="button"
@@ -885,8 +952,14 @@
     {/each}
   </div>
 
-  {#if contextPanelVisible && contextCount > 0}
-    <ContextPanel entries={contextEntries} onClose={() => contextPanelVisible = false} />
+  {#if contextPanelVisible && contextCount > 0 && detail}
+    <ContextPanel
+      {detail}
+      onClose={() => (contextPanelVisible = false)}
+      onNavigateToChunk={handleNavigateToChunk}
+      onNavigateToTool={handleNavigateToTool}
+      onNavigateToUserGroup={handleNavigateToUserGroup}
+    />
   {/if}
   </div>
 {/if}

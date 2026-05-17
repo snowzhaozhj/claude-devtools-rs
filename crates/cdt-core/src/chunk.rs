@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn user_chunk_roundtrip() {
         roundtrip(&Chunk::User(UserChunk {
-            chunk_id: "u1".into(),
+            chunk_id: "u1:0".into(),
             uuid: "u1".into(),
             timestamp: ts(),
             duration_ms: None,
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn ai_chunk_roundtrip() {
         roundtrip(&Chunk::Ai(AIChunk {
-            chunk_id: "ai:a1:0".into(),
+            chunk_id: "a1:0".into(),
             timestamp: ts(),
             duration_ms: Some(120),
             responses: Vec::new(),
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn ai_chunk_default_teammate_messages_empty() {
-        let json = r#"{"kind":"ai","chunkId":"ai:a1:0","timestamp":"2026-04-19T00:00:00Z","durationMs":null,"responses":[],"metrics":{},"semanticSteps":[],"toolExecutions":[],"subagents":[],"slashCommands":[]}"#;
+        let json = r#"{"kind":"ai","chunkId":"a1:0","timestamp":"2026-04-19T00:00:00Z","durationMs":null,"responses":[],"metrics":{},"semanticSteps":[],"toolExecutions":[],"subagents":[],"slashCommands":[]}"#;
         let chunk: Chunk = serde_json::from_str(json).unwrap();
         let Chunk::Ai(ai) = chunk else {
             panic!("expected AI chunk");
@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn ai_chunk_empty_teammate_messages_omitted_in_json() {
         let chunk = AIChunk {
-            chunk_id: "ai:a1:0".into(),
+            chunk_id: "a1:0".into(),
             timestamp: ts(),
             duration_ms: None,
             responses: Vec::new(),
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn system_chunk_roundtrip() {
         roundtrip(&Chunk::System(SystemChunk {
-            chunk_id: "s1".into(),
+            chunk_id: "s1:0".into(),
             uuid: "s1".into(),
             timestamp: ts(),
             duration_ms: None,
@@ -484,7 +484,7 @@ mod tests {
     #[test]
     fn compact_chunk_roundtrip() {
         roundtrip(&Chunk::Compact(CompactChunk {
-            chunk_id: "c1".into(),
+            chunk_id: "c1:0".into(),
             uuid: "c1".into(),
             timestamp: ts(),
             duration_ms: None,
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn compact_chunk_with_derived_camelcase_roundtrip() {
         let c = CompactChunk {
-            chunk_id: "c1".into(),
+            chunk_id: "c1:0".into(),
             uuid: "c1".into(),
             timestamp: ts(),
             duration_ms: None,

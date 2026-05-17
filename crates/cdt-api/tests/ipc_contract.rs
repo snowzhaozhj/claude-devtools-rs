@@ -1722,3 +1722,188 @@ fn session_summary_skips_worktree_fields_when_none() {
         "worktreeId/Name 为 None 时 SHALL 不出现在序列化输出（skip_serializing_if）"
     );
 }
+
+// =============================================================================
+// Schema-level: SessionDetail.phaseInfo + injectionsByPhase
+// =============================================================================
+
+/// 单 phase 会话：`injectionsByPhase` 含 key `"1"`，等价于 `contextInjections`。
+#[test]
+fn session_detail_single_phase_injections_by_phase_equals_context_injections() {
+    use cdt_api::SessionDetail;
+    let inj = serde_json::to_value(ContextInjection::UserMessage(UserMessageInjection {
+        id: "u1".into(),
+        turn_index: 0,
+        ai_group_id: "a:0".into(),
+        estimated_tokens: 2,
+        text_preview: "hi".into(),
+    }))
+    .unwrap();
+    let mut by_phase = serde_json::Map::new();
+    by_phase.insert("1".to_string(), json!([inj.clone()]));
+    let phase_info = json!({
+        "phases": [{"phaseNumber": 1, "firstAiGroupId": "a:0", "lastAiGroupId": "a:0"}],
+        "compactionCount": 0,
+        "aiGroupPhaseMap": {"a:0": 1},
+        "compactionTokenDeltas": {},
+    });
+    let detail = SessionDetail {
+        session_id: "s1".into(),
+        project_id: "p1".into(),
+        chunks: serde_json::Value::Array(vec![]),
+        metrics: json!({}),
+        metadata: json!({}),
+        context_injections: json!([inj.clone()]),
+        injections_by_phase: serde_json::Value::Object(by_phase),
+        phase_info,
+        is_ongoing: false,
+    };
+    let json_val = serde_json::to_value(&detail).unwrap();
+    assert_eq!(json_val["injectionsByPhase"]["1"], json!([inj]));
+    assert_eq!(
+        json_val["injectionsByPhase"]["1"], json_val["contextInjections"],
+        "Latest phase 的 injectionsByPhase[N] SHALL 等于 contextInjections"
+    );
+    assert_eq!(json_val["phaseInfo"]["phases"][0]["phaseNumber"], json!(1));
+    assert!(
+        json_val
+            .as_object()
+            .unwrap()
+            .contains_key("injectionsByPhase"),
+        "injectionsByPhase MUST 以 camelCase 序列化"
+    );
+}
+
+/// 多 phase 会话：Phase 1 的 injections 在 compact 后不丢失，仍在 `injectionsByPhase["1"]`。
+#[test]
+fn session_detail_multi_phase_preserves_phase1_injections() {
+    use cdt_api::SessionDetail;
+    let phase1_inj =
+        serde_json::to_value(ContextInjection::MentionedFile(MentionedFileInjection {
+            id: "m1".into(),
+            path: "/p/file.rs".into(),
+            display_name: "file.rs".into(),
+            estimated_tokens: 10,
+            first_seen_turn_index: 0,
+            first_seen_in_group: "a:0".into(),
+            exists: true,
+        }))
+        .unwrap();
+    let phase2_inj = serde_json::to_value(ContextInjection::ToolOutput(ToolOutputInjection {
+        id: "t1".into(),
+        turn_index: 1,
+        ai_group_id: "b:0".into(),
+        estimated_tokens: 50,
+        tool_count: 1,
+        tool_breakdown: vec![],
+    }))
+    .unwrap();
+    let mut by_phase = serde_json::Map::new();
+    by_phase.insert("1".into(), json!([phase1_inj.clone()]));
+    by_phase.insert("2".into(), json!([phase2_inj.clone()]));
+    let phase_info = json!({
+        "phases": [
+            {"phaseNumber": 1, "firstAiGroupId": "a:0", "lastAiGroupId": "a:0"},
+            {"phaseNumber": 2, "firstAiGroupId": "b:0", "lastAiGroupId": "b:0", "compactGroupId": "c:0"},
+        ],
+        "compactionCount": 1,
+        "aiGroupPhaseMap": {"a:0": 1, "b:0": 2},
+        "compactionTokenDeltas": {},
+    });
+    let detail = SessionDetail {
+        session_id: "s2".into(),
+        project_id: "p1".into(),
+        chunks: serde_json::Value::Array(vec![]),
+        metrics: json!({}),
+        metadata: json!({}),
+        context_injections: json!([phase2_inj.clone()]), // = latest phase
+        injections_by_phase: serde_json::Value::Object(by_phase),
+        phase_info,
+        is_ongoing: false,
+    };
+    let json_val = serde_json::to_value(&detail).unwrap();
+    // Round-trip 反序列化保持字节级相等
+    let back: SessionDetail = serde_json::from_value(json_val.clone()).unwrap();
+    let json_back = serde_json::to_value(&back).unwrap();
+    assert_eq!(json_val, json_back, "SessionDetail round-trip MUST 等价");
+    // Phase 1 injection MUST 在 injectionsByPhase["1"]，contextInjections 应只含 Phase 2
+    assert_eq!(json_val["injectionsByPhase"]["1"], json!([phase1_inj]));
+    assert_eq!(json_val["injectionsByPhase"]["2"], json!([phase2_inj]));
+    assert_eq!(
+        json_val["contextInjections"],
+        json_val["injectionsByPhase"]["2"]
+    );
+}
+
+/// `chunk_id` 形态统一：所有 chunk 类型首次出现都用 `<base>:0`，无 `ai:` 前缀。
+#[test]
+fn chunk_id_format_is_unified_base_colon_n() {
+    // 构造 4 类 chunk，断言其 chunk_id 形态符合统一规则
+    let ai = AIChunk {
+        chunk_id: "abc:0".into(),
+        timestamp: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        duration_ms: None,
+        responses: vec![],
+        metrics: ChunkMetrics::zero(),
+        semantic_steps: vec![],
+        tool_executions: vec![],
+        subagents: vec![],
+        slash_commands: vec![],
+        teammate_messages: vec![],
+    };
+    let user = UserChunk {
+        chunk_id: "u:0".into(),
+        uuid: "u".into(),
+        timestamp: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        duration_ms: None,
+        content: MessageContent::Text("hi".into()),
+        metrics: ChunkMetrics::zero(),
+    };
+    let sys = SystemChunk {
+        chunk_id: "s:0".into(),
+        uuid: "s".into(),
+        timestamp: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        duration_ms: None,
+        content_text: "init".into(),
+        metrics: ChunkMetrics::zero(),
+    };
+    let compact = CompactChunk {
+        chunk_id: "c:0".into(),
+        uuid: "c".into(),
+        timestamp: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        duration_ms: None,
+        summary_text: "x".into(),
+        metrics: ChunkMetrics::zero(),
+        token_delta: None,
+        phase_number: None,
+    };
+    let chunks = [
+        Chunk::Ai(ai),
+        Chunk::User(user),
+        Chunk::System(sys),
+        Chunk::Compact(compact),
+    ];
+    for chunk in &chunks {
+        let chunk_id = match chunk {
+            Chunk::Ai(c) => &c.chunk_id,
+            Chunk::User(c) => &c.chunk_id,
+            Chunk::System(c) => &c.chunk_id,
+            Chunk::Compact(c) => &c.chunk_id,
+        };
+        // 形态 <base>:<n>：含恰好一个或多个 ':' 分隔的最后段必须是十进制
+        let last_colon = chunk_id.rfind(':').expect("chunk_id MUST 含 ':' 分隔符");
+        let (base, tail) = chunk_id.split_at(last_colon);
+        assert!(!base.is_empty(), "chunk_id {chunk_id:?} base 段不能为空");
+        assert!(
+            tail.strip_prefix(':')
+                .unwrap_or("")
+                .chars()
+                .all(|c| c.is_ascii_digit()),
+            "chunk_id {chunk_id:?} 最后段必须为十进制 n"
+        );
+        assert!(
+            !chunk_id.starts_with("ai:"),
+            "chunk_id {chunk_id:?} MUST NOT 含 ai: 类型前缀"
+        );
+    }
+}

@@ -1,46 +1,143 @@
 <script lang="ts">
-  import { groupByCategory, categoryLabel, CATEGORY_COLORS, type ContextCategory, type ContextEntry } from "../lib/contextExtractor";
-  import DirectoryTree from "./DirectoryTree.svelte";
+  import {
+    parseInjections,
+    selectActivePhaseInjections,
+    sumTokens,
+    formatTokens,
+    CATEGORY_COLORS,
+    type ContextInjection,
+  } from "../lib/contextExtractor";
+  import type { SessionDetail } from "../lib/api";
+  import UserMessagesSection from "./contextPanel/UserMessagesSection.svelte";
+  import ClaudeMdFilesSection from "./contextPanel/ClaudeMdFilesSection.svelte";
+  import MentionedFilesSection from "./contextPanel/MentionedFilesSection.svelte";
+  import ToolOutputsSection from "./contextPanel/ToolOutputsSection.svelte";
+  import TaskCoordinationSection from "./contextPanel/TaskCoordinationSection.svelte";
+  import ThinkingTextSection from "./contextPanel/ThinkingTextSection.svelte";
+  import PhaseSelector from "./contextPanel/PhaseSelector.svelte";
 
   interface Props {
-    entries: ContextEntry[];
+    detail: SessionDetail;
     onClose: () => void;
+    onNavigateToChunk: (chunkId: string) => void;
+    onNavigateToTool: (chunkId: string, toolUseId: string) => void;
+    onNavigateToUserGroup: (aiGroupId: string) => void;
   }
 
-  let { entries, onClose }: Props = $props();
+  let { detail, onClose, onNavigateToChunk, onNavigateToTool, onNavigateToUserGroup }: Props =
+    $props();
 
   type ViewMode = "category" | "ranked";
+  type RankedMode = "grouped" | "flat";
   let viewMode: ViewMode = $state("category");
-  let collapsedCategories: Set<ContextCategory> = $state(new Set());
+  let rankedMode: RankedMode = $state("grouped");
 
-  const grouped = $derived(groupByCategory(entries));
-  const totalTokens = $derived(entries.reduce((sum, e) => sum + e.estimatedTokens, 0));
-  const rankedEntries = $derived([...entries].sort((a, b) => b.estimatedTokens - a.estimatedTokens));
+  // Phase 切换：null = Latest
+  let selectedPhase: number | null = $state(null);
 
-  // claude-md 条目单独提取用于 DirectoryTree
-  const claudeMdEntries = $derived(
-    entries.filter(e => e.categoryKey === "claude-md")
-  );
-  const mentionedFileEntries = $derived(
-    entries.filter(e => e.categoryKey === "mentioned-file")
+  // 默认展开所有 Section（对齐 TS 原版）
+  type SectionKey = "user" | "claudemd" | "mentioned" | "tool" | "task" | "thinking";
+  let expandedSections: Set<SectionKey> = $state(
+    new Set<SectionKey>(["user", "claudemd", "mentioned", "tool", "task", "thinking"]),
   );
 
-  const categories: ContextCategory[] = ["user", "claudemd", "tools", "system", "thinking", "task"];
-
-  function toggleCategory(cat: ContextCategory) {
-    const n = new Set(collapsedCategories);
-    if (n.has(cat)) n.delete(cat); else n.add(cat);
-    collapsedCategories = n;
+  function toggleSection(key: SectionKey) {
+    const n = new Set(expandedSections);
+    if (n.has(key)) n.delete(key);
+    else n.add(key);
+    expandedSections = n;
   }
 
-  function fk(n: number): string {
-    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-    if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
-    return String(n);
+  // 按 phase 过滤的当前 injections（D5b：直接从 injectionsByPhase 取）
+  const injections = $derived(selectActivePhaseInjections(detail, selectedPhase));
+
+  const totalTokens = $derived(sumTokens(injections));
+
+  // 按 category 分组（Category 视图各 Section 用）
+  const claudeMd = $derived(
+    injections.filter((i): i is Extract<ContextInjection, { category: "claude-md" }> =>
+      i.category === "claude-md",
+    ),
+  );
+  const mentionedFiles = $derived(
+    injections.filter((i): i is Extract<ContextInjection, { category: "mentioned-file" }> =>
+      i.category === "mentioned-file",
+    ),
+  );
+  const toolOutputs = $derived(
+    injections.filter((i): i is Extract<ContextInjection, { category: "tool-output" }> =>
+      i.category === "tool-output",
+    ),
+  );
+  const thinkingTexts = $derived(
+    injections.filter((i): i is Extract<ContextInjection, { category: "thinking-text" }> =>
+      i.category === "thinking-text",
+    ),
+  );
+  const taskCoordinations = $derived(
+    injections.filter((i): i is Extract<ContextInjection, { category: "task-coordination" }> =>
+      i.category === "task-coordination",
+    ),
+  );
+  const userMessages = $derived(
+    injections.filter((i): i is Extract<ContextInjection, { category: "user-message" }> =>
+      i.category === "user-message",
+    ),
+  );
+
+  // Ranked 视图
+  const ranked = $derived([...injections].sort((a, b) => b.estimatedTokens - a.estimatedTokens));
+  const rankedGrouped = $derived(() => {
+    // 按 category 分块，块内按 token 降序
+    const buckets = new Map<ContextInjection["category"], ContextInjection[]>();
+    for (const inj of ranked) {
+      const list = buckets.get(inj.category) ?? [];
+      list.push(inj);
+      buckets.set(inj.category, list);
+    }
+    return Array.from(buckets.entries());
+  });
+
+  // Phase Selector 相关
+  const phases = $derived(detail.phaseInfo?.phases ?? []);
+  const showPhaseSelector = $derived(phases.length > 1);
+
+  // injection 跳转到 user-message 时走 user group helper
+  function navigateUserMessage(aiGroupId: string) {
+    onNavigateToUserGroup(aiGroupId);
   }
 
-  function categoryTokens(items: ContextEntry[]): number {
-    return items.reduce((sum, e) => sum + e.estimatedTokens, 0);
+  function rowLabel(inj: ContextInjection): string {
+    switch (inj.category) {
+      case "claude-md":
+        return inj.displayName || inj.path;
+      case "mentioned-file":
+        return inj.displayName || inj.path;
+      case "tool-output":
+        return inj.toolBreakdown.map((b) => b.toolName).join(", ") || `${inj.toolCount} tools`;
+      case "thinking-text":
+        return `Turn ${inj.turnIndex + 1} thinking/text`;
+      case "task-coordination":
+        return `Turn ${inj.turnIndex + 1} coordination`;
+      case "user-message":
+        return inj.textPreview || `Turn ${inj.turnIndex + 1}`;
+    }
+  }
+
+  function rowNavigate(inj: ContextInjection) {
+    if (inj.category === "user-message") {
+      onNavigateToUserGroup(inj.aiGroupId);
+      return;
+    }
+    if (inj.category === "claude-md") {
+      // claude-md 没有 aiGroupId，定位不到 chunk——保持 no-op
+      return;
+    }
+    if (inj.category === "mentioned-file") {
+      onNavigateToChunk(inj.firstSeenInGroup);
+      return;
+    }
+    onNavigateToChunk(inj.aiGroupId);
   }
 </script>
 
@@ -57,7 +154,7 @@
           <path d="M16 17H8" />
         </svg>
         <span class="cp-title">Visible Context</span>
-        <span class="cp-count-badge">{entries.length}</span>
+        <span class="cp-count-badge">{injections.length}</span>
       </div>
       <button class="cp-close" onclick={onClose} title="关闭" aria-label="关闭 Context 面板">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -68,14 +165,14 @@
     </div>
     <div class="cp-token-row">
       <span class="cp-token-muted">Visible:</span>
-      <span class="cp-token-value">~{fk(totalTokens)}</span>
+      <span class="cp-token-value">~{formatTokens(totalTokens)}</span>
     </div>
     <div class="cp-mode-row">
       <span class="cp-mode-label">View:</span>
       <button
         class="cp-mode-btn"
         class:cp-mode-active={viewMode === "category"}
-        onclick={() => viewMode = "category"}
+        onclick={() => (viewMode = "category")}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M3 12h18" /><path d="M3 18h18" /></svg>
         Category
@@ -83,88 +180,110 @@
       <button
         class="cp-mode-btn"
         class:cp-mode-active={viewMode === "ranked"}
-        onclick={() => viewMode = "ranked"}
+        onclick={() => (viewMode = "ranked")}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 16 4 4 4-4" /><path d="M7 20V4" /><path d="M11 4h10" /><path d="M11 8h7" /><path d="M11 12h4" /></svg>
         By Size
       </button>
     </div>
+    {#if showPhaseSelector}
+      <PhaseSelector {phases} selected={selectedPhase} onChange={(v) => (selectedPhase = v)} />
+    {/if}
   </div>
 
   <div class="cp-body">
-    {#if viewMode === "category"}
-      <!-- Category 视图 -->
-      {#each categories as cat}
-        {@const catEntries = grouped.get(cat)}
-        {#if catEntries && catEntries.length > 0}
-          {@const isCollapsed = collapsedCategories.has(cat)}
-          <div class="cp-section">
-            <button class="cp-section-header" onclick={() => toggleCategory(cat)} aria-expanded={!isCollapsed}>
-              <span class="cp-section-main">
-                <span class="cp-chevron" class:cp-chevron-open={!isCollapsed}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
-                </span>
-                <span class="cp-section-label">{categoryLabel(cat)}</span>
-                <span class="cp-section-count">{catEntries.length}</span>
-              </span>
-              <span class="cp-section-tokens">~{fk(categoryTokens(catEntries))} tokens</span>
-            </button>
-
-            {#if !isCollapsed}
-              <div class="cp-section-items">
-                {#if cat === "claudemd" && claudeMdEntries.length > 0}
-                  <!-- CLAUDE.md 用 DirectoryTree -->
-                  <div class="cp-context-group">
-                    <div class="cp-sub-label">Loaded instruction files</div>
-                    <DirectoryTree entries={claudeMdEntries} />
-                  </div>
-                  {#if mentionedFileEntries.length > 0}
-                    <div class="cp-context-group cp-context-group-spaced">
-                      <div class="cp-sub-label">Mentioned files</div>
-                      {#each mentionedFileEntries as entry}
-                      <div class="cp-item">
-                        <div class="cp-item-row">
-                          <span class="cp-item-label">{entry.label}</span>
-                          <span class="cp-item-tokens">~{fk(entry.estimatedTokens)}</span>
-                        </div>
-                        <span class="cp-item-preview">{entry.preview}</span>
-                      </div>
-                      {/each}
-                    </div>
-                  {/if}
-                {:else}
-                  {#each catEntries as entry}
-                    <div class="cp-item">
-                      <div class="cp-item-row">
-                        <span class="cp-item-label">{entry.label}</span>
-                        <span class="cp-item-tokens">~{fk(entry.estimatedTokens)}</span>
-                      </div>
-                      <span class="cp-item-preview">{entry.preview}</span>
-                    </div>
-                  {/each}
-                {/if}
-              </div>
-            {/if}
-          </div>
-        {/if}
-      {/each}
-
+    {#if injections.length === 0}
+      <div class="cp-empty">
+        {selectedPhase !== null ? "本 phase 无 injection" : "本会话暂无 context injection"}
+      </div>
+    {:else if viewMode === "category"}
+      <UserMessagesSection
+        injections={userMessages}
+        expanded={expandedSections.has("user")}
+        onToggle={() => toggleSection("user")}
+        onNavigate={navigateUserMessage}
+      />
+      <ClaudeMdFilesSection
+        injections={claudeMd}
+        expanded={expandedSections.has("claudemd")}
+        onToggle={() => toggleSection("claudemd")}
+      />
+      <MentionedFilesSection
+        injections={mentionedFiles}
+        expanded={expandedSections.has("mentioned")}
+        onToggle={() => toggleSection("mentioned")}
+        onNavigate={onNavigateToChunk}
+      />
+      <ToolOutputsSection
+        injections={toolOutputs}
+        expanded={expandedSections.has("tool")}
+        onToggle={() => toggleSection("tool")}
+        onNavigateTool={onNavigateToTool}
+      />
+      <TaskCoordinationSection
+        injections={taskCoordinations}
+        expanded={expandedSections.has("task")}
+        onToggle={() => toggleSection("task")}
+        onNavigate={onNavigateToChunk}
+      />
+      <ThinkingTextSection
+        injections={thinkingTexts}
+        expanded={expandedSections.has("thinking")}
+        onToggle={() => toggleSection("thinking")}
+        onNavigate={onNavigateToChunk}
+      />
     {:else}
       <!-- Ranked 视图 -->
-      <div class="cp-ranked-list">
-        {#each rankedEntries as entry}
-          {@const color = CATEGORY_COLORS[entry.categoryKey]}
-          <div class="cp-ranked-item">
-            {#if color}
+      <div class="cp-ranked-toggle">
+        <button
+          class="cp-ranked-btn"
+          class:cp-ranked-active={rankedMode === "grouped"}
+          onclick={() => (rankedMode = "grouped")}
+        >
+          Grouped
+        </button>
+        <button
+          class="cp-ranked-btn"
+          class:cp-ranked-active={rankedMode === "flat"}
+          onclick={() => (rankedMode = "flat")}
+        >
+          Flat
+        </button>
+      </div>
+
+      {#if rankedMode === "flat"}
+        <div class="cp-ranked-list">
+          {#each ranked as inj (inj.id)}
+            {@const color = CATEGORY_COLORS[inj.category]}
+            <button type="button" class="cp-ranked-item" onclick={() => rowNavigate(inj)}>
               <span class="cp-cat-tag" style:background={color.bg} style:color={color.text}>
                 {color.label}
               </span>
-            {/if}
-            <span class="cp-ranked-label">{entry.label}</span>
-            <span class="cp-ranked-tokens">~{fk(entry.estimatedTokens)}</span>
+              <span class="cp-ranked-label">{rowLabel(inj)}</span>
+              <span class="cp-ranked-tokens">~{formatTokens(inj.estimatedTokens)}</span>
+            </button>
+          {/each}
+        </div>
+      {:else}
+        <!-- Grouped：按 category 分块，块内按 token 降序 -->
+        {#each rankedGrouped() as [cat, items] (cat)}
+          {@const color = CATEGORY_COLORS[cat]}
+          <div class="cp-ranked-bucket">
+            <div class="cp-ranked-bucket-header" style:color={color.text}>
+              <span class="cp-cat-tag" style:background={color.bg} style:color={color.text}>
+                {color.label}
+              </span>
+              <span class="cp-bucket-count">{items.length}</span>
+            </div>
+            {#each items as inj (inj.id)}
+              <button type="button" class="cp-ranked-item cp-ranked-item-grouped" onclick={() => rowNavigate(inj)}>
+                <span class="cp-ranked-label">{rowLabel(inj)}</span>
+                <span class="cp-ranked-tokens">~{formatTokens(inj.estimatedTokens)}</span>
+              </button>
+            {/each}
           </div>
         {/each}
-      </div>
+      {/if}
     {/if}
   </div>
 </aside>
@@ -198,8 +317,7 @@
   .cp-title-wrap,
   .cp-token-row,
   .cp-mode-row,
-  .cp-mode-btn,
-  .cp-section-main {
+  .cp-mode-btn {
     display: flex;
     align-items: center;
   }
@@ -228,8 +346,7 @@
     letter-spacing: 0.01em;
   }
 
-  .cp-count-badge,
-  .cp-section-count {
+  .cp-count-badge {
     border-radius: 5px;
     background: var(--color-surface-overlay, var(--badge-neutral-bg));
     color: var(--color-text-secondary);
@@ -319,7 +436,6 @@
   }
 
   .cp-mode-active {
-    /* rgba fallback 给旧 WebKitGTK（< 2.40）；现代浏览器走 color-mix。 */
     background: rgba(99, 102, 241, 0.18);
     background: color-mix(in oklch, var(--color-accent-indigo) 18%, transparent);
     color: var(--color-accent-indigo);
@@ -335,160 +451,46 @@
     padding: 12px 10px 18px 14px;
   }
 
-  /* ── Category 视图 ── */
-
-  .cp-section {
-    margin-bottom: 8px;
-    overflow: hidden;
-    border: 1px solid var(--color-border-subtle, var(--color-border));
-    border-radius: 8px;
-    background: var(--color-surface-raised);
-  }
-
-  .cp-section-header {
-    width: 100%;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 4px;
-    padding: 8px 10px;
-    cursor: pointer;
-    border: none;
-    background: transparent;
-    color: inherit;
-    font-family: inherit;
-    text-align: left;
-    transition: background 0.1s;
-  }
-
-  .cp-section-header[aria-expanded="true"] {
-    background: var(--color-surface-overlay, var(--tool-item-hover-bg));
-  }
-
-  .cp-section-header:hover {
-    background: var(--tool-item-hover-bg);
-  }
-
-  .cp-section-main {
-    display: grid;
-    grid-template-columns: 14px minmax(0, 1fr) auto;
+  .cp-empty {
+    display: flex;
     align-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .cp-chevron {
-    display: inline-flex;
-    width: 14px;
-    height: 14px;
-    color: var(--color-text-secondary);
-    flex-shrink: 0;
-    transition: transform 0.15s ease;
-  }
-
-  .cp-chevron svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  .cp-chevron-open {
-    transform: rotate(90deg);
-  }
-
-  .cp-section-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--color-text);
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    line-height: 1.25;
-  }
-
-  .cp-section-count {
-    font-size: 11px;
-    flex-shrink: 0;
-  }
-
-  .cp-section-tokens {
-    padding-left: 22px;
-    font-size: 11px;
-    color: var(--color-text-muted);
-    font-family: var(--font-mono);
-    white-space: nowrap;
-    line-height: 1.2;
-  }
-
-  .cp-section-items {
-    padding: 8px 10px 10px 28px;
-    border-top: 1px solid var(--color-border-subtle, var(--color-border));
-    /* surface 42% 半透铺底；旧 WebKitGTK 用 surface-raised 兜底（视觉接近） */
-    background: var(--color-surface-raised);
-    background: color-mix(in srgb, var(--color-surface) 42%, transparent);
-  }
-
-  .cp-context-group {
-    min-width: 0;
-  }
-
-  .cp-context-group-spaced {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--color-border-subtle, var(--color-border));
-  }
-
-  .cp-sub-label {
-    margin-bottom: 5px;
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--color-text-muted);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  .cp-item {
-    padding: 6px 8px;
-    border-radius: 6px;
-    transition: background 0.1s;
-  }
-
-  .cp-item:hover {
-    background: var(--tool-item-hover-bg);
-  }
-
-  .cp-item-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: start;
-    gap: 8px;
-  }
-
-  .cp-item-label {
+    justify-content: center;
+    padding: 40px 16px;
     font-size: 12px;
-    font-weight: 600;
-    color: var(--color-text);
-    min-width: 0;
-    overflow-wrap: anywhere;
-    line-height: 1.3;
-  }
-
-  .cp-item-tokens {
-    font-size: 11px;
     color: var(--color-text-muted);
-    font-family: var(--font-mono);
-    flex-shrink: 0;
-  }
-
-  .cp-item-preview {
-    display: block;
-    font-size: 11px;
-    color: var(--color-text-muted);
-    overflow-wrap: anywhere;
-    line-height: 1.35;
-    margin-top: 4px;
+    text-align: center;
   }
 
   /* ── Ranked 视图 ── */
+
+  .cp-ranked-toggle {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--color-border-subtle, var(--color-border));
+  }
+
+  .cp-ranked-btn {
+    font-size: 10px;
+    font-family: inherit;
+    color: var(--color-text-muted);
+    background: var(--color-surface-overlay, var(--badge-neutral-bg));
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 3px 8px;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+  }
+
+  .cp-ranked-btn:hover {
+    color: var(--color-text-secondary);
+  }
+
+  .cp-ranked-active {
+    background: color-mix(in oklch, var(--color-accent-indigo) 18%, transparent);
+    color: var(--color-accent-indigo);
+  }
 
   .cp-ranked-list {
     display: flex;
@@ -496,21 +498,58 @@
     gap: 6px;
   }
 
+  .cp-ranked-bucket {
+    margin-bottom: 10px;
+  }
+
+  .cp-ranked-bucket-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .cp-bucket-count {
+    color: var(--color-text-muted);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+
   .cp-ranked-item {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
+    width: 100%;
     padding: 7px 9px;
     border: 1px solid var(--color-border-subtle, var(--color-border));
     border-radius: 7px;
     background: var(--color-surface-raised);
+    color: inherit;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
     transition: background 0.1s, border-color 0.1s;
+  }
+
+  .cp-ranked-item-grouped {
+    grid-template-columns: minmax(0, 1fr) auto;
+    border: none;
+    border-radius: 5px;
+    padding: 5px 8px;
+    background: transparent;
   }
 
   .cp-ranked-item:hover {
     background: var(--tool-item-hover-bg);
     border-color: var(--color-border-emphasis);
+  }
+
+  .cp-ranked-item-grouped:hover {
+    background: var(--tool-item-hover-bg);
+    border-color: transparent;
   }
 
   .cp-cat-tag {

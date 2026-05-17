@@ -120,7 +120,7 @@ const archiveSessions = [
 // 主 session（rust-port 的 active）含多种 chunk 类型
 const userChunk: UserChunk = {
   kind: 'user',
-  chunkId: 'u-active-1',
+  chunkId: 'u-active-1:0',
   uuid: 'u-active-1',
   timestamp: ts(0),
   durationMs: null,
@@ -141,7 +141,7 @@ const userChunk: UserChunk = {
 
 const systemChunk: SystemChunk = {
   kind: 'system',
-  chunkId: 's-active-1',
+  chunkId: 's-active-1:0',
   uuid: 's-active-1',
   timestamp: ts(0.1),
   durationMs: null,
@@ -151,7 +151,7 @@ const systemChunk: SystemChunk = {
 
 const aiChunk: AIChunk = {
   kind: 'ai',
-  chunkId: 'ai:a-active-1:0',
+  chunkId: 'a-active-1:0',
   timestamp: ts(0.2),
   durationMs: 2200,
   responses: [
@@ -225,7 +225,7 @@ const aiChunk: AIChunk = {
 // 一个含 interruption 的 ai chunk
 const aiChunkInterrupted: AIChunk = {
   kind: 'ai',
-  chunkId: 'ai:a-active-2:0',
+  chunkId: 'a-active-2:0',
   timestamp: ts(0.5),
   durationMs: null,
   responses: [
@@ -250,7 +250,7 @@ const aiChunkInterrupted: AIChunk = {
 
 const compactChunk: CompactChunk = {
   kind: 'compact',
-  chunkId: 'c-active-1',
+  chunkId: 'c-active-1:0',
   uuid: 'c-active-1',
   timestamp: ts(0.6),
   durationMs: null,
@@ -284,10 +284,11 @@ export const multiProjectRichFixture: Fixture = {
       chunks: richChunks,
       metrics: { totalTokens: 2800 },
       metadata: { gitBranch: 'feat/frontend-test-infrastructure' },
+      // Latest phase（= phase 2）的累计 injections——保留以兼容旧前端
       contextInjections: [
         {
           category: 'claude-md',
-          id: 'claude-user',
+          id: 'claude-user-p2',
           path: '/Users/mock/.claude/CLAUDE.md',
           displayName: 'CLAUDE.md',
           scope: 'user',
@@ -296,7 +297,7 @@ export const multiProjectRichFixture: Fixture = {
         },
         {
           category: 'claude-md',
-          id: 'claude-project',
+          id: 'claude-project-p2',
           path: '/Users/mock/rust-port/CLAUDE.md',
           displayName: 'CLAUDE.md',
           scope: 'project',
@@ -304,25 +305,194 @@ export const multiProjectRichFixture: Fixture = {
           firstSeenTurnIndex: 0,
         },
         {
-          category: 'claude-md',
-          id: 'claude-ui',
-          path: '/Users/mock/rust-port/ui/CLAUDE.md',
-          displayName: 'CLAUDE.md',
-          scope: 'directory',
-          estimatedTokens: 960,
-          firstSeenTurnIndex: 1,
-        },
-        {
           category: 'mentioned-file',
           id: 'mentioned-context-panel',
           path: '/Users/mock/rust-port/ui/src/components/ContextPanel.svelte',
           displayName: 'ContextPanel.svelte',
           estimatedTokens: 740,
-          firstSeenTurnIndex: 1,
-          firstSeenInGroup: 'assistant-1',
+          firstSeenTurnIndex: 0,
+          firstSeenInGroup: 'a-active-2:0',
           exists: true,
         },
+        {
+          category: 'tool-output',
+          id: 'to-active-2',
+          turnIndex: 2,
+          aiGroupId: 'a-active-2:0',
+          estimatedTokens: 480,
+          toolCount: 1,
+          toolBreakdown: [
+            { toolName: 'Grep', tokenCount: 320, isError: false, toolUseId: 'tu-active-1' },
+          ],
+        },
+        {
+          category: 'thinking-text',
+          id: 'tt-active-2',
+          turnIndex: 2,
+          aiGroupId: 'a-active-2:0',
+          estimatedTokens: 220,
+          breakdown: [
+            { type: 'thinking', tokenCount: 150 },
+            { type: 'text', tokenCount: 70 },
+          ],
+        },
+        {
+          category: 'task-coordination',
+          id: 'tc-active-2',
+          turnIndex: 2,
+          aiGroupId: 'a-active-2:0',
+          estimatedTokens: 95,
+          breakdown: [
+            { type: 'task-tool', toolName: 'Task', tokenCount: 60, label: 'Task #1: rename audit' },
+            { type: 'send-message', toolName: 'SendMessage', tokenCount: 35, label: 'SendMessage #1' },
+          ],
+        },
+        {
+          category: 'user-message',
+          id: 'um-active-2',
+          turnIndex: 2,
+          aiGroupId: 'a-active-2:0',
+          estimatedTokens: 18,
+          textPreview: '继续往下',
+        },
       ],
+      injectionsByPhase: {
+        '1': [
+          {
+            category: 'claude-md',
+            id: 'claude-user-p1',
+            path: '/Users/mock/.claude/CLAUDE.md',
+            displayName: 'CLAUDE.md',
+            scope: 'user',
+            estimatedTokens: 1800,
+            firstSeenTurnIndex: 0,
+          },
+          {
+            category: 'claude-md',
+            id: 'claude-project-p1',
+            path: '/Users/mock/rust-port/CLAUDE.md',
+            displayName: 'CLAUDE.md',
+            scope: 'project',
+            estimatedTokens: 3200,
+            firstSeenTurnIndex: 0,
+          },
+          {
+            category: 'claude-md',
+            id: 'claude-ui-p1',
+            path: '/Users/mock/rust-port/ui/CLAUDE.md',
+            displayName: 'CLAUDE.md',
+            scope: 'directory',
+            estimatedTokens: 960,
+            firstSeenTurnIndex: 0,
+          },
+          {
+            category: 'user-message',
+            id: 'um-active-1',
+            turnIndex: 0,
+            aiGroupId: 'a-active-1:0',
+            estimatedTokens: 24,
+            textPreview: 'LocalDataApi 的 list_sessions 用 camelCase 还是 snake_case？',
+          },
+          {
+            category: 'tool-output',
+            id: 'to-active-1',
+            turnIndex: 0,
+            aiGroupId: 'a-active-1:0',
+            estimatedTokens: 280,
+            toolCount: 1,
+            toolBreakdown: [
+              { toolName: 'Grep', tokenCount: 280, isError: false, toolUseId: 'tu-active-1' },
+            ],
+          },
+        ],
+        '2': [
+          {
+            category: 'claude-md',
+            id: 'claude-user-p2',
+            path: '/Users/mock/.claude/CLAUDE.md',
+            displayName: 'CLAUDE.md',
+            scope: 'user',
+            estimatedTokens: 1800,
+            firstSeenTurnIndex: 0,
+          },
+          {
+            category: 'claude-md',
+            id: 'claude-project-p2',
+            path: '/Users/mock/rust-port/CLAUDE.md',
+            displayName: 'CLAUDE.md',
+            scope: 'project',
+            estimatedTokens: 3200,
+            firstSeenTurnIndex: 0,
+          },
+          {
+            category: 'mentioned-file',
+            id: 'mentioned-context-panel',
+            path: '/Users/mock/rust-port/ui/src/components/ContextPanel.svelte',
+            displayName: 'ContextPanel.svelte',
+            estimatedTokens: 740,
+            firstSeenTurnIndex: 0,
+            firstSeenInGroup: 'a-active-2:0',
+            exists: true,
+          },
+          {
+            category: 'tool-output',
+            id: 'to-active-2',
+            turnIndex: 2,
+            aiGroupId: 'a-active-2:0',
+            estimatedTokens: 480,
+            toolCount: 1,
+            toolBreakdown: [
+              { toolName: 'Grep', tokenCount: 320, isError: false, toolUseId: 'tu-active-1' },
+            ],
+          },
+          {
+            category: 'thinking-text',
+            id: 'tt-active-2',
+            turnIndex: 2,
+            aiGroupId: 'a-active-2:0',
+            estimatedTokens: 220,
+            breakdown: [
+              { type: 'thinking', tokenCount: 150 },
+              { type: 'text', tokenCount: 70 },
+            ],
+          },
+          {
+            category: 'task-coordination',
+            id: 'tc-active-2',
+            turnIndex: 2,
+            aiGroupId: 'a-active-2:0',
+            estimatedTokens: 95,
+            breakdown: [
+              { type: 'task-tool', toolName: 'Task', tokenCount: 60, label: 'Task #1: rename audit' },
+              { type: 'send-message', toolName: 'SendMessage', tokenCount: 35, label: 'SendMessage #1' },
+            ],
+          },
+          {
+            category: 'user-message',
+            id: 'um-active-2',
+            turnIndex: 2,
+            aiGroupId: 'a-active-2:0',
+            estimatedTokens: 18,
+            textPreview: '继续往下',
+          },
+        ],
+      },
+      phaseInfo: {
+        phases: [
+          { phaseNumber: 1, firstAiGroupId: 'a-active-1:0', lastAiGroupId: 'a-active-1:0' },
+          {
+            phaseNumber: 2,
+            firstAiGroupId: 'a-active-2:0',
+            lastAiGroupId: 'a-active-2:0',
+            compactGroupId: 'c-active-1:0',
+          },
+        ],
+        compactionCount: 1,
+        aiGroupPhaseMap: { 'a-active-1:0': 1, 'a-active-2:0': 2 },
+        compactionTokenDeltas: {
+          'c-active-1:0': { preCompactionTokens: 6304, postCompactionTokens: 5553, delta: -751 },
+        },
+      },
       isOngoing: true,
     },
     'mock-rich-rust:sess-rust-2': {

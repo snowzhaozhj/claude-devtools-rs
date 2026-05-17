@@ -1,8 +1,15 @@
 <script lang="ts">
-  import type { ContextEntry } from "../lib/contextExtractor";
+  /**
+   * 路径节点。`path` 是绝对路径（用于 home 替换）；`estimatedTokens` 用于显示。
+   * ClaudeMd / MentionedFile injection 都能 fit（皆有 path + estimatedTokens 字段）。
+   */
+  export interface TreeEntry {
+    path: string;
+    estimatedTokens: number;
+  }
 
   interface Props {
-    entries: ContextEntry[];
+    entries: TreeEntry[];
   }
 
   let { entries }: Props = $props();
@@ -17,7 +24,7 @@
     children: Map<string, TreeNode>;
   }
 
-  function buildTree(items: ContextEntry[]): TreeNode {
+  function buildTree(items: TreeEntry[]): TreeNode {
     const root: TreeNode = { name: "", path: "", isFile: false, tokens: 0, children: new Map() };
 
     for (const item of items) {

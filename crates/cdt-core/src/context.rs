@@ -344,7 +344,7 @@ mod tests {
         let inj = ContextInjection::ToolOutput(ToolOutputInjection {
             id: "to-0".into(),
             turn_index: 0,
-            ai_group_id: "ai-0".into(),
+            ai_group_id: "ai-0:0".into(),
             estimated_tokens: 50,
             tool_count: 2,
             tool_breakdown: vec![ToolTokenBreakdown {

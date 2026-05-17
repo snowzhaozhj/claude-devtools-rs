@@ -1210,14 +1210,35 @@ impl DataApi for LocalDataApi {
                 initial_claude_md_injections: &initial_claude_md,
             },
         );
+        // 按 phase 切分 accumulated injections。每 phase 末尾的 AI group 在
+        // stats_map 中持有该 phase 完整 accumulated（session.rs backfill 保证），
+        // 中间 group 的 accumulated_injections 是 std::mem::take 后的空 Vec。
+        let mut injections_by_phase = serde_json::Map::new();
+        for phase in &ctx_result.phase_info.phases {
+            let phase_injections = ctx_result
+                .stats_map
+                .get(&phase.last_ai_group_id)
+                .map(|stats| stats.accumulated_injections.clone())
+                .unwrap_or_default();
+            injections_by_phase.insert(
+                phase.phase_number.to_string(),
+                serde_json::to_value(&phase_injections)
+                    .unwrap_or(serde_json::Value::Array(Vec::new())),
+            );
+        }
+        // contextInjections 字段语义：latest phase 的 accumulated injections
+        // （向后兼容旧前端，等价于 injectionsByPhase[最大 phaseNumber]）。
         let context_injections = ctx_result
             .phase_info
             .phases
             .last()
             .and_then(|phase| ctx_result.stats_map.get(&phase.last_ai_group_id))
-            .map(|stats| &stats.accumulated_injections)
-            .and_then(|inj| serde_json::to_value(inj).ok())
+            .map(|stats| stats.accumulated_injections.clone())
+            .and_then(|inj| serde_json::to_value(&inj).ok())
             .unwrap_or(serde_json::Value::Array(Vec::new()));
+        let injections_by_phase_value = serde_json::Value::Object(injections_by_phase);
+        let phase_info_value =
+            serde_json::to_value(&ctx_result.phase_info).unwrap_or(serde_json::Value::Null);
         let ctx_ms = t_ctx.elapsed().as_millis();
 
         let t_serde = std::time::Instant::now();
@@ -1275,6 +1296,8 @@ impl DataApi for LocalDataApi {
                 "size": size,
             }),
             context_injections,
+            injections_by_phase: injections_by_phase_value,
+            phase_info: phase_info_value,
             is_ongoing,
         };
         let serde_ms = t_serde.elapsed().as_millis();
@@ -1499,6 +1522,8 @@ impl DataApi for LocalDataApi {
                     metrics: serde_json::Value::Null,
                     metadata: serde_json::json!({"status": "not_found"}),
                     context_injections: serde_json::Value::Array(Vec::new()),
+                    injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
+                    phase_info: serde_json::Value::Null,
                     is_ongoing: false,
                 });
                 continue;
@@ -1512,6 +1537,8 @@ impl DataApi for LocalDataApi {
                     metrics: serde_json::Value::Null,
                     metadata: serde_json::json!({"status": "not_found"}),
                     context_injections: serde_json::Value::Array(Vec::new()),
+                    injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
+                    phase_info: serde_json::Value::Null,
                     is_ongoing: false,
                 }),
             }
