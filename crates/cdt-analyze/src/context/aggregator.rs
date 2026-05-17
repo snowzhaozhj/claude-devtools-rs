@@ -240,7 +240,44 @@ fn user_chunk_text(user: &UserChunk) -> String {
     }
 }
 
+/// 噪声标签（含内容）：preview 显示前应剥离，否则截断 80 字符时残缺
+/// 标签（如 `<task-notification><task-id>...`）会原文露给用户。
+///
+/// 与 `cdt-api::ipc::session_metadata::sanitize_for_title` 列表一致；
+/// teammate-message 由 `is_user_chunk_message` 在源头过滤，这里不重复处理。
+const PREVIEW_NOISE_TAGS: &[&str] = &[
+    "system-reminder",
+    "local-command-caveat",
+    "task-notification",
+    "command-name",
+    "command-message",
+    "command-args",
+    "local-command-stdout",
+    "local-command-stderr",
+];
+
+fn sanitize_preview(text: &str) -> String {
+    let mut s = text.to_string();
+    for tag in PREVIEW_NOISE_TAGS {
+        let open = format!("<{tag}>");
+        let close = format!("</{tag}>");
+        while let Some(start) = s.find(&open) {
+            if let Some(rel_end) = s[start..].find(&close) {
+                s.replace_range(start..start + rel_end + close.len(), "");
+            } else {
+                s.truncate(start);
+                break;
+            }
+        }
+    }
+    s.trim().to_string()
+}
+
 /// 从 `UserChunk` 产出 `user-message` injection。
+///
+/// token 估计走原文（含噪声标签——其字符确实占 Claude 上下文窗口），
+/// 但 `text_preview` 先剥离 `<task-notification>` 等系统标签再截 80 字符，
+/// 避免 UI context 面板显示残缺标签（如 `<task-notification><task-id>...`）。
 #[must_use]
 pub(super) fn create_user_message_injection(
     user: &UserChunk,
@@ -256,8 +293,9 @@ pub(super) fn create_user_message_injection(
     if tokens == 0 {
         return None;
     }
-    let preview: String = text.chars().take(80).collect();
-    let preview = if text.chars().count() > 80 {
+    let sanitized = sanitize_preview(&text);
+    let preview: String = sanitized.chars().take(80).collect();
+    let preview = if sanitized.chars().count() > 80 {
         format!("{preview}…")
     } else {
         preview
@@ -437,5 +475,74 @@ mod tests {
             metrics: ChunkMetrics::zero(),
         };
         assert!(create_user_message_injection(&user, 0, "ai-0").is_none());
+    }
+
+    fn user_with_text(text: &str) -> UserChunk {
+        UserChunk {
+            chunk_id: "u1".into(),
+            uuid: "u1".into(),
+            timestamp: ts(),
+            duration_ms: None,
+            content: MessageContent::Text(text.into()),
+            metrics: ChunkMetrics::zero(),
+        }
+    }
+
+    #[test]
+    fn preview_strips_complete_task_notification_block() {
+        let raw = "<task-notification><task-id>abc</task-id><status>done</status></task-notification>真正的用户输入";
+        let user = user_with_text(raw);
+        let inj = create_user_message_injection(&user, 0, "ai-0").unwrap();
+        let ContextInjection::UserMessage(x) = inj else {
+            panic!("expected UserMessage");
+        };
+        assert_eq!(
+            x.text_preview, "真正的用户输入",
+            "preview 应剥离完整 <task-notification> 块: {:?}",
+            x.text_preview
+        );
+        assert!(
+            x.estimated_tokens >= estimate_tokens(raw) as u64,
+            "token 估计仍用原文（含标签）: {}",
+            x.estimated_tokens
+        );
+    }
+
+    #[test]
+    fn preview_strips_truncated_task_notification_when_no_close_tag() {
+        let raw = "<task-notification><task-id>bhzpt4awl</task-id> <tool-use-id>toolu_vrtx_01HSPRz_long_content_without_close_tag";
+        let user = user_with_text(raw);
+        let inj = create_user_message_injection(&user, 0, "ai-0").unwrap();
+        let ContextInjection::UserMessage(x) = inj else {
+            panic!("expected UserMessage");
+        };
+        assert_eq!(
+            x.text_preview, "",
+            "未闭合的 <task-notification> 应整段剥离: {:?}",
+            x.text_preview
+        );
+    }
+
+    #[test]
+    fn preview_strips_system_reminder_keeping_trailing_text() {
+        let user = user_with_text(
+            "<system-reminder>noise about hooks</system-reminder>hello world after reminder",
+        );
+        let inj = create_user_message_injection(&user, 0, "ai-0").unwrap();
+        let ContextInjection::UserMessage(x) = inj else {
+            panic!("expected UserMessage");
+        };
+        assert_eq!(x.text_preview, "hello world after reminder");
+    }
+
+    #[test]
+    fn preview_strips_multiple_consecutive_task_notifications() {
+        let raw = "<task-notification><task-id>a</task-id></task-notification><task-notification><task-id>b</task-id></task-notification>tail";
+        let user = user_with_text(raw);
+        let inj = create_user_message_injection(&user, 0, "ai-0").unwrap();
+        let ContextInjection::UserMessage(x) = inj else {
+            panic!("expected UserMessage");
+        };
+        assert_eq!(x.text_preview, "tail");
     }
 }
