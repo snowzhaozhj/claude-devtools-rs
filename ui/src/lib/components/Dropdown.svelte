@@ -314,6 +314,7 @@
 
   .dd-popover {
     z-index: 1000;
+    box-sizing: border-box;
     padding: 4px;
     background: var(--color-surface);
     border: 1px solid var(--color-border-emphasis, var(--color-border));
