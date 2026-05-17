@@ -547,18 +547,20 @@
         {#if text || images.length > 0 || taskNotifications.length > 0}
           <div class="msg-row msg-row-user msg-row-contained">
             <div class="msg-spacer"></div>
-            <div class="user-row">
-              <div class="msg-bubble msg-bubble-user">
-                <!-- bubble 内行内 header：与 AI .ai-header-row 的 time 共线，
-                     避免外置 meta row 让 user/ai 时间垂直高度错位（用户反馈 #122）。 -->
-                <div class="user-bubble-header">
-                  <span class="user-bubble-name">You</span>
-                  <span class="user-bubble-sep">·</span>
-                  <span class="user-bubble-time">{ftime(chunk.timestamp)}</span>
-                </div>
-                {#if text}
-                  <div class="prose lazy-md" {@attach attachMarkdown(text, "user")}></div>
-                {/if}
+            <div class="user-stack">
+              <!-- meta row 外置在 bubble 上方，右边缘紧贴 conversation 内右
+                   padding（= AI .ai-header-row 内 time 的同一 x 列）。
+                   "YOU"在前 / time 在后，让 time 真正落在最右、形成"时间戳列"。 -->
+              <div class="user-meta">
+                <span class="user-meta-name">You</span>
+                <span class="user-meta-sep">·</span>
+                <span class="user-meta-time">{ftime(chunk.timestamp)}</span>
+              </div>
+              <div class="user-row">
+                <div class="msg-bubble msg-bubble-user">
+                  {#if text}
+                    <div class="prose lazy-md" {@attach attachMarkdown(text, "user")}></div>
+                  {/if}
                 {#each images as img (img.blockId)}
                   <ImageBlock
                     source={img.source}
@@ -596,11 +598,12 @@
                       </div>
                     </div>
                   </div>
-                {/each}
+                  {/each}
+                </div>
+                <span class="user-avatar" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html USER_SVG}</svg>
+                </span>
               </div>
-              <span class="user-avatar" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html USER_SVG}</svg>
-              </span>
             </div>
           </div>
         {/if}
@@ -1179,32 +1182,35 @@
   .msg-spacer { flex: 1; min-width: 80px; }
 
   /* ── User bubble ──
-     bubble 内行内 header（time + You）与 AI .ai-header-row 的右侧 time
-     共线，bubble 旁横向排列 30×30 indigo 圆形 avatar，bubble 字号
-     14.5px + inset top 高光 + 微 chiaroscuro shadow。
+     时间外置在 bubble 上方右对齐到 conversation 内 right padding（即与 AI
+     .ai-header-row 内 time 落在同一垂直 column）；bubble + 30×30 indigo
+     avatar 横向排列；bubble 14.5px + inset top 高光 + 微 chiaroscuro shadow。
   */
   .msg-row-user {
     justify-content: flex-end;
   }
 
-  .user-row {
+  .user-stack {
     display: flex;
-    align-items: flex-start;
-    gap: 10px;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
     min-width: 0;
     max-width: 78%;
+    /* msg-row-user justify-content: flex-end → stack 整段右对齐到
+       conversation 内 right padding，与 AI .ai-msg-container 的 right edge
+       共线（因为 ai-msg-container width: 100%，无 right padding）。 */
   }
 
-  .user-bubble-header {
+  .user-meta {
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-bottom: 6px;
     line-height: 1.2;
-    color: var(--color-text-muted);
+    /* 紧贴 user-stack 右边缘——与 ai-msg-container 的 right edge 共线 */
   }
 
-  .user-bubble-name {
+  .user-meta-name {
     font-family: var(--font-sans);
     font-size: 11px;
     font-weight: 700;
@@ -1213,12 +1219,12 @@
     letter-spacing: 0.08em;
   }
 
-  .user-bubble-sep {
+  .user-meta-sep {
     color: var(--color-border-emphasis);
     font-size: 11px;
   }
 
-  .user-bubble-time {
+  .user-meta-time {
     font-family: var(--font-mono);
     font-size: 10.5px;
     font-variant-numeric: tabular-nums;
@@ -1226,10 +1232,21 @@
     color: var(--color-text-muted);
   }
 
+  .user-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+    /* 不限制 row max-width，让 row right edge = stack right edge = conversation right padding */
+  }
+
   .msg-bubble {
     border-radius: 14px;
     padding: 11px 15px;
     min-width: 0;
+    /* 不限制 bubble width — user-stack max-width 78% 已隐式限宽；
+       bubble 在 stack 内自然填满，避免再叠 max-width 让短消息无谓收窄
+       (用户反馈 visual b)。 */
   }
 
   .msg-bubble-user {
@@ -1338,7 +1355,8 @@
   .msg-ai-container {
     position: relative;
     width: 100%;
-    max-width: 95%;
+    /* 不限制 max-width，让 AI header 内 time 的右边缘 = conversation
+       内 right padding（与 user-meta time 同一 x 列）。 */
     min-width: 0;
     border-left: 3px solid var(--color-border-emphasis);
     padding-left: 16px;
