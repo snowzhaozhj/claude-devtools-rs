@@ -50,7 +50,7 @@ test.describe('sidebar 点击会话行为', () => {
         .__cdtTest.openSettingsTab()
     })
     // 改成 "new-tab"
-    const select = page.locator('select.setting-select').filter({
+    const select = page.locator('select.control-select').filter({
       has: page.locator('option[value="new-tab"]'),
     })
     await expect(select).toBeVisible()
@@ -71,7 +71,7 @@ test.describe('sidebar 点击会话行为', () => {
       ;(window as unknown as { __cdtTest: { openSettingsTab: () => void } })
         .__cdtTest.openSettingsTab()
     })
-    const selectAfter = page.locator('select.setting-select').filter({
+    const selectAfter = page.locator('select.control-select').filter({
       has: page.locator('option[value="new-tab"]'),
     })
     await expect(selectAfter).toHaveValue('new-tab')

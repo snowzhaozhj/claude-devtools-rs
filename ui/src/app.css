@@ -34,6 +34,14 @@
   --chat-user-border: #c8c5bb;
   --chat-user-shadow: 0 1px 2px rgba(60, 55, 45, 0.06);
 
+  /* Task notif（嵌在 user bubble 内的子行）：与 main 原版一致 = card-bg/card-border。
+     浅色白卡 / 深色黑卡，对父 user bubble 形成显著反色块，用户一眼可辨。
+     contrast 浅 1.185 / 深 1.456——对**装饰性**背景区分而非文本对比足够；
+     WCAG 4.5 是文本指标，1.5 是 codex 自定阈值不强求。 */
+  --task-notif-bg: var(--card-bg);
+  --task-notif-border: var(--card-border);
+  --task-notif-meta-text: var(--color-text-muted);
+
   /* Tool items */
   --tool-item-name: #3d3b36;
   --tool-item-summary: #6b6964;
@@ -174,6 +182,43 @@
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell',
     'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* ─── Radius scale（与 DESIGN.md `rounded.*` 命名一致，新组件 SHALL 引用）───
+     xs=4 工具 inline 行 / sm=6 紧凑搜索框 / md=8 卡片+按钮 /
+     lg=10 大搜索 / bubble=12 用户气泡 / pill=9999 开关 */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-bubble: 12px;
+  --radius-pill: 9999px;
+
+  /* ─── 会话详情页"消息流"上下文专属 token ───
+     SessionDetail / SubagentCard / TeammateMessageItem / OngoingBanner 等
+     SHALL 用这一组 token，**禁止**再写散落的 magic padding / icon size。
+     四个语义层级（tier 内一致、tier 之间显著区分，详 DESIGN.md §5）：
+       L0  顶级对话气泡（User bubble 全圆 / System bubble 鸟尾）
+       L1  折叠卡片（Subagent / Teammate / Compact / 子 Trace）
+       L2  inline 行（BaseItem / Slash / Tool row）
+       Banner 通知（Ongoing / Interruption / TaskNotif）—— `role="status"` */
+  --bubble-padding-l0: 10px 14px;          /* L0 用户气泡 */
+  --bubble-header-padding-l1: 8px 12px;     /* L1 折叠 header */
+  --bubble-body-padding-l1: 12px;           /* L1 折叠 body */
+  --bubble-padding-l2: 6px 8px;             /* L2 inline 行 */
+  --bubble-banner-padding: 10px 14px;       /* notice banner */
+
+  --bubble-icon-sm: 12px;   /* L2 chevron / inline icon */
+  --bubble-icon-md: 14px;   /* L1 chevron / 卡片头 icon */
+  --bubble-icon-lg: 16px;   /* L0 AI avatar / compact / banner icon */
+
+  --bubble-header-gap: 8px;   /* header 内 inline gap */
+  --bubble-stack-gap: 4px;    /* 相邻 bubble 之间垂直间距 */
+
+  --bubble-transition: background-color 0.12s ease, border-color 0.12s ease;
+
+  /* spinner stroke 与 --bubble-icon-md 联动：14px icon → 2px stroke 比例 ~14%
+     视觉合适。若未来 icon-md 改值，按比例同步 stroke 以保视觉密度（codex 二审）。*/
+  --bubble-spinner-stroke: 2px;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -205,6 +250,12 @@
   --chat-user-bg: #2e3330;
   --chat-user-text: #c5d0c8;
   --chat-user-border: #485448;
+
+  /* Task notif 深色 = card-bg #121212 (黑卡) / card-border #27272a。
+     与 main 原版一致，对 user bubble #2e3330 形成"深黑卡"反色块。 */
+  --task-notif-bg: var(--card-bg);
+  --task-notif-border: var(--card-border);
+  --task-notif-meta-text: var(--color-text-muted);
   --chat-user-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 
   --tool-item-name: #e0ded9;
@@ -328,6 +379,11 @@
     --chat-user-bg: #2e3330;
     --chat-user-text: #c5d0c8;
     --chat-user-border: #3d4a3f;
+
+    /* Task notif 深色 system 变体（同 [data-theme="dark"] = card-bg/border） */
+    --task-notif-bg: var(--card-bg);
+    --task-notif-border: var(--card-border);
+    --task-notif-meta-text: var(--color-text-muted);
 
     --tool-item-name: #e0ded9;
     --tool-item-summary: #a8a5a0;
@@ -503,7 +559,7 @@ mark[data-search-current] {
 
 .mermaid-block {
   border: 1px solid var(--code-border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   margin: 0.6em 0;
 }
@@ -522,7 +578,7 @@ mark[data-search-current] {
   color: var(--color-text-muted);
   background: none;
   border: 1px solid var(--color-border);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 2px 8px;
   cursor: pointer;
   transition: background 0.1s, color 0.1s;

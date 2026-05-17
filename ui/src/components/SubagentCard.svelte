@@ -409,7 +409,7 @@
 
 <style>
   .sa-card {
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--card-border);
     background: var(--card-bg);
     overflow: hidden;
@@ -421,10 +421,10 @@
   .sa-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: var(--bubble-header-gap);
+    padding: var(--bubble-header-padding-l1);
     cursor: pointer;
-    transition: background-color 0.1s;
+    transition: var(--bubble-transition);
   }
   .sa-header:hover {
     background: var(--card-header-hover);
@@ -435,8 +435,8 @@
   }
 
   .sa-chevron {
-    width: 14px;
-    height: 14px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     flex-shrink: 0;
     color: var(--card-icon-muted);
     transition: transform 0.15s ease;
@@ -446,15 +446,15 @@
   }
 
   .sa-dot {
-    width: 12px;
-    height: 12px;
+    width: var(--bubble-icon-sm);
+    height: var(--bubble-icon-sm);
     border-radius: 50%;
     flex-shrink: 0;
   }
 
   .sa-bot {
-    width: 16px;
-    height: 16px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     color: var(--color-text-muted);
     flex-shrink: 0;
   }
@@ -465,7 +465,7 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     padding: 1px 6px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     border: 1px solid;
     flex-shrink: 0;
   }
@@ -493,14 +493,14 @@
   }
 
   .sa-status-done {
-    width: 14px;
-    height: 14px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     flex-shrink: 0;
     color: var(--color-success-bright);
   }
   .sa-status-running {
-    width: 14px;
-    height: 14px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     flex-shrink: 0;
     color: var(--color-accent-blue);
     animation: spin 1s linear infinite;
@@ -519,7 +519,7 @@
   }
 
   .sa-body {
-    padding: 12px;
+    padding: var(--bubble-body-padding-l1);
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -567,24 +567,24 @@
 
   .sa-trace {
     border: 1px solid var(--card-border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     overflow: hidden;
     background: var(--card-header-bg);
   }
   .sa-trace-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
+    gap: var(--bubble-header-gap);
+    padding: var(--bubble-padding-l2);
     cursor: pointer;
-    transition: background-color 0.1s;
+    transition: var(--bubble-transition);
   }
   .sa-trace-header:hover {
     background: var(--card-header-hover);
   }
   .sa-trace-chevron {
-    width: 12px;
-    height: 12px;
+    width: var(--bubble-icon-sm);
+    height: var(--bubble-icon-sm);
     color: var(--card-icon-muted);
     transition: transform 0.15s ease;
     flex-shrink: 0;
@@ -593,8 +593,8 @@
     transform: rotate(90deg);
   }
   .sa-trace-terminal {
-    width: 14px;
-    height: 14px;
+    width: var(--bubble-icon-md);
+    height: var(--bubble-icon-md);
     color: var(--card-icon-muted);
     flex-shrink: 0;
   }
@@ -621,9 +621,9 @@
   .sa-shutdown {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--bubble-header-gap);
     padding: 6px 12px;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     border: 1px solid;
     background: var(--card-bg);
     opacity: 0.6;
