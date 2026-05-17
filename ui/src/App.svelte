@@ -153,8 +153,14 @@
       const tf = config.display?.timeFormat;
       if (tf === "24h" || tf === "12h") {
         setTimeFormat(tf);
+      } else {
+        setTimeFormat("24h");
       }
-    } catch { /* 加载失败保持默认浅色 + 默认字体 + 24h 时间 */ }
+    } catch {
+      // 加载失败保持默认浅色 + 默认字体；显式复位 timeFormat 防 HMR / 重挂载场景
+      // 下模块级 $state 残留前一次 setTimeFormat("12h") 的旧值（codex CR #1）
+      setTimeFormat("24h");
+    }
     // 加载 agent configs 供 subagent 彩色 badge 使用
     await loadAgentConfigs();
     // 单例 listen("file-change") —— 路由组件通过 fileChangeStore 注册 handler
