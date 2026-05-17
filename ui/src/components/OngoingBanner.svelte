@@ -29,7 +29,7 @@
     width: var(--bubble-icon-md);
     height: var(--bubble-icon-md);
     border-radius: 50%;
-    border: 2px solid currentColor;
+    border: var(--bubble-spinner-stroke) solid currentColor;
     border-right-color: transparent;
     animation: ongoing-spin 0.9s linear infinite;
     flex-shrink: 0;

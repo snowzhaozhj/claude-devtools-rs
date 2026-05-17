@@ -207,6 +207,10 @@
   --bubble-stack-gap: 4px;    /* 相邻 bubble 之间垂直间距 */
 
   --bubble-transition: background-color 0.12s ease, border-color 0.12s ease;
+
+  /* spinner stroke 与 --bubble-icon-md 联动：14px icon → 2px stroke 比例 ~14%
+     视觉合适。若未来 icon-md 改值，按比例同步 stroke 以保视觉密度（codex 二审）。*/
+  --bubble-spinner-stroke: 2px;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -536,7 +540,7 @@ mark[data-search-current] {
 
 .mermaid-block {
   border: 1px solid var(--code-border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   margin: 0.6em 0;
 }
@@ -555,7 +559,7 @@ mark[data-search-current] {
   color: var(--color-text-muted);
   background: none;
   border: 1px solid var(--color-border);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 2px 8px;
   cursor: pointer;
   transition: background 0.1s, color 0.1s;

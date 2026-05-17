@@ -985,9 +985,12 @@
     height: var(--bubble-icon-md);
   }
 
-  /* task-notification 行：嵌在 User bubble 内部，padding 故意比 banner 紧，
-     避免与 user bubble 自己的 10/14 padding 形成双层 frame 视觉肥肿。
-     视觉权重让位给主消息文本。 */
+  /* task-notification 行：嵌在 User bubble 内部，padding 故意比 banner 紧
+     (6/10 而非 banner 10/14) 避免与 user bubble 自己的 10/14 padding 形成
+     双层 frame 视觉肥肿。bg 必须用 --card-bg（浅 #f9f9f7 / 深 #121212）—
+     surface-overlay (#e8e7e4) 对 chat-user-bg (#e8e6df) 仅 1.015:1 对比度
+     人眼不可分辨（codex 二审 #2）。card-bg vs chat-user-bg 浅深主题对比
+     都显著。视觉权重让位给主消息文本由 padding + radius-xs 承担。 */
   .task-notif {
     display: flex;
     align-items: flex-start;
@@ -995,8 +998,8 @@
     padding: 6px 10px;
     margin-top: 6px;
     border-radius: var(--radius-xs);
-    background: var(--color-surface-overlay);
-    border: 1px solid var(--color-border-subtle);
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
   }
 
   .task-notif-icon {
