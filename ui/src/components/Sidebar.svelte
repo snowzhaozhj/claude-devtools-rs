@@ -320,6 +320,10 @@
     if (!selectedProjectId || !hasDeferredSessionRefresh) return;
     hasDeferredSessionRefresh = false;
     void loadSessions(selectedProjectId, true);
+    // 滚到顶部展示新加载内容——deferred refresh 默认在用户向下浏览
+    // 历史时被推迟（browsingHistory=true），按钮触发的意图就是"看新内容"，
+    // 默认就把视图带回顶部，避免点完按钮看似无反应。
+    sessionListEl?.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function onSessionListScroll(e: Event) {
@@ -740,14 +744,43 @@
 {/if}
 
 <style>
+  /* sidebar 高度撑满父容器（app-layout）而非 100vh——chrome 拍平后顶
+     部 unified toolbar 占 ~44px，sidebar 不再是 viewport 顶级容器；
+     100vh 会让 sidebar 向下溢出 toolbar 高度，session-list 底部内容
+     被裁切（用户实测"翻不到最底部"的根因）。改 100% 让 flex 父级
+     app-layout 控制可用高度。
+
+     sidebar 局部 AA-safe color tokens（codex 二审第二轮发现项目级
+     `--color-accent-blue` / `--color-accent-indigo` 在浅色 sidebar
+     bg 上对 11–12px 小字仅 3.x:1，未达 WCAG AA 4.5:1）：本组件需要
+     蓝/靛文字与 outline 的所有点都走 sidebar 局部更深变体，避免污染
+     全局 token 体系；其他组件复用项目 token 不变。 */
   .sidebar {
+    --sidebar-accent: #1d4ed8;
+    --sidebar-active-outline: var(--color-accent-blue-hover);
+    --sidebar-pinned: #4338ca;
     position: relative;
-    height: 100vh;
+    height: 100%;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     background: var(--color-surface-sidebar);
     border-right: 1px solid var(--color-border);
     overflow: hidden;
+  }
+
+  :global([data-theme="dark"]) .sidebar {
+    --sidebar-accent: #93c5fd;
+    --sidebar-active-outline: var(--color-accent-blue);
+    --sidebar-pinned: #a5b4fc;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :global([data-theme="system"]) .sidebar {
+      --sidebar-accent: #93c5fd;
+      --sidebar-active-outline: var(--color-accent-blue);
+      --sidebar-pinned: #a5b4fc;
+    }
   }
 
   /* collapsed 时通过宽度归零隐藏（不用 display:none）——保留组件挂载，避免
@@ -845,36 +878,33 @@
     cursor: default;
   }
 
-  /* "刷新" 按钮使用 focus-blue 文字 + 同色细边召唤用户注意——它表达
-     "有新数据待加载" 这一**主动召唤**的交互意图，原灰色胶囊语义太弱。
-     focus-blue 是 DESIGN.md `The Ongoing Owns Blue Rule` 已分配给
-     "进行中 / 实时" 的颜色，"有更新待刷新" 属同语义类，复用不引入新色。
-
-     文字色用 `--color-accent-blue-hover`（浅色主题 #2563eb 深蓝 /
-     深色主题 #3b82f6 比 base #60a5fa 略深）配合 weight 600，保证
-     11px 小字在 8% blue 透明底上达到 WCAG AA 4.5:1 对比度——base
-     `--color-accent-blue` 在浅底上仅 ~3.3:1 不达标。 */
+  /* "刷新"按钮：原蓝胶囊版本太抢眼（用户实测反馈），重新设计为内联
+     文字 link 形态——透明 bg、无 border，仅 icon + 单字"刷新"。色彩
+     用 sidebar 局部 --sidebar-accent（浅 #1d4ed8 / 深 #93c5fd）保证
+     11px 小字 WCAG AA ≥4.5:1，权重视觉降到与"返回 Dashboard"链接同
+     级。hover 时显微底反馈用户击中目标。
+     语义保持：focus-blue 表达"实时 / 有新数据待加载"（DESIGN.md
+     `The Ongoing Owns Blue Rule` 同类），不引入新色。 */
   .refresh-pending-btn {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     flex-shrink: 0;
-    padding: 2px 8px;
-    border: 1px solid color-mix(in oklch, var(--color-accent-blue) 45%, transparent);
-    border-radius: 999px;
-    background: color-mix(in oklch, var(--color-accent-blue) 8%, transparent);
-    color: var(--color-accent-blue-hover);
+    padding: 3px 6px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--sidebar-accent);
     font: inherit;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.2;
     cursor: pointer;
-    transition: background 0.12s, border-color 0.12s;
+    transition: background 0.12s;
   }
 
   .refresh-pending-btn:hover {
-    background: color-mix(in oklch, var(--color-accent-blue) 14%, transparent);
-    border-color: var(--color-accent-blue);
+    background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
   }
 
   .refresh-pending-btn:focus-visible {
@@ -929,7 +959,7 @@
 
   .show-hidden-active .hidden-count-badge {
     background: color-mix(in oklch, var(--color-accent-blue) 22%, var(--color-surface));
-    color: var(--color-accent-blue);
+    color: var(--sidebar-accent);
   }
 
   .session-list {
@@ -954,11 +984,12 @@
   }
 
   /* 空状态指路链接：filter 输入了 typo 时让用户一键 reset，避免被
-     困在死路里。仅在 filterQuery 非空 → 出现"无匹配会话"时渲染。 */
+     困在死路里。仅在 filterQuery 非空 → 出现"无匹配会话"时渲染。
+     色彩走 sidebar 局部 --sidebar-accent 保证 WCAG AA 4.5:1。 */
   .sidebar-status-link {
     background: none;
     border: none;
-    color: var(--color-accent-blue);
+    color: var(--sidebar-accent);
     font: inherit;
     font-size: 12px;
     cursor: pointer;
@@ -994,14 +1025,15 @@
   }
 
   /* PINNED 是用户主动标记的"我在意这条"行为，视觉上应区别于 TODAY /
-     YESTERDAY 这种被动时间分组。复用 DESIGN.md 已有 accent-indigo
-     token（switch-on / dropdown-check 同色），不引入新色。 */
+     YESTERDAY 这种被动时间分组。色彩走 sidebar 局部 --sidebar-pinned
+     深一档 indigo（codex 二审第二轮：项目级 --color-accent-indigo
+     #6366f1 在浅 sidebar bg 上 11px 仅 3.96:1 < AA 4.5:1）。 */
   .date-group-label-pinned {
-    color: var(--color-accent-indigo);
+    color: var(--sidebar-pinned);
   }
 
   .date-group-pin-icon {
-    color: var(--color-accent-indigo);
+    color: var(--sidebar-pinned);
     flex-shrink: 0;
     margin-bottom: 1px;
   }
@@ -1030,17 +1062,17 @@
   }
 
   /* 选中态：用 surface-overlay 比 hover 的 raised 再深一档 + 1px
-     accent-blue outline + title 字重 700 ink-text 三重信号。原 3px
-     灰 stripe 在暖灰 sidebar 背景上几乎被吃掉；纯背景层级差在深色
+     accent outline + title 字重 700 ink-text 三重信号。原 3px 灰
+     stripe 在暖灰 sidebar 背景上几乎被吃掉；纯背景层级差在深色
      主题（#333330 vs sidebar #232321 ≈ 1.24:1）远低于 WCAG 1.4.11
-     非文本对比要求 3:1，因此引入 1px outline 提供跨主题稳定的色相
-     信号——outline 不占 box-model 空间（offset:-1 内贴边），不构成
-     impeccable absolute-bans 禁止的 "side-stripe > 1px colored
-     accent"（限 single side & >1px），是受认可的 a11y indicator
-     形态。 */
+     非文本对比要求 3:1，因此引入 1px outline 提供跨主题稳定信号——
+     outline 不占 box-model 空间（offset:-1 内贴边），不构成 impeccable
+     禁止的 "side-stripe > 1px colored accent"（限单边 & >1px），是受
+     认可的 a11y indicator 形态。outline 色走 --sidebar-active-outline
+     （浅 #2563eb / 深 #60a5fa）保证 ≥3:1。 */
   .session-item-active {
     background: var(--color-surface-overlay);
-    outline: 1px solid var(--color-accent-blue);
+    outline: 1px solid var(--sidebar-active-outline);
     outline-offset: -1px;
   }
   .session-item-active .session-title-text {
