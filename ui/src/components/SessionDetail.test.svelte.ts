@@ -7,12 +7,11 @@
 
 import { describe, expect, test, afterEach, beforeEach, vi } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/svelte'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { clearMocks } from '@tauri-apps/api/mocks'
 
 import SessionDetail from '../routes/SessionDetail.svelte'
 import { setupMockIPC } from '../lib/tauriMock'
+import { saveTabUIState } from '../lib/tabStore.svelte'
 import { singleProjectFixture } from '../lib/__fixtures__'
 import type { Fixture } from '../lib/__fixtures__'
 import type { AIChunk, Chunk, CompactChunk } from '../lib/api'
@@ -46,8 +45,6 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-
-const SESSION_DETAIL_SOURCE = readFileSync(join(process.cwd(), 'src/routes/SessionDetail.svelte'), 'utf8')
 
 const PROJECT_ID = singleProjectFixture.projects[0].id
 const SESSION_ID = singleProjectFixture.sessions[PROJECT_ID][0].sessionId
@@ -127,10 +124,30 @@ describe('SessionDetail smoke', () => {
   })
 
 
-  test('工具列表容器不使用 containment，避免刷新后展开详情保留错误高度', () => {
-    const source = SESSION_DETAIL_SOURCE
-    expect(source).toContain('class="ai-tools-section"')
-    expect(source).not.toContain('class="ai-tools-section msg-row-contained"')
+  test('恢复展开状态时工具列表容器不使用 containment', async () => {
+    const tabId = 'tab-smoke-expanded-tools'
+    saveTabUIState(tabId, {
+      expandedChunks: new Set(['ai:a1:0']),
+      expandedItems: new Set(['ai:a1:0-tool-tu1']),
+      searchVisible: false,
+      contextPanelVisible: false,
+      scrollTop: 0,
+    })
+
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId,
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+
+    await waitFor(() => {
+      const toolsSection = container.querySelector('.ai-tools-section')
+      expect(toolsSection).not.toBeNull()
+      expect(toolsSection?.classList.contains('msg-row-contained')).toBe(false)
+      expect(toolsSection?.querySelector('.base-item-content')).not.toBeNull()
+    })
   })
 
   test('compact 后重复 AI response uuid 不会让 keyed each 崩溃', async () => {
