@@ -987,12 +987,10 @@
 
   /* task-notification 行：嵌在 User bubble 内部，padding 故意比 banner 紧
      (6/10 而非 banner 10/14) 避免与 user bubble 自己的 10/14 padding 形成
-     双层 frame 视觉肥肿。bg 走专属 --task-notif-bg/border 而非 card-bg：
-     card-bg vs chat-user-bg 实测浅 1.185 / 深 1.456 均 < 1.5 阈值人眼难辨
-     （codex V2 #1）。专属 token 浅 #b8b5a9 vs #e8e6df = 1.645、深 #0a0a0a
-     vs #2e3330 = 1.539（codex V3 修正深色实测值），跨主题都 ≥ 1.5。
-     内部文字用 --color-text + --task-notif-meta-text，于 task-notif-bg 上
-     WCAG AA ≥ 4.5（codex V3 #4）。 */
+     双层 frame 视觉肥肿。bg/border/meta-text 走 --task-notif-* 同色系 token
+     (= chat-user-border 等 user bubble border 色)，视觉上是"user bubble 内嵌
+     子区域"的延伸，**不抢主消息焦点**。详 app.css token 注释——这里有意降
+     bg contrast 让 hierarchy 正确（codex 1.5 阈值在嵌套通知场景被反对）。 */
   .task-notif {
     display: flex;
     align-items: flex-start;

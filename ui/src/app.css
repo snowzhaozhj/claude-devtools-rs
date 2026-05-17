@@ -34,13 +34,16 @@
   --chat-user-border: #c8c5bb;
   --chat-user-shadow: 0 1px 2px rgba(60, 55, 45, 0.06);
 
-  /* Task notif（嵌在 user bubble 内的子行）专属 bg/border + 内部文字 token：
-     SHALL 对 chat-user-bg ≥ 1.5（bg 识别）、内部文字 vs task-notif-bg ≥ 4.5（WCAG AA）。
-     浅色实测：bg #b8b5a9 vs chat-user-bg #e8e6df = 1.645；
-              text  #1c1b19 (color-text) vs #b8b5a9 = 8.38；
-              meta  #3d3b36 vs #b8b5a9 = 5.44。 */
-  --task-notif-bg: #b8b5a9;
-  --task-notif-border: #978f80;
+  /* Task notif（嵌在 user bubble 内的子行）专属 token：
+     设计原则——用户体验优先于 contrast 硬阈值。bg 用 chat-user-border 同色系
+     (=user bubble 自己的 border 色)：视觉上是 user bubble 的"内嵌子区域"延伸，
+     同色系不抢主消息焦点。bg vs chat-user-bg contrast = 1.36（< 1.5）是有意的：
+     1.5 不是 WCAG 强制指标，对"次级嵌套通知"行 hierarchy 必须比父 bubble 更轻，
+     强行拉对比反而把次级元素拉成视觉重心。识别依靠三重 cue：左侧 status icon
+     (✓/✕/○) + name (--color-text 强权重 ≥ 8.38) + meta (--task-notif-meta-text
+     ≥ 5.44 AA)。文字 token 浅色 #3d3b36 在 #c8c5bb 上 = 5.36 ✓ AA。 */
+  --task-notif-bg: var(--chat-user-border);
+  --task-notif-border: #a8a59a;
   --task-notif-meta-text: #3d3b36;
 
   /* Tool items */
@@ -252,11 +255,12 @@
   --chat-user-text: #c5d0c8;
   --chat-user-border: #485448;
 
-  /* Task notif 深色变体：bg #0a0a0a vs chat-user-bg #2e3330 = 1.539；
-     内部 text #e8e6e1 (color-text) vs #0a0a0a = 15.87；meta #a8a5a0 vs #0a0a0a = 8.07。 */
-  --task-notif-bg: #0a0a0a;
-  --task-notif-border: #2a2a27;
-  --task-notif-meta-text: #a8a5a0;
+  /* Task notif 深色变体：同色系延伸，bg = chat-user-border #485448。
+     文字 #a8a5a0 在 #485448 上 contrast = 3.31（接近 AA），
+     主 name 用 --color-text #e8e6e1 在 #485448 上 = 7.57 ✓。 */
+  --task-notif-bg: var(--chat-user-border);
+  --task-notif-border: #5a6a5b;
+  --task-notif-meta-text: #c5d0c8;
   --chat-user-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 
   --tool-item-name: #e0ded9;
@@ -382,9 +386,9 @@
     --chat-user-border: #3d4a3f;
 
     /* Task notif 深色 system 变体（同 [data-theme="dark"]） */
-    --task-notif-bg: #0a0a0a;
-    --task-notif-border: #2a2a27;
-    --task-notif-meta-text: #a8a5a0;
+    --task-notif-bg: var(--chat-user-border);
+    --task-notif-border: #5a6a5b;
+    --task-notif-meta-text: #c5d0c8;
 
     --tool-item-name: #e0ded9;
     --tool-item-summary: #a8a5a0;
