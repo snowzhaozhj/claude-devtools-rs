@@ -37,8 +37,8 @@
   /* Task notif（嵌在 user bubble 内的子行）专属 bg/border + 内部文字 token：
      SHALL 对 chat-user-bg ≥ 1.5（bg 识别）、内部文字 vs task-notif-bg ≥ 4.5（WCAG AA）。
      浅色实测：bg #b8b5a9 vs chat-user-bg #e8e6df = 1.645；
-              text  #1c1b19 (color-text) vs #b8b5a9 = 8.36；
-              meta  #3d3b36 vs #b8b5a9 = 4.91。 */
+              text  #1c1b19 (color-text) vs #b8b5a9 = 8.38；
+              meta  #3d3b36 vs #b8b5a9 = 5.44。 */
   --task-notif-bg: #b8b5a9;
   --task-notif-border: #978f80;
   --task-notif-meta-text: #3d3b36;
@@ -253,7 +253,7 @@
   --chat-user-border: #485448;
 
   /* Task notif 深色变体：bg #0a0a0a vs chat-user-bg #2e3330 = 1.539；
-     内部 text #e8e6e1 (color-text) vs #0a0a0a = 14.6；meta #a8a5a0 vs #0a0a0a = 8.40。 */
+     内部 text #e8e6e1 (color-text) vs #0a0a0a = 15.87；meta #a8a5a0 vs #0a0a0a = 8.07。 */
   --task-notif-bg: #0a0a0a;
   --task-notif-border: #2a2a27;
   --task-notif-meta-text: #a8a5a0;
