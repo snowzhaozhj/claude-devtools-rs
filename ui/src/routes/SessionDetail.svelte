@@ -1274,29 +1274,38 @@
     outline-offset: 2px;
   }
 
+  /* Context 按钮 active 态：用 neutral 层级（更深 surface + emphasis
+     border + 主文本色），与 ai-tool-toggle tools-open 状态视觉语言
+     统一。蓝色留给 focus / live 等真的强调状态。详见 DESIGN.md
+     `Status Owns the Color Rule`——panel toggle 不属于 selection /
+     focus / 语义状态。 */
   .top-badge-active {
-    background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
-    color: var(--color-accent-blue);
-    border-color: color-mix(in oklch, var(--color-accent-blue) 35%, transparent);
+    background: var(--color-surface-overlay);
+    color: var(--color-text);
+    border-color: var(--color-border-emphasis);
   }
 
+  /* active 态已经是最深 raised 层级（surface-overlay），hover 不再加深，
+     保持稳态——与桌面工具 (VS Code / IntelliJ) panel toggle 行为一致。
+     仍显式声明 :hover 规则覆盖通用 :not(.top-badge-active):hover 兜底。 */
   .top-badge-active:hover {
-    background: color-mix(in oklch, var(--color-accent-blue) 16%, transparent);
-    border-color: color-mix(in oklch, var(--color-accent-blue) 48%, transparent);
+    background: var(--color-surface-overlay);
+    border-color: var(--color-border-emphasis);
+    color: var(--color-text);
   }
 
   .top-badge-active .top-badge-icon {
-    color: var(--color-accent-blue);
+    color: var(--color-text);
   }
 
   .top-badge-active .top-badge-count {
-    background: color-mix(in oklch, var(--color-accent-blue) 14%, transparent);
-    border-color: transparent;
-    color: var(--color-accent-blue);
+    background: var(--color-surface);
+    border-color: var(--color-border);
+    color: var(--color-text-secondary);
   }
 
   .top-badge-active:hover .top-badge-count {
-    background: color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
+    background: var(--color-surface);
   }
 
   /* ── Content area ── */
@@ -1660,10 +1669,14 @@
     border-color: var(--color-border-emphasis);
   }
 
+  /* tools-open 选中态：用 neutral 层级（更深一档 surface + emphasis
+     border + 主文本色）+ chevron 90° 旋转表达"已展开"，把蓝色留给
+     focus / live 等真的强调状态。详见 DESIGN.md `Status Owns the
+     Color Rule`——展开/折叠不属于 selection / focus / 语义状态。 */
   .msg-ai-container-tools-open .ai-tool-toggle {
-    background: color-mix(in oklch, var(--color-accent-blue) 8%, transparent);
-    border-color: color-mix(in oklch, var(--color-accent-blue) 30%, transparent);
-    color: var(--color-accent-blue);
+    background: var(--color-surface-overlay);
+    border-color: var(--color-border-emphasis);
+    color: var(--color-text);
   }
 
   .ai-tool-toggle:focus-visible {
