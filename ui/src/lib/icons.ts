@@ -144,3 +144,75 @@ export const ARROW_DOWN_SVG = `
 <line x1="12" y1="5" x2="12" y2="19"/>
 <polyline points="19 12 12 19 5 12"/>
 `;
+
+/** Lucide sliders-horizontal — 设置 / 常规 section */
+export const SLIDERS_HORIZONTAL_SVG = `
+<line x1="21" x2="14" y1="4" y2="4"/>
+<line x1="10" x2="3" y1="4" y2="4"/>
+<line x1="21" x2="12" y1="12" y2="12"/>
+<line x1="8" x2="3" y1="12" y2="12"/>
+<line x1="21" x2="16" y1="20" y2="20"/>
+<line x1="12" x2="3" y1="20" y2="20"/>
+<line x1="14" x2="14" y1="2" y2="6"/>
+<line x1="8" x2="8" y1="10" y2="14"/>
+<line x1="16" x2="16" y1="18" y2="22"/>
+`;
+
+/** Lucide monitor — 显示 section */
+export const MONITOR_SVG = `
+<rect width="20" height="14" x="2" y="3" rx="2"/>
+<line x1="8" x2="16" y1="21" y2="21"/>
+<line x1="12" x2="12" y1="17" y2="21"/>
+`;
+
+/** Lucide info — 关于 section */
+export const INFO_SVG = `
+<circle cx="12" cy="12" r="10"/>
+<line x1="12" x2="12" y1="16" y2="12"/>
+<line x1="12" x2="12.01" y1="8" y2="8"/>
+`;
+
+/** Lucide folder — 目录选择按钮 */
+export const FOLDER_SVG = `
+<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
+`;
+
+/** Lucide rotate-ccw — 恢复默认 */
+export const ROTATE_CCW_SVG = `
+<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+<path d="M3 3v5h5"/>
+`;
+
+/** Lucide plus — 添加 */
+export const PLUS_SVG = `
+<path d="M5 12h14"/>
+<path d="M12 5v14"/>
+`;
+
+/** Lucide check-circle — 已是最新 */
+export const CHECK_CIRCLE_SVG = `
+<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+<polyline points="22 4 12 14.01 9 11.01"/>
+`;
+
+/** Lucide download-cloud — 发现新版本 */
+export const DOWNLOAD_CLOUD_SVG = `
+<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/>
+<path d="M12 12v9"/>
+<path d="m16 17-4 4-4-4"/>
+`;
+
+/** Lucide alert-circle — 检查失败 */
+export const ALERT_CIRCLE_SVG = `
+<circle cx="12" cy="12" r="10"/>
+<line x1="12" x2="12" y1="8" y2="12"/>
+<line x1="12" x2="12.01" y1="16" y2="16"/>
+`;
+
+/** Lucide bell-ring — 通知 empty state CTA icon */
+export const BELL_RING_SVG = `
+<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+<path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+<path d="M4 2C2.8 3.7 2 5.7 2 8"/>
+<path d="M22 8c0-2.3-.8-4.3-2-6"/>
+`;
