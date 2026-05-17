@@ -55,9 +55,12 @@ describe('viewerUsesOutput', () => {
     expect(viewerUsesOutput(exec({ toolName: 'WebFetch' }))).toBe(true)
   })
 
-  test('Edit viewer 仅渲染 input，不消费 output（成功 / 失败 路径都不等）', () => {
+  test('Edit 成功路径渲染 input，不消费 output', () => {
     expect(viewerUsesOutput(exec({ toolName: 'Edit' }))).toBe(false)
-    expect(viewerUsesOutput(exec({ toolName: 'Edit', isError: true }))).toBe(false)
+  })
+
+  test('Edit isError=true 走 ERROR 段，需要 output 兜底显示错误详情', () => {
+    expect(viewerUsesOutput(exec({ toolName: 'Edit', isError: true }))).toBe(true)
   })
 
   test('Write 成功路径渲染 input，不消费 output', () => {
