@@ -27,7 +27,19 @@
 - C 太激进——D8 的视觉约束确有价值（防 TabBar 行底叠线），不应完全废除 Scenario。
 - B 是精准修订：保留 D8 的真实意图（防紧贴叠线），放开被字面误伤的合理用法（下方分隔）。
 
-**风险**：未来如果有人在 SessionDetail 内插入新的顶部章节（如 banner / status bar）紧贴 TabBar 行底加 border，新 SHALL 措辞仍能拦下——因为禁止的是"与 TabBar 行底紧贴的 border"，不是某个具体 file:line。
+**风险**：未来如果有人在 SessionDetail 内插入新的顶部章节（如 banner / status bar）紧贴 TabBar 行底加 border，新 SHALL 措辞仍能拦下——因为禁止的是"与 TabBar 行底紧贴形成 ≥ 2 px 视觉加粗的 border"，不是某个具体 file:line。
+
+## D1b：codex CR 调整 — Scenario 标题与"允许"用语
+
+第二轮 codex 二审反馈两点：
+1. 原 Scenario 标题"...不与 TabBar 行底 border 紧贴"锚点偏到了"紧贴距离"，弱化了 D8 真正想防的"视觉双线加粗"语义；
+2. 第三条 AND 用中文"允许"渲染分隔线，与同段前两条 SHALL 约束规范强度不一致。
+
+**修订**：
+- 标题改为"SessionDetail 顶部不产生视觉双线"，正文 THEN 显式写"与 TabBar 行底相邻而形成 ≥ 2 px 视觉加粗"；
+- 第三条 AND 改写为"**本 Scenario SHALL NOT 禁止** top-bar 自身下方 ... 分隔线"，用双重否定保持规范断言体系一致。
+
+保留 D1 选 B 的整体决策不变（B 仍是相对 A/C 的最优解）。
 
 ## D2：装饰竖条 `.top-rail` 直接删除（无 spec）
 

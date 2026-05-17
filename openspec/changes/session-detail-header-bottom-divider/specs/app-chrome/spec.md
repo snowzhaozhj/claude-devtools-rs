@@ -20,12 +20,12 @@
 - **AND** SHALL NOT 使用 `border-bottom: 2px` 实现
 - **AND** 与 TabBar 行底 1 px border 在视觉上 SHALL 不连续拼接（indicator 仅 tab 内宽度、border 行宽度，二者分属不同层）
 
-#### Scenario: SessionDetail 顶部不与 TabBar 行底 border 紧贴
+#### Scenario: SessionDetail 顶部不产生视觉双线
 
 - **WHEN** pane content 加载 `SessionDetail.svelte`
-- **THEN** SessionDetail 最顶部章节（top-bar）SHALL NOT 渲染与上方 TabBar 行底 border 紧贴的 border（即 SessionDetail 顶部首像素层 SHALL NOT 存在另一条 1 px border 与 TabBar 行底相邻）
+- **THEN** SessionDetail 最顶部章节（top-bar）SHALL NOT 渲染与上方 TabBar 行底 border 紧贴的 border（即 SessionDetail 顶部首像素层 SHALL NOT 存在另一条 1 px border 与 TabBar 行底相邻而形成 ≥ 2 px 视觉加粗）
 - **AND** SessionDetail 最顶部章节与 TabBar 之间用户视觉上 SHALL 仅看到一条来自 TabBar 行底的 1 px 分隔线
-- **AND** top-bar 自身**下方**（top-bar 与下方 conversation/content 区域之间）允许渲染 1 px `var(--color-border)` 分隔线用于区分头部章节与下方内容——该 border 与 TabBar 行底之间隔了整个 top-bar 高度，物理上不构成紧贴叠线
+- **AND** 本 Scenario SHALL NOT 禁止 top-bar 自身**下方**（top-bar 与下方 conversation/content 区域之间）渲染 1 px `var(--color-border)` 分隔线用于区分头部章节与下方内容——该 border 与 TabBar 行底之间隔了整个 top-bar 高度，物理上不构成紧贴叠线
 
 #### Scenario: 其它 view 顶部 border audit-only
 
