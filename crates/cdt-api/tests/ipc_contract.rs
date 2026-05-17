@@ -1055,6 +1055,165 @@ async fn list_sessions_sync_returns_paginated_response_shape() {
     assert!(json["total"].is_number());
 }
 
+// change `session-title-extraction-fix`: 契约测试守护 list_sessions_sync
+// 真路径计算 title 的新规则——防 IPC 层后续意外覆盖算法或字段名。
+// spec: openspec/specs/ipc-data-api/spec.md
+//   §`Title prefers slash command with non-empty args ...`
+//   §`Sanitize title against interruption and task-output instructions`
+//   §`Title length is bounded by TITLE_MAX_CHARS constant`
+
+fn write_user_line(sid: &str, uuid: &str, ts: &str, text: &str) -> String {
+    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        r#"{{"type":"user","uuid":"{uuid}","timestamp":"{ts}","sessionId":"{sid}","cwd":"/tmp","message":{{"role":"user","content":"{escaped}"}}}}"#
+    )
+}
+
+#[tokio::test]
+async fn list_sessions_sync_slash_with_args_becomes_title() {
+    let (api, tmp) = setup_api().await;
+    let project_id = "-tmp-slash-title";
+    let project_dir = tmp.path().join("projects").join(project_id);
+    tokio::fs::create_dir_all(&project_dir).await.unwrap();
+    let session_id = "sess-slash-with-args";
+    let path = project_dir.join(format!("{session_id}.jsonl"));
+    let lines = [
+        write_user_line(
+            session_id,
+            "u1",
+            "2026-05-03T10:00:00.000Z",
+            "<command-name>/impeccable</command-name><command-args>根据项目的已有代码生成一下设计规范</command-args>",
+        ),
+        write_user_line(session_id, "u2", "2026-05-03T10:00:01.000Z", "提一下PR吧"),
+    ];
+    tokio::fs::write(&path, lines.join("\n")).await.unwrap();
+
+    let resp = api
+        .list_sessions_sync(
+            project_id,
+            &PaginatedRequest {
+                page_size: 10,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let item = resp
+        .items
+        .iter()
+        .find(|s| s.session_id == session_id)
+        .expect("session 应出现在 sync 结果");
+    assert_eq!(
+        item.title.as_deref(),
+        Some("/impeccable 根据项目的已有代码生成一下设计规范"),
+        "带 args slash SHALL 直接作 title 而非降级到 fallback"
+    );
+
+    let json = serde_json::to_value(&resp).unwrap();
+    let json_item = json["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["sessionId"] == session_id)
+        .unwrap();
+    assert_eq!(
+        json_item["title"],
+        "/impeccable 根据项目的已有代码生成一下设计规范"
+    );
+    assert!(
+        json_item.get("session_id").is_none(),
+        "字段名 SHALL 是 camelCase"
+    );
+}
+
+#[tokio::test]
+async fn list_sessions_sync_skips_request_interrupted_in_title() {
+    let (api, tmp) = setup_api().await;
+    let project_id = "-tmp-interrupted-title";
+    let project_dir = tmp.path().join("projects").join(project_id);
+    tokio::fs::create_dir_all(&project_dir).await.unwrap();
+    let session_id = "sess-interrupted";
+    let path = project_dir.join(format!("{session_id}.jsonl"));
+    let lines = [
+        write_user_line(
+            session_id,
+            "u1",
+            "2026-05-03T10:00:00.000Z",
+            "[Request interrupted by user during tooling cycle]",
+        ),
+        write_user_line(
+            session_id,
+            "u2",
+            "2026-05-03T10:00:01.000Z",
+            "继续刚才的任务",
+        ),
+    ];
+    tokio::fs::write(&path, lines.join("\n")).await.unwrap();
+
+    let resp = api
+        .list_sessions_sync(
+            project_id,
+            &PaginatedRequest {
+                page_size: 10,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let item = resp
+        .items
+        .iter()
+        .find(|s| s.session_id == session_id)
+        .expect("session 应出现在 sync 结果");
+    assert_eq!(item.title.as_deref(), Some("继续刚才的任务"));
+    assert!(
+        !item
+            .title
+            .as_deref()
+            .unwrap_or_default()
+            .contains("[Request interrupted"),
+        "interrupted 字面量 SHALL NOT 进入 title"
+    );
+}
+
+#[tokio::test]
+async fn list_sessions_sync_long_title_truncated_at_500_chars() {
+    let (api, tmp) = setup_api().await;
+    let project_id = "-tmp-long-title";
+    let project_dir = tmp.path().join("projects").join(project_id);
+    tokio::fs::create_dir_all(&project_dir).await.unwrap();
+    let session_id = "sess-long";
+    let path = project_dir.join(format!("{session_id}.jsonl"));
+    let long_text: String = "字".repeat(700);
+    let line = write_user_line(session_id, "u1", "2026-05-03T10:00:00.000Z", &long_text);
+    tokio::fs::write(&path, line).await.unwrap();
+
+    let resp = api
+        .list_sessions_sync(
+            project_id,
+            &PaginatedRequest {
+                page_size: 10,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+    let item = resp
+        .items
+        .iter()
+        .find(|s| s.session_id == session_id)
+        .expect("session 应出现在 sync 结果");
+    let title = item.title.as_deref().unwrap_or_default();
+    assert!(
+        title.chars().count() <= cdt_api::TITLE_MAX_CHARS,
+        "title 字符数 {} 应 <= {}",
+        title.chars().count(),
+        cdt_api::TITLE_MAX_CHARS
+    );
+}
+
 #[tokio::test]
 async fn get_session_detail_missing_session_returns_error() {
     let (api, _tmp) = setup_api().await;

@@ -13,6 +13,7 @@ pub mod ipc;
 pub mod notifier;
 
 pub use http::{AppState, spawn_event_bridge, start_server};
+pub use ipc::session_metadata::TITLE_MAX_CHARS;
 pub use ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, ContextInfo, DataApi, LocalDataApi,
     METADATA_SCAN_CONCURRENCY, MemoryFileContent, MemoryLayer, MemoryLayerKind, PaginatedRequest,
