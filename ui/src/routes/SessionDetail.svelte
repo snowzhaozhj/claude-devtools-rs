@@ -713,8 +713,17 @@
               </div>
             {/if}
 
-            <!-- Last output (always visible) -->
-            <div class="ai-body msg-row-contained">
+            <!-- Last output (always visible).
+                 ongoing=true 时 `.ai-body` 退出 `.msg-row-contained`——后者
+                 用 `content-visibility: auto` 把离屏子树 layout/paint 跳过；
+                 OngoingBanner spinner 是持续 CSS animation，离屏被 throttle
+                 后表现为"半天才转一下"，即使 banner 滚回视口仍要等下一次 IO
+                 commit 才补帧。改动同 #108 给 mermaid-block 加的 :has 例外
+                 同源——animation/异步高度变化场景 SHALL 退出 contain。 -->
+            <div
+              class="ai-body"
+              class:msg-row-contained={!(i === lastAiIndex && detail.isOngoing)}
+            >
               {#if i === lastAiIndex && detail.isOngoing}
                 <!-- 对齐原版 LastOutputDisplay：最后 AI 组在 ongoing 时
                      banner 占 lastOutput 位置，结束后换回真正的内容 -->
