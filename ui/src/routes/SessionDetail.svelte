@@ -462,9 +462,9 @@
   {@const lastActivity = lastActivityTs(detail.chunks)}
   {@const totalTokens = m.inputTokens + m.outputTokens}
 
-  <!-- Top bar：4px accent rail + 18px 标题 + 副标题密度行（chunks · tools · tokens · last activity） -->
+  <!-- Top bar：18px 标题 + 副标题密度行（chunks · tools · tokens · last activity）
+       （原 4px accent rail 删除，违反 DESIGN.md absolute ban "side-stripe borders > 1px"） -->
   <div class="top-bar" class:top-bar-ongoing={detail.isOngoing}>
-    <span class="top-rail" aria-hidden="true"></span>
     <div class="top-titles">
       <h1 class="top-title">{firstUserTitle(detail.chunks)}</h1>
       <div class="top-stats" aria-label="Session statistics">
@@ -959,22 +959,6 @@
     background: var(--color-surface);
   }
 
-  .top-rail {
-    position: absolute;
-    left: 16px;
-    top: 14px;
-    bottom: 14px;
-    width: 3px;
-    border-radius: 2px;
-    background: var(--color-border-emphasis);
-    transition: background 320ms cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  .top-bar-ongoing .top-rail {
-    background: var(--color-accent-blue);
-    box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 25%, transparent);
-  }
-
   .top-titles {
     flex: 1;
     min-width: 0;
@@ -1037,6 +1021,9 @@
     user-select: none;
   }
 
+  /* 顶栏 LIVE 标记：success 绿色调（与 sidebar OngoingIndicator 同语义，
+     避免与 timeline / OngoingBanner 等其它 ongoing 信号在同屏堆叠成蓝色块）；
+     dot 保留 2.4s 极慢呼吸——让用户感知"系统在跑"，但幅度极小不抢注意力。 */
   .top-stat-live {
     display: inline-flex;
     align-items: center;
@@ -1044,23 +1031,26 @@
     margin-left: 2px;
     padding: 1px 7px 1px 6px;
     border-radius: 9999px;
-    background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
-    color: var(--color-accent-blue);
+    background: color-mix(in oklch, var(--color-success) 10%, transparent);
+    color: var(--color-success);
     font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.12em;
   }
 
-  /* 顶栏 LIVE 标记：静态实心点 + 静态光环。
-     "LIVE" 文字 + 颜色（accent-blue） + 光环已足够表达活跃状态，
-     呼吸动画属于装饰性，按用户"所有持续在动的都砍"原则去掉。 */
   .top-stat-live-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: currentColor;
-    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-success) 22%, transparent);
+    animation: top-live-pulse 2.4s ease-in-out infinite;
+  }
+
+  @keyframes top-live-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
   }
 
   .top-meta {
@@ -1381,12 +1371,10 @@
     transition: color 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .msg-ai-container-live {
-    border-left-color: var(--color-accent-blue);
-  }
-
+  /* timeline rail 在 ongoing 时不染色——避免与 timeline node / 顶栏 LIVE /
+     OngoingBanner 同屏堆叠成多处蓝色块。rail 保持中性 emphasis 灰，
+     仅 node + OngoingBanner 表达 live。 */
   .msg-ai-container-live::before {
-    color: var(--color-accent-blue);
     opacity: 0.85;
   }
 
@@ -1404,18 +1392,21 @@
     transition: border-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  /* ai-thread 节点的 live 状态：原 pulse 动画与底部 OngoingBanner / 顶栏
-     LIVE 重复传递同一 "streaming" 信号。改为静态实心蓝点 + 静态光环
-     box-shadow（"亮着的节点"语义），避免 3 处动画叠加。 */
+  /* ai-thread 节点的 live 状态：success 绿（与 sidebar OngoingIndicator /
+     顶栏 LIVE 同语义同色，让"ongoing"在全应用统一一种颜色，避免蓝/绿
+     混用）；静态实心圆 + 静态光环 box-shadow。 */
   .ai-thread-node-live {
-    border-color: var(--color-accent-blue);
-    background: var(--color-accent-blue);
+    border-color: var(--color-success);
+    background: var(--color-success);
     box-shadow:
       0 0 0 2px var(--color-surface),
-      0 0 0 4px color-mix(in oklch, var(--color-accent-blue) 28%, transparent);
+      0 0 0 4px color-mix(in oklch, var(--color-success) 28%, transparent);
   }
 
   @media (prefers-reduced-motion: reduce) {
+    .top-stat-live-dot {
+      animation: none;
+    }
     .msg-ai-container::before {
       display: none;
     }

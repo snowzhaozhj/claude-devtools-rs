@@ -1,8 +1,11 @@
 <!--
   OngoingBanner：嵌入最后一个 AIChunk 的 lastOutput 槽位，表达"流仍在进行"。
-  不再使用旋转 spinner（与 IDE 工具的稳态质感不符），改用 IDE-style
-  shimmer bar（横扫 1.6s）+ mono uppercase label，对齐 product register
-  下的"调试器进度指示器"语言，同时降低视觉噪音。
+
+  色彩：success 绿（与 sidebar OngoingIndicator / 顶栏 LIVE 一致）。原先用
+  accent-blue 会与 timeline node / 顶栏 LIVE 在同屏堆叠成多块蓝色——按
+  「ongoing 全应用统一一种颜色」原则收回到绿色。
+  动效：track 内 sweep 横扫 2.4s（比原 1.6s 更慢更克制），给用户最小的
+  "系统在跑"心跳，避免静态进度条带来的"卡死"感。
 -->
 <script lang="ts">
 </script>
@@ -25,9 +28,8 @@
     gap: 8px;
     padding: 10px 14px 12px;
     border-radius: 8px;
-    background: color-mix(in oklch, var(--color-accent-blue) 5%, transparent);
-    border: 1px solid color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 6%, transparent);
+    background: color-mix(in oklch, var(--color-success) 5%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-success) 22%, transparent);
     width: 100%;
   }
 
@@ -41,11 +43,9 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--color-accent-blue);
+    background: var(--color-success);
     flex-shrink: 0;
-    /* 静态光环替代 ping scale 动画——sweep bar 已表达 streaming
-       进度，避免与 pulse 重复传递同一信号导致视觉过载。 */
-    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 24%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-success) 22%, transparent);
   }
 
   .ongoing-label {
@@ -53,7 +53,7 @@
     font-size: 10.5px;
     font-weight: 700;
     letter-spacing: 0.14em;
-    color: var(--color-accent-blue);
+    color: var(--color-success);
     flex-shrink: 0;
   }
 
@@ -67,22 +67,39 @@
     min-width: 0;
   }
 
-  /* track + fill：静态进度条替代 1.6s 横扫 sweep。
-     "STREAMING" 文字 + 静态蓝点 + 静态填充条三个信号已足够表达
-     "正在流"，持续横扫属于装饰性动画，按用户"所有持续在动的都砍"
-     原则去掉。 */
+  /* track + sweep：2.4s 横扫（比原 1.6s 慢），让用户感知"在跑"但不抢注意力。
+     完全静态会让人感觉"卡死"，这是用户反馈直接驱动的取舍。 */
   .ongoing-track {
     position: relative;
     height: 2px;
     border-radius: 2px;
     overflow: hidden;
-    background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
+    background: color-mix(in oklch, var(--color-success) 10%, transparent);
   }
 
   .ongoing-sweep {
     position: absolute;
-    inset: 0 65% 0 0;
-    background: color-mix(in oklch, var(--color-accent-blue) 55%, transparent);
-    border-radius: 2px;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in oklch, var(--color-success) 70%, transparent) 50%,
+      transparent 100%
+    );
+    animation: ongoing-sweep 2.4s ease-in-out infinite;
+    transform: translateX(-100%);
+  }
+
+  @keyframes ongoing-sweep {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ongoing-sweep {
+      animation: none;
+      transform: translateX(0);
+      opacity: 0.45;
+    }
   }
 </style>
