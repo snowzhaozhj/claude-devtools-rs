@@ -41,7 +41,7 @@ describe("ContextPanel", () => {
     expect(screen.getByText("ContextPanel.svelte")).toBeInTheDocument();
 
     await fireEvent.click(screen.getByRole("button", { name: /1 tool/ }));
-    expect(screen.getByText("Grep")).toBeInTheDocument();
+    expect(screen.getByText("Bash")).toBeInTheDocument();
 
     expect(screen.getByText("Task #1: rename audit")).toBeInTheDocument();
     expect(screen.getByText("thinking")).toBeInTheDocument();

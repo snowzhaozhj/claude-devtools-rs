@@ -238,12 +238,26 @@ const aiChunkInterrupted: AIChunk = {
       model: 'claude-sonnet-4-6',
     },
   ],
-  metrics: emptyMetrics(),
+  metrics: { ...emptyMetrics(), toolCount: 1 },
   semanticSteps: [
     { kind: 'text', text: '继续往下', timestamp: ts(0.5) },
+    { kind: 'tool_execution', toolUseId: 'tu-active-2', toolName: 'Bash', timestamp: ts(0.52) },
     { kind: 'interruption', text: '[Request interrupted by user]', timestamp: ts(0.55) },
   ],
-  toolExecutions: [],
+  toolExecutions: [
+    {
+      toolUseId: 'tu-active-2',
+      toolName: 'Bash',
+      input: { command: 'pnpm --dir ui run check' },
+      output: { kind: 'text', text: '0 errors' },
+      isError: false,
+      startTs: ts(0.52),
+      endTs: ts(0.54),
+      sourceAssistantUuid: 'a-active-2',
+      outputOmitted: false,
+      outputBytes: 8,
+    },
+  ],
   subagents: [],
   slashCommands: [],
 }
@@ -322,7 +336,7 @@ export const multiProjectRichFixture: Fixture = {
           estimatedTokens: 480,
           toolCount: 1,
           toolBreakdown: [
-            { toolName: 'Grep', tokenCount: 320, isError: false, toolUseId: 'tu-active-1' },
+            { toolName: 'Bash', tokenCount: 320, isError: false, toolUseId: 'tu-active-2' },
           ],
         },
         {
@@ -442,7 +456,7 @@ export const multiProjectRichFixture: Fixture = {
             estimatedTokens: 480,
             toolCount: 1,
             toolBreakdown: [
-              { toolName: 'Grep', tokenCount: 320, isError: false, toolUseId: 'tu-active-1' },
+              { toolName: 'Bash', tokenCount: 320, isError: false, toolUseId: 'tu-active-2' },
             ],
           },
           {

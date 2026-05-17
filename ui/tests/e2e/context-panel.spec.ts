@@ -15,13 +15,14 @@ test.describe('context panel', () => {
 
     await page.getByRole('button', { name: /Context 7/ }).click()
     await expect(page.getByText('Visible Context')).toBeVisible({ timeout: 5_000 })
-    await page.getByLabel('Phase:').selectOption('1')
     await page.getByRole('button', { name: /1 tool/ }).click()
-    await page.getByRole('button', { name: /Grep/ }).click()
+    await page.getByRole('button', { name: /Bash/ }).click()
 
-    const chunk = page.locator('[data-chunk-id="a-active-1:0"]')
-    const tool = page.locator('[data-tool-use-id="tu-active-1"]')
+    const chunk = page.locator('[data-chunk-id="a-active-2:0"]')
+    const tool = page.locator('[data-tool-use-id="tu-active-2"]')
     await expect(chunk).toBeVisible({ timeout: 5_000 })
     await expect(tool).toBeVisible({ timeout: 5_000 })
+    await expect(chunk).toHaveClass(/msg-row-anchor-hit/)
+    await expect(tool).toHaveClass(/tool-anchor-hit/)
   })
 })
