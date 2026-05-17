@@ -799,7 +799,7 @@
 
             <!-- Display items (toggle visibility) -->
             {#if toolsVisible}
-              <div class="ai-tools-section msg-row-contained">
+              <div class="ai-tools-section">
                 {#each di.items as item, di_idx}
                   {#if item.type === "slash"}
                     {@const slashKey = `${chunk.chunkId}-slash-${di_idx}`}
