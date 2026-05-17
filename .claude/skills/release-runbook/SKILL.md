@@ -12,11 +12,17 @@ description: 完整发版流水线（preflight → bump → release-check → PR
 ## 一句话流程
 
 ```
-preflight → 分支 → bump 三处 → just release-check (会改 lock) →
-amend lock 进同一 commit → push PR → /wait-ci → codex 二审 → merge →
-main 拉新 → tag vX.Y.Z → push tag → 监控 release.yml →
-4 平台 asset 全到位 → publish draft
+preflight → 分支 → just release-bump X.Y.Z (bump 三处 + release-check + commit) →
+push PR → /wait-ci → codex 二审（按豁免规则可跳）→ merge →
+main 拉新 → tag vX.Y.Z → push tag → 监控 release.yml
+（workflow 末尾 publish job 自动 verify 17 个 asset + un-draft，无需人工 publish）
 ```
+
+**自动化点**（v0.5.5 之后）：
+- `just release-bump X.Y.Z` 把"sed 三处 + release-check + git add + commit"做成一步（详 `scripts/release-bump.sh`）
+- `release.yml` 末尾 `publish` job 自动校验 17 个必需 asset + `gh release edit --draft=false`，缺一即 fail 保留 draft 待人工介入
+
+Agent / 人工只在 **CI 红 / workflow build job 失败 / verify-asset 缺件** 三种异常时介入。
 
 ## 何时用 release-engineer subagent vs 本 skill
 
@@ -105,37 +111,37 @@ main 拉新 → tag vX.Y.Z → push tag → 监控 release.yml →
 
 不满足就先解决。
 
-### Step 1：bump 三处版本号
-
-调用 `bump-version` skill（已存在），或手动改：
-- `Cargo.toml` workspace `[workspace.package].version`
-- `src-tauri/Cargo.toml` `[package].version`
-- `src-tauri/tauri.conf.json` `version`
-
-### Step 2：`just release-check`
-
-会改 `Cargo.lock` + `src-tauri/Cargo.lock`。把这俩文件一起加进同一个 release commit（F5）。
-
-### Step 3：commit + push + 开 PR
-
-commit message 模板：`chore(release): X.Y.Z`。
+### Step 1：本地 bump + commit（一行）
 
 ```bash
-git add Cargo.toml Cargo.lock src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
-git commit -m "chore(release): X.Y.Z"
+just release-bump X.Y.Z
+```
+
+`scripts/release-bump.sh` 内部：
+1. 校验版本号格式（X.Y.Z 纯数字，拒 -rc/-beta，详 F2）
+2. 校验当前分支非 main / 工作树干净
+3. sed bump 三处版本号（`Cargo.toml` workspace + `src-tauri/Cargo.toml` + `src-tauri/tauri.conf.json`）
+4. 跑 `just release-check`（同步刷新两份 `Cargo.lock`，避免 F5）
+5. `git add` 固定 5 文件 + `git commit -m "chore(release): X.Y.Z"`
+
+不 push、不 open PR——这两步保留 Agent / 人工拍板。
+
+### Step 2：push + 开 PR
+
+```bash
 git push -u origin chore/release-X.Y.Z
 gh pr create --title "chore(release): X.Y.Z" --body "..."
 ```
 
-### Step 4：等 CI 全绿（调用 `wait-ci` skill）
+### Step 3：等 CI 全绿（调用 `wait-ci` skill）
 
 调用 `wait-ci` skill polling。任一 job 红：先看 F1–F7 是否命中已知 fix；命中则改 workflow 或 manifest 后 push fix commit；不命中则报告用户介入。
 
-### Step 5：codex 二审
+### Step 4：codex 二审
 
 按 `.claude/rules/codex-usage.md` 第 1 节判断——release commit 通常属于"显式豁免（bump version）"范畴，可跳过 codex 二审，但 PR 描述里写一句"未跑 codex（理由：纯 version bump）"留痕。如果这个 release 顺带改了 release.yml / Cargo manifest 不止版本号字段，那不算"纯 bump"，仍要跑 codex。
 
-### Step 6：merge + tag
+### Step 5：merge + tag
 
 ```bash
 gh pr merge <pr> --squash --delete-branch
@@ -144,22 +150,23 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-### Step 7：监控 release.yml
+### Step 6：监控 release.yml（自动 verify + publish）
 
 ```bash
 gh run list --workflow=release.yml --limit 3
-gh run watch <run-id>
+gh run watch <run-id> --exit-status
 ```
 
-任一 platform job 红：套 F1–F4 fix。
+workflow 结构：`create-release` → `build (matrix×4)` → `publish`（verify 17 个必需 asset + un-draft）。conclusion=success 即发版完成。
 
-### Step 8：4 平台 asset 全到位 → publish
+- 任一 build job 红：套 F1–F4 fix（matrix race / Windows MSI 字母版本号 / runner / minisign）
+- `publish` job 红：通常是某平台 asset 缺失——`gh release view vX.Y.Z --json assets -q '.assets[].name'` 对比 workflow `REQUIRED` 列表定位；常见是 build 跑了但 tauri-action 没上传成功，re-run failed jobs 即可
+- 全绿 → release 已自动 publish，不需要人工 `gh release edit --draft=false`
 
+仅当 workflow 内 publish job 缺失（fork / 老版本）时才回退到手工：
 ```bash
-gh release view vX.Y.Z --json assets -q '.assets | length'
+gh release edit vX.Y.Z --draft=false
 ```
-
-期望 ≥ 4（macOS arm64 + macOS x86_64 + Linux deb + Linux AppImage + Windows MSI 等）。全到位后 `gh release edit vX.Y.Z --draft=false` publish。
 
 ## 不要做
 

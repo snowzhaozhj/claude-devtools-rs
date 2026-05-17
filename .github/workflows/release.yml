@@ -132,3 +132,74 @@ jobs:
           # createRelease——根因修复见 fix/release-workflow-race。
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
+
+  # 末尾 gate：四平台 build 全成功后校验 asset 清单完整，再 un-draft。
+  # 任一 asset 缺失 → 保留 draft + fail，Agent / 人工再介入；
+  # 全齐 → 自动 publish，不再需要手动 `gh release edit --draft=false`。
+  publish:
+    name: Verify assets and publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required assets present
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          ASSETS=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | sort -u)
+
+          # 必需 asset 清单 = 4 平台首装包 + updater 链 (.app.tar.gz / .deb / -setup.exe + 各自 .sig) + latest.json。
+          # 缺一即 fail：draft 保留供 inspect，re-run workflow 或 Agent 介入。
+          REQUIRED=(
+            # macOS 首装包（dmg 不参与 updater，故无 .sig）
+            "Claude.DevTools_${VERSION}_aarch64.dmg"
+            "Claude.DevTools_${VERSION}_x64.dmg"
+            # macOS updater bundle (.app.tar.gz + .sig，updater 主力)
+            "Claude.DevTools_aarch64.app.tar.gz"
+            "Claude.DevTools_aarch64.app.tar.gz.sig"
+            "Claude.DevTools_x64.app.tar.gz"
+            "Claude.DevTools_x64.app.tar.gz.sig"
+            # Linux 首装包 + .sig（updater 优先用 .deb；AppImage / rpm 备用）
+            "Claude.DevTools_${VERSION}_amd64.deb"
+            "Claude.DevTools_${VERSION}_amd64.deb.sig"
+            "Claude.DevTools_${VERSION}_amd64.AppImage"
+            "Claude.DevTools_${VERSION}_amd64.AppImage.sig"
+            "Claude.DevTools-${VERSION}-1.x86_64.rpm"
+            "Claude.DevTools-${VERSION}-1.x86_64.rpm.sig"
+            # Windows 首装包 + .sig（updater 用 NSIS -setup.exe）
+            "Claude.DevTools_${VERSION}_x64-setup.exe"
+            "Claude.DevTools_${VERSION}_x64-setup.exe.sig"
+            "Claude.DevTools_${VERSION}_x64_en-US.msi"
+            "Claude.DevTools_${VERSION}_x64_en-US.msi.sig"
+            # updater 元信息
+            "latest.json"
+          )
+
+          total=$(printf '%s\n' "$ASSETS" | wc -l | tr -d ' ')
+          echo "Release $TAG 共 $total 个 asset"
+
+          missing=()
+          for f in "${REQUIRED[@]}"; do
+            if ! printf '%s\n' "$ASSETS" | grep -qFx "$f"; then
+              missing+=("$f")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::缺少必需 asset (${#missing[@]} 个):"
+            printf '::error::  - %s\n' "${missing[@]}"
+            echo "::error::Draft 保留供检查；修复后可 re-run 本 workflow 的 publish job"
+            exit 1
+          fi
+
+          echo "✓ 全部 ${#REQUIRED[@]} 个必需 asset 齐全"
+
+      - name: Publish release (un-draft)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "✓ Published ${GITHUB_REF_NAME}"
