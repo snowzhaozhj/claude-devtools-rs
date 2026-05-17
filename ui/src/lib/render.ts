@@ -124,6 +124,21 @@ renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
   return `<pre><code class="hljs">${highlighted}</code></pre>`;
 };
 
+renderer.table = function (token) {
+  let header = "";
+  for (const cell of token.header) header += this.tablecell(cell);
+  const thead = this.tablerow({ text: header });
+
+  let rows = "";
+  for (const row of token.rows) {
+    let rowHtml = "";
+    for (const cell of row) rowHtml += this.tablecell(cell);
+    rows += this.tablerow({ text: rowHtml });
+  }
+  const tbody = rows ? `<tbody>${rows}</tbody>` : "";
+  return `<div class="table-scroll"><table>\n<thead>\n${thead}</thead>\n${tbody}</table>\n</div>`;
+};
+
 marked.setOptions({ renderer, async: false, breaks: true });
 
 class LRU<V> {

@@ -2082,15 +2082,16 @@
     color: var(--prose-muted);
   }
   .prose :global(strong) { color: var(--prose-heading); }
-  .prose :global(table) {
-    min-width: 0;
+  .prose :global(.table-scroll) {
     max-width: 100%;
-    border-collapse: collapse;
-    margin: 0.6em 0;
-    font-size: 0.92em;
-    width: 100%;
-    display: block;
     overflow-x: auto;
+    margin: 0.6em 0;
+  }
+  .prose :global(table) {
+    border-collapse: collapse;
+    font-size: 0.92em;
+    width: max-content;
+    min-width: 100%;
   }
   .prose :global(th), .prose :global(td) {
     border: 1px solid var(--prose-table-border);

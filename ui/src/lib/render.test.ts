@@ -2,7 +2,16 @@ import { describe, expect, test } from 'vitest'
 
 import { renderMarkdown } from './render'
 
-describe('renderMarkdown code highlighting', () => {
+describe('renderMarkdown', () => {
+  test('markdown table 保留 table 语义并用外层容器滚动', () => {
+    const html = renderMarkdown('| name | value |\n| --- | --- |\n| alpha | beta |')
+
+    expect(html).toContain('<div class="table-scroll"><table>')
+    expect(html).toContain('<thead>')
+    expect(html).toContain('<tbody>')
+    expect(html).toContain('<td>alpha</td>')
+  })
+
   test('声明语言代码块继续输出 highlight.js token', () => {
     const html = renderMarkdown('```rust\nfn main() { let value = 1; }\n```')
 
