@@ -1390,6 +1390,7 @@
     align-items: flex-start;
     gap: 10px;
     min-width: 0;
+    max-width: 100%;
     /* 不限制 row max-width，让 row right edge = stack right edge = conversation right padding */
   }
 
@@ -1397,6 +1398,9 @@
     border-radius: 14px;
     padding: 11px 15px;
     min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    flex: 0 1 auto;
     /* 不限制 bubble width — user-stack max-width 78% 已隐式限宽；
        bubble 在 stack 内自然填满，避免再叠 max-width 让短消息无谓收窄
        (用户反馈 visual b)。 */
@@ -2014,9 +2018,12 @@
 
   /* ── Prose (markdown) ── */
   .prose {
+    min-width: 0;
+    max-width: 100%;
     font-size: 14px;
     color: var(--prose-body);
     line-height: 1.65;
+    overflow-wrap: anywhere;
     word-break: break-word;
   }
   .prose :global(p) { margin: 0.35em 0; }
@@ -2033,14 +2040,19 @@
   .prose :global(ul), .prose :global(ol) { margin: 0.35em 0; padding-left: 1.4em; }
   .prose :global(li) { margin: 0.15em 0; }
   .prose :global(code) {
+    max-width: 100%;
     background: var(--prose-code-bg);
     color: var(--prose-code-text);
     padding: 1px 5px;
     border-radius: 4px;
     font-family: var(--font-mono);
     font-size: 0.87em;
+    overflow-wrap: anywhere;
   }
   .prose :global(pre) {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
     background: var(--prose-pre-bg);
     border: 1px solid var(--prose-pre-border);
     border-radius: 6px;
@@ -2050,10 +2062,16 @@
     line-height: 1.5;
   }
   .prose :global(pre code) {
+    display: block;
+    width: max-content;
+    min-width: 100%;
+    max-width: none;
     background: none;
     color: var(--color-text-secondary);
     padding: 0;
     border-radius: 0;
+    overflow-wrap: normal;
+    word-break: normal;
   }
   .prose :global(a) { color: var(--prose-link); text-decoration: none; }
   .prose :global(a:hover) { text-decoration: underline; }
@@ -2065,10 +2083,14 @@
   }
   .prose :global(strong) { color: var(--prose-heading); }
   .prose :global(table) {
+    min-width: 0;
+    max-width: 100%;
     border-collapse: collapse;
     margin: 0.6em 0;
     font-size: 0.92em;
     width: 100%;
+    display: block;
+    overflow-x: auto;
   }
   .prose :global(th), .prose :global(td) {
     border: 1px solid var(--prose-table-border);

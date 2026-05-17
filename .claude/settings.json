@@ -47,5 +47,8 @@
         ]
       }
     ]
+  },
+  "worktree": {
+    "symlinkDirectories": ["ui/node_modules"]
   }
 }
