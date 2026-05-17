@@ -1900,11 +1900,6 @@
     line-height: 1.6;
   }
 
-  /* ── Compact ──
-     Token 压缩是会话里的 hero moment：context 跳水。
-     用一条贯穿宽度的 amber rail + 居中 token delta 跨度（pre → delta → post），
-     替代原本朴素的左对齐 amber 横条。
-  */
   .msg-row-compact {
     padding: 18px 0;
     justify-content: stretch;
@@ -1916,10 +1911,10 @@
   }
 
   .compact-button {
-    display: grid;
-    grid-template-columns: auto auto 1fr auto auto;
+    display: flex;
     align-items: center;
-    column-gap: 10px;
+    flex-wrap: wrap;
+    gap: 8px 10px;
     width: 100%;
     padding: 12px 16px;
     background: linear-gradient(
@@ -1928,7 +1923,6 @@
       color-mix(in oklch, var(--color-warning) 4%, transparent) 100%
     );
     border: 1px solid color-mix(in oklch, var(--color-warning) 32%, transparent);
-    border-left-width: 3px;
     border-radius: 10px;
     color: var(--color-warning-text);
     cursor: pointer;
@@ -1980,11 +1974,11 @@
   }
 
   .compact-token-delta {
-    justify-self: center;
     display: inline-flex;
     align-items: baseline;
     gap: 8px;
     min-width: 0;
+    max-width: 100%;
     overflow: hidden;
     white-space: nowrap;
     font-size: 12.5px;
@@ -1992,12 +1986,7 @@
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
-  /* "freed" 标记：dot + bold text 装饰，不依赖 border 做组件边界。
-     codex 二审 bug 2 + 二轮回归：原填充 chip 浅色对比 4.05:1（< AA 4.5）；
-     outline 风格修复后深色 border 仅 2.77:1（< WCAG 1.4.11 non-text 3:1）。
-     dot 与文字均用 var(--color-success) currentColor，浅色 4.76:1（AA pass，
-     按 sRGB），深色 9.58:1，绕开 border 对比度问题，且更符合 product
-     register 的"克制"——VS Code git diff 风的 IDE 标记，而非营销 chip。 */
+
   .compact-token-freed {
     display: inline-flex;
     align-items: center;
