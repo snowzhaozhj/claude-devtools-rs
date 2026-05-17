@@ -13,7 +13,6 @@
     type PaginatedResponse,
   } from "../lib/api";
   import { loadProjectData } from "../lib/projectDataStore.svelte";
-  import SidebarHeader from "./SidebarHeader.svelte";
   import SessionContextMenu from "./SessionContextMenu.svelte";
   import OngoingIndicator from "./OngoingIndicator.svelte";
   import SkeletonList from "./SkeletonList.svelte";
@@ -28,7 +27,6 @@
     getHiddenIds,
     getHiddenCount,
     loadProjectPrefs,
-    toggleSidebarCollapsed,
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
@@ -502,14 +500,6 @@
   style:min-width="{collapsed ? 0 : sidebarWidth}px"
   aria-hidden={collapsed}
 >
-  <SidebarHeader
-    {projects}
-    {repositoryGroups}
-    {selectedProjectId}
-    {onSelectProject}
-    onToggleCollapsed={toggleSidebarCollapsed}
-  />
-
   {#if selectedProjectId && memoryCount > 0}
     <button
       class="memory-entry"
@@ -756,7 +746,7 @@
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    /* 不加 border-bottom：原版 sidebar 内只有 SidebarHeader 一条顶部
+    /* 不加 border-bottom：chrome 已在 sidebar 上方持有 1 px 分隔线，sidebar 内只在
        border，search filter bar 跟 list 之间靠 padding 视觉分隔即可。
        加 border 会让 sidebar 内出现第二条横线，跟右侧 TabBar 唯一一
        条横线对不齐（用户视觉上的「分隔线没齐平」）。 */

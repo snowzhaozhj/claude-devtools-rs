@@ -1064,12 +1064,15 @@
      左侧 4px accent rail + 18px 标题 + 副标题密度行（counts · tokens · last activity · LIVE 标记）
      标题字号从 14/500 跃升至 18/650，与 prose body / metadata 形成 18→14→11 三档清晰节奏。
   */
+  /* 顶部 border 移除：与上方 TabBar 行底 1 px border 紧贴会形成视觉加粗
+     幻觉（左侧 tab 宽度的下划线与全宽 border 错位），详见 change
+     unified-title-bar design D8 + app-chrome spec scenario
+     "SessionDetail 顶部不与 TabBar 行底 border 重叠"。 */
   .top-bar {
     position: relative;
     display: flex;
     align-items: center;
     padding: 14px 24px 14px 28px;
-    border-bottom: 1px solid var(--color-border);
     gap: 16px;
     flex-shrink: 0;
     background: var(--color-surface);

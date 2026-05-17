@@ -5,7 +5,9 @@
  * 进度回调直接写入 store；后端不中转 download progress event。
  *
  * 与后端 `updater://available` 事件配合：startup 检查在后端发送，
- * 前端 listen 后写入 store；`available` 状态触发 UpdateBanner 三按钮交互。
+ * 前端 listen 后写入 store；`available` 状态由 `UnifiedTitleBar` 内
+ * `UpdateStatusPill` + `UpdatePopover` 接管渲染与三按钮交互
+ * （change `unified-title-bar` 起 banner 模式归零）。
  *
  * 行为契约：openspec/specs/app-auto-update/spec.md
  */
