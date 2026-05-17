@@ -343,6 +343,24 @@
     return r;
   }
 
+  function countByKind(chunks: Chunk[]): { ai: number; user: number } {
+    let ai = 0;
+    let user = 0;
+    for (const c of chunks) {
+      if (c.kind === "ai") ai++;
+      else if (c.kind === "user") user++;
+    }
+    return { ai, user };
+  }
+
+  function lastActivityTs(chunks: Chunk[]): string | null {
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      const t = chunks[i].timestamp;
+      if (t) return t;
+    }
+    return null;
+  }
+
   function fk(n: number): string {
     if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
     if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
@@ -440,17 +458,68 @@
   <div class="state-msg state-err">{error}</div>
 {:else if detail}
   {@const m = sumMetrics(detail.chunks)}
+  {@const counts = countByKind(detail.chunks)}
+  {@const lastActivity = lastActivityTs(detail.chunks)}
+  {@const totalTokens = m.inputTokens + m.outputTokens}
 
-  <!-- Top bar -->
-  <div class="top-bar">
-    <span class="top-title">{firstUserTitle(detail.chunks)}</span>
+  <!-- Top bar：4px accent rail + 18px 标题 + 副标题密度行（chunks · tools · tokens · last activity） -->
+  <div class="top-bar" class:top-bar-ongoing={detail.isOngoing}>
+    <span class="top-rail" aria-hidden="true"></span>
+    <div class="top-titles">
+      <h1 class="top-title">{firstUserTitle(detail.chunks)}</h1>
+      <div class="top-stats" aria-label="Session statistics">
+        <span class="top-stat">
+          <span class="top-stat-num">{counts.ai}</span>
+          <span class="top-stat-unit">AI</span>
+        </span>
+        <span class="top-stat-sep">·</span>
+        <span class="top-stat">
+          <span class="top-stat-num">{counts.user}</span>
+          <span class="top-stat-unit">USER</span>
+        </span>
+        <span class="top-stat-sep">·</span>
+        <span class="top-stat">
+          <span class="top-stat-num">{m.toolCount}</span>
+          <span class="top-stat-unit">TOOLS</span>
+        </span>
+        {#if totalTokens > 0}
+          <span class="top-stat-sep">·</span>
+          <span class="top-stat">
+            <span class="top-stat-num">{fk(totalTokens)}</span>
+            <span class="top-stat-unit">TOK</span>
+          </span>
+        {/if}
+        {#if lastActivity}
+          <span class="top-stat-sep">·</span>
+          <span class="top-stat top-stat-time">
+            <span class="top-stat-unit">LAST</span>
+            <span class="top-stat-num">{ftime(lastActivity)}</span>
+          </span>
+        {/if}
+        {#if detail.isOngoing}
+          <span class="top-stat-live" aria-label="Live">
+            <span class="top-stat-live-dot"></span>
+            LIVE
+          </span>
+        {/if}
+      </div>
+    </div>
     <div class="top-meta">
       {#if contextCount > 0}
         <button
+          type="button"
           class="top-badge"
           class:top-badge-active={contextPanelVisible}
           onclick={() => contextPanelVisible = !contextPanelVisible}
-        >Context ({contextCount})</button>
+          aria-pressed={contextPanelVisible}
+        >
+          <svg class="top-badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+            <path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z" />
+          </svg>
+          <span>Context</span>
+          <span class="top-badge-count">{contextCount}</span>
+        </button>
       {/if}
     </div>
   </div>
@@ -478,55 +547,63 @@
         {#if text || images.length > 0 || taskNotifications.length > 0}
           <div class="msg-row msg-row-user msg-row-contained">
             <div class="msg-spacer"></div>
-            <div class="msg-bubble msg-bubble-user">
-              <div class="msg-bubble-header">
-                <span class="msg-time">{ftime(chunk.timestamp)}</span>
-                <span class="msg-who-user">You</span>
-                <span class="msg-avatar-user">
+            <div class="user-stack">
+              <!-- meta row 外置在 bubble 上方，右边缘紧贴 conversation 内右
+                   padding（= AI .ai-header-row 内 time 的同一 x 列）。
+                   "YOU"在前 / time 在后，让 time 真正落在最右、形成"时间戳列"。 -->
+              <div class="user-meta">
+                <span class="user-meta-name">You</span>
+                <span class="user-meta-sep">·</span>
+                <span class="user-meta-time">{ftime(chunk.timestamp)}</span>
+              </div>
+              <div class="user-row">
+                <div class="msg-bubble msg-bubble-user">
+                  {#if text}
+                    <div class="prose lazy-md" {@attach attachMarkdown(text, "user")}></div>
+                  {/if}
+                {#each images as img (img.blockId)}
+                  <ImageBlock
+                    source={img.source}
+                    rootSessionId={sessionId}
+                    sessionId={sessionId}
+                    blockId={img.blockId}
+                  />
+                {/each}
+                {#each taskNotifications as notif (notif.taskId)}
+                  {@const isFailed = notif.status === "failed" || notif.status === "error"}
+                  {@const isCompleted = notif.status === "completed"}
+                  {@const cmdMatch = /"([^"]+)"/.exec(notif.summary)}
+                  {@const cmdName = cmdMatch?.[1] ?? notif.summary}
+                  {@const exitMatch = /\(exit code (\d+)\)/.exec(notif.summary)}
+                  {@const exitCode = exitMatch?.[1]}
+                  {@const fileBase = notif.outputFile.split("/").pop() ?? ""}
+                  <div
+                    class="task-notif"
+                    class:task-notif-done={isCompleted}
+                    class:task-notif-fail={isFailed}
+                  >
+                    <span class="task-notif-icon" aria-hidden="true">
+                      {#if isFailed}✕{:else if isCompleted}✓{:else}○{/if}
+                    </span>
+                    <div class="task-notif-body">
+                      <div class="task-notif-name">{cmdName || notif.taskId}</div>
+                      <div class="task-notif-meta">
+                        <span class="task-notif-status">{notif.status}</span>
+                        {#if exitCode != null}
+                          <span>exit {exitCode}</span>
+                        {/if}
+                        {#if fileBase}
+                          <span class="task-notif-file">{fileBase}</span>
+                        {/if}
+                      </div>
+                    </div>
+                  </div>
+                  {/each}
+                </div>
+                <span class="user-avatar" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html USER_SVG}</svg>
                 </span>
               </div>
-              {#if text}
-                <div class="prose lazy-md" {@attach attachMarkdown(text, "user")}></div>
-              {/if}
-              {#each images as img (img.blockId)}
-                <ImageBlock
-                  source={img.source}
-                  rootSessionId={sessionId}
-                  sessionId={sessionId}
-                  blockId={img.blockId}
-                />
-              {/each}
-              {#each taskNotifications as notif (notif.taskId)}
-                {@const isFailed = notif.status === "failed" || notif.status === "error"}
-                {@const isCompleted = notif.status === "completed"}
-                {@const cmdMatch = /"([^"]+)"/.exec(notif.summary)}
-                {@const cmdName = cmdMatch?.[1] ?? notif.summary}
-                {@const exitMatch = /\(exit code (\d+)\)/.exec(notif.summary)}
-                {@const exitCode = exitMatch?.[1]}
-                {@const fileBase = notif.outputFile.split("/").pop() ?? ""}
-                <div
-                  class="task-notif"
-                  class:task-notif-done={isCompleted}
-                  class:task-notif-fail={isFailed}
-                >
-                  <span class="task-notif-icon" aria-hidden="true">
-                    {#if isFailed}✕{:else if isCompleted}✓{:else}○{/if}
-                  </span>
-                  <div class="task-notif-body">
-                    <div class="task-notif-name">{cmdName || notif.taskId}</div>
-                    <div class="task-notif-meta">
-                      <span class="task-notif-status">{notif.status}</span>
-                      {#if exitCode != null}
-                        <span>exit {exitCode}</span>
-                      {/if}
-                      {#if fileBase}
-                        <span class="task-notif-file">{fileBase}</span>
-                      {/if}
-                    </div>
-                  </div>
-                </div>
-              {/each}
             </div>
           </div>
         {/if}
@@ -537,6 +614,8 @@
         {@const summaryText = buildSummary(di.items)}
         {@const toolsVisible = isChunkToolsVisible(chunk)}
         {@const interruptions = chunk.semanticSteps.filter((s) => s.kind === "interruption")}
+        {@const isLastAi = i === lastAiIndex}
+        {@const isLiveTail = isLastAi && detail.isOngoing}
         <!--
           对齐原版 AIChatGroup.tsx:234-248 "Get the LAST assistant message's
           usage (represents current context window snapshot)"——Anthropic API
@@ -548,9 +627,14 @@
         {@const headerOutputTokens = lastUsage?.output_tokens ?? 0}
         {@const headerCacheRead = lastUsage?.cache_read_input_tokens ?? 0}
         {@const headerCacheCreation = lastUsage?.cache_creation_input_tokens ?? 0}
-        {@const totalTokens = headerInputTokens + headerOutputTokens + headerCacheRead + headerCacheCreation}
+        {@const aiTotalTokens = headerInputTokens + headerOutputTokens + headerCacheRead + headerCacheCreation}
         <div class="msg-row msg-row-ai">
-          <div class="msg-ai-container">
+          <div
+            class="msg-ai-container"
+            class:msg-ai-container-live={isLiveTail}
+            class:msg-ai-container-tools-open={toolsVisible}
+          >
+            <span class="ai-thread-node" class:ai-thread-node-live={isLiveTail} aria-hidden="true"></span>
             <!-- AI header -->
             <div class="ai-header-row">
               <span class="ai-avatar" aria-hidden="true">
@@ -581,7 +665,7 @@
                 </button>
               {/if}
               <span class="ai-header-spacer"></span>
-              {#if totalTokens > 0}
+              {#if aiTotalTokens > 0}
                 <span class="ai-tokens">
                   <!-- lucide Info：对齐原版 TokenUsageDisplay.tsx 的 Info icon 前缀 -->
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ai-tokens-info" aria-hidden="true">
@@ -589,9 +673,9 @@
                     <path d="M12 16v-4" />
                     <path d="M12 8h.01" />
                   </svg>
-                  <span>{fk(totalTokens)}</span>
+                  <span>{fk(aiTotalTokens)}</span>
                   <span class="ai-tokens-popover" role="tooltip">
-                    <span class="tok-row tok-row-total"><span>Total</span><span>{totalTokens.toLocaleString()}</span></span>
+                    <span class="tok-row tok-row-total"><span>Total</span><span>{aiTotalTokens.toLocaleString()}</span></span>
                     <span class="tok-row"><span>Input</span><span>{headerInputTokens.toLocaleString()}</span></span>
                     <span class="tok-row"><span>Output</span><span>{headerOutputTokens.toLocaleString()}</span></span>
                     <span class="tok-row"><span>Cache create</span><span>{headerCacheCreation.toLocaleString()}</span></span>
@@ -716,10 +800,10 @@
             <!-- Last output (always visible).
                  ongoing=true 时 `.ai-body` 退出 `.msg-row-contained`——后者
                  用 `content-visibility: auto` 把离屏子树 layout/paint 跳过；
-                 OngoingBanner spinner 是持续 CSS animation，离屏被 throttle
-                 后表现为"半天才转一下"，即使 banner 滚回视口仍要等下一次 IO
-                 commit 才补帧。改动同 #108 给 mermaid-block 加的 :has 例外
-                 同源——animation/异步高度变化场景 SHALL 退出 contain。 -->
+                 OngoingBanner 的 ping/sweep CSS animation 离屏被 throttle
+                 后会"半天才转一下"（#121 spinner 同源问题），即使 banner
+                 滚回视口仍要等下一次 IO commit 才补帧。同 #108 给 mermaid-block
+                 加的 :has 例外同源——animation/异步高度变化场景 SHALL 退出 contain。 -->
             <div
               class="ai-body"
               class:msg-row-contained={!(i === lastAiIndex && detail.isOngoing)}
@@ -835,7 +919,7 @@
     font-weight: 500;
     letter-spacing: 0.03em;
     padding: 1px 6px;
-    border-radius: var(--radius-xs);
+    border-radius: 4px;
     border: 1px solid transparent;
     flex-shrink: 0;
   }
@@ -855,24 +939,125 @@
   }
   .state-err { color: var(--tool-result-error-text); }
 
-  /* ── Top bar ── */
+  /* ── Top bar ──
+     左侧 4px accent rail + 18px 标题 + 副标题密度行（counts · tokens · last activity · LIVE 标记）
+     标题字号从 14/500 跃升至 18/650，与 prose body / metadata 形成 18→14→11 三档清晰节奏。
+  */
   .top-bar {
+    position: relative;
     display: flex;
     align-items: center;
-    padding: 10px 24px;
+    padding: 14px 24px 14px 28px;
     border-bottom: 1px solid var(--color-border);
-    gap: 12px;
+    gap: 16px;
     flex-shrink: 0;
+    background: var(--color-surface);
+  }
+
+  .top-rail {
+    position: absolute;
+    left: 16px;
+    top: 14px;
+    bottom: 14px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--color-border-emphasis);
+    transition: background 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .top-bar-ongoing .top-rail {
+    background: var(--color-accent-blue);
+    box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 25%, transparent);
+  }
+
+  .top-titles {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
 
   .top-title {
-    flex: 1;
-    font-size: 14px;
-    font-weight: 500;
+    font-size: 18px;
+    font-weight: 650;
+    line-height: 1.25;
+    letter-spacing: -0.005em;
     color: var(--color-text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    margin: 0;
+  }
+
+  .top-stats {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.2;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .top-stat {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+  }
+
+  .top-stat-num {
+    color: var(--color-text-secondary);
+    font-weight: 600;
+  }
+
+  .top-stat-unit {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+    color: var(--color-text-muted);
+    font-weight: 500;
+  }
+
+  .top-stat-time .top-stat-num {
+    color: var(--color-text-muted);
+    font-weight: 500;
+  }
+
+  .top-stat-sep {
+    color: var(--color-border-emphasis);
+    font-weight: 600;
+    user-select: none;
+  }
+
+  .top-stat-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 2px;
+    padding: 1px 7px 1px 6px;
+    border-radius: 9999px;
+    background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
+    color: var(--color-accent-blue);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+  }
+
+  .top-stat-live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: top-live-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  @keyframes top-live-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
   }
 
   .top-meta {
@@ -882,27 +1067,69 @@
   }
 
   .top-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: 12px;
+    font-weight: 500;
     color: var(--color-text-secondary);
-    background: var(--context-btn-bg, var(--color-surface-raised));
-    padding: 6px 10px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--color-border-emphasis);
-    box-shadow: var(--shadow-sm, 0 2px 6px rgba(0, 0, 0, 0.08));
+    background: transparent;
+    padding: 6px 10px 6px 9px;
+    border-radius: 6px;
+    border: 1px solid transparent;
     cursor: pointer;
     font-family: inherit;
-    transition: var(--bubble-transition);
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  }
+
+  .top-badge-icon {
+    width: 13px;
+    height: 13px;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+  }
+
+  .top-badge-count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    padding: 0 6px;
+    border-radius: 9999px;
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border);
+    line-height: 1.5;
   }
 
   .top-badge:hover {
-    background: var(--context-btn-bg-hover, var(--tool-item-hover-bg));
+    background: var(--color-surface-raised);
     color: var(--color-text);
+    border-color: var(--color-border);
+  }
+
+  .top-badge:hover .top-badge-icon {
+    color: var(--color-text-secondary);
+  }
+
+  .top-badge:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: 2px;
   }
 
   .top-badge-active {
-    background: var(--context-btn-active-bg, var(--color-border-emphasis));
-    color: var(--context-btn-active-text, var(--color-text));
-    border-color: var(--color-border-emphasis);
+    background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
+    color: var(--color-accent-blue);
+    border-color: color-mix(in oklch, var(--color-accent-blue) 35%, transparent);
+  }
+
+  .top-badge-active .top-badge-icon {
+    color: var(--color-accent-blue);
+  }
+
+  .top-badge-active .top-badge-count {
+    background: color-mix(in oklch, var(--color-accent-blue) 14%, transparent);
+    border-color: transparent;
+    color: var(--color-accent-blue);
   }
 
   /* ── Content area ── */
@@ -915,17 +1142,25 @@
     min-width: 0;
   }
 
-  /* ── Conversation ── */
+  /* ── Conversation ──
+     节奏：从 4px 全统一 gap 改为 14px 默认（user→ai 之间 18px，user 是新轮起点要换气）。
+  */
   .conversation {
     flex: 1;
     min-width: 0;
     overflow-y: scroll;
     overflow-x: hidden;
     scrollbar-gutter: stable;
-    padding: 16px 24px 48px;
+    padding: 20px 28px 56px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 14px;
+  }
+
+  /* user→ai 节奏：用户是新一轮 turn 起点，前后视觉换气 */
+  .msg-row-user + .msg-row-ai,
+  .msg-row-ai + .msg-row-user {
+    margin-top: 4px;
   }
 
   .msg-row {
@@ -946,69 +1181,122 @@
 
   .msg-spacer { flex: 1; min-width: 80px; }
 
-  /* ── User bubble ── */
+  /* ── User bubble ──
+     时间外置在 bubble 上方右对齐到 conversation 内 right padding（即与 AI
+     .ai-header-row 内 time 落在同一垂直 column）；bubble + 30×30 indigo
+     avatar 横向排列；bubble 14.5px + inset top 高光 + 微 chiaroscuro shadow。
+  */
   .msg-row-user {
     justify-content: flex-end;
   }
 
+  .user-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    min-width: 0;
+    max-width: 78%;
+    /* msg-row-user justify-content: flex-end → stack 整段右对齐到
+       conversation 内 right padding，与 AI .ai-msg-container 的 right edge
+       共线（因为 ai-msg-container width: 100%，无 right padding）。 */
+  }
+
+  .user-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    line-height: 1.2;
+    /* 紧贴 user-stack 右边缘——与 ai-msg-container 的 right edge 共线 */
+  }
+
+  .user-meta-name {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .user-meta-sep {
+    color: var(--color-border-emphasis);
+    font-size: 11px;
+  }
+
+  .user-meta-time {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    color: var(--color-text-muted);
+  }
+
+  .user-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+    /* 不限制 row max-width，让 row right edge = stack right edge = conversation right padding */
+  }
+
   .msg-bubble {
-    max-width: 75%;
-    border-radius: var(--radius-bubble);
-    padding: var(--bubble-padding-l0);
+    border-radius: 14px;
+    padding: 11px 15px;
+    min-width: 0;
+    /* 不限制 bubble width — user-stack max-width 78% 已隐式限宽；
+       bubble 在 stack 内自然填满，避免再叠 max-width 让短消息无谓收窄
+       (用户反馈 visual b)。 */
   }
 
   .msg-bubble-user {
     background: var(--chat-user-bg);
     color: var(--chat-user-text);
     border: 1px solid var(--chat-user-border);
-    box-shadow: var(--chat-user-shadow);
+    box-shadow:
+      0 1px 2px rgba(60, 55, 45, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    font-size: 14.5px;
+    line-height: 1.55;
   }
 
-  .msg-bubble-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
+  :global([data-theme="dark"]) .msg-bubble-user,
+  :global([data-theme="system"]) .msg-bubble-user {
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
 
-  .msg-time {
-    font-size: 11px;
-    color: var(--color-text-muted);
-  }
-
-  .msg-who-user {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--color-text-secondary);
-  }
-
-  .msg-avatar-user {
+  .user-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: var(--color-text-secondary);
+    flex-shrink: 0;
+    color: var(--color-accent-indigo);
+    background: color-mix(in oklch, var(--color-accent-indigo) 8%, var(--color-surface));
+    border: 1px solid color-mix(in oklch, var(--color-accent-indigo) 32%, transparent);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    margin-top: 2px;
   }
 
-  .msg-avatar-user svg {
-    width: var(--bubble-icon-md);
-    height: var(--bubble-icon-md);
+  .user-avatar svg {
+    width: 14px;
+    height: 14px;
   }
 
-  /* task-notification 行：嵌在 User bubble 内部，padding 故意比 banner 紧
-     (6/10 而非 banner 10/14) 避免与 user bubble 自己的 10/14 padding 形成
-     双层 frame 视觉肥肿。bg/border/meta-text 走 --task-notif-* 同色系 token
-     (= chat-user-border 等 user bubble border 色)，视觉上是"user bubble 内嵌
-     子区域"的延伸，**不抢主消息焦点**。详 app.css token 注释——这里有意降
-     bg contrast 让 hierarchy 正确（codex 1.5 阈值在嵌套通知场景被反对）。 */
+  /* task-notification 卡片：移植自原版 UserChatGroup.tsx 末尾的 task notif 渲染 */
   .task-notif {
     display: flex;
     align-items: flex-start;
-    gap: 8px;
-    padding: 6px 10px;
+    gap: 10px;
+    padding: 6px 12px;
     margin-top: 6px;
-    border-radius: var(--radius-xs);
-    background: var(--task-notif-bg);
-    border: 1px solid var(--task-notif-border);
+    border-radius: 8px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
   }
 
   .task-notif-icon {
@@ -1030,7 +1318,7 @@
   .task-notif-name {
     font-size: 12px;
     font-weight: 500;
-    color: var(--color-text);
+    color: var(--color-text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1041,7 +1329,7 @@
     align-items: center;
     gap: 8px;
     font-size: 10px;
-    color: var(--task-notif-meta-text);
+    color: var(--color-text-muted);
   }
 
   .task-notif-status { text-transform: capitalize; }
@@ -1052,96 +1340,197 @@
     max-width: 240px;
   }
 
-  /* ── AI message ── */
+  /* ── AI message ──
+     thread rail 是页面最重要的视觉脉络。
+     - 默认：3px solid border-emphasis；左缘外置 timeline node（7×7 圆点）
+     - ongoing tail：accent-blue + glow + 顶端"扫光"动效
+     节奏：thread rail 把所有 AIChunk 串成执行轨迹，避免"消息列表"感。
+  */
   .msg-row-ai {
     justify-content: flex-start;
+    /* 给 timeline node 流出在容器外的空间 */
+    padding-left: 8px;
   }
 
   .msg-ai-container {
+    position: relative;
     width: 100%;
-    max-width: 95%;
+    /* 不限制 max-width，让 AI header 内 time 的右边缘 = conversation
+       内 right padding（与 user-meta time 同一 x 列）。 */
     min-width: 0;
-    border-left: 2px solid var(--chat-ai-border);
-    padding-left: 12px;
+    border-left: 3px solid var(--color-border-emphasis);
+    padding-left: 16px;
+    transition: border-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .msg-ai-container::before {
+    /* 顶端 cap：让 thread 头部有一个可见 anchor 点，避免边线"突兀"。 */
+    content: "";
+    position: absolute;
+    left: -3px;
+    top: 0;
+    width: 3px;
+    height: 16px;
+    background: linear-gradient(180deg, transparent 0%, currentColor 100%);
+    color: var(--color-border-emphasis);
+    transition: color 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .msg-ai-container-live {
+    border-left-color: var(--color-accent-blue);
+  }
+
+  .msg-ai-container-live::before {
+    color: var(--color-accent-blue);
+    opacity: 0.85;
+  }
+
+  /* 左外侧 timeline node：执行轨迹的"节点" */
+  .ai-thread-node {
+    position: absolute;
+    left: -7px;
+    top: 14px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--color-surface);
+    border: 2.5px solid var(--color-border-emphasis);
+    box-shadow: 0 0 0 2px var(--color-surface);
+    transition: border-color 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .ai-thread-node-live {
+    border-color: var(--color-accent-blue);
+    background: var(--color-accent-blue);
+    animation: ai-thread-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  @keyframes ai-thread-pulse {
+    0%, 100% {
+      box-shadow:
+        0 0 0 2px var(--color-surface),
+        0 0 0 4px color-mix(in oklch, var(--color-accent-blue) 40%, transparent);
+    }
+    50% {
+      box-shadow:
+        0 0 0 2px var(--color-surface),
+        0 0 0 7px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ai-thread-node-live,
+    .top-stat-live-dot {
+      animation: none;
+    }
+    .msg-ai-container::before {
+      display: none;
+    }
   }
 
   .ai-header-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 0;
+    gap: 10px;
+    padding: 10px 0 8px;
   }
 
   .ai-avatar {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
     color: var(--color-text-secondary);
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border);
     flex-shrink: 0;
   }
 
   .ai-avatar svg {
-    width: var(--bubble-icon-lg);
-    height: var(--bubble-icon-lg);
+    width: 14px;
+    height: 14px;
   }
 
   .ai-label {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 700;
     color: var(--color-text);
     flex-shrink: 0;
+    letter-spacing: -0.005em;
   }
 
+  /* model badge：从填充 badge 改"工程标记" — 1px dashed border + uppercase mono */
   .ai-model {
-    font-size: 11px;
-    color: var(--color-text-muted);
-    background: var(--badge-neutral-bg);
-    padding: 1px 8px;
-    border-radius: var(--radius-xs);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    background: transparent;
+    padding: 2px 7px;
+    border-radius: 4px;
+    border: 1px dashed var(--color-border-emphasis);
     font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
     flex-shrink: 0;
   }
 
+  /* AI tools toggle：从 inline link 改 chip 形态，明示"可点击展开 N 项" */
   .ai-tool-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    color: var(--color-text-muted);
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--color-text-secondary);
     cursor: pointer;
-    padding: 2px 8px;
-    border-radius: var(--radius-xs);
-    transition: var(--bubble-transition);
+    padding: 3px 9px 3px 8px;
+    border-radius: 9999px;
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border);
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
     flex-shrink: 0;
-    background: none;
-    border: none;
     font-family: inherit;
+    max-width: 380px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .ai-tool-toggle:hover {
-    background: var(--tool-item-hover-bg);
-    color: var(--color-text-secondary);
+    background: var(--color-surface-overlay);
+    color: var(--color-text);
+    border-color: var(--color-border-emphasis);
+  }
+
+  .msg-ai-container-tools-open .ai-tool-toggle {
+    background: color-mix(in oklch, var(--color-accent-blue) 8%, transparent);
+    border-color: color-mix(in oklch, var(--color-accent-blue) 30%, transparent);
+    color: var(--color-accent-blue);
   }
 
   .ai-tool-toggle:focus-visible {
     outline: 2px solid var(--color-accent-blue);
-    outline-offset: -2px;
+    outline-offset: 2px;
   }
 
   .ai-tool-chevron {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: transform 0.15s ease;
+    transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+    color: currentColor;
+    opacity: 0.7;
   }
 
   .ai-tool-chevron svg {
-    width: var(--bubble-icon-sm);
-    height: var(--bubble-icon-sm);
+    width: 11px;
+    height: 11px;
   }
 
   .ai-tool-chevron-open {
     transform: rotate(90deg);
+    opacity: 1;
   }
 
   .ai-tools-section {
@@ -1176,19 +1565,22 @@
 
   .ai-tokens-popover {
     position: absolute;
-    top: calc(100% + 6px);
+    top: calc(100% + 8px);
     right: 0;
     z-index: 20;
-    min-width: 160px;
-    padding: 8px 10px;
-    border-radius: var(--radius-sm);
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+    min-width: 180px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-emphasis);
+    box-shadow:
+      0 12px 32px rgba(0, 0, 0, 0.14),
+      0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
     display: none;
     flex-direction: column;
-    gap: 4px;
-    font-size: 11px;
+    gap: 5px;
+    font-size: 11.5px;
+    font-family: var(--font-mono);
   }
 
   .ai-tokens:hover .ai-tokens-popover {
@@ -1251,9 +1643,12 @@
     min-width: 0;
   }
 
-  /* ── System ── */
+  /* ── System ──
+     System block 不属于 AI thread，但视觉上是"系统标记"。
+     加 mono SYS badge 强化"机器消息"语义。
+  */
   .msg-row-system-left {
-    padding: 8px 0;
+    padding: 4px 0;
     justify-content: flex-start;
   }
 
@@ -1262,152 +1657,222 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+    padding-left: 8px;
+    border-left: 3px dotted var(--color-border-emphasis);
+    padding-top: 4px;
+    padding-bottom: 4px;
   }
 
   .system-header {
     display: flex;
     align-items: center;
     gap: 6px;
+    padding-left: 6px;
   }
 
   .system-meta-sep {
-    color: var(--color-text-muted);
-    opacity: 0.5;
+    color: var(--color-border-emphasis);
     font-size: 11px;
   }
 
   .system-icon {
-    width: var(--bubble-icon-md);
-    height: var(--bubble-icon-md);
+    width: 12px;
+    height: 12px;
     color: var(--color-text-muted);
     flex-shrink: 0;
   }
 
   .system-label {
-    color: var(--color-text-muted);
-    font-weight: 500;
-    font-size: 12px;
+    color: var(--color-text-secondary);
+    font-weight: 700;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border);
   }
 
-  .system-time { color: var(--color-text-muted); font-size: 11px; }
+  .system-time {
+    color: var(--color-text-muted);
+    font-size: 10.5px;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
 
   .system-pre {
     font-size: 13px;
     font-family: var(--font-mono);
     color: var(--chat-system-text);
     background: var(--chat-system-bg);
-    /* 审计工具非聊天 app——鸟尾尖角对识别系统消息没增量，去掉后与 L0 同尺度 */
-    border-radius: var(--radius-bubble);
-    padding: var(--bubble-padding-l0);
-    margin: 0;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 0 0 0 6px;
     white-space: pre-wrap;
     overflow-x: auto;
     max-height: 384px;
     overflow-y: auto;
-    line-height: 1.55;
+    line-height: 1.6;
   }
 
-  /* ── Compact (对齐原版 CompactBoundary.tsx：amber 风格折叠 button + 展开 markdown) ── */
+  /* ── Compact ──
+     Token 压缩是会话里的 hero moment：context 跳水。
+     用一条贯穿宽度的 amber rail + 居中 token delta 跨度（pre → delta → post），
+     替代原本朴素的左对齐 amber 横条。
+  */
   .msg-row-compact {
-    padding: 16px 0;
+    padding: 18px 0;
     justify-content: stretch;
   }
 
   .compact-block {
     width: 100%;
+    position: relative;
   }
 
   .compact-button {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto auto 1fr auto auto;
     align-items: center;
-    gap: var(--bubble-header-gap);
+    column-gap: 10px;
     width: 100%;
-    padding: var(--bubble-banner-padding);
-    background: var(--color-warning-bg);
-    border: 1px solid var(--color-warning-border);
-    border-radius: var(--radius-md);
+    padding: 12px 16px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in oklch, var(--color-warning) 9%, transparent) 0%,
+      color-mix(in oklch, var(--color-warning) 4%, transparent) 100%
+    );
+    border: 1px solid color-mix(in oklch, var(--color-warning) 32%, transparent);
+    border-left-width: 3px;
+    border-radius: 10px;
     color: var(--color-warning-text);
     cursor: pointer;
     font-family: inherit;
     text-align: left;
-    transition: var(--bubble-transition);
+    transition: background 180ms ease, border-color 180ms ease, transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .compact-button:hover {
-    background: rgba(245, 158, 11, 0.12);
-    background: color-mix(in oklch, var(--color-warning) 12%, transparent);
-    border-color: rgba(245, 158, 11, 0.35);
-    border-color: color-mix(in oklch, var(--color-warning) 35%, transparent);
+    background: linear-gradient(
+      90deg,
+      color-mix(in oklch, var(--color-warning) 14%, transparent) 0%,
+      color-mix(in oklch, var(--color-warning) 7%, transparent) 100%
+    );
+    border-color: color-mix(in oklch, var(--color-warning) 45%, transparent);
+  }
+
+  .compact-button:focus-visible {
+    outline: 2px solid var(--color-warning);
+    outline-offset: 2px;
   }
 
   .compact-chevron {
-    width: var(--bubble-icon-md);
-    height: var(--bubble-icon-md);
+    width: 14px;
+    height: 14px;
     flex-shrink: 0;
-    transition: transform 0.2s;
+    transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+    opacity: 0.85;
   }
   .compact-chevron-rotate {
     transform: rotate(90deg);
   }
 
   .compact-layers-icon {
-    width: var(--bubble-icon-md);
-    height: var(--bubble-icon-md);
+    width: 14px;
+    height: 14px;
     flex-shrink: 0;
+    opacity: 0.85;
   }
 
   .compact-label {
-    font-size: 13px;
-    font-weight: 500;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
     flex-shrink: 0;
+    color: var(--color-warning-text);
   }
 
   .compact-token-delta {
-    margin-left: 8px;
+    justify-self: center;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 11px;
-    color: var(--color-text-muted);
+    font-size: 12.5px;
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
+  /* "freed" 标记：dot + bold text 装饰，不依赖 border 做组件边界。
+     codex 二审 bug 2 + 二轮回归：原填充 chip 浅色对比 4.05:1（< AA 4.5）；
+     outline 风格修复后深色 border 仅 2.77:1（< WCAG 1.4.11 non-text 3:1）。
+     dot 与文字均用 var(--color-success) currentColor，浅色 4.76:1（AA pass，
+     按 sRGB），深色 9.58:1，绕开 border 对比度问题，且更符合 product
+     register 的"克制"——VS Code git diff 风的 IDE 标记，而非营销 chip。 */
   .compact-token-freed {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     color: var(--color-success);
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    padding: 0 2px;
+  }
+  .compact-token-freed::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-success) 14%, transparent);
   }
 
   .compact-phase-badge {
     flex-shrink: 0;
-    padding: 1px 6px;
-    border-radius: var(--radius-xs);
-    background: rgba(99, 102, 241, 0.15);
-    background: color-mix(in oklch, var(--color-accent-indigo) 15%, transparent);
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: color-mix(in oklch, var(--color-accent-indigo) 14%, transparent);
     color: var(--color-accent-indigo);
     font-size: 10px;
-    font-weight: 500;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
     white-space: nowrap;
+    border: 1px solid color-mix(in oklch, var(--color-accent-indigo) 28%, transparent);
   }
 
   .compact-time {
-    margin-left: auto;
     flex-shrink: 0;
-    font-size: 11px;
+    font-size: 10.5px;
     color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 
   .compact-expanded {
-    margin-top: 8px;
+    margin-top: 10px;
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
+    border-left: 3px solid color-mix(in oklch, var(--color-warning) 35%, transparent);
+    border-radius: 8px;
     overflow: hidden;
   }
 
   .compact-content {
     max-height: 384px;
     overflow-y: auto;
-    padding: 12px 16px;
-    border-left: 2px solid var(--chat-ai-border, var(--color-border));
+    padding: 14px 18px;
     font-size: 13px;
   }
 
@@ -1435,14 +1900,14 @@
     background: var(--prose-code-bg);
     color: var(--prose-code-text);
     padding: 1px 5px;
-    border-radius: var(--radius-xs);
+    border-radius: 4px;
     font-family: var(--font-mono);
     font-size: 0.87em;
   }
   .prose :global(pre) {
     background: var(--prose-pre-bg);
     border: 1px solid var(--prose-pre-border);
-    border-radius: var(--radius-sm);
+    border-radius: 6px;
     padding: 12px 14px;
     overflow-x: auto;
     margin: 0.6em 0;
@@ -1487,26 +1952,29 @@
     font-size: 13px;
   }
 
-  /* Interruption 横幅：amber/warning 风格，对齐原版 LastOutputDisplay
-     —— lucide AlertTriangle icon + warning amber 配色，居中横幅。 */
+  /* Interruption：从独立 alert 横条 → 紧贴 AI body 的"流被掐断"标记
+     - 顶部 dotted amber line（流被切断的视觉）
+     - 文案左对齐，icon + "Interrupted by user" + 末尾 mono "↩"
+  */
   .interruption-block {
-    margin-top: 8px;
-    padding: var(--bubble-banner-padding);
-    border-radius: var(--radius-md);
-    background: var(--color-warning-bg, rgba(245, 158, 11, 0.1));
-    border: 1px solid var(--color-warning-border, rgba(245, 158, 11, 0.3));
-    color: var(--color-warning-text, #f59e0b);
-    font-size: 13px;
-    line-height: 1.4;
+    margin-top: 6px;
+    padding: 8px 0 4px;
+    border-top: 1px dashed color-mix(in oklch, var(--color-warning) 50%, transparent);
+    color: var(--color-warning-text);
+    font-size: 12px;
+    line-height: 1.3;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    letter-spacing: 0.04em;
     display: flex;
     width: 100%;
     align-items: center;
-    justify-content: center;
-    gap: var(--bubble-header-gap);
+    gap: 8px;
   }
   .interruption-icon {
-    width: var(--bubble-icon-md);
-    height: var(--bubble-icon-md);
+    width: 13px;
+    height: 13px;
     flex-shrink: 0;
+    opacity: 0.85;
   }
 </style>
