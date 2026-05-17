@@ -178,7 +178,9 @@
     padding: 12px 16px;
     padding-right: 60px;
     outline: none;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    /* 只 transition border-color：box-shadow 走动画时 blur 会拖尾 0.15s 才消失，
+       且和 grid 重排同时进行视觉上像在"晃"。focus 时直接出 ring，blur 直接收。 */
+    transition: border-color 0.15s;
   }
 
   .dash-search:focus {

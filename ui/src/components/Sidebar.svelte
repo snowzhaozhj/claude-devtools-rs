@@ -527,9 +527,15 @@
     <div class="session-filter-bar">
       <input
         class="session-filter-input"
-        type="text"
+        type="search"
         placeholder="搜索会话…"
         bind:value={filterQuery}
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        enterkeyhint="search"
+        aria-label="搜索会话"
       />
       <span class="session-count-num">{visibleSessions.length}/{totalSessions}</span>
       {#if hasDeferredSessionRefresh}
@@ -782,6 +788,12 @@
 
   .session-filter-input::placeholder {
     color: var(--color-text-muted);
+  }
+
+  .session-filter-input::-webkit-search-cancel-button,
+  .session-filter-input::-webkit-search-decoration {
+    appearance: none;
+    -webkit-appearance: none;
   }
 
   .sidebar-status-inline {
