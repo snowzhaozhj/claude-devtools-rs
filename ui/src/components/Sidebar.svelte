@@ -757,10 +757,12 @@
      全局 token 体系；其他组件复用项目 token 不变。 */
   .sidebar {
     --sidebar-accent: #1d4ed8;
-    /* 持久选中 indicator 走暖中性色 —— Focus Blue 留给瞬时焦点 + ongoing/live
-       （DESIGN.md `The Persistent Selection Is Quiet Rule`）。indicator on
-       sidebar bg ≈4.5:1（浅）/ 5.2:1（深），≥WCAG 1.4.11 非文本 3:1。 */
-    --sidebar-active-indicator: var(--color-text-secondary);
+    /* 持久选中 indicator 走通用强调边框灰 —— 比 text-secondary 再浅一档，更
+       克制（DESIGN.md `The Persistent Selection Is Quiet Rule`）。selection
+       由「bg surface-overlay 加深 + title 字重 600 + indicator」三层共同表达，
+       indicator 本身不必抢眼；用 border-emphasis 对齐项目通用「分隔/边框」灰
+       色族（同 --card-separator），与 sidebar bg ~2.x:1 仍清晰可辨。 */
+    --sidebar-active-indicator: var(--color-border-emphasis);
     --sidebar-pinned: #4338ca;
     position: relative;
     height: 100%;
