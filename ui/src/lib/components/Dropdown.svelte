@@ -67,9 +67,8 @@
     let left = r.left;
     if (left + width > vw - margin) left = Math.max(margin, vw - width - margin);
 
-    const maxH = placeAbove
-      ? Math.max(80, r.top - margin - gap)
-      : Math.max(80, vh - top - margin);
+    const availH = placeAbove ? r.top - margin - gap : vh - top - margin;
+    const maxH = Math.max(0, availH);
 
     popoverStyle =
       `position: fixed; top: ${top}px; left: ${left}px; ` +
