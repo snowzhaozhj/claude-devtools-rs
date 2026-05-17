@@ -77,10 +77,13 @@
 
   async function openMenu() {
     if (disabled || open) return;
-    open = true;
     highlightIdx = selectedIdx >= 0 ? selectedIdx : 0;
-    await tick();
+    // 必须在 `open = true` 之前同步算好 popoverStyle，否则首次打开时
+    // popover 会先以空 style 渲染一帧（默认 top/left 在视口角落）才被重定位
     placePopover();
+    open = true;
+    await tick();
+    // popover 已渲染，按高亮项滚动定位
     scrollHighlightIntoView();
   }
 
