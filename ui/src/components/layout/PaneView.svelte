@@ -29,6 +29,11 @@
   const activeTab = $derived(
     pane.activeTabId ? pane.tabs.find((t) => t.id === pane.activeTabId) ?? null : null,
   );
+  // sole pane + 无 tab（= Dashboard 工作台）时不渲染 TabBar：通知/设置已迁到
+  // UnifiedTitleBar，留下一条 40px 空横条 + border-bottom 会在 chrome 与搜索框
+  // 之间制造无意义空白带。多 pane 即便 tabs 为空也保留 TabBar——它承载 focus
+  // accent indicator 与 tab drop 命中区域。
+  const showTabBar = $derived(!(isSolePane && pane.tabs.length === 0));
 
   function onPointerDownCapture() {
     // 点到 pane 内部任意位置即 focus（不阻止默认，子组件正常处理）
@@ -44,8 +49,9 @@
   style:flex={pane.widthFraction}
   onpointerdowncapture={onPointerDownCapture}
 >
-  <!-- TabBar 始终渲染：即使无 tab 也要显示右侧"通知/设置"工具栏入口 -->
-  <TabBar paneId={pane.id} {isFirstPane} />
+  {#if showTabBar}
+    <TabBar paneId={pane.id} {isFirstPane} />
+  {/if}
 
   <div class="pane-body">
     {#if activeTab?.type === "settings"}
