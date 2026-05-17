@@ -59,8 +59,16 @@ describe('viewerUsesOutput', () => {
     expect(viewerUsesOutput(exec({ toolName: 'Edit' }))).toBe(false)
   })
 
-  test('Edit isError=true 走 ERROR 段，需要 output 兜底显示错误详情', () => {
+  test('Edit isError=true 且无 errorMessage 时需要 output 兜底显示错误详情', () => {
     expect(viewerUsesOutput(exec({ toolName: 'Edit', isError: true }))).toBe(true)
+  })
+
+  test('Edit isError=true 但顶层 errorMessage 已存在时不依赖 output（避免 lazy 拉失败时阻塞展开）', () => {
+    expect(viewerUsesOutput(exec({ toolName: 'Edit', isError: true, errorMessage: 'old_string not found' }))).toBe(false)
+  })
+
+  test('Edit isError=true 且 errorMessage 仅含空白被视为缺省，仍依赖 output', () => {
+    expect(viewerUsesOutput(exec({ toolName: 'Edit', isError: true, errorMessage: '  ' }))).toBe(true)
   })
 
   test('Write 成功路径渲染 input，不消费 output', () => {

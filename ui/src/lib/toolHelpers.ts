@@ -226,8 +226,13 @@ export function isToolPending(exec: ToolExecution): boolean {
  *   （old/new string、写入内容），`exec.output` 不被读 → 即便
  *   `outputOmitted=true` 也无需先拉再展开。
  * - 失败态 Edit / Write 走错误回执分支（Edit 内置 ERROR 段，Write 走
- *   DefaultToolViewer），均依赖 `toolErrorText` 的 `exec.output.text`
- *   fallback；`outputOmitted=true` 时 SHALL 先拉再展开。
+ *   DefaultToolViewer），渲染由 `toolErrorText` 提供。`toolErrorText` 优先
+ *   `exec.errorMessage`（顶层字段，永不 omit），其次 fallback 到
+ *   `exec.output.text` —— 所以仅当 `errorMessage` 缺省时才真正依赖 output。
+ *   有 `errorMessage` 时 SHALL 返回 false 不阻塞展开，否则 lazy 拉
+ *   `getToolOutput` 失败/missing 时 toggle 会直接 return（见
+ *   ExecutionTrace.svelte / SessionDetail.svelte 的 toggle 守卫），
+ *   连已有 errorMessage 都看不到（codex CR PR #151）。
  * - Read / Bash / DefaultToolViewer 都会读 `exec.output`；当
  *   `outputOmitted=true` 时 SHALL 先 IPC 拉到再加入 expanded set，否则
  *   空 OUTPUT 区会被实际内容跳变替换（详见 change
@@ -238,6 +243,7 @@ export function isToolPending(exec: ToolExecution): boolean {
  */
 export function viewerUsesOutput(exec: ToolExecution): boolean {
   if (exec.toolName === "Edit" && !exec.isError) return false;
+  if (exec.toolName === "Edit" && exec.isError && exec.errorMessage?.trim()) return false;
   if (exec.toolName === "Write" && !exec.isError) return false;
   return true;
 }
