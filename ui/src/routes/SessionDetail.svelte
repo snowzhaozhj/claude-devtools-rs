@@ -337,15 +337,27 @@
 
   // Context Panel → SessionDetail 锚点跳转 helpers。
   // spec: session-display "Context Panel turn 锚点导航"。
-  function showAnchorHighlight(chunkId: string, toolUseId: string | null = null) {
+  async function showAnchorHighlight(chunkId: string, toolUseId: string | null = null) {
+    if (highlightTimer) clearTimeout(highlightTimer);
+    highlightedChunkId = null;
+    highlightedToolUseId = null;
+    await tick();
     highlightedChunkId = chunkId;
     highlightedToolUseId = toolUseId;
-    if (highlightTimer) clearTimeout(highlightTimer);
     highlightTimer = setTimeout(() => {
       highlightedChunkId = null;
       highlightedToolUseId = null;
       highlightTimer = null;
-    }, 1400);
+    }, 2200);
+  }
+
+  function scrollAnchorIntoView(target: HTMLElement | null | undefined) {
+    if (!target || !conversationEl) return;
+    const containerRect = conversationEl.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const targetCenter = targetRect.top - containerRect.top + conversationEl.scrollTop + targetRect.height / 2;
+    const nextTop = Math.max(0, targetCenter - conversationEl.clientHeight * 0.45);
+    conversationEl.scrollTo({ top: nextTop, behavior: "smooth" });
   }
 
   async function handleNavigateToChunk(chunkId: string) {
@@ -353,11 +365,11 @@
       expandedChunks = new Set([...expandedChunks, chunkId]);
     }
     await tick();
-    const el = conversationEl?.querySelector<HTMLElement>(
+    const chunkEl = conversationEl?.querySelector<HTMLElement>(
       `[data-chunk-id="${cssEscape(chunkId)}"]`,
     );
-    el?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
-    showAnchorHighlight(chunkId);
+    scrollAnchorIntoView(chunkEl);
+    void showAnchorHighlight(chunkId);
   }
 
   async function handleNavigateToTool(chunkId: string, toolUseId: string) {
@@ -372,9 +384,8 @@
     const toolEl = chunkEl?.querySelector<HTMLElement>(
       `[data-tool-use-id="${cssEscape(toolUseId)}"]`,
     );
-    const target = toolEl ?? chunkEl;
-    target?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
-    showAnchorHighlight(chunkId, toolEl ? toolUseId : null);
+    scrollAnchorIntoView(toolEl ?? chunkEl);
+    void showAnchorHighlight(chunkId, toolEl ? toolUseId : null);
   }
 
   function handleNavigateToUserGroup(aiGroupId: string) {
@@ -1165,18 +1176,22 @@
 
 
   .msg-row-anchor-hit {
-    animation: anchor-target-pulse 1400ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: anchor-target-pulse 2200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .tool-anchor-hit {
     border-radius: 8px;
-    animation: anchor-tool-pulse 1400ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: anchor-tool-pulse 2200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   @keyframes anchor-target-pulse {
     0% {
-      background: color-mix(in oklch, var(--color-accent-blue) 12%, transparent);
-      box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 38%, transparent);
+      background: color-mix(in oklch, var(--color-accent-blue) 16%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 48%, transparent);
+    }
+    55% {
+      background: color-mix(in oklch, var(--color-accent-blue) 10%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 34%, transparent);
     }
     100% {
       background: transparent;
@@ -1186,8 +1201,12 @@
 
   @keyframes anchor-tool-pulse {
     0% {
-      background: color-mix(in oklch, var(--color-accent-blue) 16%, transparent);
-      box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 34%, transparent);
+      background: color-mix(in oklch, var(--color-accent-blue) 20%, transparent);
+      box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 48%, transparent);
+    }
+    55% {
+      background: color-mix(in oklch, var(--color-accent-blue) 12%, transparent);
+      box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 30%, transparent);
     }
     100% {
       background: transparent;
