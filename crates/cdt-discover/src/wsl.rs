@@ -28,6 +28,7 @@ pub struct WslDistroScanReport {
 /// 枚举本机 WSL distro 并返回每个 distro 的 `~/.claude` UNC 候选路径。
 ///
 /// 在非 Windows 平台直接返回空报告。
+#[cfg_attr(not(target_os = "windows"), allow(clippy::unused_async))]
 pub async fn list_distros() -> Result<WslDistroScanReport, crate::DiscoverError> {
     #[cfg(target_os = "windows")]
     {

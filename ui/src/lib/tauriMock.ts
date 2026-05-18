@@ -52,6 +52,7 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'is_running_under_rosetta',
   'list_repository_groups',
   'get_worktree_sessions',
+  'list_wsl_distros',
 ] as const
 
 export { KNOWN_TAURI_COMMANDS }
@@ -380,6 +381,52 @@ function buildHandler(fx: Fixture) {
         // 便于在浏览器里调试 UI。
         const params = new URLSearchParams(window.location.search)
         return params.get('rosetta') === '1'
+      }
+
+      case 'list_wsl_distros': {
+        // 浏览器调试：?wsl=single | multi | empty | distros-without-home
+        const params = new URLSearchParams(window.location.search)
+        const variant = params.get('wsl') ?? 'empty'
+        switch (variant) {
+          case 'single':
+            return {
+              candidates: [
+                {
+                  distro: 'Ubuntu',
+                  homePath: '/home/alice',
+                  claudeRootPath: '\\\\wsl.localhost\\Ubuntu\\home\\alice\\.claude',
+                  claudeRootExists: true,
+                },
+              ],
+              distrosWithoutHome: [],
+            }
+          case 'multi':
+            return {
+              candidates: [
+                {
+                  distro: 'Debian-12',
+                  homePath: '/root',
+                  claudeRootPath: '\\\\wsl.localhost\\Debian-12\\root\\.claude',
+                  claudeRootExists: false,
+                },
+                {
+                  distro: 'Ubuntu',
+                  homePath: '/home/alice',
+                  claudeRootPath: '\\\\wsl.localhost\\Ubuntu\\home\\alice\\.claude',
+                  claudeRootExists: true,
+                },
+              ],
+              distrosWithoutHome: [],
+            }
+          case 'distros-without-home':
+            return {
+              candidates: [],
+              distrosWithoutHome: ['Ubuntu', 'Debian-12'],
+            }
+          case 'empty':
+          default:
+            return { candidates: [], distrosWithoutHome: [] }
+        }
       }
 
       case 'check_for_update': {

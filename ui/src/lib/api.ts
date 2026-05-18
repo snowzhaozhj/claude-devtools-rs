@@ -415,6 +415,28 @@ export async function listRepositoryGroups(): Promise<RepositoryGroup[]> {
   return await invoke("list_repository_groups");
 }
 
+export interface WslDistroCandidate {
+  distro: string;
+  homePath: string;
+  claudeRootPath: string;
+  claudeRootExists: boolean;
+}
+
+export interface WslDistroScanReport {
+  candidates: WslDistroCandidate[];
+  distrosWithoutHome: string[];
+}
+
+/**
+ * 枚举本机 WSL distro 并返回每个 distro 的 `~/.claude` UNC 候选路径。
+ * 仅 Windows 平台返回非空数据；其他平台始终返回空报告。
+ *
+ * Spec：openspec/specs/wsl-distro-discovery/spec.md。
+ */
+export async function listWslDistros(): Promise<WslDistroScanReport> {
+  return await invoke("list_wsl_distros");
+}
+
 /**
  * 取得一个 RepositoryGroup 内所有 worktree 合并后的 session 列表（按 mtime 倒序）。
  * 每条 SessionSummary 携带 `worktreeId` / `worktreeName` 表示归属 worktree。

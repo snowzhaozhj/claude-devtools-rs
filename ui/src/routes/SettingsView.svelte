@@ -1,6 +1,17 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { getConfig, updateConfig, addTrigger, removeTrigger, checkForUpdate, type AppConfig, type NotificationTrigger, type CheckUpdateResult } from "../lib/api";
+  import {
+    getConfig,
+    updateConfig,
+    addTrigger,
+    removeTrigger,
+    checkForUpdate,
+    listWslDistros,
+    type AppConfig,
+    type NotificationTrigger,
+    type CheckUpdateResult,
+    type WslDistroCandidate,
+  } from "../lib/api";
   import { applyTheme } from "../lib/theme";
   import { applyFonts } from "../lib/fonts";
   import { setSessionClickBehavior, type SessionClickBehavior } from "../lib/tabStore.svelte";
@@ -11,6 +22,8 @@
   import SettingsField from "../lib/components/SettingsField.svelte";
   import SettingsButton from "../lib/components/SettingsButton.svelte";
   import Dropdown from "../lib/components/Dropdown.svelte";
+  import Modal from "../lib/components/Modal.svelte";
+  import { decideWslAction } from "../lib/wslDecision";
   import SkeletonList from "../components/SkeletonList.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { updateStore } from "../lib/updateStore.svelte";
@@ -41,6 +54,17 @@
   let fontSansInput = $state("");
   let fontMonoInput = $state("");
   let claudeRootInput = $state("");
+
+  /** Windows 平台判定。Tauri WebView UA 在 Windows 上始终含 "Windows"。
+   *  非 Windows 平台 SHALL NOT 渲染 "Use WSL" 按钮（spec settings-ui）。 */
+  const isWindowsPlatform =
+    typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+
+  let wslLoading = $state(false);
+  let wslInlineMessage: { kind: "info" | "error"; text: string } | null = $state(null);
+  let wslShowModal = $state(false);
+  let wslCandidates: WslDistroCandidate[] = $state([]);
+  let wslSelectedDistro: string | null = $state(null);
 
   const FONT_SANS_PLACEHOLDER = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", sans-serif`;
   const FONT_MONO_PLACEHOLDER = `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
@@ -254,6 +278,58 @@
     } catch (e) {
       saveError = `选择目录失败: ${e}`;
     }
+  }
+
+  async function applyWslDistro(candidate: WslDistroCandidate) {
+    claudeRootInput = candidate.claudeRootPath;
+    await updateGeneral("claudeRootPath", candidate.claudeRootPath);
+    if (saveError === null) {
+      wslInlineMessage = {
+        kind: "info",
+        text: `已切换到 WSL distro "${candidate.distro}" 的 ${candidate.claudeRootPath}`,
+      };
+    }
+  }
+
+  async function scanWslDistros() {
+    if (wslLoading) return;
+    wslLoading = true;
+    wslInlineMessage = null;
+    try {
+      const report = await listWslDistros();
+      const decision = decideWslAction(report);
+      switch (decision.kind) {
+        case "auto-apply":
+          await applyWslDistro(decision.candidate);
+          break;
+        case "select":
+          wslCandidates = decision.candidates;
+          wslSelectedDistro = decision.candidates[0].distro;
+          wslShowModal = true;
+          break;
+        case "no-distro":
+          wslInlineMessage = { kind: "info", text: decision.message };
+          break;
+        case "all-failed":
+          wslInlineMessage = { kind: "error", text: decision.message };
+          break;
+      }
+    } catch (e) {
+      wslInlineMessage = { kind: "error", text: `扫描 WSL 失败: ${e}` };
+    } finally {
+      wslLoading = false;
+    }
+  }
+
+  async function confirmWslSelection() {
+    const chosen = wslCandidates.find((c) => c.distro === wslSelectedDistro);
+    if (!chosen) return;
+    wslShowModal = false;
+    await applyWslDistro(chosen);
+  }
+
+  function cancelWslSelection() {
+    wslShowModal = false;
   }
 
   async function updateNotifications(key: string, value: unknown) {
@@ -492,8 +568,23 @@
                   {/snippet}
                   恢复默认
                 </SettingsButton>
+                {#if isWindowsPlatform}
+                  <SettingsButton
+                    variant="ghost"
+                    disabled={wslLoading}
+                    onClick={scanWslDistros}
+                    ariaLabel="使用 WSL distro 内的 Claude 数据"
+                  >
+                    {wslLoading ? "扫描中…" : "使用 WSL"}
+                  </SettingsButton>
+                {/if}
               {/snippet}
             </SettingsField>
+            {#if isWindowsPlatform && wslInlineMessage}
+              <p class="wsl-inline" class:wsl-inline-error={wslInlineMessage.kind === "error"} role="status">
+                {wslInlineMessage.text}
+              </p>
+            {/if}
           </SettingsGroup>
         {:else if activeSection === "display"}
           <SettingsGroup title="时间显示" description="影响会话详情等绝对时间戳的渲染">
@@ -764,6 +855,42 @@
     </div>
   </div>
 </div>
+
+<Modal
+  open={wslShowModal}
+  title="选择 WSL distro"
+  primaryLabel="应用"
+  primaryDisabled={wslSelectedDistro === null}
+  cancelLabel="取消"
+  onPrimary={confirmWslSelection}
+  onClose={cancelWslSelection}
+>
+  <p class="wsl-modal-hint">将把 Claude 数据根目录切换为所选 distro 的 UNC 路径</p>
+  <ul class="wsl-distro-list">
+    {#each wslCandidates as candidate (candidate.distro)}
+      <li class="wsl-distro-item">
+        <label class="wsl-distro-label">
+          <input
+            type="radio"
+            name="wsl-distro-select"
+            value={candidate.distro}
+            checked={wslSelectedDistro === candidate.distro}
+            onchange={() => {
+              wslSelectedDistro = candidate.distro;
+            }}
+          />
+          <span class="wsl-distro-info">
+            <span class="wsl-distro-name">{candidate.distro}</span>
+            <span class="wsl-distro-path">{candidate.claudeRootPath}</span>
+            {#if !candidate.claudeRootExists}
+              <span class="wsl-distro-warning">该 distro 内尚无 Claude 数据</span>
+            {/if}
+          </span>
+        </label>
+      </li>
+    {/each}
+  </ul>
+</Modal>
 
 <style>
   .settings-view {
@@ -1223,5 +1350,70 @@
       align-items: stretch;
       gap: 14px;
     }
+  }
+
+  .wsl-inline {
+    margin: 6px 0 0;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    background: var(--color-bg-elevated, rgba(0, 0, 0, 0.04));
+  }
+  .wsl-inline-error {
+    color: var(--color-danger);
+    background: color-mix(in oklch, var(--color-danger-bright) 10%, transparent);
+  }
+  .wsl-modal-hint {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: var(--color-text-muted);
+  }
+  .wsl-distro-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .wsl-distro-item {
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .wsl-distro-item:hover {
+    background: var(--tool-item-hover-bg);
+  }
+  .wsl-distro-label {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    cursor: pointer;
+  }
+  .wsl-distro-label input[type="radio"] {
+    margin-top: 3px;
+  }
+  .wsl-distro-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .wsl-distro-name {
+    font-weight: 600;
+    color: var(--color-text);
+    font-size: 13px;
+  }
+  .wsl-distro-path {
+    font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    word-break: break-all;
+  }
+  .wsl-distro-warning {
+    font-size: 11px;
+    color: var(--color-danger);
+    margin-top: 2px;
   }
 </style>
