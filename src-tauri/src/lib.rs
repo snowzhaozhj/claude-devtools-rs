@@ -374,6 +374,20 @@ async fn get_worktree_sessions(
 }
 
 // =============================================================================
+// WSL Distro Discovery (Windows 平台)
+// =============================================================================
+
+#[tauri::command]
+async fn list_wsl_distros(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
+    let report = data
+        .api
+        .list_wsl_distros()
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&report).map_err(|e| e.to_string())
+}
+
+// =============================================================================
 // Auto Updater
 // =============================================================================
 
@@ -860,6 +874,7 @@ pub fn run() {
             is_running_under_rosetta,
             list_repository_groups,
             get_worktree_sessions,
+            list_wsl_distros,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

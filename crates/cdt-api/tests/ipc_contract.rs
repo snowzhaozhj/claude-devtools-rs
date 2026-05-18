@@ -17,7 +17,7 @@ use std::sync::Arc;
 use cdt_api::{
     ConfigUpdateRequest, DataApi, LocalDataApi, MemoryFileContent, MemoryLayer, MemoryLayerKind,
     PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
-    SearchRequest, SessionMetadataUpdate, SessionSummary,
+    SearchRequest, SessionMetadataUpdate, SessionSummary, WslDistroCandidate, WslDistroScanReport,
 };
 use cdt_config::{
     ConfigManager, NotificationManager, NotificationTrigger, TriggerContentType, TriggerMode,
@@ -76,6 +76,7 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "is_running_under_rosetta",
     "list_repository_groups",
     "get_worktree_sessions",
+    "list_wsl_distros",
 ];
 
 /// 构造一个最小可用的 `LocalDataApi` 用于 contract test。
@@ -118,12 +119,12 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_29() {
+fn expected_tauri_commands_count_is_30() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        29,
+        30,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 29 个 Tauri command"
+         以及本文件常量；当前 src-tauri 注册 30 个 Tauri command"
     );
 }
 
@@ -2127,4 +2128,68 @@ fn chunk_id_format_is_unified_base_colon_n() {
             "chunk_id {chunk_id:?} MUST NOT 含 ai: 类型前缀"
         );
     }
+}
+
+// =============================================================================
+// WSL distro 枚举（wsl-distro-discovery capability）
+// =============================================================================
+
+#[tokio::test]
+async fn list_wsl_distros_returns_camelcase_report_shape() {
+    let (api, _tmp) = setup_api().await;
+    let report = api.list_wsl_distros().await.unwrap();
+    let json = serde_json::to_value(&report).unwrap();
+    assert!(json.is_object(), "list_wsl_distros SHALL 返回 object");
+    assert!(
+        json.get("candidates").is_some() && json["candidates"].is_array(),
+        "candidates 字段 SHALL 是 array"
+    );
+    assert!(
+        json.get("distrosWithoutHome").is_some() && json["distrosWithoutHome"].is_array(),
+        "distrosWithoutHome 字段 SHALL 是 camelCase array"
+    );
+    assert!(
+        json.get("distros_without_home").is_none(),
+        "MUST NOT 出现 snake_case 字段名 distros_without_home"
+    );
+    // 非 Windows 测试环境下应是空报告
+    if !cfg!(target_os = "windows") {
+        assert_eq!(json["candidates"], json!([]));
+        assert_eq!(json["distrosWithoutHome"], json!([]));
+    }
+}
+
+#[test]
+fn wsl_distro_candidate_serializes_camelcase() {
+    let candidate = WslDistroCandidate {
+        distro: "Ubuntu".to_string(),
+        home_path: "/home/alice".to_string(),
+        claude_root_path: r"\\wsl.localhost\Ubuntu\home\alice\.claude".to_string(),
+        claude_root_exists: true,
+    };
+    let json = serde_json::to_value(&candidate).unwrap();
+    assert_eq!(json["distro"], json!("Ubuntu"));
+    assert_eq!(json["homePath"], json!("/home/alice"));
+    assert_eq!(
+        json["claudeRootPath"],
+        json!(r"\\wsl.localhost\Ubuntu\home\alice\.claude")
+    );
+    assert_eq!(json["claudeRootExists"], json!(true));
+    assert!(
+        json.get("home_path").is_none()
+            && json.get("claude_root_path").is_none()
+            && json.get("claude_root_exists").is_none(),
+        "WslDistroCandidate MUST 不出现 snake_case 字段名"
+    );
+}
+
+#[test]
+fn wsl_distro_scan_report_serializes_with_distros_without_home() {
+    let report = WslDistroScanReport {
+        candidates: vec![],
+        distros_without_home: vec!["Ubuntu".to_string(), "Debian-12".to_string()],
+    };
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["distrosWithoutHome"], json!(["Ubuntu", "Debian-12"]));
+    assert_eq!(json["candidates"], json!([]));
 }

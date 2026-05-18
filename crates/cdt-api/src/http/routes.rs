@@ -84,6 +84,7 @@ pub fn build_router(state: AppState) -> Router {
         // 辅助
         .route("/api/agent-configs", get(read_agent_configs))
         .route("/api/repository-groups", get(list_repository_groups))
+        .route("/api/wsl-distros", get(list_wsl_distros))
         .route(
             "/api/worktrees/{group_id}/sessions",
             get(get_worktree_sessions),
@@ -341,6 +342,11 @@ async fn read_agent_configs(
 
 async fn list_repository_groups(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     let result = s.api.list_repository_groups().await?;
+    Ok(Json(result))
+}
+
+async fn list_wsl_distros(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let result = s.api.list_wsl_distros().await?;
     Ok(Json(result))
 }
 

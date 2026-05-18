@@ -337,4 +337,18 @@ pub trait DataApi: Send + Sync {
             total,
         })
     }
+
+    // =========================================================================
+    // WSL distro 枚举（Windows 平台）
+    // =========================================================================
+
+    /// 枚举本机 WSL distro 并返回每个 distro 的 `~/.claude` UNC 候选路径。
+    ///
+    /// 仅在 `target_os = "windows"` 上执行真实枚举；其他平台返回空报告。
+    /// Spec：`openspec/specs/wsl-distro-discovery/spec.md`。
+    async fn list_wsl_distros(&self) -> Result<cdt_discover::WslDistroScanReport, ApiError> {
+        cdt_discover::wsl::list_distros()
+            .await
+            .map_err(|e| ApiError::internal(format!("wsl scan: {e}")))
+    }
 }
