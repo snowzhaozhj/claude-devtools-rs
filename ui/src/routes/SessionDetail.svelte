@@ -2098,10 +2098,12 @@
 
   /* Prose 内的 hljs token 颜色统一在 app.css 的 .hljs-* 全局规则里 */
 
-  /* Thinking prose */
+  /* Thinking 正文：与 prose 同字体同行高，13px 略小暗示次级。
+     身份靠 BRAIN icon + label 区分，不靠颜色——与 ExecutionTrace 同步。 */
   .prose-thinking {
-    color: var(--thinking-content-text);
+    color: var(--color-text);
     font-size: 13px;
+    line-height: 1.65;
   }
 
   /* Interruption：用户显式 Esc 操作，视觉权重高于普通工具行但低于 error。

@@ -200,9 +200,13 @@
     line-height: 1.55;
     word-break: break-word;
   }
+  /* Thinking 正文：与 prose 同字体同行高，仅以 13px 略小暗示次级。
+     身份完全靠 BRAIN icon 形状 + "Thinking" label 区分，与 Bash / Read /
+     Output 同等克制——保持 PRODUCT.md "quiet debugging workbench" 调性。 */
   .prose-thinking {
-    color: var(--thinking-content-text);
-    font-size: 12px;
+    color: var(--color-text);
+    font-size: 13px;
+    line-height: 1.65;
   }
 
   .depth-limit {
