@@ -1,9 +1,5 @@
-# http-data-api Specification
+## MODIFIED Requirements
 
-## Purpose
-
-把 `ipc-data-api` 暴露的全部数据操作（项目 / 会话 / 搜索 / 配置 / 通知 / 通用工具 / SSH）通过 `/api` 前缀的 HTTP endpoint 镜像出去，并以 Server-Sent Events 推送同一套实时事件流。本 capability 让远端浏览器或第三方客户端不依赖 Tauri runtime 即可消费会话数据。
-## Requirements
 ### Requirement: Serve projects and sessions over HTTP under /api prefix
 
 系统 SHALL 在 `/api` 前缀下暴露与 IPC data API 同形数据返回的 HTTP endpoint，覆盖：列项目、取项目详情、取项目仓库信息、列会话（含分页与按 id 批量两种 variant）、取会话详情、取会话 chunk、取会话 metrics、取 waterfall 数据、取 subagent 详情。
@@ -194,4 +190,3 @@ producer 与 SSE handler SHALL 通过 `cdt_api::http::spawn_event_bridge` lib-le
 #### Scenario: Configured port is busy
 - **WHEN** 配置端口已被其它进程占用
 - **THEN** 启动 SHALL 记录明确错误，SHALL NOT 静默切换端口
-
