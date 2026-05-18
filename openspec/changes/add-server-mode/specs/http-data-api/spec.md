@@ -81,7 +81,7 @@ CORS layer 不引入鉴权或 origin 配置项——任何放宽（LAN 访问 / 
 - `GET /api/sessions/{rootSessionId}/subagents/{subagentSessionId}/trace` — 镜像 `get_subagent_trace`，返回 trace 数据
 - `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/blocks/{blockId}/image` — 镜像 `get_image_asset`，返回 base64 字符串（与 IPC 同形）
 - `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/tools/{toolUseId}/output` — 镜像 `get_tool_output`，返回 `ToolOutput`（含 `outputBytes` / `outputOmitted` 语义）
-- `POST /api/notifications/triggers` — 镜像 `add_trigger`，body 为 `NotificationTrigger`（生成 id 后返回完整对象）
+- `POST /api/notifications/triggers` — 镜像 `add_trigger`，body 为 `NotificationTrigger`（caller SHALL 在 body 内提供非空 `id`，与 IPC 路径校验语义一致；server 不自动生成 id）
 - `DELETE /api/notifications/triggers/{triggerId}` — 镜像 `remove_trigger`
 - `POST /api/projects/{projectId}/sessions/{sessionId}/pin` — 镜像 `pin_session`
 - `DELETE /api/projects/{projectId}/sessions/{sessionId}/pin` — 镜像 `unpin_session`
@@ -109,10 +109,10 @@ CORS layer 不引入鉴权或 origin 配置项——任何放宽（LAN 访问 / 
 - **WHEN** 浏览器请求 `GET /api/sessions/<root>/subagents/<sid>/tools/<tuid>/output`
 - **THEN** 响应 SHALL 与 IPC `get_tool_output` 同形——`outputBytes` 字段保留、`outputOmitted: false`、内层 `text` / `value` 携带完整内容
 
-#### Scenario: POST add trigger returns generated id
+#### Scenario: POST add trigger persists caller-provided id
 
-- **WHEN** 浏览器 `POST /api/notifications/triggers`，body 为合法 `NotificationTrigger`（`id` 字段缺省或空）
-- **THEN** 响应 SHALL 返回携带新生成 `id` 的完整 trigger，与 IPC `add_trigger` 同形
+- **WHEN** 浏览器 `POST /api/notifications/triggers`，body 为合法 `NotificationTrigger`（含 caller 自行分配的非空 `id`）
+- **THEN** 响应 SHALL 返回更新后的完整 `AppConfig` JSON，`notifications.triggers` 含该新 trigger 且 `id` 与 caller 入参一致，与 IPC `add_trigger` 同形
 - **AND** 后续 `GET /api/config` 读取的 `notifications.triggers` SHALL 含该新 trigger
 
 #### Scenario: POST pin session 与 DELETE unpin session 互逆

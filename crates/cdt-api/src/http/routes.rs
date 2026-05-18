@@ -3,16 +3,20 @@
 //! Spec：`openspec/specs/http-data-api/spec.md`。
 //! 每个 handler 委托给 `AppState.api` 的对应方法。
 
+use std::path::PathBuf;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, PaginatedRequest, SearchRequest, SshConnectRequest,
 };
 
+use super::cors::localhost_cors_layer;
 use super::sse::sse_handler;
 use super::state::AppState;
 
@@ -40,9 +44,17 @@ impl IntoResponse for ApiError {
 // Router builder
 // =============================================================================
 
-/// 构建完整的 `/api` 路由。
-pub fn build_router(state: AppState) -> Router {
-    Router::new()
+/// 构建完整的 `/api` 路由 + 可选静态文件 serve。
+///
+/// `static_dir` 为 `Some(<existing dir>)` 时挂 `ServeDir`：未命中 `/api/*`
+/// 路由的 GET 请求 SHALL fallback 到该目录（前端 client-side router）。
+/// 路径不存在或非目录时仅 `tracing::warn!` 后跳过 ServeDir，行为退化为
+/// 之前的"仅 API"模式。
+///
+/// CORS：所有路由统一 layer `localhost_cors_layer`，仅放行 localhost / 127.0.0.1
+/// origin（详 `crate::http::cors`）。
+pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
+    let api_router = Router::new()
         // 项目 + 会话
         .route("/api/projects", get(list_projects))
         .route("/api/projects/{project_id}/sessions", get(list_sessions))
@@ -64,13 +76,19 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/notifications/{notification_id}",
-            axum::routing::delete(delete_notification),
+            delete(delete_notification),
         )
         .route(
             "/api/notifications/mark-all-read",
             post(mark_all_notifications_read),
         )
         .route("/api/notifications/clear", post(clear_notifications))
+        // 通知 trigger CRUD（spec http-data-api::Mirror lazy and auxiliary）
+        .route("/api/notifications/triggers", post(add_trigger))
+        .route(
+            "/api/notifications/triggers/{trigger_id}",
+            delete(remove_trigger),
+        )
         // SSH + context
         .route("/api/contexts", get(list_contexts))
         .route("/api/contexts/switch", post(switch_context))
@@ -89,9 +107,65 @@ pub fn build_router(state: AppState) -> Router {
             "/api/worktrees/{group_id}/sessions",
             get(get_worktree_sessions),
         )
+        // Project memory（lazy mirror）
+        .route("/api/projects/{project_id}/memory", get(get_project_memory))
+        .route(
+            "/api/projects/{project_id}/memory-files",
+            post(read_memory_file),
+        )
+        // Session prefs / pin / hide（lazy mirror）
+        .route(
+            "/api/projects/{project_id}/session-prefs",
+            get(get_project_session_prefs),
+        )
+        .route(
+            "/api/projects/{project_id}/sessions/{session_id}/pin",
+            post(pin_session).delete(unpin_session),
+        )
+        .route(
+            "/api/projects/{project_id}/sessions/{session_id}/hide",
+            post(hide_session).delete(unhide_session),
+        )
+        // Subagent trace / image asset / tool output（lazy mirror）
+        .route(
+            "/api/sessions/{root_session_id}/subagents/{subagent_session_id}/trace",
+            get(get_subagent_trace),
+        )
+        .route(
+            "/api/sessions/{root_session_id}/subagents/{session_id}/blocks/{block_id}/image",
+            get(get_image_asset),
+        )
+        .route(
+            "/api/sessions/{root_session_id}/subagents/{session_id}/tools/{tool_use_id}/output",
+            get(get_tool_output),
+        )
         // SSE
         .route("/api/events", get(sse_handler))
-        .with_state(state)
+        .with_state(state);
+
+    // 顺序：CORS layer 在最外层（先看 Origin）；ServeDir 作为 fallback 仅
+    // 在传入 static_dir 且其存在时挂载；不存在 / None 时未命中 `/api/*`
+    // 的请求自然返 404（与本 change 之前行为一致）。
+    let router_with_static = match static_dir {
+        Some(p) if p.is_dir() => {
+            let index_html = p.join("index.html");
+            // SPA fallback：ServeDir 找不到对应文件时 fallback 到 index.html，
+            // 让前端 client-side router 接管路径。
+            let serve = ServeDir::new(&p).fallback(ServeFile::new(index_html));
+            api_router.fallback_service(serve)
+        }
+        Some(p) => {
+            tracing::warn!(
+                target: "cdt_api::http",
+                path = %p.display(),
+                "static_dir does not exist or is not a directory; serving /api/* only"
+            );
+            api_router
+        }
+        None => api_router,
+    };
+
+    router_with_static.layer(localhost_cors_layer())
 }
 
 // =============================================================================
@@ -357,6 +431,122 @@ async fn get_worktree_sessions(
 ) -> Result<impl IntoResponse, ApiError> {
     let result = s.api.get_worktree_sessions(&group_id, &pagination).await?;
     Ok(Json(result))
+}
+
+// =============================================================================
+// Lazy / 辅助 IPC 镜像（spec http-data-api::Mirror lazy and auxiliary IPC commands）
+// =============================================================================
+
+async fn get_project_memory(
+    State(s): State<AppState>,
+    Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let memory = s.api.get_project_memory(&project_id).await?;
+    Ok(Json(memory))
+}
+
+#[derive(serde::Deserialize)]
+struct ReadMemoryBody {
+    file: String,
+}
+
+async fn read_memory_file(
+    State(s): State<AppState>,
+    Path(project_id): Path<String>,
+    Json(body): Json<ReadMemoryBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let content = s.api.read_memory_file(&project_id, &body.file).await?;
+    Ok(Json(content))
+}
+
+async fn get_subagent_trace(
+    State(s): State<AppState>,
+    Path((root_session_id, subagent_session_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let trace = s
+        .api
+        .get_subagent_trace(&root_session_id, &subagent_session_id)
+        .await?;
+    Ok(Json(trace))
+}
+
+async fn get_image_asset(
+    State(s): State<AppState>,
+    Path((root_session_id, session_id, block_id)): Path<(String, String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let asset = s
+        .api
+        .get_image_asset(&root_session_id, &session_id, &block_id)
+        .await?;
+    // IPC 同形：返回 base64 字符串 / `asset://` URL（取决于后端实现）。
+    Ok(Json(asset))
+}
+
+async fn get_tool_output(
+    State(s): State<AppState>,
+    Path((root_session_id, session_id, tool_use_id)): Path<(String, String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let output = s
+        .api
+        .get_tool_output(&root_session_id, &session_id, &tool_use_id)
+        .await?;
+    Ok(Json(output))
+}
+
+async fn add_trigger(
+    State(s): State<AppState>,
+    Json(trigger): Json<cdt_config::NotificationTrigger>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = s.api.add_trigger(trigger).await?;
+    Ok(Json(config))
+}
+
+async fn remove_trigger(
+    State(s): State<AppState>,
+    Path(trigger_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = s.api.remove_trigger(&trigger_id).await?;
+    Ok(Json(config))
+}
+
+async fn pin_session(
+    State(s): State<AppState>,
+    Path((project_id, session_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.pin_session(&project_id, &session_id).await?;
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+async fn unpin_session(
+    State(s): State<AppState>,
+    Path((project_id, session_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.unpin_session(&project_id, &session_id).await?;
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+async fn hide_session(
+    State(s): State<AppState>,
+    Path((project_id, session_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.hide_session(&project_id, &session_id).await?;
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+async fn unhide_session(
+    State(s): State<AppState>,
+    Path((project_id, session_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.unhide_session(&project_id, &session_id).await?;
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+async fn get_project_session_prefs(
+    State(s): State<AppState>,
+    Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let prefs = s.api.get_project_session_prefs(&project_id).await?;
+    Ok(Json(prefs))
 }
 
 #[cfg(test)]

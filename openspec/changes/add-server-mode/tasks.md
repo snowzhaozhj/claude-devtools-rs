@@ -1,24 +1,24 @@
 ## 1. cdt-api：CORS 中间件 + 静态文件 serve + lazy endpoint 镜像
 
-- [ ] 1.1 在 `crates/cdt-api/src/http/mod.rs` 把 `start_server` 签名扩展为接受 `static_dir: Option<PathBuf>` 参数；旧调用方（`cdt-cli`）传 `None` 保持现状
-- [ ] 1.2 新建 `crates/cdt-api/src/http/cors.rs`：导出 `localhost_cors_layer() -> CorsLayer`，用 `AllowOrigin::predicate` 接 closure 判断 origin 是否匹配 `^https?://(localhost|127\.0\.0\.1)(:\d+)?$`；allow-methods 含 `GET/POST/PATCH/DELETE/OPTIONS`，allow-headers 含 `Content-Type`
-- [ ] 1.3 在 `start_server` 内 `.layer(localhost_cors_layer())` 接到 router；同源请求路径不变
-- [ ] 1.4 实现静态文件 serve：`static_dir = Some(p)` 且 `p.is_dir()` → router 末尾接 `tower_http::services::ServeDir` + SPA fallback（未命中 GET 请求返 `index.html`）；`p` 无效仅 `tracing::warn!`，`/api/*` 仍 serve
-- [ ] 1.5 单测：`tests/cors.rs` 覆盖 4 个 Scenario（localhost / 127.0.0.1 / `localhost.evil.com` / preflight OPTIONS）；用 axum `tower::ServiceExt::oneshot` 直接打 router，不起真 listener
-- [ ] 1.6 单测：`tests/static_serve.rs` 覆盖 5 个 Scenario（GET / 返回 index.html / 静态资产命中 / SPA fallback / `/api/*` 不被拦截 / `static_dir = None` / 无效路径仅警告）
+- [x] 1.1 在 `crates/cdt-api/src/http/mod.rs` 把 `start_server` 签名扩展为接受 `static_dir: Option<PathBuf>` 参数；旧调用方（`cdt-cli`）传 `None` 保持现状
+- [x] 1.2 新建 `crates/cdt-api/src/http/cors.rs`：导出 `localhost_cors_layer() -> CorsLayer`，用 `AllowOrigin::predicate` 接 closure 判断 origin 是否匹配 `^https?://(localhost|127\.0\.0\.1)(:\d+)?$`；allow-methods 含 `GET/POST/PATCH/DELETE/OPTIONS`，allow-headers 含 `Content-Type`
+- [x] 1.3 在 `start_server` 内 `.layer(localhost_cors_layer())` 接到 router；同源请求路径不变
+- [x] 1.4 实现静态文件 serve：`static_dir = Some(p)` 且 `p.is_dir()` → router 末尾接 `tower_http::services::ServeDir` + SPA fallback（未命中 GET 请求返 `index.html`）；`p` 无效仅 `tracing::warn!`，`/api/*` 仍 serve
+- [x] 1.5 单测：`tests/http_cors.rs` 覆盖 4 个 Scenario（localhost / 127.0.0.1 / `localhost.evil.com` / preflight OPTIONS）；用 axum `tower::ServiceExt::oneshot` 直接打 router，不起真 listener
+- [x] 1.6 单测：`tests/http_static_serve.rs` 覆盖 6 个 Scenario（GET / 返回 index.html / 静态资产命中 / SPA fallback / `/api/*` 不被拦截 / `static_dir = None` / 无效路径仅警告）
 
 ### 1.A 镜像 lazy 与辅助 IPC commands 到 HTTP（Mirror lazy and auxiliary IPC commands Requirement）
 
-- [ ] 1.A.1 `GET /api/projects/{projectId}/memory` → `LocalDataApi::get_project_memory`
-- [ ] 1.A.2 `POST /api/projects/{projectId}/memory-files` body `{ file }` → `LocalDataApi::read_memory_file`
-- [ ] 1.A.3 `GET /api/sessions/{rootSessionId}/subagents/{subagentSessionId}/trace` → `LocalDataApi::get_subagent_trace`
-- [ ] 1.A.4 `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/blocks/{blockId}/image` → `LocalDataApi::get_image_asset`（返回 base64 字符串）
-- [ ] 1.A.5 `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/tools/{toolUseId}/output` → `LocalDataApi::get_tool_output`（保留 `outputBytes`/`outputOmitted` 语义）
-- [ ] 1.A.6 `POST /api/notifications/triggers` → `LocalDataApi::add_trigger`；`DELETE /api/notifications/triggers/{triggerId}` → `LocalDataApi::remove_trigger`
-- [ ] 1.A.7 `POST /api/projects/{projectId}/sessions/{sessionId}/pin` / `DELETE` → `LocalDataApi::pin_session` / `unpin_session`
-- [ ] 1.A.8 `POST /api/projects/{projectId}/sessions/{sessionId}/hide` / `DELETE` → `LocalDataApi::hide_session` / `unhide_session`
-- [ ] 1.A.9 `GET /api/projects/{projectId}/session-prefs` → `LocalDataApi::get_project_session_prefs`
-- [ ] 1.A.10 集成测试：在 `crates/cdt-api/tests/http_*` 系列 / 新建 `tests/http_lazy.rs` 覆盖 5 个 http-data-api Scenario（GET project memory / GET image asset 返 base64 / GET tool output 保留 omit 语义 / POST add trigger 返 id / pin/unpin 互逆）；其余 6 个 endpoint 至少各一个 happy-path test
+- [x] 1.A.1 `GET /api/projects/{projectId}/memory` → `LocalDataApi::get_project_memory`
+- [x] 1.A.2 `POST /api/projects/{projectId}/memory-files` body `{ file }` → `LocalDataApi::read_memory_file`
+- [x] 1.A.3 `GET /api/sessions/{rootSessionId}/subagents/{subagentSessionId}/trace` → `LocalDataApi::get_subagent_trace`
+- [x] 1.A.4 `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/blocks/{blockId}/image` → `LocalDataApi::get_image_asset`（返回 base64 字符串）
+- [x] 1.A.5 `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/tools/{toolUseId}/output` → `LocalDataApi::get_tool_output`（保留 `outputBytes`/`outputOmitted` 语义）
+- [x] 1.A.6 `POST /api/notifications/triggers` → `LocalDataApi::add_trigger`；`DELETE /api/notifications/triggers/{triggerId}` → `LocalDataApi::remove_trigger`（trait 提升：原 inherent method 移至 `impl DataApi for LocalDataApi`）
+- [x] 1.A.7 `POST /api/projects/{projectId}/sessions/{sessionId}/pin` / `DELETE` → `LocalDataApi::pin_session` / `unpin_session`
+- [x] 1.A.8 `POST /api/projects/{projectId}/sessions/{sessionId}/hide` / `DELETE` → `LocalDataApi::hide_session` / `unhide_session`
+- [x] 1.A.9 `GET /api/projects/{projectId}/session-prefs` → `LocalDataApi::get_project_session_prefs`
+- [x] 1.A.10 集成测试：`tests/http_lazy_endpoints.rs` 7 个测试覆盖 5 个 http-data-api Scenario（GET project memory mirrors IPC / POST add trigger persists caller-provided id / pin & unpin 互逆 / hide & unhide 互逆 / DELETE remove trigger 返更新 config）+ read_memory_file 404 + 路由 smoke（image asset / tool output / subagent trace 三个 lazy endpoint）
 - [ ] 1.A.11 在 `openspec/specs/http-data-api/spec.md` 当前的"路由清单 SHALL 至少包含"列表新增这些 endpoint（archive 时自动 sync）
 
 ## 2. cdt-api / cdt-config：HttpServerConfig 持久化语义补全
