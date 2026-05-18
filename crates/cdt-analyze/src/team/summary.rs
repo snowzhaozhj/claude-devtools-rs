@@ -168,6 +168,37 @@ mod tests {
     }
 
     #[test]
+    fn send_message_shutdown_denied_explicit_false() {
+        let input = serde_json::json!({"type": "shutdown_response", "approve": false});
+        assert_eq!(
+            format_team_tool_summary("SendMessage", &input),
+            "Shutdown denied"
+        );
+    }
+
+    #[test]
+    fn send_message_shutdown_missing_approve() {
+        let input = serde_json::json!({"type": "shutdown_response"});
+        assert_eq!(
+            format_team_tool_summary("SendMessage", &input),
+            "Shutdown denied"
+        );
+    }
+
+    #[test]
+    fn send_message_default_type_without_recipient() {
+        let input =
+            serde_json::json!({"type": "reminder", "message": "ignored when to is missing"});
+        assert_eq!(format_team_tool_summary("SendMessage", &input), "reminder");
+    }
+
+    #[test]
+    fn send_message_missing_type_without_recipient_uses_message_default() {
+        let input = serde_json::json!({});
+        assert_eq!(format_team_tool_summary("SendMessage", &input), "message");
+    }
+
+    #[test]
     fn send_message_broadcast() {
         let input = serde_json::json!({"type": "broadcast", "message": "all done"});
         assert_eq!(

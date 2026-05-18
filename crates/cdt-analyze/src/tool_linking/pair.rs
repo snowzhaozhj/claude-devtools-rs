@@ -312,6 +312,22 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_tool_use_id_warns_and_keeps_first() {
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "t1", "Bash"),
+            assistant_with_tool("a2", 2, "t1", "Read"),
+            user_with_result("u1", 3, "t1", serde_json::json!("first-only"), false),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert_eq!(r.executions.len(), 1);
+        assert_eq!(r.duplicates_dropped, 1);
+        let e = &r.executions[0];
+        assert_eq!(e.tool_use_id, "t1");
+        assert_eq!(e.tool_name, "Bash");
+        assert_eq!(e.start_ts, ts(1));
+    }
+
+    #[test]
     fn orphan_tool_use_produces_missing_record() {
         let msgs = vec![assistant_with_tool("a1", 1, "t1", "Bash")];
         let r = pair_tool_executions(&msgs);

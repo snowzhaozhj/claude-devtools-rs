@@ -65,20 +65,23 @@
 
 ## tool-execution-linking
 
-### [spec-gap] 重复 tool_use_id 的处理没被实现
+### [spec-gap] 重复 tool_use_id 的处理没被实现 ✅ 已在 `tool-execution-linking-spec-sync` 同步
 - Spec 写了"WHEN 两个 tool_result 共享同一 id THEN 记录第一个并 log warning"
 - 代码：`ToolExecutionBuilder` 没有 duplicate-id 检测与告警分支
 - 决策：要么删掉 spec 的该 scenario（未实现），要么 Rust port 补实现。倾向 **保留 spec + Rust 补实现**（正确行为）
+- **Rust 实现**：`crates/cdt-analyze/src/tool_linking/pair.rs::pair_tool_executions` assistant 侧 line 36-43 `keep first + tracing::warn! + duplicates_dropped += 1`，user 侧 line 70-80 同等处理；`ToolLinkingResult.duplicates_dropped` 暴露给 IPC 给前端做 metrics。单测 `crates/cdt-analyze/src/tool_linking/pair.rs::tests::{duplicate_tool_use_id_warns_and_keeps_first, duplicate_result_id_warns_and_keeps_first}` 双侧覆盖（前者由本 change D6b 反转决策时新增）。spec 同步：`Pair tool_use with tool_result by id` 加 `Duplicate tool_use ids` scenario（assistant 侧），原有 `Duplicate result ids` scenario（user 侧）保留，两条对称冻结契约。
 
-### [spec-gap] SendMessage summary 格式细节与实现不一致
+### [spec-gap] SendMessage summary 格式细节与实现不一致 ✅ 已在 `tool-execution-linking-spec-sync` 同步
 - Spec: "SendMessage 摘要应含 recipient 和 truncated message preview"
 - 代码 `src/renderer/utils/toolRendering/toolSummaryHelpers.ts:237` 使用 `type` 与 `to` 字段，不一定包含正文 preview
 - 决策：Rust port 时按 spec 写；baseline spec 可保留不动
+- **Rust 实现**：`crates/cdt-analyze/src/team/summary.rs::format_send_message` 按 `input.type` 分四个 branch：(1) `shutdown_response` + `approve=true` → `"Shutdown approved"`；(2) `shutdown_response` + `approve=false/missing` → `"Shutdown denied"`；(3) `broadcast` → `"Broadcast: <truncated 50>"`；(4) 其它 type 含 `to` → `"To <recipient>: <truncated 50>"`，缺 `to` 时 → `truncate(type, 50)`，`type` 缺失时走 `unwrap_or("message")` 默认路径。单测 `crates/cdt-analyze/src/team/summary.rs::tests::{send_message_shutdown_approved, _shutdown_denied_explicit_false, _shutdown_missing_approve, _broadcast, _to_recipient, _default_type_without_recipient, _missing_type_without_recipient_uses_message_default}` 七条覆盖全部 branch（后四条由本 change D6b 反转决策时新增）。spec 同步：`Format readable summaries for team coordination tools` 保留原 `SendMessage with recipient and body` scenario，新增 `SendMessage shutdown_response approve true` / `_approve false or missing` / `_broadcast type` / `_default type without recipient` / `_missing type without recipient uses default literal` 五条；引言段加 effective type 默认值 `"message"` 措辞。
 
-### [coverage-gap] Task→subagent 的三阶段匹配（result-based / description-based / positional）没写进 spec
+### [coverage-gap] Task→subagent 的三阶段匹配（result-based / description-based / positional）没写进 spec ✅ 已在 `tool-execution-linking-spec-sync` 同步
 - `SubagentResolver.ts:207-309` 实现了三级 fallback 匹配
 - spec 只说"match task descriptions and spawn timestamps"过于笼统
 - 建议：归档前给 `tool-execution-linking` 补一条 `Match Task calls to subagents by three fallbacks` 的 requirement
+- **Rust 实现**：`crates/cdt-analyze/src/tool_linking/resolver.rs` 实现三阶段 fallback：phase 1（`extract_session_id` 优先 `result_agent_id`，否则从 `output` 抽 `teammate_spawned` / `session_id`）→ `Resolution::ResultBased`；phase 2（60s spawn 窗口 description 唯一匹配）→ `Resolution::DescriptionBased`；phase 3（未分配 Task 数 == 未分配 candidate 数）→ `Resolution::Positional`；其它 → `Resolution::Orphan`。spec 已含完整 Requirement `Resolve Task subagents with three-phase fallback matching`，6 个 Scenario 覆盖：`teammate_spawned result links directly` / `No result-based link, description matches one subagent` / `Description ambiguous, positional fallback applies` / `Task call matches no subagent` / `Unrelated candidate does not trigger positional match` / `Subagent JSONL located in a different project directory`。本 change 仅同步 followups 标 ✅ 状态。
 
 ### [impl-bug?] Phase 1 subagent 匹配路径错：应读 JSONL 顶层 `toolUseResult.agentId` 而非 content block text ✅ 已在 2026-04-16 subagent 三连修复中修正
 - **背景**：2026-04-16 `fix-ai-header-tool-count` 修复过程中定位到此问题，已部分缓解（添加了从 content block 文本抽取 `agentId:` 的兜底），但根本问题未修。
