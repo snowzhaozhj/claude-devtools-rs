@@ -126,6 +126,12 @@ release-build:
     pnpm --dir ui run build
     cargo tauri build
 
+# 一键 bump：sed 三处版本号 + just release-check + 本地 commit（不 push）
+# 用法：先 `git checkout -b chore/release-X.Y.Z`，再 `just release-bump X.Y.Z`
+# 后续 push / open PR / wait CI / merge / tag 仍走 Agent 或手工
+release-bump VERSION:
+    bash scripts/release-bump.sh {{VERSION}}
+
 # ──────── 维护清理 ────────
 
 # 扫 worktree，列出已 merge 且工作树干净的可清理候选（dry-run）

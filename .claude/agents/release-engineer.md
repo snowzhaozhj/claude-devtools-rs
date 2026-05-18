@@ -30,36 +30,26 @@ ls openspec/changes/ | grep -v archive  # 警告还在 propose / apply 中的 ch
 
 不干净 → 升级回主对话报告未提交改动。
 
-### 2. 切分支 + bump 三处版本号
+### 2. 切分支 + bump + 本地 commit（一行）
 
 ```bash
 git checkout main && git pull
 git checkout -b chore/release-X.Y.Z
+just release-bump X.Y.Z
 ```
 
-bump：
-- `Cargo.toml` `[workspace.package].version = "X.Y.Z"`
-- `src-tauri/Cargo.toml` `[package].version = "X.Y.Z"`
-- `src-tauri/tauri.conf.json` `"version": "X.Y.Z"`
+`just release-bump` 内部封装了 sed 三处版本号 + `just release-check`（同步两份 `Cargo.lock`，避免 F5）+ `git add 5 文件 + commit`。版本号格式 / 分支 / 工作树校验全在脚本里；脚本退出码 0 即可直接进 Step 3。
 
-### 3. `just release-check`
+如果脚本失败（版本格式不对 / 分支错 / 工作树脏 / release-check 红）→ 升级回主对话报告。
 
-```bash
-just release-check
-```
-
-这一步会改 `Cargo.lock` + `src-tauri/Cargo.lock`。**SHALL 在 commit 前跑**，否则 lock 与 manifest 脱节。
-
-### 4. commit + push + 开 PR
+### 3. push + 开 PR
 
 ```bash
-git add Cargo.toml Cargo.lock src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
-git commit -m "chore(release): X.Y.Z"
 git push -u origin chore/release-X.Y.Z
 gh pr create --title "chore(release): X.Y.Z" --body "..."
 ```
 
-### 5. wait-ci
+### 4. wait-ci
 
 ```bash
 gh pr checks <pr-number>
@@ -71,9 +61,9 @@ gh pr checks <pr-number>
 - **匹配** known-failures playbook（见下）；命中 → push fix commit → 回到 wait
 - **不命中** → 升级回主对话："release.yml 失败 [部分 log]，未在 playbook 内"
 
-全绿 → 进入 Step 6。
+全绿 → 进入 Step 5。
 
-### 6. merge + tag + push tag
+### 5. merge + tag + push tag
 
 ```bash
 gh pr merge <pr> --squash --delete-branch
@@ -82,40 +72,20 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-### 7. 监控 release.yml workflow
+### 6. 监控 release.yml workflow（含自动 verify + publish）
 
 ```bash
 gh run list --workflow=release.yml --limit 3        # 找到刚被 tag 触发的 run
-gh run watch <run-id>                               # block 直到完成
+gh run watch <run-id> --exit-status                 # block 直到完成
 ```
 
-任一 platform job 红：套 known-failures，重试 / 升级。
+workflow 结构：`create-release` → `build (matrix×4)` → `publish`（verify 17 个必需 asset + `gh release edit --draft=false`）。
 
-### 8. 验证 4 平台 asset
+- conclusion=success → release 已自动 publish，**跳过手工 publish**，直接 Step 7 总结
+- 任一 build job 红：套 F1–F4 known-failures fix；重试 / 升级
+- `publish` job 红：通常是某平台 asset 缺失——`gh release view vX.Y.Z --json assets -q '.assets[].name'` 对比 workflow `REQUIRED` 列表定位；常见是 build 跑了但 tauri-action 没上传成功，re-run failed jobs 即可
 
-```bash
-gh release view vX.Y.Z --json assets -q '.assets[].name'
-```
-
-期望（最少）：
-- `claude-devtools-tauri_X.Y.Z_aarch64.dmg` 或 `.app.tar.gz`
-- `claude-devtools-tauri_X.Y.Z_x86_64.dmg`
-- `claude-devtools-tauri_X.Y.Z_amd64.deb` 或 `.AppImage`
-- `claude-devtools-tauri_X.Y.Z_x64-setup.exe` 或 `.msi`
-- 每个平台对应 `.sig` 签名文件
-- `latest.json`（更新源）
-
-任一缺失 → 升级回主对话。
-
-### 9. publish draft
-
-确认 latest.json + 所有 asset 在位后：
-
-```bash
-gh release edit vX.Y.Z --draft=false
-```
-
-### 10. 总结报告
+### 7. 总结报告
 
 输出（中文）：
 - 版本号 + tag URL
