@@ -41,7 +41,6 @@ pub fn normalize_path_for_compare(p: &Path) -> Cow<'_, Path> {
 pub fn normalize_path_string_for_compare(s: &str) -> Cow<'_, str> {
     #[cfg(target_os = "windows")]
     {
-        let _ = s; // suppress unused on non-windows builds during analysis
         Cow::Owned(s.to_ascii_lowercase())
     }
     #[cfg(not(target_os = "windows"))]
@@ -84,18 +83,15 @@ pub fn path_starts_with(haystack: &Path, prefix: &Path) -> bool {
 pub fn path_strip_prefix<'a>(haystack: &'a Path, prefix: &Path) -> Option<&'a Path> {
     #[cfg(target_os = "windows")]
     {
-        let h_norm = normalize_path_for_compare(haystack);
         let p_norm = normalize_path_for_compare(prefix);
         let prefix_components = p_norm.components().count();
         let mut iter = haystack.components();
+        let mut consumed = PathBuf::new();
         for _ in 0..prefix_components {
-            iter.next()?;
+            consumed.push(iter.next()?);
         }
-        let stripped = iter.as_path();
-        let consumed_components = haystack.components().count() - stripped.components().count();
-        let consumed: PathBuf = haystack.components().take(consumed_components).collect();
         if normalize_path_for_compare(&consumed) == p_norm {
-            Some(stripped)
+            Some(iter.as_path())
         } else {
             None
         }
