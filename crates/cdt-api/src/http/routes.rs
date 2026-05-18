@@ -4,13 +4,13 @@
 //! 每个 handler 委托给 `AppState.api` 的对应方法。
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use tower_http::services::{ServeDir, ServeFile};
 
 use crate::ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, PaginatedRequest, SearchRequest, SshConnectRequest,
@@ -143,16 +143,19 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
         .route("/api/events", get(sse_handler))
         .with_state(state);
 
-    // 顺序：CORS layer 在最外层（先看 Origin）；ServeDir 作为 fallback 仅
-    // 在传入 static_dir 且其存在时挂载；不存在 / None 时未命中 `/api/*`
-    // 的请求自然返 404（与本 change 之前行为一致）。
+    // 顺序：CORS layer 在最外层（先看 Origin）；静态文件 fallback 仅在传入
+    // static_dir 且其存在时挂载；不存在 / None 时未命中 `/api/*` 的请求自然
+    // 返 404（与本 change 之前行为一致）。
     let router_with_static = match static_dir {
         Some(p) if p.is_dir() => {
-            let index_html = p.join("index.html");
-            // SPA fallback：ServeDir 找不到对应文件时 fallback 到 index.html，
-            // 让前端 client-side router 接管路径。
-            let serve = ServeDir::new(&p).fallback(ServeFile::new(index_html));
-            api_router.fallback_service(serve)
+            // 用 closure + Arc::clone 捕获 dir，避免引入第二个 with_state 与
+            // api_router 已设的 AppState 冲突（axum 0.8 一个 Router 只能持有
+            // 单一 State 类型）。
+            let dir = Arc::new(p);
+            api_router.fallback(move |uri: axum::http::Uri| {
+                let dir = Arc::clone(&dir);
+                async move { static_fallback(dir, uri).await }
+            })
         }
         Some(p) => {
             tracing::warn!(
@@ -166,6 +169,67 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
     };
 
     router_with_static.layer(localhost_cors_layer())
+}
+
+/// 静态文件 + SPA fallback handler。
+///
+/// 三种情况：
+/// 1. 磁盘上对应文件存在 → serve（手动 guess mime）
+/// 2. navigation 请求（路径无 `.` 扩展名 / 根路径）→ 返回 `index.html`
+/// 3. 带扩展名但磁盘上不存在的资源 → 404（**不**得 fallback 到 HTML 否则
+///    浏览器把 HTML 当 JS 解析 + CDN 缓存脏数据，codex review 指出的 SPA
+///    部署经典坑）
+async fn static_fallback(dir: Arc<PathBuf>, uri: axum::http::Uri) -> axum::response::Response {
+    let raw = uri.path().trim_start_matches('/');
+    // path traversal 防御
+    if raw.split('/').any(|seg| seg == "..") {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let candidate = dir.join(raw);
+    if candidate.is_file() {
+        return serve_file(&candidate).await;
+    }
+    // navigation 请求：根路径 `/` 或路径中无 `.`（前端 client-side router 路径）
+    let is_navigation = raw.is_empty() || !raw.contains('.');
+    if is_navigation {
+        return serve_file(&dir.join("index.html")).await;
+    }
+    StatusCode::NOT_FOUND.into_response()
+}
+
+async fn serve_file(path: &std::path::Path) -> axum::response::Response {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            let mime = guess_mime(path);
+            ([(axum::http::header::CONTENT_TYPE, mime)], bytes).into_response()
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// 极简 mime 推断——仅覆盖前端 bundle 常用扩展名。
+///
+/// 不引入 `mime_guess` 依赖：本场景 bundle 内容固定（Vite 产物），扩展名
+/// 集合可枚举；任何未列入的扩展名 fallback 到 `application/octet-stream`，
+/// 浏览器会按文件名提示用户下载——比错配 mime 更安全。
+fn guess_mime(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("html" | "htm") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "application/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json" | "map") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("ico") => "image/x-icon",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 // =============================================================================

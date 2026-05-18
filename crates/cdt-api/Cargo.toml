@@ -31,6 +31,7 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
 futures = { workspace = true }
 tokio-stream = { workspace = true }
 chrono = { workspace = true }
@@ -40,4 +41,3 @@ regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tower = { version = "0.5", features = ["util"] }

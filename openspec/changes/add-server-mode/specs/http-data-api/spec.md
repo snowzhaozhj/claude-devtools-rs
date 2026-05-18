@@ -33,11 +33,17 @@ CORS layer 不引入鉴权或 origin 配置项——任何放宽（LAN 访问 / 
 
 ### Requirement: HTTP server SHALL serve static frontend assets with SPA fallback
 
-`cdt_api::http::start_server` SHALL 接受可选参数 `static_dir: Option<PathBuf>`：传入时 SHALL 在 router 上挂 `tower_http::services::ServeDir` 提供 `static_dir` 下的静态文件 serve；传入路径无效（不存在 / 非目录）时 SHALL 仅 `tracing::warn!` 警告并跳过 ServeDir layer，**不**得 panic 或拒绝启动。
+`cdt_api::http::start_server` SHALL 接受可选参数 `static_dir: Option<PathBuf>`：传入时 SHALL 在 router 上挂静态文件 fallback handler，提供 `static_dir` 下的静态文件 serve；传入路径无效（不存在 / 非目录）时 SHALL 仅 `tracing::warn!` 警告并跳过 fallback，**不**得 panic 或拒绝启动。
 
-静态文件 layer SHALL 在 `/api` 路由之后注册（顺序保证 API 优先），未命中 `/api/*` 与已知静态文件的 GET 请求 SHALL fallback 到 `index.html`（SPA 路由），让浏览器侧的 client-side router 接管路径。
+静态文件 fallback SHALL 在 `/api` 路由之后注册（顺序保证 API 优先）。fallback handler 按以下三种情况分流：
 
-`static_dir = None` 时（如 `cdt-cli` 默认行为或 dev mode）SHALL 不挂 ServeDir，未命中 API 路由的请求 SHALL 返回 `404`（与本 change 之前行为兼容）。Tauri runtime SHALL 在调用 `start_server` 时根据 `tauri::path::resource_dir()` 计算前端 bundle 路径并传入；具体子路径解析 SHALL 在实施期通过 `cargo tauri build` 实测确定（design.md Open Questions 已记）。
+1. **磁盘上对应文件存在** → serve 文件内容（按扩展名 guess mime；未识别扩展名 fallback 到 `application/octet-stream`）
+2. **navigation 请求**（路径无 `.` 扩展名 / 根路径 `/`）→ 返回 `index.html` 让前端 client-side router 接管
+3. **带扩展名但磁盘上不存在的资源**（如 `/assets/missing.js`、`/favicon.ico`）→ SHALL 返回 `404`，**不**得 fallback 到 `index.html`——否则浏览器把 HTML 当 JS 解析爆 parse error，且 `200` 状态会被 CDN / 浏览器缓存导致脏数据持久化（SPA 部署经典坑，本 change 显式规约此行为）
+
+path traversal 防御：fallback handler SHALL 拒绝路径中含 `..` 段的请求，返回 `403`。
+
+`static_dir = None` 时（如 `cdt-cli` 默认行为或 dev mode）SHALL 不挂 fallback，未命中 API 路由的请求 SHALL 返回 `404`（与本 change 之前行为兼容）。Tauri runtime SHALL 在调用 `start_server` 时根据 `tauri::path::resource_dir()` 计算前端 bundle 路径并传入；具体子路径解析 SHALL 在实施期通过 `cargo tauri build` 实测确定（design.md Open Questions 已记）。
 
 #### Scenario: GET / 返回前端 index.html
 
@@ -53,6 +59,17 @@ CORS layer 不引入鉴权或 origin 配置项——任何放宽（LAN 访问 / 
 
 - **WHEN** 浏览器请求 `GET /sessions/some-id`（前端 client-side router 路由，磁盘上无此文件）
 - **THEN** 响应 SHALL 为 `200` 返回 `index.html` 让前端接管路由
+
+#### Scenario: GET 带扩展名但磁盘上不存在的资源 SHALL 返 404 不 fallback
+
+- **WHEN** 浏览器请求 `GET /assets/missing.js`、`/favicon.ico`、`/some/path/file.png` 等带扩展名路径，但磁盘上无此文件
+- **THEN** 响应 SHALL 为 `404`，body **不**得含 `index.html` 内容
+- **AND** 浏览器 SHALL NOT 把 HTML 当成 JS 解析（避免 CDN / 浏览器缓存脏 200 状态）
+
+#### Scenario: 路径含 .. 段被 403 拒绝
+
+- **WHEN** 浏览器请求 `GET /../etc/passwd` 或 `/foo/../../bar`
+- **THEN** 响应 SHALL 为 `403`（path traversal 防御）
 
 #### Scenario: GET /api/* 不被 ServeDir 拦截
 

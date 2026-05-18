@@ -5,6 +5,8 @@
 //! - `GET / 返回前端 index.html`
 //! - `GET 已知静态资源命中 ServeDir`
 //! - `GET 未知前端路由 fallback 到 index.html`
+//! - `GET 带扩展名但磁盘上不存在的资源 SHALL 返 404`（codex review 后新增——
+//!   防止浏览器把 HTML 当 JS 解析 + CDN 缓存脏数据）
 //! - `GET /api/* 不被 ServeDir 拦截`
 //! - `static_dir = None 时无 ServeDir`
 //! - `static_dir 路径无效仅警告不阻塞启动`
@@ -113,6 +115,66 @@ async fn unknown_frontend_route_falls_back_to_index_html() {
         body.contains("SPA-INDEX"),
         "unknown route SHALL fallback to index.html for SPA router"
     );
+}
+
+#[tokio::test]
+async fn path_traversal_attempts_are_rejected() {
+    let tmp = TempDir::new().unwrap();
+    let static_dir = build_static_dir(&tmp);
+    let state = build_state(&tmp).await;
+    let app = build_router(state, Some(static_dir));
+
+    for url in ["/foo/../bar", "/..%2Fetc%2Fpasswd"] {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(url)
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        // axum 自身可能在路由解析前就 normalize / 拒绝 `..`，403 / 404 / 400 任一
+        // 都视为合规防御（关键是**不**返 200 + 任意文件内容）。
+        assert!(
+            status == StatusCode::FORBIDDEN
+                || status == StatusCode::NOT_FOUND
+                || status == StatusCode::BAD_REQUEST,
+            "{url} SHALL 被拒绝（403/404/400），实际 {status}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn missing_asset_with_extension_returns_404_not_index_html() {
+    // 反例 / 防回归：带扩展名的请求若磁盘上不存在 SHALL 返 404，**不**
+    // 得 fallback 到 index.html（避免浏览器把 HTML 当 JS 解析 + CDN
+    // 缓存脏数据；codex review 指出的 SPA 部署经典坑）。
+    let tmp = TempDir::new().unwrap();
+    let static_dir = build_static_dir(&tmp);
+    let state = build_state(&tmp).await;
+    let app = build_router(state, Some(static_dir));
+
+    for url in [
+        "/assets/missing.js",
+        "/assets/typo.css",
+        "/favicon.ico",
+        "/some-nested/path/file.png",
+    ] {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(url)
+            .body(Body::empty())
+            .unwrap();
+        let (status, body) = body_string(app.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "{url} SHALL 返 404, 实际 {status} body={body}"
+        );
+        assert!(
+            !body.contains("SPA-INDEX"),
+            "{url} SHALL NOT fallback 到 index.html, body={body}"
+        );
+    }
 }
 
 #[tokio::test]
