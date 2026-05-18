@@ -103,7 +103,7 @@
   --thinking-bg: rgba(124, 58, 237, 0.06);
   --thinking-border: rgba(124, 58, 237, 0.2);
   --thinking-text: #7c3aed;
-  --thinking-thread-border: rgba(124, 58, 237, 0.6);
+  --thinking-thread-border: rgba(124, 58, 237, 0.7);
 
   /* Tool result */
   --tool-result-success-bg: rgba(34, 197, 94, 0.08);
