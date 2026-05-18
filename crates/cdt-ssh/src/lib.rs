@@ -38,6 +38,7 @@ pub use config_parser::{
 pub use connection::{ActiveContext, ConnectionState, ConnectionStatus, SshConnectionManager};
 pub use error::{AuthAttempt, AuthOutcome, AuthSource, SshError, TimeoutStage};
 pub use host_resolver::{ResolvedHost, parse_ssh_g_output, resolve_host_via_ssh_g};
+pub use provider::{RemoteEntry, SftpClient, SftpClientError, SshFileSystemProvider, with_retry};
 pub use request::SshConnectRequest;
 pub use session::{
     ContextChanged, ContextKind, SHUTDOWN_TIMEOUT, SshSessionManager, SshStatus, SshStatusChange,

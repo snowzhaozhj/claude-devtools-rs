@@ -6,7 +6,7 @@
 |---|---|---|---|
 | **Phase A** | tasks 1.1-1.5 / 2.1-2.5 / 3.1-3.11+3.14 | ✅ 已完成（commit `70b371f`） | `cdt-ssh::error/auth/host_resolver/request/polling_watcher` 骨架 + `lib.rs` 重组 + design.md D1b（russh 0.46→0.52） |
 | **Phase B1** | tasks 3.12-3.13 / 4.1-4.12 | ✅ 已完成 | `cdt-ssh::session::SshSessionManager` 真握手 5 阶段 + `auth::run_auth_chain` 调度层 |
-| **Phase B2** | tasks 5.1-5.8 | ⏳ 待开工 | `cdt-ssh::provider::SshFileSystemProvider` 真 SFTP（共享 `Arc<Mutex<SftpSession>>`） |
+| **Phase B2** | tasks 5.1-5.8 | ✅ 已完成 | `cdt-ssh::provider::SshFileSystemProvider` 真 SFTP：`SftpClient` trait + 生产 `RusshSftpClient` 包装 `SftpSession` + `with_retry` 3 次指数退避 + 错误分类（NoSuchFile / PermissionDenied / Transient / Other）+ inherent `open_read_stream` 流式；fake 单测注入 15 个 case 覆盖 happy path / permission denied / 瞬时重试成功 / 重试耗尽 / classify 真值表 |
 | **Phase B3** | tasks 6.1-6.8 + 8.1-8.4 | ⏳ 待开工 | `cdt-ssh::polling_watcher` 3s+30s 轮询 + `cdt-watch::attach_remote` |
 | **Phase C** | tasks 7.1-7.7 / 9.1-9.10 / 10.1-10.8 | ⏳ 待开工 | `cdt-config::SshConfig` 段 / `cdt-api::LocalDataApi` 接真 `SshSessionManager` / Tauri `invoke_handler!` 11 条 + capabilities + emit 桥 |
 | **Phase D** | tasks 11.1-11.5 / 12.1-12.6 | ⏳ 待开工 | UI: `lib/api.ts` IPC wrapper / `connection.ts` + `context.ts` store / `Connection.svelte` + `WorkspaceIndicator` + `ContextSwitchOverlay` + `ConnectionStatusBadge` |
@@ -70,14 +70,14 @@
 
 ## 5. `cdt-ssh::provider` —— 真实 `SshFileSystemProvider`（spec Requirement: Read sessions and files over SSH）
 
-- [ ] 5.1 替换 placeholder：`SshFileSystemProvider` 持有 SFTP client handle 引用
-- [ ] 5.2 实现 `exists(path)`：SFTP `stat` 不存在路径返回 `false`，其他错误透传
-- [ ] 5.3 实现 `read_to_string(path)`：SFTP `read_file` 全量读 + UTF-8 decode
-- [ ] 5.4 实现 `read_dir(path)`：SFTP `read_dir` 返回 entry 列表（`.jsonl` 过滤交给上层 scanner）
-- [ ] 5.5 实现 `stat(path)`：SFTP `stat`，map 到 `cdt-discover::FileMetadata { size, mtime, is_dir }`
-- [ ] 5.6 实现 `open_read_stream(path)`：SFTP `open_read` 返回 `AsyncRead` impl（流式读 JSONL，支持大会话）
-- [ ] 5.7 实现 `with_retry(op, max=3, backoff=75ms*attempt)` helper：覆盖 `code=4` / `EAGAIN` / `ECONNRESET` / `ETIMEDOUT` / `EPIPE`
-- [ ] 5.8 单测：mock SFTP 客户端覆盖正常 + permission denied + 瞬时错误重试 3 类
+- [x] 5.1 替换 placeholder：`SshFileSystemProvider::new(context_id, sftp: Arc<Mutex<SftpSession>>, remote_home: PathBuf)` 持有 SFTP client handle 引用（与 `SshSessionResources` 共享同一 `Arc<Mutex<SftpSession>>`）；额外 `with_client` 构造器接 `Arc<dyn SftpClient>` 用于单测注入 fake
+- [x] 5.2 实现 `exists(path)`：SFTP `try_exists` 不存在路径返 `false`，其他错误（含 permission denied）降级 `false` 与 `LocalFileSystemProvider` 对齐；放在 `with_retry` 内容忍瞬时抖动
+- [x] 5.3 实现 `read_to_string(path)`：SFTP `read` 全量读 + UTF-8 decode（失败 → `FsError::Utf8`），错误映射走 `map_client_error`
+- [x] 5.4 实现 `read_dir(path)`：SFTP `read_dir` 返回 entry 列表，把 `russh-sftp` 的 `DirEntry` 映射为 `cdt-discover::DirEntry`（含 size/mtime metadata）；`.jsonl` 过滤交给上层 scanner
+- [x] 5.5 实现 `stat(path)`：SFTP `metadata`，map 到 `FsMetadata { size, mtime }`；不存在路径返 `FsError::NotFound`
+- [x] 5.6 实现 `open_read_stream(path)`：inherent method（不进 `FileSystemProvider` trait——避免污染 `LocalFileSystemProvider`），生产路径走 `SftpSession::open` 返回 `russh_sftp::client::fs::File`（实现 `AsyncRead + AsyncSeek`）；测试路径返 `FsError::Unsupported("open_read_stream")`
+- [x] 5.7 实现 `with_retry(op, max=3, backoff=75ms*attempt)` helper：覆盖 `StatusCode::Failure`(=4) / `Timeout` / IO 字符串匹配 `EAGAIN` / `would block` / `connection reset` / `econnreset` / `etimedout` / `timed out` / `epipe` / `broken pipe`（russh-sftp 0.2 把 `io::Error` 转 `String`，匹配字符串是无奈但已加注释跟踪后续升级）
+- [x] 5.8 单测：fake `SftpClient` impl 覆盖 kind=ssh / exists 正常 / exists 不存在 / read_to_string 正常 / read_to_string permission denied 映射 `FsError::Io { kind: PermissionDenied }` / stat NotFound / stat 正常 / read_dir 多 entry / read_lines_head 正常 / read_to_string 瞬时错误重试 2 次后成功 / read_to_string 超 retry 上限返 Transient / open_read_stream fake 路径 Unsupported / `is_transient` 真值表 / `classify_sftp_error` StatusCode 4 类映射 / `classify_sftp_error` IO 字符串 5 类映射（共 15 个 provider 单测全过）
 
 ## 6. `cdt-ssh::polling_watcher` —— 远端 SFTP polling（spec ssh-remote-context Requirement: Watch remote project directories + file-watching ADDED Requirement）
 
