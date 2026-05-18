@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # release-bump.sh — 一步完成 bump 版本号 + 同步两份 Cargo.lock + 本地 commit
-# 用法: just bump X.Y.Z（先在 chore/release-X.Y.Z 分支上跑）
+# 用法: just release-bump X.Y.Z（先在 chore/release-X.Y.Z 分支上跑）
 #
 # 这是发版流水线的"本地段"自动化——消除手动 sed 三处 / 手动 git add 5 文件 /
 # 漏 release-check 让 lock 脱节（详 release-runbook F5）等踩坑。
@@ -11,7 +11,7 @@ set -euo pipefail
 VERSION="${1:-}"
 
 if [[ -z "$VERSION" ]]; then
-    echo "❌ 用法: just bump X.Y.Z（如 just bump 0.5.6）" >&2
+    echo "❌ 用法: just release-bump X.Y.Z（如 just release-bump 0.5.6）" >&2
     exit 1
 fi
 
