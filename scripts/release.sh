@@ -34,7 +34,13 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     -*) echo "未知 flag: $1" >&2; exit 1 ;;
-    *) NEW_VERSION="$1"; shift ;;
+    *)
+      if [[ -n "${NEW_VERSION}" ]]; then
+        echo "❌ 多个版本号参数（${NEW_VERSION} + $1），只能传一个" >&2
+        exit 1
+      fi
+      NEW_VERSION="$1"; shift
+      ;;
   esac
 done
 
@@ -93,11 +99,8 @@ step "Step 0: 前置检查"
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 RELEASE_BRANCH="chore/release-${NEW_VERSION}"
 
-if [[ "$CURRENT_BRANCH" == "main" || "$CURRENT_BRANCH" == "master" ]]; then
-  if [[ $RESUME -eq 0 ]]; then
-    die 1 "当前在 ${CURRENT_BRANCH}，发版必须走 release 分支。脚本会自动开 ${RELEASE_BRANCH}，但请先 git stash 或 commit 当前改动"
-  fi
-fi
+# 在 main / master 上跑是合法路径——Step 1 会自动从最新 origin/main 切 release 分支。
+# 仅当工作树脏才拦（下面统一处理）。
 
 # 工作树检查（resume / dry-run 模式下放宽：dry-run 不真写文件，resume 续跑保留中间产物）
 if [[ $RESUME -eq 0 && $DRY_RUN -eq 0 ]] && [[ -n "$(git status --porcelain)" ]]; then
@@ -155,13 +158,31 @@ step "Step 2: bump 三处版本号"
 if [[ $SKIP_BUMP -eq 1 ]]; then
   echo "  已 bumped，跳过"
 else
-  # workspace Cargo.toml: [workspace.package] 段下的 version
-  # 用 awk 替换：仅替换文件里第一个 ^version = "..."（位于 [workspace.package] 下）
+  # 严格 section 限定：仅替换 [workspace.package] / [package] section 下的 version =
+  # 防止误中其它 [dependencies.X] / [profile.release] 等 section 里偶然出现的 version 字段。
   if [[ $DRY_RUN -eq 0 ]]; then
-    # 用 perl 比 sed 更可移植（macOS sed 与 GNU sed 行为不一）
-    perl -i -pe 'BEGIN{$n=0} if (/^version\s*=\s*"[^"]+"/ && $n==0) { s/"[^"]+"/"'"$NEW_VERSION"'"/; $n=1 }' Cargo.toml
-    perl -i -pe 'BEGIN{$n=0} if (/^version\s*=\s*"[^"]+"/ && $n==0) { s/"[^"]+"/"'"$NEW_VERSION"'"/; $n=1 }' src-tauri/Cargo.toml
-    perl -i -pe 's/"version":\s*"[^"]+"/"version": "'"$NEW_VERSION"'"/' src-tauri/tauri.conf.json
+    # workspace Cargo.toml: 在 [workspace.package] 段后第一个 ^version = "..."
+    NV="${NEW_VERSION}" perl -i -pe '
+      BEGIN { $in=0; $done=0 }
+      if (/^\[workspace\.package\]/) { $in=1; next }
+      elsif (/^\[/) { $in=0 }
+      if ($in && !$done && /^version\s*=\s*"[^"]+"/) {
+        s/"[^"]+"/"$ENV{NV}"/;
+        $done=1;
+      }
+    ' Cargo.toml
+    # src-tauri/Cargo.toml: [package] 段下第一个 ^version = "..."
+    NV="${NEW_VERSION}" perl -i -pe '
+      BEGIN { $in=0; $done=0 }
+      if (/^\[package\]/) { $in=1; next }
+      elsif (/^\[/) { $in=0 }
+      if ($in && !$done && /^version\s*=\s*"[^"]+"/) {
+        s/"[^"]+"/"$ENV{NV}"/;
+        $done=1;
+      }
+    ' src-tauri/Cargo.toml
+    # tauri.conf.json: 顶层 "version": "..."（JSON 没 section 概念，但本仓只一个 version key）
+    NV="${NEW_VERSION}" perl -i -pe 's/"version":\s*"[^"]+"/"version": "$ENV{NV}"/' src-tauri/tauri.conf.json
   fi
   echo "  ✓ 三处已改"
 
@@ -175,16 +196,11 @@ else
 fi
 
 # ────── Step 3: 同步 lock + preflight ──────
-step "Step 3: 同步 Cargo.lock + preflight (fmt/lint/test/spec-validate)"
-
-# cargo check 会触发 lock 同步刷新；版本号纯数字 bump 通常无依赖变化，毫秒级返回
-if [[ $DRY_RUN -eq 0 && $SKIP_BUMP -eq 0 ]]; then
-  cargo check --workspace --quiet >/dev/null 2>&1 || true
-fi
+step "Step 3: preflight (fmt/lint/test/spec-validate)，preflight 内部 cargo build 会顺带刷 Cargo.lock"
 
 if [[ $DRY_RUN -eq 0 ]]; then
   if ! just preflight; then
-    die 2 "preflight 失败；修完后用 --resume $NEW_VERSION 续跑"
+    die 2 "preflight 失败；修完后用 --resume ${NEW_VERSION} 续跑"
   fi
 else
   echo "  [dry-run] 跳过 just preflight"
@@ -193,11 +209,24 @@ fi
 # ────── Step 4: commit + push ──────
 step "Step 4: commit + push"
 
-if [[ -n "$(git status --porcelain)" ]]; then
-  run git add Cargo.toml Cargo.lock src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
-  run git commit -m "chore(release): $NEW_VERSION"
+# 严格基于 release 三件套 + lockfile 检测改动；不 git add -A 避免误提交无关 staged 改动。
+RELEASE_FILES=(Cargo.toml Cargo.lock src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json)
+RELEASE_DIRTY=$(git status --porcelain -- "${RELEASE_FILES[@]}" | wc -l | tr -d ' ')
+OTHER_DIRTY=$(git status --porcelain | grep -vE "^.. ($(IFS='|'; echo "${RELEASE_FILES[*]}" | sed 's,/,\\/,g'))$" | wc -l | tr -d ' ')
+
+if [[ "$OTHER_DIRTY" -gt 0 ]]; then
+  echo "  ⚠️  工作树有非 release 文件的改动（$OTHER_DIRTY 个），仅 commit release 三件套；其它请单独处理"
+  if [[ $DRY_RUN -eq 0 && $RESUME -eq 0 ]]; then
+    git status --porcelain | head -10 >&2
+    die 1 "拒绝在脏工作树上发版"
+  fi
+fi
+
+if [[ "$RELEASE_DIRTY" -gt 0 ]]; then
+  run git add "${RELEASE_FILES[@]}"
+  run git commit -m "chore(release): ${NEW_VERSION}"
 else
-  echo "  无改动，跳过 commit（resume 模式）"
+  echo "  release 三件套无改动，跳过 commit（resume 模式）"
 fi
 
 if [[ $DRY_RUN -eq 0 ]]; then
@@ -210,78 +239,108 @@ fi
 step "Step 5: 开 PR"
 
 PR_NUMBER=""
+PR_STATE=""
 if [[ $DRY_RUN -eq 0 ]]; then
-  # 检查是否已存在 PR
-  PR_NUMBER=$(gh pr list --head "$RELEASE_BRANCH" --json number --jq '.[0].number // ""')
-  if [[ -z "$PR_NUMBER" ]]; then
+  # 检查是否已存在 PR（任意状态：open/merged/closed 都要查到，避免 resume 重开）
+  PR_INFO=$(gh pr list --state all --head "${RELEASE_BRANCH}" --json number,state --jq '.[0] // {}')
+  PR_NUMBER=$(echo "${PR_INFO}" | jq -r '.number // ""')
+  PR_STATE=$(echo "${PR_INFO}" | jq -r '.state // ""')
+
+  if [[ -n "${PR_NUMBER}" && "${PR_STATE}" == "MERGED" ]]; then
+    echo "  PR #${PR_NUMBER} 已 merged，跳过开 PR / wait-ci / merge（resume 续跑到 tag 步骤）"
+    SKIP_TO_TAG=1
+  elif [[ -n "${PR_NUMBER}" ]]; then
+    echo "  PR #${PR_NUMBER} 已存在（state=${PR_STATE}），复用"
+    SKIP_TO_TAG=0
+  else
+    SKIP_TO_TAG=0
     PR_BODY=$(cat <<EOF
-## Release $NEW_VERSION
+## Release ${NEW_VERSION}
 
 由 \`scripts/release.sh\` 自动生成。
 
-- 三处版本号已同步至 \`$NEW_VERSION\`
+- 三处版本号已同步至 \`${NEW_VERSION}\`
 - \`Cargo.lock\` / \`src-tauri/Cargo.lock\` 已同步刷新
 - \`just preflight\` 已通过
 
-合 PR 后脚本会自动：tag \`v$NEW_VERSION\` → push tag → 监控 \`release.yml\` → draft ready。
-
-未跑 codex（理由：纯版本号 bump，行为契约无改动）。
+合 PR 后脚本会自动：tag \`v${NEW_VERSION}\` → push tag → 监控 \`release.yml\` → draft ready。
 EOF
 )
-    PR_NUMBER=$(gh pr create \
-      --title "chore(release): $NEW_VERSION" \
-      --body "$PR_BODY" \
+    gh pr create \
+      --title "chore(release): ${NEW_VERSION}" \
+      --body "${PR_BODY}" \
       --base main \
-      --head "$RELEASE_BRANCH" | grep -oE 'pull/[0-9]+' | grep -oE '[0-9]+' | head -1)
+      --head "${RELEASE_BRANCH}" >/dev/null
+    # 用 view --json 取 number，比 grep URL 文本更稳
+    PR_NUMBER=$(gh pr view "${RELEASE_BRANCH}" --json number --jq '.number' 2>/dev/null || echo "")
+    if [[ -z "${PR_NUMBER}" ]]; then
+      die 99 "gh pr create 后无法取到 PR number；gh pr list --head ${RELEASE_BRANCH} 看一下"
+    fi
   fi
-  echo "  PR #$PR_NUMBER"
+  echo "  PR #${PR_NUMBER}"
 else
   echo "  [dry-run] 跳过 gh pr create"
   PR_NUMBER="<dry>"
+  SKIP_TO_TAG=0
 fi
 
 # ────── Step 6: wait-ci ──────
-step "Step 6: wait-ci PR #$PR_NUMBER"
+step "Step 6: wait-ci PR #${PR_NUMBER}"
 
-if [[ $DRY_RUN -eq 0 ]]; then
+if [[ ${SKIP_TO_TAG:-0} -eq 1 ]]; then
+  echo "  PR 已 merged，跳过"
+elif [[ $DRY_RUN -eq 0 ]]; then
   # gh pr checks --watch 会阻塞直到全绿/失败
-  if ! gh pr checks "$PR_NUMBER" --watch --interval 30; then
+  if ! gh pr checks "${PR_NUMBER}" --watch --interval 30; then
     echo "" >&2
     echo "  失败 job 日志摘要:" >&2
-    gh run list --limit 3 --branch "$RELEASE_BRANCH" --json databaseId,name,conclusion,status \
+    gh run list --limit 3 --branch "${RELEASE_BRANCH}" --json databaseId,name,conclusion,status \
       --jq '.[] | select(.conclusion=="failure") | "  - \(.name) (run \(.databaseId))"' >&2 || true
-    die 3 "PR CI 红，请 gh run view --log-failed 定位 + 修 + push 后用 --resume $NEW_VERSION 续跑"
+    die 3 "PR CI 红，请 gh run view --log-failed 定位 + 修 + push 后用 --resume ${NEW_VERSION} 续跑"
   fi
 else
   echo "  [dry-run] 跳过 wait-ci"
 fi
 
 # ────── Step 7: squash merge ──────
-step "Step 7: squash merge PR #$PR_NUMBER"
+step "Step 7: squash merge PR #${PR_NUMBER}"
 
-if [[ $DRY_RUN -eq 0 ]]; then
-  run gh pr merge "$PR_NUMBER" --squash --delete-branch
+if [[ ${SKIP_TO_TAG:-0} -eq 1 ]]; then
+  echo "  PR 已 merged，跳过"
+elif [[ $DRY_RUN -eq 0 ]]; then
+  run gh pr merge "${PR_NUMBER}" --squash --delete-branch
 else
   echo "  [dry-run] 跳过 gh pr merge"
 fi
 
 # ────── Step 8: 切 main + tag ──────
-step "Step 8: tag v$NEW_VERSION"
+step "Step 8: tag v${NEW_VERSION}"
 
 run git checkout main
 run git pull origin main
+run git fetch --tags origin
 
-# 检查 tag 是否已存在
-if git rev-parse -q --verify "refs/tags/v$NEW_VERSION" >/dev/null 2>&1; then
-  echo "  tag v$NEW_VERSION 已存在，跳过"
+# 检查 tag 是否已存在（本地 + 远端）
+TAG_LOCAL=$(git rev-parse -q --verify "refs/tags/v${NEW_VERSION}" 2>/dev/null || echo "")
+TAG_REMOTE=$(git ls-remote --tags origin "refs/tags/v${NEW_VERSION}" | awk '{print $1}')
+if [[ -n "${TAG_LOCAL}" || -n "${TAG_REMOTE}" ]]; then
+  echo "  tag v${NEW_VERSION} 已存在 (local=${TAG_LOCAL:-no}, remote=${TAG_REMOTE:-no})，跳过创建"
+  if [[ -z "${TAG_LOCAL}" && -n "${TAG_REMOTE}" ]]; then
+    echo "  从远端拉取 tag 到本地..."
+    run git fetch origin "refs/tags/v${NEW_VERSION}:refs/tags/v${NEW_VERSION}"
+  fi
 else
-  run git tag "v$NEW_VERSION"
+  run git tag "v${NEW_VERSION}"
 fi
 
-if [[ $DRY_RUN -eq 0 ]]; then
-  run git push origin "v$NEW_VERSION"
+if [[ -z "${TAG_REMOTE}" ]]; then
+  if [[ $DRY_RUN -eq 0 ]]; then
+    run git push origin "v${NEW_VERSION}"
+  else
+    echo "  [dry-run] 跳过 git push tag"
+  fi
 else
-  echo "  [dry-run] 跳过 git push tag"
+  echo "  远端 tag 已存在，跳过 push"
 fi
 
 # ────── Step 9: 监控 release.yml ──────
@@ -290,55 +349,79 @@ step "Step 9: 监控 release.yml"
 if [[ $DRY_RUN -eq 0 ]]; then
   # 等 workflow 启动（最多 60s）
   RUN_ID=""
-  for i in 1 2 3 4 5 6; do
+  # 精确匹配本次 tag 触发的 run：headBranch == "v$NEW_VERSION" + event=="push"。
+  # 只筛 event=="push" 不够 —— main push 也是 push，会拿到无关 run。
+  TAG_REF="v${NEW_VERSION}"
+  # 上限 5 分钟（GitHub Actions queue 偶尔 > 1min）
+  for i in $(seq 1 30); do
     sleep 10
-    RUN_ID=$(gh run list --workflow=release.yml --limit 1 \
+    RUN_ID=$(gh run list --workflow=release.yml --limit 10 \
       --json databaseId,headBranch,event,status \
-      --jq ".[] | select(.event==\"push\") | .databaseId" | head -1)
-    if [[ -n "$RUN_ID" ]]; then break; fi
-    echo "  等 release.yml 启动 ($i/6)..."
+      --jq "[.[] | select(.event==\"push\" and .headBranch==\"${TAG_REF}\") | .databaseId] | .[0] // \"\"")
+    if [[ -n "${RUN_ID}" ]]; then break; fi
+    if [[ $((i % 6)) -eq 0 ]]; then
+      echo "  等 release.yml 启动 (${i}0s elapsed)..."
+    fi
   done
 
-  if [[ -z "$RUN_ID" ]]; then
-    die 4 "release.yml 60s 内未启动，gh run list --workflow=release.yml 看一下"
+  if [[ -z "${RUN_ID}" ]]; then
+    die 4 "release.yml 5min 内未识别到 ${TAG_REF} 触发的 run；gh run list --workflow=release.yml 看一下"
   fi
 
-  echo "  release.yml run: $RUN_ID"
-  if ! gh run watch "$RUN_ID" --interval 30 --exit-status; then
+  echo "  release.yml run: ${RUN_ID} (tag ${TAG_REF})"
+  if ! gh run watch "${RUN_ID}" --interval 30 --exit-status; then
     echo "" >&2
     echo "  release.yml 红了，看一眼是否命中已知 fix:" >&2
     echo "    F1: 4 个 draft 各只含一个平台 → workflow 缺 create-release 前置 job（改 .github/workflows/release.yml）" >&2
     echo "    F3: macos-13 runner 不可用 → 升 macos-14；或 apt 包冲突 → 加 apt-get update / purge" >&2
     echo "    F4: minisign 校验失败 → GitHub secret 链 / Cargo.toml plugin / lib.rs 注册任一缺" >&2
-    die 4 "gh run view $RUN_ID --log-failed 定位 + 修 + 重打 tag"
+    die 4 "gh run view ${RUN_ID} --log-failed 定位 + 修 + 重打 tag"
   fi
 else
   echo "  [dry-run] 跳过 gh run watch"
 fi
 
 # ────── Step 10: 验 asset 齐全 ──────
-step "Step 10: 验 4 平台 asset 齐全"
+step "Step 10: 验 4 平台 asset + minisign 签名链齐全"
 
 if [[ $DRY_RUN -eq 0 ]]; then
-  ASSET_NAMES=$(gh release view "v$NEW_VERSION" --json assets --jq '.assets[].name')
-  ASSET_COUNT=$(echo "$ASSET_NAMES" | wc -l | tr -d ' ')
-  echo "  assets: $ASSET_COUNT 个"
-  echo "$ASSET_NAMES" | sed 's/^/    - /'
+  ASSET_NAMES=$(gh release view "v${NEW_VERSION}" --json assets --jq '.assets[].name')
+  ASSET_COUNT=$(echo "${ASSET_NAMES}" | wc -l | tr -d ' ')
+  echo "  assets: ${ASSET_COUNT} 个"
+  echo "${ASSET_NAMES}" | sed 's/^/    - /'
 
-  # 期望平台覆盖：macos arm64 + macos x64 + linux .deb/.AppImage + windows .msi
+  # 必有项基线（基于 v0.5.5 实际产出 17 个 asset）：
+  #   macOS: aarch64.dmg + x64.dmg + aarch64.app.tar.gz + x64.app.tar.gz（updater bundle）
+  #   Linux: .deb + .AppImage + .rpm
+  #   Windows: .msi + .exe (NSIS)
+  #   updater: latest.json
   MISSING=()
-  echo "$ASSET_NAMES" | grep -qE 'aarch64.*\.dmg$|aarch64.*\.app\.tar\.gz$' || MISSING+=("macos-arm64 dmg")
-  echo "$ASSET_NAMES" | grep -qE 'x64\.dmg$|x86_64.*\.dmg$|x64.*\.app\.tar\.gz$' || MISSING+=("macos-x64 dmg")
-  echo "$ASSET_NAMES" | grep -qE '\.deb$' || MISSING+=("linux deb")
-  echo "$ASSET_NAMES" | grep -qE '\.AppImage$' || MISSING+=("linux AppImage")
-  echo "$ASSET_NAMES" | grep -qE '\.msi$' || MISSING+=("windows msi")
-  echo "$ASSET_NAMES" | grep -q 'latest.json' || MISSING+=("latest.json (updater manifest)")
+  echo "${ASSET_NAMES}" | grep -qE 'aarch64\.dmg$'                || MISSING+=("macos-arm64 dmg")
+  echo "${ASSET_NAMES}" | grep -qE 'x64\.dmg$'                    || MISSING+=("macos-x64 dmg")
+  echo "${ASSET_NAMES}" | grep -qE 'aarch64\.app\.tar\.gz$'       || MISSING+=("macos-arm64 .app.tar.gz (updater)")
+  echo "${ASSET_NAMES}" | grep -qE 'x64\.app\.tar\.gz$'           || MISSING+=("macos-x64 .app.tar.gz (updater)")
+  echo "${ASSET_NAMES}" | grep -qE '\.deb$'                       || MISSING+=("linux .deb")
+  echo "${ASSET_NAMES}" | grep -qE '\.AppImage$'                  || MISSING+=("linux .AppImage")
+  echo "${ASSET_NAMES}" | grep -qE '\.rpm$'                       || MISSING+=("linux .rpm")
+  echo "${ASSET_NAMES}" | grep -qE '\.msi$'                       || MISSING+=("windows .msi")
+  echo "${ASSET_NAMES}" | grep -qE 'setup\.exe$'                  || MISSING+=("windows .exe (NSIS)")
+  echo "${ASSET_NAMES}" | grep -q 'latest.json'                   || MISSING+=("latest.json (updater manifest)")
+
+  # minisign 签名链：每个安装包应有 .sig（除 latest.json）
+  INSTALLER_COUNT=$(echo "${ASSET_NAMES}" | grep -cE '\.(dmg|deb|AppImage|rpm|msi|exe|app\.tar\.gz)$' || echo 0)
+  SIG_COUNT=$(echo "${ASSET_NAMES}" | grep -cE '\.sig$' || echo 0)
+  if [[ "${INSTALLER_COUNT}" != "${SIG_COUNT}" ]]; then
+    echo "" >&2
+    echo "  minisign 签名数不匹配：${INSTALLER_COUNT} 个安装包 vs ${SIG_COUNT} 个 .sig" >&2
+    echo "  F4 检查链：tauri.conf.json::bundle.createUpdaterArtifacts / GitHub secret TAURI_SIGNING_PRIVATE_KEY{,_PASSWORD}" >&2
+    MISSING+=("minisign 签名不齐 (${INSTALLER_COUNT} installer / ${SIG_COUNT} sig)")
+  fi
 
   if [[ ${#MISSING[@]} -gt 0 ]]; then
     echo "" >&2
     echo "  缺以下 asset:" >&2
     printf "    - %s\n" "${MISSING[@]}" >&2
-    die 5 "asset 不齐，gh release view v$NEW_VERSION 排查"
+    die 5 "asset 不齐，gh release view v${NEW_VERSION} 排查"
   fi
 else
   echo "  [dry-run] 跳过 asset 校验"

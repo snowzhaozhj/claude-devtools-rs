@@ -72,7 +72,7 @@ claude-devtools-rs/
 
 - `main` 是发布分支，**不直接提交**（hook 会 deny）。日常走 `feat/xxx` / `fix/xxx` 分支 → PR → merge（详见 README）。
 - **发版默认 `just release X.Y.Z` 一键端到端**：bump 三处 → preflight → 开 PR → wait-ci → squash merge → tag → push tag → 监控 `release.yml` → 验 4 平台 asset → 退出 0 时 draft ready。整段 0 agent token 介入，最后 publish draft 是 destructive 留人/agent 拍板。失败 / 异常分支走 `release-runbook` skill 的散步骤手册。`just release-dry-run X.Y.Z` 不执行 destructive，`just release-resume X.Y.Z` 中途失败修完续跑。
-- 版本号同步在三处：`Cargo.toml`（workspace）、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`；脚本会自动同步 + 跑 `just release-check`。
+- 版本号同步在三处：`Cargo.toml`（workspace）、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`；脚本用 perl section-scoped 替换三处后跑 `just preflight`（其中 cargo build 会顺带刷 Cargo.lock）。`just release-check` 仅作独立的版本一致性 + preflight 校验入口。
 - 打 `vX.Y.Z` tag 触发 `.github/workflows/release.yml` —— macOS / Linux / Windows 矩阵构建 Tauri bundle 到 Draft Release。**workflow 必须 `create-release` 前置 job + `build` matrix 用 `releaseId` 复用**——直接让 4 个 matrix job 各自带 `tagName/releaseDraft` 跑 `tauri-action` 会并发 race，同一 tag 下产出 4 个 draft 各自只含本平台 asset + 各自的 latest.json，**无法 publish**（v0.4.2 事故案例）。`tauri-action` 在给定 `releaseId` 时只上传 + merge `latest.json`，不再调 createRelease。
 - 完整发版流水线 + F1-F7 known fixes：`release-runbook` skill。
 
