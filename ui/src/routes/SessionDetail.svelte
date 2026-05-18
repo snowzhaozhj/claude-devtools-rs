@@ -848,17 +848,19 @@
                     </div>
                   {:else if item.type === "thinking"}
                     {@const key = `${chunk.chunkId}-think-${di_idx}`}
-                    <BaseItem
-                      svgIcon={BRAIN}
-                      label="Thinking"
-                      tokenCount={estimateTokens(item.text)}
-                      isExpanded={expandedItems.has(key)}
-                      onclick={() => toggle(key)}
-                    >
-                      {#snippet children()}
-                        <div class="prose prose-thinking lazy-md" {@attach attachMarkdown(item.text, "thinking")}></div>
-                      {/snippet}
-                    </BaseItem>
+                    <div class="thinking-wrapper">
+                      <BaseItem
+                        svgIcon={BRAIN}
+                        label="Thinking"
+                        tokenCount={estimateTokens(item.text)}
+                        isExpanded={expandedItems.has(key)}
+                        onclick={() => toggle(key)}
+                      >
+                        {#snippet children()}
+                          <div class="prose prose-thinking lazy-md" {@attach attachMarkdown(item.text, "thinking")}></div>
+                        {/snippet}
+                      </BaseItem>
+                    </div>
                   {:else if item.type === "output"}
                     {@const key = `${chunk.chunkId}-output-${di_idx}`}
                     <BaseItem
@@ -2098,10 +2100,17 @@
 
   /* Prose 内的 hljs token 颜色统一在 app.css 的 .hljs-* 全局规则里 */
 
-  /* Thinking prose */
+  /* Thinking 正文：身份让位给 wrapper 紫 thread border + header BRAIN icon，
+     正文回归 --color-text 高可读。13px / 1.65 与 ExecutionTrace 同步。 */
   .prose-thinking {
-    color: var(--thinking-content-text);
+    color: var(--color-text);
     font-size: 13px;
+    line-height: 1.65;
+  }
+
+  /* 覆盖 BaseItem 默认中性灰 left border 为 thinking thread purple。 */
+  .thinking-wrapper :global(.base-item-content) {
+    border-left-color: var(--thinking-thread-border);
   }
 
   /* Interruption：用户显式 Esc 操作，视觉权重高于普通工具行但低于 error。

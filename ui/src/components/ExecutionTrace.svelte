@@ -144,17 +144,19 @@
       </BaseItem>
     {:else if item.type === "thinking"}
       {@const key = `thinking-${i}`}
-      <BaseItem
-        svgIcon={BRAIN}
-        label="Thinking"
-        tokenCount={estimateTokens(item.text)}
-        isExpanded={expandedKeys.has(key)}
-        onclick={() => toggle(key)}
-      >
-        {#snippet children()}
-          <div class="prose prose-thinking">{@html renderMarkdown(item.text)}</div>
-        {/snippet}
-      </BaseItem>
+      <div class="thinking-wrapper">
+        <BaseItem
+          svgIcon={BRAIN}
+          label="Thinking"
+          tokenCount={estimateTokens(item.text)}
+          isExpanded={expandedKeys.has(key)}
+          onclick={() => toggle(key)}
+        >
+          {#snippet children()}
+            <div class="prose prose-thinking">{@html renderMarkdown(item.text)}</div>
+          {/snippet}
+        </BaseItem>
+      </div>
     {:else if item.type === "output"}
       {@const key = `output-${i}`}
       {@const cleaned = cleanDisplayText(item.text)}
@@ -200,9 +202,18 @@
     line-height: 1.55;
     word-break: break-word;
   }
+  /* Thinking 正文：身份让位给 wrapper 的紫 thread border + header BRAIN icon，
+     正文回归正文级可读性。13px 比一般 prose 14px 略小暗示次级，1.65 行高保长读。 */
   .prose-thinking {
-    color: var(--thinking-content-text);
-    font-size: 12px;
+    color: var(--color-text);
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  /* 覆盖 BaseItem 默认中性灰 left border 为 thinking thread purple，
+     与 AI thread 同语言但语义为 reasoning chain。 */
+  .thinking-wrapper :global(.base-item-content) {
+    border-left-color: var(--thinking-thread-border);
   }
 
   .depth-limit {
