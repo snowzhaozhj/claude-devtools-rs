@@ -621,10 +621,12 @@ mod tests {
              (dir-create must not have consumed mark_project_seen)"
         );
 
-        // 此刻 known_projects 才包含该 project（jsonl 分支独占首次 insert）
+        // 此刻 known_projects 才包含该 project（jsonl 分支独占首次 insert）。
+        // Windows 上 mark_project_seen 走 normalize_path_for_compare 存
+        // lowercase 形态，断言侧也走同 helper 拿规范化 key 才能 contains 命中。
         let known = watcher.known_projects.lock().unwrap();
         assert!(
-            known.contains(&project_dir),
+            known.contains(&normalize_path_for_compare(&project_dir).into_owned()),
             "first jsonl SHALL claim mark_project_seen"
         );
     }
