@@ -34,7 +34,7 @@ Rust 端口当前的 SSH 远程会话浏览只是 placeholder：`crates/cdt-ssh`
 
 ## Impact
 
-- **新依赖**：`russh` + `russh-keys` + `russh-sftp`（或 russh 自带 sftp client，design.md 选定具体 crate）添加到 `crates/cdt-ssh/Cargo.toml`；触发 `Cargo.lock` 与 `src-tauri/Cargo.lock` 双 lock 更新。
+- **新依赖**：`russh = "0.52"`（design.md D1b 修订：0.46 与 design 引用 API 形态不符，升至 0.52）+ `russh-sftp = "2"` 添加到 `crates/cdt-ssh/Cargo.toml`；触发 `Cargo.lock` 与 `src-tauri/Cargo.lock` 双 lock 更新。
 - **代码**：
   - `crates/cdt-ssh/src/{lib,connection,provider,config_parser,error}.rs` 全部重写或重大扩展（占位 → 真实实现，预计 +800 ~ +1200 行）。
   - `crates/cdt-api/src/ipc/{traits,local}.rs` 接入真握手；HTTP 路由 `/api/ssh/*` 行为升级（仍保留向后兼容）。

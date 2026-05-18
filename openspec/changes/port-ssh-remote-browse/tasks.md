@@ -1,35 +1,35 @@
 ## 1. 依赖脚手架（`cdt-ssh` + workspace lock）
 
-- [ ] 1.1 **spike + pin**：在 `crates/cdt-ssh/Cargo.toml` pin `russh = "0.46"` + `russh-keys = "0.46"`；用 ~50 行 spike 代码（建 `crates/cdt-ssh/examples/spike.rs`）验证 `russh::client::connect()` + `Handle::authenticate_*` + `Handle::channel_open_session()` 真实调用形态；同时验 `russh-sftp` 与"自组装 SFTP packet"两条路径，选定后冻结 SFTP 选型 + 删 spike 文件
-- [ ] 1.2 同步 `Cargo.lock` 与 `src-tauri/Cargo.lock`：跑 `cargo check --workspace` + `cargo check --manifest-path src-tauri/Cargo.toml`
-- [ ] 1.3 在 `crates/cdt-ssh/src/error.rs` 替换原 `SshError` 为结构化 enum：`Tcp { host, source } / AuthExhausted { attempts } / SftpInit { source } / RemoteHomeMissing { tried } / Cancelled / Timeout { stage } / Config { reason }`，附 `AuthAttempt { source, outcome, elapsed_ms }`，实现 `serde::Serialize`（`#[serde(tag = "type", content = "data", rename_all = "camelCase")]` 用于 enum；字段名 camelCase）与 `thiserror::Error`；`SshError::code` 字段使用 snake_case 与现有 `ApiError.code` 约定一致
-- [ ] 1.4 把 `crates/cdt-ssh/src/lib.rs` 重新组织：增 `auth.rs`（候选源构建）/ `host_resolver.rs`（`ssh -G` 子进程）/ `polling_watcher.rs`（远端 SFTP polling）；保留并升级 `connection.rs` / `provider.rs` / `config_parser.rs`
-- [ ] 1.5 `SshConnectRequest::Debug` impl 把 `password` 字段渲染为 `<redacted>`，避免被 `tracing::info!(?request)` 等模式误打印
+- [x] 1.1 **spike + pin**：在 `crates/cdt-ssh/Cargo.toml` pin `russh = "0.52"`（design.md D1b 修订：0.46 API 与 design 引用形态不符，升至 0.52） + `russh-sftp = "2"`；用 ~50 行 spike 代码（`crates/cdt-ssh/examples/spike.rs`）验证 `russh::client::connect()` + `Handle::authenticate_password` + `authenticate_publickey + PrivateKeyWithHashAlg` + `best_supported_rsa_hash` + `Handle::channel_open_session()` + `Channel::request_subsystem("sftp")` + `russh_sftp::client::SftpSession::new(channel.into_stream())` + `AgentClient::connect(UnixStream)` 全套；spike 通过后选定 `russh-sftp` 路径（社区 wrapper API 完整覆盖 read_dir/metadata/open_with_flags），不走自组装 packet；spike 文件在 task 1.1 末尾删除
+- [x] 1.2 同步 `Cargo.lock` 与 `src-tauri/Cargo.lock`：跑 `cargo check --workspace` + `cargo check --manifest-path src-tauri/Cargo.toml`
+- [x] 1.3 在 `crates/cdt-ssh/src/error.rs` 替换原 `SshError` 为结构化 enum：`Tcp { host, reason } / AuthExhausted { attempts } / SftpInit { reason } / RemoteHomeMissing { tried } / Cancelled / Timeout { stage } / Config { reason }`，附 `AuthAttempt { source, outcome, elapsed_ms }` + `AuthSource` + `AuthOutcome` + `TimeoutStage`，实现 `serde::Serialize`（`SshError` 走 `tag = "code"` snake_case；`AuthSource`/`AuthOutcome` 走 `tag = "type"` camelCase；字段名 camelCase）与 `thiserror::Error`；`SshError::code` 字段使用 snake_case 与现有 `ApiError.code` 约定一致。**实现差异**：`Tcp/SftpInit` 内部存 `reason: String` 而非 `source: io::Error`，因 `io::Error` / `russh::Error` 不实现 `Serialize`；? 传播点把 source 字符串化即可
+- [x] 1.4 把 `crates/cdt-ssh/src/lib.rs` 重新组织：增 `auth.rs`（候选源构建）/ `host_resolver.rs`（`ssh -G` 子进程）/ `polling_watcher.rs`（远端 SFTP polling 骨架，Phase B 填实现）/ `request.rs`（`SshConnectRequest`）；保留并升级 `connection.rs` / `provider.rs` / `config_parser.rs`
+- [x] 1.5 `SshConnectRequest::Debug` impl 把 `password` 字段渲染为 `<redacted>`（无 password 时渲染为 `<none>`），避免被 `tracing::info!(?request)` 等模式误打印；新建在 `crates/cdt-ssh/src/request.rs`，Phase C task 9.x 时由 `cdt-api` 替换原简化版
 
 ## 2. `cdt-ssh::host_resolver` —— `ssh -G` 子进程委托（D3）
 
-- [ ] 2.1 实现 `resolve_host_via_ssh_g(alias: &str) -> Result<SshHostConfig, SshError>`：`tokio::process::Command::new("ssh").args(&["-G", alias]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())`，5s 超时；显式关闭 stdin 防被 hook 影响（codex 二审 #7）
-- [ ] 2.2 解析 stdout 行 `<key> <value>` 提取 `hostname` / `port` / `user` / `identityfile`（多行）/ `identityagent`（**非空且非 `none` 时记录路径**，用于 auth 候选 1）
-- [ ] 2.3 失败 / 超时 / 非零 exit / `ssh` 二进制缺失时降级到 `cdt-ssh::config_parser` 现有解析，返回 `SshHostConfig { degraded: true }`
-- [ ] 2.4 单测：mock `Command` 输出覆盖正常 / 多 IdentityFile / 含 IdentityAgent / 超时 / `ssh` 缺失 5 类
-- [ ] 2.5 升级 `config_parser.rs::list_hosts`：仅扫描 `~/.ssh/config` Host 行返回 alias 列表，文件不存在 → 空列表
+- [x] 2.1 实现 `resolve_host_via_ssh_g(alias: &str) -> Result<ResolvedHost, SshError>`：`tokio::process::Command::new("ssh").args(&["-G", alias]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())`，5s 超时（`SSH_G_TIMEOUT`）；显式关闭 stdin 防被 hook 影响（codex 二审 #7）+ `kill_on_drop(true)`
+- [x] 2.2 `parse_ssh_g_output(stdout: &str) -> ResolvedHost`：解析 stdout 行 `<key> <value>` 提取 `hostname` / `port` / `user` / `identityfile`（多行 push 顺序保留）/ `identityagent`（非空且非 `none` 时记录路径，含双引号路径剥引号）
+- [x] 2.3 失败 / 超时 / 非零 exit / `ssh` 二进制缺失时降级到 `cdt-ssh::config_parser` 现有解析，返回 `ResolvedHost { degraded: true }`；`config_parser` 也找不到 alias 时返回 `host=alias, port=22, degraded=true` 的最小填充（不报错，让 UI 仍可手填）
+- [x] 2.4 单测：`parse_ssh_g_output` pure-fn 测试覆盖正常 / 多 IdentityFile / IdentityAgent=none 跳过 / 引号路径 / 空输出 / 未知关键字 6 类；额外加一条 `#[ignore]` 的 live 集成测试（需系统 ssh 二进制，本地 `cargo test --ignored` 跑）
+- [x] 2.5 升级 `config_parser.rs::list_hosts`：原实现已支持非通配符 host alias 列表 + `parse_ssh_config_file` 文件不存在 → 空列表；本 phase 无需改动
 
 ## 3. `cdt-ssh::auth` —— 鉴权候选链（D2）
 
-- [ ] 3.1 定义 `AuthSource` enum：`IdentityAgent(PathBuf) / EnvAgent / LaunchctlAgent / OnePasswordAgent(PathBuf) / IdentityFile(PathBuf) / DefaultKey(PathBuf) / Password`，serde `#[serde(tag = "type", content = "data", rename_all = "camelCase")]`
-- [ ] 3.2 定义 `AuthOutcome` enum：`Success / Failure(String) / Skipped(String)`，serde 同上
-- [ ] 3.3 定义 `AuthAttempt { source, outcome, elapsed_ms }`，字段名 serde rename 为 camelCase
-- [ ] 3.4 实现 `build_candidates(host_config, platform) -> Vec<AuthSource>`：按 D2 顺序构建 7 项（macOS / Linux / Windows 平台分支跳过相应候选）
-- [ ] 3.5 候选 1：`IdentityAgent` 字段（来自 `host_resolver` 解析），仅当字段非空且非 `none` 时启用；与候选 4（1Password well-known）路径相同时去重
-- [ ] 3.6 候选 2：`SSH_AUTH_SOCK` env 读取 + 路径存在校验
-- [ ] 3.7 候选 3（macOS only）：`tokio::process::Command::new("launchctl").args(&["getenv", "SSH_AUTH_SOCK"]).stdin(Stdio::null())`，5s 超时，stdout trim 后非空即用
-- [ ] 3.8 候选 4（macOS only）：1Password well-known socket 路径探测（`~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock` + `~/.1password/agent.sock`），与候选 1 去重
-- [ ] 3.9 候选 5：`IdentityFile`（来自 `host_resolver` 解析结果）
-- [ ] 3.10 候选 6：默认密钥 fallback `~/.ssh/id_ed25519` → `id_rsa` → `id_ecdsa`
-- [ ] 3.11 候选 7：password 模式（仅当 `auth_method == Password` 时构建）
-- [ ] 3.12 实现 `try_authenticate(client, source) -> Result<(), AuthAttempt>`：每个 source 包装 `russh::client::Handle::authenticate_*` 调用 + agent 连接 + 私钥 decode + passphrase 跳过逻辑（`Skipped("requires passphrase, use ssh-add")`）
-- [ ] 3.13 实现外层 `run_auth_chain(client, candidates)`：依次尝试到第一个成功，记录每个 attempt；全部失败抛 `SshError::AuthExhausted { attempts }`
-- [ ] 3.14 单测：mock `russh::client::Handle` + 各种鉴权结果（成功 / 跳过 / 失败）覆盖 6 种典型组合（含 IdentityAgent 优先于 env agent 的 Scenario）
+- [x] 3.1 定义 `AuthSource` enum：`IdentityAgent(PathBuf) / EnvAgent / LaunchctlAgent / OnePasswordAgent(PathBuf) / IdentityFile(PathBuf) / DefaultKey(PathBuf) / Password`，serde `#[serde(tag = "type", content = "data", rename_all = "camelCase")]`（落 `error.rs`）
+- [x] 3.2 定义 `AuthOutcome` enum：`Success / Failure(String) / Skipped(String)`，serde 同上（落 `error.rs`）
+- [x] 3.3 定义 `AuthAttempt { source, outcome, elapsed_ms }`，serde camelCase（`elapsedMs`）（落 `error.rs`）
+- [x] 3.4 实现 `build_candidates_with_env(host, platform, auth_method, env_auth_sock)` + 公开 wrapper `build_candidates(...)` 读 env 调内层（纯函数版便于单测，规避 workspace `forbid(unsafe_code)` 与 Rust 1.85+ env::set_var unsafe）：按 D2 顺序构建 7 项（macOS / Linux / Windows 平台分支）
+- [x] 3.5 候选 1：`IdentityAgent` 字段（来自 `ResolvedHost.identity_agent`），仅当字段非空且非 `none` 时启用；与候选 4（1Password well-known）路径相同时去重（`contains_identity_agent_path`）
+- [x] 3.6 候选 2：`env_auth_sock` 非空 + 与候选 1 路径不同时附加 `EnvAgent`
+- [x] 3.7 候选 3（macOS only）：`AuthSource::LaunchctlAgent` 占位入候选；真子进程调用（`launchctl getenv SSH_AUTH_SOCK`）放 Phase B 的 `try_authenticate`
+- [x] 3.8 候选 4（macOS only）：`one_password_well_known_paths()` 返回 `~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock` + `~/.1password/agent.sock` 并与候选 1 去重
+- [x] 3.9 候选 5：`IdentityFile`（来自 `ResolvedHost.identity_files` 顺序）
+- [x] 3.10 候选 6：默认密钥 fallback `~/.ssh/id_ed25519` → `id_rsa` → `id_ecdsa`，与候选 5 去重（`contains_identity_file_path`）
+- [x] 3.11 候选 7：password 模式（仅当 `auth_method == Password` 时构建）
+- [ ] 3.12 实现 `try_authenticate(client, source) -> Result<(), AuthAttempt>`：每个 source 包装 `russh::client::Handle::authenticate_*` 调用 + agent 连接 + 私钥 decode + passphrase 跳过逻辑（`Skipped("requires passphrase, use ssh-add")`）—— Phase B
+- [ ] 3.13 实现外层 `run_auth_chain(client, candidates)`：依次尝试到第一个成功，记录每个 attempt；全部失败抛 `SshError::AuthExhausted { attempts }` —— Phase B
+- [x] 3.14 单测覆盖 7 类 build 组合：macOS 链含 launchctl+1Password / Windows 链跳过 / IdentityAgent 优先 EnvAgent / EnvAgent 路径与 IdentityAgent 同路径去重 / 1Password 路径与 IdentityAgent 同路径去重 / IdentityFile 与 DefaultKey id_ed25519 去重 / Password method 末尾 / SshConfig method 不含 Password（共 49 个 cdt-ssh 单测全过）
 
 ## 4. `cdt-ssh::connection` —— 真握手（spec ssh-remote-context Requirement: Establish）
 

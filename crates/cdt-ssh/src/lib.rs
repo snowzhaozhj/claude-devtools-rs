@@ -6,21 +6,35 @@
 //! consumers observe identical data shapes regardless of transport.
 //!
 //! Responsibilities:
-//! - Parse `~/.ssh/config` for host aliases (hostname, user, port, identity)
-//! - Connect / disconnect / test / query status
-//! - Provide `SshFileSystemProvider` implementing `FileSystemProvider`
-//! - Report structured connection status: disconnected / connecting /
-//!   connected / error with human-readable message
+//! - Parse `~/.ssh/config` for host alias listing (UI combobox)
+//! - Delegate full host resolution (`Include` / `Match` / `ProxyJump` / `IdentityAgent`)
+//!   to system `ssh -G <host>` subprocess (`host_resolver`)
+//! - Build the 7-source authentication candidate chain (`auth`) per
+//!   `openspec/specs/ssh-remote-context/spec.md::Requirement: SSH authentication
+//!   candidate chain`
+//! - Connect / disconnect / test / query status via real `russh` 0.52 protocol
+//!   stack — Phase B / `connection.rs`
+//! - Provide `SshFileSystemProvider` implementing `FileSystemProvider` over
+//!   `russh-sftp` — Phase B / `provider.rs`
+//! - Watch remote project directories via SFTP polling (`polling_watcher`)
+//! - Report structured connection status with structured `SshError`
+//!   classification
 
+pub mod auth;
 pub mod config_parser;
 pub mod connection;
 pub mod error;
+pub mod host_resolver;
+pub mod polling_watcher;
 pub mod provider;
+pub mod request;
 
+pub use auth::{AuthMethodKind, Platform, build_candidates};
 pub use config_parser::{
     SshHostConfig, default_ssh_config_path, list_hosts, parse_ssh_config, parse_ssh_config_file,
     resolve_host,
 };
 pub use connection::{ActiveContext, ConnectionState, ConnectionStatus, SshConnectionManager};
-pub use error::SshError;
-pub use provider::SshFileSystemProvider;
+pub use error::{AuthAttempt, AuthOutcome, AuthSource, SshError, TimeoutStage};
+pub use host_resolver::{ResolvedHost, parse_ssh_g_output, resolve_host_via_ssh_g};
+pub use request::SshConnectRequest;

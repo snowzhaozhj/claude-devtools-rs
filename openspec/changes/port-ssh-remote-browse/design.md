@@ -37,6 +37,9 @@ Rust 端口现状：
 
 ### D1. SSH 库选型 — `russh` + `russh-keys`（pin 0.46.x），SFTP 客户端 spike 后定
 
+> **D1b 修订（apply task 1.1 spike 后）**：实测 `russh = "0.46"` 的 API 与本节引用的 context7 样例形态不一致——`PrivateKeyWithHashAlg`、`best_supported_rsa_hash`、`AuthResult::success()`、`russh::keys::ssh_key::PublicKey` 均为 0.49+ 引入；0.46 仍走 `KeyPair` 旧形态 + `authenticate_password` 直接返回 `bool`。OQ1 已预留"spike 失败时修订决策"路径，决议把 pin 从 `0.46` 升至 `0.52`（当前稳定 minor），与 `russh-sftp = "2"`（v2.1.2，aspectunk 维护）对接。spike 实测 `cargo check -p cdt-ssh --example spike` 在 russh 0.52.1 通过，全部 7 项 API（connect / authenticate_password / authenticate_publickey + PrivateKeyWithHashAlg / best_supported_rsa_hash / channel_open_session / request_subsystem / SftpSession::new / AgentClient::connect）类型签名均匹配。其余决策（pure Rust、错误结构化、agent 集成可走 `russh::keys::agent::client`）仍成立。
+
+
 **选择**：使用 `russh` 系列（pure async Rust SSH 实现）作为真协议栈，`Cargo.toml` pin `russh = "0.46"` + `russh-keys = "0.46"`（minor 锁定，patch 自动）。SFTP 客户端在 (a) 社区 wrapper `russh-sftp` 与 (b) `russh::client::Handle::channel_open_session()` 自行组装 SFTP packet 之间二选一——`apply` 第一步用 ~50 行 spike 验证两者 API 后选定（见 OQ1）；任务 1.1 把"先跑 spike → pin 选型 → 才进入后续实现"作为硬约束。
 
 **拒绝的备选**：
