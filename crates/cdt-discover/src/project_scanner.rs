@@ -276,7 +276,6 @@ impl ProjectScanner {
                 Some(cwd) if !cwd.is_empty() => {
                     // Bucket key 在 Windows 上规范化 ASCII 小写——避免同 project
                     // 的 cwd 仅大小写不同的 sessions 被误拆成两个 subproject。
-                    // Bucket value 保留首条进入该 bucket 的 cwd 原始大小写用于展示。
                     // Spec：`project-discovery::Compare paths case-insensitively on Windows`。
                     let key = normalize_path_string_for_compare(&cwd).into_owned();
                     let bucket = cwd_buckets.entry(key).or_insert_with(|| CwdBucket {
@@ -285,6 +284,12 @@ impl ProjectScanner {
                         most_recent_ms: 0,
                         created_ms: i64::MAX,
                     });
+                    // 同一 bucket 多个大小写形式时选**字典序最小**的原始 cwd 当
+                    // 展示代表——确定性策略，避免 Windows 上 UI 路径展示随
+                    // session mtime / 目录枚举顺序闪烁。codex PR 二审反馈。
+                    if cwd.as_str() < bucket.cwd.to_string_lossy().as_ref() {
+                        bucket.cwd = PathBuf::from(&cwd);
+                    }
                     bucket.session_ids.push(stat.id.clone());
                     bucket.most_recent_ms = bucket.most_recent_ms.max(stat.mtime_ms);
                     bucket.created_ms = bucket.created_ms.min(stat.mtime_ms);
