@@ -11,6 +11,7 @@
 pub mod agent_configs;
 pub mod error;
 pub mod fs_provider;
+pub mod path_compare;
 pub mod path_decoder;
 pub mod project_path_resolver;
 pub mod project_scanner;
@@ -24,6 +25,10 @@ pub use error::{DiscoverError, FsError};
 pub use fs_provider::{
     DirEntry, EntryKind, FileSystemProvider, FsHandle, FsKind, FsMetadata, LocalFileSystemProvider,
     local_handle,
+};
+pub use path_compare::{
+    normalize_path_for_compare, normalize_path_string_for_compare, path_starts_with,
+    path_strip_prefix, paths_equal,
 };
 pub use path_decoder::{
     COMPOSITE_SEPARATOR, decode_path, encode_path, extract_base_dir, extract_project_name,

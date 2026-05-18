@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::path_compare::normalize_path_string_for_compare;
 use crate::path_decoder::COMPOSITE_SEPARATOR;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,8 +58,13 @@ impl SubprojectRegistry {
 
     #[must_use]
     pub fn compose_id(base_dir: &str, cwd: &Path) -> String {
+        // Hash 输入在 Windows 上规范化 ASCII 小写——同一目录的不同大小写写法
+        // 产出同一 composite ID，避免 Windows 上同 project 被误拆为多个 subproject。
+        // Spec：`project-discovery::Compare paths case-insensitively on Windows`。
+        let cwd_str = cwd.to_string_lossy();
+        let normalized = normalize_path_string_for_compare(&cwd_str);
         let mut hasher = Sha256::new();
-        hasher.update(cwd.to_string_lossy().as_bytes());
+        hasher.update(normalized.as_bytes());
         let digest = hasher.finalize();
         let hex = digest
             .iter()
@@ -152,5 +158,18 @@ mod tests {
     fn is_composite_detects_separator() {
         assert!(SubprojectRegistry::is_composite("-foo::abcd1234"));
         assert!(!SubprojectRegistry::is_composite("-foo"));
+    }
+
+    /// Windows 上 cwd 仅大小写不同的两次 `compose_id` 调用 SHALL 返回同 ID。
+    /// 非 Windows 上 SHALL 返回不同 ID（字节精确比较）。
+    /// Spec：`project-discovery::Compare paths case-insensitively on Windows`。
+    #[test]
+    fn compose_id_case_handling_matches_platform() {
+        let a = SubprojectRegistry::compose_id("-base", Path::new(r"C:\Users\Alice\app"));
+        let b = SubprojectRegistry::compose_id("-base", Path::new(r"c:\users\alice\app"));
+        #[cfg(target_os = "windows")]
+        assert_eq!(a, b, "Windows: 大小写差应规范化为相同 hash");
+        #[cfg(not(target_os = "windows"))]
+        assert_ne!(a, b, "非 Windows: 大小写差应产生不同 hash");
     }
 }
