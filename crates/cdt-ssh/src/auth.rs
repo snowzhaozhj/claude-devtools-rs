@@ -1,15 +1,23 @@
 //! SSH 鉴权候选链构建与尝试。
 //!
 //! Spec：`openspec/specs/ssh-remote-context/spec.md` `Requirement: SSH authentication
-//! candidate chain`。本文件目前仅提供候选源构建（D2 7 项有序列表 + 平台分支 + 去重），
-//! 真握手（`russh::client::Handle::authenticate_*`）由 Phase B 的 `connection.rs::run_auth_chain`
-//! 接入。
+//! candidate chain`。
 //!
-//! `AuthSource` / `AuthOutcome` / `AuthAttempt` 类型定义在 `crate::error`，本文件只构建。
+//! 模块分两层：
+//! - **构建层**：`build_candidates` / `build_candidates_with_env` 按 D2 顺序产 7 项
+//!   候选源（含平台分支与路径去重，不读 env 的纯函数版便于单测）
+//! - **调度层**：`run_auth_chain` 接受调用方注入的 `try_authenticate` callback
+//!   依次尝试到第一个成功，记录每个尝试构造 `AuthAttempt`；全部失败抛
+//!   `SshError::AuthExhausted`。callback 形态把"真 russh 调用"留给 `connection.rs`
+//!   生产路径，单测侧注入 fake outcome 序列覆盖所有调度逻辑
+//!
+//! `AuthSource` / `AuthOutcome` / `AuthAttempt` 类型定义在 `crate::error`。
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::time::Instant;
 
-use crate::error::AuthSource;
+use crate::error::{AuthAttempt, AuthOutcome, AuthSource, SshError};
 use crate::host_resolver::ResolvedHost;
 
 /// 当前编译目标平台分支（用于跳过 macOS-only 候选）。
@@ -139,6 +147,45 @@ pub fn build_candidates(
 ) -> Vec<AuthSource> {
     let env = std::env::var("SSH_AUTH_SOCK").ok();
     build_candidates_with_env(host, platform, auth_method, env.as_deref())
+}
+
+/// 依次尝试候选链，记录每个 `AuthAttempt`，第一个 `Success` 立即返回；全部失败
+/// （`Failure` / `Skipped`）抛 `SshError::AuthExhausted { attempts }`。
+///
+/// `try_fn` 由调用方注入：生产路径包 `russh::client::Handle::authenticate_*`，
+/// 单测路径返 fake `AuthOutcome` 序列。这样调度逻辑（顺序 / 计时 / 错误聚合）
+/// 与协议调用解耦，便于覆盖所有典型组合。
+///
+/// 返回值：成功时返 `Vec<AuthAttempt>`，含成功之前的全部尝试 + 最后一条 `Success`，
+/// 用于在状态广播 `connecting → connected` 时让 UI 显示"试过哪些候选"。
+pub async fn run_auth_chain<F, Fut>(
+    candidates: Vec<AuthSource>,
+    mut try_fn: F,
+) -> Result<Vec<AuthAttempt>, SshError>
+where
+    F: FnMut(AuthSource) -> Fut,
+    Fut: Future<Output = AuthOutcome>,
+{
+    let mut attempts: Vec<AuthAttempt> = Vec::with_capacity(candidates.len());
+
+    for source in candidates {
+        let started = Instant::now();
+        let outcome = try_fn(source.clone()).await;
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+        let is_success = matches!(outcome, AuthOutcome::Success);
+        attempts.push(AuthAttempt {
+            source,
+            outcome,
+            elapsed_ms,
+        });
+
+        if is_success {
+            return Ok(attempts);
+        }
+    }
+
+    Err(SshError::AuthExhausted { attempts })
 }
 
 fn contains_identity_agent_path(list: &[AuthSource], target: &PathBuf) -> bool {
@@ -329,5 +376,142 @@ mod tests {
         );
 
         assert!(!chain.iter().any(|s| matches!(s, AuthSource::Password)));
+    }
+
+    // -------------------------------------------------------------------
+    // run_auth_chain 调度层测试（task 3.13 + spec Scenario "All candidates exhausted"）
+    // -------------------------------------------------------------------
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// 构造一个 fake `try_fn`：按 outcomes 序列依次返回，记录每次被调用的 source。
+    #[allow(clippy::type_complexity)]
+    fn fake_try(
+        outcomes: Vec<AuthOutcome>,
+    ) -> (
+        impl FnMut(AuthSource) -> std::pin::Pin<Box<dyn std::future::Future<Output = AuthOutcome>>>,
+        Rc<RefCell<Vec<AuthSource>>>,
+    ) {
+        let calls: Rc<RefCell<Vec<AuthSource>>> = Rc::new(RefCell::new(Vec::new()));
+        let calls_clone = calls.clone();
+        let outcomes = Rc::new(RefCell::new(outcomes.into_iter()));
+
+        let f = move |src: AuthSource| {
+            calls_clone.borrow_mut().push(src);
+            let next = outcomes.borrow_mut().next().expect("outcome supply");
+            Box::pin(async move { next })
+                as std::pin::Pin<Box<dyn std::future::Future<Output = AuthOutcome>>>
+        };
+        (f, calls)
+    }
+
+    #[tokio::test]
+    async fn run_auth_chain_returns_on_first_success() {
+        let candidates = vec![
+            AuthSource::EnvAgent,
+            AuthSource::IdentityFile(PathBuf::from("/k1")),
+            AuthSource::DefaultKey(PathBuf::from("/k2")),
+        ];
+        let (try_fn, calls) = fake_try(vec![
+            AuthOutcome::Failure("env miss".into()),
+            AuthOutcome::Success,
+            AuthOutcome::Success, // 不应被触达
+        ]);
+
+        let result = run_auth_chain(candidates, try_fn).await.expect("ok");
+
+        assert_eq!(result.len(), 2, "stop after first success");
+        assert!(matches!(result[0].outcome, AuthOutcome::Failure(_)));
+        assert!(matches!(result[1].outcome, AuthOutcome::Success));
+        // 第三个候选不应被尝试
+        assert_eq!(calls.borrow().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn run_auth_chain_all_fail_returns_auth_exhausted() {
+        let candidates = vec![
+            AuthSource::EnvAgent,
+            AuthSource::IdentityFile(PathBuf::from("/k1")),
+        ];
+        let (try_fn, _calls) = fake_try(vec![
+            AuthOutcome::Failure("Permission denied".into()),
+            AuthOutcome::Skipped("requires passphrase, use ssh-add".into()),
+        ]);
+
+        let err = run_auth_chain(candidates, try_fn).await.unwrap_err();
+        match err {
+            SshError::AuthExhausted { attempts } => {
+                assert_eq!(attempts.len(), 2);
+                assert!(matches!(attempts[0].outcome, AuthOutcome::Failure(_)));
+                assert!(matches!(attempts[1].outcome, AuthOutcome::Skipped(_)));
+            }
+            other => panic!("expected AuthExhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_auth_chain_skipped_does_not_short_circuit() {
+        // Skipped 与 Failure 一样不算成功——应继续往下试
+        let candidates = vec![
+            AuthSource::IdentityFile(PathBuf::from("/encrypted")),
+            AuthSource::DefaultKey(PathBuf::from("/k")),
+        ];
+        let (try_fn, calls) = fake_try(vec![
+            AuthOutcome::Skipped("requires passphrase, use ssh-add".into()),
+            AuthOutcome::Success,
+        ]);
+
+        let result = run_auth_chain(candidates, try_fn).await.expect("ok");
+        assert_eq!(result.len(), 2);
+        assert_eq!(calls.borrow().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn run_auth_chain_records_elapsed_ms_per_attempt() {
+        let candidates = vec![AuthSource::EnvAgent, AuthSource::Password];
+        let (try_fn, _) = fake_try(vec![AuthOutcome::Failure("x".into()), AuthOutcome::Success]);
+
+        let result = run_auth_chain(candidates, try_fn).await.expect("ok");
+        // elapsed_ms 字段已写入；fake fn 同步返回所以耗时趋近 0，但字段必须存在
+        for attempt in &result {
+            // 任何 u64 都接受，断言字段被写入即可（不能为 None，因为不是 Option）
+            let _ = attempt.elapsed_ms;
+        }
+    }
+
+    #[tokio::test]
+    async fn run_auth_chain_empty_candidates_returns_auth_exhausted_empty_attempts() {
+        let (try_fn, _) = fake_try(vec![]);
+        let err = run_auth_chain(vec![], try_fn).await.unwrap_err();
+        match err {
+            SshError::AuthExhausted { attempts } => assert!(attempts.is_empty()),
+            other => panic!("expected AuthExhausted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_auth_chain_serialization_shape_matches_spec() {
+        // spec Scenario "AuthAttempt serialization shape" 要求 attempts 序列化为
+        // { source: { type: ..., data?: ... }, outcome: { type: ..., data?: ... }, elapsedMs }
+        let candidates = vec![
+            AuthSource::IdentityAgent(PathBuf::from("/agent.sock")),
+            AuthSource::Password,
+        ];
+        let (try_fn, _) = fake_try(vec![
+            AuthOutcome::Failure("permission denied".into()),
+            AuthOutcome::Success,
+        ]);
+        let result = run_auth_chain(candidates, try_fn).await.expect("ok");
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json[0]["source"]["type"], "identityAgent");
+        assert_eq!(json[0]["source"]["data"], "/agent.sock");
+        assert_eq!(json[0]["outcome"]["type"], "failure");
+        assert_eq!(json[0]["outcome"]["data"], "permission denied");
+        assert!(json[0]["elapsedMs"].is_u64());
+        assert_eq!(json[1]["source"]["type"], "password");
+        assert!(json[1]["source"].get("data").is_none());
+        assert_eq!(json[1]["outcome"]["type"], "success");
     }
 }

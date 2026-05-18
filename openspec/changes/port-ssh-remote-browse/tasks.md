@@ -1,3 +1,25 @@
+## 0. 推进进度索引（apply 接续锚点）
+
+按 design.md `Risks / Trade-offs::[Trade-off]一次性大 PR` 拆为 5 个 sub-session 推进。每段完成后 commit 一次，不 push；最后一段统一走发布尾段 N.1-N.4。
+
+| sub-session | 范围 | 状态 | 关键产物 |
+|---|---|---|---|
+| **Phase A** | tasks 1.1-1.5 / 2.1-2.5 / 3.1-3.11+3.14 | ✅ 已完成（commit `70b371f`） | `cdt-ssh::error/auth/host_resolver/request/polling_watcher` 骨架 + `lib.rs` 重组 + design.md D1b（russh 0.46→0.52） |
+| **Phase B1** | tasks 3.12-3.13 / 4.1-4.12 | ✅ 已完成 | `cdt-ssh::session::SshSessionManager` 真握手 5 阶段 + `auth::run_auth_chain` 调度层 |
+| **Phase B2** | tasks 5.1-5.8 | ⏳ 待开工 | `cdt-ssh::provider::SshFileSystemProvider` 真 SFTP（共享 `Arc<Mutex<SftpSession>>`） |
+| **Phase B3** | tasks 6.1-6.8 + 8.1-8.4 | ⏳ 待开工 | `cdt-ssh::polling_watcher` 3s+30s 轮询 + `cdt-watch::attach_remote` |
+| **Phase C** | tasks 7.1-7.7 / 9.1-9.10 / 10.1-10.8 | ⏳ 待开工 | `cdt-config::SshConfig` 段 / `cdt-api::LocalDataApi` 接真 `SshSessionManager` / Tauri `invoke_handler!` 11 条 + capabilities + emit 桥 |
+| **Phase D** | tasks 11.1-11.5 / 12.1-12.6 | ⏳ 待开工 | UI: `lib/api.ts` IPC wrapper / `connection.ts` + `context.ts` store / `Connection.svelte` + `WorkspaceIndicator` + `ContextSwitchOverlay` + `ConnectionStatusBadge` |
+| **Phase E** | tasks 13.1-13.6 / 14.1-14.5 / N.1-N.4 | ⏳ 待开工 | 测试金字塔 + perf 验证 + 集成 smoke + 发布尾段 |
+
+**关键 design 决策**（已落代码 + 已写 tasks.md "实现差异" 注释，无需重新决议）：
+- D1b：`russh = 0.52`（非 0.46）+ `russh-sftp = 2`，详见 design.md D1b 修订块
+- `SshSessionManager`（真握手，session.rs）与 `SshConnectionManager`（占位，connection.rs）**并存**——Phase C task 9.x 切换 cdt-api 时再删旧的；这避免 Phase B 改坏现有 `cdt-api::ssh_*` 路径
+- 阶段 3 鉴权：`run_auth_chain` 是公共 API + 单测覆盖纯调度逻辑；`session.rs::connect_inner` 阶段 3 inline 跑同一调度（因 `&mut Handle` 串行 borrow 与 callback FnMut 冲突）
+- `SshError::Tcp` / `SftpInit` 存 `reason: String` 而非 `source: io::Error/russh::Error`（后者不实现 Serialize）
+
+**下次开工**：Read `openspec/changes/port-ssh-remote-browse/{proposal,design,tasks}.md` + `crates/cdt-ssh/src/{lib,session,auth,host_resolver,request,error}.rs` 即可恢复全部 context。
+
 ## 1. 依赖脚手架（`cdt-ssh` + workspace lock）
 
 - [x] 1.1 **spike + pin**：在 `crates/cdt-ssh/Cargo.toml` pin `russh = "0.52"`（design.md D1b 修订：0.46 API 与 design 引用形态不符，升至 0.52） + `russh-sftp = "2"`；用 ~50 行 spike 代码（`crates/cdt-ssh/examples/spike.rs`）验证 `russh::client::connect()` + `Handle::authenticate_password` + `authenticate_publickey + PrivateKeyWithHashAlg` + `best_supported_rsa_hash` + `Handle::channel_open_session()` + `Channel::request_subsystem("sftp")` + `russh_sftp::client::SftpSession::new(channel.into_stream())` + `AgentClient::connect(UnixStream)` 全套；spike 通过后选定 `russh-sftp` 路径（社区 wrapper API 完整覆盖 read_dir/metadata/open_with_flags），不走自组装 packet；spike 文件在 task 1.1 末尾删除
@@ -27,24 +49,24 @@
 - [x] 3.9 候选 5：`IdentityFile`（来自 `ResolvedHost.identity_files` 顺序）
 - [x] 3.10 候选 6：默认密钥 fallback `~/.ssh/id_ed25519` → `id_rsa` → `id_ecdsa`，与候选 5 去重（`contains_identity_file_path`）
 - [x] 3.11 候选 7：password 模式（仅当 `auth_method == Password` 时构建）
-- [ ] 3.12 实现 `try_authenticate(client, source) -> Result<(), AuthAttempt>`：每个 source 包装 `russh::client::Handle::authenticate_*` 调用 + agent 连接 + 私钥 decode + passphrase 跳过逻辑（`Skipped("requires passphrase, use ssh-add")`）—— Phase B
-- [ ] 3.13 实现外层 `run_auth_chain(client, candidates)`：依次尝试到第一个成功，记录每个 attempt；全部失败抛 `SshError::AuthExhausted { attempts }` —— Phase B
+- [x] 3.12 实现 `try_authenticate_via_handle(handle, source, username, password)`（落 `session.rs`）：每个 source 包装 `russh::client::Handle::authenticate_*` 调用 + agent 连接 + 私钥 decode + passphrase 跳过逻辑（`Skipped("requires passphrase, use ssh-add")`）；agent 走 `russh::keys::agent::client::AgentClient::connect(UnixStream)`；私钥走 `load_secret_key + PrivateKeyWithHashAlg`；password 走 `authenticate_password`
+- [x] 3.13 实现 `run_auth_chain(candidates, try_fn)`（落 `auth.rs`）：依次尝试到第一个成功，记录每个 attempt；全部失败抛 `SshError::AuthExhausted { attempts }`。**实现差异**：因 `&mut Handle` 串行 borrow 与 callback FnMut 冲突，`session.rs::connect_inner` 阶段 3 inline 跑同一调度逻辑（first success 立即 break / AuthExhausted on all-fail），`run_auth_chain` 仍作为公共 API + 单测覆盖纯调度逻辑（6 个 tokio test）
 - [x] 3.14 单测覆盖 7 类 build 组合：macOS 链含 launchctl+1Password / Windows 链跳过 / IdentityAgent 优先 EnvAgent / EnvAgent 路径与 IdentityAgent 同路径去重 / 1Password 路径与 IdentityAgent 同路径去重 / IdentityFile 与 DefaultKey id_ed25519 去重 / Password method 末尾 / SshConfig method 不含 Password（共 49 个 cdt-ssh 单测全过）
 
 ## 4. `cdt-ssh::connection` —— 真握手（spec ssh-remote-context Requirement: Establish）
 
-- [ ] 4.1 替换 `SshConnectionManager::register_connection` 为 `connect(request) -> Result<ContextId, SshError>`：5 阶段（TCP probe 5s → russh transport → auth chain → SFTP open 8s → remote home probe），25s 外层硬超时
-- [ ] 4.2 实现 TCP probe：`tokio::net::TcpStream::connect_timeout`，失败抛 `SshError::Tcp`
-- [ ] 4.3 实现 russh transport：`russh::client::connect(config, addr, handler)` + `Handle::wait_for_auth_request`
-- [ ] 4.4 接 `auth.rs::run_auth_chain`，失败抛 `AuthExhausted`
-- [ ] 4.5 实现 SFTP subsystem open（按 1.1 选型）+ 8s 超时 + `SftpInit` 错误
-- [ ] 4.6 实现 remote home probe：发 `printf %s "$HOME"` 唯一在远端跑的命令；尝试 `<home>/.claude/projects` → `/home/<user>/.claude/projects` → `/Users/<user>/.claude/projects` → `/root/.claude/projects` 4 个 fallback；都不存在抛 `RemoteHomeMissing { tried }`
-- [ ] 4.7 实现 `disconnect(context_id)`：关闭 SFTP + transport + TCP + 停止该 context 的 polling watcher（cancellation token）
-- [ ] 4.8 实现 `test_connection(request)`：跑同 connect 流程，成功立即关闭，不注册 active context
-- [ ] 4.9 实现 `subscribe_status() -> broadcast::Receiver<SshStatusChange>`：`broadcast::Sender<SshStatusChange>` 容量 128；`connecting` 状态携带当前 auth chain 进度
-- [ ] 4.10 实现 `subscribe_context_changed() -> broadcast::Receiver<ContextChanged>`：在 `switch_context` / 自动切回 Local 时发出
-- [ ] 4.11 实现 graceful disconnect on app exit：`shutdown_all(timeout: Duration)` 并发断开所有 SSH context，最长 3s
-- [ ] 4.12 强制单 active SSH：连接新 host 前先 `disconnect` 当前 active SSH context
+- [x] 4.1 在 `cdt-ssh::session::SshSessionManager::connect(request) -> Result<ContextId, SshError>`：5 阶段（TCP probe 5s → russh transport → auth chain → SFTP open 8s → remote home probe），25s 外层硬超时（`OUTER_TIMEOUT`）。**实现差异**：未替换 `SshConnectionManager::register_connection`（保留旧 placeholder 不破坏 cdt-api 现有路径），新建并行 `SshSessionManager` 占据真握手；Phase C task 9.x 时由 cdt-api 切换调用
+- [x] 4.2 TCP probe：`tokio::net::TcpStream::connect` + `tokio::time::timeout(TCP_TIMEOUT)`，失败抛 `SshError::Tcp { host, reason }`，超时抛 `SshError::Timeout { stage: Tcp }`
+- [x] 4.3 russh transport：`russh::client::connect_stream(config, tcp, RusshClientHandler)`（用已建 TCP stream 节省一次 connect），失败 wrap 为 `SshError::Tcp`
+- [x] 4.4 鉴权候选链 inline 调度：`build_candidates(&resolved, Platform::current(), auth_method)` + 串行循环 `try_authenticate_via_handle` + first-success break / `AuthExhausted` on all-fail
+- [x] 4.5 SFTP subsystem open（`channel.request_subsystem("sftp") + SftpSession::new(channel.into_stream())`）+ `tokio::time::timeout(SFTP_TIMEOUT)` + `SftpInit { reason }` / `Timeout { Sftp }`
+- [x] 4.6 remote home probe：`run_remote_command` 跑 `printf %s "$HOME"`（spec 显式允许的唯一远端命令）拿 real_home，依次试 `<home>/.claude/projects` → `/home/<user>/.claude/projects` → `/Users/<user>/.claude/projects` → `/root/.claude/projects` 4 个 fallback；都不存在抛 `RemoteHomeMissing { tried }`
+- [x] 4.7 `disconnect(context_id)`：从 sessions Map remove + drop SftpSession Arc + `handle.disconnect(ByApplication, "", "")` + emit `Disconnected` 状态；若被断开是 active 切回 Local。polling watcher 停止留 task 6.x（polling 还没接入）
+- [x] 4.8 `test_connection(request)`：跑同 connect_inner 流程，成功立即 drop 资源，不注册 active context；返 `Vec<AuthAttempt>` 让 UI 显示"试过哪些候选源"诊断
+- [x] 4.9 `subscribe_status() -> broadcast::Receiver<SshStatusChange>`：`broadcast::Sender` 容量 128（`STATUS_CHANNEL_CAP`）；payload 含 `contextId / status / authChain / error`，error 状态附 `auth_chain` 进度
+- [x] 4.10 `subscribe_context_changed() -> broadcast::Receiver<ContextChanged>`：`switch_context` / 自动切回 Local 时发出 `{ activeContextId, kind: local|ssh }`
+- [x] 4.11 graceful disconnect on app exit：`shutdown_all(deadline: Duration)` 用 `futures::future::join_all` 并发断开所有 SSH context + 外层 `tokio::time::timeout(deadline)` 兜底（默认 `SHUTDOWN_TIMEOUT = 3s`）
+- [x] 4.12 强制单 active SSH：`connect` 入口检测当前 active 不是新 context_id 时先 `disconnect(prev)`
 
 ## 5. `cdt-ssh::provider` —— 真实 `SshFileSystemProvider`（spec Requirement: Read sessions and files over SSH）
 

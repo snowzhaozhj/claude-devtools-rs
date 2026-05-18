@@ -28,8 +28,9 @@ pub mod host_resolver;
 pub mod polling_watcher;
 pub mod provider;
 pub mod request;
+pub mod session;
 
-pub use auth::{AuthMethodKind, Platform, build_candidates};
+pub use auth::{AuthMethodKind, Platform, build_candidates, run_auth_chain};
 pub use config_parser::{
     SshHostConfig, default_ssh_config_path, list_hosts, parse_ssh_config, parse_ssh_config_file,
     resolve_host,
@@ -38,3 +39,6 @@ pub use connection::{ActiveContext, ConnectionState, ConnectionStatus, SshConnec
 pub use error::{AuthAttempt, AuthOutcome, AuthSource, SshError, TimeoutStage};
 pub use host_resolver::{ResolvedHost, parse_ssh_g_output, resolve_host_via_ssh_g};
 pub use request::SshConnectRequest;
+pub use session::{
+    ContextChanged, ContextKind, SHUTDOWN_TIMEOUT, SshSessionManager, SshStatus, SshStatusChange,
+};
