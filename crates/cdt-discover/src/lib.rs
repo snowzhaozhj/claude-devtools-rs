@@ -19,6 +19,7 @@ pub mod search_extract;
 pub mod session_search;
 pub mod subproject_registry;
 pub mod worktree_grouper;
+pub mod wsl;
 
 pub use error::{DiscoverError, FsError};
 pub use fs_provider::{
@@ -38,3 +39,4 @@ pub use subproject_registry::{SubprojectEntry, SubprojectRegistry};
 pub use worktree_grouper::{
     GitIdentityResolver, LocalGitIdentityResolver, RepoLookup, WorktreeGrouper,
 };
+pub use wsl::{WslDistroCandidate, WslDistroScanReport};

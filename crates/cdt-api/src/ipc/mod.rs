@@ -10,6 +10,7 @@ pub mod session_metadata;
 pub mod traits;
 pub mod types;
 
+pub use cdt_discover::{WslDistroCandidate, WslDistroScanReport};
 pub use error::{ApiError, ApiErrorCode};
 pub use events::{PushEvent, SessionMetadataUpdate};
 pub use local::{LocalDataApi, METADATA_SCAN_CONCURRENCY};

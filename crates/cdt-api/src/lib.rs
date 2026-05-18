@@ -18,6 +18,7 @@ pub use ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, ContextInfo, DataApi, LocalDataApi,
     METADATA_SCAN_CONCURRENCY, MemoryFileContent, MemoryLayer, MemoryLayerKind, PaginatedRequest,
     PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs, PushEvent, SearchRequest,
-    SessionDetail, SessionMetadataUpdate, SessionSummary, SshConnectRequest,
+    SessionDetail, SessionMetadataUpdate, SessionSummary, SshConnectRequest, WslDistroCandidate,
+    WslDistroScanReport,
 };
 pub use notifier::NotificationPipeline;
