@@ -500,8 +500,13 @@
     flex-shrink: 0;
     color: var(--color-success-bright);
   }
-  /* 形态分化 + 静态化：running 标记用 outline 空心圆，与 OngoingBanner
-     的 filled dot ping 形态完全区分；同时不与 OngoingBanner 抢屏。
+  /* SubagentCard running 标记：与 OngoingBanner 同款 circular spinner，
+     但尺寸更小（10×10 vs 14×14）、border 更细（1.5px vs 2px），
+     依靠尺寸 + 位置（header inline vs 贴底独立条带）天然分层 hierarchy。
+     之前用 outline 静态圆点（"形态对立"防多脉冲源感染），但实测"看不出
+     活跃"——和 sa-status-done 静态对勾视觉同一类，缺"事情正在发生"
+     语义。旋转是 IDE/调试器工具领域的 running lingua franca（VS Code /
+     IntelliJ / GitHub Actions / cargo / pnpm 全是同款），用户零学习成本。
      详见 DESIGN.md `The Static-vs-Live Shape Rule` 与 `One Live Signal Rule`。 */
   .sa-status-running {
     width: var(--bubble-icon-md);
@@ -512,12 +517,24 @@
     justify-content: center;
   }
   .sa-status-running-dot {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
-    background: transparent;
-    border: 1.5px solid var(--color-accent-blue);
+    border: 1.5px solid color-mix(in oklch, var(--color-accent-blue) 18%, transparent);
+    border-top-color: var(--color-accent-blue);
     box-sizing: border-box;
+    animation: sa-status-spin 1.2s linear infinite;
+  }
+  @keyframes sa-status-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sa-status-running-dot {
+      animation: none;
+      /* reduced-motion 下保留可识别静态形态：顶弧蓝色仍可见，仅不旋转 */
+    }
   }
 
   .sa-duration {
