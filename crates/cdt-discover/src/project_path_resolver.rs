@@ -20,6 +20,7 @@ use cdt_parse::parse_entry_at;
 
 use crate::error::DiscoverError;
 use crate::fs_provider::{FileSystemProvider, FsKind};
+use crate::path_compare::normalize_path_string_for_compare;
 use crate::path_decoder::{decode_path, extract_base_dir, looks_like_absolute_path};
 use crate::subproject_registry::SubprojectRegistry;
 
@@ -112,7 +113,8 @@ impl ProjectPathResolver {
 
     pub fn invalidate(&self, project_id: &str) {
         if let Ok(mut cache) = self.cache.lock() {
-            cache.remove(project_id);
+            let key = normalize_path_string_for_compare(project_id);
+            cache.remove(key.as_ref());
         }
     }
 
@@ -123,15 +125,20 @@ impl ProjectPathResolver {
     }
 
     fn cache_get(&self, project_id: &str) -> Option<PathBuf> {
+        let key = normalize_path_string_for_compare(project_id);
         self.cache
             .lock()
             .ok()
-            .and_then(|map| map.get(project_id).cloned())
+            .and_then(|map| map.get(key.as_ref()).cloned())
     }
 
     fn cache_set(&self, project_id: &str, path: &Path) {
         if let Ok(mut map) = self.cache.lock() {
-            map.insert(project_id.to_string(), path.to_path_buf());
+            // Cache key 在 Windows 上规范化 ASCII 小写以容忍 `project_id` 大小写
+            // 漂移；非 Windows 平台保持原 `project_id`。Spec：`project-discovery::
+            // Compare paths case-insensitively on Windows`。
+            let key = normalize_path_string_for_compare(project_id).into_owned();
+            map.insert(key, path.to_path_buf());
         }
     }
 
@@ -255,5 +262,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resolved, PathBuf::from("/real/cwd"));
+    }
+
+    /// Spec：`project-discovery::Compare paths case-insensitively on Windows::
+    /// 跨大小写命中同一 ProjectPathResolver 缓存`。
+    ///
+    /// Windows 上以不同大小写形式查询同一 `project_id` SHALL 命中首次解析的
+    /// cache 条目；非 Windows 平台 SHALL 视为不同 key（cache miss → 触发 fallback）。
+    #[tokio::test]
+    async fn cache_handles_case_per_platform() {
+        let dir = tempdir().unwrap();
+        let fs: Arc<dyn FileSystemProvider> = Arc::new(LocalFileSystemProvider::new());
+        let resolver = ProjectPathResolver::new(fs, dir.path().to_path_buf());
+        let registry = SubprojectRegistry::new();
+
+        // 第一次走 hint 写 cache
+        let first = resolver
+            .resolve(
+                "-C:-Users-Alice-app",
+                &registry,
+                Some(Path::new(r"C:\Users\Alice\app")),
+                Some(&[]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first, PathBuf::from(r"C:\Users\Alice\app"));
+
+        // 第二次以**仅大小写不同**的 project_id 查询，**不**给 hint
+        // Windows: 命中 cache（返回首次写入的原大小写 path）
+        // 非 Windows: cache miss → 走 decode fallback（产出 best-effort 解码结果）
+        let second = resolver
+            .resolve("-C:-users-alice-app", &registry, None, Some(&[]))
+            .await
+            .unwrap();
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            second, first,
+            "Windows: 不同大小写的 project_id 应命中同一 cache 条目"
+        );
+        #[cfg(not(target_os = "windows"))]
+        assert_ne!(
+            second, first,
+            "非 Windows: 不同大小写的 project_id 应视为不同 key（cache miss）"
+        );
     }
 }

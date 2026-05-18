@@ -94,15 +94,20 @@ fn matches_sensitive_pattern(path: &str) -> bool {
 }
 
 /// 检查路径是否在允许目录内。
+///
+/// Windows 上用 `cdt_discover::path_starts_with` 做大小写不敏感前缀匹配——
+/// 用户输入路径与 `claude_dir` / `project_root` 的大小写来源不一致时仍能
+/// 通过校验。Spec：`project-discovery::Compare paths case-insensitively on
+/// Windows`。非 Windows 平台行为不变（字节精确）。
 fn is_path_within_allowed(normalized: &Path, project_root: Option<&Path>) -> bool {
     let claude_dir = claude_base_path();
 
-    if normalized.starts_with(&claude_dir) {
+    if cdt_discover::path_starts_with(normalized, &claude_dir) {
         return true;
     }
 
     if let Some(root) = project_root {
-        if normalized.starts_with(root) {
+        if cdt_discover::path_starts_with(normalized, root) {
             return true;
         }
     }

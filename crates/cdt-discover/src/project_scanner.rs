@@ -21,6 +21,7 @@ use tokio::sync::Semaphore;
 
 use crate::error::DiscoverError;
 use crate::fs_provider::{FileSystemProvider, FsKind};
+use crate::path_compare::normalize_path_string_for_compare;
 use crate::path_decoder::{
     decode_path, extract_base_dir, extract_project_name, is_valid_encoded_path,
 };
@@ -273,12 +274,22 @@ impl ProjectScanner {
         for (stat, cwd) in session_stats.into_iter().zip(cwds) {
             match cwd {
                 Some(cwd) if !cwd.is_empty() => {
-                    let bucket = cwd_buckets.entry(cwd.clone()).or_insert_with(|| CwdBucket {
+                    // Bucket key 在 Windows 上规范化 ASCII 小写——避免同 project
+                    // 的 cwd 仅大小写不同的 sessions 被误拆成两个 subproject。
+                    // Spec：`project-discovery::Compare paths case-insensitively on Windows`。
+                    let key = normalize_path_string_for_compare(&cwd).into_owned();
+                    let bucket = cwd_buckets.entry(key).or_insert_with(|| CwdBucket {
                         cwd: PathBuf::from(&cwd),
                         session_ids: Vec::new(),
                         most_recent_ms: 0,
                         created_ms: i64::MAX,
                     });
+                    // 同一 bucket 多个大小写形式时选**字典序最小**的原始 cwd 当
+                    // 展示代表——确定性策略，避免 Windows 上 UI 路径展示随
+                    // session mtime / 目录枚举顺序闪烁。codex PR 二审反馈。
+                    if cwd.as_str() < bucket.cwd.to_string_lossy().as_ref() {
+                        bucket.cwd = PathBuf::from(&cwd);
+                    }
                     bucket.session_ids.push(stat.id.clone());
                     bucket.most_recent_ms = bucket.most_recent_ms.max(stat.mtime_ms);
                     bucket.created_ms = bucket.created_ms.min(stat.mtime_ms);
@@ -302,14 +313,14 @@ impl ProjectScanner {
                     .decode_historical_worktree_dir(dir_name)
                     .await
                     .unwrap_or_else(|| decode_path(dir_name));
-                let fallback = cwd_buckets
-                    .entry(decoded.to_string_lossy().into_owned())
-                    .or_insert_with(|| CwdBucket {
-                        cwd: decoded.clone(),
-                        session_ids: Vec::new(),
-                        most_recent_ms: 0,
-                        created_ms: i64::MAX,
-                    });
+                let decoded_key =
+                    normalize_path_string_for_compare(&decoded.to_string_lossy()).into_owned();
+                let fallback = cwd_buckets.entry(decoded_key).or_insert_with(|| CwdBucket {
+                    cwd: decoded.clone(),
+                    session_ids: Vec::new(),
+                    most_recent_ms: 0,
+                    created_ms: i64::MAX,
+                });
                 for stat in unknown_cwd.drain(..) {
                     fallback.most_recent_ms = fallback.most_recent_ms.max(stat.mtime_ms);
                     fallback.created_ms = fallback.created_ms.min(stat.mtime_ms);

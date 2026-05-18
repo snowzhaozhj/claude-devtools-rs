@@ -19,6 +19,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::time::{Instant, sleep_until};
 
 use cdt_core::{FileChangeEvent, TodoChangeEvent};
+use cdt_discover::{normalize_path_for_compare, path_starts_with, path_strip_prefix};
 
 use crate::error::WatchError;
 
@@ -33,6 +34,9 @@ fn initial_projects(projects_dir: &Path) -> HashSet<PathBuf> {
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.is_dir())
+        // 与 mark_project_seen 走同一规范化策略——Windows 上 ASCII 小写存盘，
+        // 让初始扫到的 project 与运行时新见到的不同大小写形式合并为单一条目。
+        .map(|path| normalize_path_for_compare(&path).into_owned())
         .collect()
 }
 
@@ -128,12 +132,17 @@ impl FileWatcher {
     }
 
     /// 将单个去抖后的事件路由到对应的 broadcast channel。
+    ///
+    /// Windows 上 `notify` 回调返回的路径大小写可能与 `dunce::canonicalize`
+    /// 后的 `projects_dir` / `todos_dir` 不一致——走 `path_starts_with` 跨平台
+    /// helper 做大小写不敏感前缀匹配。Spec：`file-watching::Route watch events
+    /// case-insensitively on Windows`。
     fn route_event(&self, path: &Path, deleted: bool) {
-        if path.starts_with(&self.projects_dir) {
+        if path_starts_with(path, &self.projects_dir) {
             if let Some(file_event) = self.parse_project_event(path, deleted) {
                 let _ = self.file_tx.send(file_event);
             }
-        } else if path.starts_with(&self.todos_dir) {
+        } else if path_starts_with(path, &self.todos_dir) {
             if let Some(todo_event) = Self::parse_todo_event(path) {
                 let _ = self.todo_tx.send(todo_event);
             }
@@ -150,7 +159,10 @@ impl FileWatcher {
     ///   （4 层 + .jsonl，且第 3 段为 `subagents`、文件名 `agent-` 前缀但非
     ///   `agent-acompact*`），路由到父 `(project_id, session_id)` 的事件。
     fn parse_project_event(&self, path: &Path, deleted: bool) -> Option<FileChangeEvent> {
-        let rel = path.strip_prefix(&self.projects_dir).ok()?;
+        // 跨平台 strip_prefix——Windows 上容忍大小写漂移；返回的相对路径保留
+        // `path` 原始大小写以保证后续 components / file_stem 提取的 project_id /
+        // session_id 与磁盘真实命名一致。
+        let rel = path_strip_prefix(path, &self.projects_dir)?;
         let components: Vec<_> = rel.components().collect();
         if components.is_empty() {
             return None;
@@ -221,10 +233,15 @@ impl FileWatcher {
     }
 
     fn mark_project_seen(&self, project_id: &str) -> bool {
+        // HashSet 元素在 Windows 上规范化 ASCII 小写——避免同一 project 被以
+        // 不同大小写重复标记 mark。Spec：`file-watching::Route watch events
+        // case-insensitively on Windows::known_projects 在 Windows 上对大小写
+        // 漂移去重` Scenario。
+        let key = normalize_path_for_compare(&self.projects_dir.join(project_id)).into_owned();
         self.known_projects
             .lock()
             .expect("known_projects mutex poisoned")
-            .insert(self.projects_dir.join(project_id))
+            .insert(key)
     }
 
     /// 从 todos 目录下的路径解析 `TodoChangeEvent`。
@@ -604,10 +621,12 @@ mod tests {
              (dir-create must not have consumed mark_project_seen)"
         );
 
-        // 此刻 known_projects 才包含该 project（jsonl 分支独占首次 insert）
+        // 此刻 known_projects 才包含该 project（jsonl 分支独占首次 insert）。
+        // Windows 上 mark_project_seen 走 normalize_path_for_compare 存
+        // lowercase 形态，断言侧也走同 helper 拿规范化 key 才能 contains 命中。
         let known = watcher.known_projects.lock().unwrap();
         assert!(
-            known.contains(&project_dir),
+            known.contains(&normalize_path_for_compare(&project_dir).into_owned()),
             "first jsonl SHALL claim mark_project_seen"
         );
     }
