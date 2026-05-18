@@ -28,12 +28,12 @@
 
 系统 SHALL 为每个团队协作工具（`TeamCreate`、`TaskCreate`、`TaskUpdate`、`TaskList`、`TaskGet`、`SendMessage`、`TeamDelete`）产出一条简短可读的 summary 字符串，捕捉最显著的参数。
 
-`SendMessage` 工具的 summary SHALL 按 `input.type` 字段分四个 branch 处理：
+`SendMessage` 工具的 summary SHALL 按 `input.type` 字段分四个 branch 处理。读 `input.type` 时若字段缺失或非字符串 SHALL 取默认值 `"message"`（即与 `type == "message"` 等价）。各 branch 行为：
 
-1. `type == "shutdown_response"` —— 读 `input.approve`（bool），`true` 时输出 `"Shutdown approved"`，否则（含缺失 / `false`）输出 `"Shutdown denied"`，**不**追加 recipient / message body。
+1. `type == "shutdown_response"` —— 读 `input.approve`（bool），`true` 时输出 `"Shutdown approved"`，否则（含缺失 / `false` / 非 bool）输出 `"Shutdown denied"`，**不**追加 recipient / message body。
 2. `type == "broadcast"` —— 输出 `"Broadcast: <truncated message>"`，message 截断长度 SHALL ≤ 50 字符。
-3. `type` 为其它值（含 `"message"` / 缺失 / 非字符串）且 `input.to` 存在 —— 输出 `"To <recipient>: <truncated message>"`，message 截断 SHALL ≤ 50 字符。
-4. `type` 为其它值且 `input.to` 缺失 —— 退回到 `truncate(type, 50)` 文本，避免 summary 退化为单纯的工具名字面量。
+3. `type` 为其它值（含 `"message"` / 默认值）且 `input.to` 存在 —— 输出 `"To <recipient>: <truncated message>"`，message 截断 SHALL ≤ 50 字符。
+4. `type` 为其它值且 `input.to` 缺失 —— 退回到 `truncate(type, 50)` 文本，避免 summary 退化为单纯的工具名字面量。当 `type` 字段缺失走默认值路径时，由于此时 `effective type == "message"`，本 branch 输出 `"message"`。
 
 #### Scenario: SendMessage with recipient and body
 - **WHEN** 一次 `SendMessage` 工具调用 `input` 含 `to` 与 `message` 参数（`type` 缺失或为 `"message"` 等非特殊值）
@@ -52,5 +52,9 @@
 - **THEN** summary SHALL 形如 `Broadcast: <truncated message>`，message 部分截断长度 ≤ 50 字符；recipient 字段在 broadcast branch 不参与渲染（即使 `input.to` 存在也忽略）
 
 #### Scenario: SendMessage default type without recipient
-- **WHEN** 一次 `SendMessage` 调用 `input.type` 为非特殊值且 `input.to` 缺失
-- **THEN** summary SHALL 退回到 `truncate(type, 50)` 形式（如 `type == "message"` 时输出 `"message"`），避免空 recipient 路径下 summary 退化为单纯的 `"SendMessage"` 字面量
+- **WHEN** 一次 `SendMessage` 调用 `input.type` 为非特殊值（如 `"reminder"`）且 `input.to` 缺失
+- **THEN** summary SHALL 退回到 `truncate(type, 50)` 形式（如 `type == "reminder"` 时输出 `"reminder"`），避免空 recipient 路径下 summary 退化为单纯的 `"SendMessage"` 字面量
+
+#### Scenario: SendMessage missing type without recipient uses default literal
+- **WHEN** 一次 `SendMessage` 调用 `input.type` 字段缺失（或非字符串）且 `input.to` 缺失
+- **THEN** effective type 取默认值 `"message"`，summary SHALL 输出 `"message"`（即 default branch + truncate 后形式）
