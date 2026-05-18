@@ -181,8 +181,10 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
 ///    部署经典坑）
 async fn static_fallback(dir: Arc<PathBuf>, uri: axum::http::Uri) -> axum::response::Response {
     let raw = uri.path().trim_start_matches('/');
-    // path traversal 防御
-    if raw.split('/').any(|seg| seg == "..") {
+    // path traversal 防御：URL-encoded `%2e%2e`、Windows backslash、percent-decode
+    // 后含 `..` 段，三种形态都拦。`Uri::path()` 在 axum 0.8 不自动 percent-decode
+    // （codex review 第二轮指出），裸 `..` 段比对会被 `%2e%2e/etc/passwd` 绕过。
+    if !is_path_safe(raw) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let candidate = dir.join(raw);
@@ -195,6 +197,23 @@ async fn static_fallback(dir: Arc<PathBuf>, uri: axum::http::Uri) -> axum::respo
         return serve_file(&dir.join("index.html")).await;
     }
     StatusCode::NOT_FOUND.into_response()
+}
+
+/// 检查 path 是否安全（无 traversal 痕迹）。
+///
+/// 三道闸门：
+/// 1. raw 含 `\` → 拒（Windows 路径分隔符，HTTP 路径不应出现）
+/// 2. percent-decode 后 仍含 `\` → 拒（`%5c` 形态）
+/// 3. percent-decode 后按 `/` 切段，任一段为 `..` → 拒（覆盖 `..` 与 `%2e%2e` 形态）
+fn is_path_safe(raw: &str) -> bool {
+    if raw.contains('\\') {
+        return false;
+    }
+    let decoded = percent_encoding::percent_decode_str(raw).decode_utf8_lossy();
+    if decoded.contains('\\') {
+        return false;
+    }
+    !decoded.split('/').any(|seg| seg == "..")
 }
 
 async fn serve_file(path: &std::path::Path) -> axum::response::Response {

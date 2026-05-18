@@ -41,7 +41,7 @@ CORS layer 不引入鉴权或 origin 配置项——任何放宽（LAN 访问 / 
 2. **navigation 请求**（路径无 `.` 扩展名 / 根路径 `/`）→ 返回 `index.html` 让前端 client-side router 接管
 3. **带扩展名但磁盘上不存在的资源**（如 `/assets/missing.js`、`/favicon.ico`）→ SHALL 返回 `404`，**不**得 fallback 到 `index.html`——否则浏览器把 HTML 当 JS 解析爆 parse error，且 `200` 状态会被 CDN / 浏览器缓存导致脏数据持久化（SPA 部署经典坑，本 change 显式规约此行为）
 
-path traversal 防御：fallback handler SHALL 拒绝路径中含 `..` 段的请求，返回 `403`。
+path traversal 防御：fallback handler SHALL 拒绝路径中含 `..` 段（包括 URL-encoded 形态 `%2e%2e` / `%2E%2E`）以及 backslash（`\` 或 `%5c`）的请求。具体状态码可为 `403`（fallback handler 主动拒绝）、`400` / `404`（axum 路由层在 normalize / decode 阶段先拦下）任一——**不变量**是：SHALL NOT 返 `200` + 任何静态文件内容（攻击者 SHALL NOT 凭 traversal 拿到磁盘文件）。
 
 `static_dir = None` 时（如 `cdt-cli` 默认行为或 dev mode）SHALL 不挂 fallback，未命中 API 路由的请求 SHALL 返回 `404`（与本 change 之前行为兼容）。Tauri runtime SHALL 在调用 `start_server` 时根据 `tauri::path::resource_dir()` 计算前端 bundle 路径并传入；具体子路径解析 SHALL 在实施期通过 `cargo tauri build` 实测确定（design.md Open Questions 已记）。
 
@@ -66,10 +66,11 @@ path traversal 防御：fallback handler SHALL 拒绝路径中含 `..` 段的请
 - **THEN** 响应 SHALL 为 `404`，body **不**得含 `index.html` 内容
 - **AND** 浏览器 SHALL NOT 把 HTML 当成 JS 解析（避免 CDN / 浏览器缓存脏 200 状态）
 
-#### Scenario: 路径含 .. 段被 403 拒绝
+#### Scenario: path traversal 攻击 SHALL NOT 拿到磁盘文件
 
-- **WHEN** 浏览器请求 `GET /../etc/passwd` 或 `/foo/../../bar`
-- **THEN** 响应 SHALL 为 `403`（path traversal 防御）
+- **WHEN** 浏览器请求 `GET /../etc/passwd` / `/foo/../../bar` / `/%2e%2e/etc/passwd` / `/%2E%2E/etc/passwd` / `/foo/%2e%2e/bar` / `/foo%5cbar`（含裸 `..`、URL-encoded `..`、URL-encoded `\` 等形态）
+- **THEN** 响应 SHALL NOT 为 `200` 且 SHALL NOT 含任何静态文件内容
+- **AND** 状态码可为 `403`（fallback handler 主动拒绝）/ `400` / `404`（axum 路由层先拦下），具体由框架决定
 
 #### Scenario: GET /api/* 不被 ServeDir 拦截
 

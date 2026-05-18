@@ -124,7 +124,13 @@ async fn path_traversal_attempts_are_rejected() {
     let state = build_state(&tmp).await;
     let app = build_router(state, Some(static_dir));
 
-    for url in ["/foo/../bar", "/..%2Fetc%2Fpasswd"] {
+    for url in [
+        "/foo/../bar",        // 裸 `..` 段
+        "/%2e%2e/etc/passwd", // URL-encoded `..`（小写 hex）
+        "/%2E%2E/etc/passwd", // URL-encoded `..`（大写 hex）
+        "/foo/%2e%2e/bar",    // 中间段 encoded `..`
+        "/foo%5cbar",         // URL-encoded backslash
+    ] {
         let req = Request::builder()
             .method(Method::GET)
             .uri(url)
@@ -132,13 +138,21 @@ async fn path_traversal_attempts_are_rejected() {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         let status = resp.status();
-        // axum 自身可能在路由解析前就 normalize / 拒绝 `..`，403 / 404 / 400 任一
-        // 都视为合规防御（关键是**不**返 200 + 任意文件内容）。
+        // 关键不变量：SHALL NOT 返 200 + 文件内容（拒绝具体 status code 由 axum
+        // 路由层 / 我们的 fallback 谁先拦决定，可能是 400/403/404；只要不是
+        // 200 让攻击者拿到磁盘文件就 OK）。
+        assert_ne!(
+            status,
+            StatusCode::OK,
+            "{url} SHALL NOT 返 200 + 文件内容（path traversal 防御失效），实际 {status}"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body = String::from_utf8_lossy(&bytes);
         assert!(
-            status == StatusCode::FORBIDDEN
-                || status == StatusCode::NOT_FOUND
-                || status == StatusCode::BAD_REQUEST,
-            "{url} SHALL 被拒绝（403/404/400），实际 {status}"
+            !body.contains("SPA-INDEX") && !body.contains("console.log"),
+            "{url} SHALL NOT 返任何静态文件内容，body={body}"
         );
     }
 }

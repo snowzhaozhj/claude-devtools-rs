@@ -188,6 +188,7 @@ dependencies = [
  "cdt-watch",
  "chrono",
  "futures",
+ "percent-encoding",
  "regex",
  "serde",
  "serde_json",
