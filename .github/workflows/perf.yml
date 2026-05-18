@@ -85,7 +85,7 @@ jobs:
           retention-days: 30
       - name: 渲染 PR 评论
         if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           PERF_EXIT_CODE: ${{ steps.bench.outputs.exit_code }}
         with:
