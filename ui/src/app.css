@@ -103,7 +103,7 @@
   --thinking-bg: rgba(124, 58, 237, 0.06);
   --thinking-border: rgba(124, 58, 237, 0.2);
   --thinking-text: #7c3aed;
-  --thinking-thread-border: rgba(124, 58, 237, 0.35);
+  --thinking-thread-border: rgba(124, 58, 237, 0.6);
 
   /* Tool result */
   --tool-result-success-bg: rgba(34, 197, 94, 0.08);
@@ -312,7 +312,7 @@
   --thinking-bg: rgba(167, 139, 250, 0.1);
   --thinking-border: rgba(167, 139, 250, 0.25);
   --thinking-text: #a78bfa;
-  --thinking-thread-border: rgba(167, 139, 250, 0.4);
+  --thinking-thread-border: rgba(167, 139, 250, 0.65);
 
   --tool-result-success-bg: rgba(34, 197, 94, 0.12);
   --tool-result-success-text: #4ade80;
@@ -439,7 +439,7 @@
     --thinking-bg: rgba(167, 139, 250, 0.1);
     --thinking-border: rgba(167, 139, 250, 0.25);
     --thinking-text: #a78bfa;
-    --thinking-thread-border: rgba(167, 139, 250, 0.4);
+    --thinking-thread-border: rgba(167, 139, 250, 0.65);
 
     --tool-result-success-bg: rgba(34, 197, 94, 0.12);
     --tool-result-success-text: #4ade80;

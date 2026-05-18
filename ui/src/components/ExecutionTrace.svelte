@@ -216,6 +216,12 @@
     border-left-color: var(--thinking-thread-border);
   }
 
+  /* 折叠态身份：BaseItem 默认 svg icon 染 --tool-item-muted 灰，
+     thinking 行 icon 染 thinking purple，长会话扫描时一眼能识别。 */
+  .thinking-wrapper :global(.base-item-svg) {
+    color: var(--thinking-text);
+  }
+
   .depth-limit {
     display: flex;
     align-items: center;

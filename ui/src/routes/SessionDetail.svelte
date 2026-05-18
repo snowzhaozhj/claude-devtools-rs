@@ -2113,6 +2113,12 @@
     border-left-color: var(--thinking-thread-border);
   }
 
+  /* 折叠态身份：thinking 行 svg icon 染 thinking purple，
+     与 ExecutionTrace 行为一致，长会话扫描时识别度足够。 */
+  .thinking-wrapper :global(.base-item-svg) {
+    color: var(--thinking-text);
+  }
+
   /* Interruption：用户显式 Esc 操作，视觉权重高于普通工具行但低于 error。
      从早期 1px dashed line → warning chip：浅 amber bg + 1px border + 实
      icon + mono UPPERCASE label + sentence-case 文案 + 末尾 ↩ 锚定字符。
