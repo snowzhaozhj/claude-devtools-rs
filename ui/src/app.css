@@ -97,13 +97,11 @@
   --prose-table-border: #e5e4e1;
   --prose-table-header-bg: #f0efed;
 
-  /* Thinking blocks
-     身份靠结构（BRAIN icon + 紫色 thread border）表达，正文回归 --color-text
-     高可读性。--thinking-thread-border 覆盖 BaseItem 默认中性灰 left border。 */
+  /* Thinking blocks（仅 ContextPanel 等少数 chip 引用 --thinking-text 紫；
+     thinking 行 wrapper 不再用紫装饰，与普通工具行同等克制） */
   --thinking-bg: rgba(124, 58, 237, 0.06);
   --thinking-border: rgba(124, 58, 237, 0.2);
   --thinking-text: #7c3aed;
-  --thinking-thread-border: rgba(124, 58, 237, 0.7);
 
   /* Tool result */
   --tool-result-success-bg: rgba(34, 197, 94, 0.08);
@@ -312,7 +310,6 @@
   --thinking-bg: rgba(167, 139, 250, 0.1);
   --thinking-border: rgba(167, 139, 250, 0.25);
   --thinking-text: #a78bfa;
-  --thinking-thread-border: rgba(167, 139, 250, 0.65);
 
   --tool-result-success-bg: rgba(34, 197, 94, 0.12);
   --tool-result-success-text: #4ade80;
@@ -439,7 +436,6 @@
     --thinking-bg: rgba(167, 139, 250, 0.1);
     --thinking-border: rgba(167, 139, 250, 0.25);
     --thinking-text: #a78bfa;
-    --thinking-thread-border: rgba(167, 139, 250, 0.65);
 
     --tool-result-success-bg: rgba(34, 197, 94, 0.12);
     --tool-result-success-text: #4ade80;

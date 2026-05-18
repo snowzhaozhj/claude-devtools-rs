@@ -144,19 +144,17 @@
       </BaseItem>
     {:else if item.type === "thinking"}
       {@const key = `thinking-${i}`}
-      <div class="thinking-wrapper">
-        <BaseItem
-          svgIcon={BRAIN}
-          label="Thinking"
-          tokenCount={estimateTokens(item.text)}
-          isExpanded={expandedKeys.has(key)}
-          onclick={() => toggle(key)}
-        >
-          {#snippet children()}
-            <div class="prose prose-thinking">{@html renderMarkdown(item.text)}</div>
-          {/snippet}
-        </BaseItem>
-      </div>
+      <BaseItem
+        svgIcon={BRAIN}
+        label="Thinking"
+        tokenCount={estimateTokens(item.text)}
+        isExpanded={expandedKeys.has(key)}
+        onclick={() => toggle(key)}
+      >
+        {#snippet children()}
+          <div class="prose prose-thinking">{@html renderMarkdown(item.text)}</div>
+        {/snippet}
+      </BaseItem>
     {:else if item.type === "output"}
       {@const key = `output-${i}`}
       {@const cleaned = cleanDisplayText(item.text)}
@@ -202,24 +200,13 @@
     line-height: 1.55;
     word-break: break-word;
   }
-  /* Thinking 正文：身份让位给 wrapper 的紫 thread border + header BRAIN icon，
-     正文回归正文级可读性。13px 比一般 prose 14px 略小暗示次级，1.65 行高保长读。 */
+  /* Thinking 正文：与 prose 同字体同行高，仅以 13px 略小暗示次级。
+     身份完全靠 BRAIN icon 形状 + "Thinking" label 区分，与 Bash / Read /
+     Output 同等克制——保持 PRODUCT.md "quiet debugging workbench" 调性。 */
   .prose-thinking {
     color: var(--color-text);
     font-size: 13px;
     line-height: 1.65;
-  }
-
-  /* 覆盖 BaseItem 默认中性灰 left border 为 thinking thread purple，
-     与 AI thread 同语言但语义为 reasoning chain。 */
-  .thinking-wrapper :global(.base-item-content) {
-    border-left-color: var(--thinking-thread-border);
-  }
-
-  /* 折叠态身份：BaseItem 默认 svg icon 染 --tool-item-muted 灰，
-     thinking 行 icon 染 thinking purple，长会话扫描时一眼能识别。 */
-  .thinking-wrapper :global(.base-item-svg) {
-    color: var(--thinking-text);
   }
 
   .depth-limit {
