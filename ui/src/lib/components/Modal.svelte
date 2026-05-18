@@ -45,9 +45,9 @@
     if (e.key === "Tab") {
       const focusables = Array.from(
         dialogEl?.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
         ) ?? [],
-      );
+      ).filter((el) => !el.hasAttribute("disabled"));
       if (focusables.length === 0) return;
       const first = focusables[0];
       const last = focusables[focusables.length - 1];
