@@ -47,7 +47,25 @@ class TauriTransport implements Transport {
   }
 }
 
+/** EventSource CLOSED 后延迟重建的退避边界（ms）：min 是首次重建延迟，
+ * max 是指数回退上限。避免 server 长期不可用时手动重建陷入"重建 → onerror
+ * → 重建"无限风暴（codex 二审 Q3）。 */
+const SSE_RECONNECT_MIN_MS = 1000;
+const SSE_RECONNECT_MAX_MS = 30_000;
+
 class BrowserTransport implements Transport {
+  // 单例 EventSource + handler 集合：UI 里 5+ 个 `subscribeEvent` 调用点
+  // （App.svelte 3 个 + Sidebar 1 个 + fileChangeStore 1 个等），若每次都
+  // `new EventSource()` 各开一条 SSE → HTTP/1.1 同源 6 连接限制下，5 条
+  // SSE 长连接占满槽位，后续 API 请求（`/api/projects/{id}/sessions` 等）
+  // 永远等不到空闲连接，sidebar 卡 loading。复用同一条 SSE 流，按事件类型
+  // fan-out 到所有 handler。
+  private source: EventSource | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 当前指数回退步数，0=首次（min），onopen 时重置（参见 ensureSource）。 */
+  private reconnectAttempt = 0;
+  private readonly handlers = new Set<EventHandler>();
+
   async invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
     if (unsupportedBrowserCommands.has(cmd)) {
       throw new BrowserUnsupportedError(cmd);
@@ -56,15 +74,78 @@ class BrowserTransport implements Transport {
   }
 
   async subscribeEvents(handler: EventHandler): Promise<Unsubscribe> {
+    this.ensureSource();
+    this.handlers.add(handler);
+    return () => {
+      this.handlers.delete(handler);
+      if (this.handlers.size === 0) this.closeSource();
+    };
+  }
+
+  private ensureSource(): void {
+    // 现有 source 已 CLOSED（典型场景：server toggle off → axum shutdown →
+    // TCP RST → EventSource 自动重连失败 N 次后进入 CLOSED 终态，浏览器
+    // 不再自己重连），SHALL 主动清掉重建（codex 二审 MUST FIX 轴 4）。
+    if (this.source && this.source.readyState !== EventSource.CLOSED) return;
+    this.source = null;
     const source = new EventSource(`${getServerBaseUrl()}/api/events`);
+    // 连接成功打开 → 重置指数回退步数，让后续真发生 CLOSED 时从首次延迟
+    // 起算（避免长期连接稳定运行多年后偶发一次 CLOSED 还按"故障风暴"上限
+    // 延迟）。
+    source.onopen = () => {
+      this.reconnectAttempt = 0;
+    };
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data) as { type?: string } & Record<string, unknown>;
       const eventName = mapPushEventName(payload.type);
       if (!eventName) return;
       const { type: _type, ...rest } = payload;
-      handler(eventName, normalizePushPayload(payload.type, rest));
+      const normalized = normalizePushPayload(payload.type, rest);
+      // 复制 handler 集合再迭代——handler 内可能调 unsubscribe 改动 Set
+      // 触发 forEach 行为依实现，复制一份避免迭代中删除引发遗漏。
+      for (const h of [...this.handlers]) h(eventName, normalized);
     };
-    return () => source.close();
+    source.onerror = (event) => {
+      console.warn("[transport] SSE connection error", event);
+      // CONNECTING（=0）是 EventSource 自带回退重连阶段，不干预；CLOSED
+      // （=2）是终态浏览器不再重连，SHALL 主动延迟重建。OPEN（=1）短暂错误
+      // 后通常自愈，无需处理。
+      if (source.readyState === EventSource.CLOSED) this.scheduleReconnect(source);
+    };
+    this.source = source;
+  }
+
+  private scheduleReconnect(failed: EventSource): void {
+    // 只在 failed === 当前 source 时重建——避免与并发 closeSource / handler
+    // 全部 unsubscribe 后又有新 subscribe 的路径冲突。
+    if (this.source !== failed) return;
+    this.source = null;
+    if (this.reconnectTimer || this.handlers.size === 0) return;
+    // 指数回退：1s → 2s → 4s → ... → 30s 上限。server 持续不可用时（用户
+    // toggle off 后不再 toggle on / server 进程崩溃未拉起），手动重建仍会
+    // 立即 onerror → 再次 scheduleReconnect，没有上限就是每秒 burst 重连。
+    const backoff = Math.min(
+      SSE_RECONNECT_MIN_MS * 2 ** this.reconnectAttempt,
+      SSE_RECONNECT_MAX_MS,
+    );
+    this.reconnectAttempt += 1;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.handlers.size > 0) this.ensureSource();
+    }, backoff);
+  }
+
+  private closeSource(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    // 清空 attempt——下次 subscribe-重连场景应从首次延迟起算，避免上一轮
+    // 残留的回退步数惩罚新会话。
+    this.reconnectAttempt = 0;
+    if (!this.source) return;
+    this.source.close();
+    this.source = null;
   }
 }
 
