@@ -48,6 +48,15 @@ class TauriTransport implements Transport {
 }
 
 class BrowserTransport implements Transport {
+  // 单例 EventSource + handler 集合：UI 里 5+ 个 `subscribeEvent` 调用点
+  // （App.svelte 3 个 + Sidebar 1 个 + fileChangeStore 1 个等），若每次都
+  // `new EventSource()` 各开一条 SSE → HTTP/1.1 同源 6 连接限制下，5 条
+  // SSE 长连接占满槽位，后续 API 请求（`/api/projects/{id}/sessions` 等）
+  // 永远等不到空闲连接，sidebar 卡 loading。复用同一条 SSE 流，按事件类型
+  // fan-out 到所有 handler。
+  private source: EventSource | null = null;
+  private readonly handlers = new Set<EventHandler>();
+
   async invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
     if (unsupportedBrowserCommands.has(cmd)) {
       throw new BrowserUnsupportedError(cmd);
@@ -56,15 +65,38 @@ class BrowserTransport implements Transport {
   }
 
   async subscribeEvents(handler: EventHandler): Promise<Unsubscribe> {
+    this.ensureSource();
+    this.handlers.add(handler);
+    return () => {
+      this.handlers.delete(handler);
+      if (this.handlers.size === 0) this.closeSource();
+    };
+  }
+
+  private ensureSource(): void {
+    if (this.source) return;
     const source = new EventSource(`${getServerBaseUrl()}/api/events`);
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data) as { type?: string } & Record<string, unknown>;
       const eventName = mapPushEventName(payload.type);
       if (!eventName) return;
       const { type: _type, ...rest } = payload;
-      handler(eventName, normalizePushPayload(payload.type, rest));
+      const normalized = normalizePushPayload(payload.type, rest);
+      // 复制 handler 集合再迭代——handler 内可能调 unsubscribe 改动 Set
+      // 触发 forEach 行为依实现，复制一份避免迭代中删除引发遗漏。
+      for (const h of [...this.handlers]) h(eventName, normalized);
     };
-    return () => source.close();
+    source.onerror = (event) => {
+      // EventSource 自带指数回退重连，不需手动重建。记录用于诊断。
+      console.warn("[transport] SSE connection error; browser will auto-reconnect", event);
+    };
+    this.source = source;
+  }
+
+  private closeSource(): void {
+    if (!this.source) return;
+    this.source.close();
+    this.source = null;
   }
 }
 

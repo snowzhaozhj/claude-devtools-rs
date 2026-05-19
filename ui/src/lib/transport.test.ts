@@ -171,6 +171,92 @@ describe('BrowserTransport', () => {
     unsubscribe()
   })
 
+  test('多次 subscribeEvent 共享同一条 SSE 连接', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+
+    const u1 = await subscribeEvent('file-change', vi.fn())
+    const u2 = await subscribeEvent('session-metadata-update', vi.fn())
+    const u3 = await subscribeEvent('notification-update', vi.fn())
+
+    expect(instances).toHaveLength(1)
+    expect(instances[0].closed).toBe(false)
+
+    u1(); u2(); u3()
+  })
+
+  test('单条 SSE fan-out 到不同事件名的多个 handler', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+
+    const fileHandler = vi.fn()
+    const sessionHandler = vi.fn()
+    const u1 = await subscribeEvent('file-change', fileHandler)
+    const u2 = await subscribeEvent('session-metadata-update', sessionHandler)
+
+    instances[0].emit({ type: 'file_change', project_id: 'p1', session_id: 's1', deleted: false, project_list_changed: false })
+    instances[0].emit({
+      type: 'session_metadata_update', project_id: 'p1', session_id: 's1',
+      title: 'T', message_count: 1, is_ongoing: false, git_branch: null,
+    })
+
+    expect(fileHandler).toHaveBeenCalledTimes(1)
+    expect(sessionHandler).toHaveBeenCalledTimes(1)
+
+    u1(); u2()
+  })
+
+  test('部分 unsubscribe 保持连接，全部 unsubscribe 后才关', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+
+    const u1 = await subscribeEvent('file-change', vi.fn())
+    const u2 = await subscribeEvent('session-metadata-update', vi.fn())
+    expect(instances[0].closed).toBe(false)
+
+    u1()
+    expect(instances[0].closed).toBe(false)
+
+    u2()
+    expect(instances[0].closed).toBe(true)
+  })
+
+  test('全部 unsubscribe 后再 subscribe 建新连接', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+
+    const u1 = await subscribeEvent('file-change', vi.fn())
+    u1()
+    expect(instances).toHaveLength(1)
+    expect(instances[0].closed).toBe(true)
+
+    const u2 = await subscribeEvent('file-change', vi.fn())
+    expect(instances).toHaveLength(2)
+    expect(instances[1].closed).toBe(false)
+
+    u2()
+  })
+
   test('SSE context_changed 事件转换为 context_changed payload', async () => {
     const instances: FakeEventSource[] = []
     vi.stubGlobal('EventSource', class extends FakeEventSource {
