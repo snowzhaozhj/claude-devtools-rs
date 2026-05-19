@@ -72,7 +72,7 @@
 ## 开发命令
 
 - `pnpm --dir ui run check` 必须从项目根目录跑，从 `src-tauri/` 目录跑会找不到 `package.json`。
-- 浏览器直接访问 `localhost:5173` 会报 `invoke` undefined——必须通过 `cargo tauri dev` 的窗口测试，或用 `pnpm --dir ui run dev` + 浏览器访问 `?mock=1&fixture=...`。
+- 浏览器直接访问 `127.0.0.1:5173` 会报 `invoke` undefined——必须通过 `cargo tauri dev` 的窗口测试，或用 `pnpm --dir ui run dev` + 浏览器访问 `?mock=1&fixture=...`（参见下文「浏览器调试入口」为何用 `127.0.0.1` 而非 `localhost`）。
 - worktree rebase 后若 origin/main 加新 ui 依赖（典型 `tauri-plugin-opener`），跑 `pnpm --dir ui install` 重装（pnpm hardlink + global store，lockfile 未变近瞬时；变了也只下差量）。
 
 ## 浏览器调试入口
