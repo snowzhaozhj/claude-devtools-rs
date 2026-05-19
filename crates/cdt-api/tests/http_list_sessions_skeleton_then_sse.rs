@@ -175,7 +175,10 @@ async fn http_get_sessions_returns_skeleton_with_placeholder_metadata() {
             Some(false),
             "skeleton isOngoing SHALL be false"
         );
-        let sid = item.get("sessionId").and_then(serde_json::Value::as_str).unwrap();
+        let sid = item
+            .get("sessionId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
         assert!(h.session_ids.contains(&sid.to_owned()));
         assert_eq!(
             item.get("projectId").and_then(serde_json::Value::as_str),
@@ -205,10 +208,7 @@ async fn http_get_sessions_returns_skeleton_with_placeholder_metadata() {
         } = event
         {
             assert_eq!(project_id, h.project_id);
-            received.insert(
-                session_id,
-                (title.clone(), message_count, is_ongoing),
-            );
+            received.insert(session_id, (title.clone(), message_count, is_ongoing));
         }
     }
     for sid in &h.session_ids {
