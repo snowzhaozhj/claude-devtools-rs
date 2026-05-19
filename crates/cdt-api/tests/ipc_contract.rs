@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use cdt_api::{
     ConfigUpdateRequest, DataApi, LocalDataApi, MemoryFileContent, MemoryLayer, MemoryLayerKind,
     PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
@@ -23,8 +24,10 @@ use cdt_api::{
 use cdt_config::{
     ConfigManager, NotificationManager, NotificationTrigger, TriggerContentType, TriggerMode,
 };
-use cdt_discover::{LocalFileSystemProvider, ProjectScanner};
-use cdt_ssh::SshConnectionManager;
+use cdt_discover::{EntryKind, FsMetadata, LocalFileSystemProvider, ProjectScanner};
+use cdt_ssh::{
+    RemoteEntry, SftpClient, SftpClientError, SshConnectionManager, SshFileSystemProvider,
+};
 use chrono::{TimeZone, Utc};
 use serde_json::json;
 use tempfile::TempDir;
@@ -120,6 +123,96 @@ fn ts() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 4, 11, 0, 0, 0).unwrap()
 }
 
+#[derive(Default)]
+struct FakeRemoteSftp {
+    files: std::collections::HashMap<String, Vec<u8>>,
+    dirs: std::collections::HashMap<String, Vec<RemoteEntry>>,
+}
+
+impl FakeRemoteSftp {
+    fn with_session(
+        remote_home: &str,
+        project_id: &str,
+        session_id: &str,
+        content: String,
+    ) -> Self {
+        let mut fake = Self::default();
+        let project_dir = format!("{remote_home}/{project_id}");
+        let file_path = format!("{project_dir}/{session_id}.jsonl");
+        fake.dirs.insert(
+            remote_home.to_owned(),
+            vec![RemoteEntry {
+                name: project_id.to_owned(),
+                kind: EntryKind::Dir,
+                metadata: None,
+                mtime_missing: false,
+            }],
+        );
+        fake.dirs.insert(
+            project_dir,
+            vec![RemoteEntry {
+                name: format!("{session_id}.jsonl"),
+                kind: EntryKind::File,
+                metadata: Some(FsMetadata {
+                    size: content.len() as u64,
+                    mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
+                }),
+                mtime_missing: false,
+            }],
+        );
+        fake.files.insert(file_path, content.into_bytes());
+        fake
+    }
+}
+
+#[async_trait]
+impl SftpClient for FakeRemoteSftp {
+    async fn metadata(&self, path: &str) -> Result<FsMetadata, SftpClientError> {
+        if let Some(bytes) = self.files.get(path) {
+            Ok(FsMetadata {
+                size: bytes.len() as u64,
+                mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
+            })
+        } else if self.dirs.contains_key(path) {
+            Ok(FsMetadata {
+                size: 0,
+                mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
+            })
+        } else {
+            Err(SftpClientError::NoSuchFile)
+        }
+    }
+
+    async fn try_exists(&self, path: &str) -> Result<bool, SftpClientError> {
+        Ok(self.files.contains_key(path) || self.dirs.contains_key(path))
+    }
+
+    async fn read(&self, path: &str) -> Result<Vec<u8>, SftpClientError> {
+        self.files
+            .get(path)
+            .cloned()
+            .ok_or(SftpClientError::NoSuchFile)
+    }
+
+    async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, SftpClientError> {
+        self.dirs
+            .get(path)
+            .cloned()
+            .ok_or(SftpClientError::NoSuchFile)
+    }
+
+    async fn read_lines_head(
+        &self,
+        path: &str,
+        max: usize,
+    ) -> Result<Vec<String>, SftpClientError> {
+        let bytes = self.read(path).await?;
+        let content =
+            String::from_utf8(bytes).map_err(|e| SftpClientError::Other(e.to_string()))?;
+        Ok(content.lines().take(max).map(ToOwned::to_owned).collect())
+    }
+}
+
 async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, text: &str) {
     let line = format!(
         r#"{{"type":"user","uuid":"{session_id}","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":"{text}"}}}}"#,
@@ -210,6 +303,21 @@ fn ssh_connect_request_accepts_new_and_legacy_payloads() {
     assert_eq!(serialized["contextId"], json!("ctx-prod"));
     assert!(serialized.get("host_alias").is_none());
     assert!(serialized.get("auth_method").is_none());
+}
+
+#[test]
+fn ssh_connection_result_shape_matches_connect_and_test_connection_contract() {
+    let result = cdt_api::SshConnectionResult {
+        context_id: "ctx-test".into(),
+        status: cdt_ssh::SshStatus::Connected,
+        auth_chain: vec![],
+    };
+    let json = serde_json::to_value(result).unwrap();
+    assert_eq!(json["contextId"], json!("ctx-test"));
+    assert_eq!(json["status"], json!("connected"));
+    assert!(json["authChain"].is_array());
+    assert!(json.get("context_id").is_none());
+    assert!(json.get("auth_chain").is_none());
 }
 
 #[test]
@@ -981,6 +1089,60 @@ async fn list_projects_returns_camelcase_array() {
     assert!(json.is_array(), "list_projects SHALL 返回 array");
     // 空 setup → 空 array
     assert_eq!(json.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn active_ssh_context_reads_remote_projects_and_sessions() {
+    let (api, _tmp) = setup_api().await;
+    let remote_home = "/remote/home/.claude/projects";
+    let project_id = "-remote-project";
+    let session_id = "remote-session";
+    let cwd = "/srv/remote-project";
+    let line = format!(
+        r#"{{"type":"user","uuid":"{session_id}","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":"from remote"}}}}"#,
+    );
+    let fake =
+        FakeRemoteSftp::with_session(remote_home, project_id, session_id, format!("{line}\n"));
+    let provider = SshFileSystemProvider::with_client(
+        "ctx-remote",
+        Arc::new(fake),
+        std::path::PathBuf::from(remote_home),
+    );
+    api.insert_test_ssh_context(
+        "ctx-remote",
+        "remote-host",
+        22,
+        Some("alice".into()),
+        std::path::PathBuf::from(remote_home),
+        provider,
+    )
+    .await;
+
+    let projects = api.list_projects().await.unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].id, project_id);
+    assert_eq!(projects[0].path, cwd);
+
+    let sessions = api
+        .list_sessions_sync(
+            project_id,
+            &PaginatedRequest {
+                page_size: 10,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(sessions.items[0].session_id, session_id);
+    assert_eq!(sessions.items[0].title.as_deref(), Some("from remote"));
+    assert_eq!(sessions.items[0].message_count, 1);
+
+    let detail = api
+        .get_session_detail(project_id, session_id)
+        .await
+        .unwrap();
+    assert_eq!(detail.session_id, session_id);
+    assert_eq!(detail.metrics["message_count"], json!(1));
 }
 
 #[tokio::test]

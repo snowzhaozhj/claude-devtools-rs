@@ -107,13 +107,12 @@ pub struct SshContextState {
 #[allow(dead_code)]
 struct SshSessionResources {
     /// russh client handle —— 真协议栈，Drop 时自动断 transport。
-    handle: client::Handle<RusshClientHandler>,
-    /// SFTP 会话——通过 `channel.request_subsystem("sftp")` 建立。
-    /// `Mutex` 包一层是因为 `SftpSession` 内部状态非 `Sync`，但我们要在多个 IPC
-    /// 命令之间共享同一会话句柄。
-    sftp: Arc<Mutex<SftpSession>>,
+    handle: Option<client::Handle<RusshClientHandler>>,
+    /// SFTP provider。生产路径包装 `russh_sftp::SftpSession`，测试路径可注入 fake。
+    provider: SshFileSystemProvider,
     /// 远端 `~/.claude/projects` 路径（4 fallback 中第一个存在的）。
     remote_home: PathBuf,
+    status: SshStatus,
     /// 连接元信息 —— 显示给 UI（Phase C task 9.x 读）。
     host: String,
     port: u16,
@@ -147,6 +146,8 @@ pub struct SshSessionManager {
     sessions: Arc<Mutex<HashMap<String, SshSessionResources>>>,
     /// 当前活跃 context（None=Local；Some(ctx)=Ssh<ctx>）。
     active: Arc<Mutex<Option<String>>>,
+    failed_states: Arc<Mutex<HashMap<String, SshContextState>>>,
+    failed_auth_chains: Arc<Mutex<HashMap<String, Vec<AuthAttempt>>>>,
     /// 状态变更广播。
     status_tx: broadcast::Sender<SshStatusChange>,
     /// 活跃 context 切换广播。
@@ -166,6 +167,8 @@ impl SshSessionManager {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             active: Arc::new(Mutex::new(None)),
+            failed_states: Arc::new(Mutex::new(HashMap::new())),
+            failed_auth_chains: Arc::new(Mutex::new(HashMap::new())),
             status_tx,
             context_tx,
         }
@@ -191,6 +194,36 @@ impl SshSessionManager {
         let _ = self.context_tx.send(change);
     }
 
+    async fn record_error_context(
+        &self,
+        context_id: &str,
+        request: &SshConnectRequest,
+        err: &SshError,
+    ) {
+        let mut auth_chain = error_auth_chain(err);
+        if auth_chain.is_empty() {
+            auth_chain = self
+                .failed_auth_chains
+                .lock()
+                .await
+                .get(context_id)
+                .cloned()
+                .unwrap_or_default();
+        }
+        self.failed_states.lock().await.insert(
+            context_id.to_owned(),
+            SshContextState {
+                context_id: context_id.to_owned(),
+                host: request.host.clone(),
+                port: request.port.unwrap_or(22),
+                username: request.username.clone(),
+                remote_home: PathBuf::new(),
+                status: SshStatus::Error,
+                auth_chain,
+            },
+        );
+    }
+
     /// 获取活跃 context id（None 表示 Local）。
     pub async fn active_context_id(&self) -> Option<String> {
         self.active.lock().await.clone()
@@ -202,7 +235,8 @@ impl SshSessionManager {
     }
 
     pub async fn context_states(&self) -> Vec<SshContextState> {
-        self.sessions
+        let mut states: Vec<SshContextState> = self
+            .sessions
             .lock()
             .await
             .iter()
@@ -212,36 +246,67 @@ impl SshSessionManager {
                 port: resources.port,
                 username: resources.user.clone(),
                 remote_home: resources.remote_home.clone(),
-                status: SshStatus::Connected,
+                status: resources.status.clone(),
                 auth_chain: resources.auth_chain.clone(),
             })
-            .collect()
+            .collect();
+        states.extend(self.failed_states.lock().await.values().cloned());
+        states
     }
 
     pub async fn context_state(&self, context_id: &str) -> Option<SshContextState> {
+        if let Some(state) =
+            self.sessions
+                .lock()
+                .await
+                .get(context_id)
+                .map(|resources| SshContextState {
+                    context_id: context_id.to_owned(),
+                    host: resources.host.clone(),
+                    port: resources.port,
+                    username: resources.user.clone(),
+                    remote_home: resources.remote_home.clone(),
+                    status: resources.status.clone(),
+                    auth_chain: resources.auth_chain.clone(),
+                })
+        {
+            return Some(state);
+        }
+        self.failed_states.lock().await.get(context_id).cloned()
+    }
+
+    pub async fn provider(&self, context_id: &str) -> Option<SshFileSystemProvider> {
         self.sessions
             .lock()
             .await
             .get(context_id)
-            .map(|resources| SshContextState {
-                context_id: context_id.to_owned(),
-                host: resources.host.clone(),
-                port: resources.port,
-                username: resources.user.clone(),
-                remote_home: resources.remote_home.clone(),
-                status: SshStatus::Connected,
-                auth_chain: resources.auth_chain.clone(),
-            })
+            .map(|resources| resources.provider.clone())
     }
 
-    pub async fn provider(&self, context_id: &str) -> Option<SshFileSystemProvider> {
-        self.sessions.lock().await.get(context_id).map(|resources| {
-            SshFileSystemProvider::new(
-                context_id.to_owned(),
-                resources.sftp.clone(),
-                resources.remote_home.clone(),
-            )
-        })
+    pub async fn insert_test_context(
+        &self,
+        context_id: impl Into<String>,
+        host: impl Into<String>,
+        port: u16,
+        username: Option<String>,
+        remote_home: PathBuf,
+        provider: SshFileSystemProvider,
+    ) {
+        let context_id = context_id.into();
+        self.sessions.lock().await.insert(
+            context_id.clone(),
+            SshSessionResources {
+                handle: None,
+                provider,
+                remote_home,
+                status: SshStatus::Connected,
+                host: host.into(),
+                port,
+                user: username,
+                auth_chain: vec![],
+            },
+        );
+        self.set_active_inner(Some(context_id)).await;
     }
 
     /// 真握手 5 阶段连接到远端 host。
@@ -268,11 +333,14 @@ impl SshSessionManager {
             error: None,
         });
 
+        let request_for_error_state = request.clone();
         let outer = timeout(OUTER_TIMEOUT, self.connect_inner(&context_id, request)).await;
 
         let resources = match outer {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
+                self.record_error_context(&context_id, &request_for_error_state, &e)
+                    .await;
                 self.emit_status(SshStatusChange {
                     context_id: context_id.clone(),
                     status: SshStatus::Error,
@@ -285,6 +353,8 @@ impl SshSessionManager {
                 let err = SshError::Timeout {
                     stage: TimeoutStage::Tcp,
                 };
+                self.record_error_context(&context_id, &request_for_error_state, &err)
+                    .await;
                 self.emit_status(SshStatusChange {
                     context_id: context_id.clone(),
                     status: SshStatus::Error,
@@ -295,6 +365,8 @@ impl SshSessionManager {
             }
         };
 
+        self.failed_states.lock().await.remove(&context_id);
+        self.failed_auth_chains.lock().await.remove(&context_id);
         self.sessions
             .lock()
             .await
@@ -352,7 +424,7 @@ impl SshSessionManager {
     /// `_context_id` 仅用于错误诊断的 `tracing::span`（v1 暂不接 span，留前缀避免 warn）。
     async fn connect_inner(
         &self,
-        _context_id: &str,
+        context_id: &str,
         request: SshConnectRequest,
     ) -> Result<SshSessionResources, SshError> {
         // 阶段 0：解析 host alias（`ssh -G` 委托）
@@ -428,6 +500,10 @@ impl SshSessionManager {
                 attempts: auth_chain,
             });
         }
+        self.failed_auth_chains
+            .lock()
+            .await
+            .insert(context_id.to_owned(), auth_chain.clone());
 
         // 阶段 4：SFTP open 8s
         let sftp = match timeout(SFTP_TIMEOUT, open_sftp(&mut handle)).await {
@@ -448,10 +524,12 @@ impl SshSessionManager {
         // 阶段 5：remote home probe（4 fallback）
         let remote_home = probe_remote_home(&sftp, &mut handle, &username).await?;
 
+        let provider = SshFileSystemProvider::new(context_id.to_owned(), sftp, remote_home.clone());
         Ok(SshSessionResources {
-            handle,
-            sftp,
+            handle: Some(handle),
+            provider,
             remote_home,
+            status: SshStatus::Connected,
             host,
             port,
             user: Some(username),
@@ -461,15 +539,16 @@ impl SshSessionManager {
 
     /// 主动断开一个 context：关闭 SFTP / transport / TCP；若被断开的是 active 切回 Local。
     pub async fn disconnect(&self, context_id: &str) -> Result<(), SshError> {
+        self.failed_states.lock().await.remove(context_id);
+        self.failed_auth_chains.lock().await.remove(context_id);
         let resources = self.sessions.lock().await.remove(context_id);
         if let Some(r) = resources {
-            // 关闭 SFTP（drop Arc 即释放）— SftpSession 没有显式 close，drop 自动结束 channel
-            drop(r.sftp);
-            // 关闭 russh handle
-            let _ = r
-                .handle
-                .disconnect(russh::Disconnect::ByApplication, "", "")
-                .await;
+            drop(r.provider);
+            if let Some(handle) = r.handle {
+                let _ = handle
+                    .disconnect(russh::Disconnect::ByApplication, "", "")
+                    .await;
+            }
             self.emit_status(SshStatusChange {
                 context_id: context_id.to_owned(),
                 status: SshStatus::Disconnected,
@@ -816,6 +895,66 @@ mod tests {
         assert_eq!(e2.context_id, "ctx1");
         assert_eq!(e1.status, SshStatus::Connected);
         assert_eq!(e2.status, SshStatus::Connected);
+    }
+
+    #[tokio::test]
+    async fn post_auth_failure_keeps_successful_auth_chain() {
+        let mgr = SshSessionManager::new();
+        let req = SshConnectRequest {
+            host: "missing-home".into(),
+            port: Some(22),
+            username: Some("alice".into()),
+            auth_method: AuthMethodKind::SshConfig,
+            password: None,
+            context_id: Some("ctx-missing-home".into()),
+        };
+        let attempts = vec![AuthAttempt {
+            source: AuthSource::EnvAgent,
+            outcome: AuthOutcome::Success,
+            elapsed_ms: 2,
+        }];
+        mgr.failed_auth_chains
+            .lock()
+            .await
+            .insert("ctx-missing-home".into(), attempts.clone());
+        mgr.record_error_context(
+            "ctx-missing-home",
+            &req,
+            &SshError::RemoteHomeMissing { tried: vec![] },
+        )
+        .await;
+
+        let state = mgr.context_state("ctx-missing-home").await.expect("state");
+        assert_eq!(state.status, SshStatus::Error);
+        assert_eq!(state.auth_chain, attempts);
+    }
+
+    #[tokio::test]
+    async fn failed_context_remains_queryable_with_auth_chain() {
+        let mgr = SshSessionManager::new();
+        let err = SshError::AuthExhausted {
+            attempts: vec![AuthAttempt {
+                source: AuthSource::EnvAgent,
+                outcome: AuthOutcome::Skipped("SSH_AUTH_SOCK not set".into()),
+                elapsed_ms: 1,
+            }],
+        };
+        let req = SshConnectRequest {
+            host: "bad-host".into(),
+            port: Some(2222),
+            username: Some("alice".into()),
+            auth_method: AuthMethodKind::SshConfig,
+            password: None,
+            context_id: Some("ctx-bad".into()),
+        };
+
+        mgr.record_error_context("ctx-bad", &req, &err).await;
+
+        let state = mgr.context_state("ctx-bad").await.expect("state");
+        assert_eq!(state.status, SshStatus::Error);
+        assert_eq!(state.host, "bad-host");
+        assert_eq!(state.port, 2222);
+        assert_eq!(state.auth_chain.len(), 1);
     }
 
     #[tokio::test]

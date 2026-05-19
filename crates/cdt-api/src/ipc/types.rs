@@ -214,7 +214,7 @@ impl From<SshConnectRequest> for cdt_ssh::SshConnectRequest {
 pub struct SshConnectionResult {
     pub context_id: String,
     pub status: cdt_ssh::SshStatus,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub auth_chain: Vec<cdt_ssh::AuthAttempt>,
 }
 

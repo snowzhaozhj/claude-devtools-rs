@@ -86,6 +86,7 @@ pub trait SftpClient: Send + Sync + 'static {
 }
 
 /// SSH 文件系统 provider —— 实现 [`FileSystemProvider`] 用于远端 SFTP。
+#[derive(Clone)]
 pub struct SshFileSystemProvider {
     context_id: String,
     client: Arc<dyn SftpClient>,

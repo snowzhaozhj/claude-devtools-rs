@@ -18,13 +18,13 @@ use cdt_config::{
     validate_file_path,
 };
 use cdt_discover::{
-    LocalFileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
-    local_handle,
+    FileSystemProvider, LocalFileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache,
+    SessionSearcher, local_handle,
 };
-use cdt_parse::parse_file;
+use cdt_parse::{ParseError, parse_entry_at, parse_file};
 use cdt_ssh::{
-    SshConnectionManager, SshSessionManager, default_ssh_config_path, list_hosts,
-    parse_ssh_config_file, resolve_host_via_ssh_g,
+    SshConnectionManager, SshFileSystemProvider, SshSessionManager, default_ssh_config_path,
+    list_hosts, parse_ssh_config_file, resolve_host_via_ssh_g,
 };
 use cdt_watch::FileWatcher;
 
@@ -32,7 +32,8 @@ use super::error::ApiError;
 use super::events::SessionMetadataUpdate;
 use super::parsed_message_cache::{ParsedMessageCache, extract_parsed_messages_cached};
 use super::session_metadata::{
-    MetadataCache, extract_session_metadata_cached, try_lookup_cached_metadata,
+    MetadataCache, extract_session_metadata_cached, extract_session_metadata_from_parsed,
+    try_lookup_cached_metadata,
 };
 use super::traits::DataApi;
 use super::types::{
@@ -170,6 +171,27 @@ fn find_first_ai_after(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core
 ///   `post - pre`；任一缺值 → `None`
 ///
 /// 两趟扫描避免可变借用冲突：Pass 1 不可变借用算 (delta, phase)，Pass 2 可变借用写入。
+fn parse_jsonl_content(content: &str) -> Result<Vec<cdt_core::ParsedMessage>, ParseError> {
+    let mut out = Vec::new();
+    for (idx, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match parse_entry_at(line, idx + 1) {
+            Ok(Some(msg)) => out.push(msg),
+            Ok(None) => {}
+            Err(ParseError::MalformedLine { line, source }) => {
+                tracing::warn!(line, error = %source, "skipping malformed JSONL line");
+            }
+            Err(ParseError::SchemaMismatch { line, reason }) => {
+                tracing::warn!(line, reason = %reason, "skipping entry with schema mismatch");
+            }
+            Err(e @ ParseError::Io { .. }) => return Err(e),
+        }
+    }
+    Ok(out)
+}
+
 fn apply_compact_derived(chunks: &mut [cdt_core::Chunk], enabled: bool) {
     if !enabled {
         return;
@@ -360,6 +382,35 @@ pub struct LocalDataApi {
 }
 
 impl LocalDataApi {
+    async fn active_scanner(&self) -> Result<ProjectScanner, ApiError> {
+        if let Some(context_id) = self.ssh_mgr.active_context_id().await {
+            let provider = self
+                .ssh_mgr
+                .provider(&context_id)
+                .await
+                .ok_or_else(|| ApiError::not_found(format!("SSH context: {context_id}")))?;
+            let projects_dir = provider.remote_home().to_path_buf();
+            return Ok(ProjectScanner::new(Arc::new(provider), projects_dir));
+        }
+        let projects_dir = self.projects_dir.lock().await.clone();
+        Ok(ProjectScanner::new(local_handle(), projects_dir))
+    }
+
+    async fn active_fs_and_projects_dir(
+        &self,
+    ) -> Result<(Arc<dyn FileSystemProvider>, PathBuf), ApiError> {
+        if let Some(context_id) = self.ssh_mgr.active_context_id().await {
+            let provider = self
+                .ssh_mgr
+                .provider(&context_id)
+                .await
+                .ok_or_else(|| ApiError::not_found(format!("SSH context: {context_id}")))?;
+            let projects_dir = provider.remote_home().to_path_buf();
+            return Ok((Arc::new(provider), projects_dir));
+        }
+        Ok((local_handle(), self.projects_dir.lock().await.clone()))
+    }
+
     pub fn new(
         scanner: ProjectScanner,
         config_mgr: ConfigManager,
@@ -508,6 +559,20 @@ impl LocalDataApi {
         self.ssh_mgr.subscribe_status()
     }
 
+    pub async fn insert_test_ssh_context(
+        &self,
+        context_id: impl Into<String>,
+        host: impl Into<String>,
+        port: u16,
+        username: Option<String>,
+        remote_home: PathBuf,
+        provider: SshFileSystemProvider,
+    ) {
+        self.ssh_mgr
+            .insert_test_context(context_id, host, port, username, remote_home, provider)
+            .await;
+    }
+
     pub fn subscribe_context_changed(&self) -> broadcast::Receiver<cdt_ssh::ContextChanged> {
         self.ssh_mgr.subscribe_context_changed()
     }
@@ -616,14 +681,19 @@ impl LocalDataApi {
             return Err(ApiError::validation("pageSize must be > 0"));
         }
 
-        let scanner = self.scanner.lock().await;
+        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
+        let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
+        let _ = scanner
+            .scan()
+            .await
+            .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
             .await
             .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?;
         let projects_dir = scanner.projects_dir().to_path_buf();
         let root_generation = self.root_generation.load(Ordering::SeqCst);
-        drop(scanner);
 
         let offset = pagination
             .cursor
@@ -669,7 +739,16 @@ impl LocalDataApi {
         }))
         .await;
         for (s, (jsonl_path, cached_meta)) in page_sessions.into_iter().zip(lookups) {
-            if let Some(meta) = cached_meta {
+            let remote_meta = if is_remote {
+                let content = fs.read_to_string(&jsonl_path).await.ok();
+                content
+                    .as_deref()
+                    .and_then(|content| parse_jsonl_content(content).ok())
+                    .map(|messages| extract_session_metadata_from_parsed(&messages, false))
+            } else {
+                None
+            };
+            if let Some(meta) = cached_meta.or(remote_meta) {
                 page.push(SessionSummary {
                     session_id: s.id,
                     project_id: project_id.to_owned(),
@@ -693,7 +772,9 @@ impl LocalDataApi {
                     worktree_id: None,
                     worktree_name: None,
                 });
-                page_jobs.push((s.id, jsonl_path));
+                if !is_remote {
+                    page_jobs.push((s.id, jsonl_path));
+                }
             }
         }
 
@@ -932,7 +1013,7 @@ impl DataApi for LocalDataApi {
     // =========================================================================
 
     async fn list_projects(&self) -> Result<Vec<ProjectInfo>, ApiError> {
-        let mut scanner = self.scanner.lock().await;
+        let mut scanner = self.active_scanner().await?;
         let projects = scanner
             .scan()
             .await
@@ -1147,14 +1228,18 @@ impl DataApi for LocalDataApi {
         // `path_decoder::get_projects_base_path()` 仅在 `ProjectScanner` 自身
         // 用默认路径构造时返回真实 home，scanner 已经统一了入口。
         let t_locate = std::time::Instant::now();
-        let scanner = self.scanner.lock().await;
-        let projects_dir = scanner.projects_dir().to_path_buf();
+        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
+        let _ = scanner
+            .scan()
+            .await
+            .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
         let project_dir = projects_dir.join(project_id);
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;
-        drop(scanner);
+        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
 
         let main_session = sessions.iter().find(|s| s.id == session_id);
 
@@ -1164,7 +1249,10 @@ impl DataApi for LocalDataApi {
                 Some(s.last_modified),
                 Some(s.size),
             )
-        } else if let Some(path) = find_subagent_jsonl(&project_dir, session_id).await {
+        } else if !is_remote {
+            let Some(path) = find_subagent_jsonl(&project_dir, session_id).await else {
+                return Err(ApiError::not_found(format!("session {session_id}")));
+            };
             let meta = tokio::fs::metadata(&path).await.ok();
             let modified = meta.as_ref().and_then(|m| m.modified().ok()).map(|t| {
                 let dt: chrono::DateTime<chrono::Utc> = t.into();
@@ -1178,14 +1266,25 @@ impl DataApi for LocalDataApi {
         let locate_ms = t_locate.elapsed().as_millis();
 
         let t_parse = std::time::Instant::now();
-        let messages = parse_file(&jsonl_path)
-            .await
-            .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
+        let messages = if is_remote {
+            let content = fs
+                .read_to_string(&jsonl_path)
+                .await
+                .map_err(|e| ApiError::internal(format!("read error: {e}")))?;
+            parse_jsonl_content(&content)
+                .map_err(|e| ApiError::internal(format!("parse error: {e}")))?
+        } else {
+            parse_file(&jsonl_path)
+                .await
+                .map_err(|e| ApiError::internal(format!("parse error: {e}")))?
+        };
         let parse_ms = t_parse.elapsed().as_millis();
         let message_count = messages.len();
 
         let t_scan = std::time::Instant::now();
-        let candidates = if CROSS_PROJECT_SUBAGENT_SCAN {
+        let candidates = if is_remote {
+            Vec::new()
+        } else if CROSS_PROJECT_SUBAGENT_SCAN {
             scan_subagent_candidates_cross_project(&projects_dir, &project_dir, session_id).await
         } else {
             scan_subagent_candidates(&project_dir, session_id).await
@@ -1197,10 +1296,10 @@ impl DataApi for LocalDataApi {
         let messages_ongoing = cdt_analyze::check_messages_ongoing(&messages);
         // stale check 与 list_sessions 路径对齐（issue #94）：mtime > 5min 的
         // ongoing 视为 crashed/killed。
-        let is_ongoing = if messages_ongoing {
+        let is_ongoing = if messages_ongoing && !is_remote {
             !crate::ipc::session_metadata::is_file_stale(&jsonl_path).await
         } else {
-            false
+            messages_ongoing
         };
         let chunks = build_chunks_with_subagents(&messages, &candidates);
         let build_ms = t_build.elapsed().as_millis();
@@ -1754,7 +1853,15 @@ impl DataApi for LocalDataApi {
             .test_connection(request.clone().into())
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;
-        serde_json::to_value(auth_chain).map_err(|e| ApiError::internal(format!("{e}")))
+        let result = super::types::SshConnectionResult {
+            context_id: request
+                .context_id
+                .clone()
+                .unwrap_or_else(|| format!("{}-test", request.host)),
+            status: cdt_ssh::SshStatus::Connected,
+            auth_chain,
+        };
+        serde_json::to_value(result).map_err(|e| ApiError::internal(format!("{e}")))
     }
 
     async fn ssh_get_state(&self) -> Result<serde_json::Value, ApiError> {
