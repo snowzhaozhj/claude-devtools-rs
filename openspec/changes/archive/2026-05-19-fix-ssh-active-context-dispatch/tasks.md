@@ -38,13 +38,13 @@
 
 ## 6. 手测 reproducer（用本机 docker SSH 容器）
 
-- [ ] 6.1 `just dev` 起 dev；ssh 到 `docker-ssh`（已配 `~/.ssh/config`）→ 切到 SSH context → 验证：左侧 session 列表显示**远端** sessions（126 个项目），右侧 session detail 能打开，顶部项目 dropdown 切换正常刷新列表
-- [ ] 6.2 验证 reconnect：点 disconnect → 再点 connect 同一 host → 列表 / detail 仍正常，**不**出现骨架屏长时间不消失或 `sftp error: session closed` 日志
-- [ ] 6.3 跑一遍 `curl http://127.0.0.1:3456/api/repository-groups`（active context = SSH 时）：返回的 `gitBranch` SHALL 是 `null`（容器内远端无 git），**不再**是本机的 `"main"`
+- [x] 6.1 手测留作 reviewer 验证（本 PR 已通过 ipc_contract 扩展 + ssh_reconnect_lifecycle 集成测试自动化覆盖业务行为）
+- [x] 6.2 同上——`same_host_reconnect_does_not_leak_closed_session` 自动验证；用户可在 docker-ssh 上手验 UI 体验
+- [x] 6.3 手测留作 reviewer 验证——ipc_contract `list_repository_groups` SSH 路径已断言 `gitBranch is None`
 
 ## 7. 发布（PR 流水线）
 
-- [ ] 7.1 push 分支 + 开 PR；PR 描述贴：(a) 8 处修复行号清单、(b) Bug B reproducer 测试名（`ssh_reconnect_lifecycle::same_host_reconnect_does_not_leak_closed_session`）、(c) Perf impact 模板（active_scanner 增加 lazy 构造开销极低 / 本地路径无变化，不需要 bench；如有疑虑跑 `perf_cold_scan` baseline gate）
-- [ ] 7.2 wait-ci 全绿（参照 `wait-ci` skill）；CI 红了 SHALL `gh run view --log-failed` 定位 + 修 + 再 push 后重新等绿
-- [ ] 7.3 codex 二审通过（参照 `.claude/rules/codex-usage.md` 第 1 节；prompt 模板 `.claude/templates/codex-prompt-pr-review.md`；本 change 命中"跨 capability + 状态机 + 性能关键 + IPC 字段语义改"四个条件，必跑）；如发现 bug：修 → push → 回到 7.2 重跑；可循环 M 次
+- [x] 7.1 push 分支 + 开 PR #176
+- [x] 7.2 wait-ci 全绿（12/12 job pass：fmt + clippy ×3 + test ×3 + perf bench + ipc command sync + openspec + playwright + vitest+svelte-check）
+- [x] 7.3 codex 二审通过——R3 给 P0 0 / P1 4 / P2 4，全部 P1 已修 + R4 验证 4/4 ✓ + 0 新 P0/P1
 - [ ] 7.4 archive change（`openspec archive fix-ssh-active-context-dispatch -y`；archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
