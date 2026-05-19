@@ -27,17 +27,20 @@ pub trait DataApi: Send + Sync {
 
     /// 分页列出项目的会话。
     ///
-    /// IPC 路径下返回**骨架** `SessionSummary`（`title` / `messageCount` /
+    /// 返回**骨架** `SessionSummary`（`title` / `messageCount` /
     /// `isOngoing` 为占位值），元数据通过 `subscribe_session_metadata()`
-    /// 异步推送。HTTP 路径请改用 `list_sessions_sync`。
+    /// 异步推送。IPC 与 HTTP 路径共用本方法（spec ipc-data-api §"Expose
+    /// project and session queries" 段落 "HTTP `list_sessions` 复用 IPC
+    /// 骨架 + push 实现"）。
     async fn list_sessions(
         &self,
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError>;
 
-    /// 同步完整返回 session 列表（含全部元数据）。HTTP API 专用——HTTP
-    /// 无 push 通道，无法走骨架化路径。
+    /// 同步完整返回 session 列表（含全部元数据）。**保留作为 trait fallback**
+    /// 供未来非 SSE-aware 客户端使用；axum HTTP route 已切换到 `list_sessions`
+    /// 骨架 + SSE patch 路径，本方法**不**再被 HTTP handler 调用。
     ///
     /// 默认实现 fallback 到 `list_sessions`（即返回骨架）；具体实现可
     /// override 为同步扫描（见 `LocalDataApi::list_sessions_sync`）。
