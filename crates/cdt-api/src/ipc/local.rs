@@ -1797,10 +1797,91 @@ impl DataApi for LocalDataApi {
             cdt_discover::WorktreeGrouper::new(cdt_discover::LocalGitIdentityResolver::new());
         Ok(grouper.group_by_repository(projects).await)
     }
+
+    // -------------------------------------------------------------------------
+    // Trigger / pin / hide / session prefs
+    //
+    // 历史上这 7 个方法在独立 `impl LocalDataApi` 块作为 inherent method（参见
+    // `src-tauri/CLAUDE.md` 旧约定 "Trigger CRUD 走独立方法"）。本 change
+    // `add-server-mode` 把它们提升到 trait 让 HTTP 路径（浏览器 runtime）
+    // 能镜像 IPC 同名 command（spec：`http-data-api::Mirror lazy and auxiliary
+    // IPC commands`）。`src-tauri/src/lib.rs` 调用方式不变（`Arc<LocalDataApi>`
+    // 上调方法仍解析到这里，trait 在 scope 内）。
+    // -------------------------------------------------------------------------
+
+    async fn add_trigger(
+        &self,
+        trigger: cdt_config::NotificationTrigger,
+    ) -> Result<serde_json::Value, ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        let config = mgr
+            .add_trigger(trigger)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))?;
+        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn remove_trigger(&self, trigger_id: &str) -> Result<serde_json::Value, ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        let config = mgr
+            .remove_trigger(trigger_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))?;
+        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn pin_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        mgr.pin_session(project_id, session_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn unpin_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        mgr.unpin_session(project_id, session_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn hide_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        mgr.hide_session(project_id, session_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn unhide_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        mgr.unhide_session(project_id, session_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn get_project_session_prefs(
+        &self,
+        project_id: &str,
+    ) -> Result<ProjectSessionPrefs, ApiError> {
+        let mgr = self.config_mgr.lock().await;
+        let config = mgr.get_config();
+        let pinned = config
+            .sessions
+            .pinned_sessions
+            .get(project_id)
+            .map(|v| v.iter().map(|p| p.session_id.clone()).collect())
+            .unwrap_or_default();
+        let hidden = config
+            .sessions
+            .hidden_sessions
+            .get(project_id)
+            .map(|v| v.iter().map(|h| h.session_id.clone()).collect())
+            .unwrap_or_default();
+        Ok(ProjectSessionPrefs { pinned, hidden })
+    }
 }
 
 // =============================================================================
-// Trigger CRUD（非 trait 方法，供 Tauri commands 直接调用）
+// Inherent helpers（test-only / 非 trait 方法）
 // =============================================================================
 
 impl LocalDataApi {
@@ -1827,86 +1908,6 @@ impl LocalDataApi {
         path: &std::path::Path,
     ) -> Option<Arc<Vec<cdt_core::ParsedMessage>>> {
         extract_parsed_messages_cached(&self.parsed_msg_cache, path).await
-    }
-
-    /// 添加 trigger，返回更新后的 `AppConfig`。
-    pub async fn add_trigger(
-        &self,
-        trigger: cdt_config::NotificationTrigger,
-    ) -> Result<serde_json::Value, ApiError> {
-        let mut mgr = self.config_mgr.lock().await;
-        let config = mgr
-            .add_trigger(trigger)
-            .await
-            .map_err(|e| ApiError::internal(format!("{e}")))?;
-        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
-    }
-
-    /// 删除 trigger，返回更新后的 `AppConfig`。
-    pub async fn remove_trigger(&self, trigger_id: &str) -> Result<serde_json::Value, ApiError> {
-        let mut mgr = self.config_mgr.lock().await;
-        let config = mgr
-            .remove_trigger(trigger_id)
-            .await
-            .map_err(|e| ApiError::internal(format!("{e}")))?;
-        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
-    }
-
-    /// Pin 一个 session（project + session 维度），写入配置文件。
-    pub async fn pin_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
-        let mut mgr = self.config_mgr.lock().await;
-        mgr.pin_session(project_id, session_id)
-            .await
-            .map_err(|e| ApiError::internal(format!("{e}")))
-    }
-
-    /// 取消 pin，写入配置文件。
-    pub async fn unpin_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
-        let mut mgr = self.config_mgr.lock().await;
-        mgr.unpin_session(project_id, session_id)
-            .await
-            .map_err(|e| ApiError::internal(format!("{e}")))
-    }
-
-    /// 隐藏一个 session，写入配置文件。
-    pub async fn hide_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
-        let mut mgr = self.config_mgr.lock().await;
-        mgr.hide_session(project_id, session_id)
-            .await
-            .map_err(|e| ApiError::internal(format!("{e}")))
-    }
-
-    /// 取消隐藏，写入配置文件。
-    pub async fn unhide_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {
-        let mut mgr = self.config_mgr.lock().await;
-        mgr.unhide_session(project_id, session_id)
-            .await
-            .map_err(|e| ApiError::internal(format!("{e}")))
-    }
-
-    /// 返回当前 project 的 pin/hide session id 列表，供前端首次 load 时 prime `$state`。
-    ///
-    /// 列表顺序保持 `ConfigManager` 内部的"最近在前"约定（pin 用 `pinned_at` 倒序插入、
-    /// hide 用 `hidden_at` 倒序插入）。
-    pub async fn get_project_session_prefs(
-        &self,
-        project_id: &str,
-    ) -> Result<ProjectSessionPrefs, ApiError> {
-        let mgr = self.config_mgr.lock().await;
-        let config = mgr.get_config();
-        let pinned = config
-            .sessions
-            .pinned_sessions
-            .get(project_id)
-            .map(|v| v.iter().map(|p| p.session_id.clone()).collect())
-            .unwrap_or_default();
-        let hidden = config
-            .sessions
-            .hidden_sessions
-            .get(project_id)
-            .map(|v| v.iter().map(|h| h.session_id.clone()).collect())
-            .unwrap_or_default();
-        Ok(ProjectSessionPrefs { pinned, hidden })
     }
 
     /// 读取 `.claude/agents/*.md` 配置（全局 + 所有已发现项目）。

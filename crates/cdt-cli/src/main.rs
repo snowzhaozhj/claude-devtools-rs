@@ -79,7 +79,9 @@ async fn main() -> Result<()> {
     spawn_event_bridge(state.events_tx.clone(), file_rx, todo_rx, error_rx);
 
     tracing::info!("Starting claude-devtools-rs on port {port}");
-    start_server(state, port)
+    // CLI 不挂静态文件 serve（CLI 只是 API server 用途；UI 走 Tauri runtime
+    // 或浏览器打开 Tauri build 出的 bundle），传 None 让 router 仅 serve `/api/*`。
+    start_server(state, port, None)
         .await
         .context("HTTP server failed")?;
 

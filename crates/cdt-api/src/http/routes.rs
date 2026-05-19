@@ -3,16 +3,20 @@
 //! Spec：`openspec/specs/http-data-api/spec.md`。
 //! 每个 handler 委托给 `AppState.api` 的对应方法。
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 
 use crate::ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, PaginatedRequest, SearchRequest, SshConnectRequest,
 };
 
+use super::cors::localhost_cors_layer;
 use super::sse::sse_handler;
 use super::state::AppState;
 
@@ -40,9 +44,17 @@ impl IntoResponse for ApiError {
 // Router builder
 // =============================================================================
 
-/// 构建完整的 `/api` 路由。
-pub fn build_router(state: AppState) -> Router {
-    Router::new()
+/// 构建完整的 `/api` 路由 + 可选静态文件 serve。
+///
+/// `static_dir` 为 `Some(<existing dir>)` 时挂 `ServeDir`：未命中 `/api/*`
+/// 路由的 GET 请求 SHALL fallback 到该目录（前端 client-side router）。
+/// 路径不存在或非目录时仅 `tracing::warn!` 后跳过 ServeDir，行为退化为
+/// 之前的"仅 API"模式。
+///
+/// CORS：所有路由统一 layer `localhost_cors_layer`，仅放行 localhost / 127.0.0.1
+/// origin（详 `crate::http::cors`）。
+pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
+    let api_router = Router::new()
         // 项目 + 会话
         .route("/api/projects", get(list_projects))
         .route("/api/projects/{project_id}/sessions", get(list_sessions))
@@ -64,13 +76,19 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/notifications/{notification_id}",
-            axum::routing::delete(delete_notification),
+            delete(delete_notification),
         )
         .route(
             "/api/notifications/mark-all-read",
             post(mark_all_notifications_read),
         )
         .route("/api/notifications/clear", post(clear_notifications))
+        // 通知 trigger CRUD（spec http-data-api::Mirror lazy and auxiliary）
+        .route("/api/notifications/triggers", post(add_trigger))
+        .route(
+            "/api/notifications/triggers/{trigger_id}",
+            delete(remove_trigger),
+        )
         // SSH + context
         .route("/api/contexts", get(list_contexts))
         .route("/api/contexts/switch", post(switch_context))
@@ -89,9 +107,148 @@ pub fn build_router(state: AppState) -> Router {
             "/api/worktrees/{group_id}/sessions",
             get(get_worktree_sessions),
         )
+        // Project memory（lazy mirror）
+        .route("/api/projects/{project_id}/memory", get(get_project_memory))
+        .route(
+            "/api/projects/{project_id}/memory-files",
+            post(read_memory_file),
+        )
+        // Session prefs / pin / hide（lazy mirror）
+        .route(
+            "/api/projects/{project_id}/session-prefs",
+            get(get_project_session_prefs),
+        )
+        .route(
+            "/api/projects/{project_id}/sessions/{session_id}/pin",
+            post(pin_session).delete(unpin_session),
+        )
+        .route(
+            "/api/projects/{project_id}/sessions/{session_id}/hide",
+            post(hide_session).delete(unhide_session),
+        )
+        // Subagent trace / image asset / tool output（lazy mirror）
+        .route(
+            "/api/sessions/{root_session_id}/subagents/{subagent_session_id}/trace",
+            get(get_subagent_trace),
+        )
+        .route(
+            "/api/sessions/{root_session_id}/subagents/{session_id}/blocks/{block_id}/image",
+            get(get_image_asset),
+        )
+        .route(
+            "/api/sessions/{root_session_id}/subagents/{session_id}/tools/{tool_use_id}/output",
+            get(get_tool_output),
+        )
         // SSE
         .route("/api/events", get(sse_handler))
-        .with_state(state)
+        .with_state(state);
+
+    // 顺序：CORS layer 在最外层（先看 Origin）；静态文件 fallback 仅在传入
+    // static_dir 且其存在时挂载；不存在 / None 时未命中 `/api/*` 的请求自然
+    // 返 404（与本 change 之前行为一致）。
+    let router_with_static = match static_dir {
+        Some(p) if p.is_dir() => {
+            // 用 closure + Arc::clone 捕获 dir，避免引入第二个 with_state 与
+            // api_router 已设的 AppState 冲突（axum 0.8 一个 Router 只能持有
+            // 单一 State 类型）。
+            let dir = Arc::new(p);
+            api_router.fallback(move |uri: axum::http::Uri| {
+                let dir = Arc::clone(&dir);
+                async move { static_fallback(dir, uri).await }
+            })
+        }
+        Some(p) => {
+            tracing::warn!(
+                target: "cdt_api::http",
+                path = %p.display(),
+                "static_dir does not exist or is not a directory; serving /api/* only"
+            );
+            api_router
+        }
+        None => api_router,
+    };
+
+    router_with_static.layer(localhost_cors_layer())
+}
+
+/// 静态文件 + SPA fallback handler。
+///
+/// 三种情况：
+/// 1. 磁盘上对应文件存在 → serve（手动 guess mime）
+/// 2. navigation 请求（路径无 `.` 扩展名 / 根路径）→ 返回 `index.html`
+/// 3. 带扩展名但磁盘上不存在的资源 → 404（**不**得 fallback 到 HTML 否则
+///    浏览器把 HTML 当 JS 解析 + CDN 缓存脏数据，codex review 指出的 SPA
+///    部署经典坑）
+async fn static_fallback(dir: Arc<PathBuf>, uri: axum::http::Uri) -> axum::response::Response {
+    let raw = uri.path().trim_start_matches('/');
+    // path traversal 防御：URL-encoded `%2e%2e`、Windows backslash、percent-decode
+    // 后含 `..` 段，三种形态都拦。`Uri::path()` 在 axum 0.8 不自动 percent-decode
+    // （codex review 第二轮指出），裸 `..` 段比对会被 `%2e%2e/etc/passwd` 绕过。
+    if !is_path_safe(raw) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let candidate = dir.join(raw);
+    if candidate.is_file() {
+        return serve_file(&candidate).await;
+    }
+    // navigation 请求：根路径 `/` 或路径中无 `.`（前端 client-side router 路径）
+    let is_navigation = raw.is_empty() || !raw.contains('.');
+    if is_navigation {
+        return serve_file(&dir.join("index.html")).await;
+    }
+    StatusCode::NOT_FOUND.into_response()
+}
+
+/// 检查 path 是否安全（无 traversal 痕迹）。
+///
+/// 三道闸门：
+/// 1. raw 含 `\` → 拒（Windows 路径分隔符，HTTP 路径不应出现）
+/// 2. percent-decode 后 仍含 `\` → 拒（`%5c` 形态）
+/// 3. percent-decode 后按 `/` 切段，任一段为 `..` → 拒（覆盖 `..` 与 `%2e%2e` 形态）
+fn is_path_safe(raw: &str) -> bool {
+    if raw.contains('\\') {
+        return false;
+    }
+    let decoded = percent_encoding::percent_decode_str(raw).decode_utf8_lossy();
+    if decoded.contains('\\') {
+        return false;
+    }
+    !decoded.split('/').any(|seg| seg == "..")
+}
+
+async fn serve_file(path: &std::path::Path) -> axum::response::Response {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            let mime = guess_mime(path);
+            ([(axum::http::header::CONTENT_TYPE, mime)], bytes).into_response()
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// 极简 mime 推断——仅覆盖前端 bundle 常用扩展名。
+///
+/// 不引入 `mime_guess` 依赖：本场景 bundle 内容固定（Vite 产物），扩展名
+/// 集合可枚举；任何未列入的扩展名 fallback 到 `application/octet-stream`，
+/// 浏览器会按文件名提示用户下载——比错配 mime 更安全。
+fn guess_mime(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("html" | "htm") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "application/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json" | "map") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("ico") => "image/x-icon",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 // =============================================================================
@@ -357,6 +514,122 @@ async fn get_worktree_sessions(
 ) -> Result<impl IntoResponse, ApiError> {
     let result = s.api.get_worktree_sessions(&group_id, &pagination).await?;
     Ok(Json(result))
+}
+
+// =============================================================================
+// Lazy / 辅助 IPC 镜像（spec http-data-api::Mirror lazy and auxiliary IPC commands）
+// =============================================================================
+
+async fn get_project_memory(
+    State(s): State<AppState>,
+    Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let memory = s.api.get_project_memory(&project_id).await?;
+    Ok(Json(memory))
+}
+
+#[derive(serde::Deserialize)]
+struct ReadMemoryBody {
+    file: String,
+}
+
+async fn read_memory_file(
+    State(s): State<AppState>,
+    Path(project_id): Path<String>,
+    Json(body): Json<ReadMemoryBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let content = s.api.read_memory_file(&project_id, &body.file).await?;
+    Ok(Json(content))
+}
+
+async fn get_subagent_trace(
+    State(s): State<AppState>,
+    Path((root_session_id, subagent_session_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let trace = s
+        .api
+        .get_subagent_trace(&root_session_id, &subagent_session_id)
+        .await?;
+    Ok(Json(trace))
+}
+
+async fn get_image_asset(
+    State(s): State<AppState>,
+    Path((root_session_id, session_id, block_id)): Path<(String, String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let asset = s
+        .api
+        .get_image_asset(&root_session_id, &session_id, &block_id)
+        .await?;
+    // IPC 同形：返回 base64 字符串 / `asset://` URL（取决于后端实现）。
+    Ok(Json(asset))
+}
+
+async fn get_tool_output(
+    State(s): State<AppState>,
+    Path((root_session_id, session_id, tool_use_id)): Path<(String, String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let output = s
+        .api
+        .get_tool_output(&root_session_id, &session_id, &tool_use_id)
+        .await?;
+    Ok(Json(output))
+}
+
+async fn add_trigger(
+    State(s): State<AppState>,
+    Json(trigger): Json<cdt_config::NotificationTrigger>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = s.api.add_trigger(trigger).await?;
+    Ok(Json(config))
+}
+
+async fn remove_trigger(
+    State(s): State<AppState>,
+    Path(trigger_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = s.api.remove_trigger(&trigger_id).await?;
+    Ok(Json(config))
+}
+
+async fn pin_session(
+    State(s): State<AppState>,
+    Path((project_id, session_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.pin_session(&project_id, &session_id).await?;
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+async fn unpin_session(
+    State(s): State<AppState>,
+    Path((project_id, session_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.unpin_session(&project_id, &session_id).await?;
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+async fn hide_session(
+    State(s): State<AppState>,
+    Path((project_id, session_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.hide_session(&project_id, &session_id).await?;
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+async fn unhide_session(
+    State(s): State<AppState>,
+    Path((project_id, session_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.unhide_session(&project_id, &session_id).await?;
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+async fn get_project_session_prefs(
+    State(s): State<AppState>,
+    Path(project_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let prefs = s.api.get_project_session_prefs(&project_id).await?;
+    Ok(Json(prefs))
 }
 
 #[cfg(test)]
