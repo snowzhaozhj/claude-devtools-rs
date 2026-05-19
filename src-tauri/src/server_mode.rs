@@ -176,10 +176,8 @@ impl ServerState {
         Ok(())
     }
 
-    /// 用户显式关闭 server-mode：关闭运行时 server，并写 `enabled=false`。
+    /// 用户显式关闭 server-mode：先写 `enabled=false` 用户意图，再关闭运行时 server。
     pub async fn stop(&self) -> Result<(), String> {
-        self.shutdown_runtime_only().await;
-
         if let Err(e) = self.api.set_http_server_enabled(false).await {
             tracing::warn!(
                 target: "cdt_tauri::server_mode",
@@ -187,6 +185,8 @@ impl ServerState {
                 "failed to persist httpServer.enabled=false"
             );
         }
+
+        self.shutdown_runtime_only().await;
         let port = self.persisted_port().await;
         self.emit_status(false, port, None);
         Ok(())
@@ -253,6 +253,10 @@ impl ServerState {
                 error = %msg,
                 "auto-restore failed; enabled=true preserved"
             );
+            return;
+        }
+        if !self.persisted_enabled().await {
+            self.shutdown_runtime_only().await;
         }
     }
 
