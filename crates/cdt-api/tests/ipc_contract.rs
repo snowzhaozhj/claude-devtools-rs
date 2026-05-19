@@ -1143,6 +1143,96 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
         .unwrap();
     assert_eq!(detail.session_id, session_id);
     assert_eq!(detail.metrics["message_count"], json!(1));
+
+    // ====== 本 change `fix-ssh-active-context-dispatch` 新增 ======
+    // 覆盖 8 处修复的 IPC method 走 SSH provider 的契约（design.md D4）
+
+    // list_repository_groups：active context = SSH 时返回远端项目集合，
+    // 而不是宿主机本地的 git repo（容器内/fake 远端无 .git，所以无 gitBranch）
+    let repo_groups = api.list_repository_groups().await.unwrap();
+    assert!(
+        !repo_groups.is_empty(),
+        "SSH context 下 list_repository_groups SHALL 返回远端项目"
+    );
+    // worktree path 与 fake fixture 的 cwd 一致（来自 fake jsonl 的 cwd 字段，
+    // 而非宿主机的真实路径）。
+    let any_worktree_match = repo_groups.iter().any(|g| {
+        g.worktrees
+            .iter()
+            .any(|w| w.path.to_string_lossy() == cwd && w.git_branch.is_none())
+    });
+    assert!(
+        any_worktree_match,
+        "SSH context 的 worktree.path SHALL 来自远端 jsonl 的 cwd; \
+         git_branch SHALL 为 None（远端无 .git）。actual: {repo_groups:?}"
+    );
+
+    // find_session_project：返回 fake fixture 的 project_id
+    let found = api.find_session_project(session_id).await.unwrap();
+    assert_eq!(found.as_deref(), Some(project_id));
+    let missing = api.find_session_project("nonexistent-sid").await.unwrap();
+    assert_eq!(missing, None);
+
+    // get_session_summaries_by_ids：返回 fake fixture 的 summaries
+    let summaries = api
+        .get_session_summaries_by_ids(project_id, &[session_id.to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].session_id, session_id);
+
+    // project_memory_dir 是 LocalDataApi 私有 inherent method，由 add/delete
+    // claude_md 等公开 API 间接调用。本测试通过 list_projects 走 active_scanner
+    // 已验证 projects_dir 已切到 remote_home；project_memory_dir 的实现只是
+    // 拼路径，行为正确性由 line 698 `active_fs_and_projects_dir` 调用即可保证。
+
+    // get_subagent_trace：fake fixture 无 subagent 数据，返回空 array
+    let trace = api
+        .get_subagent_trace(session_id, "subagent-not-exists")
+        .await
+        .unwrap();
+    assert!(
+        trace.is_array() && trace.as_array().unwrap().is_empty(),
+        "无 subagent fixture 时 SHALL 返回空数组，actual: {trace:?}"
+    );
+
+    // get_image_asset：jsonl 内无 image block，返回 empty data URI
+    let image = api
+        .get_image_asset(session_id, session_id, "chunk-uuid:0")
+        .await
+        .unwrap();
+    assert!(
+        image.starts_with("data:") || image.is_empty(),
+        "无 image fixture 时 SHALL 返回 placeholder data URI，actual: {image}"
+    );
+
+    // get_tool_output：jsonl 内无 tool_use 匹配，返回 ToolOutput::Missing
+    let tool_out = api
+        .get_tool_output(session_id, session_id, "tool-not-exists")
+        .await
+        .unwrap();
+    assert!(
+        matches!(tool_out, cdt_core::ToolOutput::Missing),
+        "无 tool_use_id 时 SHALL 返回 ToolOutput::Missing，actual: {tool_out:?}"
+    );
+
+    // search：fake provider 包含 "from remote" 文本，SSH context 下应能搜到
+    // (SearchRequest 已在文件顶部 use cdt_api::{...} 引入)
+    let search_req = SearchRequest {
+        query: "from remote".to_owned(),
+        project_id: Some(project_id.to_owned()),
+        session_id: None,
+    };
+    let search_res = api.search(&search_req).await.unwrap();
+    let results = search_res
+        .get("results")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !results.is_empty(),
+        "SSH context 下 search SHALL 通过 active provider 搜到远端 jsonl 内容，actual: {search_res:?}"
+    );
 }
 
 #[tokio::test]

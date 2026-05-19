@@ -803,6 +803,38 @@ mod tests {
         handle.join().await;
     }
 
+    /// Spec `ssh-remote-context::Polling watcher exits promptly on
+    /// cancellation` Scenario "cancel 在 sleep 阶段触发时 watcher 立即退出"。
+    ///
+    /// 用 `start_paused` 维度断言：watcher 进入 `poll_interval.tick()` 等待
+    /// 后调 `cancel.cancel()`，cancel-and-join 在 100ms 内完成——**不**通过
+    /// `tokio::time::advance` 推进 `POLL_INTERVAL` 让 timer 自然触发，验证
+    /// `tokio::select!` 内 `cancel_token.cancelled()` 分支真正抢占了 sleep。
+    #[tokio::test(start_paused = true)]
+    async fn cancel_during_long_poll() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let snap = snap_one_project("proj-A", vec![("sess1.jsonl", meta(100, now))]);
+        let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap)]);
+        let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+
+        // 让 watcher 跑完 eager baseline scan + 进入 select! 等 poll_interval.tick()
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        // 关键：不 advance 时钟，直接 cancel——必须让 cancel_token.cancelled()
+        // 分支在 select! 内立即胜出（验证 cancel-aware long poll 行为）
+        cancel.cancel();
+
+        // paused-time 100ms timeout 足够让 cancel-and-join 完成；如果实现
+        // 错把 sleep 排在 cancel-token 前面，handle.join() 会等满 POLL_INTERVAL=3s
+        // 才返回，触发 timeout panic
+        tokio::time::timeout(Duration::from_millis(100), handle.cancel_and_join())
+            .await
+            .expect("cancel-and-join SHALL 在 100ms paused-time 内完成（cancel-aware long poll）");
+    }
+
     #[tokio::test(start_paused = true)]
     async fn cancel_token_stops_watcher_within_deadline() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);

@@ -53,13 +53,18 @@ impl SearchConfig {
 }
 
 /// Session 搜索器。
-pub struct SessionSearcher<F: FileSystemProvider> {
+///
+/// `F: ?Sized` 让 `Arc<dyn FileSystemProvider>` 也能作为 fs 入参——
+/// SSH context 下 `LocalDataApi` 通过 `active_fs_and_projects_dir()` 把
+/// `Arc<dyn FileSystemProvider>` 直接交给 searcher，无需在调用方做
+/// monomorphization 的具体类型分支。
+pub struct SessionSearcher<F: FileSystemProvider + ?Sized> {
     fs: Arc<F>,
     cache: Arc<Mutex<SearchTextCache>>,
     projects_dir: PathBuf,
 }
 
-impl<F: FileSystemProvider> SessionSearcher<F> {
+impl<F: FileSystemProvider + ?Sized> SessionSearcher<F> {
     pub fn new(
         fs: Arc<F>,
         cache: Arc<Mutex<SearchTextCache>>,
