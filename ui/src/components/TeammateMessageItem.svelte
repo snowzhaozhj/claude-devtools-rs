@@ -189,19 +189,29 @@
   }
 
   .tm-header {
+    position: relative;
     display: flex;
     align-items: center;
     gap: var(--bubble-header-gap);
     padding: var(--bubble-header-padding-l1);
     cursor: pointer;
-    transition: var(--bubble-transition);
+    transition: background-color 0.12s ease;
   }
   .tm-header:hover {
     background: var(--card-header-hover);
   }
   .tm-header-expanded {
     background: var(--card-header-bg);
-    border-bottom: 1px solid var(--card-border);
+  }
+  .tm-header-expanded::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 1px;
+    background: var(--card-border);
+    pointer-events: none;
   }
 
   .tm-chevron {
