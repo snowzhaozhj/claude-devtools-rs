@@ -14,7 +14,7 @@ use cdt_config::DetectedError;
 use cdt_core::{FileChangeEvent, TodoChangeEvent};
 use tokio::sync::broadcast;
 
-use crate::ipc::PushEvent;
+use crate::ipc::{PushEvent, SessionMetadataUpdate};
 
 /// 启动三个 producer task：file / todo / detected-error → `PushEvent`。
 ///
@@ -26,10 +26,12 @@ pub fn spawn_event_bridge(
     file_rx: broadcast::Receiver<FileChangeEvent>,
     todo_rx: broadcast::Receiver<TodoChangeEvent>,
     error_rx: broadcast::Receiver<DetectedError>,
+    metadata_rx: broadcast::Receiver<SessionMetadataUpdate>,
 ) {
     spawn_file_bridge(events_tx.clone(), file_rx);
     spawn_todo_bridge(events_tx.clone(), todo_rx);
-    spawn_detected_error_bridge(events_tx, error_rx);
+    spawn_detected_error_bridge(events_tx.clone(), error_rx);
+    spawn_metadata_bridge(events_tx, metadata_rx);
 }
 
 fn spawn_file_bridge(
@@ -94,6 +96,30 @@ fn spawn_detected_error_bridge(
                         );
                     }
                 },
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+fn spawn_metadata_bridge(
+    events_tx: broadcast::Sender<PushEvent>,
+    mut metadata_rx: broadcast::Receiver<SessionMetadataUpdate>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match metadata_rx.recv().await {
+                Ok(event) => {
+                    let _ = events_tx.send(PushEvent::SessionMetadataUpdate {
+                        project_id: event.project_id,
+                        session_id: event.session_id,
+                        title: event.title,
+                        message_count: event.message_count,
+                        is_ongoing: event.is_ongoing,
+                        git_branch: event.git_branch,
+                    });
+                }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,
             }

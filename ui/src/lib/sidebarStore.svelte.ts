@@ -7,7 +7,9 @@
 //
 // 首次访问某 project 时懒加载 pin/hide 列表到本地 state。
 
-import { invoke } from "@tauri-apps/api/core";
+import { getTransport } from "./transport";
+
+const invoke = <T>(cmd: string, args?: Record<string, unknown>) => getTransport().invoke<T>(cmd, args);
 
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 500;

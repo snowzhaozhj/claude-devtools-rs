@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { getTransport, subscribeEvent } from "./transport";
 import type {
   ContextChanged,
   ContextSummary,
@@ -10,6 +10,8 @@ import type {
   SshState,
   SshStatusChange,
 } from "./types/ssh";
+
+const invoke = <T>(cmd: string, args?: Record<string, unknown>) => getTransport().invoke<T>(cmd, args);
 
 export interface ProjectInfo {
   id: string;
@@ -844,13 +846,13 @@ export async function getActiveContext(): Promise<ContextSummary> {
 export async function listenSshStatus(
   handler: (payload: SshStatusChange) => void,
 ): Promise<UnlistenFn> {
-  return await listen<SshStatusChange>("ssh_status", (event) => handler(event.payload));
+  return await subscribeEvent<SshStatusChange>("ssh_status", (event) => handler(event.payload));
 }
 
 export async function listenContextChanged(
   handler: (payload: ContextChanged) => void,
 ): Promise<UnlistenFn> {
-  return await listen<ContextChanged>("context_changed", (event) => handler(event.payload));
+  return await subscribeEvent<ContextChanged>("context_changed", (event) => handler(event.payload));
 }
 
 // ---------------------------------------------------------------------------

@@ -10,11 +10,21 @@
 
 use std::time::Duration;
 
-use cdt_api::{PushEvent, spawn_event_bridge};
+use cdt_api::{PushEvent, SessionMetadataUpdate, spawn_event_bridge};
 use cdt_config::{DetectedError, DetectedErrorContext};
 use cdt_core::{FileChangeEvent, TodoChangeEvent};
 use tokio::sync::broadcast;
 use tokio::time::timeout;
+
+fn spawn_test_event_bridge(
+    events_tx: broadcast::Sender<PushEvent>,
+    file_rx: broadcast::Receiver<FileChangeEvent>,
+    todo_rx: broadcast::Receiver<TodoChangeEvent>,
+    error_rx: broadcast::Receiver<DetectedError>,
+) {
+    let (_metadata_tx, metadata_rx) = broadcast::channel::<SessionMetadataUpdate>(16);
+    spawn_event_bridge(events_tx, file_rx, todo_rx, error_rx, metadata_rx);
+}
 
 fn sample_detected_error(id: &str, msg: &str) -> DetectedError {
     DetectedError {
@@ -44,7 +54,7 @@ async fn file_change_forwarded_as_push_event() {
     let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
     let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
 
-    spawn_event_bridge(events_tx, file_rx, todo_rx, error_rx);
+    spawn_test_event_bridge(events_tx, file_rx, todo_rx, error_rx);
 
     file_tx
         .send(FileChangeEvent {
@@ -82,7 +92,7 @@ async fn project_list_changed_forwarded_to_sse() {
     let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
     let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
 
-    spawn_event_bridge(events_tx, file_rx, todo_rx, error_rx);
+    spawn_test_event_bridge(events_tx, file_rx, todo_rx, error_rx);
 
     file_tx
         .send(FileChangeEvent {
@@ -120,7 +130,7 @@ async fn todo_change_forwarded_with_empty_project_id() {
     let (todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
     let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
 
-    spawn_event_bridge(events_tx, file_rx, todo_rx, error_rx);
+    spawn_test_event_bridge(events_tx, file_rx, todo_rx, error_rx);
 
     todo_tx
         .send(TodoChangeEvent {
@@ -154,7 +164,7 @@ async fn detected_error_forwarded_as_new_notification() {
     let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
     let (error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
 
-    spawn_event_bridge(events_tx, file_rx, todo_rx, error_rx);
+    spawn_test_event_bridge(events_tx, file_rx, todo_rx, error_rx);
 
     error_tx
         .send(sample_detected_error("err-1", "boom"))
@@ -185,6 +195,51 @@ async fn detected_error_forwarded_as_new_notification() {
 }
 
 #[tokio::test]
+async fn session_metadata_forwarded_as_push_event() {
+    let (events_tx, mut events_rx) = broadcast::channel::<PushEvent>(64);
+    let (_file_tx, file_rx) = broadcast::channel::<FileChangeEvent>(16);
+    let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
+    let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
+    let (metadata_tx, metadata_rx) = broadcast::channel::<SessionMetadataUpdate>(16);
+
+    spawn_event_bridge(events_tx, file_rx, todo_rx, error_rx, metadata_rx);
+
+    metadata_tx
+        .send(SessionMetadataUpdate {
+            project_id: "p1".into(),
+            session_id: "s1".into(),
+            title: Some("hello".into()),
+            message_count: 42,
+            is_ongoing: true,
+            git_branch: Some("main".into()),
+        })
+        .unwrap();
+
+    let event = timeout(Duration::from_secs(2), events_rx.recv())
+        .await
+        .expect("recv timed out")
+        .expect("recv ok");
+    match event {
+        PushEvent::SessionMetadataUpdate {
+            project_id,
+            session_id,
+            title,
+            message_count,
+            is_ongoing,
+            git_branch,
+        } => {
+            assert_eq!(project_id, "p1");
+            assert_eq!(session_id, "s1");
+            assert_eq!(title.as_deref(), Some("hello"));
+            assert_eq!(message_count, 42);
+            assert!(is_ongoing);
+            assert_eq!(git_branch.as_deref(), Some("main"));
+        }
+        other => panic!("expected SessionMetadataUpdate, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn multiple_subscribers_each_receive_event_exactly_once() {
     let (events_tx, mut rx_a) = broadcast::channel::<PushEvent>(64);
     let mut rx_b = events_tx.subscribe();
@@ -193,7 +248,7 @@ async fn multiple_subscribers_each_receive_event_exactly_once() {
     let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
     let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
 
-    spawn_event_bridge(events_tx.clone(), file_rx, todo_rx, error_rx);
+    spawn_test_event_bridge(events_tx.clone(), file_rx, todo_rx, error_rx);
 
     file_tx
         .send(FileChangeEvent {
@@ -222,7 +277,7 @@ async fn producer_continues_after_lagged_recv() {
     let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
     let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
 
-    spawn_event_bridge(events_tx, file_rx, todo_rx, error_rx);
+    spawn_test_event_bridge(events_tx, file_rx, todo_rx, error_rx);
 
     // 在 producer 还没 poll 之前突发塞超过 capacity 4 的事件，确保产生 lag。
     // 即便 producer 已 spawn，也尽量把窗口堆满；spinning send 不阻塞。

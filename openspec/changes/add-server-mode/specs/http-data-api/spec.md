@@ -1,3 +1,28 @@
+## MODIFIED Requirements
+
+### Requirement: Push events via Server-Sent Events
+
+系统 SHALL 暴露一个 Server-Sent Events endpoint，路径 SHALL 为 `GET /api/events`，传递与 IPC push channel 相同的事件流：`file-change`、`todo-change`、`new-notification`、`session-metadata-update`、`ssh-status`、updater 事件。
+
+启动 HTTP server 的进程 SHALL 同时启动事件 producer：
+
+1. **`file-change`**：订阅 `cdt_watch::FileWatcher::subscribe_files()` 的 `broadcast::Receiver<FileChangeEvent>`，每条事件转换为 `PushEvent::FileChange { project_id, session_id }` 后通过 `AppState.events_tx.send(...)` 推送（`deleted=true` 的事件 SHALL 同样推送，让客户端能感知删除）。
+2. **`todo-change`**：订阅 `FileWatcher::subscribe_todos()`，每条 `TodoChangeEvent` 转换为 `PushEvent::TodoChange { project_id, session_id }` 推送（todo 文件名仅含 session_id；project_id 字段 SHALL 填空字符串占位以保留 schema 一致）。
+3. **`new-notification`**：订阅 `LocalDataApi::subscribe_detected_errors()` 的 `broadcast::Receiver<DetectedError>`，每条 `DetectedError` 序列化成 `serde_json::Value` 后包成 `PushEvent::NewNotification { notification: <value> }` 推送。
+4. **`session-metadata-update`**：订阅 `LocalDataApi::subscribe_session_metadata()` 的 `broadcast::Receiver<SessionMetadataUpdate>`，每条事件转换为 `PushEvent::SessionMetadataUpdate { project_id, session_id, title, message_count, is_ongoing, git_branch }` 推送，让浏览器 runtime 的 Sidebar 能复用 IPC 路径的骨架列表 + metadata patch 语义。
+5. **`ssh-status`** / **updater 事件**：当前 `cdt-ssh` / updater 模块未提供 broadcast 源；本 capability **不**强制系统在该实现阶段已经为这两类事件接入 producer——`PushEvent` enum 仍保留对应 variant，未来 producer 接通后 SSE 客户端 SHALL 按本 Requirement 描述的同一桥接模式收到。
+
+producer 任务对 `RecvError::Lagged(_)` SHALL `continue` 跳过该条；对 `RecvError::Closed` SHALL 退出 loop。所有 producer task 共用同一 `AppState.events_tx`，但每个 SSE 客户端连接 SHALL 通过 `events_tx.subscribe()` 各自获得独立 receiver——`broadcast` 语义保证多客户端各自**恰好**收到一次事件。
+
+producer 与 SSE handler SHALL 通过 `cdt_api::http::spawn_event_bridge` lib-level 公开函数粘合（本 Requirement 规约行为，不规约具体函数签名）。
+
+#### Scenario: Browser transport receives session metadata update
+
+- **WHEN** 浏览器 runtime 通过 `GET /api/events` 订阅 SSE，`list_sessions` 后台元数据扫描产出一条 `SessionMetadataUpdate`
+- **THEN** SSE event data SHALL 携带 `session_metadata_update` type 与 snake_case 原始字段：`project_id` / `session_id` / `title` / `message_count` / `is_ongoing` / `git_branch`
+- **AND** 浏览器 transport SHALL 将其归一化为 `session-metadata-update` 事件与 camelCase payload：`projectId` / `sessionId` / `title` / `messageCount` / `isOngoing` / `gitBranch`
+- **AND** 浏览器 runtime 的 Sidebar SHALL 能用该事件 in-place patch 对应 session summary
+
 ## ADDED Requirements
 
 ### Requirement: HTTP server SHALL layer CORS middleware for localhost origins
@@ -97,7 +122,7 @@ path traversal 防御：fallback handler SHALL 拒绝路径中含 `..` 段（包
 - `GET /api/projects/{projectId}/memory` — 镜像 `get_project_memory`，返回 `MemoryFile[]`
 - `POST /api/projects/{projectId}/memory-files` — 镜像 `read_memory_file`，body 含 `{ "file": "<relative path>" }`，返回文件内容
 - `GET /api/sessions/{rootSessionId}/subagents/{subagentSessionId}/trace` — 镜像 `get_subagent_trace`，返回 trace 数据
-- `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/blocks/{blockId}/image` — 镜像 `get_image_asset`，返回 base64 字符串（与 IPC 同形）
+- `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/blocks/{blockId}/image` — 镜像 `get_image_asset`，返回浏览器可加载的 `data:` URI / base64 字符串；若底层 IPC 返回 Tauri-only `asset://localhost/...`，HTTP handler SHALL 转为 `data:` URI
 - `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/tools/{toolUseId}/output` — 镜像 `get_tool_output`，返回 `ToolOutput`（含 `outputBytes` / `outputOmitted` 语义）
 - `POST /api/notifications/triggers` — 镜像 `add_trigger`，body 为 `NotificationTrigger`（caller SHALL 在 body 内提供非空 `id`，与 IPC 路径校验语义一致；server 不自动生成 id）
 - `DELETE /api/notifications/triggers/{triggerId}` — 镜像 `remove_trigger`
@@ -116,10 +141,11 @@ path traversal 防御：fallback handler SHALL 拒绝路径中含 `..` 段（包
 - **WHEN** 浏览器请求 `GET /api/projects/<projectId>/memory`
 - **THEN** 响应 SHALL 与 IPC `get_project_memory(<projectId>)` 同形（含 CLAUDE.md 各 scope）
 
-#### Scenario: GET image asset returns base64
+#### Scenario: GET image asset returns browser-loadable data
 
 - **WHEN** 浏览器请求 `GET /api/sessions/<root>/subagents/<sid>/blocks/<bid>/image`
-- **THEN** 响应 SHALL 是 base64 字符串（同 IPC `get_image_asset` 返回类型）
+- **THEN** 响应 SHALL 是浏览器可加载的 `data:` URI 或 base64 字符串
+- **AND** SHALL NOT 返回 Tauri-only `asset://localhost/...` URL
 - **AND** SHALL **不**应用任何 `dataOmitted` 裁剪（lazy 端点本就是真实数据源）
 
 #### Scenario: GET tool output preserves outputOmitted semantics

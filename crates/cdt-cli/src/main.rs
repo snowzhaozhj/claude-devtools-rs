@@ -72,11 +72,18 @@ async fn main() -> Result<()> {
     let file_rx = api.subscribe_file_changes();
     let todo_rx = api.subscribe_todo_changes();
     let error_rx = api.subscribe_detected_errors();
+    let metadata_rx = api.subscribe_session_metadata();
 
     let state = AppState::new(api, 256);
 
-    // 把 file / todo / detected-error 桥到 AppState.events_tx，供 SSE 推送
-    spawn_event_bridge(state.events_tx.clone(), file_rx, todo_rx, error_rx);
+    // 把 file / todo / detected-error / metadata 桥到 AppState.events_tx，供 SSE 推送
+    spawn_event_bridge(
+        state.events_tx.clone(),
+        file_rx,
+        todo_rx,
+        error_rx,
+        metadata_rx,
+    );
 
     tracing::info!("Starting claude-devtools-rs on port {port}");
     // CLI 不挂静态文件 serve（CLI 只是 API server 用途；UI 走 Tauri runtime

@@ -605,8 +605,58 @@ async fn get_image_asset(
         .api
         .get_image_asset(&root_session_id, &session_id, &block_id)
         .await?;
-    // IPC 同形：返回 base64 字符串 / `asset://` URL（取决于后端实现）。
-    Ok(Json(asset))
+    Ok(Json(browser_safe_image_asset(&asset).await))
+}
+
+async fn browser_safe_image_asset(asset: &str) -> String {
+    let Some(path) = asset.strip_prefix("asset://localhost/") else {
+        return asset.to_owned();
+    };
+    let decoded = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
+    let normalized = asset_url_path_to_platform_path(&decoded);
+    let path = std::path::Path::new(normalized.as_ref());
+    let media_type = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map_or("application/octet-stream", image_ext_to_mime);
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+            format!("data:{media_type};base64,{b64}")
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "cdt_api::http",
+                error = %e,
+                path = %path.display(),
+                "failed to read image asset file for browser response"
+            );
+            "data:application/octet-stream;base64,".to_owned()
+        }
+    }
+}
+
+fn asset_url_path_to_platform_path(path: &str) -> std::borrow::Cow<'_, str> {
+    #[cfg(windows)]
+    {
+        std::borrow::Cow::Owned(path.replace('/', "\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::borrow::Cow::Borrowed(path)
+    }
+}
+
+fn image_ext_to_mime(ext: &str) -> &'static str {
+    match ext.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn get_tool_output(
@@ -679,6 +729,37 @@ async fn get_project_session_prefs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn browser_safe_image_asset_converts_asset_url_to_data_uri() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("image.png");
+        tokio::fs::write(&path, [1_u8, 2, 3]).await.unwrap();
+        let asset = format!("asset://localhost/{}", path.display());
+
+        let result = browser_safe_image_asset(&asset).await;
+
+        assert_eq!(result, "data:image/png;base64,AQID");
+    }
+
+    #[tokio::test]
+    async fn browser_safe_image_asset_decodes_url_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("space image.PNG");
+        tokio::fs::write(&path, [1_u8, 2, 3]).await.unwrap();
+        let raw_path = path.to_string_lossy().replace(' ', "%20");
+        let asset = format!("asset://localhost/{raw_path}");
+
+        let result = browser_safe_image_asset(&asset).await;
+
+        assert_eq!(result, "data:image/png;base64,AQID");
+    }
+
+    #[tokio::test]
+    async fn browser_safe_image_asset_keeps_data_uri() {
+        let data = "data:image/png;base64,AQID";
+        assert_eq!(browser_safe_image_asset(data).await, data);
+    }
 
     #[test]
     fn api_error_validation_maps_to_400() {

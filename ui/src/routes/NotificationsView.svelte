@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import type { UnlistenFn } from "@tauri-apps/api/event";
+  import { subscribeEvent } from "../lib/transport";
   import {
     getNotifications,
     markNotificationRead,
@@ -37,8 +38,8 @@
   onMount(async () => {
     await reload();
     loading = false;
-    unlistenAdded = await listen("notification-added", () => { void reload(); });
-    unlistenUpdate = await listen("notification-update", () => { void reload(); });
+    unlistenAdded = await subscribeEvent("notification-added", () => { void reload(); });
+    unlistenUpdate = await subscribeEvent("notification-update", () => { void reload(); });
   });
 
   onDestroy(() => {

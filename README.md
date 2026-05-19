@@ -72,6 +72,16 @@ pnpm --dir ui run dev
 
 `?mock=1` 启用 dev-only mockIPC，所有 Tauri command 走 fixture 数据；fixture 选项见 `ui/src/lib/__fixtures__/`（`empty` / `single-project` / `multi-project-rich`）。production bundle 完全不含 mockIPC（vite DCE 验证）。
 
+## Browser Access
+
+桌面应用可在 Settings → General → Browser Access 中开启本机 HTTP server。开启后应用会显示 `http://localhost:<port>`，默认端口为 `3456`；在 Chrome 或其它浏览器打开该 URL 即可访问同一套 UI。关闭开关会停止 server，并保留上次端口供下次复用。
+
+安全模型：server 只监听 `127.0.0.1`，CORS 只放行 `localhost` / `127.0.0.1` 来源，不提供 token 或密码鉴权。它适合本机浏览器、iframe 嵌入或本机脚本调用；不会暴露到 LAN。若需要远程访问，请自行在外层配置反向代理、TLS 与鉴权。
+
+浏览器 runtime 通过 HTTP/SSE 访问数据 API；桌面专属能力（系统托盘、Dock badge、OS native notification、应用内更新、Rosetta 检测）不会在浏览器中提供，相关入口会隐藏或禁用。
+
+运行时 smoke 记录：PR3 在 `just dev` 下验证 Settings 开关、`http://localhost:3456` 打开 UI、项目列表、会话详情、SSE 事件和浏览器 Settings 隐藏 Browser Access；release bundle 的静态资源路径由 `src-tauri/src/server_mode.rs` 自动探测 `resource_dir()` 常见候选。
+
 ## 项目结构
 
 ```
