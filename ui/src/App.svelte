@@ -4,6 +4,8 @@
   import CommandPalette from "./components/CommandPalette.svelte";
   import PaneContainer from "./components/layout/PaneContainer.svelte";
   import UnifiedTitleBar from "./components/UnifiedTitleBar.svelte";
+  import WorkspaceIndicator from "./lib/components/WorkspaceIndicator.svelte";
+  import ContextSwitchOverlay from "./lib/components/ContextSwitchOverlay.svelte";
   import { updateStore, type UpdateAvailablePayload } from "./lib/updateStore.svelte";
   import {
     loadProjectData,
@@ -273,6 +275,9 @@
     </div>
   </div>
 </div>
+
+<WorkspaceIndicator />
+<ContextSwitchOverlay />
 
 {#if commandPaletteOpen}
   <CommandPalette

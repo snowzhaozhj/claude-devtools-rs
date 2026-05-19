@@ -9,7 +9,7 @@
 | **Phase B2** | tasks 5.1-5.8 | ✅ 已完成 | `cdt-ssh::provider::SshFileSystemProvider` 真 SFTP：`SftpClient` trait + 生产 `RusshSftpClient` 包装 `SftpSession` + `with_retry` 3 次指数退避 + 错误分类（NoSuchFile / PermissionDenied / Transient / Other）+ inherent `open_read_stream` 流式；fake 单测注入 15 个 case 覆盖 happy path / permission denied / 瞬时重试成功 / 重试耗尽 / classify 真值表 |
 | **Phase B3** | tasks 6.1-6.8 + 8.1-8.4 | ✅ 已完成 | `cdt-ssh::polling_watcher` 3s+30s 轮询 + `cdt-watch::attach_remote` |
 | **Phase C** | tasks 7.1-7.7 / 9.1-9.10 / 10.1-10.8 | ✅ 已完成 | `cdt-config::SshConfig` 强类型段 + validation/update/save-last；`cdt-api::LocalDataApi` 接真 `SshSessionManager` + status/context 订阅 + HTTP/Tauri 11 command；Tauri `ssh_status`/`context_changed` emit 桥 + shutdown hook；IPC contract / UI mock command 清单同步 |
-| **Phase D** | tasks 11.1-11.5 / 12.1-12.6 | ⏳ 待开工 | UI: `lib/api.ts` IPC wrapper / `connection.ts` + `context.ts` store / `Connection.svelte` + `WorkspaceIndicator` + `ContextSwitchOverlay` + `ConnectionStatusBadge` |
+| **Phase D** | tasks 11.1-11.5 / 12.1-12.6 | ✅ 已完成 | UI: `lib/api.ts` SSH/context IPC wrapper + `types/ssh.ts` + `connection.svelte.ts` / `context.svelte.ts` stores；Settings `Connection` tab + `WorkspaceIndicator` / `ContextSwitchOverlay` / `ConnectionStatusBadge`；mockIPC + Vitest store/event 覆盖 |
 | **Phase E** | tasks 13.1-13.6 / 14.1-14.5 / N.1-N.4 | ⏳ 待开工 | 测试金字塔 + perf 验证 + 集成 smoke + 发布尾段 |
 
 **关键 design 决策**（已落代码 + 已写 tasks.md "实现差异" 注释，无需重新决议）：
@@ -133,20 +133,20 @@
 
 ## 11. UI —— `lib/api.ts` IPC wrapper + stores
 
-- [ ] 11.1 在 `ui/src/lib/api.ts` 加 11 条 IPC wrapper 函数（types from `lib/types/ssh.ts`）+ `Tauri::listen("ssh_status")` / `listen("context_changed")` 订阅 helper
-- [ ] 11.2 `ui/src/lib/types/ssh.ts` 定义 `SshConnectionStatus` / `SshConnectionResult` / `AuthAttempt` / `ContextSummary` / `SshProfile` / `SshLastConnection` 类型
-- [ ] 11.3 `ui/src/lib/stores/connection.ts`：Svelte 5 rune store 持有当前连接状态 + auth chain 进度 + 表单字段
-- [ ] 11.4 `ui/src/lib/stores/context.ts`：rune store 持有 `availableContexts[]` + `activeContextId`，监听 `context_changed` 事件
-- [ ] 11.5 contextSwitch 逻辑：切换前显示 ContextSwitchOverlay，`context_changed` 后退场
+- [x] 11.1 在 `ui/src/lib/api.ts` 加 11 条 IPC wrapper 函数（types from `lib/types/ssh.ts`）+ `Tauri::listen("ssh_status")` / `listen("context_changed")` 订阅 helper
+- [x] 11.2 `ui/src/lib/types/ssh.ts` 定义 `SshConnectionStatus` / `SshConnectionResult` / `AuthAttempt` / `ContextSummary` / `SshProfile` / `SshLastConnection` 类型
+- [x] 11.3 `ui/src/lib/stores/connection.ts`：Svelte 5 rune store 持有当前连接状态 + auth chain 进度 + 表单字段
+- [x] 11.4 `ui/src/lib/stores/context.ts`：rune store 持有 `availableContexts[]` + `activeContextId`，监听 `context_changed` 事件
+- [x] 11.5 contextSwitch 逻辑：切换前显示 ContextSwitchOverlay，`context_changed` 后退场
 
 ## 12. UI —— Connection Section 与三个组件（capability: settings-ui）
 
-- [ ] 12.1 `ui/src/routes/settings/Connection.svelte`：host combobox（联想 + alias 选中后调 `ssh_resolve_host` 自动填充） / port / username / authMethod 单选 / password（条件显示）/ Connect / Test / Save as profile / Disconnect 按钮 / saved profiles 列表 / Windows 平台 inline 提示
-- [ ] 12.2 在 Settings section 导航加 Connection tab，仅 Tauri 桌面渲染（前端检测 `window.__TAURI_INTERNALS__`）
-- [ ] 12.3 `ui/src/lib/components/WorkspaceIndicator.svelte`：右下角 fixed 浮动 pill；仅 `availableContexts.length > 1` 时渲染；图标 `lucide-svelte::Wifi` 绿色 + host 名；点击下拉切换 workspace
-- [ ] 12.4 `ui/src/lib/components/ContextSwitchOverlay.svelte`：全屏半透明 loading；接 `context_changed` 事件后退场
-- [ ] 12.5 `ui/src/lib/components/ConnectionStatusBadge.svelte`：disconnected/connecting/connected/error 四态映射图标 + 颜色 + 错误悬浮提示
-- [ ] 12.6 ProjectList / SessionDetail 不感知数据源切换 —— 仅依赖现有 IPC，确认无 hardcode `local`
+- [x] 12.1 `ui/src/routes/settings/Connection.svelte`：host combobox（联想 + alias 选中后调 `ssh_resolve_host` 自动填充） / port / username / authMethod 单选 / password（条件显示）/ Connect / Test / Save as profile / Disconnect 按钮 / saved profiles 列表 / Windows 平台 inline 提示
+- [x] 12.2 在 Settings section 导航加 Connection tab，仅 Tauri 桌面渲染（前端检测 `window.__TAURI_INTERNALS__`）
+- [x] 12.3 `ui/src/lib/components/WorkspaceIndicator.svelte`：右下角 fixed 浮动 pill；仅 `availableContexts.length > 1` 时渲染；图标 `lucide-svelte::Wifi` 绿色 + host 名；点击下拉切换 workspace
+- [x] 12.4 `ui/src/lib/components/ContextSwitchOverlay.svelte`：全屏半透明 loading；接 `context_changed` 事件后退场
+- [x] 12.5 `ui/src/lib/components/ConnectionStatusBadge.svelte`：disconnected/connecting/connected/error 四态映射图标 + 颜色 + 错误悬浮提示
+- [x] 12.6 ProjectList / SessionDetail 不感知数据源切换 —— 仅依赖现有 IPC，确认无 hardcode `local`
 
 ## 13. 测试
 

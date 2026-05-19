@@ -23,6 +23,7 @@
   import SettingsButton from "../lib/components/SettingsButton.svelte";
   import Dropdown from "../lib/components/Dropdown.svelte";
   import Modal from "../lib/components/Modal.svelte";
+  import Connection from "./settings/Connection.svelte";
   import { decideWslAction } from "../lib/wslDecision";
   import SkeletonList from "../components/SkeletonList.svelte";
   import { getVersion } from "@tauri-apps/api/app";
@@ -43,7 +44,7 @@
     BELL_RING_SVG,
   } from "../lib/icons";
 
-  type SectionId = "general" | "display" | "notifications" | "about";
+  type SectionId = "general" | "display" | "notifications" | "connection" | "about";
 
   let config: AppConfig | null = $state(null);
   let loading = $state(true);
@@ -59,6 +60,8 @@
    *  非 Windows 平台 SHALL NOT 渲染 "Use WSL" 按钮（spec settings-ui）。 */
   const isWindowsPlatform =
     typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+  const isTauriDesktop =
+    typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
   let wslLoading = $state(false);
   let wslInlineMessage: { kind: "info" | "error"; text: string } | null = $state(null);
@@ -91,6 +94,9 @@
     { id: "general", label: "常规", description: "主题、启动行为、数据目录", icon: SLIDERS_HORIZONTAL_SVG },
     { id: "display", label: "显示", description: "界面字体与视觉密度", icon: MONITOR_SVG },
     { id: "notifications", label: "通知", description: "事件触发与提示音", icon: BELL },
+    ...(isTauriDesktop
+      ? [{ id: "connection" as const, label: "连接", description: "SSH 远端工作区", icon: MONITOR_SVG }]
+      : []),
     { id: "about", label: "关于", description: "版本与更新", icon: INFO_SVG },
   ];
 
@@ -415,7 +421,11 @@
     token_threshold: "Token 超限",
   };
 
-  const sectionMeta = $derived(sections.find((s) => s.id === activeSection)!);
+  $effect(() => {
+    if (!sections.some((section) => section.id === activeSection)) activeSection = "general";
+  });
+
+  const sectionMeta = $derived(sections.find((s) => s.id === activeSection) ?? sections[0]);
 </script>
 
 <div class="settings-view">
@@ -647,6 +657,8 @@
               </SettingsButton>
             {/snippet}
           </SettingsGroup>
+        {:else if activeSection === "connection"}
+          <Connection />
         {:else if activeSection === "notifications"}
           <SettingsGroup title="基础通知">
             <SettingsField label="启用通知" description="当触发器规则匹配时产生通知">

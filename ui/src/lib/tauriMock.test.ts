@@ -61,12 +61,14 @@ describe('mockIPC coverage', () => {
     unlisten()
   })
 
-  test('listen() 4 个真实 event 都能挂载', async () => {
+  test('listen() 6 个真实 event 都能挂载', async () => {
     const events = [
       'notification-update',
       'notification-added',
       'file-change',
       'session-metadata-update',
+      'ssh_status',
+      'context_changed',
     ]
     for (const ev of events) {
       const u = await listen(ev, () => {})
@@ -84,6 +86,8 @@ describe('mockIPC coverage', () => {
       'notification-added',
       'file-change',
       'session-metadata-update',
+      'ssh_status',
+      'context_changed',
     ] as const)('emit("%s") → handler 收到 payload', async (eventName) => {
       const handler = vi.fn()
       const unlisten = await listen(eventName, handler)

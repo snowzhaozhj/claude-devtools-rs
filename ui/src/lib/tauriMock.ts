@@ -261,6 +261,11 @@ function buildHandler(fx: Fixture) {
           fx.config.notifications = { ...fx.config.notifications, ...(data as object) }
         } else if (section === 'general' && data) {
           fx.config.general = { ...fx.config.general, ...(data as object) }
+        } else if (section === 'ssh' && data) {
+          fx.config.ssh = {
+            ...(fx.config.ssh ?? { profiles: [], lastConnection: null, autoReconnect: false }),
+            ...(data as object),
+          }
         }
         return fx.config
       }
@@ -360,14 +365,20 @@ function buildHandler(fx: Fixture) {
       case 'ssh_disconnect':
         return null
 
-      case 'ssh_test_connection':
-        return []
+      case 'ssh_test_connection': {
+        const request = getArg<Record<string, unknown>>(payload, 'request') ?? {}
+        return {
+          contextId: `test-${String(request.host ?? 'mock-ssh')}`,
+          status: 'connected',
+          authChain: [{ source: { type: 'envAgent' }, outcome: { type: 'success' }, elapsedMs: 3 }],
+        }
+      }
 
       case 'ssh_get_state':
-        return { activeContextId: null, contexts: [] }
+        return { activeContextId: 'local', contexts: [] }
 
       case 'ssh_get_config_hosts':
-        return fx.config.ssh?.profiles ?? []
+        return ['mock-prod', 'mock-staging', ...(fx.config.ssh?.profiles ?? []).map((profile) => profile.host)]
 
       case 'ssh_resolve_host': {
         const alias = getArg<string>(payload, 'alias') ?? ''
@@ -395,13 +406,16 @@ function buildHandler(fx: Fixture) {
         return fx.config.ssh?.lastConnection ?? null
 
       case 'list_contexts':
-        return [{ id: 'local', kind: 'local', isActive: true, host: null }]
+        return [
+          { id: 'local', kind: 'local', label: 'Local', status: 'connected', isActive: true, host: null },
+          { id: 'ssh-mock-prod', kind: 'ssh', label: 'mock-prod', status: 'connected', isActive: false, host: 'mock-prod' },
+        ]
 
       case 'switch_context':
         return null
 
       case 'get_active_context':
-        return { id: 'local', kind: 'local', isActive: true, host: null }
+        return { id: 'local', kind: 'local', label: 'Local', status: 'connected', isActive: true, host: null }
 
       case 'get_project_session_prefs': {
         const projectId = getArg<string>(payload, 'projectId') ?? ''
