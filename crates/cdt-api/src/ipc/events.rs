@@ -22,6 +22,15 @@ pub enum PushEvent {
     NewNotification { notification: serde_json::Value },
     /// SSH 连接状态变更。
     SshStatusChange { context_id: String, state: String },
+    /// Session 元数据增量。
+    SessionMetadataUpdate {
+        project_id: String,
+        session_id: String,
+        title: Option<String>,
+        message_count: usize,
+        is_ongoing: bool,
+        git_branch: Option<String>,
+    },
 }
 
 /// 单个 session 元数据增量推送 payload。

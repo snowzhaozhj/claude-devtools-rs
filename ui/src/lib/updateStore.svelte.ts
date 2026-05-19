@@ -12,8 +12,8 @@
  * 行为契约：openspec/specs/app-auto-update/spec.md
  */
 
-import { invoke } from '@tauri-apps/api/core'
 import { check, type Update } from '@tauri-apps/plugin-updater'
+import { getTransport } from './transport'
 import { relaunch } from '@tauri-apps/plugin-process'
 
 export type UpdateStatus =
@@ -76,7 +76,7 @@ class UpdateStore {
     const version = this.newVersion
     this.visible = false
     try {
-      await invoke('update_config', {
+      await getTransport().invoke('update_config', {
         section: 'updater',
         configData: { skippedUpdateVersion: version },
       })

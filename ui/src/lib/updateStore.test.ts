@@ -9,7 +9,7 @@
 // downloadAndInstall 涉及 plugin-updater 的真实调用，不在本文件覆盖；
 // 由 Playwright e2e + 手动 `just dev` 覆盖。
 
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 // 必须在 import updateStore 之前 mock plugin 模块
 vi.mock('@tauri-apps/plugin-updater', () => ({
@@ -32,9 +32,14 @@ const samplePayload = {
   signatureOk: true,
 }
 
+beforeEach(() => {
+  ;(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {}
+})
+
 afterEach(() => {
   updateStore.reset()
   vi.mocked(invoke).mockReset()
+  delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
 })
 
 describe('updateStore.showAvailable', () => {

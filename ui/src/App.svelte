@@ -32,8 +32,9 @@
   import { applyFonts } from "./lib/fonts";
   import { setTimeFormat } from "./lib/displayPrefs.svelte";
   import { loadAgentConfigs } from "./lib/agentConfigsStore.svelte";
-  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import type { UnlistenFn } from "@tauri-apps/api/event";
   import { initFileChangeStore } from "./lib/fileChangeStore.svelte";
+  import { subscribeEvent } from "./lib/transport";
   import { getSidebarCollapsed, toggleSidebarCollapsed } from "./lib/sidebarStore.svelte";
   import { attachExternalLinkInterceptor } from "./lib/externalLinks";
 
@@ -160,11 +161,11 @@
     // 拦截 markdown 内的外链点击，走系统默认浏览器而非 webview 窗口内导航
     detachExternalLinks = attachExternalLinkInterceptor();
     // 监听后端 notification-update 事件（mark-as-read 后刷新 badge）
-    unlistenNotif = await listen("notification-update", onNotificationUpdate);
+    unlistenNotif = await subscribeEvent("notification-update", onNotificationUpdate);
     // 监听自动通知管线新产生的通知：立即刷新 badge + 请求前台页面 reload 列表
-    unlistenNotifAdded = await listen("notification-added", onNotificationUpdate);
+    unlistenNotifAdded = await subscribeEvent("notification-added", onNotificationUpdate);
     // 监听后端启动检查 emit 的 updater://available 事件，写入 store 弹横幅
-    unlistenUpdater = await listen<UpdateAvailablePayload>(
+    unlistenUpdater = await subscribeEvent<UpdateAvailablePayload>(
       "updater://available",
       (e) => updateStore.showAvailable(e.payload)
     );

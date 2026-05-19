@@ -1,4 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { getTransport } from "./transport";
+
+const invoke = <T>(cmd: string, args?: Record<string, unknown>) => getTransport().invoke<T>(cmd, args);
 
 export interface AgentConfig {
   name: string;

@@ -1,4 +1,5 @@
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { subscribeEvent } from "./transport";
 
 export interface FileChangePayload {
   projectId: string;
@@ -18,7 +19,7 @@ let initPromise: Promise<void> | null = null;
 export function initFileChangeStore(): Promise<void> {
   if (initPromise) return initPromise;
   initPromise = (async () => {
-    unlisten = await listen<FileChangePayload>("file-change", (event) => {
+    unlisten = await subscribeEvent<FileChangePayload>("file-change", (event) => {
       const payload = event.payload;
       for (const handler of handlers.values()) {
         try {

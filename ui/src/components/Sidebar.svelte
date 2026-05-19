@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
-  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import {
     listSessions,
     getSessionSummariesByIds,
@@ -29,6 +28,7 @@
     loadProjectPrefs,
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
+  import { subscribeEvent, type Unsubscribe } from "../lib/transport";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
   import { applySilentRefresh, mergeSessions, applyPendingMetadata } from "../lib/sessionMerge";
   import { MESSAGE_SQUARE, GIT_BRANCH_SVG, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
@@ -126,7 +126,7 @@
   // Data loading
   // ---------------------------------------------------------------------------
 
-  let metadataUnlisten: UnlistenFn | null = null;
+  let metadataUnlisten: Unsubscribe | null = null;
   let refreshProjectsListener: (() => void) | null = null;
   let sessionListEl: HTMLElement | null = null;
 
@@ -166,7 +166,7 @@
     // 订阅后端元数据增量 patch；按 sessionId 定位 in-place 替换三个元数据字段，
     // 不改变 sessions 数组顺序与稳定 key，复用 DOM 节点不触发动画重启
     // （spec sidebar-navigation §"会话元数据增量 patch"）
-    metadataUnlisten = await listen<SessionMetadataUpdate>(
+    metadataUnlisten = await subscribeEvent<SessionMetadataUpdate>(
       "session-metadata-update",
       (event) => {
         const payload = event.payload;
