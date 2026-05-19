@@ -112,6 +112,25 @@ describe('SettingsView Browser Access subsection', () => {
     })
   })
 
+  test('运行中锁定端口输入并提示关闭后修改', async () => {
+    const { container } = render(SettingsView)
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="browser-access-port"]')).not.toBeNull(),
+    )
+    const toggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
+    await fireEvent.click(toggle)
+
+    await waitFor(() => {
+      const portInput = container.querySelector(
+        '[data-testid="browser-access-port"]',
+      ) as HTMLInputElement
+      expect(portInput.disabled).toBe(true)
+      expect(container.querySelector('[data-testid="browser-access-port-locked"]')?.textContent).toMatch(
+        /关闭 server mode 后可修改端口/,
+      )
+    })
+  })
+
   test('启动失败（非法端口）→ inline 错误展示且不自动消失', async () => {
     const { container } = render(SettingsView)
     await waitFor(() =>

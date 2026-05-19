@@ -147,7 +147,7 @@
 
   /** server-mode: 端口输入 blur/change 时写入配置，确保关闭状态下也能持久化。 */
   async function persistHttpServerPort() {
-    if (!config || serverPending) return;
+    if (!config || serverPending || serverStatus?.running) return;
     try {
       const port = parseHttpServerPort();
       config = await updateConfig("httpServer", { port });
@@ -703,12 +703,15 @@
                     min="1024"
                     max="65535"
                     bind:value={portInput}
-                    disabled={serverPending}
+                    disabled={serverPending || serverStatus?.running}
                     data-testid="browser-access-port"
                     onchange={persistHttpServerPort}
                     onblur={persistHttpServerPort}
                   />
                 {/snippet}
+                {#if serverStatus?.running}
+                  <div class="field-hint" data-testid="browser-access-port-locked">关闭 server mode 后可修改端口。</div>
+                {/if}
               </SettingsField>
               {#if serverStatus?.running}
                 <div class="server-status-row" role="status" data-testid="browser-access-running">

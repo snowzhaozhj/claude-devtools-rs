@@ -64,6 +64,7 @@ struct ServerHandle {
 
 /// server-mode 全局状态。Tauri `manage` 注入后由 3 个 IPC command 共享。
 pub struct ServerState {
+    lifecycle: Mutex<()>,
     handle: Mutex<Option<ServerHandle>>,
     last_error: Mutex<Option<String>>,
     api: Arc<LocalDataApi>,
@@ -72,11 +73,7 @@ pub struct ServerState {
 }
 
 impl ServerState {
-    pub fn new(
-        api: Arc<LocalDataApi>,
-        static_dir: Option<PathBuf>,
-        app_handle: AppHandle,
-    ) -> Self {
+    pub fn new(api: Arc<LocalDataApi>, static_dir: Option<PathBuf>, app_handle: AppHandle) -> Self {
         Self::with_emitter(api, static_dir, Arc::new(app_handle))
     }
 
@@ -87,6 +84,7 @@ impl ServerState {
         emitter: Arc<dyn StatusEmitter>,
     ) -> Self {
         Self {
+            lifecycle: Mutex::new(()),
             handle: Mutex::new(None),
             last_error: Mutex::new(None),
             api,
@@ -97,6 +95,7 @@ impl ServerState {
 
     /// 用户显式开启 server-mode：启动成功后写 `enabled=true` + `port` 持久化。
     pub async fn start(&self, port: u16) -> Result<(), String> {
+        let _lifecycle_guard = self.lifecycle.lock().await;
         self.start_runtime_only(port).await?;
 
         // 持久化失败不回滚 server task——已 bind 的 listener 仍可用，下次启动
@@ -178,6 +177,7 @@ impl ServerState {
 
     /// 用户显式关闭 server-mode：先写 `enabled=false` 用户意图，再关闭运行时 server。
     pub async fn stop(&self) -> Result<(), String> {
+        let _lifecycle_guard = self.lifecycle.lock().await;
         if let Err(e) = self.api.set_http_server_enabled(false).await {
             tracing::warn!(
                 target: "cdt_tauri::server_mode",
@@ -229,6 +229,7 @@ impl ServerState {
     /// 自动启动失败 SHALL 仅 `tracing::warn!` + emit `http-server-status` 事件，
     /// **不**阻塞 app 启动；`enabled` 字段 SHALL 保持 `true`（用户意图未变）。
     pub async fn restore_if_enabled(&self) {
+        let _lifecycle_guard = self.lifecycle.lock().await;
         let cfg = match self.api.http_server_config().await {
             Ok(c) => c,
             Err(e) => {
@@ -243,9 +244,6 @@ impl ServerState {
         if !cfg.enabled {
             return;
         }
-        if !self.persisted_enabled().await {
-            return;
-        }
         if let Err(msg) = self.start_runtime_only(cfg.port).await {
             tracing::warn!(
                 target: "cdt_tauri::server_mode",
@@ -253,10 +251,6 @@ impl ServerState {
                 error = %msg,
                 "auto-restore failed; enabled=true preserved"
             );
-            return;
-        }
-        if !self.persisted_enabled().await {
-            self.shutdown_runtime_only().await;
         }
     }
 
@@ -266,14 +260,6 @@ impl ServerState {
             .await
             .map(|c| c.port)
             .unwrap_or(3456)
-    }
-
-    async fn persisted_enabled(&self) -> bool {
-        self.api
-            .http_server_config()
-            .await
-            .map(|c| c.enabled)
-            .unwrap_or(false)
     }
 
     fn emit_status(&self, running: bool, port: u16, last_error: Option<String>) {
@@ -326,8 +312,8 @@ mod tests {
         }
     }
 
-    async fn build_state_with_tempdir() -> (Arc<ServerState>, Arc<RecordingEmitter>, tempfile::TempDir)
-    {
+    async fn build_state_with_tempdir()
+    -> (Arc<ServerState>, Arc<RecordingEmitter>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let config_path = tmp.path().join("config.json");
         let mut config_mgr = ConfigManager::new(Some(config_path));
@@ -459,13 +445,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stop_queued_after_start_wins_persisted_enabled() {
+        let (state, _emitter, _tmp) = build_state_with_tempdir().await;
+
+        let port = 38773;
+        if tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .is_err()
+        {
+            eprintln!("port {port} busy, skip");
+            return;
+        }
+
+        let lifecycle_guard = state.lifecycle.lock().await;
+        let start_state = state.clone();
+        let start_task = tokio::spawn(async move { start_state.start(port).await });
+        tokio::task::yield_now().await;
+        let stop_state = state.clone();
+        let stop_task = tokio::spawn(async move { stop_state.stop().await });
+        drop(lifecycle_guard);
+
+        start_task.await.unwrap().unwrap();
+        stop_task.await.unwrap().unwrap();
+
+        let cfg = state.api.http_server_config().await.unwrap();
+        assert!(!cfg.enabled, "queued stop SHALL win over prior start");
+        assert_eq!(cfg.port, port);
+        assert!(!state.status().await.running);
+    }
+
+    #[tokio::test]
     async fn second_start_aborts_first_handle() {
         let (state, _emitter, _tmp) = build_state_with_tempdir().await;
 
         let port1 = 38767;
         let port2 = 38768;
         for p in [port1, port2] {
-            if tokio::net::TcpListener::bind(("127.0.0.1", p)).await.is_err() {
+            if tokio::net::TcpListener::bind(("127.0.0.1", p))
+                .await
+                .is_err()
+            {
                 eprintln!("port {p} busy, skip");
                 return;
             }
@@ -535,7 +554,9 @@ mod tests {
         let s = state.status().await;
         assert_eq!(s.last_error.as_deref(), Some(err.as_str()));
         let events = emitter.snapshot();
-        let last = events.last().expect("validation failure should emit status");
+        let last = events
+            .last()
+            .expect("validation failure should emit status");
         assert!(!last.1.running);
         assert_eq!(last.1.last_error.as_deref(), Some(err.as_str()));
     }
@@ -570,10 +591,7 @@ mod tests {
         state.start(port_ok).await.unwrap();
         let s = state.status().await;
         assert!(s.running);
-        assert!(
-            s.last_error.is_none(),
-            "成功启动后 SHALL 重置 lastError"
-        );
+        assert!(s.last_error.is_none(), "成功启动后 SHALL 重置 lastError");
 
         state.stop().await.unwrap();
     }
