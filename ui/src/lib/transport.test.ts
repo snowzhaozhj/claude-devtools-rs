@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(vi.fn()),
+}))
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}))
+
+import { listen } from '@tauri-apps/api/event'
 import { BrowserUnsupportedError, getTransport, subscribeEvent } from './transport'
 
 afterEach(() => {
@@ -58,6 +66,13 @@ describe('BrowserTransport', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ section: 'httpServer', data: { port: 3500 } }),
     })
+  })
+
+  test('Tauri runtime 订阅 session-metadata-update', async () => {
+    ;(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {}
+    await subscribeEvent('session-metadata-update', vi.fn())
+
+    expect(vi.mocked(listen)).toHaveBeenCalledWith('session-metadata-update', expect.any(Function))
   })
 
   test('浏览器 runtime 下桌面专属 command 抛 BrowserUnsupportedError', async () => {

@@ -36,6 +36,7 @@ class TauriTransport implements Transport {
       listen("file-change", (event) => handler("file-change", event.payload)),
       listen("notification-update", (event) => handler("notification-update", event.payload)),
       listen("notification-added", (event) => handler("notification-added", event.payload)),
+      listen("session-metadata-update", (event) => handler("session-metadata-update", event.payload)),
       listen("updater://available", (event) => handler("updater://available", event.payload)),
     ]);
     return () => {

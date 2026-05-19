@@ -121,7 +121,7 @@ path traversal 防御：fallback handler SHALL 拒绝路径中含 `..` 段（包
 - `GET /api/projects/{projectId}/memory` — 镜像 `get_project_memory`，返回 `MemoryFile[]`
 - `POST /api/projects/{projectId}/memory-files` — 镜像 `read_memory_file`，body 含 `{ "file": "<relative path>" }`，返回文件内容
 - `GET /api/sessions/{rootSessionId}/subagents/{subagentSessionId}/trace` — 镜像 `get_subagent_trace`，返回 trace 数据
-- `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/blocks/{blockId}/image` — 镜像 `get_image_asset`，返回 base64 字符串（与 IPC 同形）
+- `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/blocks/{blockId}/image` — 镜像 `get_image_asset`，返回浏览器可加载的 `data:` URI / base64 字符串；若底层 IPC 返回 Tauri-only `asset://localhost/...`，HTTP handler SHALL 转为 `data:` URI
 - `GET /api/sessions/{rootSessionId}/subagents/{sessionId}/tools/{toolUseId}/output` — 镜像 `get_tool_output`，返回 `ToolOutput`（含 `outputBytes` / `outputOmitted` 语义）
 - `POST /api/notifications/triggers` — 镜像 `add_trigger`，body 为 `NotificationTrigger`（caller SHALL 在 body 内提供非空 `id`，与 IPC 路径校验语义一致；server 不自动生成 id）
 - `DELETE /api/notifications/triggers/{triggerId}` — 镜像 `remove_trigger`
@@ -140,10 +140,11 @@ path traversal 防御：fallback handler SHALL 拒绝路径中含 `..` 段（包
 - **WHEN** 浏览器请求 `GET /api/projects/<projectId>/memory`
 - **THEN** 响应 SHALL 与 IPC `get_project_memory(<projectId>)` 同形（含 CLAUDE.md 各 scope）
 
-#### Scenario: GET image asset returns base64
+#### Scenario: GET image asset returns browser-loadable data
 
 - **WHEN** 浏览器请求 `GET /api/sessions/<root>/subagents/<sid>/blocks/<bid>/image`
-- **THEN** 响应 SHALL 是 base64 字符串（同 IPC `get_image_asset` 返回类型）
+- **THEN** 响应 SHALL 是浏览器可加载的 `data:` URI 或 base64 字符串
+- **AND** SHALL NOT 返回 Tauri-only `asset://localhost/...` URL
 - **AND** SHALL **不**应用任何 `dataOmitted` 裁剪（lazy 端点本就是真实数据源）
 
 #### Scenario: GET tool output preserves outputOmitted semantics
