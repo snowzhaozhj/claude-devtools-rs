@@ -158,14 +158,14 @@ pub fn validate_file_path(file_path: &str, project_root: Option<&Path>) -> PathV
     }
 
     // 如果文件存在，检查 symlink 目标
-    if let Ok(real_path) = std::fs::canonicalize(&normalized) {
+    if let Ok(real_path) = dunce::canonicalize(&normalized) {
         let real_str = real_path.to_string_lossy();
         if matches_sensitive_pattern(&real_str) {
             return PathValidationResult::fail("Access to sensitive files is not allowed");
         }
 
         // 对 project root 也做 canonicalize
-        let real_project = project_root.and_then(|p| std::fs::canonicalize(p).ok());
+        let real_project = project_root.and_then(|p| dunce::canonicalize(p).ok());
         if !is_path_within_allowed(&real_path, real_project.as_deref()) {
             return PathValidationResult::fail(
                 "Path is outside allowed directories (project or Claude root)",

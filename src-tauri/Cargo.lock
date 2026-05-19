@@ -760,6 +760,7 @@ dependencies = [
  "cdt-discover",
  "chrono",
  "dirs",
+ "dunce",
  "lru",
  "regex",
  "serde",

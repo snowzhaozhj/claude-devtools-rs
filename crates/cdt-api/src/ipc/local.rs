@@ -2150,7 +2150,7 @@ fn validate_project_base_dir(base_dir: &str) -> Result<(), ApiError> {
 
 fn validate_memory_file_name(file: &str) -> Result<String, ApiError> {
     let path = Path::new(file);
-    if path.is_absolute()
+    if cdt_discover::looks_like_absolute_path(file)
         || path.components().count() != 1
         || file.contains(['/', '\\', ':'])
         || !path
@@ -2184,12 +2184,9 @@ async fn build_claude_md_from_filesystem(
                     cdt_core::ClaudeMdScope::Project
                 }
             };
-            let display_name = info
-                .path
-                .rsplit('/')
-                .next()
-                .unwrap_or(&info.path)
-                .to_owned();
+            let display_name = Path::new(&info.path)
+                .file_name()
+                .map_or_else(|| info.path.clone(), |s| s.to_string_lossy().into_owned());
             cdt_core::ContextInjection::ClaudeMd(cdt_core::ClaudeMdContextInjection {
                 id: format!("claude-md-{}", info.path),
                 path: info.path,

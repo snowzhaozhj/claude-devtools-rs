@@ -56,7 +56,7 @@ pub enum AuthMethodKind {
 /// 与 OpenSSH 行为对齐——若用户在 ssh config 显式指定了 `IdentityAgent`，候选 1
 /// 已经覆盖；候选 4 仅作为兜底。
 fn one_password_well_known_paths() -> Vec<PathBuf> {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
     vec![
         home.join("Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"),
         home.join(".1password/agent.sock"),
@@ -65,7 +65,7 @@ fn one_password_well_known_paths() -> Vec<PathBuf> {
 
 /// 默认密钥位置 fallback（候选 6）。
 fn default_key_paths() -> Vec<PathBuf> {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
     vec![
         home.join(".ssh/id_ed25519"),
         home.join(".ssh/id_rsa"),
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn identity_file_then_default_key_fallback_dedupe() {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let work_key = home.join(".ssh/id_ed25519"); // 故意与默认密钥重复
         let chain = build_candidates_with_env(
             &host_with(None, vec![work_key.clone()]),

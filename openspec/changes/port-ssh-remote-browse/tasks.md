@@ -150,24 +150,24 @@
 
 ## 13. 测试
 
-- [ ] 13.1 `cargo test -p cdt-ssh`：单元测试覆盖 host_resolver / auth / connection / provider / polling_watcher
-- [ ] 13.2 `cargo test -p cdt-api --test ipc_contract`：11 条新命令 payload schema
-- [ ] 13.3 `cargo test -p cdt-config`：SSH 字段 validation 全过
-- [ ] 13.4 Vitest + mockIPC：connection store / context store / Connection.svelte 表单校验
-- [ ] 13.5 Playwright user story：打开 Settings → Connection → 输入 host alias → 看到联想 + 显示状态（mock IPC 不真连远端）
-- [ ] 13.6 `just preflight` 全过（fmt / lint / test / spec-validate）
+- [x] 13.1 `cargo test -p cdt-ssh`：单元测试覆盖 host_resolver / auth / connection / provider / polling_watcher（86 passed / 2 live ignored）
+- [x] 13.2 `cargo test -p cdt-api --test ipc_contract`：11 条新命令 payload schema（83 passed）
+- [x] 13.3 `cargo test -p cdt-config`：SSH 字段 validation 全过（123 unit + 8 round_trip passed）
+- [x] 13.4 Vitest + mockIPC：connection store / context store / Connection.svelte 表单校验（299 passed / 1 skipped；补 `Connection.test.ts` 端口范围 + alias/test 状态；补 `tauriMock.test.ts` SSH payload args）
+- [x] 13.5 Playwright user story：打开 Settings → Connection → 输入 host alias → 看到联想 + 显示状态（`connection-settings.spec.ts` mock IPC 通过，不真连远端）
+- [x] 13.6 `just preflight` 全过（fmt / lint / test / spec-validate；OpenSpec 26/26 + IPC command sync OK）
 
 ## 14. perf 验证 + 集成 smoke
 
-- [ ] 14.1 idle CPU 实测：`just dev` 跑应用 + 连一个本地 ssh server（或用 docker `linuxserver/openssh-server`），观察 Activity Monitor 远端 polling watcher 启动后 idle CPU 稳态 < 2%；不达标降级为 5s 间隔 + 仅 readdir 维度（更新 D5 + spec Scenario）
-- [ ] 14.2 远端拉大会话 perf：用本地 docker ssh server 模拟"远端 ~/.claude/projects 含一个 1221 msg session"，跑 `get_session_detail` 记录 wall / user / sys / RSS / user/real ratio，对照本地 baseline 60-74ms 的远端容差是否合理；不合理在 PR 描述里说明
-- [ ] 14.3 macOS Launchpad 启动场景手动验证：从 dmg 安装的 release build → Launchpad 启动 → 进 Connection tab → 连 1Password 管理的密钥 host 成功
-- [ ] 14.4 Windows 兼容验证：`ssh` 二进制存在场景 + 缺失场景 各跑一遍 `ssh_resolve_host`，确认 degraded fallback 工作
-- [ ] 14.5 远端 `~/.claude/projects` 不存在场景：mock 远端 home 仅有非 .claude 目录，确认返回 `RemoteHomeMissing { tried: [...] }` 错误且 SSH 仍 connected
+- [ ] 14.1 idle CPU 实测：`just dev` 跑应用 + 连一个本地 ssh server（或用 docker `linuxserver/openssh-server`），观察 Activity Monitor 远端 polling watcher 启动后 idle CPU 稳态 < 2%；不达标降级为 5s 间隔 + 仅 readdir 维度（更新 D5 + spec Scenario）。**实现差异**：bg session 无法完成 GUI Activity Monitor；自动化已跑 `pnpm --dir ui exec playwright test tests/e2e/connection-settings.spec.ts` 与 `just preflight`，真实 idle CPU smoke 留 PR manual checklist
+- [ ] 14.2 远端拉大会话 perf：用本地 docker ssh server 模拟"远端 ~/.claude/projects 含一个 1221 msg session"，跑 `get_session_detail` 记录 wall / user / sys / RSS / user/real ratio，对照本地 baseline 60-74ms 的远端容差是否合理；不合理在 PR 描述里说明。**实现差异**：本机缺 `~/.claude/projects/-perf-fixture-project`，`perf_get_session_detail` release bench 仅完成 smoke（2 passed，内部跳过样本），远端/docker perf 留 PR manual checklist
+- [ ] 14.3 macOS Launchpad 启动场景手动验证：从 dmg 安装的 release build → Launchpad 启动 → 进 Connection tab → 连 1Password 管理的密钥 host 成功。**实现差异**：bg session 无 dmg/Launchpad/1Password GUI 环境，留 PR manual checklist
+- [ ] 14.4 Windows 兼容验证：`ssh` 二进制存在场景 + 缺失场景 各跑一遍 `ssh_resolve_host`，确认 degraded fallback 工作。**实现差异**：已跑 Windows 静态 grep + `windows-compat-reviewer` 只读审查并修复 home/canonicalize/路径名问题；真实 Windows smoke 留 PR manual checklist
+- [x] 14.5 远端 `~/.claude/projects` 不存在场景：mock 远端 home 仅有非 .claude 目录，确认返回 `RemoteHomeMissing { tried: [...] }` 错误且 SSH 仍 connected（`SshError::RemoteHomeMissing` serde 单测 + session home probe 错误路径覆盖）
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
+- [x] N.1 push 分支 + 开 PR
 - [ ] N.2 wait-ci 全绿
 - [ ] N.3 codex 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）

@@ -64,7 +64,8 @@
     }
   }
 
-  const canSubmit = $derived(connectionStore.host.trim().length > 0 && !connectionStore.actionInFlight);
+  const validPort = $derived(Number.isInteger(connectionStore.port) && connectionStore.port >= 1 && connectionStore.port <= 65535);
+  const canSubmit = $derived(connectionStore.host.trim().length > 0 && validPort && !connectionStore.actionInFlight);
   const diagnosticChain = $derived(
     connectionStore.errorDetail?.attempts ?? connectionStore.authChain,
   );

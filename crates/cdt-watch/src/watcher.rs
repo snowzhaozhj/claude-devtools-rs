@@ -59,7 +59,7 @@ impl Default for FileWatcher {
 impl FileWatcher {
     /// 创建监听默认路径（`~/.claude/projects/` 和 `~/.claude/todos/`）的 watcher。
     pub fn new() -> Self {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let projects_dir = home.join(".claude").join("projects");
         let todos_dir = home.join(".claude").join("todos");
         Self::with_paths(projects_dir, todos_dir)

@@ -30,6 +30,13 @@ const ARGS_BY_CMD: Record<string, Record<string, unknown>> = {
   hide_session: { projectId: 'mock-rich-rust', sessionId: 'sess-rust-2' },
   unhide_session: { projectId: 'mock-rich-rust', sessionId: 'sess-rust-3' },
   get_project_session_prefs: { projectId: 'mock-rich-rust' },
+  ssh_connect: { request: { host: 'mock-prod', port: 22, username: 'alice', authMethod: 'sshConfig' } },
+  ssh_disconnect: { contextId: 'ssh-mock-prod' },
+  ssh_test_connection: { request: { host: 'mock-prod', port: 22, username: 'alice', authMethod: 'sshConfig' } },
+  ssh_get_state: { contextId: null },
+  ssh_resolve_host: { alias: 'mock-prod' },
+  ssh_save_last_connection: { request: { host: 'mock-prod', port: 22, username: 'alice', authMethod: 'sshConfig', contextId: 'ssh-mock-prod' } },
+  switch_context: { contextId: 'ssh-mock-prod' },
 }
 
 beforeEach(() => {
@@ -50,6 +57,24 @@ describe('mockIPC coverage', () => {
       expect(result).not.toBeUndefined()
     },
   )
+
+  test('SSH mock command payloads match wrapper shape', async () => {
+    await expect(invoke('ssh_get_config_hosts')).resolves.toContain('mock-prod')
+    await expect(invoke('ssh_resolve_host', { alias: 'mock-prod' })).resolves.toMatchObject({
+      host: 'mock-prod',
+      port: 22,
+      degraded: true,
+    })
+
+    await invoke('ssh_save_last_connection', {
+      request: { host: 'mock-prod', port: 22, username: 'alice', authMethod: 'password', password: 'secret' },
+    })
+    await expect(invoke('ssh_get_last_connection')).resolves.toMatchObject({
+      host: 'mock-prod',
+      username: 'alice',
+      authMethod: 'password',
+    })
+  })
 
   test('未知 command 走兜底 reject 含 not implemented', async () => {
     await expect(invoke('totally_made_up_command')).rejects.toThrow('not implemented')
