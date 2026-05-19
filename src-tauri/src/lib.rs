@@ -812,6 +812,7 @@ pub fn run() {
     });
 
     let api_for_window_event = api.clone();
+    let api_for_run_event = api.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -1095,11 +1096,15 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|app_handle, event| {
+        .run(move |app_handle, event| {
             if let RunEvent::Exit = event {
                 // 应用退出：abort 已运行的 HTTP server task 让 TCP listener
                 // 立即释放（详 openspec/specs/server-mode/spec.md::Scenario
                 // "应用退出时关闭 server"）。
+                let api = api_for_run_event.clone();
+                tauri::async_runtime::block_on(async move {
+                    api.shutdown_ssh_all(cdt_ssh::SHUTDOWN_TIMEOUT).await;
+                });
                 if let Some(state) = app_handle.try_state::<Arc<ServerState>>() {
                     let state = state.inner().clone();
                     tauri::async_runtime::block_on(async move {

@@ -1866,11 +1866,17 @@ impl DataApi for LocalDataApi {
         &self,
         request: &SshConnectRequest,
     ) -> Result<serde_json::Value, ApiError> {
+        let previous_context_id = self.ssh_mgr.active_context_id().await;
         let context_id = self
             .ssh_mgr
             .connect(request.clone().into())
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;
+        if previous_context_id.as_deref() != Some(context_id.as_str()) {
+            if let Some(prev) = previous_context_id {
+                self.cancel_remote_watcher(&prev).await;
+            }
+        }
         self.attach_remote_watcher(&context_id).await;
         let auth_chain = self
             .ssh_mgr
