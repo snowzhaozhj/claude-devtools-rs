@@ -1145,6 +1145,13 @@ pub fn run() {
 /// 未启用分支不进 HIR/codegen，路径字面量**保证**不进入 release binary。`_app`
 /// underscore-prefix 让 dev 构建里不触发 unused warning（release 构建里读
 /// `_app.path()`）。
+///
+/// **分支选择按 `cfg(debug_assertions)` 不按 profile 名**（codex Q2）：若在
+/// 自定义 cargo profile 里强制 `debug-assertions = true`（如 release-with-debug-
+/// info 类配置），release-name profile 仍走 dev 路径——dev 字面量会进 binary。
+/// 标准 `cargo build --release` 不受影响。**结果速查**：release binary 走
+/// `resource_dir()`；dev / debug-assertions=on 的 binary 走
+/// `CARGO_MANIFEST_DIR` 拼路径。
 #[cfg(debug_assertions)]
 fn resolve_static_dir(_app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     let src_tauri_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
