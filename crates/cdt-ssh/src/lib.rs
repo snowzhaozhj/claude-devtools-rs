@@ -42,5 +42,6 @@ pub use polling_watcher::{CancelToken, RemotePollingWatcher, RemoteWatcherHandle
 pub use provider::{RemoteEntry, SftpClient, SftpClientError, SshFileSystemProvider, with_retry};
 pub use request::SshConnectRequest;
 pub use session::{
-    ContextChanged, ContextKind, SHUTDOWN_TIMEOUT, SshSessionManager, SshStatus, SshStatusChange,
+    ContextChanged, ContextKind, SHUTDOWN_TIMEOUT, SshContextState, SshSessionManager, SshStatus,
+    SshStatusChange,
 };

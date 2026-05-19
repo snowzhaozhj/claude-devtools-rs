@@ -600,6 +600,32 @@ export interface DisplayConfig {
   timeFormat?: TimeFormat;
 }
 
+export type SshAuthMethod = "sshConfig" | "password";
+
+export interface SshProfile {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  authMethod: SshAuthMethod;
+  privateKeyPath?: string | null;
+}
+
+export interface SshLastConnection {
+  host: string;
+  port?: number | null;
+  username?: string | null;
+  authMethod: SshAuthMethod;
+  contextId?: string | null;
+}
+
+export interface SshConfig {
+  profiles: SshProfile[];
+  lastConnection?: SshLastConnection | null;
+  autoReconnect: boolean;
+}
+
 export interface UpdaterConfig {
   autoUpdateCheckEnabled: boolean;
   skippedUpdateVersion?: string | null;
@@ -609,6 +635,7 @@ export interface AppConfig {
   notifications: NotificationConfig;
   general: GeneralConfig;
   display?: DisplayConfig;
+  ssh?: SshConfig;
   updater?: UpdaterConfig;
 }
 

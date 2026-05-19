@@ -17,7 +17,8 @@ use std::sync::Arc;
 use cdt_api::{
     ConfigUpdateRequest, DataApi, LocalDataApi, MemoryFileContent, MemoryLayer, MemoryLayerKind,
     PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
-    SearchRequest, SessionMetadataUpdate, SessionSummary, WslDistroCandidate, WslDistroScanReport,
+    SearchRequest, SessionMetadataUpdate, SessionSummary, SshAuthMethod, SshConnectRequest,
+    WslDistroCandidate, WslDistroScanReport,
 };
 use cdt_config::{
     ConfigManager, NotificationManager, NotificationTrigger, TriggerContentType, TriggerMode,
@@ -67,6 +68,17 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "add_trigger",
     "remove_trigger",
     "read_agent_configs",
+    "ssh_connect",
+    "ssh_disconnect",
+    "ssh_test_connection",
+    "ssh_get_state",
+    "ssh_get_config_hosts",
+    "ssh_resolve_host",
+    "ssh_save_last_connection",
+    "ssh_get_last_connection",
+    "list_contexts",
+    "switch_context",
+    "get_active_context",
     "pin_session",
     "unpin_session",
     "hide_session",
@@ -119,12 +131,12 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_30() {
+fn expected_tauri_commands_count_is_41() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        30,
+        41,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 30 个 Tauri command"
+         以及本文件常量；当前 src-tauri 注册 41 个 Tauri command"
     );
 }
 
@@ -149,6 +161,60 @@ async fn setup_api_constructs_without_panic() {
 // =============================================================================
 // Schema-level: ProjectInfo / SessionSummary / PaginatedResponse / 其他基础 struct
 // =============================================================================
+
+#[test]
+fn ssh_connect_request_accepts_new_and_legacy_payloads() {
+    let new_payload: SshConnectRequest = serde_json::from_value(json!({
+        "host": "prod-box",
+        "port": 2222,
+        "username": "alice",
+        "authMethod": "password",
+        "password": "secret",
+        "contextId": "ctx-prod"
+    }))
+    .unwrap();
+    assert_eq!(new_payload.host, "prod-box");
+    assert_eq!(new_payload.port, Some(2222));
+    assert_eq!(new_payload.username.as_deref(), Some("alice"));
+    assert_eq!(new_payload.auth_method, SshAuthMethod::Password);
+    assert_eq!(new_payload.context_id.as_deref(), Some("ctx-prod"));
+
+    let legacy_payload: SshConnectRequest = serde_json::from_value(json!({
+        "hostAlias": "legacy-host"
+    }))
+    .unwrap();
+    assert_eq!(legacy_payload.host, "legacy-host");
+    assert_eq!(legacy_payload.auth_method, SshAuthMethod::SshConfig);
+    assert_eq!(legacy_payload.port, None);
+
+    let serialized = serde_json::to_value(&new_payload).unwrap();
+    assert_eq!(serialized["authMethod"], json!("password"));
+    assert_eq!(serialized["contextId"], json!("ctx-prod"));
+    assert!(serialized.get("host_alias").is_none());
+    assert!(serialized.get("auth_method").is_none());
+}
+
+#[test]
+fn ssh_auth_and_error_payloads_match_ipc_contract() {
+    let attempt = cdt_ssh::AuthAttempt {
+        source: cdt_ssh::AuthSource::Password,
+        outcome: cdt_ssh::AuthOutcome::Failure("denied".into()),
+        elapsed_ms: 12,
+    };
+    let attempt_json = serde_json::to_value(&attempt).unwrap();
+    assert_eq!(attempt_json["source"]["type"], json!("password"));
+    assert_eq!(attempt_json["outcome"]["type"], json!("failure"));
+    assert_eq!(attempt_json["outcome"]["data"], json!("denied"));
+    assert_eq!(attempt_json["elapsedMs"], json!(12));
+    assert!(attempt_json.get("elapsed_ms").is_none());
+
+    let error = cdt_ssh::SshError::AuthExhausted {
+        attempts: vec![attempt],
+    };
+    let error_json = serde_json::to_value(&error).unwrap();
+    assert_eq!(error_json["code"], json!("ssh_auth_exhausted"));
+    assert!(error_json.get("AuthExhausted").is_none());
+}
 
 #[test]
 fn project_info_serializes_camelcase() {
@@ -1360,6 +1426,78 @@ async fn get_config_display_section_exposes_font_fields_camelcase() {
         display.get("font_mono").is_none(),
         "MUST 不出现 snake_case font_mono"
     );
+}
+
+#[tokio::test]
+async fn update_config_ssh_round_trip_and_validation() {
+    let (api, _tmp) = setup_api().await;
+    let config = api.get_config().await.unwrap();
+    assert_eq!(config["ssh"]["profiles"], json!([]));
+    assert_eq!(config["ssh"]["lastConnection"], json!(null));
+    assert_eq!(config["ssh"]["autoReconnect"], json!(false));
+
+    api.update_config(&ConfigUpdateRequest {
+        section: "ssh".into(),
+        data: json!({
+            "profiles": [{
+                "id": "prod",
+                "name": "Production",
+                "host": "prod-box",
+                "port": 22,
+                "username": "alice",
+                "authMethod": "sshConfig"
+            }],
+            "autoReconnect": true
+        }),
+    })
+    .await
+    .expect("valid ssh profile SHALL persist");
+    let config = api.get_config().await.unwrap();
+    assert_eq!(
+        config["ssh"]["profiles"][0]["authMethod"],
+        json!("sshConfig")
+    );
+    assert_eq!(config["ssh"]["autoReconnect"], json!(true));
+
+    let err = api
+        .update_config(&ConfigUpdateRequest {
+            section: "ssh".into(),
+            data: json!({
+                "profiles": [{
+                    "id": "bad",
+                    "name": "",
+                    "host": "",
+                    "port": 0,
+                    "username": "",
+                    "authMethod": "password"
+                }]
+            }),
+        })
+        .await
+        .expect_err("invalid ssh profile SHALL be rejected");
+    assert!(err.to_string().contains("ssh.profiles"));
+}
+
+#[tokio::test]
+async fn ssh_save_last_connection_omits_password() {
+    let (api, _tmp) = setup_api().await;
+    let request = SshConnectRequest {
+        host: "prod-box".into(),
+        port: Some(2222),
+        username: Some("alice".into()),
+        auth_method: SshAuthMethod::Password,
+        password: Some("secret".into()),
+        context_id: Some("ctx-prod".into()),
+    };
+    api.ssh_save_last_connection(&request)
+        .await
+        .expect("last connection SHALL persist without password");
+    let last = api.ssh_get_last_connection().await.unwrap();
+    assert_eq!(last["host"], json!("prod-box"));
+    assert_eq!(last["port"], json!(2222));
+    assert_eq!(last["username"], json!("alice"));
+    assert_eq!(last["authMethod"], json!("password"));
+    assert!(last.get("password").is_none());
 }
 
 #[tokio::test]

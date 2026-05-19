@@ -13,10 +13,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::defaults::default_config;
 use crate::error::ConfigError;
 use crate::trigger::{TriggerManager, merge_triggers, validate_trigger};
-use crate::types::{AppConfig, HiddenSession, NotificationTrigger, PinnedSession};
+use crate::types::{
+    AppConfig, HiddenSession, NotificationTrigger, PinnedSession, SshConfig, SshLastConnection,
+};
 use crate::validation::{
     normalize_claude_root_path, validate_claude_root_path, validate_http_port,
-    validate_snooze_minutes,
+    validate_snooze_minutes, validate_ssh_config,
 };
 
 /// 默认配置文件路径：`~/.claude/claude-devtools-config.json`。
@@ -495,6 +497,66 @@ impl ConfigManager {
             }
         }
         self.commit_next_config(next).await
+    }
+
+    pub async fn update_ssh(
+        &mut self,
+        updates: serde_json::Value,
+    ) -> Result<AppConfig, ConfigError> {
+        let mut candidate = self.config.ssh.clone();
+        if let Some(obj) = updates.as_object() {
+            for (k, v) in obj {
+                match k.as_str() {
+                    "profiles" => {
+                        candidate.profiles = serde_json::from_value(v.clone()).map_err(|e| {
+                            ConfigError::validation(format!(
+                                "ssh.profiles must be an array of SSH profiles: {e}"
+                            ))
+                        })?;
+                    }
+                    "lastConnection" => {
+                        candidate.last_connection = if v.is_null() {
+                            None
+                        } else {
+                            Some(serde_json::from_value(v.clone()).map_err(|e| {
+                                ConfigError::validation(format!(
+                                    "ssh.lastConnection must be an SSH connection object: {e}"
+                                ))
+                            })?)
+                        };
+                    }
+                    "autoReconnect" => {
+                        if let Some(b) = v.as_bool() {
+                            candidate.auto_reconnect = b;
+                        }
+                    }
+                    other => tracing::warn!(key = %other, "unknown ssh update key ignored"),
+                }
+            }
+        }
+        validate_ssh_config(&candidate)?;
+
+        let mut next = self.config.clone();
+        next.ssh = candidate;
+        self.commit_next_config(next).await
+    }
+
+    pub async fn save_ssh_last_connection(
+        &mut self,
+        last_connection: SshLastConnection,
+    ) -> Result<AppConfig, ConfigError> {
+        let mut next = self.config.clone();
+        next.ssh.last_connection = Some(last_connection);
+        validate_ssh_config(&next.ssh)?;
+        self.commit_next_config(next).await
+    }
+
+    pub fn get_ssh_last_connection(&self) -> Option<SshLastConnection> {
+        self.config.ssh.last_connection.clone()
+    }
+
+    pub fn get_ssh_config(&self) -> SshConfig {
+        self.config.ssh.clone()
     }
 
     // =========================================================================

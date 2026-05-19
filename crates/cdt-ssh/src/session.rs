@@ -34,6 +34,7 @@ use tokio::time::timeout;
 use crate::auth::{Platform, build_candidates};
 use crate::error::{AuthAttempt, AuthOutcome, AuthSource, SshError, TimeoutStage};
 use crate::host_resolver::resolve_host_via_ssh_g;
+use crate::provider::SshFileSystemProvider;
 use crate::request::SshConnectRequest;
 
 /// `connect()` 各阶段超时（design.md D1 + spec `Requirement: Establish`）。
@@ -83,6 +84,20 @@ pub struct ContextChanged {
 pub enum ContextKind {
     Local,
     Ssh,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshContextState {
+    pub context_id: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    pub remote_home: PathBuf,
+    pub status: SshStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auth_chain: Vec<AuthAttempt>,
 }
 
 /// 单个 SSH 连接持有的资源（真 russh handle + sftp 句柄 + 远端 home 探测结果）。
@@ -184,6 +199,49 @@ impl SshSessionManager {
     /// 列出所有已注册 SSH context id。
     pub async fn registered_context_ids(&self) -> Vec<String> {
         self.sessions.lock().await.keys().cloned().collect()
+    }
+
+    pub async fn context_states(&self) -> Vec<SshContextState> {
+        self.sessions
+            .lock()
+            .await
+            .iter()
+            .map(|(context_id, resources)| SshContextState {
+                context_id: context_id.clone(),
+                host: resources.host.clone(),
+                port: resources.port,
+                username: resources.user.clone(),
+                remote_home: resources.remote_home.clone(),
+                status: SshStatus::Connected,
+                auth_chain: resources.auth_chain.clone(),
+            })
+            .collect()
+    }
+
+    pub async fn context_state(&self, context_id: &str) -> Option<SshContextState> {
+        self.sessions
+            .lock()
+            .await
+            .get(context_id)
+            .map(|resources| SshContextState {
+                context_id: context_id.to_owned(),
+                host: resources.host.clone(),
+                port: resources.port,
+                username: resources.user.clone(),
+                remote_home: resources.remote_home.clone(),
+                status: SshStatus::Connected,
+                auth_chain: resources.auth_chain.clone(),
+            })
+    }
+
+    pub async fn provider(&self, context_id: &str) -> Option<SshFileSystemProvider> {
+        self.sessions.lock().await.get(context_id).map(|resources| {
+            SshFileSystemProvider::new(
+                context_id.to_owned(),
+                resources.sftp.clone(),
+                resources.remote_home.clone(),
+            )
+        })
     }
 
     /// 真握手 5 阶段连接到远端 host。

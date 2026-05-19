@@ -18,7 +18,7 @@ pub struct AppConfig {
     pub general: GeneralConfig,
     pub display: DisplayConfig,
     pub sessions: SessionsConfig,
-    pub ssh: SshPersistConfig,
+    pub ssh: SshConfig,
     pub http_server: HttpServerConfig,
     #[serde(default)]
     pub updater: UpdaterConfig,
@@ -214,29 +214,52 @@ pub struct SessionsConfig {
 // SSH
 // =============================================================================
 
-/// SSH 连接配置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SshAuthMethod {
+    #[default]
+    SshConfig,
+    Password,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SshConnectionProfile {
+pub struct SshProfile {
     pub id: String,
     pub name: String,
     pub host: String,
     pub port: u16,
     pub username: String,
-    pub auth_method: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_method: SshAuthMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_key_path: Option<String>,
 }
 
-/// SSH 持久化配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SshPersistConfig {
-    pub last_connection: Option<serde_json::Value>,
-    pub auto_reconnect: bool,
-    pub profiles: Vec<SshConnectionProfile>,
-    pub last_active_context_id: String,
+pub struct SshLastConnection {
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub auth_method: SshAuthMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_connection: Option<SshLastConnection>,
+    pub auto_reconnect: bool,
+    pub profiles: Vec<SshProfile>,
+}
+
+pub type SshConnectionProfile = SshProfile;
+pub type SshPersistConfig = SshConfig;
 
 // =============================================================================
 // HTTP Server

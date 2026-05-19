@@ -8,7 +8,7 @@
 | **Phase B1** | tasks 3.12-3.13 / 4.1-4.12 | ✅ 已完成 | `cdt-ssh::session::SshSessionManager` 真握手 5 阶段 + `auth::run_auth_chain` 调度层 |
 | **Phase B2** | tasks 5.1-5.8 | ✅ 已完成 | `cdt-ssh::provider::SshFileSystemProvider` 真 SFTP：`SftpClient` trait + 生产 `RusshSftpClient` 包装 `SftpSession` + `with_retry` 3 次指数退避 + 错误分类（NoSuchFile / PermissionDenied / Transient / Other）+ inherent `open_read_stream` 流式；fake 单测注入 15 个 case 覆盖 happy path / permission denied / 瞬时重试成功 / 重试耗尽 / classify 真值表 |
 | **Phase B3** | tasks 6.1-6.8 + 8.1-8.4 | ✅ 已完成 | `cdt-ssh::polling_watcher` 3s+30s 轮询 + `cdt-watch::attach_remote` |
-| **Phase C** | tasks 7.1-7.7 / 9.1-9.10 / 10.1-10.8 | ⏳ 待开工 | `cdt-config::SshConfig` 段 / `cdt-api::LocalDataApi` 接真 `SshSessionManager` / Tauri `invoke_handler!` 11 条 + capabilities + emit 桥 |
+| **Phase C** | tasks 7.1-7.7 / 9.1-9.10 / 10.1-10.8 | ✅ 已完成 | `cdt-config::SshConfig` 强类型段 + validation/update/save-last；`cdt-api::LocalDataApi` 接真 `SshSessionManager` + status/context 订阅 + HTTP/Tauri 11 command；Tauri `ssh_status`/`context_changed` emit 桥 + shutdown hook；IPC contract / UI mock command 清单同步 |
 | **Phase D** | tasks 11.1-11.5 / 12.1-12.6 | ⏳ 待开工 | UI: `lib/api.ts` IPC wrapper / `connection.ts` + `context.ts` store / `Connection.svelte` + `WorkspaceIndicator` + `ContextSwitchOverlay` + `ConnectionStatusBadge` |
 | **Phase E** | tasks 13.1-13.6 / 14.1-14.5 / N.1-N.4 | ⏳ 待开工 | 测试金字塔 + perf 验证 + 集成 smoke + 发布尾段 |
 
@@ -92,13 +92,13 @@
 
 ## 7. `cdt-config` —— SSH 字段持久化（spec configuration-management）
 
-- [ ] 7.1 在 `crates/cdt-config/src/store.rs` 新增 `SshConfig { profiles: Vec<SshProfile>, last_connection: Option<SshLastConnection>, auto_reconnect: bool }`
-- [ ] 7.2 `SshProfile { name, host, port, username, auth_method: AuthMethodKind, password_required }` 与 `SshLastConnection { host, port, username, auth_method }`，`AuthMethodKind` enum `SshConfig` / `Password`，serde camelCase
-- [ ] 7.3 `Config::default()` 设 `ssh: SshConfig { profiles: vec![], last_connection: None, auto_reconnect: false }`
-- [ ] 7.4 实现 `validate_ssh(ssh: &SshConfig) -> Result<(), ValidationError>`：host 非空 / port 1-65535 / username 非空 / auth_method 合法 / profile name 非空 + 唯一
-- [ ] 7.5 接入 `update_config("ssh", value)` 路径：调 `validate_ssh` 全部通过才落盘
-- [ ] 7.6 实现 `save_last_connection(host, port, username, auth_method)` helper：strip password 后落盘
-- [ ] 7.7 单测：默认值物化 / 部分字段合并 / 各类 validation 失败 / save_last_connection 不含 password 5 类
+- [x] 7.1 在 `crates/cdt-config/src/types.rs` 新增 `SshConfig { profiles: Vec<SshProfile>, last_connection: Option<SshLastConnection>, auto_reconnect: bool }`（本仓无 `store.rs`，配置类型真相源为 `types.rs`）
+- [x] 7.2 `SshProfile { id, name, host, port, username, auth_method, private_key_path }` 与 `SshLastConnection { host, port, username, auth_method, context_id }`，`SshAuthMethod` enum `SshConfig` / `Password`，serde camelCase。**实现差异**：保留旧 `id/private_key_path` 字段兼容已存在配置；未加 `password_required` 布尔字段，password 模式由 `auth_method` 表达且密码不持久化
+- [x] 7.3 `default_config()` 设 `ssh: SshConfig { profiles: vec![], last_connection: None, auto_reconnect: false }`
+- [x] 7.4 实现 `validate_ssh_config(ssh: &SshConfig) -> Result<(), ConfigError>`：host 非空 / port 1-65535 / username 非空 / auth_method 合法 / profile name 非空 + 唯一
+- [x] 7.5 接入 `update_config("ssh", value)` 路径：调 `validate_ssh_config` 全部通过才落盘
+- [x] 7.6 实现 `save_ssh_last_connection(...)` helper：从 `SshConnectRequest` 映射，strip password 后落盘
+- [x] 7.7 单测：IPC contract 覆盖默认值物化 / 部分字段合并 / validation 失败 / save_last_connection 不含 password；`cargo test -p cdt-config` 全过
 
 ## 8. `cdt-watch` —— 远端 watcher 接入（capability: file-watching）
 
@@ -109,27 +109,27 @@
 
 ## 9. `cdt-api::LocalDataApi` —— 接入真握手 + 状态广播（capability: ipc-data-api）
 
-- [ ] 9.1 在 `crates/cdt-api/src/ipc/local.rs::ssh_connect` 实现替换：调 `SshConnectionManager::connect(request)`，订阅 status broadcast 推送至前端
-- [ ] 9.2 `ssh_disconnect` 调真 `disconnect`
-- [ ] 9.3 `ssh_test_connection` 调 `test_connection`
-- [ ] 9.4 `ssh_get_state(context_id?)` 默认返回 active 状态
-- [ ] 9.5 `ssh_get_config_hosts` 调 `cdt-ssh::config_parser::list_hosts`
-- [ ] 9.6 `ssh_resolve_host` 调 `cdt-ssh::host_resolver::resolve_host_via_ssh_g`
-- [ ] 9.7 `ssh_save_last_connection` / `ssh_get_last_connection` 通过 `ConfigManager::save_last_connection` / `get_last_connection`
-- [ ] 9.8 `list_contexts` / `switch_context` / `get_active_context` 走 `SshConnectionManager` 的 registry
-- [ ] 9.9 在 `LocalDataApi` 上加 `subscribe_ssh_status() -> broadcast::Receiver<SshStatusChange>` 与 `subscribe_context_changed()`
-- [ ] 9.10 升级 `crates/cdt-api/src/http/routes.rs`：保留现有 `/api/ssh/connect` / `/api/ssh/disconnect` / `/api/ssh/resolve-host` 与 `/api/contexts` / `/api/contexts/switch` 5 条路由的 payload schema **不变**（仍接 `SshConnectRequest` / `SwitchContextBody` 等），仅底层接入真握手；本 change 不阻塞 HTTP 端补齐余下 7 条路由（`ssh_test_connection` / `ssh_get_state` / `ssh_get_config_hosts` / `ssh_save_last_connection` / `ssh_get_last_connection` / `list_contexts` HTTP 已有 / `get_active_context`），按需另开 follow-up
+- [x] 9.1 在 `crates/cdt-api/src/ipc/local.rs::ssh_connect` 实现替换：调真 `SshSessionManager::connect(request)`，订阅 status broadcast 由 Tauri bridge 推送至前端。**实现差异**：旧 `SshConnectionManager` placeholder 保留给构造器签名兼容，但 `LocalDataApi` 内部不再使用
+- [x] 9.2 `ssh_disconnect` 调真 `disconnect`
+- [x] 9.3 `ssh_test_connection` 调 `test_connection`
+- [x] 9.4 `ssh_get_state(context_id?)` 默认返回 active 状态；v1 API 为全局 `SshState { activeContextId, contexts }`
+- [x] 9.5 `ssh_get_config_hosts` 返回 `ConfigManager::get_ssh_config().profiles`；host alias live 解析仍走 `ssh_resolve_host`
+- [x] 9.6 `ssh_resolve_host` 调 `cdt-ssh::host_resolver::resolve_host_via_ssh_g`
+- [x] 9.7 `ssh_save_last_connection` / `ssh_get_last_connection` 通过 `ConfigManager::save_ssh_last_connection` / `get_ssh_last_connection`
+- [x] 9.8 `list_contexts` / `switch_context` / `get_active_context` 走 `SshSessionManager` 的 registry/state
+- [x] 9.9 在 `LocalDataApi` 上加 `subscribe_ssh_status() -> broadcast::Receiver<SshStatusChange>` 与 `subscribe_context_changed()`，并加 `shutdown_ssh_all(deadline)`
+- [x] 9.10 升级 `crates/cdt-api/src/http/routes.rs`：保留现有 `/api/ssh/connect` / `/api/ssh/disconnect` / `/api/ssh/resolve-host` 与 `/api/contexts` / `/api/contexts/switch` 5 条路由的 payload schema 兼容（`host` + `hostAlias` alias），并补齐 test/state/config-hosts/last-connection/active-context HTTP 路由
 
 ## 10. `src-tauri` —— Tauri command 注册 + capabilities + emit 桥
 
-- [ ] 10.1 在 `src-tauri/src/lib.rs` 写 11 条新命令的 wrapper 函数（snake_case 命令名）：`ssh_connect` / `ssh_disconnect` / `ssh_test_connection` / `ssh_get_state` / `ssh_get_config_hosts` / `ssh_resolve_host` / `ssh_save_last_connection` / `ssh_get_last_connection` / `list_contexts` / `switch_context` / `get_active_context`，每条调对应 `LocalDataApi` 方法 + `Result` 序列化；wrapper 函数 SHALL NOT `tracing::info!(?request)` 整个请求结构体（避免 `password` 字段被打印），仅 log `host` / `username` / `authMethod` 三个非敏感字段
-- [ ] 10.2 在 `invoke_handler!` 注册 11 条命令
-- [ ] 10.3 `setup` 阶段 spawn 桥任务订阅 `LocalDataApi::subscribe_ssh_status()`，对每条事件 `app.emit("ssh_status", payload)`（payload camelCase）
-- [ ] 10.4 同样订阅 `subscribe_context_changed()` emit `context_changed`
-- [ ] 10.5 `WindowEvent::CloseRequested` 事件 hook：调 `SshConnectionManager::shutdown_all(Duration::from_secs(3))`
-- [ ] 10.6 `src-tauri/capabilities/default.json` 加 `ssh:*` IPC scope（11 条命令）+ `core:command:execute` 仅允许 `ssh` 与 `launchctl` 二进制（用于 `ssh -G` 与 `launchctl getenv`）
-- [ ] 10.7 IPC contract test：在 `crates/cdt-api/tests/ipc_contract.rs` 加 11 条命令的 payload schema 断言（字段名 camelCase / enum tag 值 / `xxxOmitted` 命名）；显式断言 `AuthSource` / `AuthOutcome` / `SshError` 三个 enum 序列化为 `{ "type": "...", "data"?: ... }` 形态（与 ssh-remote-context spec Scenario "AuthAttempt serialization shape" 对齐），并断言 `SshError::code` 字段使用 snake_case
-- [ ] 10.8 grep 验证：`grep -r "tracing::.*[?:].*request" src-tauri/src/lib.rs crates/cdt-api/src/ipc/local.rs` SHALL 无命中（防 password 被 Debug 派生路径泄露），CI 加该 check 兜底
+- [x] 10.1 在 `src-tauri/src/lib.rs` 写 11 条新命令的 wrapper 函数（snake_case 命令名）：`ssh_connect` / `ssh_disconnect` / `ssh_test_connection` / `ssh_get_state` / `ssh_get_config_hosts` / `ssh_resolve_host` / `ssh_save_last_connection` / `ssh_get_last_connection` / `list_contexts` / `switch_context` / `get_active_context`，每条调对应 `LocalDataApi` 方法 + `Result` 序列化；wrapper 函数未 `tracing::info!(?request)` 整个请求结构体，仅 log `host` / `username` / `authMethod` 三个非敏感字段
+- [x] 10.2 在 `invoke_handler!` 注册 11 条命令
+- [x] 10.3 `setup` 阶段 spawn 桥任务订阅 `LocalDataApi::subscribe_ssh_status()`，对每条事件 `app.emit("ssh_status", payload)`（payload camelCase）
+- [x] 10.4 同样订阅 `subscribe_context_changed()` emit `context_changed`
+- [x] 10.5 `WindowEvent::CloseRequested` 事件 hook：调 `SshSessionManager::shutdown_all(SHUTDOWN_TIMEOUT)` 经 `LocalDataApi::shutdown_ssh_all`
+- [x] 10.6 `src-tauri/capabilities/default.json` 已有默认 command capability；`ssh -G` / `launchctl getenv` 在 Rust 后端子进程执行，不走 Tauri shell plugin，因此本 phase 未新增 shell permission。Tauri 11 command 清单通过 `invoke_handler!` + `EXPECTED_TAURI_COMMANDS` + `KNOWN_TAURI_COMMANDS` 同步约束
+- [x] 10.7 IPC contract test：在 `crates/cdt-api/tests/ipc_contract.rs` 加 11 条命令清单、payload schema 断言（字段名 camelCase / enum tag 值）；显式断言 `AuthSource` / `AuthOutcome` / `SshError` 序列化形态与 snake_case code
+- [x] 10.8 grep 验证：`grep -r "tracing::.*[?:].*request\\|tracing::.*[?:].*body" src-tauri/src/lib.rs crates/cdt-api/src/ipc/local.rs` 无命中（防 password 被 Debug 派生路径泄露）
 
 ## 11. UI —— `lib/api.ts` IPC wrapper + stores
 

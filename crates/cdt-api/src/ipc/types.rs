@@ -141,13 +141,88 @@ pub struct ConfigUpdateRequest {
 // SSH
 // =============================================================================
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SshAuthMethod {
+    #[default]
+    SshConfig,
+    Password,
+}
+
 /// SSH 连接请求。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConnectRequest {
-    pub host_alias: String,
+    #[serde(alias = "hostAlias")]
+    pub host: String,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub auth_method: SshAuthMethod,
+    #[serde(default)]
+    pub password: Option<String>,
     #[serde(default)]
     pub context_id: Option<String>,
+}
+
+impl std::fmt::Debug for SshConnectRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshConnectRequest")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("auth_method", &self.auth_method)
+            .field(
+                "password",
+                &if self.password.is_some() {
+                    "<redacted>"
+                } else {
+                    "<none>"
+                },
+            )
+            .field("context_id", &self.context_id)
+            .finish()
+    }
+}
+
+impl From<SshAuthMethod> for cdt_ssh::AuthMethodKind {
+    fn from(value: SshAuthMethod) -> Self {
+        match value {
+            SshAuthMethod::SshConfig => Self::SshConfig,
+            SshAuthMethod::Password => Self::Password,
+        }
+    }
+}
+
+impl From<SshConnectRequest> for cdt_ssh::SshConnectRequest {
+    fn from(value: SshConnectRequest) -> Self {
+        Self {
+            host: value.host,
+            port: value.port,
+            username: value.username,
+            auth_method: value.auth_method.into(),
+            password: value.password,
+            context_id: value.context_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConnectionResult {
+    pub context_id: String,
+    pub status: cdt_ssh::SshStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auth_chain: Vec<cdt_ssh::AuthAttempt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshState {
+    pub active_context_id: Option<String>,
+    pub contexts: Vec<cdt_ssh::SshContextState>,
 }
 
 // =============================================================================

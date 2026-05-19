@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use cdt_api::{ConfigUpdateRequest, DataApi, LocalDataApi, PaginatedRequest, SearchRequest};
+use cdt_api::{
+    ConfigUpdateRequest, DataApi, LocalDataApi, PaginatedRequest, SearchRequest, SshConnectRequest,
+};
 use cdt_config::{ConfigManager, NotificationManager, NotificationTrigger};
 use cdt_discover::{ProjectScanner, local_handle, path_decoder};
 use cdt_ssh::SshConnectionManager;
@@ -273,6 +275,117 @@ async fn read_agent_configs(data: State<'_, AppData>) -> Result<serde_json::Valu
         .await
         .map_err(|e| e.to_string())?;
     serde_json::to_value(&configs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ssh_connect(
+    data: State<'_, AppData>,
+    request: SshConnectRequest,
+) -> Result<serde_json::Value, String> {
+    tracing::info!(
+        target: "cdt_tauri::ssh",
+        host = %request.host,
+        username = ?request.username,
+        auth_method = ?request.auth_method,
+        "ssh connect requested"
+    );
+    data.api
+        .ssh_connect(&request)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ssh_disconnect(data: State<'_, AppData>, context_id: String) -> Result<(), String> {
+    data.api
+        .ssh_disconnect(&context_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ssh_test_connection(
+    data: State<'_, AppData>,
+    request: SshConnectRequest,
+) -> Result<serde_json::Value, String> {
+    tracing::info!(
+        target: "cdt_tauri::ssh",
+        host = %request.host,
+        username = ?request.username,
+        auth_method = ?request.auth_method,
+        "ssh test connection requested"
+    );
+    data.api
+        .ssh_test_connection(&request)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ssh_get_state(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
+    data.api.ssh_get_state().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ssh_get_config_hosts(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
+    data.api
+        .ssh_get_config_hosts()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ssh_resolve_host(
+    data: State<'_, AppData>,
+    alias: String,
+) -> Result<serde_json::Value, String> {
+    data.api
+        .resolve_ssh_host(&alias)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ssh_save_last_connection(
+    data: State<'_, AppData>,
+    request: SshConnectRequest,
+) -> Result<serde_json::Value, String> {
+    data.api
+        .ssh_save_last_connection(&request)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ssh_get_last_connection(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
+    data.api
+        .ssh_get_last_connection()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_contexts(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
+    let contexts = data.api.list_contexts().await.map_err(|e| e.to_string())?;
+    serde_json::to_value(contexts).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn switch_context(data: State<'_, AppData>, context_id: String) -> Result<(), String> {
+    data.api
+        .switch_context(&context_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_active_context(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
+    let context = data
+        .api
+        .get_active_context()
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(context).map_err(|e| e.to_string())
 }
 
 // =============================================================================
@@ -672,6 +785,8 @@ pub fn run() {
         Arc::new(api_inner)
     });
 
+    let api_for_window_event = api.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -748,6 +863,34 @@ pub fn run() {
                     match file_rx.recv().await {
                         Ok(event) => {
                             let _ = app_handle_for_files.emit("file-change", &event);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+
+            let mut ssh_status_rx = api.subscribe_ssh_status();
+            let app_handle_for_ssh_status = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match ssh_status_rx.recv().await {
+                        Ok(event) => {
+                            let _ = app_handle_for_ssh_status.emit("ssh_status", &event);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+
+            let mut context_rx = api.subscribe_context_changed();
+            let app_handle_for_context = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match context_rx.recv().await {
+                        Ok(event) => {
+                            let _ = app_handle_for_context.emit("context_changed", &event);
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -844,6 +987,16 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event({
+            move |_window, event| {
+                if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                    let api = api_for_window_event.clone();
+                    tauri::async_runtime::spawn(async move {
+                        api.shutdown_ssh_all(cdt_ssh::SHUTDOWN_TIMEOUT).await;
+                    });
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             list_projects,
             list_sessions,
@@ -865,6 +1018,17 @@ pub fn run() {
             add_trigger,
             remove_trigger,
             read_agent_configs,
+            ssh_connect,
+            ssh_disconnect,
+            ssh_test_connection,
+            ssh_get_state,
+            ssh_get_config_hosts,
+            ssh_resolve_host,
+            ssh_save_last_connection,
+            ssh_get_last_connection,
+            list_contexts,
+            switch_context,
+            get_active_context,
             pin_session,
             unpin_session,
             hide_session,
