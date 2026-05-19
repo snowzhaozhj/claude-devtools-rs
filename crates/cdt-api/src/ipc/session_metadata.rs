@@ -277,6 +277,82 @@ pub(crate) async fn extract_session_metadata_with_ongoing(path: &Path) -> (Sessi
     )
 }
 
+pub(crate) fn extract_session_metadata_from_parsed(
+    messages: &[ParsedMessage],
+    is_stale: bool,
+) -> SessionMetadata {
+    let mut title: Option<String> = None;
+    let mut command_fallback: Option<String> = None;
+    let mut message_count: usize = 0;
+    let mut awaiting_ai = false;
+    let mut ongoing_sm = cdt_analyze::IsOngoingStateMachine::new();
+    let mut last_git_branch: Option<String> = None;
+
+    for (idx, msg) in messages.iter().enumerate() {
+        if let Some(branch) = &msg.git_branch {
+            if !branch.is_empty() && branch != "HEAD" {
+                last_git_branch = Some(branch.clone());
+            }
+        }
+
+        if is_user_chunk_message(msg) {
+            message_count += 1;
+            awaiting_ai = true;
+        } else if awaiting_ai
+            && msg.category == MessageCategory::Assistant
+            && msg.model.as_deref() != Some("<synthetic>")
+            && !msg.is_sidechain
+        {
+            message_count += 1;
+            awaiting_ai = false;
+        }
+
+        if idx < TITLE_MAX_LINES
+            && title.is_none()
+            && msg.category == MessageCategory::User
+            && !msg.is_meta
+        {
+            let text = extract_text(&msg.content);
+            if !text.is_empty() {
+                let trimmed = text.trim_start();
+                if is_command_output(&text) || trimmed.starts_with(REQUEST_INTERRUPTED_PREFIX) {
+                } else if is_command_content(&text) {
+                    match extract_command_parts(&text) {
+                        Some((slash_name, args)) if !args.is_empty() => {
+                            let display = format!("{slash_name} {args}");
+                            title = Some(truncate_str(&display, TITLE_MAX_CHARS));
+                        }
+                        Some((slash_name, _)) if command_fallback.is_none() => {
+                            command_fallback = Some(slash_name);
+                        }
+                        _ => {}
+                    }
+                } else if let Some(summary) = extract_teammate_summary_title(&text) {
+                    title = Some(truncate_str(&summary, TITLE_MAX_CHARS));
+                } else {
+                    let sanitized = sanitize_for_title(&text);
+                    if !sanitized.is_empty() {
+                        title = Some(truncate_str(&sanitized, TITLE_MAX_CHARS));
+                    }
+                }
+            }
+        }
+
+        ongoing_sm.feed(msg);
+    }
+
+    if title.is_none() {
+        title = command_fallback;
+    }
+
+    SessionMetadata {
+        title,
+        message_count,
+        is_ongoing: ongoing_sm.finalize() && !is_stale,
+        git_branch: last_git_branch,
+    }
+}
+
 // ============================================================================
 // metadata 缓存（详 change `multi-session-cpu-cache` design D3b/D8）
 //

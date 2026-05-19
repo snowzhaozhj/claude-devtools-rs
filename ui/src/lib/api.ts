@@ -1,4 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type {
+  ContextChanged,
+  ContextSummary,
+  ResolvedHost,
+  SshConnectionRequest,
+  SshConnectionResult,
+  SshLastConnection as IpcSshLastConnection,
+  SshState,
+  SshStatusChange,
+} from "./types/ssh";
 
 export interface ProjectInfo {
   id: string;
@@ -600,6 +611,32 @@ export interface DisplayConfig {
   timeFormat?: TimeFormat;
 }
 
+export type SshAuthMethod = "sshConfig" | "password";
+
+export interface SshProfile {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  authMethod: SshAuthMethod;
+  privateKeyPath?: string | null;
+}
+
+export interface SshLastConnection {
+  host: string;
+  port?: number | null;
+  username?: string | null;
+  authMethod: SshAuthMethod;
+  contextId?: string | null;
+}
+
+export interface SshConfig {
+  profiles: SshProfile[];
+  lastConnection?: SshLastConnection | null;
+  autoReconnect: boolean;
+}
+
 export interface UpdaterConfig {
   autoUpdateCheckEnabled: boolean;
   skippedUpdateVersion?: string | null;
@@ -620,6 +657,7 @@ export interface AppConfig {
   notifications: NotificationConfig;
   general: GeneralConfig;
   display?: DisplayConfig;
+  ssh?: SshConfig;
   updater?: UpdaterConfig;
   httpServer?: HttpServerConfig;
 }
@@ -751,6 +789,68 @@ export async function addTrigger(trigger: NewTrigger): Promise<AppConfig> {
 
 export async function removeTrigger(triggerId: string): Promise<AppConfig> {
   return await invoke("remove_trigger", { triggerId });
+}
+
+export async function sshConnect(
+  request: SshConnectionRequest,
+): Promise<SshConnectionResult> {
+  return await invoke("ssh_connect", { request });
+}
+
+export async function sshDisconnect(contextId: string): Promise<void> {
+  return await invoke("ssh_disconnect", { contextId });
+}
+
+export async function sshTestConnection(
+  request: SshConnectionRequest,
+): Promise<SshConnectionResult> {
+  return await invoke("ssh_test_connection", { request });
+}
+
+export async function sshGetState(contextId?: string): Promise<SshState> {
+  return await invoke("ssh_get_state", { contextId: contextId ?? null });
+}
+
+export async function sshGetConfigHosts(): Promise<string[]> {
+  return await invoke("ssh_get_config_hosts");
+}
+
+export async function sshResolveHost(alias: string): Promise<ResolvedHost> {
+  return await invoke("ssh_resolve_host", { alias });
+}
+
+export async function sshSaveLastConnection(
+  payload: IpcSshLastConnection,
+): Promise<IpcSshLastConnection | null> {
+  return await invoke("ssh_save_last_connection", { request: payload });
+}
+
+export async function sshGetLastConnection(): Promise<IpcSshLastConnection | null> {
+  return await invoke("ssh_get_last_connection");
+}
+
+export async function listContexts(): Promise<ContextSummary[]> {
+  return await invoke("list_contexts");
+}
+
+export async function switchContext(contextId: string): Promise<void> {
+  return await invoke("switch_context", { contextId });
+}
+
+export async function getActiveContext(): Promise<ContextSummary> {
+  return await invoke("get_active_context");
+}
+
+export async function listenSshStatus(
+  handler: (payload: SshStatusChange) => void,
+): Promise<UnlistenFn> {
+  return await listen<SshStatusChange>("ssh_status", (event) => handler(event.payload));
+}
+
+export async function listenContextChanged(
+  handler: (payload: ContextChanged) => void,
+): Promise<UnlistenFn> {
+  return await listen<ContextChanged>("context_changed", (event) => handler(event.payload));
 }
 
 // ---------------------------------------------------------------------------

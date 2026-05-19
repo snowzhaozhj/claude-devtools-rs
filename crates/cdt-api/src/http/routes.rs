@@ -91,9 +91,17 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
         )
         // SSH + context
         .route("/api/contexts", get(list_contexts))
+        .route("/api/contexts/active", get(get_active_context))
         .route("/api/contexts/switch", post(switch_context))
         .route("/api/ssh/connect", post(ssh_connect))
         .route("/api/ssh/disconnect", post(ssh_disconnect))
+        .route("/api/ssh/test-connection", post(ssh_test_connection))
+        .route("/api/ssh/state", get(ssh_get_state))
+        .route("/api/ssh/config-hosts", get(ssh_get_config_hosts))
+        .route(
+            "/api/ssh/last-connection",
+            get(ssh_get_last_connection).post(ssh_save_last_connection),
+        )
         .route("/api/ssh/resolve-host", get(resolve_ssh_host))
         // 文件 + 验证
         .route("/api/validate/path", post(validate_path))
@@ -413,6 +421,42 @@ async fn ssh_connect(
     Json(request): Json<SshConnectRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let result = s.api.ssh_connect(&request).await?;
+    Ok(Json(result))
+}
+
+async fn ssh_test_connection(
+    State(s): State<AppState>,
+    Json(request): Json<SshConnectRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let result = s.api.ssh_test_connection(&request).await?;
+    Ok(Json(result))
+}
+
+async fn ssh_get_state(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let result = s.api.ssh_get_state().await?;
+    Ok(Json(result))
+}
+
+async fn ssh_get_config_hosts(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let result = s.api.ssh_get_config_hosts().await?;
+    Ok(Json(result))
+}
+
+async fn ssh_save_last_connection(
+    State(s): State<AppState>,
+    Json(request): Json<SshConnectRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let result = s.api.ssh_save_last_connection(&request).await?;
+    Ok(Json(result))
+}
+
+async fn ssh_get_last_connection(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let result = s.api.ssh_get_last_connection().await?;
+    Ok(Json(result))
+}
+
+async fn get_active_context(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let result = s.api.get_active_context().await?;
     Ok(Json(result))
 }
 

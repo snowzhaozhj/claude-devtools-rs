@@ -18,5 +18,6 @@ pub use traits::DataApi;
 pub use types::{
     ConfigUpdateRequest, ContextInfo, MemoryFileContent, MemoryLayer, MemoryLayerKind,
     PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
-    SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
+    SearchRequest, SessionDetail, SessionSummary, SshAuthMethod, SshConnectRequest,
+    SshConnectionResult, SshState,
 };

@@ -215,7 +215,7 @@ impl NotificationManager {
 }
 
 fn default_notifications_path() -> PathBuf {
-    dirs::home_dir()
+    cdt_discover::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".claude")
         .join("claude-devtools-notifications.json")

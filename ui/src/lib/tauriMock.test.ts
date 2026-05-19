@@ -30,6 +30,13 @@ const ARGS_BY_CMD: Record<string, Record<string, unknown>> = {
   hide_session: { projectId: 'mock-rich-rust', sessionId: 'sess-rust-2' },
   unhide_session: { projectId: 'mock-rich-rust', sessionId: 'sess-rust-3' },
   get_project_session_prefs: { projectId: 'mock-rich-rust' },
+  ssh_connect: { request: { host: 'mock-prod', port: 22, username: 'alice', authMethod: 'sshConfig' } },
+  ssh_disconnect: { contextId: 'ssh-mock-prod' },
+  ssh_test_connection: { request: { host: 'mock-prod', port: 22, username: 'alice', authMethod: 'sshConfig' } },
+  ssh_get_state: { contextId: null },
+  ssh_resolve_host: { alias: 'mock-prod' },
+  ssh_save_last_connection: { request: { host: 'mock-prod', port: 22, username: 'alice', authMethod: 'sshConfig', contextId: 'ssh-mock-prod' } },
+  switch_context: { contextId: 'ssh-mock-prod' },
 }
 
 beforeEach(() => {
@@ -51,6 +58,24 @@ describe('mockIPC coverage', () => {
     },
   )
 
+  test('SSH mock command payloads match wrapper shape', async () => {
+    await expect(invoke('ssh_get_config_hosts')).resolves.toContain('mock-prod')
+    await expect(invoke('ssh_resolve_host', { alias: 'mock-prod' })).resolves.toMatchObject({
+      host: 'mock-prod',
+      port: 22,
+      degraded: true,
+    })
+
+    await invoke('ssh_save_last_connection', {
+      request: { host: 'mock-prod', port: 22, username: 'alice', authMethod: 'password', password: 'secret' },
+    })
+    await expect(invoke('ssh_get_last_connection')).resolves.toMatchObject({
+      host: 'mock-prod',
+      username: 'alice',
+      authMethod: 'password',
+    })
+  })
+
   test('未知 command 走兜底 reject 含 not implemented', async () => {
     await expect(invoke('totally_made_up_command')).rejects.toThrow('not implemented')
   })
@@ -61,12 +86,14 @@ describe('mockIPC coverage', () => {
     unlisten()
   })
 
-  test('listen() 4 个真实 event 都能挂载', async () => {
+  test('listen() 6 个真实 event 都能挂载', async () => {
     const events = [
       'notification-update',
       'notification-added',
       'file-change',
       'session-metadata-update',
+      'ssh_status',
+      'context_changed',
     ]
     for (const ev of events) {
       const u = await listen(ev, () => {})
@@ -84,6 +111,8 @@ describe('mockIPC coverage', () => {
       'notification-added',
       'file-change',
       'session-metadata-update',
+      'ssh_status',
+      'context_changed',
     ] as const)('emit("%s") → handler 收到 payload', async (eventName) => {
       const handler = vi.fn()
       const unlisten = await listen(eventName, handler)

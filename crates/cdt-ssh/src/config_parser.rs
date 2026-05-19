@@ -110,7 +110,7 @@ pub async fn parse_ssh_config_file(path: &Path) -> Vec<SshHostConfig> {
 
 /// 默认 SSH config 路径。
 pub fn default_ssh_config_path() -> std::path::PathBuf {
-    dirs::home_dir()
+    cdt_discover::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".ssh")
         .join("config")
@@ -135,7 +135,7 @@ fn expand_tilde(path: &str) -> String {
     if let Some(rest) = path.strip_prefix('~') {
         let trimmed = rest.trim_start_matches(['/', '\\']);
         if rest.is_empty() || rest.len() != trimmed.len() {
-            if let Some(home) = dirs::home_dir() {
+            if let Some(home) = cdt_discover::home_dir() {
                 return home.join(trimmed).to_string_lossy().into_owned();
             }
         }
@@ -215,7 +215,7 @@ Host *
 
     #[test]
     fn expand_tilde_supports_forward_and_backslash() {
-        let home = dirs::home_dir().expect("home dir resolvable");
+        let home = cdt_discover::home_dir().expect("home dir resolvable");
         let forward = expand_tilde("~/foo/bar");
         let back = expand_tilde(r"~\foo\bar");
         // 验证两种前缀都能展开到 home；不断言完整路径等值（rest 段分隔符会被

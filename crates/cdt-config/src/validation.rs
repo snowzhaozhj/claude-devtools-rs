@@ -3,10 +3,12 @@
 //! 对应 TS `configValidation.ts`。对 `update_config` 的 payload
 //! 做分 section 校验，拦截无效值。
 
+use std::collections::HashSet;
+
 use cdt_discover::looks_like_absolute_path;
 
 use crate::error::ConfigError;
-use crate::types::ConfigSection;
+use crate::types::{ConfigSection, SshConfig, SshLastConnection, SshProfile};
 
 /// 校验 HTTP 端口范围 1024–65535。
 pub fn validate_http_port(port: u16) -> Result<(), ConfigError> {
@@ -83,6 +85,70 @@ pub fn validate_snooze_minutes(minutes: u32) -> Result<(), ConfigError> {
         return Err(ConfigError::validation(
             "notifications.snoozeMinutes must be between 1 and 1440",
         ));
+    }
+    Ok(())
+}
+
+pub fn validate_ssh_config(config: &SshConfig) -> Result<(), ConfigError> {
+    let mut names = HashSet::new();
+    for profile in &config.profiles {
+        validate_ssh_profile(profile)?;
+        let normalized = profile.name.trim();
+        if !names.insert(normalized.to_owned()) {
+            return Err(ConfigError::validation("ssh.profiles names must be unique"));
+        }
+    }
+    if let Some(last) = &config.last_connection {
+        validate_ssh_last_connection(last)?;
+    }
+    Ok(())
+}
+
+fn validate_ssh_profile(profile: &SshProfile) -> Result<(), ConfigError> {
+    if profile.name.trim().is_empty() {
+        return Err(ConfigError::validation(
+            "ssh.profiles[].name must be non-empty",
+        ));
+    }
+    validate_host(&profile.host, "ssh.profiles[].host")?;
+    validate_port(profile.port, "ssh.profiles[].port")?;
+    validate_username(&profile.username, "ssh.profiles[].username")
+}
+
+fn validate_ssh_last_connection(last: &SshLastConnection) -> Result<(), ConfigError> {
+    validate_host(&last.host, "ssh.lastConnection.host")?;
+    if let Some(port) = last.port {
+        validate_port(port, "ssh.lastConnection.port")?;
+    }
+    if let Some(username) = &last.username {
+        validate_username(username, "ssh.lastConnection.username")?;
+    }
+    Ok(())
+}
+
+fn validate_host(host: &str, field: &str) -> Result<(), ConfigError> {
+    if host.trim().is_empty() {
+        return Err(ConfigError::validation(format!(
+            "{field} must be non-empty"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_username(username: &str, field: &str) -> Result<(), ConfigError> {
+    if username.trim().is_empty() {
+        return Err(ConfigError::validation(format!(
+            "{field} must be non-empty"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_port(port: u16, field: &str) -> Result<(), ConfigError> {
+    if port == 0 {
+        return Err(ConfigError::validation(format!(
+            "{field} must be an integer between 1 and 65535"
+        )));
     }
     Ok(())
 }
