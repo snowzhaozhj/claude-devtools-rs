@@ -16,10 +16,11 @@ producer 任务对 `RecvError::Lagged(_)` SHALL `continue` 跳过该条；对 `R
 
 producer 与 SSE handler SHALL 通过 `cdt_api::http::spawn_event_bridge` lib-level 公开函数粘合（本 Requirement 规约行为，不规约具体函数签名）。
 
-#### Scenario: SSE client receives session metadata update
+#### Scenario: Browser transport receives session metadata update
 
-- **WHEN** SSE 客户端连接 `GET /api/events`，`list_sessions` 后台元数据扫描产出一条 `SessionMetadataUpdate`
-- **THEN** 客户端 SHALL 收到一条 `session-metadata-update` 事件，携带 camelCase payload：`projectId` / `sessionId` / `title` / `messageCount` / `isOngoing` / `gitBranch`
+- **WHEN** 浏览器 runtime 通过 `GET /api/events` 订阅 SSE，`list_sessions` 后台元数据扫描产出一条 `SessionMetadataUpdate`
+- **THEN** SSE event data SHALL 携带 `session_metadata_update` type 与 snake_case 原始字段：`project_id` / `session_id` / `title` / `message_count` / `is_ongoing` / `git_branch`
+- **AND** 浏览器 transport SHALL 将其归一化为 `session-metadata-update` 事件与 camelCase payload：`projectId` / `sessionId` / `title` / `messageCount` / `isOngoing` / `gitBranch`
 - **AND** 浏览器 runtime 的 Sidebar SHALL 能用该事件 in-place patch 对应 session summary
 
 ## ADDED Requirements
