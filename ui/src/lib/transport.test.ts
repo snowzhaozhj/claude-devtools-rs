@@ -292,6 +292,82 @@ describe('BrowserTransport', () => {
     vi.useRealTimers()
   })
 
+  test('连续 CLOSED 错误触发指数回退（1s → 2s → 4s → ...）', async () => {
+    vi.useFakeTimers()
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+
+    const unsubscribe = await subscribeEvent('file-change', vi.fn())
+    expect(instances).toHaveLength(1)
+
+    // 第 1 次 CLOSED：1s 后重建
+    instances[0].triggerClosedError()
+    await vi.advanceTimersByTimeAsync(999)
+    expect(instances).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(instances).toHaveLength(2)
+
+    // 第 2 次 CLOSED：2s 后重建（指数 = 2^1 * 1000）
+    instances[1].triggerClosedError()
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(instances).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(instances).toHaveLength(3)
+
+    // 第 3 次 CLOSED：4s 后重建
+    instances[2].triggerClosedError()
+    await vi.advanceTimersByTimeAsync(3999)
+    expect(instances).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(instances).toHaveLength(4)
+
+    unsubscribe()
+    vi.useRealTimers()
+  })
+
+  test('onopen 重置指数回退步数', async () => {
+    vi.useFakeTimers()
+    const instances: (FakeEventSource & { triggerOpen: () => void })[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      onopen: (() => void) | null = null
+      constructor(url: string) {
+        super(url)
+        instances.push(this as FakeEventSource & { triggerOpen: () => void })
+      }
+      triggerOpen() {
+        this.readyState = FakeEventSource.OPEN
+        this.onopen?.()
+      }
+    })
+
+    const unsubscribe = await subscribeEvent('file-change', vi.fn())
+
+    // 触发两次连续 CLOSED 把 attempt 推到 2（下一次会用 4s 退避）
+    instances[0].triggerClosedError()
+    await vi.advanceTimersByTimeAsync(1000)
+    instances[1].triggerClosedError()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(instances).toHaveLength(3)
+
+    // 第 3 条 source 成功打开 → 重置 attempt
+    instances[2].triggerOpen()
+
+    // 之后再 CLOSED 应该回到首次 1s（不是 8s）
+    instances[2].triggerClosedError()
+    await vi.advanceTimersByTimeAsync(999)
+    expect(instances).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(instances).toHaveLength(4)
+
+    unsubscribe()
+    vi.useRealTimers()
+  })
+
   test('handlers 全空时 CLOSED 不触发重建', async () => {
     vi.useFakeTimers()
     const instances: FakeEventSource[] = []

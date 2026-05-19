@@ -47,9 +47,11 @@ class TauriTransport implements Transport {
   }
 }
 
-/** EventSource CLOSED 后延迟重建的退避（ms）。避免 server toggle off → on
- * 之间立即 burst 重连风暴。 */
-const SSE_RECONNECT_BACKOFF_MS = 1000;
+/** EventSource CLOSED 后延迟重建的退避边界（ms）：min 是首次重建延迟，
+ * max 是指数回退上限。避免 server 长期不可用时手动重建陷入"重建 → onerror
+ * → 重建"无限风暴（codex 二审 Q3）。 */
+const SSE_RECONNECT_MIN_MS = 1000;
+const SSE_RECONNECT_MAX_MS = 30_000;
 
 class BrowserTransport implements Transport {
   // 单例 EventSource + handler 集合：UI 里 5+ 个 `subscribeEvent` 调用点
@@ -60,6 +62,8 @@ class BrowserTransport implements Transport {
   // fan-out 到所有 handler。
   private source: EventSource | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 当前指数回退步数，0=首次（min），onopen 时重置（参见 ensureSource）。 */
+  private reconnectAttempt = 0;
   private readonly handlers = new Set<EventHandler>();
 
   async invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
@@ -85,6 +89,12 @@ class BrowserTransport implements Transport {
     if (this.source && this.source.readyState !== EventSource.CLOSED) return;
     this.source = null;
     const source = new EventSource(`${getServerBaseUrl()}/api/events`);
+    // 连接成功打开 → 重置指数回退步数，让后续真发生 CLOSED 时从首次延迟
+    // 起算（避免长期连接稳定运行多年后偶发一次 CLOSED 还按"故障风暴"上限
+    // 延迟）。
+    source.onopen = () => {
+      this.reconnectAttempt = 0;
+    };
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data) as { type?: string } & Record<string, unknown>;
       const eventName = mapPushEventName(payload.type);
@@ -111,10 +121,18 @@ class BrowserTransport implements Transport {
     if (this.source !== failed) return;
     this.source = null;
     if (this.reconnectTimer || this.handlers.size === 0) return;
+    // 指数回退：1s → 2s → 4s → ... → 30s 上限。server 持续不可用时（用户
+    // toggle off 后不再 toggle on / server 进程崩溃未拉起），手动重建仍会
+    // 立即 onerror → 再次 scheduleReconnect，没有上限就是每秒 burst 重连。
+    const backoff = Math.min(
+      SSE_RECONNECT_MIN_MS * 2 ** this.reconnectAttempt,
+      SSE_RECONNECT_MAX_MS,
+    );
+    this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.handlers.size > 0) this.ensureSource();
-    }, SSE_RECONNECT_BACKOFF_MS);
+    }, backoff);
   }
 
   private closeSource(): void {
@@ -122,6 +140,9 @@ class BrowserTransport implements Transport {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    // 清空 attempt——下次 subscribe-重连场景应从首次延迟起算，避免上一轮
+    // 残留的回退步数惩罚新会话。
+    this.reconnectAttempt = 0;
     if (!this.source) return;
     this.source.close();
     this.source = null;
