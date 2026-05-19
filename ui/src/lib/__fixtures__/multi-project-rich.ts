@@ -586,6 +586,10 @@ export const multiProjectRichFixture: Fixture = {
       fontMono: null,
       timeFormat: '24h',
     },
+    httpServer: {
+      enabled: false,
+      port: 3456,
+    },
   },
   notifications: {
     notifications: [

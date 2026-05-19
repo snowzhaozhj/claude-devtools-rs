@@ -19,6 +19,7 @@ pub struct AppConfig {
     pub display: DisplayConfig,
     pub sessions: SessionsConfig,
     pub ssh: SshPersistConfig,
+    #[serde(default)]
     pub http_server: HttpServerConfig,
     #[serde(default)]
     pub updater: UpdaterConfig,
@@ -243,11 +244,35 @@ pub struct SshPersistConfig {
 // =============================================================================
 
 /// HTTP 服务器配置。
+///
+/// 老配置文件可能缺整个 `httpServer` 节点或只缺其中一个字段——所有缺失字段
+/// 都通过 `#[serde(default = "<fn>")]` 物化为 `enabled=false / port=3456`。
+/// 详见 `openspec/specs/configuration-management/spec.md` §"HTTP server enabled
+/// / port SHALL be persisted in lockstep with lifecycle"。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpServerConfig {
+    #[serde(default = "default_http_server_enabled")]
     pub enabled: bool,
+    #[serde(default = "default_http_server_port")]
     pub port: u16,
+}
+
+impl Default for HttpServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_http_server_enabled(),
+            port: default_http_server_port(),
+        }
+    }
+}
+
+fn default_http_server_enabled() -> bool {
+    false
+}
+
+fn default_http_server_port() -> u16 {
+    3456
 }
 
 // =============================================================================

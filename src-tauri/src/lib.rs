@@ -1,3 +1,5 @@
+mod server_mode;
+
 use std::sync::Arc;
 
 use cdt_api::{ConfigUpdateRequest, DataApi, LocalDataApi, PaginatedRequest, SearchRequest};
@@ -6,12 +8,14 @@ use cdt_discover::{ProjectScanner, local_handle, path_decoder};
 use cdt_ssh::SshConnectionManager;
 use cdt_watch::FileWatcher;
 use tauri::{
-    Emitter, Manager, State,
+    Emitter, Manager, RunEvent, State,
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
+
+use server_mode::{ServerState, ServerStatus};
 
 struct AppData {
     api: Arc<LocalDataApi>,
@@ -388,6 +392,28 @@ async fn list_wsl_distros(data: State<'_, AppData>) -> Result<serde_json::Value,
 }
 
 // =============================================================================
+// Server-mode 控制（详 openspec/specs/server-mode/spec.md）
+// =============================================================================
+
+#[tauri::command]
+async fn http_server_start(
+    state: State<'_, Arc<ServerState>>,
+    port: u16,
+) -> Result<(), String> {
+    state.start(port).await
+}
+
+#[tauri::command]
+async fn http_server_stop(state: State<'_, Arc<ServerState>>) -> Result<(), String> {
+    state.stop().await
+}
+
+#[tauri::command]
+async fn http_server_status(state: State<'_, Arc<ServerState>>) -> Result<ServerStatus, String> {
+    Ok(state.status().await)
+}
+
+// =============================================================================
 // Auto Updater
 // =============================================================================
 
@@ -679,7 +705,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppData { api: api.clone() })
-        .setup(move |app| {
+        .setup({
+            let api = api.clone();
+            move |app| {
             #[cfg(debug_assertions)]
             {
                 app.handle().plugin(
@@ -842,7 +870,29 @@ pub fn run() {
                 }
             });
 
+            // server-mode：构建 ServerState + 自动恢复（详
+            // openspec/specs/server-mode/spec.md::Tauri 桌面应用启动时 SHALL
+            // 按持久化配置自动恢复 server）。
+            //
+            // static_dir 解析：dev mode 走 Vite proxy 不需要静态 serve，传 None；
+            // release 走 resource_dir 下的前端 bundle 子路径——实测后填正确子路径
+            // （已记 design.md Open Question；当前 release 默认尝试 resource_dir
+            // 本身，子路径回填见 task 6.3）。
+            let static_dir = resolve_static_dir(app.handle());
+            let server_state = Arc::new(ServerState::new(
+                api.clone(),
+                static_dir,
+                app.handle().clone(),
+            ));
+            app.manage(server_state.clone());
+
+            let server_state_for_restore = server_state.clone();
+            tauri::async_runtime::spawn(async move {
+                server_state_for_restore.restore_if_enabled().await;
+            });
+
             Ok(())
+        }
         })
         .invoke_handler(tauri::generate_handler![
             list_projects,
@@ -875,7 +925,47 @@ pub fn run() {
             list_repository_groups,
             get_worktree_sessions,
             list_wsl_distros,
+            http_server_start,
+            http_server_stop,
+            http_server_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app_handle, event| {
+            if let RunEvent::Exit = event {
+                // 应用退出：abort 已运行的 HTTP server task 让 TCP listener
+                // 立即释放（详 openspec/specs/server-mode/spec.md::Scenario
+                // "应用退出时关闭 server"）。
+                if let Some(state) = app_handle.try_state::<Arc<ServerState>>() {
+                    let state = state.inner().clone();
+                    tauri::async_runtime::block_on(async move {
+                        let _ = state.stop().await;
+                    });
+                }
+            }
+        });
+}
+
+/// release 模式下解析前端 bundle 静态文件目录。dev 模式（`cfg!(debug_assertions)`）
+/// 返回 `None`——Vite 端口由 `beforeDevCommand` 启动，server-mode 启用时浏览器
+/// 访问 server port 仅能拿到 `/api/*`，UI bundle 走 dev server。
+///
+/// release 默认从 `resource_dir()` 取——`tauri.conf.json::build.frontendDist =
+/// "../ui/dist"` 在 release 打包时被 tauri-build 拷贝到 resource_dir 根。各平台
+/// 实测子路径见 task 6.3，必要时改成 `resource_dir().join("<subpath>")`。
+fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    if cfg!(debug_assertions) {
+        return None;
+    }
+    match app.path().resource_dir() {
+        Ok(dir) => Some(dir),
+        Err(e) => {
+            tracing::warn!(
+                target: "cdt_tauri::server_mode",
+                error = %e,
+                "failed to resolve resource_dir for static serve"
+            );
+            None
+        }
+    }
 }
