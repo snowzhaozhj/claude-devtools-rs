@@ -342,6 +342,7 @@ pub struct LocalDataApi {
     watcher_tasks: Mutex<Vec<JoinHandle<()>>>,
     remote_watchers: Mutex<HashMap<String, RemoteWatcherHandle>>,
     ssh_watcher_ops: Mutex<()>,
+    ssh_shutdown_generation: AtomicU64,
     /// `list_sessions` 后台元数据扫描的广播发送端。`subscribe_session_metadata()`
     /// 返回 receiver，Tauri host 桥接为前端 `session-metadata-update` 事件。
     session_metadata_tx: broadcast::Sender<SessionMetadataUpdate>,
@@ -438,6 +439,7 @@ impl LocalDataApi {
             watcher_tasks: Mutex::new(Vec::new()),
             remote_watchers: Mutex::new(HashMap::new()),
             ssh_watcher_ops: Mutex::new(()),
+            ssh_shutdown_generation: AtomicU64::new(0),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
@@ -519,6 +521,7 @@ impl LocalDataApi {
             watcher_tasks,
             remote_watchers: Mutex::new(HashMap::new()),
             ssh_watcher_ops: Mutex::new(()),
+            ssh_shutdown_generation: AtomicU64::new(0),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
@@ -585,6 +588,7 @@ impl LocalDataApi {
     }
 
     pub async fn shutdown_ssh_all(&self, deadline: std::time::Duration) {
+        self.ssh_shutdown_generation.fetch_add(1, Ordering::SeqCst);
         let Ok(_ops) = self.ssh_watcher_ops.try_lock() else {
             self.ssh_mgr.shutdown_all(deadline).await;
             return;
@@ -1886,6 +1890,7 @@ impl DataApi for LocalDataApi {
     ) -> Result<serde_json::Value, ApiError> {
         let context_id = {
             let _ops = self.ssh_watcher_ops.lock().await;
+            let shutdown_generation = self.ssh_shutdown_generation.load(Ordering::SeqCst);
             let target_context_id = request
                 .context_id
                 .clone()
@@ -1901,8 +1906,13 @@ impl DataApi for LocalDataApi {
                 .connect(request.clone().into())
                 .await
                 .map_err(|e| ApiError::internal(format!("{e}")))?;
-            self.attach_remote_watcher(&context_id).await;
-            context_id
+            if self.ssh_shutdown_generation.load(Ordering::SeqCst) == shutdown_generation {
+                self.attach_remote_watcher(&context_id).await;
+                context_id
+            } else {
+                let _ = self.ssh_mgr.disconnect(&context_id).await;
+                return Err(ApiError::internal("SSH shutdown in progress"));
+            }
         };
         let auth_chain = self
             .ssh_mgr
