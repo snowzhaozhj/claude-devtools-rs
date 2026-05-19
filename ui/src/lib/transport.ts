@@ -37,6 +37,8 @@ class TauriTransport implements Transport {
       listen("notification-update", (event) => handler("notification-update", event.payload)),
       listen("notification-added", (event) => handler("notification-added", event.payload)),
       listen("session-metadata-update", (event) => handler("session-metadata-update", event.payload)),
+      listen("ssh_status", (event) => handler("ssh_status", event.payload)),
+      listen("context_changed", (event) => handler("context_changed", event.payload)),
       listen("updater://available", (event) => handler("updater://available", event.payload)),
     ]);
     return () => {
@@ -152,6 +154,28 @@ function httpRequestForCommand(cmd: string, args: InvokeArgs): HttpRequest {
       return { method: "POST", path: "/api/notifications/triggers", body: a.trigger };
     case "remove_trigger":
       return { method: "DELETE", path: `/api/notifications/triggers/${enc(a.triggerId)}` };
+    case "ssh_connect":
+      return { method: "POST", path: "/api/ssh/connect", body: a.request };
+    case "ssh_disconnect":
+      return { method: "POST", path: "/api/ssh/disconnect", body: { context_id: a.contextId } };
+    case "ssh_test_connection":
+      return { method: "POST", path: "/api/ssh/test-connection", body: a.request };
+    case "ssh_get_state":
+      return { method: "GET", path: "/api/ssh/state" };
+    case "ssh_get_config_hosts":
+      return { method: "GET", path: "/api/ssh/config-hosts" };
+    case "ssh_resolve_host":
+      return { method: "GET", path: `/api/ssh/resolve-host?alias=${enc(a.alias)}` };
+    case "ssh_save_last_connection":
+      return { method: "POST", path: "/api/ssh/last-connection", body: a.request };
+    case "ssh_get_last_connection":
+      return { method: "GET", path: "/api/ssh/last-connection" };
+    case "list_contexts":
+      return { method: "GET", path: "/api/contexts" };
+    case "switch_context":
+      return { method: "POST", path: "/api/contexts/switch", body: { context_id: a.contextId } };
+    case "get_active_context":
+      return { method: "GET", path: "/api/contexts/active" };
     case "get_project_session_prefs":
       return { method: "GET", path: `/api/projects/${enc(a.projectId)}/session-prefs` };
     case "pin_session":
@@ -215,7 +239,9 @@ function mapPushEventName(type: string | undefined): string | null {
     case "session_metadata_update":
       return "session-metadata-update";
     case "ssh_status_change":
-      return "ssh-status-change";
+      return "ssh_status";
+    case "context_changed":
+      return "context_changed";
     default:
       return null;
   }
@@ -243,6 +269,8 @@ function normalizePushPayload(type: string | undefined, payload: Record<string, 
         isOngoing: payload.is_ongoing,
         gitBranch: payload.git_branch,
       };
+    case "context_changed":
+      return { activeContext: payload.active_context };
     default:
       return payload;
   }

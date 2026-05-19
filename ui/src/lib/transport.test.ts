@@ -68,11 +68,39 @@ describe('BrowserTransport', () => {
     })
   })
 
-  test('Tauri runtime 订阅 session-metadata-update', async () => {
+  test('浏览器 runtime 下 SSH/context command 映射到 HTTP 路由', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ success: true }), { status: 200 }),
+    )
+
+    await getTransport().invoke('switch_context', { contextId: 'ctx-1' })
+    await getTransport().invoke('ssh_disconnect', { contextId: 'ctx-1' })
+    await getTransport().invoke('ssh_resolve_host', { alias: 'dev host' })
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, `${window.location.origin}/api/contexts/switch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context_id: 'ctx-1' }),
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `${window.location.origin}/api/ssh/disconnect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context_id: 'ctx-1' }),
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(3, `${window.location.origin}/api/ssh/resolve-host?alias=dev%20host`, {
+      method: 'GET',
+      headers: undefined,
+      body: undefined,
+    })
+  })
+
+  test('Tauri runtime 订阅 session-metadata-update 与 SSH/context 事件', async () => {
     ;(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {}
     await subscribeEvent('session-metadata-update', vi.fn())
 
     expect(vi.mocked(listen)).toHaveBeenCalledWith('session-metadata-update', expect.any(Function))
+    expect(vi.mocked(listen)).toHaveBeenCalledWith('ssh_status', expect.any(Function))
+    expect(vi.mocked(listen)).toHaveBeenCalledWith('context_changed', expect.any(Function))
   })
 
   test('浏览器 runtime 下桌面专属 command 抛 BrowserUnsupportedError', async () => {
@@ -139,6 +167,30 @@ describe('BrowserTransport', () => {
         isOngoing: true,
         gitBranch: 'main',
       },
+    })
+    unsubscribe()
+  })
+
+  test('SSE context_changed 事件转换为 context_changed payload', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('context_changed', handler)
+    instances[0].emit({
+      type: 'context_changed',
+      active_context: { id: 'ctx-1', name: 'Local' },
+    })
+
+    expect(handler).toHaveBeenCalledWith({
+      event: 'context_changed',
+      id: 0,
+      payload: { activeContext: { id: 'ctx-1', name: 'Local' } },
     })
     unsubscribe()
   })
