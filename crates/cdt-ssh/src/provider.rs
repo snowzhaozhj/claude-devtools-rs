@@ -143,6 +143,11 @@ impl SshFileSystemProvider {
         &self.remote_home
     }
 
+    #[must_use]
+    pub fn sftp_client(&self) -> Arc<dyn SftpClient> {
+        self.client.clone()
+    }
+
     /// 流式打开远端文件（tasks 5.6 + spec `Requirement: Read sessions...`）。
     /// 返回的 `File` 实现 `tokio::io::AsyncRead` + `AsyncSeek`——caller 可用
     /// `AsyncBufReadExt::lines()` 流式读 JSONL，不全量拉到内存。

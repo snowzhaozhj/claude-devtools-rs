@@ -93,6 +93,7 @@ export function getContextStore() {
       error = null;
       try {
         await switchContextIpc(contextId);
+        await refreshAfterContextChange({ activeContextId: contextId, kind: contextId === "local" ? "local" : "ssh" });
       } catch (e) {
         switching = false;
         switchingTo = null;

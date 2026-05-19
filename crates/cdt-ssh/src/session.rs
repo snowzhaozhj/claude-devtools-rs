@@ -429,7 +429,7 @@ impl SshSessionManager {
     ) -> Result<SshSessionResources, SshError> {
         // 阶段 0：解析 host alias（`ssh -G` 委托）
         let resolved = resolve_host_via_ssh_g(&request.host).await?;
-        let port = request.port.or(Some(resolved.port)).unwrap_or(22);
+        let port = resolved_connect_port(request.port, resolved.port);
         let username = request
             .username
             .clone()
@@ -611,6 +611,10 @@ fn whoami_fallback() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "root".into())
+}
+
+fn resolved_connect_port(request_port: Option<u16>, resolved_port: u16) -> u16 {
+    request_port.filter(|p| *p != 22).unwrap_or(resolved_port)
 }
 
 fn expand_local_ssh_path(path: &Path) -> PathBuf {
@@ -875,6 +879,13 @@ mod tests {
             .expect("ok");
         assert!(evt.active_context_id.is_none());
         assert_eq!(evt.kind, ContextKind::Local);
+    }
+
+    #[test]
+    fn default_port_does_not_override_ssh_config_port() {
+        assert_eq!(resolved_connect_port(None, 2200), 2200);
+        assert_eq!(resolved_connect_port(Some(22), 2200), 2200);
+        assert_eq!(resolved_connect_port(Some(2222), 2200), 2222);
     }
 
     #[test]

@@ -23,8 +23,9 @@ use cdt_discover::{
 };
 use cdt_parse::{ParseError, parse_entry_at, parse_file};
 use cdt_ssh::{
-    SshConnectionManager, SshFileSystemProvider, SshSessionManager, default_ssh_config_path,
-    list_hosts, parse_ssh_config_file, resolve_host_via_ssh_g,
+    RemotePollingWatcher, RemoteWatcherHandle, SshConnectionManager, SshFileSystemProvider,
+    SshSessionManager, default_ssh_config_path, list_hosts, parse_ssh_config_file,
+    resolve_host_via_ssh_g,
 };
 use cdt_watch::FileWatcher;
 
@@ -339,6 +340,7 @@ pub struct LocalDataApi {
     file_tx: Option<broadcast::Sender<cdt_core::FileChangeEvent>>,
     todo_tx: Option<broadcast::Sender<cdt_core::TodoChangeEvent>>,
     watcher_tasks: Mutex<Vec<JoinHandle<()>>>,
+    remote_watchers: Mutex<HashMap<String, RemoteWatcherHandle>>,
     /// `list_sessions` 后台元数据扫描的广播发送端。`subscribe_session_metadata()`
     /// 返回 receiver，Tauri host 桥接为前端 `session-metadata-update` 事件。
     session_metadata_tx: broadcast::Sender<SessionMetadataUpdate>,
@@ -433,6 +435,7 @@ impl LocalDataApi {
             file_tx: None,
             todo_tx: None,
             watcher_tasks: Mutex::new(Vec::new()),
+            remote_watchers: Mutex::new(HashMap::new()),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
@@ -512,6 +515,7 @@ impl LocalDataApi {
             file_tx: Some(file_tx),
             todo_tx: Some(todo_tx),
             watcher_tasks,
+            remote_watchers: Mutex::new(HashMap::new()),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
@@ -578,7 +582,50 @@ impl LocalDataApi {
     }
 
     pub async fn shutdown_ssh_all(&self, deadline: std::time::Duration) {
+        self.cancel_all_remote_watchers().await;
         self.ssh_mgr.shutdown_all(deadline).await;
+    }
+
+    async fn attach_remote_watcher(&self, context_id: &str) {
+        let Some(file_tx) = self.file_tx.as_ref() else {
+            return;
+        };
+        let Some(provider) = self.ssh_mgr.provider(context_id).await else {
+            return;
+        };
+        let watcher = RemotePollingWatcher::spawn(
+            provider.sftp_client(),
+            provider.remote_home().to_path_buf(),
+            file_tx.clone(),
+            cdt_ssh::CancelToken::new(),
+        );
+        if let Some(old) = self
+            .remote_watchers
+            .lock()
+            .await
+            .insert(context_id.to_owned(), watcher)
+        {
+            old.cancel_and_join().await;
+        }
+    }
+
+    async fn cancel_remote_watcher(&self, context_id: &str) {
+        if let Some(handle) = self.remote_watchers.lock().await.remove(context_id) {
+            handle.cancel_and_join().await;
+        }
+    }
+
+    async fn cancel_all_remote_watchers(&self) {
+        let handles = self
+            .remote_watchers
+            .lock()
+            .await
+            .drain()
+            .map(|(_, handle)| handle)
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.cancel_and_join().await;
+        }
     }
 
     async fn claude_base_path(&self) -> PathBuf {
@@ -1824,6 +1871,7 @@ impl DataApi for LocalDataApi {
             .connect(request.clone().into())
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;
+        self.attach_remote_watcher(&context_id).await;
         let auth_chain = self
             .ssh_mgr
             .context_state(&context_id)
@@ -1838,6 +1886,7 @@ impl DataApi for LocalDataApi {
     }
 
     async fn ssh_disconnect(&self, context_id: &str) -> Result<(), ApiError> {
+        self.cancel_remote_watcher(context_id).await;
         self.ssh_mgr
             .disconnect(context_id)
             .await

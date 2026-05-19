@@ -254,8 +254,10 @@ async fn run_one_pass(
             None => true,
             Some(old_fp) => old_fp.size != cur_fp.size || old_fp.mtime != cur_fp.mtime,
         };
-        if changed && let Some(event) = build_change_event(projects_root, path, false) {
-            let _ = sender.send(event);
+        if changed {
+            if let Some(event) = build_change_event(projects_root, path, false) {
+                let _ = sender.send(event);
+            }
         }
     }
     let removed: Vec<PathBuf> = baseline

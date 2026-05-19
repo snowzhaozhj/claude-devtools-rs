@@ -228,7 +228,10 @@ export function getConnectionStore() {
       } catch (e) {
         status = "error";
         error = errorText(e);
-        errorDetail = e && typeof e === "object" ? e as SshErrorDetail : { message: error };
+        const nextErrorDetail: SshErrorDetail = e && typeof e === "object" ? e as SshErrorDetail : { message: error };
+        errorDetail = authChain.length && !nextErrorDetail.attempts?.length
+          ? { ...nextErrorDetail, attempts: authChain }
+          : nextErrorDetail;
       } finally {
         actionInFlight = false;
       }

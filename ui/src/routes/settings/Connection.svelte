@@ -10,6 +10,7 @@
   import type { AuthAttempt, AuthSource, AuthOutcome } from "../../lib/types/ssh";
 
   let hostFocused = $state(false);
+  let hostCombobox: HTMLDivElement | null = $state(null);
   let profileName = $state("");
   let savingProfile = $state(false);
 
@@ -26,7 +27,19 @@
   onMount(() => {
     void connectionStore.initialize();
     void connectionStore.startListening();
-    return () => connectionStore.stopListening();
+    const onPointerDown = (event: PointerEvent) => {
+      if (!hostCombobox?.contains(event.target as Node)) hostFocused = false;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") hostFocused = false;
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      connectionStore.stopListening();
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   });
 
   function sourceLabel(source: AuthSource): string {
@@ -118,7 +131,7 @@
 
   <SettingsField label="Host" description="支持 ~/.ssh/config Host alias，也可输入 hostname" layout="stack" labelFor="ssh-host-input">
     {#snippet control()}
-      <div class="host-combobox">
+      <div class="host-combobox" bind:this={hostCombobox}>
         <input
           id="ssh-host-input"
           class="control-input control-input-mono"
