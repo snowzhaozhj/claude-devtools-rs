@@ -149,6 +149,57 @@ const systemChunk: SystemChunk = {
   metrics: emptyMetrics(),
 }
 
+const subagentTraceChunk: AIChunk = {
+  kind: 'ai',
+  chunkId: 'sub-rich-1:a1:0',
+  timestamp: ts(0.36),
+  durationMs: 1400,
+  responses: [
+    {
+      uuid: 'sub-rich-1-a1',
+      timestamp: ts(0.36),
+      content: '我检查了 fixture、类型定义和 subagent 渲染路径。',
+      toolCalls: [],
+      usage: {
+        input_tokens: 1800,
+        output_tokens: 520,
+        cache_read_input_tokens: 2600,
+        cache_creation_input_tokens: 120,
+      },
+      model: 'claude-sonnet-4-6',
+    },
+  ],
+  metrics: {
+    inputTokens: 1800,
+    outputTokens: 520,
+    cacheCreationTokens: 120,
+    cacheReadTokens: 2600,
+    toolCount: 1,
+    costUsd: null,
+  },
+  semanticSteps: [
+    { kind: 'thinking', text: 'Need compare SubagentProcess fields with mock fixture rendering requirements.', timestamp: ts(0.36) },
+    { kind: 'tool_execution', toolUseId: 'sub-rich-grep-1', toolName: 'Grep', timestamp: ts(0.37) },
+    { kind: 'text', text: 'Fixture needs a subagent_spawn semantic step plus a matching SubagentProcess.', timestamp: ts(0.38) },
+  ],
+  toolExecutions: [
+    {
+      toolUseId: 'sub-rich-grep-1',
+      toolName: 'Grep',
+      input: { pattern: 'interface SubagentProcess', path: 'ui/src/lib/api.ts' },
+      output: { kind: 'text', text: 'ui/src/lib/api.ts:217:export interface SubagentProcess' },
+      isError: false,
+      startTs: ts(0.37),
+      endTs: ts(0.38),
+      sourceAssistantUuid: 'sub-rich-1-a1',
+      outputOmitted: false,
+      outputBytes: 55,
+    },
+  ],
+  subagents: [],
+  slashCommands: [],
+}
+
 const aiChunk: AIChunk = {
   kind: 'ai',
   chunkId: 'a-active-1:0',
@@ -180,6 +231,17 @@ const aiChunk: AIChunk = {
       toolName: 'Grep',
       timestamp: ts(0.3),
     },
+    {
+      kind: 'tool_execution',
+      toolUseId: 'task-sub-rich-1',
+      toolName: 'Task',
+      timestamp: ts(0.34),
+    },
+    {
+      kind: 'subagent_spawn',
+      placeholderId: 'sub-rich-1',
+      timestamp: ts(0.35),
+    },
   ],
   toolExecutions: [
     {
@@ -194,8 +256,50 @@ const aiChunk: AIChunk = {
       outputOmitted: false,
       outputBytes: 11,
     },
+    {
+      toolUseId: 'task-sub-rich-1',
+      toolName: 'Task',
+      input: {
+        description: 'Audit IPC field mappings for fixture coverage',
+        prompt: 'Check the mock fixture fields and report what is missing.',
+        subagent_type: 'general-purpose',
+      },
+      output: { kind: 'structured', value: { session_id: 'sub-rich-1' } },
+      isError: false,
+      startTs: ts(0.34),
+      endTs: ts(0.35),
+      sourceAssistantUuid: 'a-active-1',
+      outputOmitted: false,
+    },
   ],
-  subagents: [],
+  subagents: [
+    {
+      sessionId: 'sub-rich-1',
+      rootTaskDescription: 'Audit IPC field mappings for fixture coverage',
+      spawnTs: ts(0.35),
+      endTs: ts(0.48),
+      metrics: {
+        inputTokens: 1800,
+        outputTokens: 520,
+        cacheCreationTokens: 120,
+        cacheReadTokens: 2600,
+        toolCount: 1,
+        costUsd: null,
+      },
+      team: null,
+      subagentType: 'general-purpose',
+      messages: [subagentTraceChunk],
+      mainSessionImpact: { totalTokens: 96 },
+      isOngoing: false,
+      durationMs: 7800,
+      parentTaskId: 'task-sub-rich-1',
+      description: 'Audit IPC field mappings for fixture coverage',
+      headerModel: 'sonnet4.6',
+      lastIsolatedTokens: 5040,
+      messagesOmitted: false,
+      messagesTotalCount: 1,
+    },
+  ],
   slashCommands: [
     {
       name: '/commit',
