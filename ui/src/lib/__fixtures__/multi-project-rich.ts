@@ -220,7 +220,7 @@ const aiChunk: AIChunk = {
     outputTokens: 800,
     cacheCreationTokens: 200,
     cacheReadTokens: 300,
-    toolCount: 1,
+    toolCount: 2,
     costUsd: null,
   },
   semanticSteps: [
