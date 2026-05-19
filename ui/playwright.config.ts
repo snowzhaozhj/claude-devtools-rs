@@ -20,7 +20,9 @@ export default defineConfig({
     },
   },
   use: {
-    baseURL: 'http://localhost:5173',
+    // 与 vite.config.ts::server.host='127.0.0.1' 对齐：双栈环境下浏览器/playwright
+    // 解析 localhost 可能优先 IPv6 [::1]，vite 仅 bind 127.0.0.1 时会连不上。
+    baseURL: 'http://127.0.0.1:5173',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'off',
@@ -33,7 +35,7 @@ export default defineConfig({
   ],
   webServer: {
     command: 'pnpm run dev',
-    url: 'http://localhost:5173',
+    url: 'http://127.0.0.1:5173',
     reuseExistingServer: !process.env.CI,
     stdout: 'pipe',
     stderr: 'pipe',
