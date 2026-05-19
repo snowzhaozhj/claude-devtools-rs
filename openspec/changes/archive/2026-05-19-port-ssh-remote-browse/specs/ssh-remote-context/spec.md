@@ -81,7 +81,7 @@
 
 - **WHEN** 远端 `<home>/.claude/projects` 不存在，但 `/home/<user>/.claude/projects` 或 `/Users/<user>/.claude/projects` 或 `/root/.claude/projects` 存在
 - **THEN** 系统 SHALL 按上述顺序探测候选路径并使用第一个存在的
-- **AND** 全部不存在时 SHALL 返回 `SshError::RemoteHomeMissing { tried }` 错误，但 SHALL 仍保持 SSH 连接活跃（用户可手动重新连接到正确的 host）
+- **AND** 全部不存在时 SHALL 返回 `SshError::RemoteHomeMissing { tried }` 错误，状态切到 `error`，不切换 active context，但 `ssh_get_state` SHALL 保留该 context 的错误状态与已完成的 `authChain` 诊断
 
 #### Scenario: SFTP transient errors are retried
 

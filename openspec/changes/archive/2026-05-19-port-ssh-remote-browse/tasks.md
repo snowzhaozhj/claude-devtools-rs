@@ -163,11 +163,11 @@
 - [ ] 14.2 远端拉大会话 perf：用本地 docker ssh server 模拟"远端 ~/.claude/projects 含一个 1221 msg session"，跑 `get_session_detail` 记录 wall / user / sys / RSS / user/real ratio，对照本地 baseline 60-74ms 的远端容差是否合理；不合理在 PR 描述里说明。**实现差异**：本机缺 `~/.claude/projects/-perf-fixture-project`，`perf_get_session_detail` release bench 仅完成 smoke（2 passed，内部跳过样本），远端/docker perf 留 PR manual checklist
 - [ ] 14.3 macOS Launchpad 启动场景手动验证：从 dmg 安装的 release build → Launchpad 启动 → 进 Connection tab → 连 1Password 管理的密钥 host 成功。**实现差异**：bg session 无 dmg/Launchpad/1Password GUI 环境，留 PR manual checklist
 - [ ] 14.4 Windows 兼容验证：`ssh` 二进制存在场景 + 缺失场景 各跑一遍 `ssh_resolve_host`，确认 degraded fallback 工作。**实现差异**：已跑 Windows 静态 grep + `windows-compat-reviewer` 只读审查并修复 home/canonicalize/路径名问题；真实 Windows smoke 留 PR manual checklist
-- [x] 14.5 远端 `~/.claude/projects` 不存在场景：mock 远端 home 仅有非 .claude 目录，确认返回 `RemoteHomeMissing { tried: [...] }` 错误且 SSH 仍 connected（`SshError::RemoteHomeMissing` serde 单测 + session home probe 错误路径覆盖）
+- [x] 14.5 远端 `~/.claude/projects` 不存在场景：确认返回 `RemoteHomeMissing { tried: [...] }` 错误，状态保留为可查询 `error` 且带已完成 `authChain`，不切换 active context（`SshError::RemoteHomeMissing` serde 单测 + post-auth failure authChain 单测覆盖）
 
 ## N. 发布
 
 - [x] N.1 push 分支 + 开 PR
 - [x] N.2 wait-ci 全绿
-- [ ] N.3 codex 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
+- [x] N.3 codex 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
