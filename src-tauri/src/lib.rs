@@ -1120,35 +1120,52 @@ pub fn run() {
 /// **release 模式**：从 `resource_dir()` 取——`tauri.conf.json::build.frontendDist =
 /// "../ui/dist"` 在 release 打包时被 tauri-build 拷贝到 resource_dir 根。各平台
 /// 实测子路径见 task 6.3，必要时改成 `resource_dir().join("<subpath>")`。
+/// **未来分叉风险**（codex D5）：若 tauri-action 改成嵌套子路径（如
+/// `resource_dir().join("dist")`），dev 端基于 `<repo>/ui/dist` 的硬编码会与
+/// release 分叉——届时**两个 `resolve_static_dir` 必须同时改**。另：以 resource
+/// 根作为静态根会同时暴露同目录其他打包资源，加入非前端资源时应收窄静态根。
 ///
-/// **dev 模式**（`cfg!(debug_assertions)`）：指向 repo 内 `<repo>/ui/dist` 的
-/// pnpm build 产物——让 dev 启用 server-mode 时浏览器访问命中**与 release 完全
-/// 一致的 `static_fallback` 代码路径**（path traversal 防御 / SPA fallback /
-/// mime 推断），便于端到端验证真实 server 代码。代价是 ui/dist 与 Vite hot
-/// reload 不同步——浏览器看到 pre-build 版本，桌面 webview 通过 Vite 看到 hot
-/// reload 版本。用户需手动 `pnpm --dir ui build` 刷新 dist；缺失时降级返 None +
-/// warn 引导。
-fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    if cfg!(debug_assertions) {
-        // `CARGO_MANIFEST_DIR` 在编译时固定为 src-tauri 路径——dev binary 永远
-        // 从 `cargo tauri dev` 启动，源码树必然在线，无需运行时探测。纯解析
-        // 逻辑拆到 `resolve_dev_static_dir_from` 便于单测注入 fixture root。
-        let src_tauri_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let resolved = resolve_dev_static_dir_from(&src_tauri_dir);
-        match resolved.as_ref() {
-            Some(p) => tracing::info!(
-                target: "cdt_tauri::server_mode",
-                path = %p.display(),
-                "dev mode static_dir resolved to ui/dist (pre-built); browser is out of sync with Vite hot reload"
-            ),
-            None => tracing::warn!(
-                target: "cdt_tauri::server_mode",
-                src_tauri_dir = %src_tauri_dir.display(),
-                "dev mode ui/dist missing; run `pnpm --dir ui build` to enable browser access to server mode"
-            ),
-        }
-        return resolved;
+/// **dev 模式**（`cfg!(debug_assertions)`）：指向**编译时 src-tauri manifest
+/// 目录的兄弟** `<src-tauri parent>/ui/dist`（pnpm build 产物）——让 dev 启用
+/// server-mode 时浏览器访问命中**与 release 完全一致的 `static_fallback` 代码
+/// 路径**（path traversal 防御 / SPA fallback / mime 推断），便于端到端验证
+/// 真实 server 代码。代价是 ui/dist 与 Vite hot reload 不同步——浏览器看到
+/// pre-build 版本，桌面 webview 通过 Vite 看到 hot reload 版本。用户需手动
+/// `pnpm --dir ui build` 刷新 dist；缺失时降级返 None + warn 引导。
+///
+/// **worktree 路径绑定的是编译时源树**（codex D2）：`env!("CARGO_MANIFEST_DIR")`
+/// 在编译期固定。正常 worktree 内 `cargo tauri dev` → 指向本 worktree 自己的
+/// `ui/dist`，互相隔离没问题；但若复用主 checkout 编译产物在 worktree 跑，仍
+/// serve 主 checkout 的旧 dist——排查 UI 不一致时记得 `which claude-devtools-tauri`
+/// 看 binary 来源。
+///
+/// **`#[cfg(debug_assertions)]` 属性 gate 而非 `if cfg!(...)` 运行时判断**（codex
+/// D1）：后者依赖 LLVM DCE 才能从 release `.rodata` 段剔除 `env!()` 编译期展开
+/// 的开发机绝对路径字面量（如 `/Users/<dev>/.../src-tauri`）；属性 gate 让整段
+/// 未启用分支不进 HIR/codegen，路径字面量**保证**不进入 release binary。`_app`
+/// underscore-prefix 让 dev 构建里不触发 unused warning（release 构建里读
+/// `_app.path()`）。
+#[cfg(debug_assertions)]
+fn resolve_static_dir(_app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let src_tauri_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let resolved = resolve_dev_static_dir_from(&src_tauri_dir);
+    match resolved.as_ref() {
+        Some(p) => tracing::info!(
+            target: "cdt_tauri::server_mode",
+            path = %p.display(),
+            "dev mode static_dir resolved to ui/dist (pre-built); browser is out of sync with Vite hot reload"
+        ),
+        None => tracing::warn!(
+            target: "cdt_tauri::server_mode",
+            src_tauri_dir = %src_tauri_dir.display(),
+            "dev mode ui/dist missing; run `pnpm --dir ui build` to enable browser access to server mode"
+        ),
     }
+    resolved
+}
+
+#[cfg(not(debug_assertions))]
+fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     match app.path().resource_dir() {
         Ok(dir) => Some(dir),
         Err(e) => {
@@ -1164,13 +1181,16 @@ fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 
 /// 从 src-tauri manifest dir 推 `<repo>/ui/dist`，仅当目标存在且是目录时返
 /// `Some`。pure function——不读 env / 不打 log，让单测能注入 fixture root 验证
-/// 三种形态（存在 / 不存在 / 是文件不是目录）。
+/// 三种形态（存在 / 不存在 / 是文件不是目录）。dev-only：release 构建里属性
+/// gate 完全剔除（含 env!() 字面量），不进 codegen。
+#[cfg(debug_assertions)]
 fn resolve_dev_static_dir_from(src_tauri_dir: &std::path::Path) -> Option<std::path::PathBuf> {
     let dist = src_tauri_dir.parent()?.join("ui").join("dist");
     if dist.is_dir() { Some(dist) } else { None }
 }
 
 #[cfg(test)]
+#[cfg(debug_assertions)]
 mod tests {
     use super::resolve_dev_static_dir_from;
     use std::fs;
