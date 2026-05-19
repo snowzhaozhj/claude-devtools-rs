@@ -605,11 +605,23 @@ export interface UpdaterConfig {
   skippedUpdateVersion?: string | null;
 }
 
+export interface HttpServerConfig {
+  enabled: boolean;
+  port: number;
+}
+
+export interface HttpServerStatus {
+  running: boolean;
+  port: number;
+  lastError: string | null;
+}
+
 export interface AppConfig {
   notifications: NotificationConfig;
   general: GeneralConfig;
   display?: DisplayConfig;
   updater?: UpdaterConfig;
+  httpServer?: HttpServerConfig;
 }
 
 // =============================================================================
@@ -739,4 +751,23 @@ export async function addTrigger(trigger: NewTrigger): Promise<AppConfig> {
 
 export async function removeTrigger(triggerId: string): Promise<AppConfig> {
   return await invoke("remove_trigger", { triggerId });
+}
+
+// ---------------------------------------------------------------------------
+// server-mode：本机 HTTP server 启停 / 状态查询
+//
+// 详见 openspec/specs/server-mode/spec.md。仅 Tauri runtime 调用——浏览器
+// runtime 已在 server 后面，没有控制 server 的入口（且会自杀失联）。
+// ---------------------------------------------------------------------------
+
+export async function startHttpServer(port: number): Promise<void> {
+  await invoke("http_server_start", { port });
+}
+
+export async function stopHttpServer(): Promise<void> {
+  await invoke("http_server_stop");
+}
+
+export async function getHttpServerStatus(): Promise<HttpServerStatus> {
+  return await invoke("http_server_status");
 }

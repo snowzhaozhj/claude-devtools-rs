@@ -465,6 +465,33 @@ impl ConfigManager {
         self.commit_next_config(next).await
     }
 
+    /// 仅写 `httpServer.enabled` 字段，**不**触碰 `port`。
+    ///
+    /// `server-mode` 的 `http_server_stop` IPC 用此方法把 `enabled=false`
+    /// 持久化，让下次启动时 `port` 保留上次成功值（详
+    /// `openspec/specs/configuration-management/spec.md` §"HTTP server enabled
+    /// / port SHALL be persisted in lockstep with lifecycle"）。
+    pub async fn set_http_server_enabled(
+        &mut self,
+        enabled: bool,
+    ) -> Result<AppConfig, ConfigError> {
+        let mut next = self.config.clone();
+        next.http_server.enabled = enabled;
+        self.commit_next_config(next).await
+    }
+
+    /// 仅写 `httpServer.port` 字段，先经 `validate_http_port` 校验。
+    ///
+    /// `server-mode` 的 `http_server_start` IPC 在 bind 成功后调此方法
+    /// 持久化用户选的端口（不重置 `enabled`，由调用方按需另调
+    /// `set_http_server_enabled`）。
+    pub async fn set_http_server_port(&mut self, port: u16) -> Result<AppConfig, ConfigError> {
+        validate_http_port(port)?;
+        let mut next = self.config.clone();
+        next.http_server.port = port;
+        self.commit_next_config(next).await
+    }
+
     /// 更新 `httpServer` section。
     pub async fn update_http_server(
         &mut self,
@@ -1196,6 +1223,99 @@ mod tests {
         let cfg = mgr.get_config();
         assert!(cfg.display.font_sans.is_none());
         assert!(cfg.display.font_mono.is_none());
+    }
+
+    #[tokio::test]
+    async fn http_server_start_persists_enabled_true_and_port() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path.clone()));
+        mgr.load().await.unwrap();
+
+        // server-mode 的 http_server_start IPC：成功 bind 后顺序调两个 setter
+        mgr.set_http_server_port(3500).await.unwrap();
+        mgr.set_http_server_enabled(true).await.unwrap();
+
+        // 重 load 验证持久化往返
+        let mut mgr2 = ConfigManager::new(Some(path));
+        mgr2.load().await.unwrap();
+        let cfg = mgr2.get_config();
+        assert!(cfg.http_server.enabled);
+        assert_eq!(cfg.http_server.port, 3500);
+    }
+
+    #[tokio::test]
+    async fn http_server_stop_writes_enabled_false_only_preserves_port() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path.clone()));
+        mgr.load().await.unwrap();
+
+        mgr.set_http_server_port(3500).await.unwrap();
+        mgr.set_http_server_enabled(true).await.unwrap();
+
+        mgr.set_http_server_enabled(false).await.unwrap();
+
+        let mut mgr2 = ConfigManager::new(Some(path));
+        mgr2.load().await.unwrap();
+        let cfg = mgr2.get_config();
+        assert!(!cfg.http_server.enabled, "stop SHALL 写 enabled=false");
+        assert_eq!(
+            cfg.http_server.port, 3500,
+            "stop SHALL 保留上次成功 port 不重置为默认"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_server_start_failed_validation_does_not_persist() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        // 模拟 server-mode 的 http_server_start：先校验 port，超范围直接 return Err，
+        // 不调 set_http_server_enabled / set_http_server_port → 持久化保持原值
+        let err = mgr.set_http_server_port(80).await.unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+
+        let cfg = mgr.get_config();
+        assert!(!cfg.http_server.enabled);
+        assert_eq!(cfg.http_server.port, 3456);
+    }
+
+    #[tokio::test]
+    async fn http_server_config_missing_in_old_file_uses_defaults() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 老配置：完全没 httpServer 字段
+        tokio::fs::write(
+            &path,
+            r#"{"display":{"showTimestamps":false,"compactMode":false,"syntaxHighlighting":true}}"#,
+        )
+        .await
+        .unwrap();
+
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+        let cfg = mgr.get_config();
+        assert!(!cfg.http_server.enabled, "缺字段默认 enabled=false");
+        assert_eq!(cfg.http_server.port, 3456, "缺字段默认 port=3456");
+    }
+
+    #[tokio::test]
+    async fn http_server_partial_section_missing_one_field_uses_default() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 老配置：httpServer 节点存在但只有 enabled 缺 port
+        tokio::fs::write(&path, r#"{"httpServer":{"enabled":true}}"#)
+            .await
+            .unwrap();
+
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+        let cfg = mgr.get_config();
+        assert!(cfg.http_server.enabled);
+        assert_eq!(cfg.http_server.port, 3456, "缺 port 字段用默认 3456");
     }
 
     #[tokio::test]

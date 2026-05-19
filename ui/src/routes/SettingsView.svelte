@@ -7,11 +7,16 @@
     removeTrigger,
     checkForUpdate,
     listWslDistros,
+    startHttpServer,
+    stopHttpServer,
+    getHttpServerStatus,
     type AppConfig,
     type NotificationTrigger,
     type CheckUpdateResult,
     type WslDistroCandidate,
+    type HttpServerStatus,
   } from "../lib/api";
+  import { isTauriRuntime } from "../lib/runtime";
   import { applyTheme } from "../lib/theme";
   import { applyFonts } from "../lib/fonts";
   import { setSessionClickBehavior, type SessionClickBehavior } from "../lib/tabStore.svelte";
@@ -94,12 +99,21 @@
     { id: "about", label: "关于", description: "版本与更新", icon: INFO_SVG },
   ];
 
+  // server-mode: Browser Access subsection 状态（详 openspec/specs/server-mode/spec.md）
+  const showBrowserAccess = isTauriRuntime();
+  let serverStatus: HttpServerStatus | null = $state(null);
+  let serverPending = $state(false);
+  let serverError: string | null = $state(null);
+  let copyFeedback = $state(false);
+  let portInput = $state("3456");
+
   onMount(async () => {
     try {
       config = await getConfig();
       fontSansInput = config.display?.fontSans ?? "";
       fontMonoInput = config.display?.fontMono ?? "";
       claudeRootInput = config!.general.claudeRootPath ?? "";
+      portInput = String(config.httpServer?.port ?? 3456);
     } catch (e) {
       error = String(e);
     } finally {
@@ -110,7 +124,85 @@
     } catch {
       /* mock 模式或非 Tauri 环境静默 */
     }
+    if (showBrowserAccess) {
+      try {
+        serverStatus = await getHttpServerStatus();
+        if (serverStatus.lastError) {
+          serverError = serverStatus.lastError;
+        }
+      } catch (e) {
+        // mock / 非 Tauri runtime 不报错——showBrowserAccess 已经做了 gate
+        console.warn("[server-mode] failed to fetch initial status:", e);
+      }
+    }
   });
+
+  function parseHttpServerPort(): number {
+    const port = Number.parseInt(portInput, 10);
+    if (!Number.isFinite(port) || port < 1024 || port > 65535) {
+      throw new Error("端口必须在 1024-65535 范围内");
+    }
+    return port;
+  }
+
+  /** server-mode: 端口输入 blur/change 时写入配置，确保关闭状态下也能持久化。 */
+  async function persistHttpServerPort() {
+    if (!config || serverPending || serverStatus?.running) return;
+    try {
+      const port = parseHttpServerPort();
+      config = await updateConfig("httpServer", { port });
+      serverError = null;
+      if (serverStatus && !serverStatus.running) {
+        serverStatus = { ...serverStatus, port };
+      }
+    } catch (e) {
+      serverError = String(e instanceof Error ? e.message : e);
+      portInput = String(config.httpServer?.port ?? serverStatus?.port ?? 3456);
+    }
+  }
+
+  /** server-mode: toggle 启动 / 关闭 server。 */
+  async function toggleHttpServer(targetEnabled: boolean) {
+    if (serverPending) return;
+    serverPending = true;
+    serverError = null;
+    try {
+      if (targetEnabled) {
+        const port = parseHttpServerPort();
+        await startHttpServer(port);
+      } else {
+        await stopHttpServer();
+      }
+      serverStatus = await getHttpServerStatus();
+      if (serverStatus) portInput = String(serverStatus.port);
+      config = await getConfig();
+      // 失败启动 toggle 自动回到 off 状态由 IPC 抛错路径处理
+    } catch (e) {
+      serverError = String(e instanceof Error ? e.message : e);
+      // 失败后重读状态，保证 toggle 与 server 真实状态一致
+      try {
+        serverStatus = await getHttpServerStatus();
+        if (serverStatus?.lastError) serverError = serverStatus.lastError;
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      serverPending = false;
+    }
+  }
+
+  /** server-mode: 复制 server URL 到剪贴板。 */
+  async function copyServerUrl() {
+    if (!serverStatus?.running) return;
+    const url = `http://localhost:${serverStatus.port}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      copyFeedback = true;
+      setTimeout(() => (copyFeedback = false), 1500);
+    } catch (e) {
+      console.warn("[server-mode] clipboard write failed:", e);
+    }
+  }
 
   $effect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
@@ -586,6 +678,62 @@
               </p>
             {/if}
           </SettingsGroup>
+          {#if showBrowserAccess}
+            <SettingsGroup
+              title="Browser Access"
+              description="Start an HTTP server to access the UI from a browser or embed in iframes"
+            >
+              <SettingsField label="Enable server mode" description="启用后本机浏览器可访问 http://localhost:&lt;port&gt;">
+                {#snippet control()}
+                  <SettingsToggle
+                    enabled={serverStatus?.running ?? false}
+                    disabled={serverPending}
+                    onChange={(v) => toggleHttpServer(v)}
+                    ariaLabel="Enable server mode"
+                  />
+                {/snippet}
+              </SettingsField>
+              <SettingsField label="端口" description="服务监听端口（1024-65535）" labelFor="http-server-port-input">
+                {#snippet control()}
+                  <input
+                    id="http-server-port-input"
+                    class="control-input control-input-mono"
+                    type="number"
+                    inputmode="numeric"
+                    min="1024"
+                    max="65535"
+                    bind:value={portInput}
+                    disabled={serverPending || serverStatus?.running}
+                    data-testid="browser-access-port"
+                    onchange={persistHttpServerPort}
+                    onblur={persistHttpServerPort}
+                  />
+                {/snippet}
+                {#if serverStatus?.running}
+                  <div class="field-hint" data-testid="browser-access-port-locked">关闭 server mode 后可修改端口。</div>
+                {/if}
+              </SettingsField>
+              {#if serverStatus?.running}
+                <div class="server-status-row" role="status" data-testid="browser-access-running">
+                  <span class="status-dot status-dot-on" aria-hidden="true"></span>
+                  <span>Running on <code>http://localhost:{serverStatus.port}</code></span>
+                  <button
+                    type="button"
+                    class="copy-url-btn"
+                    onclick={copyServerUrl}
+                    data-testid="browser-access-copy"
+                  >
+                    {copyFeedback ? "Copied" : "Copy URL"}
+                  </button>
+                </div>
+              {/if}
+              {#if serverError}
+                <p class="server-inline-error" role="alert" data-testid="browser-access-error">
+                  {serverError}
+                </p>
+              {/if}
+            </SettingsGroup>
+          {/if}
         {:else if activeSection === "display"}
           <SettingsGroup title="时间显示" description="影响会话详情等绝对时间戳的渲染">
             <SettingsField label="时间格式" description="切换 24 小时制 / 12 小时制（带上午/下午）">
@@ -1361,6 +1509,56 @@
     background: var(--color-bg-elevated, rgba(0, 0, 0, 0.04));
   }
   .wsl-inline-error {
+    color: var(--color-danger);
+    background: color-mix(in oklch, var(--color-danger-bright) 10%, transparent);
+  }
+
+  /* server-mode: Browser Access subsection */
+  .server-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+  }
+  .server-status-row code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-text);
+  }
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+  }
+  .status-dot-on {
+    background: var(--color-success, #10b981);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-success, #10b981) 20%, transparent);
+  }
+  .copy-url-btn {
+    margin-left: auto;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .copy-url-btn:hover {
+    border-color: var(--color-switch-on);
+  }
+  .server-inline-error {
+    margin: 8px 0 0;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
     color: var(--color-danger);
     background: color-mix(in oklch, var(--color-danger-bright) 10%, transparent);
   }

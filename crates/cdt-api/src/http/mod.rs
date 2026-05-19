@@ -35,18 +35,27 @@ pub async fn start_server(
     port: u16,
     static_dir: Option<PathBuf>,
 ) -> Result<(), ApiError> {
-    let router = build_router(state, static_dir);
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to bind to port {port}: {e}")))?;
-
     tracing::info!("HTTP server listening on {addr}");
+    serve_with_listener(state, listener, static_dir).await
+}
 
+/// 用调用方已 bind 的 `TcpListener` 启 server。
+///
+/// server-mode 在 Tauri 进程里需要先 bind 拿到具体 `io::Error`（端口冲突 vs 权限
+/// 等）再决定是否报错给前端，因此把 bind 与 serve 拆成两个 entry。
+/// 单实例 `start_server` 仍保持原签名，内部转发到本函数。
+pub async fn serve_with_listener(
+    state: AppState,
+    listener: tokio::net::TcpListener,
+    static_dir: Option<PathBuf>,
+) -> Result<(), ApiError> {
+    let router = build_router(state, static_dir);
     axum::serve(listener, router)
         .await
         .map_err(|e| ApiError::internal(format!("HTTP server error: {e}")))?;
-
     Ok(())
 }

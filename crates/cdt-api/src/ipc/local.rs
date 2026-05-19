@@ -1881,6 +1881,41 @@ impl DataApi for LocalDataApi {
 }
 
 // =============================================================================
+// Inherent helpers for server-mode（host-only / 非 trait 方法）
+// =============================================================================
+
+impl LocalDataApi {
+    /// 返回当前持久化 `HttpServerConfig`，供 server-mode 启动恢复 +
+    /// `http_server_status` IPC 读取最近一次成功 `port`。
+    pub async fn http_server_config(&self) -> Result<cdt_config::HttpServerConfig, ApiError> {
+        let mgr = self.config_mgr.lock().await;
+        Ok(mgr.get_config().http_server)
+    }
+
+    /// 把 `httpServer.enabled` 字段写盘，**不**改 `port`。server-mode 的
+    /// `http_server_stop` / `http_server_start` 成功后调此方法落盘用户意图（详
+    /// `openspec/specs/configuration-management/spec.md` §"HTTP server enabled
+    /// / port SHALL be persisted in lockstep with lifecycle"）。
+    pub async fn set_http_server_enabled(&self, enabled: bool) -> Result<(), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        mgr.set_http_server_enabled(enabled)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))?;
+        Ok(())
+    }
+
+    /// 把 `httpServer.port` 字段写盘（先经 `validate_http_port` 校验）。
+    /// server-mode 的 `http_server_start` 成功后调此方法持久化用户选的端口。
+    pub async fn set_http_server_port(&self, port: u16) -> Result<(), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        mgr.set_http_server_port(port)
+            .await
+            .map_err(|e| ApiError::validation(format!("{e}")))?;
+        Ok(())
+    }
+}
+
+// =============================================================================
 // Inherent helpers（test-only / 非 trait 方法）
 // =============================================================================
 
