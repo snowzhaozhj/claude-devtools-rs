@@ -154,8 +154,10 @@ git push origin vX.Y.Z
 
 ```bash
 gh run list --workflow=release.yml --limit 3
-gh run watch <run-id> --exit-status
+gh run watch <run-id> --exit-status --interval 30
 ```
+
+调用方式：Bash 工具 **`run_in_background: true`** + `timeout: 3600000`（1 h 上限）。release.yml 跨平台矩阵 + bundle 通常 20-30 min，远超 Bash 工具同步 10 min 上限；run_in_background 让 harness 在 `gh run watch` 退出时自动 task-notification 触发，避免 Bash timeout 误判失败。退出码：0 全绿、非 0 有 job 失败。**不要**主动 tail 输出 / ScheduleWakeup poll——bg 模式下 harness 已经在等 exit 信号，主动看是浪费 token。
 
 workflow 结构：`create-release` → `build (matrix×4)` → `publish`（verify 17 个必需 asset + un-draft）。conclusion=success 即发版完成。
 

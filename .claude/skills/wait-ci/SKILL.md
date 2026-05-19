@@ -44,26 +44,40 @@ gh pr checks "$pr" 2>&1 | head -15
 - 有 `fail` → 跳到 Step 4
 - 有 `pending` / `in_progress` / `queued` → 进入 Step 3 poll
 
-### 3. Poll 直到结束
+### 3. 起后台 watch，等 harness 自动通知（首选方式）
 
-方式：调用 ScheduleWakeup 自我定时（推荐 60-90s 间隔），每次 fire 重跑 `gh pr checks`。
+`gh pr checks` 自带 `--watch`，内部 polling 直到所有 check 收敛——**全绿 exit 0、任一 fail exit 8**。配合 Bash 工具 `run_in_background: true`，命令完成时 harness 自动 task-notification 触发主 session：
 
-**不要**在 Bash 里 `while sleep` —— 那会阻塞 session context。用 ScheduleWakeup 让 runtime 替你等。
-
-典型节奏：
-- 首轮 60s 后醒
-- 若还 pending 再等 90s
-- 最长 15 分钟（Tauri 构建 + 跨三平台矩阵，约 10-15 min）
-- 超时则打印当前状态让用户决定
-
-每次 wakeup：
 ```bash
-gh pr checks "$pr" 2>&1 | head -20
+gh pr checks "$pr" --watch --fail-fast --interval 30 2>&1 | tail -30
 ```
 
-找关键词：
-- `fail\|FAIL` → 直接到 Step 4 不再等
-- 无 `pending\|in_progress\|queued` → 全绿，到 Step 5
+调用方式：Bash 工具 `run_in_background: true` + `timeout: 900000`（15 min 上限兜底 Tauri 矩阵 + perf bench 偶发慢跑），**不要**主动 poll bg 输出、**不要** `while sleep`、**不要** ScheduleWakeup 节奏。
+
+**为什么是首选**：主 session 整个等待过程只多消耗 2 个 turn（起命令 + 处理 task-notification）。对比 ScheduleWakeup 每 270 s 重跑完整 prompt 一次（一次 CI 10-15 min = 3-5 个完整 turn 重读上下文 + 跑 `gh pr checks`），省 50-80 % token。
+
+参数说明：
+- `--watch`：流式监控直到收敛
+- `--fail-fast`：任一 fail 立刻退出，不再等其他 check 跑完
+- `--interval 30`：gh 内部 polling 间隔，默认 10 s 偏 burst；30 s 平衡延迟/请求量
+- `tail -30`：watch 输出含 ANSI 重绘，只保留末尾终态行避免 transcript 噪声
+
+收到通知后**一次性**读 output file 末尾几十行解析终态（不要重复读 inflate transcript）。退出码：
+- exit 0 → CI 全绿，跳 Step 6
+- exit 8 → 有 fail，跳 Step 4
+- 其他（gh 异常 / Bash timeout）→ 报告状态让用户决定是否 retry
+
+### 3 alt. ScheduleWakeup 回退路径
+
+仅当 Step 3 首选方式不适用时用，例如：
+- Bash run_in_background 在当前环境不可用
+- 跑的不是 CI 而是**远端长任务** harness 看不到完成信号（远端队列、外部 webhook 触发的 workflow 等）
+- 上一次 bg watch 真挂了 / 被 timeout kill，且重启 bg 不解决
+
+回退用法：270 s 兜底唤醒一次（避开 5 min 缓存 TTL 边界），fire 时复跑 `gh pr checks "$pr" 2>&1 | head -20` 看一眼。判断关键词：
+- `fail\|FAIL` → Step 4
+- 无 `pending\|in_progress\|queued` → 全绿，Step 6
+- 仍 pending → 再 ScheduleWakeup 一次（最多 3 轮，再不收敛报告用户）
 
 ### 4. 失败时拉日志 + 提炼错误行 + 自己定位 + 修
 
@@ -101,29 +115,19 @@ gh run view <run_id> --log-failed --job <job_id> 2>&1 \
 
 ## 实施细节
 
-### ScheduleWakeup 用法
-
-```
-ScheduleWakeup({
-  delaySeconds: 60,  // 或 90 / 270，见下
-  reason: "poll PR #6 CI status",
-  prompt: "/wait-ci 6"  // 原样把自己再触发一次
-})
-```
-
-**delaySeconds 选择**：
-- 首轮 60s（快看一眼）
-- 若还 pending 继续 90s（长轮询）
-- **不要**选 300s —— 会命中 Anthropic prompt cache 5 分钟 TTL 边界；用 270s 或直接 600s
-- 长尾等待（10+ min Tauri 构建）：1200s（20 min）兜底唤醒，避免 cache 反复重热
-
 ### 结果传递
 
-把 poll 结果写进 turn 的 text，让用户看到节奏推进：
+bg watch 完成的通知里包含 exit 码；output file 含 gh 流式重绘后末尾的最终状态行。首选**一次性 tail**：
+
+```bash
+tail -30 <output-file-path-from-notification>
+```
+
+回退路径下，把每轮 ScheduleWakeup poll 的状态写进 turn 文本让用户看到推进，例如：
 
 ```
-[wait-ci #6] 第 1 轮：7 job pending, 0 fail → 60s 后再看
-[wait-ci #6] 第 2 轮：4 pass, 3 pending → 90s 后再看
+[wait-ci #6] 第 1 轮：7 job pending, 0 fail → 270s 后再看
+[wait-ci #6] 第 2 轮：4 pass, 3 pending → 270s 后再看
 [wait-ci #6] 第 3 轮：test (windows-latest) FAIL → 拉日志
 ```
 
@@ -131,7 +135,7 @@ ScheduleWakeup({
 
 - 若 `gh` 未安装或未登录：报错"gh CLI not available"并退出
 - 若 PR 已 merge / closed：报告并退出
-- 用户手动中断（下一个 turn 是其他指令）：ScheduleWakeup 自动失效；不清理
+- 用户手动中断（下一个 turn 是其他指令）：bg 命令 / ScheduleWakeup 都会被 harness 自动清理
 
 ## 相关
 
