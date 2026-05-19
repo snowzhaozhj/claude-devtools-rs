@@ -161,7 +161,7 @@ impl SshFileSystemProvider {
 }
 
 fn path_to_string(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
+    p.to_string_lossy().replace('\\', "/")
 }
 
 #[async_trait]
@@ -550,6 +550,14 @@ mod tests {
         assert_eq!(provider.kind(), FsKind::Ssh);
         assert_eq!(provider.context_id(), "test-ctx");
         assert_eq!(provider.remote_home(), Path::new("/remote/home"));
+    }
+
+    #[test]
+    fn sftp_paths_are_normalized_to_posix_separators() {
+        assert_eq!(
+            path_to_string(Path::new(r"/remote/home\.claude\projects\-x\s.jsonl")),
+            "/remote/home/.claude/projects/-x/s.jsonl"
+        );
     }
 
     #[tokio::test]
