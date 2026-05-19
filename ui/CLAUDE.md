@@ -72,12 +72,14 @@
 ## 开发命令
 
 - `pnpm --dir ui run check` 必须从项目根目录跑，从 `src-tauri/` 目录跑会找不到 `package.json`。
-- 浏览器直接访问 `localhost:5173` 会报 `invoke` undefined——必须通过 `cargo tauri dev` 的窗口测试，或用 `pnpm --dir ui run dev` + 浏览器访问 `?mock=1&fixture=...`。
+- 浏览器直接访问 `127.0.0.1:5173` 会报 `invoke` undefined——必须通过 `cargo tauri dev` 的窗口测试，或用 `pnpm --dir ui run dev` + 浏览器访问 `?mock=1&fixture=...`（参见下文「浏览器调试入口」为何用 `127.0.0.1` 而非 `localhost`）。
 - worktree rebase 后若 origin/main 加新 ui 依赖（典型 `tauri-plugin-opener`），跑 `pnpm --dir ui install` 重装（pnpm hardlink + global store，lockfile 未变近瞬时；变了也只下差量）。
 
 ## 浏览器调试入口
 
-不开 Tauri 窗口调 UI：`pnpm --dir ui run dev` → `http://localhost:5173/?mock=1&fixture=multi-project-rich`。fixture 有 `empty` / `single-project` / `multi-project-rich` 三种，详见 `ui/src/lib/__fixtures__/`。**仅 dev 启用**，production bundle 完全不含 mockIPC（vite DCE 验证见 `tauriMock.bundle.test.ts`）。
+不开 Tauri 窗口调 UI：`pnpm --dir ui run dev` → `http://127.0.0.1:5173/?mock=1&fixture=multi-project-rich`。fixture 有 `empty` / `single-project` / `multi-project-rich` 三种，详见 `ui/src/lib/__fixtures__/`。**仅 dev 启用**，production bundle 完全不含 mockIPC（vite DCE 验证见 `tauriMock.bundle.test.ts`）。
+
+**为什么用 `127.0.0.1` 而非 `localhost`**：`vite.config.ts::server.host='127.0.0.1'` 强 bind IPv4（与 Tauri WKWebView 解析 `localhost` 优先 IPv4 对齐，详 commit `fix(dev): pin vite to 127.0.0.1:5173`）；浏览器在双栈环境可能优先解析 `localhost → [::1]` → 连不上。
 
 ## 测试基础设施陷阱
 
