@@ -250,4 +250,3 @@
 - **WHEN** 用户在 `connecting` 状态点击 UI 取消按钮
 - **THEN** 进行中的 `russh::client::connect` future SHALL 被 abort
 - **AND** 错误 SHALL 为 `SshError::Cancelled`，状态切到 `disconnected`，不残留半连接资源
-

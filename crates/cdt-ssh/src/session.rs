@@ -613,6 +613,21 @@ fn whoami_fallback() -> String {
         .unwrap_or_else(|_| "root".into())
 }
 
+fn expand_local_ssh_path(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if s == "~" {
+        return cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from(s.as_ref()));
+    }
+    if let Some(rest) = s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
+        if let Some(home) = cdt_discover::home_dir() {
+            return rest
+                .split(['/', '\\'])
+                .fold(home, |path, component| path.join(component));
+        }
+    }
+    path.to_path_buf()
+}
+
 /// `russh::client::connect_stream` 替代 `connect` 用，把已建立的 `TcpStream` 直接传入。
 mod _ensure_connect_stream_exists {
     // russh 0.52 提供 `client::connect_stream`，签名 `pub async fn connect_stream<H, S>(
@@ -729,10 +744,11 @@ async fn authenticate_with_key(
     path: &Path,
     username: &str,
 ) -> AuthOutcome {
+    let path = expand_local_ssh_path(path);
     if !path.exists() {
         return AuthOutcome::Skipped(format!("not found: {}", path.display()));
     }
-    let key = match russh::keys::load_secret_key(path, None) {
+    let key = match russh::keys::load_secret_key(&path, None) {
         Ok(k) => k,
         Err(e) => {
             let msg = e.to_string();
@@ -765,10 +781,11 @@ async fn authenticate_with_agent(
     use russh::keys::agent::client::AgentClient;
     use tokio::net::UnixStream;
 
+    let socket_path = expand_local_ssh_path(socket_path);
     if !socket_path.exists() {
         return AuthOutcome::Skipped(format!("agent socket missing: {}", socket_path.display()));
     }
-    let stream = match UnixStream::connect(socket_path).await {
+    let stream = match UnixStream::connect(&socket_path).await {
         Ok(s) => s,
         Err(e) => return AuthOutcome::Failure(format!("agent connect: {e}")),
     };
@@ -858,6 +875,24 @@ mod tests {
             .expect("ok");
         assert!(evt.active_context_id.is_none());
         assert_eq!(evt.kind, ContextKind::Local);
+    }
+
+    #[test]
+    fn expands_tilde_for_local_ssh_paths() {
+        let home = cdt_discover::home_dir().expect("home dir resolvable");
+        assert_eq!(expand_local_ssh_path(Path::new("~")), home);
+        assert_eq!(
+            expand_local_ssh_path(Path::new("~/.ssh/id_ed25519")),
+            home.join(".ssh/id_ed25519")
+        );
+        assert_eq!(
+            expand_local_ssh_path(Path::new(r"~\.ssh\id_ed25519")),
+            home.join(".ssh/id_ed25519")
+        );
+        assert_eq!(
+            expand_local_ssh_path(Path::new("/tmp/id_ed25519")),
+            PathBuf::from("/tmp/id_ed25519")
+        );
     }
 
     #[tokio::test]
