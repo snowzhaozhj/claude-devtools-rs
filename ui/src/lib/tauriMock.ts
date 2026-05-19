@@ -64,6 +64,9 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'list_repository_groups',
   'get_worktree_sessions',
   'list_wsl_distros',
+  'http_server_start',
+  'http_server_stop',
+  'http_server_status',
 ] as const
 
 export { KNOWN_TAURI_COMMANDS }
@@ -266,8 +269,44 @@ function buildHandler(fx: Fixture) {
             ...(fx.config.ssh ?? { profiles: [], lastConnection: null, autoReconnect: false }),
             ...(data as object),
           }
+        } else if (section === 'httpServer' && data) {
+          fx.config.httpServer = { ...(fx.config.httpServer ?? { enabled: false, port: 3456 }), ...(data as object) }
         }
         return fx.config
+      }
+
+      // ---------------------------------------------------------------------
+      // server-mode：模拟 ServerState 行为（详 ipc-data-api / server-mode spec）
+      // ---------------------------------------------------------------------
+      case 'http_server_start': {
+        const port = getArg<number>(payload, 'port')
+        if (port == null || port < 1024 || port > 65535) {
+          throw new Error('port must be in 1024..=65535')
+        }
+        fx.mockHttpServer = { running: true, port, lastError: null }
+        fx.config.httpServer = { enabled: true, port }
+        return null
+      }
+
+      case 'http_server_stop': {
+        if (fx.mockHttpServer) {
+          fx.mockHttpServer.running = false
+          fx.mockHttpServer.lastError = null
+        } else {
+          fx.mockHttpServer = { running: false, port: 3456, lastError: null }
+        }
+        if (fx.config.httpServer) {
+          fx.config.httpServer.enabled = false
+        } else {
+          fx.config.httpServer = { enabled: false, port: 3456 }
+        }
+        return null
+      }
+
+      case 'http_server_status': {
+        if (fx.mockHttpServer) return { ...fx.mockHttpServer }
+        const persisted = fx.config.httpServer ?? { enabled: false, port: 3456 }
+        return { running: false, port: persisted.port, lastError: null }
       }
 
       case 'get_notifications':

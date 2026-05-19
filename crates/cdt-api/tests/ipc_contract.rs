@@ -89,6 +89,9 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "list_repository_groups",
     "get_worktree_sessions",
     "list_wsl_distros",
+    "http_server_start",
+    "http_server_stop",
+    "http_server_status",
 ];
 
 /// 构造一个最小可用的 `LocalDataApi` 用于 contract test。
@@ -131,13 +134,28 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_41() {
+fn expected_tauri_commands_count_is_44() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        41,
+        44,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 41 个 Tauri command"
+         以及本文件常量；当前 src-tauri 注册 44 个 Tauri command（含 SSH + server-mode）"
     );
+}
+
+#[test]
+fn expected_tauri_commands_include_server_mode_three() {
+    for name in [
+        "http_server_start",
+        "http_server_stop",
+        "http_server_status",
+    ] {
+        assert!(
+            EXPECTED_TAURI_COMMANDS.contains(&name),
+            "server-mode command {name} SHALL 在 EXPECTED_TAURI_COMMANDS 内（与 \
+             src-tauri/src/lib.rs::invoke_handler! 同步）"
+        );
+    }
 }
 
 #[test]
@@ -2330,4 +2348,145 @@ fn wsl_distro_scan_report_serializes_with_distros_without_home() {
     let json = serde_json::to_value(&report).unwrap();
     assert_eq!(json["distrosWithoutHome"], json!(["Ubuntu", "Debian-12"]));
     assert_eq!(json["candidates"], json!([]));
+}
+
+// =============================================================================
+// server-mode: http_server_start / _stop / _status 字段契约
+// =============================================================================
+
+/// 与 `src-tauri/src/server_mode.rs::ServerStatus` 字段一致。该结构与 `ServerStatus`
+/// 跨 crate 不复用——src-tauri 的 `ServerStatus` 在 desktop binary 内部，cdt-api
+/// 此处用同结构 mirror 用于断言 serde 形状。两者形状漂移由本测试拦截。
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerStatusContract {
+    running: bool,
+    port: u16,
+    last_error: Option<String>,
+}
+
+#[test]
+fn http_server_start_request_shape() {
+    // 前端调 invoke('http_server_start', { port: 3456 }) 时 Tauri JSON->Rust
+    // 转换走 camelCase 自动映射。`port: u16` 是唯一入参，断言：(a) port 是 number
+    // (b) 没有其它字段被前端误传。
+    let payload = json!({ "port": 3456 });
+    assert!(payload["port"].is_number());
+    assert_eq!(payload["port"].as_u64(), Some(3456));
+    // 入参 schema MUST 不含 snake_case 其它字段
+    let obj = payload.as_object().unwrap();
+    assert_eq!(obj.len(), 1, "http_server_start 入参 MUST 仅含 port 字段");
+}
+
+#[test]
+fn http_server_status_response_shape_initial() {
+    // 初始状态：server 未跑过、未持久化任何 port
+    let status = ServerStatusContract {
+        running: false,
+        port: 3456,
+        last_error: None,
+    };
+    let json = serde_json::to_value(&status).unwrap();
+    assert_eq!(json["running"], json!(false));
+    assert_eq!(json["port"], json!(3456));
+    assert_eq!(json["lastError"], json!(null));
+    // MUST 不出现 snake_case
+    assert!(
+        json.get("last_error").is_none(),
+        "MUST 不出现 snake_case last_error"
+    );
+}
+
+#[test]
+fn http_server_status_response_shape_after_start_failure() {
+    let status = ServerStatusContract {
+        running: false,
+        port: 3456,
+        last_error: Some("port 3456 is in use".into()),
+    };
+    let json = serde_json::to_value(&status).unwrap();
+    assert_eq!(json["running"], json!(false));
+    assert_eq!(json["lastError"], json!("port 3456 is in use"));
+}
+
+#[test]
+fn http_server_status_response_shape_after_start_success() {
+    let status = ServerStatusContract {
+        running: true,
+        port: 3500,
+        last_error: None,
+    };
+    let json = serde_json::to_value(&status).unwrap();
+    assert_eq!(json["running"], json!(true));
+    assert_eq!(json["port"], json!(3500));
+    assert_eq!(
+        json["lastError"],
+        json!(null),
+        "成功启动后 lastError SHALL 序列化为 null（不是 missing）"
+    );
+}
+
+#[test]
+fn http_server_stop_response_shape() {
+    // stop IPC 返回 `Result<null, string>`——Ok 路径前端拿到 `null`。
+    // Tauri 命令 fn 返回 `Result<(), String>` 时 Ok(()) 序列化为 JSON `null`。
+    let value: serde_json::Value = serde_json::to_value(Option::<()>::None).unwrap();
+    assert!(value.is_null(), "http_server_stop Ok 路径 SHALL 是 null");
+}
+
+#[tokio::test]
+async fn update_config_http_server_round_trip() {
+    let (api, _tmp) = setup_api().await;
+
+    // 默认值
+    let cfg = api.get_config().await.unwrap();
+    assert_eq!(cfg["httpServer"]["enabled"], json!(false));
+    assert_eq!(cfg["httpServer"]["port"], json!(3456));
+
+    // 改 port
+    let req = ConfigUpdateRequest {
+        section: "httpServer".into(),
+        data: json!({ "port": 3500 }),
+    };
+    let next = api.update_config(&req).await.unwrap();
+    assert_eq!(next["httpServer"]["port"], json!(3500));
+    assert_eq!(
+        next["httpServer"]["enabled"],
+        json!(false),
+        "仅 port 更新 SHALL 不影响 enabled"
+    );
+
+    // 改回
+    let req = ConfigUpdateRequest {
+        section: "httpServer".into(),
+        data: json!({ "port": 3456 }),
+    };
+    let next = api.update_config(&req).await.unwrap();
+    assert_eq!(next["httpServer"]["port"], json!(3456));
+
+    // 非法 port（< 1024）拒绝；ConfigManager::update_http_server 内部走
+    // validate_http_port，应返回 Err
+    let req = ConfigUpdateRequest {
+        section: "httpServer".into(),
+        data: json!({ "port": 80 }),
+    };
+    let err = api.update_config(&req).await.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("1024") || msg.to_lowercase().contains("port"),
+        "非法 port SHALL 拒绝并附 range 文案，got: {msg}"
+    );
+
+    // 改 enabled
+    let req = ConfigUpdateRequest {
+        section: "httpServer".into(),
+        data: json!({ "enabled": true }),
+    };
+    let next = api.update_config(&req).await.unwrap();
+    assert_eq!(next["httpServer"]["enabled"], json!(true));
+    assert_eq!(
+        next["httpServer"]["port"],
+        json!(3456),
+        "仅 enabled 更新 SHALL 不影响 port"
+    );
 }

@@ -9,7 +9,8 @@ use async_trait::async_trait;
 use super::error::ApiError;
 use super::types::{
     ConfigUpdateRequest, ContextInfo, MemoryFileContent, PaginatedRequest, PaginatedResponse,
-    ProjectInfo, ProjectMemory, SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
+    ProjectInfo, ProjectMemory, ProjectSessionPrefs, SearchRequest, SessionDetail, SessionSummary,
+    SshConnectRequest,
 };
 
 /// 数据 API 操作集。
@@ -374,5 +375,68 @@ pub trait DataApi: Send + Sync {
         cdt_discover::wsl::list_distros()
             .await
             .map_err(|e| ApiError::internal(format!("wsl scan: {e}")))
+    }
+
+    // =========================================================================
+    // 通知 trigger / pin / hide / session prefs
+    //
+    // 为让 HTTP 路径（浏览器 runtime）能镜像 IPC 同名 command，把这 7 个方法
+    // 提升到 trait（spec：`http-data-api::Mirror lazy and auxiliary IPC commands`
+    // / `server-mode`）。default fallback 返回 not_found / 空对象，让远端
+    // mock 实现保持安全降级；`LocalDataApi` 在自己的 `impl DataApi` 块里
+    // override 真实读写逻辑。
+    // =========================================================================
+
+    /// 添加 notification trigger，返回更新后的完整 `AppConfig` JSON。
+    async fn add_trigger(
+        &self,
+        _trigger: cdt_config::NotificationTrigger,
+    ) -> Result<serde_json::Value, ApiError> {
+        Err(ApiError::internal(
+            "add_trigger not implemented on this transport",
+        ))
+    }
+
+    /// 删除 notification trigger，返回更新后的完整 `AppConfig` JSON。
+    async fn remove_trigger(&self, _trigger_id: &str) -> Result<serde_json::Value, ApiError> {
+        Err(ApiError::internal(
+            "remove_trigger not implemented on this transport",
+        ))
+    }
+
+    /// Pin 一个 session（project + session 维度），写入配置文件。
+    async fn pin_session(&self, _project_id: &str, _session_id: &str) -> Result<(), ApiError> {
+        Err(ApiError::internal(
+            "pin_session not implemented on this transport",
+        ))
+    }
+
+    /// 取消 pin。
+    async fn unpin_session(&self, _project_id: &str, _session_id: &str) -> Result<(), ApiError> {
+        Err(ApiError::internal(
+            "unpin_session not implemented on this transport",
+        ))
+    }
+
+    /// 隐藏一个 session。
+    async fn hide_session(&self, _project_id: &str, _session_id: &str) -> Result<(), ApiError> {
+        Err(ApiError::internal(
+            "hide_session not implemented on this transport",
+        ))
+    }
+
+    /// 取消隐藏。
+    async fn unhide_session(&self, _project_id: &str, _session_id: &str) -> Result<(), ApiError> {
+        Err(ApiError::internal(
+            "unhide_session not implemented on this transport",
+        ))
+    }
+
+    /// 返回当前 project 的 pin/hide session id 列表（按"最近在前"约定）。
+    async fn get_project_session_prefs(
+        &self,
+        _project_id: &str,
+    ) -> Result<ProjectSessionPrefs, ApiError> {
+        Ok(ProjectSessionPrefs::default())
     }
 }

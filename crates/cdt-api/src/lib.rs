@@ -12,7 +12,7 @@ pub mod http;
 pub mod ipc;
 pub mod notifier;
 
-pub use http::{AppState, spawn_event_bridge, start_server};
+pub use http::{AppState, build_router, serve_with_listener, spawn_event_bridge, start_server};
 pub use ipc::session_metadata::TITLE_MAX_CHARS;
 pub use ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, ContextInfo, DataApi, LocalDataApi,

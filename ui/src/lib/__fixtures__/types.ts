@@ -5,6 +5,7 @@
 import type {
   AppConfig,
   GetNotificationsResult,
+  HttpServerStatus,
   PaginatedResponse,
   ProjectInfo,
   ProjectMemory,
@@ -49,12 +50,19 @@ export interface Fixture {
    * 退化为只含自己的 group）。
    */
   repositoryGroups?: RepositoryGroup[]
+  /**
+   * 可变 server-mode 运行时状态。`http_server_start` / `_stop` 写入；
+   * `http_server_status` 读取。`null` 时 `_status` fallback 到 config 持久化值。
+   * vitest 测试可手动设置初始状态验证 UI。
+   */
+  mockHttpServer?: HttpServerStatus | null
 }
 
 export type {
   AgentConfig,
   AppConfig,
   GetNotificationsResult,
+  HttpServerStatus,
   PaginatedResponse,
   ProjectInfo,
   ProjectMemory,
