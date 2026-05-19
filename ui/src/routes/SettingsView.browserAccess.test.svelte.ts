@@ -96,7 +96,23 @@ describe('SettingsView Browser Access subsection', () => {
     await waitFor(() => expect(copyBtn.textContent?.trim()).toBe('Copied'))
   })
 
-  test('启动失败（非法端口）→ inline 错误展示', async () => {
+  test('端口输入 blur 持久化到 httpServer 配置', async () => {
+    const { container } = render(SettingsView)
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="browser-access-port"]')).not.toBeNull(),
+    )
+    const portInput = container.querySelector(
+      '[data-testid="browser-access-port"]',
+    ) as HTMLInputElement
+    await fireEvent.input(portInput, { target: { value: '3500' } })
+    await fireEvent.blur(portInput)
+
+    await waitFor(() => {
+      expect(emptyFixture.config.httpServer?.port).toBe(3500)
+    })
+  })
+
+  test('启动失败（非法端口）→ inline 错误展示且不自动消失', async () => {
     const { container } = render(SettingsView)
     await waitFor(() =>
       expect(container.querySelector('[data-testid="browser-access-port"]')).not.toBeNull(),
@@ -116,6 +132,9 @@ describe('SettingsView Browser Access subsection', () => {
     })
     // toggle 保持 off
     expect(toggle.getAttribute('aria-checked')).toBe('false')
+    // 错误不会在本次失败路径中被自动清掉
+    const err = container.querySelector('[data-testid="browser-access-error"]')
+    expect(err).not.toBeNull()
     // 持久化没被改（未走到 IPC 成功路径）
     const running = container.querySelector('[data-testid="browser-access-running"]')
     expect(running).toBeNull()
@@ -132,10 +151,17 @@ describe('SettingsView Browser Access subsection', () => {
       expect(container.querySelector('[data-testid="browser-access-running"]')).not.toBeNull(),
     )
 
-    await fireEvent.click(toggle)
     await waitFor(() => {
+      const currentToggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
+      expect(currentToggle.getAttribute('aria-checked')).toBe('true')
+      expect(currentToggle.disabled).toBe(false)
+    })
+    const currentToggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
+    await fireEvent.click(currentToggle)
+    await waitFor(() => {
+      const latestToggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
       expect(container.querySelector('[data-testid="browser-access-running"]')).toBeNull()
-      expect(toggle.getAttribute('aria-checked')).toBe('false')
+      expect(latestToggle.getAttribute('aria-checked')).toBe('false')
     })
   })
 })

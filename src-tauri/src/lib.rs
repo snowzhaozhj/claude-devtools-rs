@@ -939,7 +939,7 @@ pub fn run() {
                 if let Some(state) = app_handle.try_state::<Arc<ServerState>>() {
                     let state = state.inner().clone();
                     tauri::async_runtime::block_on(async move {
-                        let _ = state.stop().await;
+                        state.shutdown_runtime_only().await;
                     });
                 }
             }

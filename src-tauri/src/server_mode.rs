@@ -95,16 +95,43 @@ impl ServerState {
         }
     }
 
-    /// 启动 HTTP server bind 到 `127.0.0.1:port`。
-    ///
-    /// 串行化：调用方持有 `Mutex<Option<ServerHandle>>` 的 lock 期间没有其它
-    /// `start` / `stop` 能进入；进入后第一步 abort 旧 handle 再 bind 新 listener。
+    /// 用户显式开启 server-mode：启动成功后写 `enabled=true` + `port` 持久化。
     pub async fn start(&self, port: u16) -> Result<(), String> {
-        validate_http_port(port).map_err(|e| e.to_string())?;
+        self.start_runtime_only(port).await?;
+
+        // 持久化失败不回滚 server task——已 bind 的 listener 仍可用，下次启动
+        // 仅是 config.json 不一致；分别 warn 让运维感知。
+        if let Err(e) = self.api.set_http_server_port(port).await {
+            tracing::warn!(
+                target: "cdt_tauri::server_mode",
+                error = %e,
+                "failed to persist httpServer.port"
+            );
+        }
+        if let Err(e) = self.api.set_http_server_enabled(true).await {
+            tracing::warn!(
+                target: "cdt_tauri::server_mode",
+                error = %e,
+                "failed to persist httpServer.enabled=true"
+            );
+        }
+        Ok(())
+    }
+
+    /// 仅启动运行时 server，不写持久化。setup 自动恢复路径使用本函数，避免
+    /// 与用户刚关闭 toggle 的 `enabled=false` 意图竞态覆盖。
+    async fn start_runtime_only(&self, port: u16) -> Result<(), String> {
+        if let Err(e) = validate_http_port(port) {
+            let msg = e.to_string();
+            *self.last_error.lock().await = Some(msg.clone());
+            self.emit_status(false, port, Some(msg.clone()));
+            return Err(msg);
+        }
 
         let mut handle_guard = self.handle.lock().await;
         if let Some(old) = handle_guard.take() {
             old.task.abort();
+            let _ = old.task.await;
         }
 
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
@@ -145,35 +172,13 @@ impl ServerState {
         drop(handle_guard);
         *self.last_error.lock().await = None;
 
-        // 持久化失败不回滚 server task——已 bind 的 listener 仍可用，下次启动
-        // 仅是 config.json 不一致；分别 warn 让运维感知。
-        if let Err(e) = self.api.set_http_server_port(port).await {
-            tracing::warn!(
-                target: "cdt_tauri::server_mode",
-                error = %e,
-                "failed to persist httpServer.port"
-            );
-        }
-        if let Err(e) = self.api.set_http_server_enabled(true).await {
-            tracing::warn!(
-                target: "cdt_tauri::server_mode",
-                error = %e,
-                "failed to persist httpServer.enabled=true"
-            );
-        }
-
         self.emit_status(true, port, None);
         Ok(())
     }
 
-    /// 优雅关闭已运行的 server task；未运行时返回 `Ok` 保持幂等。
+    /// 用户显式关闭 server-mode：关闭运行时 server，并写 `enabled=false`。
     pub async fn stop(&self) -> Result<(), String> {
-        let mut handle_guard = self.handle.lock().await;
-        if let Some(old) = handle_guard.take() {
-            old.task.abort();
-        }
-        drop(handle_guard);
-        *self.last_error.lock().await = None;
+        self.shutdown_runtime_only().await;
 
         if let Err(e) = self.api.set_http_server_enabled(false).await {
             tracing::warn!(
@@ -185,6 +190,18 @@ impl ServerState {
         let port = self.persisted_port().await;
         self.emit_status(false, port, None);
         Ok(())
+    }
+
+    /// 仅关闭运行时 server，不改持久化配置。app 退出路径使用本函数，保留
+    /// `enabled=true` 用户意图，让下次启动仍能自动恢复。
+    pub async fn shutdown_runtime_only(&self) {
+        let mut handle_guard = self.handle.lock().await;
+        if let Some(old) = handle_guard.take() {
+            old.task.abort();
+            let _ = old.task.await;
+        }
+        drop(handle_guard);
+        *self.last_error.lock().await = None;
     }
 
     /// 当前 server 状态快照——`running` 反映运行时 task 是否存活；`port` 优先取
@@ -226,16 +243,16 @@ impl ServerState {
         if !cfg.enabled {
             return;
         }
-        if let Err(msg) = self.start(cfg.port).await {
+        if !self.persisted_enabled().await {
+            return;
+        }
+        if let Err(msg) = self.start_runtime_only(cfg.port).await {
             tracing::warn!(
                 target: "cdt_tauri::server_mode",
                 port = cfg.port,
                 error = %msg,
                 "auto-restore failed; enabled=true preserved"
             );
-            // start 内部已经 set last_error + emit；这里仅日志。
-            // SHALL **不**改 enabled——用户意图保持。set_http_server_enabled 在
-            // start 失败路径里**不**被调，自然不会写盘。
         }
     }
 
@@ -245,6 +262,14 @@ impl ServerState {
             .await
             .map(|c| c.port)
             .unwrap_or(3456)
+    }
+
+    async fn persisted_enabled(&self) -> bool {
+        self.api
+            .http_server_config()
+            .await
+            .map(|c| c.enabled)
+            .unwrap_or(false)
     }
 
     fn emit_status(&self, running: bool, port: u16, last_error: Option<String>) {
@@ -452,6 +477,63 @@ mod tests {
         assert_eq!(s.port, port2, "新 port 接管");
 
         state.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn second_start_same_port_waits_old_task_release() {
+        let (state, _emitter, _tmp) = build_state_with_tempdir().await;
+
+        let port = 38771;
+        if tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .is_err()
+        {
+            eprintln!("port {port} busy, skip");
+            return;
+        }
+
+        state.start(port).await.unwrap();
+        // 第二次同端口 start 应先 abort+await 旧 task，再 bind 新 listener。
+        state.start(port).await.unwrap();
+        let s = state.status().await;
+        assert!(s.running);
+        assert_eq!(s.port, port);
+        state.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_runtime_only_preserves_enabled_intent() {
+        let (state, _emitter, _tmp) = build_state_with_tempdir().await;
+
+        let port = 38772;
+        if tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .is_err()
+        {
+            eprintln!("port {port} busy, skip");
+            return;
+        }
+
+        state.start(port).await.unwrap();
+        assert!(state.api.http_server_config().await.unwrap().enabled);
+
+        state.shutdown_runtime_only().await;
+        let cfg = state.api.http_server_config().await.unwrap();
+        assert!(cfg.enabled, "app exit SHALL 保留 enabled=true 用户意图");
+        assert_eq!(cfg.port, port);
+        assert!(!state.status().await.running);
+    }
+
+    #[tokio::test]
+    async fn start_with_invalid_port_sets_last_error_and_emits() {
+        let (state, emitter, _tmp) = build_state_with_tempdir().await;
+        let err = state.start(80).await.unwrap_err();
+        let s = state.status().await;
+        assert_eq!(s.last_error.as_deref(), Some(err.as_str()));
+        let events = emitter.snapshot();
+        let last = events.last().expect("validation failure should emit status");
+        assert!(!last.1.running);
+        assert_eq!(last.1.last_error.as_deref(), Some(err.as_str()));
     }
 
     #[tokio::test]

@@ -137,6 +137,30 @@
     }
   });
 
+  function parseHttpServerPort(): number {
+    const port = Number.parseInt(portInput, 10);
+    if (!Number.isFinite(port) || port < 1024 || port > 65535) {
+      throw new Error("端口必须在 1024-65535 范围内");
+    }
+    return port;
+  }
+
+  /** server-mode: 端口输入 blur/change 时写入配置，确保关闭状态下也能持久化。 */
+  async function persistHttpServerPort() {
+    if (!config || serverPending) return;
+    try {
+      const port = parseHttpServerPort();
+      config = await updateConfig("httpServer", { port });
+      serverError = null;
+      if (serverStatus && !serverStatus.running) {
+        serverStatus = { ...serverStatus, port };
+      }
+    } catch (e) {
+      serverError = String(e instanceof Error ? e.message : e);
+      portInput = String(config.httpServer?.port ?? serverStatus?.port ?? 3456);
+    }
+  }
+
   /** server-mode: toggle 启动 / 关闭 server。 */
   async function toggleHttpServer(targetEnabled: boolean) {
     if (serverPending) return;
@@ -144,21 +168,21 @@
     serverError = null;
     try {
       if (targetEnabled) {
-        const port = Number.parseInt(portInput, 10);
-        if (!Number.isFinite(port) || port < 1024 || port > 65535) {
-          throw new Error("端口必须在 1024-65535 范围内");
-        }
+        const port = parseHttpServerPort();
         await startHttpServer(port);
       } else {
         await stopHttpServer();
       }
       serverStatus = await getHttpServerStatus();
+      if (serverStatus) portInput = String(serverStatus.port);
+      config = await getConfig();
       // 失败启动 toggle 自动回到 off 状态由 IPC 抛错路径处理
     } catch (e) {
       serverError = String(e instanceof Error ? e.message : e);
       // 失败后重读状态，保证 toggle 与 server 真实状态一致
       try {
         serverStatus = await getHttpServerStatus();
+        if (serverStatus?.lastError) serverError = serverStatus.lastError;
       } catch {
         /* ignore */
       }
@@ -681,6 +705,8 @@
                     bind:value={portInput}
                     disabled={serverPending}
                     data-testid="browser-access-port"
+                    onchange={persistHttpServerPort}
+                    onblur={persistHttpServerPort}
                   />
                 {/snippet}
               </SettingsField>

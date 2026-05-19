@@ -288,7 +288,7 @@ function buildHandler(fx: Fixture) {
       }
 
       case 'http_server_status': {
-        if (fx.mockHttpServer) return fx.mockHttpServer
+        if (fx.mockHttpServer) return { ...fx.mockHttpServer }
         const persisted = fx.config.httpServer ?? { enabled: false, port: 3456 }
         return { running: false, port: persisted.port, lastError: null }
       }
