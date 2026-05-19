@@ -13,22 +13,28 @@ use tokio::task::{AbortHandle, JoinHandle, JoinSet};
 
 use cdt_analyze::build_chunks_with_subagents;
 use cdt_config::{
-    ConfigManager, DetectedError, NotificationManager, read_all_claude_md_files_with_base,
-    read_mentioned_file as config_read_mentioned_file, validate_file_path,
+    ConfigManager, DetectedError, NotificationManager, SshLastConnection,
+    read_all_claude_md_files_with_base, read_mentioned_file as config_read_mentioned_file,
+    validate_file_path,
 };
 use cdt_discover::{
-    LocalFileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
-    local_handle,
+    FileSystemProvider, LocalFileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache,
+    SessionSearcher, local_handle,
 };
-use cdt_parse::parse_file;
-use cdt_ssh::{ActiveContext, SshConnectionManager, parse_ssh_config_file, resolve_host};
+use cdt_parse::{ParseError, parse_entry_at, parse_file};
+use cdt_ssh::{
+    RemotePollingWatcher, RemoteWatcherHandle, SshConnectionManager, SshFileSystemProvider,
+    SshSessionManager, default_ssh_config_path, list_hosts, parse_ssh_config_file,
+    resolve_host_via_ssh_g,
+};
 use cdt_watch::FileWatcher;
 
 use super::error::ApiError;
 use super::events::SessionMetadataUpdate;
 use super::parsed_message_cache::{ParsedMessageCache, extract_parsed_messages_cached};
 use super::session_metadata::{
-    MetadataCache, extract_session_metadata_cached, try_lookup_cached_metadata,
+    MetadataCache, extract_session_metadata_cached, extract_session_metadata_from_parsed,
+    try_lookup_cached_metadata,
 };
 use super::traits::DataApi;
 use super::types::{
@@ -166,6 +172,27 @@ fn find_first_ai_after(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core
 ///   `post - pre`；任一缺值 → `None`
 ///
 /// 两趟扫描避免可变借用冲突：Pass 1 不可变借用算 (delta, phase)，Pass 2 可变借用写入。
+fn parse_jsonl_content(content: &str) -> Result<Vec<cdt_core::ParsedMessage>, ParseError> {
+    let mut out = Vec::new();
+    for (idx, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match parse_entry_at(line, idx + 1) {
+            Ok(Some(msg)) => out.push(msg),
+            Ok(None) => {}
+            Err(ParseError::MalformedLine { line, source }) => {
+                tracing::warn!(line, error = %source, "skipping malformed JSONL line");
+            }
+            Err(ParseError::SchemaMismatch { line, reason }) => {
+                tracing::warn!(line, reason = %reason, "skipping entry with schema mismatch");
+            }
+            Err(e @ ParseError::Io { .. }) => return Err(e),
+        }
+    }
+    Ok(out)
+}
+
 fn apply_compact_derived(chunks: &mut [cdt_core::Chunk], enabled: bool) {
     if !enabled {
         return;
@@ -303,7 +330,7 @@ pub struct LocalDataApi {
     search_cache: Arc<Mutex<SearchTextCache>>,
     config_mgr: Arc<Mutex<ConfigManager>>,
     notif_mgr: Arc<Mutex<NotificationManager>>,
-    ssh_mgr: Mutex<SshConnectionManager>,
+    ssh_mgr: SshSessionManager,
     /// 自动通知管线的 `DetectedError` 广播发送端。仅在 `new_with_watcher`
     /// 构造下存在；`new()` 构造返回 `None`，此时 `subscribe_detected_errors`
     /// 返回一条永不发消息的 receiver（caller 代码统一）。
@@ -313,6 +340,7 @@ pub struct LocalDataApi {
     file_tx: Option<broadcast::Sender<cdt_core::FileChangeEvent>>,
     todo_tx: Option<broadcast::Sender<cdt_core::TodoChangeEvent>>,
     watcher_tasks: Mutex<Vec<JoinHandle<()>>>,
+    remote_watchers: Mutex<HashMap<String, RemoteWatcherHandle>>,
     /// `list_sessions` 后台元数据扫描的广播发送端。`subscribe_session_metadata()`
     /// 返回 receiver，Tauri host 桥接为前端 `session-metadata-update` 事件。
     session_metadata_tx: broadcast::Sender<SessionMetadataUpdate>,
@@ -356,11 +384,40 @@ pub struct LocalDataApi {
 }
 
 impl LocalDataApi {
+    async fn active_scanner(&self) -> Result<ProjectScanner, ApiError> {
+        if let Some(context_id) = self.ssh_mgr.active_context_id().await {
+            let provider = self
+                .ssh_mgr
+                .provider(&context_id)
+                .await
+                .ok_or_else(|| ApiError::not_found(format!("SSH context: {context_id}")))?;
+            let projects_dir = provider.remote_home().to_path_buf();
+            return Ok(ProjectScanner::new(Arc::new(provider), projects_dir));
+        }
+        let projects_dir = self.projects_dir.lock().await.clone();
+        Ok(ProjectScanner::new(local_handle(), projects_dir))
+    }
+
+    async fn active_fs_and_projects_dir(
+        &self,
+    ) -> Result<(Arc<dyn FileSystemProvider>, PathBuf), ApiError> {
+        if let Some(context_id) = self.ssh_mgr.active_context_id().await {
+            let provider = self
+                .ssh_mgr
+                .provider(&context_id)
+                .await
+                .ok_or_else(|| ApiError::not_found(format!("SSH context: {context_id}")))?;
+            let projects_dir = provider.remote_home().to_path_buf();
+            return Ok((Arc::new(provider), projects_dir));
+        }
+        Ok((local_handle(), self.projects_dir.lock().await.clone()))
+    }
+
     pub fn new(
         scanner: ProjectScanner,
         config_mgr: ConfigManager,
         notif_mgr: NotificationManager,
-        ssh_mgr: SshConnectionManager,
+        _ssh_mgr: SshConnectionManager,
     ) -> Self {
         let search_cache = std::sync::Arc::new(Mutex::new(SearchTextCache::new()));
         let (session_metadata_tx, _) =
@@ -373,11 +430,12 @@ impl LocalDataApi {
             search_cache,
             config_mgr: Arc::new(Mutex::new(config_mgr)),
             notif_mgr: Arc::new(Mutex::new(notif_mgr)),
-            ssh_mgr: Mutex::new(ssh_mgr),
+            ssh_mgr: SshSessionManager::new(),
             error_tx: None,
             file_tx: None,
             todo_tx: None,
             watcher_tasks: Mutex::new(Vec::new()),
+            remote_watchers: Mutex::new(HashMap::new()),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
@@ -409,7 +467,7 @@ impl LocalDataApi {
         scanner: ProjectScanner,
         config_mgr: ConfigManager,
         notif_mgr: NotificationManager,
-        ssh_mgr: SshConnectionManager,
+        _ssh_mgr: SshConnectionManager,
         watcher: &FileWatcher,
         projects_dir: std::path::PathBuf,
     ) -> Self {
@@ -452,11 +510,12 @@ impl LocalDataApi {
             search_cache,
             config_mgr,
             notif_mgr,
-            ssh_mgr: Mutex::new(ssh_mgr),
+            ssh_mgr: SshSessionManager::new(),
             error_tx: Some(error_tx),
             file_tx: Some(file_tx),
             todo_tx: Some(todo_tx),
             watcher_tasks,
+            remote_watchers: Mutex::new(HashMap::new()),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
@@ -497,6 +556,75 @@ impl LocalDataApi {
         } else {
             let (_tx, rx) = broadcast::channel::<cdt_core::TodoChangeEvent>(1);
             rx
+        }
+    }
+
+    pub fn subscribe_ssh_status(&self) -> broadcast::Receiver<cdt_ssh::SshStatusChange> {
+        self.ssh_mgr.subscribe_status()
+    }
+
+    pub async fn insert_test_ssh_context(
+        &self,
+        context_id: impl Into<String>,
+        host: impl Into<String>,
+        port: u16,
+        username: Option<String>,
+        remote_home: PathBuf,
+        provider: SshFileSystemProvider,
+    ) {
+        self.ssh_mgr
+            .insert_test_context(context_id, host, port, username, remote_home, provider)
+            .await;
+    }
+
+    pub fn subscribe_context_changed(&self) -> broadcast::Receiver<cdt_ssh::ContextChanged> {
+        self.ssh_mgr.subscribe_context_changed()
+    }
+
+    pub async fn shutdown_ssh_all(&self, deadline: std::time::Duration) {
+        self.cancel_all_remote_watchers().await;
+        self.ssh_mgr.shutdown_all(deadline).await;
+    }
+
+    async fn attach_remote_watcher(&self, context_id: &str) {
+        let Some(file_tx) = self.file_tx.as_ref() else {
+            return;
+        };
+        let Some(provider) = self.ssh_mgr.provider(context_id).await else {
+            return;
+        };
+        let watcher = RemotePollingWatcher::spawn(
+            provider.sftp_client(),
+            provider.remote_home().to_path_buf(),
+            file_tx.clone(),
+            cdt_ssh::CancelToken::new(),
+        );
+        if let Some(old) = self
+            .remote_watchers
+            .lock()
+            .await
+            .insert(context_id.to_owned(), watcher)
+        {
+            old.cancel_and_join().await;
+        }
+    }
+
+    async fn cancel_remote_watcher(&self, context_id: &str) {
+        if let Some(handle) = self.remote_watchers.lock().await.remove(context_id) {
+            handle.cancel_and_join().await;
+        }
+    }
+
+    async fn cancel_all_remote_watchers(&self) {
+        let handles = self
+            .remote_watchers
+            .lock()
+            .await
+            .drain()
+            .map(|(_, handle)| handle)
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.cancel_and_join().await;
         }
     }
 
@@ -600,14 +728,19 @@ impl LocalDataApi {
             return Err(ApiError::validation("pageSize must be > 0"));
         }
 
-        let scanner = self.scanner.lock().await;
+        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
+        let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
+        let _ = scanner
+            .scan()
+            .await
+            .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
             .await
             .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?;
         let projects_dir = scanner.projects_dir().to_path_buf();
         let root_generation = self.root_generation.load(Ordering::SeqCst);
-        drop(scanner);
 
         let offset = pagination
             .cursor
@@ -653,7 +786,16 @@ impl LocalDataApi {
         }))
         .await;
         for (s, (jsonl_path, cached_meta)) in page_sessions.into_iter().zip(lookups) {
-            if let Some(meta) = cached_meta {
+            let remote_meta = if is_remote {
+                let content = fs.read_to_string(&jsonl_path).await.ok();
+                content
+                    .as_deref()
+                    .and_then(|content| parse_jsonl_content(content).ok())
+                    .map(|messages| extract_session_metadata_from_parsed(&messages, false))
+            } else {
+                None
+            };
+            if let Some(meta) = cached_meta.or(remote_meta) {
                 page.push(SessionSummary {
                     session_id: s.id,
                     project_id: project_id.to_owned(),
@@ -677,7 +819,9 @@ impl LocalDataApi {
                     worktree_id: None,
                     worktree_name: None,
                 });
-                page_jobs.push((s.id, jsonl_path));
+                if !is_remote {
+                    page_jobs.push((s.id, jsonl_path));
+                }
             }
         }
 
@@ -916,7 +1060,7 @@ impl DataApi for LocalDataApi {
     // =========================================================================
 
     async fn list_projects(&self) -> Result<Vec<ProjectInfo>, ApiError> {
-        let mut scanner = self.scanner.lock().await;
+        let mut scanner = self.active_scanner().await?;
         let projects = scanner
             .scan()
             .await
@@ -1131,14 +1275,18 @@ impl DataApi for LocalDataApi {
         // `path_decoder::get_projects_base_path()` 仅在 `ProjectScanner` 自身
         // 用默认路径构造时返回真实 home，scanner 已经统一了入口。
         let t_locate = std::time::Instant::now();
-        let scanner = self.scanner.lock().await;
-        let projects_dir = scanner.projects_dir().to_path_buf();
+        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
+        let _ = scanner
+            .scan()
+            .await
+            .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
         let project_dir = projects_dir.join(project_id);
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;
-        drop(scanner);
+        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
 
         let main_session = sessions.iter().find(|s| s.id == session_id);
 
@@ -1148,7 +1296,10 @@ impl DataApi for LocalDataApi {
                 Some(s.last_modified),
                 Some(s.size),
             )
-        } else if let Some(path) = find_subagent_jsonl(&project_dir, session_id).await {
+        } else if !is_remote {
+            let Some(path) = find_subagent_jsonl(&project_dir, session_id).await else {
+                return Err(ApiError::not_found(format!("session {session_id}")));
+            };
             let meta = tokio::fs::metadata(&path).await.ok();
             let modified = meta.as_ref().and_then(|m| m.modified().ok()).map(|t| {
                 let dt: chrono::DateTime<chrono::Utc> = t.into();
@@ -1162,14 +1313,25 @@ impl DataApi for LocalDataApi {
         let locate_ms = t_locate.elapsed().as_millis();
 
         let t_parse = std::time::Instant::now();
-        let messages = parse_file(&jsonl_path)
-            .await
-            .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
+        let messages = if is_remote {
+            let content = fs
+                .read_to_string(&jsonl_path)
+                .await
+                .map_err(|e| ApiError::internal(format!("read error: {e}")))?;
+            parse_jsonl_content(&content)
+                .map_err(|e| ApiError::internal(format!("parse error: {e}")))?
+        } else {
+            parse_file(&jsonl_path)
+                .await
+                .map_err(|e| ApiError::internal(format!("parse error: {e}")))?
+        };
         let parse_ms = t_parse.elapsed().as_millis();
         let message_count = messages.len();
 
         let t_scan = std::time::Instant::now();
-        let candidates = if CROSS_PROJECT_SUBAGENT_SCAN {
+        let candidates = if is_remote {
+            Vec::new()
+        } else if CROSS_PROJECT_SUBAGENT_SCAN {
             scan_subagent_candidates_cross_project(&projects_dir, &project_dir, session_id).await
         } else {
             scan_subagent_candidates(&project_dir, session_id).await
@@ -1181,10 +1343,10 @@ impl DataApi for LocalDataApi {
         let messages_ongoing = cdt_analyze::check_messages_ongoing(&messages);
         // stale check 与 list_sessions 路径对齐（issue #94）：mtime > 5min 的
         // ongoing 视为 crashed/killed。
-        let is_ongoing = if messages_ongoing {
+        let is_ongoing = if messages_ongoing && !is_remote {
             !crate::ipc::session_metadata::is_file_stale(&jsonl_path).await
         } else {
-            false
+            messages_ongoing
         };
         let chunks = build_chunks_with_subagents(&messages, &candidates);
         let build_ms = t_build.elapsed().as_millis();
@@ -1599,6 +1761,7 @@ impl DataApi for LocalDataApi {
             "general" => mgr.update_general(request.data.clone()).await,
             "display" => mgr.update_display(request.data.clone()).await,
             "notifications" => mgr.update_notifications(request.data.clone()).await,
+            "ssh" => mgr.update_ssh(request.data.clone()).await,
             "httpServer" => mgr.update_http_server(request.data.clone()).await,
             "updater" => mgr.update_updater(request.data.clone()).await,
             _ => {
@@ -1667,22 +1830,20 @@ impl DataApi for LocalDataApi {
     // =========================================================================
 
     async fn list_contexts(&self) -> Result<Vec<ContextInfo>, ApiError> {
-        let mgr = self.ssh_mgr.lock().await;
-        let active = mgr.get_active_context();
-
+        let active = self.ssh_mgr.active_context_id().await;
         let mut contexts = vec![ContextInfo {
             id: "local".into(),
             kind: "local".into(),
-            is_active: matches!(active, ActiveContext::Local),
+            is_active: active.is_none(),
             host: None,
         }];
 
-        for status in mgr.get_all_statuses() {
+        for state in self.ssh_mgr.context_states().await {
             contexts.push(ContextInfo {
-                id: status.context_id.clone(),
+                id: state.context_id.clone(),
                 kind: "ssh".into(),
-                is_active: matches!(active, ActiveContext::Ssh(id) if id == &status.context_id),
-                host: status.host.clone(),
+                is_active: active.as_deref() == Some(state.context_id.as_str()),
+                host: Some(state.host),
             });
         }
 
@@ -1690,51 +1851,146 @@ impl DataApi for LocalDataApi {
     }
 
     async fn switch_context(&self, context_id: &str) -> Result<(), ApiError> {
-        let mut mgr = self.ssh_mgr.lock().await;
-        if context_id == "local" {
-            mgr.set_active_context(ActiveContext::Local);
+        let target = if context_id == "local" {
+            None
         } else {
-            mgr.set_active_context(ActiveContext::Ssh(context_id.to_owned()));
-        }
-        Ok(())
+            Some(context_id.to_owned())
+        };
+        self.ssh_mgr
+            .switch_context(target)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
     }
 
     async fn ssh_connect(
         &self,
         request: &SshConnectRequest,
     ) -> Result<serde_json::Value, ApiError> {
-        let config_path = cdt_ssh::default_ssh_config_path();
-        let configs = parse_ssh_config_file(&config_path).await;
-        let host_config = resolve_host(&configs, &request.host_alias)
-            .ok_or_else(|| ApiError::not_found(format!("SSH host: {}", request.host_alias)))?;
-
-        let context_id = request
-            .context_id
-            .clone()
-            .unwrap_or_else(|| request.host_alias.clone());
-
-        let mut mgr = self.ssh_mgr.lock().await;
-        let status = mgr.register_connection(&context_id, &host_config);
-        serde_json::to_value(status).map_err(|e| ApiError::internal(format!("{e}")))
+        let previous_context_id = self.ssh_mgr.active_context_id().await;
+        let context_id = self
+            .ssh_mgr
+            .connect(request.clone().into())
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))?;
+        if previous_context_id.as_deref() != Some(context_id.as_str()) {
+            if let Some(prev) = previous_context_id {
+                self.cancel_remote_watcher(&prev).await;
+            }
+        }
+        self.attach_remote_watcher(&context_id).await;
+        let auth_chain = self
+            .ssh_mgr
+            .context_state(&context_id)
+            .await
+            .map_or_else(Vec::new, |state| state.auth_chain);
+        let result = super::types::SshConnectionResult {
+            context_id,
+            status: cdt_ssh::SshStatus::Connected,
+            auth_chain,
+        };
+        serde_json::to_value(result).map_err(|e| ApiError::internal(format!("{e}")))
     }
 
     async fn ssh_disconnect(&self, context_id: &str) -> Result<(), ApiError> {
-        let mut mgr = self.ssh_mgr.lock().await;
-        mgr.disconnect(context_id);
-        Ok(())
+        self.cancel_remote_watcher(context_id).await;
+        self.ssh_mgr
+            .disconnect(context_id)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn ssh_test_connection(
+        &self,
+        request: &SshConnectRequest,
+    ) -> Result<serde_json::Value, ApiError> {
+        let auth_chain = self
+            .ssh_mgr
+            .test_connection(request.clone().into())
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))?;
+        let result = super::types::SshConnectionResult {
+            context_id: request
+                .context_id
+                .clone()
+                .unwrap_or_else(|| format!("{}-test", request.host)),
+            status: cdt_ssh::SshStatus::Connected,
+            auth_chain,
+        };
+        serde_json::to_value(result).map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn ssh_get_state(&self) -> Result<serde_json::Value, ApiError> {
+        let state = super::types::SshState {
+            active_context_id: self.ssh_mgr.active_context_id().await,
+            contexts: self.ssh_mgr.context_states().await,
+        };
+        serde_json::to_value(state).map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn ssh_get_config_hosts(&self) -> Result<serde_json::Value, ApiError> {
+        let config_path = default_ssh_config_path();
+        let configs = parse_ssh_config_file(&config_path).await;
+        serde_json::to_value(list_hosts(&configs)).map_err(|e| ApiError::internal(format!("{e}")))
     }
 
     async fn resolve_ssh_host(&self, alias: &str) -> Result<serde_json::Value, ApiError> {
-        let config_path = cdt_ssh::default_ssh_config_path();
-        let configs = parse_ssh_config_file(&config_path).await;
-        let host = resolve_host(&configs, alias)
-            .ok_or_else(|| ApiError::not_found(format!("SSH host: {alias}")))?;
-        Ok(serde_json::json!({
-            "hostname": host.hostname,
-            "user": host.user,
-            "port": host.port,
-            "identityFiles": host.identity_files,
-        }))
+        let host = resolve_host_via_ssh_g(alias)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))?;
+        serde_json::to_value(host).map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn ssh_save_last_connection(
+        &self,
+        request: &SshConnectRequest,
+    ) -> Result<serde_json::Value, ApiError> {
+        let last_connection = SshLastConnection {
+            host: request.host.clone(),
+            port: request.port,
+            username: request.username.clone(),
+            auth_method: match request.auth_method {
+                super::types::SshAuthMethod::SshConfig => cdt_config::SshAuthMethod::SshConfig,
+                super::types::SshAuthMethod::Password => cdt_config::SshAuthMethod::Password,
+            },
+            context_id: request.context_id.clone(),
+        };
+        let mut mgr = self.config_mgr.lock().await;
+        let config = mgr
+            .save_ssh_last_connection(last_connection)
+            .await
+            .map_err(|e| ApiError::internal(format!("{e}")))?;
+        serde_json::to_value(config.ssh.last_connection)
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn ssh_get_last_connection(&self) -> Result<serde_json::Value, ApiError> {
+        let mgr = self.config_mgr.lock().await;
+        serde_json::to_value(mgr.get_ssh_last_connection())
+            .map_err(|e| ApiError::internal(format!("{e}")))
+    }
+
+    async fn get_active_context(&self) -> Result<ContextInfo, ApiError> {
+        let active = self.ssh_mgr.active_context_id().await;
+        if let Some(context_id) = active {
+            let state = self
+                .ssh_mgr
+                .context_state(&context_id)
+                .await
+                .ok_or_else(|| ApiError::not_found(format!("SSH context: {context_id}")))?;
+            Ok(ContextInfo {
+                id: state.context_id,
+                kind: "ssh".into(),
+                is_active: true,
+                host: Some(state.host),
+            })
+        } else {
+            Ok(ContextInfo {
+                id: "local".into(),
+                kind: "local".into(),
+                is_active: true,
+                host: None,
+            })
+        }
     }
 
     // =========================================================================
@@ -2092,7 +2348,7 @@ fn validate_project_base_dir(base_dir: &str) -> Result<(), ApiError> {
 
 fn validate_memory_file_name(file: &str) -> Result<String, ApiError> {
     let path = Path::new(file);
-    if path.is_absolute()
+    if cdt_discover::looks_like_absolute_path(file)
         || path.components().count() != 1
         || file.contains(['/', '\\', ':'])
         || !path
@@ -2126,12 +2382,9 @@ async fn build_claude_md_from_filesystem(
                     cdt_core::ClaudeMdScope::Project
                 }
             };
-            let display_name = info
-                .path
-                .rsplit('/')
-                .next()
-                .unwrap_or(&info.path)
-                .to_owned();
+            let display_name = Path::new(&info.path)
+                .file_name()
+                .map_or_else(|| info.path.clone(), |s| s.to_string_lossy().into_owned());
             cdt_core::ContextInjection::ClaudeMd(cdt_core::ClaudeMdContextInjection {
                 id: format!("claude-md-{}", info.path),
                 path: info.path,

@@ -18,7 +18,16 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 dirs = { workspace = true }
+# SSH 协议栈 — design.md D1b 决议 pin minor 0.52.x；0.46 API 与 design 引用的样例形态不符
+# （PrivateKeyWithHashAlg / best_supported_rsa_hash / AuthResult.success() 均为 0.49+ 引入），
+# 升至 0.52 同时锁住 minor。russh-sftp 2.x 与 russh 0.52 兼容（aspectunk 维护）。
+russh = "0.52"
+russh-sftp = "2"
+futures = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+serde_json = { workspace = true }

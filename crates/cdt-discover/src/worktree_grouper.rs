@@ -198,7 +198,7 @@ async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool)> {
                             return None;
                         }
                         let common_path = Path::new(raw);
-                        let common = if common_path.is_absolute() {
+                        let common = if crate::looks_like_absolute_path(raw) {
                             common_path.to_path_buf()
                         } else {
                             gitdir.join(common_path)
@@ -233,7 +233,7 @@ fn parse_gitlink_dir(content: &str, base: &Path) -> Option<PathBuf> {
                 return None;
             }
             let p = Path::new(trimmed);
-            return Some(if p.is_absolute() {
+            return Some(if crate::looks_like_absolute_path(trimmed) {
                 p.to_path_buf()
             } else {
                 base.join(p)
@@ -884,6 +884,10 @@ mod tests {
         assert_eq!(
             parse_gitlink_dir("gitdir: ../repo/.git/worktrees/feat\n", base),
             Some(PathBuf::from("/tmp/wt/../repo/.git/worktrees/feat"))
+        );
+        assert_eq!(
+            parse_gitlink_dir("gitdir: C:\\repo\\.git\\worktrees\\feat\n", base),
+            Some(PathBuf::from(r"C:\repo\.git\worktrees\feat"))
         );
         assert!(parse_gitlink_dir("not a gitlink\n", base).is_none());
     }

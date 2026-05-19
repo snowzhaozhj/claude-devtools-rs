@@ -14,16 +14,20 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use cdt_api::{
     ConfigUpdateRequest, DataApi, LocalDataApi, MemoryFileContent, MemoryLayer, MemoryLayerKind,
     PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
-    SearchRequest, SessionMetadataUpdate, SessionSummary, WslDistroCandidate, WslDistroScanReport,
+    SearchRequest, SessionMetadataUpdate, SessionSummary, SshAuthMethod, SshConnectRequest,
+    WslDistroCandidate, WslDistroScanReport,
 };
 use cdt_config::{
     ConfigManager, NotificationManager, NotificationTrigger, TriggerContentType, TriggerMode,
 };
-use cdt_discover::{LocalFileSystemProvider, ProjectScanner};
-use cdt_ssh::SshConnectionManager;
+use cdt_discover::{EntryKind, FsMetadata, LocalFileSystemProvider, ProjectScanner};
+use cdt_ssh::{
+    RemoteEntry, SftpClient, SftpClientError, SshConnectionManager, SshFileSystemProvider,
+};
 use chrono::{TimeZone, Utc};
 use serde_json::json;
 use tempfile::TempDir;
@@ -67,6 +71,17 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "add_trigger",
     "remove_trigger",
     "read_agent_configs",
+    "ssh_connect",
+    "ssh_disconnect",
+    "ssh_test_connection",
+    "ssh_get_state",
+    "ssh_get_config_hosts",
+    "ssh_resolve_host",
+    "ssh_save_last_connection",
+    "ssh_get_last_connection",
+    "list_contexts",
+    "switch_context",
+    "get_active_context",
     "pin_session",
     "unpin_session",
     "hide_session",
@@ -108,6 +123,96 @@ fn ts() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 4, 11, 0, 0, 0).unwrap()
 }
 
+#[derive(Default)]
+struct FakeRemoteSftp {
+    files: std::collections::HashMap<String, Vec<u8>>,
+    dirs: std::collections::HashMap<String, Vec<RemoteEntry>>,
+}
+
+impl FakeRemoteSftp {
+    fn with_session(
+        remote_home: &str,
+        project_id: &str,
+        session_id: &str,
+        content: String,
+    ) -> Self {
+        let mut fake = Self::default();
+        let project_dir = format!("{remote_home}/{project_id}");
+        let file_path = format!("{project_dir}/{session_id}.jsonl");
+        fake.dirs.insert(
+            remote_home.to_owned(),
+            vec![RemoteEntry {
+                name: project_id.to_owned(),
+                kind: EntryKind::Dir,
+                metadata: None,
+                mtime_missing: false,
+            }],
+        );
+        fake.dirs.insert(
+            project_dir,
+            vec![RemoteEntry {
+                name: format!("{session_id}.jsonl"),
+                kind: EntryKind::File,
+                metadata: Some(FsMetadata {
+                    size: content.len() as u64,
+                    mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
+                }),
+                mtime_missing: false,
+            }],
+        );
+        fake.files.insert(file_path, content.into_bytes());
+        fake
+    }
+}
+
+#[async_trait]
+impl SftpClient for FakeRemoteSftp {
+    async fn metadata(&self, path: &str) -> Result<FsMetadata, SftpClientError> {
+        if let Some(bytes) = self.files.get(path) {
+            Ok(FsMetadata {
+                size: bytes.len() as u64,
+                mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
+            })
+        } else if self.dirs.contains_key(path) {
+            Ok(FsMetadata {
+                size: 0,
+                mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
+            })
+        } else {
+            Err(SftpClientError::NoSuchFile)
+        }
+    }
+
+    async fn try_exists(&self, path: &str) -> Result<bool, SftpClientError> {
+        Ok(self.files.contains_key(path) || self.dirs.contains_key(path))
+    }
+
+    async fn read(&self, path: &str) -> Result<Vec<u8>, SftpClientError> {
+        self.files
+            .get(path)
+            .cloned()
+            .ok_or(SftpClientError::NoSuchFile)
+    }
+
+    async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, SftpClientError> {
+        self.dirs
+            .get(path)
+            .cloned()
+            .ok_or(SftpClientError::NoSuchFile)
+    }
+
+    async fn read_lines_head(
+        &self,
+        path: &str,
+        max: usize,
+    ) -> Result<Vec<String>, SftpClientError> {
+        let bytes = self.read(path).await?;
+        let content =
+            String::from_utf8(bytes).map_err(|e| SftpClientError::Other(e.to_string()))?;
+        Ok(content.lines().take(max).map(ToOwned::to_owned).collect())
+    }
+}
+
 async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, text: &str) {
     let line = format!(
         r#"{{"type":"user","uuid":"{session_id}","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":"{text}"}}}}"#,
@@ -122,12 +227,12 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_33() {
+fn expected_tauri_commands_count_is_44() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        33,
+        44,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 33 个 Tauri command（加 3 个 server-mode）"
+         以及本文件常量；当前 src-tauri 注册 44 个 Tauri command（含 SSH + server-mode）"
     );
 }
 
@@ -167,6 +272,75 @@ async fn setup_api_constructs_without_panic() {
 // =============================================================================
 // Schema-level: ProjectInfo / SessionSummary / PaginatedResponse / 其他基础 struct
 // =============================================================================
+
+#[test]
+fn ssh_connect_request_accepts_new_and_legacy_payloads() {
+    let new_payload: SshConnectRequest = serde_json::from_value(json!({
+        "host": "prod-box",
+        "port": 2222,
+        "username": "alice",
+        "authMethod": "password",
+        "password": "secret",
+        "contextId": "ctx-prod"
+    }))
+    .unwrap();
+    assert_eq!(new_payload.host, "prod-box");
+    assert_eq!(new_payload.port, Some(2222));
+    assert_eq!(new_payload.username.as_deref(), Some("alice"));
+    assert_eq!(new_payload.auth_method, SshAuthMethod::Password);
+    assert_eq!(new_payload.context_id.as_deref(), Some("ctx-prod"));
+
+    let legacy_payload: SshConnectRequest = serde_json::from_value(json!({
+        "hostAlias": "legacy-host"
+    }))
+    .unwrap();
+    assert_eq!(legacy_payload.host, "legacy-host");
+    assert_eq!(legacy_payload.auth_method, SshAuthMethod::SshConfig);
+    assert_eq!(legacy_payload.port, None);
+
+    let serialized = serde_json::to_value(&new_payload).unwrap();
+    assert_eq!(serialized["authMethod"], json!("password"));
+    assert_eq!(serialized["contextId"], json!("ctx-prod"));
+    assert!(serialized.get("host_alias").is_none());
+    assert!(serialized.get("auth_method").is_none());
+}
+
+#[test]
+fn ssh_connection_result_shape_matches_connect_and_test_connection_contract() {
+    let result = cdt_api::SshConnectionResult {
+        context_id: "ctx-test".into(),
+        status: cdt_ssh::SshStatus::Connected,
+        auth_chain: vec![],
+    };
+    let json = serde_json::to_value(result).unwrap();
+    assert_eq!(json["contextId"], json!("ctx-test"));
+    assert_eq!(json["status"], json!("connected"));
+    assert!(json["authChain"].is_array());
+    assert!(json.get("context_id").is_none());
+    assert!(json.get("auth_chain").is_none());
+}
+
+#[test]
+fn ssh_auth_and_error_payloads_match_ipc_contract() {
+    let attempt = cdt_ssh::AuthAttempt {
+        source: cdt_ssh::AuthSource::Password,
+        outcome: cdt_ssh::AuthOutcome::Failure("denied".into()),
+        elapsed_ms: 12,
+    };
+    let attempt_json = serde_json::to_value(&attempt).unwrap();
+    assert_eq!(attempt_json["source"]["type"], json!("password"));
+    assert_eq!(attempt_json["outcome"]["type"], json!("failure"));
+    assert_eq!(attempt_json["outcome"]["data"], json!("denied"));
+    assert_eq!(attempt_json["elapsedMs"], json!(12));
+    assert!(attempt_json.get("elapsed_ms").is_none());
+
+    let error = cdt_ssh::SshError::AuthExhausted {
+        attempts: vec![attempt],
+    };
+    let error_json = serde_json::to_value(&error).unwrap();
+    assert_eq!(error_json["code"], json!("ssh_auth_exhausted"));
+    assert!(error_json.get("AuthExhausted").is_none());
+}
 
 #[test]
 fn project_info_serializes_camelcase() {
@@ -918,6 +1092,60 @@ async fn list_projects_returns_camelcase_array() {
 }
 
 #[tokio::test]
+async fn active_ssh_context_reads_remote_projects_and_sessions() {
+    let (api, _tmp) = setup_api().await;
+    let remote_home = "/remote/home/.claude/projects";
+    let project_id = "-remote-project";
+    let session_id = "remote-session";
+    let cwd = "/srv/remote-project";
+    let line = format!(
+        r#"{{"type":"user","uuid":"{session_id}","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":"from remote"}}}}"#,
+    );
+    let fake =
+        FakeRemoteSftp::with_session(remote_home, project_id, session_id, format!("{line}\n"));
+    let provider = SshFileSystemProvider::with_client(
+        "ctx-remote",
+        Arc::new(fake),
+        std::path::PathBuf::from(remote_home),
+    );
+    api.insert_test_ssh_context(
+        "ctx-remote",
+        "remote-host",
+        22,
+        Some("alice".into()),
+        std::path::PathBuf::from(remote_home),
+        provider,
+    )
+    .await;
+
+    let projects = api.list_projects().await.unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].id, project_id);
+    assert_eq!(projects[0].path, cwd);
+
+    let sessions = api
+        .list_sessions_sync(
+            project_id,
+            &PaginatedRequest {
+                page_size: 10,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(sessions.items[0].session_id, session_id);
+    assert_eq!(sessions.items[0].title.as_deref(), Some("from remote"));
+    assert_eq!(sessions.items[0].message_count, 1);
+
+    let detail = api
+        .get_session_detail(project_id, session_id)
+        .await
+        .unwrap();
+    assert_eq!(detail.session_id, session_id);
+    assert_eq!(detail.metrics["message_count"], json!(1));
+}
+
+#[tokio::test]
 async fn list_sessions_returns_paginated_response_shape() {
     let (api, _tmp) = setup_api().await;
     let resp = api
@@ -1378,6 +1606,78 @@ async fn get_config_display_section_exposes_font_fields_camelcase() {
         display.get("font_mono").is_none(),
         "MUST 不出现 snake_case font_mono"
     );
+}
+
+#[tokio::test]
+async fn update_config_ssh_round_trip_and_validation() {
+    let (api, _tmp) = setup_api().await;
+    let config = api.get_config().await.unwrap();
+    assert_eq!(config["ssh"]["profiles"], json!([]));
+    assert_eq!(config["ssh"]["lastConnection"], json!(null));
+    assert_eq!(config["ssh"]["autoReconnect"], json!(false));
+
+    api.update_config(&ConfigUpdateRequest {
+        section: "ssh".into(),
+        data: json!({
+            "profiles": [{
+                "id": "prod",
+                "name": "Production",
+                "host": "prod-box",
+                "port": 22,
+                "username": "alice",
+                "authMethod": "sshConfig"
+            }],
+            "autoReconnect": true
+        }),
+    })
+    .await
+    .expect("valid ssh profile SHALL persist");
+    let config = api.get_config().await.unwrap();
+    assert_eq!(
+        config["ssh"]["profiles"][0]["authMethod"],
+        json!("sshConfig")
+    );
+    assert_eq!(config["ssh"]["autoReconnect"], json!(true));
+
+    let err = api
+        .update_config(&ConfigUpdateRequest {
+            section: "ssh".into(),
+            data: json!({
+                "profiles": [{
+                    "id": "bad",
+                    "name": "",
+                    "host": "",
+                    "port": 0,
+                    "username": "",
+                    "authMethod": "password"
+                }]
+            }),
+        })
+        .await
+        .expect_err("invalid ssh profile SHALL be rejected");
+    assert!(err.to_string().contains("ssh.profiles"));
+}
+
+#[tokio::test]
+async fn ssh_save_last_connection_omits_password() {
+    let (api, _tmp) = setup_api().await;
+    let request = SshConnectRequest {
+        host: "prod-box".into(),
+        port: Some(2222),
+        username: Some("alice".into()),
+        auth_method: SshAuthMethod::Password,
+        password: Some("secret".into()),
+        context_id: Some("ctx-prod".into()),
+    };
+    api.ssh_save_last_connection(&request)
+        .await
+        .expect("last connection SHALL persist without password");
+    let last = api.ssh_get_last_connection().await.unwrap();
+    assert_eq!(last["host"], json!("prod-box"));
+    assert_eq!(last["port"], json!(2222));
+    assert_eq!(last["username"], json!("alice"));
+    assert_eq!(last["authMethod"], json!("password"));
+    assert!(last.get("password").is_none());
 }
 
 #[tokio::test]

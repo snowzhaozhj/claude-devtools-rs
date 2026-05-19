@@ -43,6 +43,17 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'add_trigger',
   'remove_trigger',
   'read_agent_configs',
+  'ssh_connect',
+  'ssh_disconnect',
+  'ssh_test_connection',
+  'ssh_get_state',
+  'ssh_get_config_hosts',
+  'ssh_resolve_host',
+  'ssh_save_last_connection',
+  'ssh_get_last_connection',
+  'list_contexts',
+  'switch_context',
+  'get_active_context',
   'pin_session',
   'unpin_session',
   'hide_session',
@@ -253,6 +264,11 @@ function buildHandler(fx: Fixture) {
           fx.config.notifications = { ...fx.config.notifications, ...(data as object) }
         } else if (section === 'general' && data) {
           fx.config.general = { ...fx.config.general, ...(data as object) }
+        } else if (section === 'ssh' && data) {
+          fx.config.ssh = {
+            ...(fx.config.ssh ?? { profiles: [], lastConnection: null, autoReconnect: false }),
+            ...(data as object),
+          }
         } else if (section === 'httpServer' && data) {
           fx.config.httpServer = { ...(fx.config.httpServer ?? { enabled: false, port: 3456 }), ...(data as object) }
         }
@@ -375,6 +391,70 @@ function buildHandler(fx: Fixture) {
 
       case 'read_agent_configs':
         return fx.agentConfigs
+
+      case 'ssh_connect': {
+        const request = getArg<Record<string, unknown>>(payload, 'request') ?? {}
+        return {
+          contextId: String(request.contextId ?? request.host ?? 'mock-ssh'),
+          status: 'connected',
+          authChain: [],
+        }
+      }
+
+      case 'ssh_disconnect':
+        return null
+
+      case 'ssh_test_connection': {
+        const request = getArg<Record<string, unknown>>(payload, 'request') ?? {}
+        return {
+          contextId: `test-${String(request.host ?? 'mock-ssh')}`,
+          status: 'connected',
+          authChain: [{ source: { type: 'envAgent' }, outcome: { type: 'success' }, elapsedMs: 3 }],
+        }
+      }
+
+      case 'ssh_get_state':
+        return { activeContextId: 'local', contexts: [] }
+
+      case 'ssh_get_config_hosts':
+        return ['mock-prod', 'mock-staging', ...(fx.config.ssh?.profiles ?? []).map((profile) => profile.host)]
+
+      case 'ssh_resolve_host': {
+        const alias = getArg<string>(payload, 'alias') ?? ''
+        return { host: alias, port: 22, user: null, identityFiles: [], identityAgent: null, degraded: true }
+      }
+
+      case 'ssh_save_last_connection': {
+        const request = getArg<Record<string, unknown>>(payload, 'request') ?? {}
+        const port = typeof request.port === 'number' ? request.port : null
+        const username = typeof request.username === 'string' ? request.username : null
+        const authMethod = request.authMethod === 'password' ? 'password' : 'sshConfig'
+        const contextId = typeof request.contextId === 'string' ? request.contextId : null
+        fx.config.ssh = fx.config.ssh ?? { profiles: [], lastConnection: null, autoReconnect: false }
+        fx.config.ssh.lastConnection = {
+          host: String(request.host ?? ''),
+          port,
+          username,
+          authMethod,
+          contextId,
+        }
+        return fx.config.ssh.lastConnection
+      }
+
+      case 'ssh_get_last_connection':
+        return fx.config.ssh?.lastConnection ?? null
+
+      case 'list_contexts':
+        return [
+          { id: 'local', kind: 'local', label: 'Local', status: 'connected', isActive: true, host: null },
+          { id: 'ssh-mock-prod', kind: 'ssh', label: 'mock-prod', status: 'connected', isActive: false, host: 'mock-prod' },
+        ]
+
+      case 'switch_context':
+        return null
+
+      case 'get_active_context':
+        return { id: 'local', kind: 'local', label: 'Local', status: 'connected', isActive: true, host: null }
 
       case 'get_project_session_prefs': {
         const projectId = getArg<string>(payload, 'projectId') ?? ''

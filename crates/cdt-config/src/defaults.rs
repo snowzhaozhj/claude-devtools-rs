@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::types::{
     AppConfig, DisplayConfig, GeneralConfig, HttpServerConfig, NotificationConfig,
-    NotificationTrigger, SessionsConfig, SshPersistConfig, TriggerContentType, TriggerMode,
+    NotificationTrigger, SessionsConfig, SshConfig, TriggerContentType, TriggerMode,
     TriggerTokenType, UpdaterConfig,
 };
 
@@ -108,11 +108,10 @@ pub fn default_config() -> AppConfig {
             pinned_sessions: HashMap::new(),
             hidden_sessions: HashMap::new(),
         },
-        ssh: SshPersistConfig {
+        ssh: SshConfig {
             last_connection: None,
             auto_reconnect: false,
             profiles: Vec::new(),
-            last_active_context_id: "local".into(),
         },
         http_server: HttpServerConfig {
             enabled: false,

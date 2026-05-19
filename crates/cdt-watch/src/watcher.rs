@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -20,6 +20,7 @@ use tokio::time::{Instant, sleep_until};
 
 use cdt_core::{FileChangeEvent, TodoChangeEvent};
 use cdt_discover::{normalize_path_for_compare, path_starts_with, path_strip_prefix};
+use cdt_ssh::{CancelToken, RemotePollingWatcher, RemoteWatcherHandle, SftpClient};
 
 use crate::error::WatchError;
 
@@ -58,7 +59,7 @@ impl Default for FileWatcher {
 impl FileWatcher {
     /// 创建监听默认路径（`~/.claude/projects/` 和 `~/.claude/todos/`）的 watcher。
     pub fn new() -> Self {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let projects_dir = home.join(".claude").join("projects");
         let todos_dir = home.join(".claude").join("todos");
         Self::with_paths(projects_dir, todos_dir)
@@ -93,6 +94,21 @@ impl FileWatcher {
     /// 订阅 todo 变更事件。
     pub fn subscribe_todos(&self) -> broadcast::Receiver<TodoChangeEvent> {
         self.todo_tx.subscribe()
+    }
+
+    /// 接入远端 SSH polling watcher，把远端 `FileChangeEvent` 注入同一
+    /// `file_tx` broadcast channel。
+    pub fn attach_remote(
+        &self,
+        client: Arc<dyn SftpClient>,
+        remote_projects_root: PathBuf,
+    ) -> RemoteWatcherHandle {
+        RemotePollingWatcher::spawn(
+            client,
+            remote_projects_root,
+            self.file_tx.clone(),
+            CancelToken::new(),
+        )
     }
 
     /// 启动监听，阻塞直到出错或被取消。
@@ -331,7 +347,11 @@ mod tests {
     //! 端到端 `FSEvents` 测试在 `tests/file_watching.rs`，只做烟雾测。
 
     use super::*;
+    use async_trait::async_trait;
+    use cdt_discover::{EntryKind, FsMetadata};
+    use cdt_ssh::{RemoteEntry, SftpClientError};
     use std::sync::{Arc, Mutex};
+    use std::time::SystemTime;
     use tempfile::TempDir;
     use tokio::time::Duration;
 
@@ -740,6 +760,102 @@ mod tests {
 
         assert!(file_rx.try_recv().is_err());
         assert!(todo_rx.try_recv().is_err());
+    }
+
+    struct RemoteBroadcastFake {
+        snapshots: tokio::sync::Mutex<Vec<Vec<RemoteEntry>>>,
+        projects_root: String,
+    }
+
+    impl RemoteBroadcastFake {
+        fn arc(projects_root: &str, snapshots: Vec<Vec<RemoteEntry>>) -> Arc<Self> {
+            Arc::new(Self {
+                snapshots: tokio::sync::Mutex::new(snapshots),
+                projects_root: projects_root.to_owned(),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl SftpClient for RemoteBroadcastFake {
+        async fn metadata(&self, _path: &str) -> Result<FsMetadata, SftpClientError> {
+            Err(SftpClientError::Other("metadata not used".into()))
+        }
+        async fn try_exists(&self, _path: &str) -> Result<bool, SftpClientError> {
+            Err(SftpClientError::Other("try_exists not used".into()))
+        }
+        async fn read(&self, _path: &str) -> Result<Vec<u8>, SftpClientError> {
+            Err(SftpClientError::Other("read not used".into()))
+        }
+        async fn read_lines_head(
+            &self,
+            _path: &str,
+            _max: usize,
+        ) -> Result<Vec<String>, SftpClientError> {
+            Err(SftpClientError::Other("read_lines_head not used".into()))
+        }
+        async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, SftpClientError> {
+            if path == self.projects_root {
+                return Ok(vec![RemoteEntry {
+                    name: "proj-r".into(),
+                    kind: EntryKind::Dir,
+                    metadata: None,
+                    mtime_missing: false,
+                }]);
+            }
+            if path == format!("{}/proj-r", self.projects_root) {
+                let mut snapshots = self.snapshots.lock().await;
+                if snapshots.len() > 1 {
+                    return Ok(snapshots.remove(0));
+                }
+                return Ok(snapshots.first().cloned().unwrap_or_default());
+            }
+            Err(SftpClientError::NoSuchFile)
+        }
+    }
+
+    fn remote_session(name: &str, size: u64) -> RemoteEntry {
+        RemoteEntry {
+            name: name.to_owned(),
+            kind: EntryKind::File,
+            metadata: Some(FsMetadata {
+                size,
+                mtime: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+            }),
+            mtime_missing: false,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn attach_remote_broadcasts_schema_compatible_file_event() {
+        let (_tmp, _projects, _todos, watcher) = setup_watcher_dirs();
+        let projects_root = "/remote/.claude/projects";
+        let fake = RemoteBroadcastFake::arc(
+            projects_root,
+            vec![
+                vec![remote_session("sess-r.jsonl", 10)],
+                vec![remote_session("sess-r.jsonl", 20)],
+            ],
+        );
+        let mut rx = watcher.subscribe_files();
+        let handle = watcher.attach_remote(fake, PathBuf::from(projects_root));
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        assert!(rx.try_recv().is_err(), "baseline must not emit");
+
+        tokio::time::advance(cdt_ssh::polling_watcher::POLL_INTERVAL + Duration::from_millis(50))
+            .await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let event = rx.try_recv().expect("remote size change should broadcast");
+        assert_eq!(event.project_id, "proj-r");
+        assert_eq!(event.session_id, "sess-r");
+        assert!(!event.deleted);
+        assert!(!event.project_list_changed);
+
+        handle.cancel_and_join().await;
     }
 
     // --- 嵌套 subagent JSONL 路径路由（spec file-watching "Route nested subagent

@@ -210,8 +210,32 @@ pub trait DataApi: Send + Sync {
     /// SSH 断开。
     async fn ssh_disconnect(&self, context_id: &str) -> Result<(), ApiError>;
 
+    /// 测试 SSH 连接，不注册 active context。
+    async fn ssh_test_connection(
+        &self,
+        request: &SshConnectRequest,
+    ) -> Result<serde_json::Value, ApiError>;
+
+    /// 获取 SSH/context 状态。
+    async fn ssh_get_state(&self) -> Result<serde_json::Value, ApiError>;
+
+    /// 列出 ssh config hosts。
+    async fn ssh_get_config_hosts(&self) -> Result<serde_json::Value, ApiError>;
+
     /// 解析 SSH host alias。
     async fn resolve_ssh_host(&self, alias: &str) -> Result<serde_json::Value, ApiError>;
+
+    /// 保存最近一次 SSH 连接。
+    async fn ssh_save_last_connection(
+        &self,
+        request: &SshConnectRequest,
+    ) -> Result<serde_json::Value, ApiError>;
+
+    /// 读取最近一次 SSH 连接。
+    async fn ssh_get_last_connection(&self) -> Result<serde_json::Value, ApiError>;
+
+    /// 获取当前活跃 context。
+    async fn get_active_context(&self) -> Result<ContextInfo, ApiError>;
 
     // =========================================================================
     // 文件 + 路径验证

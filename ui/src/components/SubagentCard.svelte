@@ -421,21 +421,30 @@
   }
 
   .sa-header {
+    position: relative;
     display: flex;
     align-items: center;
     gap: var(--bubble-header-gap);
     padding: var(--bubble-header-padding-l1);
     cursor: pointer;
-    transition: var(--bubble-transition);
+    transition: background-color 0.12s ease;
   }
   .sa-header:hover {
     background: var(--card-header-hover);
   }
   .sa-header-expanded {
     background: var(--card-header-bg);
-    border-bottom: 1px solid var(--card-border);
   }
-
+  .sa-header-expanded::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 1px;
+    background: var(--card-border);
+    pointer-events: none;
+  }
   .sa-chevron {
     width: var(--bubble-icon-md);
     height: var(--bubble-icon-md);

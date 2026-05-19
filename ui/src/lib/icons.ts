@@ -216,3 +216,25 @@ export const BELL_RING_SVG = `
 <path d="M4 2C2.8 3.7 2 5.7 2 8"/>
 <path d="M22 8c0-2.3-.8-4.3-2-6"/>
 `;
+
+export const WIFI_SVG = `
+<path d="M12 20h.01"/>
+<path d="M8.5 16.5a5 5 0 0 1 7 0"/>
+<path d="M5 13a10 10 0 0 1 14 0"/>
+<path d="M2 9.5a15 15 0 0 1 20 0"/>
+`;
+
+export const WIFI_OFF_SVG = `
+<path d="M12 20h.01"/>
+<path d="M8.5 16.5a5 5 0 0 1 7 0"/>
+<path d="M2 8.82a15 15 0 0 1 4.17-2.65"/>
+<path d="M10.66 5.11A15 15 0 0 1 22 8.82"/>
+<path d="m2 2 20 20"/>
+`;
+
+export const SERVER_SVG = `
+<rect width="20" height="8" x="2" y="2" rx="2" ry="2"/>
+<rect width="20" height="8" x="2" y="14" rx="2" ry="2"/>
+<line x1="6" x2="6.01" y1="6" y2="6"/>
+<line x1="6" x2="6.01" y1="18" y2="18"/>
+`;
