@@ -65,6 +65,7 @@ pub struct RemoteEntry {
     pub name: String,
     pub kind: EntryKind,
     pub metadata: Option<FsMetadata>,
+    pub mtime_missing: bool,
 }
 
 /// SFTP I/O seam —— `SshFileSystemProvider` 通过此 trait 访问远端，生产路径是
@@ -385,10 +386,12 @@ impl SftpClient for RusshSftpClient {
             .map(|entry| {
                 let meta = entry.metadata();
                 let kind = file_type_to_entry_kind(entry.file_type());
+                let modified = meta.modified();
+                let mtime_missing = matches!(kind, EntryKind::File) && modified.is_err();
                 let metadata = if matches!(kind, EntryKind::File) {
                     Some(FsMetadata {
                         size: meta.len(),
-                        mtime: meta.modified().unwrap_or(UNIX_EPOCH),
+                        mtime: modified.unwrap_or(UNIX_EPOCH),
                     })
                 } else {
                     None
@@ -397,6 +400,7 @@ impl SftpClient for RusshSftpClient {
                     name: entry.file_name(),
                     kind,
                     metadata,
+                    mtime_missing,
                 }
             })
             .collect())
@@ -631,11 +635,13 @@ mod tests {
                     size: 100,
                     mtime: SystemTime::UNIX_EPOCH,
                 }),
+                mtime_missing: true,
             },
             RemoteEntry {
                 name: "sub".into(),
                 kind: EntryKind::Dir,
                 metadata: None,
+                mtime_missing: false,
             },
         ]))
         .await;

@@ -838,6 +838,7 @@ version = "0.5.6"
 dependencies = [
  "cdt-core",
  "cdt-discover",
+ "cdt-ssh",
  "dirs",
  "dunce",
  "notify",

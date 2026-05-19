@@ -7,7 +7,7 @@
 | **Phase A** | tasks 1.1-1.5 / 2.1-2.5 / 3.1-3.11+3.14 | ✅ 已完成（commit `70b371f`） | `cdt-ssh::error/auth/host_resolver/request/polling_watcher` 骨架 + `lib.rs` 重组 + design.md D1b（russh 0.46→0.52） |
 | **Phase B1** | tasks 3.12-3.13 / 4.1-4.12 | ✅ 已完成 | `cdt-ssh::session::SshSessionManager` 真握手 5 阶段 + `auth::run_auth_chain` 调度层 |
 | **Phase B2** | tasks 5.1-5.8 | ✅ 已完成 | `cdt-ssh::provider::SshFileSystemProvider` 真 SFTP：`SftpClient` trait + 生产 `RusshSftpClient` 包装 `SftpSession` + `with_retry` 3 次指数退避 + 错误分类（NoSuchFile / PermissionDenied / Transient / Other）+ inherent `open_read_stream` 流式；fake 单测注入 15 个 case 覆盖 happy path / permission denied / 瞬时重试成功 / 重试耗尽 / classify 真值表 |
-| **Phase B3** | tasks 6.1-6.8 + 8.1-8.4 | ⏳ 待开工 | `cdt-ssh::polling_watcher` 3s+30s 轮询 + `cdt-watch::attach_remote` |
+| **Phase B3** | tasks 6.1-6.8 + 8.1-8.4 | ✅ 已完成 | `cdt-ssh::polling_watcher` 3s+30s 轮询 + `cdt-watch::attach_remote` |
 | **Phase C** | tasks 7.1-7.7 / 9.1-9.10 / 10.1-10.8 | ⏳ 待开工 | `cdt-config::SshConfig` 段 / `cdt-api::LocalDataApi` 接真 `SshSessionManager` / Tauri `invoke_handler!` 11 条 + capabilities + emit 桥 |
 | **Phase D** | tasks 11.1-11.5 / 12.1-12.6 | ⏳ 待开工 | UI: `lib/api.ts` IPC wrapper / `connection.ts` + `context.ts` store / `Connection.svelte` + `WorkspaceIndicator` + `ContextSwitchOverlay` + `ConnectionStatusBadge` |
 | **Phase E** | tasks 13.1-13.6 / 14.1-14.5 / N.1-N.4 | ⏳ 待开工 | 测试金字塔 + perf 验证 + 集成 smoke + 发布尾段 |
@@ -81,14 +81,14 @@
 
 ## 6. `cdt-ssh::polling_watcher` —— 远端 SFTP polling（spec ssh-remote-context Requirement: Watch remote project directories + file-watching ADDED Requirement）
 
-- [ ] 6.1 实现 `RemotePollingWatcher::spawn(provider, projects_root, sender, cancel_token)`：3s 间隔 tokio task，持有 `BTreeMap<PathBuf, FileFingerprint { size: u64, mtime: Option<SystemTime> }>` baseline
-- [ ] 6.2 第一次 poll 不发事件，仅建 baseline
-- [ ] 6.3 后续 poll diff baseline，对差异 emit `cdt_watch::FileChangeEvent { project_id, session_id, deleted, project_list_changed: false }`；差异判定 SHALL 按 size + mtime 双维度：(a) 新增 (b) size 变化 (c) size 不变 mtime 变化 (d) 删除
-- [ ] 6.4 mtime 缺失（`mtime = None`）时退化为 size-only fingerprint，并通过 `tracing::debug!(target: "cdt_watch::ssh_polling", "mtime missing")` 记录一次（不 spam）
-- [ ] 6.5 30s catch-up timer 强制全量 readdir + size + mtime 双维度 diff
-- [ ] 6.6 瞬时 SFTP 错误跳过本轮，不停 watcher
-- [ ] 6.7 `cancel_token.cancelled()` 1s 内退出
-- [ ] 6.8 单测：mock SFTP 客户端模拟 5 类差异（新增 / size 变化 / mtime 变化 / mtime 缺失退化 / 删除）
+- [x] 6.1 实现 `RemotePollingWatcher::spawn(provider, projects_root, sender, cancel_token)`：3s 间隔 tokio task，持有 `BTreeMap<PathBuf, FileFingerprint { size: u64, mtime: Option<SystemTime> }>` baseline
+- [x] 6.2 第一次 poll 不发事件，仅建 baseline
+- [x] 6.3 后续 poll diff baseline，对差异 emit `cdt_watch::FileChangeEvent { project_id, session_id, deleted, project_list_changed: false }`；差异判定 SHALL 按 size + mtime 双维度：(a) 新增 (b) size 变化 (c) size 不变 mtime 变化 (d) 删除
+- [x] 6.4 mtime 缺失（`mtime = None`）时退化为 size-only fingerprint，并通过 `tracing::debug!(target: "cdt_watch::ssh_polling", "mtime missing")` 记录一次（不 spam）
+- [x] 6.5 30s catch-up timer 强制全量 readdir + size + mtime 双维度 diff
+- [x] 6.6 瞬时 SFTP 错误跳过本轮，不停 watcher
+- [x] 6.7 `cancel_token.cancelled()` 1s 内退出
+- [x] 6.8 单测：mock SFTP 客户端模拟 5 类差异（新增 / size 变化 / mtime 变化 / mtime 缺失退化 / 删除）
 
 ## 7. `cdt-config` —— SSH 字段持久化（spec configuration-management）
 
@@ -102,10 +102,10 @@
 
 ## 8. `cdt-watch` —— 远端 watcher 接入（capability: file-watching）
 
-- [ ] 8.1 在 `crates/cdt-watch/src/lib.rs` 暴露 `FileWatcher::attach_remote(provider, projects_root, cancel_token)` 方法（替代之前可能的 stub）
-- [ ] 8.2 内部 spawn `cdt-ssh::polling_watcher`，把发出的 `FileChangeEvent` 喂入既有 broadcast channel（与本地 `notify` 事件流共享）
-- [ ] 8.3 `attach_remote` 返回 `RemoteWatcherHandle { cancel_token }` 让 connection manager 在 disconnect 时调 `cancel`
-- [ ] 8.4 单测：远端事件经 broadcast 与本地事件 schema 一致
+- [x] 8.1 在 `crates/cdt-watch/src/lib.rs` 暴露 `FileWatcher::attach_remote(provider, projects_root, cancel_token)` 方法（替代之前可能的 stub）
+- [x] 8.2 内部 spawn `cdt-ssh::polling_watcher`，把发出的 `FileChangeEvent` 喂入既有 broadcast channel（与本地 `notify` 事件流共享）
+- [x] 8.3 `attach_remote` 返回 `RemoteWatcherHandle { cancel_token }` 让 connection manager 在 disconnect 时调 `cancel`
+- [x] 8.4 单测：远端事件经 broadcast 与本地事件 schema 一致
 
 ## 9. `cdt-api::LocalDataApi` —— 接入真握手 + 状态广播（capability: ipc-data-api）
 
