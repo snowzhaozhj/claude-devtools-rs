@@ -31,6 +31,11 @@
   import { subscribeEvent, type Unsubscribe } from "../lib/transport";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
   import { applySilentRefresh, mergeSessions, applyPendingMetadata } from "../lib/sessionMerge";
+  import {
+    read as readSessionListCache,
+    setSessions as cacheSessions,
+    applyMetadata as cacheApplyMetadata,
+  } from "../lib/sessionListStore.svelte";
   import { MESSAGE_SQUARE, GIT_BRANCH_SVG, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
 
   // 虚拟滚动行高（实测 .session-item ≈ 44px：padding 8+8 + title 13×1.4 +
@@ -187,6 +192,8 @@
               }
             : s,
         );
+        // 同步写 store 缓存：下次切回该 project 时立即看到已 patch 的真值
+        cacheApplyMetadata(payload.projectId, payload);
       },
     );
 
@@ -232,6 +239,25 @@
       pendingMetadataUpdates.clear();
       return;
     }
+    // 非 silent 路径（切 project / 首次加载）：先查 sessionListStore 缓存；
+    // 命中则立即 sync hydrate 三态（避免"加载中..."中间态），同时触发 silent
+    // SWR refresh。详见 spec sidebar-navigation §"Sessions store
+    // stale-while-revalidate 缓存"。
+    if (!silent) {
+      const cached = readSessionListCache(projectId);
+      if (cached) {
+        // 切 project 的瞬间：buffer 也清掉（与下面 non-cached 分支同步行为），
+        // 旧 project 残留的 update 不应继承到新 project 显示。
+        pendingMetadataUpdates.clear();
+        sessions = cached.sessions;
+        sessionsNextCursor = cached.nextCursor;
+        sessionsTotal = cached.total;
+        sessionsLoading = false;
+        // 后台 silent refresh 兜底拉最新；走原 silent merge 路径保留尾部
+        void loadSessions(projectId, true);
+        return;
+      }
+    }
     // 非 silent 路径（切 project / 首次加载）SHALL 在 await 之**前**清空 buffer：
     // 后端 list_sessions 在 IPC return 之前已 spawn 扫描任务并可能 broadcast emit，
     // listener 在 `await listSessions(...)` 阻塞期间收到的新 project update 必须
@@ -270,6 +296,8 @@
       // 后端 `result.total`（项目维度全量 session 计数）覆盖 `sessionsTotal`。
       // loadMoreSessions 翻页路径**不**改 sessionsTotal。
       sessionsTotal = result.total;
+      // 同步写 by-projectId 缓存供下次切回该 project 立即 hydrate
+      cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);
       hasDeferredSessionRefresh = false;
       queueMicrotask(() => maybeLoadMoreSessions(true));
     } catch (e) {
@@ -301,6 +329,8 @@
       // spec sidebar-navigation §"会话总数显示口径"：loadMore **不**改
       // sessionsTotal——首次加载时已由 loadSessions 写入正确值；翻页累加期间
       // total 不应变化。后续 silent 刷新会再用最新 result.total 覆盖。
+      // 同步写 store 缓存（保留 total 不变，nextCursor 推进）
+      cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);
     } catch (e) {
       console.error("Failed to load more sessions:", e);
     } finally {
@@ -645,6 +675,7 @@
             class="session-item"
             class:session-item-active={session.sessionId === activeSessionId}
             class:session-item-hidden={isHidden(selectedProjectId, session.sessionId)}
+            class:metadata-pending={!session.title && session.messageCount === 0 && !session.isOngoing}
             style:height="{ITEM_HEIGHT}px"
             onclick={(e) => onSelectSession(session.sessionId, sessionLabel(session), e)}
             oncontextmenu={(e) => onContextMenu(e, session)}
@@ -1090,6 +1121,31 @@
 
   .session-item-hidden {
     opacity: 0.5;
+  }
+
+  /* 骨架占位"加载中"语义：shimmer 横移 + 内容半透明，让用户感知"在加载"
+     而不是"内容会突然跳变"。Metadata patch 到达后移除 `.metadata-pending`，
+     触发 .session-item 已有的 `transition: opacity 0.15s` 让真值平滑显形。
+     Spec sidebar-navigation §"Metadata 占位字段视觉渐显"。
+
+     `content-visibility: auto` 父级 throttle 离屏 animation 是 ui/CLAUDE.md
+     提过的踩坑——但 sidebar 列表外层未设 `content-visibility`，可忽略。 */
+  .session-item.metadata-pending .session-title-text,
+  .session-item.metadata-pending .session-meta {
+    opacity: 0.55;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--color-surface-overlay) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: metadata-pending-shimmer 1500ms linear infinite;
+  }
+
+  @keyframes metadata-pending-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
   }
 
   .session-title {

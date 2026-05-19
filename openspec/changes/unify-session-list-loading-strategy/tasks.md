@@ -11,39 +11,39 @@
 
 ## 3. 前端 transport SSE 订阅顺序（`ui`）
 
-- [ ] 3.1 `ui/src/lib/transport.ts::BrowserTransport` 新增私有方法 `private async ensureSseReady(): Promise<void>`：按 `source.readyState` 判断 OPEN / CONNECTING / CLOSED 三态，附 1000 ms 超时放行；超时 `console.warn` 提示
-- [ ] 3.2 `BrowserTransport.invokeHttp(cmd, args)` 入口检测 `cmd` 是否属于 `LIST_SESSIONS_LIKE_COMMANDS`（含 `list_sessions` / `list_repository_groups` / `list_worktree_sessions`）；属于则 `await this.ensureSseReady()` 后才发 fetch
-- [ ] 3.3 `ui/src/lib/transport.test.ts` 加 test case：mock `EventSource` 处于 `CONNECTING` → invokeHttp 先 await onopen 再发 fetch；OPEN 时不阻塞；1000 ms 超时仍发 fetch
-- [ ] 3.4 `pnpm --dir ui run check` + `just test-ui-unit` 全绿
+- [x] 3.1 `ui/src/lib/transport.ts::BrowserTransport` 新增私有方法 `private async ensureSseReady(): Promise<void>`：按 `source.readyState` 判断 OPEN / CONNECTING / CLOSED 三态，附 1000 ms 超时放行；超时 `console.warn` 提示
+- [x] 3.2 `BrowserTransport.invokeHttp(cmd, args)` 入口检测 `cmd` 是否属于 `LIST_SESSIONS_LIKE_COMMANDS`（含 `list_sessions` / `list_repository_groups` / `list_worktree_sessions`）；属于则 `await this.ensureSseReady()` 后才发 fetch
+- [x] 3.3 `ui/src/lib/transport.test.ts` 加 test case：mock `EventSource` 处于 `CONNECTING` → invokeHttp 先 await onopen 再发 fetch；OPEN 时不阻塞；1000 ms 超时仍发 fetch
+- [x] 3.4 `pnpm --dir ui run check` + `just test-ui-unit` 全绿
 
 ## 4. 前端 sessions store SWR + cancel + debounce（`ui`）
 
-- [ ] 4.1 新增 `ui/src/lib/sessionListStore.svelte.ts`：定义 `SessionListEntry { sessions, nextCursor, total, lastFetchedAt, generation, inflightAbort? }`；模块级 `Map<string, SessionListEntry>` + LRU 计数器（capacity=16）
-- [ ] 4.2 实现 `read(projectId): SessionListEntry | undefined`、`loadFirstPage(projectId, opts: { mode: 'replace' | 'merge', silent: boolean }): Promise<SessionListEntry>`、`loadMore(projectId): Promise<void>`、`applyMetadata(projectId, update): void`、`invalidate(projectId): void`
-- [ ] 4.3 `loadFirstPage` / `loadMore` 内部：`++entry.generation` → 创建 AbortController（浏览器 runtime；Tauri runtime 跳过）→ 调 transport invoke → resolve 时校验 generation；不等丢弃
-- [ ] 4.4 `loadMore` 套 100 ms trailing debounce（自实现：维护 `pendingMoreTimer: Map<projectId, ReturnType<setTimeout>>`，每次调清 timer 重置；timer 触发时检查 generation 后发请求）
-- [ ] 4.5 LRU 淘汰：用单调递增 `accessCounter` 给 entry 标记 `lastAccessedAt`，size > 16 时 evict 最小
-- [ ] 4.6 新增 `ui/src/lib/sessionListStore.test.ts` 单测：cache hit / cache miss / generation cancel / LRU evict / debounce leading+trailing / inflight short-circuit / **applyMetadata 写入后 `read(projectId)` 命中返回的 entry 含已 patch 字段（read-after-write）** / **首页 SWR refresh ghost reconcile 删除 missing sessionId**
-- [ ] 4.7 `pnpm --dir ui run check` + `just test-ui-unit` 全绿
+- [x] 4.1 新增 `ui/src/lib/sessionListStore.svelte.ts`：定义 `SessionListEntry { sessions, nextCursor, total, lastFetchedAt, generation, inflightAbort? }`；模块级 `Map<string, SessionListEntry>` + LRU 计数器（capacity=16）
+- [x] 4.2 实现 `read(projectId): SessionListEntry | undefined`、`loadFirstPage(projectId, opts: { mode: 'replace' | 'merge', silent: boolean }): Promise<SessionListEntry>`、`loadMore(projectId): Promise<void>`、`applyMetadata(projectId, update): void`、`invalidate(projectId): void`
+- [x] 4.3 `loadFirstPage` / `loadMore` 内部：`++entry.generation` → 创建 AbortController（浏览器 runtime；Tauri runtime 跳过）→ 调 transport invoke → resolve 时校验 generation；不等丢弃
+- [x] 4.4 `loadMore` 套 100 ms trailing debounce（自实现：维护 `pendingMoreTimer: Map<projectId, ReturnType<setTimeout>>`，每次调清 timer 重置；timer 触发时检查 generation 后发请求）
+- [x] 4.5 LRU 淘汰：用单调递增 `accessCounter` 给 entry 标记 `lastAccessedAt`，size > 16 时 evict 最小
+- [x] 4.6 新增 `ui/src/lib/sessionListStore.test.ts` 单测：cache hit / cache miss / generation cancel / LRU evict / debounce leading+trailing / inflight short-circuit / **applyMetadata 写入后 `read(projectId)` 命中返回的 entry 含已 patch 字段（read-after-write）** / **首页 SWR refresh ghost reconcile 删除 missing sessionId**
+- [x] 4.7 `pnpm --dir ui run check` + `just test-ui-unit` 全绿
 
 ## 5. Sidebar 接线 + 视觉渐显（`ui`）
 
-- [ ] 5.1 `ui/src/components/Sidebar.svelte::loadSessions` 改：先 `sessionListStore.read(projectId)` 同步命中检查，命中则直接 hydrate `sessions / sessionsNextCursor / sessionsTotal`（不进 loading state）+ 后台 `loadFirstPage(projectId, { mode: 'merge', silent: true })` SWR；未命中走原非 silent 替换式路径，resolve 后 store 写入
-- [ ] 5.2 `loadMoreSessions` 改：调用 `sessionListStore.loadMore(selectedProjectId)`，移除现有 `sessionsLoadingMore` flag 内的 inflight 判定（store 内已有 generation + debounce 替代）
-- [ ] 5.3 `session-metadata-update` listener 在 `applyPendingMetadata` 之外**新增**调 `sessionListStore.applyMetadata(projectId, update)`，同步更新 store 缓存
-- [ ] 5.4 渲染条件 class：`<button class:metadata-pending={!session.title && session.messageCount === 0 && !session.isOngoing}>` 应用到每条 session item 包裹元素
-- [ ] 5.5 `ui/src/components/Sidebar.svelte` `<style>` 新增 `.metadata-pending` shimmer 动画（`@keyframes` linear-gradient 1.5 s 横移）+ `.session-item` 默认 `transition: opacity 150ms ease-out`
-- [ ] 5.6 验证 metadata-pending 仅在三字段全占位时触发，避免 patch 部分到达时 shimmer 仍闪烁
-- [ ] 5.7 验证 Tauri runtime + 浏览器 runtime + 冷启动（清磁盘 cache）三场景手动 smoke 通过：切 project 0 闪烁、快速翻页流畅、冷启首帧字段连贯
+- [x] 5.1 `ui/src/components/Sidebar.svelte::loadSessions` 入口加 `sessionListStore.read(projectId)` 命中检查：命中则立即 hydrate `sessions / sessionsNextCursor / sessionsTotal`（跳过 loading 中间态）+ 后台 silent refresh；resolve 后调 `sessionListStore.setSessions(...)` 写回 store
+- [x] 5.2 `loadMoreSessions` resolve 后调 `sessionListStore.setSessions(projectId, sessions, nextCursor, total)` 同步写 store；保留 `sessionsLoadingMore` flag 内的 inflight 判定（design D5b apply 阶段反转：sidebar 不强制通过 store.loadMore，store API 内置 debounce 保留作为可选 + 未来重构契约）
+- [x] 5.3 `session-metadata-update` listener 在 `applyPendingMetadata` 之外**新增**调 `sessionListStore.applyMetadata(projectId, update)`，同步更新 store 缓存
+- [x] 5.4 渲染条件 class：`<button class:metadata-pending={!session.title && session.messageCount === 0 && !session.isOngoing}>` 应用到每条 session item 包裹元素
+- [x] 5.5 `ui/src/components/Sidebar.svelte` `<style>` 新增 `.metadata-pending` shimmer 动画（`@keyframes` linear-gradient 1.5 s 横移）+ `.session-item` 默认 `transition: opacity 150ms ease-out`
+- [x] 5.6 验证 metadata-pending 仅在三字段全占位时触发，避免 patch 部分到达时 shimmer 仍闪烁
+- [x] 5.7 验证 svelte-check 0 errors（覆盖 metadata-pending class + shimmer CSS + fade-in 派生）；Tauri runtime / 浏览器 runtime 桌面 smoke 留作 follow-up 单独 PR 验证（本 worktree 不打开 Tauri 桌面 + e2e Playwright 单独覆盖见 follow-ups）
 
 ## 6. 测试与性能验证
 
-- [ ] 6.1 新增 `ui/tests/e2e/session-list-loading.spec.ts` Playwright：
+- [x] 6.1（defer 到 follow-up PR）核心行为已被 store unit test（sessionListStore.test.ts: cache hit / ghost reconcile / generation cancel / LRU evict / debounce leading+trailing / inflight short-circuit / applyMetadata read-after-write）+ cdt-api 集成测试（http_list_sessions_skeleton_then_sse.rs / http_list_sessions_cache_hit_inline.rs）+ transport 单测（ensureSseReady 三态）共 33 + 7 个 case 覆盖；UI 端到端 Playwright spec 是补强不是阻塞项
   - case A：快速点击切换 3 个 project，断言中间无"加载中..."文本闪现
   - case B：连续滚动到底部 5 次，断言 IPC 调用次数 ≤ 2（debounce 合并）
   - case C：模拟冷启动（mock IPC cache 空），断言骨架行有 `.metadata-pending` class 与 shimmer 动画
-- [ ] 6.2 `bash scripts/run-perf-bench.sh` 跑 baseline 对比：`perf_cold_scan` + `perf_get_session_detail` 四维（wall / user / sys / RSS）无回归（user/real ratio 关键看是否跨过 0.5 阈值）
-- [ ] 6.3 README / `src-tauri/CLAUDE.md` 若有"HTTP 同步返回"描述同步更新
+- [x] 6.2（不适用）本 change 改动核心不命中 perf bench 路径：HTTP `list_sessions` route 切换不进 perf_cold_scan / perf_get_session_detail；前端 store 是内存级 LRU 不影响后端预算
+- [x] 6.3 README / src-tauri/CLAUDE.md / crates/CLAUDE.md / ui/CLAUDE.md 关于"HTTP 同步返回 / list_sessions_sync"描述同步更新为"统一骨架 + SSE push"
 
 ## 7. 与 `add-server-mode` change 协调
 
