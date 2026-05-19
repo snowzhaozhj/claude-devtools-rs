@@ -585,7 +585,10 @@ impl LocalDataApi {
     }
 
     pub async fn shutdown_ssh_all(&self, deadline: std::time::Duration) {
-        let _ops = self.ssh_watcher_ops.lock().await;
+        let Ok(_ops) = self.ssh_watcher_ops.try_lock() else {
+            self.ssh_mgr.shutdown_all(deadline).await;
+            return;
+        };
         self.cancel_all_remote_watchers().await;
         self.ssh_mgr.shutdown_all(deadline).await;
     }
@@ -1855,15 +1858,26 @@ impl DataApi for LocalDataApi {
     }
 
     async fn switch_context(&self, context_id: &str) -> Result<(), ApiError> {
+        let _ops = self.ssh_watcher_ops.lock().await;
+        let previous_context_id = self.ssh_mgr.active_context_id().await;
         let target = if context_id == "local" {
             None
         } else {
             Some(context_id.to_owned())
         };
         self.ssh_mgr
-            .switch_context(target)
+            .switch_context(target.clone())
             .await
-            .map_err(|e| ApiError::internal(format!("{e}")))
+            .map_err(|e| ApiError::internal(format!("{e}")))?;
+        if previous_context_id != target {
+            if let Some(prev) = previous_context_id {
+                self.cancel_remote_watcher(&prev).await;
+            }
+            if let Some(next) = target {
+                self.attach_remote_watcher(&next).await;
+            }
+        }
+        Ok(())
     }
 
     async fn ssh_connect(
@@ -2214,7 +2228,7 @@ impl LocalDataApi {
         extract_parsed_messages_cached(&self.parsed_msg_cache, path).await
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(test)]
     async fn run_ssh_watcher_op_for_test(&self, delay: std::time::Duration) {
         let _ops = self.ssh_watcher_ops.lock().await;
         tokio::time::sleep(delay).await;
