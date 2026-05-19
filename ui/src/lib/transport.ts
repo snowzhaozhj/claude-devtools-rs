@@ -47,6 +47,10 @@ class TauriTransport implements Transport {
   }
 }
 
+/** EventSource CLOSED 后延迟重建的退避（ms）。避免 server toggle off → on
+ * 之间立即 burst 重连风暴。 */
+const SSE_RECONNECT_BACKOFF_MS = 1000;
+
 class BrowserTransport implements Transport {
   // 单例 EventSource + handler 集合：UI 里 5+ 个 `subscribeEvent` 调用点
   // （App.svelte 3 个 + Sidebar 1 个 + fileChangeStore 1 个等），若每次都
@@ -55,6 +59,7 @@ class BrowserTransport implements Transport {
   // 永远等不到空闲连接，sidebar 卡 loading。复用同一条 SSE 流，按事件类型
   // fan-out 到所有 handler。
   private source: EventSource | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly handlers = new Set<EventHandler>();
 
   async invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
@@ -74,7 +79,11 @@ class BrowserTransport implements Transport {
   }
 
   private ensureSource(): void {
-    if (this.source) return;
+    // 现有 source 已 CLOSED（典型场景：server toggle off → axum shutdown →
+    // TCP RST → EventSource 自动重连失败 N 次后进入 CLOSED 终态，浏览器
+    // 不再自己重连），SHALL 主动清掉重建（codex 二审 MUST FIX 轴 4）。
+    if (this.source && this.source.readyState !== EventSource.CLOSED) return;
+    this.source = null;
     const source = new EventSource(`${getServerBaseUrl()}/api/events`);
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data) as { type?: string } & Record<string, unknown>;
@@ -87,13 +96,32 @@ class BrowserTransport implements Transport {
       for (const h of [...this.handlers]) h(eventName, normalized);
     };
     source.onerror = (event) => {
-      // EventSource 自带指数回退重连，不需手动重建。记录用于诊断。
-      console.warn("[transport] SSE connection error; browser will auto-reconnect", event);
+      console.warn("[transport] SSE connection error", event);
+      // CONNECTING（=0）是 EventSource 自带回退重连阶段，不干预；CLOSED
+      // （=2）是终态浏览器不再重连，SHALL 主动延迟重建。OPEN（=1）短暂错误
+      // 后通常自愈，无需处理。
+      if (source.readyState === EventSource.CLOSED) this.scheduleReconnect(source);
     };
     this.source = source;
   }
 
+  private scheduleReconnect(failed: EventSource): void {
+    // 只在 failed === 当前 source 时重建——避免与并发 closeSource / handler
+    // 全部 unsubscribe 后又有新 subscribe 的路径冲突。
+    if (this.source !== failed) return;
+    this.source = null;
+    if (this.reconnectTimer || this.handlers.size === 0) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.handlers.size > 0) this.ensureSource();
+    }, SSE_RECONNECT_BACKOFF_MS);
+  }
+
   private closeSource(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (!this.source) return;
     this.source.close();
     this.source = null;
