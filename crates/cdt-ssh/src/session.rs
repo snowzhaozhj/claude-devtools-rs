@@ -720,7 +720,10 @@ async fn authenticate_with_agent(
     _socket_path: &Path,
     _username: &str,
 ) -> AuthOutcome {
-    AuthOutcome::Skipped("named-pipe agent not supported in v1".into())
+    std::future::ready(AuthOutcome::Skipped(
+        "named-pipe agent not supported in v1".into(),
+    ))
+    .await
 }
 
 /// macOS `launchctl getenv SSH_AUTH_SOCK` 子进程包装（v1 D2 候选 3）。
