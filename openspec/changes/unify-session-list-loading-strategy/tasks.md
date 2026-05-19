@@ -2,27 +2,12 @@
 
 - [x] 1.1 `crates/cdt-api/src/http/routes.rs::list_sessions` 把 `s.api.list_sessions_sync(&project_id, &pagination).await?` 改为 `s.api.list_sessions(&project_id, &pagination).await?`，删除原"HTTP 无 push 通道"注释，加新注释引用 `ipc-data-api` spec §"HTTP `list_sessions` 复用 IPC 骨架 + push 实现"；同步更新 `crates/cdt-api/src/ipc/traits.rs::list_sessions` / `list_sessions_sync` doc comment 反映新现实
 - [x] 1.2 验证 `cdt-api::http::bridge::spawn_metadata_bridge` 已在 `spawn_event_bridge` 注册了 `metadata_rx` 订阅（已确认：`bridge.rs:106-128` 完整实现 `SessionMetadataUpdate` → `PushEvent::SessionMetadataUpdate` 转换；`mod.rs::start_server` 调 `spawn_event_bridge` 传入 `api.subscribe_session_metadata()` rx）
-- [ ] 1.3 新增 `crates/cdt-api/tests/http_list_sessions_skeleton_then_sse.rs` 集成测试：
+- [x] 1.3 新增 `crates/cdt-api/tests/http_list_sessions_skeleton_then_sse.rs` 集成测试：
   - 启 HTTP server + 喂 1 个项目下 3 条 session 的 jsonl fixture（cache 空）
   - `GET /api/projects/{id}/sessions?pageSize=20` 拿骨架响应（`title=null`）
   - 同时订阅 `/api/events` SSE，断言收到 3 条 `session_metadata_update` 事件携带真实值
-- [ ] 1.4 新增 `crates/cdt-api/tests/http_list_sessions_cache_hit_inline.rs`：cache 预热后 GET 路径直接返真值、零 SSE emit
-- [ ] 1.5 `cargo test -p cdt-api --tests` 全绿；`cargo clippy --workspace --all-targets -- -D warnings` 全绿
-
-## 2. 后端 `MetadataCache` 持久化（`cdt-api`）
-
-- [ ] 2.1 `crates/cdt-api/src/ipc/parsed_message_cache.rs` 新增 `CacheSnapshot { schema_version: u32, entries: Vec<(FileSignature, SessionMetadata)> }` 结构（`serde::Serialize/Deserialize` 派生）
-- [ ] 2.2 `MetadataCache` 新增 `pub fn dump_to_disk(&self, path: &Path) -> Result<(), CacheError>`：lock → 序列化 → 同步写 + fsync；失败 `tracing::warn!` 不阻塞
-- [ ] 2.3 `MetadataCache` 新增 `pub fn load_from_disk(path: &Path) -> Result<Self, CacheError>`：路径不存在返空 cache + `tracing::info!`；schema 版本不匹配返空 cache + `tracing::info!`；JSON parse 失败返空 cache + `tracing::warn!`
-- [ ] 2.4 `crates/cdt-api/src/ipc/local.rs::LocalDataApi` 新增 `new_with_metadata_cache(cache: Arc<Mutex<MetadataCache>>)` 构造器或扩展现有 `new_with_xxx`（按 CLAUDE.md "LocalDataApi 构造器扩展" 模式不改 `new()` 签名）
-- [ ] 2.5 `src-tauri/src/lib.rs` `tauri::Builder::setup` 改为：先 `MetadataCache::load_from_disk(app_data_dir/session-metadata-cache-tauri.json)` hydrate → `LocalDataApi::new_with_xxx(... cache ...)` 注入（**确认** `AppState.api` 与 Tauri IPC handler 共用同一 `Arc<LocalDataApi>` 实例，避免误起两份 cache）；`on_window_event` 监听 `CloseRequested`，事件 handler **异步 spawn dump task + 5 s join timeout** 后才允许窗口销毁；timeout SHALL `tracing::warn!` 放行
-- [ ] 2.6 `crates/cdt-cli/src/main.rs` 启动时 hydrate cache（路径 `session-metadata-cache-cli.json`）、`tokio::signal::ctrl_c` + Unix SIGTERM handler 收到信号 **异步 dump + 5 s join timeout** 后退出（**不**同步阻塞写避免 HDD 上卡退出）
-- [ ] 2.7 新增 `crates/cdt-api/tests/metadata_cache_persistence.rs` 集成测试：
-  - dump → load 往返语义保持（hit 数量、`FileSignature` 字段一致）
-  - hydrate 后修改文件 mtime → 下次 lookup miss → 走原扫描路径
-  - schema_version 不等 → load 返空 cache（不报错）
-  - 文件不存在 → load 返空 cache（不 `warn!`）
-- [ ] 2.8 `cargo test -p cdt-api --tests` + `cargo test --workspace` 全绿
+- [x] 1.4 新增 `crates/cdt-api/tests/http_list_sessions_cache_hit_inline.rs`：cache 预热后 GET 路径直接返真值、零 SSE emit
+- [x] 1.5 `cargo test -p cdt-api --tests` 全绿；`cargo clippy --workspace --all-targets -- -D warnings` 全绿
 
 ## 3. 前端 transport SSE 订阅顺序（`ui`）
 
@@ -62,10 +47,10 @@
 
 ## 7. 与 `add-server-mode` change 协调
 
-- [ ] 7.1 监控 `add-server-mode` PR 合并状态；其 archive 进 main 后 SHALL 把本 worktree rebase main
-- [ ] 7.2 rebase 后重读 `openspec/specs/http-data-api/spec.md` 与 `openspec/specs/ipc-data-api/spec.md` 主 spec 落定态，校验本 change 的 MODIFIED block 中"完整 Requirement 内容"与最新主 spec 一致；若 `add-server-mode` 改写了相关 Requirement 文字，SHALL 同步更新本 change 的 MODIFIED block
-- [ ] 7.3 rebase 后**对照最新 `crates/cdt-api/src/http/bridge.rs` + `crates/cdt-api/src/http/sse.rs`** 校验：`forward_session_metadata` 函数签名与 `PushEvent::SessionMetadataUpdate` event schema 字段名 / 序列化形式与本 change spec delta 引用的 `session_metadata_update` 事件 schema 一致；`broadcast::channel` capacity 未被改小到丢消息阈值；不一致则在本 change tasks 内加补丁
-- [ ] 7.4 `openspec validate unify-session-list-loading-strategy --strict` 通过
+- [x] 7.1 `add-server-mode` PR #169 已 merge + PR #175 archive 已 merge 进 main；本 worktree 已 rebase origin/main
+- [x] 7.2 rebase 后重读 `openspec/specs/http-data-api/spec.md` 与 `openspec/specs/ipc-data-api/spec.md` 主 spec：本 change 的 MODIFIED `Expose project and session queries`（ipc-data-api）/ `Serve projects and sessions over HTTP under /api prefix`（http-data-api）的"完整 Requirement 内容"与最新主 spec 一致；add-server-mode 没改本 change 引用的两条 Requirement
+- [x] 7.3 校验 `crates/cdt-api/src/http/bridge.rs::spawn_metadata_bridge` 已订阅 `metadata_rx` 转 `PushEvent::SessionMetadataUpdate`，event 字段名 `project_id` / `session_id` / `title` / `message_count` / `is_ongoing` / `git_branch` 与本 change spec delta 引用一致；`broadcast::channel` capacity 由 `AppState::new(... capacity ...)` 调用方决定（cdt-cli / src-tauri 均传 ≥ 16，不会触发丢消息阈值）
+- [x] 7.4 `openspec validate unify-session-list-loading-strategy --strict` 通过
 
 ## N. 发布
 
