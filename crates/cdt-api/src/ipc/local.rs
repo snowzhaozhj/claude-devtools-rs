@@ -341,6 +341,8 @@ pub struct LocalDataApi {
     todo_tx: Option<broadcast::Sender<cdt_core::TodoChangeEvent>>,
     watcher_tasks: Mutex<Vec<JoinHandle<()>>>,
     remote_watchers: Mutex<HashMap<String, RemoteWatcherHandle>>,
+    ssh_watcher_ops: Mutex<()>,
+    ssh_shutdown_generation: AtomicU64,
     /// `list_sessions` 后台元数据扫描的广播发送端。`subscribe_session_metadata()`
     /// 返回 receiver，Tauri host 桥接为前端 `session-metadata-update` 事件。
     session_metadata_tx: broadcast::Sender<SessionMetadataUpdate>,
@@ -436,6 +438,8 @@ impl LocalDataApi {
             todo_tx: None,
             watcher_tasks: Mutex::new(Vec::new()),
             remote_watchers: Mutex::new(HashMap::new()),
+            ssh_watcher_ops: Mutex::new(()),
+            ssh_shutdown_generation: AtomicU64::new(0),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
@@ -516,6 +520,8 @@ impl LocalDataApi {
             todo_tx: Some(todo_tx),
             watcher_tasks,
             remote_watchers: Mutex::new(HashMap::new()),
+            ssh_watcher_ops: Mutex::new(()),
+            ssh_shutdown_generation: AtomicU64::new(0),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
@@ -582,6 +588,11 @@ impl LocalDataApi {
     }
 
     pub async fn shutdown_ssh_all(&self, deadline: std::time::Duration) {
+        self.ssh_shutdown_generation.fetch_add(1, Ordering::SeqCst);
+        let Ok(_ops) = self.ssh_watcher_ops.try_lock() else {
+            self.ssh_mgr.shutdown_all(deadline).await;
+            return;
+        };
         self.cancel_all_remote_watchers().await;
         self.ssh_mgr.shutdown_all(deadline).await;
     }
@@ -1851,33 +1862,58 @@ impl DataApi for LocalDataApi {
     }
 
     async fn switch_context(&self, context_id: &str) -> Result<(), ApiError> {
+        let _ops = self.ssh_watcher_ops.lock().await;
+        let previous_context_id = self.ssh_mgr.active_context_id().await;
         let target = if context_id == "local" {
             None
         } else {
             Some(context_id.to_owned())
         };
         self.ssh_mgr
-            .switch_context(target)
+            .switch_context(target.clone())
             .await
-            .map_err(|e| ApiError::internal(format!("{e}")))
+            .map_err(|e| ApiError::internal(format!("{e}")))?;
+        if previous_context_id != target {
+            if let Some(prev) = previous_context_id {
+                self.cancel_remote_watcher(&prev).await;
+            }
+            if let Some(next) = target {
+                self.attach_remote_watcher(&next).await;
+            }
+        }
+        Ok(())
     }
 
     async fn ssh_connect(
         &self,
         request: &SshConnectRequest,
     ) -> Result<serde_json::Value, ApiError> {
-        let previous_context_id = self.ssh_mgr.active_context_id().await;
-        let context_id = self
-            .ssh_mgr
-            .connect(request.clone().into())
-            .await
-            .map_err(|e| ApiError::internal(format!("{e}")))?;
-        if previous_context_id.as_deref() != Some(context_id.as_str()) {
-            if let Some(prev) = previous_context_id {
-                self.cancel_remote_watcher(&prev).await;
+        let context_id = {
+            let _ops = self.ssh_watcher_ops.lock().await;
+            let shutdown_generation = self.ssh_shutdown_generation.load(Ordering::SeqCst);
+            let target_context_id = request
+                .context_id
+                .clone()
+                .unwrap_or_else(|| request.host.clone());
+            let previous_context_id = self.ssh_mgr.active_context_id().await;
+            if previous_context_id.as_deref() != Some(target_context_id.as_str()) {
+                if let Some(prev) = previous_context_id {
+                    self.cancel_remote_watcher(&prev).await;
+                }
             }
-        }
-        self.attach_remote_watcher(&context_id).await;
+            let context_id = self
+                .ssh_mgr
+                .connect(request.clone().into())
+                .await
+                .map_err(|e| ApiError::internal(format!("{e}")))?;
+            if self.ssh_shutdown_generation.load(Ordering::SeqCst) == shutdown_generation {
+                self.attach_remote_watcher(&context_id).await;
+                context_id
+            } else {
+                let _ = self.ssh_mgr.disconnect(&context_id).await;
+                return Err(ApiError::internal("SSH shutdown in progress"));
+            }
+        };
         let auth_chain = self
             .ssh_mgr
             .context_state(&context_id)
@@ -1892,6 +1928,7 @@ impl DataApi for LocalDataApi {
     }
 
     async fn ssh_disconnect(&self, context_id: &str) -> Result<(), ApiError> {
+        let _ops = self.ssh_watcher_ops.lock().await;
         self.cancel_remote_watcher(context_id).await;
         self.ssh_mgr
             .disconnect(context_id)
@@ -2199,6 +2236,12 @@ impl LocalDataApi {
         path: &std::path::Path,
     ) -> Option<Arc<Vec<cdt_core::ParsedMessage>>> {
         extract_parsed_messages_cached(&self.parsed_msg_cache, path).await
+    }
+
+    #[cfg(test)]
+    async fn run_ssh_watcher_op_for_test(&self, delay: std::time::Duration) {
+        let _ops = self.ssh_watcher_ops.lock().await;
+        tokio::time::sleep(delay).await;
     }
 
     /// 读取 `.claude/agents/*.md` 配置（全局 + 所有已发现项目）。
@@ -2935,6 +2978,26 @@ mod tests {
         let ssh_mgr = SshConnectionManager::new();
         let scanner = ProjectScanner::new(local_handle(), projects_dir);
         LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr)
+    }
+
+    #[tokio::test]
+    async fn ssh_watcher_ops_are_serialized() {
+        let dir = tempdir().unwrap();
+        let api = Arc::new(build_api(dir.path().join("config.json")).await);
+        let started = std::time::Instant::now();
+        let first = {
+            let api = api.clone();
+            tokio::spawn(async move {
+                api.run_ssh_watcher_op_for_test(std::time::Duration::from_millis(50))
+                    .await;
+            })
+        };
+        tokio::task::yield_now().await;
+        api.run_ssh_watcher_op_for_test(std::time::Duration::from_millis(0))
+            .await;
+        first.await.unwrap();
+
+        assert!(started.elapsed() >= std::time::Duration::from_millis(50));
     }
 
     #[tokio::test]
