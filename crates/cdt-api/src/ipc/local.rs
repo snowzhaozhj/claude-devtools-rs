@@ -172,6 +172,30 @@ fn find_first_ai_after(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core
 ///   `post - pre`；任一缺值 → `None`
 ///
 /// 两趟扫描避免可变借用冲突：Pass 1 不可变借用算 (delta, phase)，Pass 2 可变借用写入。
+/// SSH context 下取代 `LocalGitIdentityResolver` 用于 `list_repository_groups`——
+/// 远端无 git 解析能力（不能 spawn 子进程，也不能 SFTP 读容器内 `.git` 因为
+/// 大多数远端是非 git 项目），所有 git 字段返回 None / true 兜底。
+/// 修复 codex R3 P1[1]：避免容器内 cwd 与本机宿主路径重合时泄漏本地 gitBranch。
+struct NoopGitIdentityResolver;
+
+#[async_trait::async_trait]
+impl cdt_discover::GitIdentityResolver for NoopGitIdentityResolver {
+    async fn resolve_identity(
+        &self,
+        _path: &std::path::Path,
+    ) -> Option<cdt_core::RepositoryIdentity> {
+        None
+    }
+
+    async fn get_branch(&self, _path: &std::path::Path) -> Option<String> {
+        None
+    }
+
+    async fn is_main_worktree(&self, _path: &std::path::Path) -> bool {
+        true
+    }
+}
+
 fn parse_jsonl_content(content: &str) -> Result<Vec<cdt_core::ParsedMessage>, ParseError> {
     let mut out = Vec::new();
     for (idx, line) in content.lines().enumerate() {
@@ -1234,6 +1258,21 @@ impl DataApi for LocalDataApi {
     }
 
     async fn get_project_memory(&self, project_id: &str) -> Result<ProjectMemory, ApiError> {
+        // SSH context 下 graceful degradation：远端 memory 文件读取暂不支持
+        // （`discover_memory_layers` / `validate_memory_file_name` 内部走
+        // 同步 tokio::fs，无法直接复用走远端 SFTP）。返回 has_memory=false
+        // 让 UI 显示"无 memory"而非读宿主机错误数据。
+        // followup：openspec/followups.md 已记 SSH context memory 支持（TODO）
+        let (fs, _projects_dir) = self.active_fs_and_projects_dir().await?;
+        if fs.kind() == cdt_discover::FsKind::Ssh {
+            return Ok(ProjectMemory {
+                project_id: project_id.to_owned(),
+                has_memory: false,
+                count: 0,
+                default_file: None,
+                layers: Vec::new(),
+            });
+        }
         let memory_dir = self.project_memory_dir(project_id).await?;
         let layers = discover_memory_layers(&memory_dir).await?;
         let default_file = layers
@@ -1255,6 +1294,13 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         file: &str,
     ) -> Result<MemoryFileContent, ApiError> {
+        // SSH context 下 graceful degradation——同 get_project_memory 同款理由。
+        let (fs, _projects_dir) = self.active_fs_and_projects_dir().await?;
+        if fs.kind() == cdt_discover::FsKind::Ssh {
+            return Err(ApiError::not_found(format!(
+                "memory file {file}: SSH context 下远端 memory 文件读取尚不支持"
+            )));
+        }
         let memory_dir = self.project_memory_dir(project_id).await?;
         let safe_file = validate_memory_file_name(file)?;
         let path = memory_dir.join(&safe_file);
@@ -1847,7 +1893,6 @@ impl DataApi for LocalDataApi {
             }));
         }
 
-        let config = SearchConfig::default();
         let max_results = 50;
 
         let project_id = request
@@ -1856,6 +1901,9 @@ impl DataApi for LocalDataApi {
             .ok_or_else(|| ApiError::validation("project_id is required for search"))?;
 
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        // active context = SSH 时启用 SearchConfig.is_ssh=true，开 stage-limit
+        // 避免远端 SFTP 全量扫描（local 默认 is_ssh=false）
+        let config = SearchConfig::from_fs_kind(fs.kind());
         let searcher = SessionSearcher::new(fs, self.search_cache.clone(), projects_dir);
         let result = searcher
             .search_sessions(project_id, &request.query, max_results, &config)
@@ -1988,15 +2036,20 @@ impl DataApi for LocalDataApi {
             next = ?target,
             "ssh_watcher_ops locked"
         );
+        // spec `ssh-remote-context::Reconnect lifecycle preserves SFTP session
+        // integrity`：cancel-and-join SHALL 在 ssh_mgr mutate 之前完成
+        if previous_context_id != target {
+            if let Some(prev) = previous_context_id.as_deref() {
+                tracing::debug!(target: "cdt_ssh::lifecycle", phase = "cancel_prev_watcher", context_id = %prev);
+                self.cancel_remote_watcher(prev).await;
+            }
+        }
+        tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_mgr_switch_context");
         self.ssh_mgr
             .switch_context(target.clone())
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;
         if previous_context_id != target {
-            if let Some(prev) = previous_context_id {
-                tracing::debug!(target: "cdt_ssh::lifecycle", phase = "cancel_prev_watcher", context_id = %prev);
-                self.cancel_remote_watcher(&prev).await;
-            }
             if let Some(next) = target.as_deref() {
                 tracing::debug!(target: "cdt_ssh::lifecycle", phase = "attach_new_watcher", context_id = %next);
                 self.attach_remote_watcher(next).await;
@@ -2218,14 +2271,24 @@ impl DataApi for LocalDataApi {
 
     async fn list_repository_groups(&self) -> Result<Vec<cdt_core::RepositoryGroup>, ApiError> {
         // D3b：grouper 无状态轻量，每次 lazy 构造，避免 LocalDataApi 字段污染。
-        let mut scanner = self.active_scanner().await?;
+        // active context = SSH 时 SHALL NOT 用 LocalGitIdentityResolver——容器内远端
+        // cwd 与本机宿主路径重合时（如 docker 挂载 `~/.claude` 复现场景），会读宿主机
+        // `.git` 泄漏本地 gitBranch。SSH 路径用 NoopGitIdentityResolver 让 git 字段全 None。
+        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
+        let mut scanner = ProjectScanner::new(fs, projects_dir);
         let projects = scanner
             .scan()
             .await
             .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
-        let grouper =
-            cdt_discover::WorktreeGrouper::new(cdt_discover::LocalGitIdentityResolver::new());
-        Ok(grouper.group_by_repository(projects).await)
+        if is_remote {
+            let grouper = cdt_discover::WorktreeGrouper::new(NoopGitIdentityResolver);
+            Ok(grouper.group_by_repository(projects).await)
+        } else {
+            let grouper =
+                cdt_discover::WorktreeGrouper::new(cdt_discover::LocalGitIdentityResolver::new());
+            Ok(grouper.group_by_repository(projects).await)
+        }
     }
 
     // -------------------------------------------------------------------------
