@@ -14,14 +14,14 @@
   const effectiveStatus = $derived(contextId === "local" ? "connected" : (status ?? "disconnected"));
   const label = $derived(
     contextId === "local"
-      ? "Local"
+      ? "本地"
       : effectiveStatus === "connected"
-        ? "Connected"
+        ? "已连接"
         : effectiveStatus === "connecting"
-          ? "Connecting"
+          ? "连接中"
           : effectiveStatus === "error"
-            ? "Error"
-            : "Disconnected",
+            ? "连接失败"
+            : "未连接",
   );
 </script>
 
