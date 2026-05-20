@@ -3559,6 +3559,13 @@ mod tests {
         LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr)
     }
 
+    #[test]
+    fn metadata_scan_key_keeps_project_id_with_separator_intact() {
+        let key = MetadataScanKey::page("-tmp|pipe", Some("20"));
+        assert_eq!(key.project_id, "-tmp|pipe");
+        assert_eq!(key.for_tests(), "-tmp|pipe|20");
+    }
+
     #[tokio::test]
     async fn ssh_watcher_ops_are_serialized() {
         let dir = tempdir().unwrap();

@@ -506,6 +506,7 @@ async fn eager_timeout_includes_waiting_for_metadata_permit() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn project_id_with_pipe_does_not_confuse_active_scan_abort() {
     use cdt_api::DataApi;
