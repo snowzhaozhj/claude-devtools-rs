@@ -690,24 +690,31 @@
           </SettingsGroup>
           {#if showBrowserAccess}
             <SettingsGroup
-              title="Browser Access"
-              description="Start an HTTP server to access the UI from a browser or embed in iframes"
+              title="浏览器访问"
+              description="启动本地 HTTP 服务，让本机浏览器或 iframe 直接打开 Claude DevTools"
             >
-              <SettingsField label="Enable server mode" description="启用后本机浏览器可访问 http://localhost:&lt;port&gt;">
+              <SettingsField
+                label="启用浏览器访问"
+                description="启用后可在浏览器中打开 http://localhost:&lt;端口&gt;"
+              >
                 {#snippet control()}
                   <SettingsToggle
                     enabled={serverStatus?.running ?? false}
                     disabled={serverPending}
                     onChange={(v) => toggleHttpServer(v)}
-                    ariaLabel="Enable server mode"
+                    ariaLabel="启用浏览器访问"
                   />
                 {/snippet}
               </SettingsField>
-              <SettingsField label="端口" description="服务监听端口（1024-65535）" labelFor="http-server-port-input">
+              <SettingsField
+                label="监听端口"
+                description="允许范围 1024–65535，启用后锁定，停用后可修改"
+                labelFor="http-server-port-input"
+              >
                 {#snippet control()}
                   <input
                     id="http-server-port-input"
-                    class="control-input control-input-mono"
+                    class="control-input control-input-mono control-input-narrow"
                     type="number"
                     inputmode="numeric"
                     min="1024"
@@ -715,25 +722,35 @@
                     bind:value={portInput}
                     disabled={serverPending || serverStatus?.running}
                     data-testid="browser-access-port"
+                    aria-describedby={serverStatus?.running ? "http-server-port-locked" : undefined}
                     onchange={persistHttpServerPort}
                     onblur={persistHttpServerPort}
                   />
+                  {#if serverStatus?.running}
+                    <span
+                      id="http-server-port-locked"
+                      class="port-locked-badge"
+                      data-testid="browser-access-port-locked"
+                      aria-label="端口已锁定"
+                    >
+                      已锁定
+                    </span>
+                  {/if}
                 {/snippet}
-                {#if serverStatus?.running}
-                  <div class="field-hint" data-testid="browser-access-port-locked">关闭 server mode 后可修改端口。</div>
-                {/if}
               </SettingsField>
               {#if serverStatus?.running}
                 <div class="server-status-row" role="status" data-testid="browser-access-running">
                   <span class="status-dot status-dot-on" aria-hidden="true"></span>
-                  <span>Running on <code>http://localhost:{serverStatus.port}</code></span>
+                  <span class="server-status-text">
+                    运行中 · <code>http://localhost:{serverStatus.port}</code>
+                  </span>
                   <button
                     type="button"
                     class="copy-url-btn"
                     onclick={copyServerUrl}
                     data-testid="browser-access-copy"
                   >
-                    {copyFeedback ? "Copied" : "Copy URL"}
+                    {copyFeedback ? "已复制" : "复制链接"}
                   </button>
                 </div>
               {/if}
@@ -1288,6 +1305,23 @@
     font-family: var(--font-mono);
     font-size: 12px;
   }
+  /* inline 布局下窄数值控件，避免 flex:1 把 SettingsField label 列挤垮 */
+  .content-body :global(.control-input-narrow) {
+    flex: 0 0 auto;
+    width: 120px;
+    text-align: left;
+  }
+  .port-locked-badge {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 9999px;
+    background: var(--color-surface-overlay);
+    color: var(--color-text-secondary);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.4;
+  }
   .content-body :global(.control-color) {
     width: 38px;
     height: 30px;
@@ -1529,10 +1563,18 @@
   .server-status-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-top: 10px;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--color-surface-raised);
     font-size: 13px;
     color: var(--color-text-secondary);
+  }
+  .server-status-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .server-status-row code {
     font-family: var(--font-mono);
