@@ -114,8 +114,8 @@ fn pct(values: &mut [u128], q: f64) -> u128 {
 }
 
 /// 三个子场景串行跑（`run-perf-bench.sh` 用 `--exact` 匹配单一 test，所以需
-/// 要一个总入口 ignored test 名 `bench_eager_first_page` 把 page_size=20 /
-/// page_size=50 / D4b 复合三个场景串起来，让进程级 `/usr/bin/time -lp` wall/
+/// 要一个总入口 ignored test 名 `bench_eager_first_page` 把 `page_size=20` /
+/// `page_size=50` / D4b 复合三个场景串起来，让进程级 `/usr/bin/time -lp` wall/
 /// user/sys/RSS 四维覆盖完整链路。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "perf bench, builds 30×50 corpus in tempdir"]
