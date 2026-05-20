@@ -6,7 +6,7 @@
 
 - 独立 Cargo.toml，**excluded from workspace**（workspace 根 `Cargo.toml` 的 `exclude` 列表里必须含 `src-tauri`）；通过 path deps 引用 `crates/`。
 - `beforeDevCommand` 从 `src-tauri/` 目录执行，路径用 `../ui`。
-- Tauri IPC commands 直接调用 `LocalDataApi`（不走 HTTP）。command 权威清单 = `crates/cdt-api/tests/ipc_contract.rs::EXPECTED_TAURI_COMMANDS`，`src-tauri/src/lib.rs::invoke_handler!` 与之同步。`list_sessions_sync` 是 `LocalDataApi` 公开方法但不在 invoke_handler（仅供 HTTP server）。
+- Tauri IPC commands 直接调用 `LocalDataApi`（不走 HTTP）。command 权威清单 = `crates/cdt-api/tests/ipc_contract.rs::EXPECTED_TAURI_COMMANDS`，`src-tauri/src/lib.rs::invoke_handler!` 与之同步。`list_sessions_sync` trait method 保留作为非 SSE-aware 客户端 fallback，但 axum HTTP route 现已与 IPC 共用 `list_sessions`（骨架 + SSE push）实现（change `unify-session-list-loading-strategy`）。
 - **Trigger / pin / hide / session prefs 在 `DataApi` trait 中**：`add_trigger` / `remove_trigger` / `pin_session` / `unpin_session` / `hide_session` / `unhide_session` / `get_project_session_prefs` 历史上是独立 inherent 方法，change `add-server-mode` 起提升到 trait，让 HTTP 路径（浏览器 runtime）能镜像 IPC 同名 command；trait `default impl` 返回 not-implemented，`LocalDataApi` 在 `impl DataApi` 块 override 真实实现。
 
 ## 后台任务模式

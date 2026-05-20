@@ -74,7 +74,10 @@ async fn main() -> Result<()> {
     let error_rx = api.subscribe_detected_errors();
     let metadata_rx = api.subscribe_session_metadata();
 
-    let state = AppState::new(api, 256);
+    // 与 src-tauri/server_mode 保持一致：page_size=50 默认 × 多 SSE
+    // subscriber 时 256 容量易被打满（codex 二审 issue 2）。1024 给约 20×
+    // headroom；仍 lag 时由 SSE handler 的 `sse_lagged` sentinel 兜底。
+    let state = AppState::new(api, 1024);
 
     // 把 file / todo / detected-error / metadata 桥到 AppState.events_tx，供 SSE 推送
     spawn_event_bridge(

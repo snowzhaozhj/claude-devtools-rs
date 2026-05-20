@@ -53,6 +53,25 @@ class TauriTransport implements Transport {
 const SSE_RECONNECT_MIN_MS = 1000;
 const SSE_RECONNECT_MAX_MS = 30_000;
 
+/** 命令名集合：发请求前 SHALL 先 await `ensureSseReady()` 让浏览器订阅好
+ * `/api/events` SSE 才发 fetch——否则后端在 GET response 返回后立即 emit 的
+ * `session_metadata_update` 会在 EventSource OPEN 前发生，patch 永久丢失
+ * 直到下一次 file-change silent refresh 兜底（spec http-data-api §"浏览器
+ * client SHALL 在首次 list_sessions 前订阅 SSE"）。 */
+const LIST_SESSIONS_LIKE_COMMANDS = new Set([
+  "list_sessions",
+  "list_repository_groups",
+  "get_worktree_sessions",
+]);
+
+/** `ensureSseReady` 内部轮询粒度与总超时窗口。设计 D2：固定 onopen 监听绑死
+ * 在某个特定 EventSource 实例上，重连退避期间新 source 还没创建（current source
+ * 是 CLOSED 状态），监听器永远等不到 OPEN——所以每 50 ms 重读 `this.source`
+ * 引用，捕捉重连过程中诞生的新 source。1000 ms 总超时是经验值，超时后不抛错
+ * 放行让冷启加载继续，丢失的 metadata 由后续 file-change silent refresh 兜底。 */
+const SSE_READY_POLL_MS = 50;
+const SSE_READY_TIMEOUT_MS = 1000;
+
 class BrowserTransport implements Transport {
   // 单例 EventSource + handler 集合：UI 里 5+ 个 `subscribeEvent` 调用点
   // （App.svelte 3 个 + Sidebar 1 个 + fileChangeStore 1 个等），若每次都
@@ -65,12 +84,56 @@ class BrowserTransport implements Transport {
   /** 当前指数回退步数，0=首次（min），onopen 时重置（参见 ensureSource）。 */
   private reconnectAttempt = 0;
   private readonly handlers = new Set<EventHandler>();
+  /** `ensureSseReady` 1000 ms 超时放行后置 true：彼时 fetch 已发出，但 SSE
+   * 尚未 OPEN，后端骨架 + 异步 metadata patch 会全部丢失。SSE 真正进入
+   * OPEN 时（`source.onopen`）需要给 UI 层发一次 `sse-recovered` 兜底事件，
+   * 让 Sidebar 重新触发 silent refresh 拉一轮新 metadata（codex 二审 issue 1）。
+   * 单标志而非队列：所有 list_sessions-like 请求共享一次重拉即可。 */
+  private sseRecoveryPending = false;
 
   async invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
     if (unsupportedBrowserCommands.has(cmd)) {
       throw new BrowserUnsupportedError(cmd);
     }
+    if (LIST_SESSIONS_LIKE_COMMANDS.has(cmd)) {
+      await this.ensureSseReady();
+    }
     return await invokeHttp<T>(cmd, args ?? {});
+  }
+
+  /** 阻塞调用方直到 SSE EventSource 进入 OPEN，最多等 1000 ms 后放行。
+   *
+   * 见 D2：每次循环重读 `this.source` 引用，重连退避期间新 source 诞生后
+   * 仍能被捕捉到。CLOSED 的 source 主动 nil 后调 `ensureSource()` 重建。
+   * Tauri runtime 不走这条路径（IPC event listener 是同步 register，没有
+   * EventSource OPEN 等待问题）。 */
+  private async ensureSseReady(): Promise<void> {
+    const deadline =
+      (typeof performance !== "undefined" ? performance.now() : Date.now()) + SSE_READY_TIMEOUT_MS;
+    this.ensureSource();
+    while (true) {
+      const src = this.source;
+      if (src && src.readyState === EventSource.OPEN) return;
+      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+      if (now >= deadline) {
+        console.warn(
+          "[transport] SSE not OPEN within 1000ms; proceeding without subscription—metadata patches may be lost until SSE recovers",
+        );
+        // 后续 onopen 时 emit `sse-recovered` 通知 UI 层兜底重拉一轮，避免
+        // 后端在 timeout 窗口内已发的 metadata patch 永久丢失（codex 二审
+        // issue 1）。loop 入口已 short-circuit OPEN，timeout 必然意味着新
+        // source 仍在 CONNECTING；onopen 在最终成功（或下次重连成功）时触发。
+        this.sseRecoveryPending = true;
+        return;
+      }
+      await new Promise<void>((r) => setTimeout(r, SSE_READY_POLL_MS));
+      // CLOSED 的旧 source 主动清掉重建——`ensureSource()` 已有自检，重复
+      // 调用安全（OPEN/CONNECTING 时直接 return）。
+      if (this.source && this.source.readyState === EventSource.CLOSED) {
+        this.source = null;
+        this.ensureSource();
+      }
+    }
   }
 
   async subscribeEvents(handler: EventHandler): Promise<Unsubscribe> {
@@ -94,6 +157,14 @@ class BrowserTransport implements Transport {
     // 延迟）。
     source.onopen = () => {
       this.reconnectAttempt = 0;
+      // 上一轮 list_sessions-like 请求 ensureSseReady 超时（SSE 还没 OPEN
+      // 就放行 fetch）→ 后端在该窗口期内 emit 的 metadata patch 全部丢失。
+      // 真正 OPEN 后给所有 handler 发一次 `sse-recovered` pseudo-event 让
+      // Sidebar 触发 silent refresh 重拉一轮（codex 二审 issue 1）。
+      if (this.sseRecoveryPending) {
+        this.sseRecoveryPending = false;
+        for (const h of [...this.handlers]) h("sse-recovered", {});
+      }
     };
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data) as { type?: string } & Record<string, unknown>;
@@ -154,6 +225,29 @@ const browserTransport = new BrowserTransport();
 
 export function getTransport(): Transport {
   return isTauriRuntime() ? tauriTransport : browserTransport;
+}
+
+/** 测试专用：清掉模块单例 `browserTransport` 持有的 SSE source / handlers /
+ * reconnect timer，避免测试间状态污染（前一个测试的 OPEN source 会让下一个
+ * 测试的 `ensureSseReady` 跳过等待逻辑）。production 代码 SHALL NOT 调用。 */
+export function __resetBrowserTransportForTests(): void {
+  // BrowserTransport 私有字段，测试时强转访问；命名加 underscore 前缀避免误用。
+  const inst = browserTransport as unknown as {
+    source: EventSource | null;
+    reconnectTimer: ReturnType<typeof setTimeout> | null;
+    reconnectAttempt: number;
+    handlers: Set<unknown>;
+  };
+  inst.handlers.clear();
+  if (inst.reconnectTimer) {
+    clearTimeout(inst.reconnectTimer);
+    inst.reconnectTimer = null;
+  }
+  inst.reconnectAttempt = 0;
+  if (inst.source) {
+    inst.source.close();
+    inst.source = null;
+  }
 }
 
 export async function subscribeEvent<T>(
@@ -323,6 +417,12 @@ function mapPushEventName(type: string | undefined): string | null {
       return "ssh_status";
     case "context_changed":
       return "context_changed";
+    case "sse_lagged":
+      // 后端 broadcast 容量打满后丢弃了若干 PushEvent。`/api/events` SSE
+      // handler 在 BroadcastStream Lagged 时 inline emit 一条 `sse_lagged`
+      // 让 UI 知道：前后状态可能不一致，触发 silent refresh 兜底重拉一轮
+      // （codex 二审 issue 2）。
+      return "sse-lagged";
     default:
       return null;
   }

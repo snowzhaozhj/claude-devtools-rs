@@ -123,7 +123,7 @@ Claude Code 父 process cwd 被切（worktree / `EnterWorktree`）后，subagent
 
 ## IPC vs HTTP 行为分叉
 
-trait 加默认方法 fallback 到通用版本，`LocalDataApi` 自己 override 真版本——HTTP 跑 LocalDataApi 拿完整结果，其他实现安全降级。例：`DataApi::list_sessions_sync` 默认调 `list_sessions`（骨架），LocalDataApi override 为同步全扫。
+trait 加默认方法 fallback 到通用版本，`LocalDataApi` 自己 override 真版本——其他实现安全降级。例：`DataApi::list_sessions_sync` 默认调 `list_sessions`（骨架），LocalDataApi override 为同步全扫；**`list_sessions_sync` 保留作为 trait fallback，但 axum HTTP route 已切换到与 IPC 共用的 `list_sessions`（骨架 + SSE push）实现**（change `unify-session-list-loading-strategy`）。
 
 ## 后台任务 per-key 取消
 

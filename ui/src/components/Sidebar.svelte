@@ -29,8 +29,19 @@
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { subscribeEvent, type Unsubscribe } from "../lib/transport";
+  import { isTauriRuntime } from "../lib/runtime";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
-  import { applySilentRefresh, mergeSessions, applyPendingMetadata } from "../lib/sessionMerge";
+  import {
+    applySilentRefresh,
+    mergeSessions,
+    mergeRecoveryResponse,
+    applyPendingMetadata,
+  } from "../lib/sessionMerge";
+  import {
+    read as readSessionListCache,
+    setSessions as cacheSessions,
+    applyMetadata as cacheApplyMetadata,
+  } from "../lib/sessionListStore.svelte";
   import { MESSAGE_SQUARE, GIT_BRANCH_SVG, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
 
   // 虚拟滚动行高（实测 .session-item ≈ 44px：padding 8+8 + title 13×1.4 +
@@ -127,6 +138,8 @@
   // ---------------------------------------------------------------------------
 
   let metadataUnlisten: Unsubscribe | null = null;
+  let sseRecoveredUnlisten: Unsubscribe | null = null;
+  let sseLaggedUnlisten: Unsubscribe | null = null;
   let refreshProjectsListener: (() => void) | null = null;
   let sessionListEl: HTMLElement | null = null;
 
@@ -187,8 +200,78 @@
               }
             : s,
         );
+        // 同步写 store 缓存：下次切回该 project 时立即看到已 patch 的真值
+        cacheApplyMetadata(payload.projectId, payload);
       },
     );
+
+    // SSE 恢复兜底（codex 二审 issue 1 / issue 2 修法的 UI 层）：
+    // - `sse-recovered`：transport 层 ensureSseReady 1000 ms 超时放行 fetch 后，
+    //   后端发出的 metadata patch 在 SSE OPEN 前已丢失，OPEN 时通知 UI 重拉
+    // - `sse-lagged`：HTTP server 端 broadcast 容量打满 + slow client 跟不上时
+    //   sse handler 推送的 sentinel，告知 UI "中间已丢若干 PushEvent"
+    // 两条都触发当前 project 一次 silent refresh，让后端重启扫描 + emit 新
+    // 一轮 metadata patch；silent merge 不会用骨架 null 覆盖已 patch 真值。
+    //
+    // 仅 BrowserTransport 会 synthesize 这两个事件——Tauri runtime 直接走
+    // `@tauri-apps/api` 的 listen()，不存在 SSE OPEN/lag 概念。Tauri runtime
+    // 跳过订阅避免在测试 mock 环境下额外触发 listen() 调用让 transformCallback
+    // 路径报错，同时也省掉真桌面运行时无谓的 listen() 注册。
+    if (!isTauriRuntime()) {
+      const recoverHandler = () => {
+        const projectId = selectedProjectId;
+        if (!projectId) return;
+        // 触发后端按**已加载范围**重新扫描，pageSize=sessions.length 让
+        // 后端 `take(pagination.page_size)` 覆盖 page 1 + page 2+。两类
+        // 真值都需要消费 response 写回：
+        //
+        // 1. **cache hit 项**：后端 `try_lookup_cached_metadata` fast-path
+        //    inline 返真值（`crates/cdt-api/src/ipc/local.rs:809-820`），
+        //    **不**入 `page_jobs` 后台扫描，**不**会 emit SSE patch；前端
+        //    必须从 response 拿真值合并（codex 二审 round 4）
+        // 2. **cache miss 项**：后端 spawn 扫描后通过 SSE 广播
+        //    `SessionMetadataUpdate`，UI 走既有 listener patch 路径写回；
+        //    response 里仍是骨架——`mergeSilentMetadata` 让新骨架不会
+        //    覆盖 prev 已 patch 真值，安全
+        //
+        // 决策记录（codex 4 轮验证后定型）：
+        // - round 1 silent loadSessions 重扫 page 1 → page 2+ pending 永久卡空
+        // - round 2 + getSessionSummariesByIds 补齐 → 该 IPC 是 light
+        //   skeleton（contract 固化），无效
+        // - round 3 listSessions(已加载范围) fire-and-forget → cache hit
+        //   不 emit SSE，response 真值丢失
+        // - round 4（当前）listSessions(已加载范围) **消费 response** 走
+        //   mergeSessions/applyPendingMetadata 写回——cache hit 真值从
+        //   response 拿、cache miss 真值从 SSE patch 拿
+        const pageSize = Math.max(sessions.length, SESSION_PAGE_SIZE);
+        void (async () => {
+          try {
+            const result = await listSessions(projectId, pageSize);
+            // race guard：异步完成时 user 可能已切到别的 project
+            if (projectId !== selectedProjectId) return;
+            // recovery 专用合并语义：response 真值（cache hit fast-path）
+            // 优先覆盖 prev stale 真值，response 骨架则保留 prev 已 patched
+            // 真值。常规 mergeSessions 用 mergeSilentMetadata 始终保留 prev
+            // 真值——recovery 场景下 prev 真值可能 stale，会卡 stale 状态
+            // （codex 二审 round 5）。
+            //
+            // 这里**不**调 applyPendingMetadata：buffer 中可能保留了 lag 之前
+            // 的旧 SSE patch（buffer 跨 SSE 异常生命周期持久），applyPendingMetadata
+            // 会用 buffer 旧值覆盖刚刚 mergeRecoveryResponse 写入的 response
+            // 新真值，让 stale 自愈失败（codex 二审 round 6）。recovery 路径
+            // sessions 已含全部 sessionId（因为 pageSize=sessions.length），
+            // listener 同时直接走 sessions.map in-place patch，buffer 兜底
+            // 路径在 recovery 场景下无必要。
+            sessions = mergeRecoveryResponse(sessions, result.items);
+            cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);
+          } catch (e) {
+            console.warn("[sidebar] sse-recovery rescan failed:", e);
+          }
+        })();
+      };
+      sseRecoveredUnlisten = await subscribeEvent<unknown>("sse-recovered", recoverHandler);
+      sseLaggedUnlisten = await subscribeEvent<unknown>("sse-lagged", recoverHandler);
+    }
 
     refreshProjectsListener = () => {
       scheduleRefresh("sidebar:projects", () => untrack(() => loadProjects(true)));
@@ -232,6 +315,25 @@
       pendingMetadataUpdates.clear();
       return;
     }
+    // 非 silent 路径（切 project / 首次加载）：先查 sessionListStore 缓存；
+    // 命中则立即 sync hydrate 三态（避免"加载中..."中间态），同时触发 silent
+    // SWR refresh。详见 spec sidebar-navigation §"Sessions store
+    // stale-while-revalidate 缓存"。
+    if (!silent) {
+      const cached = readSessionListCache(projectId);
+      if (cached) {
+        // 切 project 的瞬间：buffer 也清掉（与下面 non-cached 分支同步行为），
+        // 旧 project 残留的 update 不应继承到新 project 显示。
+        pendingMetadataUpdates.clear();
+        sessions = cached.sessions;
+        sessionsNextCursor = cached.nextCursor;
+        sessionsTotal = cached.total;
+        sessionsLoading = false;
+        // 后台 silent refresh 兜底拉最新；走原 silent merge 路径保留尾部
+        void loadSessions(projectId, true);
+        return;
+      }
+    }
     // 非 silent 路径（切 project / 首次加载）SHALL 在 await 之**前**清空 buffer：
     // 后端 list_sessions 在 IPC return 之前已 spawn 扫描任务并可能 broadcast emit，
     // listener 在 `await listSessions(...)` 阻塞期间收到的新 project update 必须
@@ -270,6 +372,8 @@
       // 后端 `result.total`（项目维度全量 session 计数）覆盖 `sessionsTotal`。
       // loadMoreSessions 翻页路径**不**改 sessionsTotal。
       sessionsTotal = result.total;
+      // 同步写 by-projectId 缓存供下次切回该 project 立即 hydrate
+      cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);
       hasDeferredSessionRefresh = false;
       queueMicrotask(() => maybeLoadMoreSessions(true));
     } catch (e) {
@@ -301,6 +405,8 @@
       // spec sidebar-navigation §"会话总数显示口径"：loadMore **不**改
       // sessionsTotal——首次加载时已由 loadSessions 写入正确值；翻页累加期间
       // total 不应变化。后续 silent 刷新会再用最新 result.total 覆盖。
+      // 同步写 store 缓存（保留 total 不变，nextCursor 推进）
+      cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);
     } catch (e) {
       console.error("Failed to load more sessions:", e);
     } finally {
@@ -385,6 +491,10 @@
     }
     metadataUnlisten?.();
     metadataUnlisten = null;
+    sseRecoveredUnlisten?.();
+    sseRecoveredUnlisten = null;
+    sseLaggedUnlisten?.();
+    sseLaggedUnlisten = null;
   });
 
   // ---------------------------------------------------------------------------
@@ -645,6 +755,7 @@
             class="session-item"
             class:session-item-active={session.sessionId === activeSessionId}
             class:session-item-hidden={isHidden(selectedProjectId, session.sessionId)}
+            class:metadata-pending={!session.title && session.messageCount === 0 && !session.isOngoing}
             style:height="{ITEM_HEIGHT}px"
             onclick={(e) => onSelectSession(session.sessionId, sessionLabel(session), e)}
             oncontextmenu={(e) => onContextMenu(e, session)}
@@ -1090,6 +1201,31 @@
 
   .session-item-hidden {
     opacity: 0.5;
+  }
+
+  /* 骨架占位"加载中"语义：shimmer 横移 + 内容半透明，让用户感知"在加载"
+     而不是"内容会突然跳变"。Metadata patch 到达后移除 `.metadata-pending`，
+     触发 .session-item 已有的 `transition: opacity 0.15s` 让真值平滑显形。
+     Spec sidebar-navigation §"Metadata 占位字段视觉渐显"。
+
+     `content-visibility: auto` 父级 throttle 离屏 animation 是 ui/CLAUDE.md
+     提过的踩坑——但 sidebar 列表外层未设 `content-visibility`，可忽略。 */
+  .session-item.metadata-pending .session-title-text,
+  .session-item.metadata-pending .session-meta {
+    opacity: 0.55;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--color-surface-overlay) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: metadata-pending-shimmer 1500ms linear infinite;
+  }
+
+  @keyframes metadata-pending-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
   }
 
   .session-title {

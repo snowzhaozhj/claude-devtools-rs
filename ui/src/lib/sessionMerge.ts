@@ -66,6 +66,52 @@ export function mergeSilentMetadata(
  * `sort=false` 保留 prev 顺序（loadMoreSessions 翻页追加路径，对齐 spec
  * `sidebar-navigation::Scenario "加载更多时保持已加载顺序"`）。
  */
+/**
+ * SSE 恢复路径专用合并：让 `next`（response）中**含真值**的条目优先覆盖
+ * `prev`——与 `mergeSilentMetadata` 相反语义（codex 二审 round 5）。
+ *
+ * 常规 silent refresh 走 `mergeSilentMetadata`：prev 真值优先（信任 SSE
+ * listener 实时 patch；response 中的"骨架→真值"通过后续 SSE patch 完成）。
+ *
+ * SSE 恢复路径不能这么做：sse-recovered / sse-lagged 触发 = SSE 中间已
+ * 断/lag，prev 真值可能是几分钟前的 stale 值；response 来自 cache hit
+ * fast-path（`crates/cdt-api/src/ipc/local.rs:809-820`）的 inline 真值，
+ * 是 cache 当前**最新**状态。让 response 真值覆盖 prev stale 真值才能
+ * 自愈 stale metadata。
+ *
+ * 决策：
+ * - `next` 含真值（任一 metadata 字段非占位）→ 用 `next` 覆盖 prev
+ * - `next` 是骨架（全占位，意味着 cache miss 由后续 SSE patch 提供真值）
+ *   → 保留 prev（可能含已 patched 真值）；prev 没真值时仍是骨架，等
+ *   listener 后续写入
+ * - `prev` 中不在 `next` 内的尾部条目保留（防 next.length < prev.length 漏项）
+ *
+ * sort=true 按 timestamp 倒序对齐 sidebar 默认排序。
+ */
+export function mergeRecoveryResponse(
+  prev: SessionSummary[],
+  next: SessionSummary[],
+): SessionSummary[] {
+  const prevMap = new Map(prev.map((s) => [s.sessionId, s]));
+  const seen = new Set<string>();
+  const merged: SessionSummary[] = [];
+  for (const n of next) {
+    seen.add(n.sessionId);
+    const old = prevMap.get(n.sessionId);
+    if (!old) {
+      merged.push(n);
+      continue;
+    }
+    const newHasMeta =
+      n.title !== null || n.messageCount > 0 || n.isOngoing || n.gitBranch !== null;
+    merged.push(newHasMeta ? n : old);
+  }
+  for (const p of prev) {
+    if (!seen.has(p.sessionId)) merged.push(p);
+  }
+  return merged.sort((a, b) => b.timestamp - a.timestamp);
+}
+
 export function mergeSessions(
   prev: SessionSummary[],
   next: SessionSummary[],
