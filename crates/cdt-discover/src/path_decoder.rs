@@ -13,9 +13,6 @@
 
 use std::path::{Path, PathBuf};
 
-/// composite project ID 的分隔符（`{baseDir}::{hash8}`）。
-pub const COMPOSITE_SEPARATOR: &str = "::";
-
 /// 把绝对路径编码成 `~/.claude/projects/` 下的目录名。
 ///
 /// 规则（对齐 TS `pathDecoder.ts::encodePath`）：
@@ -157,11 +154,15 @@ pub fn looks_like_absolute_path(s: &str) -> bool {
         && (bytes[2] == b'\\' || bytes[2] == b'/')
 }
 
-/// 从任意 project ID 抽出 `baseDir` —— composite ID 去掉 `::<hash>` 后缀，
-/// plain ID 原样返回。
+/// 从任意 project ID 抽出 `baseDir`。
+///
+/// 历史上同一编码目录下不同 `cwd` 的 session 会被拆分为多个 composite project
+/// （id 形如 `{baseDir}::{hash8}`）；现已通过 change `merge-composite-projects`
+/// 移除该拆分。本函数保留向后兼容语义：含 `::` 的旧 ID 仍能抽出 `base_dir`，
+/// 使配置文件 / 持久化 IPC 缓存里残留的 composite key 在过渡期不致 panic。
 #[must_use]
 pub fn extract_base_dir(project_id: &str) -> &str {
-    match project_id.find(COMPOSITE_SEPARATOR) {
+    match project_id.find("::") {
         Some(idx) => &project_id[..idx],
         None => project_id,
     }

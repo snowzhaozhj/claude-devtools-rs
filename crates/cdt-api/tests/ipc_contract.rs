@@ -413,6 +413,7 @@ fn session_summary_serializes_camelcase_with_optional_title() {
         git_branch: Some("feat/x".into()),
         worktree_id: None,
         worktree_name: None,
+        cwd: Some("/Users/foo/repo".into()),
     };
     let json = serde_json::to_value(&s).unwrap();
     assert_eq!(json["sessionId"], json!("sess-1"));
@@ -421,22 +422,28 @@ fn session_summary_serializes_camelcase_with_optional_title() {
     assert_eq!(json["isOngoing"], json!(true));
     assert_eq!(json["title"], json!("hello"));
     assert_eq!(json["gitBranch"], json!("feat/x"));
+    assert_eq!(json["cwd"], json!("/Users/foo/repo"));
     assert!(
         json.get("git_branch").is_none(),
         "MUST 不出现 snake_case 字段名"
     );
 
-    // Skeleton variant (title=None / git_branch=None)
+    // Skeleton variant (title=None / git_branch=None / cwd=None)
     let skeleton = SessionSummary {
         title: None,
         is_ongoing: false,
         git_branch: None,
+        cwd: None,
         ..s
     };
     let json = serde_json::to_value(&skeleton).unwrap();
     assert_eq!(json["title"], json!(null), "Option<String> None → null");
     assert_eq!(json["isOngoing"], json!(false));
     assert_eq!(json["gitBranch"], json!(null));
+    assert!(
+        json.get("cwd").is_none(),
+        "cwd=None SHALL 被 skip_serializing_if 省略输出"
+    );
 }
 
 #[test]
@@ -2330,6 +2337,7 @@ async fn get_worktree_sessions_paginated_response_serializes_camelcase() {
             git_branch: None,
             worktree_id: Some("wt-1".into()),
             worktree_name: Some("main".into()),
+            cwd: None,
         }],
         next_cursor: Some("1".into()),
         total: 5,
@@ -2358,11 +2366,16 @@ fn session_summary_skips_worktree_fields_when_none() {
         git_branch: None,
         worktree_id: None,
         worktree_name: None,
+        cwd: None,
     };
     let json = serde_json::to_value(&s).unwrap();
     assert!(
         json.get("worktreeId").is_none() && json.get("worktreeName").is_none(),
         "worktreeId/Name 为 None 时 SHALL 不出现在序列化输出（skip_serializing_if）"
+    );
+    assert!(
+        json.get("cwd").is_none(),
+        "cwd=None 时 SHALL 不出现在序列化输出（skip_serializing_if）"
     );
 }
 

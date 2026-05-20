@@ -75,6 +75,13 @@ pub struct SessionSummary {
     /// 同 `worktree_id`，记录 worktree 的人类展示名（`Worktree.name`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_name: Option<String>,
+    /// session jsonl 首条带 `cwd` 字段消息的 `cwd` 值；缺失时为 `None`。
+    /// 由 `ProjectScanner` 在 head-read 阶段填充，让 sidebar 在同一 project 下
+    /// 区分不同 cwd 的 session（典型场景：worktree / monorepo 子目录）。
+    ///
+    /// Spec：`ipc-data-api::Session 列表序列化暴露 cwd 字段`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// 会话详情。

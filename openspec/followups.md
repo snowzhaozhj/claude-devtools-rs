@@ -138,7 +138,7 @@
 - Spec: `Path containing legitimate hyphens` → "resolving to the closest existing filesystem path when ambiguous"
 - 代码：`src/main/utils/pathDecoder.ts:40-64` 是 best-effort 简单替换，注释明确说不能歧义消解；歧义靠 `ProjectPathResolver.ts:76-86` 通过读 JSONL 里的 `cwd` 补救
 - 决策：**改 spec**，把机制写清楚：解码是 best-effort；真实路径由 session 文件中的 cwd 字段最终确定
-- **Rust 实现**：`crates/cdt-discover/src/path_decoder.rs::decode_path` 保持 best-effort；`crates/cdt-discover/src/project_path_resolver.rs::ProjectPathResolver::resolve` 的解析顺序为 composite registry → cache → 绝对路径 hint → `read_lines_head` 抽 session `cwd` 字段 → `decode_path` fallback。集成测试 `cwd_field_overrides_decode` / `decode_path_fallback_used_when_no_cwd_in_sessions` 覆盖两条主路径。同时 port 在 `FileSystemProvider` 上新增 `read_lines_head`，修正 TS 侧 SSH 模式必须拉完整 JSONL 的隐性性能 bug。
+- **Rust 实现**：`crates/cdt-discover/src/path_decoder.rs::decode_path` 保持 best-effort；`crates/cdt-discover/src/project_path_resolver.rs::ProjectPathResolver::resolve` 的解析顺序为 cache → 绝对路径 hint → `read_lines_head` 抽 session `cwd` 字段 → `decode_path` fallback（change `merge-composite-projects` 移除了 composite registry short-circuit）。集成测试 `cwd_field_overrides_decode` / `decode_path_fallback_used_when_no_cwd_in_sessions` 覆盖两条主路径。同时 port 在 `FileSystemProvider` 上新增 `read_lines_head`，修正 TS 侧 SSH 模式必须拉完整 JSONL 的隐性性能 bug。
 
 ---
 
@@ -409,8 +409,8 @@ change `fix-ssh-active-context-dispatch` 的 SSH 分支让 `get_project_memory` 
 
 - TS 原版 `pathValidation.ts:65-72` 的 `normalizeForCompare(s, isWindows)` 在 `process.platform === 'win32'` 时 `path.normalize().toLowerCase()`，让 `C:\Users\Alice` 和 `c:\users\ALICE` 比较相等。
 - Rust port 之前字符串级比较（`starts_with` / `eq`）大小写敏感。Windows 用户若 JSONL 里 `cwd` 是 `C:\Users\Alice` 但配置里是 `c:\users\alice`，会匹配失败。
-- **Rust 实现**：新增 `cdt-discover::path_compare` 模块（workspace 跨平台路径比较的唯一来源）导出 `paths_equal` / `path_starts_with` / `path_strip_prefix` / `normalize_path_for_compare` / `normalize_path_string_for_compare`，Windows 走 ASCII lowercase（与 TS `toLowerCase` 行为档位对齐的有意近似）、非 Windows 字节精确。接入 7 处 callsite：`cdt-watch::FileWatcher::{route_event, parse_project_event::strip_prefix, mark_project_seen, initial_projects}`、`cdt-discover::ProjectPathResolver::{cache_get, cache_set, invalidate}`、`cdt-discover::ProjectScanner` 的 cwd `BTreeMap` key、`cdt-discover::SubprojectRegistry::compose_id` 的 SHA-256 输入、`cdt-config::mention::is_path_within_allowed` 两处。`cdt-api` 内部 cache (`parsed_message_cache` / `session_metadata`) 显式不纳入——path 来源 IPC 同源，cache miss 不影响正确性，design 留档。
-- **覆盖测试**：`path_compare` 模块底部 12 个跨平台双向断言；`project_path_resolver::cache_handles_case_per_platform` / `subproject_registry::compose_id_case_handling_matches_platform` 双平台分支断言。Windows-only ASCII 折叠不覆盖非 ASCII 用户名（土耳其 `İ`/`ı` 等）——按 spec 留档"待真实用户报告后再升级 Unicode 方案"。
+- **Rust 实现**：新增 `cdt-discover::path_compare` 模块（workspace 跨平台路径比较的唯一来源）导出 `paths_equal` / `path_starts_with` / `path_strip_prefix` / `normalize_path_for_compare` / `normalize_path_string_for_compare`，Windows 走 ASCII lowercase（与 TS `toLowerCase` 行为档位对齐的有意近似）、非 Windows 字节精确。接入 callsite：`cdt-watch::FileWatcher::{route_event, parse_project_event::strip_prefix, mark_project_seen, initial_projects}`、`cdt-discover::ProjectPathResolver::{cache_get, cache_set, invalidate}`、`cdt-discover::ProjectScanner::scan_project_dir` 的 `distinct_cwds` 去重 key、`cdt-config::mention::is_path_within_allowed` 两处。`cdt-api` 内部 cache (`parsed_message_cache` / `session_metadata`) 显式不纳入——path 来源 IPC 同源，cache miss 不影响正确性，design 留档。change `merge-composite-projects` 删除 `SubprojectRegistry::compose_id` 后，原 SHA-256 归一 callsite 与 `BTreeMap` cwd bucket key 不再存在；归一改作用于 `Project.distinct_cwds` 去重 key（同 Windows 跨大小写视为同 cwd）。
+- **覆盖测试**：`path_compare` 模块底部 12 个跨平台双向断言；`project_path_resolver::cache_handles_case_per_platform` 双平台分支断言。Windows-only ASCII 折叠不覆盖非 ASCII 用户名（土耳其 `İ`/`ı` 等）——按 spec 留档"待真实用户报告后再升级 Unicode 方案"。
 
 ---
 

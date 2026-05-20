@@ -52,6 +52,13 @@ export interface SessionSummary {
    */
   worktreeId?: string;
   worktreeName?: string;
+  /**
+   * session jsonl 首条带 `cwd` 字段消息的 `cwd` 值；缺失时省略。
+   * 由后端 `ProjectScanner` 通过 head-read 填充，让 sidebar 在同一 project
+   * 下区分不同 cwd 的 session（典型场景：worktree / monorepo 子目录）。
+   * 详见 `openspec/specs/ipc-data-api/spec.md` §"Session 列表序列化暴露 cwd 字段"。
+   */
+  cwd?: string;
 }
 
 /**

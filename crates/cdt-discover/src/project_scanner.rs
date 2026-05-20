@@ -2,15 +2,17 @@
 //!
 //! 职责：
 //! 1. 枚举合法编码目录。
-//! 2. 对每个目录抽取 `cwd` 以拆分 subproject（产生 composite ID）。
-//! 3. 列出 `.jsonl` session，按 mtime 降序附在 `Project` 上。
+//! 2. 列出 `.jsonl` session，按 mtime 降序，附 `cwd` 字段（head-read）。
+//! 3. 每个编码目录产 **1 个** `Project`：同目录下不同 `cwd` 的 session 始终归
+//!    属同一 `Project`，cwd 差异由 `Session.cwd` 字段暴露。
 //! 4. 全量按 `most_recent_session` 降序返回。
 //!
 //! Spec：`openspec/specs/project-discovery/spec.md` 的
 //! `Scan Claude projects directory`、`List sessions per project`、
-//! `Resolve subprojects and pinned sessions` Requirement。
+//! `Expose session cwd for downstream display`、
+//! `Resolve historical Claude worktree directories` Requirement。
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -21,34 +23,26 @@ use tokio::sync::Semaphore;
 
 use crate::error::DiscoverError;
 use crate::fs_provider::{FileSystemProvider, FsKind};
-use crate::path_compare::normalize_path_string_for_compare;
 use crate::path_decoder::{
     decode_path, extract_base_dir, extract_project_name, is_valid_encoded_path,
 };
 use crate::project_path_resolver::ProjectPathResolver;
-use crate::subproject_registry::SubprojectRegistry;
 
 /// 扫描 session 头时读取的最大行数。
 const SESSION_HEAD_LINES: usize = 20;
 
 /// 顶层 project 目录并发扫描的上限。
-///
-/// 每个 project 内部的 `extract_session_cwd` 已经走 `join_all` 并发——但**不只**
-/// 受顶层 `PROJECT_SCAN_CONCURRENCY` 控制：单 project 内可能有 N 个 session
-/// 同时 in-flight。最终的 fd 上限闸门是 `FILE_READ_CONCURRENCY` Semaphore，顶层
-/// 限速主要为了控制 in-memory 中间结构（`session_stats` vec / `cwd_buckets`）的并发数。
 const PROJECT_SCAN_CONCURRENCY: usize = 8;
 
 /// 共享的文件读取并发上限。所有 `extract_session_cwd` 调用——无论来自哪个
 /// project——在真正调用底层 `read_lines_head` / `read_to_string` 之前必须先持
 /// 一份 permit。这是真正防止"8 project × N session 叠乘超过 macOS 默认 256
-/// fd 上限"的硬闸门。64 在并发收益（远多于 cpu 核数）与系统稳定性之间取折中。
+/// fd 上限"的硬闸门。
 const FILE_READ_CONCURRENCY: usize = 64;
 
 pub struct ProjectScanner {
     fs: Arc<dyn FileSystemProvider>,
     projects_dir: PathBuf,
-    registry: SubprojectRegistry,
     path_resolver: ProjectPathResolver,
     read_semaphore: Arc<Semaphore>,
 }
@@ -60,17 +54,12 @@ impl ProjectScanner {
         Self {
             fs,
             projects_dir,
-            registry: SubprojectRegistry::new(),
             path_resolver,
             read_semaphore: Arc::new(Semaphore::new(FILE_READ_CONCURRENCY)),
         }
     }
 
     /// 返回 scanner 持有的 projects 根目录路径。
-    ///
-    /// 用于上层 crate（如 `cdt-api`）需要在 scanner 维度构造文件路径
-    /// 时复用同一个 base，避免再依赖 `path_decoder::get_projects_base_path()`
-    /// 这种全局环境路径——便于集成测试通过 tempdir override。
     #[must_use]
     pub fn projects_dir(&self) -> &std::path::Path {
         &self.projects_dir
@@ -83,7 +72,6 @@ impl ProjectScanner {
             return Ok(Vec::new());
         }
 
-        self.registry.clear();
         self.path_resolver.clear();
 
         let entries = self.fs.read_dir(&self.projects_dir).await?;
@@ -94,19 +82,14 @@ impl ProjectScanner {
             .collect();
 
         let mut all_projects = Vec::new();
-        let mut all_pending: Vec<PendingRegistration> = Vec::new();
 
         // SSH 模式保持顺序遍历（远端 ssh provider 串行更稳）；本地走并发上限受
-        // `PROJECT_SCAN_CONCURRENCY` 控制的 buffer_unordered。`scan_project_dir`
-        // 本身只读 fs（`&self`），不再 mutate `self.registry`，把待注册条目作为
-        // pending 返回，统一在主 task 里 sequential register 保持 ID 计算确定性。
+        // `PROJECT_SCAN_CONCURRENCY` 控制的 `FuturesUnordered`。`scan_project_dir`
+        // 只读 fs（`&self`），无内部 mutation，可并发跑。
         if self.fs.kind() == FsKind::Ssh {
             for dir_name in dirs {
                 match self.scan_project_dir(&dir_name).await {
-                    Ok((projects, pending)) => {
-                        all_projects.extend(projects);
-                        all_pending.extend(pending);
-                    }
+                    Ok(projects) => all_projects.extend(projects),
                     Err(err) => {
                         tracing::warn!(dir = %dir_name, error = ?err, "skip unreadable project dir");
                     }
@@ -124,10 +107,7 @@ impl ProjectScanner {
             }
             while let Some((dir_name, result)) = futs.next().await {
                 match result {
-                    Ok((projects, pending)) => {
-                        all_projects.extend(projects);
-                        all_pending.extend(pending);
-                    }
+                    Ok(projects) => all_projects.extend(projects),
                     Err(err) => {
                         tracing::warn!(dir = %dir_name, error = ?err, "skip unreadable project dir");
                     }
@@ -136,11 +116,6 @@ impl ProjectScanner {
                     futs.push(Self::scan_with_name(self, next_dir));
                 }
             }
-        }
-
-        for entry in all_pending {
-            self.registry
-                .register(&entry.base_dir, &entry.cwd, entry.session_ids);
         }
 
         all_projects.sort_by(|a, b| {
@@ -154,18 +129,16 @@ impl ProjectScanner {
     async fn scan_with_name(
         &self,
         dir_name: String,
-    ) -> (
-        String,
-        Result<(Vec<Project>, Vec<PendingRegistration>), DiscoverError>,
-    ) {
+    ) -> (String, Result<Vec<Project>, DiscoverError>) {
         let result = self.scan_project_dir(&dir_name).await;
         (dir_name, result)
     }
 
-    /// 列出某个 project 的所有 session（带 mtime / size）。
+    /// 列出某个 project 的所有 session（带 mtime / size / cwd）。
     ///
     /// 若 `pinned` 集合里命中某个 session id，返回条目的 `is_pinned = true`。
-    /// composite project ID 只返回 registry filter 命中的 session。
+    /// `cwd` 通过对每个 session 调 `extract_session_cwd`（head-read）填充，
+    /// 与 `scan_project_dir` 同口径，使 sidebar / session 列表行能展示 cwd badge。
     pub async fn list_sessions(
         &self,
         project_id: &str,
@@ -183,8 +156,8 @@ impl ProjectScanner {
             }
             Err(err) => return Err(err.into()),
         };
-        let filter = self.registry.get_session_filter(project_id);
-        let mut sessions: Vec<Session> = Vec::new();
+
+        let mut records: Vec<SessionStat> = Vec::new();
         for entry in entries {
             if !entry.kind.is_file() {
                 continue;
@@ -192,41 +165,44 @@ impl ProjectScanner {
             let Some(id) = entry.name.strip_suffix(".jsonl") else {
                 continue;
             };
-            if let Some(f) = filter {
-                if !f.contains(id) {
-                    continue;
-                }
-            }
+            let full = dir.join(&entry.name);
             let stat = match entry.metadata {
                 Some(metadata) => metadata,
-                None => self.fs.stat(&dir.join(&entry.name)).await?,
+                None => self.fs.stat(&full).await?,
             };
-            sessions.push(Session {
+            records.push(SessionStat {
                 id: id.to_string(),
-                last_modified: stat.mtime_ms(),
+                path: full,
+                mtime_ms: stat.mtime_ms(),
                 size: stat.size,
-                is_pinned: pinned.contains(id),
             });
         }
+
+        let cwds: Vec<Option<String>> = self.extract_cwds_for(&records).await;
+
+        let mut sessions: Vec<Session> = records
+            .into_iter()
+            .zip(cwds)
+            .map(|(rec, cwd)| Session {
+                last_modified: rec.mtime_ms,
+                size: rec.size,
+                is_pinned: pinned.contains(&rec.id),
+                id: rec.id,
+                cwd,
+            })
+            .collect();
         sessions.sort_by_key(|s| std::cmp::Reverse(s.last_modified));
         Ok(sessions)
-    }
-
-    pub fn registry(&self) -> &SubprojectRegistry {
-        &self.registry
     }
 
     pub fn path_resolver(&self) -> &ProjectPathResolver {
         &self.path_resolver
     }
 
-    async fn scan_project_dir(
-        &self,
-        dir_name: &str,
-    ) -> Result<(Vec<Project>, Vec<PendingRegistration>), DiscoverError> {
+    async fn scan_project_dir(&self, dir_name: &str) -> Result<Vec<Project>, DiscoverError> {
         let dir_path = self.projects_dir.join(dir_name);
         let entries = self.fs.read_dir_with_metadata(&dir_path).await?;
-        let mut session_stats: Vec<SessionStat> = Vec::new();
+        let mut records: Vec<SessionStat> = Vec::new();
         for entry in entries {
             if !entry.kind.is_file() {
                 continue;
@@ -239,141 +215,86 @@ impl ProjectScanner {
                 Some(metadata) => metadata,
                 None => self.fs.stat(&full).await?,
             };
-            session_stats.push(SessionStat {
+            records.push(SessionStat {
                 id: id.to_string(),
                 path: full,
                 mtime_ms: stat.mtime_ms(),
+                size: stat.size,
             });
         }
-        if session_stats.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
+        if records.is_empty() {
+            return Ok(Vec::new());
         }
 
-        session_stats.sort_by_key(|s| std::cmp::Reverse(s.mtime_ms));
+        records.sort_by_key(|s| std::cmp::Reverse(s.mtime_ms));
 
-        // Group sessions by extracted cwd. `None` bucket = sessions without a cwd.
-        let mut cwd_buckets: BTreeMap<String, CwdBucket> = BTreeMap::new();
-        let mut unknown_cwd: Vec<SessionStat> = Vec::new();
+        let cwds: Vec<Option<String>> = self.extract_cwds_for(&records).await;
 
-        let ssh_mode = self.fs.kind() == FsKind::Ssh;
-        // 并发提取每个 session 的 cwd。老路径串行 `for stat in session_stats`
-        // 对 N 个 jsonl 文件 head-read 累计 N × ~1ms，27 project × 534 session
-        // 实测累计 ~280ms。改并发后 tokio 可以同时打开多个文件，单 project
-        // 内的扫描接近 max(单文件 head 耗时) 而非 sum。
-        // SSH 模式保持顺序遍历——underlying provider 串行更稳，且只取第一个
-        // 命中 cwd 后理论可短路（当前实现实际仍跑完所有，留待 follow-up）。
-        let cwds: Vec<Option<String>> = if ssh_mode {
-            let mut out = Vec::with_capacity(session_stats.len());
-            for stat in &session_stats {
-                out.push(self.extract_session_cwd(&stat.path).await);
+        // 取最新 mtime 的 session 的 cwd 当 `Project.path` 代表；无非空 cwd 时
+        // fallback 到历史 worktree 解码 / encoded 目录解码。新设计下不再按 cwd
+        // 分桶——一个 encoded 目录恒产一个 `Project`，cwd 差异由各 `Session.cwd`
+        // 暴露。Spec：`project-discovery::Expose session cwd for downstream display`。
+        let latest_cwd: Option<String> = cwds.iter().find_map(Clone::clone);
+        let project_path: PathBuf = if let Some(cwd) = latest_cwd.as_deref() {
+            PathBuf::from(cwd)
+        } else if let Some(decoded) = self.decode_historical_worktree_dir(dir_name).await {
+            decoded
+        } else {
+            decode_path(dir_name)
+        };
+
+        let session_ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
+        let most_recent_ms: i64 = records.iter().map(|r| r.mtime_ms).max().unwrap_or(0);
+        let created_ms: i64 = records.iter().map(|r| r.mtime_ms).min().unwrap_or(i64::MAX);
+
+        // 收集所有 session 的 cwd 去重集合，保留 mtime 倒序：
+        // 让 `agent-configs` 等消费方覆盖所有 cwd 的 `.claude/agents/` 扫描，
+        // 避免合并 composite 后丢失非代表 cwd 的配置。Spec：
+        // `agent-configs::Scan agent config files from global and project scopes`。
+        //
+        // 去重 key 走 `normalize_path_string_for_compare`（Windows 上 ASCII
+        // 小写归一；非 Windows 字节精确），与 `project-discovery::Compare paths
+        // case-insensitively on Windows` 保持一致。展示值保留**首次出现**的
+        // 原始 cwd（即最新 mtime session 的 cwd 字面量），避免 Windows 上
+        // 同一目录因 `C:\Users\foo` vs `c:\users\foo` 写法被当成两个 cwd。
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut distinct_cwds: Vec<String> = Vec::new();
+        for cwd in cwds.iter().flatten() {
+            let key = crate::path_compare::normalize_path_string_for_compare(cwd).into_owned();
+            if seen.insert(key) {
+                distinct_cwds.push(cwd.clone());
+            }
+        }
+
+        let name = extract_project_name(&project_path);
+        let project = Project {
+            id: dir_name.to_string(),
+            name,
+            path: project_path,
+            sessions: session_ids,
+            most_recent_session: Some(most_recent_ms),
+            created_at: if created_ms == i64::MAX {
+                None
+            } else {
+                Some(created_ms)
+            },
+            distinct_cwds,
+        };
+        Ok(vec![project])
+    }
+
+    /// 并发提取一批 session 的 cwd。SSH 走顺序、本地走 `join_all`。
+    async fn extract_cwds_for(&self, records: &[SessionStat]) -> Vec<Option<String>> {
+        if self.fs.kind() == FsKind::Ssh {
+            let mut out = Vec::with_capacity(records.len());
+            for rec in records {
+                out.push(self.extract_session_cwd(&rec.path).await);
             }
             out
         } else {
-            futures::future::join_all(
-                session_stats
-                    .iter()
-                    .map(|stat| self.extract_session_cwd(&stat.path)),
-            )
-            .await
-        };
-
-        for (stat, cwd) in session_stats.into_iter().zip(cwds) {
-            match cwd {
-                Some(cwd) if !cwd.is_empty() => {
-                    // Bucket key 在 Windows 上规范化 ASCII 小写——避免同 project
-                    // 的 cwd 仅大小写不同的 sessions 被误拆成两个 subproject。
-                    // Spec：`project-discovery::Compare paths case-insensitively on Windows`。
-                    let key = normalize_path_string_for_compare(&cwd).into_owned();
-                    let bucket = cwd_buckets.entry(key).or_insert_with(|| CwdBucket {
-                        cwd: PathBuf::from(&cwd),
-                        session_ids: Vec::new(),
-                        most_recent_ms: 0,
-                        created_ms: i64::MAX,
-                    });
-                    // 同一 bucket 多个大小写形式时选**字典序最小**的原始 cwd 当
-                    // 展示代表——确定性策略，避免 Windows 上 UI 路径展示随
-                    // session mtime / 目录枚举顺序闪烁。codex PR 二审反馈。
-                    if cwd.as_str() < bucket.cwd.to_string_lossy().as_ref() {
-                        bucket.cwd = PathBuf::from(&cwd);
-                    }
-                    bucket.session_ids.push(stat.id.clone());
-                    bucket.most_recent_ms = bucket.most_recent_ms.max(stat.mtime_ms);
-                    bucket.created_ms = bucket.created_ms.min(stat.mtime_ms);
-                }
-                _ => unknown_cwd.push(stat),
-            }
+            futures::future::join_all(records.iter().map(|r| self.extract_session_cwd(&r.path)))
+                .await
         }
-
-        // 把 unknown_cwd 合并到 bucket：若存在唯一 cwd bucket，就并入；否则自己成一个
-        // 退化为 decoded path 的 bucket。
-        if !unknown_cwd.is_empty() {
-            if cwd_buckets.len() == 1 {
-                let bucket = cwd_buckets.values_mut().next().expect("one bucket");
-                for stat in unknown_cwd.drain(..) {
-                    bucket.most_recent_ms = bucket.most_recent_ms.max(stat.mtime_ms);
-                    bucket.created_ms = bucket.created_ms.min(stat.mtime_ms);
-                    bucket.session_ids.push(stat.id);
-                }
-            } else {
-                let decoded = self
-                    .decode_historical_worktree_dir(dir_name)
-                    .await
-                    .unwrap_or_else(|| decode_path(dir_name));
-                let decoded_key =
-                    normalize_path_string_for_compare(&decoded.to_string_lossy()).into_owned();
-                let fallback = cwd_buckets.entry(decoded_key).or_insert_with(|| CwdBucket {
-                    cwd: decoded.clone(),
-                    session_ids: Vec::new(),
-                    most_recent_ms: 0,
-                    created_ms: i64::MAX,
-                });
-                for stat in unknown_cwd.drain(..) {
-                    fallback.most_recent_ms = fallback.most_recent_ms.max(stat.mtime_ms);
-                    fallback.created_ms = fallback.created_ms.min(stat.mtime_ms);
-                    fallback.session_ids.push(stat.id);
-                }
-            }
-        }
-
-        let mut projects = Vec::with_capacity(cwd_buckets.len());
-        let mut pending = Vec::new();
-        let bucket_count = cwd_buckets.len();
-        for (_key, mut bucket) in cwd_buckets {
-            // Session id list 已经按 mtime 插入顺序（降序）排好。
-            let sessions = std::mem::take(&mut bucket.session_ids);
-            let id = if bucket_count > 1 {
-                let session_set: BTreeSet<String> = sessions.iter().cloned().collect();
-                let owned_ids: Vec<String> = session_set.into_iter().collect();
-                let composite = SubprojectRegistry::compose_id(dir_name, &bucket.cwd);
-                pending.push(PendingRegistration {
-                    base_dir: dir_name.to_string(),
-                    cwd: bucket.cwd.clone(),
-                    session_ids: owned_ids,
-                });
-                composite
-            } else {
-                dir_name.to_string()
-            };
-            let name = extract_project_name(&bucket.cwd);
-            projects.push(Project {
-                id,
-                name,
-                path: bucket.cwd,
-                sessions,
-                most_recent_session: Some(bucket.most_recent_ms),
-                created_at: if bucket.created_ms == i64::MAX {
-                    None
-                } else {
-                    Some(bucket.created_ms)
-                },
-            });
-        }
-        projects.sort_by(|a, b| {
-            b.most_recent_session
-                .unwrap_or(0)
-                .cmp(&a.most_recent_session.unwrap_or(0))
-        });
-        Ok((projects, pending))
     }
 
     async fn extract_session_cwd(&self, path: &Path) -> Option<String> {
@@ -467,29 +388,8 @@ struct SessionStat {
     id: String,
     path: PathBuf,
     mtime_ms: i64,
+    size: u64,
 }
-
-/// 单个 project 扫描产出的待注册 composite subproject 条目。
-///
-/// 由 `scan_project_dir` 收集后返回给 `scan`，最终由 scan 主 task 在收到所有
-/// project 结果后顺序注册——`scan_project_dir` 自身不再 mutate `self.registry`，
-/// 这是把签名从 `&mut self` 改成 `&self` 让顶层 `buffer_unordered` 并发跑的前提。
-struct PendingRegistration {
-    base_dir: String,
-    cwd: PathBuf,
-    session_ids: Vec<String>,
-}
-
-struct CwdBucket {
-    cwd: PathBuf,
-    session_ids: Vec<String>,
-    most_recent_ms: i64,
-    created_ms: i64,
-}
-
-// 避免 "unused import" 警告：当没有 SSH 实现时 `HashMap` 只在测试使用。
-#[allow(dead_code)]
-fn _assert_hash<T>(_: &HashMap<T, T>) {}
 
 #[cfg(test)]
 mod tests {

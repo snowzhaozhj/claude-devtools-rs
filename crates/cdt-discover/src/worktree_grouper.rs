@@ -458,6 +458,7 @@ mod tests {
             sessions: vec!["s".to_string()],
             most_recent_session: Some(recent),
             created_at: None,
+            distinct_cwds: Vec::new(),
         }
     }
 
@@ -721,6 +722,7 @@ mod tests {
                 sessions: vec!["s1".into()],
                 most_recent_session: Some(100),
                 created_at: None,
+                distinct_cwds: Vec::new(),
             },
             Project {
                 id: "feat".into(),
@@ -729,6 +731,7 @@ mod tests {
                 sessions: vec!["s2".into()],
                 most_recent_session: Some(200),
                 created_at: None,
+                distinct_cwds: Vec::new(),
             },
         ];
         let grouper = WorktreeGrouper::new(LocalGitIdentityResolver::new());

@@ -581,6 +581,13 @@
             <span class="top-stat-num">{ftime(lastActivity)}</span>
           </span>
         {/if}
+        {#if detail.metadata && typeof detail.metadata === 'object' && typeof (detail.metadata as { cwd?: string }).cwd === 'string'}
+          <span class="top-stat-sep">·</span>
+          <span class="top-stat top-stat-cwd" title={(detail.metadata as { cwd: string }).cwd}>
+            <span class="top-stat-unit">CWD</span>
+            <span class="top-stat-num">{(detail.metadata as { cwd: string }).cwd}</span>
+          </span>
+        {/if}
       </div>
     </div>
     <div class="top-meta">
@@ -1133,6 +1140,23 @@
   .top-stat-time .top-stat-num {
     color: var(--color-text-muted);
     font-weight: 500;
+  }
+
+  /* CWD：完整路径，长度变化大，让它吸收剩余横向空间并 ellipsis；
+     与时间一样降权显示。 */
+  .top-stat-cwd {
+    min-width: 0;
+    flex-shrink: 1;
+    overflow: hidden;
+  }
+
+  .top-stat-cwd .top-stat-num {
+    color: var(--color-text-muted);
+    font-weight: 500;
+    font-family: var(--font-mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .top-stat-sep {
