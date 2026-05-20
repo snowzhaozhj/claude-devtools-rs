@@ -728,19 +728,21 @@
                   />
                   {#if serverStatus?.running}
                     <span
-                      id="http-server-port-locked"
                       class="port-locked-badge"
                       data-testid="browser-access-port-locked"
-                      aria-label="端口已锁定"
+                      aria-hidden="true"
                     >
                       已锁定
+                    </span>
+                    <span id="http-server-port-locked" class="sr-only">
+                      端口已锁定，停用浏览器访问后可修改
                     </span>
                   {/if}
                 {/snippet}
               </SettingsField>
               {#if serverStatus?.running}
                 <div class="server-status-row" role="status" data-testid="browser-access-running">
-                  <span class="status-dot status-dot-on" aria-hidden="true"></span>
+                  <span class="server-live-spinner" aria-hidden="true"></span>
                   <span class="server-status-text">
                     运行中 · <code>http://localhost:{serverStatus.port}</code>
                   </span>
@@ -1314,13 +1316,24 @@
   .port-locked-badge {
     flex-shrink: 0;
     padding: 2px 8px;
-    border: 1px solid var(--color-border);
+    border: 1px solid color-mix(in oklch, var(--color-text-secondary) 35%, var(--color-border));
     border-radius: 9999px;
     background: var(--color-surface-overlay);
     color: var(--color-text-secondary);
     font-size: 11px;
     font-weight: 500;
     line-height: 1.4;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
   .content-body :global(.control-color) {
     width: 38px;
@@ -1581,16 +1594,30 @@
     font-size: 12px;
     color: var(--color-text);
   }
-  .status-dot {
+  /* DESIGN.md::Static-vs-Live Shape Rule + Ongoing Owns Blue：
+     运行中是 live process，用 Focus Blue spinner 而非 success-green halo dot。
+     primary 尺寸 14×14 + 2px border（独立状态条带，参照 OngoingBanner）。 */
+  .server-live-spinner {
+    flex-shrink: 0;
     display: inline-block;
-    width: 8px;
-    height: 8px;
+    width: 14px;
+    height: 14px;
+    border: 2px solid color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
+    border-top-color: var(--color-accent-blue);
     border-radius: 50%;
-    background: var(--color-text-muted);
+    animation: server-live-spin 1.2s linear infinite;
   }
-  .status-dot-on {
-    background: var(--color-success, #10b981);
-    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-success, #10b981) 20%, transparent);
+  @keyframes server-live-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .server-live-spinner {
+      animation: none;
+      border-color: var(--color-accent-blue);
+      border-top-color: var(--color-accent-blue);
+    }
   }
   .copy-url-btn {
     margin-left: auto;
