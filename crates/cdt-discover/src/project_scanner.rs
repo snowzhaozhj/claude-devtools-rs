@@ -173,10 +173,16 @@ impl ProjectScanner {
     ) -> Result<Vec<Session>, DiscoverError> {
         let base_dir = extract_base_dir(project_id);
         let dir = self.projects_dir.join(base_dir);
-        if !self.fs.exists(&dir).await {
+        if self.fs.kind() != FsKind::Ssh && !self.fs.exists(&dir).await {
             return Ok(Vec::new());
         }
-        let entries = self.fs.read_dir_with_metadata(&dir).await?;
+        let entries = match self.fs.read_dir_with_metadata(&dir).await {
+            Ok(entries) => entries,
+            Err(crate::error::FsError::NotFound(_)) if self.fs.kind() == FsKind::Ssh => {
+                return Ok(Vec::new());
+            }
+            Err(err) => return Err(err.into()),
+        };
         let filter = self.registry.get_session_filter(project_id);
         let mut sessions: Vec<Session> = Vec::new();
         for entry in entries {
