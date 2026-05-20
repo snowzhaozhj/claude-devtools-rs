@@ -1316,7 +1316,7 @@
   .port-locked-badge {
     flex-shrink: 0;
     padding: 2px 8px;
-    border: 1px solid color-mix(in oklch, var(--color-text-secondary) 35%, var(--color-border));
+    border: 1px solid color-mix(in oklch, var(--color-text-secondary) 80%, var(--color-border));
     border-radius: 9999px;
     background: var(--color-surface-overlay);
     color: var(--color-text-secondary);
