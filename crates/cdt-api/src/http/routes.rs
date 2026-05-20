@@ -408,6 +408,7 @@ async fn list_contexts(State(s): State<AppState>) -> Result<impl IntoResponse, A
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SwitchContextBody {
+    #[serde(alias = "context_id")]
     context_id: String,
 }
 
@@ -466,6 +467,7 @@ async fn get_active_context(State(s): State<AppState>) -> Result<impl IntoRespon
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DisconnectBody {
+    #[serde(alias = "context_id")]
     context_id: String,
 }
 

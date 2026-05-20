@@ -178,8 +178,7 @@ impl ProjectScanner {
         }
         let entries = match self.fs.read_dir_with_metadata(&dir).await {
             Ok(entries) => entries,
-            Err(err) if self.fs.kind() == FsKind::Ssh => {
-                tracing::warn!(path = %dir.display(), error = ?err, "skip unreadable SSH project dir");
+            Err(crate::error::FsError::NotFound(_)) if self.fs.kind() == FsKind::Ssh => {
                 return Ok(Vec::new());
             }
             Err(err) => return Err(err.into()),
