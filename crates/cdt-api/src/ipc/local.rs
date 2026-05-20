@@ -19,7 +19,7 @@ use cdt_config::{
 };
 use cdt_discover::{
     FileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
-    local_handle,
+    SubprojectRegistry, local_handle,
 };
 use cdt_parse::{ParseError, parse_entry_at, parse_file};
 use cdt_ssh::{
@@ -753,6 +753,7 @@ impl LocalDataApi {
             Vec<(String, std::path::PathBuf)>,
             std::path::PathBuf,
             u64,
+            Vec<SessionMetadataUpdate>,
         ),
         ApiError,
     > {
@@ -762,16 +763,23 @@ impl LocalDataApi {
 
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
-        let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
-        let _ = scanner
-            .scan()
-            .await
-            .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
-        let sessions = scanner
-            .list_sessions(project_id, &std::collections::BTreeSet::new())
-            .await
-            .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?;
-        let projects_dir = scanner.projects_dir().to_path_buf();
+        let sessions = if is_remote && !SubprojectRegistry::is_composite(project_id) {
+            let scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
+            scanner
+                .list_sessions(project_id, &std::collections::BTreeSet::new())
+                .await
+                .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?
+        } else {
+            let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
+            let _ = scanner
+                .scan()
+                .await
+                .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
+            scanner
+                .list_sessions(project_id, &std::collections::BTreeSet::new())
+                .await
+                .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?
+        };
         let root_generation = self.root_generation.load(Ordering::SeqCst);
 
         let offset = pagination
@@ -791,6 +799,7 @@ impl LocalDataApi {
 
         let mut page = Vec::with_capacity(page_sessions.len());
         let mut page_jobs = Vec::with_capacity(page_sessions.len());
+        let mut inline_updates = Vec::new();
         // Cache fast-path：命中条骨架阶段直接带 title / messageCount 返回，避免
         // 完全依赖后台 broadcast emit（如果 emit 在前端 listener 注册前 fire-and-forget
         // 丢失，列表项会卡在 title=null 永久 fallback 到 sessionId 前 8 字符）。
@@ -827,7 +836,18 @@ impl LocalDataApi {
             } else {
                 None
             };
+            let should_emit_inline_update = is_remote && remote_meta.is_some();
             if let Some(meta) = cached_meta.or(remote_meta) {
+                if should_emit_inline_update {
+                    inline_updates.push(SessionMetadataUpdate {
+                        project_id: project_id.to_owned(),
+                        session_id: s.id.clone(),
+                        title: meta.title.clone(),
+                        message_count: meta.message_count,
+                        is_ongoing: meta.is_ongoing,
+                        git_branch: meta.git_branch.clone(),
+                    });
+                }
                 page.push(SessionSummary {
                     session_id: s.id,
                     project_id: project_id.to_owned(),
@@ -864,7 +884,15 @@ impl LocalDataApi {
             None
         };
 
-        Ok((page, next_cursor, total, page_jobs, dir, root_generation))
+        Ok((
+            page,
+            next_cursor,
+            total,
+            page_jobs,
+            dir,
+            root_generation,
+            inline_updates,
+        ))
     }
 }
 
@@ -1114,7 +1142,7 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (mut page, next_cursor, total, page_jobs, _dir, _root_generation) =
+        let (mut page, next_cursor, total, page_jobs, _dir, _root_generation, _inline_updates) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
         // 并发提取每条 session 的 metadata：复用 `self.metadata_scan_semaphore`
@@ -1155,8 +1183,12 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (page, next_cursor, total, page_jobs, dir, root_generation) =
+        let (page, next_cursor, total, page_jobs, dir, root_generation, inline_updates) =
             self.list_sessions_skeleton(project_id, pagination).await?;
+
+        for update in inline_updates {
+            let _ = self.session_metadata_tx.send(update);
+        }
 
         if !page_jobs.is_empty() && root_generation == self.root_generation.load(Ordering::SeqCst) {
             let tx = self.session_metadata_tx.clone();
@@ -1330,17 +1362,26 @@ impl DataApi for LocalDataApi {
         // 用默认路径构造时返回真实 home，scanner 已经统一了入口。
         let t_locate = std::time::Instant::now();
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
-        let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
-        let _ = scanner
-            .scan()
-            .await
-            .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
-        let project_dir = projects_dir.join(project_id);
-        let sessions = scanner
-            .list_sessions(project_id, &std::collections::BTreeSet::new())
-            .await
-            .map_err(|e| ApiError::internal(format!("{e}")))?;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
+        let sessions = if is_remote && !SubprojectRegistry::is_composite(project_id) {
+            let scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
+            scanner
+                .list_sessions(project_id, &std::collections::BTreeSet::new())
+                .await
+                .map_err(|e| ApiError::internal(format!("{e}")))?
+        } else {
+            let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
+            let _ = scanner
+                .scan()
+                .await
+                .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
+            scanner
+                .list_sessions(project_id, &std::collections::BTreeSet::new())
+                .await
+                .map_err(|e| ApiError::internal(format!("{e}")))?
+        };
+        let project_dir =
+            projects_dir.join(cdt_discover::path_decoder::extract_base_dir(project_id));
 
         let main_session = sessions.iter().find(|s| s.id == session_id);
 

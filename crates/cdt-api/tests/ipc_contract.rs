@@ -1123,19 +1123,32 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
     assert_eq!(projects[0].id, project_id);
     assert_eq!(projects[0].path, cwd);
 
-    let sessions = api
-        .list_sessions_sync(
-            project_id,
-            &PaginatedRequest {
-                page_size: 10,
-                cursor: None,
-            },
-        )
-        .await
-        .unwrap();
+    let pagination = PaginatedRequest {
+        page_size: 10,
+        cursor: None,
+    };
+    let mut metadata_rx = api.subscribe_session_metadata();
+    let sessions = api.list_sessions(project_id, &pagination).await.unwrap();
     assert_eq!(sessions.items[0].session_id, session_id);
     assert_eq!(sessions.items[0].title.as_deref(), Some("from remote"));
     assert_eq!(sessions.items[0].message_count, 1);
+
+    let update = tokio::time::timeout(std::time::Duration::from_secs(1), metadata_rx.recv())
+        .await
+        .expect("remote list_sessions should emit metadata update")
+        .expect("metadata channel should stay open");
+    assert_eq!(update.project_id, project_id);
+    assert_eq!(update.session_id, session_id);
+    assert_eq!(update.title.as_deref(), Some("from remote"));
+    assert_eq!(update.message_count, 1);
+
+    let sync_sessions = api
+        .list_sessions_sync(project_id, &pagination)
+        .await
+        .unwrap();
+    assert_eq!(sync_sessions.items[0].session_id, session_id);
+    assert_eq!(sync_sessions.items[0].title.as_deref(), Some("from remote"));
+    assert_eq!(sync_sessions.items[0].message_count, 1);
 
     let detail = api
         .get_session_detail(project_id, session_id)
