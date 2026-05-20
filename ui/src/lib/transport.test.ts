@@ -160,6 +160,7 @@ describe('BrowserTransport', () => {
       message_count: 12,
       is_ongoing: true,
       git_branch: 'main',
+      context_id: 'ssh-host-x',
     })
 
     expect(handler).toHaveBeenCalledWith({
@@ -172,6 +173,47 @@ describe('BrowserTransport', () => {
         messageCount: 12,
         isOngoing: true,
         gitBranch: 'main',
+        contextId: 'ssh-host-x',
+      },
+    })
+    unsubscribe()
+  })
+
+  test('SSE session_metadata_update 缺 context_id 时 contextId 退化为 null', async () => {
+    // codex 二审 PR #178 V3 P0 兜底：旧 backend 不带 context_id 字段时，
+    // SSE/browser runtime 仍 SHALL 把 payload.contextId 规范化为 null，让
+    // Sidebar listener 的 `payload.contextId === undefined` 短路保持向后兼容。
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('session-metadata-update', handler)
+    instances[0].emit({
+      type: 'session_metadata_update',
+      project_id: 'p1',
+      session_id: 's1',
+      title: 'Hello',
+      message_count: 12,
+      is_ongoing: true,
+      git_branch: 'main',
+    })
+
+    expect(handler).toHaveBeenCalledWith({
+      event: 'session-metadata-update',
+      id: 0,
+      payload: {
+        projectId: 'p1',
+        sessionId: 's1',
+        title: 'Hello',
+        messageCount: 12,
+        isOngoing: true,
+        gitBranch: 'main',
+        contextId: null,
       },
     })
     unsubscribe()

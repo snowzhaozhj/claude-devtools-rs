@@ -449,6 +449,10 @@ function normalizePushPayload(type: string | undefined, payload: Record<string, 
         messageCount: payload.message_count,
         isOngoing: payload.is_ongoing,
         gitBranch: payload.git_branch,
+        // SSE/browser runtime 必须把 snake_case `context_id` 映射成 camelCase
+        // `contextId`，否则 Sidebar listener 的二次 context 过滤完全失效
+        // （HTTP 路径绕过 serde camelCase 转换；codex 二审 PR #178 V3 P0）。
+        contextId: payload.context_id ?? null,
       };
     case "context_changed":
       return { activeContext: payload.active_context };
