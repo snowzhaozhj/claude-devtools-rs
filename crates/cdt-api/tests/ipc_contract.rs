@@ -1236,6 +1236,77 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
 }
 
 #[tokio::test]
+async fn ssh_active_context_list_sessions_skeleton_emits_metadata_updates() {
+    // 回归 fix `ssh-list-sessions-skeleton-broadcast`：active context 为 SSH 时，
+    // `list_sessions`（async path，不是 sync）SHALL：
+    // 1) 同步返回骨架——title=None / message_count=0 / is_ongoing=false
+    // 2) 后台扫描完成后通过 `subscribe_session_metadata()` broadcast 一条
+    //    `SessionMetadataUpdate`，title/messageCount 为远端 jsonl 解析的真值
+    //
+    // 历史 PR #176 让 SSH 走骨架阶段同步 fs.read_to_string，但读取失败时不进
+    // page_jobs → 永久卡骨架，且即便成功也阻塞 IPC 响应（违反"骨架快返回 +
+    // 后台慢更新"契约）。修复后 SSH 与 local 共享后台扫描路径，via_fs 版本
+    // 内部按 fs.kind() 分流到 SFTP read_to_string。
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let (api, _tmp) = setup_api().await;
+    let remote_home = "/remote/home/.claude/projects";
+    let project_id = "-remote-async-skeleton";
+    let session_id = "remote-async-sess";
+    let cwd = "/srv/remote-async-project";
+    let line = format!(
+        r#"{{"type":"user","uuid":"{session_id}","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":"async skeleton test"}}}}"#,
+    );
+    let fake =
+        FakeRemoteSftp::with_session(remote_home, project_id, session_id, format!("{line}\n"));
+    let provider = SshFileSystemProvider::with_client(
+        "ctx-async-skel",
+        Arc::new(fake),
+        std::path::PathBuf::from(remote_home),
+    );
+    api.insert_test_ssh_context(
+        "ctx-async-skel",
+        "remote-host",
+        22,
+        Some("alice".into()),
+        std::path::PathBuf::from(remote_home),
+        provider,
+    )
+    .await;
+
+    let mut rx = api.subscribe_session_metadata();
+    let resp = api
+        .list_sessions(
+            project_id,
+            &PaginatedRequest {
+                page_size: 10,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // 骨架契约：page 中 session_id 已知，title=None / count=0 / ongoing=false
+    assert_eq!(resp.items.len(), 1);
+    let s = &resp.items[0];
+    assert_eq!(s.session_id, session_id);
+    assert!(s.title.is_none(), "skeleton title SHALL be None");
+    assert_eq!(s.message_count, 0, "skeleton count SHALL be 0");
+    assert!(!s.is_ongoing, "skeleton is_ongoing SHALL be false");
+
+    // 后台扫描必经 broadcast：title 来自远端 jsonl 第一条 user 消息内容
+    let upd = timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("SSH list_sessions SHALL emit SessionMetadataUpdate within 5s")
+        .expect("recv");
+    assert_eq!(upd.project_id, project_id);
+    assert_eq!(upd.session_id, session_id);
+    assert_eq!(upd.title.as_deref(), Some("async skeleton test"));
+    assert_eq!(upd.message_count, 1);
+}
+
+#[tokio::test]
 async fn list_sessions_returns_paginated_response_shape() {
     let (api, _tmp) = setup_api().await;
     let resp = api
