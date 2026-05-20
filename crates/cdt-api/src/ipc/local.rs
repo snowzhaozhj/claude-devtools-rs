@@ -951,9 +951,9 @@ impl LocalDataApi {
     /// 超时 / 失败条保留占位 + spawn deferred retry；剩余条走骨架 + 后台 scan
     /// + broadcast（与翻页路径同模型）。
     ///
-    /// D4b：开始前遍历 `active_scans`，按 `key.split('|').next()` 解析 projectId，
-    /// abort 所有 `projectId != current_project_id` 的旧扫描，释放 8 容量信号量
-    /// 让首页 eager 立即拿到 permit。
+    /// D4b：开始前遍历结构化 `active_scans` key，abort 所有
+    /// `projectId != current_project_id` 的旧扫描，释放 8 容量信号量让首页
+    /// eager 立即拿到 permit。
     async fn list_sessions_eager(
         &self,
         project_id: &str,
