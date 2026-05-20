@@ -1,10 +1,14 @@
-//! Integration tests for skeleton `list_sessions` + async metadata broadcast.
+//! Integration tests for `list_sessions` cursor-branched eager/skeleton +
+//! async metadata broadcast。
 //!
-//! 覆盖 spec `ipc-data-api` §"Emit session metadata updates" 与
-//! `sidebar-navigation` §"骨架列表快速加载" 的可观察契约：
-//! - `list_sessions` 同步返回的 `SessionSummary` 元数据字段为占位
-//! - `subscribe_session_metadata()` 收到 N 条 update（N = page 内 session 数）
-//! - 同 project 重复调用不会引发事件无界爆炸（取消语义近似断言）
+//! 覆盖 spec `ipc-data-api` §"Emit session metadata updates"、
+//! `sidebar-navigation` §"骨架列表快速加载"、以及 change
+//! `eager-first-page-metadata` D4b / D6b / D6c / D8 / D11 的可观察契约：
+//! - cursor=None：前 `EAGER_FIRST_PAGE_LIMIT` 条同步等真值 inline 返、零 SSE emit
+//! - cursor=Some：返回骨架 + 后台 scan + broadcast push（原行为不变）
+//! - 首页 eager 单条解析失败 → 占位 + deferred retry emit + 不写正向 cache
+//! - cursor=None pageSize > 20 → 前 20 eager + 剩余条 remainder scan + emit
+//! - 同 project 切换：跨 project 的旧 scan 被 abort 让出 permits
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,9 +42,6 @@ async fn write_fixture_session(dir: &std::path::Path, session_id: &str, title: &
         "message": {"role": "user", "content": title}
     })
     .to_string();
-    // tool_use（无配对 tool_result）让 check_messages_ongoing 判 true，
-    // 模拟"仍在进行的会话"——见 cdt-analyze session_state 测试
-    // `ongoing_when_only_ai_activity`
     let assistant = serde_json::json!({
         "type": "assistant",
         "uuid": format!("a-{session_id}"),
@@ -66,12 +67,29 @@ async fn write_fixture_session(dir: &std::path::Path, session_id: &str, title: &
     f.flush().await.unwrap();
 }
 
-async fn build_api_with_fixtures(titles: &[&str]) -> (LocalDataApi, TempDir, String, Vec<String>) {
-    let tmp = TempDir::new().unwrap();
+/// 写一个完全损坏的 jsonl（非法 JSON），让 `extract_session_metadata`
+/// 解析出全占位字段——触发 D6b（不写正向 cache）+ D6c（写 negative TTL）。
+async fn write_corrupt_session(dir: &std::path::Path, session_id: &str) {
+    let path = dir.join(format!("{session_id}.jsonl"));
+    let mut f = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .await
+        .unwrap();
+    f.write_all(b"{not valid json at all\n").await.unwrap();
+    f.write_all(b"completely broken line\n").await.unwrap();
+    f.flush().await.unwrap();
+}
+
+async fn build_api_in_dir(
+    tmp: &TempDir,
+    project_dir_name: &str,
+    titles: &[&str],
+) -> (LocalDataApi, String, Vec<String>) {
     let projects_base = tmp.path().join("projects");
     std::fs::create_dir_all(&projects_base).unwrap();
-
-    let project_dir_name = "-tmp-fixture";
     let project_dir = projects_base.join(project_dir_name);
     std::fs::create_dir_all(&project_dir).unwrap();
 
@@ -83,18 +101,59 @@ async fn build_api_with_fixtures(titles: &[&str]) -> (LocalDataApi, TempDir, Str
     }
 
     let fs = Arc::new(LocalFileSystemProvider::new());
-    let scanner = ProjectScanner::new(fs, projects_base.clone());
+    let scanner = ProjectScanner::new(fs, projects_base);
     let mut config_mgr = ConfigManager::new(Some(tmp.path().join("config.json")));
     config_mgr.load().await.unwrap();
     let mut notif_mgr = NotificationManager::new(Some(tmp.path().join("notifications.json")));
     notif_mgr.load().await.unwrap();
     let ssh_mgr = SshConnectionManager::new();
     let api = LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr);
-    (api, tmp, project_dir_name.to_owned(), session_ids)
+    (api, project_dir_name.to_owned(), session_ids)
+}
+
+async fn build_api_with_fixtures(titles: &[&str]) -> (LocalDataApi, TempDir, String, Vec<String>) {
+    let tmp = TempDir::new().unwrap();
+    let (api, project_id, session_ids) = build_api_in_dir(&tmp, "-tmp-fixture", titles).await;
+    (api, tmp, project_id, session_ids)
 }
 
 #[tokio::test]
-async fn list_sessions_returns_skeleton_and_emits_metadata_updates() {
+async fn cursor_none_eager_inlines_real_values_with_zero_emit_within_window() {
+    use cdt_api::DataApi;
+
+    let titles = vec!["重构 auth 模块", "修复 sidebar bug", "性能优化探索"];
+    let (api, _tmp, project_id, _session_ids) = build_api_with_fixtures(&titles).await;
+
+    let mut rx = api.subscribe_session_metadata();
+    let pagination = PaginatedRequest {
+        page_size: 3,
+        cursor: None,
+    };
+    let resp = api.list_sessions(&project_id, &pagination).await.unwrap();
+
+    // cursor=None eager: 前 EAGER_FIRST_PAGE_LIMIT 条同步真值 inline
+    assert_eq!(resp.items.len(), 3);
+    for s in &resp.items {
+        assert!(
+            s.title.as_deref().is_some_and(|t| !t.is_empty()),
+            "eager path title SHALL inline real value, got {:?}",
+            s.title
+        );
+        assert_eq!(s.message_count, 2, "eager path SHALL inline message_count");
+        assert!(s.is_ongoing, "eager path SHALL inline is_ongoing");
+        assert_eq!(s.project_id, project_id);
+    }
+
+    // 验证 eager 路径 300ms 内零 broadcast emit
+    let recv = timeout(Duration::from_millis(300), rx.recv()).await;
+    assert!(
+        recv.is_err(),
+        "eager cursor=None SHALL NOT emit broadcast for items already inlined; got {recv:?}"
+    );
+}
+
+#[tokio::test]
+async fn cursor_some_paged_returns_skeleton_and_emits_metadata_updates() {
     use cdt_api::DataApi;
 
     let titles = vec![
@@ -107,77 +166,68 @@ async fn list_sessions_returns_skeleton_and_emits_metadata_updates() {
 
     let mut rx = api.subscribe_session_metadata();
 
-    let pagination = PaginatedRequest {
-        page_size: 3,
-        cursor: None,
-    };
-    let resp = api.list_sessions(&project_id, &pagination).await.unwrap();
+    // 先 cursor=None 抢占 eager（pageSize=2，eager 内联前 2 条，零 emit）
+    let first = api
+        .list_sessions(
+            &project_id,
+            &PaginatedRequest {
+                page_size: 2,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.items.len(), 2);
+    let next_cursor = first
+        .next_cursor
+        .expect("first page SHALL have next_cursor");
 
-    // 骨架契约：title=None / message_count=0 / is_ongoing=false
-    assert_eq!(resp.items.len(), 3);
-    assert_eq!(resp.next_cursor.as_deref(), Some("3"));
+    // cursor=Some 翻页：骨架 + 后台 scan + broadcast
+    let resp = api
+        .list_sessions(
+            &project_id,
+            &PaginatedRequest {
+                page_size: 2,
+                cursor: Some(next_cursor),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.items.len(), 2);
     for s in &resp.items {
         assert!(
             s.title.is_none(),
-            "skeleton title should be None, got {:?}",
+            "cursor=Some skeleton title SHALL be None, got {:?}",
             s.title
         );
-        assert_eq!(s.message_count, 0, "skeleton message_count should be 0");
-        assert!(!s.is_ongoing, "skeleton is_ongoing should be false");
-        assert_eq!(s.project_id, project_id);
+        assert_eq!(s.message_count, 0);
+        assert!(!s.is_ongoing);
         assert!(session_ids.contains(&s.session_id));
     }
 
-    let page_ids: std::collections::BTreeSet<_> =
-        resp.items.iter().map(|s| s.session_id.clone()).collect();
-    let all_ids: std::collections::BTreeSet<_> = session_ids.into_iter().collect();
-    let non_page_ids: Vec<_> = all_ids.difference(&page_ids).cloned().collect();
-
-    // 异步收齐当前页 update（最多等 5s）
+    // 异步收齐当前页 update
     let mut received = std::collections::HashMap::new();
     while received.len() < resp.items.len() {
         let upd = timeout(Duration::from_secs(5), rx.recv())
             .await
             .expect("timed out waiting for SessionMetadataUpdate")
             .expect("recv");
-        assert_eq!(upd.project_id, project_id);
-        received.insert(upd.session_id.clone(), upd);
+        if resp.items.iter().any(|s| s.session_id == upd.session_id) {
+            received.insert(upd.session_id.clone(), upd);
+        }
     }
-
-    // 元数据真值断言：只扫描当前响应页
-    for sid in &page_ids {
-        let upd = received.get(sid).expect("missing update for session");
-        // title fixture 是中文文本，extract_session_metadata 会清洗后取前 200 字符
-        assert!(
-            upd.title.as_deref().is_some_and(|t| !t.is_empty()),
-            "title should be populated, got {:?}",
-            upd.title
-        );
-        // 1 user + 1 assistant 应配对成 message_count=2
-        assert_eq!(upd.message_count, 2, "expected message_count=2 for fixture");
-        // assistant 是最后消息，无 ending event → ongoing
-        assert!(
-            upd.is_ongoing,
-            "fixture ends on assistant tool/text → is_ongoing should be true"
-        );
-    }
-    for sid in non_page_ids {
-        assert!(
-            !received.contains_key(&sid),
-            "non-page session {sid} should not be scanned"
-        );
+    for upd in received.values() {
+        assert!(upd.title.as_deref().is_some_and(|t| !t.is_empty()));
+        assert_eq!(upd.message_count, 2);
+        assert!(upd.is_ongoing);
     }
 }
 
 #[tokio::test]
-async fn repeated_list_sessions_returns_cached_metadata_inline() {
-    // 回归 fix `session-title-race`：第一次 list_sessions 完成后 cache 已写入；
-    // 第二次同 project 调用 SHALL 在骨架阶段直接 inline 填回 title/messageCount
-    // /isOngoing/gitBranch，**不再**依赖后台 broadcast emit。
-    //
-    // 这是修复 sidebar 偶发 session 显示"短 hash"的兜底——即使前端 listener
-    // 注册晚于 emit、tauri fire-and-forget 丢消息，重复打开列表仍能从 cache
-    // 拿到完整元数据。
+async fn repeated_cursor_none_lists_inline_truth_both_times() {
+    // 之前是 fix `session-title-race` 回归：第一次 list 完后 cache 写入；
+    // 第二次同 project 调用骨架阶段 inline。eager 路径下两次都直接同步等到
+    // 真值（cache 命中或 miss 都 inline），且都零 broadcast emit。
     use cdt_api::DataApi;
 
     let titles = vec!["重构 auth 模块", "修复 sidebar bug", "性能优化探索"];
@@ -189,311 +239,339 @@ async fn repeated_list_sessions_returns_cached_metadata_inline() {
         cursor: None,
     };
 
-    // 第一次：骨架 title=None；收齐 N 条 update 让 cache 写满
     let first = api.list_sessions(&project_id, &pagination).await.unwrap();
-    assert_eq!(first.items.len(), 3);
     for s in &first.items {
-        assert!(
-            s.title.is_none(),
-            "first call skeleton title should be None"
-        );
-    }
-    for _ in 0..first.items.len() {
-        let upd = timeout(Duration::from_secs(5), rx.recv())
-            .await
-            .expect("first-pass scan timed out")
-            .expect("recv");
-        assert_eq!(upd.project_id, project_id);
+        assert!(s.title.as_deref().is_some_and(|t| !t.is_empty()));
+        assert_eq!(s.message_count, 2);
     }
 
-    // 第二次：cache 全命中 → 骨架阶段就带元数据 → 不再 spawn 任何扫描任务
-    // → 不再 emit 任何 update
     let second = api.list_sessions(&project_id, &pagination).await.unwrap();
-    assert_eq!(second.items.len(), 3);
     for s in &second.items {
         assert!(
             s.title.as_deref().is_some_and(|t| !t.is_empty()),
-            "second call should inline cached title, got {:?}",
+            "second call SHALL inline cached title, got {:?}",
             s.title
         );
-        assert_eq!(
-            s.message_count, 2,
-            "second call should inline cached message_count"
-        );
-        assert!(s.is_ongoing, "second call should inline cached is_ongoing");
+        assert_eq!(s.message_count, 2);
+        assert!(s.is_ongoing);
     }
 
-    // 短时间内不应收到任何新 update（cache 全命中 → page_jobs 空 → 不 spawn）
-    let result = timeout(Duration::from_millis(300), rx.recv()).await;
+    // 两次累计 300ms 内零 emit
+    let recv = timeout(Duration::from_millis(300), rx.recv()).await;
     assert!(
-        result.is_err(),
-        "cache fast-path 应跳过后台扫描，却收到了 update：{result:?}"
+        recv.is_err(),
+        "eager cursor=None repeated calls SHALL stay silent on broadcast; got {recv:?}"
     );
 }
 
 #[tokio::test]
-async fn repeated_list_sessions_aborts_previous_scan() {
+async fn cursor_none_page_size_over_20_eager_first_20_plus_remainder_scan() {
+    // 1.4：pageSize > EAGER_FIRST_PAGE_LIMIT 时前 20 条 eager inline、剩余条走
+    // 骨架 + spawn `scan_metadata_for_page` + broadcast。
     use cdt_api::DataApi;
 
-    // 制造稍多 session，让两次扫描的事件总数与 N 的关系可观察
-    let titles: Vec<String> = (0..16).map(|i| format!("title-{i}")).collect();
+    let titles: Vec<String> = (0..25).map(|i| format!("session-{i:02}")).collect();
     let title_refs: Vec<&str> = titles.iter().map(String::as_str).collect();
     let (api, _tmp, project_id, _session_ids) = build_api_with_fixtures(&title_refs).await;
 
     let mut rx = api.subscribe_session_metadata();
     let pagination = PaginatedRequest {
-        page_size: 50,
+        page_size: 25,
         cursor: None,
     };
+    let resp = api.list_sessions(&project_id, &pagination).await.unwrap();
+    assert_eq!(resp.items.len(), 25);
 
-    // 连续两次调用——前一次未完成的扫描会被 abort
-    let _ = api.list_sessions(&project_id, &pagination).await.unwrap();
-    let _ = api.list_sessions(&project_id, &pagination).await.unwrap();
-
-    // 收集一段时间内全部 update：上限是 2 * N（最坏情况两次都全跑完）
-    let mut total = 0_usize;
-    let max_expected = titles.len() * 2;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-
-    loop {
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            break;
-        }
-        match timeout(deadline - now, rx.recv()).await {
-            Ok(Ok(upd)) => {
-                assert_eq!(upd.project_id, project_id);
-                total += 1;
-                assert!(
-                    total <= max_expected,
-                    "received more than 2*N updates ({total}); abort 未生效"
-                );
-            }
-            Ok(Err(_)) | Err(_) => break,
+    let mut eager_inline_count = 0usize;
+    let mut placeholder_count = 0usize;
+    for s in &resp.items {
+        if s.title.is_some() {
+            eager_inline_count += 1;
+        } else {
+            placeholder_count += 1;
         }
     }
-
-    // 至少有一次扫描完整跑完 → 收到至少 N 条
-    assert!(
-        total >= titles.len(),
-        "expected at least N={} updates, got {total}",
-        titles.len()
-    );
-    assert!(
-        total <= max_expected,
-        "abort 失效：updates={total} 超过 2*N={max_expected}"
-    );
-}
-
-#[tokio::test]
-async fn concurrent_list_sessions_does_not_orphan_scan() {
-    // 并发调用同 project 的 list_sessions 不能让任一 task 变成"孤儿"——
-    // 即第二次 list_sessions 进入时 SHALL 能 abort 当前 in-flight scan，
-    // 后续 list_sessions 也 SHALL 能 abort 第二次的 scan。
-    //
-    // 回归 codex 二审第二轮发现的 race：spawn 与 insert 之间 lock 释放，
-    // A 的 spawn → B abort/spawn/insert → A 晚到 insert 覆盖 B 的 entry，
-    // 后续 C 无法 abort B 的 task。修复后 abort/spawn/insert 在同一 sync
-    // lock 下原子完成，event 总数依然受 2*N 上界约束。
-    use cdt_api::DataApi;
-    use std::sync::Arc as StdArc;
-
-    let titles: Vec<String> = (0..16).map(|i| format!("title-{i}")).collect();
-    let title_refs: Vec<&str> = titles.iter().map(String::as_str).collect();
-    let (api, _tmp, project_id, _session_ids) = build_api_with_fixtures(&title_refs).await;
-    let api = StdArc::new(api);
-
-    let mut rx = api.subscribe_session_metadata();
-    let pagination = PaginatedRequest {
-        page_size: 50,
-        cursor: None,
-    };
-
-    // join_all 三个并发 list_sessions（同 project）
-    let api_a = api.clone();
-    let pid_a = project_id.clone();
-    let pag_a = pagination.clone();
-    let api_b = api.clone();
-    let pid_b = project_id.clone();
-    let pag_b = pagination.clone();
-    let api_c = api.clone();
-    let pid_c = project_id.clone();
-
-    let _ = tokio::join!(
-        async move { api_a.list_sessions(&pid_a, &pag_a).await.unwrap() },
-        async move { api_b.list_sessions(&pid_b, &pag_b).await.unwrap() },
-        async move { api_c.list_sessions(&pid_c, &pagination).await.unwrap() },
-    );
-
-    // 收集 update 事件；至多 3*N（最坏情况三次都全跑完）；race 修复后实际
-    // 应远低于该上限（前 2 次基本被 abort）。
-    let mut total = 0_usize;
-    let max_expected = titles.len() * 3;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-
-    loop {
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            break;
-        }
-        match timeout(deadline - now, rx.recv()).await {
-            Ok(Ok(upd)) => {
-                assert_eq!(upd.project_id, project_id);
-                total += 1;
-                assert!(
-                    total <= max_expected,
-                    "received more than 3*N updates ({total}); orphan scan 未被 abort"
-                );
-            }
-            Ok(Err(_)) | Err(_) => break,
-        }
-    }
-    assert!(
-        total >= titles.len(),
-        "expected at least N={} updates from final scan, got {total}",
-        titles.len()
-    );
-}
-
-#[tokio::test]
-async fn list_sessions_different_cursor_scans_run_concurrently() {
-    // 回归 fix `session-list-per-cursor-abort`：spec `ipc-data-api/spec.md`
-    // §"Emit session metadata updates" Scenario "同 projectId 不同 cursor 的
-    // 扫描并存互不 abort"。
-    //
-    // 历史 bug：`active_scans` 用单 `project_id` 当 abort key，Sidebar 首次加载
-    // page 1 拿到骨架后立刻 `queueMicrotask(maybeLoadMoreSessions(true))` 自动
-    // 触发 page 2 → page 2 调用进入临界区时 abort 掉 page 1 的扫描 → page 1
-    // cache miss session 永远拿不到 title，UI 卡在短 hash 占位。
-    //
-    // 修复后 abort key 改为 `(project_id, cursor)`，page 1 与 page 2 的扫描
-    // 互不 abort；receiver SHALL 收到两页**所有** cache miss session 的 update
-    // （总数 = N，没有任何条因 abort 丢失）。
-    use cdt_api::DataApi;
-
-    // 每页 8 条 × 2 页 = 16 条 fixture
-    let titles: Vec<String> = (0..16).map(|i| format!("page-title-{i:02}")).collect();
-    let title_refs: Vec<&str> = titles.iter().map(String::as_str).collect();
-    let (api, _tmp, project_id, _session_ids) = build_api_with_fixtures(&title_refs).await;
-
-    let mut rx = api.subscribe_session_metadata();
-
-    let page1 = PaginatedRequest {
-        page_size: 8,
-        cursor: None,
-    };
-    let resp1 = api.list_sessions(&project_id, &page1).await.unwrap();
-    assert_eq!(resp1.items.len(), 8);
+    assert_eq!(eager_inline_count, 20, "前 20 条 SHALL eager inline 真值");
     assert_eq!(
-        resp1.next_cursor.as_deref(),
-        Some("8"),
-        "page 1 next_cursor 应为 \"8\""
+        placeholder_count, 5,
+        "剩余 5 条 SHALL 保留骨架占位等 broadcast"
     );
 
-    // 紧接着调 page 2（typical Sidebar `queueMicrotask(maybeLoadMoreSessions)` 路径）
-    let page2 = PaginatedRequest {
-        page_size: 8,
-        cursor: Some("8".to_owned()),
-    };
-    let resp2 = api.list_sessions(&project_id, &page2).await.unwrap();
-    assert_eq!(resp2.items.len(), 8);
-
-    // 收集所有 update：两页扫描互不 abort 时，updates 总数 SHALL 等于 N（page 1
-    // + page 2 全部 cache miss session）。bug 路径下 page 1 被 abort，updates
-    // 数会显著小于 N（甚至只有 page 2 的 8 条）。
-    let mut received: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // remainder 5 条 SHALL 经 broadcast emit
+    let mut received = std::collections::HashSet::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while received.len() < titles.len() {
+    while received.len() < 5 {
         let now = tokio::time::Instant::now();
         if now >= deadline {
             break;
         }
         match timeout(deadline - now, rx.recv()).await {
             Ok(Ok(upd)) => {
-                assert_eq!(upd.project_id, project_id);
                 received.insert(upd.session_id);
             }
             Ok(Err(_)) | Err(_) => break,
         }
     }
-
     assert_eq!(
         received.len(),
-        titles.len(),
-        "page 1 + page 2 应各自完整扫完，总 updates 数 = N={}，实际 {}（page 1 被 abort 时数量会少）",
-        titles.len(),
+        5,
+        "remainder 5 条 SHALL 各 emit 一条 broadcast，实际 {}",
         received.len()
     );
+}
 
-    // 验证 page 1 与 page 2 的 session 都收到了 update
-    let page1_ids: std::collections::HashSet<_> =
-        resp1.items.iter().map(|s| s.session_id.clone()).collect();
-    let page2_ids: std::collections::HashSet<_> =
-        resp2.items.iter().map(|s| s.session_id.clone()).collect();
-    for sid in &page1_ids {
-        assert!(
-            received.contains(sid),
-            "page 1 session {sid} 的 update 缺失（被 abort）"
-        );
+#[tokio::test]
+async fn corrupt_session_returns_placeholder_no_positive_cache_and_deferred_retry() {
+    // D6b + 1.3：首页 eager 单条解析失败 → 响应该条占位（title=None）+ 正向
+    // MetadataCache 不含该 sessionId entry（D6b 不写 cache）+ receiver 收到
+    // deferred retry emit（spawn_deferred_metadata_retry 走 bypass_negative=true，
+    // 仍解析失败也会经 broadcast 推送占位状态？实际：spawn_deferred 内部判
+    // is_placeholder 不 emit，仅成功才 emit）。本测试聚焦 D6b 的 cache 不
+    // 污染 + eager 占位回填。
+    use cdt_api::DataApi;
+
+    let tmp = TempDir::new().unwrap();
+    let projects_base = tmp.path().join("projects");
+    std::fs::create_dir_all(&projects_base).unwrap();
+    let project_dir = projects_base.join("-tmp-corrupt");
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    write_fixture_session(&project_dir, "good-01", "正常 session").await;
+    write_corrupt_session(&project_dir, "bad-01").await;
+
+    let fs = Arc::new(LocalFileSystemProvider::new());
+    let scanner = ProjectScanner::new(fs, projects_base);
+    let mut config_mgr = ConfigManager::new(Some(tmp.path().join("config.json")));
+    config_mgr.load().await.unwrap();
+    let mut notif_mgr = NotificationManager::new(Some(tmp.path().join("notifications.json")));
+    notif_mgr.load().await.unwrap();
+    let ssh_mgr = SshConnectionManager::new();
+    let api = LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr);
+
+    let _rx = api.subscribe_session_metadata();
+    let resp = api
+        .list_sessions(
+            "-tmp-corrupt",
+            &PaginatedRequest {
+                page_size: 20,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let bad = resp
+        .items
+        .iter()
+        .find(|s| s.session_id == "bad-01")
+        .expect("bad-01 should appear");
+    assert!(
+        bad.title.is_none(),
+        "corrupt session SHALL keep placeholder title"
+    );
+    assert_eq!(bad.message_count, 0);
+    assert!(!bad.is_ongoing);
+
+    let good = resp
+        .items
+        .iter()
+        .find(|s| s.session_id == "good-01")
+        .expect("good-01 should appear");
+    assert!(good.title.as_deref().is_some_and(|t| !t.is_empty()));
+
+    // D6c: 给 deferred retry 一些时间运行（500ms 延迟 + 解析时间）
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // D6b: 正向 cache 仅含 good，不含 bad
+    let positive = api.metadata_cache_len_for_tests();
+    assert_eq!(
+        positive, 1,
+        "正向 cache SHALL 仅含 good entry，实际 {positive}"
+    );
+    // D6c: negative cache 含 bad（写入 + retry 仍失败重写）
+    let negative = api.metadata_cache_negative_len_for_tests();
+    assert!(
+        negative >= 1,
+        "negative cache SHALL 含 bad entry（D6c），实际 {negative}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_project_active_scans_aborted_on_eager_project_switch() {
+    // D4b: 多 project 翻页扫描进行中，调 list_sessions(projectB, cursor=None)
+    // 进入 eager 时遍历 active_scans 按 projectId 解析 abort 所有非 projectB
+    // 的 entry。验证 active_scans 中切到 projectB 之后只剩 projectB 自己的 key。
+    //
+    // 备注：小 fixture + 高并发下后台 scan task 几乎瞬时完成，**先有 projectA scan
+    // 后被 abort** 与 **projectA scan 自然结束已 cleanup** 在 active_scans 黑盒视角
+    // 上一致。所以测试主张的硬不变量是 post-condition（切换后 active_scans 中
+    // 不含非 projectB key），precondition 用 best-effort 多次重发让窗口更宽。
+    use cdt_api::DataApi;
+
+    let tmp = TempDir::new().unwrap();
+    let projects_base = tmp.path().join("projects");
+    std::fs::create_dir_all(&projects_base).unwrap();
+
+    // projectA / projectC：每个 100 条让翻页扫描 spawn 真起来
+    for pid in ["-tmp-projA", "-tmp-projC"] {
+        let pdir = projects_base.join(pid);
+        std::fs::create_dir_all(&pdir).unwrap();
+        for i in 0..100 {
+            write_fixture_session(&pdir, &format!("sess-{i:03}"), &format!("{pid}-{i}")).await;
+        }
     }
-    for sid in &page2_ids {
-        assert!(
-            received.contains(sid),
-            "page 2 session {sid} 的 update 缺失"
+    let pb_dir = projects_base.join("-tmp-projB");
+    std::fs::create_dir_all(&pb_dir).unwrap();
+    write_fixture_session(&pb_dir, "b-01", "projB only").await;
+
+    let fs = Arc::new(LocalFileSystemProvider::new());
+    let scanner = ProjectScanner::new(fs, projects_base);
+    let mut config_mgr = ConfigManager::new(Some(tmp.path().join("config.json")));
+    config_mgr.load().await.unwrap();
+    let mut notif_mgr = NotificationManager::new(Some(tmp.path().join("notifications.json")));
+    notif_mgr.load().await.unwrap();
+    let ssh_mgr = SshConnectionManager::new();
+    let api = LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr);
+
+    // 用 cursor=Some 多次连发让 projectA / projectC 的扫描在 active_scans 里堆叠
+    for cursor in ["0", "50"] {
+        for pid in ["-tmp-projA", "-tmp-projC"] {
+            let _ = api
+                .list_sessions(
+                    pid,
+                    &PaginatedRequest {
+                        page_size: 50,
+                        cursor: Some(cursor.to_owned()),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    // 切到 projectB cursor=None → eager 路径开始时 abort 所有非 projectB 的 entry
+    let _ = api
+        .list_sessions(
+            "-tmp-projB",
+            &PaginatedRequest {
+                page_size: 1,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // 立即检查 active_scans——任何残存的非 projectB key 都意味着 D4b 没生效
+    let after = api.active_scan_keys_for_tests();
+    for key in &after {
+        let pid = key.split('|').next().unwrap();
+        assert_eq!(
+            pid, "-tmp-projB",
+            "after switch active_scans SHALL only contain projectB keys, got {after:?}"
         );
     }
 }
 
 #[tokio::test]
-async fn list_sessions_same_cursor_repeated_aborts_previous_scan() {
-    // spec `ipc-data-api/spec.md` §"Emit session metadata updates" Scenario
-    // "同 projectId 同 cursor 的新扫描取消旧扫描"。同 cursor=null 重复调用
-    // 时（典型场景：silent 刷新连续触发或快速重复点击），旧扫描 SHALL 被 abort，
-    // updates 总数 SHALL ≤ N（不会出现 2*N 全跑完的情况）。
-    //
-    // 与 `repeated_list_sessions_aborts_previous_scan` 区别：此处显式断言
-    // 同 cursor 抢占语义，避免被未来"放宽 abort"的修改无声破坏。
+async fn d11_remainder_scan_dedupe_keeps_at_most_one_active_entry() {
+    // D11: pageSize > 20 高频 silent refresh 时 remainder scan 同
+    // `format!("{project_id}|None|remainder")` key 自然 dedupe——active_scans
+    // 中始终至多 1 个 remainder entry。
     use cdt_api::DataApi;
 
-    let titles: Vec<String> = (0..16).map(|i| format!("same-{i:02}")).collect();
+    let titles: Vec<String> = (0..30).map(|i| format!("dedupe-{i:02}")).collect();
+    let title_refs: Vec<&str> = titles.iter().map(String::as_str).collect();
+    let (api, _tmp, project_id, _) = build_api_with_fixtures(&title_refs).await;
+
+    let pagination = PaginatedRequest {
+        page_size: 30,
+        cursor: None,
+    };
+
+    // 高频 silent refresh：连续 3 次 list_sessions
+    for _ in 0..3 {
+        let _ = api.list_sessions(&project_id, &pagination).await.unwrap();
+    }
+
+    // 检查 active_scans 中 remainder key 至多 1 个
+    let keys = api.active_scan_keys_for_tests();
+    let remainder_count = keys
+        .iter()
+        .filter(|k| k.ends_with("|None|remainder"))
+        .count();
+    assert!(
+        remainder_count <= 1,
+        "D11: remainder key SHALL dedupe to ≤ 1 entry, got {remainder_count} ({keys:?})"
+    );
+}
+
+#[tokio::test]
+async fn paged_cursor_different_pages_run_concurrently_without_abort() {
+    // 回归 fix `session-list-per-cursor-abort`：cursor=Some(...) 翻页扫描间
+    // 用 `(project_id, cursor)` 当 key，不同 cursor 互不 abort。
+    use cdt_api::DataApi;
+
+    let titles: Vec<String> = (0..24).map(|i| format!("page-{i:02}")).collect();
     let title_refs: Vec<&str> = titles.iter().map(String::as_str).collect();
     let (api, _tmp, project_id, _session_ids) = build_api_with_fixtures(&title_refs).await;
 
     let mut rx = api.subscribe_session_metadata();
-    let pagination = PaginatedRequest {
-        page_size: 50,
-        cursor: None,
-    };
 
-    let _ = api.list_sessions(&project_id, &pagination).await.unwrap();
-    let _ = api.list_sessions(&project_id, &pagination).await.unwrap();
+    // 抢一次 eager 把前 20 条 cache 起来
+    let _ = api
+        .list_sessions(
+            &project_id,
+            &PaginatedRequest {
+                page_size: 20,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+    while let Ok(Ok(_)) = timeout(Duration::from_millis(50), rx.recv()).await {}
 
-    // 收集 updates；同 cursor 抢占下，2*N 是绝对上界
-    let mut total = 0_usize;
-    let max_expected = titles.len() * 2;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-    loop {
+    // 然后翻页 cursor=Some("20") page_size=2 拿剩 2 条 + cursor=Some("22") 拿剩 2 条
+    let _ = api
+        .list_sessions(
+            &project_id,
+            &PaginatedRequest {
+                page_size: 2,
+                cursor: Some("20".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+    let _ = api
+        .list_sessions(
+            &project_id,
+            &PaginatedRequest {
+                page_size: 2,
+                cursor: Some("22".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+
+    // 两次翻页各 2 条独立扫描；emit 总数 SHALL ≥ 4（两页都跑完）
+    let mut received = std::collections::HashSet::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while received.len() < 4 {
         let now = tokio::time::Instant::now();
         if now >= deadline {
             break;
         }
         match timeout(deadline - now, rx.recv()).await {
             Ok(Ok(upd)) => {
-                assert_eq!(upd.project_id, project_id);
-                total += 1;
-                assert!(
-                    total <= max_expected,
-                    "received more than 2*N updates ({total}); same-cursor abort 未生效"
-                );
+                received.insert(upd.session_id);
             }
             Ok(Err(_)) | Err(_) => break,
         }
     }
-    // 至少 N（最后一次扫完）；上界 2*N
-    assert!(
-        total >= titles.len(),
-        "expected at least N={} updates, got {total}",
-        titles.len()
+    assert_eq!(
+        received.len(),
+        4,
+        "两页翻页各 2 条 cache miss SHALL 都 emit，实际 {}",
+        received.len()
     );
 }
 

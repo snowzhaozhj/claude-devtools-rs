@@ -43,6 +43,19 @@
         "largest_ipc_ms": 100,
         "largest_payload_kb": 1500
       }
+    },
+    "perf_eager_first_page": {
+      "$comment": "change `eager-first-page-metadata` 引入的 cursor=None eager 路径在 30 project × 50 session 固定 corpus 下的四维。三个 bench 入口同 binary：page_size=20 / page_size=50 / D4b 复合场景串行跑完整体 wall。本地 macOS min-of-5 观测：wall ~14-20s（30 project 串行 × 每 project ~500ms eager 等真值）/ user ~2-3s / sys ~6-8s / max_rss ~80-100 MB。baseline 取 min 观测 ~1.5x 容噪——bench 自带 corpus 不依赖本机，是 CI fixture 模式下的真实 gate 入口。设计目标（per-call wall）：p50 < 300ms / p95 < 500ms / worst < 1500ms；当前 fixture 因冷启动 ProjectScanner 首扫拉满 p50，已在 bench assert 维持上界。",
+      "binary": "perf_eager_first_page",
+      "test_filter": "bench_eager_first_page",
+      "platform_scope": "local",
+      "metrics": {
+        "wall_ms": 30000,
+        "user_ms": 5000,
+        "sys_ms": 12000,
+        "max_rss_kb": 200000,
+        "user_real_ratio": 0.6
+      }
     }
   }
 }

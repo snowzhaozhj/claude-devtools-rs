@@ -470,7 +470,7 @@ describe('BrowserTransport', () => {
     expect(elapsed).toBeLessThan(500) // OPEN 立返，不应有 50ms+ poll 延迟
   })
 
-  test('ensureSseReady：CONNECTING 状态等待 onopen 后才发 fetch', async () => {
+  test('ensureSseReady：cursor=Some 翻页时 CONNECTING 状态等待 onopen 后才发 fetch', async () => {
     const instances: FakeEventSource[] = []
     vi.stubGlobal(
       'EventSource',
@@ -486,7 +486,8 @@ describe('BrowserTransport', () => {
       new Response(JSON.stringify({ items: [], nextCursor: null, total: 0 }), { status: 200 }),
     )
 
-    const invokePromise = getTransport().invoke('list_sessions', { projectId: 'p2', pageSize: 20 })
+    // cursor=Some 走 await 闸门（翻页路径）
+    const invokePromise = getTransport().invoke('list_sessions', { projectId: 'p2', pageSize: 20, cursor: '20' })
 
     // 给 ensureSseReady 跑一两轮 poll（≥ 50ms）让 source 创建
     await new Promise<void>((r) => setTimeout(r, 80))
@@ -501,7 +502,7 @@ describe('BrowserTransport', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  test('ensureSseReady：1000ms 超时后仍放行 fetch + console.warn', async () => {
+  test('ensureSseReady：cursor=Some 翻页时 1000ms 超时后仍放行 fetch + console.warn', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.stubGlobal(
       'EventSource',
@@ -518,7 +519,8 @@ describe('BrowserTransport', () => {
     )
 
     const start = performance.now()
-    await getTransport().invoke('list_sessions', { projectId: 'p3', pageSize: 20 })
+    // cursor=Some 走 await 闸门：才会到 1000 ms 超时 + console.warn 路径
+    await getTransport().invoke('list_sessions', { projectId: 'p3', pageSize: 20, cursor: '20' })
     const elapsed = performance.now() - start
 
     expect(elapsed).toBeGreaterThanOrEqual(950) // 等满 ~1000ms（含轮询粒度抖动）
@@ -545,7 +547,7 @@ describe('BrowserTransport', () => {
     expect(instances.length).toBeGreaterThanOrEqual(1) // ensureSource 已触发
   })
 
-  test('ensureSseReady：1000ms 超时后下一次 onopen 触发 sse-recovered 兜底事件', async () => {
+  test('ensureSseReady：cursor=Some 翻页 1000ms 超时后下一次 onopen 触发 sse-recovered 兜底事件', async () => {
     vi.useFakeTimers()
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const instances: (FakeEventSource & { triggerOpen: () => void })[] = []
@@ -572,8 +574,8 @@ describe('BrowserTransport', () => {
     await subscribeEvent('sse-recovered', recoveredHandler)
     expect(instances.length).toBeGreaterThanOrEqual(1)
 
-    // ensureSseReady 永等不到 OPEN → 1000 ms 超时放行 fetch
-    const invokePromise = getTransport().invoke('list_sessions', { projectId: 'p-recover', pageSize: 20 })
+    // cursor=Some 翻页 → ensureSseReady 永等不到 OPEN → 1000 ms 超时放行 fetch
+    const invokePromise = getTransport().invoke('list_sessions', { projectId: 'p-recover', pageSize: 20, cursor: '20' })
     await vi.advanceTimersByTimeAsync(1000)
     await invokePromise
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('SSE not OPEN within 1000ms'))
@@ -593,6 +595,129 @@ describe('BrowserTransport', () => {
     expect(recoveredHandler).toHaveBeenCalledTimes(1)
 
     vi.useRealTimers()
+  })
+
+  test('D9 + D9b：list_sessions(cursor=null) 不 await ensureSseReady 立即发 fetch', async () => {
+    // 让 EventSource 永远 CONNECTING——cursor=null 路径 SHALL 仍立即发 fetch
+    // 不被 SSE 状态阻塞（首页 eager 路径 inline 真值已含 metadata）
+    vi.stubGlobal(
+      'EventSource',
+      class extends FakeEventSource {
+        constructor(url: string) {
+          super(url)
+          this.readyState = FakeEventSource.CONNECTING
+        }
+      },
+    )
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ items: [], nextCursor: null, total: 0 }), { status: 200 }),
+    )
+
+    const start = performance.now()
+    await getTransport().invoke('list_sessions', { projectId: 'p-eager', pageSize: 20 })
+    const elapsed = performance.now() - start
+
+    // 不该等满 1000 ms 闸门——cursor=null 走 fire-and-forget
+    expect(elapsed).toBeLessThan(300)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test('D9 + D9b：list_sessions(cursor=null) fire-and-forget 仍触发 ensureSource 订阅 SSE', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal(
+      'EventSource',
+      class extends FakeEventSource {
+        constructor(url: string) {
+          super(url)
+          this.readyState = FakeEventSource.CONNECTING
+          instances.push(this)
+        }
+      },
+    )
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ items: [], nextCursor: null, total: 0 }), { status: 200 }),
+    )
+
+    await getTransport().invoke('list_sessions', { projectId: 'p-eager-sub', pageSize: 20 })
+
+    // 即便不 await ensureSseReady，ensureSource 也 SHALL 同步建出 SSE 实例
+    // 让后续 metadata patch 走得通
+    expect(instances).toHaveLength(1)
+  })
+
+  test('codex v3 issue 1：list_sessions(cursor=null) 在 SSE CONNECTING 时立即设 sseRecoveryPending；OPEN 后 emit sse-recovered', async () => {
+    const instances: (FakeEventSource & { triggerOpen: () => void })[] = []
+    vi.stubGlobal(
+      'EventSource',
+      class extends FakeEventSource {
+        onopen: (() => void) | null = null
+        constructor(url: string) {
+          super(url)
+          this.readyState = FakeEventSource.CONNECTING
+          instances.push(this as FakeEventSource & { triggerOpen: () => void })
+        }
+        triggerOpen() {
+          this.readyState = FakeEventSource.OPEN
+          this.onopen?.()
+        }
+      },
+    )
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ items: [], nextCursor: null, total: 0 }), { status: 200 }),
+    )
+
+    const recoveredHandler = vi.fn()
+    await subscribeEvent('sse-recovered', recoveredHandler)
+    expect(instances).toHaveLength(1)
+    expect(instances[0].readyState).toBe(FakeEventSource.CONNECTING)
+
+    // cursor=null：fetch 立即发出（不等 SSE OPEN），但 sseRecoveryPending SHALL
+    // 被置 true——这样 SSE 后续 OPEN 时（即使 < 1000 ms 快速 OPEN）也会 emit
+    // sse-recovered 兜底事件覆盖 fetch 在 OPEN 前发出窗口期内丢失的 metadata patch
+    await getTransport().invoke('list_sessions', { projectId: 'p-fast-open', pageSize: 20 })
+    expect(recoveredHandler).not.toHaveBeenCalled()
+
+    // SSE 在 fetch 后 < 1000 ms 内成功 OPEN（fast-open 路径，不走 1000 ms 超时）
+    instances[0].triggerOpen()
+    expect(recoveredHandler).toHaveBeenCalledTimes(1)
+    expect(recoveredHandler).toHaveBeenCalledWith({
+      event: 'sse-recovered',
+      id: 0,
+      payload: {},
+    })
+  })
+
+  test('codex v3 issue 1：list_sessions(cursor=null) 在 SSE 已 OPEN 时不设 sseRecoveryPending 不 emit 多余 sse-recovered', async () => {
+    const instances: (FakeEventSource & { triggerOpen: () => void })[] = []
+    vi.stubGlobal(
+      'EventSource',
+      class extends FakeEventSource {
+        onopen: (() => void) | null = null
+        constructor(url: string) {
+          super(url)
+          this.readyState = FakeEventSource.OPEN
+          instances.push(this as FakeEventSource & { triggerOpen: () => void })
+        }
+        triggerOpen() {
+          this.readyState = FakeEventSource.OPEN
+          this.onopen?.()
+        }
+      },
+    )
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ items: [], nextCursor: null, total: 0 }), { status: 200 }),
+    )
+
+    const recoveredHandler = vi.fn()
+    await subscribeEvent('sse-recovered', recoveredHandler)
+    expect(instances).toHaveLength(1)
+    expect(instances[0].readyState).toBe(FakeEventSource.OPEN)
+
+    // SSE 已 OPEN：fetch 之前 SSE 就在听了，没有 patch 丢失窗口——SHALL 不设
+    // sseRecoveryPending，后续重连 onopen 也不会触发多余 sse-recovered
+    await getTransport().invoke('list_sessions', { projectId: 'p-already-open', pageSize: 20 })
+    instances[0].triggerOpen() // 模拟 spurious onopen（重连成功等）
+    expect(recoveredHandler).not.toHaveBeenCalled()
   })
 
   test('SSE sse_lagged 事件转换为 sse-lagged event（broadcast 容量打满兜底）', async () => {

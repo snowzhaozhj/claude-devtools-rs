@@ -27,9 +27,20 @@ pub trait DataApi: Send + Sync {
 
     /// 分页列出项目的会话。
     ///
-    /// 返回**骨架** `SessionSummary`（`title` / `messageCount` /
-    /// `isOngoing` 为占位值），元数据通过 `subscribe_session_metadata()`
-    /// 异步推送。IPC 与 HTTP 路径共用本方法（spec ipc-data-api §"Expose
+    /// **cursor 分叉契约**（change `eager-first-page-metadata` D8）：
+    ///
+    /// - `pagination.cursor == None`（首页 / silent refresh）：响应内前
+    ///   `EAGER_FIRST_PAGE_LIMIT` 条 SHALL **同步等到** metadata 真值
+    ///   （`title` / `messageCount` / `isOngoing` / `gitBranch`）；超时
+    ///   （`EAGER_PER_SESSION_TIMEOUT`）/ 失败条保留占位并触发 deferred retry，
+    ///   通过 `subscribe_session_metadata()` 后续 emit。`page_size >
+    ///   EAGER_FIRST_PAGE_LIMIT` 时，剩余条走骨架 + 后台 scan + broadcast
+    ///   （与翻页路径同模型）。
+    /// - `pagination.cursor == Some(_)`（翻页）：返回**骨架**
+    ///   `SessionSummary`（`title` / `messageCount` / `isOngoing` 为占位值），
+    ///   元数据通过 `subscribe_session_metadata()` 异步推送。
+    ///
+    /// IPC 与 HTTP 路径共用本方法（spec ipc-data-api §"Expose
     /// project and session queries" 段落 "HTTP `list_sessions` 复用 IPC
     /// 骨架 + push 实现"）。
     async fn list_sessions(

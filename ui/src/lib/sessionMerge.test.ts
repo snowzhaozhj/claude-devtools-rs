@@ -155,6 +155,29 @@ describe('applySilentRefresh', () => {
     expect(result.nextCursor).toBe(prevCursor)
   })
 
+  test('change `eager-first-page-metadata` D3b：firstPage 含真值时覆盖 prev stale 元数据', () => {
+    // 关键回归测试：silent refresh 走 eager 路径返 inline 真值时 SHALL 用
+    // response 覆盖 prev 的旧值，让 cache 里刚刷新出的 isOngoing / messageCount
+    // 立即生效，不再被 `mergeSilentMetadata` 的"prev 真值优先"语义压住
+    const prev = [patched('s1', 1000, 'old stale title', { isOngoing: true, gitBranch: 'main' })]
+    const firstPage = [patched('s1', 1500, 'fresh title', { isOngoing: false, gitBranch: 'dev', messageCount: 99 })]
+    const result = applySilentRefresh(prev, prevCursor, firstPage)
+    expect(result.sessions[0].title).toBe('fresh title')
+    expect(result.sessions[0].isOngoing).toBe(false)
+    expect(result.sessions[0].gitBranch).toBe('dev')
+    expect(result.sessions[0].messageCount).toBe(99)
+  })
+
+  test('change `eager-first-page-metadata` D3b：firstPage 是占位（deferred retry 失败）时保留 prev 真值', () => {
+    // 极端场景：eager 路径单条解析超时 / 损坏 jsonl → response 保留骨架占位。
+    // 此时 SHALL 保留 prev 已 patch 的真值，避免 UI 倒退到占位态
+    const prev = [patched('s1', 1000, 'patched title', { isOngoing: true })]
+    const firstPage = [skel('s1', 2000)] // 占位
+    const result = applySilentRefresh(prev, prevCursor, firstPage)
+    expect(result.sessions[0].title).toBe('patched title')
+    expect(result.sessions[0].isOngoing).toBe(true)
+  })
+
   test('silent 合并不丢失任何 prev sessionId（scrollTop 锚定保障）', () => {
     const prev: SessionSummary[] = [
       patched('p1-a', 5000, 'page1-a'),

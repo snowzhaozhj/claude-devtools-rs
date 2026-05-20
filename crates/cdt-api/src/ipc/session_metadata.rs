@@ -14,7 +14,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex as StdMutex, OnceLock};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use regex::Regex;
 use tokio::fs::File;
@@ -364,6 +364,14 @@ pub(crate) fn extract_session_metadata_from_parsed(
 /// metadata 缓存容量上限。
 pub const METADATA_CACHE_CAPACITY: usize = 200;
 
+/// 解析失败 / 全占位 sessionId 在重新尝试解析前的 backoff 窗口。
+///
+/// 配合 `MetadataCache::negative_results` 实现 negative TTL：60s 内对同
+/// sessionId 的非 retry 路径直接返占位，避免永久损坏 jsonl 持续 CPU spike
+/// （详 change `eager-first-page-metadata` D6c）。`bypass_negative=true` 的
+/// deferred retry 路径强制重新解析跳过本窗口。
+pub const NEGATIVE_TTL: Duration = Duration::from_secs(60);
+
 /// 单条缓存记录：`FileSignature` + 各字段（不含时间敏感的 `is_ongoing`）。
 #[derive(Debug, Clone)]
 struct MetadataCacheEntry {
@@ -374,12 +382,25 @@ struct MetadataCacheEntry {
     git_branch: Option<String>,
 }
 
+/// negative 缓存记录：失败 sessionId + 当时的 `FileSignature` + 写入时刻。
+///
+/// 命中规则：同 path + `FileSignature` 等价 + 距 `recorded_at` < `NEGATIVE_TTL`
+/// → 直接返占位跳过解析。`FileSignature` 不等价时视为文件已变化，重新尝试。
+#[derive(Debug, Clone)]
+struct NegativeEntry {
+    signature: FileSignature,
+    recorded_at: Instant,
+}
+
 /// `LocalDataApi` 持有的 metadata LRU 缓存。**不**用全局单例（详 design D3b）。
 #[derive(Debug)]
 pub struct MetadataCache {
     map: HashMap<PathBuf, MetadataCacheEntry>,
     order: VecDeque<PathBuf>,
     capacity: usize,
+    /// 解析失败 / 全占位 sessionId 的 negative TTL（详 D6b/D6c）。永远 LRU
+    /// 上限同 `capacity`——损坏 sessionId 总数同量级，不会爆。
+    negative: HashMap<PathBuf, NegativeEntry>,
 }
 
 impl Default for MetadataCache {
@@ -394,6 +415,7 @@ impl MetadataCache {
             map: HashMap::new(),
             order: VecDeque::new(),
             capacity,
+            negative: HashMap::new(),
         }
     }
 
@@ -426,9 +448,43 @@ impl MetadataCache {
         self.order.push_front(path);
     }
 
-    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.map.len()
+    }
+
+    /// 写入 negative 记录（失败 / 全占位 path + 当前 `FileSignature` + `Instant::now`）。
+    fn record_negative(&mut self, path: PathBuf, signature: FileSignature) {
+        self.negative.insert(
+            path,
+            NegativeEntry {
+                signature,
+                recorded_at: Instant::now(),
+            },
+        );
+    }
+
+    /// 命中判定：`path` 在 `negative` 中、`FileSignature` 等价且距 `recorded_at`
+    /// < `NEGATIVE_TTL`。命中 → 直接返占位跳过解析；过期或文件变化 → remove
+    /// 后让 caller 重新尝试解析。
+    fn lookup_negative(&mut self, path: &Path, current_sig: &FileSignature) -> bool {
+        let Some(entry) = self.negative.get(path) else {
+            return false;
+        };
+        if &entry.signature != current_sig || entry.recorded_at.elapsed() >= NEGATIVE_TTL {
+            self.negative.remove(path);
+            return false;
+        }
+        true
+    }
+
+    /// 清除 negative 记录——解析成功 / `FileSignature` 已变 时调，让 cache 与
+    /// negative 互斥（同 path 不会同时在两边）。
+    fn clear_negative(&mut self, path: &Path) {
+        self.negative.remove(path);
+    }
+
+    pub(crate) fn negative_len(&self) -> usize {
+        self.negative.len()
     }
 }
 
@@ -465,9 +521,23 @@ pub(crate) async fn try_lookup_cached_metadata(
 /// 与 `is_session_stale(signature.mtime, now)` 实时合成）。
 /// miss / stat 失败：调 uncached `extract_session_metadata_with_ongoing` 重扫，
 /// 成功后写缓存。stat 失败不写缓存。
+///
+/// `bypass_negative` 控制 negative TTL 行为（详 change `eager-first-page-metadata`
+/// D6b/D6c）：
+/// - `false`（默认路径，含首页 eager + 翻页 + skeleton fast-path）：60s 内对
+///   同 sessionId（`FileSignature` 等价）若有 negative 记录直接返占位跳过解析，
+///   避免永久损坏 jsonl 持续 CPU spike
+/// - `true`（deferred retry 路径专用）：跳过 negative TTL 强制重新解析；
+///   恢复成功 → 移除 negative + 写正向 cache + 调用方 broadcast；仍失败 →
+///   重写 negative 续 60s
+///
+/// 写 cache 策略：解析结果**字段全占位**（`title=None && message_count=0 &&
+/// !messages_ongoing && git_branch=None`）时 SHALL NOT 写正向 cache（避免下次
+/// fast-path 命中 stale placeholder），改写 `negative_results`。
 pub(crate) async fn extract_session_metadata_cached(
     cache: &StdMutex<MetadataCache>,
     path: &Path,
+    bypass_negative: bool,
 ) -> SessionMetadata {
     let new_sig = match tokio::fs::metadata(path).await {
         Ok(meta) => Some(FileSignature::from_metadata(&meta)),
@@ -475,6 +545,7 @@ pub(crate) async fn extract_session_metadata_cached(
     };
 
     if let Some(sig) = new_sig {
+        // 优先查正向 cache：命中且 signature 等价直接返。
         let cached = cache
             .lock()
             .expect("metadata cache mutex poisoned")
@@ -491,21 +562,47 @@ pub(crate) async fn extract_session_metadata_cached(
                 };
             }
         }
+
+        // 正向 miss → 查 negative TTL（`bypass_negative=true` 跳过）。
+        if !bypass_negative {
+            let hit = cache
+                .lock()
+                .expect("metadata cache mutex poisoned")
+                .lookup_negative(path, &sig);
+            if hit {
+                return SessionMetadata {
+                    title: None,
+                    message_count: 0,
+                    is_ongoing: false,
+                    git_branch: None,
+                };
+            }
+        }
     }
 
     let (meta, messages_ongoing) = extract_session_metadata_with_ongoing(path).await;
 
     if let Some(sig) = new_sig {
-        cache.lock().expect("metadata cache mutex poisoned").insert(
-            path.to_path_buf(),
-            MetadataCacheEntry {
-                signature: sig,
-                title: meta.title.clone(),
-                message_count: meta.message_count,
-                messages_ongoing,
-                git_branch: meta.git_branch.clone(),
-            },
-        );
+        let is_all_placeholder = meta.title.is_none()
+            && meta.message_count == 0
+            && !messages_ongoing
+            && meta.git_branch.is_none();
+        let mut guard = cache.lock().expect("metadata cache mutex poisoned");
+        if is_all_placeholder {
+            guard.record_negative(path.to_path_buf(), sig);
+        } else {
+            guard.clear_negative(path);
+            guard.insert(
+                path.to_path_buf(),
+                MetadataCacheEntry {
+                    signature: sig,
+                    title: meta.title.clone(),
+                    message_count: meta.message_count,
+                    messages_ongoing,
+                    git_branch: meta.git_branch.clone(),
+                },
+            );
+        }
     }
 
     meta
@@ -1113,7 +1210,7 @@ mod tests {
         );
 
         let cache = make_cache();
-        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        let m1 = extract_session_metadata_cached(&cache, &path, false).await;
         assert_eq!(m1.message_count, 2);
 
         // 缓存应已写入
@@ -1121,7 +1218,7 @@ mod tests {
 
         // 第二次：FileSignature 不变命中。改变文件内容后再次调用 cached
         // 不会读取——这里通过比较返回结果与缓存一致间接验证（不真改文件）
-        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        let m2 = extract_session_metadata_cached(&cache, &path, false).await;
         assert_eq!(m1.message_count, m2.message_count);
         assert_eq!(m1.title, m2.title);
         assert_eq!(m1.git_branch, m2.git_branch);
@@ -1136,7 +1233,7 @@ mod tests {
         );
 
         let cache = make_cache();
-        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        let m1 = extract_session_metadata_cached(&cache, &path, false).await;
         assert_eq!(m1.message_count, 1);
 
         // append 新内容让 size 变化 → cache miss → 重扫
@@ -1151,7 +1248,7 @@ mod tests {
         )
         .unwrap();
 
-        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        let m2 = extract_session_metadata_cached(&cache, &path, false).await;
         assert_eq!(m2.message_count, 2, "size 变化后应重扫");
     }
 
@@ -1165,7 +1262,7 @@ mod tests {
         );
 
         let cache = make_cache();
-        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        let m1 = extract_session_metadata_cached(&cache, &path, false).await;
         assert_eq!(m1.message_count, 1);
 
         // 准备替换文件（不同内容）
@@ -1181,7 +1278,7 @@ mod tests {
         .unwrap();
         std::fs::rename(&replacement, &path).unwrap();
 
-        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        let m2 = extract_session_metadata_cached(&cache, &path, false).await;
         assert_eq!(
             m2.message_count, 2,
             "rename 替换（inode 变化）必须重扫，message_count 应反映新内容"
@@ -1195,6 +1292,7 @@ mod tests {
         let m = extract_session_metadata_cached(
             &cache,
             std::path::Path::new("/nonexistent/missing.jsonl"),
+            false,
         )
         .await;
         assert_eq!(m.message_count, 0);
@@ -1271,7 +1369,7 @@ mod tests {
         );
 
         let cache = make_cache();
-        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        let m1 = extract_session_metadata_cached(&cache, &path, false).await;
         // 第一次：刚写入，mtime 接近 now，is_ongoing 取决于 messages_ongoing 与 stale
         // 不强断言 m1.is_ongoing，重点是缓存的 messages_ongoing 中间值
         let _ = m1;
@@ -1287,7 +1385,7 @@ mod tests {
         // 修改文件 mtime 让 stat 与缓存中的（被改成远古）一致
         let _ = filetime_set_old(&path);
 
-        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        let m2 = extract_session_metadata_cached(&cache, &path, false).await;
         // 命中后实时合成：mtime 远古 → stale → is_ongoing = false
         assert!(
             !m2.is_ongoing,
@@ -1588,7 +1686,7 @@ mod tests {
             },
         );
 
-        let m = extract_session_metadata_cached(&cache, &path).await;
+        let m = extract_session_metadata_cached(&cache, &path, false).await;
         assert_eq!(m.title.as_deref(), Some("旧规则算出的 title"));
         assert_eq!(
             m.message_count, 7,
@@ -1608,7 +1706,7 @@ mod tests {
 
         let cache = make_cache();
         // 第一次扫填入 cache
-        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        let m1 = extract_session_metadata_cached(&cache, &path, false).await;
         assert_eq!(m1.title.as_deref(), Some("old"));
 
         // 把 cache 里的 title 篡改为模拟"按旧算法算出来的不同字面量"，签名仍匹配
@@ -1619,7 +1717,7 @@ mod tests {
             }
         }
         // 命中：返回篡改后的旧 title
-        let m_legacy = extract_session_metadata_cached(&cache, &path).await;
+        let m_legacy = extract_session_metadata_cached(&cache, &path, false).await;
         assert_eq!(
             m_legacy.title.as_deref(),
             Some("legacy title from old algo")
@@ -1637,7 +1735,7 @@ mod tests {
         )
         .unwrap();
 
-        let m_new = extract_session_metadata_cached(&cache, &path).await;
+        let m_new = extract_session_metadata_cached(&cache, &path, false).await;
         // 新扫描时第一条仍是 "old"（按 early-exit gate 它先被赋 title）。
         // 关键 assertion：cache 已用 *新算法* 重算并写回，不再是 legacy 字面量
         assert_ne!(

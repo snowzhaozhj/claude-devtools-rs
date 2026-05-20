@@ -57,12 +57,28 @@ const SSE_RECONNECT_MAX_MS = 30_000;
  * `/api/events` SSE 才发 fetch——否则后端在 GET response 返回后立即 emit 的
  * `session_metadata_update` 会在 EventSource OPEN 前发生，patch 永久丢失
  * 直到下一次 file-change silent refresh 兜底（spec http-data-api §"浏览器
- * client SHALL 在首次 list_sessions 前订阅 SSE"）。 */
+ * client SHALL 在首次 list_sessions 前订阅 SSE"）。
+ *
+ * 例外（change `eager-first-page-metadata` D9 + D9b）：`list_sessions` 在
+ * `cursor=null/undefined`（首页）走 eager 路径，items 同步含真值，后端零
+ * broadcast emit——await SSE-ready 闸门会把首屏 wall 抬到 ≥ 1000 ms（CONNECTING
+ * → OPEN）但完全不必要。改用 fire-and-forget `void this.ensureSseReady()`：
+ * 立即放行 fetch 拿到 inline 真值；同时异步触发 SSE 订阅 + `sse-recovered`
+ * 兜底事件，让翻页 / file-change 时刻 patch 仍能正常到。 */
 const LIST_SESSIONS_LIKE_COMMANDS = new Set([
   "list_sessions",
   "list_repository_groups",
   "get_worktree_sessions",
 ]);
+
+/** 判定 `list_sessions` 调用是否走 cursor=null/undefined 首页 eager 路径——
+ * D9 + D9b 该路径下 SHALL 跳过 await `ensureSseReady()` 闸门（fire-and-forget
+ * 触发订阅）。其它 cursor=Some 翻页保持原 1000 ms gate。 */
+function isCursorNoneListSessions(cmd: string, args: InvokeArgs | undefined): boolean {
+  if (cmd !== "list_sessions") return false;
+  const cursor = (args as { cursor?: unknown } | undefined)?.cursor;
+  return cursor === undefined || cursor === null;
+}
 
 /** `ensureSseReady` 内部轮询粒度与总超时窗口。设计 D2：固定 onopen 监听绑死
  * 在某个特定 EventSource 实例上，重连退避期间新 source 还没创建（current source
@@ -96,7 +112,21 @@ class BrowserTransport implements Transport {
       throw new BrowserUnsupportedError(cmd);
     }
     if (LIST_SESSIONS_LIKE_COMMANDS.has(cmd)) {
-      await this.ensureSseReady();
+      if (isCursorNoneListSessions(cmd, args)) {
+        // D9 + D9b：首页 eager 路径不阻塞 fetch，让 inline 真值立即返。但
+        // fetch 大概率先于 SSE OPEN 发出——这段窗口里后端 emit 的 metadata
+        // patch 会全部丢失。SHALL 在 SSE 未 OPEN 时显式 set
+        // `sseRecoveryPending=true`，让 SSE 真正 OPEN（无论 fast-open 还是
+        // 1000 ms 超时后重连）emit `sse-recovered` 兜底事件，Sidebar 重拉
+        // 一轮元数据补全（codex v3 issue 1 fast-open race）。
+        this.ensureSource();
+        if (!this.source || this.source.readyState !== EventSource.OPEN) {
+          this.sseRecoveryPending = true;
+        }
+        void this.ensureSseReady();
+      } else {
+        await this.ensureSseReady();
+      }
     }
     return await invokeHttp<T>(cmd, args ?? {});
   }

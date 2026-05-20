@@ -144,6 +144,12 @@ export interface SilentRefreshResult {
  * 把 file-change 或"有更新"按钮触发的第一页结果合并进现有 `sessions`，
  * 保留 prev 中超出第一页的尾部条目；保留 prev 的 `sessionsNextCursor`，
  * 不让用户已翻到的分页位置被重置。
+ *
+ * change `eager-first-page-metadata` D3b：`firstPageItems` 走 cursor=None
+ * eager 路径，items 已含 inline 真值（除极端 deferred retry 失败保留占位）。
+ * 用 `mergeRecoveryResponse`——next 含真值时优先覆盖 prev 让 cache 中刚刷新
+ * 出的 isOngoing / messageCount 立即生效，不再被 `mergeSilentMetadata` 的
+ * "prev 真值优先"语义压住（fix `session-list-stale-metadata` 反复回归点）。
  */
 export function applySilentRefresh(
   prev: SessionSummary[],
@@ -151,7 +157,7 @@ export function applySilentRefresh(
   firstPageItems: SessionSummary[],
 ): SilentRefreshResult {
   return {
-    sessions: mergeSessions(prev, firstPageItems, true),
+    sessions: mergeRecoveryResponse(prev, firstPageItems),
     nextCursor: prevCursor,
   };
 }

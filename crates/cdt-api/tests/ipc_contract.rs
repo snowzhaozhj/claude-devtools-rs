@@ -1319,6 +1319,72 @@ async fn list_sessions_cursor_pages_cover_all_sessions_without_restarting() {
     assert_eq!(ids.last(), Some(&"s000"));
 }
 
+/// change `eager-first-page-metadata` D8：`cursor=None` 首页 SHALL 直接 inline
+/// 真值返回（不再仅返骨架）——前 20 条中 title / messageCount / isOngoing /
+/// gitBranch **至少有一个非占位**（占位 = title 是 None 且 messageCount=0 且
+/// isOngoing=false 且 gitBranch 是 None）。
+#[tokio::test]
+async fn list_sessions_cursor_none_inlines_non_placeholder_values() {
+    let (api, tmp) = setup_api().await;
+    let project_id = "-tmp-eager-values";
+    let project_dir = tmp.path().join("projects").join(project_id);
+    tokio::fs::create_dir_all(&project_dir).await.unwrap();
+
+    for i in 0..3 {
+        let session_id = format!("sess-{i:03}");
+        let path = project_dir.join(format!("{session_id}.jsonl"));
+        let user = serde_json::json!({
+            "type": "user",
+            "uuid": format!("u-{session_id}"),
+            "timestamp": "2026-05-20T10:00:00Z",
+            "cwd": "/tmp/proj",
+            "message": {"role": "user", "content": format!("Eager fixture {i}")}
+        })
+        .to_string();
+        let assistant = serde_json::json!({
+            "type": "assistant",
+            "uuid": format!("a-{session_id}"),
+            "timestamp": "2026-05-20T10:00:01Z",
+            "cwd": "/tmp/proj",
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet",
+                "content": [{
+                    "type": "tool_use",
+                    "id": format!("tu-{session_id}"),
+                    "name": "Bash",
+                    "input": {"command": "ls"}
+                }]
+            }
+        })
+        .to_string();
+        let body = format!("{user}\n{assistant}\n");
+        tokio::fs::write(&path, body).await.unwrap();
+    }
+
+    let resp = api
+        .list_sessions(
+            project_id,
+            &PaginatedRequest {
+                page_size: 20,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.items.len(), 3);
+    for (idx, item) in resp.items.iter().enumerate() {
+        let non_placeholder = item.title.is_some()
+            || item.message_count > 0
+            || item.is_ongoing
+            || item.git_branch.is_some();
+        assert!(
+            non_placeholder,
+            "cursor=None eager item[{idx}] SHALL inline at least one non-placeholder field, got {item:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn list_sessions_rejects_zero_page_size() {
     let (api, _tmp) = setup_api().await;

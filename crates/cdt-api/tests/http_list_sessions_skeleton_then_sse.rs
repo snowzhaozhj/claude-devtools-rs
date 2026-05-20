@@ -7,6 +7,7 @@
 //! - `http-data-api` §"Serve projects and sessions over HTTP under /api prefix"
 //!   Scenario `GET paginated sessions returns skeleton with cache-hit inline real values`
 //!   Scenario `HTTP list_sessions 后台扫描产物经 SSE 推送`（spec `ipc-data-api`）
+//! - change `eager-first-page-metadata` D8：`cursor=None` 同步真值 / `cursor=Some` 走骨架
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -133,9 +134,10 @@ async fn body_json(resp: axum::http::Response<Body>) -> (StatusCode, Value) {
     (status, value)
 }
 
+/// D8 cursor=None：eager 路径前 `EAGER_FIRST_PAGE_LIMIT` 条 SHALL 同步带真值 inline 返。
 #[tokio::test]
-async fn http_get_sessions_returns_skeleton_with_placeholder_metadata() {
-    let mut h = build_harness(&["改 auth", "修 sidebar bug", "perf 优化"]).await;
+async fn http_get_sessions_cursor_none_inlines_real_values() {
+    let h = build_harness(&["改 auth", "修 sidebar bug", "perf 优化"]).await;
     let url = format!("/api/projects/{}/sessions?pageSize=20", h.project_id);
     let resp = h
         .router
@@ -158,45 +160,121 @@ async fn http_get_sessions_returns_skeleton_with_placeholder_metadata() {
         .expect("body.items array");
     assert_eq!(items.len(), 3);
     for item in items {
-        // 骨架契约：title=null / messageCount=0 / isOngoing=false（cache miss
-        // 路径，未走 try_lookup_cached_metadata 命中分支）
+        // eager 路径：cursor=None 同步等到 metadata 真值（D8）
         assert!(
-            item.get("title").is_some_and(serde_json::Value::is_null),
-            "skeleton title SHALL be null, got {:?}",
+            item.get("title")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|t| !t.is_empty()),
+            "cursor=None eager path SHALL inline real title, got {:?}",
             item.get("title")
         );
         assert_eq!(
             item.get("messageCount").and_then(serde_json::Value::as_u64),
-            Some(0),
-            "skeleton messageCount SHALL be 0"
+            Some(2),
+            "cursor=None eager path SHALL inline real messageCount=2"
         );
         assert_eq!(
             item.get("isOngoing").and_then(serde_json::Value::as_bool),
-            Some(false),
-            "skeleton isOngoing SHALL be false"
+            Some(true),
+            "cursor=None eager path SHALL inline real isOngoing=true"
         );
         let sid = item
             .get("sessionId")
             .and_then(serde_json::Value::as_str)
             .unwrap();
         assert!(h.session_ids.contains(&sid.to_owned()));
+    }
+}
+
+/// D8 cursor=Some(_)：翻页路径保留原"骨架 + 后台扫描 → SSE patch"行为。
+#[tokio::test]
+async fn http_get_sessions_cursor_some_returns_skeleton_then_sse() {
+    // 4 个 session + pageSize=2 让 cursor=None 仅吃前 2 条 eager，留 cursor=Some 翻第二页。
+    let titles = ["改 auth", "修 sidebar bug", "perf 优化", "添加 tracing"];
+    let mut h = build_harness(&titles).await;
+
+    // 第一次 GET：cursor=None pageSize=2 → eager 前 2 条 inline 真值 + 返 nextCursor
+    let url_first = format!("/api/projects/{}/sessions?pageSize=2", h.project_id);
+    let resp = h
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(&url_first)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let next_cursor = body
+        .get("nextCursor")
+        .and_then(serde_json::Value::as_str)
+        .expect("first page SHALL return nextCursor")
+        .to_owned();
+    // 排空 eager 路径不该 emit 但保险一下：清掉任何可能的 deferred retry 残留
+    while let Ok(Ok(_)) = timeout(Duration::from_millis(50), h.events_rx.recv()).await {}
+
+    // 第二次 GET：cursor=Some(_) → 骨架 + 后台扫描 + SSE emit
+    let url_second = format!(
+        "/api/projects/{}/sessions?pageSize=2&cursor={next_cursor}",
+        h.project_id
+    );
+    let resp = h
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(&url_second)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let items = body
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .expect("body.items array");
+    assert!(!items.is_empty(), "second page SHALL have remaining items");
+    for item in items {
+        // 翻页路径：骨架契约（title=null / messageCount=0 / isOngoing=false）
+        assert!(
+            item.get("title").is_some_and(serde_json::Value::is_null),
+            "cursor=Some skeleton title SHALL be null, got {:?}",
+            item.get("title")
+        );
         assert_eq!(
-            item.get("projectId").and_then(serde_json::Value::as_str),
-            Some(h.project_id.as_str())
+            item.get("messageCount").and_then(serde_json::Value::as_u64),
+            Some(0),
+            "cursor=Some skeleton messageCount SHALL be 0"
+        );
+        assert_eq!(
+            item.get("isOngoing").and_then(serde_json::Value::as_bool),
+            Some(false),
+            "cursor=Some skeleton isOngoing SHALL be false"
         );
     }
-    assert_eq!(
-        body.get("total").and_then(serde_json::Value::as_u64),
-        Some(3),
-        "total SHALL match all sessions in project"
-    );
+    let skeleton_ids: Vec<String> = items
+        .iter()
+        .map(|it| {
+            it.get("sessionId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
 
-    // 后台扫描应通过 SSE bridge emit 3 条 SessionMetadataUpdate（每条带真值）。
+    // 后台扫描 SHALL 通过 SSE bridge emit 对应的 SessionMetadataUpdate（每条带真值）
     let mut received = std::collections::HashMap::new();
-    while received.len() < 3 {
+    while received.len() < skeleton_ids.len() {
         let event = timeout(Duration::from_secs(5), h.events_rx.recv())
             .await
-            .expect("timed out waiting for PushEvent")
+            .expect("timed out waiting for PushEvent for skeleton items")
             .expect("recv ok");
         if let PushEvent::SessionMetadataUpdate {
             project_id,
@@ -208,11 +286,13 @@ async fn http_get_sessions_returns_skeleton_with_placeholder_metadata() {
         } = event
         {
             assert_eq!(project_id, h.project_id);
-            received.insert(session_id, (title.clone(), message_count, is_ongoing));
+            if skeleton_ids.contains(&session_id) {
+                received.insert(session_id, (title.clone(), message_count, is_ongoing));
+            }
         }
     }
-    for sid in &h.session_ids {
-        let (title, count, ongoing) = received.get(sid).expect("missing update");
+    for sid in &skeleton_ids {
+        let (title, count, ongoing) = received.get(sid).expect("missing update for skeleton item");
         assert!(
             title.as_deref().is_some_and(|t| !t.is_empty()),
             "title SHALL be populated, got {title:?}",

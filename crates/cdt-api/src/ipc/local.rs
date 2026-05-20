@@ -48,6 +48,26 @@ use crate::notifier::NotificationPipeline;
 /// 顺序读且不抢 tokio runtime（详见 design.md decision 2）。
 pub const METADATA_SCAN_CONCURRENCY: usize = 8;
 
+/// 首页 eager 同步等待真值的最大条数（change `eager-first-page-metadata` D5）。
+///
+/// `list_sessions(project, { cursor: None })` 路径下，前 N 条 SHALL 在 IPC 响应内
+/// 同步等到 metadata 真值；超出 N 条走骨架 + 后台 scan + broadcast（与翻页
+/// 路径同模型，详见 D5b）。
+const EAGER_FIRST_PAGE_LIMIT: usize = 20;
+
+/// 首页 eager 单条 metadata 解析超时（change `eager-first-page-metadata` D7）。
+///
+/// 整页同步等不被任一坏 jsonl 拖住——每条独立 `tokio::time::timeout` 包裹；
+/// 超时条 SHALL 保留占位 + 触发 deferred retry（带 `bypass_negative=true`）。
+const EAGER_PER_SESSION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// 首页 eager deferred retry 延迟（change `eager-first-page-metadata` 1.3）。
+///
+/// 超时 / 失败条 SHALL spawn 单条 retry：延迟后无 timeout 重新调，最多 retry
+/// 1 次；成功后通过 `broadcast::Sender::send` emit 真值；失败保留占位
+/// （已写入 negative TTL 由后续轮次自然兜底）。
+const EAGER_DEFERRED_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// IPC payload 优化：`get_session_detail` 默认把每个 `Process.messages`
 /// 裁剪为空 `Vec`、设 `messages_omitted=true`，砍掉 ~60% payload。前端
 /// `SubagentCard` 展开时调 `get_subagent_trace` 懒拉取。
@@ -736,6 +756,38 @@ impl LocalDataApi {
         self.session_metadata_tx.subscribe()
     }
 
+    /// 测试专用：返回 `active_scans` 中所有 key 的快照（按字典序排序）。
+    /// 用于 change `eager-first-page-metadata` D4b/D11 集成测试 introspect
+    /// 并发扫描的 dedupe / abort 行为。
+    #[doc(hidden)]
+    pub fn active_scan_keys_for_tests(&self) -> Vec<String> {
+        let scans = self
+            .active_scans
+            .lock()
+            .expect("active_scans lock poisoned");
+        let mut keys: Vec<String> = scans.keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    /// 测试专用：返回正向 `MetadataCache` 内 entry 总数。
+    #[doc(hidden)]
+    pub fn metadata_cache_len_for_tests(&self) -> usize {
+        self.metadata_cache
+            .lock()
+            .expect("metadata cache lock poisoned")
+            .len()
+    }
+
+    /// 测试专用：返回 negative `MetadataCache` 内 entry 总数（D6b/D6c）。
+    #[doc(hidden)]
+    pub fn metadata_cache_negative_len_for_tests(&self) -> usize {
+        self.metadata_cache
+            .lock()
+            .expect("metadata cache lock poisoned")
+            .negative_len()
+    }
+
     /// 同步骨架扫描：完成目录 scan + 分页切片 + 构造占位 `SessionSummary`，
     /// 返回 (page, `next_cursor`, total, `page_jobs`, dir)。
     ///
@@ -866,6 +918,227 @@ impl LocalDataApi {
 
         Ok((page, next_cursor, total, page_jobs, dir, root_generation))
     }
+
+    /// 首页 `cursor=None` 路径：前 `EAGER_FIRST_PAGE_LIMIT` 条同步等真值，
+    /// 超时 / 失败条保留占位 + spawn deferred retry；剩余条走骨架 + 后台 scan
+    /// + broadcast（与翻页路径同模型）。
+    ///
+    /// D4b：开始前遍历 `active_scans`，按 `key.split('|').next()` 解析 projectId，
+    /// abort 所有 `projectId != current_project_id` 的旧扫描，释放 8 容量信号量
+    /// 让首页 eager 立即拿到 permit。
+    async fn list_sessions_eager(
+        &self,
+        project_id: &str,
+        pagination: &PaginatedRequest,
+    ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
+        // D4b: 切 project 时 abort 所有 projectId != current 的旧扫描
+        if let Ok(mut scans) = self.active_scans.lock() {
+            scans.retain(|key, entry| {
+                if project_id_from_scan_key(key) == project_id {
+                    true
+                } else {
+                    entry.handle.abort();
+                    false
+                }
+            });
+        }
+
+        let (mut page, next_cursor, total, page_jobs, dir, root_generation) =
+            self.list_sessions_skeleton(project_id, pagination).await?;
+
+        if page_jobs.is_empty() {
+            return Ok(PaginatedResponse {
+                items: page,
+                next_cursor,
+                total,
+            });
+        }
+
+        // 切割：前 EAGER_FIRST_PAGE_LIMIT 条同步等；剩余条 spawn 后台 scan。
+        // 注意 page_jobs 索引 ≠ page 索引：page_jobs 只含未命中 cache 的条；
+        // 用 session_id 反查回 page 索引。建立 session_id → page_index 映射。
+        let mut session_id_to_page_idx: HashMap<String, usize> = HashMap::with_capacity(page.len());
+        for (i, summary) in page.iter().enumerate() {
+            session_id_to_page_idx.insert(summary.session_id.clone(), i);
+        }
+
+        let (eager_jobs, remainder_jobs): (Vec<_>, Vec<_>) =
+            page_jobs.into_iter().partition(|(sid, _)| {
+                session_id_to_page_idx
+                    .get(sid)
+                    .is_some_and(|&i| i < EAGER_FIRST_PAGE_LIMIT)
+            });
+
+        // 同步等 eager_jobs，每条独立 timeout 包裹。
+        let sem = self.metadata_scan_semaphore.clone();
+        let eager_results =
+            futures::future::join_all(eager_jobs.into_iter().map(|(session_id, jsonl_path)| {
+                let sem = sem.clone();
+                let cache = self.metadata_cache.clone();
+                async move {
+                    let Ok(_permit) = sem.acquire_owned().await else {
+                        return (session_id, jsonl_path, None);
+                    };
+                    let fut = extract_session_metadata_cached(&cache, &jsonl_path, false);
+                    match tokio::time::timeout(EAGER_PER_SESSION_TIMEOUT, fut).await {
+                        Ok(meta) => (session_id, jsonl_path, Some(meta)),
+                        Err(_) => (session_id, jsonl_path, None),
+                    }
+                }
+            }))
+            .await;
+
+        // 把成功的真值写回 page；超时 / 失败条收集为 deferred retry 候选。
+        let mut retry_jobs: Vec<(String, std::path::PathBuf)> = Vec::new();
+        for (session_id, jsonl_path, maybe_meta) in eager_results {
+            match maybe_meta {
+                Some(meta) => {
+                    // 判定 D6b：四字段全占位条不算真值（已被解析侧 negative 兜底），
+                    // 让前端继续走 fallback；同时也走一次 deferred retry 拿真值。
+                    let is_placeholder = meta.title.is_none()
+                        && meta.message_count == 0
+                        && !meta.is_ongoing
+                        && meta.git_branch.is_none();
+                    if is_placeholder {
+                        retry_jobs.push((session_id, jsonl_path));
+                    } else if let Some(&i) = session_id_to_page_idx.get(&session_id) {
+                        let s = &mut page[i];
+                        s.title = meta.title;
+                        s.message_count = meta.message_count;
+                        s.is_ongoing = meta.is_ongoing;
+                        s.git_branch = meta.git_branch;
+                    }
+                }
+                None => {
+                    retry_jobs.push((session_id, jsonl_path));
+                }
+            }
+        }
+
+        // 1.3：超时 / 失败条 spawn deferred retry（最多 1 次），成功 broadcast。
+        if !retry_jobs.is_empty() && root_generation == self.root_generation.load(Ordering::SeqCst)
+        {
+            let tx = self.session_metadata_tx.clone();
+            let cache = self.metadata_cache.clone();
+            let project_id_owned = project_id.to_owned();
+            let root_gen = self.root_generation.clone();
+            for (session_id, jsonl_path) in retry_jobs {
+                let tx = tx.clone();
+                let cache = cache.clone();
+                let project_id_owned = project_id_owned.clone();
+                let root_gen = root_gen.clone();
+                tokio::spawn(spawn_deferred_metadata_retry(
+                    project_id_owned,
+                    session_id,
+                    jsonl_path,
+                    cache,
+                    tx,
+                    root_gen,
+                    root_generation,
+                ));
+            }
+        }
+
+        // 1.4 + D11：剩余条走骨架 + spawn scan + broadcast；专用 `|None|remainder` key
+        // 让同 project 高频 silent refresh 在同 key 上自然 dedupe。
+        if !remainder_jobs.is_empty()
+            && root_generation == self.root_generation.load(Ordering::SeqCst)
+        {
+            let tx = self.session_metadata_tx.clone();
+            let active_scans = self.active_scans.clone();
+            let scan_key = metadata_scan_key_eager_remainder(project_id);
+            let key_for_cleanup = scan_key.clone();
+
+            if let Ok(mut scans) = self.active_scans.lock() {
+                if let Some(old) = scans.remove(&scan_key) {
+                    old.handle.abort();
+                }
+                let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
+
+                let handle = tokio::spawn(scan_metadata_for_page(
+                    project_id.to_owned(),
+                    dir,
+                    remainder_jobs,
+                    tx,
+                    active_scans.clone(),
+                    key_for_cleanup,
+                    my_generation,
+                    self.metadata_cache.clone(),
+                    self.metadata_scan_semaphore.clone(),
+                    self.root_generation.clone(),
+                    root_generation,
+                ));
+
+                scans.insert(
+                    scan_key,
+                    ScanEntry {
+                        generation: my_generation,
+                        handle: handle.abort_handle(),
+                    },
+                );
+            }
+        }
+
+        Ok(PaginatedResponse {
+            items: page,
+            next_cursor,
+            total,
+        })
+    }
+
+    /// 翻页 `cursor=Some` 路径：保留原行为——骨架 + spawn scan + broadcast push。
+    /// 不同 project 的翻页扫描之间互不 abort（D6 既有契约）。
+    async fn list_sessions_paged(
+        &self,
+        project_id: &str,
+        pagination: &PaginatedRequest,
+    ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
+        let (page, next_cursor, total, page_jobs, dir, root_generation) =
+            self.list_sessions_skeleton(project_id, pagination).await?;
+
+        if !page_jobs.is_empty() && root_generation == self.root_generation.load(Ordering::SeqCst) {
+            let tx = self.session_metadata_tx.clone();
+            let project_id_owned = project_id.to_owned();
+            let active_scans = self.active_scans.clone();
+            let scan_key = metadata_scan_key(project_id, pagination.cursor.as_deref());
+            let key_for_cleanup = scan_key.clone();
+
+            if let Ok(mut scans) = self.active_scans.lock() {
+                if let Some(old) = scans.remove(&scan_key) {
+                    old.handle.abort();
+                }
+                let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
+
+                let handle = tokio::spawn(scan_metadata_for_page(
+                    project_id_owned,
+                    dir,
+                    page_jobs,
+                    tx,
+                    active_scans.clone(),
+                    key_for_cleanup,
+                    my_generation,
+                    self.metadata_cache.clone(),
+                    self.metadata_scan_semaphore.clone(),
+                    self.root_generation.clone(),
+                    root_generation,
+                ));
+
+                scans.insert(
+                    scan_key,
+                    ScanEntry {
+                        generation: my_generation,
+                        handle: handle.abort_handle(),
+                    },
+                );
+            }
+        }
+
+        Ok(PaginatedResponse {
+            items: page,
+            next_cursor,
+            total,
+        })
+    }
 }
 
 /// 后台扫描某页 session 的元数据，每扫完一个 broadcast 一条
@@ -884,6 +1157,65 @@ impl LocalDataApi {
 /// 由 `(offset).to_string()` 生成（纯 ASCII 数字），不会与分隔符冲突。
 fn metadata_scan_key(project_id: &str, cursor: Option<&str>) -> String {
     format!("{project_id}|{}", cursor.unwrap_or(""))
+}
+
+/// 首页 eager 路径剩余条（超过 `EAGER_FIRST_PAGE_LIMIT`）走骨架 + spawn scan
+/// 的 `active_scans` key（change `eager-first-page-metadata` D11）。
+///
+/// 与翻页路径 key (`"{project}|{cursor}"`) 互不撞——专用后缀 `|None|remainder`
+/// 让同 project 的高频 silent refresh 在同 key 上自然 dedupe（既有
+/// generation token cleanup abort 旧 entry）。
+fn metadata_scan_key_eager_remainder(project_id: &str) -> String {
+    format!("{project_id}|None|remainder")
+}
+
+/// 从 `active_scans` 的 key 解析 projectId（`|` 之前的段）。
+///
+/// 用于 change `eager-first-page-metadata` D4b：切 project 时遍历 `active_scans`
+/// abort 所有 `projectId != current_project_id` 的旧扫描，释放 8 容量信号量
+/// 让首页 eager 能立即拿到 permit。
+fn project_id_from_scan_key(key: &str) -> &str {
+    key.split('|').next().unwrap_or(key)
+}
+
+/// 首页 eager 单条 metadata 解析的 deferred retry：延迟后无 timeout
+/// 重新调 `extract_session_metadata_cached(.., bypass_negative=true)`，成功
+/// 后 broadcast emit 真值（change `eager-first-page-metadata` 1.3 + D6c
+/// retry bypass）。`bypass_negative=true` 让本次跳过 negative TTL 强制重试；
+/// 仍失败则解析侧重写 negative TTL 续 60s，不再 spawn 第二轮。
+async fn spawn_deferred_metadata_retry(
+    project_id: String,
+    session_id: String,
+    jsonl_path: std::path::PathBuf,
+    cache: Arc<std::sync::Mutex<MetadataCache>>,
+    tx: broadcast::Sender<SessionMetadataUpdate>,
+    root_generation: Arc<AtomicU64>,
+    expected_root_generation: u64,
+) {
+    tokio::time::sleep(EAGER_DEFERRED_RETRY_DELAY).await;
+    if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+        return;
+    }
+    let meta = extract_session_metadata_cached(&cache, &jsonl_path, true).await;
+    if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+        return;
+    }
+    // 真值条件：四个字段任一非占位（与 session_metadata::is_all_placeholder 对偶）。
+    let is_placeholder = meta.title.is_none()
+        && meta.message_count == 0
+        && !meta.is_ongoing
+        && meta.git_branch.is_none();
+    if is_placeholder {
+        return;
+    }
+    let _ = tx.send(SessionMetadataUpdate {
+        project_id,
+        session_id,
+        title: meta.title,
+        message_count: meta.message_count,
+        is_ongoing: meta.is_ongoing,
+        git_branch: meta.git_branch,
+    });
 }
 
 fn todos_dir_from_projects_dir(projects_dir: &Path) -> PathBuf {
@@ -1059,7 +1391,7 @@ async fn scan_metadata_for_page(
             let Ok(_permit) = permit_sem.acquire_owned().await else {
                 return;
             };
-            let meta = extract_session_metadata_cached(&cache, &jsonl_path).await;
+            let meta = extract_session_metadata_cached(&cache, &jsonl_path, false).await;
             if root_generation.load(Ordering::SeqCst) != expected_root_generation {
                 return;
             }
@@ -1129,7 +1461,7 @@ impl DataApi for LocalDataApi {
             let path = path.clone();
             async move {
                 let _permit = sem.acquire_owned().await.ok()?;
-                Some(extract_session_metadata_cached(&cache, &path).await)
+                Some(extract_session_metadata_cached(&cache, &path, false).await)
             }
         }))
         .await;
@@ -1155,61 +1487,11 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (page, next_cursor, total, page_jobs, dir, root_generation) =
-            self.list_sessions_skeleton(project_id, pagination).await?;
-
-        if !page_jobs.is_empty() && root_generation == self.root_generation.load(Ordering::SeqCst) {
-            let tx = self.session_metadata_tx.clone();
-            let project_id_owned = project_id.to_owned();
-            let active_scans = self.active_scans.clone();
-            // (project_id, cursor) 双键：同 cursor 抢占 / 不同 cursor 并存
-            // （详见 spec `ipc-data-api/spec.md::Emit session metadata updates`
-            // Scenario "同 projectId 同 cursor 的新扫描取消旧扫描" 与
-            // "同 projectId 不同 cursor 的扫描并存互不 abort"）。
-            let scan_key = metadata_scan_key(project_id, pagination.cursor.as_deref());
-            let key_for_cleanup = scan_key.clone();
-
-            // abort 旧 + 分配 generation + spawn + insert **全部**在同一把
-            // sync lock 内完成。`tokio::spawn` 不会 await，sync lock 保持
-            // 期间调用是安全的。这样并发 list_sessions(同 project) 的两个
-            // 调用 A/B 会顺序进入临界区，避免：A 的 spawn 与 insert 之间
-            // B 完整 abort/spawn/insert 后 A 的 insert 覆盖 B 的 entry，导致
-            // 后续 C 无法 abort B 的孤立 task（codex 二审第二轮 race）。
-            if let Ok(mut scans) = self.active_scans.lock() {
-                if let Some(old) = scans.remove(&scan_key) {
-                    old.handle.abort();
-                }
-                let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
-
-                let handle = tokio::spawn(scan_metadata_for_page(
-                    project_id_owned,
-                    dir,
-                    page_jobs,
-                    tx,
-                    active_scans.clone(),
-                    key_for_cleanup,
-                    my_generation,
-                    self.metadata_cache.clone(),
-                    self.metadata_scan_semaphore.clone(),
-                    self.root_generation.clone(),
-                    root_generation,
-                ));
-
-                scans.insert(
-                    scan_key,
-                    ScanEntry {
-                        generation: my_generation,
-                        handle: handle.abort_handle(),
-                    },
-                );
-            }
+        // cursor=None 路径走 eager 同步等真值（change `eager-first-page-metadata`）
+        if pagination.cursor.is_none() {
+            return self.list_sessions_eager(project_id, pagination).await;
         }
-
-        Ok(PaginatedResponse {
-            items: page,
-            next_cursor,
-            total,
-        })
+        self.list_sessions_paged(project_id, pagination).await
     }
 
     async fn get_session_summaries_by_ids(
