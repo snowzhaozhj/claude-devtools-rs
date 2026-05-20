@@ -260,8 +260,7 @@ impl ProjectScanner {
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut distinct_cwds: Vec<String> = Vec::new();
         for cwd in cwds.iter().flatten() {
-            let key =
-                crate::path_compare::normalize_path_string_for_compare(cwd).into_owned();
+            let key = crate::path_compare::normalize_path_string_for_compare(cwd).into_owned();
             if seen.insert(key) {
                 distinct_cwds.push(cwd.clone());
             }

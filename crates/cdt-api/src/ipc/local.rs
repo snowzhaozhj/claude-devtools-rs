@@ -1380,8 +1380,7 @@ impl DataApi for LocalDataApi {
                 // 远端列目录。`find_session_project` SSH 分支已用同 helper（line 1583+），
                 // 这里对齐避免 "find_session_project 命中但 get_session_detail 又取不到"
                 // 的不一致（codex PR 二审反馈）。
-                let Some(path) =
-                    find_subagent_jsonl_via_fs(&*fs, &project_dir, session_id).await
+                let Some(path) = find_subagent_jsonl_via_fs(&*fs, &project_dir, session_id).await
                 else {
                     return Err(ApiError::not_found(format!("session {session_id}")));
                 };
