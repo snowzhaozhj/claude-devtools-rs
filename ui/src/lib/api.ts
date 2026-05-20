@@ -57,6 +57,12 @@ export interface SessionSummary {
 /**
  * 单条 session 元数据增量更新，由后端 `session-metadata-update` 事件推送。
  * 前端 Sidebar 订阅后按 `sessionId` 在 `sessions[]` 中定位并 in-place patch。
+ *
+ * `contextId` 为后端 emit 时记录的 expected scope（"local" 或 SSH context_id）。
+ * 前端 listener SHALL 用 `contextStore.activeContextId` 比对——不匹配说明
+ * context 已切换/断开，metadata 属于旧 context，需要丢弃避免污染当前 sidebar
+ * （codex 二审 PR #178 V2 必须修 2）。`contextId` 缺失（旧 backend 兼容）时退化为
+ * 不做二次过滤。
  */
 export interface SessionMetadataUpdate {
   projectId: string;
@@ -65,6 +71,7 @@ export interface SessionMetadataUpdate {
   messageCount: number;
   isOngoing: boolean;
   gitBranch: string | null;
+  contextId?: string | null;
 }
 
 export interface PaginatedResponse<T> {

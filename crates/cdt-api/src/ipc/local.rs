@@ -430,6 +430,19 @@ impl LocalDataApi {
     async fn active_fs_and_projects_dir(
         &self,
     ) -> Result<(Arc<dyn FileSystemProvider>, PathBuf), ApiError> {
+        let (fs, dir, _scope) = self.active_fs_dir_and_scope().await?;
+        Ok((fs, dir))
+    }
+
+    /// 一次性快照三元组 `(fs, projects_dir, cache_scope)`——避免分两次读
+    /// `active_context_id()` 中间被 disconnect/switch 抢断造成 fs 与 scope 错配
+    /// （codex 二审 PR #178 V2 必须修 1）。
+    ///
+    /// `cache_scope = "local"` 或 SSH `context_id`，用于 metadata cache 与
+    /// `SessionMetadataUpdate` broadcast 路径的 context 隔离。
+    async fn active_fs_dir_and_scope(
+        &self,
+    ) -> Result<(Arc<dyn FileSystemProvider>, PathBuf, String), ApiError> {
         if let Some(context_id) = self.ssh_mgr.active_context_id().await {
             let provider = self
                 .ssh_mgr
@@ -437,9 +450,13 @@ impl LocalDataApi {
                 .await
                 .ok_or_else(|| ApiError::not_found(format!("SSH context: {context_id}")))?;
             let projects_dir = provider.remote_home().to_path_buf();
-            return Ok((Arc::new(provider), projects_dir));
+            return Ok((Arc::new(provider), projects_dir, context_id));
         }
-        Ok((local_handle(), self.projects_dir.lock().await.clone()))
+        Ok((
+            local_handle(),
+            self.projects_dir.lock().await.clone(),
+            LOCAL_CACHE_SCOPE.to_owned(),
+        ))
     }
 
     pub fn new(
@@ -765,15 +782,10 @@ impl LocalDataApi {
             return Err(ApiError::validation("pageSize must be > 0"));
         }
 
-        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        // 一次性快照 (fs, projects_dir, cache_scope)，避免两次独立读 active context
+        // 中间被 disconnect/switch 抢断让 fs 与 scope 错配（codex 二审 V2 必须修 1）。
+        let (fs, projects_dir, cache_scope) = self.active_fs_dir_and_scope().await?;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
-        // cache scope = "local" 或 SSH context_id；用于隔离不同主机/不同 context
-        // 下同 path 同 size+mtime 文件的缓存条目（codex 二审 PR #178 🔴#1）。
-        let cache_scope: String = self
-            .ssh_mgr
-            .active_context_id()
-            .await
-            .unwrap_or_else(|| LOCAL_CACHE_SCOPE.to_owned());
         let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
         let _ = scanner
             .scan()
@@ -1112,7 +1124,7 @@ async fn scan_metadata_for_page(
             if root_generation.load(Ordering::SeqCst) != expected_root_generation {
                 return;
             }
-            // codex 二审 PR #178 🔴#2：active context 已切走（用户 disconnect 或
+            // codex 二审 PR #178 必须修 2：active context 已切走（用户 disconnect 或
             // switch 到别的 context）就不再 broadcast——避免旧 context 的
             // metadata patch 错误的 sidebar 数据。比对当前 `active_context_id`
             // 与启动 task 时记录的 expected_cache_scope。
@@ -1137,6 +1149,10 @@ async fn scan_metadata_for_page(
                 message_count: meta.message_count,
                 is_ongoing: meta.is_ongoing,
                 git_branch: meta.git_branch,
+                // 携带 expected scope 让前端二次过滤——emit-time check 与 send
+                // 之间仍有 TOCTOU 窗口（codex 二审 V2 必须修 2）。前端 listener 用
+                // `contextStore.activeContextId` 比对，不匹配就丢弃。
+                context_id: Some(scope.clone()),
             });
         });
     }

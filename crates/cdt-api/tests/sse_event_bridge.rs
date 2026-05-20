@@ -212,6 +212,7 @@ async fn session_metadata_forwarded_as_push_event() {
             message_count: 42,
             is_ongoing: true,
             git_branch: Some("main".into()),
+            context_id: Some("local".into()),
         })
         .unwrap();
 
@@ -227,6 +228,7 @@ async fn session_metadata_forwarded_as_push_event() {
             message_count,
             is_ongoing,
             git_branch,
+            context_id,
         } => {
             assert_eq!(project_id, "p1");
             assert_eq!(session_id, "s1");
@@ -234,6 +236,7 @@ async fn session_metadata_forwarded_as_push_event() {
             assert_eq!(message_count, 42);
             assert!(is_ongoing);
             assert_eq!(git_branch.as_deref(), Some("main"));
+            assert_eq!(context_id.as_deref(), Some("local"));
         }
         other => panic!("expected SessionMetadataUpdate, got {other:?}"),
     }

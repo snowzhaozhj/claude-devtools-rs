@@ -28,6 +28,7 @@
     loadProjectPrefs,
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
+  import { contextStore } from "../lib/stores/context.svelte";
   import { subscribeEvent, type Unsubscribe } from "../lib/transport";
   import { isTauriRuntime } from "../lib/runtime";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
@@ -190,6 +191,17 @@
         const payload = event.payload;
         // 切 project 期间残留的旧 project 事件忽略
         if (payload.projectId !== selectedProjectId) return;
+        // codex 二审 PR #178 V2 必须修 2 兜底：后端 emit-time check 与 send 之间
+        // 仍有 TOCTOU 窗口，前端按 contextStore.activeContextId 二次过滤。
+        // 旧 backend 不带 contextId 时 payload.contextId 为 undefined，跳过
+        // 过滤（行为退化为无 contextId 时的默认信任）。
+        if (
+          payload.contextId !== undefined &&
+          payload.contextId !== null &&
+          payload.contextId !== contextStore.activeContextId
+        ) {
+          return;
+        }
         // 始终先写 pending buffer（即使当前 sessions 已含此 sessionId 也覆盖，
         // 让 update 是最终 source of truth）；buffer 在切 project / sessions 重置
         // 时清空，避免 stale。详见上方 `pendingMetadataUpdates` doc-comment。

@@ -378,7 +378,7 @@ struct MetadataCacheEntry {
 
 /// 缓存 key：`(context_scope, path)`——`context_scope` 区分 `local` 与 SSH
 /// 各 `context_id`，让"远端 host A 与 host B 的同 path 同 size+mtime 文件"以及
-/// "本地与远端的路径名巧合相同"互不串用对方缓存（codex 二审 PR #178 🔴#1）。
+/// "本地与远端的路径名巧合相同"互不串用对方缓存（codex 二审 PR #178 必须修 1）。
 pub(crate) type MetadataCacheKey = (String, PathBuf);
 
 /// `LocalDataApi` 持有的 metadata LRU 缓存。**不**用全局单例（详 design D3b）。
@@ -470,7 +470,7 @@ pub(crate) async fn try_lookup_cached_metadata(
 /// 不可见，identity 维度本就退化）。
 ///
 /// `scope` 用于隔离不同 context（`local` / SSH `context_id`）的同 path 同 size+mtime
-/// 文件，避免跨主机串缓存（codex 二审 PR #178 🔴#1）。
+/// 文件，避免跨主机串缓存（codex 二审 PR #178 必须修 1）。
 pub(crate) async fn try_lookup_cached_metadata_with_signature(
     cache: &StdMutex<MetadataCache>,
     scope: &str,
@@ -1383,7 +1383,7 @@ mod tests {
 
     #[test]
     fn metadata_cache_isolates_by_scope() {
-        // codex 二审 PR #178 🔴#1：不同 context 下同 path 不串缓存
+        // codex 二审 PR #178 必须修 1：不同 context 下同 path 不串缓存
         let mut cache = MetadataCache::new(10);
         let path = PathBuf::from("/home/u/.claude/projects/-p/s.jsonl");
         cache.insert("ssh-host-a".to_owned(), path.clone(), dummy_entry(1));

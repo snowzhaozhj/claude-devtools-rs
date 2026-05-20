@@ -144,7 +144,7 @@ impl client::Handler for RusshClientHandler {
 ///
 /// 所有字段已是 `Arc<...>` / `broadcast::Sender`（自带 Clone），整体 `Clone`
 /// 直接共享内部状态——`cdt-api` 后台 metadata scan task 需克隆 `Arc`-style
-/// 引用做 active-context check（codex 二审 PR #178 🔴#2）。
+/// 引用做 active-context check（codex 二审 PR #178 必须修 2）。
 #[derive(Clone)]
 pub struct SshSessionManager {
     /// `context_id` → 资源；连接成功才插入。

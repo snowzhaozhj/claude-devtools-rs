@@ -448,6 +448,7 @@ fn session_metadata_update_serializes_camelcase_with_git_branch() {
         message_count: 7,
         is_ongoing: true,
         git_branch: Some("feat/x".into()),
+        context_id: Some("ssh-host-x".into()),
     };
     let json = serde_json::to_value(&u).unwrap();
     assert_eq!(json["projectId"], json!("proj-1"));
@@ -456,8 +457,13 @@ fn session_metadata_update_serializes_camelcase_with_git_branch() {
     assert_eq!(json["messageCount"], json!(7));
     assert_eq!(json["isOngoing"], json!(true));
     assert_eq!(json["gitBranch"], json!("feat/x"));
+    assert_eq!(json["contextId"], json!("ssh-host-x"));
     assert!(
         json.get("git_branch").is_none(),
+        "MUST 不出现 snake_case 字段名"
+    );
+    assert!(
+        json.get("context_id").is_none(),
         "MUST 不出现 snake_case 字段名"
     );
 

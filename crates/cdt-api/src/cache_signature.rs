@@ -83,7 +83,7 @@ impl FileSignature {
     /// `mtime` **截断到毫秒**——SSH 路径下骨架阶段从 `Session.last_modified`
     /// (epoch ms `i64`) 还原签名 vs 后台扫描走 `fs.stat` 拿到的完整 `SystemTime`
     /// (可能 sub-ms 精度) 这两路必须 byte-equal 才能命中缓存，统一规范化到
-    /// ms 精度可避免"系统性 cache miss"——codex 二审 PR #178 🟡#1。
+    /// ms 精度可避免"系统性 cache miss"——codex 二审 PR #178 建议修 1。
     pub fn from_fs_metadata(meta: &FsMetadata) -> Self {
         Self {
             mtime: truncate_to_ms(meta.mtime),
