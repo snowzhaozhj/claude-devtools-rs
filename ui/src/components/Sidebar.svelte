@@ -253,12 +253,16 @@
             // 优先覆盖 prev stale 真值，response 骨架则保留 prev 已 patched
             // 真值。常规 mergeSessions 用 mergeSilentMetadata 始终保留 prev
             // 真值——recovery 场景下 prev 真值可能 stale，会卡 stale 状态
-            // （codex 二审 round 5）。pendingMetadataUpdates buffer 在 await
-            // 期间收到的最新 SSE patch 会通过 applyPendingMetadata 兜底应用。
-            sessions = applyPendingMetadata(
-              mergeRecoveryResponse(sessions, result.items),
-              pendingMetadataUpdates,
-            );
+            // （codex 二审 round 5）。
+            //
+            // 这里**不**调 applyPendingMetadata：buffer 中可能保留了 lag 之前
+            // 的旧 SSE patch（buffer 跨 SSE 异常生命周期持久），applyPendingMetadata
+            // 会用 buffer 旧值覆盖刚刚 mergeRecoveryResponse 写入的 response
+            // 新真值，让 stale 自愈失败（codex 二审 round 6）。recovery 路径
+            // sessions 已含全部 sessionId（因为 pageSize=sessions.length），
+            // listener 同时直接走 sessions.map in-place patch，buffer 兜底
+            // 路径在 recovery 场景下无必要。
+            sessions = mergeRecoveryResponse(sessions, result.items);
             cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);
           } catch (e) {
             console.warn("[sidebar] sse-recovery rescan failed:", e);
