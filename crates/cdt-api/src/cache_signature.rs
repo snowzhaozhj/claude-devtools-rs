@@ -12,6 +12,7 @@
 //!   `volume_serial_number()` 是 unstable feature `windows_by_handle`，stable
 //!   Rust 不可用；退化为 `None` 让 Windows 仅依赖 mtime+size（D1f 修订）
 
+use cdt_discover::FsMetadata;
 use std::fs::Metadata;
 use std::time::SystemTime;
 
@@ -72,6 +73,17 @@ impl FileSignature {
             mtime,
             size: meta.len(),
             identity: FileIdentity::from_metadata(meta),
+        }
+    }
+
+    /// 从 `cdt_discover::FsMetadata` 构造签名。SSH 远端 stat 不带 inode，
+    /// `identity` 退化为 `None`（与 Windows 同处理）——等价性仅靠 mtime+size
+    /// 判定，足以覆盖 append-only JSONL 的常规变化路径。
+    pub fn from_fs_metadata(meta: &FsMetadata) -> Self {
+        Self {
+            mtime: meta.mtime,
+            size: meta.size,
+            identity: FileIdentity::None,
         }
     }
 }

@@ -251,12 +251,17 @@ export function getConnectionStore() {
     },
 
     async disconnect() {
-      if (!activeContextId) return;
+      if (!activeContextId || activeContextId === "local") return;
       actionInFlight = true;
       try {
         await sshDisconnect(activeContextId);
         status = "disconnected";
-        activeContextId = "local";
+        // 之前硬编码 `activeContextId = "local"` 导致 connection 与 context
+        // 两个 store 中的 `activeContextId` 概念不一致——connection store 维护
+        // "当前 SSH 连接的 context id"，断开后该字段语义就是"无 SSH 连接"，
+        // 应回到 null 而非 "local"。`contextStore` 才负责跟踪 "local|ssh:xxx"
+        // 的 active context（由后端 `ContextChanged` 事件驱动）。
+        activeContextId = null;
         connectedHost = null;
         error = null;
         errorDetail = null;
