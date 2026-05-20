@@ -21,9 +21,11 @@ use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use cdt_core::message::{ContentBlock, MessageCategory, MessageContent, ParsedMessage};
+use cdt_discover::FileSystemProvider;
 use cdt_parse::parse_entry_at;
 
 use crate::cache_signature::FileSignature;
+use std::sync::Arc;
 
 /// 文件 mtime 距 now 超过此阈值则即便消息序列结构上为 ongoing 也强制判 done。
 /// 5 分钟，对齐原版 `STALE_SESSION_THRESHOLD_MS`。
@@ -443,6 +445,21 @@ pub(crate) async fn try_lookup_cached_metadata(
     path: &Path,
 ) -> Option<SessionMetadata> {
     let sig = FileSignature::from_metadata(&tokio::fs::metadata(path).await.ok()?);
+    try_lookup_cached_metadata_with_signature(cache, path, sig).await
+}
+
+/// `try_lookup_cached_metadata` 的 stat-free 变体——caller 已有 `FileSignature`
+/// 时直接用，避免重复调用 `tokio::fs::metadata` / `fs.stat`。
+///
+/// 典型场景：SSH 路径下 `Session.last_modified+size` 已经包含够用的 mtime+size
+/// 信息，构造一个 identity=None 的签名即可与缓存中（同样 identity=None 的）SSH
+/// 写入项做 byte-equal 对比，命中率与本地 `(dev,ino)` 路径一致（远端文件 inode
+/// 不可见，identity 维度本就退化）。
+pub(crate) async fn try_lookup_cached_metadata_with_signature(
+    cache: &StdMutex<MetadataCache>,
+    path: &Path,
+    sig: FileSignature,
+) -> Option<SessionMetadata> {
     let entry = cache
         .lock()
         .expect("metadata cache mutex poisoned")
@@ -507,6 +524,98 @@ pub(crate) async fn extract_session_metadata_cached(
             },
         );
     }
+
+    meta
+}
+
+/// `extract_session_metadata_cached` 的 fs-aware 变体——同时支持 local 与 SSH。
+///
+/// 当 `fs.kind()` 为 `Ssh` 时走 `fs.stat` + `fs.read_to_string` + 同步 parse 路径
+/// （SFTP 不支持流式逐行读，必须把整文件拉下来再 parse）；本地路径仍然走流式
+/// `extract_session_metadata_with_ongoing` 避免性能退化。
+///
+/// **stale 判定**：本地路径走 `is_file_stale(path)`；SSH 路径用 stat 已经拿到的
+/// `mtime` 走纯函数 `is_session_stale(mtime, now)`，不再多发一次 `stat`。
+pub(crate) async fn extract_session_metadata_cached_via_fs(
+    cache: &StdMutex<MetadataCache>,
+    fs: &Arc<dyn FileSystemProvider>,
+    path: &Path,
+) -> SessionMetadata {
+    let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
+    if !is_remote {
+        return extract_session_metadata_cached(cache, path).await;
+    }
+
+    // SSH 路径：stat 失败就直接返回空骨架（让 caller 知道 metadata 不可用）。
+    let Ok(fs_meta) = fs.stat(path).await else {
+        return SessionMetadata {
+            title: None,
+            message_count: 0,
+            is_ongoing: false,
+            git_branch: None,
+        };
+    };
+    let sig = FileSignature::from_fs_metadata(&fs_meta);
+
+    if let Some(entry) = cache
+        .lock()
+        .expect("metadata cache mutex poisoned")
+        .lookup(path)
+    {
+        if entry.signature == sig {
+            let is_ongoing =
+                entry.messages_ongoing && !is_session_stale(sig.mtime, SystemTime::now());
+            return SessionMetadata {
+                title: entry.title,
+                message_count: entry.message_count,
+                is_ongoing,
+                git_branch: entry.git_branch,
+            };
+        }
+    }
+
+    let content = match fs.read_to_string(path).await {
+        Ok(c) => c,
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = ?err, "ssh read_to_string failed in metadata scan");
+            return SessionMetadata {
+                title: None,
+                message_count: 0,
+                is_ongoing: false,
+                git_branch: None,
+            };
+        }
+    };
+    let messages = match crate::ipc::local::parse_jsonl_content(&content) {
+        Ok(m) => m,
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = ?err, "ssh jsonl parse failed in metadata scan");
+            return SessionMetadata {
+                title: None,
+                message_count: 0,
+                is_ongoing: false,
+                git_branch: None,
+            };
+        }
+    };
+
+    let messages_ongoing = cdt_analyze::check_messages_ongoing(&messages);
+    let is_stale = is_session_stale(sig.mtime, SystemTime::now());
+    // `extract_session_metadata_from_parsed` 内部合成 `is_ongoing = ongoing_sm && !is_stale`，
+    // 与 `check_messages_ongoing` 同源；此处单独算 `messages_ongoing` 用作缓存
+    // 的 stale-independent 字段（命中时再用 `is_session_stale(sig.mtime, now)` 实时合成）。
+    let meta = extract_session_metadata_from_parsed(&messages, is_stale);
+
+    cache.lock().expect("metadata cache mutex poisoned").insert(
+        path.to_path_buf(),
+        MetadataCacheEntry {
+            signature: sig,
+            title: meta.title.clone(),
+            message_count: meta.message_count,
+            messages_ongoing,
+            git_branch: meta.git_branch.clone(),
+        },
+    );
 
     meta
 }

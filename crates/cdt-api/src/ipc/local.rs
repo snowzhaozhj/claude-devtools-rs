@@ -33,8 +33,8 @@ use super::error::ApiError;
 use super::events::SessionMetadataUpdate;
 use super::parsed_message_cache::{ParsedMessageCache, extract_parsed_messages_cached};
 use super::session_metadata::{
-    MetadataCache, extract_session_metadata_cached, extract_session_metadata_from_parsed,
-    try_lookup_cached_metadata,
+    MetadataCache, SessionMetadata, extract_session_metadata_cached_via_fs,
+    try_lookup_cached_metadata, try_lookup_cached_metadata_with_signature,
 };
 use super::traits::DataApi;
 use super::types::{
@@ -42,6 +42,7 @@ use super::types::{
     PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
     SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
 };
+use crate::cache_signature::{FileIdentity, FileSignature};
 use crate::notifier::NotificationPipeline;
 
 /// 元数据扫描的最大并发数。文件扫描是 I/O 密集，8 路并发足够打满 `NVMe`
@@ -196,7 +197,9 @@ impl cdt_discover::GitIdentityResolver for NoopGitIdentityResolver {
     }
 }
 
-fn parse_jsonl_content(content: &str) -> Result<Vec<cdt_core::ParsedMessage>, ParseError> {
+pub(crate) fn parse_jsonl_content(
+    content: &str,
+) -> Result<Vec<cdt_core::ParsedMessage>, ParseError> {
     let mut out = Vec::new();
     for (idx, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
@@ -753,6 +756,7 @@ impl LocalDataApi {
             Vec<(String, std::path::PathBuf)>,
             std::path::PathBuf,
             u64,
+            Arc<dyn cdt_discover::FileSystemProvider>,
         ),
         ApiError,
     > {
@@ -803,31 +807,38 @@ impl LocalDataApi {
         // 卡到 `METADATA_SCAN_CONCURRENCY`，避免 caller 传超大 page_size 时
         // 一次性把 tokio blocking pool 占满（codex 二审 Q3）。
         let lookup_permit = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
+        // SSH 路径用 Session.last_modified+size 直接构造 signature，避免每条
+        // 都发一次 SFTP stat（SFTP RTT ~50-200ms，page=20 串行就是几秒）。
+        // 本地路径仍走 tokio::fs::metadata 的 fast-path（识别 inode 维度）。
         let lookups = futures::future::join_all(page_sessions.iter().map(|s| {
             let cache = self.metadata_cache.clone();
             let jsonl_path = dir.join(format!("{}.jsonl", s.id));
             let permit_sem = lookup_permit.clone();
+            let session_sig = if is_remote {
+                Some(FileSignature {
+                    mtime: epoch_ms_to_system_time(s.last_modified),
+                    size: s.size,
+                    identity: FileIdentity::None,
+                })
+            } else {
+                None
+            };
             async move {
                 let _guard = permit_sem
                     .acquire()
                     .await
                     .expect("lookup semaphore should not be closed");
-                let meta = try_lookup_cached_metadata(&cache, &jsonl_path).await;
+                let meta = if let Some(sig) = session_sig {
+                    try_lookup_cached_metadata_with_signature(&cache, &jsonl_path, sig).await
+                } else {
+                    try_lookup_cached_metadata(&cache, &jsonl_path).await
+                };
                 (jsonl_path, meta)
             }
         }))
         .await;
         for (s, (jsonl_path, cached_meta)) in page_sessions.into_iter().zip(lookups) {
-            let remote_meta = if is_remote {
-                let content = fs.read_to_string(&jsonl_path).await.ok();
-                content
-                    .as_deref()
-                    .and_then(|content| parse_jsonl_content(content).ok())
-                    .map(|messages| extract_session_metadata_from_parsed(&messages, false))
-            } else {
-                None
-            };
-            if let Some(meta) = cached_meta.or(remote_meta) {
+            if let Some(meta) = cached_meta {
                 page.push(SessionSummary {
                     session_id: s.id,
                     project_id: project_id.to_owned(),
@@ -851,9 +862,12 @@ impl LocalDataApi {
                     worktree_id: None,
                     worktree_name: None,
                 });
-                if !is_remote {
-                    page_jobs.push((s.id, jsonl_path));
-                }
+                // 本地 + SSH 都进 page_jobs：让后台扫描走 fs trait 分流
+                // （`scan_metadata_for_page` 内部按 fs.kind() 选 local/SSH 路径）。
+                // 历史 PR #176 让 SSH 走骨架阶段同步 read_to_string，但读取
+                // 失败时 fallback 不进 page_jobs → 永久卡骨架；改后 SSH 也走
+                // 后台异步扫描 + broadcast SessionMetadataUpdate 增量 patch。
+                page_jobs.push((s.id, jsonl_path));
             }
         }
 
@@ -864,8 +878,25 @@ impl LocalDataApi {
             None
         };
 
-        Ok((page, next_cursor, total, page_jobs, dir, root_generation))
+        Ok((
+            page,
+            next_cursor,
+            total,
+            page_jobs,
+            dir,
+            root_generation,
+            fs,
+        ))
     }
+}
+
+/// 把 epoch milliseconds 转成 `SystemTime`，便于从 `Session.last_modified` 构造
+/// `FileSignature`。负数（理论上不应出现）退化为 `UNIX_EPOCH`。
+fn epoch_ms_to_system_time(ms: i64) -> std::time::SystemTime {
+    let Ok(ms_u64) = u64::try_from(ms) else {
+        return std::time::SystemTime::UNIX_EPOCH;
+    };
+    std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(ms_u64)
 }
 
 /// 后台扫描某页 session 的元数据，每扫完一个 broadcast 一条
@@ -1040,6 +1071,7 @@ async fn scan_metadata_for_page(
     semaphore: Arc<Semaphore>,
     root_generation: Arc<AtomicU64>,
     expected_root_generation: u64,
+    fs: Arc<dyn cdt_discover::FileSystemProvider>,
 ) {
     let _ = dir; // dir 当前由 page_jobs 内的 jsonl_path 携带，保留参数为未来扩展（如懒构造路径）
     // semaphore 由 caller 注入：所有 in-flight scan task 共享同一实例，保证全局
@@ -1055,11 +1087,12 @@ async fn scan_metadata_for_page(
         let project_id = project_id.clone();
         let cache = metadata_cache.clone();
         let root_generation = root_generation.clone();
+        let fs = fs.clone();
         set.spawn(async move {
             let Ok(_permit) = permit_sem.acquire_owned().await else {
                 return;
             };
-            let meta = extract_session_metadata_cached(&cache, &jsonl_path).await;
+            let meta = extract_session_metadata_cached_via_fs(&cache, &fs, &jsonl_path).await;
             if root_generation.load(Ordering::SeqCst) != expected_root_generation {
                 return;
             }
@@ -1114,7 +1147,7 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (mut page, next_cursor, total, page_jobs, _dir, _root_generation) =
+        let (mut page, next_cursor, total, page_jobs, _dir, _root_generation, fs) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
         // 并发提取每条 session 的 metadata：复用 `self.metadata_scan_semaphore`
@@ -1123,24 +1156,34 @@ impl DataApi for LocalDataApi {
         // 限制" Scenario 的全局 8 上限——HTTP 路径与 async 路径并发时也不会
         // 累加成 16+ 并发。metadata cache 内部有锁，多 task 共享安全。结果按
         // page_jobs 顺序一一映射回 page。
-        let metas = futures::future::join_all(page_jobs.iter().map(|(_id, path)| {
+        let metas = futures::future::join_all(page_jobs.iter().map(|(id, path)| {
             let sem = self.metadata_scan_semaphore.clone();
             let cache = self.metadata_cache.clone();
             let path = path.clone();
+            let fs = fs.clone();
+            let id = id.clone();
             async move {
                 let _permit = sem.acquire_owned().await.ok()?;
-                Some(extract_session_metadata_cached(&cache, &path).await)
+                Some((
+                    id,
+                    extract_session_metadata_cached_via_fs(&cache, &fs, &path).await,
+                ))
             }
         }))
         .await;
-        for (summary, maybe_meta) in page.iter_mut().zip(metas) {
-            let Some(meta) = maybe_meta else {
+        // 按 sessionId 建索引：page_jobs 只包含 cache miss 的 session，page 还
+        // 含 cache hit 的——之前用 `page.iter_mut().zip(metas)` 在 SSH 也走
+        // page_jobs 后会把 metas 错位写到 hit 的 page 项上（hit 的 metadata 被
+        // miss 的 metadata 覆盖）。改成 by-id lookup 安全。
+        let metas_by_id: HashMap<String, SessionMetadata> = metas.into_iter().flatten().collect();
+        for summary in &mut page {
+            let Some(meta) = metas_by_id.get(&summary.session_id) else {
                 continue;
             };
-            summary.title = meta.title;
+            summary.title = meta.title.clone();
             summary.message_count = meta.message_count;
             summary.is_ongoing = meta.is_ongoing;
-            summary.git_branch = meta.git_branch;
+            summary.git_branch = meta.git_branch.clone();
         }
 
         Ok(PaginatedResponse {
@@ -1155,7 +1198,7 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (page, next_cursor, total, page_jobs, dir, root_generation) =
+        let (page, next_cursor, total, page_jobs, dir, root_generation, fs) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
         if !page_jobs.is_empty() && root_generation == self.root_generation.load(Ordering::SeqCst) {
@@ -1193,6 +1236,7 @@ impl DataApi for LocalDataApi {
                     self.metadata_scan_semaphore.clone(),
                     self.root_generation.clone(),
                     root_generation,
+                    fs,
                 ));
 
                 scans.insert(
