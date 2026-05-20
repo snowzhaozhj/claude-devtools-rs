@@ -136,16 +136,16 @@
     <div class="status-copy">
       {#if isConnected}
         <strong>已连接 · {connectionStore.connectedHost ?? connectionStore.host}</strong>
-        <span>通过 SSH 读取远端 <code>~/.claude/projects</code></span>
+        <span>项目列表来自远端</span>
       {:else if connectionStore.status === "connecting"}
         <strong>正在连接 {connectionStore.host}</strong>
-        <span>按 ssh config、agent、IdentityFile、密码 顺序尝试鉴权</span>
+        <span>依次尝试 ssh config、agent、IdentityFile、密码</span>
       {:else if connectionStore.status === "error"}
         <strong>连接失败</strong>
-        <span>{connectionStore.error ?? "请检查下方诊断信息"}</span>
+        <span>{connectionStore.error ?? "请展开下方诊断查看详情"}</span>
       {:else}
         <strong>本地模式</strong>
-        <span>当前读取本机 <code>~/.claude/projects</code></span>
+        <span>未连接到远端</span>
       {/if}
     </div>
     {#if isConnected}
