@@ -216,23 +216,43 @@
       const recoverHandler = () => {
         const projectId = selectedProjectId;
         if (!projectId) return;
-        // 触发后端按**已加载范围**重新 spawn metadata 扫描——不仅 page 1，
-        // 用户已翻到的 page 2+ 也覆盖。后端 `LocalDataApi::list_sessions`
-        // 按 `take(pagination.page_size)` 截断，pageSize=sessions.length
-        // 等价于"扫描已加载范围"；spawn 的后台 task 对每条 cache miss
-        // 都会通过 SSE 广播 `SessionMetadataUpdate`，UI 走既有 listener
-        // patch 路径正常写回 sessions + store 缓存——不需要消费本次
-        // listSessions response（response 是骨架且 SSE 已恢复，patch 才是
-        // 真值通道）。
+        // 触发后端按**已加载范围**重新扫描，pageSize=sessions.length 让
+        // 后端 `take(pagination.page_size)` 覆盖 page 1 + page 2+。两类
+        // 真值都需要消费 response 写回：
         //
-        // codex 二审 round 2 指出："silent loadSessions 只重扫 page 1，
-        // page 2+ 卡 pending"；round 3 指出"`getSessionSummariesByIds`
-        // 是 light skeleton 不带 metadata（contract 固化）"。本方案直接
-        // 复用现有 list_sessions IPC，0 新 IPC、0 后端改动。
+        // 1. **cache hit 项**：后端 `try_lookup_cached_metadata` fast-path
+        //    inline 返真值（`crates/cdt-api/src/ipc/local.rs:809-820`），
+        //    **不**入 `page_jobs` 后台扫描，**不**会 emit SSE patch；前端
+        //    必须从 response 拿真值合并（codex 二审 round 4）
+        // 2. **cache miss 项**：后端 spawn 扫描后通过 SSE 广播
+        //    `SessionMetadataUpdate`，UI 走既有 listener patch 路径写回；
+        //    response 里仍是骨架——`mergeSilentMetadata` 让新骨架不会
+        //    覆盖 prev 已 patch 真值，安全
+        //
+        // 决策记录（codex 4 轮验证后定型）：
+        // - round 1 silent loadSessions 重扫 page 1 → page 2+ pending 永久卡空
+        // - round 2 + getSessionSummariesByIds 补齐 → 该 IPC 是 light
+        //   skeleton（contract 固化），无效
+        // - round 3 listSessions(已加载范围) fire-and-forget → cache hit
+        //   不 emit SSE，response 真值丢失
+        // - round 4（当前）listSessions(已加载范围) **消费 response** 走
+        //   mergeSessions/applyPendingMetadata 写回——cache hit 真值从
+        //   response 拿、cache miss 真值从 SSE patch 拿
         const pageSize = Math.max(sessions.length, SESSION_PAGE_SIZE);
-        void listSessions(projectId, pageSize).catch((e) => {
-          console.warn("[sidebar] sse-recovery rescan failed:", e);
-        });
+        void (async () => {
+          try {
+            const result = await listSessions(projectId, pageSize);
+            // race guard：异步完成时 user 可能已切到别的 project
+            if (projectId !== selectedProjectId) return;
+            sessions = applyPendingMetadata(
+              mergeSessions(sessions, result.items, true),
+              pendingMetadataUpdates,
+            );
+            cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);
+          } catch (e) {
+            console.warn("[sidebar] sse-recovery rescan failed:", e);
+          }
+        })();
       };
       sseRecoveredUnlisten = await subscribeEvent<unknown>("sse-recovered", recoverHandler);
       sseLaggedUnlisten = await subscribeEvent<unknown>("sse-lagged", recoverHandler);
