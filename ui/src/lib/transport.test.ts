@@ -545,6 +545,77 @@ describe('BrowserTransport', () => {
     expect(instances.length).toBeGreaterThanOrEqual(1) // ensureSource 已触发
   })
 
+  test('ensureSseReady：1000ms 超时后下一次 onopen 触发 sse-recovered 兜底事件', async () => {
+    vi.useFakeTimers()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const instances: (FakeEventSource & { triggerOpen: () => void })[] = []
+    vi.stubGlobal(
+      'EventSource',
+      class extends FakeEventSource {
+        onopen: (() => void) | null = null
+        constructor(url: string) {
+          super(url)
+          this.readyState = FakeEventSource.CONNECTING
+          instances.push(this as FakeEventSource & { triggerOpen: () => void })
+        }
+        triggerOpen() {
+          this.readyState = FakeEventSource.OPEN
+          this.onopen?.()
+        }
+      },
+    )
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ items: [], nextCursor: null, total: 0 }), { status: 200 }),
+    )
+
+    const recoveredHandler = vi.fn()
+    await subscribeEvent('sse-recovered', recoveredHandler)
+    expect(instances.length).toBeGreaterThanOrEqual(1)
+
+    // ensureSseReady 永等不到 OPEN → 1000 ms 超时放行 fetch
+    const invokePromise = getTransport().invoke('list_sessions', { projectId: 'p-recover', pageSize: 20 })
+    await vi.advanceTimersByTimeAsync(1000)
+    await invokePromise
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('SSE not OPEN within 1000ms'))
+    expect(recoveredHandler).not.toHaveBeenCalled()
+
+    // SSE 真正 OPEN → 触发 sse-recovered 兜底 event
+    instances[0].triggerOpen()
+    expect(recoveredHandler).toHaveBeenCalledTimes(1)
+    expect(recoveredHandler).toHaveBeenCalledWith({
+      event: 'sse-recovered',
+      id: 0,
+      payload: {},
+    })
+
+    // 再次 OPEN（重连场景）不应再 emit——flag 已被清空
+    instances[0].triggerOpen()
+    expect(recoveredHandler).toHaveBeenCalledTimes(1)
+
+    vi.useRealTimers()
+  })
+
+  test('SSE sse_lagged 事件转换为 sse-lagged event（broadcast 容量打满兜底）', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('sse-lagged', handler)
+    instances[0].emit({ type: 'sse_lagged' })
+
+    expect(handler).toHaveBeenCalledWith({
+      event: 'sse-lagged',
+      id: 0,
+      payload: {},
+    })
+    unsubscribe()
+  })
+
   test('SSE context_changed 事件转换为 context_changed payload', async () => {
     const instances: FakeEventSource[] = []
     vi.stubGlobal('EventSource', class extends FakeEventSource {

@@ -29,6 +29,7 @@
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { subscribeEvent, type Unsubscribe } from "../lib/transport";
+  import { isTauriRuntime } from "../lib/runtime";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
   import { applySilentRefresh, mergeSessions, applyPendingMetadata } from "../lib/sessionMerge";
   import {
@@ -132,6 +133,8 @@
   // ---------------------------------------------------------------------------
 
   let metadataUnlisten: Unsubscribe | null = null;
+  let sseRecoveredUnlisten: Unsubscribe | null = null;
+  let sseLaggedUnlisten: Unsubscribe | null = null;
   let refreshProjectsListener: (() => void) | null = null;
   let sessionListEl: HTMLElement | null = null;
 
@@ -196,6 +199,27 @@
         cacheApplyMetadata(payload.projectId, payload);
       },
     );
+
+    // SSE 恢复兜底（codex 二审 issue 1 / issue 2 修法的 UI 层）：
+    // - `sse-recovered`：transport 层 ensureSseReady 1000 ms 超时放行 fetch 后，
+    //   后端发出的 metadata patch 在 SSE OPEN 前已丢失，OPEN 时通知 UI 重拉
+    // - `sse-lagged`：HTTP server 端 broadcast 容量打满 + slow client 跟不上时
+    //   sse handler 推送的 sentinel，告知 UI "中间已丢若干 PushEvent"
+    // 两条都触发当前 project 一次 silent refresh，让后端重启扫描 + emit 新
+    // 一轮 metadata patch；silent merge 不会用骨架 null 覆盖已 patch 真值。
+    //
+    // 仅 BrowserTransport 会 synthesize 这两个事件——Tauri runtime 直接走
+    // `@tauri-apps/api` 的 listen()，不存在 SSE OPEN/lag 概念。Tauri runtime
+    // 跳过订阅避免在测试 mock 环境下额外触发 listen() 调用让 transformCallback
+    // 路径报错，同时也省掉真桌面运行时无谓的 listen() 注册。
+    if (!isTauriRuntime()) {
+      const recoverHandler = () => {
+        if (!selectedProjectId) return;
+        void loadSessions(selectedProjectId, true);
+      };
+      sseRecoveredUnlisten = await subscribeEvent<unknown>("sse-recovered", recoverHandler);
+      sseLaggedUnlisten = await subscribeEvent<unknown>("sse-lagged", recoverHandler);
+    }
 
     refreshProjectsListener = () => {
       scheduleRefresh("sidebar:projects", () => untrack(() => loadProjects(true)));
@@ -415,6 +439,10 @@
     }
     metadataUnlisten?.();
     metadataUnlisten = null;
+    sseRecoveredUnlisten?.();
+    sseRecoveredUnlisten = null;
+    sseLaggedUnlisten?.();
+    sseLaggedUnlisten = null;
   });
 
   // ---------------------------------------------------------------------------

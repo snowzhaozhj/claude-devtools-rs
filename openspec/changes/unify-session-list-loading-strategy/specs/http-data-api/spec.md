@@ -80,4 +80,34 @@ Tauri runtime（`TauriTransport`）SHALL NOT 受此 Requirement 影响——Taur
 
 - **WHEN** `EventSource` 由于网络问题 1000 ms 内未进入 `OPEN`
 - **THEN** `ensureSseReady()` SHALL resolve（不抛错）
-- **AND** 后续 fetch SHALL 正常发起；丢失的 metadata patch SHALL 由后续 file-change 触发的 silent refresh 拉到（与桌面 IPC 路径 file-change 兜底语义对齐）
+- **AND** 后续 fetch SHALL 正常发起
+- **AND** `BrowserTransport` SHALL 记录 timeout 状态，使得后续 EventSource 真正进入 `OPEN` 时（自然成功 / scheduleReconnect 重连成功）SHALL 给所有已注册 handler emit 一次 `sse-recovered` pseudo-event，让 UI 触发 silent refresh 重拉一轮 metadata patch；**不**得仅依赖偶发的 file-change 兜底（codex 二审 issue 1：纯历史浏览场景无新 file-change 时 metadata 永久卡空）
+
+#### Scenario: SSE 超时后真正 OPEN 时通过 sse-recovered 自愈
+
+- **WHEN** 上一次 `ensureSseReady()` 已超时放行 fetch、`sseRecoveryPending` 标志为 true
+- **AND** EventSource 终于进入 `OPEN`（首次成功 / 重连成功）
+- **THEN** `BrowserTransport` SHALL 给所有 `EventHandler` 调用 `handler('sse-recovered', {})` 一次
+- **AND** 之后立即清空 `sseRecoveryPending` 标志，避免后续 onopen 再次重复 emit
+- **AND** UI 层（典型 `Sidebar.svelte`）订阅 `sse-recovered` 事件后 SHALL 对当前选中 project 调一次 silent `loadSessions(projectId, true)` 兜底重拉
+
+### Requirement: /api/events SSE 在 broadcast 容量打满时 SHALL 推送 sse_lagged sentinel
+
+`/api/events` SSE handler 的 `BroadcastStream` 在 `events_tx` 容量打满 + 当前 receiver 跟不上速度时返回 `Err(BroadcastStreamRecvError::Lagged(skipped))`。原实现对 `Lagged` 走 `filter_map None` 静默吞掉，UI 永久看不到落地的 metadata patch（codex 二审 issue 2）。系统 SHALL 把 `Lagged` 转为一条 SSE `Event`，`data` 字段为 `'{"type":"sse_lagged"}'` 字面量字符串；stream SHALL 继续从最新 PushEvent 接收，**不**退出 stream。
+
+UI 层 `BrowserTransport` 收到 `sse_lagged` event SHALL 映射到 `sse-lagged` event name 派发给所有 handler；订阅方（典型 `Sidebar.svelte`）SHALL 与 `sse-recovered` 共享同一 silent refresh handler 重拉一轮 metadata。
+
+实现上 `EVENT_BRIDGE_CAPACITY` SHALL ≥ 1024（`src-tauri/src/server_mode.rs` 与 `crates/cdt-cli/src/main.rs` 同步），给默认 `pageSize=50` × 多 project 切换 × 多 SSE subscriber 留约 20× headroom；这是性能优化、不是行为契约——`sse_lagged` sentinel 是行为兜底，capacity 提升是降低触发频率。
+
+#### Scenario: 容量打满时 SSE handler 推送 sse_lagged sentinel
+
+- **WHEN** `events_tx` 的 broadcast channel capacity 被打满 + 当前 SSE receiver 落后导致 `BroadcastStream` 产出 `Err(Lagged(N))`
+- **THEN** SSE handler SHALL 推送一条 SSE event，`data` 字段字符串等于 `'{"type":"sse_lagged"}'`
+- **AND** SSE stream SHALL 继续从最新 PushEvent 接收（**不**得退出 stream / **不**得静默丢弃）
+- **AND** 后续真正的 `PushEvent::SessionMetadataUpdate` 等事件 SHALL 正常推送到 client
+
+#### Scenario: 浏览器 client 收到 sse_lagged 时触发 silent refresh
+
+- **WHEN** 浏览器 client 收到 SSE event `{"type":"sse_lagged"}`
+- **THEN** `BrowserTransport` SHALL 把它映射到 `sse-lagged` event name 派发给所有 handler
+- **AND** 订阅方 SHALL 对当前选中 project 调 `loadSessions(projectId, true)` silent refresh 兜底重拉

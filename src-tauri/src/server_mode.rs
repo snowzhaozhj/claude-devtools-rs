@@ -42,8 +42,14 @@ impl StatusEmitter for AppHandle {
     }
 }
 
-/// HTTP server 事件桥广播容量。与 `cdt-cli` / 测试一致。
-const EVENT_BRIDGE_CAPACITY: usize = 128;
+/// HTTP server 事件桥广播容量。
+///
+/// 默认 page_size=50（`src-tauri/src/lib.rs`）+ 单次 cache miss 触发 50 条
+/// metadata patch，多 project 切换或多 SSE subscriber 时 128 容量很容易被
+/// 打满；提到 1024 给约 20× headroom（codex 二审 issue 2 修法之一）。仍可
+/// 能 lag——`cdt-api/src/http/sse.rs` 的 `sse_lagged` sentinel 兜底通知 UI
+/// 重拉数据。
+const EVENT_BRIDGE_CAPACITY: usize = 1024;
 
 /// `http_server_status` IPC 返回结构 + emit `http-server-status` event 载荷。
 #[derive(Serialize, Clone, Debug)]
