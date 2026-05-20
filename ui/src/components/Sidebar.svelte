@@ -574,6 +574,21 @@
     return s.title || s.sessionId.slice(0, 8);
   }
 
+  /**
+   * 把绝对 cwd 路径压缩为 sidebar 行内可读尾段：
+   * - `/Users/foo/repo/.claude/worktrees/feat-x` → `worktrees/feat-x`
+   * - `/Users/foo/repo` → `repo`
+   * - `/Users/foo/repo/packages/a` → `packages/a`
+   * 空路径返回空串，调用方通过 truthy 判断决定是否渲染。
+   */
+  function cwdTailLabel(cwd: string | undefined | null): string {
+    if (!cwd) return '';
+    const parts = cwd.split(/[/\\]/).filter(Boolean);
+    if (parts.length === 0) return '';
+    if (parts.length === 1) return parts[0];
+    return parts.slice(-2).join('/');
+  }
+
   // ---------------------------------------------------------------------------
   // Derived: filter → hide → pin split → group
   // ---------------------------------------------------------------------------
@@ -816,6 +831,11 @@
                 <span class="session-branch" title={session.gitBranch}>
                   <svg class="meta-icon session-branch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html GIT_BRANCH_SVG}</svg>
                   <span class="session-branch-name">{session.gitBranch}</span>
+                </span>
+              {/if}
+              {#if session.cwd && cwdTailLabel(session.cwd)}
+                <span class="session-cwd" title={session.cwd}>
+                  {cwdTailLabel(session.cwd)}
                 </span>
               {/if}
             </div>
@@ -1345,6 +1365,23 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* cwd 尾段标签：同 project 下不同 cwd（worktree / monorepo 子目录）的
+     session 通过此 chip 区分；与 session-branch 同等级，但用更弱的视觉
+     权重（无图标 + 略小字号），避免主信息行变拥挤。 */
+  .session-cwd {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    min-width: 0;
+    flex-shrink: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.78;
   }
 
   /* Resize handle */

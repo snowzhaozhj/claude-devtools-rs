@@ -13,10 +13,10 @@ use serde::{Deserialize, Serialize};
 
 /// 单个 Claude Code 工程条目。
 ///
-/// `id` 既可能是 `~/.claude/projects/` 下的编码目录名（例如
-/// `-Users-alice-code-foo`），也可能是 composite 形式
-/// `{baseDir}::{hash8}` —— 当同一编码目录下的 session 属于多个 `cwd`
-/// 时，port-project-discovery 会按 `cwd` 拆分为多个逻辑子工程。
+/// `id` 是 `~/.claude/projects/` 下的编码目录名（例如
+/// `-Users-alice-code-foo`）。同一编码目录下不同 `cwd` 的 session
+/// 始终归属同一 `Project`；session 之间 cwd 差异由 `Session.cwd` 字段
+/// 暴露，由消费方（UI）按需展示。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -26,6 +26,11 @@ pub struct Project {
     pub sessions: Vec<String>,
     pub most_recent_session: Option<i64>,
     pub created_at: Option<i64>,
+    /// 该 encoded 目录下所有 session 的 `cwd` 去重集合，按 session mtime 降序。
+    /// 由 `ProjectScanner` 填充，供 `agent-configs` 等消费方覆盖所有 cwd 的
+    /// `.claude/agents/` 扫描；为空时省略序列化保持对老前端非破坏。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub distinct_cwds: Vec<String>,
 }
 
 /// 单个 session 文件的 UI 元数据视图。
@@ -36,6 +41,11 @@ pub struct Session {
     pub last_modified: i64,
     pub size: u64,
     pub is_pinned: bool,
+    /// session jsonl 内首条带 `cwd` 字段消息的 `cwd` 值；缺失时为 `None`。
+    /// 由 `ProjectScanner` 在扫描时通过 head-read 填充，供消费方（UI）
+    /// 在同一 `Project` 下区分不同 cwd 的 session。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// `analyze_session_file_metadata` 返回的薄 metadata，本 port 只用 size / mtime。

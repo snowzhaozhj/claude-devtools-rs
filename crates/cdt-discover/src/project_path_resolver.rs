@@ -1,16 +1,19 @@
 //! 项目 ID → 规范 `cwd` 的解析器。
 //!
-//! 解析顺序（与 TS `ProjectPathResolver` 对齐）：
-//! 1. composite subproject registry 的 `cwd`
-//! 2. 内存 cache
-//! 3. 外部传入的 `hint`（必须是绝对路径）
-//! 4. 逐个 session 文件的前 N 行，用 `cdt_parse::parse_entry_at` 抽出 `cwd`
+//! 解析顺序（与 TS `ProjectPathResolver` 对齐，已移除 composite registry 短路）：
+//! 1. 内存 cache
+//! 2. 外部传入的 `hint`（必须是绝对路径）
+//! 3. 逐个 session 文件的前 N 行，用 `cdt_parse::parse_entry_at` 抽出 `cwd`
 //!    —— SSH 模式下最多检查 1 个 session 文件，本地模式遍历全部
-//! 5. `decode_path` best-effort fallback
+//! 4. `decode_path` best-effort fallback
 //!
 //! Spec：`openspec/specs/project-discovery/spec.md` 的
-//! `Decode encoded project paths` / `Resolve subprojects and pinned sessions`
+//! `Decode encoded project paths` / `Compare paths case-insensitively on Windows`
 //! Requirement。
+//!
+//! Change `merge-composite-projects` 已移除 composite ID 拆分；本 resolver 不再
+//! 接收 `SubprojectRegistry`，直接从 cache / hint / session jsonl / decode 链路
+//! 解析。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -22,7 +25,6 @@ use crate::error::DiscoverError;
 use crate::fs_provider::{FileSystemProvider, FsKind};
 use crate::path_compare::normalize_path_string_for_compare;
 use crate::path_decoder::{decode_path, extract_base_dir, looks_like_absolute_path};
-use crate::subproject_registry::SubprojectRegistry;
 
 /// 扫描 session 头部时最多读取的行数。对齐 TS 里的默认 `maxLines`。
 const SESSION_HEAD_LINES: usize = 20;
@@ -45,23 +47,15 @@ impl ProjectPathResolver {
 
     /// 解析一个 project ID 到规范 cwd。
     ///
-    /// * `registry` 提供 composite ID 的 short-circuit 源。
     /// * `hint` 是可选的 cwd 提示（例如 IPC 调用方已知的绝对路径）。
     /// * `session_paths` 是可选的"已列好的 session 路径列表"，用于避免
     ///   resolver 再自己遍历目录。
     pub async fn resolve(
         &self,
         project_id: &str,
-        registry: &SubprojectRegistry,
         hint: Option<&Path>,
         session_paths: Option<&[PathBuf]>,
     ) -> Result<PathBuf, DiscoverError> {
-        if let Some(cwd) = registry.get_cwd(project_id) {
-            let owned = cwd.to_path_buf();
-            self.cache_set(project_id, &owned);
-            return Ok(owned);
-        }
-
         if let Some(cached) = self.cache_get(project_id) {
             return Ok(cached);
         }
@@ -196,29 +190,13 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn registry_short_circuits_resolution() {
-        let dir = tempdir().unwrap();
-        let fs: Arc<dyn FileSystemProvider> = Arc::new(LocalFileSystemProvider::new());
-        let resolver = ProjectPathResolver::new(fs, dir.path().to_path_buf());
-
-        let mut registry = SubprojectRegistry::new();
-        let id = registry.register("-Users-foo", Path::new("/Users/foo/a"), []);
-        let resolved = resolver
-            .resolve(&id, &registry, None, Some(&[]))
-            .await
-            .unwrap();
-        assert_eq!(resolved, PathBuf::from("/Users/foo/a"));
-    }
-
-    #[tokio::test]
     async fn decode_fallback_when_no_sessions() {
         let dir = tempdir().unwrap();
         let fs: Arc<dyn FileSystemProvider> = Arc::new(LocalFileSystemProvider::new());
         let resolver = ProjectPathResolver::new(fs, dir.path().to_path_buf());
-        let registry = SubprojectRegistry::new();
 
         let resolved = resolver
-            .resolve("-Users-alice-code-foo", &registry, None, Some(&[]))
+            .resolve("-Users-alice-code-foo", None, Some(&[]))
             .await
             .unwrap();
         assert_eq!(resolved, PathBuf::from("/Users/alice/code/foo"));
@@ -230,7 +208,6 @@ mod tests {
         let project_dir = dir.path().join("-Users-alice-my-app");
         tokio::fs::create_dir_all(&project_dir).await.unwrap();
         let session = project_dir.join("s1.jsonl");
-        // minimal valid JSONL user line with a cwd field
         let line = r#"{"type":"user","uuid":"u1","cwd":"/Users/alice/my-app","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}"#;
         tokio::fs::write(&session, format!("{line}\n"))
             .await
@@ -238,9 +215,8 @@ mod tests {
 
         let fs: Arc<dyn FileSystemProvider> = Arc::new(LocalFileSystemProvider::new());
         let resolver = ProjectPathResolver::new(fs, dir.path().to_path_buf());
-        let registry = SubprojectRegistry::new();
         let resolved = resolver
-            .resolve("-Users-alice-my-app", &registry, None, None)
+            .resolve("-Users-alice-my-app", None, None)
             .await
             .unwrap();
         assert_eq!(resolved, PathBuf::from("/Users/alice/my-app"));
@@ -251,11 +227,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let fs: Arc<dyn FileSystemProvider> = Arc::new(LocalFileSystemProvider::new());
         let resolver = ProjectPathResolver::new(fs, dir.path().to_path_buf());
-        let registry = SubprojectRegistry::new();
         let resolved = resolver
             .resolve(
                 "-Users-alice-my-app",
-                &registry,
                 Some(Path::new("/real/cwd")),
                 Some(&[]),
             )
@@ -266,21 +240,15 @@ mod tests {
 
     /// Spec：`project-discovery::Compare paths case-insensitively on Windows::
     /// 跨大小写命中同一 ProjectPathResolver 缓存`。
-    ///
-    /// Windows 上以不同大小写形式查询同一 `project_id` SHALL 命中首次解析的
-    /// cache 条目；非 Windows 平台 SHALL 视为不同 key（cache miss → 触发 fallback）。
     #[tokio::test]
     async fn cache_handles_case_per_platform() {
         let dir = tempdir().unwrap();
         let fs: Arc<dyn FileSystemProvider> = Arc::new(LocalFileSystemProvider::new());
         let resolver = ProjectPathResolver::new(fs, dir.path().to_path_buf());
-        let registry = SubprojectRegistry::new();
 
-        // 第一次走 hint 写 cache
         let first = resolver
             .resolve(
                 "-C:-Users-Alice-app",
-                &registry,
                 Some(Path::new(r"C:\Users\Alice\app")),
                 Some(&[]),
             )
@@ -288,11 +256,8 @@ mod tests {
             .unwrap();
         assert_eq!(first, PathBuf::from(r"C:\Users\Alice\app"));
 
-        // 第二次以**仅大小写不同**的 project_id 查询，**不**给 hint
-        // Windows: 命中 cache（返回首次写入的原大小写 path）
-        // 非 Windows: cache miss → 走 decode fallback（产出 best-effort 解码结果）
         let second = resolver
-            .resolve("-C:-users-alice-app", &registry, None, Some(&[]))
+            .resolve("-C:-users-alice-app", None, Some(&[]))
             .await
             .unwrap();
 

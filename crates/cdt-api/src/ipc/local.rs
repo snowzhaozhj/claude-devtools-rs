@@ -19,7 +19,7 @@ use cdt_config::{
 };
 use cdt_discover::{
     FileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
-    SubprojectRegistry, local_handle,
+    local_handle,
 };
 use cdt_parse::{ParseError, parse_entry_at, parse_file};
 use cdt_ssh::{
@@ -763,23 +763,11 @@ impl LocalDataApi {
 
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
-        let sessions = if is_remote && !SubprojectRegistry::is_composite(project_id) {
-            let scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
-            scanner
-                .list_sessions(project_id, &std::collections::BTreeSet::new())
-                .await
-                .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?
-        } else {
-            let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
-            let _ = scanner
-                .scan()
-                .await
-                .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
-            scanner
-                .list_sessions(project_id, &std::collections::BTreeSet::new())
-                .await
-                .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?
-        };
+        let scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
+        let sessions = scanner
+            .list_sessions(project_id, &std::collections::BTreeSet::new())
+            .await
+            .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?;
         let root_generation = self.root_generation.load(Ordering::SeqCst);
 
         let offset = pagination
@@ -858,6 +846,7 @@ impl LocalDataApi {
                     git_branch: meta.git_branch,
                     worktree_id: None,
                     worktree_name: None,
+                    cwd: s.cwd,
                 });
             } else {
                 page.push(SessionSummary {
@@ -870,6 +859,7 @@ impl LocalDataApi {
                     git_branch: None,
                     worktree_id: None,
                     worktree_name: None,
+                    cwd: s.cwd,
                 });
                 if !is_remote {
                     page_jobs.push((s.id, jsonl_path));
@@ -1278,6 +1268,7 @@ impl DataApi for LocalDataApi {
                         git_branch: None,
                         worktree_id: None,
                         worktree_name: None,
+                        cwd: session.cwd,
                     },
                 )
             })
@@ -1357,53 +1348,34 @@ impl DataApi for LocalDataApi {
         // 不要把这些段塞进一个汇总 log——分开打才能据此判断瓶颈走向。
         let t_total = std::time::Instant::now();
 
-        // 路径解析以 scanner 持有的 projects_dir 为准，让集成测试可用 tmp 目录。
-        // `path_decoder::get_projects_base_path()` 仅在 `ProjectScanner` 自身
-        // 用默认路径构造时返回真实 home，scanner 已经统一了入口。
+        // 路径解析直接走 `fs.stat(jsonl_path)`：一次系统调用拿 mtime / size，**不**
+        // 触发跨 project 全量扫描。Spec：`ipc-data-api::get_session_detail 本地路径
+        // 以单文件 stat 取元数据`。change `merge-composite-projects` 移除了原本为
+        // 反解 composite id 而调用 `scanner.scan()` 的全扫开销（~14K reads / IPC）。
         let t_locate = std::time::Instant::now();
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
-        let sessions = if is_remote && !SubprojectRegistry::is_composite(project_id) {
-            let scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
-            scanner
-                .list_sessions(project_id, &std::collections::BTreeSet::new())
-                .await
-                .map_err(|e| ApiError::internal(format!("{e}")))?
-        } else {
-            let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
-            let _ = scanner
-                .scan()
-                .await
-                .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
-            scanner
-                .list_sessions(project_id, &std::collections::BTreeSet::new())
-                .await
-                .map_err(|e| ApiError::internal(format!("{e}")))?
-        };
         let project_dir =
             projects_dir.join(cdt_discover::path_decoder::extract_base_dir(project_id));
+        let primary_jsonl = project_dir.join(format!("{session_id}.jsonl"));
 
-        let main_session = sessions.iter().find(|s| s.id == session_id);
-
-        let (jsonl_path, last_modified, size) = if let Some(s) = main_session {
-            (
-                project_dir.join(format!("{session_id}.jsonl")),
-                Some(s.last_modified),
-                Some(s.size),
-            )
-        } else if !is_remote {
-            let Some(path) = find_subagent_jsonl(&project_dir, session_id).await else {
+        let (jsonl_path, last_modified, size) = match fs.stat(&primary_jsonl).await {
+            Ok(meta) => (primary_jsonl, Some(meta.mtime_ms()), Some(meta.size)),
+            Err(_) if !is_remote => {
+                let Some(path) = find_subagent_jsonl(&project_dir, session_id).await else {
+                    return Err(ApiError::not_found(format!("session {session_id}")));
+                };
+                let meta = tokio::fs::metadata(&path).await.ok();
+                let modified = meta.as_ref().and_then(|m| m.modified().ok()).map(|t| {
+                    let dt: chrono::DateTime<chrono::Utc> = t.into();
+                    dt.timestamp_millis()
+                });
+                let size = meta.as_ref().map(std::fs::Metadata::len);
+                (path, modified, size)
+            }
+            Err(_) => {
                 return Err(ApiError::not_found(format!("session {session_id}")));
-            };
-            let meta = tokio::fs::metadata(&path).await.ok();
-            let modified = meta.as_ref().and_then(|m| m.modified().ok()).map(|t| {
-                let dt: chrono::DateTime<chrono::Utc> = t.into();
-                dt.timestamp_millis()
-            });
-            let size = meta.as_ref().map(std::fs::Metadata::len);
-            (path, modified, size)
-        } else {
-            return Err(ApiError::not_found(format!("session {session_id}")));
+            }
         };
         let locate_ms = t_locate.elapsed().as_millis();
 
@@ -1543,6 +1515,10 @@ impl DataApi for LocalDataApi {
             }
             chunks
         };
+        // metadata 暴露 session 级 cwd（首条带 cwd 字段消息的值），让前端
+        // SessionDetail 头部直接展示完整 cwd。Spec：
+        // `ipc-data-api::Session 列表序列化暴露 cwd 字段::get_session_detail 元数据带 cwd`。
+        let session_cwd: Option<&str> = messages.iter().find_map(|m| m.cwd.as_deref());
         let detail = SessionDetail {
             session_id: session_id.to_owned(),
             project_id: project_id.to_owned(),
@@ -1551,6 +1527,7 @@ impl DataApi for LocalDataApi {
             metadata: serde_json::json!({
                 "last_modified": last_modified,
                 "size": size,
+                "cwd": session_cwd,
             }),
             context_injections,
             injections_by_phase: injections_by_phase_value,
@@ -2498,10 +2475,25 @@ impl LocalDataApi {
             .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
         drop(scanner);
 
-        let pairs: Vec<(String, String)> = projects
-            .iter()
-            .map(|p| (p.id.clone(), p.path.to_string_lossy().into_owned()))
-            .collect();
+        // 同一 encoded project 目录下若存在多个不同 `cwd` 的 session（典型场景：
+        // worktree / monorepo 子目录），SHALL 扫描所有 cwd 下的 `.claude/agents/`。
+        // 历史上 composite 拆分会按 cwd 把同 encoded 目录拆成多个 `Project`，所以
+        // 一个 project 一条 pair 就够了；现已合并（change `merge-composite-projects`）,
+        // 因此 IPC 入口在这里**按每个 project 的 distinct cwds 笛卡尔展开**。
+        // Spec：`agent-configs::Scan agent config files from global and project scopes`。
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for project in &projects {
+            if project.distinct_cwds.is_empty() {
+                pairs.push((
+                    project.id.clone(),
+                    project.path.to_string_lossy().into_owned(),
+                ));
+            } else {
+                for cwd in &project.distinct_cwds {
+                    pairs.push((project.id.clone(), cwd.clone()));
+                }
+            }
+        }
         // 扫描涉及文件系统 I/O，放到 blocking 线程池避免阻塞 runtime
         let configs = tokio::task::spawn_blocking(move || {
             cdt_discover::agent_configs::read_agent_configs(&pairs)

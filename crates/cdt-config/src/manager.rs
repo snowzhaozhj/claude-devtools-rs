@@ -48,9 +48,48 @@ impl ConfigManager {
     }
 
     /// 从磁盘异步加载配置。
+    ///
+    /// 加载完成后会同步执行 `migrate_composite_ids` 一次性数据迁移：把
+    /// `pinned_sessions` / `hidden_sessions` `HashMap` 中含 `::` 形式的旧
+    /// composite `project_id` key 折叠为 `base_dir`（详见
+    /// `configuration-management::Migrate composite project IDs in pinned sessions on load`
+    /// Requirement）。迁移失败 / 写盘失败 SHALL 通过 `warn!` 记录但**不阻塞**启动。
     pub async fn load(&mut self) -> Result<(), ConfigError> {
         self.config = self.load_from_disk().await?;
+        let needs_write = migrate_composite_ids(&mut self.config);
+        if needs_write {
+            if let Err(e) = self.backup_pre_merge_composite().await {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to back up config before composite migration; continuing"
+                );
+            }
+            if let Err(e) = self.persist_config(&self.config).await {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to persist composite-folded config; will retry on next load"
+                );
+            }
+        }
         self.trigger_manager = TriggerManager::new(self.config.notifications.triggers.clone());
+        Ok(())
+    }
+
+    /// 迁移前备份原配置文件到 `<path>.pre-merge-composite.bak`（覆盖已存在的）。
+    async fn backup_pre_merge_composite(&self) -> Result<(), ConfigError> {
+        if !tokio::fs::try_exists(&self.config_path)
+            .await
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        let backup_path = PathBuf::from(format!(
+            "{}.pre-merge-composite.bak",
+            self.config_path.display()
+        ));
+        tokio::fs::copy(&self.config_path, &backup_path)
+            .await
+            .map_err(|e| ConfigError::io(&backup_path, e))?;
         Ok(())
     }
 
@@ -779,6 +818,65 @@ impl ConfigManager {
     }
 }
 
+/// 一次性折叠 `pinned_sessions` / `hidden_sessions` `HashMap` 里残留的 composite
+/// `project_id`（含 `::`）为 `base_dir`，并按 `(session_id, pinned_at / hidden_at)`
+/// 去重保留**时间戳最早**的条目。返回是否真的发生了折叠（决定是否需要写盘）。
+///
+/// Spec：`configuration-management::Migrate composite project IDs in pinned sessions on load`。
+/// 本函数 SHALL 是**幂等**的——纯粹基于 input 重写，不依赖任何"已迁移"标志位。
+pub(crate) fn migrate_composite_ids(config: &mut AppConfig) -> bool {
+    let pinned_changed = fold_composite_keys(
+        &mut config.sessions.pinned_sessions,
+        |a: &PinnedSession, b: &PinnedSession| a.pinned_at <= b.pinned_at,
+        |a: &PinnedSession, b: &PinnedSession| a.session_id == b.session_id,
+    );
+    let hidden_changed = fold_composite_keys(
+        &mut config.sessions.hidden_sessions,
+        |a: &HiddenSession, b: &HiddenSession| a.hidden_at <= b.hidden_at,
+        |a: &HiddenSession, b: &HiddenSession| a.session_id == b.session_id,
+    );
+    pinned_changed || hidden_changed
+}
+
+fn fold_composite_keys<T, EarlierFn, SameSessionFn>(
+    map: &mut std::collections::HashMap<String, Vec<T>>,
+    is_earlier: EarlierFn,
+    same_session: SameSessionFn,
+) -> bool
+where
+    T: Clone,
+    EarlierFn: Fn(&T, &T) -> bool,
+    SameSessionFn: Fn(&T, &T) -> bool,
+{
+    let composite_keys: Vec<String> = map.keys().filter(|k| k.contains("::")).cloned().collect();
+    if composite_keys.is_empty() {
+        return false;
+    }
+    for key in composite_keys {
+        let Some(entries) = map.remove(&key) else {
+            continue;
+        };
+        let base_dir = key
+            .split_once("::")
+            .map(|(b, _)| b.to_string())
+            .unwrap_or(key);
+        let target = map.entry(base_dir).or_default();
+        for new_entry in entries {
+            if let Some(existing) = target
+                .iter_mut()
+                .find(|existing| same_session(existing, &new_entry))
+            {
+                if is_earlier(&new_entry, existing) {
+                    *existing = new_entry;
+                }
+            } else {
+                target.push(new_entry);
+            }
+        }
+    }
+    true
+}
+
 /// 把传入的 JSON 值归一化为 `Option<String>` 用于 font-family 类字段：
 /// - `null` → `None`
 /// - 字符串 trim 后为空 → `None`
@@ -930,6 +1028,143 @@ mod tests {
         mgr.unpin_session("proj1", "sess1").await.unwrap();
         let config = mgr.get_config();
         assert!(!config.sessions.pinned_sessions.contains_key("proj1"));
+    }
+
+    #[tokio::test]
+    async fn migrate_composite_ids_folds_pinned_sessions() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 写入含两个 composite key（同 base_dir 不同 hash）的配置：
+        // - "-Users-foo-repo::abcd1234" 含 s1 (pinnedAt=1000)
+        // - "-Users-foo-repo::ef567890" 含 s2 (pinnedAt=2000) + s1 (pinnedAt=500)
+        // fold 后 base_dir "-Users-foo-repo" 应含 s1(500, 取最早) + s2(2000)
+        let body = serde_json::json!({
+            "sessions": {
+                "pinnedSessions": {
+                    "-Users-foo-repo::abcd1234": [
+                        { "sessionId": "s1", "pinnedAt": 1000 }
+                    ],
+                    "-Users-foo-repo::ef567890": [
+                        { "sessionId": "s2", "pinnedAt": 2000 },
+                        { "sessionId": "s1", "pinnedAt": 500 }
+                    ]
+                },
+                "hiddenSessions": {}
+            }
+        });
+        tokio::fs::write(&path, serde_json::to_string_pretty(&body).unwrap())
+            .await
+            .unwrap();
+
+        let mut mgr = ConfigManager::new(Some(path.clone()));
+        mgr.load().await.unwrap();
+        let config = mgr.get_config();
+
+        // composite key 已不存在
+        assert!(
+            !config
+                .sessions
+                .pinned_sessions
+                .contains_key("-Users-foo-repo::abcd1234")
+        );
+        assert!(
+            !config
+                .sessions
+                .pinned_sessions
+                .contains_key("-Users-foo-repo::ef567890")
+        );
+        let pins = config
+            .sessions
+            .pinned_sessions
+            .get("-Users-foo-repo")
+            .expect("base_dir key must exist after fold");
+        assert_eq!(pins.len(), 2, "去重后应有 2 条 session: {pins:?}");
+        let s1 = pins.iter().find(|p| p.session_id == "s1").unwrap();
+        let s2 = pins.iter().find(|p| p.session_id == "s2").unwrap();
+        assert_eq!(s1.pinned_at, 500, "s1 应保留 pinned_at 最早");
+        assert_eq!(s2.pinned_at, 2000);
+
+        // 备份文件应已生成
+        let backup = PathBuf::from(format!("{}.pre-merge-composite.bak", path.display()));
+        assert!(backup.exists(), "备份文件应存在");
+
+        // 写回内容已 fold（再次 load 不应再次触发 fold）
+        let raw = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(!raw.contains("::"), "落盘后 key 不含 `::`: {raw}");
+
+        // 幂等性：再次 load 不会修改落盘内容
+        let mtime_before = tokio::fs::metadata(&path)
+            .await
+            .unwrap()
+            .modified()
+            .unwrap();
+        // 删掉 backup 让第二次如果触发就重新生成
+        tokio::fs::remove_file(&backup).await.unwrap();
+        let mut mgr2 = ConfigManager::new(Some(path.clone()));
+        mgr2.load().await.unwrap();
+        let mtime_after = tokio::fs::metadata(&path)
+            .await
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(mtime_before, mtime_after, "幂等 load 不应改 mtime");
+        assert!(!backup.exists(), "幂等 load 不应再产生 backup");
+    }
+
+    #[tokio::test]
+    async fn migrate_composite_ids_does_not_touch_repository_ids() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let body = serde_json::json!({
+            "notifications": {
+                "triggers": [
+                    {
+                        "id": "t1",
+                        "name": "T1",
+                        "enabled": true,
+                        "contentType": "tool_result",
+                        "mode": "error_status",
+                        "repositoryIds": ["/Users/foo/repo/.git", "-with::colon-ok-since-not-our-key"]
+                    }
+                ]
+            },
+            "sessions": {
+                "pinnedSessions": {
+                    "-Users-foo-repo::abcd1234": [{ "sessionId": "s1", "pinnedAt": 1 }]
+                },
+                "hiddenSessions": {}
+            }
+        });
+        tokio::fs::write(&path, serde_json::to_string_pretty(&body).unwrap())
+            .await
+            .unwrap();
+
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+        let config = mgr.get_config();
+
+        // pinned_sessions fold 生效
+        assert!(
+            config
+                .sessions
+                .pinned_sessions
+                .contains_key("-Users-foo-repo")
+        );
+        // triggers.repository_ids 字节不变
+        let trigger = config
+            .notifications
+            .triggers
+            .iter()
+            .find(|t| t.id == "t1")
+            .expect("custom trigger t1");
+        let repo_ids = trigger.repository_ids.as_ref().expect("repository_ids set");
+        assert_eq!(
+            repo_ids.as_slice(),
+            &[
+                "/Users/foo/repo/.git".to_string(),
+                "-with::colon-ok-since-not-our-key".to_string()
+            ]
+        );
     }
 
     #[tokio::test]

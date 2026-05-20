@@ -18,7 +18,6 @@ pub mod project_scanner;
 pub mod search_cache;
 pub mod search_extract;
 pub mod session_search;
-pub mod subproject_registry;
 pub mod worktree_grouper;
 pub mod wsl;
 
@@ -32,15 +31,13 @@ pub use path_compare::{
     path_strip_prefix, paths_equal,
 };
 pub use path_decoder::{
-    COMPOSITE_SEPARATOR, decode_path, encode_path, extract_base_dir, extract_project_name,
-    get_projects_base_path, get_todos_base_path, home_dir, is_valid_encoded_path,
-    looks_like_absolute_path,
+    decode_path, encode_path, extract_base_dir, extract_project_name, get_projects_base_path,
+    get_todos_base_path, home_dir, is_valid_encoded_path, looks_like_absolute_path,
 };
 pub use project_path_resolver::ProjectPathResolver;
 pub use project_scanner::ProjectScanner;
 pub use search_cache::SearchTextCache;
 pub use session_search::{SearchConfig, SessionSearcher};
-pub use subproject_registry::{SubprojectEntry, SubprojectRegistry};
 pub use worktree_grouper::{
     GitIdentityResolver, LocalGitIdentityResolver, RepoLookup, WorktreeGrouper,
 };
