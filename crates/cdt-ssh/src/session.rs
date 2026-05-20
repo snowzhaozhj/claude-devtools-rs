@@ -141,6 +141,11 @@ impl client::Handler for RusshClientHandler {
 /// SSH session 管理器：真握手 + 资源生命周期 + 状态广播。
 ///
 /// 与 `connection::SshConnectionManager`（占位）独立——Phase C 时 `cdt-api` 切换。
+///
+/// 所有字段已是 `Arc<...>` / `broadcast::Sender`（自带 Clone），整体 `Clone`
+/// 直接共享内部状态——`cdt-api` 后台 metadata scan task 需克隆 `Arc`-style
+/// 引用做 active-context check（codex 二审 PR #178 🔴#2）。
+#[derive(Clone)]
 pub struct SshSessionManager {
     /// `context_id` → 资源；连接成功才插入。
     sessions: Arc<Mutex<HashMap<String, SshSessionResources>>>,

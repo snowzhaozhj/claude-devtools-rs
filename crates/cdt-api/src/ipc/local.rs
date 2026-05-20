@@ -33,7 +33,7 @@ use super::error::ApiError;
 use super::events::SessionMetadataUpdate;
 use super::parsed_message_cache::{ParsedMessageCache, extract_parsed_messages_cached};
 use super::session_metadata::{
-    MetadataCache, SessionMetadata, extract_session_metadata_cached_via_fs,
+    LOCAL_CACHE_SCOPE, MetadataCache, SessionMetadata, extract_session_metadata_cached_via_fs,
     try_lookup_cached_metadata, try_lookup_cached_metadata_with_signature,
 };
 use super::traits::DataApi;
@@ -757,6 +757,7 @@ impl LocalDataApi {
             std::path::PathBuf,
             u64,
             Arc<dyn cdt_discover::FileSystemProvider>,
+            String,
         ),
         ApiError,
     > {
@@ -766,6 +767,13 @@ impl LocalDataApi {
 
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
+        // cache scope = "local" 或 SSH context_id；用于隔离不同主机/不同 context
+        // 下同 path 同 size+mtime 文件的缓存条目（codex 二审 PR #178 🔴#1）。
+        let cache_scope: String = self
+            .ssh_mgr
+            .active_context_id()
+            .await
+            .unwrap_or_else(|| LOCAL_CACHE_SCOPE.to_owned());
         let mut scanner = ProjectScanner::new(fs.clone(), projects_dir.clone());
         let _ = scanner
             .scan()
@@ -814,6 +822,7 @@ impl LocalDataApi {
             let cache = self.metadata_cache.clone();
             let jsonl_path = dir.join(format!("{}.jsonl", s.id));
             let permit_sem = lookup_permit.clone();
+            let scope = cache_scope.clone();
             let session_sig = if is_remote {
                 Some(FileSignature {
                     mtime: epoch_ms_to_system_time(s.last_modified),
@@ -829,7 +838,8 @@ impl LocalDataApi {
                     .await
                     .expect("lookup semaphore should not be closed");
                 let meta = if let Some(sig) = session_sig {
-                    try_lookup_cached_metadata_with_signature(&cache, &jsonl_path, sig).await
+                    try_lookup_cached_metadata_with_signature(&cache, &scope, &jsonl_path, sig)
+                        .await
                 } else {
                     try_lookup_cached_metadata(&cache, &jsonl_path).await
                 };
@@ -886,6 +896,7 @@ impl LocalDataApi {
             dir,
             root_generation,
             fs,
+            cache_scope,
         ))
     }
 }
@@ -1072,6 +1083,8 @@ async fn scan_metadata_for_page(
     root_generation: Arc<AtomicU64>,
     expected_root_generation: u64,
     fs: Arc<dyn cdt_discover::FileSystemProvider>,
+    expected_cache_scope: String,
+    ssh_mgr: SshSessionManager,
 ) {
     let _ = dir; // dir 当前由 page_jobs 内的 jsonl_path 携带，保留参数为未来扩展（如懒构造路径）
     // semaphore 由 caller 注入：所有 in-flight scan task 共享同一实例，保证全局
@@ -1088,12 +1101,33 @@ async fn scan_metadata_for_page(
         let cache = metadata_cache.clone();
         let root_generation = root_generation.clone();
         let fs = fs.clone();
+        let scope = expected_cache_scope.clone();
+        let ssh_mgr = ssh_mgr.clone();
         set.spawn(async move {
             let Ok(_permit) = permit_sem.acquire_owned().await else {
                 return;
             };
-            let meta = extract_session_metadata_cached_via_fs(&cache, &fs, &jsonl_path).await;
+            let meta =
+                extract_session_metadata_cached_via_fs(&cache, &fs, &scope, &jsonl_path).await;
             if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+                return;
+            }
+            // codex 二审 PR #178 🔴#2：active context 已切走（用户 disconnect 或
+            // switch 到别的 context）就不再 broadcast——避免旧 context 的
+            // metadata patch 错误的 sidebar 数据。比对当前 `active_context_id`
+            // 与启动 task 时记录的 expected_cache_scope。
+            let current_scope = ssh_mgr
+                .active_context_id()
+                .await
+                .unwrap_or_else(|| LOCAL_CACHE_SCOPE.to_owned());
+            if current_scope != scope {
+                tracing::debug!(
+                    project_id,
+                    session_id,
+                    expected = %scope,
+                    actual = %current_scope,
+                    "skip session-metadata-update broadcast: active context changed"
+                );
                 return;
             }
             let _ = tx.send(SessionMetadataUpdate {
@@ -1147,7 +1181,7 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (mut page, next_cursor, total, page_jobs, _dir, _root_generation, fs) =
+        let (mut page, next_cursor, total, page_jobs, _dir, _root_generation, fs, cache_scope) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
         // 并发提取每条 session 的 metadata：复用 `self.metadata_scan_semaphore`
@@ -1162,11 +1196,12 @@ impl DataApi for LocalDataApi {
             let path = path.clone();
             let fs = fs.clone();
             let id = id.clone();
+            let scope = cache_scope.clone();
             async move {
                 let _permit = sem.acquire_owned().await.ok()?;
                 Some((
                     id,
-                    extract_session_metadata_cached_via_fs(&cache, &fs, &path).await,
+                    extract_session_metadata_cached_via_fs(&cache, &fs, &scope, &path).await,
                 ))
             }
         }))
@@ -1198,7 +1233,7 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (page, next_cursor, total, page_jobs, dir, root_generation, fs) =
+        let (page, next_cursor, total, page_jobs, dir, root_generation, fs, cache_scope) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
         if !page_jobs.is_empty() && root_generation == self.root_generation.load(Ordering::SeqCst) {
@@ -1237,6 +1272,8 @@ impl DataApi for LocalDataApi {
                     self.root_generation.clone(),
                     root_generation,
                     fs,
+                    cache_scope,
+                    self.ssh_mgr.clone(),
                 ));
 
                 scans.insert(

@@ -79,13 +79,30 @@ impl FileSignature {
     /// 从 `cdt_discover::FsMetadata` 构造签名。SSH 远端 stat 不带 inode，
     /// `identity` 退化为 `None`（与 Windows 同处理）——等价性仅靠 mtime+size
     /// 判定，足以覆盖 append-only JSONL 的常规变化路径。
+    ///
+    /// `mtime` **截断到毫秒**——SSH 路径下骨架阶段从 `Session.last_modified`
+    /// (epoch ms `i64`) 还原签名 vs 后台扫描走 `fs.stat` 拿到的完整 `SystemTime`
+    /// (可能 sub-ms 精度) 这两路必须 byte-equal 才能命中缓存，统一规范化到
+    /// ms 精度可避免"系统性 cache miss"——codex 二审 PR #178 🟡#1。
     pub fn from_fs_metadata(meta: &FsMetadata) -> Self {
         Self {
-            mtime: meta.mtime,
+            mtime: truncate_to_ms(meta.mtime),
             size: meta.size,
             identity: FileIdentity::None,
         }
     }
+}
+
+/// 把 `SystemTime` 截断到毫秒精度——丢弃 sub-ms 余数，让来自不同精度源的
+/// 同一时刻能 byte-equal 比较。`Duration::new(secs, nanos)` 的 `nanos` 必须
+/// 小于 `1e9`，`subsec_millis() * 1_000_000` 落在 `0..999_000_000` 安全。
+fn truncate_to_ms(t: SystemTime) -> SystemTime {
+    let Ok(d) = t.duration_since(SystemTime::UNIX_EPOCH) else {
+        return SystemTime::UNIX_EPOCH;
+    };
+    let secs = d.as_secs();
+    let nanos_from_ms = d.subsec_millis() * 1_000_000;
+    SystemTime::UNIX_EPOCH + std::time::Duration::new(secs, nanos_from_ms)
 }
 
 #[cfg(test)]

@@ -376,11 +376,16 @@ struct MetadataCacheEntry {
     git_branch: Option<String>,
 }
 
+/// 缓存 key：`(context_scope, path)`——`context_scope` 区分 `local` 与 SSH
+/// 各 `context_id`，让"远端 host A 与 host B 的同 path 同 size+mtime 文件"以及
+/// "本地与远端的路径名巧合相同"互不串用对方缓存（codex 二审 PR #178 🔴#1）。
+pub(crate) type MetadataCacheKey = (String, PathBuf);
+
 /// `LocalDataApi` 持有的 metadata LRU 缓存。**不**用全局单例（详 design D3b）。
 #[derive(Debug)]
 pub struct MetadataCache {
-    map: HashMap<PathBuf, MetadataCacheEntry>,
-    order: VecDeque<PathBuf>,
+    map: HashMap<MetadataCacheKey, MetadataCacheEntry>,
+    order: VecDeque<MetadataCacheKey>,
     capacity: usize,
 }
 
@@ -399,21 +404,26 @@ impl MetadataCache {
         }
     }
 
-    fn lookup(&mut self, path: &Path) -> Option<MetadataCacheEntry> {
-        let entry = self.map.get(path)?.clone();
-        if let Some(pos) = self.order.iter().position(|p| p == path) {
-            let p = self.order.remove(pos).expect("position 已校验");
-            self.order.push_front(p);
+    fn lookup(&mut self, scope: &str, path: &Path) -> Option<MetadataCacheEntry> {
+        // HashMap key 是 (String, PathBuf)，借入查找需 (&str, &Path) 的等价
+        // tuple——`Borrow` 跨 String/&str 不直接生效，简单做法是临时构造 key
+        // clone（cache 操作冷路径，clone 成本可忽略）。
+        let key: MetadataCacheKey = (scope.to_owned(), path.to_path_buf());
+        let entry = self.map.get(&key)?.clone();
+        if let Some(pos) = self.order.iter().position(|k| k == &key) {
+            let k = self.order.remove(pos).expect("position 已校验");
+            self.order.push_front(k);
         }
         Some(entry)
     }
 
-    fn insert(&mut self, path: PathBuf, entry: MetadataCacheEntry) {
-        if self.map.contains_key(&path) {
-            self.map.insert(path.clone(), entry);
-            if let Some(pos) = self.order.iter().position(|p| p == &path) {
-                let p = self.order.remove(pos).expect("position 已校验");
-                self.order.push_front(p);
+    fn insert(&mut self, scope: String, path: PathBuf, entry: MetadataCacheEntry) {
+        let key: MetadataCacheKey = (scope, path);
+        if self.map.contains_key(&key) {
+            self.map.insert(key.clone(), entry);
+            if let Some(pos) = self.order.iter().position(|k| k == &key) {
+                let k = self.order.remove(pos).expect("position 已校验");
+                self.order.push_front(k);
             }
             return;
         }
@@ -424,8 +434,8 @@ impl MetadataCache {
             }
         }
 
-        self.map.insert(path.clone(), entry);
-        self.order.push_front(path);
+        self.map.insert(key.clone(), entry);
+        self.order.push_front(key);
     }
 
     #[cfg(test)]
@@ -433,6 +443,9 @@ impl MetadataCache {
         self.map.len()
     }
 }
+
+/// 默认本地 cache scope。所有"未跨 fs trait 直接走 `tokio::fs`"的路径用此值。
+pub(crate) const LOCAL_CACHE_SCOPE: &str = "local";
 
 /// `extract_session_metadata_cached` 的 lookup-only 变体：只查 cache + 校验
 /// `FileSignature`，miss 或 stat 失败返回 `None`，**不**触发扫描。
@@ -445,7 +458,7 @@ pub(crate) async fn try_lookup_cached_metadata(
     path: &Path,
 ) -> Option<SessionMetadata> {
     let sig = FileSignature::from_metadata(&tokio::fs::metadata(path).await.ok()?);
-    try_lookup_cached_metadata_with_signature(cache, path, sig).await
+    try_lookup_cached_metadata_with_signature(cache, LOCAL_CACHE_SCOPE, path, sig).await
 }
 
 /// `try_lookup_cached_metadata` 的 stat-free 变体——caller 已有 `FileSignature`
@@ -455,15 +468,19 @@ pub(crate) async fn try_lookup_cached_metadata(
 /// 信息，构造一个 identity=None 的签名即可与缓存中（同样 identity=None 的）SSH
 /// 写入项做 byte-equal 对比，命中率与本地 `(dev,ino)` 路径一致（远端文件 inode
 /// 不可见，identity 维度本就退化）。
+///
+/// `scope` 用于隔离不同 context（`local` / SSH `context_id`）的同 path 同 size+mtime
+/// 文件，避免跨主机串缓存（codex 二审 PR #178 🔴#1）。
 pub(crate) async fn try_lookup_cached_metadata_with_signature(
     cache: &StdMutex<MetadataCache>,
+    scope: &str,
     path: &Path,
     sig: FileSignature,
 ) -> Option<SessionMetadata> {
     let entry = cache
         .lock()
         .expect("metadata cache mutex poisoned")
-        .lookup(path)?;
+        .lookup(scope, path)?;
     if entry.signature != sig {
         return None;
     }
@@ -495,7 +512,7 @@ pub(crate) async fn extract_session_metadata_cached(
         let cached = cache
             .lock()
             .expect("metadata cache mutex poisoned")
-            .lookup(path);
+            .lookup(LOCAL_CACHE_SCOPE, path);
         if let Some(entry) = cached {
             if entry.signature == sig {
                 let is_ongoing =
@@ -514,6 +531,7 @@ pub(crate) async fn extract_session_metadata_cached(
 
     if let Some(sig) = new_sig {
         cache.lock().expect("metadata cache mutex poisoned").insert(
+            LOCAL_CACHE_SCOPE.to_owned(),
             path.to_path_buf(),
             MetadataCacheEntry {
                 signature: sig,
@@ -539,6 +557,7 @@ pub(crate) async fn extract_session_metadata_cached(
 pub(crate) async fn extract_session_metadata_cached_via_fs(
     cache: &StdMutex<MetadataCache>,
     fs: &Arc<dyn FileSystemProvider>,
+    scope: &str,
     path: &Path,
 ) -> SessionMetadata {
     let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
@@ -560,7 +579,7 @@ pub(crate) async fn extract_session_metadata_cached_via_fs(
     if let Some(entry) = cache
         .lock()
         .expect("metadata cache mutex poisoned")
-        .lookup(path)
+        .lookup(scope, path)
     {
         if entry.signature == sig {
             let is_ongoing =
@@ -607,6 +626,7 @@ pub(crate) async fn extract_session_metadata_cached_via_fs(
     let meta = extract_session_metadata_from_parsed(&messages, is_stale);
 
     cache.lock().expect("metadata cache mutex poisoned").insert(
+        scope.to_owned(),
         path.to_path_buf(),
         MetadataCacheEntry {
             signature: sig,
@@ -1334,29 +1354,44 @@ mod tests {
     #[test]
     fn metadata_cache_evicts_lru_when_over_capacity() {
         let mut cache = MetadataCache::new(2);
-        cache.insert(PathBuf::from("/a"), dummy_entry(1));
-        cache.insert(PathBuf::from("/b"), dummy_entry(2));
-        cache.insert(PathBuf::from("/c"), dummy_entry(3));
+        let s = LOCAL_CACHE_SCOPE;
+        cache.insert(s.to_owned(), PathBuf::from("/a"), dummy_entry(1));
+        cache.insert(s.to_owned(), PathBuf::from("/b"), dummy_entry(2));
+        cache.insert(s.to_owned(), PathBuf::from("/c"), dummy_entry(3));
         // /a 应被淘汰
-        assert!(cache.lookup(std::path::Path::new("/a")).is_none());
-        assert!(cache.lookup(std::path::Path::new("/b")).is_some());
-        assert!(cache.lookup(std::path::Path::new("/c")).is_some());
+        assert!(cache.lookup(s, std::path::Path::new("/a")).is_none());
+        assert!(cache.lookup(s, std::path::Path::new("/b")).is_some());
+        assert!(cache.lookup(s, std::path::Path::new("/c")).is_some());
         assert!(cache.len() <= 2);
     }
 
     #[test]
     fn metadata_cache_lookup_bumps_hit_to_front() {
         let mut cache = MetadataCache::new(2);
-        cache.insert(PathBuf::from("/a"), dummy_entry(1));
-        cache.insert(PathBuf::from("/b"), dummy_entry(2));
+        let s = LOCAL_CACHE_SCOPE;
+        cache.insert(s.to_owned(), PathBuf::from("/a"), dummy_entry(1));
+        cache.insert(s.to_owned(), PathBuf::from("/b"), dummy_entry(2));
         // lookup /a → bump 到队首
-        assert!(cache.lookup(std::path::Path::new("/a")).is_some());
-        cache.insert(PathBuf::from("/c"), dummy_entry(3));
+        assert!(cache.lookup(s, std::path::Path::new("/a")).is_some());
+        cache.insert(s.to_owned(), PathBuf::from("/c"), dummy_entry(3));
         assert!(
-            cache.lookup(std::path::Path::new("/a")).is_some(),
+            cache.lookup(s, std::path::Path::new("/a")).is_some(),
             "命中后 bump 队首，不应被淘汰"
         );
-        assert!(cache.lookup(std::path::Path::new("/b")).is_none());
+        assert!(cache.lookup(s, std::path::Path::new("/b")).is_none());
+    }
+
+    #[test]
+    fn metadata_cache_isolates_by_scope() {
+        // codex 二审 PR #178 🔴#1：不同 context 下同 path 不串缓存
+        let mut cache = MetadataCache::new(10);
+        let path = PathBuf::from("/home/u/.claude/projects/-p/s.jsonl");
+        cache.insert("ssh-host-a".to_owned(), path.clone(), dummy_entry(1));
+        // 同 path 不同 scope SHALL miss
+        assert!(cache.lookup("ssh-host-b", &path).is_none());
+        assert!(cache.lookup(LOCAL_CACHE_SCOPE, &path).is_none());
+        // 原 scope 仍命中
+        assert!(cache.lookup("ssh-host-a", &path).is_some());
     }
 
     // -------- stale 实时合成 --------
@@ -1388,7 +1423,8 @@ mod tests {
         // 把缓存条目的 mtime 改成远古，模拟"缓存命中但 wall-clock 推进 > 5 分钟"
         {
             let mut guard = cache.lock().unwrap();
-            if let Some(entry) = guard.map.get_mut(path.as_path()) {
+            let key: MetadataCacheKey = (LOCAL_CACHE_SCOPE.to_owned(), path.clone());
+            if let Some(entry) = guard.map.get_mut(&key) {
                 entry.signature.mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
                 entry.messages_ongoing = true;
             }
@@ -1687,6 +1723,7 @@ mod tests {
         let cache = make_cache();
         // 模拟旧版本缓存：title 写一个完全不同的字面量
         cache.lock().unwrap().insert(
+            LOCAL_CACHE_SCOPE.to_owned(),
             path.clone(),
             MetadataCacheEntry {
                 signature: sig,
@@ -1723,7 +1760,8 @@ mod tests {
         // 把 cache 里的 title 篡改为模拟"按旧算法算出来的不同字面量"，签名仍匹配
         {
             let mut guard = cache.lock().unwrap();
-            if let Some(entry) = guard.map.get_mut(path.as_path()) {
+            let key: MetadataCacheKey = (LOCAL_CACHE_SCOPE.to_owned(), path.clone());
+            if let Some(entry) = guard.map.get_mut(&key) {
                 entry.title = Some("legacy title from old algo".to_string());
             }
         }
