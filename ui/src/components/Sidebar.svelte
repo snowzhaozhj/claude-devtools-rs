@@ -214,8 +214,30 @@
     // 路径报错，同时也省掉真桌面运行时无谓的 listen() 注册。
     if (!isTauriRuntime()) {
       const recoverHandler = () => {
-        if (!selectedProjectId) return;
-        void loadSessions(selectedProjectId, true);
+        const projectId = selectedProjectId;
+        if (!projectId) return;
+        // (a) silent reload 让后端重启扫描 + emit 新一轮 page 1 metadata
+        void loadSessions(projectId, true);
+        // (b) 精准补齐 page 2+ 已加载但仍 pending 的 metadata：后端
+        // `list_sessions` 只扫 `take(pageSize)` 当前页，silent reload 不
+        // 覆盖已加载的 page 2+ pending 项；codex 二审 round 2 指出
+        // 用户翻到底 + SSE 在 page 2 调用期间异常时尾部永远卡空。
+        // pending 判定与 `.metadata-pending` shimmer 同条件（三字段全占位）。
+        const pendingIds = sessions
+          .filter((s) => !s.title && s.messageCount === 0 && !s.isOngoing)
+          .map((s) => s.sessionId);
+        if (pendingIds.length === 0) return;
+        void (async () => {
+          try {
+            const summaries = await getSessionSummariesByIds(projectId, pendingIds);
+            // race guard：异步完成时 user 可能已切到别的 project
+            if (projectId !== selectedProjectId) return;
+            sessions = mergeSessions(sessions, summaries, false);
+            cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);
+          } catch (e) {
+            console.warn("[sidebar] sse-recovery batch summary fetch failed:", e);
+          }
+        })();
       };
       sseRecoveredUnlisten = await subscribeEvent<unknown>("sse-recovered", recoverHandler);
       sseLaggedUnlisten = await subscribeEvent<unknown>("sse-lagged", recoverHandler);
