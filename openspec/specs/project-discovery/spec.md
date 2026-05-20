@@ -163,30 +163,6 @@ Worktree 排序 SHALL 按 `is_main_worktree` 优先（main 排前）、再按 `m
 - **WHEN** 后续某个 port 引入新后端（例如 SSH）
 - **THEN** 引入仅 SHALL 要求实现 `FileSystemProvider`，SHALL NOT 要求改 `ProjectScanner` / `ProjectPathResolver` / `WorktreeGrouper`
 
-### Requirement: Represent split subprojects with a stable composite identifier
-
-系统 SHALL 在同一 encoded project 目录下出现两条以上不同 `cwd` 值的 session 时，把该目录拆分为多个逻辑 "subproject"，每个 subproject 由形如 `{baseDir}::{hash8}` 的复合 ID 标识：`baseDir` 为原 encoded 目录名，`hash8` 为该 subproject canonical `cwd` 字符串 SHA-256 摘要前 8 个字符的小写十六进制表示。复合 ID SHALL 是确定性的——同一 `baseDir` + `cwd` 组合 SHALL 始终产生同一 ID。
-
-#### Scenario: Single-cwd directory keeps its plain ID
-
-- **WHEN** 一个 project 目录下所有 session 共享同一 `cwd`
-- **THEN** 系统 SHALL 输出一条 `Project`，其 `id` 等于 encoded 目录名（无 `::` 后缀）
-
-#### Scenario: Multi-cwd directory splits into composite IDs
-
-- **WHEN** 一个 project 目录含两条 session，`cwd` 互不相同
-- **THEN** 系统 SHALL 输出两条 `Project`，各自 `id` 为形如 `{encodedDir}::{8-char-hex}` 的复合 ID，`path` 字段分别为各自 `cwd`
-
-#### Scenario: Composite ID is stable across scans
-
-- **WHEN** 同一目录在 session 内容不变的前提下被扫描两次
-- **THEN** 两次扫描 SHALL 对同一 subproject 产出相同的复合 ID
-
-#### Scenario: Registry exposes session filter for a composite ID
-
-- **WHEN** 调用方拿一个复合 ID 查 subproject registry
-- **THEN** registry SHALL 返回属于该 subproject 的 session id 集合（使 session 列表可据此过滤），并对任意 plain（非复合）ID 返回 `None`
-
 ### Requirement: Encode absolute paths into directory names
 
 系统 SHALL 在 `cdt-discover::path_decoder` 中暴露唯一的规范函数 `encode_path(absolute_path: &str) -> String`，把任意绝对路径转为 `~/.claude/projects/` 下的目录名。编码规则 SHALL：
@@ -301,22 +277,50 @@ Project session enumeration SHALL preserve sorted, paginated results while avoid
 
 规范化 helper SHALL 由 `cdt-discover::path_compare` 模块统一提供，是整个 workspace 中跨平台路径比较的唯一来源；任何其它 crate 需要做路径比较 / hash 时 SHALL 引用该模块的公开函数，**不得**自行实现 lowercase / equality 逻辑。规范化策略 SHALL 使用 ASCII lowercase（与 TS 原版 `pathValidation.ts::normalizeForCompare` 行为对齐），不做 Unicode 大小写折叠。
 
-`ProjectPathResolver` 的内部 cache key（encoded `project_id`）、`ProjectScanner` 内部按 cwd 聚类的 bucket key、`SubprojectRegistry::compose_id` 的 hash 输入 SHALL 在插入与查询前都经过此规范化。
+`ProjectPathResolver` 的内部 cache key（encoded `project_id`）以及 `ProjectScanner::scan_project_dir` 的 `Project.distinct_cwds` 去重 key 都 SHALL 在插入与查询前经过此规范化。`distinct_cwds` 展示值 SHALL 保留首次出现的原始 cwd 字面量（不归一），以便消费方（UI / agent-configs）拿到与文件系统真实大小写一致的路径。
 
 #### Scenario: Windows 上同一路径不同大小写归一
 
 - **WHEN** 在 Windows 平台运行，两条 session 的 `cwd` 字段分别为 `C:\Users\Alice\app` 与 `c:\users\alice\app`
-- **THEN** `ProjectPathResolver` 与 `SubprojectRegistry` SHALL 把两条 session 视为同一 project / 同一 subproject
-- **AND** `compose_id` 对两个 cwd 输入 SHALL 返回相同的 8 字符十六进制后缀
+- **THEN** `ProjectPathResolver` SHALL 把两条 session 视为同一 project
+- **AND** `ProjectScanner::scan_project_dir` 产出的 `Project.distinct_cwds` SHALL 只含一条 cwd（去重命中），其值为首次出现的原始字面量
 
 #### Scenario: 非 Windows 平台保持精确比较
 
 - **WHEN** 在 Linux 或 macOS 平台运行，两条 session 的 `cwd` 字段分别为 `/Users/alice/App` 与 `/users/alice/app`
-- **THEN** `ProjectPathResolver` 与 `SubprojectRegistry` SHALL 把两条 session 视为不同 project / 不同 subproject
-- **AND** `compose_id` 对两个 cwd 输入 SHALL 返回不同的 8 字符十六进制后缀
+- **THEN** `ProjectPathResolver` SHALL 把两条 session 视为不同 project
 
 #### Scenario: 跨大小写命中同一 ProjectPathResolver 缓存
 
 - **WHEN** 在 Windows 平台运行，调用方先用 encoded `project_id = "-C:-Users-Alice-app"` 触发解析并写 cache，再用 `"-C:-users-alice-app"`（同一目录、不同大小写）查询
 - **THEN** `ProjectPathResolver::resolve` SHALL 命中第一次的 cache 条目，返回相同 `PathBuf`，不重新走文件系统扫描
+
+### Requirement: Expose session cwd for downstream display
+
+系统 SHALL 在 `Session`（`cdt-core::Session`，IPC 序列化形态）中暴露 `cwd: Option<String>` 字段，值取自该 session jsonl 内首条带 `cwd` 字段消息的 `cwd` 值；该字段为空（jsonl 不含 cwd）时 SHALL 为 `None`。序列化 SHALL 使用 camelCase（`cwd`），并在为 `None` 时通过 `#[serde(skip_serializing_if = "Option::is_none")]` 省略输出。
+
+`ProjectScanner::scan_project_dir` SHALL 在产生 `Session` 时把 `extract_session_cwd` 的结果直接写入 `Session.cwd`；该 cwd 提取沿用现有 head-read（仅读 jsonl 前 `SESSION_HEAD_LINES` 行）+ `FILE_READ_CONCURRENCY` 信号量限流路径，**不**得为获取 cwd 而触发全文件读取（除非 head 不含 cwd 字段时按现有 `extract_session_cwd` SSH fallback 路径回滚）。
+
+#### Scenario: 单 cwd session 暴露 cwd 字段
+
+- **WHEN** 一个 jsonl session 首条消息 `cwd = "/Users/foo/myrepo"`
+- **THEN** 系统 SHALL 在 `Session.cwd` 中返回 `Some("/Users/foo/myrepo")`
+- **AND** IPC 序列化结果 SHALL 包含 `"cwd": "/Users/foo/myrepo"`
+
+#### Scenario: 缺 cwd session 暴露 None
+
+- **WHEN** 一个 jsonl session 所有消息均不含 `cwd` 字段
+- **THEN** 系统 SHALL 在 `Session.cwd` 中返回 `None`
+- **AND** IPC 序列化结果 SHALL 省略 `cwd` 键（不出现 `"cwd": null`）
+
+#### Scenario: 同一 encoded 目录多 cwd 的 session 各自暴露真实 cwd
+
+- **WHEN** 一个 encoded 目录 `D` 下含两条 session，cwd 分别为 `/a/b` 与 `/a/c`
+- **THEN** 系统 SHALL 输出**一条** `Project`（`id = D`，不再拆分），其 `sessions` 列表两条目分别带 `cwd = Some("/a/b")` 与 `cwd = Some("/a/c")`
+
+#### Scenario: 提取 cwd 不触发全文件读
+
+- **WHEN** 一个 session jsonl 文件大小 100 MB，cwd 在前 20 行内
+- **THEN** 系统 SHALL 仅通过 head-read（`FileSystemProvider::read_lines_head`）拿到 cwd
+- **AND** SHALL NOT 触发对该文件的 `read_to_string`
 
