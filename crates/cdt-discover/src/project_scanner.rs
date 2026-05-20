@@ -251,10 +251,18 @@ impl ProjectScanner {
         // 让 `agent-configs` 等消费方覆盖所有 cwd 的 `.claude/agents/` 扫描，
         // 避免合并 composite 后丢失非代表 cwd 的配置。Spec：
         // `agent-configs::Scan agent config files from global and project scopes`。
+        //
+        // 去重 key 走 `normalize_path_string_for_compare`（Windows 上 ASCII
+        // 小写归一；非 Windows 字节精确），与 `project-discovery::Compare paths
+        // case-insensitively on Windows` 保持一致。展示值保留**首次出现**的
+        // 原始 cwd（即最新 mtime session 的 cwd 字面量），避免 Windows 上
+        // 同一目录因 `C:\Users\foo` vs `c:\users\foo` 写法被当成两个 cwd。
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut distinct_cwds: Vec<String> = Vec::new();
         for cwd in cwds.iter().flatten() {
-            if seen.insert(cwd.clone()) {
+            let key =
+                crate::path_compare::normalize_path_string_for_compare(cwd).into_owned();
+            if seen.insert(key) {
                 distinct_cwds.push(cwd.clone());
             }
         }

@@ -1362,6 +1362,7 @@ impl DataApi for LocalDataApi {
         let (jsonl_path, last_modified, size) = match fs.stat(&primary_jsonl).await {
             Ok(meta) => (primary_jsonl, Some(meta.mtime_ms()), Some(meta.size)),
             Err(_) if !is_remote => {
+                // 本地：fallback 走专用 helper（用 tokio::fs，命中速率最高）
                 let Some(path) = find_subagent_jsonl(&project_dir, session_id).await else {
                     return Err(ApiError::not_found(format!("session {session_id}")));
                 };
@@ -1374,7 +1375,20 @@ impl DataApi for LocalDataApi {
                 (path, modified, size)
             }
             Err(_) => {
-                return Err(ApiError::not_found(format!("session {session_id}")));
+                // 远端 SSH：本地 `find_subagent_jsonl` 走 `tokio::fs`，不能用。
+                // 必须改走 `find_subagent_jsonl_via_fs(&*fs, ..)` 经 `FileSystemProvider`
+                // 远端列目录。`find_session_project` SSH 分支已用同 helper（line 1583+），
+                // 这里对齐避免 "find_session_project 命中但 get_session_detail 又取不到"
+                // 的不一致（codex PR 二审反馈）。
+                let Some(path) =
+                    find_subagent_jsonl_via_fs(&*fs, &project_dir, session_id).await
+                else {
+                    return Err(ApiError::not_found(format!("session {session_id}")));
+                };
+                let meta = fs.stat(&path).await.ok();
+                let modified = meta.as_ref().map(cdt_discover::FsMetadata::mtime_ms);
+                let size = meta.as_ref().map(|m| m.size);
+                (path, modified, size)
             }
         };
         let locate_ms = t_locate.elapsed().as_millis();
