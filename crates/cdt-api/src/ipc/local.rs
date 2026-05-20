@@ -33,7 +33,8 @@ use super::error::ApiError;
 use super::events::SessionMetadataUpdate;
 use super::parsed_message_cache::{ParsedMessageCache, extract_parsed_messages_cached};
 use super::session_metadata::{
-    MetadataCache, extract_session_metadata_cached, extract_session_metadata_from_parsed,
+    MetadataCache, MetadataCacheStatus, extract_session_metadata_cached,
+    extract_session_metadata_cached_with_status, extract_session_metadata_from_parsed,
     try_lookup_cached_metadata,
 };
 use super::traits::DataApi;
@@ -362,6 +363,18 @@ const METADATA_BROADCAST_CAPACITY: usize = 256;
 /// 单条 active scan 注册项：generation 作为版本号让 cleanup 时只在
 /// 自己仍是当前注册的 scan 时才 remove，避免旧 task 误删新 handle
 /// （codex 二审找到的 race，详见 `scan_metadata_for_page`）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct MetadataScanKey {
+    project_id: String,
+    cursor: MetadataScanCursor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum MetadataScanCursor {
+    Page(String),
+    FirstPageRemainder,
+}
+
 #[derive(Debug)]
 struct ScanEntry {
     generation: u64,
@@ -390,14 +403,11 @@ pub struct LocalDataApi {
     /// `list_sessions` 后台元数据扫描的广播发送端。`subscribe_session_metadata()`
     /// 返回 receiver，Tauri host 桥接为前端 `session-metadata-update` 事件。
     session_metadata_tx: broadcast::Sender<SessionMetadataUpdate>,
-    /// 当前进行中的元数据扫描句柄。key 由 `metadata_scan_key(project_id, cursor)`
-    /// 编码为 `"{project_id}|{cursor}"`，让同 project 不同分页的扫描互不 abort。
-    /// `list_sessions` 调用前会 abort **同 (`project_id`, `cursor`)** 的旧扫描，
-    /// 避免重复触发同一页扫描造成的事件串扰；不同分页的扫描 SHALL 并存（详见
-    /// `openspec/specs/ipc-data-api/spec.md::Emit session metadata updates`
-    /// Scenario "同 projectId 同 cursor 的新扫描取消旧扫描" 与 "同 projectId
-    /// 不同 cursor 的扫描并存互不 abort"）。
-    active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
+    /// 当前进行中的元数据扫描句柄。key 由 projectId + cursor kind 结构化组成，
+    /// 让同 project 不同分页的扫描互不 abort。`list_sessions` 调用前会 abort
+    /// **同 (`project_id`, `cursor`)** 的旧扫描，避免重复触发同一页扫描造成的
+    /// 事件串扰；不同分页的扫描 SHALL 并存（详见 `ipc-data-api` spec）。
+    active_scans: Arc<std::sync::Mutex<HashMap<MetadataScanKey, ScanEntry>>>,
     /// 单调递增的 scan generation 计数器，用于 `active_scans` 的 race-free
     /// cleanup（详见 `scan_metadata_for_page`）。
     scan_generation: Arc<AtomicU64>,
@@ -765,9 +775,27 @@ impl LocalDataApi {
             .active_scans
             .lock()
             .expect("active_scans lock poisoned");
-        let mut keys: Vec<String> = scans.keys().cloned().collect();
+        let mut keys: Vec<String> = scans.keys().map(MetadataScanKey::for_tests).collect();
         keys.sort();
         keys
+    }
+
+    #[doc(hidden)]
+    pub async fn acquire_metadata_scan_permits_for_tests(
+        &self,
+        count: usize,
+    ) -> Vec<tokio::sync::OwnedSemaphorePermit> {
+        let mut permits = Vec::with_capacity(count);
+        for _ in 0..count {
+            permits.push(
+                self.metadata_scan_semaphore
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("metadata scan semaphore open"),
+            );
+        }
+        permits
     }
 
     /// 测试专用：返回正向 `MetadataCache` 内 entry 总数。
@@ -934,7 +962,7 @@ impl LocalDataApi {
         // D4b: 切 project 时 abort 所有 projectId != current 的旧扫描
         if let Ok(mut scans) = self.active_scans.lock() {
             scans.retain(|key, entry| {
-                if project_id_from_scan_key(key) == project_id {
+                if key.project_id == project_id {
                     true
                 } else {
                     entry.handle.abort();
@@ -969,19 +997,24 @@ impl LocalDataApi {
                     .is_some_and(|&i| i < EAGER_FIRST_PAGE_LIMIT)
             });
 
-        // 同步等 eager_jobs，每条独立 timeout 包裹。
+        // 同步等 eager_jobs，每条独立 timeout 包住排队拿 permit + 解析全过程。
         let sem = self.metadata_scan_semaphore.clone();
         let eager_results =
             futures::future::join_all(eager_jobs.into_iter().map(|(session_id, jsonl_path)| {
                 let sem = sem.clone();
                 let cache = self.metadata_cache.clone();
                 async move {
-                    let Ok(_permit) = sem.acquire_owned().await else {
-                        return (session_id, jsonl_path, None);
+                    let fut = async {
+                        let Ok(_permit) = sem.acquire_owned().await else {
+                            return None;
+                        };
+                        Some(
+                            extract_session_metadata_cached_with_status(&cache, &jsonl_path, false)
+                                .await,
+                        )
                     };
-                    let fut = extract_session_metadata_cached(&cache, &jsonl_path, false);
                     match tokio::time::timeout(EAGER_PER_SESSION_TIMEOUT, fut).await {
-                        Ok(meta) => (session_id, jsonl_path, Some(meta)),
+                        Ok(result) => (session_id, jsonl_path, result),
                         Err(_) => (session_id, jsonl_path, None),
                     }
                 }
@@ -990,17 +1023,18 @@ impl LocalDataApi {
 
         // 把成功的真值写回 page；超时 / 失败条收集为 deferred retry 候选。
         let mut retry_jobs: Vec<(String, std::path::PathBuf)> = Vec::new();
-        for (session_id, jsonl_path, maybe_meta) in eager_results {
-            match maybe_meta {
-                Some(meta) => {
-                    // 判定 D6b：四字段全占位条不算真值（已被解析侧 negative 兜底），
-                    // 让前端继续走 fallback；同时也走一次 deferred retry 拿真值。
+        for (session_id, jsonl_path, maybe_cached) in eager_results {
+            match maybe_cached {
+                Some(cached) => {
+                    let meta = cached.metadata;
                     let is_placeholder = meta.title.is_none()
                         && meta.message_count == 0
                         && !meta.is_ongoing
                         && meta.git_branch.is_none();
                     if is_placeholder {
-                        retry_jobs.push((session_id, jsonl_path));
+                        if cached.status != MetadataCacheStatus::Negative {
+                            retry_jobs.push((session_id, jsonl_path));
+                        }
                     } else if let Some(&i) = session_id_to_page_idx.get(&session_id) {
                         let s = &mut page[i];
                         s.title = meta.title;
@@ -1046,7 +1080,7 @@ impl LocalDataApi {
         {
             let tx = self.session_metadata_tx.clone();
             let active_scans = self.active_scans.clone();
-            let scan_key = metadata_scan_key_eager_remainder(project_id);
+            let scan_key = MetadataScanKey::first_page_remainder(project_id);
             let key_for_cleanup = scan_key.clone();
 
             if let Ok(mut scans) = self.active_scans.lock() {
@@ -1100,7 +1134,7 @@ impl LocalDataApi {
             let tx = self.session_metadata_tx.clone();
             let project_id_owned = project_id.to_owned();
             let active_scans = self.active_scans.clone();
-            let scan_key = metadata_scan_key(project_id, pagination.cursor.as_deref());
+            let scan_key = MetadataScanKey::page(project_id, pagination.cursor.as_deref());
             let key_for_cleanup = scan_key.clone();
 
             if let Ok(mut scans) = self.active_scans.lock() {
@@ -1150,32 +1184,29 @@ impl LocalDataApi {
 /// `broadcast::send` 在无订阅者时返回 `Err`，本函数静默忽略——元数据更新
 /// 本质上是 fire-and-forget。
 ///
-/// `active_scans` 的 key 由 `(project_id, cursor)` 组合构成，让同 project 不同
-/// 分页的扫描相互独立——典型场景：page 1 / page 2 的并发扫描互不 abort（spec
-/// `ipc-data-api/spec.md::Emit session metadata updates` Scenario "同 projectId
-/// 不同 cursor 的扫描并存互不 abort"）。`|` 字符为 reserved 分隔符，当前 cursor
-/// 由 `(offset).to_string()` 生成（纯 ASCII 数字），不会与分隔符冲突。
-fn metadata_scan_key(project_id: &str, cursor: Option<&str>) -> String {
-    format!("{project_id}|{}", cursor.unwrap_or(""))
-}
+impl MetadataScanKey {
+    fn page(project_id: &str, cursor: Option<&str>) -> Self {
+        Self {
+            project_id: project_id.to_owned(),
+            cursor: MetadataScanCursor::Page(cursor.unwrap_or_default().to_owned()),
+        }
+    }
 
-/// 首页 eager 路径剩余条（超过 `EAGER_FIRST_PAGE_LIMIT`）走骨架 + spawn scan
-/// 的 `active_scans` key（change `eager-first-page-metadata` D11）。
-///
-/// 与翻页路径 key (`"{project}|{cursor}"`) 互不撞——专用后缀 `|None|remainder`
-/// 让同 project 的高频 silent refresh 在同 key 上自然 dedupe（既有
-/// generation token cleanup abort 旧 entry）。
-fn metadata_scan_key_eager_remainder(project_id: &str) -> String {
-    format!("{project_id}|None|remainder")
-}
+    fn first_page_remainder(project_id: &str) -> Self {
+        Self {
+            project_id: project_id.to_owned(),
+            cursor: MetadataScanCursor::FirstPageRemainder,
+        }
+    }
 
-/// 从 `active_scans` 的 key 解析 projectId（`|` 之前的段）。
-///
-/// 用于 change `eager-first-page-metadata` D4b：切 project 时遍历 `active_scans`
-/// abort 所有 `projectId != current_project_id` 的旧扫描，释放 8 容量信号量
-/// 让首页 eager 能立即拿到 permit。
-fn project_id_from_scan_key(key: &str) -> &str {
-    key.split('|').next().unwrap_or(key)
+    fn for_tests(&self) -> String {
+        match &self.cursor {
+            MetadataScanCursor::Page(cursor) => format!("{}|{cursor}", self.project_id),
+            MetadataScanCursor::FirstPageRemainder => {
+                format!("{}|None|remainder", self.project_id)
+            }
+        }
+    }
 }
 
 /// 首页 eager 单条 metadata 解析的 deferred retry：延迟后无 timeout
@@ -1365,8 +1396,8 @@ async fn scan_metadata_for_page(
     dir: std::path::PathBuf,
     page_jobs: Vec<(String, std::path::PathBuf)>,
     tx: broadcast::Sender<SessionMetadataUpdate>,
-    active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
-    cleanup_key: String,
+    active_scans: Arc<std::sync::Mutex<HashMap<MetadataScanKey, ScanEntry>>>,
+    cleanup_key: MetadataScanKey,
     my_generation: u64,
     metadata_cache: Arc<std::sync::Mutex<MetadataCache>>,
     semaphore: Arc<Semaphore>,

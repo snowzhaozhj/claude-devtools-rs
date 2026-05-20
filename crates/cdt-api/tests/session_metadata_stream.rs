@@ -473,6 +473,96 @@ async fn cross_project_active_scans_aborted_on_eager_project_switch() {
 }
 
 #[tokio::test]
+async fn eager_timeout_includes_waiting_for_metadata_permit() {
+    use cdt_api::{DataApi, METADATA_SCAN_CONCURRENCY};
+
+    let (api, _tmp, project_id, _session_ids) = build_api_with_fixtures(&["blocked permit"]).await;
+    let permits = api
+        .acquire_metadata_scan_permits_for_tests(METADATA_SCAN_CONCURRENCY)
+        .await;
+
+    let start = tokio::time::Instant::now();
+    let resp = api
+        .list_sessions(
+            &project_id,
+            &PaginatedRequest {
+                page_size: 1,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+    let elapsed = start.elapsed();
+    drop(permits);
+
+    assert!(
+        elapsed < Duration::from_millis(900),
+        "eager timeout SHALL include semaphore queueing, elapsed={elapsed:?}"
+    );
+    let item = resp.items.first().expect("one session");
+    assert!(
+        item.title.is_none(),
+        "permit starvation should return placeholder instead of waiting for metadata"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_id_with_pipe_does_not_confuse_active_scan_abort() {
+    use cdt_api::DataApi;
+
+    let tmp = TempDir::new().unwrap();
+    let project_id = "-tmp|pipe";
+    let projects_base = tmp.path().join("projects");
+    std::fs::create_dir_all(&projects_base).unwrap();
+    let project_dir = projects_base.join(project_id);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    for i in 0..80 {
+        write_fixture_session(&project_dir, &format!("sess-{i:03}"), &format!("pipe-{i}")).await;
+    }
+
+    let fs = Arc::new(LocalFileSystemProvider::new());
+    let scanner = ProjectScanner::new(fs, projects_base);
+    let mut config_mgr = ConfigManager::new(Some(tmp.path().join("config.json")));
+    config_mgr.load().await.unwrap();
+    let mut notif_mgr = NotificationManager::new(Some(tmp.path().join("notifications.json")));
+    notif_mgr.load().await.unwrap();
+    let ssh_mgr = SshConnectionManager::new();
+    let api = LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr);
+    let permits = api
+        .acquire_metadata_scan_permits_for_tests(cdt_api::METADATA_SCAN_CONCURRENCY)
+        .await;
+
+    let _ = api
+        .list_sessions(
+            project_id,
+            &PaginatedRequest {
+                page_size: 20,
+                cursor: Some("20".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+
+    let _ = api
+        .list_sessions(
+            project_id,
+            &PaginatedRequest {
+                page_size: 1,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let keys = api.active_scan_keys_for_tests();
+    drop(permits);
+    assert!(
+        keys.iter().any(|key| key.starts_with("-tmp|pipe|20")),
+        "same-project scan with `|` in projectId SHALL not be mis-aborted, keys={keys:?}"
+    );
+}
+
+#[tokio::test]
 async fn d11_remainder_scan_dedupe_keeps_at_most_one_active_entry() {
     // D11: pageSize > 20 高频 silent refresh 时 remainder scan 同
     // `format!("{project_id}|None|remainder")` key 自然 dedupe——active_scans

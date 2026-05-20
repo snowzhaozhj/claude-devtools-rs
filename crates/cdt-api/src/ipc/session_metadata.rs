@@ -60,6 +60,18 @@ pub struct SessionMetadata {
     pub git_branch: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MetadataCacheStatus {
+    Positive,
+    Negative,
+    Parsed,
+}
+
+pub(crate) struct CachedSessionMetadata {
+    pub metadata: SessionMetadata,
+    pub status: MetadataCacheStatus,
+}
+
 /// 扫描标题时读取的最大行数（与原版 `maxLines: 200` 对齐）。
 const TITLE_MAX_LINES: usize = 200;
 
@@ -539,6 +551,16 @@ pub(crate) async fn extract_session_metadata_cached(
     path: &Path,
     bypass_negative: bool,
 ) -> SessionMetadata {
+    extract_session_metadata_cached_with_status(cache, path, bypass_negative)
+        .await
+        .metadata
+}
+
+pub(crate) async fn extract_session_metadata_cached_with_status(
+    cache: &StdMutex<MetadataCache>,
+    path: &Path,
+    bypass_negative: bool,
+) -> CachedSessionMetadata {
     let new_sig = match tokio::fs::metadata(path).await {
         Ok(meta) => Some(FileSignature::from_metadata(&meta)),
         Err(_) => None,
@@ -554,11 +576,14 @@ pub(crate) async fn extract_session_metadata_cached(
             if entry.signature == sig {
                 let is_ongoing =
                     entry.messages_ongoing && !is_session_stale(sig.mtime, SystemTime::now());
-                return SessionMetadata {
-                    title: entry.title,
-                    message_count: entry.message_count,
-                    is_ongoing,
-                    git_branch: entry.git_branch,
+                return CachedSessionMetadata {
+                    metadata: SessionMetadata {
+                        title: entry.title,
+                        message_count: entry.message_count,
+                        is_ongoing,
+                        git_branch: entry.git_branch,
+                    },
+                    status: MetadataCacheStatus::Positive,
                 };
             }
         }
@@ -570,11 +595,14 @@ pub(crate) async fn extract_session_metadata_cached(
                 .expect("metadata cache mutex poisoned")
                 .lookup_negative(path, &sig);
             if hit {
-                return SessionMetadata {
-                    title: None,
-                    message_count: 0,
-                    is_ongoing: false,
-                    git_branch: None,
+                return CachedSessionMetadata {
+                    metadata: SessionMetadata {
+                        title: None,
+                        message_count: 0,
+                        is_ongoing: false,
+                        git_branch: None,
+                    },
+                    status: MetadataCacheStatus::Negative,
                 };
             }
         }
@@ -605,7 +633,10 @@ pub(crate) async fn extract_session_metadata_cached(
         }
     }
 
-    meta
+    CachedSessionMetadata {
+        metadata: meta,
+        status: MetadataCacheStatus::Parsed,
+    }
 }
 
 /// 异步读 file mtime 并判定是否超过 stale 阈值。
@@ -1222,6 +1253,23 @@ mod tests {
         assert_eq!(m1.message_count, m2.message_count);
         assert_eq!(m1.title, m2.title);
         assert_eq!(m1.git_branch, m2.git_branch);
+    }
+
+    #[tokio::test]
+    async fn negative_cache_hit_reports_negative_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bad.jsonl");
+        std::fs::write(&path, "{not json\n").unwrap();
+
+        let cache = make_cache();
+        let first = extract_session_metadata_cached_with_status(&cache, &path, false).await;
+        assert_eq!(first.status, MetadataCacheStatus::Parsed);
+        assert_eq!(cache.lock().unwrap().negative_len(), 1);
+
+        let second = extract_session_metadata_cached_with_status(&cache, &path, false).await;
+        assert_eq!(second.status, MetadataCacheStatus::Negative);
+        assert!(second.metadata.title.is_none());
+        assert_eq!(second.metadata.message_count, 0);
     }
 
     #[tokio::test]
