@@ -70,6 +70,11 @@
   let repositoryGroups: RepositoryGroup[] = $state([]);
   let sessions: SessionSummary[] = $state([]);
   let projectMemory: ProjectMemory | null = $state(null);
+  // by-projectId memory cache：切 project 时同步 hydrate 让 memory-entry
+  // 显隐与 selectedProjectId 切换瞬时同步，避免等 async getProjectMemory
+  // return 期间 entry 闪现/消失引发 sidebar 顶部 layout shift。命中走 SWR：
+  // 先 set 当前值同时后台 refresh；miss 走正常 fetch。
+  const memoryCache = new Map<string, ProjectMemory | null>();
   let projectsLoading = $state(true);
   let sessionsLoading = $state(false);
   let sessionsLoadingMore = $state(false);
@@ -298,8 +303,28 @@
       projectMemory = null;
       return;
     }
+    // 同步 hydrate：cache 命中立即 set，避免等 IPC return 期间 memory-entry
+    // 显隐引发 sidebar 顶部 layout shift（用户来回切已访问过的项目时）。
+    const cached = memoryCache.get(projectId);
+    if (cached !== undefined) {
+      projectMemory = cached;
+      // SWR 后台 refresh 拉新值并写 cache；只有 selectedProjectId 仍是
+      // 当前 projectId 时才回写 projectMemory，避免覆盖用户期间已切换到
+      // 其它 project 的显示。
+      void (async () => {
+        try {
+          const fresh = await getProjectMemory(projectId);
+          memoryCache.set(projectId, fresh);
+          if (projectId === selectedProjectId) projectMemory = fresh;
+        } catch (e) {
+          console.warn("Failed to refresh project memory:", e);
+        }
+      })();
+      return;
+    }
     try {
       const memory = await getProjectMemory(projectId);
+      memoryCache.set(projectId, memory);
       if (projectId === selectedProjectId) projectMemory = memory;
     } catch (e) {
       console.warn("Failed to load project memory:", e);
@@ -634,8 +659,13 @@
     </button>
   {/if}
 
-  <!-- Session filter + count -->
-  {#if !sessionsLoading && selectedProjectId}
+  <!-- Session filter + count
+       始终在 selectedProjectId 存在时渲染（不再因 sessionsLoading 隐藏）：
+       loading 期间整条 bar 隐藏会让下方 session-list 顶部上移约 40 px，
+       IPC return 后重新出现 → 整个列表跳一下。SkeletonList 在 .session-list
+       内承载 loading 视觉，filter-bar 保持 DOM 稳定不参与显隐。
+       count span 在 sessionsLoading 时仍隐藏避免显 "0" 误导用户。 -->
+  {#if selectedProjectId}
     <div class="session-filter-bar">
       <input
         class="session-filter-input"
@@ -649,10 +679,12 @@
         enterkeyhint="search"
         aria-label="搜索会话"
       />
-      <span
-        class="session-count-num"
-        title="可见 {visibleSessions.length} / 总 {totalSessions}"
-      >{visibleSessions.length}</span>
+      {#if !sessionsLoading}
+        <span
+          class="session-count-num"
+          title="可见 {visibleSessions.length} / 总 {totalSessions}"
+        >{visibleSessions.length}</span>
+      {/if}
       {#if hasDeferredSessionRefresh}
         <button
           class="refresh-pending-btn"

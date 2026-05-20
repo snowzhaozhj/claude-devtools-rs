@@ -79,4 +79,66 @@ describe('Sidebar smoke', () => {
     // collapsed 状态下 sidebar 仍渲染 DOM（宽度由 CSS 控制，不影响节点存在）
     expect(container.querySelector('.session-list')).not.toBeNull()
   })
+
+  test('selectedProjectId 非空时 session-filter-bar 始终渲染（不因 sessionsLoading 隐藏）', async () => {
+    // 抗回归：若改回 `{#if !sessionsLoading && selectedProjectId}` guard，
+    // 切项目 / 首次打开期间 filter-bar 会先消失再出现（高度 ~40px），
+    // 下方 session-list 会跟随上下抖动一格——用户视觉感受为"切换项目时
+    // 元素位置跳动一下"。本 test 锁住"filter-bar 在 selectedProjectId
+    // 存在时 SHALL 渲染"的契约。
+    const { container } = render(Sidebar, {
+      props: {
+        selectedProjectId: 'mock-rich-rust',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+    await waitFor(() => {
+      expect(container.querySelector('.session-filter-bar')).not.toBeNull()
+    })
+  })
+
+  test('切回已访问过的 project 时 memory-entry 通过 cache 同步 hydrate', async () => {
+    // 抗回归：若移除 memoryCache，切项目时 projectMemory 仍是上一个 project
+    // 的值直到 async getProjectMemory return，期间 memory-entry 保持上一次
+    // 状态 → IPC return 后才切到新值——若新旧 project 的 memoryCount 一个
+    // 为 0 一个非 0，entry 显隐切换（高度 ~52px）会让 sidebar 顶部抖动。
+    // cache 命中后 loadProjectMemory 同步 set projectMemory，无中间空档。
+    const { container, rerender } = render(Sidebar, {
+      props: {
+        selectedProjectId: 'mock-rich-rust',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+    // 第一次访问：等首次 IPC return 后 memory-entry 出现（fixture 中
+    // mock-rich-rust hasMemory=true count=3）
+    await waitFor(() => {
+      expect(container.querySelector('.memory-entry')).not.toBeNull()
+    })
+    // 切到无 memory 的项目（fixture 中 mock-rich-rust-wt-feat hasMemory=false）
+    await rerender({
+      selectedProjectId: 'mock-rich-rust-wt-feat',
+      activeSessionId: null,
+      onSelectProject: () => {},
+      onSelectSession: () => {},
+    })
+    await waitFor(() => {
+      expect(container.querySelector('.memory-entry')).toBeNull()
+    })
+    // 切回 mock-rich-rust：cache 命中后 SHALL 同步显示 memory-entry
+    // （仅靠 svelte 1 个 reactivity microtask）。如果还要等 IPC return
+    // 才显示，说明 cache 路径未生效。
+    await rerender({
+      selectedProjectId: 'mock-rich-rust',
+      activeSessionId: null,
+      onSelectProject: () => {},
+      onSelectSession: () => {},
+    })
+    await tick()
+    await tick()
+    expect(container.querySelector('.memory-entry')).not.toBeNull()
+  })
 })
