@@ -71,10 +71,3 @@
 - **THEN** 该 update SHALL 通过 `cdt-api::http::bridge::forward_session_metadata` 转换为 `PushEvent::SessionMetadataUpdate { projectId, sessionId, title, messageCount, isOngoing, gitBranch }` 推送到所有 `/api/events` 客户端
 - **AND** 浏览器 client `transport.ts::BrowserTransport` SHALL 按既有归一化路径转交 `session-metadata-update` 事件给 listener，与 IPC 路径行为一致
 
-## REMOVED Requirements
-
-### Requirement: HTTP `list_sessions` 同步完整返回豁免
-
-**Reason**：该豁免的前提"HTTP API 无 push 通道"已被 `add-server-mode` change 引入的 `/api/events` SSE bridge 与 `session_metadata_update` 推送通道推翻；HTTP `GET /api/projects/{projectId}/sessions` 现在能与 IPC 路径共享骨架 + push 语义（详见本 spec §"HTTP `list_sessions` 复用 IPC 骨架 + push 实现"）。
-
-**Migration**：HTTP route 调用从 `DataApi::list_sessions_sync` 切换到 `DataApi::list_sessions`；`list_sessions_sync` trait method 保留作为非 SSE-aware 客户端的 fallback。浏览器 client 既有 `transport.ts::BrowserTransport` 通过 `EventSource('/api/events')` 已订阅 `session_metadata_update` 事件，无需新增订阅逻辑；行为契约从"完整 metadata 一次返"变为"骨架先返 + SSE patch"，对前端 listener 完全透明。
