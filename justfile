@@ -92,6 +92,10 @@ preflight: fmt lint test test-ui-unit spec-validate spec-archive-check ipc-sync-
 perf-check *ARGS:
     bash scripts/run-perf-bench.sh {{ARGS}}
 
+# 真实 Docker SSH e2e：cdt-ssh-test + cdt-cli HTTP/SSE 用户可见行为验收
+verify-ssh-docker:
+    bash scripts/verify-ssh-docker-e2e.sh
+
 # ──────── 发布 ────────
 
 # 发布前检查：版本号三处一致 + preflight（含 cargo build 会顺带刷新 Cargo.lock）
