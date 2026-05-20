@@ -31,7 +31,12 @@
   import { subscribeEvent, type Unsubscribe } from "../lib/transport";
   import { isTauriRuntime } from "../lib/runtime";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
-  import { applySilentRefresh, mergeSessions, applyPendingMetadata } from "../lib/sessionMerge";
+  import {
+    applySilentRefresh,
+    mergeSessions,
+    mergeRecoveryResponse,
+    applyPendingMetadata,
+  } from "../lib/sessionMerge";
   import {
     read as readSessionListCache,
     setSessions as cacheSessions,
@@ -244,8 +249,14 @@
             const result = await listSessions(projectId, pageSize);
             // race guard：异步完成时 user 可能已切到别的 project
             if (projectId !== selectedProjectId) return;
+            // recovery 专用合并语义：response 真值（cache hit fast-path）
+            // 优先覆盖 prev stale 真值，response 骨架则保留 prev 已 patched
+            // 真值。常规 mergeSessions 用 mergeSilentMetadata 始终保留 prev
+            // 真值——recovery 场景下 prev 真值可能 stale，会卡 stale 状态
+            // （codex 二审 round 5）。pendingMetadataUpdates buffer 在 await
+            // 期间收到的最新 SSE patch 会通过 applyPendingMetadata 兜底应用。
             sessions = applyPendingMetadata(
-              mergeSessions(sessions, result.items, true),
+              mergeRecoveryResponse(sessions, result.items),
               pendingMetadataUpdates,
             );
             cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);

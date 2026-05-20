@@ -3,6 +3,7 @@ import type { SessionMetadataUpdate, SessionSummary } from './api'
 import {
   applyPendingMetadata,
   applySilentRefresh,
+  mergeRecoveryResponse,
   mergeSessions,
   mergeSilentMetadata,
 } from './sessionMerge'
@@ -258,5 +259,63 @@ describe('applyPendingMetadata', () => {
     const arr2 = [skel('a', 1000), skel('b', 500)]
     const result2 = applyPendingMetadata(arr2, buffer)
     expect(result2[1].title).toBe('B 标题')
+  })
+})
+
+describe('mergeRecoveryResponse', () => {
+  test('response 真值（cache hit）覆盖 prev stale 真值', () => {
+    // 关键场景（codex 二审 round 5）：prev 是几分钟前的 stale 真值，
+    // SSE 期间断/lagged，response 来自 cache hit 是当前最新值——SHALL
+    // 用 response 覆盖 prev
+    const prev = [patched('s1', 1000, 'old stale title', { messageCount: 5 })]
+    const next = [patched('s1', 1500, 'new fresh title', { messageCount: 12 })]
+    const result = mergeRecoveryResponse(prev, next)
+    expect(result).toHaveLength(1)
+    expect(result[0].title).toBe('new fresh title')
+    expect(result[0].messageCount).toBe(12)
+  })
+
+  test('response 骨架（cache miss）保留 prev 已 patched 真值不被覆盖', () => {
+    // 后端 cache miss 项 inline 返骨架；SSE patch 后续会通过 listener 写
+    // 真值。这里 prev 已含真值（之前 listener 写入），SHALL 保留
+    const prev = [patched('s1', 1000, 'patched title', { isOngoing: true })]
+    const next = [skel('s1', 2000)]
+    const result = mergeRecoveryResponse(prev, next)
+    expect(result[0].title).toBe('patched title')
+    expect(result[0].isOngoing).toBe(true)
+  })
+
+  test('response 真值与 prev 骨架时让 response 覆盖', () => {
+    const prev = [skel('s1', 1000)]
+    const next = [patched('s1', 1500, 'fresh', { gitBranch: 'main' })]
+    const result = mergeRecoveryResponse(prev, next)
+    expect(result[0].title).toBe('fresh')
+    expect(result[0].gitBranch).toBe('main')
+  })
+
+  test('prev tail 不在 next 内的条目保留', () => {
+    // 极端：response 因后端 sessions 列表已变（例如某 jsonl 被删）少了
+    // 一条；不应让 prev 中那条凭空消失（删除走专门路径）
+    const prev = [patched('s1', 2000, 'a'), patched('s2', 1000, 'b')]
+    const next = [patched('s1', 2000, 'a updated')]
+    const result = mergeRecoveryResponse(prev, next)
+    expect(result).toHaveLength(2)
+    expect(result.find((s) => s.sessionId === 's1')!.title).toBe('a updated')
+    expect(result.find((s) => s.sessionId === 's2')!.title).toBe('b')
+  })
+
+  test('next 中新增 sessionId 直接加入', () => {
+    const prev = [patched('s1', 2000, 'a')]
+    const next = [patched('s1', 2000, 'a updated'), patched('s_new', 1500, 'new')]
+    const result = mergeRecoveryResponse(prev, next)
+    expect(result).toHaveLength(2)
+    expect(result.find((s) => s.sessionId === 's_new')!.title).toBe('new')
+  })
+
+  test('结果按 timestamp 倒序排序', () => {
+    const prev = [patched('a', 100, 'a'), patched('b', 200, 'b')]
+    const next = [patched('a', 100, 'a updated'), patched('b', 200, 'b updated')]
+    const result = mergeRecoveryResponse(prev, next)
+    expect(result.map((s) => s.sessionId)).toEqual(['b', 'a'])
   })
 })
