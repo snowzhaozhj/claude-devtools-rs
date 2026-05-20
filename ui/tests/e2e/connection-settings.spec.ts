@@ -14,16 +14,16 @@ test.describe('connection settings', () => {
     await gotoConnectionSettings(page)
 
     await expect(page.getByRole('heading', { name: '连接', exact: true })).toBeVisible({ timeout: 5_000 })
-    await expect(page.getByText('当前使用本机 Claude 数据目录')).toBeVisible()
+    await expect(page.getByText('本地模式')).toBeVisible()
 
-    const host = page.getByRole('textbox', { name: 'Host' })
+    const host = page.getByRole('textbox', { name: '主机' })
     await host.fill('mock')
     await expect(page.getByRole('option', { name: 'mock-prod' })).toBeVisible()
     await page.getByRole('option', { name: 'mock-prod' }).click()
 
     await expect(host).toHaveValue('mock-prod')
-    await expect(page.getByRole('spinbutton', { name: 'Port' })).toHaveValue('22')
-    await page.getByRole('button', { name: 'Test connection' }).click()
-    await expect(page.getByText('测试成功，active context 未切换')).toBeVisible()
+    await expect(page.getByRole('spinbutton', { name: '端口' })).toHaveValue('22')
+    await page.getByRole('button', { name: '测试连接' }).click()
+    await expect(page.getByText('测试通过，未切换当前数据源')).toBeVisible()
   })
 })
