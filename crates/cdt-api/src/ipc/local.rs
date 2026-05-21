@@ -1026,7 +1026,10 @@ impl LocalDataApi {
     ///
     /// 与 `active_fs_and_projects_dir` 行为差异：本方法 **不**对 disconnect 中间态
     /// 报错（cache 路径优先连续性）；旧方法对未注册 SSH context 返 `not_found`，
-    /// 现有非 cache callsite 保留旧行为。
+    /// 现有非 cache callsite 保留旧行为。**用户可见 IPC handler**（`get_tool_output`
+    /// / `get_image_asset` 等）SHALL 走 `active_fs_and_context_strict()` —— 用户
+    /// 在 SSH context 下请求时 SHALL NOT 静默降级到 Local 数据（详 change
+    /// `parsed-message-cache-context-prefix` codex 二审 commit-stage Q1）。
     pub(crate) async fn active_fs_and_context(
         &self,
     ) -> (Arc<dyn FileSystemProvider>, PathBuf, cdt_fs::ContextId) {
@@ -1046,6 +1049,36 @@ impl LocalDataApi {
         let projects_dir = self.projects_dir.lock().await.clone();
         let ctx = cdt_fs::ContextId::local(projects_dir.clone());
         (local_handle(), projects_dir, ctx)
+    }
+
+    /// `active_fs_and_context` 的**严格变体**：用于用户可见 IPC handler。SSH
+    /// active 但 provider/ContextId lookup miss 时 SHALL 返回 `not_found` 错——
+    /// 与旧 `active_fs_and_projects_dir` 同语义，**不**静默降级到 Local。
+    ///
+    /// 设计动机（change `parsed-message-cache-context-prefix` codex 二审 Q1）：
+    /// `get_tool_output` / `get_image_asset` 等用户调用方一旦 SSH active 但
+    /// provider 丢失（concurrent disconnect 中间态），若降级到 Local 可能返回
+    /// 同 ID 的 Local 文件数据，破"用户在 SSH context 下请求"的语义契约。
+    /// cache-only 内部路径（如 `prime_parsed_msg_cache_for_test` / metadata 主动
+    /// scan）仍可用 `active_fs_and_context` 的 relaxed 版本，因 cache 写入即便
+    /// 短暂降级也只是多一次 Local entry，无数据正确性问题。
+    ///
+    /// 原子性同 `active_fs_and_context`：单次 `provider_and_context_id` 调用
+    /// 同时拿 provider + ContextId，绝不返回 SSH/Local 混合三元组。
+    pub(crate) async fn active_fs_and_context_strict(
+        &self,
+    ) -> Result<(Arc<dyn FileSystemProvider>, PathBuf, cdt_fs::ContextId), ApiError> {
+        if let Some(context_id) = self.ssh_mgr.active_context_id().await {
+            let Some((provider, ctx)) = self.ssh_mgr.provider_and_context_id(&context_id).await
+            else {
+                return Err(ApiError::not_found(format!("SSH context: {context_id}")));
+            };
+            let remote_home = provider.remote_home().to_path_buf();
+            return Ok((Arc::new(provider), remote_home, ctx));
+        }
+        let projects_dir = self.projects_dir.lock().await.clone();
+        let ctx = cdt_fs::ContextId::local(projects_dir.clone());
+        Ok((local_handle(), projects_dir, ctx))
     }
 
     pub fn new(
@@ -2454,7 +2487,10 @@ impl DataApi for LocalDataApi {
         // 一次性快照 (fs, projects_dir, ctx) 来自同一 active context（详 change
         // `parsed-message-cache-context-prefix` design D8-bis：避免 active_fs_and_projects_dir
         // + active_fs_and_context 两次 lock 之间被并发 ssh_connect race 让 fs/ctx 不自洽）。
-        let (fs, projects_dir, ctx) = self.active_fs_and_context().await;
+        // 用户可见 IPC handler 走 strict 变体——SSH disconnect 中间态 SHALL 报错而非
+        // 静默降级到 Local（避免返回同 ID 的 Local 文件数据；详 codex 二审 commit
+        // stage Q1）。
+        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
         let messages = if is_remote {
             let Some(jsonl_path) =
@@ -2520,7 +2556,9 @@ impl DataApi for LocalDataApi {
     ) -> Result<cdt_core::ToolOutput, ApiError> {
         // 一次性快照 (fs, projects_dir, ctx) 来自同一 active context（详 change
         // `parsed-message-cache-context-prefix` design D8-bis）。
-        let (fs, projects_dir, ctx) = self.active_fs_and_context().await;
+        // 用户可见 IPC handler 走 strict 变体——SSH disconnect 中间态 SHALL 报错而非
+        // 静默降级到 Local（codex 二审 commit stage Q1）。
+        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
         let messages = if is_remote {
             let Some(jsonl_path) =

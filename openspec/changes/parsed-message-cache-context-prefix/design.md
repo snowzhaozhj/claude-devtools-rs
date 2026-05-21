@@ -190,6 +190,21 @@ async fn get_tool_output(&self, root_session_id: &str, session_id: &str, tool_us
 
 `active_fs_and_context()` 是 PR-B 提供的"fs+projects_dir+ctx 同快照"helper，本就是为了消除 race 而设计；本 change 把现有 `active_fs_and_projects_dir()` 替换成它的范围**仅限**这两个 callsite（其它走 `active_fs_and_projects_dir()` 的方法不动，保持现状减小 PR 范围）。
 
+### D8-bis-fix: 用户可见 IPC handler 走 strict 变体——SSH disconnect 不静默降级
+
+**问题**（codex 二审 commit-stage Q1 = BUG）：D8-bis 让 `get_tool_output` / `get_image_asset` 改用 `active_fs_and_context()` 拿三元组，但该 helper 在 SSH active 但 provider 丢失（concurrent disconnect 中间态）时**静默降级**到 Local。原 `active_fs_and_projects_dir()` 在同场景返 `ApiError::not_found`。用户在 SSH context 下请求 `get_tool_output(sid)` 时，本地恰好有同 ID 的 jsonl 文件→会返 Local 数据。破"用户在 SSH context 下请求"语义契约。
+
+**修法**：在 `LocalDataApi` 上加 `active_fs_and_context_strict() -> Result<(Arc<dyn FileSystemProvider>, PathBuf, ContextId), ApiError>` 严格变体。语义与旧 `active_fs_and_projects_dir` 一致：SSH active + provider lookup miss 时返 `not_found` 错；正常路径与 `active_fs_and_context` 完全一致（同样走 `provider_and_context_id` 原子 accessor，避免 SSH/Local 混合）。
+
+**两个变体的使用边界**：
+
+- **`active_fs_and_context()` (relaxed)**：cache-only 内部路径——cache 写入即便短暂降级也只是多写一个 Local entry，无数据正确性问题（用 LRU 自然淘汰兜底）。用于 `prime_parsed_msg_cache_for_test`、metadata 主动 scan 等。
+- **`active_fs_and_context_strict()` (strict)**：用户可见 IPC handler——SHALL 返错而非降级，让前端能区分"SSH context 下请求失败"与"在 Local context 下查不到"。用于 `get_tool_output` / `get_image_asset`。
+
+**为何不直接让 `active_fs_and_context()` 默认 strict**：cache wrapper 内部走的就是 relaxed 语义（cache 写入降级到 Local 是 design D3 的"safe miss"），改成 strict 会让 cache 写入抛错——破 cache wrapper 现有 fallback 路径。两个变体并存最清晰。
+
+**替代方案**：(a) 用户可见 IPC handler 内联探 `ssh_mgr.active_context_id()` + 二次校验 `fs.kind()` → 否决（探+helper 之间还是 race，且代码分散）；(b) 改 `active_fs_and_context()` 默认 strict + cache 内部 catch 错降级 → 否决（破 cache wrapper 默认行为，cache callsite 重抓更乱）；(c) 当前方案（两变体并存） → 选中
+
 **与 PR-B 对比**：PR-B 的 metadata cache callsite 也是相同模式（line 822 / 890 / 1397 / 1681 / 1756 / 1820 起始处只调一次 `active_fs_and_context()`），本 change 沿用同一模式。
 
 **替代方案**：(a) 不变（两次快照） → 否决（已确认 race）；(b) 加锁让 active+ctx 全原子 → 否决（破封装，与 PR-B D3-bis 路线背离）；(c) 当前方案 → 选中
