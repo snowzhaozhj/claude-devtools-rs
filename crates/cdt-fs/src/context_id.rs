@@ -3,7 +3,7 @@
 //! Spec：`openspec/specs/fs-abstraction/spec.md` §`ContextId` 三元组作为 cache key 前缀。
 //! 设计：`openspec/changes/unify-fs-abstraction/design.md` D5 / D5b / D5b-i / D5c。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
@@ -47,37 +47,49 @@ pub struct HostSignature {
 }
 
 impl HostSignature {
-    /// 计算 `config_digest` —— SHA-256 over `hostname` / `port` / `user` /
-    /// `identity_files`（字典序排序后拼接）/ `proxyjump` / `proxycommand` /
-    /// `hostkeyalias`，各字段间用 `\0` 分隔。
+    /// 计算 `config_digest` —— SHA-256 over length-prefixed encoding of
+    /// `hostname` / `port` / `user` / `identity_files`（字典序排序）/
+    /// `proxyjump` / `proxycommand` / `hostkeyalias`。
+    ///
+    /// **Length-prefix encoding 防歧义**：每个字段编码为 `[u32 BE length][bytes]`，
+    /// 杜绝"不同输入产相同 byte stream"的碰撞（codex 二审 M1）。`identity_files`
+    /// 列表头部额外编码 `[u32 BE count]`，每个 path 用平台原生 OS bytes
+    /// 编码（Unix: `OsStrExt::as_bytes`；Windows: UTF-16 LE）防止 `to_string_lossy`
+    /// 的替换字符碰撞。
     ///
     /// 设计 D5b：连接行为无关字段（`loglevel` / `compression` / `connecttimeout`
     /// 等）SHALL NOT 在 `SshConfigDigestInput` 中，自然不参与 hash。
     ///
-    /// `display_label = format!("{user}@{hostname}:{port}")` 仅展示。
+    /// `display_label = format!("{user}@{hostname}:{port}")` 仅展示，不参与 hash。
     #[must_use]
     pub fn from_ssh_config_fields(input: &SshConfigDigestInput) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(input.hostname.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(input.port.to_string().as_bytes());
-        hasher.update(b"\0");
-        hasher.update(input.user.as_bytes());
-        hasher.update(b"\0");
+        write_field(&mut hasher, input.hostname.as_bytes());
+        write_field(&mut hasher, &input.port.to_be_bytes());
+        write_field(&mut hasher, input.user.as_bytes());
 
+        // identity_files：先 count，再每个 path 按平台原生 bytes length-prefix
         let mut sorted_ids = input.identity_files.clone();
         sorted_ids.sort();
+        let count_u32 = u32::try_from(sorted_ids.len()).unwrap_or(u32::MAX);
+        hasher.update(count_u32.to_be_bytes());
         for id_file in &sorted_ids {
-            hasher.update(id_file.to_string_lossy().as_bytes());
-            hasher.update(b"\x1f");
+            let bytes = path_to_native_bytes(id_file);
+            write_field(&mut hasher, &bytes);
         }
-        hasher.update(b"\0");
 
-        hasher.update(input.proxyjump.as_deref().unwrap_or("").as_bytes());
-        hasher.update(b"\0");
-        hasher.update(input.proxycommand.as_deref().unwrap_or("").as_bytes());
-        hasher.update(b"\0");
-        hasher.update(input.hostkeyalias.as_deref().unwrap_or("").as_bytes());
+        write_field(
+            &mut hasher,
+            input.proxyjump.as_deref().unwrap_or("").as_bytes(),
+        );
+        write_field(
+            &mut hasher,
+            input.proxycommand.as_deref().unwrap_or("").as_bytes(),
+        );
+        write_field(
+            &mut hasher,
+            input.hostkeyalias.as_deref().unwrap_or("").as_bytes(),
+        );
 
         let digest: [u8; 32] = hasher.finalize().into();
         let display_label = format!("{}@{}:{}", input.user, input.hostname, input.port);
@@ -86,6 +98,37 @@ impl HostSignature {
             display_label,
         }
     }
+}
+
+/// 写入 `[u32 BE length][bytes]` length-prefix 编码，防止字段拼接歧义。
+fn write_field(hasher: &mut Sha256, bytes: &[u8]) {
+    let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+    hasher.update(len.to_be_bytes());
+    hasher.update(bytes);
+}
+
+/// 平台原生 path bytes —— Unix `OsStrExt::as_bytes()` 直拿；Windows 走
+/// `encode_wide()` UTF-16 LE。避免 `to_string_lossy` 的非法字符替换碰撞。
+#[cfg(unix)]
+fn path_to_native_bytes(path: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(windows)]
+fn path_to_native_bytes(path: &Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let mut bytes = Vec::with_capacity(wide.len() * 2);
+    for w in wide {
+        bytes.extend_from_slice(&w.to_le_bytes());
+    }
+    bytes
+}
+
+#[cfg(not(any(unix, windows)))]
+fn path_to_native_bytes(path: &Path) -> Vec<u8> {
+    path.to_string_lossy().as_bytes().to_vec()
 }
 
 impl PartialEq for HostSignature {

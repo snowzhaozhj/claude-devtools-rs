@@ -24,6 +24,20 @@ impl LocalFileSystemProvider {
         Self
     }
 
+    /// **per-entry 错误降级语义**（codex 二审 M2 by-design）：
+    /// - `entry.file_type().await` 失败：emit `tracing::warn!` + skip 该 entry
+    ///   （上层 cache 不应将"entry 缺失"解释为"entry 不存在"——dir scan 只是
+    ///   weak signal，cache key 用 mtime+size+identity 判定有效性，单 entry
+    ///   读取失败属环境抖动而非 entry 删除）
+    /// - `read.next_entry().await` 失败：emit `tracing::warn!` + 截断列表返
+    ///   partial 结果（同上语义，业务路径 `ProjectScanner` 等 best-effort 消费方
+    ///   依赖此降级行为）
+    /// - 仅 per-file metadata 缺失（`entry.metadata()` 失败）单独降级该 entry 的
+    ///   `metadata: None`，不影响其他 entry
+    ///
+    /// 后续 PR 若新增"cache invalidation 依赖完整 dir scan"的调用方，应该
+    /// **包裹**本方法（自己跑一次完整 scan + 任一 per-entry 错就清 cache），
+    /// 而**不**改变本方法默认行为。
     async fn read_dir_entries(
         &self,
         path: &Path,
@@ -40,6 +54,7 @@ impl LocalFileSystemProvider {
                     let file_type = match entry.file_type().await {
                         Ok(ft) => ft,
                         Err(err) => {
+                            // M2 by-design：per-entry file_type 失败降级 skip
                             tracing::warn!(path = %entry.path().display(), error = %err, "skip unreadable dir entry");
                             continue;
                         }

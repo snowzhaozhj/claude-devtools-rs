@@ -273,6 +273,13 @@ proxyjump none
 proxycommand none
 ";
 
+    const SSH_G_WITH_PROXY_COMMAND: &str = "\
+user alice
+hostname target.internal
+port 22
+proxycommand nc -X 5 -x bastion:1080 %h %p
+";
+
     #[test]
     fn parses_normal_ssh_g_output() {
         let r = parse_ssh_g_output(SSH_G_NORMAL);
@@ -285,6 +292,27 @@ proxycommand none
         assert!(r.proxycommand.is_none());
         assert!(r.hostkeyalias.is_none());
         assert!(!r.degraded);
+    }
+
+    #[test]
+    fn parses_proxycommand_positively() {
+        // codex 二审 L2：正向 proxycommand 解析单测（原仅 SSH_G_PROXY_NONE 覆盖反向）
+        let r = parse_ssh_g_output(SSH_G_WITH_PROXY_COMMAND);
+        assert_eq!(
+            r.proxycommand.as_deref(),
+            Some("nc -X 5 -x bastion:1080 %h %p")
+        );
+        assert!(r.proxyjump.is_none());
+        assert!(r.hostkeyalias.is_none());
+
+        // 同 user@host:port 但 ProxyCommand 不同也 SHALL 产生不同 HostSignature
+        let mut without = r.clone();
+        without.proxycommand = None;
+        let sig_with: cdt_fs::SshConfigDigestInput = (&r).into();
+        let sig_without: cdt_fs::SshConfigDigestInput = (&without).into();
+        let h_with = cdt_fs::HostSignature::from_ssh_config_fields(&sig_with);
+        let h_without = cdt_fs::HostSignature::from_ssh_config_fields(&sig_without);
+        assert_ne!(h_with, h_without);
     }
 
     #[test]

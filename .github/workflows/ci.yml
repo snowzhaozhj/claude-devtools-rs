@@ -52,7 +52,7 @@ jobs:
   fs-abstraction:
     name: xtask check-fs-direct-calls (warn-only)
     # H1 enforce 机制（unify-fs-abstraction change）：扫业务 crate 是否含
-    # `tokio::fs::*` 直调；allowlist 真相源 `.claude/rules/fs-abstraction.md`。
+    # `tokio::fs::*` 直调；allowlist 真相源 `crates/cdt-fs/ALLOWLIST.md`。
     # PR-A 期间 `--warn-only` 仅打印 violation 不 fail；PR-D 完成 callsite
     # 迁移后切到 fail-on-match。
     runs-on: ubuntu-latest

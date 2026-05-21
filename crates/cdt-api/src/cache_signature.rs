@@ -247,6 +247,22 @@ mod tests {
         assert_eq!(sig_old, sig_new, "两条路径产物 SHALL byte-equal");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn from_fs_metadata_unix_identity_bridges_to_file_identity_unix() {
+        // codex 二审 L1：手工构造 Unix identity 显式断言桥接精确无损
+        let mtime = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let fs_meta = CdtFsMetadata {
+            size: 1024,
+            mtime,
+            identity: Some(CdtFsIdentity::Unix { dev: 42, ino: 9999 }),
+        };
+        let sig = FileSignature::from_fs_metadata(&fs_meta);
+        assert_eq!(sig.size, 1024);
+        assert_eq!(sig.mtime, mtime);
+        assert_eq!(sig.identity, FileIdentity::Unix { dev: 42, ino: 9999 });
+    }
+
     #[test]
     fn from_fs_metadata_with_ssh_style_none_identity_yields_none_variant() {
         // SSH backend 永远填 identity: None；FileSignature.identity 必须落到

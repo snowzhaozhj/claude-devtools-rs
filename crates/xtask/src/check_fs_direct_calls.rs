@@ -192,17 +192,19 @@ fn scan_file(path: &Path, rel: &str, hits: &mut Vec<Hit>) {
     let Ok(text) = std::fs::read_to_string(path) else {
         return;
     };
-    // 启发式：找到第一个 `#[cfg(test)]` 后跟 `mod ` 的行号，从该行起视为
-    // 单元测试 mod（Rust 惯例放在文件底部），跳过这些行。
-    // 反例覆盖：worktree_grouper.rs / project_path_resolver.rs 等 src 内
-    // 单元测试的 fs setup —— 严格按 H1 它们是 test code，不算业务 violation。
-    let test_mod_start = find_test_mod_start(&text);
+    // brace-depth tracking 识别 `#[cfg(test)] mod ... { ... }` span（codex 二审 M4）：
+    // 旧实现单点 `find_test_mod_start` 截断文件尾部，多个 test mod / 中间夹业务
+    // 代码会漏检。新实现精确收集 span 列表，仅跳过 span 内行，span 之后业务
+    // 代码继续扫。
+    //
+    // 限制：brace count 不识别 string literal 中的 `{` `}` —— Rust 单测代码内
+    // 此类 case 罕见，假阴性接受（dev tooling 性价比平衡）。
+    let test_spans = collect_test_mod_spans(&text);
+    let in_test_span = |i: usize| test_spans.iter().any(|(s, e)| i >= *s && i <= *e);
 
     for (i, line) in text.lines().enumerate() {
-        if let Some(start) = test_mod_start {
-            if i >= start {
-                break;
-            }
+        if in_test_span(i) {
+            continue;
         }
         // 跳过本行是注释（行首 trim 后以 // 开头）—— xtask 只关心实际调用
         let trimmed = line.trim_start();
@@ -223,28 +225,71 @@ fn scan_file(path: &Path, rel: &str, hits: &mut Vec<Hit>) {
     }
 }
 
-/// 返回 `#[cfg(test)]` 后跟 `mod ` 的 line index（0-based），无则 `None`。
+/// 返回所有 `#[cfg(test)] mod ... { ... }` 的 (`start_line`, `end_line`) span（0-based 含端）。
 ///
-/// 注意：仅识别"裸" `#[cfg(test)]`；不展开 `#[cfg(any(test, ...))]` 等组合
-/// 属性——若未来需要可扩展，目前 Rust 单元测试约定都用裸 cfg(test)。
-fn find_test_mod_start(text: &str) -> Option<usize> {
+/// 仅识别"裸" `#[cfg(test)]`；不展开 `#[cfg(any(test, ...))]` 等组合属性
+/// （Rust 惯例单元测试都用裸 cfg(test)）。brace tracking 用简单字符扫描，
+/// **不**区分 string literal —— 单测代码内裸 `{` / `}` 在 string 内罕见，
+/// 假阴性接受。
+fn collect_test_mod_spans(text: &str) -> Vec<(usize, usize)> {
     let lines: Vec<&str> = text.lines().collect();
-    for (i, line) in lines.iter().enumerate() {
-        if line.trim() == "#[cfg(test)]" {
-            // 允许中间空行 / 其他 attribute；扫到第一个非空非 attribute 行
-            for (j, next) in lines.iter().enumerate().skip(i + 1) {
-                let trimmed = next.trim();
-                if trimmed.is_empty() || trimmed.starts_with("#[") {
-                    continue;
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim() != "#[cfg(test)]" {
+            i += 1;
+            continue;
+        }
+        // 向后扫到 `mod ... ` 行（允许中间空行 / 其他 attribute）
+        let mut j = i + 1;
+        let mut mod_line = None;
+        while j < lines.len() {
+            let t = lines[j].trim();
+            if t.is_empty() || t.starts_with("#[") {
+                j += 1;
+                continue;
+            }
+            if t.starts_with("mod ") {
+                mod_line = Some(j);
+            }
+            break;
+        }
+        let Some(mod_idx) = mod_line else {
+            i += 1;
+            continue;
+        };
+        // brace tracking 从 mod_idx 开始，找首个 `{` 然后跟 depth 直到回 0
+        let mut depth: i32 = 0;
+        let mut found_open = false;
+        let mut end_line = None;
+        let mut k = mod_idx;
+        while k < lines.len() {
+            for ch in lines[k].chars() {
+                if ch == '{' {
+                    depth += 1;
+                    found_open = true;
+                } else if ch == '}' && found_open {
+                    depth -= 1;
+                    if depth == 0 {
+                        end_line = Some(k);
+                        break;
+                    }
                 }
-                if trimmed.starts_with("mod ") {
-                    return Some(j);
-                }
+            }
+            if end_line.is_some() {
                 break;
             }
+            k += 1;
+        }
+        if let Some(end) = end_line {
+            spans.push((i, end));
+            i = end + 1;
+        } else {
+            // 异常：没找到 close brace（文件 truncate 等），保守跳到 mod_idx
+            i = mod_idx + 1;
         }
     }
-    None
+    spans
 }
 
 /// 轻量 glob：支持 `**`（任意层）、`*`（不含 `/` 的任意片段）、字面字符。
@@ -266,13 +311,16 @@ fn glob_lite_match_inner(pattern: &[u8], target: &[u8]) -> bool {
                 } else {
                     rest_pat
                 };
-                // ** 匹配零或多段
+                // ** 匹配零或多段；codex 二审 M5 修：每次跳过位置 SHALL 在
+                // segment 边界（idx == 0 或 target[idx-1] == '/'），防止
+                // `**/tests/**` 误匹配 `crates/foo/not_tests/x.rs` 这类子串。
                 if rest_pat.is_empty() {
                     return true;
                 }
                 let mut idx = 0usize;
                 loop {
-                    if glob_lite_match_inner(rest_pat, &target[idx..]) {
+                    let at_boundary = idx == 0 || target[idx - 1] == b'/';
+                    if at_boundary && glob_lite_match_inner(rest_pat, &target[idx..]) {
                         return true;
                     }
                     if idx >= target.len() {
@@ -354,6 +402,68 @@ mod tests {
         assert_eq!(
             extract_first_cell(row).as_deref(),
             Some("crates/cdt-fs/src/local.rs")
+        );
+    }
+
+    #[test]
+    fn glob_double_star_respects_segment_boundary() {
+        // codex 二审 M5：`**/tests/**` SHALL NOT 误匹配 `not_tests/` 子串
+        assert!(glob_lite_match("**/tests/**", "crates/foo/tests/bar.rs"));
+        assert!(
+            !glob_lite_match("**/tests/**", "crates/foo/not_tests/bar.rs"),
+            "不应误匹配 not_tests/ 中的 tests 子串"
+        );
+        assert!(
+            !glob_lite_match("**/tests/**", "crates/foo/testsuite/bar.rs"),
+            "不应误匹配 testsuite/ 前缀"
+        );
+    }
+
+    #[test]
+    fn glob_trailing_double_star_matches_only_under_prefix() {
+        assert!(glob_lite_match(
+            "crates/xtask/**",
+            "crates/xtask/src/main.rs"
+        ));
+        assert!(!glob_lite_match(
+            "crates/xtask/**",
+            "crates/cdt-fs/src/main.rs"
+        ));
+        assert!(
+            !glob_lite_match("crates/xtask/**", "other-crates/xtask/src/main.rs"),
+            "不应误匹配 other-crates/xtask/ 子串"
+        );
+    }
+
+    #[test]
+    fn collect_test_mod_spans_handles_multiple_and_mid_file_modules() {
+        let src = r#"
+fn business_a() { }
+
+#[cfg(test)]
+mod tests_a {
+    fn test1() { }
+}
+
+fn business_b() {
+    tokio::fs::write("path", b"x").await.unwrap();
+}
+
+#[cfg(test)]
+mod tests_b {
+    use super::*;
+    fn test2() { }
+}
+"#;
+        let spans = collect_test_mod_spans(src);
+        assert_eq!(spans.len(), 2, "SHALL 识别两个独立 test mod");
+        // 验证 business_b 行不在任一 span 内（M4 修法核心点）
+        let business_b_line = src.lines().position(|l| l.contains("business_b")).unwrap();
+        assert!(
+            !spans
+                .iter()
+                .any(|(s, e)| business_b_line >= *s && business_b_line <= *e),
+            "中间业务函数 SHALL NOT 被 span 跳过"
         );
     }
 }

@@ -97,6 +97,15 @@ tokio::task_local! {
 
 /// 包住一段 async 代码统计内部 fs op 次数——结束 emit tracing event + 返计数。
 ///
+/// **嵌套语义（codex 二审 M3 钉死）**：`with_fs_counter` 内部用
+/// `tokio::task_local!::scope` 注入 counter，嵌套调用 SHALL 表现为
+/// **独立计数**——内层 scope 创建新 counter 完全覆盖外层 task-local 槽位，
+/// 内层 fs op **不**回传到外层 counter。
+///
+/// 设计原因：业务路径常用模式是"per-IPC-command counter"（外层）+
+/// "测试 / 子任务 fs op 上限断言"（内层），独立计数语义让测试断言不被外层污染；
+/// 若未来需要"嵌套聚合"（rare），调用方应该手工合并 inner snapshot 到 outer。
+///
 /// 未包 `InstrumentedFs` 的 provider 调 trait 方法时 counter 不递增（向后兼容）。
 pub async fn with_fs_counter<F, Fut>(f: F) -> (Fut::Output, FsOpCounts)
 where
@@ -282,5 +291,34 @@ mod tests {
     #[tokio::test]
     async fn current_returns_none_outside_with_fs_counter() {
         assert!(FsOpCounter::current().is_none());
+    }
+
+    #[tokio::test]
+    async fn nested_with_fs_counter_scopes_are_independent() {
+        // codex 二审 M3 / L3：嵌套 with_fs_counter 语义钉死 = 独立计数。
+        // 内层 scope 创建新 counter 覆盖外层 task-local 槽位，内层 fs op
+        // 不回传到外层 counter。
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("a");
+        tokio::fs::write(&path, b"x").await.unwrap();
+
+        let fs = InstrumentedFs::new(LocalFileSystemProvider::new());
+        let ((), outer) = with_fs_counter(|| async {
+            fs.stat(&path).await.unwrap();
+            let ((), inner) = with_fs_counter(|| async {
+                fs.stat(&path).await.unwrap();
+                fs.stat(&path).await.unwrap();
+            })
+            .await;
+            assert_eq!(inner.stat, 2, "内层 SHALL 独立计数 2 次");
+            // 内层 scope 退出后外层 task-local counter 恢复
+            fs.stat(&path).await.unwrap();
+        })
+        .await;
+        // 外层 SHALL 仅含外层 scope 内调用，不含内层（独立计数）
+        assert_eq!(
+            outer.stat, 2,
+            "外层 SHALL 仅记录自身 scope 内 2 次 stat，不聚合内层"
+        );
     }
 }
