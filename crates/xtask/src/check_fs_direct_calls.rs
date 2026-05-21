@@ -1,7 +1,7 @@
 //! `check-fs-direct-calls` subcommand —— H1 enforce 机制。
 //!
 //! 扫 `crates/*/src/**/*.rs` 内是否含 `tokio::fs::*` 直调，allowlist 从
-//! `.claude/rules/fs-abstraction.md` 的 H1 Allowlist markdown table 读出。
+//! `crates/cdt-fs/ALLOWLIST.md` 的 H1 Allowlist markdown table 读出。
 //!
 //! 设计：`openspec/changes/unify-fs-abstraction/design.md` D9 + D7。
 
@@ -33,7 +33,7 @@ pub fn run(workspace_root: &Path, args: &[String]) -> ExitCode {
     let allowlist = match load_allowlist(workspace_root) {
         Ok(list) => list,
         Err(e) => {
-            eprintln!("error: failed to parse allowlist from .claude/rules/fs-abstraction.md: {e}");
+            eprintln!("error: failed to parse allowlist from crates/cdt-fs/ALLOWLIST.md: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -60,7 +60,7 @@ pub fn run(workspace_root: &Path, args: &[String]) -> ExitCode {
         println!("  > {}", h.line);
     }
     println!(
-        "xtask: check-fs-direct-calls found {} violation(s); allowlist source = .claude/rules/fs-abstraction.md",
+        "xtask: check-fs-direct-calls found {} violation(s); allowlist source = crates/cdt-fs/ALLOWLIST.md",
         hits.len()
     );
 
@@ -94,7 +94,7 @@ impl AllowEntry {
 }
 
 fn load_allowlist(workspace_root: &Path) -> Result<Vec<AllowEntry>, String> {
-    let rules_path = workspace_root.join(".claude/rules/fs-abstraction.md");
+    let rules_path = workspace_root.join("crates/cdt-fs/ALLOWLIST.md");
     let text = std::fs::read_to_string(&rules_path)
         .map_err(|e| format!("read {}: {e}", rules_path.display()))?;
 

@@ -23,12 +23,12 @@
 
 ### 基础设施
 - **`ContextId` 类型**：三元组 `(backend_kind, host_signature, remote_home_or_local_root)`，cache key scope 规范化防跨 host 串扰
-- **`xtask check-fs-direct-calls`**：复用 PR #186 `build_time_invariants` 模式禁业务路径直调 `tokio::fs::*` / 业务算法层禁 `fs.kind() == Ssh`，加 CI gate
+- **`xtask check-fs-direct-calls`**：复用 PR #186 `build_time_invariants` 模式禁业务路径直调 `tokio::fs::*` / 业务算法层禁 `fs.kind() == Ssh`，加 CI gate；allowlist single source of truth 住 `crates/cdt-fs/ALLOWLIST.md`
 - **Provider instrumentation**：每个 IPC command 统计 fs op 次数 + tracing histogram（H2 可执行性基础设施）
-- **`.claude/rules/fs-abstraction.md`** 落 H1-H6 六条契约
+- **H1-H6 六条契约**：落地在 `openspec/specs/fs-abstraction/spec.md` 内对应 Requirement，**不**新增 `.claude/rules/*.md` 散文件（避免每会话自动加载浪费 token，遵守 30 行红线）
 - **`BackendPolicy` enum 雏形**：`initial_load_policy: FullEager | SkeletonThenStream` + `max_round_trips_for_initial_page: u8`，定义 + 单测，**不 wire 到业务**（PR-E 才接入）
 
-### 六条硬契约（H1-H6 写进 `.claude/rules/fs-abstraction.md` + 新 capability spec）
+### 六条硬契约（H1-H6 写进新 capability spec + 各自 enforce 机制）
 - **H1**: `cdt-api` / `cdt-config` / 业务路径**禁止**直调 `tokio::fs::*`（allowlist: provider 实现 + `cdt-cli` main + `cdt-watch` notify + 测试）
 - **H2**: hot path（list / 翻页 / 详情）**禁止** N 次串行 `fs.stat / read`；SHALL 用 `read_dir_with_metadata` / `stat_many` batched API
 - **H3**: 业务**算法**代码 `fs.kind() == Ssh` 默认拒；业务**策略**层（`LocalDataApi`）允许但 SHALL ADR + inline 注释 `// strategy fork: see design.md::Dx`，**收窄到只选 policy 不复制算法**
@@ -59,9 +59,9 @@
 - **修改** workspace `Cargo.toml` / 各 crate `Cargo.toml` → workspace.deps + cdt-discover / cdt-api / cdt-config / cdt-ssh / cdt-cli 加 `cdt-fs` dep；冗余 cdt-discover dep 标记 follow-up 清理（PR-D 时一起做）
 
 ### 规则与文档
-- 新增 `.claude/rules/fs-abstraction.md` 落 H1-H6
-- 修改 `CLAUDE.md` 加链接到 `.claude/rules/fs-abstraction.md`
-- 新增 `openspec/specs/fs-abstraction/spec.md`（新 capability 主 spec，由 archive 自动 sync）
+- 新增 `crates/cdt-fs/ALLOWLIST.md`：crate-local H1 allowlist 数据（xtask + build_time_invariants 共用 parse 入口，single source of truth）
+- 新增 `openspec/specs/fs-abstraction/spec.md`（新 capability 主 spec，由 archive 自动 sync；H1-H6 SHALL 句承载在此）
+- **不**新增 `.claude/rules/fs-abstraction.md` —— 行为契约住 spec.md（按需 Read），跨域操作纪律不必新增散文件（避免每会话自动加载浪费 token）
 
 ### CI
 - 新增 `xtask check-fs-direct-calls` 作为 PR check（grep `tokio::fs::*` 在业务 crate 内 + `fs.kind() == Ssh` 在业务算法路径，allowlist 控制）

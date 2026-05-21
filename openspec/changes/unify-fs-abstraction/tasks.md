@@ -86,12 +86,12 @@
 
 ## 8. xtask check-fs-direct-calls
 
-> codex 第二轮 Medium #7：xtask 与 `build_time_invariants` 集成测试是不同机制并存，allowlist 必须单源（住在 `.claude/rules/fs-abstraction.md`）。
+> codex 第二轮 Medium #7：xtask 与 `build_time_invariants` 集成测试是不同机制并存，allowlist 必须单源（住在 `crates/cdt-fs/ALLOWLIST.md`）。
 
 - [x] 8.1 调研：workspace 是否已有 `xtask` crate？若有，加 subcommand；若无，新建 `crates/xtask/` minimal binary crate（不进 publish 列表 + 不进 workspace `default-members`）
 - [x] 8.2 实现 `check-fs-direct-calls` 命令：grep 业务 crate 内 `tokio::fs::(metadata|read|read_to_string|read_dir|File::open|write|create_dir_all|remove)` 模式
-- [x] 8.3 allowlist **单源住在 `.claude/rules/fs-abstraction.md`** 的 "Allowlist" 段（markdown table 格式：`| crate/path | reason |`），xtask 启动时 parse 规则文件，**不**在 xtask 源码硬编码 allowlist
-- [x] 8.4 `crates/cdt-api/tests/build_time_invariants.rs`（PR #186 留下的）若 future 需要也接 `tokio::fs::*` 类检查，**也**从同一 `.claude/rules/fs-abstraction.md` 读 allowlist，保证两套机制单源；本 change 不动 build_time_invariants（仅文档化它读规则文件作为 future contract）
+- [x] 8.3 allowlist **单源住在 `crates/cdt-fs/ALLOWLIST.md`** 的 "Allowlist" 段（markdown table 格式：`| crate/path | reason |`），xtask 启动时 parse 规则文件，**不**在 xtask 源码硬编码 allowlist
+- [x] 8.4 `crates/cdt-api/tests/build_time_invariants.rs`（PR #186 留下的）若 future 需要也接 `tokio::fs::*` 类检查，**也**从同一 `crates/cdt-fs/ALLOWLIST.md` 读 allowlist，保证两套机制单源；本 change 不动 build_time_invariants（仅文档化它读规则文件作为 future contract）
 - [x] 8.5 支持 `--warn-only` flag：命中时 warning + exit 0（本 change 期间默认开启）；不带 flag 时 exit 1
 - [x] 8.6 加 CI 配置：`.github/workflows/check.yml` 或等价位置加 step `cargo xtask check-fs-direct-calls --warn-only`
 - [x] 8.7 自测：手动跑 `cargo xtask check-fs-direct-calls`，确认输出 ~34 处现有违反作为 warning，CI 不 fail
@@ -125,15 +125,15 @@
 
 > codex 第二轮 Medium #7：allowlist 单源住在规则文件；codex 第二轮 High #9：每条 H 必须标 enforce 方式。
 
-- [x] 10.1 新建 `.claude/rules/fs-abstraction.md`，落 H1-H6 六条契约：每条标题 + 约束描述 + 至少一个违反示例 + 修法 + **Enforce 机制段**（H1 → xtask；H2 → instrumentation + 集成测试 + review；H3 → review + D6 分类表；H4 → BackendPolicy 单测；H5 → no_pagination_in_trait 测试；H6 → FsError 元方法单测）
+- [x] 10.1 新建 `crates/cdt-fs/ALLOWLIST.md`，落 H1-H6 六条契约：每条标题 + 约束描述 + 至少一个违反示例 + 修法 + **Enforce 机制段**（H1 → xtask；H2 → instrumentation + 集成测试 + review；H3 → review + D6 分类表；H4 → BackendPolicy 单测；H5 → no_pagination_in_trait 测试；H6 → FsError 元方法单测）
 - [x] 10.2 H1 段落含"Allowlist" markdown table，列每个允许的路径 + reason；xtask + build_time_invariants 都 SHALL parse 此 table（**single source of truth**）
 - [x] 10.3 H2 段落含具体反模式（`for path in paths { fs.stat(path).await? }`）与修法（`fs.stat_many(&paths).await`）；附 instrumentation 接入样例 `with_fs_counter(async { api.list_sessions(...).await }).await`
 - [x] 10.4 H3 段落含"算法分叉 vs 策略分叉"区分判据 + 具体反例（"if Ssh { sort by mtime } else { sort by size }" = 算法分叉拒；"if Ssh { initial_load_policy: FullEager }" = 策略分叉允许）+ 链接到本 change design.md D6 的 23 处分叉初步分类表
 - [x] 10.5 H4 段落含 `BackendPolicy::for_local() / for_ssh() / for_http()` 三种默认值 table + transport 抽象延后的 anchor
 - [x] 10.6 H5 段落引用 PR #186 `GroupCursor` 作为"高层分页正确实现位置"范例 + 链接 `no_pagination_in_trait.rs` 自动化测试
 - [x] 10.7 H6 段落含 `FsError.is_retryable()` / `should_invalidate_cache()` 使用样例（cache 写入时检查 `should_invalidate_cache`；重试 backoff 用 `is_retryable` 守卫）
-- [x] 10.8 修改 `CLAUDE.md` "按域去哪查" 段或等价位置加链接到 `.claude/rules/fs-abstraction.md`
-- [x] 10.9 修改 `CLAUDE.md` 的 "跨域规则散文件" 表格加一行 `.claude/rules/fs-abstraction.md` + 何时读列：「任何 fs 调用 / cache 改动 / SSH / HTTP server mode 相关改动 SHALL 读」
+- [x] 10.8 修改 `CLAUDE.md` "按域去哪查" 段或等价位置加链接到 `crates/cdt-fs/ALLOWLIST.md`
+- [x] 10.9 修改 `CLAUDE.md` 的 "跨域规则散文件" 表格加一行 `crates/cdt-fs/ALLOWLIST.md` + 何时读列：「任何 fs 调用 / cache 改动 / SSH / HTTP server mode 相关改动 SHALL 读」
 
 ## 11. 编译 + 测试 + 性能验证
 

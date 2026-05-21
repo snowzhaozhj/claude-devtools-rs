@@ -202,35 +202,28 @@ pub struct HostSignature {
 - **THEN** 同一 `MetadataCache` 实例 SHALL 同时持有两个 context 的 entry
 - **AND** SSH context A 的 entry SHALL NOT 因切回 Local 被自动清除（依赖 LRU + TTL 自然淘汰）
 
-### Requirement: H1-H6 六条硬契约通过 `.claude/rules/fs-abstraction.md` 落地
+### Requirement: H1-H6 六条硬契约 SHALL 通过 enforce 机制守护
 
-系统 SHALL 在 `.claude/rules/fs-abstraction.md` 文件中明文落地以下六条硬约束（H1-H6），作为本 capability 的代码组织契约。每条 SHALL 同时标注 enforce 机制（"如何检查违反"）：
+本 capability SHALL 守护以下六条硬约束（H1-H6），作为 fs 抽象边界的代码组织契约。每条 SHALL 由对应 enforce 机制（自动化测试 / xtask / 单测 / PR review）守护，**不**单独依赖独立的散文档存在：
 
-- **H1**: `cdt-api` / `cdt-config` / 业务路径**禁止**直调 `tokio::fs::*`；allowlist 包括 provider 实现、`cdt-cli` main、`cdt-watch` notify、测试与 examples。**Enforce**: `xtask check-fs-direct-calls`（本 change 实现，--warn-only；PR-D 完成后切 fail-on-match）
+- **H1**: `cdt-api` / `cdt-config` / 业务路径**禁止**直调 `tokio::fs::*`；allowlist（豁免清单）SHALL 单源住在 `crates/cdt-fs/ALLOWLIST.md`，xtask 与 build-time 集成测试 SHALL 在运行时 parse 此文件作为唯一输入。**Enforce**: `cargo xtask check-fs-direct-calls`（本 change 实现，`--warn-only`；PR-D 完成后切 fail-on-match）
 - **H2**: hot path（list / 翻页 / 详情）**禁止** N 次串行 `fs.stat / read`；SHALL 用 `read_dir_with_metadata` 或 `stat_many` batched API。**Enforce**: (a) `FsOpCounter` instrumentation 输出 tracing histogram（本 change 提供基础设施）；(b) 集成测试用 fake provider 断言 fs op 上限（PR-B/C/D 加测）；(c) PR review checklist
 - **H3**: 业务**算法**代码 `fs.kind() == Ssh` 默认拒；业务**策略**层（`LocalDataApi`）允许但 SHALL ADR + inline 注释，且**只允许选 `BackendPolicy` 字段值，不允许复制业务算法**。**Enforce**: PR review checklist 按本 change design.md D6 分类表逐行复核；未来可扩展 xtask（本 change 不实现）
 - **H4**: HTTP backend SHALL 默认 `initial_load_policy: FullEager` + `max_round_trips_for_initial_page: 1`；Tauri 本地 backend SHALL 默认 `SkeletonThenStream`；transport 层抽象延后处理。**Enforce**: `BackendPolicy::for_local() / for_ssh() / for_http()` 单测断言（本 change 实现）；PR-E wire 时单测断言 `LocalDataApi(http_mode).policy == BackendPolicy::for_http()`
-- **H5**: `FileSystemProvider` trait **不**承担分页 / 排序语义——按 mtime 拿前 N 走更高层（`SessionIndex` / `ProjectRepository`），不污染 fs trait。**Enforce**: 集成测试 `fs_trait_no_pagination_methods`（grep trait 方法签名禁含 `Cursor / Offset / SortBy / Order`，本 change 实现）
+- **H5**: `FileSystemProvider` trait **不**承担分页 / 排序语义——按 mtime 拿前 N 走更高层（`SessionIndex` / `ProjectRepository`），不污染 fs trait。**Enforce**: 集成测试 `cdt-fs/tests/no_pagination_in_trait.rs`（`syn` AST parse trait 方法签名，禁含 `Cursor / Offset / Limit / SortBy / Order` 类型）
 - **H6**: `FsError` 必须可操作 —— `is_retryable / should_invalidate_cache` 元方法是 trait 契约的一部分。**Enforce**: 单测覆盖每个 variant 的元方法返回值（本 change 实现）
 
-`CLAUDE.md` SHALL 在"按域去哪查"段或等价位置加链接指向 `.claude/rules/fs-abstraction.md`。
+#### Scenario: H1 allowlist single source of truth 来自 `crates/cdt-fs/ALLOWLIST.md`
 
-#### Scenario: 规则文件存在且含六条契约 + enforce 标注
-
-- **WHEN** 读 `.claude/rules/fs-abstraction.md`
-- **THEN** 内容 SHALL 含 H1 / H2 / H3 / H4 / H5 / H6 六个段落
-- **AND** 每段 SHALL 含约束描述 + 违反示例 + 修法 + **Enforce 机制标注**（说明该契约通过哪种自动化或人工流程检查）
-
-#### Scenario: 根 CLAUDE.md 引用规则文件
-
-- **WHEN** 读 `CLAUDE.md`
-- **THEN** SHALL 含链接到 `.claude/rules/fs-abstraction.md` 的引用，告诉 contributor 何时查阅
+- **WHEN** `cargo xtask check-fs-direct-calls --warn-only` 在 CI 跑
+- **THEN** xtask SHALL 从 `crates/cdt-fs/ALLOWLIST.md` 的 `## Allowlist` 段 markdown table 解析 allowlist
+- **AND** `crates/cdt-api/tests/build_time_invariants.rs`（PR #186 留下的）若未来加入 `tokio::fs::*` 类似检查也 SHALL 从同一文件 parse，**禁止** xtask 源码或测试源码硬编码 allowlist 副本
 
 #### Scenario: H5 fs trait 不暴露排序参数（自动化测试）
 
-- **WHEN** CI 跑 `cargo test --workspace`
-- **THEN** 必须有集成测试断言 `cdt_fs::FileSystemProvider` 的方法签名（通过 trait method 元信息或 `inventory!` 等机制）SHALL NOT 含 `Cursor` / `Offset` / `Limit` / `SortBy` / `Order` 等标识符
-- **AND** 该测试 fail 时 CI 拒
+- **WHEN** CI 跑 `cargo test -p cdt-fs --test no_pagination_in_trait`
+- **THEN** 必须有集成测试用 `syn::parse_str::<syn::File>` parse trait 方法签名，断言无方法参数 type 含 `Cursor` / `Offset` / `Limit` / `SortBy` / `Order`
+- **AND** 该测试 fail 时 CI 拒，panic 消息含 method name + violating arg type + 指向本 spec H5 + design.md D2
 
 ### Requirement: `xtask check-fs-direct-calls` 自动化 H1
 

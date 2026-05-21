@@ -2,7 +2,7 @@
 //!
 //! 子命令：
 //! - `check-fs-direct-calls [--warn-only]` —— 扫业务 crate 内是否有 `tokio::fs::*`
-//!   直调（H1 Allowlist 真相源：`.claude/rules/fs-abstraction.md`）。
+//!   直调（H1 Allowlist 真相源：`crates/cdt-fs/ALLOWLIST.md`）。
 //!   `--warn-only` 命中报 warning 但 exit 0（本 change PR-A 期间默认开启）；
 //!   不带 flag 时命中 exit 1（PR-D 完成 callsite 迁移后切到 fail-on-match）。
 

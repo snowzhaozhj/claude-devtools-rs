@@ -1,7 +1,7 @@
 //! 本地文件系统 `FileSystemProvider` 实现。
 //!
 //! 单态、内部无状态；本 crate 内部允许调 `tokio::fs::*`，但其它业务 crate
-//! 通过 trait 调用——`.claude/rules/fs-abstraction.md` H1 allowlist 这里。
+//! 通过 trait 调用——`crates/cdt-fs/ALLOWLIST.md` H1 allowlist 列在这里。
 
 use std::path::Path;
 use std::time::UNIX_EPOCH;

@@ -3,7 +3,8 @@
 //! 本 crate 是 local / ssh / 未来 http-server / WSL / fake-test 等所有 fs backend
 //! 的**唯一**抽象住所。业务 crate（`cdt-api` / `cdt-config` / `cdt-discover`
 //! / `cdt-ssh` / `cdt-cli` / `cdt-watch`）SHALL 通过本 crate 拿 fs 抽象，
-//! **不得**直接调 `tokio::fs::*`（详见 `.claude/rules/fs-abstraction.md` H1）。
+//! **不得**直接调 `tokio::fs::*`（详见 `openspec/specs/fs-abstraction/spec.md` H1
+//! Requirement + `crates/cdt-fs/ALLOWLIST.md` 豁免清单）。
 //!
 //! Spec：`openspec/specs/fs-abstraction/spec.md`。
 //!
