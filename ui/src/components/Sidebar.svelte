@@ -920,6 +920,8 @@
             class:session-item-hidden={isHidden(sessionProjectId, session.sessionId)}
             class:metadata-pending={!session.title && session.messageCount === 0 && !session.isOngoing}
             style:height="{ITEM_HEIGHT}px"
+            data-session-id={session.sessionId}
+            data-project-id={sessionProjectId}
             onclick={(e) => onSelectSession(session.sessionId, sessionProjectId, selectedGroupId, sessionLabel(session), e)}
             oncontextmenu={(e) => onContextMenu(e, session)}
           >

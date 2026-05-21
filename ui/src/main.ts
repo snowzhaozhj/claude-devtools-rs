@@ -14,15 +14,12 @@ async function maybeSetupMock(): Promise<void> {
   // 被 esbuild DCE，连同 dynamic import './lib/tauriMock' 一起从 bundle 剔除。
   if (import.meta.env.DEV) {
     const params = new URLSearchParams(window.location.search)
-    if (params.has('http')) return // server-mode 调试：走真后端，不注入 mock
-    const forceMock = params.has('mock')
-    const noTauriRuntime = !('__TAURI_INTERNALS__' in window)
-    if (!forceMock && !noTauriRuntime) return
-    const fixtureName = params.get('fixture')
-    const { setupMockIPC } = await import('./lib/tauriMock')
-    setupMockIPC(fixtureName)
-    // dev/test 暴露关键 store 函数到 window，让 Playwright 能直接调
-    // 而不用走完整 UI 路径（避免 virtualization / 异步渲染时序导致的 flake）。
+
+    // dev/test 暴露关键 store 函数到 window，让 Playwright / chrome-devtools mcp
+    // 能直接调而不用走完整 UI 路径（避免 virtualization / 异步渲染时序导致的 flake）。
+    // 任何 dev 入口（?http=1 真后端 / ?mock=1 / Tauri dev runtime）都注入——
+    // 历史上只在 mockIPC 分支注入，导致 e2e-http-verify skill 推荐的 ?http=1 入口
+    // 拿不到 helper 只能靠 sidebar click + virtualization 文本模糊匹配，flake 高。
     const { openSettingsTab, openNotificationsTab, openMemoryTab, openTab, setActiveTab } =
       await import('./lib/tabStore.svelte')
     Object.assign(window, {
@@ -34,6 +31,14 @@ async function maybeSetupMock(): Promise<void> {
         setActiveTab,
       },
     })
+
+    if (params.has('http')) return // server-mode 调试：走真后端，不注入 mock
+    const forceMock = params.has('mock')
+    const noTauriRuntime = !('__TAURI_INTERNALS__' in window)
+    if (!forceMock && !noTauriRuntime) return
+    const fixtureName = params.get('fixture')
+    const { setupMockIPC } = await import('./lib/tauriMock')
+    setupMockIPC(fixtureName)
   }
 }
 
