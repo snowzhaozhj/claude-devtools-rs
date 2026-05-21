@@ -600,7 +600,8 @@ impl LocalDataApi {
         let wt_lists = futures::future::join_all(futs).await;
         let mut wt_sessions: std::collections::BTreeMap<String, Vec<cdt_core::Session>> =
             std::collections::BTreeMap::new();
-        let mut failed_wt_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut failed_wt_ids: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
         let scheduled_wt_ids: std::collections::BTreeSet<String> =
             group.worktrees.iter().map(|w| w.id.clone()).collect();
         for result in wt_lists {
