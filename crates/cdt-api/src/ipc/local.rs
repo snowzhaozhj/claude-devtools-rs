@@ -587,6 +587,12 @@ impl LocalDataApi {
 
         let cursor_state = parse_group_cursor(cursor);
 
+        // codex 二审第五轮 Blocker 修订：generation snapshot SHALL **先于** fs/ctx
+        // await 拿取，与之同源属于"reconfigure 前的 snapshot"。否则 reader 在
+        // await 期间被 reconfigure 跑过 → 拿到旧 fs/ctx + 新 generation → scan task
+        // 内 expected == current → 仍 broadcast 旧 ctx 串扰。
+        let expected_context_generation = self.context_generation.load(Ordering::SeqCst);
+        let _expected_root_generation = self.root_generation.load(Ordering::SeqCst);
         // 用户可见列表 handler 走 strict 变体——SSH disconnect 中间态 SHALL 报错
         // 而非静默降级（PR-C codex commit-stage round-2 Q1：原 PR-B 引入 relaxed
         // 在用户可见列表路径，本 PR 加 strict 时一并修齐）。
@@ -912,7 +918,10 @@ impl LocalDataApi {
         //    字符串作 namespace key 后缀，无碰撞、deterministic，与
         //    `list_sessions` 走 `(project_id, cursor)` 双键的并存语义一致。
         let cur_root_generation = self.root_generation.load(Ordering::SeqCst);
-        let cur_context_generation = self.context_generation.load(Ordering::SeqCst);
+        // codex 第五轮 Blocker：用 fn 顶部早 load 的 expected_context_generation
+        // （与 fs/ctx 同 snapshot），避免 reconfigure 在 await 期间跑过让 reader
+        // 拿到旧 ctx + 新 generation 的 race。
+        let cur_context_generation = expected_context_generation;
         let scan_cursor_id = format!("group:{}", cursor.unwrap_or("none"));
         for (wt_id, (dir, jobs)) in page_jobs_by_wt {
             if jobs.is_empty() {
@@ -1321,6 +1330,27 @@ impl LocalDataApi {
 
     pub async fn shutdown_ssh_all(&self, deadline: std::time::Duration) {
         self.ssh_shutdown_generation.fetch_add(1, Ordering::SeqCst);
+        // codex 二审第五轮 Missing Entry：shutdown_ssh_all 也是 context 变更入口
+        // （内部 ssh_mgr.shutdown_all 会 disconnect 所有 SSH ctx 并 emit context
+        // changed event），必须 bump context_generation + abort 所有 SSH scan
+        // 避免 late-insert scan task 在 broadcast 旧 ctx update 串扰新 (Local)
+        // 状态。app exit 路径理论上无前端可观察者，但 deadline 后 process 仍
+        // 存活时（如 graceful shutdown 失败）broadcast 仍可能到达——保守 bump。
+        self.context_generation.fetch_add(1, Ordering::SeqCst);
+        {
+            let Ok(mut scans) = self.active_scans.lock() else {
+                self.ssh_mgr.shutdown_all(deadline).await;
+                return;
+            };
+            scans.retain(|_key, entry| {
+                if entry.context_id.backend_kind == cdt_fs::FsKind::Ssh {
+                    entry.handle.abort();
+                    false
+                } else {
+                    true
+                }
+            });
+        }
         let Ok(_ops) = self.ssh_watcher_ops.try_lock() else {
             self.ssh_mgr.shutdown_all(deadline).await;
             return;
@@ -1531,6 +1561,9 @@ impl LocalDataApi {
             Vec<SessionMetadataUpdate>,
             Arc<dyn FileSystemProvider>,
             cdt_fs::ContextId,
+            // expected_context_generation —— 与 fs/ctx 同 snapshot 早 load，
+            // 防 codex 第五轮 Blocker 报的 generation late-capture race。
+            u64,
         ),
         ApiError,
     > {
@@ -1538,6 +1571,14 @@ impl LocalDataApi {
             return Err(ApiError::validation("pageSize must be > 0"));
         }
 
+        // codex 二审第五轮 Blocker 修订：generation snapshot SHALL **先于**
+        // `active_fs_and_context_strict()` await 拿取，与 fs/ctx 同属"reconfigure
+        // 前的 snapshot"。late-load 模式下 reconfigure 在 await 期间跑完 → reader
+        // 拿到旧 fs/ctx + 新 generation → scan task 内 expected == current → 仍 broadcast
+        // 旧 ctx 串扰 UI。改先 load：reader 持旧 generation → scan task check 旧
+        // expected != 当前(新)值 → silent drop。
+        let expected_context_generation = self.context_generation.load(Ordering::SeqCst);
+        let expected_root_generation = self.root_generation.load(Ordering::SeqCst);
         // 用户可见列表 handler 走 strict 变体——SSH disconnect 中间态 SHALL 报错
         // 而非静默降级（PR-C codex commit-stage round-2 Q1）。
         let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
@@ -1551,7 +1592,7 @@ impl LocalDataApi {
             .list_sessions(project_id, &std::collections::BTreeSet::new())
             .await
             .map_err(|e| ApiError::internal(format!("list sessions error: {e}")))?;
-        let root_generation = self.root_generation.load(Ordering::SeqCst);
+        let root_generation = expected_root_generation;
 
         let offset = pagination
             .cursor
@@ -1674,6 +1715,7 @@ impl LocalDataApi {
             inline_updates,
             fs,
             ctx,
+            expected_context_generation,
         ))
     }
 }
@@ -1974,6 +2016,7 @@ impl DataApi for LocalDataApi {
             _inline_updates,
             fs,
             ctx,
+            _expected_context_generation,
         ) = self.list_sessions_skeleton(project_id, pagination).await?;
 
         // 并发提取每条 session 的 metadata：复用 `self.metadata_scan_semaphore`
@@ -2016,8 +2059,18 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (page, next_cursor, total, page_jobs, dir, root_generation, inline_updates, fs, ctx) =
-            self.list_sessions_skeleton(project_id, pagination).await?;
+        let (
+            page,
+            next_cursor,
+            total,
+            page_jobs,
+            dir,
+            root_generation,
+            inline_updates,
+            fs,
+            ctx,
+            expected_context_generation,
+        ) = self.list_sessions_skeleton(project_id, pagination).await?;
 
         for update in inline_updates {
             let _ = self.session_metadata_tx.send(update);
@@ -2047,7 +2100,10 @@ impl DataApi for LocalDataApi {
                 let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
 
                 let ctx_for_entry = ctx.clone();
-                let cur_context_generation = self.context_generation.load(Ordering::SeqCst);
+                // codex 第五轮 Blocker：用 list_sessions_skeleton 早 load 的
+                // expected_context_generation（与 fs/ctx 同 snapshot），而非 spawn 时
+                // 才 load——避免 reconfigure 在 fs/ctx 已 await 完成、spawn 之前跑过
+                // 让 reader 拿到旧 ctx + 新 generation 的 race。
                 let handle = tokio::spawn(scan_metadata_for_page(
                     project_id_owned,
                     dir,
@@ -2064,7 +2120,7 @@ impl DataApi for LocalDataApi {
                     fs,
                     ctx,
                     self.context_generation.clone(),
-                    cur_context_generation,
+                    expected_context_generation,
                 ));
 
                 scans.insert(
