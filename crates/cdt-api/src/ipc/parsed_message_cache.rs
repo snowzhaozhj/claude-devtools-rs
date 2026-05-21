@@ -1,26 +1,32 @@
-//! parsed-message LRU 缓存：按 `(jsonl_path, FileSignature)` 缓存
+//! parsed-message LRU 缓存：按 `((ContextId, jsonl_path), FileSignature)` 缓存
 //! `cdt_parse::parse_file` 结果，让 `get_tool_output` / `get_image_asset`
 //! hot path 避免重复 line-by-line 解析整个 JSONL。
 //!
 //! 行为契约见 `openspec/specs/ipc-data-api/spec.md` §"`get_tool_output` 与
-//! `get_image_asset` 走 parsed-message LRU 缓存"。模式与
-//! `crates/cdt-api/src/ipc/session_metadata.rs::MetadataCache` 完全对齐：
-//! 同款 `(mtime, size, identity)` 签名 + LRU + 命中 bump 到队首。
+//! `get_image_asset` 走 parsed-message LRU 缓存"。形态与
+//! `crates/cdt-api/src/ipc/session_metadata.rs::MetadataCache` 完全对齐
+//! （change `metadata-cache-context-prefix` PR-B → 本 change PR-C 同型搬运）：
+//! - 同款 `(mtime, size, identity)` 签名 + LRU + 命中 bump 到队首
+//! - key 加 `ContextId` 前缀，跨 Local / SSH host 不串扰（详 change
+//!   `parsed-message-cache-context-prefix` design D1）
+//! - stat 路径走 `FileSystemProvider::stat`（design D7），SSH callsite
+//!   暂不接入 cache（design D6，留 PR-D）
 //!
-//! 容量上限调低为 50（vs metadata 200）——单条 entry 是
-//! `Arc<Vec<ParsedMessage>>`，量级千倍以上；详 change
-//! `parsed-message-lru-cache` design D3。
+//! 容量上限 50（vs metadata 2000）—— 单 entry 是 `Arc<Vec<ParsedMessage>>`，
+//! 量级千倍以上；详 change `parsed-message-cache-context-prefix` design D3。
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use cdt_core::ParsedMessage;
+use cdt_fs::{ContextId, FileSystemProvider};
 use cdt_parse::parse_file;
 
 use crate::cache_signature::FileSignature;
 
-/// 缓存容量上限。详 change `parsed-message-lru-cache` design D3。
+/// 缓存容量上限。详 change `parsed-message-cache-context-prefix` design D3
+/// （单 entry 大、count 少；保持原 50 不动避免触碰内存峰值）。
 pub const PARSED_MESSAGE_CACHE_CAPACITY: usize = 50;
 
 #[derive(Debug, Clone)]
@@ -29,11 +35,19 @@ struct ParsedMessageEntry {
     messages: Arc<Vec<ParsedMessage>>,
 }
 
-/// `LocalDataApi` 持有的 parsed-message LRU 缓存（**不**用全局单例，详 design D3）。
+/// cache key 形态：`(ContextId, PathBuf)` tuple —— 与 `MetadataCache` 同形
+/// （PR-A spec `fs-abstraction::ContextId 三元组作为 cache key 前缀` SHALL 句 +
+/// change `parsed-message-cache-context-prefix` design D1）。Local vs SSH 或
+/// 不同 SSH host 间天然由 `ContextId` 的 `Hash`/`Eq` 隔离，不串扰。
+type ParsedMessageCacheKey = (ContextId, PathBuf);
+
+/// `LocalDataApi` 持有的 parsed-message LRU 缓存（**不**用全局单例，详 change
+/// `parsed-message-lru-cache` design D3）。key 加 `ContextId` 前缀
+/// （change `parsed-message-cache-context-prefix` PR-C）。
 #[derive(Debug)]
 pub struct ParsedMessageCache {
-    map: HashMap<PathBuf, ParsedMessageEntry>,
-    order: VecDeque<PathBuf>,
+    map: HashMap<ParsedMessageCacheKey, ParsedMessageEntry>,
+    order: VecDeque<ParsedMessageCacheKey>,
     capacity: usize,
 }
 
@@ -52,21 +66,26 @@ impl ParsedMessageCache {
         }
     }
 
-    fn lookup(&mut self, path: &Path) -> Option<ParsedMessageEntry> {
-        let entry = self.map.get(path)?.clone();
-        if let Some(pos) = self.order.iter().position(|p| p == path) {
-            let p = self.order.remove(pos).expect("position 已校验");
-            self.order.push_front(p);
+    fn lookup(&mut self, ctx: &ContextId, path: &Path) -> Option<ParsedMessageEntry> {
+        // HashMap key 是 owned `(ContextId, PathBuf)` tuple，无法用 `(&ContextId, &Path)`
+        // 直接 get；克隆 key 用于 lookup 是常规模式（ContextId ~300 bytes + PathBuf
+        // ~120 bytes 短暂分配，相对 cache hit 后 Arc::clone 完整 messages 的几 µs
+        // 量级可忽略）。
+        let key = (ctx.clone(), path.to_path_buf());
+        let entry = self.map.get(&key)?.clone();
+        if let Some(pos) = self.order.iter().position(|k| k == &key) {
+            let k = self.order.remove(pos).expect("position 已校验");
+            self.order.push_front(k);
         }
         Some(entry)
     }
 
-    fn insert(&mut self, path: PathBuf, entry: ParsedMessageEntry) {
-        if self.map.contains_key(&path) {
-            self.map.insert(path.clone(), entry);
-            if let Some(pos) = self.order.iter().position(|p| p == &path) {
-                let p = self.order.remove(pos).expect("position 已校验");
-                self.order.push_front(p);
+    fn insert(&mut self, key: ParsedMessageCacheKey, entry: ParsedMessageEntry) {
+        if self.map.contains_key(&key) {
+            self.map.insert(key.clone(), entry);
+            if let Some(pos) = self.order.iter().position(|k| k == &key) {
+                let k = self.order.remove(pos).expect("position 已校验");
+                self.order.push_front(k);
             }
             return;
         }
@@ -77,35 +96,38 @@ impl ParsedMessageCache {
             }
         }
 
-        self.map.insert(path.clone(), entry);
-        self.order.push_front(path);
+        self.map.insert(key.clone(), entry);
+        self.order.push_front(key);
     }
 
-    /// 主动从缓存移除 `path` 条目。不在 cache 中时 no-op。
-    pub fn remove(&mut self, path: &Path) {
-        if self.map.remove(path).is_some() {
-            if let Some(pos) = self.order.iter().position(|p| p == path) {
+    /// 主动从缓存移除 `(ctx, path)` 条目。不在 cache 中时 no-op。
+    pub fn remove(&mut self, ctx: &ContextId, path: &Path) {
+        let key = (ctx.clone(), path.to_path_buf());
+        if self.map.remove(&key).is_some() {
+            if let Some(pos) = self.order.iter().position(|k| k == &key) {
                 let _ = self.order.remove(pos);
             }
         }
     }
 
-    /// 仅在 cache 中 `path` 条目的 `FileSignature` 与 `current_sig` 不一致时
-    /// 才 remove。用于 file-watcher 广播 invalidate 路径——避免 spurious 事件
-    /// （如 CI 上 inotify 启动期对刚创建的 watch dir 偶发的"无内容变化"事件、
+    /// 仅在 cache 中 `(ctx, path)` 条目的 `FileSignature` 与 `current_sig`
+    /// 不一致时才 remove。用于 file-watcher 广播 invalidate 路径——避免 spurious
+    /// 事件（如 CI 上 inotify 启动期对刚创建的 watch dir 偶发的"无内容变化"事件、
     /// metadata-only touch 等）错杀有效 cache。返回是否真的发生了 remove。
     pub fn remove_if_signature_mismatch(
         &mut self,
+        ctx: &ContextId,
         path: &Path,
         current_sig: &FileSignature,
     ) -> bool {
-        let Some(entry) = self.map.get(path) else {
+        let key = (ctx.clone(), path.to_path_buf());
+        let Some(entry) = self.map.get(&key) else {
             return false;
         };
         if entry.signature == *current_sig {
             return false;
         }
-        self.remove(path);
+        self.remove(ctx, path);
         true
     }
 
@@ -127,24 +149,32 @@ impl ParsedMessageCache {
 /// 调 `parse_file(path)` 写入缓存。
 ///
 /// 返回 `None` 的两类场景（caller 走原有错误兜底）：
-/// - `tokio::fs::metadata(path)` 失败：SHALL NOT 写入 cache
+/// - `fs.stat(path)` 失败：SHALL NOT 写入 cache
 /// - `parse_file(path)` 返回 `Err`：SHALL NOT 写入 cache（避免 negative cache
-///   引入新失效边界，详 design D6）
+///   引入新失效边界，详 change `parsed-message-lru-cache` design D6）
+///
+/// stat 路径走 `FileSystemProvider::stat`（详 change
+/// `parsed-message-cache-context-prefix` design D6 / D7）；cache miss 后的扫描
+/// 路径仍是 `cdt_parse::parse_file`（内部 `tokio::fs::File::open`），本 change
+/// scope 边界——SSH callsite 当前不经过此 wrapper（design D6），完整 SSH 接入 +
+/// `parse_file` 切 `fs.open_read` 留 PR-D。
 ///
 /// 行为契约：`openspec/specs/ipc-data-api/spec.md` §"`get_tool_output` 与
 /// `get_image_asset` 走 parsed-message LRU 缓存"。
-#[allow(deprecated)]
 pub(crate) async fn extract_parsed_messages_cached(
     cache: &StdMutex<ParsedMessageCache>,
+    fs: &dyn FileSystemProvider,
+    context_id: &ContextId,
     path: &Path,
 ) -> Option<Arc<Vec<ParsedMessage>>> {
-    let sig = FileSignature::from_metadata(&tokio::fs::metadata(path).await.ok()?);
+    let meta = fs.stat(path).await.ok()?;
+    let sig = FileSignature::from_fs_metadata(&meta);
 
     {
         let cached = cache
             .lock()
             .expect("parsed message cache mutex poisoned")
-            .lookup(path);
+            .lookup(context_id, path);
         if let Some(entry) = cached {
             if entry.signature == sig {
                 return Some(entry.messages);
@@ -169,7 +199,7 @@ pub(crate) async fn extract_parsed_messages_cached(
         .lock()
         .expect("parsed message cache mutex poisoned")
         .insert(
-            path.to_path_buf(),
+            (context_id.clone(), path.to_path_buf()),
             ParsedMessageEntry {
                 signature: sig,
                 messages: messages.clone(),
@@ -185,6 +215,27 @@ mod tests {
 
     use super::*;
     use crate::cache_signature::{FileIdentity, FileSignature};
+
+    fn local_ctx() -> ContextId {
+        ContextId::local(PathBuf::from("/test/local"))
+    }
+
+    fn ssh_ctx() -> ContextId {
+        // 用一个稳定 mock host_signature；不同 ssh_ctx() 调用返回同 digest，
+        // 单测内的"SSH ctx"语义稳定。
+        use cdt_fs::{HostSignature, SshConfigDigestInput};
+        let input = SshConfigDigestInput {
+            hostname: "fake-host".to_string(),
+            port: 22,
+            user: "user".to_string(),
+            identity_files: vec![],
+            proxyjump: None,
+            proxycommand: None,
+            hostkeyalias: None,
+        };
+        let sig = HostSignature::from_ssh_config_fields(&input);
+        ContextId::ssh(sig, PathBuf::from("/remote/home"))
+    }
 
     fn dummy_entry(size: u64) -> ParsedMessageEntry {
         ParsedMessageEntry {
@@ -202,46 +253,50 @@ mod tests {
 
     #[test]
     fn parsed_cache_evicts_lru_when_over_capacity() {
+        let ctx = local_ctx();
         let mut cache = ParsedMessageCache::new(2);
-        cache.insert(PathBuf::from("/a"), dummy_entry(1));
-        cache.insert(PathBuf::from("/b"), dummy_entry(2));
-        cache.insert(PathBuf::from("/c"), dummy_entry(3));
-        assert!(cache.lookup(Path::new("/a")).is_none(), "/a 应被淘汰");
-        assert!(cache.lookup(Path::new("/b")).is_some());
-        assert!(cache.lookup(Path::new("/c")).is_some());
+        cache.insert((ctx.clone(), PathBuf::from("/a")), dummy_entry(1));
+        cache.insert((ctx.clone(), PathBuf::from("/b")), dummy_entry(2));
+        cache.insert((ctx.clone(), PathBuf::from("/c")), dummy_entry(3));
+        assert!(cache.lookup(&ctx, Path::new("/a")).is_none(), "/a 应被淘汰");
+        assert!(cache.lookup(&ctx, Path::new("/b")).is_some());
+        assert!(cache.lookup(&ctx, Path::new("/c")).is_some());
         assert!(cache.len() <= 2);
     }
 
     #[test]
     fn parsed_cache_lookup_bumps_hit_to_front() {
+        let ctx = local_ctx();
         let mut cache = ParsedMessageCache::new(2);
-        cache.insert(PathBuf::from("/a"), dummy_entry(1));
-        cache.insert(PathBuf::from("/b"), dummy_entry(2));
-        assert!(cache.lookup(Path::new("/a")).is_some());
-        cache.insert(PathBuf::from("/c"), dummy_entry(3));
+        cache.insert((ctx.clone(), PathBuf::from("/a")), dummy_entry(1));
+        cache.insert((ctx.clone(), PathBuf::from("/b")), dummy_entry(2));
+        assert!(cache.lookup(&ctx, Path::new("/a")).is_some());
+        cache.insert((ctx.clone(), PathBuf::from("/c")), dummy_entry(3));
         assert!(
-            cache.lookup(Path::new("/a")).is_some(),
+            cache.lookup(&ctx, Path::new("/a")).is_some(),
             "命中后 bump 队首，不应被淘汰"
         );
-        assert!(cache.lookup(Path::new("/b")).is_none(), "/b 应被淘汰");
+        assert!(cache.lookup(&ctx, Path::new("/b")).is_none(), "/b 应被淘汰");
     }
 
     #[test]
     fn parsed_cache_remove_drops_entry() {
+        let ctx = local_ctx();
         let mut cache = ParsedMessageCache::new(2);
-        cache.insert(PathBuf::from("/a"), dummy_entry(1));
-        cache.insert(PathBuf::from("/b"), dummy_entry(2));
-        cache.remove(Path::new("/a"));
-        assert!(cache.lookup(Path::new("/a")).is_none());
-        assert!(cache.lookup(Path::new("/b")).is_some());
+        cache.insert((ctx.clone(), PathBuf::from("/a")), dummy_entry(1));
+        cache.insert((ctx.clone(), PathBuf::from("/b")), dummy_entry(2));
+        cache.remove(&ctx, Path::new("/a"));
+        assert!(cache.lookup(&ctx, Path::new("/a")).is_none());
+        assert!(cache.lookup(&ctx, Path::new("/b")).is_some());
         assert_eq!(cache.len(), 1);
     }
 
     #[test]
     fn parsed_cache_remove_noop_when_absent() {
+        let ctx = local_ctx();
         let mut cache = ParsedMessageCache::new(2);
-        cache.insert(PathBuf::from("/a"), dummy_entry(1));
-        cache.remove(Path::new("/nonexistent"));
+        cache.insert((ctx.clone(), PathBuf::from("/a")), dummy_entry(1));
+        cache.remove(&ctx, Path::new("/nonexistent"));
         assert_eq!(cache.len(), 1);
     }
 
@@ -249,19 +304,21 @@ mod tests {
     fn remove_if_signature_mismatch_keeps_entry_when_sig_matches() {
         // spurious watcher event 场景：cache 里的 signature 与当前文件 stat
         // 完全一致 → 不应 remove。
+        let ctx = local_ctx();
         let mut cache = ParsedMessageCache::new(2);
         let entry = dummy_entry(7);
         let same_sig = entry.signature;
-        cache.insert(PathBuf::from("/x"), entry);
-        let removed = cache.remove_if_signature_mismatch(Path::new("/x"), &same_sig);
+        cache.insert((ctx.clone(), PathBuf::from("/x")), entry);
+        let removed = cache.remove_if_signature_mismatch(&ctx, Path::new("/x"), &same_sig);
         assert!(!removed, "signature 一致时不应 remove");
-        assert!(cache.lookup(Path::new("/x")).is_some());
+        assert!(cache.lookup(&ctx, Path::new("/x")).is_some());
     }
 
     #[test]
     fn remove_if_signature_mismatch_removes_when_sig_changes() {
+        let ctx = local_ctx();
         let mut cache = ParsedMessageCache::new(2);
-        cache.insert(PathBuf::from("/x"), dummy_entry(1));
+        cache.insert((ctx.clone(), PathBuf::from("/x")), dummy_entry(1));
         let new_sig = FileSignature {
             mtime: SystemTime::UNIX_EPOCH + Duration::from_secs(999),
             size: 999,
@@ -270,19 +327,144 @@ mod tests {
             #[cfg(not(unix))]
             identity: FileIdentity::None,
         };
-        let removed = cache.remove_if_signature_mismatch(Path::new("/x"), &new_sig);
+        let removed = cache.remove_if_signature_mismatch(&ctx, Path::new("/x"), &new_sig);
         assert!(removed, "signature 不一致时应 remove");
-        assert!(cache.lookup(Path::new("/x")).is_none());
+        assert!(cache.lookup(&ctx, Path::new("/x")).is_none());
     }
 
     #[test]
     fn remove_if_signature_mismatch_noop_when_absent() {
+        let ctx = local_ctx();
         let mut cache = ParsedMessageCache::new(2);
         let any_sig = dummy_entry(5).signature;
-        let removed = cache.remove_if_signature_mismatch(Path::new("/missing"), &any_sig);
+        let removed = cache.remove_if_signature_mismatch(&ctx, Path::new("/missing"), &any_sig);
         assert!(!removed);
         assert_eq!(cache.len(), 0);
     }
+
+    // ----- 新增 4 个 ContextId 隔离 / 混合 LRU / 切换不清 / per-ctx 失效 -----
+
+    #[test]
+    fn parsed_local_vs_ssh_keys_do_not_collide() {
+        // 同字面 path 在 Local ctx 与 SSH ctx 下应有两个独立 entry，互不串扰。
+        let mut cache = ParsedMessageCache::new(4);
+        let local = local_ctx();
+        let ssh = ssh_ctx();
+        let path = PathBuf::from("/shared/path.jsonl");
+
+        let local_entry = dummy_entry(1);
+        let ssh_entry = dummy_entry(2);
+        cache.insert((local.clone(), path.clone()), local_entry.clone());
+        cache.insert((ssh.clone(), path.clone()), ssh_entry.clone());
+        assert_eq!(cache.len(), 2);
+
+        let got_local = cache.lookup(&local, &path).expect("Local entry 应命中");
+        assert_eq!(got_local.signature, local_entry.signature);
+
+        let got_ssh = cache.lookup(&ssh, &path).expect("SSH entry 应命中");
+        assert_eq!(got_ssh.signature, ssh_entry.signature);
+        assert_ne!(
+            got_local.signature, got_ssh.signature,
+            "Local 与 SSH 同字面 path 应是独立 entry"
+        );
+    }
+
+    #[test]
+    fn parsed_lru_evicts_with_mixed_context() {
+        // 跨 Local + SSH 混合插入 51 个 entry，验证容量上限 50 + 最早 entry 被淘汰。
+        let mut cache = ParsedMessageCache::new(50);
+        let local = local_ctx();
+        let ssh = ssh_ctx();
+
+        // 0..25 用 Local，25..50 用 SSH，50 触发淘汰
+        for i in 0..25_u64 {
+            cache.insert(
+                (local.clone(), PathBuf::from(format!("/l/{i}"))),
+                dummy_entry(i),
+            );
+        }
+        for i in 0..25_u64 {
+            cache.insert(
+                (ssh.clone(), PathBuf::from(format!("/s/{i}"))),
+                dummy_entry(100 + i),
+            );
+        }
+        assert_eq!(cache.len(), 50);
+
+        // 插入第 51 个 → 最早的 (Local, /l/0) 应被淘汰
+        cache.insert(
+            (local.clone(), PathBuf::from("/l/extra")),
+            dummy_entry(9999),
+        );
+        assert_eq!(cache.len(), 50, "总容量 SHALL ≤ 50");
+        assert!(
+            cache.lookup(&local, Path::new("/l/0")).is_none(),
+            "最早插入的 (Local, /l/0) 应被淘汰"
+        );
+        assert!(
+            cache.lookup(&local, Path::new("/l/extra")).is_some(),
+            "新插入的 entry 应在 cache 内"
+        );
+    }
+
+    #[test]
+    fn parsed_switch_context_does_not_clear_cache() {
+        // 模拟 Local → SSH context 切换（直接构造 SSH ctx 查询）—— Local entry SHALL
+        // 保留在 cache 内。本 change scope 内 SSH callsite 不写入 cache，但
+        // ParsedMessageCache 公开 API 应支持"两 ctx 共存"形态。
+        let mut cache = ParsedMessageCache::new(4);
+        let local = local_ctx();
+        let ssh = ssh_ctx();
+        cache.insert((local.clone(), PathBuf::from("/a")), dummy_entry(1));
+
+        // 切到 SSH ctx 查询 —— Local entry 自然不命中（key 不等）
+        assert!(
+            cache.lookup(&ssh, Path::new("/a")).is_none(),
+            "SSH ctx 查询 SHALL NOT 命中 Local entry"
+        );
+        // 切回 Local ctx 查询 —— Local entry 仍在
+        assert!(
+            cache.lookup(&local, Path::new("/a")).is_some(),
+            "切回 Local 后原 entry 仍在 cache"
+        );
+        assert_eq!(cache.len(), 1, "未发生主动清空");
+    }
+
+    #[test]
+    fn parsed_remove_if_signature_mismatch_per_ctx() {
+        // 同 path 写入 Local + SSH 两个 entry，对 Local ctx 触发 signature mismatch
+        // remove，SSH entry SHALL 保留不受影响。
+        let mut cache = ParsedMessageCache::new(4);
+        let local = local_ctx();
+        let ssh = ssh_ctx();
+        let path = PathBuf::from("/shared.jsonl");
+
+        cache.insert((local.clone(), path.clone()), dummy_entry(1));
+        cache.insert((ssh.clone(), path.clone()), dummy_entry(2));
+        assert_eq!(cache.len(), 2);
+
+        let new_sig = FileSignature {
+            mtime: SystemTime::UNIX_EPOCH + Duration::from_secs(9999),
+            size: 9999,
+            #[cfg(unix)]
+            identity: FileIdentity::Unix { dev: 7, ino: 9999 },
+            #[cfg(not(unix))]
+            identity: FileIdentity::None,
+        };
+        let removed = cache.remove_if_signature_mismatch(&local, &path, &new_sig);
+        assert!(removed, "Local ctx signature mismatch 应触发 remove");
+        assert!(
+            cache.lookup(&local, &path).is_none(),
+            "Local entry 应被 remove"
+        );
+        assert!(
+            cache.lookup(&ssh, &path).is_some(),
+            "SSH entry SHALL NOT 受 Local ctx remove 影响"
+        );
+        assert_eq!(cache.len(), 1);
+    }
+
+    // ----- extract_parsed_messages_cached wrapper 集成测试 -----
 
     fn write_jsonl(dir: &Path, lines: &[&str]) -> PathBuf {
         let path = dir.join("session.jsonl");
@@ -301,6 +483,11 @@ mod tests {
         StdMutex::new(ParsedMessageCache::default())
     }
 
+    /// 测试用 `ContextId` —— 以 tempdir 路径作 Local root，与真磁盘 fixture 对齐。
+    fn ctx_for(tmp: &tempfile::TempDir) -> ContextId {
+        ContextId::local(tmp.path().to_path_buf())
+    }
+
     #[tokio::test]
     async fn cached_hit_returns_arc_without_rereading() {
         let tmp = tempfile::tempdir().unwrap();
@@ -313,14 +500,16 @@ mod tests {
         );
 
         let cache = make_cache();
+        let fs = cdt_fs::local_handle();
+        let ctx = ctx_for(&tmp);
 
-        let a = extract_parsed_messages_cached(&cache, &path)
+        let a = extract_parsed_messages_cached(&cache, &*fs, &ctx, &path)
             .await
             .expect("first parse should succeed");
         assert_eq!(a.len(), 2);
         assert_eq!(cache.lock().unwrap().len(), 1);
 
-        let b = extract_parsed_messages_cached(&cache, &path)
+        let b = extract_parsed_messages_cached(&cache, &*fs, &ctx, &path)
             .await
             .expect("second lookup should hit cache");
         assert!(
@@ -339,7 +528,11 @@ mod tests {
         );
 
         let cache = make_cache();
-        let m1 = extract_parsed_messages_cached(&cache, &path).await.unwrap();
+        let fs = cdt_fs::local_handle();
+        let ctx = ctx_for(&tmp);
+        let m1 = extract_parsed_messages_cached(&cache, &*fs, &ctx, &path)
+            .await
+            .unwrap();
         assert_eq!(m1.len(), 1);
 
         tokio::time::sleep(Duration::from_millis(1100)).await;
@@ -353,7 +546,9 @@ mod tests {
         )
         .unwrap();
 
-        let m2 = extract_parsed_messages_cached(&cache, &path).await.unwrap();
+        let m2 = extract_parsed_messages_cached(&cache, &*fs, &ctx, &path)
+            .await
+            .unwrap();
         assert_eq!(m2.len(), 2, "size 变化后 SHALL 走 cache miss + 重 parse");
         assert!(!Arc::ptr_eq(&m1, &m2), "miss 时 SHALL 是新 Arc");
     }
@@ -368,7 +563,11 @@ mod tests {
         );
 
         let cache = make_cache();
-        let m1 = extract_parsed_messages_cached(&cache, &path).await.unwrap();
+        let fs = cdt_fs::local_handle();
+        let ctx = ctx_for(&tmp);
+        let m1 = extract_parsed_messages_cached(&cache, &*fs, &ctx, &path)
+            .await
+            .unwrap();
         assert_eq!(m1.len(), 1);
 
         let replacement = tmp.path().join("replace.jsonl");
@@ -383,7 +582,9 @@ mod tests {
         .unwrap();
         std::fs::rename(&replacement, &path).unwrap();
 
-        let m2 = extract_parsed_messages_cached(&cache, &path).await.unwrap();
+        let m2 = extract_parsed_messages_cached(&cache, &*fs, &ctx, &path)
+            .await
+            .unwrap();
         assert_eq!(
             m2.len(),
             2,
@@ -394,8 +595,15 @@ mod tests {
     #[tokio::test]
     async fn cached_stat_failure_returns_none_no_write() {
         let cache = make_cache();
-        let result =
-            extract_parsed_messages_cached(&cache, Path::new("/nonexistent/path.jsonl")).await;
+        let fs = cdt_fs::local_handle();
+        let ctx = ContextId::local(PathBuf::from("/nonexistent/root"));
+        let result = extract_parsed_messages_cached(
+            &cache,
+            &*fs,
+            &ctx,
+            Path::new("/nonexistent/path.jsonl"),
+        )
+        .await;
         assert!(result.is_none(), "stat 失败 SHALL 返回 None");
         assert_eq!(cache.lock().unwrap().len(), 0, "SHALL NOT 写入缓存");
     }
@@ -408,8 +616,210 @@ mod tests {
         std::fs::write(&path, "").unwrap();
 
         let cache = make_cache();
-        let result = extract_parsed_messages_cached(&cache, &path).await.unwrap();
+        let fs = cdt_fs::local_handle();
+        let ctx = ctx_for(&tmp);
+        let result = extract_parsed_messages_cached(&cache, &*fs, &ctx, &path)
+            .await
+            .unwrap();
         assert!(result.is_empty());
         assert_eq!(cache.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cached_uses_fs_stat_not_tokio_fs_metadata() {
+        // 用 InstrumentedFs 包装 LocalFileSystemProvider，验证 wrapper 走 fs.stat
+        // 而非 tokio::fs::metadata —— stat 计数应在 miss + hit 路径各 +1。
+        use cdt_fs::{InstrumentedFs, LocalFileSystemProvider, with_fs_counter};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[&user_text_line("u1", "2026-05-03T10:00:00.000Z", "ping")],
+        );
+        let cache = std::sync::Arc::new(make_cache());
+        let ctx = ctx_for(&tmp);
+        let fs = std::sync::Arc::new(InstrumentedFs::new(LocalFileSystemProvider::new()));
+
+        let cache_for_miss = cache.clone();
+        let fs_for_miss = fs.clone();
+        let ctx_for_miss = ctx.clone();
+        let path_for_miss = path.clone();
+        let ((), counters_miss) = with_fs_counter(move || async move {
+            let _ = extract_parsed_messages_cached(
+                &cache_for_miss,
+                &*fs_for_miss,
+                &ctx_for_miss,
+                &path_for_miss,
+            )
+            .await;
+        })
+        .await;
+        assert!(
+            counters_miss.stat >= 1,
+            "miss 路径 SHALL 调 fs.stat 至少 1 次（实测 {} 次）",
+            counters_miss.stat
+        );
+
+        let cache_for_hit = cache.clone();
+        let fs_for_hit = fs.clone();
+        let ctx_for_hit = ctx.clone();
+        let path_for_hit = path.clone();
+        let ((), counters_hit) = with_fs_counter(move || async move {
+            let _ = extract_parsed_messages_cached(
+                &cache_for_hit,
+                &*fs_for_hit,
+                &ctx_for_hit,
+                &path_for_hit,
+            )
+            .await;
+        })
+        .await;
+        assert_eq!(
+            counters_hit.stat, 1,
+            "hit 路径 SHALL 仅调 fs.stat 1 次（signature 校验）"
+        );
+        assert_eq!(
+            counters_hit.open_read, 0,
+            "hit 路径 SHALL NOT 调 fs.open_read"
+        );
+        assert_eq!(
+            counters_hit.read_to_string, 0,
+            "hit 路径 SHALL NOT 调 fs.read_to_string"
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_local_vs_ssh_isolation() {
+        // 同 path 在 Local + SSH 两个 ctx 下写入 → 互不串扰。
+        // 注：本 change scope 内 SSH callsite 实际不调 wrapper（design D6）；本测试
+        // 验证 wrapper 的 ctx 隔离能力本身，为 PR-D 接入做铺路。
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[&user_text_line("u1", "2026-05-03T10:00:00.000Z", "x")],
+        );
+        let cache = make_cache();
+        let fs = cdt_fs::local_handle();
+        let local = ctx_for(&tmp);
+        let ssh = ssh_ctx();
+
+        // 用 Local ctx 写入 cache
+        let a = extract_parsed_messages_cached(&cache, &*fs, &local, &path)
+            .await
+            .expect("Local 写入");
+        // 用 SSH ctx 再写一次 —— 不应命中 Local entry，应作为新 entry 写入
+        let b = extract_parsed_messages_cached(&cache, &*fs, &ssh, &path)
+            .await
+            .expect("SSH 写入");
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "Local 与 SSH ctx 写入应是独立 entry（不同 Arc）"
+        );
+        assert_eq!(cache.lock().unwrap().len(), 2, "cache 应有 2 个独立 entry");
+    }
+
+    // ========================================================================
+    // counter-based bench：wrapper stat 入口 + hit 路径不重读全文件
+    //
+    // 详 change `parsed-message-cache-context-prefix` design D6 + codex 二审 Q5：
+    // 原计划"fake-SSH fs + miss→hit RTT 节省" bench 设计上行不通——`parse_file`
+    // 内部走 `tokio::fs::File::open` **不**经 fs trait，fake_ssh_fs 的 `open_read`
+    // 永远不会被 cache wrapper miss 路径调用；等 PR-D 把 `parse_file` 切到
+    // `FileSystemProvider::open_read` 之后才能补 fake-SSH RTT 节省 bench。
+    //
+    // 本 bench 验证 wrapper 自身的 stat 入口已切 fs trait + hit 路径不重读：
+    // - 第一轮 miss：counter.stat ≥ N
+    // - 第二轮 hit：counter.stat == N（每个 path 仍 stat 校验 signature）+
+    //   open_read / read_to_string 均为 0
+    //
+    // 标 `#[ignore]`——CI 不跑；本地 `cargo test -p cdt-api --lib
+    // ipc::parsed_message_cache::tests::parsed_message_cache_stat_counter_hit_miss
+    // -- --ignored --nocapture` 验收。
+    // ========================================================================
+    #[tokio::test]
+    #[ignore = "counter-based perf bench；本地手动跑（详方法 doc）"]
+    async fn parsed_message_cache_stat_counter_hit_miss() {
+        use cdt_fs::{InstrumentedFs, LocalFileSystemProvider, with_fs_counter};
+
+        const N: u32 = 3;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut paths: Vec<PathBuf> = Vec::with_capacity(N as usize);
+        for i in 0..N {
+            let p = tmp.path().join(format!("session-{i}.jsonl"));
+            let line = user_text_line(
+                &format!("u{i}"),
+                "2026-05-21T10:00:00.000Z",
+                &format!("hi-{i}"),
+            );
+            std::fs::write(&p, format!("{line}\n")).expect("write fixture");
+            paths.push(p);
+        }
+
+        let cache = Arc::new(make_cache());
+        let ctx = ContextId::local(tmp.path().to_path_buf());
+        let fs = Arc::new(InstrumentedFs::new(LocalFileSystemProvider::new()));
+
+        // 第一轮 miss
+        let cache_for_miss = cache.clone();
+        let fs_for_miss = fs.clone();
+        let ctx_for_miss = ctx.clone();
+        let paths_for_miss = paths.clone();
+        let ((), miss_counts) = with_fs_counter(move || async move {
+            for p in &paths_for_miss {
+                let messages = extract_parsed_messages_cached(
+                    &cache_for_miss,
+                    &*fs_for_miss,
+                    &ctx_for_miss,
+                    p,
+                )
+                .await
+                .expect("miss parse succeeds");
+                assert_eq!(messages.len(), 1, "fixture 每个文件 1 条消息");
+            }
+        })
+        .await;
+        assert!(
+            miss_counts.stat >= N,
+            "miss 路径每个 path SHALL 调 fs.stat 至少 1 次（实测 stat={}，N={N}）",
+            miss_counts.stat
+        );
+        assert_eq!(
+            cache.lock().unwrap().len(),
+            N as usize,
+            "miss 后 cache 应有 {N} 个 entry"
+        );
+
+        // 第二轮 hit
+        let cache_for_hit = cache.clone();
+        let fs_for_hit = fs.clone();
+        let ctx_for_hit = ctx.clone();
+        let paths_for_hit = paths.clone();
+        let ((), hit_counts) = with_fs_counter(move || async move {
+            for p in &paths_for_hit {
+                let _ =
+                    extract_parsed_messages_cached(&cache_for_hit, &*fs_for_hit, &ctx_for_hit, p)
+                        .await;
+            }
+        })
+        .await;
+
+        eprintln!(
+            "[perf_parsed_message_cache_stat_counter] miss={miss_counts:?} hit={hit_counts:?} \
+             cache_size={}",
+            cache.lock().unwrap().len()
+        );
+
+        assert_eq!(
+            hit_counts.stat, N,
+            "hit 路径每个 path SHALL 仅调 fs.stat 1 次（signature 校验）"
+        );
+        assert_eq!(
+            hit_counts.open_read, 0,
+            "hit 路径 SHALL NOT 调 fs.open_read（cache 命中后不重读全文件）"
+        );
+        assert_eq!(
+            hit_counts.read_to_string, 0,
+            "hit 路径 SHALL NOT 调 fs.read_to_string"
+        );
     }
 }
