@@ -805,6 +805,10 @@ impl LocalDataApi {
         // 2026-05-21）。
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
         let lookup_permit = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
+        // D8 scope：cache wrapper 当前仅对 Local context 接入。SSH 路径跳过
+        // cache lookup 避免每页 N 次远端 stat RTT，扫描分支也已 gate `!is_remote`
+        // 不入 page_jobs（codex 二审 commit-stage High → 详 spec
+        // `ipc-data-api/spec.md` Scenario `本 change 不强制切 scanner 路径`）。
         let lookups = futures::future::join_all(page.iter().map(|summary| {
             let wt_id = summary.project_id.clone();
             let session_id = summary.session_id.clone();
@@ -817,6 +821,9 @@ impl LocalDataApi {
             let fs_clone = fs.clone();
             let ctx_clone = ctx.clone();
             async move {
+                if is_remote {
+                    return (wt_id, session_id, jsonl_path, None);
+                }
                 let _guard = permit_sem
                     .acquire()
                     .await
@@ -1024,21 +1031,18 @@ impl LocalDataApi {
         &self,
     ) -> (Arc<dyn FileSystemProvider>, PathBuf, cdt_fs::ContextId) {
         if let Some(context_id) = self.ssh_mgr.active_context_id().await {
-            if let Some(provider) = self.ssh_mgr.provider(&context_id).await {
+            // 原子取 provider + ContextId（同一 sessions lock 内）——避免独立
+            // `provider(&id)` + `context_id(&id)` 调用之间的 disconnect race 让
+            // (SSH provider, Local ctx) 不自洽组合（codex 二审 commit-stage
+            // Blocking → design D3-bis）。任一 miss 整体 fall-through 到
+            // Local，绝不返回 SSH/Local 混合三元组。
+            if let Some((provider, ctx)) =
+                self.ssh_mgr.provider_and_context_id(&context_id).await
+            {
                 let remote_home = provider.remote_home().to_path_buf();
-                if let Some(ctx) = self.ssh_mgr.context_id(&context_id).await {
-                    return (Arc::new(provider), remote_home, ctx);
-                }
-                // active=Some + provider 在但 host_signature 缺失——理论不该到，
-                // safely degrade 到 Local 兜底（用 remote_home 作 Local root 也无害，
-                // ContextId Hash 隔离仍生效）。
-                return (
-                    Arc::new(provider),
-                    remote_home.clone(),
-                    cdt_fs::ContextId::local(remote_home),
-                );
+                return (Arc::new(provider), remote_home, ctx);
             }
-            // active=Some 但 provider 已被 remove（concurrent disconnect 中间态）
+            // active=Some 但 session 已被 remove（concurrent disconnect 中间态）
             // → 走 Local 安全降级
         }
         let projects_dir = self.projects_dir.lock().await.clone();
@@ -1438,6 +1442,11 @@ impl LocalDataApi {
         // 卡到 `METADATA_SCAN_CONCURRENCY`，避免 caller 传超大 page_size 时
         // 一次性把 tokio blocking pool 占满（codex 二审 Q3）。
         let lookup_permit = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
+        // 本 change D8 scope 边界：cache wrapper 当前仅对 Local context 接入。SSH
+        // 路径走 inline `read_to_string + extract_metadata_from_parsed` 拿到
+        // remote_meta，不查 cache 避免每页 50 条多跑远端 stat RTT（codex 二审
+        // commit-stage High → 详 spec `ipc-data-api/spec.md` Scenario `本 change
+        // 不强制切 scanner 路径`）。SSH 完整接入留 PR-D。
         let lookups = futures::future::join_all(page_sessions.iter().map(|s| {
             let cache = self.metadata_cache.clone();
             let jsonl_path = dir.join(format!("{}.jsonl", s.id));
@@ -1445,6 +1454,12 @@ impl LocalDataApi {
             let fs_clone = fs.clone();
             let ctx_clone = ctx.clone();
             async move {
+                if is_remote {
+                    // SSH 路径完全跳过 cache lookup —— 避免远端 stat RTT；下方
+                    // remote_meta 走 inline 读全文，本 change scope 内 SSH cache
+                    // 不接入。
+                    return (jsonl_path, None);
+                }
                 let _guard = permit_sem
                     .acquire()
                     .await

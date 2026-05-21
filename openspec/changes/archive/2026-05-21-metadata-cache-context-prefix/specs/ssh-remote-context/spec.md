@@ -13,6 +13,8 @@
 
 `SshSessionManager::insert_test_context` test helper SHALL 接受 `Option<cdt_fs::HostSignature>` 参数；缺省时 SHALL 用 `(host, port, user)` 字符串拼接做 fake SHA-256 digest 构造一个 `HostSignature`，使不同 host 的测试 fixture 自然产不同 digest。
 
+`SshSessionManager` SHALL 暴露原子查询方法 `async fn provider_and_context_id(&self, context_id: &str) -> Option<(SshFileSystemProvider, cdt_fs::ContextId)>`——单次 `sessions` lock 内同时返回 provider 与 `ContextId`，保证二者来自同一快照（codex 二审 commit-stage Blocking → design D3-bis）。调用方 SHALL 用本方法而非独立的 `provider(&str)` + `context_id(&str)` 配对取 fs/ctx，避免 disconnect race 产生 `(SSH provider, Local ctx)` 不自洽组合。
+
 #### Scenario: connect 路径自动计算并存储 `HostSignature`
 
 - **WHEN** `SshSessionManager::connect(request)` 走到 stage 0 完成 `resolve_host_via_ssh_g` 拿到 `ResolvedHost`
@@ -32,6 +34,15 @@
 
 - **WHEN** 调用方对一个未注册（或已 disconnect）的 context_id 调用 `ssh_mgr.context_id(...)`
 - **THEN** SHALL 返回 `None`，且 SHALL NOT panic 或 spawn 子进程
+
+#### Scenario: `provider_and_context_id` 原子返回 provider+ctx
+
+- **WHEN** 调用方对已注册 SSH context 调用 `ssh_mgr.provider_and_context_id("ssh-host-A").await`
+- **THEN** SHALL 返回 `Some((provider, ctx))`，二者来自同一 `sessions.lock()` 快照
+- **AND** `ctx.host_signature` SHALL 等于该 provider 在 connect 时计算并存储的 `HostSignature`
+- **AND** `ctx.root_or_home` SHALL 等于 provider 的 `remote_home`
+- **WHEN** 调用方对未注册 context 调用同方法
+- **THEN** SHALL 返回 `None`，调用方据此 fall-through 到 Local 安全降级
 
 #### Scenario: 同 host reconnect 后 `ContextId` 一致
 

@@ -103,11 +103,15 @@ async fn active_fs_and_context(&self) -> (Arc<dyn FileSystemProvider>, PathBuf, 
 
 **替代方案**：(a) Mutex<ContextId> + 三处同步更新 → 否决（codex Blocking：disconnect/connect 中间态不一致）；(b) Mutex<ContextId> + 加锁 disconnect-connect 原子 → 否决（要把 ssh_mgr 内部 atomic 操作外推到 LocalDataApi，污染层次）；(c) 就地合成（本节版本）→ 选中
 
-### D3-bis: `ssh_mgr.active_context_id` 与 `ssh_mgr.provider` 之间的 atomicity
+### D3-bis: `ssh_mgr.active_context_id` 与 `ssh_mgr.provider_and_context_id` 之间的 atomicity
 
-**问题**：`active_fs_and_context()` 先调 `active_context_id().await` 拿 ID，再调 `provider(&id).await` 拿 provider——两次 lock 之间，并发 disconnect 可能让 provider 已被 remove。
+**问题**：`active_fs_and_context()` 先调 `active_context_id().await` 拿 ID，再去拿 provider 与 ContextId。早期稿用两个独立 accessor（`provider(&id)` + `context_id(&id)`），三次独立 lock；codex 二审 commit-stage Blocking 指出：第二次与第三次 lock 之间若并发 disconnect/replace，provider 命中但 ctx 返 None，代码会返回 `(SSH provider, ContextId::local(remote_home))`——SSH/Local 混合不自洽，cache 写入会用 SSH provider stat 配 Local namespace。
 
-**修法**：如上方实现，`provider(&id).await` 返 `Option`；None 时走 Local 兜底（与 `active=None` 同分支）。这是 best-effort 安全降级——并发 disconnect 期间偶发拿到 Local 而非 SSH provider 不会 cache 误命中（用户即将看到的本就是 Local 状态），不影响正确性。
+**修法**：在 `SshSessionManager` 暴露原子 accessor `pub async fn provider_and_context_id(&self, context_id: &str) -> Option<(SshFileSystemProvider, ContextId)>`，单次 `sessions.lock()` 内同时返 provider + ContextId；二者要么同时 Some 要么同时 None。`active_fs_and_context` 调用此原子方法，None 时**整体** fall-through 到 Local 三元组——绝不返回 SSH/Local 混合。
+
+**为何 active_context_id 与 provider_and_context_id 之间仍可能 race**：在 `active=Some` 与 `provider_and_context_id` 之间并发 disconnect 后，前者返 Some 但后者返 None——此场景由 `if let Some((provider, ctx)) = ...` 的 None 分支 fall-through 到 Local，与 `active=None` 同分支处理；安全降级，不产生混合。
+
+**为何不把 active+provider+ContextId 全部塞进一把 sync lock**：会强制 `LocalDataApi` 持有 `ssh_mgr.active` 与 `sessions` 的私有引用，破封装；当前 `(active_context_id, provider_and_context_id)` 两次 lock 之间的窗口足够窄（μs 级），并发 disconnect 在此 race 的实际触发概率极低，安全降级语义已正确处理。
 
 ### D4: LRU 容量 200 → 2000，全局共享 pool
 

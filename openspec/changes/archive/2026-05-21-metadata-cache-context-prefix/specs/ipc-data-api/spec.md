@@ -136,3 +136,10 @@
 - **WHEN** cache lookup miss 后触发 `extract_session_metadata_with_ongoing` 内的扫描路径
 - **THEN** 本 change SHALL 保留 `tokio::fs::File::open` + `BufReader::lines` 扫描实现，未强制切 `FileSystemProvider::open_read`
 - **AND** SHALL 在 design.md D8 + tasks.md follow-up 显式记录"PR-D 完成 scanner 切 fs.open_read + SSH callsite 接入 cache wrapper"，作为未来 spec 演进锚点
+
+#### Scenario: SSH 路径跳过 cache lookup wrapper（design D8 + codex commit-stage High 修正）
+
+- **WHEN** `list_sessions_skeleton` / `build_group_session_page` 在 SSH active context 下执行 page 处理
+- **THEN** 每条 page session SHALL NOT 经过 `try_lookup_cached_metadata` —— 直接返 `None` 并由调用方走 inline `fs.read_to_string` + `extract_metadata_from_parsed` 路径
+- **AND** SHALL NOT 增加额外远端 `fs.stat` RTT；本 change scope 内 SSH cache 完全不接入
+- **AND** Local context 下行为不变：每条 page session 仍走 `try_lookup_cached_metadata` 命中后省扫描

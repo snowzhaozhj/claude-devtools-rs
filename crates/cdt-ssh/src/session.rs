@@ -303,6 +303,24 @@ impl SshSessionManager {
             .map(|r| cdt_fs::ContextId::ssh(r.host_signature.clone(), r.remote_home.clone()))
     }
 
+    /// 原子获取 `(SshFileSystemProvider, ContextId)` 对 —— 单次 `sessions` lock 内
+    /// 同时拿 provider 与 `host_signature`/`remote_home`，避免独立调用
+    /// `provider(&id)` + `context_id(&id)` 之间的 disconnect race（codex 二审
+    /// commit-stage Blocking）。详 change `metadata-cache-context-prefix` design D3-bis。
+    ///
+    /// 未注册 context 返回 `None`。
+    pub async fn provider_and_context_id(
+        &self,
+        context_id: &str,
+    ) -> Option<(SshFileSystemProvider, cdt_fs::ContextId)> {
+        self.sessions.lock().await.get(context_id).map(|r| {
+            (
+                r.provider.clone(),
+                cdt_fs::ContextId::ssh(r.host_signature.clone(), r.remote_home.clone()),
+            )
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_test_context(
         &self,
