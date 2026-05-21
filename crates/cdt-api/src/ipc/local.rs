@@ -353,9 +353,8 @@ const METADATA_BROADCAST_CAPACITY: usize = 256;
 #[derive(Debug)]
 struct ScanEntry {
     generation: u64,
-    /// 让 `abort_scans_for_context` 未来按 ctx 精细 abort 用（当前 callsite
-    /// 走 abort-all 简化逻辑——见 `LocalDataApi::abort_scans_for_context` doc）。
-    #[allow(dead_code)]
+    /// 让 `abort_scans_for_context` 按 ctx 精确 abort 用——避免 abort-all 误杀
+    /// 新 host scan（codex 二审第二轮 H2-R 修订）。
     context_id: cdt_fs::ContextId,
     handle: AbortHandle,
 }
@@ -1368,25 +1367,61 @@ impl LocalDataApi {
             )
     }
 
-    /// abort 当前所有 in-flight metadata scan handle 并清空 `active_scans` map。
+    /// 按 `ContextId` 精确 abort：retain 所有非匹配 entry，匹配的 entry handle
+    /// abort + 从 map 移除。避免 codex 二审 H2-R 报的"abort-all 误杀新 host
+    /// scan"（如 B 已 active spawn scan，并发 `ssh_disconnect("A")` 调 abort-all
+    /// 会误杀 B 的 scan）。
     ///
-    /// change `unify-fs-direct-calls` codex 二审 H2 修订 + design D3-bis：旧 ctx
-    /// 的 `page_jobs` scan 跨 await 持 `Arc<dyn FileSystemProvider>`，切 host /
-    /// disconnect 后会继续向 `session_metadata_tx` broadcast 旧 ctx 的 metadata
-    /// update，污染新 ctx 的 UI 渲染状态。`switch_context` / `ssh_disconnect`
-    /// 调本 helper 提前 abort 防串扰。
-    ///
-    /// `_context_id` 参数留给 future per-ctx 精细 abort 用（当前 `active_scans`
-    /// 内 entry 必属同一 active ctx，统一 abort 是正确且无副作用的——切完
-    /// context 后用户重发 `list_sessions` 会重新 spawn 新 ctx 下的 scan）。
-    fn abort_scans_for_context(&self, _context_id: &str) {
+    /// change `unify-fs-direct-calls` codex 二审 H2 + 第二轮 H2-R 修订 + design
+    /// D3-bis：旧 ctx 的 `page_jobs` scan 跨 await 持 `Arc<dyn FileSystemProvider>`，
+    /// 切 host / disconnect 后会继续向 `session_metadata_tx` broadcast 旧 ctx
+    /// 的 metadata update，污染新 ctx 的 UI 渲染状态。`switch_context` /
+    /// `ssh_disconnect` / `ssh_connect` 三个 context 变更入口都 SHALL 调本
+    /// helper 按 prev ctx 精确 abort，避免误杀新 ctx scan 也避免漏 abort。
+    fn abort_scans_for_context(&self, ctx: &cdt_fs::ContextId) {
         let Ok(mut scans) = self.active_scans.lock() else {
             return;
         };
-        for entry in scans.values() {
-            entry.handle.abort();
+        scans.retain(|_key, entry| {
+            if &entry.context_id == ctx {
+                entry.handle.abort();
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    /// 按 ssh `context_id` 字符串解析 → `ContextId` → 精确 abort。
+    ///
+    /// `switch_context` / `ssh_disconnect` / `ssh_connect` 三个入口的便捷
+    /// 调用——内部通过 `ssh_mgr.provider_and_context_id` 拿到旧 host 的
+    /// `ContextId`（包含 `host_signature`），失败则 silently no-op（旧 host
+    /// 可能已被 `ssh_mgr` 移除，此时 scan 无法再写 cache 实际上也无害——
+    /// task 持的 `Arc<dyn>` clone 已与新 active 解耦）。
+    async fn abort_scans_for_ssh_context_id(&self, ssh_context_id: &str) {
+        if let Some((_provider, ctx)) = self.ssh_mgr.provider_and_context_id(ssh_context_id).await {
+            self.abort_scans_for_context(&ctx);
         }
-        scans.clear();
+    }
+
+    /// abort 所有 Local context 下的 in-flight scan。
+    ///
+    /// 用于 Local → SSH 切换路径（`switch_context(<ssh>)` 当 `previous_context_id
+    /// == None` 时，旧 Local scan 仍可能跑着）以及 `reconfigure_claude_root`
+    /// 重建 Local `projects_dir` 后让旧 `ContextId::local` 的 scan 立刻退出。
+    fn abort_local_scans(&self) {
+        let Ok(mut scans) = self.active_scans.lock() else {
+            return;
+        };
+        scans.retain(|_key, entry| {
+            if entry.context_id.backend_kind == cdt_fs::FsKind::Local {
+                entry.handle.abort();
+                false
+            } else {
+                true
+            }
+        });
     }
 
     async fn reconfigure_claude_root(&self, claude_root_path: Option<&str>) {
@@ -2729,14 +2764,23 @@ impl DataApi for LocalDataApi {
         // spec `ssh-remote-context::Reconnect lifecycle preserves SFTP session
         // integrity`：cancel-and-join SHALL 在 ssh_mgr mutate 之前完成
         if previous_context_id != target {
+            // change `unify-fs-direct-calls` codex 二审 H2 + 第二轮 H2-R 修订：旧
+            // ctx 的 page_jobs scan 持 Arc<dyn FileSystemProvider> 跨 await，切 ctx
+            // 后仍会 broadcast 旧 ctx 的 metadata update 串扰新 ctx 渲染。按旧
+            // ctx (Local 或 SSH) 精确 abort 其下 in-flight scan handle。
+            //
+            // 注：`abort_scans_for_ssh_context_id` 在 ssh_mgr.switch_context **之前**
+            // 调，确保仍能 lookup 到旧 host 的 ContextId（否则切完 ssh_mgr 状态
+            // 后 provider_and_context_id 会找不到）。Local→SSH 切换路径单独
+            // 调 `abort_local_scans()`。
             if let Some(prev) = previous_context_id.as_deref() {
                 tracing::debug!(target: "cdt_ssh::lifecycle", phase = "cancel_prev_watcher", context_id = %prev);
                 self.cancel_remote_watcher(prev).await;
-                // change `unify-fs-direct-calls` codex 二审 H2 修订：旧 ctx 的
-                // page_jobs scan 持 Arc<dyn FileSystemProvider> 跨 await，切 ctx
-                // 后仍会 broadcast 旧 ctx 的 metadata update 串扰新 ctx 渲染。
-                // 这里按旧 prev context_id abort 其下所有 in-flight scan handle。
-                self.abort_scans_for_context(prev);
+                self.abort_scans_for_ssh_context_id(prev).await;
+            } else if target.is_some() {
+                // Local → SSH 切换：abort Local context 下的 in-flight scan，避免
+                // 切到 SSH 后 Local scan 仍 broadcast Local metadata 串扰 SSH UI。
+                self.abort_local_scans();
             }
         }
         tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_mgr_switch_context");
@@ -2777,6 +2821,13 @@ impl DataApi for LocalDataApi {
                 if let Some(prev) = previous_context_id {
                     tracing::debug!(target: "cdt_ssh::lifecycle", phase = "cancel_prev_watcher", context_id = %prev);
                     self.cancel_remote_watcher(&prev).await;
+                    // codex 二审第二轮 H2-R：ssh_connect(A→B) 也 SHALL abort 旧 A
+                    // 下 page_jobs scan，避免旧 A scan 跨切换继续 broadcast 串扰 B 渲染。
+                    self.abort_scans_for_ssh_context_id(&prev).await;
+                } else {
+                    // Local → SSH 切换路径：abort Local scan 避免 Local metadata
+                    // 跨切换串扰 SSH UI。
+                    self.abort_local_scans();
                 }
             }
             tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_mgr_connect");
@@ -2812,10 +2863,13 @@ impl DataApi for LocalDataApi {
     async fn ssh_disconnect(&self, context_id: &str) -> Result<(), ApiError> {
         let _ops = self.ssh_watcher_ops.lock().await;
         tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_disconnect_begin", context_id = %context_id);
+        // change `unify-fs-direct-calls` codex 二审第二轮 H2-R 修订：按 SSH
+        // context_id 精确 abort 该 ctx 下未完成的 scan handle（**在
+        // cancel_remote_watcher 与 ssh_mgr.disconnect 之前**，确保仍能 lookup
+        // 到 ContextId）。避免 abort-all 误杀已 active 的新 host scan
+        // （场景：B 已 active spawn scan 时并发 ssh_disconnect("A") 清理旧 host）。
+        self.abort_scans_for_ssh_context_id(context_id).await;
         self.cancel_remote_watcher(context_id).await;
-        // change `unify-fs-direct-calls` codex 二审 H2 修订：disconnect 时同时 abort
-        // 该 ctx 下未完成的 metadata scan handle，避免持失效 fs handle 继续 broadcast。
-        self.abort_scans_for_context(context_id);
         tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_mgr_disconnect", context_id = %context_id);
         let result = self
             .ssh_mgr

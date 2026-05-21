@@ -6,11 +6,11 @@
 
 `open_read` SHALL 替代旧的 inherent 方法 `open_read_stream`——返回 `Box<dyn AsyncRead + Send + Unpin>` 让调用方不需 downcast 到 `SshFileSystemProvider` 就能流式读。`stat_many` SHALL 实现为 trait default（`futures::future::join_all` 包装 `stat`）；由于底层 `Arc<Mutex<SftpSession>>` 全锁串行，当前 SSH `stat_many` 仍是 N 次串行 RTT（**已知限制**），真正的 SFTP message-id 并发 pipeline 留独立 PR（PR-F，方案 C 路径——保持"无远端 shell 依赖"架构假设）解决。trait API 先就位让 caller 一律调 `stat_many` 而非循环 `stat`。
 
-**SSH list 路径性能契约**（本 change 引入）：朴素 per-session 串行 `fs.stat` 验 cache signature 在 SSH 上 `Arc<Mutex<SftpSession>>` 全锁串行 = 50 sessions × 50ms = 2.5s wall，超 sidebar 首屏 < 500ms 预算 5×（详 ipc-data-api change `unify-fs-direct-calls` design D3 + codex 二审 Blocking #1）。本 change SHALL 让 SSH list 路径走以下三件套：
+**SSH list 路径性能契约**（本 change 引入）：朴素 per-session 串行 `fs.stat` 验 cache signature 在 SSH 上 `Arc<Mutex<SftpSession>>` 全锁串行 = 50 sessions × 50ms = 2.5s wall，超 sidebar 首屏 < 500ms 预算 5×（详 ipc-data-api change `unify-fs-direct-calls` design D3 + codex 二审 Blocking #1）。本 change SHALL 让 SSH list 路径走以下两件套（**E. read_dir_with_metadata batch 留 PR-D2 follow-up**）：
 
-- **G. cache hit trust**：用户切回已访问过的 SSH host → UI 立刻拿 in-memory cache 内容渲染列表（**0 fs op**），不等任何 fs.stat RTT
-- **D. SkeletonThenStream**：list_sessions SSH 路径与 Local 路径同走 page_jobs spawn 模型；首屏返骨架 + cache trust 内容，metadata diff 通过 SSE event 异步推送（取代 PR-A D6 标"PR-E 上移"的 SSH FullEager line 855/1515/1524/1574——本 change 提前实施算法层 SSH 同入口；PR-E 后续把字段值塞 BackendPolicy struct）
-- **E. read_dir_with_metadata batch**：后台 batch 校验 task 走 `fs.read_dir_with_metadata(project_dir)` per project（SFTP READDIR reply 含 entry attrs，1 RTT 拿全 dir metadata），逐条比对 cache signature → mismatch / 新增 → cache miss + scanner → SSE 推差量
+- **G. cache hit trust**（本 segment）：用户切回已访问过的 SSH host → UI 立刻拿 in-memory cache 内容渲染列表（**0 fs op via `MetadataCache::lookup_trust_cached`**），不等任何 fs.stat RTT
+- **D. SkeletonThenStream**（本 segment）：list_sessions SSH 路径与 Local 路径同走 `page_jobs` spawn 模型；首屏返骨架 + cache trust 内容，metadata diff 通过 SSE event 异步推送（取代 PR-A D6 标"PR-E 上移"的 SSH FullEager line 855/1515/1524/1574——本 change 提前实施算法层 SSH 同入口；PR-E 后续把字段值塞 BackendPolicy struct）。后台 scan 通过现有 `scan_metadata_for_page`（per-session via fs trait）实现
+- **E. read_dir_with_metadata batch**（PR-D2 follow-up）：后台 batch 校验 task 走 `fs.read_dir_with_metadata(project_dir)` per project（SFTP READDIR reply 含 entry attrs，1 RTT 拿全 dir metadata），逐条比对 cache signature → mismatch / 新增 → cache miss + scanner → SSE 推差量。本 segment 已 ship `MetadataCache::lookup_with_known_signature` helper + ADR `#[allow(dead_code)]`，待 PR-D2 wire 入 `scan_metadata_for_page` 实施
 
 **SSH 大会话 scanner buffer 上限**（本 change 引入）：scanner（`extract_session_metadata_with_ongoing` / `parse_file_via_fs`）SHALL 通过 `FileSystemProvider::open_read` 拿 `Box<dyn AsyncRead + Send + Unpin>`，再用 `BufReader::with_capacity(SCANNER_BUF_BYTES /* 32 KiB */, reader)` 包装。Buffer 容量钉死 **32 KiB** 与 SFTP packet 上限对齐——`SSH_FXP_READ` reply 单消息上限 32 KiB，64 KiB BufReader 强制每次 fill 跑 2 次底层 SFTP READ 无收益反而多一层 alloc；32 KiB 单 BufReader fill = 单 SFTP READ message。
 
