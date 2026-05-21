@@ -41,6 +41,7 @@
 <style>
   .field {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 16px;
     padding: 14px 16px;
@@ -88,5 +89,6 @@
   }
   .field-extra {
     flex-basis: 100%;
+    min-width: 0;
   }
 </style>

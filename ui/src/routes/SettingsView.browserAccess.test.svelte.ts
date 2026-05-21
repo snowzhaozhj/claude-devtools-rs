@@ -61,7 +61,7 @@ describe('SettingsView Browser Access subsection', () => {
     await waitFor(() =>
       expect(container.querySelector('[data-testid="browser-access-port"]')).not.toBeNull(),
     )
-    const toggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
+    const toggle = container.querySelector('[aria-label="启用浏览器访问"]') as HTMLButtonElement
     expect(toggle).not.toBeNull()
     expect(toggle.getAttribute('aria-checked')).toBe('false')
 
@@ -70,7 +70,7 @@ describe('SettingsView Browser Access subsection', () => {
     await waitFor(() => {
       const running = container.querySelector('[data-testid="browser-access-running"]')
       expect(running).not.toBeNull()
-      expect(running!.textContent).toMatch(/Running on/)
+      expect(running!.textContent).toMatch(/运行中/)
       expect(running!.textContent).toMatch(/3456/)
     })
     // toggle 翻成 on
@@ -83,7 +83,7 @@ describe('SettingsView Browser Access subsection', () => {
     await waitFor(() =>
       expect(container.querySelector('[data-testid="browser-access-port"]')).not.toBeNull(),
     )
-    const toggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
+    const toggle = container.querySelector('[aria-label="启用浏览器访问"]') as HTMLButtonElement
     await fireEvent.click(toggle)
     await waitFor(() =>
       expect(container.querySelector('[data-testid="browser-access-copy"]')).not.toBeNull(),
@@ -93,7 +93,7 @@ describe('SettingsView Browser Access subsection', () => {
     ) as HTMLButtonElement
     await fireEvent.click(copyBtn)
     expect(writeText).toHaveBeenCalledWith('http://localhost:3456')
-    await waitFor(() => expect(copyBtn.textContent?.trim()).toBe('Copied'))
+    await waitFor(() => expect(copyBtn.textContent?.trim()).toBe('已复制'))
   })
 
   test('端口输入 blur 持久化到 httpServer 配置', async () => {
@@ -117,7 +117,7 @@ describe('SettingsView Browser Access subsection', () => {
     await waitFor(() =>
       expect(container.querySelector('[data-testid="browser-access-port"]')).not.toBeNull(),
     )
-    const toggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
+    const toggle = container.querySelector('[aria-label="启用浏览器访问"]') as HTMLButtonElement
     await fireEvent.click(toggle)
 
     await waitFor(() => {
@@ -126,7 +126,7 @@ describe('SettingsView Browser Access subsection', () => {
       ) as HTMLInputElement
       expect(portInput.disabled).toBe(true)
       expect(container.querySelector('[data-testid="browser-access-port-locked"]')?.textContent).toMatch(
-        /关闭 server mode 后可修改端口/,
+        /已锁定/,
       )
     })
   })
@@ -141,7 +141,7 @@ describe('SettingsView Browser Access subsection', () => {
     ) as HTMLInputElement
     await fireEvent.input(portInput, { target: { value: '80' } })
 
-    const toggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
+    const toggle = container.querySelector('[aria-label="启用浏览器访问"]') as HTMLButtonElement
     await fireEvent.click(toggle)
 
     await waitFor(() => {
@@ -164,21 +164,21 @@ describe('SettingsView Browser Access subsection', () => {
     await waitFor(() =>
       expect(container.querySelector('[data-testid="browser-access-port"]')).not.toBeNull(),
     )
-    const toggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
+    const toggle = container.querySelector('[aria-label="启用浏览器访问"]') as HTMLButtonElement
     await fireEvent.click(toggle)
     await waitFor(() =>
       expect(container.querySelector('[data-testid="browser-access-running"]')).not.toBeNull(),
     )
 
     await waitFor(() => {
-      const currentToggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
+      const currentToggle = container.querySelector('[aria-label="启用浏览器访问"]') as HTMLButtonElement
       expect(currentToggle.getAttribute('aria-checked')).toBe('true')
       expect(currentToggle.disabled).toBe(false)
     })
-    const currentToggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
+    const currentToggle = container.querySelector('[aria-label="启用浏览器访问"]') as HTMLButtonElement
     await fireEvent.click(currentToggle)
     await waitFor(() => {
-      const latestToggle = container.querySelector('[aria-label="Enable server mode"]') as HTMLButtonElement
+      const latestToggle = container.querySelector('[aria-label="启用浏览器访问"]') as HTMLButtonElement
       expect(container.querySelector('[data-testid="browser-access-running"]')).toBeNull()
       expect(latestToggle.getAttribute('aria-checked')).toBe('false')
     })
@@ -200,7 +200,7 @@ describe('SettingsView Browser Access subsection: browser runtime hides section'
       // 仍有 General section 内其他控件（如 themeDropdown）渲染——确保 SettingsView 没整体白屏
       // 主断言：Browser Access 相关 data-testid 不存在
       expect(container.querySelector('[data-testid="browser-access-port"]')).toBeNull()
-      expect(container.querySelector('[aria-label="Enable server mode"]')).toBeNull()
+      expect(container.querySelector('[aria-label="启用浏览器访问"]')).toBeNull()
     })
   })
 })

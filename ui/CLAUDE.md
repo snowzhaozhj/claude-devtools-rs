@@ -75,6 +75,16 @@
 - 浏览器直接访问 `127.0.0.1:5173` 会报 `invoke` undefined——必须通过 `cargo tauri dev` 的窗口测试，或用 `pnpm --dir ui run dev` + 浏览器访问 `?mock=1&fixture=...`（参见下文「浏览器调试入口」为何用 `127.0.0.1` 而非 `localhost`）。
 - worktree rebase 后若 origin/main 加新 ui 依赖（典型 `tauri-plugin-opener`），跑 `pnpm --dir ui install` 重装（pnpm hardlink + global store，lockfile 未变近瞬时；变了也只下差量）。
 
+## 视觉改动自验
+
+CSS / 布局 / 组件结构改动后，SHALL 自己先看一眼再喊用户：
+
+1. 起 mock（见下文「浏览器调试入口」），每个状态分支（如 disabled / enabled / error）各截一张
+2. 自己 Read 截图过一遍：无逐字折行 / 列对齐 / 文案风格统一
+3. 看着不对优先 `evaluate` 拿 `getBoundingClientRect` + computed style 定位，再修
+
+vitest / svelte-check 抓不到 flex 撑垮、文字折行、文案不统一 —— 视觉只能视觉验。
+
 ## 浏览器调试入口
 
 不开 Tauri 窗口调 UI：`pnpm --dir ui run dev` → `http://127.0.0.1:5173/?mock=1&fixture=multi-project-rich`。fixture 有 `empty` / `single-project` / `multi-project-rich` 三种，详见 `ui/src/lib/__fixtures__/`。**仅 dev 启用**，production bundle 完全不含 mockIPC（vite DCE 验证见 `tauriMock.bundle.test.ts`）。
