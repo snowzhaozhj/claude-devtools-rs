@@ -1145,10 +1145,16 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
     let mut metadata_rx = api.subscribe_session_metadata();
     let sessions = api.list_sessions(project_id, &pagination).await.unwrap();
     assert_eq!(sessions.items[0].session_id, session_id);
-    assert_eq!(sessions.items[0].title.as_deref(), Some("from remote"));
-    assert_eq!(sessions.items[0].message_count, 1);
+    // change `unify-fs-direct-calls` design D2/D3：SSH 改走 SkeletonThenStream 后
+    // hot path 首屏只返骨架（title=None），title / message_count 通过 SSE
+    // `session_metadata_update` 事件异步推差量。首次访问无 cache → 走 page_jobs
+    // 后台 scan；二次访问会从 cache hit trust 立刻拿到完整 metadata。
+    assert!(
+        sessions.items[0].title.is_none(),
+        "首次 SSH list_sessions 骨架不含 title（SkeletonThenStream）"
+    );
 
-    let update = tokio::time::timeout(std::time::Duration::from_secs(1), metadata_rx.recv())
+    let update = tokio::time::timeout(std::time::Duration::from_secs(2), metadata_rx.recv())
         .await
         .expect("remote list_sessions should emit metadata update")
         .expect("metadata channel should stay open");

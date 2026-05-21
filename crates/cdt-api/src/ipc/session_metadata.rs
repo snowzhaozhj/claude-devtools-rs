@@ -29,8 +29,8 @@ use crate::cache_signature::FileSignature;
 /// 5 分钟，对齐原版 `STALE_SESSION_THRESHOLD_MS`。
 pub const STALE_SESSION_THRESHOLD: Duration = Duration::from_secs(5 * 60);
 
-/// scanner 用 BufReader 容量 —— 与 SFTP `SSH_FXP_READ` reply 单消息上限对齐。
-/// 详 change `unify-fs-direct-calls` design D5：32 KiB 单 BufReader fill = 单 SFTP READ
+/// scanner 用 `BufReader` 容量 —— 与 SFTP `SSH_FXP_READ` reply 单消息上限对齐。
+/// 详 change `unify-fs-direct-calls` design D5：32 KiB 单 `BufReader` fill = 单 SFTP READ
 /// message；64 KiB 强制底层拆 2× SFTP READ 无收益；默认 8 KiB 在 SSH 5MB jsonl 需 ~640 RTTs。
 const SCANNER_BUF_BYTES: usize = 32 * 1024;
 
@@ -156,7 +156,7 @@ pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
 /// `messages_ongoing`（不随时间变），`is_ongoing` 在 lookup 时由当前 wall clock
 /// 实时合成 stale 状态。
 ///
-/// 通过 `fs.open_read(path)` 拿 `Box<dyn AsyncRead + Send + Unpin>`，BufReader 容量
+/// 通过 `fs.open_read(path)` 拿 `Box<dyn AsyncRead + Send + Unpin>`，`BufReader` 容量
 /// 32 KiB 与 SFTP packet 上限对齐（详 change `unify-fs-direct-calls` design D5）。
 pub(crate) async fn extract_session_metadata_with_ongoing(
     fs: &dyn FileSystemProvider,
@@ -291,6 +291,7 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
     )
 }
 
+#[allow(dead_code)]
 pub(crate) fn extract_session_metadata_from_parsed(
     messages: &[ParsedMessage],
     is_stale: bool,
@@ -385,12 +386,12 @@ pub const METADATA_CACHE_CAPACITY: usize = 2000;
 
 /// 单条缓存记录：`FileSignature` + 各字段（不含时间敏感的 `is_ongoing`）。
 #[derive(Debug, Clone)]
-struct MetadataCacheEntry {
-    signature: FileSignature,
-    title: Option<String>,
-    message_count: usize,
-    messages_ongoing: bool,
-    git_branch: Option<String>,
+pub(crate) struct MetadataCacheEntry {
+    pub(crate) signature: FileSignature,
+    pub(crate) title: Option<String>,
+    pub(crate) message_count: usize,
+    pub(crate) messages_ongoing: bool,
+    pub(crate) git_branch: Option<String>,
 }
 
 /// cache key —— `(ContextId, PathBuf)` tuple，按 PR-A spec
@@ -442,6 +443,7 @@ impl MetadataCache {
     /// （详 change `unify-fs-direct-calls` design D3）。
     ///
     /// signature 字段 byte-equal 才命中；mismatch 返 None。命中时 LRU bump 到队首。
+    #[allow(dead_code)]
     pub(crate) fn lookup_with_known_signature(
         &mut self,
         ctx: &ContextId,

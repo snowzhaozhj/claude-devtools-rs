@@ -4,6 +4,7 @@
 
 pub mod error;
 pub mod events;
+pub(crate) mod image_disk_cache;
 pub mod local;
 pub(crate) mod parsed_message_cache;
 pub mod session_metadata;

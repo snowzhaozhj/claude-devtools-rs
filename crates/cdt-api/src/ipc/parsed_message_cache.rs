@@ -85,6 +85,7 @@ impl ParsedMessageCache {
     /// 用于 list 后台 batch 校验路径：调用方先 `fs.read_dir_with_metadata(parent)`
     /// 一次拿全 dir 内 entry 的 metadata，再批量 lookup，避免 N 次串行 stat
     /// （详 change `unify-fs-direct-calls` design D3）。
+    #[allow(dead_code)]
     pub(crate) fn lookup_with_known_signature(
         &mut self,
         ctx: &ContextId,
@@ -105,6 +106,7 @@ impl ParsedMessageCache {
 
     /// hot path cache hit trust —— 不校验 signature 直接返当前 entry。
     /// signature 校验由后台 batch task 异步跑（详 change `unify-fs-direct-calls` design D3）。
+    #[allow(dead_code)]
     pub(crate) fn lookup_trust_cached(
         &mut self,
         ctx: &ContextId,

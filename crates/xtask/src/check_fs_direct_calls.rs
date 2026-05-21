@@ -93,10 +93,7 @@ pub fn run(workspace_root: &Path, args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     } else if !stale_patterns.is_empty() {
         for e in &stale_patterns {
-            eprintln!(
-                "warning: ALLOWLIST entry '{}' matches 0 files",
-                e.pattern
-            );
+            eprintln!("warning: ALLOWLIST entry '{}' matches 0 files", e.pattern);
         }
     }
 
@@ -246,7 +243,7 @@ fn extract_pattern_and_reason(row: &str) -> Option<(String, String)> {
     let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
     let mut parts = inner.split('|');
     let pattern = parts.next()?.trim().trim_matches('`').trim().to_string();
-    let reason = parts.next().map(str::trim).unwrap_or("").to_string();
+    let reason = parts.next().map_or("", str::trim).to_string();
     if pattern.is_empty() {
         None
     } else {

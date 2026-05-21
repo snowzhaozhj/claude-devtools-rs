@@ -33,3 +33,4 @@ SHALL 在运行时 parse 本表作为 allowlist 输入。表外路径命中 `tok
 | `crates/cdt-discover/src/wsl.rs` | WSL distro 探测——永远本机 Local，跨发行版 Windows 路径检测，与 SSH context 无关（design D7 同型 Local-only 业务） |
 | `crates/cdt-discover/src/worktree_grouper.rs` | Local-only Git plumbing 读 .git/HEAD / commondir 等文件——SSH 路径走 NoopGitIdentityResolver（local.rs:3068 policy fork），永远不调此 module |
 | `crates/cdt-ssh/src/config_parser.rs` | ssh config 文件解析——boot / connect phase Local 读取 ~/.ssh/config，与 active SSH context 的 fs trait 无关 |
+| `crates/cdt-api/src/ipc/image_disk_cache.rs` | image disk cache 永远本地 ~/.cache/，与 SSH context 无关——Local + SSH 的 image asset 都写本地 cache_dir（SSH 端 image 由 fs trait 拉到 Local 后 cache 在本地复用避免每次 SFTP 重拉），详 change unify-fs-direct-calls design D4 |

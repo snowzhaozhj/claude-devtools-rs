@@ -21,7 +21,7 @@ use cdt_discover::{
     FileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
     local_handle,
 };
-use cdt_parse::{ParseError, parse_entry_at, parse_file};
+use cdt_parse::{ParseError, parse_entry_at};
 use cdt_ssh::{
     RemotePollingWatcher, RemoteWatcherHandle, SshConnectionManager, SshFileSystemProvider,
     SshSessionManager, default_ssh_config_path, list_hosts, parse_ssh_config_file,
@@ -31,10 +31,10 @@ use cdt_watch::FileWatcher;
 
 use super::error::ApiError;
 use super::events::SessionMetadataUpdate;
+use super::image_disk_cache::{empty_data_uri, format_data_uri, materialize_image_asset};
 use super::parsed_message_cache::{ParsedMessageCache, extract_parsed_messages_cached};
 use super::session_metadata::{
-    MetadataCache, extract_session_metadata_cached, extract_session_metadata_from_parsed,
-    try_lookup_cached_metadata,
+    MetadataCache, SessionMetadata, extract_session_metadata_cached, try_lookup_cached_metadata,
 };
 use super::traits::DataApi;
 use super::types::{
@@ -197,6 +197,7 @@ impl cdt_discover::GitIdentityResolver for NoopGitIdentityResolver {
     }
 }
 
+#[allow(dead_code)]
 fn parse_jsonl_content(content: &str) -> Result<Vec<cdt_core::ParsedMessage>, ParseError> {
     let mut out = Vec::new();
     for (idx, line) in content.lines().enumerate() {
@@ -808,10 +809,10 @@ impl LocalDataApi {
         // 2026-05-21）。
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
         let lookup_permit = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
-        // D8 scope：cache wrapper 当前仅对 Local context 接入。SSH 路径跳过
-        // cache lookup 避免每页 N 次远端 stat RTT，扫描分支也已 gate `!is_remote`
-        // 不入 page_jobs（codex 二审 commit-stage High → 详 spec
-        // `ipc-data-api/spec.md` Scenario `本 change 不强制切 scanner 路径`）。
+        // change `unify-fs-direct-calls` design D2/D3 (line 810-863):
+        // SSH 与 Local 同走 SkeletonThenStream——hot path 用 `lookup_trust_cached`
+        // 让 SSH cache hit 0 fs op 立刻渲染；cache miss 入 page_jobs 后台 scan，
+        // 通过 SSE 推差量。
         let lookups = futures::future::join_all(page.iter().map(|summary| {
             let wt_id = summary.project_id.clone();
             let session_id = summary.session_id.clone();
@@ -825,7 +826,19 @@ impl LocalDataApi {
             let ctx_clone = ctx.clone();
             async move {
                 if is_remote {
-                    return (wt_id, session_id, jsonl_path, None);
+                    // SSH hot path：cache hit trust（0 fs op）；miss 入后台 scan。
+                    let cached = cache
+                        .lock()
+                        .ok()
+                        .and_then(|mut c| c.lookup_trust_cached(&ctx_clone, &jsonl_path))
+                        .map(|entry| SessionMetadata {
+                            title: entry.title,
+                            message_count: entry.message_count,
+                            // SSH stale check policy fork（同 line 2171）
+                            is_ongoing: entry.messages_ongoing,
+                            git_branch: entry.git_branch,
+                        });
+                    return (wt_id, session_id, jsonl_path, cached);
                 }
                 let _guard = permit_sem
                     .acquire()
@@ -852,7 +865,8 @@ impl LocalDataApi {
                 summary.message_count = meta.message_count;
                 summary.is_ongoing = meta.is_ongoing;
                 summary.git_branch = meta.git_branch;
-            } else if !is_remote {
+            } else {
+                // SSH + Local 都入 page_jobs（design D2 去掉 !is_remote gate）
                 let base_dir = cdt_discover::path_decoder::extract_base_dir(&wt_id);
                 let dir = projects_dir.join(base_dir);
                 page_jobs_by_wt
@@ -1470,24 +1484,19 @@ impl LocalDataApi {
 
         let mut page = Vec::with_capacity(page_sessions.len());
         let mut page_jobs = Vec::with_capacity(page_sessions.len());
-        let mut inline_updates = Vec::new();
+        let inline_updates = Vec::new();
         // Cache fast-path：命中条骨架阶段直接带 title / messageCount 返回，避免
         // 完全依赖后台 broadcast emit（如果 emit 在前端 listener 注册前 fire-and-forget
         // 丢失，列表项会卡在 title=null 永久 fallback 到 sessionId 前 8 字符）。
         // 未命中条仍入 page_jobs 走后台扫描，扫完通过 broadcast 增量 patch。
         //
-        // 并发执行 stat + cache lookup：caller 可传任意大 page_size（如
-        // `list_all_sessions` 路径 50 条/页），串行 stat 累计 ms 数随 page 线性
-        // 放大；用 `join_all` 让 tokio runtime 并发调度 stat。lookup 内部仅做
-        // sync mutex lock + map lookup，相互不会阻塞。并发上限用 `Semaphore`
-        // 卡到 `METADATA_SCAN_CONCURRENCY`，避免 caller 传超大 page_size 时
-        // 一次性把 tokio blocking pool 占满（codex 二审 Q3）。
+        // change `unify-fs-direct-calls` design D2/D3 (line 1444-1574, 1515, 1524, 1575):
+        // SSH 路径与 Local 同走 SkeletonThenStream 入口——hot path 用
+        // `lookup_trust_cached` 让 SSH 在 cache hit 时 0 fs op 立刻渲染；cache miss
+        // 入 page_jobs 走 `scan_metadata_for_page` 异步刷新通过 SSE 推差量。
+        // PR-E 后续把"SSH 是否走 SkeletonThenStream"上移到 BackendPolicy 字段，
+        // 本 PR 提前内联实施以让 SSH 用户卡顿消失。
         let lookup_permit = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
-        // 本 change D8 scope 边界：cache wrapper 当前仅对 Local context 接入。SSH
-        // 路径走 inline `read_to_string + extract_metadata_from_parsed` 拿到
-        // remote_meta，不查 cache 避免每页 50 条多跑远端 stat RTT（codex 二审
-        // commit-stage High → 详 spec `ipc-data-api/spec.md` Scenario `本 change
-        // 不强制切 scanner 路径`）。SSH 完整接入留 PR-D。
         let lookups = futures::future::join_all(page_sessions.iter().map(|s| {
             let cache = self.metadata_cache.clone();
             let jsonl_path = dir.join(format!("{}.jsonl", s.id));
@@ -1496,10 +1505,21 @@ impl LocalDataApi {
             let ctx_clone = ctx.clone();
             async move {
                 if is_remote {
-                    // SSH 路径完全跳过 cache lookup —— 避免远端 stat RTT；下方
-                    // remote_meta 走 inline 读全文，本 change scope 内 SSH cache
-                    // 不接入。
-                    return (jsonl_path, None);
+                    // SSH hot path：cache hit trust 不做 stat（避免远端 RTT）；miss 入
+                    // page_jobs 后台 scan，通过 SSE event 推差量给前端。
+                    let cached = cache
+                        .lock()
+                        .ok()
+                        .and_then(|mut c| c.lookup_trust_cached(&ctx_clone, &jsonl_path))
+                        .map(|entry| SessionMetadata {
+                            title: entry.title,
+                            message_count: entry.message_count,
+                            // SSH 远端 mtime / 本机 SystemTime::now() 跨 clock domain
+                            // 不可比对，stale check 跳过（policy fork 同 line 2171）。
+                            is_ongoing: entry.messages_ongoing,
+                            git_branch: entry.git_branch,
+                        });
+                    return (jsonl_path, cached);
                 }
                 let _guard = permit_sem
                     .acquire()
@@ -1512,32 +1532,7 @@ impl LocalDataApi {
         }))
         .await;
         for (s, (jsonl_path, cached_meta)) in page_sessions.into_iter().zip(lookups) {
-            let remote_meta = if is_remote {
-                let content = fs.read_to_string(&jsonl_path).await.ok();
-                content
-                    .as_deref()
-                    .and_then(|content| parse_jsonl_content(content).ok())
-                    .map(|messages| extract_session_metadata_from_parsed(&messages, false))
-            } else {
-                None
-            };
-            let should_emit_inline_update = is_remote && remote_meta.is_some();
-            if let Some(meta) = cached_meta.or(remote_meta) {
-                if should_emit_inline_update {
-                    inline_updates.push(SessionMetadataUpdate {
-                        project_id: project_id.to_owned(),
-                        session_id: s.id.clone(),
-                        title: meta.title.clone(),
-                        message_count: meta.message_count,
-                        is_ongoing: meta.is_ongoing,
-                        git_branch: meta.git_branch.clone(),
-                        group_id: self
-                            .worktree_meta_cache
-                            .read()
-                            .ok()
-                            .and_then(|c| c.get(project_id).map(|m| m.group_id.clone())),
-                    });
-                }
+            if let Some(meta) = cached_meta {
                 let mut summary = SessionSummary {
                     session_id: s.id,
                     project_id: project_id.to_owned(),
@@ -1571,9 +1566,8 @@ impl LocalDataApi {
                 };
                 self.apply_worktree_meta(&mut summary);
                 page.push(summary);
-                if !is_remote {
-                    page_jobs.push((s.id, jsonl_path));
-                }
+                // SSH + Local 都入 page_jobs（design D2 line 1575：去掉 !is_remote gate）
+                page_jobs.push((s.id, jsonl_path));
             }
         }
 
@@ -2032,6 +2026,7 @@ impl DataApi for LocalDataApi {
         // 让 UI 显示"无 memory"而非读宿主机错误数据。
         // followup：openspec/followups.md 已记 SSH context memory 支持（TODO）
         let (fs, _projects_dir) = self.active_fs_and_projects_dir().await?;
+        // policy fork: PR-E lift to BackendPolicy::supports_memory
         if fs.kind() == cdt_discover::FsKind::Ssh {
             return Ok(ProjectMemory {
                 project_id: project_id.to_owned(),
@@ -2042,7 +2037,7 @@ impl DataApi for LocalDataApi {
             });
         }
         let memory_dir = self.project_memory_dir(project_id).await?;
-        let layers = discover_memory_layers(&memory_dir).await?;
+        let layers = discover_memory_layers(&*fs, &memory_dir).await?;
         let default_file = layers
             .iter()
             .find(|layer| layer.kind == MemoryLayerKind::Index)
@@ -2064,6 +2059,7 @@ impl DataApi for LocalDataApi {
     ) -> Result<MemoryFileContent, ApiError> {
         // SSH context 下 graceful degradation——同 get_project_memory 同款理由。
         let (fs, _projects_dir) = self.active_fs_and_projects_dir().await?;
+        // policy fork: PR-E lift to BackendPolicy::supports_memory
         if fs.kind() == cdt_discover::FsKind::Ssh {
             return Err(ApiError::not_found(format!(
                 "memory file {file}: SSH context 下远端 memory 文件读取尚不支持"
@@ -2072,7 +2068,8 @@ impl DataApi for LocalDataApi {
         let memory_dir = self.project_memory_dir(project_id).await?;
         let safe_file = validate_memory_file_name(file)?;
         let path = memory_dir.join(&safe_file);
-        let content = tokio::fs::read_to_string(&path)
+        let content = fs
+            .read_to_string(&path)
             .await
             .map_err(|e| ApiError::not_found(format!("memory file {safe_file}: {e}")))?;
         Ok(MemoryFileContent {
@@ -2098,68 +2095,54 @@ impl DataApi for LocalDataApi {
         // 以单文件 stat 取元数据`。change `merge-composite-projects` 移除了原本为
         // 反解 composite id 而调用 `scanner.scan()` 的全扫开销（~14K reads / IPC）。
         let t_locate = std::time::Instant::now();
-        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        // change `unify-fs-direct-calls` design D2 (line 2102): 用 strict 快照让 fs / ctx /
+        // projects_dir 来自同一次 provider 调用，避免 SSH disconnect 中间态降级。
+        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
         let project_dir =
             projects_dir.join(cdt_discover::path_decoder::extract_base_dir(project_id));
         let primary_jsonl = project_dir.join(format!("{session_id}.jsonl"));
 
-        let (jsonl_path, last_modified, size) = match fs.stat(&primary_jsonl).await {
-            Ok(meta) => (primary_jsonl, Some(meta.mtime_ms()), Some(meta.size)),
-            Err(_) if !is_remote => {
-                // 本地：fallback 走专用 helper（用 tokio::fs，命中速率最高）
-                let Some(path) = find_subagent_jsonl(&project_dir, session_id).await else {
-                    return Err(ApiError::not_found(format!("session {session_id}")));
-                };
-                let meta = tokio::fs::metadata(&path).await.ok();
-                let modified = meta.as_ref().and_then(|m| m.modified().ok()).map(|t| {
-                    let dt: chrono::DateTime<chrono::Utc> = t.into();
-                    dt.timestamp_millis()
-                });
-                let size = meta.as_ref().map(std::fs::Metadata::len);
-                (path, modified, size)
-            }
-            Err(_) => {
-                // 远端 SSH：本地 `find_subagent_jsonl` 走 `tokio::fs`，不能用。
-                // 必须改走 `find_subagent_jsonl_via_fs(&*fs, ..)` 经 `FileSystemProvider`
-                // 远端列目录。`find_session_project` SSH 分支已用同 helper（line 1583+），
-                // 这里对齐避免 "find_session_project 命中但 get_session_detail 又取不到"
-                // 的不一致（codex PR 二审反馈）。
-                let Some(path) = find_subagent_jsonl_via_fs(&*fs, &project_dir, session_id).await
-                else {
-                    return Err(ApiError::not_found(format!("session {session_id}")));
-                };
-                let meta = fs.stat(&path).await.ok();
-                let modified = meta.as_ref().map(cdt_discover::FsMetadata::mtime_ms);
-                let size = meta.as_ref().map(|m| m.size);
-                (path, modified, size)
-            }
+        let (jsonl_path, last_modified, size) = if let Ok(meta) = fs.stat(&primary_jsonl).await {
+            (primary_jsonl, Some(meta.mtime_ms()), Some(meta.size))
+        } else {
+            // Local + SSH 共用入口：find_subagent_jsonl 已 fs-aware + 保留 flat/nested
+            // 双结构，与 find_session_project 一致避免 "find_session_project 命中但
+            // get_session_detail 又取不到" 的不一致（codex PR 二审反馈）。
+            let Some(path) = find_subagent_jsonl(&*fs, &project_dir, session_id).await else {
+                return Err(ApiError::not_found(format!("session {session_id}")));
+            };
+            let meta = fs.stat(&path).await.ok();
+            let modified = meta.as_ref().map(cdt_discover::FsMetadata::mtime_ms);
+            let size = meta.as_ref().map(|m| m.size);
+            (path, modified, size)
         };
         let locate_ms = t_locate.elapsed().as_millis();
 
         let t_parse = std::time::Instant::now();
-        let messages = if is_remote {
-            let content = fs
-                .read_to_string(&jsonl_path)
+        // Local + SSH 共用 cache wrapper：cache hit byte-equal 直接返；miss 经 parse_file_via_fs
+        // 走 fs.open_read 流式解析后写回 cache（design D2 line 2141）。
+        let messages =
+            extract_parsed_messages_cached(&self.parsed_msg_cache, &*fs, &ctx, &jsonl_path)
                 .await
-                .map_err(|e| ApiError::internal(format!("read error: {e}")))?;
-            parse_jsonl_content(&content)
-                .map_err(|e| ApiError::internal(format!("parse error: {e}")))?
-        } else {
-            parse_file(&jsonl_path)
-                .await
-                .map_err(|e| ApiError::internal(format!("parse error: {e}")))?
-        };
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "parse error: stat or parse failed for {}",
+                        jsonl_path.display()
+                    ))
+                })?;
         let parse_ms = t_parse.elapsed().as_millis();
         let message_count = messages.len();
 
         let t_scan = std::time::Instant::now();
+        // policy fork: PR-E lift to BackendPolicy::supports_subagent_scan
         let candidates = if is_remote {
             Vec::new()
         } else if CROSS_PROJECT_SUBAGENT_SCAN {
-            scan_subagent_candidates_cross_project(&projects_dir, &project_dir, session_id).await
+            scan_subagent_candidates_cross_project(&*fs, &projects_dir, &project_dir, session_id)
+                .await
         } else {
-            scan_subagent_candidates(&project_dir, session_id).await
+            scan_subagent_candidates(&*fs, &project_dir, session_id).await
         };
         let scan_ms = t_scan.elapsed().as_millis();
         let candidate_count = candidates.len();
@@ -2324,59 +2307,27 @@ impl DataApi for LocalDataApi {
         //   - legacy subagent：`<projects_dir>/<encoded>/agent-<session_id>.jsonl`
         //   - 新结构 subagent：`<projects_dir>/<encoded>/<parent>/subagents/agent-<session_id>.jsonl`
         // 与 `find_subagent_jsonl` + `get_session_detail` 的查找口径一致。
+        // Local + SSH 共用 fs trait（design D2 line 2325）：算法分叉消除。
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
-        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
         let main_filename = format!("{session_id}.jsonl");
-        if is_remote {
-            // SSH 路径：通过 active provider 走远端 SFTP read_dir + exists
-            let Ok(entries) = fs.read_dir(&projects_dir).await else {
-                return Ok(None);
-            };
-            for entry in entries {
-                if !entry.kind.is_dir() {
-                    continue;
-                }
-                let project_dir = projects_dir.join(&entry.name);
-                // 主会话快路径
-                if fs.exists(&project_dir.join(&main_filename)).await {
-                    return Ok(Some(entry.name));
-                }
-                // 远端 subagent 仅扫新结构 `<project_dir>/*/subagents/agent-<sid>.jsonl`
-                // 旧 flat 结构需要逐文件 stat，远端 latency 不可接受——跳过
-                if find_subagent_jsonl_via_fs(&*fs, &project_dir, session_id)
-                    .await
-                    .is_some()
-                {
-                    return Ok(Some(entry.name));
-                }
-            }
-            return Ok(None);
-        }
-        // local 路径保留原 tokio::fs 实现
-        let Ok(mut entries) = tokio::fs::read_dir(&projects_dir).await else {
+        let Ok(entries) = fs.read_dir(&projects_dir).await else {
             return Ok(None);
         };
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let Ok(file_type) = entry.file_type().await else {
-                continue;
-            };
-            if !file_type.is_dir() {
+        for entry in entries {
+            if !entry.kind.is_dir() {
                 continue;
             }
-            let project_dir = entry.path();
+            let project_dir = projects_dir.join(&entry.name);
             // 主会话快路径
-            if tokio::fs::metadata(project_dir.join(&main_filename))
-                .await
-                .is_ok()
-            {
-                return Ok(entry.file_name().to_str().map(String::from));
+            if fs.exists(&project_dir.join(&main_filename)).await {
+                return Ok(Some(entry.name));
             }
-            // subagent 慢路径（与 `get_session_detail` fallback 一致）
-            if find_subagent_jsonl(&project_dir, session_id)
+            // subagent 慢路径（双结构 flat + nested fallback 由 find_subagent_jsonl 提供）
+            if find_subagent_jsonl(&*fs, &project_dir, session_id)
                 .await
                 .is_some()
             {
-                return Ok(entry.file_name().to_str().map(String::from));
+                return Ok(Some(entry.name));
             }
         }
         Ok(None)
@@ -2394,85 +2345,51 @@ impl DataApi for LocalDataApi {
         // 后在该目录内查 flat agent jsonl"。
         //
         // 使用当前 active context 的 fs + projects_dir，避免 root 切换后继续扫描旧目录。
+        // Local + SSH 共用 fs trait（design D2 line 2395-2396）：算法分叉消除。
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
-        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
-        let (path, content): (std::path::PathBuf, Option<String>) = if is_remote {
-            // SSH 路径：扫 projects_dir 找 root jsonl 所在 project_dir 后
-            // 探测 `<project_dir>/<root>/subagents/agent-<sub>.jsonl` 新结构
-            // （旧 flat 结构远端不支持——见 find_session_project 同款理由）
-            let filename = format!("agent-{subagent_session_id}.jsonl");
+        let new_structure_path = if CROSS_PROJECT_SUBAGENT_SCAN {
+            find_subagent_jsonl_cross_project(
+                &*fs,
+                &projects_dir,
+                root_session_id,
+                subagent_session_id,
+            )
+            .await
+        } else {
+            None
+        };
+        let path = if let Some(p) = new_structure_path {
+            p
+        } else {
+            // 旧结构兜底：找 root jsonl 所在 project_dir 后在该目录扫 flat（双结构 fallback
+            // 由 find_subagent_jsonl 提供）。
             let Ok(entries) = fs.read_dir(&projects_dir).await else {
                 return Ok(serde_json::Value::Array(Vec::new()));
             };
-            let mut found: Option<std::path::PathBuf> = None;
+            let mut fallback: Option<std::path::PathBuf> = None;
             for entry in entries {
                 if !entry.kind.is_dir() {
                     continue;
                 }
                 let project_dir = projects_dir.join(&entry.name);
-                let candidate = project_dir
-                    .join(root_session_id)
-                    .join("subagents")
-                    .join(&filename);
-                if fs.exists(&candidate).await {
-                    found = Some(candidate);
+                let root_jsonl = project_dir.join(format!("{root_session_id}.jsonl"));
+                if fs.exists(&root_jsonl).await {
+                    if let Some(p) =
+                        find_subagent_jsonl(&*fs, &project_dir, subagent_session_id).await
+                    {
+                        fallback = Some(p);
+                    }
                     break;
                 }
             }
-            let Some(p) = found else {
+            let Some(p) = fallback else {
                 return Ok(serde_json::Value::Array(Vec::new()));
             };
-            let body = fs
-                .read_to_string(&p)
-                .await
-                .map_err(|e| ApiError::internal(format!("read error: {e}")))?;
-            (p, Some(body))
-        } else {
-            let new_structure_path = if CROSS_PROJECT_SUBAGENT_SCAN {
-                find_subagent_jsonl_cross_project(
-                    &projects_dir,
-                    root_session_id,
-                    subagent_session_id,
-                )
-                .await
-            } else {
-                None
-            };
-            let path = if let Some(p) = new_structure_path {
-                p
-            } else {
-                // 旧结构兜底：找 root jsonl 所在 project_dir 后在该目录扫 flat。
-                let Ok(mut entries) = tokio::fs::read_dir(&projects_dir).await else {
-                    return Ok(serde_json::Value::Array(Vec::new()));
-                };
-                let mut fallback: Option<std::path::PathBuf> = None;
-                while let Ok(Some(entry)) = entries.next_entry().await {
-                    let project_dir = entry.path();
-                    let root_jsonl = project_dir.join(format!("{root_session_id}.jsonl"));
-                    if tokio::fs::metadata(&root_jsonl).await.is_ok() {
-                        if let Some(p) =
-                            find_subagent_jsonl(&project_dir, subagent_session_id).await
-                        {
-                            fallback = Some(p);
-                        }
-                        break;
-                    }
-                }
-                let Some(p) = fallback else {
-                    return Ok(serde_json::Value::Array(Vec::new()));
-                };
-                p
-            };
-            (path, None)
+            p
         };
-        let messages = if let Some(body) = content {
-            parse_jsonl_content(&body)
-                .map_err(|e| ApiError::internal(format!("parse error: {e}")))?
-        } else {
-            parse_file(&path)
-                .await
-                .map_err(|e| ApiError::internal(format!("parse error: {e}")))?
-        };
+        let messages = cdt_parse::parse_file_via_fs(&*fs, &path)
+            .await
+            .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
         let mut msgs = messages;
         for m in &mut msgs {
             m.is_sidechain = false;
@@ -2504,47 +2421,20 @@ impl DataApi for LocalDataApi {
         // 静默降级到 Local（避免返回同 ID 的 Local 文件数据；详 codex 二审 commit
         // stage Q1）。
         let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
-        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
-        let messages = if is_remote {
-            let Some(jsonl_path) =
-                locate_session_jsonl_via_fs(&*fs, &projects_dir, root_session_id, session_id).await
-            else {
-                tracing::warn!(target: "cdt_api::image", root_session_id, session_id, "jsonl not found (ssh)");
-                return Ok(empty_data_uri());
-            };
-            let body = match fs.read_to_string(&jsonl_path).await {
-                Ok(b) => b,
-                Err(e) => {
-                    tracing::warn!(target: "cdt_api::image", error = %e, "ssh read jsonl failed; returning empty data URI");
-                    return Ok(empty_data_uri());
-                }
-            };
-            match parse_jsonl_content(&body) {
-                Ok(m) => std::sync::Arc::new(m),
-                Err(e) => {
-                    tracing::warn!(target: "cdt_api::image", error = %e, "ssh parse failed; returning empty data URI");
-                    return Ok(empty_data_uri());
-                }
-            }
-        } else {
-            let Some(jsonl_path) =
-                locate_session_jsonl(&projects_dir, root_session_id, session_id).await
-            else {
-                tracing::warn!(target: "cdt_api::image", root_session_id, session_id, "jsonl not found");
-                return Ok(empty_data_uri());
-            };
-            // parse 整个文件 → 找 chunk_uuid → 取 block_index 的 image。
-            // 走 parsed-message LRU cache：命中时复用 Arc<Vec<ParsedMessage>>，
-            // 跳过整文件 line-by-line parse；详 change `parsed-message-lru-cache`。
-            // PR-C：wrapper stat 走 fs trait，key 含 ContextId 前缀（design D1）。
-            let Some(messages) =
-                extract_parsed_messages_cached(&self.parsed_msg_cache, &*fs, &ctx, &jsonl_path)
-                    .await
-            else {
-                tracing::warn!(target: "cdt_api::image", "parse failed or stat error; returning empty data URI");
-                return Ok(empty_data_uri());
-            };
-            messages
+        let Some(jsonl_path) =
+            locate_session_jsonl(&*fs, &projects_dir, root_session_id, session_id).await
+        else {
+            tracing::warn!(target: "cdt_api::image", root_session_id, session_id, "jsonl not found");
+            return Ok(empty_data_uri());
+        };
+        // Local + SSH 共用 cache wrapper：命中时复用 Arc<Vec<ParsedMessage>>，跳过整文件
+        // line-by-line parse；miss 经 parse_file_via_fs 走 fs.open_read 后写回 cache
+        // （design D2 line 2504：统一走 cache wrapper 消除 SSH inline read 分叉）。
+        let Some(messages) =
+            extract_parsed_messages_cached(&self.parsed_msg_cache, &*fs, &ctx, &jsonl_path).await
+        else {
+            tracing::warn!(target: "cdt_api::image", "parse failed or stat error; returning empty data URI");
+            return Ok(empty_data_uri());
         };
         let Some((data_b64, media_type)) =
             find_image_block_in_messages(&messages, &chunk_uuid, block_index)
@@ -2572,47 +2462,19 @@ impl DataApi for LocalDataApi {
         // 用户可见 IPC handler 走 strict 变体——SSH disconnect 中间态 SHALL 报错而非
         // 静默降级到 Local（codex 二审 commit stage Q1）。
         let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
-        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
-        let messages = if is_remote {
-            let Some(jsonl_path) =
-                locate_session_jsonl_via_fs(&*fs, &projects_dir, root_session_id, session_id).await
-            else {
-                tracing::warn!(target: "cdt_api::tool_output", root_session_id, session_id, "jsonl not found (ssh)");
-                return Ok(cdt_core::ToolOutput::Missing);
-            };
-            let body = match fs.read_to_string(&jsonl_path).await {
-                Ok(b) => b,
-                Err(e) => {
-                    tracing::warn!(target: "cdt_api::tool_output", error = %e, "ssh read jsonl failed; returning Missing");
-                    return Ok(cdt_core::ToolOutput::Missing);
-                }
-            };
-            match parse_jsonl_content(&body) {
-                Ok(m) => std::sync::Arc::new(m),
-                Err(e) => {
-                    tracing::debug!(target: "cdt_api::tool_output", error = %e, "ssh parse failed; returning Missing");
-                    return Ok(cdt_core::ToolOutput::Missing);
-                }
-            }
-        } else {
-            let Some(jsonl_path) =
-                locate_session_jsonl(&projects_dir, root_session_id, session_id).await
-            else {
-                tracing::warn!(target: "cdt_api::tool_output", root_session_id, session_id, "jsonl not found");
-                return Ok(cdt_core::ToolOutput::Missing);
-            };
-
-            // 走 parsed-message LRU cache：命中时复用 Arc<Vec<ParsedMessage>>，
-            // 跳过整文件 line-by-line parse；详 change `parsed-message-lru-cache`。
-            // PR-C：wrapper stat 走 fs trait，key 含 ContextId 前缀（design D1）。
-            let Some(messages) =
-                extract_parsed_messages_cached(&self.parsed_msg_cache, &*fs, &ctx, &jsonl_path)
-                    .await
-            else {
-                tracing::debug!(target: "cdt_api::tool_output", "parse failed or stat error; returning Missing");
-                return Ok(cdt_core::ToolOutput::Missing);
-            };
-            messages
+        let Some(jsonl_path) =
+            locate_session_jsonl(&*fs, &projects_dir, root_session_id, session_id).await
+        else {
+            tracing::warn!(target: "cdt_api::tool_output", root_session_id, session_id, "jsonl not found");
+            return Ok(cdt_core::ToolOutput::Missing);
+        };
+        // Local + SSH 共用 cache wrapper：cache hit 复用 Arc<Vec<ParsedMessage>>；miss 经
+        // parse_file_via_fs 走 fs.open_read 后写回 cache（design D2 line 2572）。
+        let Some(messages) =
+            extract_parsed_messages_cached(&self.parsed_msg_cache, &*fs, &ctx, &jsonl_path).await
+        else {
+            tracing::debug!(target: "cdt_api::tool_output", "parse failed or stat error; returning Missing");
+            return Ok(cdt_core::ToolOutput::Missing);
         };
 
         // build_chunks 后线性 scan tool_executions 找 tool_use_id 匹配。
@@ -2696,6 +2558,7 @@ impl DataApi for LocalDataApi {
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
         // active context = SSH 时启用 SearchConfig.is_ssh=true，开 stage-limit
         // 避免远端 SFTP 全量扫描（local 默认 is_ssh=false）
+        // policy fork: PR-E lift to BackendPolicy::search_config
         let config = SearchConfig::from_fs_kind(fs.kind());
         let searcher = SessionSearcher::new(fs, self.search_cache.clone(), projects_dir);
         let result = searcher
@@ -3077,6 +2940,7 @@ impl DataApi for LocalDataApi {
         // cwd 与本机宿主路径重合时（如 docker 挂载 `~/.claude` 复现场景），会读宿主机
         // `.git` 泄漏本地 gitBranch。SSH 路径用 NoopGitIdentityResolver 让 git 字段全 None。
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        // policy fork: PR-E lift to BackendPolicy::git_identity_resolver
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
         let mut scanner = ProjectScanner::new_with_semaphore(
             fs,
@@ -3087,6 +2951,7 @@ impl DataApi for LocalDataApi {
             .scan()
             .await
             .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
+        // policy fork: PR-E lift to BackendPolicy::git_identity_resolver
         let groups = if is_remote {
             let grouper = cdt_discover::WorktreeGrouper::new(NoopGitIdentityResolver);
             grouper.group_by_repository(projects).await
@@ -3340,34 +3205,26 @@ impl LocalDataApi {
     }
 }
 
-async fn discover_memory_layers(memory_dir: &Path) -> Result<Vec<MemoryLayer>, ApiError> {
-    let mut entries = match tokio::fs::read_dir(memory_dir).await {
+async fn discover_memory_layers(
+    fs: &dyn FileSystemProvider,
+    memory_dir: &Path,
+) -> Result<Vec<MemoryLayer>, ApiError> {
+    let entries = match fs.read_dir(memory_dir).await {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(cdt_fs::FsError::NotFound(_)) => return Ok(Vec::new()),
         Err(e) => return Err(ApiError::internal(format!("read memory dir error: {e}"))),
     };
 
     let mut markdown_files = std::collections::BTreeSet::new();
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| ApiError::internal(format!("read memory entry error: {e}")))?
-    {
-        let file_type = entry
-            .file_type()
-            .await
-            .map_err(|e| ApiError::internal(format!("read memory file type error: {e}")))?;
-        if !file_type.is_file() {
+    for entry in entries {
+        if !entry.kind.is_file() {
             continue;
         }
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        if Path::new(&name)
+        if Path::new(&entry.name)
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
         {
-            markdown_files.insert(name);
+            markdown_files.insert(entry.name);
         }
     }
 
@@ -3380,7 +3237,8 @@ async fn discover_memory_layers(memory_dir: &Path) -> Result<Vec<MemoryLayer>, A
             hook: Some("MEMORY.md".to_owned()),
             kind: MemoryLayerKind::Index,
         });
-        let index_content = tokio::fs::read_to_string(memory_dir.join("MEMORY.md"))
+        let index_content = fs
+            .read_to_string(&memory_dir.join("MEMORY.md"))
             .await
             .map_err(|e| ApiError::internal(format!("read MEMORY.md error: {e}")))?;
         for layer in parse_memory_index(&index_content, &markdown_files) {
@@ -3513,99 +3371,37 @@ async fn build_claude_md_from_filesystem(
 // phase 3: image asset cache 辅助
 // =============================================================================
 
-/// 失败 fallback：返回一个空 `data:` URI 占位。前端 `<img>` 加载会显示
-/// broken-image，不阻塞 session 渲染。
-fn empty_data_uri() -> String {
-    "data:application/octet-stream;base64,".to_owned()
-}
-
-/// 完整 `data:` URI（落盘失败 / cache 目录未注入时 fallback）。
-fn format_data_uri(media_type: &str, base64_data: &str) -> String {
-    format!("data:{media_type};base64,{base64_data}")
-}
-
 /// 在 projects 根目录下定位 (`root_session_id`, `session_id`) 对应的 jsonl。
 ///
 /// `session_id == root_session_id` 时直接找 root jsonl（在任一 `project_dir` 内）；
 /// 不等时跨 `projects_dir` 扫 `{project_dir}/{root_session_id}/subagents/agent-<sub>.jsonl`
 /// （新结构），命中即返；未命中再 fallback 到 root `project_dir` 内的 flat 旧结构。
-/// SSH 远端版的 `locate_session_jsonl`——同语义但走 `FileSystemProvider`
-/// 而不是 `tokio::fs`。远端只覆盖新结构 subagent（`{project}/{root}/subagents/agent-<sid>.jsonl`），
-/// 旧 flat 结构需要 per-file stat，远端 latency 不可接受。
-async fn locate_session_jsonl_via_fs(
-    fs: &dyn FileSystemProvider,
-    projects_dir: &Path,
-    root_session_id: &str,
-    session_id: &str,
-) -> Option<std::path::PathBuf> {
-    let entries = fs.read_dir(projects_dir).await.ok()?;
-    if session_id == root_session_id {
-        for entry in entries {
-            if !entry.kind.is_dir() {
-                continue;
-            }
-            let candidate = projects_dir
-                .join(&entry.name)
-                .join(format!("{root_session_id}.jsonl"));
-            if fs.exists(&candidate).await {
-                return Some(candidate);
-            }
-        }
-        return None;
-    }
-    // subagent 新结构：`{projects_dir}/<project>/<root>/subagents/agent-<sid>.jsonl`
-    let filename = format!("agent-{session_id}.jsonl");
-    for entry in entries {
-        if !entry.kind.is_dir() {
-            continue;
-        }
-        let candidate = projects_dir
-            .join(&entry.name)
-            .join(root_session_id)
-            .join("subagents")
-            .join(&filename);
-        if fs.exists(&candidate).await {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-/// SSH 远端版的 `find_subagent_jsonl`——给定 `project_dir` 扫
-/// `<project_dir>/*/subagents/agent-<sid>.jsonl` 新结构。
-async fn find_subagent_jsonl_via_fs(
-    fs: &dyn FileSystemProvider,
-    project_dir: &Path,
-    session_id: &str,
-) -> Option<std::path::PathBuf> {
-    let filename = format!("agent-{session_id}.jsonl");
-    let entries = fs.read_dir(project_dir).await.ok()?;
-    for entry in entries {
-        if !entry.kind.is_dir() {
-            continue;
-        }
-        let candidate = project_dir
-            .join(&entry.name)
-            .join("subagents")
-            .join(&filename);
-        if fs.exists(&candidate).await {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
+/// 通过 `FileSystemProvider` 定位主 session / subagent 的 JSONL。
+///
+/// `session_id == root_session_id`：扫 `projects_dir` 找任一 `project_dir` 含 root jsonl
+/// 即返。subagent：优先扫新嵌套结构（`{project}/{root}/subagents/agent-<sid>.jsonl`，
+/// `CROSS_PROJECT_SUBAGENT_SCAN=true` 时跨 `projects_dir`），未命中再 fallback 到旧 flat
+/// 结构（`{project}/agent-<sid>.jsonl`）。
+///
+/// SSH context 与 Local context 共用此入口（design D6：4 个 subagent helper 切 fs trait
+/// + 保留 flat / nested 双结构）。
 async fn locate_session_jsonl(
+    fs: &dyn FileSystemProvider,
     projects_dir: &Path,
     root_session_id: &str,
     session_id: &str,
 ) -> Option<std::path::PathBuf> {
     // 主 session 自身：扫 projects_dir 找到任一 project_dir 含 root jsonl 即返。
     if session_id == root_session_id {
-        let mut entries = tokio::fs::read_dir(projects_dir).await.ok()?;
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let root_jsonl = entry.path().join(format!("{root_session_id}.jsonl"));
-            if tokio::fs::metadata(&root_jsonl).await.is_ok() {
+        let entries = fs.read_dir(projects_dir).await.ok()?;
+        for entry in entries {
+            if !entry.kind.is_dir() {
+                continue;
+            }
+            let root_jsonl = projects_dir
+                .join(&entry.name)
+                .join(format!("{root_session_id}.jsonl"));
+            if fs.exists(&root_jsonl).await {
                 return Some(root_jsonl);
             }
         }
@@ -3615,21 +3411,24 @@ async fn locate_session_jsonl(
     // subagent：优先跨 project_dir 扫新结构。
     if CROSS_PROJECT_SUBAGENT_SCAN {
         if let Some(p) =
-            find_subagent_jsonl_cross_project(projects_dir, root_session_id, session_id).await
+            find_subagent_jsonl_cross_project(fs, projects_dir, root_session_id, session_id).await
         {
             return Some(p);
         }
     }
 
     // 旧结构兜底：找含 root jsonl 的 project_dir 后扫该目录的 flat agent jsonl。
-    let mut entries = tokio::fs::read_dir(projects_dir).await.ok()?;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let project_dir = entry.path();
-        let root_jsonl = project_dir.join(format!("{root_session_id}.jsonl"));
-        if tokio::fs::metadata(&root_jsonl).await.is_err() {
+    let entries = fs.read_dir(projects_dir).await.ok()?;
+    for entry in entries {
+        if !entry.kind.is_dir() {
             continue;
         }
-        if let Some(p) = find_subagent_jsonl(&project_dir, session_id).await {
+        let project_dir = projects_dir.join(&entry.name);
+        let root_jsonl = project_dir.join(format!("{root_session_id}.jsonl"));
+        if !fs.exists(&root_jsonl).await {
+            continue;
+        }
+        if let Some(p) = find_subagent_jsonl(fs, &project_dir, session_id).await {
             return Some(p);
         }
     }
@@ -3653,80 +3452,37 @@ fn find_image_block_in_messages(
     Some((source.data.clone(), source.media_type.clone()))
 }
 
-/// SHA256 内容寻址 + 落盘到 cache 目录，返回 `asset://localhost/<absolute_path>`。
-/// 失败时 fallback 返回 `data:` URI。
-async fn materialize_image_asset(cache_dir: &Path, media_type: &str, base64_data: &str) -> String {
-    use base64::Engine;
-    use sha2::Digest;
-
-    let bytes = match base64::engine::general_purpose::STANDARD.decode(base64_data) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(target: "cdt_api::image", error = %e, "base64 decode failed");
-            return format_data_uri(media_type, base64_data);
-        }
-    };
-
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(&bytes);
-    let digest = hasher.finalize();
-    let hash_hex: String = digest.iter().take(8).fold(String::new(), |mut acc, b| {
-        use std::fmt::Write;
-        let _ = write!(acc, "{b:02x}");
-        acc
-    });
-
-    let ext = media_type_to_ext(media_type);
-    let file_path = cache_dir.join(format!("{hash_hex}.{ext}"));
-
-    if let Err(e) = tokio::fs::create_dir_all(cache_dir).await {
-        tracing::warn!(target: "cdt_api::image", error = %e, dir = %cache_dir.display(), "create cache dir failed");
-        return format_data_uri(media_type, base64_data);
-    }
-
-    if tokio::fs::metadata(&file_path).await.is_err() {
-        if let Err(e) = tokio::fs::write(&file_path, &bytes).await {
-            tracing::warn!(target: "cdt_api::image", error = %e, path = %file_path.display(), "write image cache failed");
-            return format_data_uri(media_type, base64_data);
-        }
-    }
-
-    // Windows 上 `file_path.display()` 含 `\`，Tauri asset protocol 按 POSIX URI
-    // 解析 —— 手动归一为 `/` 保证 `asset://localhost/C:/Users/...` 格式。
-    let url_path = file_path.to_string_lossy().replace('\\', "/");
-    format!("asset://localhost/{url_path}")
-}
-
-fn media_type_to_ext(mime: &str) -> &'static str {
-    match mime {
-        "image/png" => "png",
-        "image/jpeg" | "image/jpg" => "jpg",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/svg+xml" => "svg",
-        _ => "bin",
-    }
-}
-
 /// 在 project 目录下查找指定 session id 的 subagent JSONL 文件。
 ///
-/// 检查两种结构：
-/// - 新：`{project_dir}/*/subagents/agent-{session_id}.jsonl`（扁平扫一层主 session 目录）
-/// - 旧：`{project_dir}/agent-{session_id}.jsonl`
-async fn find_subagent_jsonl(project_dir: &Path, session_id: &str) -> Option<std::path::PathBuf> {
+/// 检查两种结构（design D6 保留双结构 fallback）：
+/// - 旧 flat：`{project_dir}/agent-{session_id}.jsonl`
+/// - 新 nested：`{project_dir}/*/subagents/agent-{session_id}.jsonl`（扁平扫一层主 session 目录）
+///
+/// 通过 `FileSystemProvider` 走当前 active context 的 fs；Local + SSH 共用此入口。
+async fn find_subagent_jsonl(
+    fs: &dyn FileSystemProvider,
+    project_dir: &Path,
+    session_id: &str,
+) -> Option<std::path::PathBuf> {
     let filename = format!("agent-{session_id}.jsonl");
 
-    // 旧结构：project_dir/agent-<id>.jsonl
+    // 旧 flat：project_dir/agent-<id>.jsonl
     let flat = project_dir.join(&filename);
-    if tokio::fs::metadata(&flat).await.is_ok() {
+    if fs.exists(&flat).await {
         return Some(flat);
     }
 
-    // 新结构：project_dir/{parent_session}/subagents/agent-<id>.jsonl
-    let mut entries = tokio::fs::read_dir(project_dir).await.ok()?;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let candidate = entry.path().join("subagents").join(&filename);
-        if tokio::fs::metadata(&candidate).await.is_ok() {
+    // 新 nested：project_dir/{parent_session}/subagents/agent-<id>.jsonl
+    let entries = fs.read_dir(project_dir).await.ok()?;
+    for entry in entries {
+        if !entry.kind.is_dir() {
+            continue;
+        }
+        let candidate = project_dir
+            .join(&entry.name)
+            .join("subagents")
+            .join(&filename);
+        if fs.exists(&candidate).await {
             return Some(candidate);
         }
     }
@@ -3742,9 +3498,12 @@ async fn find_subagent_jsonl(project_dir: &Path, session_id: &str) -> Option<std
 /// 主要出现在主 cwd 启动的老 session，跨目录场景罕见）。
 ///
 /// `main_project_dir` 用于旧结构扫描；新结构扫描仅依赖 `projects_dir`。
+/// 通过 `FileSystemProvider` 走当前 active context 的 fs（design D6）。
 ///
 /// 跳过 `agent-acompact*` 前缀（compaction 类内部产物，不是真实 subagent）。
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
 async fn scan_subagent_candidates_cross_project(
+    fs: &dyn FileSystemProvider,
     projects_dir: &Path,
     main_project_dir: &Path,
     root_session_id: &str,
@@ -3757,15 +3516,12 @@ async fn scan_subagent_candidates_cross_project(
 
     // 第一遍：收集所有 project_dir entry path（顺序快，单 read_dir）。
     let mut project_dirs: Vec<std::path::PathBuf> = Vec::new();
-    if let Ok(mut entries) = tokio::fs::read_dir(projects_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let Ok(file_type) = entry.file_type().await else {
-                continue;
-            };
-            if !file_type.is_dir() {
+    if let Ok(entries) = fs.read_dir(projects_dir).await {
+        for entry in entries {
+            if !entry.kind.is_dir() {
                 continue;
             }
-            project_dirs.push(entry.path());
+            project_dirs.push(projects_dir.join(&entry.name));
         }
     }
     let projects_scanned = project_dirs.len();
@@ -3783,19 +3539,19 @@ async fn scan_subagent_candidates_cross_project(
         async move {
             let _permit = sem.acquire_owned().await.ok()?;
             let new_dir = project_path.join(&root_session_id).join("subagents");
-            let mut sub_entries = tokio::fs::read_dir(&new_dir).await.ok()?;
+            let sub_entries = fs.read_dir(&new_dir).await.ok()?;
             let mut local: Vec<(cdt_core::SubagentCandidate, u128)> = Vec::new();
-            while let Ok(Some(sub_entry)) = sub_entries.next_entry().await {
-                let name = sub_entry.file_name();
-                let name_str = name.to_string_lossy();
+            for sub_entry in sub_entries {
+                let name_str = sub_entry.name.as_str();
                 if !(name_str.starts_with("agent-")
                     && name_str.ends_with(".jsonl")
                     && !name_str.starts_with("agent-acompact"))
                 {
                     continue;
                 }
+                let candidate_path = new_dir.join(&sub_entry.name);
                 let t = std::time::Instant::now();
-                if let Some(c) = parse_subagent_candidate(&sub_entry.path()).await {
+                if let Some(c) = parse_subagent_candidate(fs, &candidate_path).await {
                     local.push((c, t.elapsed().as_millis()));
                 }
             }
@@ -3821,18 +3577,18 @@ async fn scan_subagent_candidates_cross_project(
     }
 
     // 旧结构兜底：始终只扫主 project_dir，避免跨目录大量 parse 成本。
-    if let Ok(mut old_entries) = tokio::fs::read_dir(main_project_dir).await {
-        while let Ok(Some(entry)) = old_entries.next_entry().await {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
+    if let Ok(old_entries) = fs.read_dir(main_project_dir).await {
+        for entry in old_entries {
+            let name_str = entry.name.as_str();
             if !(name_str.starts_with("agent-")
                 && name_str.ends_with(".jsonl")
                 && !name_str.starts_with("agent-acompact"))
             {
                 continue;
             }
+            let candidate_path = main_project_dir.join(&entry.name);
             let t = std::time::Instant::now();
-            let Some(c) = parse_subagent_candidate(&entry.path()).await else {
+            let Some(c) = parse_subagent_candidate(fs, &candidate_path).await else {
                 continue;
             };
             if c.parent_session_id.as_deref() != Some(root_session_id) {
@@ -3870,29 +3626,27 @@ async fn scan_subagent_candidates_cross_project(
 ///
 /// 扫所有 `{projects_dir}/*/{root_session_id}/subagents/agent-{sub_session_id}.jsonl`，
 /// 命中即返。未命中且 `CROSS_PROJECT_SUBAGENT_SCAN=true` 时不再 fallback —— 调用方需要
-/// 额外回退路径时显式叠加调用 `find_subagent_jsonl(&main_project_dir, ...)` 兜旧结构。
+/// 额外回退路径时显式叠加调用 `find_subagent_jsonl(fs, &main_project_dir, ...)` 兜旧结构。
+///
+/// 通过 `FileSystemProvider` 走当前 active context 的 fs（design D6）。
 async fn find_subagent_jsonl_cross_project(
+    fs: &dyn FileSystemProvider,
     projects_dir: &Path,
     root_session_id: &str,
     sub_session_id: &str,
 ) -> Option<std::path::PathBuf> {
     let filename = format!("agent-{sub_session_id}.jsonl");
-    let Ok(mut entries) = tokio::fs::read_dir(projects_dir).await else {
-        return None;
-    };
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let Ok(file_type) = entry.file_type().await else {
-            continue;
-        };
-        if !file_type.is_dir() {
+    let entries = fs.read_dir(projects_dir).await.ok()?;
+    for entry in entries {
+        if !entry.kind.is_dir() {
             continue;
         }
-        let candidate = entry
-            .path()
+        let candidate = projects_dir
+            .join(&entry.name)
             .join(root_session_id)
             .join("subagents")
             .join(&filename);
-        if tokio::fs::metadata(&candidate).await.is_ok() {
+        if fs.exists(&candidate).await {
             return Some(candidate);
         }
     }
@@ -3901,13 +3655,16 @@ async fn find_subagent_jsonl_cross_project(
 
 /// 扫描 subagent 候选文件，构建 `SubagentCandidate` 列表。
 ///
-/// 扫描路径：
-/// - 新结构：`{project_dir}/{session_id}/subagents/agent-*.jsonl`
-/// - 旧结构：`{project_dir}/agent-*.jsonl`（需要读首行检查 parent session）
+/// 扫描路径（design D6 保留双结构）：
+/// - 新 nested：`{project_dir}/{session_id}/subagents/agent-*.jsonl`
+/// - 旧 flat：`{project_dir}/agent-*.jsonl`（需要读首行检查 parent session）
 ///
 /// 扫描失败时静默返回空列表（warn 日志）。本函数仅扫主 `project_dir`，
 /// 跨 `projects_dir` 的扫描走 `scan_subagent_candidates_cross_project`。
+/// 通过 `FileSystemProvider` 走当前 active context 的 fs。
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
 async fn scan_subagent_candidates(
+    fs: &dyn FileSystemProvider,
     project_dir: &Path,
     session_id: &str,
 ) -> Vec<cdt_core::SubagentCandidate> {
@@ -3916,16 +3673,16 @@ async fn scan_subagent_candidates(
 
     // 新结构：{project_dir}/{session_id}/subagents/
     let new_dir = project_dir.join(session_id).join("subagents");
-    if let Ok(mut entries) = tokio::fs::read_dir(&new_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
+    if let Ok(entries) = fs.read_dir(&new_dir).await {
+        for entry in entries {
+            let name_str = entry.name.as_str();
             if name_str.starts_with("agent-")
                 && name_str.ends_with(".jsonl")
                 && !name_str.starts_with("agent-acompact")
             {
+                let candidate_path = new_dir.join(&entry.name);
                 let t = std::time::Instant::now();
-                if let Some(c) = parse_subagent_candidate(&entry.path()).await {
+                if let Some(c) = parse_subagent_candidate(fs, &candidate_path).await {
                     per_candidate_ms.push(t.elapsed().as_millis());
                     candidates.push(c);
                 }
@@ -3934,16 +3691,16 @@ async fn scan_subagent_candidates(
     }
 
     // 旧结构：{project_dir}/agent-*.jsonl
-    if let Ok(mut entries) = tokio::fs::read_dir(project_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
+    if let Ok(entries) = fs.read_dir(project_dir).await {
+        for entry in entries {
+            let name_str = entry.name.as_str();
             if name_str.starts_with("agent-")
                 && name_str.ends_with(".jsonl")
                 && !name_str.starts_with("agent-acompact")
             {
+                let candidate_path = project_dir.join(&entry.name);
                 let t = std::time::Instant::now();
-                if let Some(c) = parse_subagent_candidate(&entry.path()).await {
+                if let Some(c) = parse_subagent_candidate(fs, &candidate_path).await {
                     if c.parent_session_id.as_deref() == Some(session_id) {
                         per_candidate_ms.push(t.elapsed().as_millis());
                         candidates.push(c);
@@ -3970,11 +3727,17 @@ async fn scan_subagent_candidates(
 }
 
 /// 轻量解析一个 subagent JSONL 文件的前几行，提取候选信息。
-async fn parse_subagent_candidate(path: &Path) -> Option<cdt_core::SubagentCandidate> {
+///
+/// 通过 `FileSystemProvider` 走当前 active context 的 fs（design D6）；
+/// `BufReader` 容量与 `session_metadata::SCANNER_BUF_BYTES` 对齐 SFTP packet 上限。
+async fn parse_subagent_candidate(
+    fs: &dyn FileSystemProvider,
+    path: &Path,
+) -> Option<cdt_core::SubagentCandidate> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
-    let file = tokio::fs::File::open(path).await.ok()?;
-    let reader = BufReader::new(file);
+    let reader = fs.open_read(path).await.ok()?;
+    let reader = BufReader::with_capacity(32 * 1024, reader);
     let mut lines = reader.lines();
 
     let mut session_id = path
@@ -4061,7 +3824,7 @@ async fn parse_subagent_candidate(path: &Path) -> Option<cdt_core::SubagentCandi
     // 流跑 `check_messages_ongoing`——避免 followups.md "Subagent 状态判定"
     // 段记录的 impl-bug：仅看 `end_ts > spawn_ts` 会把"中断后无 assistant 收尾"
     // 的 subagent 误判为已完成，导致 `SubagentCard` 右上角误显示 ✓。
-    let (is_ongoing, messages) = match parse_file(path).await {
+    let (is_ongoing, messages) = match cdt_parse::parse_file_via_fs(fs, path).await {
         Ok(mut msgs) => {
             let ongoing = cdt_analyze::check_messages_ongoing(&msgs);
             for m in &mut msgs {
@@ -4348,15 +4111,6 @@ mod tests {
         assert_eq!(source.kind, "base64");
         // 非 image block 不动
         assert!(matches!(blocks[0], cdt_core::ContentBlock::Text { .. }));
-    }
-
-    #[test]
-    fn media_type_to_ext_known_and_unknown() {
-        assert_eq!(media_type_to_ext("image/png"), "png");
-        assert_eq!(media_type_to_ext("image/jpeg"), "jpg");
-        assert_eq!(media_type_to_ext("image/gif"), "gif");
-        assert_eq!(media_type_to_ext("image/webp"), "webp");
-        assert_eq!(media_type_to_ext("application/x-future"), "bin");
     }
 
     #[tokio::test]
@@ -4785,7 +4539,9 @@ mod tests {
             },
         })];
         let path = write_subagent_jsonl(dir.path(), "abcd", &lines).await;
-        let cand = parse_subagent_candidate(&path).await.expect("candidate");
+        let cand = parse_subagent_candidate(&*cdt_fs::local_handle(), &path)
+            .await
+            .expect("candidate");
         assert!(
             cand.is_ongoing,
             "末尾 assistant tool_use 无 tool_result 应判 ongoing，旧逻辑会误报 done"
@@ -4809,7 +4565,9 @@ mod tests {
             },
         })];
         let path = write_subagent_jsonl(dir.path(), "efgh", &lines).await;
-        let cand = parse_subagent_candidate(&path).await.expect("candidate");
+        let cand = parse_subagent_candidate(&*cdt_fs::local_handle(), &path)
+            .await
+            .expect("candidate");
         assert!(!cand.is_ongoing, "末尾 assistant text 是 ending，应判 done");
         assert!(cand.end_ts.is_some());
     }
@@ -4846,7 +4604,9 @@ mod tests {
             }),
         ];
         let path = write_subagent_jsonl(dir.path(), "ijkl", &lines).await;
-        let cand = parse_subagent_candidate(&path).await.expect("candidate");
+        let cand = parse_subagent_candidate(&*cdt_fs::local_handle(), &path)
+            .await
+            .expect("candidate");
         assert!(
             cand.is_ongoing,
             "tool_use → tool_result 但无后续 assistant 收尾应判 ongoing"
@@ -5152,8 +4912,13 @@ mod tests {
             "/ws/my-proj/.claude/worktrees/feat-x",
         );
 
-        let cands =
-            scan_subagent_candidates_cross_project(&projects_dir, &main_pd, "root-uuid").await;
+        let cands = scan_subagent_candidates_cross_project(
+            &*cdt_fs::local_handle(),
+            &projects_dir,
+            &main_pd,
+            "root-uuid",
+        )
+        .await;
         assert_eq!(cands.len(), 1, "应找到 worktree pd 下的 subagent candidate");
         assert_eq!(cands[0].session_id, "sub-uuid");
     }
@@ -5175,8 +4940,13 @@ mod tests {
         }
 
         let main_pd = projects_dir.join("-ws-a");
-        let cands =
-            scan_subagent_candidates_cross_project(&projects_dir, &main_pd, "root-uuid").await;
+        let cands = scan_subagent_candidates_cross_project(
+            &*cdt_fs::local_handle(),
+            &projects_dir,
+            &main_pd,
+            "root-uuid",
+        )
+        .await;
         assert_eq!(cands.len(), 1, "同 agent_id 跨目录重复应被 seen_ids 去重");
     }
 
@@ -5188,8 +4958,13 @@ mod tests {
         let main_pd = projects_dir.join("-ws-my-proj");
         std::fs::create_dir_all(&main_pd).unwrap();
 
-        let cands =
-            scan_subagent_candidates_cross_project(&projects_dir, &main_pd, "missing-root").await;
+        let cands = scan_subagent_candidates_cross_project(
+            &*cdt_fs::local_handle(),
+            &projects_dir,
+            &main_pd,
+            "missing-root",
+        )
+        .await;
         assert!(cands.is_empty(), "无任何 subagent 时返空");
     }
 
@@ -5206,7 +4981,13 @@ mod tests {
             .join("agent-sub-uuid.jsonl");
         write_xproj_subagent_jsonl(&agent_path, "root-uuid", "sub-uuid", "/ws/wt");
 
-        let found = find_subagent_jsonl_cross_project(&projects_dir, "root-uuid", "sub-uuid").await;
+        let found = find_subagent_jsonl_cross_project(
+            &*cdt_fs::local_handle(),
+            &projects_dir,
+            "root-uuid",
+            "sub-uuid",
+        )
+        .await;
         assert_eq!(found, Some(agent_path));
     }
 
@@ -5217,7 +4998,13 @@ mod tests {
         std::fs::create_dir_all(&projects_dir).unwrap();
         std::fs::create_dir_all(projects_dir.join("-ws-empty")).unwrap();
 
-        let found = find_subagent_jsonl_cross_project(&projects_dir, "root-uuid", "sub-uuid").await;
+        let found = find_subagent_jsonl_cross_project(
+            &*cdt_fs::local_handle(),
+            &projects_dir,
+            "root-uuid",
+            "sub-uuid",
+        )
+        .await;
         assert!(found.is_none());
     }
 
@@ -5230,7 +5017,13 @@ mod tests {
         let root_jsonl = pd.join("root-uuid.jsonl");
         std::fs::write(&root_jsonl, b"").unwrap();
 
-        let found = locate_session_jsonl(&projects_dir, "root-uuid", "root-uuid").await;
+        let found = locate_session_jsonl(
+            &*cdt_fs::local_handle(),
+            &projects_dir,
+            "root-uuid",
+            "root-uuid",
+        )
+        .await;
         assert_eq!(found, Some(root_jsonl));
     }
 
@@ -5252,7 +5045,13 @@ mod tests {
             .join("agent-sub-uuid.jsonl");
         write_xproj_subagent_jsonl(&agent_path, "root-uuid", "sub-uuid", "/ws/wt");
 
-        let found = locate_session_jsonl(&projects_dir, "root-uuid", "sub-uuid").await;
+        let found = locate_session_jsonl(
+            &*cdt_fs::local_handle(),
+            &projects_dir,
+            "root-uuid",
+            "sub-uuid",
+        )
+        .await;
         assert_eq!(
             found,
             Some(agent_path),

@@ -1,7 +1,7 @@
 //! 文件级异步解析：流式读行 + 容忍坏行。
 //!
 //! - `parse_file_via_fs(fs, path)` 是 SSH-aware 入口：通过 `FileSystemProvider::open_read`
-//!   拿 `Box<dyn AsyncRead + Send + Unpin>`，BufReader 容量 32 KiB 与 SFTP packet 上限对齐
+//!   拿 `Box<dyn AsyncRead + Send + Unpin>`，`BufReader` 容量 32 KiB 与 SFTP packet 上限对齐
 //!   （详 change `unify-fs-direct-calls` design D5）。
 //! - `parse_file(path)` 是兼容 Local-only 入口，内部包装到 `parse_file_via_fs(local_handle(), path)`。
 
@@ -14,14 +14,14 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use crate::error::ParseError;
 use crate::parser::parse_entry_at;
 
-/// BufReader 容量 —— 与 SFTP `SSH_FXP_READ` reply 单消息上限对齐。
+/// `BufReader` 容量 —— 与 SFTP `SSH_FXP_READ` reply 单消息上限对齐。
 /// 详 change `unify-fs-direct-calls` design D5。
 const SCANNER_BUF_BYTES: usize = 32 * 1024;
 
 /// 通过 fs trait 解析 JSONL 会话文件 —— SSH-aware 入口。
 ///
 /// - 用 `fs.open_read(path)` 拿 `Box<dyn AsyncRead + Send + Unpin>`，
-///   BufReader 容量 32 KiB 与 SFTP packet 上限对齐
+///   `BufReader` 容量 32 KiB 与 SFTP packet 上限对齐
 /// - 收集每一条成功解析的 `ParsedMessage`：坏行 `tracing::warn!` 后跳过
 /// - **不**对同 `requestId` 去重（详 `parse_file` doc 内同段说明）
 ///
