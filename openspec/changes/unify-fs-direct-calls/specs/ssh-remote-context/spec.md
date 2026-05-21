@@ -52,31 +52,32 @@
 #### Scenario: SSH list 路径 hot path cache hit trust（用户感知卡顿消失）
 
 - **WHEN** 用户在 SSH active context 下调 `list_sessions`，cache 中持有该 ContextId 的 entry
-- **THEN** UI 渲染路径 fs op 计数 SHALL 满足：`fs.open_read = 0`、`fs.read_to_string = 0`、`fs.stat = 0`、`fs.read_dir_with_metadata = 0`
+- **THEN** UI 渲染路径 SHALL 走 `MetadataCache::lookup_trust_cached(&ctx, path)` 命中返 cache 内容（**0 fs op**：无 `fs.open_read` / `fs.read_to_string` / `fs.stat`）
 - **AND** UI 立刻拿 in-memory cache 内容渲染列表（与 Local SkeletonThenStream 路径同入口）
-- **AND** 后台 spawn batch 校验 task 走 `fs.read_dir_with_metadata` per project 异步刷新，外部进程改动 → 通过 SSE event 推差量给 UI
+- **AND** 后台 spawn `scan_metadata_for_page` task per project 异步校验 cache freshness——本 segment 走 per-session `extract_session_metadata_cached`（fs trait），N→1 batch read_dir_with_metadata 优化留 PR-D2 follow-up
+- **AND** 外部进程改动 → cache miss → 通过 `session_metadata_update` SSE event 推差量给 UI
 
-#### Scenario: SSH list 路径冷启动走 read_dir_with_metadata 批量
+#### Scenario: SSH list 路径冷启动走 SkeletonThenStream + page_jobs
 
 - **WHEN** 用户首次连 SSH host A 调 `list_sessions`，cache 中无该 ContextId 的 entry
-- **THEN** SHALL 调 `fs.read_dir_with_metadata(project_dir)` per project（M projects × 1 RTT）拿骨架 + metadata
-- **AND** SHALL NOT 走 per-session 串行 `fs.stat` 路径（朴素方案 50 × 50ms = 2.5s 超 sidebar 预算 5×）
-- **AND** SSE event 推骨架 + 增量 metadata 给 UI；前端按 SkeletonThenStream 模式先渲染 file_name 骨架后填充 metadata
-- **AND** 典型 5-10 projects/page 总 RTT 250-500ms，重 user 30+ projects 约 1.5s（真消除冷启动卡顿留 PR-F SFTP message-id pipeline）
+- **THEN** UI 首屏 SHALL 返 SessionSummary 骨架（title=None / message_count=0），不阻塞等待 metadata
+- **AND** 入 `page_jobs` 后 spawn `scan_metadata_for_page` task，per-session 走 `extract_session_metadata_cached`（内部 `fs.stat` + cache miss 调 `parse_file_via_fs` 走 `fs.open_read`）异步刷新 metadata
+- **AND** 每条 metadata 通过 `session_metadata_update` SSE event 推给 UI 增量填充
+- **AND** 本 segment 不实现 `fs.read_dir_with_metadata` per-project N→1 stat batch 优化；scan 仍是 per-session 串行（PR-D2 follow-up：把 batch + `MetadataCache::lookup_with_known_signature` 上层加进 `scan_metadata_for_page` 复用 SFTP READDIR reply 自带 entry attrs）
 
-#### Scenario: SSH 同 session 二次 get_tool_output cache hit
+#### Scenario: SSH 同 session 二次 get_tool_output cache hit byte-equal
 
 - **WHEN** 在 SSH context 下首次调 `get_tool_output(root, sid, tu_a)` 完成 cache 写入；session 文件未变后调 `get_tool_output(root, sid, tu_b)`（同 session，不同 tool_use_id）
-- **THEN** 第二次调用 UI 路径 SHALL 走 `cache.lookup_trust_cached(&ctx, path)` 返 cache 内容（**0 fs op**）
-- **AND** SHALL spawn 后台 task 走 `fs.stat(path)` 校验 signature；mismatch 时 cache miss + 通过 SSE 推 update 给 UI
-- **AND** `cdt_parse::parse_file_via_fs` 调用次数 = 0（cache hit 直接 `Arc::clone` 复用）
+- **THEN** 第二次调用 SHALL 走 `extract_parsed_messages_cached` 内部 `fs.stat(path)` 拿当前 signature + cache lookup；signature byte-equal 直接 `Arc::clone` 复用 cache `Arc<Vec<ParsedMessage>>`，**SHALL NOT 触发 `parse_file_via_fs` 重 parse**（即 `fs.open_read = 0`）
+- **AND** 形态：`fs.stat = 1`、`fs.open_read = 0`、`fs.read_to_string = 0`、`cdt_parse::parse_file_via_fs` 调用次数 = 0
+- **AND** Note：纯 0 fs op `ParsedMessageCache::lookup_trust_cached` + 后台 stat 校验的设计留 PR-D2 follow-up（本 segment 已添加 helper 函数 + ADR `#[allow(dead_code)]`，待 follow-up wire 入 get_tool_output / get_image_asset）
 
-#### Scenario: SSH 远端 jsonl 真改动后 cache invalidate 走后台 batch 校验
+#### Scenario: SSH 远端 jsonl 真改动后 cache invalidate 走 page_jobs 校验
 
 - **WHEN** 用户在 SSH context 下访问 session A 写入 cache；外部进程（`ssh remote-host > append.jsonl`）追加该 jsonl 内容；用户再次访问 list_sessions
-- **THEN** UI 立刻拿旧 cache 内容渲染（hot path 0 fs op）
-- **AND** 后台 batch task 走 `fs.read_dir_with_metadata` 拿新 metadata，与 cache signature 比对发现 mismatch → cache miss → spawn cache miss scan → 通过 SSE event 推 metadata diff 给 UI
-- **AND** UI 收到 SSE event 后增量更新对应 session 行（用户感知"列表先出但 1-2 秒后内容自动 refresh"）
+- **THEN** UI 立刻拿旧 cache 内容渲染（hot path 0 fs op，via `lookup_trust_cached`）
+- **AND** 同时 spawn `scan_metadata_for_page` task per project_dir，内部 per-session 调 `extract_session_metadata_cached`（`fs.stat` 拿新 signature → 与 cache 比对 mismatch → cache miss → `parse_file_via_fs` 走 `fs.open_read` 重 parse）
+- **AND** 每条改动通过 `session_metadata_update` SSE event 推 metadata diff 给 UI 增量更新（用户感知"列表先出但 1-2 秒后内容自动 refresh"）
 
 #### Scenario: SSH disconnect 中间态 user-facing IPC 返 not_found 而非降级 Local
 

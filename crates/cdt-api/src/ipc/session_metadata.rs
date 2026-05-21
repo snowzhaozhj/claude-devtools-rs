@@ -559,6 +559,12 @@ pub(crate) async fn extract_session_metadata_cached(
     context_id: &ContextId,
     path: &Path,
 ) -> SessionMetadata {
+    // SSH 远端 mtime 与本机 `SystemTime::now()` 跨 clock domain，5min 阈值不可
+    // 比对（远端时钟回拨/时差产生 false positive/negative）；SSH callsite SHALL
+    // skip stale check 让 `is_ongoing = messages_ongoing`（详 change
+    // `unify-fs-direct-calls` design D2 line 2171 / codex 二审 H1 + ADR 同 SSH
+    // policy fork）。Local context 仍按 `messages_ongoing && !stale` 合成。
+    let backend_skips_stale = matches!(fs.kind(), cdt_discover::FsKind::Ssh);
     let new_sig = fs
         .stat(path)
         .await
@@ -572,8 +578,11 @@ pub(crate) async fn extract_session_metadata_cached(
             .lookup(context_id, path);
         if let Some(entry) = cached {
             if entry.signature == sig {
-                let is_ongoing =
-                    entry.messages_ongoing && !is_session_stale(sig.mtime, SystemTime::now());
+                let is_ongoing = if backend_skips_stale {
+                    entry.messages_ongoing
+                } else {
+                    entry.messages_ongoing && !is_session_stale(sig.mtime, SystemTime::now())
+                };
                 return SessionMetadata {
                     title: entry.title,
                     message_count: entry.message_count,
@@ -584,7 +593,13 @@ pub(crate) async fn extract_session_metadata_cached(
         }
     }
 
-    let (meta, messages_ongoing) = extract_session_metadata_with_ongoing(fs, path).await;
+    let (mut meta, messages_ongoing) = extract_session_metadata_with_ongoing(fs, path).await;
+    if backend_skips_stale {
+        // scanner 内部已对 Local 路径做 stale check 合并；SSH 走外层 skip 后用
+        // `messages_ongoing` 覆写（scanner 内部 `is_file_stale` 也用本机时钟，跨
+        // clock domain 不可信）。
+        meta.is_ongoing = messages_ongoing;
+    }
 
     if let Some(sig) = new_sig {
         cache.lock().expect("metadata cache mutex poisoned").insert(

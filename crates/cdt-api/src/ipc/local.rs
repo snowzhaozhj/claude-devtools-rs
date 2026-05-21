@@ -344,9 +344,19 @@ const METADATA_BROADCAST_CAPACITY: usize = 256;
 /// 单条 active scan 注册项：generation 作为版本号让 cleanup 时只在
 /// 自己仍是当前注册的 scan 时才 remove，避免旧 task 误删新 handle
 /// （codex 二审找到的 race，详见 `scan_metadata_for_page`）。
+///
+/// `context_id` 让 `switch_context` / `ssh_disconnect` 能按 ctx abort 旧
+/// host 下未完成的 scan（change `unify-fs-direct-calls` design D3-bis +
+/// codex 二审 H2 修订：旧 ctx 的 scan 仍持 `Arc<dyn FileSystemProvider>`
+/// 跨 await，切 host 后会向前端 broadcast 旧 ctx 的 metadata update，
+/// 串扰新 ctx 的渲染状态）。
 #[derive(Debug)]
 struct ScanEntry {
     generation: u64,
+    /// 让 `abort_scans_for_context` 未来按 ctx 精细 abort 用（当前 callsite
+    /// 走 abort-all 简化逻辑——见 `LocalDataApi::abort_scans_for_context` doc）。
+    #[allow(dead_code)]
+    context_id: cdt_fs::ContextId,
     handle: AbortHandle,
 }
 
@@ -926,6 +936,7 @@ impl LocalDataApi {
                     scan_key,
                     ScanEntry {
                         generation: my_generation,
+                        context_id: ctx.clone(),
                         handle: handle.abort_handle(),
                     },
                 );
@@ -1355,6 +1366,27 @@ impl LocalDataApi {
                 cdt_discover::path_decoder::get_claude_base_path,
                 PathBuf::from,
             )
+    }
+
+    /// abort 当前所有 in-flight metadata scan handle 并清空 `active_scans` map。
+    ///
+    /// change `unify-fs-direct-calls` codex 二审 H2 修订 + design D3-bis：旧 ctx
+    /// 的 `page_jobs` scan 跨 await 持 `Arc<dyn FileSystemProvider>`，切 host /
+    /// disconnect 后会继续向 `session_metadata_tx` broadcast 旧 ctx 的 metadata
+    /// update，污染新 ctx 的 UI 渲染状态。`switch_context` / `ssh_disconnect`
+    /// 调本 helper 提前 abort 防串扰。
+    ///
+    /// `_context_id` 参数留给 future per-ctx 精细 abort 用（当前 `active_scans`
+    /// 内 entry 必属同一 active ctx，统一 abort 是正确且无副作用的——切完
+    /// context 后用户重发 `list_sessions` 会重新 spawn 新 ctx 下的 scan）。
+    fn abort_scans_for_context(&self, _context_id: &str) {
+        let Ok(mut scans) = self.active_scans.lock() else {
+            return;
+        };
+        for entry in scans.values() {
+            entry.handle.abort();
+        }
+        scans.clear();
     }
 
     async fn reconfigure_claude_root(&self, claude_root_path: Option<&str>) {
@@ -1938,6 +1970,7 @@ impl DataApi for LocalDataApi {
                 }
                 let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
 
+                let ctx_for_entry = ctx.clone();
                 let handle = tokio::spawn(scan_metadata_for_page(
                     project_id_owned,
                     dir,
@@ -1959,6 +1992,7 @@ impl DataApi for LocalDataApi {
                     scan_key,
                     ScanEntry {
                         generation: my_generation,
+                        context_id: ctx_for_entry,
                         handle: handle.abort_handle(),
                     },
                 );
@@ -2698,6 +2732,11 @@ impl DataApi for LocalDataApi {
             if let Some(prev) = previous_context_id.as_deref() {
                 tracing::debug!(target: "cdt_ssh::lifecycle", phase = "cancel_prev_watcher", context_id = %prev);
                 self.cancel_remote_watcher(prev).await;
+                // change `unify-fs-direct-calls` codex 二审 H2 修订：旧 ctx 的
+                // page_jobs scan 持 Arc<dyn FileSystemProvider> 跨 await，切 ctx
+                // 后仍会 broadcast 旧 ctx 的 metadata update 串扰新 ctx 渲染。
+                // 这里按旧 prev context_id abort 其下所有 in-flight scan handle。
+                self.abort_scans_for_context(prev);
             }
         }
         tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_mgr_switch_context");
@@ -2774,6 +2813,9 @@ impl DataApi for LocalDataApi {
         let _ops = self.ssh_watcher_ops.lock().await;
         tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_disconnect_begin", context_id = %context_id);
         self.cancel_remote_watcher(context_id).await;
+        // change `unify-fs-direct-calls` codex 二审 H2 修订：disconnect 时同时 abort
+        // 该 ctx 下未完成的 metadata scan handle，避免持失效 fs handle 继续 broadcast。
+        self.abort_scans_for_context(context_id);
         tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_mgr_disconnect", context_id = %context_id);
         let result = self
             .ssh_mgr
