@@ -592,9 +592,17 @@ impl LocalDataApi {
         // 单 worktree scan 失败 SHALL NOT 让整页 500——scanner 自身已对单文件
         // 损坏走降级，本层 join_all + per-result warn + skip 保持同语义：缺失
         // worktree 自然不进 k-way merge，UI 上少几行 session 但不阻塞剩余 group。
+        // **关键**：记录 `failed_wt_ids` 让 cursor 编码 SHALL NOT 把临时 IO 失败
+        // 的 worktree 错标 `Exhausted`——否则 (codex Blocker, 2026-05-21)：临时
+        // scan 失败会让该 worktree 在用户后续 loadMore 中**永久消失**（silent
+        // data loss）。失败的 wt cursor 上保留 `cursor_state` 原值（多数为
+        // `NotStarted`），下次请求时仍会重试。
         let wt_lists = futures::future::join_all(futs).await;
         let mut wt_sessions: std::collections::BTreeMap<String, Vec<cdt_core::Session>> =
             std::collections::BTreeMap::new();
+        let mut failed_wt_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let scheduled_wt_ids: std::collections::BTreeSet<String> =
+            group.worktrees.iter().map(|w| w.id.clone()).collect();
         for result in wt_lists {
             match result {
                 Ok((wt_id, sessions)) => {
@@ -606,6 +614,13 @@ impl LocalDataApi {
                         "scan worktree failed, skip from k-way merge"
                     );
                 }
+            }
+        }
+        // 推导 failed_wt_ids：scheduled 但未在 wt_sessions 出现的 wt 都视为
+        // 失败（join_all 错误未携带 wt_id，从两侧差集反推）。
+        for wid in &scheduled_wt_ids {
+            if !wt_sessions.contains_key(wid) {
+                failed_wt_ids.insert(wid.clone());
             }
         }
 
@@ -716,6 +731,19 @@ impl LocalDataApi {
                 new_cursor
                     .per_worktree
                     .insert(wt.id.clone(), WorktreeOffset::Exhausted);
+                continue;
+            }
+            // scan 失败的 worktree SHALL 保留 cursor_state 原 offset（不进 Exhausted
+            // 分支）—— 否则下次请求该 wt 永久丢失。`all_exhausted` 也强制 false
+            // 让前端有机会续页重试。
+            if failed_wt_ids.contains(&wt.id) {
+                let preserved = cursor_state
+                    .per_worktree
+                    .get(&wt.id)
+                    .cloned()
+                    .unwrap_or(WorktreeOffset::NotStarted);
+                new_cursor.per_worktree.insert(wt.id.clone(), preserved);
+                all_exhausted = false;
                 continue;
             }
             let wt_len = wt_sessions.get(&wt.id).map_or(0, Vec::len);

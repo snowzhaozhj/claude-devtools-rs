@@ -478,7 +478,16 @@ fn compute_cwd_relative_to_repo_root(
     // `<parent>/.git/modules/<name>` 的 parent 是 `<parent>/.git/modules`
     // 不构成 working tree 根——此时 strip_prefix 失败 → None，符合预期。
     let repo_root = common_dir.parent()?;
-    let relative = project_path.strip_prefix(repo_root).ok()?;
+    // Windows 兼容 + macOS `/var` vs `/private/var` symlink：identity.id 已经
+    // 经 dunce 剥 UNC，但 project_path 可能仍带 `\\?\` 前缀（Windows
+    // std::fs::canonicalize）或 symlink 表达不一致——本侧再 dunce 一次让
+    // 比较的两端命名空间对齐。失败时回退到原 project_path 走字符串 strip，
+    // 兼容 project_path 不存在（被 git rm 但 ~/.claude/projects 仍有记录）。
+    let normalized_project: std::borrow::Cow<'_, Path> = match dunce::canonicalize(project_path) {
+        Ok(canon) => std::borrow::Cow::Owned(canon),
+        Err(_) => std::borrow::Cow::Borrowed(project_path),
+    };
+    let relative = normalized_project.strip_prefix(repo_root).ok()?;
     // Windows 兼容：`relative.to_string_lossy()` 在 Windows 输出 `crates\subdir`
     // 反斜杠形态，跨平台 IPC payload 会分叉。归一为 `/` 与前端期望对齐。
     let s = relative.to_string_lossy().replace('\\', "/");

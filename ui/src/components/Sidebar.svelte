@@ -433,7 +433,11 @@
         SESSION_PAGE_SIZE,
         silent ? null : initialFilterCursor(),
       );
-      if (groupId !== selectedGroupId) return;
+      // 同时校验 groupId + (groupId, filter) 复合键——切 group 时 reset
+      // worktreeFilter effect 与本 loadSessions effect 在同 microtask 触发，
+      // 旧 filter 构造的请求可能晚于新 filter 请求返回，late response 会用空
+      // 列表覆盖正确列表（codex 二审 Major 1，2026-05-21）。
+      if (cacheKey !== buildSessionListCacheKey()) return;
       // silent 路径：合并到现有列表保留尾部 + 保留分页 cursor（避免 sessions 缩水
       // 与计数跳变，spec sidebar-navigation §"会话元数据增量 patch"）。非 silent：
       // 替换式加载第一页 + 取本次 cursor（buffer 在 await 前已清空，仅含 await
@@ -449,7 +453,7 @@
         nextCursor = result.nextCursor;
       }
       fresh = await reconcilePinnedAndHidden(anchor, fresh);
-      if (groupId !== selectedGroupId) return;
+      if (cacheKey !== buildSessionListCacheKey()) return;
       // sessions 写入后立即把 pending buffer 中已存在的 sessionId 应用上去——
       // 兜底 broadcast 在 IPC return 之前到达时找不到目标的 race。
       sessions = applyPendingMetadata(fresh, pendingMetadataUpdates);
@@ -462,13 +466,13 @@
       queueMicrotask(() => maybeLoadMoreSessions(true));
     } catch (e) {
       console.error("Failed to load sessions:", e);
-      if (!silent && groupId === selectedGroupId) {
+      if (!silent && cacheKey === buildSessionListCacheKey()) {
         sessions = [];
         sessionsNextCursor = null;
         pendingMetadataUpdates.clear();
       }
     } finally {
-      if (!silent && groupId === selectedGroupId) sessionsLoading = false;
+      if (!silent && cacheKey === buildSessionListCacheKey()) sessionsLoading = false;
     }
   }
 
