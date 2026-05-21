@@ -566,7 +566,7 @@ impl LocalDataApi {
 
         let cursor_state = parse_group_cursor(cursor);
 
-        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        let (fs, projects_dir, ctx) = self.active_fs_and_context().await;
         let pinned = std::collections::BTreeSet::<String>::new();
         let scanner = ProjectScanner::new_with_semaphore(
             fs.clone(),
@@ -814,12 +814,15 @@ impl LocalDataApi {
                 .join(format!("{session_id}.jsonl"));
             let cache = self.metadata_cache.clone();
             let permit_sem = lookup_permit.clone();
+            let fs_clone = fs.clone();
+            let ctx_clone = ctx.clone();
             async move {
                 let _guard = permit_sem
                     .acquire()
                     .await
                     .expect("lookup semaphore should not be closed");
-                let meta = try_lookup_cached_metadata(&cache, &jsonl_path).await;
+                let meta =
+                    try_lookup_cached_metadata(&cache, &*fs_clone, &ctx_clone, &jsonl_path).await;
                 (wt_id, session_id, jsonl_path, meta)
             }
         }))
@@ -892,6 +895,8 @@ impl LocalDataApi {
                     self.root_generation.clone(),
                     cur_root_generation,
                     self.worktree_meta_cache.clone(),
+                    fs.clone(),
+                    ctx.clone(),
                 ));
                 scans.insert(
                     scan_key,
@@ -1004,6 +1009,41 @@ impl LocalDataApi {
             return Ok((Arc::new(provider), projects_dir));
         }
         Ok((local_handle(), self.projects_dir.lock().await.clone()))
+    }
+
+    /// 派生 fs + `projects_dir` + `ContextId` 三元组——给 fs-related cache 作 key
+    /// 前缀。函数内部单次读 `ssh_mgr.active_context_id().await` 决定走 SSH 还是
+    /// Local 分支；SSH 分支若 provider/`host_signature` lookup miss（disconnect
+    /// 中间态）SHALL **safely degrade** 到 Local——避免"fs 是 SSH 但 ctx 是 Local"
+    /// 等不一致组合（详 change `metadata-cache-context-prefix` design D3 / D3-bis）。
+    ///
+    /// 与 `active_fs_and_projects_dir` 行为差异：本方法 **不**对 disconnect 中间态
+    /// 报错（cache 路径优先连续性）；旧方法对未注册 SSH context 返 `not_found`，
+    /// 现有非 cache callsite 保留旧行为。
+    pub(crate) async fn active_fs_and_context(
+        &self,
+    ) -> (Arc<dyn FileSystemProvider>, PathBuf, cdt_fs::ContextId) {
+        if let Some(context_id) = self.ssh_mgr.active_context_id().await {
+            if let Some(provider) = self.ssh_mgr.provider(&context_id).await {
+                let remote_home = provider.remote_home().to_path_buf();
+                if let Some(ctx) = self.ssh_mgr.context_id(&context_id).await {
+                    return (Arc::new(provider), remote_home, ctx);
+                }
+                // active=Some + provider 在但 host_signature 缺失——理论不该到，
+                // safely degrade 到 Local 兜底（用 remote_home 作 Local root 也无害，
+                // ContextId Hash 隔离仍生效）。
+                return (
+                    Arc::new(provider),
+                    remote_home.clone(),
+                    cdt_fs::ContextId::local(remote_home),
+                );
+            }
+            // active=Some 但 provider 已被 remove（concurrent disconnect 中间态）
+            // → 走 Local 安全降级
+        }
+        let projects_dir = self.projects_dir.lock().await.clone();
+        let ctx = cdt_fs::ContextId::local(projects_dir.clone());
+        (local_handle(), projects_dir, ctx)
     }
 
     pub fn new(
@@ -1180,7 +1220,15 @@ impl LocalDataApi {
         provider: SshFileSystemProvider,
     ) {
         self.ssh_mgr
-            .insert_test_context(context_id, host, port, username, remote_home, provider)
+            .insert_test_context(
+                context_id,
+                host,
+                port,
+                username,
+                remote_home,
+                provider,
+                None,
+            )
             .await;
     }
 
@@ -1318,10 +1366,13 @@ impl LocalDataApi {
     }
 
     /// 同步骨架扫描：完成目录 scan + 分页切片 + 构造占位 `SessionSummary`，
-    /// 返回 (page, `next_cursor`, total, `page_jobs`, dir)。
+    /// 返回 (page, `next_cursor`, total, `page_jobs`, dir, `root_generation`,
+    /// `inline_updates`, fs, `context_id`)。
     ///
     /// `page_jobs` 是 `(session_id, jsonl_path)` 元组列表，供后台元数据扫描
-    /// 任务消费。
+    /// 任务消费。`fs` + `context_id` 来自同一 `active_fs_and_context()` 快照（详
+    /// change `metadata-cache-context-prefix` design D3），caller 直接复用避免
+    /// 再次 lock 引入 fs/ctx 不一致 race。
     async fn list_sessions_skeleton(
         &self,
         project_id: &str,
@@ -1335,6 +1386,8 @@ impl LocalDataApi {
             std::path::PathBuf,
             u64,
             Vec<SessionMetadataUpdate>,
+            Arc<dyn FileSystemProvider>,
+            cdt_fs::ContextId,
         ),
         ApiError,
     > {
@@ -1342,7 +1395,7 @@ impl LocalDataApi {
             return Err(ApiError::validation("pageSize must be > 0"));
         }
 
-        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        let (fs, projects_dir, ctx) = self.active_fs_and_context().await;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
         let scanner = ProjectScanner::new_with_semaphore(
             fs.clone(),
@@ -1389,12 +1442,15 @@ impl LocalDataApi {
             let cache = self.metadata_cache.clone();
             let jsonl_path = dir.join(format!("{}.jsonl", s.id));
             let permit_sem = lookup_permit.clone();
+            let fs_clone = fs.clone();
+            let ctx_clone = ctx.clone();
             async move {
                 let _guard = permit_sem
                     .acquire()
                     .await
                     .expect("lookup semaphore should not be closed");
-                let meta = try_lookup_cached_metadata(&cache, &jsonl_path).await;
+                let meta =
+                    try_lookup_cached_metadata(&cache, &*fs_clone, &ctx_clone, &jsonl_path).await;
                 (jsonl_path, meta)
             }
         }))
@@ -1480,6 +1536,8 @@ impl LocalDataApi {
             dir,
             root_generation,
             inline_updates,
+            fs,
+            ctx,
         ))
     }
 }
@@ -1658,6 +1716,8 @@ async fn scan_metadata_for_page(
     root_generation: Arc<AtomicU64>,
     expected_root_generation: u64,
     worktree_meta_cache: Arc<std::sync::RwLock<HashMap<String, WorktreeMeta>>>,
+    fs: Arc<dyn FileSystemProvider>,
+    context_id: cdt_fs::ContextId,
 ) {
     let _ = dir; // dir 当前由 page_jobs 内的 jsonl_path 携带，保留参数为未来扩展（如懒构造路径）
     // semaphore 由 caller 注入：所有 in-flight scan task 共享同一实例，保证全局
@@ -1674,11 +1734,14 @@ async fn scan_metadata_for_page(
         let cache = metadata_cache.clone();
         let root_generation = root_generation.clone();
         let worktree_meta_cache = worktree_meta_cache.clone();
+        let fs_clone = fs.clone();
+        let ctx_clone = context_id.clone();
         set.spawn(async move {
             let Ok(_permit) = permit_sem.acquire_owned().await else {
                 return;
             };
-            let meta = extract_session_metadata_cached(&cache, &jsonl_path).await;
+            let meta =
+                extract_session_metadata_cached(&cache, &*fs_clone, &ctx_clone, &jsonl_path).await;
             if root_generation.load(Ordering::SeqCst) != expected_root_generation {
                 return;
             }
@@ -1738,8 +1801,17 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (mut page, next_cursor, total, page_jobs, _dir, _root_generation, _inline_updates) =
-            self.list_sessions_skeleton(project_id, pagination).await?;
+        let (
+            mut page,
+            next_cursor,
+            total,
+            page_jobs,
+            _dir,
+            _root_generation,
+            _inline_updates,
+            fs,
+            ctx,
+        ) = self.list_sessions_skeleton(project_id, pagination).await?;
 
         // 并发提取每条 session 的 metadata：复用 `self.metadata_scan_semaphore`
         // 与 async `list_sessions` 共享同一把 8 容量信号量，保证 spec
@@ -1751,9 +1823,11 @@ impl DataApi for LocalDataApi {
             let sem = self.metadata_scan_semaphore.clone();
             let cache = self.metadata_cache.clone();
             let path = path.clone();
+            let fs_clone = fs.clone();
+            let ctx_clone = ctx.clone();
             async move {
                 let _permit = sem.acquire_owned().await.ok()?;
-                Some(extract_session_metadata_cached(&cache, &path).await)
+                Some(extract_session_metadata_cached(&cache, &*fs_clone, &ctx_clone, &path).await)
             }
         }))
         .await;
@@ -1779,7 +1853,7 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (page, next_cursor, total, page_jobs, dir, root_generation, inline_updates) =
+        let (page, next_cursor, total, page_jobs, dir, root_generation, inline_updates, fs, ctx) =
             self.list_sessions_skeleton(project_id, pagination).await?;
 
         for update in inline_updates {
@@ -1822,6 +1896,8 @@ impl DataApi for LocalDataApi {
                     self.root_generation.clone(),
                     root_generation,
                     self.worktree_meta_cache.clone(),
+                    fs,
+                    ctx,
                 ));
 
                 scans.insert(

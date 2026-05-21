@@ -119,6 +119,11 @@ struct SshSessionResources {
     user: Option<String>,
     /// 鉴权链结果（成功路径下 attempts 含 success；error 路径下 attempts 全部失败）。
     auth_chain: Vec<AuthAttempt>,
+    /// SSH host 的稳定身份签名 —— `connect_inner` 在 stage 0 之后立即按
+    /// `SshConfigDigestInput::from(&resolved)` + `HostSignature::from_ssh_config_fields`
+    /// 计算并存入；用于 `SshSessionManager::context_id(&str)` 派生 `ContextId::ssh(...)`
+    /// 给 fs-related cache 作 key 前缀（详 change `metadata-cache-context-prefix` design D6）。
+    host_signature: cdt_fs::HostSignature,
 }
 
 /// `russh::client::Handler` 实现：v1 SHALL 接受任意 server key（host key 校验留 v2）。
@@ -283,6 +288,22 @@ impl SshSessionManager {
             .map(|resources| resources.provider.clone())
     }
 
+    /// 派生当前 SSH context 的 `ContextId::ssh(host_signature, remote_home)` —— 给
+    /// fs-related cache 作 key 前缀。未注册（未 connect 或已 disconnect）的 context
+    /// 返回 `None`；本方法 SHALL NOT 调用 `resolve_host_via_ssh_g` 子进程
+    /// （`HostSignature` 在 `connect_inner` 已计算并缓存于 `SshSessionResources`）。
+    ///
+    /// 详 change `metadata-cache-context-prefix` ssh-remote-context spec delta
+    /// §`SshSessionManager 暴露 HostSignature 派生的 ContextId 查询`。
+    pub async fn context_id(&self, context_id: &str) -> Option<cdt_fs::ContextId> {
+        self.sessions
+            .lock()
+            .await
+            .get(context_id)
+            .map(|r| cdt_fs::ContextId::ssh(r.host_signature.clone(), r.remote_home.clone()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_test_context(
         &self,
         context_id: impl Into<String>,
@@ -291,8 +312,23 @@ impl SshSessionManager {
         username: Option<String>,
         remote_home: PathBuf,
         provider: SshFileSystemProvider,
+        host_signature: Option<cdt_fs::HostSignature>,
     ) {
         let context_id = context_id.into();
+        let host_str = host.into();
+        let host_signature = host_signature.unwrap_or_else(|| {
+            // fake digest：用真算法 + (host, port, user) 字段构造，确保不同 host 自然
+            // 产不同 digest；不直接造 raw bytes，避免 fake 与生产路径行为分叉。
+            cdt_fs::HostSignature::from_ssh_config_fields(&cdt_fs::SshConfigDigestInput {
+                hostname: host_str.clone(),
+                port,
+                user: username.clone().unwrap_or_default(),
+                identity_files: vec![],
+                proxyjump: None,
+                proxycommand: None,
+                hostkeyalias: None,
+            })
+        });
         self.sessions.lock().await.insert(
             context_id.clone(),
             SshSessionResources {
@@ -300,10 +336,11 @@ impl SshSessionManager {
                 provider,
                 remote_home,
                 status: SshStatus::Connected,
-                host: host.into(),
+                host: host_str,
                 port,
                 user: username,
                 auth_chain: vec![],
+                host_signature,
             },
         );
         self.set_active_inner(Some(context_id)).await;
@@ -429,6 +466,12 @@ impl SshSessionManager {
     ) -> Result<SshSessionResources, SshError> {
         // 阶段 0：解析 host alias（`ssh -G` 委托）
         let resolved = resolve_host_via_ssh_g(&request.host).await?;
+        // stage 0 resolve 后立即计算 HostSignature —— 用于 fs-related cache key
+        // 前缀（详 change `metadata-cache-context-prefix` design D6）。无论 ssh -G
+        // 成功还是 degraded fallback 路径都会产 32-byte digest，by-design 落不同
+        // cache namespace 防串扰。
+        let host_signature_input: cdt_fs::SshConfigDigestInput = (&resolved).into();
+        let host_signature = cdt_fs::HostSignature::from_ssh_config_fields(&host_signature_input);
         let port = resolved_connect_port(request.port, resolved.port);
         let username = request
             .username
@@ -534,6 +577,7 @@ impl SshSessionManager {
             port,
             user: Some(username),
             auth_chain,
+            host_signature,
         })
     }
 
@@ -904,6 +948,148 @@ mod tests {
             expand_local_ssh_path(Path::new("/tmp/id_ed25519")),
             PathBuf::from("/tmp/id_ed25519")
         );
+    }
+
+    // change `metadata-cache-context-prefix` ssh-remote-context spec delta：
+    // SshSessionManager 暴露 HostSignature 派生的 ContextId 查询。
+
+    /// 最小 fake `SftpClient` —— 仅供 `host_signature` / `context_id` 相关测试构造
+    /// `SshFileSystemProvider`，不真做远端 I/O；所有方法返 `NotFound` 哨兵。
+    struct DummySftpClient;
+
+    #[async_trait::async_trait]
+    impl crate::provider::SftpClient for DummySftpClient {
+        async fn metadata(
+            &self,
+            _path: &str,
+        ) -> Result<cdt_fs::FsMetadata, crate::provider::SftpClientError> {
+            Err(crate::provider::SftpClientError::Other("dummy fake".into()))
+        }
+        async fn try_exists(&self, _path: &str) -> Result<bool, crate::provider::SftpClientError> {
+            Ok(false)
+        }
+        async fn read(&self, _path: &str) -> Result<Vec<u8>, crate::provider::SftpClientError> {
+            Err(crate::provider::SftpClientError::Other("dummy fake".into()))
+        }
+        async fn read_dir(
+            &self,
+            _path: &str,
+        ) -> Result<Vec<crate::provider::RemoteEntry>, crate::provider::SftpClientError> {
+            Ok(vec![])
+        }
+        async fn read_lines_head(
+            &self,
+            _path: &str,
+            _max: usize,
+        ) -> Result<Vec<String>, crate::provider::SftpClientError> {
+            Ok(vec![])
+        }
+    }
+
+    fn fake_provider(context_id: &str, remote_home: &str) -> SshFileSystemProvider {
+        SshFileSystemProvider::with_client(
+            context_id,
+            std::sync::Arc::new(DummySftpClient),
+            PathBuf::from(remote_home),
+        )
+    }
+
+    #[tokio::test]
+    async fn insert_test_context_with_explicit_host_signature_round_trips() {
+        let mgr = SshSessionManager::new();
+        let sig = cdt_fs::HostSignature::from_ssh_config_fields(&cdt_fs::SshConfigDigestInput {
+            hostname: "explicit-host".into(),
+            port: 2222,
+            user: "u".into(),
+            identity_files: vec![],
+            proxyjump: Some("bastion".into()),
+            proxycommand: None,
+            hostkeyalias: None,
+        });
+        mgr.insert_test_context(
+            "ctx-1",
+            "explicit-host",
+            2222,
+            Some("u".into()),
+            PathBuf::from("/remote/home"),
+            fake_provider("ctx-1", "/remote/home"),
+            Some(sig.clone()),
+        )
+        .await;
+
+        let ctx = mgr.context_id("ctx-1").await.expect("registered context");
+        assert_eq!(ctx.backend_kind, cdt_fs::FsKind::Ssh);
+        assert_eq!(ctx.host_signature.as_ref().unwrap(), &sig);
+        assert_eq!(ctx.root_or_home, PathBuf::from("/remote/home"));
+    }
+
+    #[tokio::test]
+    async fn insert_test_context_default_host_signature_derives_from_host_port_user() {
+        // 缺省 host_signature SHALL 用真算法构造，不同 host 自然产不同 digest。
+        let mgr = SshSessionManager::new();
+        mgr.insert_test_context(
+            "host-a",
+            "host-a.example",
+            22,
+            Some("u".into()),
+            PathBuf::from("/h"),
+            fake_provider("host-a", "/h"),
+            None,
+        )
+        .await;
+        mgr.insert_test_context(
+            "host-b",
+            "host-b.example",
+            22,
+            Some("u".into()),
+            PathBuf::from("/h"),
+            fake_provider("host-b", "/h"),
+            None,
+        )
+        .await;
+        let ctx_a = mgr.context_id("host-a").await.expect("ctx-a");
+        let ctx_b = mgr.context_id("host-b").await.expect("ctx-b");
+        assert_ne!(ctx_a.host_signature, ctx_b.host_signature);
+    }
+
+    #[tokio::test]
+    async fn context_id_returns_none_for_unregistered() {
+        let mgr = SshSessionManager::new();
+        assert!(mgr.context_id("missing").await.is_none());
+    }
+
+    #[test]
+    fn degraded_fallback_digest_differs_from_ssh_g_success() {
+        // change `metadata-cache-context-prefix` ssh-remote-context spec delta
+        // §`degraded fallback 与 ssh -G 路径产 ContextId 安全不等` —— success
+        // 路径 ResolvedHost 含 proxyjump，fallback 路径三字段全 None，digest 不等。
+        let success_input = cdt_fs::SshConfigDigestInput {
+            hostname: "host.example".into(),
+            port: 22,
+            user: "u".into(),
+            identity_files: vec![PathBuf::from("/home/u/.ssh/id_ed25519")],
+            proxyjump: Some("bastion".into()),
+            proxycommand: None,
+            hostkeyalias: None,
+        };
+        let fallback_input = cdt_fs::SshConfigDigestInput {
+            hostname: "host.example".into(),
+            port: 22,
+            user: "u".into(),
+            identity_files: vec![PathBuf::from("/home/u/.ssh/id_ed25519")],
+            proxyjump: None,
+            proxycommand: None,
+            hostkeyalias: None,
+        };
+        let sig_success = cdt_fs::HostSignature::from_ssh_config_fields(&success_input);
+        let sig_fallback = cdt_fs::HostSignature::from_ssh_config_fields(&fallback_input);
+        assert_ne!(
+            sig_success.config_digest, sig_fallback.config_digest,
+            "ssh -G 成功路径与 degraded fallback 路径 digest SHALL 不同（by-design safe miss）"
+        );
+        let ctx_success = cdt_fs::ContextId::ssh(sig_success, PathBuf::from("/h"));
+        let ctx_fallback = cdt_fs::ContextId::ssh(sig_fallback, PathBuf::from("/h"));
+        assert_ne!(ctx_success, ctx_fallback);
     }
 
     #[tokio::test]

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
+use cdt_fs::{ContextId, FileSystemProvider};
 use regex::Regex;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -362,7 +363,12 @@ pub(crate) fn extract_session_metadata_from_parsed(
 // ============================================================================
 
 /// metadata 缓存容量上限。
-pub const METADATA_CACHE_CAPACITY: usize = 200;
+///
+/// 从 PR `multi-session-cpu-cache` 的 200 提升到 2000：本 change
+/// `metadata-cache-context-prefix` 把 cache key 升级为 `(ContextId, PathBuf)`
+/// 后，单个 cache 实例需要同时容纳 Local + 多个 SSH host 的 entry —— 200
+/// 容量在多 context 共享下会让 SSH cache 几次列表查询就被挤光。详 design D4。
+pub const METADATA_CACHE_CAPACITY: usize = 2000;
 
 /// 单条缓存记录：`FileSignature` + 各字段（不含时间敏感的 `is_ongoing`）。
 #[derive(Debug, Clone)]
@@ -374,11 +380,17 @@ struct MetadataCacheEntry {
     git_branch: Option<String>,
 }
 
+/// cache key —— `(ContextId, PathBuf)` tuple，按 PR-A spec
+/// `openspec/specs/fs-abstraction/spec.md` §`fs-related cache 必须采用'单实例 + ContextId key 前缀'拓扑`
+/// 钉死的契约：单实例 cache + key 含 `ContextId` 前缀。Local vs SSH / 不同 SSH host
+/// 间天然由 `ContextId` 的 `Hash`/`Eq` 隔离，不串扰。
+type MetadataCacheKey = (ContextId, PathBuf);
+
 /// `LocalDataApi` 持有的 metadata LRU 缓存。**不**用全局单例（详 design D3b）。
 #[derive(Debug)]
 pub struct MetadataCache {
-    map: HashMap<PathBuf, MetadataCacheEntry>,
-    order: VecDeque<PathBuf>,
+    map: HashMap<MetadataCacheKey, MetadataCacheEntry>,
+    order: VecDeque<MetadataCacheKey>,
     capacity: usize,
 }
 
@@ -397,21 +409,25 @@ impl MetadataCache {
         }
     }
 
-    fn lookup(&mut self, path: &Path) -> Option<MetadataCacheEntry> {
-        let entry = self.map.get(path)?.clone();
-        if let Some(pos) = self.order.iter().position(|p| p == path) {
-            let p = self.order.remove(pos).expect("position 已校验");
-            self.order.push_front(p);
+    fn lookup(&mut self, ctx: &ContextId, path: &Path) -> Option<MetadataCacheEntry> {
+        // HashMap key 是 owned `(ContextId, PathBuf)` tuple，无法用 `(&ContextId, &Path)`
+        // 直接 get；克隆 key 用于 lookup 是常规模式（ContextId ~300 bytes + PathBuf ~120
+        // bytes 短暂分配，每次 cache hit 几百 ns 可忽略，相对 fs.stat 微秒级开销）。
+        let key = (ctx.clone(), path.to_path_buf());
+        let entry = self.map.get(&key)?.clone();
+        if let Some(pos) = self.order.iter().position(|k| k == &key) {
+            let k = self.order.remove(pos).expect("position 已校验");
+            self.order.push_front(k);
         }
         Some(entry)
     }
 
-    fn insert(&mut self, path: PathBuf, entry: MetadataCacheEntry) {
-        if self.map.contains_key(&path) {
-            self.map.insert(path.clone(), entry);
-            if let Some(pos) = self.order.iter().position(|p| p == &path) {
-                let p = self.order.remove(pos).expect("position 已校验");
-                self.order.push_front(p);
+    fn insert(&mut self, key: MetadataCacheKey, entry: MetadataCacheEntry) {
+        if self.map.contains_key(&key) {
+            self.map.insert(key.clone(), entry);
+            if let Some(pos) = self.order.iter().position(|k| k == &key) {
+                let k = self.order.remove(pos).expect("position 已校验");
+                self.order.push_front(k);
             }
             return;
         }
@@ -422,8 +438,8 @@ impl MetadataCache {
             }
         }
 
-        self.map.insert(path.clone(), entry);
-        self.order.push_front(path);
+        self.map.insert(key.clone(), entry);
+        self.order.push_front(key);
     }
 
     #[cfg(test)]
@@ -438,16 +454,22 @@ impl MetadataCache {
 /// 用于 `list_sessions_skeleton` 的 fast-path：cache 命中时骨架阶段直接带元数据
 /// 返回，规避 `session-metadata-update` event 在前端 listener 注册前 fire-and-forget
 /// 丢失的 race（详见 fix `session-title-race` 修复说明）。
-#[allow(deprecated)]
+///
+/// stat 走 `FileSystemProvider::stat`（详 change `metadata-cache-context-prefix`
+/// design D2 / D3），让 Local 与 SSH 两条 fs backend 共用同一 cache 抽象——
+/// 调用方按"当前 active context"传 fs + ctx，cache key 加 `ContextId` 前缀防串扰。
 pub(crate) async fn try_lookup_cached_metadata(
     cache: &StdMutex<MetadataCache>,
+    fs: &dyn FileSystemProvider,
+    context_id: &ContextId,
     path: &Path,
 ) -> Option<SessionMetadata> {
-    let sig = FileSignature::from_metadata(&tokio::fs::metadata(path).await.ok()?);
+    let meta = fs.stat(path).await.ok()?;
+    let sig = FileSignature::from_fs_metadata(&meta);
     let entry = cache
         .lock()
         .expect("metadata cache mutex poisoned")
-        .lookup(path)?;
+        .lookup(context_id, path)?;
     if entry.signature != sig {
         return None;
     }
@@ -466,21 +488,29 @@ pub(crate) async fn try_lookup_cached_metadata(
 /// 与 `is_session_stale(signature.mtime, now)` 实时合成）。
 /// miss / stat 失败：调 uncached `extract_session_metadata_with_ongoing` 重扫，
 /// 成功后写缓存。stat 失败不写缓存。
+///
+/// stat 走 `FileSystemProvider::stat`（详 change `metadata-cache-context-prefix`
+/// design D2 / D8）；cache miss 后的扫描路径仍是 `tokio::fs::File::open`，本
+/// change scope 边界——SSH callsite 当前不经过此 wrapper（详 spec
+/// `ipc-data-api/spec.md` Scenario `本 change 不强制切 scanner 路径`），完整
+/// SSH 接入 + scanner 切 `fs.open_read` 留 PR-D。
 pub(crate) async fn extract_session_metadata_cached(
     cache: &StdMutex<MetadataCache>,
+    fs: &dyn FileSystemProvider,
+    context_id: &ContextId,
     path: &Path,
 ) -> SessionMetadata {
-    let new_sig = match tokio::fs::metadata(path).await {
-        #[allow(deprecated)]
-        Ok(meta) => Some(FileSignature::from_metadata(&meta)),
-        Err(_) => None,
-    };
+    let new_sig = fs
+        .stat(path)
+        .await
+        .ok()
+        .map(|m| FileSignature::from_fs_metadata(&m));
 
     if let Some(sig) = new_sig {
         let cached = cache
             .lock()
             .expect("metadata cache mutex poisoned")
-            .lookup(path);
+            .lookup(context_id, path);
         if let Some(entry) = cached {
             if entry.signature == sig {
                 let is_ongoing =
@@ -499,7 +529,7 @@ pub(crate) async fn extract_session_metadata_cached(
 
     if let Some(sig) = new_sig {
         cache.lock().expect("metadata cache mutex poisoned").insert(
-            path.to_path_buf(),
+            (context_id.clone(), path.to_path_buf()),
             MetadataCacheEntry {
                 signature: sig,
                 title: meta.title.clone(),
@@ -1138,6 +1168,40 @@ mod tests {
         StdMutex::new(MetadataCache::default())
     }
 
+    fn test_local_ctx(root: &std::path::Path) -> ContextId {
+        ContextId::local(root.to_path_buf())
+    }
+
+    fn test_ssh_ctx() -> ContextId {
+        ContextId::ssh(
+            cdt_fs::HostSignature::from_ssh_config_fields(&cdt_fs::SshConfigDigestInput {
+                hostname: "host-a.example".into(),
+                port: 22,
+                user: "alice".into(),
+                identity_files: vec![],
+                proxyjump: None,
+                proxycommand: None,
+                hostkeyalias: None,
+            }),
+            PathBuf::from("/remote/home/.claude/projects"),
+        )
+    }
+
+    fn test_ssh_ctx_b() -> ContextId {
+        ContextId::ssh(
+            cdt_fs::HostSignature::from_ssh_config_fields(&cdt_fs::SshConfigDigestInput {
+                hostname: "host-b.example".into(),
+                port: 22,
+                user: "bob".into(),
+                identity_files: vec![],
+                proxyjump: None,
+                proxycommand: None,
+                hostkeyalias: None,
+            }),
+            PathBuf::from("/remote/home-b/.claude/projects"),
+        )
+    }
+
     #[tokio::test]
     async fn cached_hit_returns_cached_metadata_without_rereading() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1150,7 +1214,13 @@ mod tests {
         );
 
         let cache = make_cache();
-        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        let m1 = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         assert_eq!(m1.message_count, 2);
 
         // 缓存应已写入
@@ -1158,7 +1228,13 @@ mod tests {
 
         // 第二次：FileSignature 不变命中。改变文件内容后再次调用 cached
         // 不会读取——这里通过比较返回结果与缓存一致间接验证（不真改文件）
-        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        let m2 = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         assert_eq!(m1.message_count, m2.message_count);
         assert_eq!(m1.title, m2.title);
         assert_eq!(m1.git_branch, m2.git_branch);
@@ -1173,7 +1249,13 @@ mod tests {
         );
 
         let cache = make_cache();
-        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        let m1 = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         assert_eq!(m1.message_count, 1);
 
         // append 新内容让 size 变化 → cache miss → 重扫
@@ -1188,7 +1270,13 @@ mod tests {
         )
         .unwrap();
 
-        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        let m2 = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         assert_eq!(m2.message_count, 2, "size 变化后应重扫");
     }
 
@@ -1202,7 +1290,13 @@ mod tests {
         );
 
         let cache = make_cache();
-        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        let m1 = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         assert_eq!(m1.message_count, 1);
 
         // 准备替换文件（不同内容）
@@ -1218,7 +1312,13 @@ mod tests {
         .unwrap();
         std::fs::rename(&replacement, &path).unwrap();
 
-        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        let m2 = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         assert_eq!(
             m2.message_count, 2,
             "rename 替换（inode 变化）必须重扫，message_count 应反映新内容"
@@ -1231,6 +1331,8 @@ mod tests {
         // 不存在的 path → stat 失败 → 走 uncached → 返回空 metadata，不写缓存
         let m = extract_session_metadata_cached(
             &cache,
+            &*cdt_fs::local_handle(),
+            &ContextId::local(PathBuf::from("/")),
             std::path::Path::new("/nonexistent/missing.jsonl"),
         )
         .await;
@@ -1262,29 +1364,147 @@ mod tests {
     #[test]
     fn metadata_cache_evicts_lru_when_over_capacity() {
         let mut cache = MetadataCache::new(2);
-        cache.insert(PathBuf::from("/a"), dummy_entry(1));
-        cache.insert(PathBuf::from("/b"), dummy_entry(2));
-        cache.insert(PathBuf::from("/c"), dummy_entry(3));
+        let ctx = ContextId::local(PathBuf::from("/"));
+        cache.insert((ctx.clone(), PathBuf::from("/a")), dummy_entry(1));
+        cache.insert((ctx.clone(), PathBuf::from("/b")), dummy_entry(2));
+        cache.insert((ctx.clone(), PathBuf::from("/c")), dummy_entry(3));
         // /a 应被淘汰
-        assert!(cache.lookup(std::path::Path::new("/a")).is_none());
-        assert!(cache.lookup(std::path::Path::new("/b")).is_some());
-        assert!(cache.lookup(std::path::Path::new("/c")).is_some());
+        assert!(cache.lookup(&ctx, std::path::Path::new("/a")).is_none());
+        assert!(cache.lookup(&ctx, std::path::Path::new("/b")).is_some());
+        assert!(cache.lookup(&ctx, std::path::Path::new("/c")).is_some());
         assert!(cache.len() <= 2);
     }
 
     #[test]
     fn metadata_cache_lookup_bumps_hit_to_front() {
         let mut cache = MetadataCache::new(2);
-        cache.insert(PathBuf::from("/a"), dummy_entry(1));
-        cache.insert(PathBuf::from("/b"), dummy_entry(2));
+        let ctx = ContextId::local(PathBuf::from("/"));
+        cache.insert((ctx.clone(), PathBuf::from("/a")), dummy_entry(1));
+        cache.insert((ctx.clone(), PathBuf::from("/b")), dummy_entry(2));
         // lookup /a → bump 到队首
-        assert!(cache.lookup(std::path::Path::new("/a")).is_some());
-        cache.insert(PathBuf::from("/c"), dummy_entry(3));
+        assert!(cache.lookup(&ctx, std::path::Path::new("/a")).is_some());
+        cache.insert((ctx.clone(), PathBuf::from("/c")), dummy_entry(3));
         assert!(
-            cache.lookup(std::path::Path::new("/a")).is_some(),
+            cache.lookup(&ctx, std::path::Path::new("/a")).is_some(),
             "命中后 bump 队首，不应被淘汰"
         );
-        assert!(cache.lookup(std::path::Path::new("/b")).is_none());
+        assert!(cache.lookup(&ctx, std::path::Path::new("/b")).is_none());
+    }
+
+    #[test]
+    fn local_vs_ssh_keys_do_not_collide() {
+        // Spec `ipc-data-api/spec.md` §`Local 与 SSH 同字面 path 不串扰` —— 同
+        // path 但不同 `ContextId` 必须各占独立 cache slot，互不串扰。
+        let mut cache = MetadataCache::new(10);
+        let local_ctx = ContextId::local(PathBuf::from("/home/u/.claude/projects"));
+        let ssh_ctx = ContextId::ssh(
+            cdt_fs::HostSignature::from_ssh_config_fields(&cdt_fs::SshConfigDigestInput {
+                hostname: "remote".into(),
+                port: 22,
+                user: "u".into(),
+                identity_files: vec![],
+                proxyjump: None,
+                proxycommand: None,
+                hostkeyalias: None,
+            }),
+            PathBuf::from("/home/u/.claude/projects"),
+        );
+        // 字面同 path，但 ContextId 不等
+        let same_path = PathBuf::from("/foo/s.jsonl");
+        cache.insert((local_ctx.clone(), same_path.clone()), dummy_entry(1));
+        cache.insert((ssh_ctx.clone(), same_path.clone()), dummy_entry(2));
+        assert_eq!(cache.len(), 2, "Local 与 SSH 各占一个 slot");
+        let local_hit = cache.lookup(&local_ctx, &same_path).unwrap();
+        let ssh_hit = cache.lookup(&ssh_ctx, &same_path).unwrap();
+        assert_eq!(local_hit.message_count, 1);
+        assert_eq!(ssh_hit.message_count, 2, "SSH lookup 必须命中 SSH entry");
+    }
+
+    #[test]
+    fn lru_capacity_2000_evicts_lru_with_mixed_context() {
+        // Spec `ipc-data-api/spec.md` §`缓存超过容量按 LRU 淘汰` —— 容量上限是
+        // 跨 ContextId 全局总和。混插 Local + SSH 共 2001 条 → 最早一条被淘汰。
+        let mut cache = MetadataCache::new(2000);
+        let local_ctx = ContextId::local(PathBuf::from("/local"));
+        let ssh_ctx = test_ssh_ctx();
+        for i in 0..1000 {
+            cache.insert(
+                (local_ctx.clone(), PathBuf::from(format!("/p{i}"))),
+                dummy_entry(u64::try_from(i).unwrap()),
+            );
+        }
+        for i in 0..1000 {
+            cache.insert(
+                (ssh_ctx.clone(), PathBuf::from(format!("/p{i}"))),
+                dummy_entry(u64::try_from(i + 5000).unwrap()),
+            );
+        }
+        assert_eq!(cache.len(), 2000);
+        // 再插一条让 Local 的第一条（最久未访问）被淘汰
+        cache.insert(
+            (local_ctx.clone(), PathBuf::from("/p9999")),
+            dummy_entry(9999),
+        );
+        assert_eq!(cache.len(), 2000, "容量上限");
+        assert!(
+            cache
+                .lookup(&local_ctx, std::path::Path::new("/p0"))
+                .is_none(),
+            "最久未访问的 Local /p0 应被淘汰"
+        );
+        assert!(
+            cache
+                .lookup(&ssh_ctx, std::path::Path::new("/p999"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn switch_context_does_not_clear_cache() {
+        // Spec `ipc-data-api/spec.md` §`ssh_disconnect 不清 cache` 的纯 cache 层验证：
+        // 写入 Local entry 后，模拟"切到 SSH"（直接构造 SSH ctx 查），SSH lookup
+        // miss；切回 Local lookup 仍命中 —— ContextId 隔离 + cache 永久未被清。
+        let mut cache = MetadataCache::new(10);
+        let local_ctx = ContextId::local(PathBuf::from("/local"));
+        let ssh_ctx = test_ssh_ctx();
+        cache.insert((local_ctx.clone(), PathBuf::from("/foo")), dummy_entry(1));
+        // 切到 SSH 视角：同字面 path 必 miss
+        assert!(
+            cache
+                .lookup(&ssh_ctx, std::path::Path::new("/foo"))
+                .is_none()
+        );
+        // 切回 Local 视角：仍命中
+        assert!(
+            cache
+                .lookup(&local_ctx, std::path::Path::new("/foo"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn different_ssh_hosts_do_not_collide() {
+        // Spec `ipc-data-api/spec.md` §`不同 SSH host 之间不串扰`。
+        let mut cache = MetadataCache::new(10);
+        let ssh_a = test_ssh_ctx();
+        let ssh_b = test_ssh_ctx_b();
+        assert_ne!(ssh_a, ssh_b, "fixture 必须产不同 ContextId");
+        cache.insert((ssh_a.clone(), PathBuf::from("/foo")), dummy_entry(1));
+        cache.insert((ssh_b.clone(), PathBuf::from("/foo")), dummy_entry(2));
+        assert_eq!(
+            cache
+                .lookup(&ssh_a, std::path::Path::new("/foo"))
+                .unwrap()
+                .message_count,
+            1
+        );
+        assert_eq!(
+            cache
+                .lookup(&ssh_b, std::path::Path::new("/foo"))
+                .unwrap()
+                .message_count,
+            2
+        );
     }
 
     // -------- stale 实时合成 --------
@@ -1308,7 +1528,13 @@ mod tests {
         );
 
         let cache = make_cache();
-        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        let m1 = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         // 第一次：刚写入，mtime 接近 now，is_ongoing 取决于 messages_ongoing 与 stale
         // 不强断言 m1.is_ongoing，重点是缓存的 messages_ongoing 中间值
         let _ = m1;
@@ -1316,7 +1542,8 @@ mod tests {
         // 把缓存条目的 mtime 改成远古，模拟"缓存命中但 wall-clock 推进 > 5 分钟"
         {
             let mut guard = cache.lock().unwrap();
-            if let Some(entry) = guard.map.get_mut(path.as_path()) {
+            let key = (test_local_ctx(tmp.path()), path.clone());
+            if let Some(entry) = guard.map.get_mut(&key) {
                 entry.signature.mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
                 entry.messages_ongoing = true;
             }
@@ -1324,7 +1551,13 @@ mod tests {
         // 修改文件 mtime 让 stat 与缓存中的（被改成远古）一致
         let _ = filetime_set_old(&path);
 
-        let m2 = extract_session_metadata_cached(&cache, &path).await;
+        let m2 = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         // 命中后实时合成：mtime 远古 → stale → is_ongoing = false
         assert!(
             !m2.is_ongoing,
@@ -1610,13 +1843,14 @@ mod tests {
                 "新规则会用这串",
             )],
         );
-        #[allow(deprecated)]
-        let sig = FileSignature::from_metadata(&std::fs::metadata(&path).unwrap());
+        let fs_meta = cdt_fs::local_handle().stat(&path).await.unwrap();
+        let sig = FileSignature::from_fs_metadata(&fs_meta);
 
         let cache = make_cache();
+        let ctx = test_local_ctx(tmp.path());
         // 模拟旧版本缓存：title 写一个完全不同的字面量
         cache.lock().unwrap().insert(
-            path.clone(),
+            (ctx.clone(), path.clone()),
             MetadataCacheEntry {
                 signature: sig,
                 title: Some("旧规则算出的 title".to_string()),
@@ -1626,7 +1860,13 @@ mod tests {
             },
         );
 
-        let m = extract_session_metadata_cached(&cache, &path).await;
+        let m = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         assert_eq!(m.title.as_deref(), Some("旧规则算出的 title"));
         assert_eq!(
             m.message_count, 7,
@@ -1646,18 +1886,31 @@ mod tests {
 
         let cache = make_cache();
         // 第一次扫填入 cache
-        let m1 = extract_session_metadata_cached(&cache, &path).await;
+        let m1 = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         assert_eq!(m1.title.as_deref(), Some("old"));
 
         // 把 cache 里的 title 篡改为模拟"按旧算法算出来的不同字面量"，签名仍匹配
         {
             let mut guard = cache.lock().unwrap();
-            if let Some(entry) = guard.map.get_mut(path.as_path()) {
+            let key = (test_local_ctx(tmp.path()), path.clone());
+            if let Some(entry) = guard.map.get_mut(&key) {
                 entry.title = Some("legacy title from old algo".to_string());
             }
         }
         // 命中：返回篡改后的旧 title
-        let m_legacy = extract_session_metadata_cached(&cache, &path).await;
+        let m_legacy = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         assert_eq!(
             m_legacy.title.as_deref(),
             Some("legacy title from old algo")
@@ -1675,7 +1928,13 @@ mod tests {
         )
         .unwrap();
 
-        let m_new = extract_session_metadata_cached(&cache, &path).await;
+        let m_new = extract_session_metadata_cached(
+            &cache,
+            &*cdt_fs::local_handle(),
+            &test_local_ctx(tmp.path()),
+            &path,
+        )
+        .await;
         // 新扫描时第一条仍是 "old"（按 early-exit gate 它先被赋 title）。
         // 关键 assertion：cache 已用 *新算法* 重算并写回，不再是 legacy 字面量
         assert_ne!(
@@ -1684,5 +1943,197 @@ mod tests {
             "signature 变化后 SHALL 重扫，不再返回篡改后的旧 cache"
         );
         assert_eq!(m_new.title.as_deref(), Some("old"));
+    }
+
+    // ========================================================================
+    // fake-SSH metadata cache perf bench —— counter-based assertion
+    //
+    // Spec `ipc-data-api/spec.md` §`相同 (ContextId, path) FileSignature 不变命中缓存`
+    // 的运行时含义：cache hit 后 SHALL NOT 调 `open_read` 或 `read_to_string`，
+    // 仅需 `stat` 校验 signature。本测试用 fake-SSH provider 模拟 50ms RTT，
+    // counter-based assertion 验证 hit 路径 fs op 形态。
+    //
+    // 标 `#[ignore]`——CI 不跑；本地 `cargo test -p cdt-api --lib
+    // ipc::session_metadata::tests::ssh_cache_hit_skips -- --ignored --nocapture` 验收。
+    // 详 change `metadata-cache-context-prefix` design EXTRA-4。
+    // ========================================================================
+
+    use cdt_fs::{
+        DirEntry as CdtDirEntry, FsError, FsKind, FsMetadata, InstrumentedFs, with_fs_counter,
+    };
+    use std::collections::HashMap as PerfHashMap;
+    use std::path::Path as StdPath;
+    use std::sync::Arc as StdArc;
+    use std::sync::Mutex as StdSyncMutex;
+    use tokio::io::AsyncRead;
+
+    struct FakeSshFs {
+        latency: Duration,
+        files: StdSyncMutex<PerfHashMap<PathBuf, (u64, SystemTime, String)>>,
+    }
+
+    impl FakeSshFs {
+        fn new(latency: Duration) -> Self {
+            Self {
+                latency,
+                files: StdSyncMutex::new(PerfHashMap::new()),
+            }
+        }
+        fn insert(&self, path: PathBuf, size: u64, mtime: SystemTime, content: String) {
+            self.files
+                .lock()
+                .expect("FakeSshFs mutex")
+                .insert(path, (size, mtime, content));
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl FileSystemProvider for FakeSshFs {
+        fn kind(&self) -> FsKind {
+            FsKind::Ssh
+        }
+        async fn exists(&self, path: &StdPath) -> bool {
+            tokio::time::sleep(self.latency).await;
+            self.files
+                .lock()
+                .expect("FakeSshFs mutex")
+                .contains_key(path)
+        }
+        async fn read_dir(&self, _path: &StdPath) -> Result<Vec<CdtDirEntry>, FsError> {
+            tokio::time::sleep(self.latency).await;
+            Ok(vec![])
+        }
+        async fn read_to_string(&self, path: &StdPath) -> Result<String, FsError> {
+            tokio::time::sleep(self.latency).await;
+            self.files
+                .lock()
+                .expect("FakeSshFs mutex")
+                .get(path)
+                .map(|(_, _, c)| c.clone())
+                .ok_or_else(|| FsError::NotFound(path.to_path_buf()))
+        }
+        async fn stat(&self, path: &StdPath) -> Result<FsMetadata, FsError> {
+            tokio::time::sleep(self.latency).await;
+            self.files
+                .lock()
+                .expect("FakeSshFs mutex")
+                .get(path)
+                .map(|(size, mtime, _)| FsMetadata {
+                    size: *size,
+                    mtime: *mtime,
+                    identity: None,
+                })
+                .ok_or_else(|| FsError::NotFound(path.to_path_buf()))
+        }
+        async fn read_lines_head(
+            &self,
+            path: &StdPath,
+            max: usize,
+        ) -> Result<Vec<String>, FsError> {
+            tokio::time::sleep(self.latency).await;
+            let content = self
+                .files
+                .lock()
+                .expect("FakeSshFs mutex")
+                .get(path)
+                .map(|(_, _, c)| c.clone())
+                .ok_or_else(|| FsError::NotFound(path.to_path_buf()))?;
+            Ok(content.lines().take(max).map(str::to_owned).collect())
+        }
+        async fn open_read(
+            &self,
+            path: &StdPath,
+        ) -> Result<Box<dyn AsyncRead + Send + Unpin>, FsError> {
+            tokio::time::sleep(self.latency).await;
+            let content = self
+                .files
+                .lock()
+                .expect("FakeSshFs mutex")
+                .get(path)
+                .map(|(_, _, c)| c.clone())
+                .ok_or_else(|| FsError::NotFound(path.to_path_buf()))?;
+            Ok(Box::new(std::io::Cursor::new(content.into_bytes())))
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "perf bench, dev-only; run via `cargo test --lib ssh_cache_hit_skips -- --ignored --nocapture`"]
+    async fn ssh_cache_hit_skips_open_read_and_read_to_string() {
+        // 不模拟真 RTT（tokio test-util 未启用，virtual time 不可用）；assertion
+        // 完全基于 counter——latency=0 让本机跑时 sub-second 完成，CI 不跑（#[ignore]）。
+        const N: usize = 500;
+        let latency = Duration::from_millis(0);
+        let fake = FakeSshFs::new(latency);
+        let base = PathBuf::from("/fake/ssh/home/.claude/projects/-fake-project");
+        let mtime_base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+        let paths: Vec<PathBuf> = (0..N)
+            .map(|i| base.join(format!("session-{i}.jsonl")))
+            .collect();
+        for (i, p) in paths.iter().enumerate() {
+            fake.insert(
+                p.clone(),
+                64 + u64::try_from(i).unwrap(),
+                mtime_base + Duration::from_secs(u64::try_from(i).unwrap()),
+                String::new(),
+            );
+        }
+
+        let instrumented = StdArc::new(InstrumentedFs::new(fake));
+        let ctx = test_ssh_ctx();
+        let cache = StdArc::new(StdMutex::new(MetadataCache::default()));
+
+        // 第一轮 500 次：全部 miss（cache 为空）→ stat + 内部扫描（scanner 走
+        // `tokio::fs::File::open(path)` 在 fake path 上失败，返空 metadata，
+        // 但 cache 仍按 signature 写入 entry，让第二轮命中）。
+        let cache_for_miss = cache.clone();
+        let fs_for_miss = instrumented.clone();
+        let ctx_for_miss = ctx.clone();
+        let paths_for_miss = paths.clone();
+        let ((), miss_counts) = with_fs_counter(move || async move {
+            for p in &paths_for_miss {
+                let _ = extract_session_metadata_cached(
+                    &cache_for_miss,
+                    &*fs_for_miss,
+                    &ctx_for_miss,
+                    p,
+                )
+                .await;
+            }
+        })
+        .await;
+
+        // 第二轮 500 次：全部 hit → 仅 fs.stat 校验 signature，绝不应再调
+        // open_read / read_to_string。
+        let cache_for_hit = cache.clone();
+        let fs_for_hit = instrumented.clone();
+        let ctx_for_hit = ctx.clone();
+        let paths_for_hit = paths.clone();
+        let ((), hit_counts) = with_fs_counter(move || async move {
+            for p in &paths_for_hit {
+                let _ =
+                    extract_session_metadata_cached(&cache_for_hit, &*fs_for_hit, &ctx_for_hit, p)
+                        .await;
+            }
+        })
+        .await;
+
+        eprintln!("[perf_metadata_cache_ssh_hit] miss={miss_counts:?} hit={hit_counts:?}");
+
+        assert_eq!(
+            hit_counts.open_read, 0,
+            "cache hit SHALL NOT 调 fs.open_read（实际：{}）",
+            hit_counts.open_read
+        );
+        assert_eq!(
+            hit_counts.read_to_string, 0,
+            "cache hit SHALL NOT 调 fs.read_to_string（实际：{}）",
+            hit_counts.read_to_string
+        );
+        assert_eq!(
+            hit_counts.stat,
+            u32::try_from(N).unwrap(),
+            "cache hit 每个 path SHALL 仍调一次 fs.stat 校验 signature"
+        );
     }
 }

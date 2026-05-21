@@ -62,11 +62,7 @@ impl FileIdentity {
 
     /// 从 `cdt_fs::FsIdentity` 桥接 —— `None`（SSH / Windows）→ `FileIdentity::None`，
     /// `Unix { dev, ino }` → `FileIdentity::Unix { dev, ino }`。
-    ///
-    /// `allow(dead_code)`：本 change PR-A 是基建，业务 callsite 尚未迁移到
-    /// `from_fs_metadata`；PR-D 完成 cache callsite 切 trait 后此 lint 自然消除。
     #[must_use]
-    #[allow(dead_code)]
     pub fn from_fs_identity(identity: Option<CdtFsIdentity>) -> Self {
         match identity {
             #[cfg(unix)]
@@ -113,11 +109,7 @@ impl FileSignature {
     ///
     /// Spec：`openspec/specs/fs-abstraction/spec.md`
     /// §`FsMetadata.identity 字段采 best-effort 策略`。
-    ///
-    /// `allow(dead_code)`：本 change PR-A 是基建，业务 callsite 尚未迁移；
-    /// PR-D 完成 cache callsite 切 trait 后此 lint 自然消除。
     #[must_use]
-    #[allow(dead_code)]
     pub fn from_fs_metadata(meta: &CdtFsMetadata) -> Self {
         Self {
             mtime: meta.mtime,
