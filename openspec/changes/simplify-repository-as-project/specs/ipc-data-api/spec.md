@@ -211,7 +211,7 @@ Tauri command 入参 SHALL 与既有 `list_sessions` 风格一致——顶层 `g
 
 `extract_session_metadata` 提取的 `SessionSummary.title` MUST 在做长度截断之前剥除任何 `<teammate-message ...>...</teammate-message>` 包裹片段，避免 sidebar 标题吐出原始 XML。
 
-实现 SHALL 在 `cdt-api::session_metadata::sanitize_for_title` 同函数内完成两步：
+实现 SHALL 在 `cdt-api::session_metadata` 标题提取路径中完成两步——先调 `extract_teammate_summary_title` 跑 fast-path；未命中（非 teammate 主导，或主导但 summary + body 都空）再走 `sanitize_for_title` 跑 fallback 整段剥标签。两个 helper 是独立函数，调用顺序由 `extract_session_metadata_with_ongoing` / `extract_session_metadata_from_parsed` 统一编排：
 
 1. **Fast-path（teammate 主导消息）**：若 trim 后 text 以 `<teammate-message` 开头，SHALL 按以下优先级提取标题候选：
    - **优先 `summary` 属性**：regex 抽 `summary="..."` 属性内容，非空时 SHALL 直接返回作为标题候选（截断长度由常量 `TITLE_MAX_CHARS` 控制）
