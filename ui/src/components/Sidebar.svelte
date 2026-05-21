@@ -189,10 +189,16 @@
   const groupWorktrees: Worktree[] = $derived(selectedGroup?.worktrees ?? []);
   const showWorktreeFilter = $derived(groupWorktrees.length > 1);
 
-  /** "锚点" worktree —— 优先 repo 根 → 主 worktree → 第一个，用于 Pin/Hide /
-   * Memory 等 per-project state 的 fallback projectId。 */
+  /** "锚点" worktree —— 用于 Pin/Hide / Memory 等 per-project state 的
+   * projectId。spec sidebar-navigation D7："per-project memory / prefs 维持
+   * per-worktree"——worktree filter 选了具体 worktree 时锚点 SHALL 跟随；
+   * "全部" 模式下 fallback 到 repo 根 → 主 worktree → 第一个。 */
   const anchorWorktreeId = $derived.by(() => {
     if (groupWorktrees.length === 0) return selectedGroupId;
+    if (worktreeFilter !== ALL_WORKTREES) {
+      const filtered = groupWorktrees.find((w) => w.id === worktreeFilter);
+      if (filtered) return filtered.id;
+    }
     return (
       groupWorktrees.find((w) => w.isRepoRoot)?.id
       ?? groupWorktrees.find((w) => w.isMainWorktree)?.id
