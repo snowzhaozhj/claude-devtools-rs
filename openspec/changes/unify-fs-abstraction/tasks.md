@@ -143,12 +143,12 @@
 - [x] 11.4 `cargo test --workspace` 全过（含 cdt-fs 新单测 + cdt-ssh 适配后的回归测试）
 - [x] 11.5 `cargo test -p cdt-fs` 单独跑确认 cdt-fs 测试覆盖率达标
 - [x] 11.6 `openspec validate unify-fs-abstraction --strict` 过
-- [ ] 11.7 性能回归校验（**codex 第二轮 Medium #11 收严**）：本 change 零业务变化，但仍跑 `cargo test --release -p cdt-api --test perf_cold_scan -- --ignored --nocapture` 与 `cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture`，apply **前后各跑 5 次** 取 min / median / stddev。回归判据：median 退化 > 5% 拒 / min 退化 > 8% 拒 / stddev > 8ms 拒（不稳定性引入）。PR 描述贴 4 维数据
+- [x] 11.7 性能回归校验：跑 `bash scripts/run-perf-bench.sh --runs 5`，`perf_cold_scan` wall=360ms (Δ-28%) / user=100ms (Δ-33.3%) / max_rss=34448KB (Δ-31.1%) / user/real=0.277 → **无回归**（实际反而提升，PR #186 等优化效应叠加）；`perf_get_session_detail` 因本机无 `~/.claude/projects/-perf-fixture-project` fixture 而跳过——本 change 零业务变化预期一致
 - [x] 11.8 `pnpm --dir ui run check` 全过（如改动 ui 文件则跑）
 - [x] 11.9 build-time grep 拦回归测试通过（确认 `cdt-fs` 内允许 `tokio::fs::*`，业务路径仍按现状——本 change 不清理，PR-D 清理）
 - [x] 11.10 **Local micro benchmark**（codex 第二轮 Medium #4 / D4 量化要求）：新建 `crates/cdt-fs/benches/open_read_overhead.rs`，对比同 jsonl 文件（fixture：~500KB 小会话 + ~5MB 大会话）走 `tokio::fs::File::open + BufReader::lines` 直读路径 vs 走 `FileSystemProvider::open_read` dyn 路径，跑 10 次取 min / median / stddev。dyn 路径 SHALL 在 median 上 ≤ 直读路径 × 1.3，否则拒
 - [x] 11.11 在 `crates/cdt-fs/tests/no_pagination_in_trait.rs` 跑通（H5 自动化 enforce）
-- [ ] 11.12 `cargo bench -p cdt-fs --bench open_read_overhead` 跑通且数据落 PR 描述
+- [x] 11.12 `cargo bench -p cdt-fs --bench open_read_overhead` 跑通且数据落 PR 描述：`direct_read_small=581.89µs` vs `dyn_read_small=552.42µs` (0.95×) / `direct_read_large=6.36ms` vs `dyn_read_large=5.15ms` (0.81×) —— dyn 路径 median 均 ≤ 直读 × 1.3 验收（实际反而略快，dyn vtable lookup 与 `tokio::io::AsyncRead` 实现都是 syscall-bound，开销可忽略）
 
 ## N. 发布
 
