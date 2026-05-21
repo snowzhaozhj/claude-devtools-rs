@@ -1036,9 +1036,7 @@ impl LocalDataApi {
             // (SSH provider, Local ctx) 不自洽组合（codex 二审 commit-stage
             // Blocking → design D3-bis）。任一 miss 整体 fall-through 到
             // Local，绝不返回 SSH/Local 混合三元组。
-            if let Some((provider, ctx)) =
-                self.ssh_mgr.provider_and_context_id(&context_id).await
-            {
+            if let Some((provider, ctx)) = self.ssh_mgr.provider_and_context_id(&context_id).await {
                 let remote_home = provider.remote_home().to_path_buf();
                 return (Arc::new(provider), remote_home, ctx);
             }
