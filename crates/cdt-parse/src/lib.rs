@@ -18,5 +18,5 @@ pub(crate) mod parser;
 
 pub use dedupe::dedupe_by_request_id;
 pub use error::ParseError;
-pub use file::parse_file;
+pub use file::{parse_file, parse_file_via_fs};
 pub use parser::{parse_entry, parse_entry_at};

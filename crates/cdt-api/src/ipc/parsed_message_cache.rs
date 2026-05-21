@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use cdt_core::ParsedMessage;
 use cdt_fs::{ContextId, FileSystemProvider};
-use cdt_parse::parse_file;
+use cdt_parse::parse_file_via_fs;
 
 use crate::cache_signature::FileSignature;
 
@@ -78,6 +78,45 @@ impl ParsedMessageCache {
             self.order.push_front(k);
         }
         Some(entry)
+    }
+
+    /// 用调用方提供的 `FileSignature` 直接查 cache —— 跳过内部 stat。
+    ///
+    /// 用于 list 后台 batch 校验路径：调用方先 `fs.read_dir_with_metadata(parent)`
+    /// 一次拿全 dir 内 entry 的 metadata，再批量 lookup，避免 N 次串行 stat
+    /// （详 change `unify-fs-direct-calls` design D3）。
+    pub(crate) fn lookup_with_known_signature(
+        &mut self,
+        ctx: &ContextId,
+        path: &Path,
+        signature: &FileSignature,
+    ) -> Option<Arc<Vec<ParsedMessage>>> {
+        let key = (ctx.clone(), path.to_path_buf());
+        let entry = self.map.get(&key)?.clone();
+        if entry.signature != *signature {
+            return None;
+        }
+        if let Some(pos) = self.order.iter().position(|k| k == &key) {
+            let k = self.order.remove(pos).expect("position 已校验");
+            self.order.push_front(k);
+        }
+        Some(entry.messages)
+    }
+
+    /// hot path cache hit trust —— 不校验 signature 直接返当前 entry。
+    /// signature 校验由后台 batch task 异步跑（详 change `unify-fs-direct-calls` design D3）。
+    pub(crate) fn lookup_trust_cached(
+        &mut self,
+        ctx: &ContextId,
+        path: &Path,
+    ) -> Option<Arc<Vec<ParsedMessage>>> {
+        let key = (ctx.clone(), path.to_path_buf());
+        let entry = self.map.get(&key)?.clone();
+        if let Some(pos) = self.order.iter().position(|k| k == &key) {
+            let k = self.order.remove(pos).expect("position 已校验");
+            self.order.push_front(k);
+        }
+        Some(entry.messages)
     }
 
     fn insert(&mut self, key: ParsedMessageCacheKey, entry: ParsedMessageEntry) {
@@ -182,14 +221,14 @@ pub(crate) async fn extract_parsed_messages_cached(
         }
     }
 
-    let messages = match parse_file(path).await {
+    let messages = match parse_file_via_fs(fs, path).await {
         Ok(m) => Arc::new(m),
         Err(e) => {
             tracing::warn!(
                 target: "cdt_api::parsed_message_cache",
                 path = %path.display(),
                 error = %e,
-                "parse_file failed; SHALL NOT write to cache"
+                "parse_file_via_fs failed; SHALL NOT write to cache"
             );
             return None;
         }

@@ -38,17 +38,20 @@
 
 ## 启动样板
 
-推荐 **inline prompt**（简单任务不必落文件）：
+**默认走 inline prompt**——`bg-pr` recipe 用 just `quote()` 把 NAME / PROMPT 编码为 shell-safe 单引号字面量，含 backtick / 双引号 / `$` / `$HOME` 等特殊字符的 prompt 也能原样传入，不被宿主 shell 解释（change `unify-fs-direct-calls` 修订）：
+
 ```bash
 just bg-pr <name> '<inline prompt with placeholders filled>'
+# 含特殊字符也安全：
+just bg-pr fix-foo '修 `fn foo()` 的 bug，参考 "原版行为" 与 $HOME 路径'
 ```
 
-长 prompt / 想留审计追溯时落文件：
+长 prompt / 想留审计追溯时落 `.claude/*` 子目录下文件（hook 拦 main 分支 Edit `/tmp/*` 等非白名单路径）：
 ```bash
 just bg-pr <name> .claude/perf-prompts/<name>.md
 ```
 
-`bg-pr` recipe 通过 `[ -f "$PROMPT" ]` 自动判断 PROMPT 是文件还是 inline 字符串。
+`bg-pr` recipe 通过 `[ -f "$prompt" ]` 自动判断 PROMPT 是文件还是 inline 字符串。**禁止**手写 `claude --bg "..."` 直接绕过 `bg-pr` —— 历史踩过 inline prompt 双引号嵌套被 shell 吃的坑。
 
 裸命令（subshell 隔离主 session cwd）：
 ```bash

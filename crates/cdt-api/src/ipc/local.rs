@@ -2168,8 +2168,11 @@ impl DataApi for LocalDataApi {
         let messages_ongoing = cdt_analyze::check_messages_ongoing(&messages);
         // stale check 与 list_sessions 路径对齐（issue #94）：mtime > 5min 的
         // ongoing 视为 crashed/killed。
+        // policy fork: SSH mtime/local clock 跨 domain (远端时钟回拨/时差导致 5min
+        // 阈值不可比对)，PR-E lift to BackendPolicy::stale_check_strategy 或加 SSH-aware
+        // clock skew compensation；本 change unify-fs-direct-calls design D2 line 2171。
         let is_ongoing = if messages_ongoing && !is_remote {
-            !crate::ipc::session_metadata::is_file_stale(&jsonl_path).await
+            !crate::ipc::session_metadata::is_file_stale(&*fs, &jsonl_path).await
         } else {
             messages_ongoing
         };
@@ -3044,6 +3047,15 @@ impl DataApi for LocalDataApi {
         path: &str,
         project_root: &str,
     ) -> Result<serde_json::Value, ApiError> {
+        // change `unify-fs-direct-calls` design D7：SSH context 下 @mention 文件解析
+        // SHALL gracefully skip 而非读 Local 路径串扰（mention.rs 走 ALLOWLIST 不切
+        // fs trait，但 caller 侧按 fs.kind() gate）。
+        let (fs, _projects_dir) = self.active_fs_and_projects_dir().await?;
+        if fs.kind() == cdt_fs::FsKind::Ssh {
+            // SSH context 下返回 Null 让前端按"无 mention 内容"处理；具体 error code
+            // 上移留 follow-up（codex Open Question 4）。
+            return Ok(serde_json::Value::Null);
+        }
         let result = config_read_mentioned_file(path, Path::new(project_root), None)
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;

@@ -443,6 +443,7 @@ name = "cdt-parse"
 version = "0.5.6"
 dependencies = [
  "cdt-core",
+ "cdt-fs",
  "chrono",
  "futures",
  "serde",

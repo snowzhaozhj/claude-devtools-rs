@@ -18,7 +18,6 @@ use std::time::{Duration, SystemTime};
 
 use cdt_fs::{ContextId, FileSystemProvider};
 use regex::Regex;
-use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use cdt_core::message::{ContentBlock, MessageCategory, MessageContent, ParsedMessage};
@@ -29,6 +28,11 @@ use crate::cache_signature::FileSignature;
 /// 文件 mtime 距 now 超过此阈值则即便消息序列结构上为 ongoing 也强制判 done。
 /// 5 分钟，对齐原版 `STALE_SESSION_THRESHOLD_MS`。
 pub const STALE_SESSION_THRESHOLD: Duration = Duration::from_secs(5 * 60);
+
+/// scanner 用 BufReader 容量 —— 与 SFTP `SSH_FXP_READ` reply 单消息上限对齐。
+/// 详 change `unify-fs-direct-calls` design D5：32 KiB 单 BufReader fill = 单 SFTP READ
+/// message；64 KiB 强制底层拆 2× SFTP READ 无收益；默认 8 KiB 在 SSH 5MB jsonl 需 ~640 RTTs。
+const SCANNER_BUF_BYTES: usize = 32 * 1024;
 
 /// `SessionSummary.title` 最大字符数（Unicode `char` 计数，非 byte）。
 /// 见 spec `ipc-data-api/spec.md` §`Title length is bounded by TITLE_MAX_CHARS constant`。
@@ -138,18 +142,27 @@ fn starts_with_system_output_tag(text: &str) -> bool {
 /// 扫描 JSONL 文件，提取标题和消息计数（薄 wrapper：复用 `extract_session_metadata_with_ongoing`）。
 ///
 /// 标题只扫描前 `TITLE_MAX_LINES` 行；消息计数扫描全文件。
+///
+/// path-only Local-only 兼容入口。SSH-aware 调用方 SHALL 用 `extract_session_metadata_with_ongoing(fs, path)`。
 pub async fn extract_session_metadata(path: &Path) -> SessionMetadata {
-    extract_session_metadata_with_ongoing(path).await.0
+    let fs = cdt_fs::local_handle();
+    extract_session_metadata_with_ongoing(&*fs, path).await.0
 }
 
 /// `extract_session_metadata` 的内部实现，额外暴露 `messages_ongoing` 中间值
 /// 给 cache 写入路径使用 —— 详见 change `multi-session-cpu-cache` D8。
 ///
-/// `is_ongoing = messages_ongoing && !is_file_stale(path)`。缓存只存
+/// `is_ongoing = messages_ongoing && !is_file_stale(fs, path)`。缓存只存
 /// `messages_ongoing`（不随时间变），`is_ongoing` 在 lookup 时由当前 wall clock
 /// 实时合成 stale 状态。
-pub(crate) async fn extract_session_metadata_with_ongoing(path: &Path) -> (SessionMetadata, bool) {
-    let Ok(file) = File::open(path).await else {
+///
+/// 通过 `fs.open_read(path)` 拿 `Box<dyn AsyncRead + Send + Unpin>`，BufReader 容量
+/// 32 KiB 与 SFTP packet 上限对齐（详 change `unify-fs-direct-calls` design D5）。
+pub(crate) async fn extract_session_metadata_with_ongoing(
+    fs: &dyn FileSystemProvider,
+    path: &Path,
+) -> (SessionMetadata, bool) {
+    let Ok(reader) = fs.open_read(path).await else {
         return (
             SessionMetadata {
                 title: None,
@@ -161,7 +174,7 @@ pub(crate) async fn extract_session_metadata_with_ongoing(path: &Path) -> (Sessi
         );
     };
 
-    let reader = BufReader::new(file);
+    let reader = BufReader::with_capacity(SCANNER_BUF_BYTES, reader);
     let mut lines = reader.lines();
 
     let mut title: Option<String> = None;
@@ -262,7 +275,7 @@ pub(crate) async fn extract_session_metadata_with_ongoing(path: &Path) -> (Sessi
 
     let messages_ongoing = ongoing_sm.finalize();
     let is_ongoing = if messages_ongoing {
-        !is_file_stale(path).await
+        !is_file_stale(fs, path).await
     } else {
         false
     };
@@ -422,6 +435,50 @@ impl MetadataCache {
         Some(entry)
     }
 
+    /// 用调用方提供的 `FileSignature` 直接查 cache —— 跳过内部 stat。
+    ///
+    /// 用于 list 后台 batch 校验路径：调用方先 `fs.read_dir_with_metadata(parent)`
+    /// 一次拿全 dir 内 entry 的 metadata，再批量 lookup，避免 N 次串行 stat
+    /// （详 change `unify-fs-direct-calls` design D3）。
+    ///
+    /// signature 字段 byte-equal 才命中；mismatch 返 None。命中时 LRU bump 到队首。
+    pub(crate) fn lookup_with_known_signature(
+        &mut self,
+        ctx: &ContextId,
+        path: &Path,
+        signature: &FileSignature,
+    ) -> Option<MetadataCacheEntry> {
+        let key = (ctx.clone(), path.to_path_buf());
+        let entry = self.map.get(&key)?.clone();
+        if entry.signature != *signature {
+            return None;
+        }
+        if let Some(pos) = self.order.iter().position(|k| k == &key) {
+            let k = self.order.remove(pos).expect("position 已校验");
+            self.order.push_front(k);
+        }
+        Some(entry)
+    }
+
+    /// hot path cache hit trust —— 不校验 signature 直接返当前 entry。
+    ///
+    /// 调用方语义：信任 cache 内容立即返回 UI 渲染（0 fs op），signature 校验
+    /// 由后台 batch task 异步跑（详 change `unify-fs-direct-calls` design D3）。
+    /// 命中时 LRU bump。
+    pub(crate) fn lookup_trust_cached(
+        &mut self,
+        ctx: &ContextId,
+        path: &Path,
+    ) -> Option<MetadataCacheEntry> {
+        let key = (ctx.clone(), path.to_path_buf());
+        let entry = self.map.get(&key)?.clone();
+        if let Some(pos) = self.order.iter().position(|k| k == &key) {
+            let k = self.order.remove(pos).expect("position 已校验");
+            self.order.push_front(k);
+        }
+        Some(entry)
+    }
+
     fn insert(&mut self, key: MetadataCacheKey, entry: MetadataCacheEntry) {
         if self.map.contains_key(&key) {
             self.map.insert(key.clone(), entry);
@@ -525,7 +582,7 @@ pub(crate) async fn extract_session_metadata_cached(
         }
     }
 
-    let (meta, messages_ongoing) = extract_session_metadata_with_ongoing(path).await;
+    let (meta, messages_ongoing) = extract_session_metadata_with_ongoing(fs, path).await;
 
     if let Some(sig) = new_sig {
         cache.lock().expect("metadata cache mutex poisoned").insert(
@@ -545,14 +602,16 @@ pub(crate) async fn extract_session_metadata_cached(
 
 /// 异步读 file mtime 并判定是否超过 stale 阈值。
 /// stat 失败时回退到 `false`（不强制 stale，保守保留 `messages_ongoing` 的判定）。
-pub async fn is_file_stale(path: &Path) -> bool {
-    let Ok(meta) = tokio::fs::metadata(path).await else {
+///
+/// 通过 `FileSystemProvider::stat` 走当前 active context 的 fs（Local / SSH）。
+/// 注：SSH context 下远端 mtime 与本机 `SystemTime::now()` 跨 clock domain，
+/// 不可比对——SSH callsite SHALL 通过外层 policy fork 跳过此判定（详 change
+/// `unify-fs-direct-calls` design D2 line 2171 + tasks 6.4 ADR）。
+pub async fn is_file_stale(fs: &dyn FileSystemProvider, path: &Path) -> bool {
+    let Ok(meta) = fs.stat(path).await else {
         return false;
     };
-    let Ok(modified) = meta.modified() else {
-        return false;
-    };
-    is_session_stale(modified, SystemTime::now())
+    is_session_stale(meta.mtime, SystemTime::now())
 }
 
 /// 纯函数版本：给定文件 mtime 与"当前时刻"判定 session 是否 stale。
