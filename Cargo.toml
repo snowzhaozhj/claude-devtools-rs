@@ -38,6 +38,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3"
+filetime = "0.2"
 dirs = "6"
 notify = "8"
 insta = { version = "1", features = ["yaml"] }

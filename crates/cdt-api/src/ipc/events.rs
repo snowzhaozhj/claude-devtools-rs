@@ -30,6 +30,10 @@ pub enum PushEvent {
         message_count: usize,
         is_ongoing: bool,
         git_branch: Option<String>,
+        /// 该 session 所属 `RepositoryGroup.id`（前端按 groupId 过滤 SSE，
+        /// change `simplify-repository-as-project::D7`）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group_id: Option<String>,
     },
 }
 
@@ -55,4 +59,11 @@ pub struct SessionMetadataUpdate {
     /// §"Expose git branch on session summary and metadata updates"。
     #[serde(default)]
     pub git_branch: Option<String>,
+    /// 该 session 所属 `RepositoryGroup.id`。前端按
+    /// `payload.groupId === selectedGroupId` 过滤 SSE event，避免切 group
+    /// 后被旧 group event 误 patch（change
+    /// `simplify-repository-as-project::D7`）。`list_repository_groups`
+    /// 未跑过时为 None；前端 fallback 用 `projectId` 当 groupId。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
 }

@@ -91,6 +91,7 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "is_running_under_rosetta",
     "list_repository_groups",
     "get_worktree_sessions",
+    "list_group_sessions",
     "list_wsl_distros",
     "http_server_start",
     "http_server_stop",
@@ -227,12 +228,13 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_44() {
+fn expected_tauri_commands_count_is_45() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        44,
+        45,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 44 个 Tauri command（含 SSH + server-mode）"
+         以及本文件常量；当前 src-tauri 注册 45 个 Tauri command（含 SSH + server-mode + \
+         simplify-repository-as-project change 加的 list_group_sessions）"
     );
 }
 
@@ -413,6 +415,8 @@ fn session_summary_serializes_camelcase_with_optional_title() {
         git_branch: Some("feat/x".into()),
         worktree_id: None,
         worktree_name: None,
+        group_id: None,
+        cwd_relative_to_repo_root: None,
         cwd: Some("/Users/foo/repo".into()),
     };
     let json = serde_json::to_value(&s).unwrap();
@@ -455,6 +459,7 @@ fn session_metadata_update_serializes_camelcase_with_git_branch() {
         message_count: 7,
         is_ongoing: true,
         git_branch: Some("feat/x".into()),
+        group_id: Some("group-1".into()),
     };
     let json = serde_json::to_value(&u).unwrap();
     assert_eq!(json["projectId"], json!("proj-1"));
@@ -2264,6 +2269,8 @@ async fn list_repository_groups_serializes_camelcase_when_non_empty() {
             name: "demo".into(),
             git_branch: Some("main".into()),
             is_main_worktree: true,
+            is_repo_root: true,
+            cwd_relative_to_repo_root: None,
             sessions: vec!["s-1".into()],
             created_at: Some(1),
             most_recent_session: Some(1_700_000_000),
@@ -2337,6 +2344,8 @@ async fn get_worktree_sessions_paginated_response_serializes_camelcase() {
             git_branch: None,
             worktree_id: Some("wt-1".into()),
             worktree_name: Some("main".into()),
+            group_id: Some("g-1".into()),
+            cwd_relative_to_repo_root: Some("crates".into()),
             cwd: None,
         }],
         next_cursor: Some("1".into()),
@@ -2366,6 +2375,8 @@ fn session_summary_skips_worktree_fields_when_none() {
         git_branch: None,
         worktree_id: None,
         worktree_name: None,
+        group_id: None,
+        cwd_relative_to_repo_root: None,
         cwd: None,
     };
     let json = serde_json::to_value(&s).unwrap();

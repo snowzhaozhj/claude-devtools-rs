@@ -69,6 +69,19 @@ pub struct RepositoryIdentity {
 }
 
 /// 一个 worktree —— 同一 `Project` 的 git 视图封装。
+///
+/// `is_main_worktree` 语义：`common-dir` 是主 `.git` 而非 linked worktree
+/// gitdir（用于 worktree 排序与同 main-tree 分组）；**不**等同于"该 path
+/// 自身是 working tree 根目录"——子目录 cwd walk-up 到主 `.git` 时
+/// `is_main_worktree=true` 但 `is_repo_root=false`。
+///
+/// `is_repo_root` 语义：`path` 自身就是主 working tree 的根目录，仅当
+/// walk-up 起点等于解析出的 repo root 时为 `true`。同一 group 内只应有
+/// 一个 worktree `is_repo_root=true`。
+///
+/// `cwd_relative_to_repo_root`：相对 repo 根的子路径（如 `crates`、
+/// `.claude/worktrees/feat-x`）。repo 根本身或解析失败时为 `None`；UI 用
+/// 作 chip / filter hint。change `simplify-repository-as-project`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Worktree {
@@ -77,6 +90,10 @@ pub struct Worktree {
     pub name: String,
     pub git_branch: Option<String>,
     pub is_main_worktree: bool,
+    #[serde(default)]
+    pub is_repo_root: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd_relative_to_repo_root: Option<String>,
     pub sessions: Vec<String>,
     pub created_at: Option<i64>,
     pub most_recent_session: Option<i64>,

@@ -40,7 +40,7 @@
   import { getSidebarCollapsed, toggleSidebarCollapsed } from "./lib/sidebarStore.svelte";
   import { attachExternalLinkInterceptor } from "./lib/externalLinks";
 
-  let selectedProjectId: string = $state("");
+  let selectedGroupId: string = $state("");
   let selectedProjectName: string = $state("");
   let commandPaletteOpen = $state(false);
   let unlistenNotif: UnlistenFn | null = null;
@@ -231,18 +231,26 @@
   const activeTab = $derived(getActiveTab());
 
   function selectProject(id: string, name: string) {
-    selectedProjectId = id;
+    selectedGroupId = id;
     selectedProjectName = name;
   }
 
-  function selectSession(sessionId: string, label: string, event: MouseEvent) {
+  function selectSession(
+    sessionId: string,
+    projectId: string,
+    groupId: string,
+    label: string,
+    event: MouseEvent,
+  ) {
     // Cmd/Ctrl + 点击翻转 sessionClickBehavior 默认（对齐 Chrome）
+    // 按 change `simplify-repository-as-project::D7` 双 id 分层：
+    // detail API 入参用 worktree id (projectId)；sidebar 高亮关联 group id。
     const forceNewTab = event.ctrlKey || event.metaKey;
     openSessionTab(
       sessionId,
-      selectedProjectId,
+      projectId,
       label || sessionId.slice(0, 12),
-      forceNewTab ? { forceNewTab: true } : undefined,
+      forceNewTab ? { forceNewTab: true, groupId } : { groupId },
     );
   }
 </script>
@@ -251,7 +259,7 @@
   <UnifiedTitleBar
     {projects}
     {repositoryGroups}
-    {selectedProjectId}
+    {selectedGroupId}
     projectsLoading={projectsLoading}
     onSelectProject={selectProject}
     rosettaVisible={rosettaWarningVisible}
@@ -261,7 +269,7 @@
          避免每次 toggle 都 destroy → ResizeObserver 重测量 → vlist 空→填充
          的视觉闪烁。展开/收起入口现在统一在 UnifiedTitleBar 折叠按钮。 -->
     <Sidebar
-      {selectedProjectId}
+      {selectedGroupId}
       activeSessionId={activeTab?.sessionId ?? null}
       collapsed={getSidebarCollapsed()}
       onSelectProject={selectProject}
@@ -269,8 +277,12 @@
     />
 
     <div class="main-area">
+      <!-- PaneContainer / CommandPalette 的 Props prop 名仍是 selectedProjectId
+           （per design D7：组件内部 detail API / per-project state 路径用
+           tab.projectId 即 worktree id；这里传 group id 作为"当前 group 视角"
+           显示标识，字符串值与单 worktree group 的 project id 字符串相同）。 -->
       <PaneContainer
-        {selectedProjectId}
+        selectedProjectId={selectedGroupId}
         onSelectProject={selectProject}
       />
     </div>
@@ -282,7 +294,7 @@
 
 {#if commandPaletteOpen}
   <CommandPalette
-    {selectedProjectId}
+    selectedProjectId={selectedGroupId}
     onSelectProject={selectProject}
     onClose={() => { commandPaletteOpen = false; }}
   />

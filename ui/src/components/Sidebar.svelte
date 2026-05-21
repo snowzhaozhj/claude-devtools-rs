@@ -1,20 +1,22 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
   import {
-    listSessions,
+    listGroupSessions,
     getSessionSummariesByIds,
     getProjectMemory,
     type ProjectInfo,
     type RepositoryGroup,
     type ProjectMemory,
+    type Worktree,
     type SessionSummary,
     type SessionMetadataUpdate,
-    type PaginatedResponse,
+    type GroupSessionPage,
   } from "../lib/api";
   import { loadProjectData } from "../lib/projectDataStore.svelte";
   import SessionContextMenu from "./SessionContextMenu.svelte";
   import OngoingIndicator from "./OngoingIndicator.svelte";
   import SkeletonList from "./SkeletonList.svelte";
+  import Dropdown from "../lib/components/Dropdown.svelte";
   import { openTab, openOrReplaceTab, openTabInNewPane, getPaneLayout, openMemoryTab } from "../lib/tabStore.svelte";
   import { MAX_PANES } from "../lib/paneTypes";
   import {
@@ -42,24 +44,31 @@
     setSessions as cacheSessions,
     applyMetadata as cacheApplyMetadata,
   } from "../lib/sessionListStore.svelte";
+  import { buildFilterCursor, sessionListCacheKey } from "../lib/groupCursor";
+  import { cwdRelativeHintLabel } from "../lib/cwdHint";
   import { MESSAGE_SQUARE, GIT_BRANCH_SVG, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
 
   // 虚拟滚动行高（实测 .session-item ≈ 44px：padding 8+8 + title 13×1.4 +
   // meta 11×1.4）；header 行高强制对齐 44 让单一 windowing 单元生效。
   const ITEM_HEIGHT = 44;
-  const SESSION_PAGE_SIZE = 20;
+  // change `simplify-repository-as-project::D3`：k-way merge 路径每页 50 条，
+  // 比单 worktree 的 20 略大——多 worktree group 合并后期望首屏 ~50 条覆盖
+  // 最常用的 "TODAY + YESTERDAY" 时间窗口。
+  const SESSION_PAGE_SIZE = 50;
   const HISTORY_SCROLL_THRESHOLD = ITEM_HEIGHT * 2;
+  const ALL_WORKTREES = "__all__";
 
   interface Props {
-    selectedProjectId: string;
+    /** App 顶层选中的项目入口 id —— `RepositoryGroup.id`（D7 rename）。 */
+    selectedGroupId: string;
     activeSessionId: string | null;
     collapsed?: boolean;
     onSelectProject: (id: string, name: string) => void;
-    onSelectSession: (sessionId: string, label: string, event: MouseEvent) => void;
+    onSelectSession: (sessionId: string, projectId: string, groupId: string, label: string, event: MouseEvent) => void;
   }
 
   let {
-    selectedProjectId,
+    selectedGroupId,
     activeSessionId,
     collapsed = false,
     onSelectProject,
@@ -70,8 +79,8 @@
   let repositoryGroups: RepositoryGroup[] = $state([]);
   let sessions: SessionSummary[] = $state([]);
   let projectMemory: ProjectMemory | null = $state(null);
-  // by-projectId memory cache：切 project 时同步 hydrate 让 memory-entry
-  // 显隐与 selectedProjectId 切换瞬时同步，避免等 async getProjectMemory
+  // by-worktree-id memory cache：切 group 时同步 hydrate 让 memory-entry
+  // 显隐与 selectedGroupId 切换瞬时同步，避免等 async getProjectMemory
   // return 期间 entry 闪现/消失引发 sidebar 顶部 layout shift。命中走 SWR：
   // 先 set 当前值同时后台 refresh；miss 走正常 fetch。
   const memoryCache = new Map<string, ProjectMemory | null>();
@@ -79,11 +88,12 @@
   let sessionsLoading = $state(false);
   let sessionsLoadingMore = $state(false);
   let sessionsNextCursor: string | null = $state(null);
-  // 后端 `list_sessions` 响应的 `result.total`：项目维度 read_dir 后的全部 session
-  // 数。spec `sidebar-navigation/spec.md::会话总数显示口径` 要求 `totalSessions`
-  // 取本字段，**而非** `sessions.length`，避免翻页累加 20 → 40 → 60 跳变。
-  // 切 project 时 reset 为 0；非 silent + silent 路径都覆盖；loadMore 翻页**不**改。
-  let sessionsTotal = $state(0);
+  // "可见 / 总" tooltip 右半的 "总"——取 `selectedGroup.totalSessions`
+  // （grouper 计算的整个 group 跨 worktree 的 session 总数）。
+  // 切 group / 切 worktree filter 时由 derived 自动更新，无需手动维护。
+  /** 当前 worktree filter（`ALL_WORKTREES` = "全部"；否则为 worktree.id）。
+   * session-scoped，切 group 时 reset 为 "全部"（不跨会话持久化）。 */
+  let worktreeFilter: string = $state(ALL_WORKTREES);
 
   // listener 收到 `session-metadata-update` 时若 `sessions` 数组还没扩展到对应
   // sessionId（典型 race：多 page 并存扫描 + 高速 broadcast emit + IPC return
@@ -154,15 +164,15 @@
       const result = await loadProjectData({ refresh: silent });
       repositoryGroups = result.repositoryGroups;
       projects = result.worktreeProjects;
-      const selectedExists = result.worktreeProjects.some((p) => p.id === selectedProjectId);
-      if (result.worktreeProjects.length > 0 && (!selectedProjectId || !selectedExists)) {
-        // 默认选中"最近活动 group 的 main worktree"（spec sidebar-navigation
-        // §"活跃 worktree 选中状态"）：repositoryGroups 已按 mostRecentSession
-        // 倒序，worktrees 已 main 优先排序——直接取第一个 group 的 [0]。
-        const first = result.repositoryGroups[0]?.worktrees?.[0];
-        if (first) {
-          onSelectProject(first.id, first.name);
-        } else {
+      // change `simplify-repository-as-project::D7`：顶层导航持 group id。
+      // 默认选中"最近活动 group"——`repositoryGroups` 已按 mostRecentSession 倒序。
+      const selectedExists = result.repositoryGroups.some((g) => g.id === selectedGroupId);
+      if (!selectedExists) {
+        const firstGroup = result.repositoryGroups[0];
+        if (firstGroup) {
+          onSelectProject(firstGroup.id, firstGroup.name);
+        } else if (result.worktreeProjects.length > 0) {
+          // fallback：listRepositoryGroups 返空时走老 listProjects 平铺路径
           onSelectProject(result.worktreeProjects[0].id, result.worktreeProjects[0].displayName);
         }
       }
@@ -171,6 +181,42 @@
     } finally {
       if (!silent) projectsLoading = false;
     }
+  }
+
+  /** 当前选中 group 的 worktrees（按 D1 排序：repo 根 → 主 worktree → mtime 倒序）。
+   * grouper 输出已按此排序，无需前端二次排序。 */
+  const selectedGroup = $derived(repositoryGroups.find((g) => g.id === selectedGroupId) ?? null);
+  const groupWorktrees: Worktree[] = $derived(selectedGroup?.worktrees ?? []);
+  const showWorktreeFilter = $derived(groupWorktrees.length > 1);
+
+  /** "锚点" worktree —— 优先 repo 根 → 主 worktree → 第一个，用于 Pin/Hide /
+   * Memory 等 per-project state 的 fallback projectId。 */
+  const anchorWorktreeId = $derived.by(() => {
+    if (groupWorktrees.length === 0) return selectedGroupId;
+    return (
+      groupWorktrees.find((w) => w.isRepoRoot)?.id
+      ?? groupWorktrees.find((w) => w.isMainWorktree)?.id
+      ?? groupWorktrees[0].id
+    );
+  });
+
+  /** 当前 sessions / context-menu 项查 Pin/Hide / Memory 状态的 projectId。
+   * 优先用 session 自带 `worktreeId`（IPC join 填），否则 fallback 到锚点 worktree。 */
+  function projectIdForSession(s: SessionSummary | null | undefined): string {
+    return s?.worktreeId ?? anchorWorktreeId;
+  }
+
+  function buildSessionListCacheKey(): string {
+    return sessionListCacheKey(
+      selectedGroupId,
+      worktreeFilter === ALL_WORKTREES ? null : worktreeFilter,
+    );
+  }
+
+  /** "全部" → null；具体 worktree → 构造 server-side filter cursor（D6）。 */
+  function initialFilterCursor(): string | null {
+    if (worktreeFilter === ALL_WORKTREES) return null;
+    return buildFilterCursor(groupWorktrees, worktreeFilter);
   }
 
   onMount(async () => {
@@ -188,10 +234,14 @@
       "session-metadata-update",
       (event) => {
         const payload = event.payload;
-        // 切 project 期间残留的旧 project 事件忽略
-        if (payload.projectId !== selectedProjectId) return;
+        // 切 group 期间残留的旧 group 事件忽略。D7：后端 `SessionMetadataUpdate`
+        // 新增 `groupId` 字段——优先按 groupId 匹配 selectedGroupId；缺省
+        // （未跑过 list_repository_groups）时 fallback 按 projectId 匹配
+        // selectedGroupId，单 worktree group 字符串相同仍能命中。
+        const eventGroupId = payload.groupId ?? payload.projectId;
+        if (eventGroupId !== selectedGroupId) return;
         // 始终先写 pending buffer（即使当前 sessions 已含此 sessionId 也覆盖，
-        // 让 update 是最终 source of truth）；buffer 在切 project / sessions 重置
+        // 让 update 是最终 source of truth）；buffer 在切 group / sessions 重置
         // 时清空，避免 stale。详见上方 `pendingMetadataUpdates` doc-comment。
         pendingMetadataUpdates.set(payload.sessionId, payload);
         sessions = sessions.map((s) =>
@@ -205,8 +255,10 @@
               }
             : s,
         );
-        // 同步写 store 缓存：下次切回该 project 时立即看到已 patch 的真值
-        cacheApplyMetadata(payload.projectId, payload);
+        // 同步写 store 缓存：下次切回该 group 时立即看到已 patch 的真值。
+        // cache key 走 `buildSessionListCacheKey()` 复合 (groupId + filter)
+        // 与 loadSessions / loadMore 写入路径对齐。
+        cacheApplyMetadata(buildSessionListCacheKey(), payload);
       },
     );
 
@@ -224,8 +276,8 @@
     // 路径报错，同时也省掉真桌面运行时无谓的 listen() 注册。
     if (!isTauriRuntime()) {
       const recoverHandler = () => {
-        const projectId = selectedProjectId;
-        if (!projectId) return;
+        const groupId = selectedGroupId;
+        if (!groupId) return;
         // 触发后端按**已加载范围**重新扫描，pageSize=sessions.length 让
         // 后端 `take(pagination.page_size)` 覆盖 page 1 + page 2+。两类
         // 真值都需要消费 response 写回：
@@ -249,11 +301,14 @@
         //   mergeSessions/applyPendingMetadata 写回——cache hit 真值从
         //   response 拿、cache miss 真值从 SSE patch 拿
         const pageSize = Math.max(sessions.length, SESSION_PAGE_SIZE);
+        const cacheKey = buildSessionListCacheKey();
         void (async () => {
           try {
-            const result = await listSessions(projectId, pageSize);
-            // race guard：异步完成时 user 可能已切到别的 project
-            if (projectId !== selectedProjectId) return;
+            // D6/D7：走 listGroupSessions + 当前 worktree filter 的初始 cursor
+            const result = await listGroupSessions(groupId, pageSize, initialFilterCursor());
+            // race guard：异步完成时 user 可能已切到别的 group / filter
+            if (groupId !== selectedGroupId) return;
+            if (cacheKey !== buildSessionListCacheKey()) return;
             // recovery 专用合并语义：response 真值（cache hit fast-path）
             // 优先覆盖 prev stale 真值，response 骨架则保留 prev 已 patched
             // 真值。常规 mergeSessions 用 mergeSilentMetadata 始终保留 prev
@@ -267,8 +322,8 @@
             // sessions 已含全部 sessionId（因为 pageSize=sessions.length），
             // listener 同时直接走 sessions.map in-place patch，buffer 兜底
             // 路径在 recovery 场景下无必要。
-            sessions = mergeRecoveryResponse(sessions, result.items);
-            cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);
+            sessions = mergeRecoveryResponse(sessions, result.sessions);
+            cacheSessions(cacheKey, sessions, sessionsNextCursor, totalSessions);
           } catch (e) {
             console.warn("[sidebar] sse-recovery rescan failed:", e);
           }
@@ -308,14 +363,14 @@
     const cached = memoryCache.get(projectId);
     if (cached !== undefined) {
       projectMemory = cached;
-      // SWR 后台 refresh 拉新值并写 cache；只有 selectedProjectId 仍是
+      // SWR 后台 refresh 拉新值并写 cache；只有 anchorWorktreeId 仍是
       // 当前 projectId 时才回写 projectMemory，避免覆盖用户期间已切换到
-      // 其它 project 的显示。
+      // 其它 group 的显示。
       void (async () => {
         try {
           const fresh = await getProjectMemory(projectId);
           memoryCache.set(projectId, fresh);
-          if (projectId === selectedProjectId) projectMemory = fresh;
+          if (projectId === anchorWorktreeId) projectMemory = fresh;
         } catch (e) {
           console.warn("Failed to refresh project memory:", e);
         }
@@ -325,43 +380,43 @@
     try {
       const memory = await getProjectMemory(projectId);
       memoryCache.set(projectId, memory);
-      if (projectId === selectedProjectId) projectMemory = memory;
+      if (projectId === anchorWorktreeId) projectMemory = memory;
     } catch (e) {
       console.warn("Failed to load project memory:", e);
-      if (projectId === selectedProjectId) projectMemory = null;
+      if (projectId === anchorWorktreeId) projectMemory = null;
     }
   }
 
-  async function loadSessions(projectId: string, silent = false) {
-    if (!projectId) {
+  async function loadSessions(groupId: string, silent = false) {
+    if (!groupId) {
       sessions = [];
       sessionsNextCursor = null;
-      sessionsTotal = 0;
       pendingMetadataUpdates.clear();
       return;
     }
-    // 非 silent 路径（切 project / 首次加载）：先查 sessionListStore 缓存；
+    const cacheKey = buildSessionListCacheKey();
+    const anchor = anchorWorktreeId;
+    // 非 silent 路径（切 group / 首次加载）：先查 sessionListStore 缓存；
     // 命中则立即 sync hydrate 三态（避免"加载中..."中间态），同时触发 silent
     // SWR refresh。详见 spec sidebar-navigation §"Sessions store
     // stale-while-revalidate 缓存"。
     if (!silent) {
-      const cached = readSessionListCache(projectId);
+      const cached = readSessionListCache(cacheKey);
       if (cached) {
-        // 切 project 的瞬间：buffer 也清掉（与下面 non-cached 分支同步行为），
-        // 旧 project 残留的 update 不应继承到新 project 显示。
+        // 切 group 的瞬间：buffer 也清掉（与下面 non-cached 分支同步行为），
+        // 旧 group 残留的 update 不应继承到新 group 显示。
         pendingMetadataUpdates.clear();
         sessions = cached.sessions;
         sessionsNextCursor = cached.nextCursor;
-        sessionsTotal = cached.total;
         sessionsLoading = false;
         // 后台 silent refresh 兜底拉最新；走原 silent merge 路径保留尾部
-        void loadSessions(projectId, true);
+        void loadSessions(groupId, true);
         return;
       }
     }
-    // 非 silent 路径（切 project / 首次加载）SHALL 在 await 之**前**清空 buffer：
-    // 后端 list_sessions 在 IPC return 之前已 spawn 扫描任务并可能 broadcast emit，
-    // listener 在 `await listSessions(...)` 阻塞期间收到的新 project update 必须
+    // 非 silent 路径（切 group / 首次加载）SHALL 在 await 之**前**清空 buffer：
+    // 后端 list_group_sessions 在 IPC return 之前已 spawn 扫描任务并可能 broadcast emit，
+    // listener 在 `await listGroupSessions(...)` 阻塞期间收到的新 group update 必须
     // 保留到 apply 时。clear 放 await 之后会把这些"早到的" update 一起清掉，
     // 正是 race buffer 想修的核心 bug（codex 二审第三轮找到，详见 commit 6833ba8
     // 之后的修订）。
@@ -370,72 +425,77 @@
       sessionsLoading = true;
     }
     try {
-      await loadProjectPrefs(projectId);
-      const result: PaginatedResponse<SessionSummary> = await listSessions(projectId, SESSION_PAGE_SIZE);
-      if (projectId !== selectedProjectId) return;
+      // pin/hide prefs 仍按 worktree 维度持久化——用 anchor worktree id 拉取
+      await loadProjectPrefs(anchor);
+      // D6/D7：走 listGroupSessions + 当前 worktree filter 的初始 cursor
+      const result: GroupSessionPage = await listGroupSessions(
+        groupId,
+        SESSION_PAGE_SIZE,
+        silent ? null : initialFilterCursor(),
+      );
+      if (groupId !== selectedGroupId) return;
       // silent 路径：合并到现有列表保留尾部 + 保留分页 cursor（避免 sessions 缩水
       // 与计数跳变，spec sidebar-navigation §"会话元数据增量 patch"）。非 silent：
       // 替换式加载第一页 + 取本次 cursor（buffer 在 await 前已清空，仅含 await
-      // 期间到达的新 project update）。
+      // 期间到达的新 group update）。
       let fresh: SessionSummary[];
       let nextCursor: string | null;
       if (silent) {
-        const merged = applySilentRefresh(sessions, sessionsNextCursor, result.items);
+        const merged = applySilentRefresh(sessions, sessionsNextCursor, result.sessions);
         fresh = merged.sessions;
         nextCursor = merged.nextCursor;
       } else {
-        fresh = result.items;
+        fresh = result.sessions;
         nextCursor = result.nextCursor;
       }
-      fresh = await reconcilePinnedAndHidden(projectId, fresh);
-      if (projectId !== selectedProjectId) return;
+      fresh = await reconcilePinnedAndHidden(anchor, fresh);
+      if (groupId !== selectedGroupId) return;
       // sessions 写入后立即把 pending buffer 中已存在的 sessionId 应用上去——
       // 兜底 broadcast 在 IPC return 之前到达时找不到目标的 race。
       sessions = applyPendingMetadata(fresh, pendingMetadataUpdates);
       sessionsNextCursor = nextCursor;
-      // spec sidebar-navigation §"会话总数显示口径"：silent / 非 silent 路径都用
-      // 后端 `result.total`（项目维度全量 session 计数）覆盖 `sessionsTotal`。
-      // loadMoreSessions 翻页路径**不**改 sessionsTotal。
-      sessionsTotal = result.total;
-      // 同步写 by-projectId 缓存供下次切回该 project 立即 hydrate
-      cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);
+      // 同步写 by-(groupId + filter) 缓存供下次切回立即 hydrate；total 取
+      // `selectedGroup.totalSessions`（derived `totalSessions`）让 cache 与 UI
+      // 显示口径一致。GroupSessionPage 无 `.total`，total 由 derived 维护。
+      cacheSessions(cacheKey, sessions, sessionsNextCursor, totalSessions);
       hasDeferredSessionRefresh = false;
       queueMicrotask(() => maybeLoadMoreSessions(true));
     } catch (e) {
       console.error("Failed to load sessions:", e);
-      if (!silent && projectId === selectedProjectId) {
+      if (!silent && groupId === selectedGroupId) {
         sessions = [];
         sessionsNextCursor = null;
-        sessionsTotal = 0;
         pendingMetadataUpdates.clear();
       }
     } finally {
-      if (!silent && projectId === selectedProjectId) sessionsLoading = false;
+      if (!silent && groupId === selectedGroupId) sessionsLoading = false;
     }
   }
 
   async function loadMoreSessions() {
-    const projectId = selectedProjectId;
+    const groupId = selectedGroupId;
     const cursor = sessionsNextCursor;
-    if (!projectId || !cursor || sessionsLoading || sessionsLoadingMore) return;
+    if (!groupId || !cursor || sessionsLoading || sessionsLoadingMore) return;
+    const cacheKey = buildSessionListCacheKey();
     sessionsLoadingMore = true;
     try {
-      const result = await listSessions(projectId, SESSION_PAGE_SIZE, cursor);
-      if (projectId !== selectedProjectId || cursor !== sessionsNextCursor) return;
+      const result = await listGroupSessions(groupId, SESSION_PAGE_SIZE, cursor);
+      if (groupId !== selectedGroupId || cursor !== sessionsNextCursor) return;
+      if (cacheKey !== buildSessionListCacheKey()) return;
       // 翻页扩展 sessions 后立即把 pending buffer 应用上去——broadcast 可能在
       // 这次 IPC return 之前已 emit 了新增 page 的 update，那些 update 此前
       // sessions.map 找不到目标被 buffer 截胡。
-      sessions = applyPendingMetadata(mergeSessions(sessions, result.items, false), pendingMetadataUpdates);
+      sessions = applyPendingMetadata(mergeSessions(sessions, result.sessions, false), pendingMetadataUpdates);
       sessionsNextCursor = result.nextCursor;
       // spec sidebar-navigation §"会话总数显示口径"：loadMore **不**改
-      // sessionsTotal——首次加载时已由 loadSessions 写入正确值；翻页累加期间
-      // total 不应变化。后续 silent 刷新会再用最新 result.total 覆盖。
+      // totalSessions——total 由 `selectedGroup.totalSessions` derived 维护，
+      // 翻页累加 sessions 不影响 group 总数。
       // 同步写 store 缓存（保留 total 不变，nextCursor 推进）
-      cacheSessions(projectId, sessions, sessionsNextCursor, sessionsTotal);
+      cacheSessions(cacheKey, sessions, sessionsNextCursor, totalSessions);
     } catch (e) {
       console.error("Failed to load more sessions:", e);
     } finally {
-      if (projectId === selectedProjectId) sessionsLoadingMore = false;
+      if (groupId === selectedGroupId) sessionsLoadingMore = false;
     }
   }
 
@@ -448,9 +508,9 @@
   }
 
   function refreshDeferredSessions() {
-    if (!selectedProjectId || !hasDeferredSessionRefresh) return;
+    if (!selectedGroupId || !hasDeferredSessionRefresh) return;
     hasDeferredSessionRefresh = false;
-    void loadSessions(selectedProjectId, true);
+    void loadSessions(selectedGroupId, true);
     // 滚到顶部展示新加载内容——deferred refresh 默认在用户向下浏览
     // 历史时被推迟（browsingHistory=true），按钮触发的意图就是"看新内容"，
     // 默认就把视图带回顶部，避免点完按钮看似无反应。
@@ -466,44 +526,64 @@
   }
 
   $effect(() => {
-    if (selectedProjectId) {
-      loadSessions(selectedProjectId);
-      void loadProjectMemory(selectedProjectId);
-      // 首次访问此 project 时从后端拉取 pin/hide 持久化状态（幂等）
-      void loadProjectPrefs(selectedProjectId);
+    if (selectedGroupId) {
+      // memory / pin/hide prefs 仍是 per-worktree 持久化——用 anchor worktree id
+      void loadProjectMemory(anchorWorktreeId);
+      // 首次访问此 group 的 anchor worktree 时从后端拉取 pin/hide 持久化状态（幂等）
+      void loadProjectPrefs(anchorWorktreeId);
     }
   });
 
-  // 切 project 自动清空 filter：filterQuery 是 project 维度的过滤，
-  // 在 A 项目输入 "fix" 后切到 B 项目时若不 reset，B 项目会卡在
-  // "无匹配会话" 的假空状态，需要用户额外手动清空 input 才能看到列表。
+  // 合并 (selectedGroupId, worktreeFilter) 驱动 loadSessions —— Svelte 5 在同
+  // microtask 内合并依赖变更，单次 effect 跑一次。切 group 时 reset filter
+  // 与 group 变更同时入栈，避免双触发（ui-reviewer 反馈 #3：原本 selectedGroupId
+  // effect + worktreeFilter effect 各调一次 IPC，浪费 1 个 list_group_sessions 调用）。
   $effect(() => {
-    selectedProjectId;
-    untrack(() => { filterQuery = ""; });
+    const gid = selectedGroupId;
+    worktreeFilter;
+    untrack(() => {
+      if (gid) void loadSessions(gid);
+    });
   });
 
-  // 注册 file-change handler；依赖 selectedProjectId，切 project 时
-  // 重新注册让闭包捕获最新值
+  // 切 group 自动清空 filter：filterQuery 是 group 维度的过滤，
+  // 在 A group 输入 "fix" 后切到 B group 时若不 reset，B group 会卡在
+  // "无匹配会话" 的假空状态，需要用户额外手动清空 input 才能看到列表。
+  // 切 group 时同时把 worktreeFilter 复位到"全部"，避免上一个 group 的
+  // worktree id 在新 group 不存在时 derived cursor 把所有 worktree 都标
+  // Exhausted 让列表空白。
   $effect(() => {
-    const currentProjectId = selectedProjectId;
+    selectedGroupId;
+    untrack(() => {
+      filterQuery = "";
+      worktreeFilter = ALL_WORKTREES;
+    });
+  });
+
+  // 注册 file-change handler；依赖 selectedGroupId / anchorWorktreeId，
+  // 切 group 时重新注册让闭包捕获最新值。file-change 事件按 worktree
+  // 触发（payload.projectId 是 worktree id），匹配 anchor 即视为本 group。
+  $effect(() => {
+    const currentGroupId = selectedGroupId;
+    const currentAnchor = anchorWorktreeId;
     registerHandler("sidebar", (payload) => {
       if (payload.projectListChanged) {
         scheduleRefresh("sidebar:projects", () =>
           untrack(() => loadProjects(true)),
         );
       }
-      if (!currentProjectId || payload.projectId !== currentProjectId || !payload.sessionId) return;
+      if (!currentGroupId || payload.projectId !== currentAnchor || !payload.sessionId) return;
       if (browsingHistory) {
         hasDeferredSessionRefresh = true;
         return;
       }
-      scheduleRefresh(`sidebar:${currentProjectId}`, () =>
-        untrack(() => loadSessions(currentProjectId, true)),
+      scheduleRefresh(`sidebar:${currentGroupId}`, () =>
+        untrack(() => loadSessions(currentGroupId, true)),
       );
     });
     return () => {
       unregisterHandler("sidebar");
-      if (currentProjectId) cancelScheduledRefresh(`sidebar:${currentProjectId}`);
+      if (currentGroupId) cancelScheduledRefresh(`sidebar:${currentGroupId}`);
       cancelScheduledRefresh("sidebar:projects");
     };
   });
@@ -574,20 +654,6 @@
     return s.title || s.sessionId.slice(0, 8);
   }
 
-  /**
-   * 把绝对 cwd 路径压缩为 sidebar 行内可读尾段：
-   * - `/Users/foo/repo/.claude/worktrees/feat-x` → `worktrees/feat-x`
-   * - `/Users/foo/repo` → `repo`
-   * - `/Users/foo/repo/packages/a` → `packages/a`
-   * 空路径返回空串，调用方通过 truthy 判断决定是否渲染。
-   */
-  function cwdTailLabel(cwd: string | undefined | null): string {
-    if (!cwd) return '';
-    const parts = cwd.split(/[/\\]/).filter(Boolean);
-    if (parts.length === 0) return '';
-    if (parts.length === 1) return parts[0];
-    return parts.slice(-2).join('/');
-  }
 
   // ---------------------------------------------------------------------------
   // Derived: filter → hide → pin split → group
@@ -601,23 +667,25 @@
 
   const visibleSessions = $derived.by(() => {
     if (getShowHidden()) return filteredSessions;
-    return filteredSessions.filter(s => !isHidden(selectedProjectId, s.sessionId));
+    return filteredSessions.filter(s => !isHidden(anchorWorktreeId, s.sessionId));
   });
 
   const pinnedSessions = $derived(
-    visibleSessions.filter(s => isPinned(selectedProjectId, s.sessionId))
+    visibleSessions.filter(s => isPinned(anchorWorktreeId, s.sessionId))
   );
 
   const unpinnedSessions = $derived(
-    visibleSessions.filter(s => !isPinned(selectedProjectId, s.sessionId))
+    visibleSessions.filter(s => !isPinned(anchorWorktreeId, s.sessionId))
   );
 
   const dateGroups = $derived(groupByDate(unpinnedSessions));
-  // 项目维度全量 session 计数。取后端 `list_sessions` 响应的 `result.total`
-  // （由 `sessionsTotal` 维护），非 `sessions.length`——后者会随 loadMore 累加
-  // 跳变。详见 spec `sidebar-navigation/spec.md::会话总数显示口径`。
-  const totalSessions = $derived(sessionsTotal);
-  const hiddenCount = $derived(getHiddenCount(selectedProjectId));
+  // Group 维度的全量 session 计数。`selectedGroup.totalSessions` 由 grouper
+  // 计算的整个 group 跨 worktree 的真值（spec sidebar-navigation §"会话总数
+  // 显示口径"）；fallback `sessions.length` 应对 selectedGroup 暂时为 null
+  // 的早期渲染窗口（loadProjects 未完成）。loadMore 累加 sessions 不影响
+  // total——derived 直接消费 group 维度计数。
+  const totalSessions = $derived(selectedGroup?.totalSessions ?? sessions.length);
+  const hiddenCount = $derived(getHiddenCount(anchorWorktreeId));
   const memoryCount = $derived.by(() => projectMemory ? projectMemory.count : 0);
   const sidebarWidth = $derived(getSidebarWidth());
 
@@ -662,10 +730,10 @@
   style:min-width="{collapsed ? 0 : sidebarWidth}px"
   aria-hidden={collapsed}
 >
-  {#if selectedProjectId && memoryCount > 0}
+  {#if selectedGroupId && memoryCount > 0}
     <button
       class="memory-entry"
-      onclick={() => openMemoryTab(selectedProjectId, "Memory")}
+      onclick={() => openMemoryTab(anchorWorktreeId, "Memory")}
     >
       <svg class="memory-entry-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         {@html BOOK_OPEN_TEXT_SVG}
@@ -675,12 +743,31 @@
   {/if}
 
   <!-- Session filter + count
-       始终在 selectedProjectId 存在时渲染（不再因 sessionsLoading 隐藏）：
+       始终在 selectedGroupId 存在时渲染（不再因 sessionsLoading 隐藏）：
        loading 期间整条 bar 隐藏会让下方 session-list 顶部上移约 40 px，
        IPC return 后重新出现 → 整个列表跳一下。SkeletonList 在 .session-list
        内承载 loading 视觉，filter-bar 保持 DOM 稳定不参与显隐。
        count span 在 sessionsLoading 时仍隐藏避免显 "0" 误导用户。 -->
-  {#if selectedProjectId}
+  {#if selectedGroupId}
+    {#if showWorktreeFilter}
+      <!-- 多 worktree group 顶部 worktree filter dropdown（D6）：值变化通过
+           $effect 触发 loadSessions 重拉，cursor 让非选 worktree Exhausted。
+           SHALL 走 `lib/components/Dropdown.svelte` size="sm"——ui/CLAUDE.md 硬约束：
+           原生 <select> 在 macOS WKWebView 会遮盖当前选值。 -->
+      <div class="worktree-filter-bar">
+        <Dropdown
+          size="sm"
+          minWidth={140}
+          ariaLabel="按 worktree 过滤会话"
+          value={worktreeFilter}
+          options={[
+            { value: ALL_WORKTREES, label: "全部 worktree" },
+            ...groupWorktrees.map((wt) => ({ value: wt.id, label: wt.name })),
+          ]}
+          onChange={(v) => (worktreeFilter = v)}
+        />
+      </div>
+    {/if}
     <div class="session-filter-bar">
       <input
         class="session-filter-input"
@@ -798,13 +885,14 @@
           </div>
         {:else}
           {@const session = item.session}
+          {@const sessionProjectId = session.worktreeId ?? selectedGroupId}
           <button
             class="session-item"
             class:session-item-active={session.sessionId === activeSessionId}
-            class:session-item-hidden={isHidden(selectedProjectId, session.sessionId)}
+            class:session-item-hidden={isHidden(sessionProjectId, session.sessionId)}
             class:metadata-pending={!session.title && session.messageCount === 0 && !session.isOngoing}
             style:height="{ITEM_HEIGHT}px"
-            onclick={(e) => onSelectSession(session.sessionId, sessionLabel(session), e)}
+            onclick={(e) => onSelectSession(session.sessionId, sessionProjectId, selectedGroupId, sessionLabel(session), e)}
             oncontextmenu={(e) => onContextMenu(e, session)}
           >
             <div class="session-title">
@@ -833,9 +921,9 @@
                   <span class="session-branch-name">{session.gitBranch}</span>
                 </span>
               {/if}
-              {#if session.cwd && cwdTailLabel(session.cwd)}
-                <span class="session-cwd" title={session.cwd}>
-                  {cwdTailLabel(session.cwd)}
+              {#if session.cwdRelativeToRepoRoot && cwdRelativeHintLabel(session.cwdRelativeToRepoRoot)}
+                <span class="session-path-chip" title={session.cwdRelativeToRepoRoot}>
+                  {cwdRelativeHintLabel(session.cwdRelativeToRepoRoot)}
                 </span>
               {/if}
             </div>
@@ -890,18 +978,19 @@
 {#if ctxMenu}
   {@const ctx = ctxMenu}
   {@const canSplit = getPaneLayout().panes.length < MAX_PANES}
+  {@const sessionProjectId = ctx.session.worktreeId ?? selectedGroupId}
   <SessionContextMenu
     x={ctx.x}
     y={ctx.y}
     sessionId={ctx.session.sessionId}
-    isPinned={isPinned(selectedProjectId, ctx.session.sessionId)}
-    isHidden={isHidden(selectedProjectId, ctx.session.sessionId)}
+    isPinned={isPinned(sessionProjectId, ctx.session.sessionId)}
+    isHidden={isHidden(sessionProjectId, ctx.session.sessionId)}
     {canSplit}
-    onOpenInCurrentTab={() => openOrReplaceTab(ctx.session.sessionId, selectedProjectId, sessionLabel(ctx.session))}
-    onOpenInNewTab={() => openTab(ctx.session.sessionId, selectedProjectId, sessionLabel(ctx.session))}
-    onOpenInNewPane={() => openTabInNewPane(ctx.session.sessionId, selectedProjectId, sessionLabel(ctx.session))}
-    onTogglePin={() => togglePin(selectedProjectId, ctx.session.sessionId)}
-    onToggleHide={() => toggleHide(selectedProjectId, ctx.session.sessionId)}
+    onOpenInCurrentTab={() => openOrReplaceTab(ctx.session.sessionId, sessionProjectId, sessionLabel(ctx.session))}
+    onOpenInNewTab={() => openTab(ctx.session.sessionId, sessionProjectId, sessionLabel(ctx.session))}
+    onOpenInNewPane={() => openTabInNewPane(ctx.session.sessionId, sessionProjectId, sessionLabel(ctx.session))}
+    onTogglePin={() => togglePin(sessionProjectId, ctx.session.sessionId)}
+    onToggleHide={() => toggleHide(sessionProjectId, ctx.session.sessionId)}
     onClose={() => { ctxMenu = null; }}
   />
 {/if}
@@ -984,6 +1073,15 @@
     height: 16px;
     flex-shrink: 0;
     color: var(--color-text-muted);
+  }
+
+  /* 多 worktree group filter dropdown 容器：跟 .session-filter-bar 视觉同
+     行级，padding 与之对齐；底部不留分隔线，避免与下方 session-filter-bar 之
+     间出现双线，跟右侧 TabBar 横线对不齐。Dropdown anchor 自带边框 / 高度。 */
+  .worktree-filter-bar {
+    display: flex;
+    align-items: center;
+    padding: 6px 12px 0;
   }
 
   .session-filter-bar {
@@ -1367,10 +1465,11 @@
     white-space: nowrap;
   }
 
-  /* cwd 尾段标签：同 project 下不同 cwd（worktree / monorepo 子目录）的
-     session 通过此 chip 区分；与 session-branch 同等级，但用更弱的视觉
-     权重（无图标 + 略小字号），避免主信息行变拥挤。 */
-  .session-cwd {
+  /* cwd hint chip：同 group 内不同 worktree / monorepo 子目录的 session
+     通过此 chip 区分；与 session-branch 同等级，但用更弱视觉权重（无图标 +
+     略低不透明度），避免主信息行变拥挤。spec `Session row branch + cwd
+     chip` 取 cwd_relative_to_repo_root 最后两段。 */
+  .session-path-chip {
     display: inline-flex;
     align-items: center;
     font-size: 10px;

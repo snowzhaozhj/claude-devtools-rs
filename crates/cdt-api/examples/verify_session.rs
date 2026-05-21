@@ -3,6 +3,7 @@ use cdt_config::{ConfigManager, NotificationManager};
 use cdt_discover::{ProjectScanner, local_handle, path_decoder};
 use cdt_ssh::SshConnectionManager;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 #[tokio::main]
 async fn main() {
@@ -12,7 +13,10 @@ async fn main() {
     let _ = notif_mgr.load().await;
     let fs = local_handle();
     let projects_dir = path_decoder::get_projects_base_path();
-    let scanner = ProjectScanner::new(fs, projects_dir);
+    // change `simplify-repository-as-project::D4`：non-test 调用走
+    // `new_with_semaphore`（spec 约束），example 也遵循以让 build-time grep 收敛。
+    let scanner_semaphore = Arc::new(Semaphore::new(64));
+    let scanner = ProjectScanner::new_with_semaphore(fs, projects_dir, scanner_semaphore);
     let ssh_mgr = SshConnectionManager::new();
     let api = Arc::new(LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr));
 

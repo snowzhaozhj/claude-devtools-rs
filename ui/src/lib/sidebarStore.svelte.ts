@@ -177,40 +177,9 @@ export function getHiddenCount(projectId: string): number {
   return (hiddenByProject[projectId] ?? []).length;
 }
 
-// ---------------------------------------------------------------------------
-// Repository group 折叠/展开（内存级）
+// Repository group accordion 已在 change `simplify-repository-as-project::D5`
+// 删除——多 worktree group 在 ProjectSwitcher 内单行渲染（点击即选中整个 group），
+// worktree 维度的细化下沉到 sidebar 顶部 worktree filter（D6）。
 //
-// 详见 openspec/specs/sidebar-navigation/spec.md §"默认渲染按仓库聚合的
-// Sidebar"。仅活跃会话生效，不跨会话持久化（同 Pin/Hide 模式）。
-// ---------------------------------------------------------------------------
-
-let expandedGroupIds: Set<string> = $state(new Set());
-
-export function isGroupExpanded(groupId: string): boolean {
-  return expandedGroupIds.has(groupId);
-}
-
-export function toggleGroupExpanded(groupId: string): void {
-  const next = new Set(expandedGroupIds);
-  if (next.has(groupId)) {
-    next.delete(groupId);
-  } else {
-    next.add(groupId);
-  }
-  expandedGroupIds = next;
-}
-
-export function setGroupExpanded(groupId: string, expanded: boolean): void {
-  if (expandedGroupIds.has(groupId) === expanded) return;
-  const next = new Set(expandedGroupIds);
-  if (expanded) {
-    next.add(groupId);
-  } else {
-    next.delete(groupId);
-  }
-  expandedGroupIds = next;
-}
-
-export function getExpandedGroupIds(): ReadonlySet<string> {
-  return expandedGroupIds;
-}
+// 历史 `expandedGroupIds` / `isGroupExpanded` / `toggleGroupExpanded` /
+// `setGroupExpanded` / `getExpandedGroupIds` API 已移除。

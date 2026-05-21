@@ -26,7 +26,20 @@ export interface Tab {
   id: string;
   type: TabType;
   sessionId: string;
+  /**
+   * Detail / per-project state 链路用 worktree id（即底层 `Project.id`）。
+   * `getSessionDetail(projectId, sessionId)` / `getToolOutput` /
+   * `getImageAsset` / `getSubagentTrace` 都按此字段定位。change
+   * `simplify-repository-as-project::D7`。
+   */
   projectId: string;
+  /**
+   * Sidebar 顶层选中 `RepositoryGroup.id`，供 sidebar 高亮"该 tab 属于哪个
+   * group"。`get_session_detail` 等链路**不**消费此字段。单 worktree group 时
+   * 与 `projectId` 字符串相同（grouper standalone 场景）。change
+   * `simplify-repository-as-project::D7`。
+   */
+  groupId: string;
   label: string;
   createdAt: number;
 }
@@ -164,20 +177,23 @@ export function openSessionTab(
   sessionId: string,
   projectId: string,
   label: string,
-  opts?: { forceNewTab?: boolean; forceReplace?: boolean },
+  opts?: { forceNewTab?: boolean; forceReplace?: boolean; groupId?: string },
 ): void {
+  // 兼容：未传 groupId 时退化等于 projectId（单 worktree group 场景，二者
+  // 字符串本就相同；多 worktree 老 caller 没传时 sidebar 高亮可能漂移到组上）。
+  const groupId = opts?.groupId ?? projectId;
   if (opts?.forceNewTab) {
-    openTab(sessionId, projectId, label);
+    openTab(sessionId, projectId, label, groupId);
     return;
   }
   if (opts?.forceReplace) {
-    openOrReplaceTab(sessionId, projectId, label);
+    openOrReplaceTab(sessionId, projectId, label, groupId);
     return;
   }
   if (sessionClickBehavior === "replace") {
-    openOrReplaceTab(sessionId, projectId, label);
+    openOrReplaceTab(sessionId, projectId, label, groupId);
   } else {
-    openTab(sessionId, projectId, label);
+    openTab(sessionId, projectId, label, groupId);
   }
 }
 
@@ -263,6 +279,7 @@ export function openTab(
   sessionId: string,
   projectId: string,
   label: string,
+  groupId?: string,
 ): void {
   // 若 session 已在任意 pane 打开 → focus 该 pane + 激活 tab
   for (const pane of paneLayout.panes) {
@@ -283,6 +300,7 @@ export function openTab(
     type: "session",
     sessionId,
     projectId,
+    groupId: groupId ?? projectId,
     label: shortLabel(label),
     createdAt: Date.now(),
   };
@@ -306,6 +324,7 @@ export function openOrReplaceTab(
   sessionId: string,
   projectId: string,
   label: string,
+  groupId?: string,
 ): void {
   for (const pane of paneLayout.panes) {
     const existing = pane.tabs.find(
@@ -333,6 +352,7 @@ export function openOrReplaceTab(
       ...activeTab,
       sessionId,
       projectId,
+      groupId: groupId ?? projectId,
       label: shortLabel(label),
       createdAt: Date.now(),
     };
@@ -343,7 +363,7 @@ export function openOrReplaceTab(
     return;
   }
 
-  openTab(sessionId, projectId, label);
+  openTab(sessionId, projectId, label, groupId);
 }
 
 function openSingletonTab(type: "settings" | "notifications", label: string): void {
@@ -363,6 +383,7 @@ function openSingletonTab(type: "settings" | "notifications", label: string): vo
     type,
     sessionId: "",
     projectId: "",
+    groupId: "",
     label,
     createdAt: Date.now(),
   };
@@ -400,6 +421,7 @@ export function openMemoryTab(projectId: string, label = "Memory"): void {
     type: "memory",
     sessionId: "",
     projectId,
+    groupId: projectId,
     label: shortLabel(label),
     createdAt: Date.now(),
   };
@@ -420,6 +442,7 @@ export function openTabInNewPane(
   sessionId: string,
   projectId: string,
   label: string,
+  groupId?: string,
 ): void {
   if (paneLayout.panes.length >= MAX_PANES) return;
 
@@ -428,6 +451,7 @@ export function openTabInNewPane(
     type: "session",
     sessionId,
     projectId,
+    groupId: groupId ?? projectId,
     label: shortLabel(label),
     createdAt: Date.now(),
   };

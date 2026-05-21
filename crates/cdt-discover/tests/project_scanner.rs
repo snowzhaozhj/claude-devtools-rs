@@ -374,3 +374,68 @@ async fn decode_path_fallback_used_when_no_cwd_in_sessions() {
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].path, PathBuf::from("/Users/alice/blank"));
 }
+
+/// spec project-discovery §"Expose session cwd for downstream display"
+/// Scenario "缺 cwd session 暴露 None"：jsonl 不含任何 cwd 字段时
+/// `Session.cwd` SHALL 为 `None`，且 IPC 序列化 SHALL 省略 `cwd` 键。
+#[tokio::test]
+async fn list_sessions_returns_none_cwd_when_jsonl_lacks_cwd_field() {
+    let root = tempfile::tempdir().unwrap();
+    let projects_dir = root.path().join("projects");
+    let proj = projects_dir.join("-tmp-no-cwd");
+    tokio::fs::create_dir_all(&proj).await.unwrap();
+
+    // 不含 cwd 字段的 jsonl —— 单一 user 消息，仅 type / uuid / timestamp / message。
+    let line = r#"{"type":"user","uuid":"no-cwd","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}"#;
+    tokio::fs::write(proj.join("s1.jsonl"), format!("{line}\n"))
+        .await
+        .unwrap();
+
+    let fs: Arc<dyn FileSystemProvider> = Arc::new(LocalFileSystemProvider::new());
+    let scanner = ProjectScanner::new(fs, projects_dir);
+    let pinned = BTreeSet::new();
+    let sessions = scanner.list_sessions("-tmp-no-cwd", &pinned).await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert!(
+        sessions[0].cwd.is_none(),
+        "缺 cwd session SHALL 让 Session.cwd 为 None，得到 {:?}",
+        sessions[0].cwd
+    );
+
+    let json = serde_json::to_value(&sessions[0]).unwrap();
+    assert!(
+        json.get("cwd").is_none(),
+        "Session.cwd = None 时 SHALL 省略 cwd 键，得到 {json}"
+    );
+}
+
+/// spec project-discovery §"Expose session cwd for downstream display"
+/// Scenario "`cdt-core::Session` 不含 `cwd_relative_to_repo_root`"——
+/// 该派生字段由 `Worktree` 持有，scanner 阶段不重走 repo 解析。
+#[test]
+fn cdt_core_session_does_not_have_cwd_relative_to_repo_root_field() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("cdt-core")
+        .join("src")
+        .join("project.rs");
+    let body = std::fs::read_to_string(&path).expect("cdt-core/src/project.rs SHALL exist");
+
+    // 简单扫描 Session struct block 内字段名——区分 Worktree（允许含该字段）。
+    let session_idx = body
+        .find("pub struct Session ")
+        .or_else(|| body.find("pub struct Session{"))
+        .expect("`pub struct Session` SHALL exist in cdt-core/src/project.rs");
+    let rest = &body[session_idx..];
+    // 找到该 struct 结束的右括号（粗略截到下一个 `}` 行首）。
+    let end = rest.find("\n}").map_or(body.len(), |i| session_idx + i);
+    let session_block = &body[session_idx..end];
+
+    assert!(
+        !session_block.contains("cwd_relative_to_repo_root"),
+        "cdt-core::Session SHALL NOT contain field `cwd_relative_to_repo_root` \
+         (it belongs to Worktree); spec project-discovery `Expose session cwd` Scenario \
+         #5. block:\n{session_block}"
+    );
+}

@@ -490,6 +490,21 @@ async fn get_worktree_sessions(
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn list_group_sessions(
+    data: State<'_, AppData>,
+    group_id: String,
+    page_size: Option<usize>,
+    cursor: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let result = data
+        .api
+        .list_group_sessions(&group_id, page_size.unwrap_or(50), cursor.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&result).map_err(|e| e.to_string())
+}
+
 // =============================================================================
 // WSL Distro Discovery (Windows 平台)
 // =============================================================================
@@ -1089,6 +1104,7 @@ pub fn run() {
             is_running_under_rosetta,
             list_repository_groups,
             get_worktree_sessions,
+            list_group_sessions,
             list_wsl_distros,
             http_server_start,
             http_server_stop,

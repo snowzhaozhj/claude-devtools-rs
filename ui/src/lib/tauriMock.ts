@@ -63,6 +63,7 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'is_running_under_rosetta',
   'list_repository_groups',
   'get_worktree_sessions',
+  'list_group_sessions',
   'list_wsl_distros',
   'http_server_start',
   'http_server_stop',

@@ -47,16 +47,32 @@ export interface SessionSummary {
    */
   gitBranch: string | null;
   /**
-   * 当 session 来自 `getWorktreeSessions(groupId)` 路径时，记录归属 worktree
-   * 的 project id。`listSessions(projectId)` 路径下 SHALL 为 undefined。
+   * 当 session 属于某 `RepositoryGroup` 内的 worktree 时，记录 worktree 的
+   * project id（与 `Worktree.id == Project.id` 一致）。`list_repository_groups`
+   * 未跑过时 fallback 为 `projectId`（IPC handler join 缓存未填）。
+   * change `simplify-repository-as-project::D2/D7`。
    */
   worktreeId?: string;
+  /** 同 `worktreeId`，记录 worktree 的人类展示名（`Worktree.name`）。 */
   worktreeName?: string;
   /**
+   * 该 session 所属 `RepositoryGroup.id`，让前端按 group 维度过滤 SSE event /
+   * cache key。`list_repository_groups` 未跑过时 fallback 为 `projectId`。
+   * change `simplify-repository-as-project::D7`。
+   */
+  groupId?: string;
+  /**
+   * 该 session 所属 `Worktree.cwd_relative_to_repo_root`（如 `crates`、
+   * `.claude/worktrees/feat-x`）。repo 根本身或解析失败时省略。
+   * 由 IPC handler 通过 `worktree_meta_cache` join 填入（scheme c）。
+   * change `simplify-repository-as-project::D2`。
+   */
+  cwdRelativeToRepoRoot?: string;
+  /**
    * session jsonl 首条带 `cwd` 字段消息的 `cwd` 值；缺失时省略。
-   * 由后端 `ProjectScanner` 通过 head-read 填充，让 sidebar 在同一 project
-   * 下区分不同 cwd 的 session（典型场景：worktree / monorepo 子目录）。
-   * 详见 `openspec/specs/ipc-data-api/spec.md` §"Session 列表序列化暴露 cwd 字段"。
+   * 由后端 `ProjectScanner` 通过 head-read 填充。Sidebar 行尾不再展示该字段
+   * （change `simplify-repository-as-project::D8` 已切换到 cwd hint chip），
+   * SessionDetail 顶部 badge 仍消费。
    */
   cwd?: string;
 }
@@ -72,6 +88,13 @@ export interface SessionMetadataUpdate {
   messageCount: number;
   isOngoing: boolean;
   gitBranch: string | null;
+  /**
+   * 该 session 所属 `RepositoryGroup.id`。前端按此字段匹配 `selectedGroupId`
+   * 过滤 SSE event；`projectId` 仍保留供 detail / cache 路径用。
+   * `list_repository_groups` 未跑过时缺省，前端 fallback 到 `projectId` 匹配。
+   * change `simplify-repository-as-project::D7`。
+   */
+  groupId?: string;
 }
 
 export interface PaginatedResponse<T> {
@@ -410,6 +433,19 @@ export interface Worktree {
   name: string;
   gitBranch: string | null;
   isMainWorktree: boolean;
+  /**
+   * true 时表示该 worktree 的 cwd 即 git repo 根（且为主 working tree）。
+   * 与 `isMainWorktree` 区分："主 .git common-dir" vs "working tree 根"；
+   * 主仓子目录（如 `<repo>/crates`）`isMainWorktree=true` 但 `isRepoRoot=false`。
+   * change `simplify-repository-as-project::D1`。
+   */
+  isRepoRoot?: boolean;
+  /**
+   * worktree cwd 相对 repo 根的子路径（如 `crates`、`.claude/worktrees/feat-x`）。
+   * repo 根本身或解析失败时省略。grouper 内部纯字符串运算，0 syscall。
+   * change `simplify-repository-as-project::D2`。
+   */
+  cwdRelativeToRepoRoot?: string;
   sessions: string[];
   createdAt: number | null;
   mostRecentSession: number | null;
@@ -433,6 +469,37 @@ export async function listProjects(): Promise<ProjectInfo[]> {
 
 export async function listRepositoryGroups(): Promise<RepositoryGroup[]> {
   return await invoke("list_repository_groups");
+}
+
+/**
+ * k-way merge group-session 分页响应。Server 无状态——`nextCursor` 是
+ * base64(JSON) 自描述每个 worktree 的指针位置。`null` 表示所有 worktree
+ * 流已耗尽。change `simplify-repository-as-project::D3`。
+ */
+export interface GroupSessionPage {
+  sessions: SessionSummary[];
+  nextCursor: string | null;
+}
+
+/**
+ * 取得 group 内 N 个 worktree 合并后的 session 列表，按 `(mtime desc, sid asc)`
+ * 全序输出 `pageSize` 条，cursor 自描述续页位点。worktree filter 通过构造
+ * 初始 cursor（让非选 worktree 标 `Exhausted`）在 server 端表达，前端无需
+ * 任何客户端过滤。
+ *
+ * Spec: `openspec/specs/ipc-data-api/spec.md` §"Expose group session listing
+ * via k-way merge pagination"。
+ */
+export async function listGroupSessions(
+  groupId: string,
+  pageSize: number = 50,
+  cursor?: string | null,
+): Promise<GroupSessionPage> {
+  return await invoke("list_group_sessions", {
+    groupId,
+    pageSize,
+    cursor: cursor ?? null,
+  });
 }
 
 export interface WslDistroCandidate {

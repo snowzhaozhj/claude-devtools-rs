@@ -1,20 +1,17 @@
 <script lang="ts">
-  import type { ProjectInfo, RepositoryGroup, Worktree } from "../lib/api";
-  import {
-    CHEVRON_DOWN,
-    CHECK_SVG,
-    GIT_BRANCH_SVG,
-  } from "../lib/icons";
-  import {
-    isGroupExpanded,
-    toggleGroupExpanded,
-    setGroupExpanded,
-  } from "../lib/sidebarStore.svelte";
+  import type { ProjectInfo, RepositoryGroup } from "../lib/api";
+  import { CHEVRON_DOWN, CHECK_SVG } from "../lib/icons";
 
   interface Props {
     projects: ProjectInfo[];
     repositoryGroups?: RepositoryGroup[];
-    selectedProjectId: string;
+    /**
+     * App 顶层选中的项目入口 id —— 等于 `RepositoryGroup.id`（change
+     * `simplify-repository-as-project::D7`：rename `selectedProjectId` →
+     * `selectedGroupId`）。单 worktree group 时 group.id 与 worktree.id 字符串
+     * 相同（grouper standalone 场景），单 project 用户无感知。
+     */
+    selectedGroupId: string;
     onSelectProject: (id: string, name: string) => void;
     /** projectDataStore 首次 fetch 时为 true；为 true 且无 projects 时显示
      *  "加载中…" 而非 "无项目"，避免视觉闪烁（codex PR #140 二审 #7） */
@@ -24,26 +21,12 @@
   let {
     projects,
     repositoryGroups = [],
-    selectedProjectId,
+    selectedGroupId,
     onSelectProject,
     loading = false,
   }: Props = $props();
 
   let dropdownOpen = $state(false);
-  let lastDropdownOpen = $state(false);
-  $effect(() => {
-    if (dropdownOpen && !lastDropdownOpen) {
-      for (const g of repositoryGroups) {
-        if (
-          g.worktrees.length > 1 &&
-          g.worktrees.some((w) => w.id === selectedProjectId)
-        ) {
-          setGroupExpanded(g.id, true);
-        }
-      }
-    }
-    lastDropdownOpen = dropdownOpen;
-  });
 
   function toggleDropdown() {
     dropdownOpen = !dropdownOpen;
@@ -54,8 +37,8 @@
     dropdownOpen = false;
   }
 
-  function selectWorktree(wt: Worktree) {
-    onSelectProject(wt.id, wt.name);
+  function selectGroup(group: RepositoryGroup) {
+    onSelectProject(group.id, group.name);
     dropdownOpen = false;
   }
 
@@ -64,14 +47,9 @@
   }
 
   const selectedName = $derived.by(() => {
-    for (const g of repositoryGroups) {
-      const wt = g.worktrees.find((w) => w.id === selectedProjectId);
-      if (wt) {
-        if (g.worktrees.length <= 1 || wt.isMainWorktree) return g.name;
-        return `${g.name} · ${wt.name}`;
-      }
-    }
-    return projects.find((p) => p.id === selectedProjectId)?.displayName ?? "选择项目";
+    const g = repositoryGroups.find((g) => g.id === selectedGroupId);
+    if (g) return g.name;
+    return projects.find((p) => p.id === selectedGroupId)?.displayName ?? "选择项目";
   });
 
   const useGroupedView = $derived(repositoryGroups.length > 0);
@@ -113,83 +91,35 @@
       <div class="dropdown-title">切换项目</div>
 
       {#if useGroupedView}
+        <!-- change `simplify-repository-as-project::D5`：多 / 单 worktree group
+             走同一渲染分支——同 git repo 占一行，点击即选中整个 group；不再渲染
+             accordion / chevron / worktree count badge / 展开后的 worktree 子列表。
+             worktree 维度的细化由 sidebar 顶部 worktree filter 提供（D6）。 -->
         {#each repositoryGroups as group (group.id)}
-          {#if group.worktrees.length === 1}
-            {@const wt = group.worktrees[0]}
-            {@const isActive = wt.id === selectedProjectId}
-            <button
-              class="dropdown-item"
-              class:dropdown-item-active={isActive}
-              onclick={() => selectWorktree(wt)}
-            >
-              <div class="dropdown-item-info">
-                <span class="dropdown-item-name" class:dropdown-item-name-active={isActive}>{group.name}</span>
-                <span class="dropdown-item-path">{formatPath(wt.path)}</span>
-              </div>
-              <span class="dropdown-item-count">{group.totalSessions}</span>
-              {#if isActive}
-                <svg class="dropdown-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  {@html CHECK_SVG}
-                </svg>
+          {@const isActive = group.id === selectedGroupId}
+          {@const anchor = group.worktrees[0]}
+          <button
+            class="dropdown-item"
+            class:dropdown-item-active={isActive}
+            onclick={() => selectGroup(group)}
+          >
+            <div class="dropdown-item-info">
+              <span class="dropdown-item-name" class:dropdown-item-name-active={isActive}>{group.name}</span>
+              {#if anchor}
+                <span class="dropdown-item-path">{formatPath(anchor.path)}</span>
               {/if}
-            </button>
-          {:else}
-            {@const expanded = isGroupExpanded(group.id)}
-            {@const hasActive = group.worktrees.some((w) => w.id === selectedProjectId)}
-            <button
-              class="dropdown-group-row"
-              class:dropdown-group-row-active={hasActive}
-              onclick={() => toggleGroupExpanded(group.id)}
-              aria-expanded={expanded}
-            >
-              <span class="dropdown-group-chevron" class:dropdown-group-chevron-open={expanded}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d={CHEVRON_DOWN} />
-                </svg>
-              </span>
-              <div class="dropdown-item-info">
-                <span class="dropdown-item-name" class:dropdown-item-name-active={hasActive}>{group.name}</span>
-              </div>
-              <span class="dropdown-group-badge" title="worktree 数量">{group.worktrees.length}</span>
-              <span class="dropdown-item-count">{group.totalSessions}</span>
-            </button>
-
-            {#if expanded}
-              {#each group.worktrees as wt (wt.id)}
-                {@const isActive = wt.id === selectedProjectId}
-                <button
-                  class="dropdown-item dropdown-item-worktree"
-                  class:dropdown-item-active={isActive}
-                  onclick={() => selectWorktree(wt)}
-                >
-                  <div class="dropdown-item-info">
-                    <span class="dropdown-item-name" class:dropdown-item-name-active={isActive}>
-                      {wt.isMainWorktree ? "main" : wt.name}
-                    </span>
-                    <span class="dropdown-item-path">{formatPath(wt.path)}</span>
-                  </div>
-                  {#if wt.gitBranch}
-                    <span class="dropdown-item-branch" title={wt.gitBranch}>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        {@html GIT_BRANCH_SVG}
-                      </svg>
-                      <span class="dropdown-item-branch-text">{wt.gitBranch}</span>
-                    </span>
-                  {/if}
-                  <span class="dropdown-item-count">{wt.sessions.length}</span>
-                  {#if isActive}
-                    <svg class="dropdown-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      {@html CHECK_SVG}
-                    </svg>
-                  {/if}
-                </button>
-              {/each}
+            </div>
+            <span class="dropdown-item-count">{group.totalSessions}</span>
+            {#if isActive}
+              <svg class="dropdown-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                {@html CHECK_SVG}
+              </svg>
             {/if}
-          {/if}
+          </button>
         {/each}
       {:else}
         {#each projects as project (project.id)}
-          {@const isActive = project.id === selectedProjectId}
+          {@const isActive = project.id === selectedGroupId}
           <button
             class="dropdown-item"
             class:dropdown-item-active={isActive}
@@ -392,87 +322,5 @@
     text-align: center;
     color: var(--color-text-muted);
     font-size: 13px;
-  }
-
-  .dropdown-group-row {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    padding: 6px 8px;
-    background: none;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    text-align: left;
-    font: inherit;
-    color: var(--color-text);
-    transition: background 0.1s;
-  }
-
-  .dropdown-group-row:hover {
-    background: var(--tool-item-hover-bg);
-  }
-
-  .dropdown-group-row-active {
-    background: var(--color-surface-raised);
-  }
-
-  .dropdown-group-chevron {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 14px;
-    height: 14px;
-    color: var(--color-text-muted);
-    transition: transform 0.15s ease;
-  }
-
-  .dropdown-group-chevron svg {
-    width: 14px;
-    height: 14px;
-    transform: rotate(-90deg);
-    transition: transform 0.15s ease;
-  }
-
-  .dropdown-group-chevron-open svg {
-    transform: rotate(0deg);
-  }
-
-  .dropdown-group-badge {
-    flex-shrink: 0;
-    padding: 1px 6px;
-    border-radius: 8px;
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    color: var(--color-text-muted);
-    background: var(--color-surface-raised);
-  }
-
-  .dropdown-item-worktree {
-    padding-left: 28px;
-  }
-
-  .dropdown-item-branch {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-    max-width: 120px;
-    color: var(--color-text-muted);
-    font-size: 10px;
-  }
-
-  .dropdown-item-branch svg {
-    width: 11px;
-    height: 11px;
-    flex-shrink: 0;
-  }
-
-  .dropdown-item-branch-text {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 </style>

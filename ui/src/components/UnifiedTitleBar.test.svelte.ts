@@ -47,7 +47,7 @@ describe('UnifiedTitleBar chrome 容器', () => {
       props: {
         projects: [],
         repositoryGroups: [],
-        selectedProjectId: '',
+        selectedGroupId: '',
         onSelectProject: () => undefined,
         rosettaVisible: false,
       },
@@ -65,7 +65,7 @@ describe('UnifiedTitleBar 跨平台 padding', () => {
       props: {
         projects: [],
         repositoryGroups: [],
-        selectedProjectId: '',
+        selectedGroupId: '',
         onSelectProject: () => undefined,
         rosettaVisible: false,
       },
@@ -81,7 +81,7 @@ describe('UnifiedTitleBar 跨平台 padding', () => {
       props: {
         projects: [],
         repositoryGroups: [],
-        selectedProjectId: '',
+        selectedGroupId: '',
         onSelectProject: () => undefined,
         rosettaVisible: false,
       },
@@ -96,7 +96,7 @@ describe('UnifiedTitleBar 跨平台 padding', () => {
       props: {
         projects: [],
         repositoryGroups: [],
-        selectedProjectId: '',
+        selectedGroupId: '',
         onSelectProject: () => undefined,
         rosettaVisible: false,
       },
@@ -112,7 +112,7 @@ describe('UnifiedTitleBar status zone 容纳契约', () => {
       props: {
         projects: [],
         repositoryGroups: [],
-        selectedProjectId: '',
+        selectedGroupId: '',
         onSelectProject: () => undefined,
         rosettaVisible: false,
       },
@@ -130,7 +130,7 @@ describe('UnifiedTitleBar status zone 容纳契约', () => {
       props: {
         projects: [],
         repositoryGroups: [],
-        selectedProjectId: '',
+        selectedGroupId: '',
         onSelectProject: () => undefined,
         rosettaVisible: true,
       },
@@ -147,7 +147,7 @@ describe('UnifiedTitleBar zone-left-center', () => {
       props: {
         projects: [],
         repositoryGroups: [],
-        selectedProjectId: '',
+        selectedGroupId: '',
         onSelectProject: () => undefined,
         rosettaVisible: false,
       },

@@ -205,6 +205,7 @@ async fn http_get_sessions_returns_skeleton_with_placeholder_metadata() {
             message_count,
             is_ongoing,
             git_branch: _,
+            group_id: _,
         } = event
         {
             assert_eq!(project_id, h.project_id);

@@ -212,6 +212,7 @@ async fn session_metadata_forwarded_as_push_event() {
             message_count: 42,
             is_ongoing: true,
             git_branch: Some("main".into()),
+            group_id: Some("g1".into()),
         })
         .unwrap();
 
@@ -227,6 +228,7 @@ async fn session_metadata_forwarded_as_push_event() {
             message_count,
             is_ongoing,
             git_branch,
+            group_id,
         } => {
             assert_eq!(project_id, "p1");
             assert_eq!(session_id, "s1");
@@ -234,6 +236,14 @@ async fn session_metadata_forwarded_as_push_event() {
             assert_eq!(message_count, 42);
             assert!(is_ongoing);
             assert_eq!(git_branch.as_deref(), Some("main"));
+            // spec sidebar-navigation §"selectedGroupId 与 worktree id 分层维护"
+            // Scenario "SSE patch 按 groupId filter"：bridge MUST 透传 group_id
+            // 字段——前端按此过滤当前 group 的 patch。
+            assert_eq!(
+                group_id.as_deref(),
+                Some("g1"),
+                "SSE event SHALL 透传 group_id"
+            );
         }
         other => panic!("expected SessionMetadataUpdate, got {other:?}"),
     }

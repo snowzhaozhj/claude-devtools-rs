@@ -13,7 +13,7 @@
   interface Props {
     projects: ProjectInfo[];
     repositoryGroups?: RepositoryGroup[];
-    selectedProjectId: string;
+    selectedGroupId: string;
     onSelectProject: (id: string, name: string) => void;
     rosettaVisible: boolean;
     projectsLoading?: boolean;
@@ -22,7 +22,7 @@
   let {
     projects,
     repositoryGroups = [],
-    selectedProjectId,
+    selectedGroupId,
     onSelectProject,
     rosettaVisible,
     projectsLoading = false,
@@ -51,7 +51,7 @@
     <ProjectSwitcher
       {projects}
       {repositoryGroups}
-      {selectedProjectId}
+      {selectedGroupId}
       {onSelectProject}
       loading={projectsLoading}
     />
