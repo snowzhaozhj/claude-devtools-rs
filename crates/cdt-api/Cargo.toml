@@ -17,6 +17,7 @@ test-utils = []
 
 [dependencies]
 cdt-core = { workspace = true }
+cdt-fs = { workspace = true }
 cdt-parse = { workspace = true }
 cdt-analyze = { workspace = true }
 cdt-discover = { workspace = true }

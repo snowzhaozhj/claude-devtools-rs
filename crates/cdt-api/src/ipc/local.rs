@@ -1618,6 +1618,7 @@ fn spawn_parsed_msg_cache_invalidator(
                         .join(format!("{}.jsonl", evt.session_id));
                     match tokio::fs::metadata(&path).await {
                         Ok(meta) => {
+                            #[allow(deprecated)]
                             let current_sig = FileSignature::from_metadata(&meta);
                             cache
                                 .lock()

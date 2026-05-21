@@ -438,6 +438,7 @@ impl MetadataCache {
 /// 用于 `list_sessions_skeleton` 的 fast-path：cache 命中时骨架阶段直接带元数据
 /// 返回，规避 `session-metadata-update` event 在前端 listener 注册前 fire-and-forget
 /// 丢失的 race（详见 fix `session-title-race` 修复说明）。
+#[allow(deprecated)]
 pub(crate) async fn try_lookup_cached_metadata(
     cache: &StdMutex<MetadataCache>,
     path: &Path,
@@ -470,6 +471,7 @@ pub(crate) async fn extract_session_metadata_cached(
     path: &Path,
 ) -> SessionMetadata {
     let new_sig = match tokio::fs::metadata(path).await {
+        #[allow(deprecated)]
         Ok(meta) => Some(FileSignature::from_metadata(&meta)),
         Err(_) => None,
     };
@@ -1608,6 +1610,7 @@ mod tests {
                 "新规则会用这串",
             )],
         );
+        #[allow(deprecated)]
         let sig = FileSignature::from_metadata(&std::fs::metadata(&path).unwrap());
 
         let cache = make_cache();

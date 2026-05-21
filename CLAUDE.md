@@ -20,6 +20,7 @@
 | `.claude/rules/codex-usage.md` | 何时调 codex 二审 / rescue + prompt 模板 |
 | `.claude/rules/perf.md` | 涉及启动路径 / IPC / 后端算法 / 列表渲染的 PR |
 | `.claude/rules/bg-task-dispatch.md` | N≥2 个独立可并行 PR 启动 `claude --bg` 前 |
+| `.claude/rules/fs-abstraction.md` | 任何 fs 调用 / cache 改动 / SSH / HTTP server mode 相关改动 SHALL 读 |
 
 ## Parent repo
 
@@ -39,7 +40,7 @@ claude-devtools-rs/
 │   ├── specs/                # 主 spec（行为契约真相源）
 │   ├── followups.md          # TS impl-bugs to fix, not replicate
 │   └── README.md             # workflow + capability map
-└── .claude/rules/            # 跨域规则散文件（4 个：bg-task-dispatch / codex-usage / opsx-apply-cadence / perf）
+└── .claude/rules/            # 跨域规则散文件（5 个：bg-task-dispatch / codex-usage / fs-abstraction / opsx-apply-cadence / perf）
 ```
 
 详细 crate → capability 映射见 `crates/CLAUDE.md::crate 边界`；UI 布局见 `ui/CLAUDE.md::架构与布局`。

@@ -11,9 +11,17 @@
 //! - Windows 上 `std::os::windows::fs::MetadataExt::file_index()` /
 //!   `volume_serial_number()` 是 unstable feature `windows_by_handle`，stable
 //!   Rust 不可用；退化为 `None` 让 Windows 仅依赖 mtime+size（D1f 修订）
+//!
+//! 桥接 `cdt_fs::FsMetadata`（change `unify-fs-abstraction`）：
+//! - `FileSignature::from_fs_metadata` 是首选构造路径，覆盖 local / ssh / 未来
+//!   远端 backend 统一来源
+//! - `FileSignature::from_metadata(&std::fs::Metadata)` 是过渡期兼容路径，
+//!   PR-D 清除所有 `tokio::fs::metadata` 直调后将移除
 
 use std::fs::Metadata;
 use std::time::SystemTime;
+
+use cdt_fs::{FsIdentity as CdtFsIdentity, FsMetadata as CdtFsMetadata};
 
 /// 文件身份维度 —— Unix 上是 `(dev, ino)`；Windows 与其它平台退化为 `None`。
 ///
@@ -28,7 +36,8 @@ pub enum FileIdentity {
     /// Windows 与其它平台共享的退化 variant —— identity 维度不参与签名比对，
     /// 等价性仅由 mtime+size 决定（best-effort）。
     /// `allow(dead_code)`：在 Unix 平台上此 variant 不被 `from_metadata` 构造，
-    /// 但仍需保留以让跨 cfg 测试代码（如 `dummy_sig`）能引用。
+    /// 但仍需保留以让跨 cfg 测试代码（如 `dummy_sig`）能引用；
+    /// SSH backend 在 unify-fs-abstraction change 后也会构造此 variant。
     #[allow(dead_code)]
     None,
 }
@@ -50,6 +59,21 @@ impl FileIdentity {
             Self::None
         }
     }
+
+    /// 从 `cdt_fs::FsIdentity` 桥接 —— `None`（SSH / Windows）→ `FileIdentity::None`，
+    /// `Unix { dev, ino }` → `FileIdentity::Unix { dev, ino }`。
+    ///
+    /// `allow(dead_code)`：本 change PR-A 是基建，业务 callsite 尚未迁移到
+    /// `from_fs_metadata`；PR-D 完成 cache callsite 切 trait 后此 lint 自然消除。
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn from_fs_identity(identity: Option<CdtFsIdentity>) -> Self {
+        match identity {
+            #[cfg(unix)]
+            Some(CdtFsIdentity::Unix { dev, ino }) => Self::Unix { dev, ino },
+            _ => Self::None,
+        }
+    }
 }
 
 /// 文件签名 —— mtime + size + identity 的组合。
@@ -66,6 +90,14 @@ pub struct FileSignature {
 impl FileSignature {
     /// 从 `std::fs::Metadata` 构造签名。`mtime` 取 `modified()`，失败时退化
     /// 为 `UNIX_EPOCH`（保守判定，让缓存走 miss）。
+    ///
+    /// **deprecated**：unify-fs-abstraction change 后 SHALL 改用
+    /// [`FileSignature::from_fs_metadata`]，PR-D 完成 callsite 迁移后本路径
+    /// 移除。本 PR-A 期间仍保留以避免业务代码扩散性破坏。
+    #[deprecated(
+        since = "0.5.6",
+        note = "请改用 FileSignature::from_fs_metadata（基于 cdt_fs::FsMetadata），本路径将随 PR-D 移除"
+    )]
     pub fn from_metadata(meta: &Metadata) -> Self {
         let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         Self {
@@ -74,9 +106,29 @@ impl FileSignature {
             identity: FileIdentity::from_metadata(meta),
         }
     }
+
+    /// 从 `cdt_fs::FsMetadata` 构造签名 —— 覆盖 local / ssh / 未来远端 backend
+    /// 统一来源。`identity` 桥接：`Unix { dev, ino }` 透传；`None`（SSH / Windows）
+    /// 落到 [`FileIdentity::None`]，best-effort 维度退化为 mtime+size 比对。
+    ///
+    /// Spec：`openspec/specs/fs-abstraction/spec.md`
+    /// §`FsMetadata.identity 字段采 best-effort 策略`。
+    ///
+    /// `allow(dead_code)`：本 change PR-A 是基建，业务 callsite 尚未迁移；
+    /// PR-D 完成 cache callsite 切 trait 后此 lint 自然消除。
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn from_fs_metadata(meta: &CdtFsMetadata) -> Self {
+        Self {
+            mtime: meta.mtime,
+            size: meta.size,
+            identity: FileIdentity::from_fs_identity(meta.identity),
+        }
+    }
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use std::io::Write;
@@ -159,5 +211,55 @@ mod tests {
         let sa = FileSignature::from_metadata(&meta_for(&a));
         let sb = FileSignature::from_metadata(&meta_for(&b));
         assert_ne!(sa.identity, sb.identity);
+    }
+
+    #[test]
+    fn from_fs_metadata_matches_from_metadata_for_local_file() {
+        // 同一文件走两条路径构造的 FileSignature SHALL byte-equal：
+        // - from_metadata(&std::fs::Metadata) → 老路径
+        // - from_fs_metadata(&cdt_fs::FsMetadata) → 新路径（基于
+        //   LocalFileSystemProvider::stat 的产物）
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("a.jsonl");
+        std::fs::write(&p, b"hello\n").unwrap();
+
+        let std_meta = std::fs::metadata(&p).unwrap();
+        let sig_old = FileSignature::from_metadata(&std_meta);
+
+        let mtime = std_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        #[cfg(unix)]
+        let identity = {
+            use std::os::unix::fs::MetadataExt;
+            Some(CdtFsIdentity::Unix {
+                dev: std_meta.dev(),
+                ino: std_meta.ino(),
+            })
+        };
+        #[cfg(not(unix))]
+        let identity = None;
+        let fs_meta = CdtFsMetadata {
+            size: std_meta.len(),
+            mtime,
+            identity,
+        };
+        let sig_new = FileSignature::from_fs_metadata(&fs_meta);
+
+        assert_eq!(sig_old, sig_new, "两条路径产物 SHALL byte-equal");
+    }
+
+    #[test]
+    fn from_fs_metadata_with_ssh_style_none_identity_yields_none_variant() {
+        // SSH backend 永远填 identity: None；FileSignature.identity 必须落到
+        // FileIdentity::None，依靠 mtime + size 完成 best-effort 等价性判定。
+        let mtime = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let fs_meta = CdtFsMetadata {
+            size: 4096,
+            mtime,
+            identity: None,
+        };
+        let sig = FileSignature::from_fs_metadata(&fs_meta);
+        assert_eq!(sig.size, 4096);
+        assert_eq!(sig.mtime, mtime);
+        assert_eq!(sig.identity, FileIdentity::None);
     }
 }

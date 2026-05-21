@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 cdt-api = { workspace = true }
+cdt-fs = { workspace = true }
 cdt-discover = { path = "../cdt-discover" }
 cdt-config = { workspace = true }
 cdt-ssh = { workspace = true }
