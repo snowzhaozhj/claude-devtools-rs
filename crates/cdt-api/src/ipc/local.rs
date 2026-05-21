@@ -887,13 +887,20 @@ impl LocalDataApi {
         {
             debug_assert_eq!(summary.project_id, wt_id);
             debug_assert_eq!(summary.session_id, session_id);
+            // SSH cache hit 走 `lookup_trust_cached`（0 fs op）不校验 signature——
+            // 远端文件被 `RemotePollingWatcher` 3s poll 出变化后没有自动失效路径。
+            // 解法（codex round-7 Blocker #4 方案 #1）：SSH 路径无论 cache hit / miss
+            // 都入 page_jobs 后台 scan，`extract_session_metadata_cached` 会 stat 比对
+            // signature，不变 silent return / 变化 broadcast SSE 差量给前端。
+            // Local cache hit 走 `try_lookup_cached_metadata` 已 stat 校验，无需重 scan。
+            let need_background_validation = is_remote || cached_meta.is_none();
             if let Some(meta) = cached_meta {
                 summary.title = meta.title;
                 summary.message_count = meta.message_count;
                 summary.is_ongoing = meta.is_ongoing;
                 summary.git_branch = meta.git_branch;
-            } else {
-                // SSH + Local 都入 page_jobs（design D2 去掉 !is_remote gate）
+            }
+            if need_background_validation {
                 let base_dir = cdt_discover::path_decoder::extract_base_dir(&wt_id);
                 let dir = projects_dir.join(base_dir);
                 page_jobs_by_wt
@@ -1661,42 +1668,41 @@ impl LocalDataApi {
         }))
         .await;
         for (s, (jsonl_path, cached_meta)) in page_sessions.into_iter().zip(lookups) {
-            if let Some(meta) = cached_meta {
-                let mut summary = SessionSummary {
-                    session_id: s.id,
-                    project_id: project_id.to_owned(),
-                    timestamp: s.last_modified,
-                    message_count: meta.message_count,
-                    title: meta.title,
-                    is_ongoing: meta.is_ongoing,
-                    git_branch: meta.git_branch,
-                    worktree_id: None,
-                    worktree_name: None,
-                    group_id: None,
-                    cwd_relative_to_repo_root: None,
-                    cwd: s.cwd,
-                };
-                self.apply_worktree_meta(&mut summary);
-                page.push(summary);
-            } else {
-                let mut summary = SessionSummary {
-                    session_id: s.id.clone(),
-                    project_id: project_id.to_owned(),
-                    timestamp: s.last_modified,
-                    message_count: 0,
-                    title: None,
-                    is_ongoing: false,
-                    git_branch: None,
-                    worktree_id: None,
-                    worktree_name: None,
-                    group_id: None,
-                    cwd_relative_to_repo_root: None,
-                    cwd: s.cwd,
-                };
-                self.apply_worktree_meta(&mut summary);
-                page.push(summary);
-                // SSH + Local 都入 page_jobs（design D2 line 1575：去掉 !is_remote gate）
-                page_jobs.push((s.id, jsonl_path));
+            // SSH cache hit 走 `lookup_trust_cached`（0 fs op）不校验 signature——
+            // 远端文件被 `RemotePollingWatcher` 3s poll 出变化后没有自动失效路径。
+            // 解法（codex round-7 Blocker #4 方案 #1）：SSH 路径无论 cache hit / miss
+            // 都入 page_jobs 后台 scan，`extract_session_metadata_cached` 会 stat 比对
+            // signature，不变 silent return / 变化 broadcast SSE 差量给前端。
+            // Local cache hit 走 `try_lookup_cached_metadata` 已 stat 校验，无需重 scan。
+            let need_background_validation = is_remote || cached_meta.is_none();
+            let session_id_for_jobs = s.id.clone();
+            let (message_count, title, is_ongoing, git_branch) = match cached_meta {
+                Some(meta) => (
+                    meta.message_count,
+                    meta.title,
+                    meta.is_ongoing,
+                    meta.git_branch,
+                ),
+                None => (0, None, false, None),
+            };
+            let mut summary = SessionSummary {
+                session_id: s.id,
+                project_id: project_id.to_owned(),
+                timestamp: s.last_modified,
+                message_count,
+                title,
+                is_ongoing,
+                git_branch,
+                worktree_id: None,
+                worktree_name: None,
+                group_id: None,
+                cwd_relative_to_repo_root: None,
+                cwd: s.cwd,
+            };
+            self.apply_worktree_meta(&mut summary);
+            page.push(summary);
+            if need_background_validation {
+                page_jobs.push((session_id_for_jobs, jsonl_path));
             }
         }
 
