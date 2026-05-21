@@ -1444,6 +1444,14 @@ impl LocalDataApi {
         let claude_root = claude_root_path.map(PathBuf::from);
         let projects_dir =
             cdt_discover::path_decoder::projects_base_path_for(claude_root.as_deref());
+        // codex 二审第四轮 Blocker：reconfigure 改 Local projects_dir = Local
+        // ContextId 变化，与 SSH 切换语义同型。必须在 abort 之前先 bump
+        // `context_generation` + `root_generation`，关闭"in-flight list_sessions
+        // 已拿旧 (fs, ctx, root_generation) 后才 late-insert scan handle"的窗口。
+        // 任何 late-insert 的 scan task 在 broadcast 前 check 会发现 generation
+        // 不匹配 → silent drop。
+        self.context_generation.fetch_add(1, Ordering::SeqCst);
+        self.root_generation.fetch_add(1, Ordering::SeqCst);
         // codex 二审第三轮 Low：用 abort_local_scans 替代 abort-all 避免误杀
         // SSH active 时的远端 metadata scan（reconfigure_claude_root 仅改 Local
         // projects_dir，不影响 SSH ContextId 下的 scan）。
@@ -1477,7 +1485,8 @@ impl LocalDataApi {
                 projects_dir,
             );
         }
-        self.root_generation.fetch_add(1, Ordering::SeqCst);
+        // root_generation 与 context_generation 都已在函数开头 bump（codex 二审
+        // 第四轮 Blocker 修订）；这里无需再 bump 以保持单次递增。
     }
 
     async fn project_memory_dir(&self, project_id: &str) -> Result<std::path::PathBuf, ApiError> {
@@ -1889,6 +1898,13 @@ async fn scan_metadata_for_page(
             }
             // 同上：scan 内部 await 完成后再次检查 context_generation，避免在
             // extract 期间发生切换后仍 broadcast 旧 ctx metadata。
+            //
+            // codex 二审第四轮 note：本 check 之前 `extract_session_metadata_cached`
+            // 可能已写入 cache。但 cache key 是 `(ContextId, PathBuf)` namespace
+            // 隔离——旧 ctx 的 cache entry 不污染新 ctx 的 cache lookup。下次
+            // 用户访问旧 ctx (reconnect 同 host) 时，cache entry 仍按 signature
+            // 校验有效——这是设计的正确行为而非 bug。本 check 仅 enforce
+            // "不向前端 broadcast 旧 ctx update" 这一可观察契约。
             if context_generation.load(Ordering::SeqCst) != expected_context_generation {
                 return;
             }
