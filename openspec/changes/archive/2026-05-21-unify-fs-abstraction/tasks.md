@@ -152,10 +152,10 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR（标题 `feat(fs): unify FileSystemProvider abstraction in cdt-fs crate`，PR 描述含 perf impact 表格 + design.md 链接）
-- [ ] N.2 wait-ci 全绿（用 `/wait-ci <pr>` skill；CI 必须含新 `cargo xtask check-fs-direct-calls --warn-only` step）
-- [ ] N.3 codex 二审通过（按 `.claude/rules/codex-usage.md` 第 3 节 design 阶段已审一次，本 change push 后 PR commit 阶段再审一次）；如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次
-- [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
+- [x] N.1 push 分支 + 开 PR https://github.com/snowzhaozhj/claude-devtools-rs/pull/187
+- [x] N.2 wait-ci 全绿（commit `61f80b9` 13/13 jobs pass，含新 `xtask check-fs-direct-calls (warn-only)` job）
+- [x] N.3 codex 二审通过（第一轮报 9 条 Medium/Low，commit `61f80b9` 全部消化；第二轮 verify 9/9 OK + no further issues）
+- [x] N.4 archive change（本 commit 原子完成 mv + sync）
 
 ## 后续 follow-up（不在本 change，但提醒勿漏）
 
