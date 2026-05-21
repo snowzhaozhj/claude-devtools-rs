@@ -112,3 +112,28 @@ fn cdt_api_examples_does_not_call_project_scanner_new() {
         assert_no_naked_new_calls(&root);
     }
 }
+
+/// `list_group_sessions` 在 k-way merge 之前 SHALL 跨 worktree 按 sessionId
+/// 去重（保留 `last_modified` 最大的 wt 版本）。否则同一 `<sid>.jsonl` 因为
+/// main + linked worktree 两份 encoded path 被两次 enumerate 时，page 内
+/// 同一 sessionId 出现两次，前端 `{#each ... (sessionId)}` 报
+/// `each_key_duplicate` 整段列表崩。
+///
+/// 该不变量靠源码 grep 防回归——多 worktree group 集成测需要真 git
+/// `common-dir` + linked worktree fixture，留作 followup。
+#[test]
+fn list_group_sessions_dedupes_sessions_across_worktrees() {
+    let path = workspace_root()
+        .join("crates")
+        .join("cdt-api")
+        .join("src")
+        .join("ipc")
+        .join("local.rs");
+    let body = fs::read_to_string(&path).expect("read cdt-api/src/ipc/local.rs");
+    assert!(
+        body.contains("best_wt_for_sid"),
+        "list_group_sessions 内 cross-worktree sessionId dedup 标记 `best_wt_for_sid` \
+         不存在于 {}——同一 sessionId 跨 worktree 重复会让前端 each_key_duplicate 列表崩。",
+        path.display()
+    );
+}

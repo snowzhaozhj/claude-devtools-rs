@@ -433,11 +433,18 @@
     try {
       // pin/hide prefs 仍按 worktree 维度持久化——用 anchor worktree id 拉取
       await loadProjectPrefs(anchor);
-      // D6/D7：走 listGroupSessions + 当前 worktree filter 的初始 cursor
+      // D6/D7：走 listGroupSessions + 当前 worktree filter 的初始 cursor。
+      // silent 路径**也**走 `initialFilterCursor()`——之前 `silent ? null :`
+      // 让 file-change 触发的 silent refresh 用 null cursor 拉全 group 数据，
+      // 与 cacheKey (groupId + filter) 口径不一致，applySilentRefresh merge
+      // 时会把其他 worktree 的 session 混进当前 filter view（codex 二审
+      // round 3 Blocker，2026-05-21）。`initialFilterCursor()` 在 filter=ALL
+      // 时本就返 null 与原行为兼容，filter=worktreeX 时返 base64 cursor
+      // 让 silent 只拉到 worktreeX 数据，与 cacheKey 一致。
       const result: GroupSessionPage = await listGroupSessions(
         groupId,
         SESSION_PAGE_SIZE,
-        silent ? null : initialFilterCursor(),
+        initialFilterCursor(),
       );
       // 同时校验 groupId + (groupId, filter) 复合键——切 group 时 reset
       // worktreeFilter effect 与本 loadSessions effect 在同 microtask 触发，
@@ -572,17 +579,28 @@
 
   // 注册 file-change handler；依赖 selectedGroupId / anchorWorktreeId，
   // 切 group 时重新注册让闭包捕获最新值。file-change 事件按 worktree
-  // 触发（payload.projectId 是 worktree id），匹配 anchor 即视为本 group。
+  // 触发（payload.projectId 是 worktree id）。
+  //
+  // 全部模式（filter=ALL）下列表合并 group 内所有 worktree，应接受 group
+  // 内**任一** worktree 命中即刷新——否则其他非 anchor worktree 新增
+  // session 不会触发列表更新（codex 二审 round 3 Major，2026-05-21）。
+  // 具体 filter 模式只接 anchor，保持精准刷新。
   $effect(() => {
     const currentGroupId = selectedGroupId;
     const currentAnchor = anchorWorktreeId;
+    const currentFilter = worktreeFilter;
+    const currentGroupWorktreeIds = new Set(groupWorktrees.map((w) => w.id));
     registerHandler("sidebar", (payload) => {
       if (payload.projectListChanged) {
         scheduleRefresh("sidebar:projects", () =>
           untrack(() => loadProjects(true)),
         );
       }
-      if (!currentGroupId || payload.projectId !== currentAnchor || !payload.sessionId) return;
+      if (!currentGroupId || !payload.sessionId) return;
+      const inGroup = currentFilter === ALL_WORKTREES
+        ? currentGroupWorktreeIds.has(payload.projectId)
+        : payload.projectId === currentAnchor;
+      if (!inGroup) return;
       if (browsingHistory) {
         hasDeferredSessionRefresh = true;
         return;

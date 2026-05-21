@@ -569,8 +569,8 @@ impl LocalDataApi {
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
         let pinned = std::collections::BTreeSet::<String>::new();
         let scanner = ProjectScanner::new_with_semaphore(
-            fs,
-            projects_dir,
+            fs.clone(),
+            projects_dir.clone(),
             self.shared_read_semaphore.clone(),
         );
         let scanner = Arc::new(scanner);
@@ -623,6 +623,37 @@ impl LocalDataApi {
             if !wt_sessions.contains_key(wid) {
                 failed_wt_ids.insert(wid.clone());
             }
+        }
+
+        // 跨 worktree 去重：同一 sessionId 出现在多个 worktree 时（典型场景：
+        // 同一个 `.claude/projects/<encoded>/<sid>.jsonl` 因为 main repo + linked
+        // worktree 两份 encoded path 被两次 enumerate）保留 `last_modified` 最大
+        // 的 wt 版本，其他 wt 中删掉该 sessionId 条目。否则 k-way merge 会让
+        // page 内同一 sessionId 出现两次，前端 `{#each ... (sessionId)}` 报
+        // `each_key_duplicate` 整段列表崩。tie-break 按 wt_id 字典序保证确定性。
+        let mut best_wt_for_sid: std::collections::HashMap<String, (String, i64)> =
+            std::collections::HashMap::new();
+        for (wt_id, sessions) in &wt_sessions {
+            for s in sessions {
+                best_wt_for_sid
+                    .entry(s.id.clone())
+                    .and_modify(|(cur_wt, cur_mtime)| {
+                        if s.last_modified > *cur_mtime
+                            || (s.last_modified == *cur_mtime && wt_id < cur_wt)
+                        {
+                            cur_wt.clone_from(wt_id);
+                            *cur_mtime = s.last_modified;
+                        }
+                    })
+                    .or_insert((wt_id.clone(), s.last_modified));
+            }
+        }
+        for (wt_id, sessions) in &mut wt_sessions {
+            sessions.retain(|s| {
+                best_wt_for_sid
+                    .get(&s.id)
+                    .is_some_and(|(best, _)| best == wt_id)
+            });
         }
 
         // 二分定位每个 worktree 的指针起点（含 Exhausted 跳过）。
@@ -718,6 +749,116 @@ impl LocalDataApi {
                     wt_id: top.wt_id.clone(),
                     idx: next_idx,
                 });
+            }
+        }
+
+        // page 构造完后给每个 summary 跑 metadata cache fast-path lookup +
+        // 按 worktree 分组未命中条目走后台扫描（spawn `scan_metadata_for_page`），
+        // 让 cache hit 直接带 title / messageCount 返回，cache miss 通过
+        // `session_metadata_tx` broadcast → SSE patch 异步补齐。
+        //
+        // 否则 list_group_sessions 永远返 skeleton（title=None），UI 列表项
+        // 卡在 `session.title || session.sessionId` 永久 fallback 到 sessionId
+        // 前缀（用户感知"会话名变 sessionId"的根因，codex 二审 round 3 Blocker，
+        // 2026-05-21）。
+        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
+        let lookup_permit = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
+        let lookups = futures::future::join_all(page.iter().map(|summary| {
+            let wt_id = summary.project_id.clone();
+            let session_id = summary.session_id.clone();
+            let base_dir = cdt_discover::path_decoder::extract_base_dir(&wt_id);
+            let jsonl_path = projects_dir
+                .join(base_dir)
+                .join(format!("{session_id}.jsonl"));
+            let cache = self.metadata_cache.clone();
+            let permit_sem = lookup_permit.clone();
+            async move {
+                let _guard = permit_sem
+                    .acquire()
+                    .await
+                    .expect("lookup semaphore should not be closed");
+                let meta = try_lookup_cached_metadata(&cache, &jsonl_path).await;
+                (wt_id, session_id, jsonl_path, meta)
+            }
+        }))
+        .await;
+
+        // 按 worktree 分组的 page_jobs（未命中 cache 的条目走 spawn 扫描）。
+        let mut page_jobs_by_wt: std::collections::BTreeMap<
+            String,
+            (PathBuf, Vec<(String, PathBuf)>),
+        > = std::collections::BTreeMap::new();
+        for (summary, (wt_id, session_id, jsonl_path, cached_meta)) in page.iter_mut().zip(lookups)
+        {
+            debug_assert_eq!(summary.project_id, wt_id);
+            debug_assert_eq!(summary.session_id, session_id);
+            if let Some(meta) = cached_meta {
+                summary.title = meta.title;
+                summary.message_count = meta.message_count;
+                summary.is_ongoing = meta.is_ongoing;
+                summary.git_branch = meta.git_branch;
+            } else if !is_remote {
+                let base_dir = cdt_discover::path_decoder::extract_base_dir(&wt_id);
+                let dir = projects_dir.join(base_dir);
+                page_jobs_by_wt
+                    .entry(wt_id)
+                    .or_insert_with(|| (dir, Vec::new()))
+                    .1
+                    .push((session_id, jsonl_path));
+            }
+        }
+
+        // per-worktree spawn scan_metadata_for_page。scan_key 给 group 路径
+        // 分配独立 namespace（前缀 `group:`）+ cursor hash 后缀，让 page 1 /
+        // page 2 / loadMore 的 scan 在同一 wt 上**并存而非互相 abort**。
+        //
+        // 历史踩坑：scan_key 若只用 `wt_id|group` 单一 namespace，loadMore
+        // 触发的 page 2 scan 会立刻 cancel page 1 还在跑的 jobs → page 1
+        // 后段 cache miss 的 sessions metadata 永久丢失 → 用户感知"sidebar
+        // 前几条 title 正确，后续全 sessionId fallback"。改用 cursor hash
+        // 当 namespace key 后缀，让每页 scan 拿独立 entry 互不 abort（与
+        // `list_sessions` 走 `(project_id, cursor)` 双键的并存语义一致）。
+        let cur_root_generation = self.root_generation.load(Ordering::SeqCst);
+        let cursor_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            cursor.unwrap_or("").hash(&mut hasher);
+            hasher.finish()
+        };
+        for (wt_id, (dir, jobs)) in page_jobs_by_wt {
+            if jobs.is_empty() {
+                continue;
+            }
+            let scan_key = metadata_scan_key(&wt_id, Some(&format!("group:{cursor_hash:x}")));
+            let key_for_cleanup = scan_key.clone();
+            let tx = self.session_metadata_tx.clone();
+            let active_scans_clone = self.active_scans.clone();
+            if let Ok(mut scans) = self.active_scans.lock() {
+                if let Some(old) = scans.remove(&scan_key) {
+                    old.handle.abort();
+                }
+                let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
+                let handle = tokio::spawn(scan_metadata_for_page(
+                    wt_id.clone(),
+                    dir,
+                    jobs,
+                    tx,
+                    active_scans_clone,
+                    key_for_cleanup,
+                    my_generation,
+                    self.metadata_cache.clone(),
+                    self.metadata_scan_semaphore.clone(),
+                    self.root_generation.clone(),
+                    cur_root_generation,
+                    self.worktree_meta_cache.clone(),
+                ));
+                scans.insert(
+                    scan_key,
+                    ScanEntry {
+                        generation: my_generation,
+                        handle: handle.abort_handle(),
+                    },
+                );
             }
         }
 

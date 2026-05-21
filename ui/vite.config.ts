@@ -14,5 +14,16 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     strictPort: true,
+    // dev-only：浏览器走 `?http=1` 调试模式时 fetch `/api/*` 转发到 cdt-cli
+    // 起的 server-mode HTTP server（默认 :3456）。让 chrome-devtools mcp /
+    // 远端 server-mode UI 都能在浏览器里跑真后端（含 SSE `/api/events`）。
+    // production bundle 不含 vite，proxy 配置仅 dev server 生效。
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:3456',
+        changeOrigin: false,
+        ws: false,
+      },
+    },
   },
 })
