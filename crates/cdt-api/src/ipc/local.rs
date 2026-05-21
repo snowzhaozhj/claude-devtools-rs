@@ -579,6 +579,14 @@ impl LocalDataApi {
         page_size: usize,
         cursor: Option<&str>,
     ) -> Result<GroupSessionPage, ApiError> {
+        // codex 二审第五轮 Blocker + 第六轮 修订：generation snapshot SHALL **先于
+        // 函数内任何 await**，与 fs/ctx 同源属于"reconfigure 前的 snapshot"。
+        // `list_repository_groups()` 也 await，本身可能跨 reconfigure 边界——所以
+        // 必须 load 在它之前；同样 root_generation 在 spawn 时复用早 load 的 expected
+        // 值（不 late-load）。
+        let expected_context_generation = self.context_generation.load(Ordering::SeqCst);
+        let expected_root_generation = self.root_generation.load(Ordering::SeqCst);
+
         let groups = self.list_repository_groups().await?;
         let group = groups
             .into_iter()
@@ -586,13 +594,6 @@ impl LocalDataApi {
             .ok_or_else(|| ApiError::not_found(format!("repository group {group_id}")))?;
 
         let cursor_state = parse_group_cursor(cursor);
-
-        // codex 二审第五轮 Blocker 修订：generation snapshot SHALL **先于** fs/ctx
-        // await 拿取，与之同源属于"reconfigure 前的 snapshot"。否则 reader 在
-        // await 期间被 reconfigure 跑过 → 拿到旧 fs/ctx + 新 generation → scan task
-        // 内 expected == current → 仍 broadcast 旧 ctx 串扰。
-        let expected_context_generation = self.context_generation.load(Ordering::SeqCst);
-        let _expected_root_generation = self.root_generation.load(Ordering::SeqCst);
         // 用户可见列表 handler 走 strict 变体——SSH disconnect 中间态 SHALL 报错
         // 而非静默降级（PR-C codex commit-stage round-2 Q1：原 PR-B 引入 relaxed
         // 在用户可见列表路径，本 PR 加 strict 时一并修齐）。
@@ -917,10 +918,11 @@ impl LocalDataApi {
         //    metadata 永远扫不出来（codex 第三轮二审 Bug 1）。改用完整 cursor
         //    字符串作 namespace key 后缀，无碰撞、deterministic，与
         //    `list_sessions` 走 `(project_id, cursor)` 双键的并存语义一致。
-        let cur_root_generation = self.root_generation.load(Ordering::SeqCst);
-        // codex 第五轮 Blocker：用 fn 顶部早 load 的 expected_context_generation
-        // （与 fs/ctx 同 snapshot），避免 reconfigure 在 await 期间跑过让 reader
-        // 拿到旧 ctx + 新 generation 的 race。
+        // codex 第五轮 + 第六轮 Blocker：用 fn 顶部早 load 的 expected_*_generation
+        // （与 fs/ctx 同 snapshot），避免 reconfigure 在 list_repository_groups /
+        // active_fs_and_context_strict 任一 await 期间跑过让 reader 拿到旧 ctx +
+        // 新 generation 的 race。
+        let cur_root_generation = expected_root_generation;
         let cur_context_generation = expected_context_generation;
         let scan_cursor_id = format!("group:{}", cursor.unwrap_or("none"));
         for (wt_id, (dir, jobs)) in page_jobs_by_wt {
