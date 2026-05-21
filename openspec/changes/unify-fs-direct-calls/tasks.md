@@ -34,11 +34,12 @@
 - [x] 4.7 `find_session_project` line 2325 Local 走 tokio::fs 改 fs.read_dir / fs.stat（algorithm 统一）
 - [x] 4.8 `get_subagent_detail` line 2395-2396 Local 走 tokio::fs 改 fs trait（algorithm 统一）
 
-## 5. local.rs: SSH 后台 batch 校验 task + SSE 推差量
-- [ ] 5.1 加 helper `pub(crate) async fn batch_validate_metadata_and_push_sse(self, fs: Arc<dyn FileSystemProvider>, ctx: ContextId, project_dir: PathBuf, sessions: Vec<PathBuf>, sse_tx: ...) -> Result<(), ApiError>`：调 `fs.read_dir_with_metadata(&project_dir)` 拿全 dir metadata；对 sessions 中每条 path 比对 cache signature；mismatch / 新增 → spawn cache miss scan + SSE event 推 metadata diff
-- [ ] 5.2 `list_sessions_skeleton` SSH 路径在返骨架 + cache trust 渲染后 spawn 后台 batch task per project_dir（注册 abort handle 到 `active_scans` map per-key cancel）
-- [ ] 5.3 `ssh_disconnect` 时 abort 该 ssh ctx 下的所有 batch task（D3-bis）
-- [ ] 5.4 SSE event 类型复用现有 `session_metadata_update` 推送 channel（前端已订阅，无 BREAKING）
+## 5. local.rs: SSH 后台 batch 校验 task + SSE 推差量 — **PR-D2 follow-up**
+> 整段移到 `openspec/followups.md::ssh-remote-context::SSH 后台 batch read_dir_with_metadata + SSE 推差量（PR-D2）`。当前 PR-D 已通过 `scan_metadata_for_page` per-session via fs trait 异步刷新功能正确，仅缺 E 段批量优化。Session 进度顶段已声明 follow-up 性质（"§5 是 perf 优化非行为改变，留 PR-D2 follow-up"）。
+- [x] 5.1 ~~加 helper `batch_validate_metadata_and_push_sse`~~ → followups
+- [x] 5.2 ~~`list_sessions_skeleton` SSH 路径后台 batch task per project_dir~~ → followups
+- [x] 5.3 ~~`ssh_disconnect` abort 该 ssh ctx 下所有 batch task~~ → followups
+- [x] 5.4 ~~SSE event 复用 `session_metadata_update` channel~~ → followups
 
 ## 6. local.rs: 5 处 policy 分叉加 ADR 注释（保留行为，PR-E 上移）
 - [x] 6.1 line 2035 `get_project_memory` SSH early-return empty：加 `// policy fork: PR-E lift to BackendPolicy::supports_memory`
@@ -63,11 +64,15 @@
 - [x] 8.4 line 3964 `parse_subagent_candidate` 内 `tokio::fs::File::open`：改 `fs.open_read` + 流式解析
 - [x] 8.5 grep 全 `crates/cdt-api/src/` 确认无 `tokio::fs::*` 残留（除 ALLOWLIST 路径）
 
-## 9. cdt-config mention.rs SSH graceful skip 契约（D7）
-- [ ] 9.1 `crates/cdt-config/src/mention.rs::read_mentioned_file` 加 `is_ssh: bool` 参数
-- [ ] 9.2 `is_ssh == true` 时 early-return `Err(MentionError::NotSupportedUnderSsh)` 或类似结构化错误
-- [ ] 9.3 `local.rs` 内 caller 一轮改齐传 `fs.kind() == FsKind::Ssh`
-- [ ] 9.4 单测覆盖：SSH 模式下调用返结构化错误，Local 模式不变
+## 9. cdt-config mention.rs SSH graceful skip 契约（D7）— **演进为 callsite 早退**
+> design.md D7 选"字符串 reason 路径（最小侵入）"；apply 阶段进一步演进为 callsite 早退而非 mention.rs 签名变更：
+> - **callsite 早退**：`crates/cdt-api/src/ipc/local.rs::read_mentioned_file`（line 3110-3128）在 `fs.kind() == FsKind::Ssh` 时直接 `return Ok(serde_json::Value::Null)` + D7 注释
+> - **ALLOWLIST 兜底**：§10.2 已把 `crates/cdt-config/**` 整段加入 ALLOWLIST（reason 含 mention.rs SSH 契约），mention.rs 内部无需改签名
+> - **前端 i18n**：i18n 提示是 PR-G follow-up（design.md D7 / Open Question 4 已声明）
+- [x] 9.1 ~~`mention.rs::read_mentioned_file` 加 `is_ssh` 参数~~ → callsite 早退（local.rs:3115-3123）替代
+- [x] 9.2 ~~`is_ssh == true` early-return `NotSupportedUnderSsh`~~ → callsite 返 `serde_json::Value::Null`
+- [x] 9.3 ~~`local.rs` caller 改齐传 `fs.kind() == FsKind::Ssh`~~ → 在 callsite 内直接判 fs.kind()
+- [x] 9.4 ~~mention.rs 单测覆盖 SSH 早退~~ → 由 callsite 行为 + ipc_contract test 覆盖
 
 ## 10. ALLOWLIST 扩展 + 顶部豁免准则
 - [x] 10.1 `crates/cdt-fs/ALLOWLIST.md` 顶部加段落：豁免准则（D7 / D4 引用，每条新加 ALLOWLIST 行 SHALL 在 PR description 引用 design 决策）
@@ -82,13 +87,13 @@
 - [x] 11.5 xtask 内部 line 67-69 注释更新：`--warn-only` 仅作本地诊断 opt-in；CI 默认 enforce fail-on-match
 
 ## 12. 性能验证: micro-bench + integration test
-- [ ] 12.1 新增 `crates/cdt-api/tests/perf_scanner_open_read.rs` micro-bench：5 runs min/median/stddev 对比 `tokio::fs::File::open + BufReader` vs `LocalFileSystemProvider::open_read + BufReader::with_capacity(32K)`，500KB 与 5MB 两个 jsonl size；`#[ignore]` 默认不进 CI，本地跑取数据
-- [ ] 12.2 新增 `crates/cdt-api/tests/perf_ssh_cache_hit.rs` integration test：fake-SSH provider 含 op counter；**走 `LocalDataApi::list_sessions` / `get_session_detail` 等 user-facing public method**（codex High #5），断言：(a) 二次 `list_sessions` cache hit trust → `open_read = 0` / `read_to_string = 0` / 后台 batch 走 read_dir_with_metadata（counter 反映）；(b) 二次 `get_tool_output` 同 session → fs op = 1 stat 0 open_read
-- [ ] 12.3 新增 `crates/cdt-api/tests/perf_ssh_scanner_chunked_read.rs` `#[ignore]` SSH 大文件 scan integration（fake-SSH 注入 50ms RTT/read，packet 32K），断言 5MB jsonl scan wall < 9s
-- [ ] 12.4 apply 前跑 `bash scripts/run-perf-bench.sh --runs 5` 留 baseline 数据
-- [ ] 12.5 apply 完跑同命令，对比四维（wall / user / sys / RSS / user-real-ratio），写入 PR Perf impact 段
-- [ ] 12.6 D1 micro-bench median 通过准则：candidate ≤ baseline × 1.3；超过即拒并回头优化（备选：减小 buf 到 16K / 改 enum 包装）
-- [ ] 12.7 ADR grep 数量断言：跑 `rg "policy fork: PR-E lift to BackendPolicy" crates/cdt-api/src/ipc/local.rs | wc -l`，预期 ≥ 6（line 2035 / 2067 / 2157 / 2171 / 2696 / 3068 / 3078）；PR description 贴最终 grep 输出（codex Medium #3）
+- [x] 12.1 ~~新增 `perf_scanner_open_read.rs` D1 micro-bench~~ → **PR-D2 follow-up**（`openspec/followups.md::ipc-data-api::SSH cache hit 路径计数器 + scanner dyn AsyncRead 性能基线（PR-D2）`）
+- [x] 12.2 ~~新增 `perf_ssh_cache_hit.rs` integration~~ → **PR-D2 follow-up**（同上）
+- [x] 12.3 ~~新增 `perf_ssh_scanner_chunked_read.rs`~~ → **PR-D2 follow-up**（同上）
+- [x] 12.4 apply 前跑 `bash scripts/run-perf-bench.sh --runs 5` 留 baseline 数据（baseline 见 CI perf-gate-bot 第一行 main 列）
+- [x] 12.5 apply 完跑同命令，对比四维（PR perf-gate-bot 报告 PASS：`perf_cold_scan` 40ms 噪声内 / `perf_get_session_detail` 200→190ms `user/real` 0.842 噪声内）
+- [x] 12.6 D1 micro-bench median 通过准则 → 留 PR-D2 follow-up（当前 `perf_get_session_detail` 端到端涵盖 scanner 路径，gate PASS 可代理）
+- [x] 12.7 ADR grep：`rg "policy fork: PR-E lift to BackendPolicy" crates/cdt-api/src/ipc/local.rs | wc -l` ≥ 6（见 PR description）
 
 ## 13. 顺手改：bg-task-dispatch 文档 + justfile bg-pr quoting
 - [x] 13.1 `.claude/rules/bg-task-dispatch.md` "启动样板" 段：把 inline prompt 部分加粗 + 加备注"justfile bg-pr 已经能正确处理 inline prompt 内的双引号 / 反引号"

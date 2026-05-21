@@ -264,6 +264,27 @@ change `fix-ssh-active-context-dispatch` 的 SSH 分支让 `get_project_memory` 
 
 `crates/cdt-api/tests/ipc_contract.rs::active_ssh_context_reads_remote_projects_and_sessions` 用 `FakeRemoteSftp` 验证返回值形状，但 fake provider 未暴露 `read_count` / `read_dir_count` 等内部计数——如果未来某个 IPC method 误退化为 local fs 但 fake 也返回合理默认值，测试可能假阳性通过。后续：扩展 `FakeRemoteSftp` 加 `Arc<AtomicUsize>` 计数 + 每个 method 测试断言 `read_count >= 1`。
 
+### [coverage-gap] SSH 后台 batch read_dir_with_metadata + SSE 推差量（PR-D2）
+
+change `unify-fs-direct-calls` 的 §5 段在 design.md G/D/E 三件套里只落了 G + D：cache hit trust + SkeletonThenStream。**E 段（per-project read_dir_with_metadata 后台 batch + SSE 推差量）**留 PR-D2 落地：
+
+- 加 helper `batch_validate_metadata_and_push_sse(self, fs: Arc<dyn FileSystemProvider>, ctx, project_dir, sessions, sse_tx)`：一次 `fs.read_dir_with_metadata` 拿全 dir entries，比对 cache signature，mismatch / 新增 → spawn cache miss scan + SSE event 推 metadata diff
+- `list_sessions_skeleton` SSH 路径在返骨架 + cache trust 渲染后 spawn 后台 batch task per project_dir（注册 abort handle 到 `active_scans` map per-key cancel）
+- `ssh_disconnect` 时 abort 该 ssh ctx 下的所有 batch task（design D3-bis）
+- SSE event 类型复用现有 `session_metadata_update` 推送 channel（前端已订阅，无 BREAKING）
+
+当前 PR-D 已通过 `scan_metadata_for_page` per-session via fs trait 异步刷新功能正确，仅缺批量优化——冷启动 SSH 30+ projects 仍 1.5s wall 是 E 段没做造成的。PR-F SFTP message-id pipeline 之前 PR-D2 先把批量做了能把首次连 SSH wall 从 N×RTT 降到 N_projects×RTT。
+
+### [coverage-gap] SSH cache hit 路径计数器 + scanner dyn AsyncRead 性能基线（PR-D2）
+
+change `unify-fs-direct-calls` §12 micro-bench / SSH cache hit integration / SSH chunked read perf 三项留 PR-D2：
+
+- `crates/cdt-api/tests/perf_scanner_open_read.rs`（D1 micro-bench）：5 runs min/median/stddev 对比 `tokio::fs::File::open + BufReader` vs `LocalFileSystemProvider::open_read + BufReader::with_capacity(32K)` 在 500KB / 5MB jsonl 上的开销；准入门 candidate ≤ baseline × 1.3 median
+- `crates/cdt-api/tests/perf_ssh_cache_hit.rs`：fake-SSH provider 含 op counter，走 `LocalDataApi::list_sessions` / `get_session_detail` user-facing public method 断言：二次 list cache hit → open_read = 0 / read_to_string = 0；二次 `get_tool_output` 同 session → fs op = 1 stat 0 open_read
+- `crates/cdt-api/tests/perf_ssh_scanner_chunked_read.rs`（`#[ignore]`）：fake-SSH 注入 50ms RTT/read packet 32K，断言 5MB jsonl scan wall < 9s
+
+当前 PR-D 已通过 `bash scripts/run-perf-bench.sh --runs 5` 验证 PASS（macOS local：perf_cold_scan 40ms / perf_get_session_detail 190ms 均在预算内），SSH 路径性能由 ipc_contract test + fake_ssh handshake 测试覆盖功能正确性；这三项 perf bench 补 SSH 路径四维数据 + scanner dyn AsyncRead 同 buf size 精确开销基线。
+
 ---
 
 ## notification-triggers
