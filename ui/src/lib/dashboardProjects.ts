@@ -37,15 +37,17 @@ export function deriveDashboardProjects(data: ProjectData | null): DashboardProj
   return data.repositoryGroups.map((group) => {
     const mainWorktree = group.worktrees.find((w) => w.isMainWorktree) ?? group.worktrees[0];
     return {
-      id: mainWorktree.id,
+      // change `simplify-repository-as-project::D5/D7`：dashboard 点击进入
+      // sidebar 后 selectedGroupId 持 group.id，list_group_sessions(groupId, ...)
+      // 返回 group 内合并 sessions。dashboard id 必须与之对齐——若仍用
+      // mainWorktree.id，sidebar 收到的 groupId 不匹配任何 group → 列表为空
+      // （历史 e2e 通过路径）。
+      id: group.id,
       path: mainWorktree.path,
       displayName: group.name,
-      // 与 Sidebar 跳转后视图保持一致：点击 dashboard 行进入 sidebar 时
-      // selectedProjectId = mainWorktree.id，sidebar 只显示该 worktree 的
-      // sessions，所以 dashboard chip 也用 worktree.sessions.length，避免
-      // "dashboard 显示 5、点进去 sidebar 显示 1" 的认知错配。group 维度
-      // 聚合数留给未来支持 group 级选择再补（codex CR 反馈）。
-      sessionCount: mainWorktree.sessions.length,
+      // dashboard chip 显示 group 维度聚合 session 总数，与点击进入 sidebar
+      // 后列表的实际条数对齐。
+      sessionCount: group.totalSessions,
       lastModified: group.mostRecentSession,
       worktreeCount: group.worktrees.length,
     };

@@ -38,12 +38,21 @@ function flattenRepositoryGroups(groups: RepositoryGroup[]): ProjectInfo[] {
 }
 
 function summarizeRepositoryGroups(groups: RepositoryGroup[]): ProjectInfo[] {
+  // change `simplify-repository-as-project::D5/D7`：ProjectSwitcher 下拉项
+  // 的 `id` SHALL 是 `group.id`（不再是 mainWorktree.id），让 App 顶层导航
+  // 持 `selectedGroupId` 与 sidebar `list_group_sessions(groupId, ...)` 对齐。
+  // 单 worktree group 时 `group.id === worktrees[0].id`（grouper 在 standalone
+  // 场景下设定），所以单 project 用户无感知 ID 变化。
   return [...groups]
     .sort((a, b) => (b.mostRecentSession ?? 0) - (a.mostRecentSession ?? 0))
     .map((group) => {
-      const mainWorktree = group.worktrees.find((worktree) => worktree.isMainWorktree) ?? group.worktrees[0];
+      const anchor = group.worktrees.find((w) => w.isRepoRoot)
+        ?? group.worktrees.find((w) => w.isMainWorktree)
+        ?? group.worktrees[0];
       return {
-        ...projectFromWorktree(mainWorktree, group.name),
+        id: group.id,
+        path: anchor.path,
+        displayName: group.name,
         sessionCount: group.totalSessions,
       };
     });

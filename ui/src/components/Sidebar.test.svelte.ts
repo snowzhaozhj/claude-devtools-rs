@@ -28,10 +28,10 @@ afterEach(() => {
 })
 
 describe('Sidebar smoke', () => {
-  test('给定空 selectedProjectId 可渲染 sidebar 容器', async () => {
+  test('给定空 selectedGroupId 可渲染 sidebar 容器', async () => {
     const { container } = render(Sidebar, {
       props: {
-        selectedProjectId: '',
+        selectedGroupId: '',
         activeSessionId: null,
         onSelectProject: () => {},
         onSelectSession: () => {},
@@ -48,7 +48,7 @@ describe('Sidebar smoke', () => {
     const onSelectProject = vi.fn()
     render(Sidebar, {
       props: {
-        selectedProjectId: '',
+        selectedGroupId: '',
         activeSessionId: null,
         onSelectProject,
         onSelectSession: () => {},
@@ -68,7 +68,7 @@ describe('Sidebar smoke', () => {
   test('collapsed=true 渲染不抛错', async () => {
     const { container } = render(Sidebar, {
       props: {
-        selectedProjectId: '',
+        selectedGroupId: '',
         activeSessionId: null,
         collapsed: true,
         onSelectProject: () => {},
@@ -80,15 +80,15 @@ describe('Sidebar smoke', () => {
     expect(container.querySelector('.session-list')).not.toBeNull()
   })
 
-  test('selectedProjectId 非空时 session-filter-bar 始终渲染（不因 sessionsLoading 隐藏）', async () => {
-    // 抗回归：若改回 `{#if !sessionsLoading && selectedProjectId}` guard，
+  test('selectedGroupId 非空时 session-filter-bar 始终渲染（不因 sessionsLoading 隐藏）', async () => {
+    // 抗回归：若改回 `{#if !sessionsLoading && selectedGroupId}` guard，
     // 切项目 / 首次打开期间 filter-bar 会先消失再出现（高度 ~40px），
     // 下方 session-list 会跟随上下抖动一格——用户视觉感受为"切换项目时
-    // 元素位置跳动一下"。本 test 锁住"filter-bar 在 selectedProjectId
+    // 元素位置跳动一下"。本 test 锁住"filter-bar 在 selectedGroupId
     // 存在时 SHALL 渲染"的契约。
     const { container } = render(Sidebar, {
       props: {
-        selectedProjectId: 'mock-rich-rust',
+        selectedGroupId: 'mock-rich-rust',
         activeSessionId: null,
         onSelectProject: () => {},
         onSelectSession: () => {},
@@ -99,6 +99,37 @@ describe('Sidebar smoke', () => {
     })
   })
 
+  test('多 worktree group 顶部渲染 worktree filter dropdown（spec sidebar §filter）', async () => {
+    // mock-rich-repo-rust group 含 2 个 worktree → showWorktreeFilter=true
+    const { container } = render(Sidebar, {
+      props: {
+        selectedGroupId: 'mock-rich-repo-rust',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+    await waitFor(() => {
+      expect(container.querySelector('.worktree-filter-bar')).not.toBeNull()
+    })
+  })
+
+  test('单 worktree group 顶部 SHALL NOT 渲染 worktree filter dropdown', async () => {
+    const { container } = render(Sidebar, {
+      props: {
+        selectedGroupId: 'mock-rich-ts',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+    // 等 session-filter-bar 渲染再断言 filter 隐藏（避免初始未挂时误绿）
+    await waitFor(() => {
+      expect(container.querySelector('.session-filter-bar')).not.toBeNull()
+    })
+    expect(container.querySelector('.worktree-filter-bar')).toBeNull()
+  })
+
   test('切回已访问过的 project 时 memory-entry 通过 cache 同步 hydrate', async () => {
     // 抗回归：若移除 memoryCache，切项目时 projectMemory 仍是上一个 project
     // 的值直到 async getProjectMemory return，期间 memory-entry 保持上一次
@@ -107,7 +138,7 @@ describe('Sidebar smoke', () => {
     // cache 命中后 loadProjectMemory 同步 set projectMemory，无中间空档。
     const { container, rerender } = render(Sidebar, {
       props: {
-        selectedProjectId: 'mock-rich-rust',
+        selectedGroupId: 'mock-rich-rust',
         activeSessionId: null,
         onSelectProject: () => {},
         onSelectSession: () => {},
@@ -120,7 +151,7 @@ describe('Sidebar smoke', () => {
     })
     // 切到无 memory 的项目（fixture 中 mock-rich-rust-wt-feat hasMemory=false）
     await rerender({
-      selectedProjectId: 'mock-rich-rust-wt-feat',
+      selectedGroupId: 'mock-rich-rust-wt-feat',
       activeSessionId: null,
       onSelectProject: () => {},
       onSelectSession: () => {},
@@ -132,7 +163,7 @@ describe('Sidebar smoke', () => {
     // （仅靠 svelte 1 个 reactivity microtask）。如果还要等 IPC return
     // 才显示，说明 cache 路径未生效。
     await rerender({
-      selectedProjectId: 'mock-rich-rust',
+      selectedGroupId: 'mock-rich-rust',
       activeSessionId: null,
       onSelectProject: () => {},
       onSelectSession: () => {},

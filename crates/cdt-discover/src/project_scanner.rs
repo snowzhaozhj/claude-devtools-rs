@@ -48,14 +48,34 @@ pub struct ProjectScanner {
 }
 
 impl ProjectScanner {
+    /// 便利构造：内部新建独立 `Arc<Semaphore>`。仅适合**测试** / 单次性
+    /// 扫描场景；生产代码（多个 IPC 并发创建 scanner 时）SHALL 用
+    /// [`new_with_semaphore`] 注入 `LocalDataApi` 持有的共享 semaphore，避免
+    /// "N 个 scanner × 64 fd 击穿"风险。
+    /// change `simplify-repository-as-project::D4`。
     #[must_use]
     pub fn new(fs: Arc<dyn FileSystemProvider>, projects_dir: PathBuf) -> Self {
+        let semaphore = Arc::new(Semaphore::new(FILE_READ_CONCURRENCY));
+        Self::new_with_semaphore(fs, projects_dir, semaphore)
+    }
+
+    /// 接受外部注入的共享 `Arc<Semaphore>` 控制 head-read 并发。多个
+    /// scanner 实例共享同一 semaphore 时，全局 in-flight `read_lines_head`
+    /// 上限始终为 semaphore 容量（生产默认 64），不会随 scanner 数量线性
+    /// 放大。`LocalDataApi` 在内部所有动态 scanner 构造点 SHALL 走此入口。
+    /// change `simplify-repository-as-project::D4`。
+    #[must_use]
+    pub fn new_with_semaphore(
+        fs: Arc<dyn FileSystemProvider>,
+        projects_dir: PathBuf,
+        read_semaphore: Arc<Semaphore>,
+    ) -> Self {
         let path_resolver = ProjectPathResolver::new(fs.clone(), projects_dir.clone());
         Self {
             fs,
             projects_dir,
             path_resolver,
-            read_semaphore: Arc::new(Semaphore::new(FILE_READ_CONCURRENCY)),
+            read_semaphore,
         }
     }
 
@@ -191,7 +211,15 @@ impl ProjectScanner {
                 cwd,
             })
             .collect();
-        sessions.sort_by_key(|s| std::cmp::Reverse(s.last_modified));
+        // 同 mtime 时 sid 字典序升序——k-way merge cursor 续页正确性依赖
+        // session 流稳定顺序，否则 read_dir 顺序非确定性会让 (mtime, sid)
+        // 指针的"严格之后"判定漂移。spec ipc-data-api §"Expose group session
+        // listing via k-way merge pagination" Scenario "同 mtime sid 稳序"。
+        sessions.sort_by(|a, b| {
+            b.last_modified
+                .cmp(&a.last_modified)
+                .then_with(|| a.id.cmp(&b.id))
+        });
         Ok(sessions)
     }
 

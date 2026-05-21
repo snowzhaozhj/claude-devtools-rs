@@ -651,8 +651,19 @@ fn sanitize_for_title(text: &str) -> String {
     s.trim().to_string()
 }
 
-/// 若 `text` trim 后以 `<teammate-message` 起首，提取 `summary="..."` 属性
-/// 内容作为标题候选；非 teammate 主导消息或无 summary 属性返回 `None`。
+/// 若 `text` trim 后以 `<teammate-message` 起首，按优先级提取标题候选：
+/// 1. `summary="..."` 属性（如有非空值）
+/// 2. fallback：tag body 文本（`<teammate-message ...>body</teammate-message>`
+///    中 body 部分 trim 后非空）
+///
+/// 非 teammate 主导消息或两者都失败时返回 `None`。
+///
+/// 历史踩坑：原实现只看 `summary` 属性，没 summary 时 fallback 走
+/// `sanitize_for_title`，那里把 `<teammate-message ...>...</teammate-message>`
+/// **整段含 body** 剥除 → title 变空。结果是 teammate-message 主导消息
+/// 无 summary 属性时（典型场景：用户发 teammate body 但没标 summary），
+/// 该 session 的 title 永久卡在 null，UI fallback 到 sessionId 前缀
+/// （2026-05-21 修复）。
 ///
 /// Spec：`openspec/specs/ipc-data-api/spec.md`
 /// §`Strip teammate-message tags from session title`。
@@ -661,18 +672,30 @@ fn extract_teammate_summary_title(text: &str) -> Option<String> {
     if !trimmed.starts_with("<teammate-message") {
         return None;
     }
-    // 取开 tag 范围内的属性串
     let tag_end = trimmed.find('>')?;
     let attrs = &trimmed[..tag_end];
-    // summary="..."
-    let idx = attrs.find("summary=\"")?;
-    let after = &attrs[idx + "summary=\"".len()..];
-    let close = after.find('"')?;
-    let summary = after[..close].trim();
-    if summary.is_empty() {
+    // 1. 优先 summary="..."
+    if let Some(idx) = attrs.find("summary=\"") {
+        let after = &attrs[idx + "summary=\"".len()..];
+        if let Some(close) = after.find('"') {
+            let summary = after[..close].trim();
+            if !summary.is_empty() {
+                return Some(summary.to_string());
+            }
+        }
+    }
+    // 2. fallback：提取 body 文本（截到 `</teammate-message>` 或文本末尾）。
+    let after_open_tag = &trimmed[tag_end + 1..];
+    let body = if let Some(close_pos) = after_open_tag.find("</teammate-message>") {
+        &after_open_tag[..close_pos]
+    } else {
+        after_open_tag
+    };
+    let body_trimmed = body.trim();
+    if body_trimmed.is_empty() {
         None
     } else {
-        Some(summary.to_string())
+        Some(body_trimmed.to_string())
     }
 }
 
@@ -741,10 +764,22 @@ mod tests {
     }
 
     #[test]
-    fn teammate_no_summary_returns_none() {
-        let text = r#"<teammate-message teammate_id="alice" color="blue">body</teammate-message>"#;
-        let summary = extract_teammate_summary_title(text);
-        assert!(summary.is_none());
+    fn teammate_no_summary_falls_back_to_body() {
+        // teammate-message 主导消息但无 summary 属性时 SHALL fallback 到 body
+        // 文本作 title（2026-05-21 修复：原实现返 None 让 sanitize_for_title
+        // 把整段含 body 一起剥光，导致 title 永久 null）。
+        let text =
+            r#"<teammate-message teammate_id="alice" color="blue">body text</teammate-message>"#;
+        let title = extract_teammate_summary_title(text);
+        assert_eq!(title.as_deref(), Some("body text"));
+    }
+
+    #[test]
+    fn teammate_empty_body_returns_none() {
+        // body 为空且无 summary → 仍返 None（不当 title）。
+        let text = r#"<teammate-message teammate_id="alice"></teammate-message>"#;
+        let title = extract_teammate_summary_title(text);
+        assert!(title.is_none());
     }
 
     #[test]

@@ -57,7 +57,9 @@ describe('projectDataStore', () => {
     expect(first).toBe(second)
     expect(calls).toEqual(['list_repository_groups'])
     expect(first.projects).toEqual([
-      { id: 'project-1', path: '/repo', displayName: 'repo', sessionCount: 3 },
+      // change `simplify-repository-as-project::D7`: projects[i].id 持 group.id
+      // 而非 worktrees[0].id，使 ProjectSwitcher selectedProjectId 语义切到 group。
+      { id: 'group-1', path: '/repo', displayName: 'repo', sessionCount: 3 },
     ])
     expect(first.worktreeProjects).toEqual([
       { id: 'project-1-feat', path: '/repo/.claude/worktrees/feat-x', displayName: 'feat-x', sessionCount: 1 },

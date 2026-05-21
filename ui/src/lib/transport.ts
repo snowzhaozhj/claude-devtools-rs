@@ -61,6 +61,7 @@ const SSE_RECONNECT_MAX_MS = 30_000;
 const LIST_SESSIONS_LIKE_COMMANDS = new Set([
   "list_sessions",
   "list_repository_groups",
+  "list_group_sessions",
   "get_worktree_sessions",
 ]);
 
@@ -293,6 +294,8 @@ function httpRequestForCommand(cmd: string, args: InvokeArgs): HttpRequest {
       return { method: "GET", path: "/api/wsl-distros" };
     case "get_worktree_sessions":
       return { method: "GET", path: `/api/worktrees/${enc(a.groupId)}/sessions${paginationQuery(a)}` };
+    case "list_group_sessions":
+      return { method: "GET", path: `/api/repository-groups/${enc(a.groupId)}/sessions${paginationQuery(a)}` };
     case "list_sessions":
       return { method: "GET", path: `/api/projects/${enc(a.projectId)}/sessions${paginationQuery(a)}` };
     case "get_session_summaries_by_ids":

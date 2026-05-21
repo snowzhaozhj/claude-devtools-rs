@@ -24,6 +24,47 @@ pub struct PaginatedResponse<T> {
     pub total: usize,
 }
 
+/// k-way merge group-session 分页响应。**Server 无状态** —— cursor 自描述
+/// 每个 worktree 的指针位置（base64 JSON），重启服务后仍可继续分页。
+/// change `simplify-repository-as-project::D3`。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupSessionPage {
+    pub sessions: Vec<SessionSummary>,
+    pub next_cursor: Option<String>,
+}
+
+/// 单 worktree 在 group session 流中的指针状态。
+///
+/// tag 值用 `snake_case` 与其他面向 IPC 的 enum 一致（如
+/// `cdt_core::message::MessageContent` / `cdt_api::ipc::events::*`）；字段
+/// （如 `mtime_ms`）继续按 camelCase 暴露给前端。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum WorktreeOffset {
+    /// 从该 worktree 的第一条 session 开始消费。
+    NotStarted,
+    /// 已消费到 `(mtime_ms, sid)` 这条；续页时找第一条**严格**在其之后的：
+    /// `(s.mtime_ms < mtime_ms) || (s.mtime_ms == mtime_ms && s.sid > sid)`。
+    AfterMtime { mtime_ms: i64, sid: String },
+    /// 该 worktree 流已耗尽，k-way merge 跳过。前端也用此变体表达
+    /// "worktree filter 排除该 worktree" 语义（D6 server-side filter）。
+    Exhausted,
+}
+
+/// k-way merge cursor 内部表示——`perWorktree` key 是 `worktree.id`
+/// （即 `project.id`），value 是该 worktree 的指针状态。
+/// 序列化为 base64(JSON) 传 IPC。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupCursor {
+    pub per_worktree: std::collections::BTreeMap<String, WorktreeOffset>,
+}
+
 // =============================================================================
 // 项目
 // =============================================================================
@@ -69,12 +110,24 @@ pub struct SessionSummary {
     /// 当 session 属于某 `RepositoryGroup` 内的 worktree 时，记录 worktree 的
     /// project id（与 `Worktree.id == Project.id` 一致）。`list_sessions` /
     /// `list_sessions_sync` 路径**不**填（默认 None），仅 `get_worktree_sessions`
-    /// 路径填，让前端按 worktree 过滤展示。
+    /// / `list_group_sessions` 路径填，让前端按 worktree 过滤展示。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_id: Option<String>,
     /// 同 `worktree_id`，记录 worktree 的人类展示名（`Worktree.name`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_name: Option<String>,
+    /// 该 session 所属 `RepositoryGroup.id`，让前端按 group 维度过滤 SSE
+    /// event / cache key（design `simplify-repository-as-project::D7`）。
+    /// `list_repository_groups` 未跑过时为 None，前端 fallback 到 `project_id`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
+    /// 该 session 所属 `Worktree.cwd_relative_to_repo_root`（如 `crates`、
+    /// `.claude/worktrees/feat-x`）。repo 根本身或解析失败时为 None。
+    /// 由 IPC handler 通过 `LocalDataApi::worktree_meta_cache` join 填入
+    /// （change `simplify-repository-as-project::D2` scheme c），`cdt-core::Session`
+    /// 不存此字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd_relative_to_repo_root: Option<String>,
     /// session jsonl 首条带 `cwd` 字段消息的 `cwd` 值；缺失时为 `None`。
     /// 由 `ProjectScanner` 在 head-read 阶段填充，让 sidebar 在同一 project 下
     /// 区分不同 cwd 的 session（典型场景：worktree / monorepo 子目录）。

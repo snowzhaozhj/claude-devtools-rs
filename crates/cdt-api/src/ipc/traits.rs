@@ -8,9 +8,9 @@ use async_trait::async_trait;
 
 use super::error::ApiError;
 use super::types::{
-    ConfigUpdateRequest, ContextInfo, MemoryFileContent, PaginatedRequest, PaginatedResponse,
-    ProjectInfo, ProjectMemory, ProjectSessionPrefs, SearchRequest, SessionDetail, SessionSummary,
-    SshConnectRequest,
+    ConfigUpdateRequest, ContextInfo, GroupSessionPage, MemoryFileContent, PaginatedRequest,
+    PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs, SearchRequest,
+    SessionDetail, SessionSummary, SshConnectRequest,
 };
 
 /// 数据 API 操作集。
@@ -294,6 +294,8 @@ pub trait DataApi: Send + Sync {
                     name: p.display_name.clone(),
                     git_branch: None,
                     is_main_worktree: true,
+                    is_repo_root: true,
+                    cwd_relative_to_repo_root: None,
                     sessions: Vec::new(),
                     created_at: None,
                     most_recent_session: None,
@@ -363,6 +365,48 @@ pub trait DataApi: Send + Sync {
             items,
             next_cursor,
             total,
+        })
+    }
+
+    /// k-way merge 流式分页拉取 group 内所有 worktree 合并后的 sessions。
+    ///
+    /// **Server 无状态**：cursor 自描述每个 worktree 的指针位置（base64
+    /// JSON）；MUST NOT 在产出当前页前把 group 全 sessions collect 到 Vec
+    /// 全量排序（避免 RSS 击穿）；MUST NOT 对每个 worktree 调
+    /// `list_sessions_sync(page_size = usize::MAX)`。
+    ///
+    /// 全序定义：`(mtime_ms desc, sid asc)`——mtime 大的排前，同 mtime 时
+    /// sid 字典序小的排前。续页 `AfterMtime { mtime_ms, sid }` SHALL 找
+    /// 第一条满足 `(s.mtime_ms < mtime_ms) || (s.mtime_ms == mtime_ms &&
+    /// s.sid > sid)` 的条目（严格在 cursor 之后，无 off-by-one）。
+    ///
+    /// 默认实现 fallback 到 `get_worktree_sessions(group_id, { page_size })`
+    /// 兜底——SSH / 远端 trait impl 暂未实现 k-way merge 时仍可用，但 perf
+    /// 会回退到老路径。`LocalDataApi` override 真版本。
+    ///
+    /// 详 `openspec/specs/ipc-data-api/spec.md` §"Expose group session
+    /// listing via k-way merge pagination"。
+    /// change `simplify-repository-as-project::D3`。
+    async fn list_group_sessions(
+        &self,
+        group_id: &str,
+        page_size: usize,
+        cursor: Option<&str>,
+    ) -> Result<GroupSessionPage, ApiError> {
+        if page_size == 0 {
+            return Err(ApiError::validation("pageSize must be > 0"));
+        }
+        // fallback：跑 get_worktree_sessions 拿一页，重打包成 GroupSessionPage。
+        // 注意：fallback 路径会走老的"全量扫描"路径，仅在 trait impl 没 override
+        // 时降级使用。
+        let pagination = PaginatedRequest {
+            page_size,
+            cursor: cursor.map(std::borrow::ToOwned::to_owned),
+        };
+        let resp = self.get_worktree_sessions(group_id, &pagination).await?;
+        Ok(GroupSessionPage {
+            sessions: resp.items,
+            next_cursor: resp.next_cursor,
         })
     }
 

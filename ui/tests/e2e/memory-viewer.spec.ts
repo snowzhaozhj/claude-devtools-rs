@@ -1,11 +1,15 @@
 import { expect, test } from '@playwright/test'
 
 test.describe('memory viewer', () => {
-  test('无 memory 的项目不显示 Sidebar Memory 入口', async ({ page }) => {
+  test('无 memory 的 worktree 不显示 Sidebar Memory 入口', async ({ page }) => {
     await page.goto('/?mock=1&fixture=multi-project-rich')
 
-    await page.getByRole('button', { name: 'rust-port' }).first().click()
-    await page.getByRole('button', { name: /feat-x/ }).click()
+    // 切到 rust-port group（含 main + feat-x 双 worktree）
+    await page.locator('.dash-row, .dash-card', { hasText: 'rust-port' }).first().click()
+    // sidebar 顶部 worktree filter dropdown 切到 feat-x（spec D6）；
+    // feat-x worktree 在 fixture 中无 memory，Sidebar Memory 入口 SHALL 隐藏。
+    await page.locator('.worktree-filter-bar .dd-anchor').click()
+    await page.locator('.dd-popover .dd-opt-label', { hasText: 'feat-x' }).click()
 
     await expect(page.getByRole('button', { name: /Memory \(/ })).toHaveCount(0)
   })

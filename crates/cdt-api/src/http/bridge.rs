@@ -118,6 +118,7 @@ fn spawn_metadata_bridge(
                         message_count: event.message_count,
                         is_ongoing: event.is_ongoing,
                         git_branch: event.git_branch,
+                        group_id: event.group_id,
                     });
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}

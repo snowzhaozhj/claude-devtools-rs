@@ -110,6 +110,10 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
         // 辅助
         .route("/api/agent-configs", get(read_agent_configs))
         .route("/api/repository-groups", get(list_repository_groups))
+        .route(
+            "/api/repository-groups/{group_id}/sessions",
+            get(list_group_sessions),
+        )
         .route("/api/wsl-distros", get(list_wsl_distros))
         .route(
             "/api/worktrees/{group_id}/sessions",
@@ -563,6 +567,28 @@ async fn get_worktree_sessions(
     Query(pagination): Query<PaginatedRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let result = s.api.get_worktree_sessions(&group_id, &pagination).await?;
+    Ok(Json(result))
+}
+
+/// change `simplify-repository-as-project::D3`：k-way merge cursor 分页桥接。
+///
+/// Server-mode 远端 UI 必须能拿到 group 维度的 sessions 合并视图，否则切到
+/// `RepositoryGroup` 入口后无法走 `list_group_sessions` IPC（远端没 Tauri runtime）
+/// 只能 fallback `get_worktree_sessions`（单 worktree，丢 group merge 语义）。
+/// `pageSize` 与 `cursor` 走 query string。
+async fn list_group_sessions(
+    State(s): State<AppState>,
+    Path(group_id): Path<String>,
+    Query(pagination): Query<PaginatedRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let result = s
+        .api
+        .list_group_sessions(
+            &group_id,
+            pagination.page_size,
+            pagination.cursor.as_deref(),
+        )
+        .await?;
     Ok(Json(result))
 }
 

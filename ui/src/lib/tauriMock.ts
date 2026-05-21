@@ -63,6 +63,7 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'is_running_under_rosetta',
   'list_repository_groups',
   'get_worktree_sessions',
+  'list_group_sessions',
   'list_wsl_distros',
   'http_server_start',
   'http_server_stop',
@@ -144,6 +145,147 @@ function buildHandler(fx: Fixture) {
             ) || null,
           totalSessions: p.sessionCount,
         }))
+      }
+
+      case 'list_group_sessions': {
+        // change `simplify-repository-as-project::D3`：k-way merge cursor 分页。
+        // 后端 cursor wire 形态：base64(JSON.stringify({ perWorktree: { <wt-id>:
+        // { kind: 'not_started' | 'after_mtime' { mtimeMs, sid } | 'exhausted' } } }))
+        // mock 解码 cursor 后按 per-worktree offset 计算可参与的 sessions →
+        // 合并 → timestamp desc → 取 pageSize → 编码新 cursor。这样 worktree
+        // filter / Exhausted / loadMore 三个核心 cursor 语义都能被 vitest /
+        // playwright e2e 真实覆盖（codex 二审 round 3 测试覆盖洞）。
+        //
+        // 损坏 cursor 仍 fallback 视为首页（与后端 `parse_group_cursor` 对齐）。
+        type WtOffset =
+          | { kind: 'not_started' }
+          | { kind: 'after_mtime'; mtimeMs: number; sid: string }
+          | { kind: 'exhausted' }
+        interface CursorWire {
+          perWorktree: Record<string, WtOffset>
+        }
+
+        const decodeCursor = (raw: string | undefined): CursorWire | null => {
+          if (!raw) return null
+          try {
+            const bin = typeof atob === 'function'
+              ? atob(raw)
+              : Buffer.from(raw, 'base64').toString('binary')
+            const bytes = new Uint8Array(bin.length)
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+            const json = new TextDecoder().decode(bytes)
+            const parsed = JSON.parse(json) as unknown
+            if (
+              parsed && typeof parsed === 'object' &&
+              'perWorktree' in parsed &&
+              parsed.perWorktree && typeof parsed.perWorktree === 'object'
+            ) {
+              return parsed as CursorWire
+            }
+            return null
+          } catch {
+            return null
+          }
+        }
+
+        const groupId = getArg<string>(payload, 'groupId') ?? ''
+        const pageSize = getArg<number>(payload, 'pageSize') ?? 20
+        const rawCursor = getArg<string>(payload, 'cursor')
+        const cursor = decodeCursor(rawCursor)
+
+        const groups =
+          fx.repositoryGroups ??
+          fx.projects.map((p) => ({
+            id: p.id,
+            worktrees: [{ id: p.id, name: p.displayName }],
+          }))
+        const group = groups.find((g) => g.id === groupId)
+        if (!group) {
+          return { sessions: [], nextCursor: null }
+        }
+
+        // per-worktree 过滤：cursor 缺省视为 NotStarted（全量）。
+        const wtOffsets: Record<string, WtOffset> = cursor?.perWorktree ?? {}
+        const eligible = group.worktrees.flatMap((wt) => {
+          const off = wtOffsets[wt.id] ?? { kind: 'not_started' }
+          if (off.kind === 'exhausted') return []
+          const all = (fx.sessions[wt.id] ?? [])
+            .slice()
+            .sort((a, b) => b.timestamp - a.timestamp)
+          const cutoff =
+            off.kind === 'after_mtime'
+              ? all.findIndex(
+                  (s) =>
+                    s.timestamp < off.mtimeMs ||
+                    (s.timestamp === off.mtimeMs && s.sessionId > off.sid),
+                )
+              : 0
+          const start = cutoff < 0 ? all.length : cutoff
+          return all.slice(start).map((s) => ({
+            ...s,
+            worktreeId: wt.id,
+            worktreeName: wt.name,
+            groupId,
+          }))
+        })
+        eligible.sort((a, b) => b.timestamp - a.timestamp)
+        const items = eligible.slice(0, pageSize)
+
+        // 跨页 next cursor：每个 wt 按本页消费末尾的 (mtime, sid) 编 after_mtime；
+        // exhausted 保持；本页未消费的 worktree 保持原 offset。
+        const consumedByWt: Record<string, { mtimeMs: number; sid: string }> = {}
+        for (const s of items) {
+          consumedByWt[s.worktreeId] = { mtimeMs: s.timestamp, sid: s.sessionId }
+        }
+        const newPerWorktree: Record<string, WtOffset> = {}
+        let allExhausted = true
+        for (const wt of group.worktrees) {
+          const prev = wtOffsets[wt.id] ?? { kind: 'not_started' }
+          if (prev.kind === 'exhausted') {
+            newPerWorktree[wt.id] = { kind: 'exhausted' }
+            continue
+          }
+          const consumed = consumedByWt[wt.id]
+          if (!consumed) {
+            // 本页没消费过该 wt：保持原 offset（NotStarted 或 AfterMtime）。
+            newPerWorktree[wt.id] = prev
+            allExhausted = false
+            continue
+          }
+          const all = (fx.sessions[wt.id] ?? [])
+            .slice()
+            .sort((a, b) => b.timestamp - a.timestamp)
+          const idxAfter = all.findIndex(
+            (s) =>
+              s.timestamp < consumed.mtimeMs ||
+              (s.timestamp === consumed.mtimeMs && s.sessionId > consumed.sid),
+          )
+          if (idxAfter < 0) {
+            newPerWorktree[wt.id] = { kind: 'exhausted' }
+          } else {
+            newPerWorktree[wt.id] = {
+              kind: 'after_mtime',
+              mtimeMs: consumed.mtimeMs,
+              sid: consumed.sid,
+            }
+            allExhausted = false
+          }
+        }
+
+        const encodeCursor = (obj: CursorWire): string => {
+          const json = JSON.stringify(obj)
+          if (typeof btoa === 'function') {
+            const bytes = new TextEncoder().encode(json)
+            let bin = ''
+            for (const b of bytes) bin += String.fromCharCode(b)
+            return btoa(bin)
+          }
+          return Buffer.from(json, 'utf8').toString('base64')
+        }
+        const nextCursor = allExhausted
+          ? null
+          : encodeCursor({ perWorktree: newPerWorktree })
+        return { sessions: items, nextCursor }
       }
 
       case 'get_worktree_sessions': {

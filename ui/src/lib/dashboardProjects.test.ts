@@ -71,8 +71,11 @@ describe("deriveDashboardProjects", () => {
     };
     const out = deriveDashboardProjects(data);
     expect(out).toHaveLength(1);
+    // change `simplify-repository-as-project::D5/D7`：dashboard id 走 group.id
+    // 让 sidebar 点击后 selectedGroupId 命中 list_group_sessions(groupId, ...)；
+    // 单 worktree group 时 group.id === worktrees[0].id 退化为字符串相同。
     expect(out[0]).toEqual({
-      id: "w-main",
+      id: "g1",
       path: "/home/me/repo",
       displayName: "My Repo",
       sessionCount: 3,
@@ -81,7 +84,7 @@ describe("deriveDashboardProjects", () => {
     });
   });
 
-  test("多 worktree group：选 isMainWorktree=true 作为 id，worktreeCount 反映总数，sessionCount 取 mainWorktree.sessions.length 而非聚合 totalSessions", () => {
+  test("多 worktree group：id 用 group.id，sessionCount 聚合 group.totalSessions", () => {
     const data: ProjectData = {
       projects: [],
       worktreeProjects: [],
@@ -100,18 +103,20 @@ describe("deriveDashboardProjects", () => {
       ],
     };
     const out = deriveDashboardProjects(data);
-    // sessionCount=1 = wt-main.sessions.length，与 sidebar 跳转后展示一致；
-    // 总数 5（group.totalSessions）有意不暴露，避免 dashboard / sidebar 数字错配
+    // change `simplify-repository-as-project::D5/D7`：id 是 group.id，
+    // sessionCount 是 group.totalSessions=5（与 sidebar 切到该 group 后
+    // list_group_sessions 返回的合并条数一致），path 仍用 mainWorktree.path
+    // 作为 dashboard 行展示锚点。
     expect(out[0]).toMatchObject({
-      id: "wt-main",
+      id: "g2",
       path: "/home/me/big",
       displayName: "Big Repo",
-      sessionCount: 1,
+      sessionCount: 5,
       worktreeCount: 3,
     });
   });
 
-  test("无 isMainWorktree 时回退到第一个 worktree", () => {
+  test("无 isMainWorktree 时仍走 group.id（path 回退到第一个 worktree）", () => {
     const data: ProjectData = {
       projects: [],
       worktreeProjects: [],
@@ -127,7 +132,8 @@ describe("deriveDashboardProjects", () => {
       ],
     };
     const out = deriveDashboardProjects(data);
-    expect(out[0].id).toBe("wt-a");
+    expect(out[0].id).toBe("g3");
+    expect(out[0].path).toBe("/x/a"); // path 仍取第一个 worktree 作为展示锚点
     expect(out[0].worktreeCount).toBe(2);
   });
 });

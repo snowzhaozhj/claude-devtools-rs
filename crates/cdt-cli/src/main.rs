@@ -4,8 +4,10 @@
 //! 与 SSE event bridge → 启动 HTTP server。
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use tokio::sync::Semaphore;
 
 use cdt_api::http::spawn_event_bridge;
 use cdt_api::{AppState, LocalDataApi, start_server};
@@ -53,7 +55,11 @@ async fn main() -> Result<()> {
             .map(PathBuf::from)
             .as_deref(),
     );
-    let scanner = ProjectScanner::new(fs, projects_dir.clone());
+    // change `simplify-repository-as-project::D4`：生产代码 SHALL 用
+    // `new_with_semaphore` 注入共享 semaphore，避免 N 个 scanner × 64 fd 击穿。
+    // CLI 此处仅创建 1 个 scanner，但保持 spec 约束以便 build-time grep 拦回归。
+    let scanner_semaphore = Arc::new(Semaphore::new(64));
+    let scanner = ProjectScanner::new_with_semaphore(fs, projects_dir.clone(), scanner_semaphore);
 
     // SSH manager
     let ssh_mgr = SshConnectionManager::new();

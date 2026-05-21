@@ -28,6 +28,12 @@ pub struct RepoLookup {
     pub identity: Option<RepositoryIdentity>,
     pub branch: Option<String>,
     pub is_main_worktree: bool,
+    /// `path` 自身就是 working tree 根目录（walk-up 0 步即命中 `.git`）。
+    /// 区别于 `is_main_worktree`：子目录 cwd walk-up 到主 `.git` 时
+    /// `is_main_worktree=true` 但 `is_repo_root=false`，避免 UI 把主仓
+    /// 子目录 cwd 误标为独立 "main" 撞名。
+    /// change `simplify-repository-as-project::D1`。
+    pub is_repo_root: bool,
 }
 
 impl Default for RepoLookup {
@@ -36,6 +42,7 @@ impl Default for RepoLookup {
             identity: None,
             branch: None,
             is_main_worktree: true,
+            is_repo_root: false,
         }
     }
 }
@@ -61,6 +68,9 @@ pub trait GitIdentityResolver: Send + Sync {
             identity,
             branch,
             is_main_worktree: is_main,
+            // trait 默认实现无法判定 working tree 根；保守 false。Fake / SSH impl
+            // 需要更精确语义时应 override `resolve_all`。
+            is_repo_root: false,
         }
     }
 }
@@ -118,11 +128,18 @@ impl GitIdentityResolver for LocalGitIdentityResolver {
 
 /// 纯 fs 解析 `path` 的 git 元数据；失败任一步返 `None`，caller 走 `RepoLookup::default()`。
 async fn resolve_all_fs(path: &Path) -> Option<RepoLookup> {
-    let (git_dir, common_dir, is_main) = locate_git_dirs(path).await?;
+    let (git_dir, common_dir, is_main, is_repo_root) = locate_git_dirs(path).await?;
 
-    let canonical_common = tokio::fs::canonicalize(&common_dir)
-        .await
-        .unwrap_or(common_dir);
+    // Windows 兼容：`tokio::fs::canonicalize` 返 `\\?\C:\...` UNC 前缀，会让下游
+    // `strip_prefix(repo_root)` 永远失败。`dunce::canonicalize` 在 Unix 等价
+    // `fs::canonicalize`、在 Windows 上自动剥 UNC，跨平台一致。包 `spawn_blocking`
+    // 避免阻塞 tokio worker。
+    let canonical_common = {
+        let common_dir = common_dir.clone();
+        tokio::task::spawn_blocking(move || dunce::canonicalize(&common_dir).unwrap_or(common_dir))
+            .await
+            .ok()?
+    };
     // identity id / name 与原 `git rev-parse --git-common-dir` 路径等价：
     // canonical 后取 parent.file_name 作为 repo name（main worktree 时
     // `<repo>/.git` 的 parent 就是 `<repo>`，file_name 就是 repo 目录名）。
@@ -148,10 +165,12 @@ async fn resolve_all_fs(path: &Path) -> Option<RepoLookup> {
         identity: Some(identity),
         branch,
         is_main_worktree: is_main,
+        is_repo_root,
     })
 }
 
-/// 向上 walk 找到 `.git`；返回 `(git_dir, common_dir, is_main_worktree)`。
+/// 向上 walk 找到 `.git`；返回 `(git_dir, common_dir, is_main_worktree, is_repo_root)`。
+///
 /// `.git` 是目录 → main，`git_dir == common_dir`。
 /// `.git` 是文件（gitlink） → 进一步看 `<gitdir>/commondir`：
 ///   - 文件存在 → linked worktree（git 标准约定）：`common_dir` 从该文件读取，`is_main=false`
@@ -159,10 +178,15 @@ async fn resolve_all_fs(path: &Path) -> Option<RepoLookup> {
 ///     （codex 二审 Bug 1：submodule 的 `.git` 也是 gitlink，但其 common dir 是自身 gitdir，
 ///     不是上两级，否则会把 submodule 错归到父仓库/错误的 common dir）
 ///
+/// `is_repo_root` 语义：`start` 自身就是 walk-up 命中 `.git` 的目录（即 working
+/// tree 根 / linked worktree 根 / submodule 根），未 pop 过；子目录 cwd walk-up
+/// 多步命中 `.git` 时该字段为 `false`，避免 UI 把同 repo 的不同 cwd 都标 "main"
+/// 撞名。change `simplify-repository-as-project::D1`。
+///
 /// 已知 trade-off（claude session 场景下概率近 0，未实现）：
 /// - bare repo（用户 cd 进 bare repo 跑 claude）：当前返回 default 走非 git 路径
 /// - `GIT_COMMON_DIR` 环境变量覆盖：纯 fs 实现无感（旧 `git rev-parse` 会受环境变量覆盖）
-async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool)> {
+async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool, bool)> {
     // 入口先校验 start path 自身存在；否则向上 walk 时会越过已被 git prune 掉的
     // worktree 目录（`<repo>/.claude/worktrees/<old-name>/`，path 已不存在），
     // 最终撞到父 repo 的 `.git` 把它当成自身 working tree，于是显示父 repo
@@ -172,13 +196,20 @@ async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool)> {
         return None;
     }
     let mut current = start.to_path_buf();
+    let mut walked = false;
     loop {
         let dot_git = current.join(".git");
         match tokio::fs::metadata(&dot_git).await {
             Ok(meta) if meta.is_dir() => {
-                return Some((dot_git.clone(), dot_git, true));
+                return Some((dot_git.clone(), dot_git, true, !walked));
             }
             Ok(meta) if meta.is_file() => {
+                // `.git` 是 file（linked worktree / submodule）—— 按 spec
+                // `simplify-repository-as-project::D1`，is_repo_root **仅**当
+                // `.git` 是目录（即主 working tree 根）才为 true。linked
+                // worktree / submodule 即便 start 就是它们的根目录，也算独
+                // 立 working tree 视角，**不**算所属 group 的 repo root，
+                // 保证同 group 内 is_repo_root 唯一性。
                 let content = tokio::fs::read_to_string(&dot_git).await.ok()?;
                 let gitdir = parse_gitlink_dir(&content, &current)?;
                 // 区分 linked worktree（has `commondir` file）vs submodule（no `commondir`）。
@@ -203,11 +234,11 @@ async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool)> {
                         } else {
                             gitdir.join(common_path)
                         };
-                        return Some((gitdir, common, false));
+                        return Some((gitdir, common, false, false));
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                         // 没有 commondir 文件 → submodule 或独立 gitlink，common = gitdir
-                        return Some((gitdir.clone(), gitdir, true));
+                        return Some((gitdir.clone(), gitdir, true, false));
                     }
                     Err(_) => {
                         // 其他 IO 错误（权限 / 损坏） → 跳过该项，不臆测语义
@@ -216,6 +247,7 @@ async fn locate_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, bool)> {
                 }
             }
             _ => {
+                walked = true;
                 if !current.pop() {
                     return None;
                 }
@@ -303,7 +335,8 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
                 // 例：被 prune 掉的 `.claude/worktrees/<name>` 仍能挂到 parent
                 // repo 的 group。borrow parent 的 identity，但 `branch` 与
                 // `is_main_worktree` 对原 path 不再适用（保持与老逻辑等价：
-                // identity 来自 fallback 时 is_main = false、branch = None）。
+                // identity 来自 fallback 时 is_main = false、branch = None、
+                // is_repo_root = false）。
                 let Some(parent) = infer_parent_repo_from_worktree_path(&project_path) else {
                     return primary;
                 };
@@ -312,6 +345,7 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
                     identity: parent_lookup.identity,
                     branch: None,
                     is_main_worktree: false,
+                    is_repo_root: false,
                 }
             }
         }))
@@ -323,10 +357,18 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
                 identity,
                 branch,
                 is_main_worktree: is_main,
+                is_repo_root,
             } = lookup;
             let group_id = identity
                 .as_ref()
                 .map_or_else(|| project.id.clone(), |i| i.id.clone());
+
+            // cwd_relative_to_repo_root 纯字符串运算 0 syscall：
+            // identity.id 已经是 canonical `<repo>/.git`，strip `/.git` suffix
+            // 得 repo 根；project.path 减去前缀就是相对路径。
+            // change `simplify-repository-as-project::D2`。
+            let cwd_relative_to_repo_root =
+                compute_cwd_relative_to_repo_root(identity.as_ref(), project.path.as_path());
 
             let bucket = buckets.entry(group_id.clone()).or_insert_with(|| Bucket {
                 id: group_id.clone(),
@@ -343,6 +385,8 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
                 name: project.name,
                 git_branch: branch,
                 is_main_worktree: is_main,
+                is_repo_root,
+                cwd_relative_to_repo_root,
                 sessions: project.sessions,
                 created_at: project.created_at,
                 most_recent_session: project.most_recent_session,
@@ -355,15 +399,20 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
                 if b.worktrees.is_empty() {
                     return None;
                 }
-                b.worktrees
-                    .sort_by(|a, c| match (a.is_main_worktree, c.is_main_worktree) {
-                        (true, false) => std::cmp::Ordering::Less,
-                        (false, true) => std::cmp::Ordering::Greater,
-                        _ => c
-                            .most_recent_session
-                            .unwrap_or(0)
-                            .cmp(&a.most_recent_session.unwrap_or(0)),
-                    });
+                // 排序优先级：is_repo_root 优先（repo 根排前）→ is_main_worktree
+                // 优先 → most_recent_session 倒序。change
+                // `simplify-repository-as-project::D1`：避免主仓 cwd 与
+                // `crates/` 子目录 cwd 都判 is_main_worktree=true 时撞名首位。
+                b.worktrees.sort_by(|a, c| {
+                    c.is_repo_root
+                        .cmp(&a.is_repo_root)
+                        .then_with(|| c.is_main_worktree.cmp(&a.is_main_worktree))
+                        .then_with(|| {
+                            c.most_recent_session
+                                .unwrap_or(0)
+                                .cmp(&a.most_recent_session.unwrap_or(0))
+                        })
+                });
                 let total_sessions: usize = b.worktrees.iter().map(|w| w.sessions.len()).sum();
                 let most_recent = b
                     .worktrees
@@ -410,6 +459,39 @@ fn infer_parent_repo_from_worktree_path(path: &Path) -> Option<PathBuf> {
         parent.push(component.as_os_str());
     }
     None
+}
+
+/// 纯字符串运算（0 syscall / 0 spawn）：从 identity.id（canonical
+/// `<repo>/.git`）反推 repo 根，再让 `project_path` strip 前缀。repo 根
+/// 自身或 `strip_prefix` 失败 → `None`。
+/// change `simplify-repository-as-project::D2`。
+///
+/// Windows 兼容：strip `.git` 后缀走 `Path::parent`（跨平台分隔符），
+/// `strip_prefix` 走 `Path::strip_prefix`，避免硬编码 `/`。
+fn compute_cwd_relative_to_repo_root(
+    identity: Option<&RepositoryIdentity>,
+    project_path: &Path,
+) -> Option<String> {
+    let identity = identity?;
+    let common_dir = Path::new(&identity.id);
+    // canonical 后的 `<repo>/.git` 的 parent 就是 repo 根；submodule 的
+    // `<parent>/.git/modules/<name>` 的 parent 是 `<parent>/.git/modules`
+    // 不构成 working tree 根——此时 strip_prefix 失败 → None，符合预期。
+    let repo_root = common_dir.parent()?;
+    // Windows 兼容 + macOS `/var` vs `/private/var` symlink：identity.id 已经
+    // 经 dunce 剥 UNC，但 project_path 可能仍带 `\\?\` 前缀（Windows
+    // std::fs::canonicalize）或 symlink 表达不一致——本侧再 dunce 一次让
+    // 比较的两端命名空间对齐。失败时回退到原 project_path 走字符串 strip，
+    // 兼容 project_path 不存在（被 git rm 但 ~/.claude/projects 仍有记录）。
+    let normalized_project: std::borrow::Cow<'_, Path> = match dunce::canonicalize(project_path) {
+        Ok(canon) => std::borrow::Cow::Owned(canon),
+        Err(_) => std::borrow::Cow::Borrowed(project_path),
+    };
+    let relative = normalized_project.strip_prefix(repo_root).ok()?;
+    // Windows 兼容：`relative.to_string_lossy()` 在 Windows 输出 `crates\subdir`
+    // 反斜杠形态，跨平台 IPC payload 会分叉。归一为 `/` 与前端期望对齐。
+    let s = relative.to_string_lossy().replace('\\', "/");
+    if s.is_empty() { None } else { Some(s) }
 }
 
 struct Bucket {
@@ -875,6 +957,160 @@ mod tests {
         assert!(parse_head_branch("ref: refs/remotes/origin/main\n").is_none());
         // 空分支名也是非法
         assert!(parse_head_branch("ref: refs/heads/\n").is_none());
+    }
+
+    /// change `simplify-repository-as-project::D1` Scenario:
+    /// "主仓子目录 cwd 不被误标为 repo root"。
+    #[tokio::test]
+    async fn subdir_cwd_not_marked_as_repo_root() {
+        let dir = tempdir().unwrap();
+        // canonicalize 让 tempdir path 与 identity.id 走 canonical 一致
+        // （macOS `/var/...` vs `/private/var/...` symlink 差异会让
+        // `strip_prefix` 失败，但生产 cwd 通常 syscall getcwd 自带 canonical）
+        let base = dir.path().canonicalize().unwrap();
+        let repo = base.join("repo");
+        let git = repo.join(".git");
+        let crates_dir = repo.join("crates");
+        tokio::fs::create_dir_all(&git).await.unwrap();
+        tokio::fs::create_dir_all(&crates_dir).await.unwrap();
+        tokio::fs::write(git.join("HEAD"), "ref: refs/heads/main\n")
+            .await
+            .unwrap();
+
+        let projects = vec![
+            Project {
+                id: "main".into(),
+                name: "repo".into(),
+                path: repo.clone(),
+                sessions: vec!["s1".into()],
+                most_recent_session: Some(100),
+                created_at: None,
+                distinct_cwds: Vec::new(),
+            },
+            Project {
+                id: "crates_sub".into(),
+                name: "crates".into(),
+                path: crates_dir.clone(),
+                sessions: vec!["s2".into()],
+                most_recent_session: Some(200),
+                created_at: None,
+                distinct_cwds: Vec::new(),
+            },
+        ];
+
+        let grouper = WorktreeGrouper::new(LocalGitIdentityResolver::new());
+        let groups = grouper.group_by_repository(projects).await;
+
+        assert_eq!(groups.len(), 1, "subdir + repo root SHALL share one group");
+        let group = &groups[0];
+        assert_eq!(group.worktrees.len(), 2);
+
+        let main_wt = group
+            .worktrees
+            .iter()
+            .find(|w| w.id == "main")
+            .expect("main worktree should exist");
+        assert!(main_wt.is_repo_root, "repo root SHALL be is_repo_root=true");
+        assert!(main_wt.is_main_worktree);
+        assert_eq!(main_wt.cwd_relative_to_repo_root, None);
+
+        let sub_wt = group
+            .worktrees
+            .iter()
+            .find(|w| w.id == "crates_sub")
+            .expect("subdir worktree should exist");
+        assert!(
+            !sub_wt.is_repo_root,
+            "subdir cwd SHALL NOT be is_repo_root=true (历史 bug 把它误标为 main)"
+        );
+        assert_eq!(
+            sub_wt.cwd_relative_to_repo_root.as_deref(),
+            Some("crates"),
+            "subdir 应有 cwd_relative_to_repo_root=Some(\"crates\")"
+        );
+
+        // 排序：is_repo_root=true 的 main_wt SHALL 排前，即便 sub 的 most_recent_session 更新
+        assert!(
+            group.worktrees[0].is_repo_root,
+            "排序后 repo root SHALL 排第一位"
+        );
+        assert_eq!(group.worktrees[0].id, "main");
+    }
+
+    /// change `simplify-repository-as-project::D2` Scenario:
+    /// "linked worktree cwd 含 `cwd_relative_to_repo_root`"。
+    #[tokio::test]
+    async fn linked_worktree_cwd_relative_to_repo_root_under_claude_worktrees() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let main_repo = base.join("main_repo");
+        let main_git = main_repo.join(".git");
+        let wt_git_dir = main_git.join("worktrees").join("feat-x");
+        let wt_path = main_repo.join(".claude").join("worktrees").join("feat-x");
+        tokio::fs::create_dir_all(&wt_git_dir).await.unwrap();
+        tokio::fs::create_dir_all(&wt_path).await.unwrap();
+        tokio::fs::write(main_git.join("HEAD"), "ref: refs/heads/main\n")
+            .await
+            .unwrap();
+        tokio::fs::write(wt_git_dir.join("HEAD"), "ref: refs/heads/feat-x\n")
+            .await
+            .unwrap();
+        tokio::fs::write(wt_git_dir.join("commondir"), "../..\n")
+            .await
+            .unwrap();
+        let gitlink = format!("gitdir: {}\n", wt_git_dir.display());
+        tokio::fs::write(wt_path.join(".git"), gitlink)
+            .await
+            .unwrap();
+
+        let projects = vec![
+            Project {
+                id: "main".into(),
+                name: "main_repo".into(),
+                path: main_repo.clone(),
+                sessions: vec!["s1".into()],
+                most_recent_session: Some(100),
+                created_at: None,
+                distinct_cwds: Vec::new(),
+            },
+            Project {
+                id: "feat-x".into(),
+                name: "feat-x".into(),
+                path: wt_path.clone(),
+                sessions: vec!["s2".into()],
+                most_recent_session: Some(200),
+                created_at: None,
+                distinct_cwds: Vec::new(),
+            },
+        ];
+
+        let grouper = WorktreeGrouper::new(LocalGitIdentityResolver::new());
+        let groups = grouper.group_by_repository(projects).await;
+
+        assert_eq!(
+            groups.len(),
+            1,
+            "main + linked worktree SHALL share one group"
+        );
+        let group = &groups[0];
+        let linked = group
+            .worktrees
+            .iter()
+            .find(|w| w.id == "feat-x")
+            .expect("linked worktree should exist");
+        assert!(
+            !linked.is_repo_root,
+            "linked worktree path 嵌套在 main repo 内不算 repo root"
+        );
+        assert!(
+            !linked.is_main_worktree,
+            "linked worktree common-dir 是主 .git 但本身是 linked"
+        );
+        assert_eq!(
+            linked.cwd_relative_to_repo_root.as_deref(),
+            Some(".claude/worktrees/feat-x"),
+            "linked worktree 路径 SHALL strip 出 .claude/worktrees/feat-x"
+        );
     }
 
     #[test]

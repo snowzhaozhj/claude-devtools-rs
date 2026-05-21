@@ -55,7 +55,19 @@ pub async fn sse_handler(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, axum::Error>>> {
     let rx = state.events_tx.subscribe();
-    let stream = BroadcastStream::new(rx).map(|result| Ok(convert_broadcast_result(result)));
+    let broadcast_stream =
+        BroadcastStream::new(rx).map(|result| Ok(convert_broadcast_result(result)));
+    // 立即 emit 一条 SSE comment（`:open`）作为 prelude，让 axum / 反向代理 /
+    // vite dev proxy 立刻 flush HTTP response chunked 给浏览器，浏览器
+    // EventSource 收到 response headers 后立即进入 OPEN。否则首条真实 event
+    // 之前 response body 可能被中间 proxy 缓冲，浏览器 EventSource 永远卡在
+    // CONNECTING（readyState=0）→ 前端 `ensureSseReady` 1000ms 超时放行 →
+    // 后端在该窗口 emit 的 `session_metadata_update` 全部丢失 → 列表项
+    // title=null 永久 fallback 到 sessionId（codex 二审 round 3 报"会话名
+    // 变 sessionId"的修法）。SSE comment 行以 `:` 开头，符合 W3C spec，
+    // 浏览器静默忽略不当成 event 派发。
+    let prelude = futures::stream::once(async { Ok(Event::default().comment("open")) });
+    let stream = prelude.chain(broadcast_stream);
     Sse::new(stream)
 }
 
