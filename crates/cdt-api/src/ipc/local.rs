@@ -566,7 +566,10 @@ impl LocalDataApi {
 
         let cursor_state = parse_group_cursor(cursor);
 
-        let (fs, projects_dir, ctx) = self.active_fs_and_context().await;
+        // 用户可见列表 handler 走 strict 变体——SSH disconnect 中间态 SHALL 报错
+        // 而非静默降级（PR-C codex commit-stage round-2 Q1：原 PR-B 引入 relaxed
+        // 在用户可见列表路径，本 PR 加 strict 时一并修齐）。
+        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
         let pinned = std::collections::BTreeSet::<String>::new();
         let scanner = ProjectScanner::new_with_semaphore(
             fs.clone(),
@@ -1029,7 +1032,12 @@ impl LocalDataApi {
     /// 现有非 cache callsite 保留旧行为。**用户可见 IPC handler**（`get_tool_output`
     /// / `get_image_asset` 等）SHALL 走 `active_fs_and_context_strict()` —— 用户
     /// 在 SSH context 下请求时 SHALL NOT 静默降级到 Local 数据（详 change
-    /// `parsed-message-cache-context-prefix` codex 二审 commit-stage Q1）。
+    /// `parsed-message-cache-context-prefix` codex 二审 commit-stage Q1 + round-2 Q1）。
+    ///
+    /// 当前唯一 callsite 是 `prime_parsed_msg_cache_for_test`（`test-utils` feature
+    /// 路径），所以 cfg-gated 编译；release / 默认构建里无 user。其它已知 cache 写
+    /// 入路径若未来需 relaxed 行为，再放开 cfg。
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) async fn active_fs_and_context(
         &self,
     ) -> (Arc<dyn FileSystemProvider>, PathBuf, cdt_fs::ContextId) {
@@ -1430,7 +1438,9 @@ impl LocalDataApi {
             return Err(ApiError::validation("pageSize must be > 0"));
         }
 
-        let (fs, projects_dir, ctx) = self.active_fs_and_context().await;
+        // 用户可见列表 handler 走 strict 变体——SSH disconnect 中间态 SHALL 报错
+        // 而非静默降级（PR-C codex commit-stage round-2 Q1）。
+        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
         let scanner = ProjectScanner::new_with_semaphore(
             fs.clone(),

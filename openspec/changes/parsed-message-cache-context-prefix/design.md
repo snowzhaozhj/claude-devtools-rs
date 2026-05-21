@@ -198,8 +198,12 @@ async fn get_tool_output(&self, root_session_id: &str, session_id: &str, tool_us
 
 **两个变体的使用边界**：
 
-- **`active_fs_and_context()` (relaxed)**：cache-only 内部路径——cache 写入即便短暂降级也只是多写一个 Local entry，无数据正确性问题（用 LRU 自然淘汰兜底）。用于 `prime_parsed_msg_cache_for_test`、metadata 主动 scan 等。
-- **`active_fs_and_context_strict()` (strict)**：用户可见 IPC handler——SHALL 返错而非降级，让前端能区分"SSH context 下请求失败"与"在 Local context 下查不到"。用于 `get_tool_output` / `get_image_asset`。
+- **`active_fs_and_context()` (relaxed)**：仅 `prime_parsed_msg_cache_for_test`（`test-utils` feature 路径，构造时不接 SSH，行为等价）；其它内部 cache 写入路径若有，本 PR 已审计无新增。
+- **`active_fs_and_context_strict()` (strict)**：所有用户可见 IPC handler ——SHALL 返错而非降级，让前端能区分"SSH context 下请求失败"与"在 Local context 下查不到"。本 PR 切换的 callsite：
+  - `get_tool_output`（line 2540 附近）
+  - `get_image_asset`（line 2470 附近）
+  - `build_group_session_page`（line 569，原 PR-B 引入的 relaxed callsite，本 PR 引入 strict 时一并修齐）
+  - `list_sessions_skeleton`（line 1433，原 PR-B 引入的 relaxed callsite，本 PR 引入 strict 时一并修齐）
 
 **为何不直接让 `active_fs_and_context()` 默认 strict**：cache wrapper 内部走的就是 relaxed 语义（cache 写入降级到 Local 是 design D3 的"safe miss"），改成 strict 会让 cache 写入抛错——破 cache wrapper 现有 fallback 路径。两个变体并存最清晰。
 
