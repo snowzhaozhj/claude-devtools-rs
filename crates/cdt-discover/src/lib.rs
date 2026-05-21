@@ -23,8 +23,13 @@ pub mod wsl;
 
 pub use error::{DiscoverError, FsError};
 pub use fs_provider::{
-    DirEntry, EntryKind, FileSystemProvider, FsHandle, FsKind, FsMetadata, LocalFileSystemProvider,
-    local_handle,
+    DirEntry, EntryKind, FileSystemProvider, FsHandle, FsIdentity, FsKind, FsMetadata,
+    LocalFileSystemProvider, local_handle,
+};
+// 新增类型从 cdt-fs re-export（兼容历史 import 路径 + 提供未来扩展锚点）。
+pub use cdt_fs::{
+    BackendPolicy, ContextId, FsOpCounter, FsOpCounts, HostSignature, InitialLoadPolicy,
+    InstrumentedFs, PrefetchPolicy, SshConfigDigestInput, with_fs_counter,
 };
 pub use path_compare::{
     normalize_path_for_compare, normalize_path_string_for_compare, path_starts_with,

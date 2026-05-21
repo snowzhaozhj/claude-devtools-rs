@@ -13,6 +13,7 @@ authors = ["zhaohejie"]
 
 [workspace.dependencies]
 # Shared crate interdeps — keep versions aligned here.
+cdt-fs = { path = "crates/cdt-fs" }
 cdt-core = { path = "crates/cdt-core" }
 cdt-parse = { path = "crates/cdt-parse" }
 cdt-analyze = { path = "crates/cdt-analyze" }
@@ -50,6 +51,7 @@ uuid = { version = "1", features = ["v4"] }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 percent-encoding = "2"
+syn = { version = "2", features = ["full", "parsing"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

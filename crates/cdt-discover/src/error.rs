@@ -1,32 +1,12 @@
-//! 本 crate 的错误类型。
+//! cdt-discover 顶层错误。
 //!
-//! 设计决策见 `openspec/changes/port-project-discovery/design.md` §决策 6。
-
-use std::path::PathBuf;
+//! `FsError` 的真相源在 `cdt-fs` crate（capability `fs-abstraction`），这里
+//! 通过 `pub use` re-export 兼容历史 import 路径（如 `use cdt_discover::FsError`）。
+//! 新代码 SHOULD 直接 `use cdt_fs::FsError`。
 
 use thiserror::Error;
 
-/// 文件系统层错误 —— 所有 `FileSystemProvider` 实现必须把下游 I/O 错误
-/// 投影到这里。
-#[derive(Debug, Error)]
-pub enum FsError {
-    #[error("path not found: {0}")]
-    NotFound(PathBuf),
-    #[error("io error at {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("utf-8 decode error at {path}: {source}")]
-    Utf8 {
-        path: PathBuf,
-        #[source]
-        source: std::string::FromUtf8Error,
-    },
-    #[error("unsupported operation: {0}")]
-    Unsupported(&'static str),
-}
+pub use cdt_fs::FsError;
 
 /// discovery 流水线的顶层错误。
 ///

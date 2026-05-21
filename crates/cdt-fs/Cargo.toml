@@ -1,0 +1,24 @@
+[package]
+name = "cdt-fs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Filesystem abstraction layer (FileSystemProvider trait + Local impl + ContextId + BackendPolicy + instrumentation). Owns capability `fs-abstraction`."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+syn = { workspace = true }

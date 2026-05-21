@@ -16,6 +16,7 @@ default = []
 git-integration-test = []
 
 [dependencies]
+cdt-fs = { workspace = true }
 cdt-core = { workspace = true }
 cdt-parse = { workspace = true }
 serde = { workspace = true }

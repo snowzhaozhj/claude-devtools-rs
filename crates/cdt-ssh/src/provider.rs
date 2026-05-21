@@ -26,9 +26,10 @@ use russh_sftp::client::SftpSession;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::fs::File;
 use russh_sftp::protocol::{FileType, StatusCode};
+use tokio::io::AsyncRead;
 use tokio::sync::Mutex;
 
-use cdt_discover::{DirEntry, EntryKind, FileSystemProvider, FsError, FsKind, FsMetadata};
+use cdt_fs::{DirEntry, EntryKind, FileSystemProvider, FsError, FsKind, FsMetadata};
 
 /// SFTP 操作重试的最大尝试次数。
 const MAX_RETRY_ATTEMPTS: u32 = 3;
@@ -249,6 +250,15 @@ impl FileSystemProvider for SshFileSystemProvider {
         .await
         .map_err(|e| map_client_error(path, e))
     }
+
+    /// trait `open_read` 实现——包装现有 `open_read_stream` inherent 方法返
+    /// `Box<dyn AsyncRead + Send + Unpin>`，让调用方不需 downcast 即能流式读。
+    ///
+    /// 设计：`openspec/changes/unify-fs-abstraction/design.md` D4。
+    async fn open_read(&self, path: &Path) -> Result<Box<dyn AsyncRead + Send + Unpin>, FsError> {
+        let file = self.open_read_stream(path).await?;
+        Ok(Box::new(file))
+    }
 }
 
 /// 重试 helper：瞬时错误最多 3 次，指数退避（75ms × attempt）。
@@ -274,6 +284,10 @@ where
 }
 
 /// 把 [`SftpClientError`] 投影到 [`FsError`]。
+///
+/// `Transient` 经过 `with_retry` 3 次仍失败时调用本函数——投影到结构化的
+/// `FsError::TransientExhausted`，让上层 cache 能按 `should_invalidate_cache` /
+/// `is_retryable` 做正确决策（详见 `cdt-fs::FsError` 元方法）。
 fn map_client_error(path: &Path, err: SftpClientError) -> FsError {
     match err {
         SftpClientError::NoSuchFile => FsError::NotFound(path.to_path_buf()),
@@ -281,9 +295,10 @@ fn map_client_error(path: &Path, err: SftpClientError) -> FsError {
             path: path.to_path_buf(),
             source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied"),
         },
-        SftpClientError::Transient(reason) => FsError::Io {
+        SftpClientError::Transient(reason) => FsError::TransientExhausted {
             path: path.to_path_buf(),
-            source: std::io::Error::other(format!("transient sftp error: {reason}")),
+            attempts: MAX_RETRY_ATTEMPTS,
+            last_reason: reason,
         },
         SftpClientError::Other(reason) => FsError::Io {
             path: path.to_path_buf(),
@@ -365,6 +380,7 @@ impl SftpClient for RusshSftpClient {
         Ok(FsMetadata {
             size: meta.len(),
             mtime: meta.modified().unwrap_or(UNIX_EPOCH),
+            identity: None,
         })
     }
 
@@ -398,6 +414,7 @@ impl SftpClient for RusshSftpClient {
                     Some(FsMetadata {
                         size: meta.len(),
                         mtime: modified.unwrap_or(UNIX_EPOCH),
+                        identity: None,
                     })
                 } else {
                     None
@@ -630,6 +647,7 @@ mod tests {
         fake.set_metadata(Ok(FsMetadata {
             size: 42,
             mtime: now,
+            identity: None,
         }))
         .await;
         let provider = make_provider(fake.clone());
@@ -648,6 +666,7 @@ mod tests {
                 metadata: Some(FsMetadata {
                     size: 100,
                     mtime: SystemTime::UNIX_EPOCH,
+                    identity: None,
                 }),
                 mtime_missing: true,
             },
@@ -701,7 +720,10 @@ mod tests {
 
     #[tokio::test]
     async fn read_to_string_gives_up_after_max_transient() {
-        // 4 次失败超出 MAX_RETRY_ATTEMPTS=3；最后返 transient 错误。
+        // 4 次失败超出 MAX_RETRY_ATTEMPTS=3；最后返 `FsError::TransientExhausted`
+        // 让上层 cache 能按 `should_invalidate_cache=false` / `is_retryable=false`
+        // 做正确决策（change `unify-fs-abstraction` D5b + ssh-remote-context spec
+        // §`Structured SSH error classification`）。
         let fake = FakeSftpClient::arc();
         fake.set_transient_then_ok(10, b"never".to_vec()).await;
         let provider = make_provider(fake.clone());
@@ -710,11 +732,23 @@ mod tests {
             .await
             .expect_err("transient exhausted");
         match err {
-            FsError::Io { source, .. } => {
-                assert!(source.to_string().contains("transient"));
+            FsError::TransientExhausted {
+                attempts,
+                last_reason,
+                ..
+            } => {
+                assert_eq!(attempts, MAX_RETRY_ATTEMPTS);
+                assert!(!last_reason.is_empty(), "last_reason 应保留瞬时错误描述");
             }
             other => panic!("unexpected: {other:?}"),
         }
+        // 验证元方法语义：耗尽后既不可重试也不应清 cache（远端可能恢复）
+        let err = provider
+            .read_to_string(Path::new("/remote/perma-flaky-2"))
+            .await
+            .expect_err("transient exhausted again");
+        assert!(!err.is_retryable());
+        assert!(!err.should_invalidate_cache());
     }
 
     #[tokio::test]
