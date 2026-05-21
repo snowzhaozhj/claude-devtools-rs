@@ -147,6 +147,42 @@ function buildHandler(fx: Fixture) {
         }))
       }
 
+      case 'list_group_sessions': {
+        // change `simplify-repository-as-project::D3`：k-way merge cursor 分页。
+        // mock 退化为"合并 group 内所有 worktree sessions → 按 timestamp 倒序
+        // → 按 offset 切页"；cursor 是简单的 `offset` 字符串而非 base64 GroupCursor
+        // ——前端 buildFilterCursor 产 base64 时这里 fallback 视为首页（与后端
+        // `parse_group_cursor` 损坏 cursor fallback 语义对齐，不破坏测试预期）。
+        const groupId = getArg<string>(payload, 'groupId') ?? ''
+        const pageSize = getArg<number>(payload, 'pageSize') ?? 20
+        const rawCursor = getArg<string>(payload, 'cursor')
+        const offset = rawCursor && /^\d+$/.test(rawCursor) ? Number.parseInt(rawCursor, 10) : 0
+
+        const groups =
+          fx.repositoryGroups ??
+          fx.projects.map((p) => ({
+            id: p.id,
+            worktrees: [{ id: p.id, name: p.displayName }],
+          }))
+        const group = groups.find((g) => g.id === groupId)
+        if (!group) {
+          return { sessions: [], nextCursor: null }
+        }
+        const merged = group.worktrees.flatMap((wt) =>
+          (fx.sessions[wt.id] ?? []).map((s) => ({
+            ...s,
+            worktreeId: wt.id,
+            worktreeName: wt.name,
+            groupId,
+          })),
+        )
+        merged.sort((a, b) => b.timestamp - a.timestamp)
+        const items = merged.slice(offset, offset + pageSize)
+        const nextOffset = offset + items.length
+        const nextCursor = nextOffset < merged.length ? String(nextOffset) : null
+        return { sessions: items, nextCursor }
+      }
+
       case 'get_worktree_sessions': {
         const groupId = getArg<string>(payload, 'groupId') ?? ''
         const groups =
