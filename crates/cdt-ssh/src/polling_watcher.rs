@@ -532,7 +532,11 @@ mod tests {
     }
 
     fn meta(size: u64, mtime: SystemTime) -> FsMetadata {
-        FsMetadata { size, mtime }
+        FsMetadata {
+            size,
+            mtime,
+            identity: None,
+        }
     }
 
     fn snap_one_project(name: &str, files: Vec<(&str, FsMetadata)>) -> DirSnapshot {

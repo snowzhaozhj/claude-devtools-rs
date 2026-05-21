@@ -49,6 +49,25 @@ jobs:
       - name: cargo fmt --all --check
         run: cargo fmt --all -- --check
 
+  fs-abstraction:
+    name: xtask check-fs-direct-calls (warn-only)
+    # H1 enforce 机制（unify-fs-abstraction change）：扫业务 crate 是否含
+    # `tokio::fs::*` 直调；allowlist 真相源 `crates/cdt-fs/ALLOWLIST.md`。
+    # PR-A 期间 `--warn-only` 仅打印 violation 不 fail；PR-D 完成 callsite
+    # 迁移后切到 fail-on-match。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: "false"
+          prefix-key: v3-rust
+      - name: cargo xtask check-fs-direct-calls --warn-only
+        run: cargo xtask check-fs-direct-calls --warn-only
+
   clippy:
     name: clippy (${{ matrix.os }})
     strategy:

@@ -207,6 +207,12 @@ async fn list_sessions_does_not_cross_project_boundary() {
             self.log.lock().unwrap().read_lines.push(path.to_path_buf());
             self.inner.read_lines_head(path, max).await
         }
+        async fn open_read(
+            &self,
+            path: &Path,
+        ) -> Result<Box<dyn tokio::io::AsyncRead + Send + Unpin>, FsError> {
+            self.inner.open_read(path).await
+        }
     }
 
     let root = tempfile::tempdir().unwrap();

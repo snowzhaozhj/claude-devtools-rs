@@ -11,6 +11,7 @@ description = "SSH remote context support (owns ssh-remote-context). Implements 
 workspace = true
 
 [dependencies]
+cdt-fs = { workspace = true }
 cdt-core = { workspace = true }
 cdt-discover = { path = "../cdt-discover" }
 async-trait = { workspace = true }

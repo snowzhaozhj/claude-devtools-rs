@@ -133,6 +133,7 @@ impl ParsedMessageCache {
 ///
 /// 行为契约：`openspec/specs/ipc-data-api/spec.md` §"`get_tool_output` 与
 /// `get_image_asset` 走 parsed-message LRU 缓存"。
+#[allow(deprecated)]
 pub(crate) async fn extract_parsed_messages_cached(
     cache: &StdMutex<ParsedMessageCache>,
     path: &Path,

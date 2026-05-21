@@ -19,6 +19,12 @@ use crate::config_parser::{SshHostConfig, parse_ssh_config_file, resolve_host};
 use crate::error::SshError;
 
 /// `ssh -G` 解析结果或 fallback。
+///
+/// `proxyjump` / `proxycommand` / `hostkeyalias` 字段（unify-fs-abstraction
+/// change D5b-i）参与 `cdt_fs::HostSignature` 计算——同 `user@host:port` 但
+/// 不同 `ProxyJump` / `ProxyCommand` / `HostKeyAlias` 的连接应视为不同 fs
+/// 上下文，cache key 不应串扰。退化路径 `config_parser` 拿不到这三字段时填
+/// `None`，`HostSignature` 落到 degraded 等价类。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedHost {
@@ -29,6 +35,12 @@ pub struct ResolvedHost {
     pub identity_agent: Option<PathBuf>,
     /// `IdentityFile` 字段（多行允许）。
     pub identity_files: Vec<PathBuf>,
+    /// `ProxyJump` 字段——`ssh -G` 输出非空时填写；退化路径填 `None`。
+    pub proxyjump: Option<String>,
+    /// `ProxyCommand` 字段——`ssh -G` 输出非空时填写；退化路径填 `None`。
+    pub proxycommand: Option<String>,
+    /// `HostKeyAlias` 字段——`ssh -G` 输出非空时填写；退化路径填 `None`。
+    pub hostkeyalias: Option<String>,
     /// 标记是否走了 `fallback`（`config_parser` 而非 `ssh -G`）。
     pub degraded: bool,
 }
@@ -41,7 +53,28 @@ impl ResolvedHost {
             user: cfg.user,
             identity_agent: None,
             identity_files: cfg.identity_files.into_iter().map(PathBuf::from).collect(),
+            proxyjump: None,
+            proxycommand: None,
+            hostkeyalias: None,
             degraded,
+        }
+    }
+}
+
+/// 转换 `ResolvedHost` → `cdt_fs::SshConfigDigestInput` —— `HostSignature` 计算
+/// 的最小入参形状。设计 D5b-i：`cdt-fs` 不反向依赖 `cdt-ssh`，conversion 住在
+/// 此处。`identity_files` 透传（`HostSignature::from_ssh_config_fields` 内部排序）；
+/// `user` 缺失时落空串（OpenSSH `ssh -G` 默认填当前 login user，理论上不会缺）。
+impl From<&ResolvedHost> for cdt_fs::SshConfigDigestInput {
+    fn from(host: &ResolvedHost) -> Self {
+        Self {
+            hostname: host.host.clone(),
+            port: host.port,
+            user: host.user.clone().unwrap_or_default(),
+            identity_files: host.identity_files.clone(),
+            proxyjump: host.proxyjump.clone(),
+            proxycommand: host.proxycommand.clone(),
+            hostkeyalias: host.hostkeyalias.clone(),
         }
     }
 }
@@ -75,6 +108,9 @@ async fn fallback_via_config_parser(alias: &str) -> Result<ResolvedHost, SshErro
             user: None,
             identity_agent: None,
             identity_files: vec![],
+            proxyjump: None,
+            proxycommand: None,
+            hostkeyalias: None,
             degraded: true,
         })
     }
@@ -124,6 +160,9 @@ pub fn parse_ssh_g_output(stdout: &str) -> ResolvedHost {
     let mut user: Option<String> = None;
     let mut identity_agent: Option<PathBuf> = None;
     let mut identity_files: Vec<PathBuf> = Vec::new();
+    let mut proxyjump: Option<String> = None;
+    let mut proxycommand: Option<String> = None;
+    let mut hostkeyalias: Option<String> = None;
 
     for line in stdout.lines() {
         let trimmed = line.trim();
@@ -149,6 +188,16 @@ pub fn parse_ssh_g_output(stdout: &str) -> ResolvedHost {
             "identityfile" => {
                 identity_files.push(strip_quotes_into_path(value));
             }
+            // OpenSSH 输出 `none` 表示显式禁用 ProxyJump / ProxyCommand
+            "proxyjump" if !value.is_empty() && !value.eq_ignore_ascii_case("none") => {
+                proxyjump = Some(value.to_owned());
+            }
+            "proxycommand" if !value.is_empty() && !value.eq_ignore_ascii_case("none") => {
+                proxycommand = Some(value.to_owned());
+            }
+            "hostkeyalias" if !value.is_empty() => {
+                hostkeyalias = Some(value.to_owned());
+            }
             _ => {}
         }
     }
@@ -159,6 +208,9 @@ pub fn parse_ssh_g_output(stdout: &str) -> ResolvedHost {
         user,
         identity_agent,
         identity_files,
+        proxyjump,
+        proxycommand,
+        hostkeyalias,
         degraded: false,
     }
 }
@@ -204,6 +256,30 @@ port 22
 identityagent \"/Users/me/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock\"
 ";
 
+    const SSH_G_WITH_PROXY_JUMP: &str = "\
+user alice
+hostname target.internal
+port 22
+identityfile ~/.ssh/id_ed25519
+proxyjump bastion.example.com
+hostkeyalias target-canonical
+";
+
+    const SSH_G_PROXY_NONE: &str = "\
+user alice
+hostname server
+port 22
+proxyjump none
+proxycommand none
+";
+
+    const SSH_G_WITH_PROXY_COMMAND: &str = "\
+user alice
+hostname target.internal
+port 22
+proxycommand nc -X 5 -x bastion:1080 %h %p
+";
+
     #[test]
     fn parses_normal_ssh_g_output() {
         let r = parse_ssh_g_output(SSH_G_NORMAL);
@@ -212,7 +288,114 @@ identityagent \"/Users/me/Library/Group Containers/2BUA8C4S2C.com.1password/t/ag
         assert_eq!(r.user, Some("alice".into()));
         assert_eq!(r.identity_agent, Some(PathBuf::from("~/.ssh/agent.sock")));
         assert_eq!(r.identity_files, vec![PathBuf::from("~/.ssh/id_ed25519")]);
+        assert!(r.proxyjump.is_none());
+        assert!(r.proxycommand.is_none());
+        assert!(r.hostkeyalias.is_none());
         assert!(!r.degraded);
+    }
+
+    #[test]
+    fn parses_proxycommand_positively() {
+        // codex 二审 L2：正向 proxycommand 解析单测（原仅 SSH_G_PROXY_NONE 覆盖反向）
+        let r = parse_ssh_g_output(SSH_G_WITH_PROXY_COMMAND);
+        assert_eq!(
+            r.proxycommand.as_deref(),
+            Some("nc -X 5 -x bastion:1080 %h %p")
+        );
+        assert!(r.proxyjump.is_none());
+        assert!(r.hostkeyalias.is_none());
+
+        // 同 user@host:port 但 ProxyCommand 不同也 SHALL 产生不同 HostSignature
+        let mut without = r.clone();
+        without.proxycommand = None;
+        let sig_with: cdt_fs::SshConfigDigestInput = (&r).into();
+        let sig_without: cdt_fs::SshConfigDigestInput = (&without).into();
+        let h_with = cdt_fs::HostSignature::from_ssh_config_fields(&sig_with);
+        let h_without = cdt_fs::HostSignature::from_ssh_config_fields(&sig_without);
+        assert_ne!(h_with, h_without);
+    }
+
+    #[test]
+    fn parses_proxyjump_and_hostkeyalias() {
+        let r = parse_ssh_g_output(SSH_G_WITH_PROXY_JUMP);
+        assert_eq!(r.proxyjump.as_deref(), Some("bastion.example.com"));
+        assert_eq!(r.hostkeyalias.as_deref(), Some("target-canonical"));
+        assert!(r.proxycommand.is_none());
+    }
+
+    #[test]
+    fn ignores_proxyjump_and_proxycommand_none() {
+        let r = parse_ssh_g_output(SSH_G_PROXY_NONE);
+        assert!(r.proxyjump.is_none());
+        assert!(r.proxycommand.is_none());
+    }
+
+    #[test]
+    fn fallback_default_resolved_host_has_none_for_new_fields() {
+        // 退化路径返默认 ResolvedHost：proxyjump/proxycommand/hostkeyalias 都 None
+        let r = ResolvedHost {
+            host: "alias".into(),
+            port: 22,
+            user: None,
+            identity_agent: None,
+            identity_files: vec![],
+            proxyjump: None,
+            proxycommand: None,
+            hostkeyalias: None,
+            degraded: true,
+        };
+        assert!(r.proxyjump.is_none());
+        assert!(r.proxycommand.is_none());
+        assert!(r.hostkeyalias.is_none());
+    }
+
+    #[test]
+    fn from_resolved_host_into_digest_input_propagates_proxy_fields() {
+        let r = parse_ssh_g_output(SSH_G_WITH_PROXY_JUMP);
+        let input: cdt_fs::SshConfigDigestInput = (&r).into();
+        assert_eq!(input.hostname, "target.internal");
+        assert_eq!(input.port, 22);
+        assert_eq!(input.user, "alice");
+        assert_eq!(
+            input.identity_files,
+            vec![PathBuf::from("~/.ssh/id_ed25519")]
+        );
+        assert_eq!(input.proxyjump.as_deref(), Some("bastion.example.com"));
+        assert_eq!(input.hostkeyalias.as_deref(), Some("target-canonical"));
+    }
+
+    #[test]
+    fn proxyjump_difference_produces_different_host_signature() {
+        // 同 user@host:port 但 ProxyJump 不同的两台 host 必须产生不同 HostSignature
+        let with_jump = parse_ssh_g_output(SSH_G_WITH_PROXY_JUMP);
+        let mut without_jump = with_jump.clone();
+        without_jump.proxyjump = None;
+
+        let sig_with: cdt_fs::SshConfigDigestInput = (&with_jump).into();
+        let sig_without: cdt_fs::SshConfigDigestInput = (&without_jump).into();
+
+        let h_with = cdt_fs::HostSignature::from_ssh_config_fields(&sig_with);
+        let h_without = cdt_fs::HostSignature::from_ssh_config_fields(&sig_without);
+        assert_ne!(h_with, h_without);
+    }
+
+    #[test]
+    fn degraded_path_conversion_does_not_panic() {
+        let r = ResolvedHost {
+            host: "alias".into(),
+            port: 22,
+            user: None,
+            identity_agent: None,
+            identity_files: vec![],
+            proxyjump: None,
+            proxycommand: None,
+            hostkeyalias: None,
+            degraded: true,
+        };
+        let input: cdt_fs::SshConfigDigestInput = (&r).into();
+        // 退化路径 user 缺失 → 空串，HostSignature 仍可计算
+        assert_eq!(input.user, "");
+        let _ = cdt_fs::HostSignature::from_ssh_config_fields(&input);
     }
 
     #[test]

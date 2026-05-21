@@ -156,6 +156,7 @@ impl NotificationPipeline {
         // stat 失败走原路径让 parse_file 自己处理。
         let cache_key = (event.project_id.clone(), event.session_id.clone());
         let new_sig = match tokio::fs::metadata(&jsonl_path).await {
+            #[allow(deprecated)]
             Ok(meta) => Some(FileSignature::from_metadata(&meta)),
             Err(err) => {
                 tracing::debug!(

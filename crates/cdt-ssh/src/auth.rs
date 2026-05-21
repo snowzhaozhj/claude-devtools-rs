@@ -213,6 +213,9 @@ mod tests {
             user: None,
             identity_agent,
             identity_files,
+            proxyjump: None,
+            proxycommand: None,
+            hostkeyalias: None,
             degraded: false,
         }
     }
