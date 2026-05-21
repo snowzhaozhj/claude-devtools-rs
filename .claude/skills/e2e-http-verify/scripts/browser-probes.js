@@ -8,7 +8,8 @@
  *   T1 sseOpenLatency()       - 测 SSE OPEN 时间（应 < 100ms，回归判定）
  *   T2 listGroupsLatency()    - 测 list_group_sessions IPC P50 / P95（n=5）
  *   T3 clickProjectLatency()  - 测点击 dashboard project card → fetch 完成 wall time
- *   T4 networkOverFetch()     - 列 2s 内重复 fetch（>3 次同 URL 即 over-fetch 嫌疑）
+ *   T4 networkOverFetch()     - 列 windowSec（默认 5s）内按 {path, cursor/pageSize} 维度分组 fetch
+ *                                count > threshold（默认 3）标 suspect 让人判断（不直接 fail）
  *   T5 sessionDetailReady()   - 点开 session → 等 chunks DOM 出现 → 报 chunk 数 / role 分布
  *   T6 collectConsoleErrors() - 装 console.error 监听 N 秒，返回所有错误
  *   T7 openSessionViaTest()   - 用 window.__cdtTest.openTab 绕过 sidebar virtualization
@@ -91,12 +92,27 @@ async ({ projectNameContains = null } = {}) => {
 }
 
 // ===== T4 networkOverFetch =====
-async ({ windowSec = 5 } = {}) => {
+// 收集窗口内 fetch，按 `{path, cursor/pageSize}` 维度分组——纯按 path 折叠会
+// 把不同 page 的 loadMore 都算重复，误报严重（codex PR 二审 issue 5）。
+// suspects 是**嫌疑**不是 fail——SSE recovered refresh / 用户滚动 / 初始批量
+// 加载可能合理产生 > threshold；结合用户操作判断是否真 over-fetch。
+async ({ windowSec = 5, threshold = 3 } = {}) => {
   const seen = new Map();
+  const groupKey = (urlNoOrigin) => {
+    const [path, query = ''] = urlNoOrigin.split('?');
+    const qs = new URLSearchParams(query);
+    // 保留区分批次的关键 query；忽略 cache-buster 噪音
+    const keep = ['cursor', 'pageSize', 'page', 'offset', 'limit'];
+    const parts = keep
+      .filter((k) => qs.has(k))
+      .map((k) => `${k}=${qs.get(k)}`)
+      .sort();
+    return parts.length ? `${path}?${parts.join('&')}` : path;
+  };
   const obs = new PerformanceObserver((list) => {
     for (const e of list.getEntries()) {
       if (e.initiatorType === 'fetch' && e.name.includes('/api/')) {
-        const key = e.name.replace(location.origin, '').split('?')[0];
+        const key = groupKey(e.name.replace(location.origin, ''));
         seen.set(key, (seen.get(key) || 0) + 1);
       }
     }
@@ -107,8 +123,9 @@ async ({ windowSec = 5 } = {}) => {
   const sorted = [...seen.entries()].sort((a, b) => b[1] - a[1]);
   return {
     window_sec: windowSec,
-    over_fetch_threshold: 3,
-    suspects: sorted.filter(([, n]) => n > 3).map(([url, n]) => ({ url, count: n })),
+    threshold,
+    note: 'suspects 是嫌疑，不是 fail；结合用户操作判断（滚动/初始批量加载可能合理产生 > threshold）',
+    suspects: sorted.filter(([, n]) => n > threshold).map(([url, n]) => ({ url, count: n })),
     all: Object.fromEntries(sorted),
   };
 }

@@ -1,6 +1,6 @@
 ---
 name: e2e-http-verify
-description: 用 cdt-cli HTTP server + vite proxy + 浏览器 `?http=1` 入口跑端到端真数据验证 backend / 前端行为类修法。**只要**用户说"用 cli 起 server / 用 http 接口验证 / 浏览器自动化测试 / 真数据 e2e / chrome devtools 端到端 / 验证修法 / 用户感知 bug 复现 / 桌面端看不到修复 / sidebar 显示异常 / 切 group 慢 / 列表渲染 / 卡顿"或显式 `/e2e-http-verify`，**都用这个 skill**。**agent 在以下时机也 SHALL 自动调用**（无需用户念关键词）：(a) 改完任何 IPC 字段 / 后端算法 / 状态机 / SSE 路径准备宣告完成前；(b) 改完 Svelte 组件渲染 / store 转换 / IPC 字段消费类前端行为 + vitest/playwright 通过后；(c) PR push 前的最终验证一环；(d) 用户报"我重启了桌面端还是没修好"。避免每次重新摸 vite proxy / SSE prelude / BrowserTransport 路由 / 端口冲突 / chrome-devtools mcp evaluate_script 陷阱，也避免修完只跑 unit test + mockIPC 就声称完成（mockIPC fixture ≠ 真后端数据，桌面端 binary 不一定用上新代码）。
+description: 用 cdt-cli HTTP server + vite proxy + 浏览器 `?http=1` 入口跑端到端真数据验证**用户可感知 + HTTP transport 暴露**路径的修法。**只要**用户说"用 cli 起 server / 用 http 接口验证 / 浏览器自动化测试 / 真数据 e2e / chrome devtools 端到端 / 验证修法 / 用户感知 bug 复现 / 桌面端看不到修复 / sidebar 显示异常 / 切 group 慢 / 列表渲染 / 卡顿"或显式 `/e2e-http-verify`，**都用这个 skill**。**agent 在以下时机也宜自动调用**（无需用户念关键词）：(a) 改完 HTTP route / SSE 路径 / list_sessions / sidebar 渲染 / IPC 字段被前端消费的路径准备宣告完成前；(b) 用户报"我重启了桌面端还是没修好" / "看不见修复" / "刷新没用"。**不适用**（避免 over-trigger）：纯 Tauri 专属 API（通知 / 托盘 / setBadgeCount）/ 纯 backend 内部重构 / 没有用户可见路径的纯算法改动 / 纯样式微调 / bump version / docs。避免每次重新摸 vite proxy / SSE prelude / BrowserTransport 路由 / 端口冲突 / chrome-devtools mcp evaluate_script 陷阱，也避免修完只跑 unit test + mockIPC 就声称完成（mockIPC fixture ≠ 真后端数据，桌面端 binary 不一定用上新代码）。
 ---
 
 # e2e-http-verify

@@ -11,31 +11,55 @@
 
 set -euo pipefail
 
-REPO_ROOT="${REPO_ROOT:-/Users/zhaohejie/RustroverProjects/Project/claude-devtools-rs}"
+# REPO_ROOT 优先用 git root（自动适配 worktree——历史上写死主 repo 路径会让
+# worktree 里跑 start.sh 启动**主 repo** 的代码而非 PR 分支，e2e 验证错版本，
+# codex PR 二审 issue 1）。env 变量优先，其次脚本所在 git root。
+if [ -z "${REPO_ROOT:-}" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+fi
+if [ -z "${REPO_ROOT:-}" ] || [ ! -f "$REPO_ROOT/Cargo.toml" ]; then
+  echo "❌ 无法确定 REPO_ROOT（试过 git rev-parse），用 REPO_ROOT=<path> 显式指定" >&2
+  exit 1
+fi
+
 PORT_BE=3456
 PORT_FE=5173
 LOG_BE=/tmp/cdt-cli.log
 LOG_FE=/tmp/vite-dev.log
 
+# 端口归属判定：桌面 app → 拒绝；项目自己的 cdt/vite → kill；陌生 → 提示用户。
+# 拒绝自动 kill 陌生进程是 codex PR 二审 issue 3——`:5173` 上的任何 node 都被
+# kill -9 安全边界过宽（开发者可能有别的 vite/dev server 占着）。
 check_port() {
   local port=$1
-  local pids proc
+  local pids proc cmdline
   if ! pids=$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null); then
     return 0
   fi
-  proc=$(ps -p "$(echo "$pids" | head -1)" -o comm= 2>/dev/null | head -1)
+  local pid1
+  pid1=$(echo "$pids" | head -1)
+  proc=$(ps -p "$pid1" -o comm= 2>/dev/null | head -1)
+  cmdline=$(ps -p "$pid1" -o args= 2>/dev/null | head -1)
   case "$proc" in
     *claude-devtools-tauri*|*claude-de*)
       echo "❌ :$port 被桌面 Tauri app ($proc, pid=$pids) 占用" >&2
       echo "   退出桌面 app 后重跑，或临时改 config.http_server.port" >&2
       return 2
       ;;
-    *)
-      echo "⚠️  :$port 被 $proc (pid=$pids) 占用，pkill 后继续"
-      kill -9 $pids 2>/dev/null || true
-      sleep 0.5
-      ;;
   esac
+  # 项目自己的 cdt binary 或 vite/pnpm dev server—— 可安全清理
+  if echo "$cmdline" | grep -qE 'target/(debug|release)/cdt( |$)|pnpm.*vite|node.*vite'; then
+    echo "⚠️  :$port 被项目自己的进程 ($proc, pid=$pids) 占用，pkill 后继续"
+    kill -9 $pids 2>/dev/null || true
+    sleep 0.5
+    return 0
+  fi
+  # 陌生进程：拒绝自动 kill，让用户决定
+  echo "❌ :$port 被陌生进程 $proc (pid=$pids) 占用" >&2
+  echo "   cmdline: $cmdline" >&2
+  echo "   不属于项目自动清理范围；请人工 kill 或换端口" >&2
+  return 2
 }
 
 wait_http_200() {
