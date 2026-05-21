@@ -204,3 +204,40 @@ Tauri command 入参 SHALL 与既有 `list_sessions` 风格一致——顶层 `g
 - **WHEN** caller 调用 `invoke("get_worktree_sessions", { groupId, pageSize: 10 })`
 - **THEN** 实现 SHALL NOT 在内部对各 worktree 调 `list_sessions_sync(pageSize = usize::MAX)`
 - **AND** SHALL 走与 `list_group_sessions` 等价的 k-way merge 路径（或共享同一实现）
+
+## MODIFIED Requirements
+
+### Requirement: Strip teammate-message tags from session title
+
+`extract_session_metadata` 提取的 `SessionSummary.title` MUST 在做长度截断之前剥除任何 `<teammate-message ...>...</teammate-message>` 包裹片段，避免 sidebar 标题吐出原始 XML。
+
+实现 SHALL 在 `cdt-api::session_metadata::sanitize_for_title` 同函数内完成两步：
+
+1. **Fast-path（teammate 主导消息）**：若 trim 后 text 以 `<teammate-message` 开头，SHALL 按以下优先级提取标题候选：
+   - **优先 `summary` 属性**：regex 抽 `summary="..."` 属性内容，非空时 SHALL 直接返回作为标题候选（截断长度由常量 `TITLE_MAX_CHARS` 控制）
+   - **fallback 到 body 文本**（2026-05-21 修订）：`summary` 属性缺失或值为空时，SHALL 提取开标签 `>` 与闭标签 `</teammate-message>` 之间的 body 文本（无闭标签时取剩余全部），trim 后非空则作为标题候选。**只有** body 也为空时才退回到下一步。
+   理由：用户实测发现"teammate-message 主导消息但作者忘写 `summary` 属性"是常见场景（如 `<teammate-message teammate_id="team-lead">用户在 Claude Code auto mode 下调用 codex:codex-rescue 被拦截...</teammate-message>`），body 才是真实对话内容；初版 spec 直接剥除整段会让 title 永久 null，UI 列表项 fallback 到 sessionId 前缀让用户无法识别 session。
+
+2. **Fallback（剥标签）**：若 fast-path 完全未命中（非 teammate 主导，或主导但 summary + body 都空），SHALL 在既有标签剥除循环中追加 `teammate-message` 标签——把整段 `<teammate-message ...>body</teammate-message>` 从文本中删除（含 attributes 与 inner body）。剥除后若文本为空，SHALL 回退到 `command_fallback` 或 `None`，按既有路径处理。
+
+   注意：此 fallback 仅在 **非 teammate 主导消息**（混合内容中嵌入 teammate 块）时触发；teammate 主导消息已在 fast-path 由 summary 或 body 兜底，不会落到这一步剥除 body。
+
+`sanitize_for_title` MUST 不再在标题里输出任何 `<teammate-message` / `</teammate-message>` 字面量。
+
+#### Scenario: Title takes summary attribute when message is wrapped solely by teammate-message
+- **WHEN** session 第一条 user 消息 content 为 `<teammate-message teammate_id="alice" summary="Set up project">body</teammate-message>`
+- **THEN** `extract_session_metadata.title` SHALL 为 `Some("Set up project")`
+
+#### Scenario: Title falls back to body when teammate-message has no summary
+- **WHEN** session 第一条 user 消息 content 为 `<teammate-message teammate_id="alice">用户在 auto mode 下调用 codex 被拦截</teammate-message>`（无 summary 属性，body 非空）
+- **THEN** `extract_session_metadata.title` SHALL 为 `Some("用户在 auto mode 下调用 codex 被拦截")`
+- **AND** title SHALL NOT 含 `<teammate-message` / `</teammate-message>` 字面量
+
+#### Scenario: Title returns None when teammate-message has no summary and empty body
+- **WHEN** session 第一条 user 消息 content 为 `<teammate-message teammate_id="alice"></teammate-message>`（无 summary 属性，body 也空）
+- **THEN** `extract_session_metadata.title` SHALL 为 `None` 或退回到 `command_fallback`
+
+#### Scenario: Mixed content strips teammate-message tag
+- **WHEN** 第一条 user 消息 content 为 `Hello team. <teammate-message teammate_id="alice">body</teammate-message> please continue.`
+- **THEN** title SHALL 不含 `<teammate-message`，剥除后 SHALL 仅保留 `Hello team.  please continue.`（trim 后），整体走既有截断路径
+- **AND** 此场景下 teammate 块按 fallback 路径整段剥除（含 body），与 teammate 主导消息的 body fallback 行为不冲突
