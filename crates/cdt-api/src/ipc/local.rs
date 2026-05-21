@@ -576,8 +576,24 @@ impl LocalDataApi {
         let scanner = Arc::new(scanner);
 
         // 并发拉每个 worktree 的 sessions（已按 mtime 倒序）。
+        // **性能优化**：cursor `Exhausted` 的 worktree 跳过 `scanner.list_sessions`
+        // IO——worktree filter 模式下 cursor 让 16/17 个 wt = Exhausted，扫它们
+        // 的 sessions 是无用 IO（heap 不会 push 这些 wt + dedup 也跳过它们）。
+        // 跳过后 filter 切换从 N×IO 降到 1×IO（codex 第三轮二审 known
+        // trade-off + 用户感知"切 worktree 慢"的根因，2026-05-21）。
         let mut futs = Vec::with_capacity(group.worktrees.len());
+        let mut scheduled_wt_ids: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
         for wt in &group.worktrees {
+            let initial_offset = cursor_state
+                .per_worktree
+                .get(&wt.id)
+                .cloned()
+                .unwrap_or(WorktreeOffset::NotStarted);
+            if matches!(initial_offset, WorktreeOffset::Exhausted) {
+                continue;
+            }
+            scheduled_wt_ids.insert(wt.id.clone());
             let wt_id = wt.id.clone();
             let scanner = scanner.clone();
             let pinned = pinned.clone();
@@ -602,8 +618,6 @@ impl LocalDataApi {
             std::collections::BTreeMap::new();
         let mut failed_wt_ids: std::collections::BTreeSet<String> =
             std::collections::BTreeSet::new();
-        let scheduled_wt_ids: std::collections::BTreeSet<String> =
-            group.worktrees.iter().map(|w| w.id.clone()).collect();
         for result in wt_lists {
             match result {
                 Ok((wt_id, sessions)) => {
@@ -631,9 +645,34 @@ impl LocalDataApi {
         // 的 wt 版本，其他 wt 中删掉该 sessionId 条目。否则 k-way merge 会让
         // page 内同一 sessionId 出现两次，前端 `{#each ... (sessionId)}` 报
         // `each_key_duplicate` 整段列表崩。tie-break 按 wt_id 字典序保证确定性。
+        //
+        // **关键**：dedup 仅在 cursor "active"（非 Exhausted）的 worktree 间执行。
+        // worktree filter 模式下 cursor 让 16/17 个 wt = Exhausted，只剩 1 个
+        // active wt；若 dedup 把 active wt 的某 sessionId 让给 Exhausted wt，
+        // 该 wt 的 heap 不参与合并 → page 内永远拿不到这条 → 用户感知"切到
+        // worktree filter 后列表少几条 / 整组空"（codex 第三轮二审 Bug 2，
+        // 2026-05-21）。
+        let active_wts: std::collections::BTreeSet<&String> = group
+            .worktrees
+            .iter()
+            .filter(|wt| {
+                !matches!(
+                    cursor_state
+                        .per_worktree
+                        .get(&wt.id)
+                        .cloned()
+                        .unwrap_or(WorktreeOffset::NotStarted),
+                    WorktreeOffset::Exhausted
+                )
+            })
+            .map(|wt| &wt.id)
+            .collect();
         let mut best_wt_for_sid: std::collections::HashMap<String, (String, i64)> =
             std::collections::HashMap::new();
         for (wt_id, sessions) in &wt_sessions {
+            if !active_wts.contains(wt_id) {
+                continue;
+            }
             for s in sessions {
                 best_wt_for_sid
                     .entry(s.id.clone())
@@ -649,6 +688,9 @@ impl LocalDataApi {
             }
         }
         for (wt_id, sessions) in &mut wt_sessions {
+            if !active_wts.contains(wt_id) {
+                continue;
+            }
             sessions.retain(|s| {
                 best_wt_for_sid
                     .get(&s.id)
@@ -809,27 +851,26 @@ impl LocalDataApi {
         }
 
         // per-worktree spawn scan_metadata_for_page。scan_key 给 group 路径
-        // 分配独立 namespace（前缀 `group:`）+ cursor hash 后缀，让 page 1 /
-        // page 2 / loadMore 的 scan 在同一 wt 上**并存而非互相 abort**。
+        // 分配独立 namespace（前缀 `group:`）+ **完整 cursor 字符串**后缀，让
+        // page 1 / page 2 / loadMore 的 scan 在同一 wt 上**并存而非互相 abort**。
         //
-        // 历史踩坑：scan_key 若只用 `wt_id|group` 单一 namespace，loadMore
-        // 触发的 page 2 scan 会立刻 cancel page 1 还在跑的 jobs → page 1
-        // 后段 cache miss 的 sessions metadata 永久丢失 → 用户感知"sidebar
-        // 前几条 title 正确，后续全 sessionId fallback"。改用 cursor hash
-        // 当 namespace key 后缀，让每页 scan 拿独立 entry 互不 abort（与
-        // `list_sessions` 走 `(project_id, cursor)` 双键的并存语义一致）。
+        // 历史踩坑：
+        // 1. scan_key 若只用 `wt_id|group` 单一 namespace，loadMore 触发的 page 2
+        //    scan 会立刻 cancel page 1 还在跑的 jobs → page 1 后段 cache miss
+        //    的 sessions metadata 永久丢失 → 用户感知"sidebar 前几条 title
+        //    正确，后续全 sessionId fallback"。
+        // 2. 用 `DefaultHasher` 64-bit hash 当 cursor 身份在跨进程随机种子下不
+        //    稳定，且 hash 碰撞会让两个不同 cursor 的 scan 互相 abort → 某页
+        //    metadata 永远扫不出来（codex 第三轮二审 Bug 1）。改用完整 cursor
+        //    字符串作 namespace key 后缀，无碰撞、deterministic，与
+        //    `list_sessions` 走 `(project_id, cursor)` 双键的并存语义一致。
         let cur_root_generation = self.root_generation.load(Ordering::SeqCst);
-        let cursor_hash = {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            cursor.unwrap_or("").hash(&mut hasher);
-            hasher.finish()
-        };
+        let scan_cursor_id = format!("group:{}", cursor.unwrap_or("none"));
         for (wt_id, (dir, jobs)) in page_jobs_by_wt {
             if jobs.is_empty() {
                 continue;
             }
-            let scan_key = metadata_scan_key(&wt_id, Some(&format!("group:{cursor_hash:x}")));
+            let scan_key = metadata_scan_key(&wt_id, Some(&scan_cursor_id));
             let key_for_cleanup = scan_key.clone();
             let tx = self.session_metadata_tx.clone();
             let active_scans_clone = self.active_scans.clone();
