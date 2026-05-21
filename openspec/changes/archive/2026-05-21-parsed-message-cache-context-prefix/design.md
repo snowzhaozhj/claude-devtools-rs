@@ -198,12 +198,14 @@ async fn get_tool_output(&self, root_session_id: &str, session_id: &str, tool_us
 
 **两个变体的使用边界**：
 
-- **`active_fs_and_context()` (relaxed)**：仅 `prime_parsed_msg_cache_for_test`（`test-utils` feature 路径，构造时不接 SSH，行为等价）；其它内部 cache 写入路径若有，本 PR 已审计无新增。
-- **`active_fs_and_context_strict()` (strict)**：所有用户可见 IPC handler ——SHALL 返错而非降级，让前端能区分"SSH context 下请求失败"与"在 Local context 下查不到"。本 PR 切换的 callsite：
+- **`active_fs_and_context()` (relaxed)**：仅 `prime_parsed_msg_cache_for_test`（`test-utils` feature 路径，构造时不接 SSH，行为等价）；`#[cfg(any(test, feature = "test-utils"))]` cfg-gated 避免 release 构建 dead_code。其它内部 cache 写入路径若未来需 relaxed 行为，再放开 cfg。
+- **`active_fs_and_context_strict()` (strict)**：本 PR 切换的 4 处 callsite——这些 handler 需要 `(fs, projects_dir, ctx)` 三元组同快照，且会**读用户可见 session 内容**或返回**包含 SSH/Local 数据混合后果的列表**，所以 SHALL 在 SSH disconnect 中间态返错而非降级：
   - `get_tool_output`（line 2540 附近）
   - `get_image_asset`（line 2470 附近）
   - `build_group_session_page`（line 569，原 PR-B 引入的 relaxed callsite，本 PR 引入 strict 时一并修齐）
   - `list_sessions_skeleton`（line 1433，原 PR-B 引入的 relaxed callsite，本 PR 引入 strict 时一并修齐）
+
+**仍走旧 `active_fs_and_projects_dir()` 的 user-facing handler**（如 `get_session_detail` / `search_sessions` / `list_repository_groups` / `read_agent_configs` 等约 9 处，详 `local.rs:1986/2018/2053/2276/2346/2449/2511/2631/3005`）保持旧行为不动——它们旧 helper 本就返 `Err(not_found)`，与本 PR 引入的 strict 语义等价，**无新降级风险**。统一迁移到 strict 是 PR-D `unify-fs-direct-calls` 范围（同时切 30+ 处 tokio::fs::* 直调与 18 处 is_remote 分叉清理）。
 
 **为何不直接让 `active_fs_and_context()` 默认 strict**：cache wrapper 内部走的就是 relaxed 语义（cache 写入降级到 Local 是 design D3 的"safe miss"），改成 strict 会让 cache 写入抛错——破 cache wrapper 现有 fallback 路径。两个变体并存最清晰。
 
@@ -267,3 +269,7 @@ async fn get_tool_output(&self, root_session_id: &str, session_id: &str, tool_us
 1. **byte cap 是否必要？** —— 单 entry 估算 1-10MB，50 容量上限最坏 500MB。**保持 open 让 perf 数据驱动决策**：本 change 不引入，PR-D 让 SSH 接入 cache 后若实测内存峰值超 perf budget 200MB，再开 follow-up PR 引入 `current_bytes: AtomicUsize` + `max_bytes` 双闸门。
 2. ~~**root 切换时 invalidator 是否需要重启？**~~ —— **已 closed by codex 二审 Q2**：实测确认 `LocalDataApi::reconfigure_claude_root`（`local.rs:1305-1348`）已经在 `general.claudeRootPath` 切换时 abort 旧 watcher tasks + 用新 `projects_dir` 重启 `spawn_watcher_runtime`（含 invalidator）+ 同步更新 `self.projects_dir`，整个失效路径自动用新 root 推算 ctx，不存在 stale projects_dir 问题。无需 follow-up。
 3. **PR-D 接入 SSH cache 后是否需要 `extract_parsed_messages_cached` 提供 `fs: Arc<dyn FileSystemProvider>` 而非 `&dyn`？** —— 当前 PR-B `MetadataCache` 用 `&dyn`，是因 callsite 持 `Arc<dyn>` 后 `&*fs` 即可。本 change 保持 `&dyn` 一致；PR-D 若需在 cache miss 后 spawn 异步任务持 fs，再开 follow-up 评估转 `Arc<dyn>`。
+
+4. **SSH disconnect 中间态返 `ApiError::not_found` vs 专用 `ApiError::ssh(...)` error code？** —— codex 二审 round-3 Q2 指出：strict 现在返 `not_found` 让 HTTP 映射 404，前端无法区分"SSH 临时 disconnect"与"资源真不存在"。但本 PR 的 strict 实际是**复刻**原 `active_fs_and_projects_dir()` 的 not_found 语义，**未引入新行为**——PR-B 之前已经是这个 error code。改 `ApiError::ssh(...)` 会扩 scope 到 IPC error 契约 + 前端 UX 改进（详 FU-4），属于跨 PR 的 error code 统一工作，本 PR 不做。**保持 open**。
+
+5. **前端 Sidebar / sessionListStore 缺 SSH disconnect 错误态展示** —— codex 二审 round-3 Q3/Q4：当前 IPC list 接口失败时前端仅 `console.error` 后清空列表，无 disconnect 重试 UI。本 PR 不动 UI，留 FU-5。这与 Open Question 4 互相依赖——先定 error code 拓扑再做 UX。
