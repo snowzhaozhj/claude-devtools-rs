@@ -166,7 +166,8 @@ fs op 计数：
 - **THEN** SHALL spawn `scan_metadata_for_page` 后台 task per project；task 内部 per-session 调 `extract_session_metadata_cached`（`fs.stat` + cache miss 调 `parse_file_via_fs` 走 `fs.open_read`）
 - **AND** 每条改动通过 `session_metadata_update` SSE event 推差量给 UI 增量更新
 - **AND** task SHALL NOT 阻塞 list_sessions IPC 响应——hot path 走 cache trust 立即返回；后台 task 异步更新通过 SSE channel
-- **AND** task SHALL 注册 abort handle 到 `LocalDataApi::active_scans` map；`ssh_disconnect` / `switch_context` 时所有 in-flight scan task SHALL 通过 `abort_scans_for_context` 被 abort（codex 二审 H2 修订 + design D3-bis）
+- **AND** task SHALL 注册 abort handle 到 `LocalDataApi::active_scans` map；`switch_context` / `ssh_connect` / `ssh_disconnect` 三个 context 变更入口 SHALL：(1) `context_generation.fetch_add(1, SeqCst)` 关闭 in-flight `list_sessions` 的 late insert 窗口；(2) 按 prev `ContextId` 精确 `abort_scans_for_context` 已注册的 scan handle（codex 二审 H2 + 第二轮 H2-R + 第三轮 H2-R-2 修订 + design D3-bis）
+- **AND** `scan_metadata_for_page` task 内部每次 broadcast 前 SHALL check `context_generation.load(SeqCst) == expected_context_generation`；mismatch 时 silent drop update（不 broadcast 不 panic），防止 context 切换期间 in-flight task 串扰新 ctx UI
 - **AND** 本 segment **不**实现 `fs.read_dir_with_metadata` per-project N→1 stat batch 优化；scan 仍是 per-session 串行（PR-D2 follow-up：把 batch + `MetadataCache::lookup_with_known_signature` 上层加进 `scan_metadata_for_page` 复用 SFTP READDIR reply 自带 entry attrs）
 
 #### Scenario: 冷启动 SSH list_sessions（cache 无 entry）

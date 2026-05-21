@@ -394,6 +394,17 @@ pub struct LocalDataApi {
     scan_generation: Arc<AtomicU64>,
     /// Claude root generation，仅在 `general.claudeRootPath` 切换时递增。
     root_generation: Arc<AtomicU64>,
+    /// active context 切换 generation —— `switch_context` / `ssh_connect` /
+    /// `ssh_disconnect` SHALL `fetch_add(1, SeqCst)` 递增此计数器。
+    ///
+    /// 修复 codex 二审第三轮 H2-R-2 Blocking：context 切换期间，已 in-flight 的
+    /// `list_sessions` 调用会先拿到旧 `(fs, ctx)` 后再 await scanner，最终才 insert
+    /// scan handle 到 `active_scans`。`abort_scans_for_context` 跑在 abort 之前没
+    /// 捕获这个 late insert，导致旧 ctx scan 在 context 切换后仍 broadcast 旧
+    /// metadata 串扰新 ctx UI。`scan_metadata_for_page` 内每次 broadcast 前
+    /// SHALL check `context_generation.load(SeqCst) == my_generation`；mismatch
+    /// 时 silent drop 该 update（不 broadcast 也不 panic）。
+    context_generation: Arc<AtomicU64>,
     /// 后台元数据扫描共享的 `Semaphore`，所有 in-flight scan task 共享一个实例
     /// 以保证全局并发上限为 `METADATA_SCAN_CONCURRENCY=8`。spec
     /// `ipc-data-api/spec.md::Emit session metadata updates` Scenario "后台扫描
@@ -901,6 +912,7 @@ impl LocalDataApi {
         //    字符串作 namespace key 后缀，无碰撞、deterministic，与
         //    `list_sessions` 走 `(project_id, cursor)` 双键的并存语义一致。
         let cur_root_generation = self.root_generation.load(Ordering::SeqCst);
+        let cur_context_generation = self.context_generation.load(Ordering::SeqCst);
         let scan_cursor_id = format!("group:{}", cursor.unwrap_or("none"));
         for (wt_id, (dir, jobs)) in page_jobs_by_wt {
             if jobs.is_empty() {
@@ -930,6 +942,8 @@ impl LocalDataApi {
                     self.worktree_meta_cache.clone(),
                     fs.clone(),
                     ctx.clone(),
+                    self.context_generation.clone(),
+                    cur_context_generation,
                 ));
                 scans.insert(
                     scan_key,
@@ -1142,6 +1156,7 @@ impl LocalDataApi {
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
             root_generation: Arc::new(AtomicU64::new(0)),
+            context_generation: Arc::new(AtomicU64::new(0)),
             metadata_scan_semaphore: Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY)),
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
@@ -1229,6 +1244,7 @@ impl LocalDataApi {
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
             scan_generation: Arc::new(AtomicU64::new(0)),
             root_generation: Arc::new(AtomicU64::new(0)),
+            context_generation: Arc::new(AtomicU64::new(0)),
             metadata_scan_semaphore: Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY)),
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
@@ -1428,16 +1444,10 @@ impl LocalDataApi {
         let claude_root = claude_root_path.map(PathBuf::from);
         let projects_dir =
             cdt_discover::path_decoder::projects_base_path_for(claude_root.as_deref());
-        {
-            let mut active = self
-                .active_scans
-                .lock()
-                .expect("active_scans lock poisoned");
-            for entry in active.values() {
-                entry.handle.abort();
-            }
-            active.clear();
-        }
+        // codex 二审第三轮 Low：用 abort_local_scans 替代 abort-all 避免误杀
+        // SSH active 时的远端 metadata scan（reconfigure_claude_root 仅改 Local
+        // projects_dir，不影响 SSH ContextId 下的 scan）。
+        self.abort_local_scans();
         *self.scanner.lock().await = ProjectScanner::new_with_semaphore(
             local_handle(),
             projects_dir.clone(),
@@ -1840,6 +1850,8 @@ async fn scan_metadata_for_page(
     worktree_meta_cache: Arc<std::sync::RwLock<HashMap<String, WorktreeMeta>>>,
     fs: Arc<dyn FileSystemProvider>,
     context_id: cdt_fs::ContextId,
+    context_generation: Arc<AtomicU64>,
+    expected_context_generation: u64,
 ) {
     let _ = dir; // dir 当前由 page_jobs 内的 jsonl_path 携带，保留参数为未来扩展（如懒构造路径）
     // semaphore 由 caller 注入：所有 in-flight scan task 共享同一实例，保证全局
@@ -1855,6 +1867,7 @@ async fn scan_metadata_for_page(
         let project_id = project_id.clone();
         let cache = metadata_cache.clone();
         let root_generation = root_generation.clone();
+        let context_generation = context_generation.clone();
         let worktree_meta_cache = worktree_meta_cache.clone();
         let fs_clone = fs.clone();
         let ctx_clone = context_id.clone();
@@ -1862,9 +1875,21 @@ async fn scan_metadata_for_page(
             let Ok(_permit) = permit_sem.acquire_owned().await else {
                 return;
             };
+            // codex 二审第三轮 H2-R-2 修订：context 切换期间的 in-flight
+            // list_sessions 调用会先拿旧 (fs, ctx) 后才 insert scan handle
+            // 到 active_scans，绕过 abort 窗口。每次 broadcast 前 SHALL 检查
+            // context_generation 不变；不变才 broadcast，变了 silent drop。
+            if context_generation.load(Ordering::SeqCst) != expected_context_generation {
+                return;
+            }
             let meta =
                 extract_session_metadata_cached(&cache, &*fs_clone, &ctx_clone, &jsonl_path).await;
             if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+                return;
+            }
+            // 同上：scan 内部 await 完成后再次检查 context_generation，避免在
+            // extract 期间发生切换后仍 broadcast 旧 ctx metadata。
+            if context_generation.load(Ordering::SeqCst) != expected_context_generation {
                 return;
             }
             let group_id = worktree_meta_cache
@@ -2006,6 +2031,7 @@ impl DataApi for LocalDataApi {
                 let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
 
                 let ctx_for_entry = ctx.clone();
+                let cur_context_generation = self.context_generation.load(Ordering::SeqCst);
                 let handle = tokio::spawn(scan_metadata_for_page(
                     project_id_owned,
                     dir,
@@ -2021,6 +2047,8 @@ impl DataApi for LocalDataApi {
                     self.worktree_meta_cache.clone(),
                     fs,
                     ctx,
+                    self.context_generation.clone(),
+                    cur_context_generation,
                 ));
 
                 scans.insert(
@@ -2764,15 +2792,14 @@ impl DataApi for LocalDataApi {
         // spec `ssh-remote-context::Reconnect lifecycle preserves SFTP session
         // integrity`：cancel-and-join SHALL 在 ssh_mgr mutate 之前完成
         if previous_context_id != target {
-            // change `unify-fs-direct-calls` codex 二审 H2 + 第二轮 H2-R 修订：旧
-            // ctx 的 page_jobs scan 持 Arc<dyn FileSystemProvider> 跨 await，切 ctx
-            // 后仍会 broadcast 旧 ctx 的 metadata update 串扰新 ctx 渲染。按旧
-            // ctx (Local 或 SSH) 精确 abort 其下 in-flight scan handle。
-            //
-            // 注：`abort_scans_for_ssh_context_id` 在 ssh_mgr.switch_context **之前**
-            // 调，确保仍能 lookup 到旧 host 的 ContextId（否则切完 ssh_mgr 状态
-            // 后 provider_and_context_id 会找不到）。Local→SSH 切换路径单独
-            // 调 `abort_local_scans()`。
+            // change `unify-fs-direct-calls` codex 二审 H2 + 第二轮 H2-R + 第三轮
+            // H2-R-2 修订：先 bump `context_generation` 让任何 in-flight
+            // list_sessions 在 spawn 时记录的 expected_context_generation 失效
+            // → scan task 内每次 broadcast 前 SHALL check 不变；再按 ctx 精确
+            // abort 已注册的 active_scans。两路防护：
+            //   - bump → 关闭"abort 与 in-flight list_sessions await 之间的窗口"
+            //   - abort → 立即停止已注册 scan
+            self.context_generation.fetch_add(1, Ordering::SeqCst);
             if let Some(prev) = previous_context_id.as_deref() {
                 tracing::debug!(target: "cdt_ssh::lifecycle", phase = "cancel_prev_watcher", context_id = %prev);
                 self.cancel_remote_watcher(prev).await;
@@ -2818,6 +2845,9 @@ impl DataApi for LocalDataApi {
                 "ssh_watcher_ops locked"
             );
             if previous_context_id.as_deref() != Some(target_context_id.as_str()) {
+                // codex 二审第三轮 H2-R-2：先 bump context_generation 防御 in-flight
+                // list_sessions 的 late insert 串扰，再 abort 已注册 scan。
+                self.context_generation.fetch_add(1, Ordering::SeqCst);
                 if let Some(prev) = previous_context_id {
                     tracing::debug!(target: "cdt_ssh::lifecycle", phase = "cancel_prev_watcher", context_id = %prev);
                     self.cancel_remote_watcher(&prev).await;
@@ -2863,11 +2893,13 @@ impl DataApi for LocalDataApi {
     async fn ssh_disconnect(&self, context_id: &str) -> Result<(), ApiError> {
         let _ops = self.ssh_watcher_ops.lock().await;
         tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_disconnect_begin", context_id = %context_id);
-        // change `unify-fs-direct-calls` codex 二审第二轮 H2-R 修订：按 SSH
-        // context_id 精确 abort 该 ctx 下未完成的 scan handle（**在
+        // change `unify-fs-direct-calls` codex 二审第二轮 H2-R + 第三轮 H2-R-2
+        // 修订：先 bump context_generation 关闭 in-flight list_sessions 的 late
+        // insert 窗口；再按 SSH context_id 精确 abort 已注册 scan handle（**在
         // cancel_remote_watcher 与 ssh_mgr.disconnect 之前**，确保仍能 lookup
         // 到 ContextId）。避免 abort-all 误杀已 active 的新 host scan
         // （场景：B 已 active spawn scan 时并发 ssh_disconnect("A") 清理旧 host）。
+        self.context_generation.fetch_add(1, Ordering::SeqCst);
         self.abort_scans_for_ssh_context_id(context_id).await;
         self.cancel_remote_watcher(context_id).await;
         tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_mgr_disconnect", context_id = %context_id);
