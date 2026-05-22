@@ -1121,6 +1121,13 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
     // ====== 本 change `fix-ssh-active-context-dispatch` 新增 ======
     // 覆盖 8 处修复的 IPC method 走 SSH provider 的契约（design.md D4）
 
+    // list_projects 已经在前面调过会写入 SSH ContextId 的 ProjectScanCache entry
+    // （change `project-scanner-memoize` FU-4）；这里调 list_repository_groups
+    // 会 cache hit 跳过 fs op → counter 不增 → assert_remote_fs_touched 假阳性
+    // FAIL。显式清掉让本断言走真实远端 fs op 路径（生产代码用 watcher /
+    // generation / TTL 失效；测试用例之间用 invalidate_project_scan_cache）。
+    api.invalidate_project_scan_cache();
+
     // list_repository_groups：active context = SSH 时返回远端项目集合，
     // 而不是宿主机本地的 git repo（容器内/fake 远端无 .git，所以无 gitBranch）
     let before = fake.snapshot_counters();

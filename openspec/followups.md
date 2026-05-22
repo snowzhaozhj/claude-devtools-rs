@@ -296,6 +296,34 @@ change `unify-fs-direct-calls` §12 micro-bench / SSH cache hit integration / SS
 
 `ipc_contract.rs::FakeRemoteSftp` 加 counter 是独立 PR（见本文 `active context dispatch contract test 缺 read 计数器` 条），与本 PR scope 解耦。
 
+### [coverage-gap] context_generation 模式 sub-window race（PR #198 codex 三轮 verify 残留）
+
+PR #198 `project-scanner-memoize` 的 codex 二审第三轮 verify 报了 2 个 Medium race window，**未在本 PR 修**（超出 scope，属 `context_generation` / `root_generation` 模式的固有边界——任何依赖 generation 校验的 callsite 都有）：
+
+1. **switch_context 顺序导致的 generation snapshot race**（`crates/cdt-api/src/ipc/local.rs:3309`）
+   `switch_context` 当前先 `context_generation.fetch_add(1)` 再 `await ssh_mgr.switch_context(...)`（line 3302-3308 注释说明该顺序为让 in-flight `list_sessions_skeleton` 早 fail 用）。窗口：generation 已 bump 但 ssh_mgr active 尚未切；此时 `list_repository_groups` 进入 → pre snapshot = N+1（已 bump）→ `active_fs_and_policy` 拿到旧 ctx（ssh_mgr 还没切完）→ scan + grouper 完成 → post = N+1 == pre → 通过校验 → refresh 旧 ctx 的 `worktree_meta_cache`。
+   修法候选：(a) 改 `switch_context` 顺序为"先 await ssh_mgr 后 bump"—— 需要 audit 所有依赖 generation bump-first 顺序的 callsite（`list_sessions_skeleton` / `get_session_detail` 等）；(b) `active_fs_and_policy` 拿 fs 时同时返回当时的 `(active_context_id, generation)` 让 caller 双重比较。
+   影响：用户切 SSH context 期间一次性短暂错乱（worktree_meta cache 含旧 ctx 数据）；下次 IPC 自然修复。
+
+2. **`build_group_session_page` 用旧 groups + 新 fs 混用**（`crates/cdt-api/src/ipc/local.rs:574-584`）
+   `build_group_session_page` 先调 `list_repository_groups().await` 拿 groups，再独立 `active_fs_and_context_strict().await` 拿当前 fs/ctx。若 `list_repository_groups` safe-degrade 返回旧 groups（generation mismatch 跳 refresh 路径），后续用旧 worktree_id 在新 fs 上 scan 会返回空页/缺项。
+   修法候选：让 `build_group_session_page` 拿 (groups, fs, ctx) 时同步校验 generation；或让 `list_repository_groups` mismatch 时返 `ApiError::Conflict` 让 caller 走 retry。
+   影响：safe degrade（用户看到空 group 而非错乱数据），下次 IPC 自然修复。
+
+两个 issue 都是"一次错乱、下次修复"性质，不是 silent data corruption。**本 PR 已修主要 race**（Lagged 处理 / in-flight scan generation guard / `list_repository_groups` 两次 await race）；上述 sub-window race 待 generation 模式整体 audit 时一并处理。
+
+### [coverage-gap → done] ProjectScanner 结果 in-memory 复用（FU-4 收尾）
+
+change `unify-fs-abstraction` 的 FU-4 "ProjectScanner 结果在 LocalDataApi 内 in-memory 复用 + BackendPolicy wire 到业务" **已分两步完成** ✅：
+
+- **BackendPolicy wire 部分**已在 change `backend-policy-struct`（PR-E）落地：6 处 `fs.kind()` callsite 上移到 `BackendPolicy` + `BackendResolvers` 字段读取
+- **ProjectScanner memoize 部分**已在 change `project-scanner-memoize`（本 PR）落地：
+  - `crates/cdt-api/src/ipc/project_scan_cache.rs` 新增 `ProjectScanCache` —— key=`ContextId`，value=`Arc<Vec<Project>>` + `(root_generation, context_generation, inserted_at, fs_kind)`
+  - 失效层级：(1) Local watcher 主动失效 —— 任意 `FileChangeEvent` 触发 `invalidate_local`；(2) `root_generation` / `context_generation` 校验；(3) TTL 兜底（Local 5min 给 watcher 漏掉时兜底，SSH 10s 给无 watcher 路径）
+  - `LocalDataApi::scan_projects_cached()` helper 让 `list_projects` / `list_repository_groups` 第二次 IPC 调用 cache hit
+  - bench `crates/cdt-api/tests/perf_project_scan_cache.rs`（`#[ignore]`）实测：`list_projects` cold 146ms → warm 0ms；`list_repository_groups` cold 150ms → warm 3ms（50× 提速，只剩 grouper git resolve）
+  - 不在 scope：`read_agent_configs` 用全局 `self.scanner.lock()` 走固定 Local 路径不变；`build_group_session_page` / `list_sessions_skeleton` 用 `scanner.list_sessions(project_id)` 是 per-project 列表（需另一层 cache，不在本 PR）
+
 ---
 
 ## notification-triggers

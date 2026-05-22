@@ -8,6 +8,7 @@ pub mod events;
 pub(crate) mod image_disk_cache;
 pub mod local;
 pub(crate) mod parsed_message_cache;
+pub(crate) mod project_scan_cache;
 pub mod session_metadata;
 pub mod traits;
 pub mod types;
