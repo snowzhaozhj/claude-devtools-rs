@@ -367,8 +367,7 @@ mod tests {
         let mut c = ProjectScanCache::new();
         let recorded = c.invalidation_generation();
         c.invalidate_local(); // 期间 watcher 事件
-        let inserted =
-            c.try_insert(local_ctx(), snapshot(), 1, 2, FsKind::Local, recorded);
+        let inserted = c.try_insert(local_ctx(), snapshot(), 1, 2, FsKind::Local, recorded);
         assert!(
             !inserted,
             "watcher 在 scan 期间 invalidate 后 SHALL NOT 让旧 snapshot 写入"

@@ -3584,7 +3584,12 @@ impl DataApi for LocalDataApi {
         // **一次 await** 拿 fs/projects_dir/ctx/policy/resolvers 五元组，再用
         // 同一组 fs/ctx 调 `scan_projects_cached_with`——避免两次 `active_*().await`
         // 之间被 SSH switch / reconfigure 跨过导致 projects 与 resolvers 属于
-        // 不同 context snapshot（codex 二审 #3）。
+        // 不同 context snapshot（codex 二审第一轮 #3）。
+        //
+        // generation snapshot **先于** active_fs_and_policy await：reconfigure /
+        // ssh_switch 在该 await 期间跑完时，下方 post-await 校验能识别。
+        let pre_root_generation = self.root_generation.load(Ordering::SeqCst);
+        let pre_context_generation = self.context_generation.load(Ordering::SeqCst);
         let (fs, projects_dir, ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
         let projects = self
             .scan_projects_cached_with(&fs, &projects_dir, &ctx)
@@ -3592,6 +3597,29 @@ impl DataApi for LocalDataApi {
         let grouper =
             cdt_discover::WorktreeGrouper::new_dyn(resolvers.git_identity_resolver.clone());
         let groups = grouper.group_by_repository((*projects).clone()).await;
+        // post-await generation 校验：scan + grouper 两次 await 期间若 SSH
+        // switch / reconfigure 跨过，groups 内容仍属于旧 ctx；写入全局
+        // `worktree_meta_cache` 会让后续不同 ctx 的 list_sessions /
+        // get_worktree_sessions 用旧 worktree_id → meta 映射污染 UI。
+        // **safe degrade**：保留旧 groups 给本次 caller（数据本身正确）但
+        // 跳过 `refresh_worktree_meta_cache`，让 `apply_worktree_meta` 在
+        // 新 ctx 查不到映射走 None fallback；下次 IPC 自然重做刷新到新 ctx
+        // 的 meta（codex 二审第二轮 D）。
+        let post_root_generation = self.root_generation.load(Ordering::SeqCst);
+        let post_context_generation = self.context_generation.load(Ordering::SeqCst);
+        if pre_root_generation != post_root_generation
+            || pre_context_generation != post_context_generation
+        {
+            tracing::debug!(
+                target: "cdt_api::perf",
+                pre_root = pre_root_generation,
+                post_root = post_root_generation,
+                pre_ctx = pre_context_generation,
+                post_ctx = post_context_generation,
+                "list_repository_groups: context switched mid-await, skip refresh_worktree_meta_cache"
+            );
+            return Ok(groups);
+        }
         // 刷新 worktree_meta_cache（scheme c, D2）：让后续 list_sessions /
         // list_group_sessions / get_worktree_sessions 序列化 SessionSummary 时
         // 能 join 拿到 worktreeName / groupId / cwdRelativeToRepoRoot。
