@@ -580,7 +580,7 @@ impl SshSessionManager {
                 });
             }
         };
-        let sftp = Arc::new(Mutex::new(sftp));
+        let sftp = Arc::new(sftp);
 
         // 阶段 5：remote home probe（4 fallback）
         let remote_home = probe_remote_home(&sftp, &mut handle, &username).await?;
@@ -716,7 +716,7 @@ async fn open_sftp(
 /// 再依次试 `<home>/.claude/projects` / `/home/<user>/.claude/projects` /
 /// `/Users/<user>/.claude/projects` / `/root/.claude/projects`。
 async fn probe_remote_home(
-    sftp: &Arc<Mutex<SftpSession>>,
+    sftp: &Arc<SftpSession>,
     handle: &mut client::Handle<RusshClientHandler>,
     user: &str,
 ) -> Result<PathBuf, SshError> {
@@ -737,7 +737,6 @@ async fn probe_remote_home(
         PathBuf::from("/root/.claude/projects"),
     ]);
 
-    let sftp = sftp.lock().await;
     for path in &candidates {
         let path_str = path.to_string_lossy().into_owned();
         match sftp.metadata(&path_str).await {

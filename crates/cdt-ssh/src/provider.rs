@@ -17,6 +17,7 @@
 //! 与 IO 层的 `EAGAIN` / `ECONNRESET` / `ETIMEDOUT` / `EPIPE` —— 远端短暂抖动
 //! 时让 scanner 不立即崩。
 
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
@@ -26,8 +27,7 @@ use russh_sftp::client::SftpSession;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::fs::File;
 use russh_sftp::protocol::{FileType, StatusCode};
-use tokio::io::AsyncRead;
-use tokio::sync::Mutex;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 
 use cdt_fs::{DirEntry, EntryKind, FileSystemProvider, FsError, FsKind, FsMetadata};
 
@@ -35,6 +35,18 @@ use cdt_fs::{DirEntry, EntryKind, FileSystemProvider, FsError, FsKind, FsMetadat
 const MAX_RETRY_ATTEMPTS: u32 = 3;
 /// 指数退避基数（实际 wait = `RETRY_BACKOFF_BASE * attempt`）。
 const RETRY_BACKOFF_BASE: Duration = Duration::from_millis(75);
+
+/// 单文件 pipelined read 的 worker 数量上限——每个 worker 占用一个独立的
+/// SFTP file handle，通过 `Arc<SftpSession>` 共享底层 channel 上的 message-id
+/// 多路复用并发飞 `SSH_FXP_READ` 请求；wall ≈ `ceil(file_size / chunk_per_worker)` × RTT
+/// 而非 `N_chunks` × RTT。16 平衡了 server-side `open_handles` 上限与并发增益。
+pub const SFTP_PIPELINE_MAX_WORKERS: usize = 16;
+/// 每个 worker 内部 `read_exact` 的 chunk 大小——SFTP 协议 packet 限制典型 32K，
+/// 这里取 32K 以与 `SCANNER_BUF_BYTES` 对齐，避免 `BufReader` 切包。
+pub const SFTP_PIPELINE_CHUNK_BYTES: usize = 32 * 1024;
+/// 启用 pipelined read 的最小文件大小阈值——小文件 1 个 RTT 就读完，
+/// 多 worker open/close 反而引入 N×open RTT overhead。
+pub const SFTP_PIPELINE_MIN_BYTES: u64 = 256 * 1024;
 
 /// SFTP 客户端错误分类——既驱动 retry 决策，也映射到 [`FsError`]。
 #[derive(Debug, Clone, thiserror::Error)]
@@ -95,17 +107,22 @@ pub struct SshFileSystemProvider {
     /// 仅生产构造器填——`open_read_stream` 用真 [`SftpSession`] 句柄取
     /// `russh_sftp::client::fs::File`；测试路径为 `None`，调用时返
     /// [`FsError::Unsupported`]。
-    sftp: Option<Arc<Mutex<SftpSession>>>,
+    sftp: Option<Arc<SftpSession>>,
 }
 
 impl SshFileSystemProvider {
     /// 生产路径构造器：与 [`crate::session::SshSessionManager`] 共享同一
-    /// `Arc<Mutex<SftpSession>>`——session 持有它做远端命令 / disconnect，
+    /// `Arc<SftpSession>`——session 持有它做远端命令 / disconnect，
     /// provider 用它做文件读 + 流式打开。
+    ///
+    /// 不再用 `Arc<Mutex<SftpSession>>` 包 Mutex —— `SftpSession` 公共 API
+    /// 全是 `&self`（内部 `RawSftpSession` 按 `request_id` 多路复用响应），
+    /// 外层 Mutex 是冗余 over-protection 且把 N 次 `open` / `read` 强制串行
+    /// 化，PR-F SFTP message-id pipeline 的根因。
     #[must_use]
     pub fn new(
         context_id: impl Into<String>,
-        sftp: Arc<Mutex<SftpSession>>,
+        sftp: Arc<SftpSession>,
         remote_home: PathBuf,
     ) -> Self {
         let client: Arc<dyn SftpClient> = Arc::new(RusshSftpClient {
@@ -159,11 +176,7 @@ impl SshFileSystemProvider {
             return Err(FsError::Unsupported("open_read_stream"));
         };
         let path_str = path_to_string(path);
-        let sftp_guard = sftp.lock().await;
-        sftp_guard
-            .open(path_str)
-            .await
-            .map_err(|e| map_sftp_io(path, &e))
+        sftp.open(path_str).await.map_err(|e| map_sftp_io(path, &e))
     }
 }
 
@@ -407,16 +420,83 @@ fn is_transient_io_reason(reason: &str) -> bool {
     false
 }
 
+/// 单文件 SFTP 多 worker pipelined read —— 把 N 个 `SSH_FXP_READ` 串行 await 改成
+/// K 个 worker 并发飞，wall ≈ `ceil(file_size / chunk_per_worker)` × RTT。
+///
+/// 实现：
+/// - K = `min(SFTP_PIPELINE_MAX_WORKERS, ceil(size / SFTP_PIPELINE_CHUNK_BYTES))`
+/// - 每个 worker `sftp.open(path)` 拿独立 file handle（K 次 open 并发飞，
+///   `SftpSession::open` 是 `&self` 内部 `request_id` 多路复用），各自 `seek` +
+///   `read_exact` 处理一段连续 byte range
+/// - K 个 worker 用 `try_join_all` 并发，按 `worker_id` 排序后拼成完整 bytes
+/// - 任何 worker 失败立即取消其它（`try_join_all` 短路）
+///
+/// PR-D2 PR body 标的 8.36s 基线（5MB / 32K / 50ms RTT，160 次串行 read）
+/// 在 K=16 worker 时降到 (10 reads/worker × 50ms) ≈ 500ms-1s wall；
+/// 加 metadata 的 1 RTT + open 的 ~1 RTT batch wall < 2s。
+async fn read_pipelined(
+    sftp: &Arc<SftpSession>,
+    path: &str,
+    size: u64,
+) -> Result<Vec<u8>, SftpError> {
+    use futures::future::try_join_all;
+
+    let total_size = usize::try_from(size)
+        .map_err(|_| SftpError::UnexpectedBehavior(format!("file size {size} exceeds usize")))?;
+    let n_chunks = total_size.div_ceil(SFTP_PIPELINE_CHUNK_BYTES);
+    let n_workers = SFTP_PIPELINE_MAX_WORKERS.min(n_chunks).max(1);
+    let chunks_per_worker = n_chunks.div_ceil(n_workers);
+
+    let tasks = (0..n_workers).map(|worker_id| {
+        let sftp = Arc::clone(sftp);
+        let path = path.to_owned();
+        async move {
+            let start_chunk = worker_id * chunks_per_worker;
+            if start_chunk >= n_chunks {
+                return Ok::<(usize, Vec<u8>), SftpError>((worker_id, Vec::new()));
+            }
+            let end_chunk = (start_chunk + chunks_per_worker).min(n_chunks);
+            let start_offset = start_chunk * SFTP_PIPELINE_CHUNK_BYTES;
+            let end_offset = (end_chunk * SFTP_PIPELINE_CHUNK_BYTES).min(total_size);
+            let segment_len = end_offset - start_offset;
+
+            let mut file = sftp.open(path).await?;
+            file.seek(SeekFrom::Start(start_offset as u64))
+                .await
+                .map_err(|e| SftpError::IO(e.to_string()))?;
+            let mut buf = vec![0u8; segment_len];
+            file.read_exact(&mut buf)
+                .await
+                .map_err(|e| SftpError::IO(e.to_string()))?;
+            Ok((worker_id, buf))
+        }
+    });
+
+    let mut results = try_join_all(tasks).await?;
+    results.sort_by_key(|(worker_id, _)| *worker_id);
+    let mut out = Vec::with_capacity(total_size);
+    for (_, segment) in results {
+        out.extend_from_slice(&segment);
+    }
+    Ok(out)
+}
+
 /// 生产实现：包装 `russh-sftp` 的 `SftpSession`。
+///
+/// 持有 `Arc<SftpSession>`（无外层 Mutex）—— `SftpSession` 公共 API 全 `&self`，
+/// 内部 `RawSftpSession` 按 `request_id` 多路复用响应，外层 Mutex 是冗余 over-protection
+/// 且把 N 次并发 SFTP 请求强制串行化。`read` / `open_read` 利用此特性走 multi-worker
+/// pipelined read（每个 worker 一个独立 file handle，K 个 worker 并发飞 `SSH_FXP_READ`
+/// 请求），把 wall 从 N×RTT 压到 `ceil(N/K)`×RTT。
 struct RusshSftpClient {
-    sftp: Arc<Mutex<SftpSession>>,
+    sftp: Arc<SftpSession>,
 }
 
 #[async_trait]
 impl SftpClient for RusshSftpClient {
     async fn metadata(&self, path: &str) -> Result<FsMetadata, SftpClientError> {
-        let sftp = self.sftp.lock().await;
-        let meta = sftp
+        let meta = self
+            .sftp
             .metadata(path.to_owned())
             .await
             .map_err(|e| classify_sftp_error(&e))?;
@@ -428,22 +508,35 @@ impl SftpClient for RusshSftpClient {
     }
 
     async fn try_exists(&self, path: &str) -> Result<bool, SftpClientError> {
-        let sftp = self.sftp.lock().await;
-        sftp.try_exists(path.to_owned())
+        self.sftp
+            .try_exists(path.to_owned())
             .await
             .map_err(|e| classify_sftp_error(&e))
     }
 
     async fn read(&self, path: &str) -> Result<Vec<u8>, SftpClientError> {
-        let sftp = self.sftp.lock().await;
-        sftp.read(path.to_owned())
+        let meta = self
+            .sftp
+            .metadata(path.to_owned())
+            .await
+            .map_err(|e| classify_sftp_error(&e))?;
+        let size = meta.len();
+        if size < SFTP_PIPELINE_MIN_BYTES {
+            // 小文件 1 个 RTT 就读完，多 worker open / close overhead 反而拖慢。
+            return self
+                .sftp
+                .read(path.to_owned())
+                .await
+                .map_err(|e| classify_sftp_error(&e));
+        }
+        read_pipelined(&self.sftp, path, size)
             .await
             .map_err(|e| classify_sftp_error(&e))
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, SftpClientError> {
-        let sftp = self.sftp.lock().await;
-        let read_dir = sftp
+        let read_dir = self
+            .sftp
             .read_dir(path.to_owned())
             .await
             .map_err(|e| classify_sftp_error(&e))?;

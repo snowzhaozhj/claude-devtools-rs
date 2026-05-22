@@ -4,15 +4,21 @@
     clippy::manual_div_ceil
 )]
 
-//! `perf_ssh_scanner_chunked_read` —— SSH 5MB jsonl scan wall < 9s sanity bench。
+//! `perf_ssh_scanner_chunked_read` —— SSH 5MB jsonl scan wall < 2s pipeline bench。
 //!
-//! change `unify-fs-direct-calls` D5 + ssh-remote-context spec Scenario "SSH 大会话
-//! scanner BufReader 容量与 SFTP packet 对齐"：fake-SSH 注入 50ms RTT / `read()` +
-//! 32K packet 限制，5MB jsonl 内容用 `cdt-parse::parse_file_via_fs` 流式 parse，
-//! 验 BufReader::with_capacity(32K) 与 SFTP packet 对齐，**总 wall 时间 < 9s**。
+//! PR-F SFTP message-id pipeline + change `unify-fs-direct-calls` D5 + ssh-remote-context
+//! spec Scenario "SSH 大会话 scanner BufReader 容量与 SFTP packet 对齐"：fake-SSH
+//! 注入 50ms RTT / `read()` + 32K packet 限制，5MB jsonl 内容用
+//! `cdt-parse::parse_file_via_fs` 流式 parse，**总 wall 时间 < 2s**。
 //!
-//! 5MB / 32K ≈ 160 SFTP READ messages × 50ms RTT ≈ 8s 理论下限 + 1s buffer for
-//! parse / tokio overhead。
+//! 基线演化：
+//! - PR-D2 之前（串行 SFTP read，每 packet 等 1 RTT）：5MB / 32K ≈ 160 packets × 50ms
+//!   = 8s 理论下限，9s threshold 留 1s buffer for parse / tokio overhead；测出 8.36s。
+//! - **PR-F（multi-worker pipeline，K=`SFTP_PIPELINE_MAX_WORKERS`=16）**：
+//!   `ThrottledFakeSftpClient::read` 模拟 K 个 worker 并发飞 ceil(N/K)=10 个串行
+//!   `SSH_FXP_READ`，wall ≈ 10 × 50ms = 500ms 理论下限；2s threshold 含 metadata
+//!   1 RTT + parse / tokio overhead。生产 `RusshSftpClient::read` 用同模型走
+//!   `try_join_all` K 个 worker 并发 `sftp.open` + `seek` + `read_exact`。
 //!
 //! 跑：
 //! ```sh
@@ -29,7 +35,9 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use cdt_discover::{EntryKind, FsMetadata};
-use cdt_ssh::{RemoteEntry, SftpClient, SftpClientError, SshFileSystemProvider};
+use cdt_ssh::{
+    RemoteEntry, SFTP_PIPELINE_MAX_WORKERS, SftpClient, SftpClientError, SshFileSystemProvider,
+};
 
 const PACKET_SIZE: usize = 32 * 1024;
 const RTT_PER_READ: Duration = Duration::from_millis(50);
@@ -63,16 +71,32 @@ impl SftpClient for ThrottledFakeSftpClient {
 
     async fn read(&self, path: &str) -> Result<Vec<u8>, SftpClientError> {
         // ThrottledFakeSftpClient 走 with_client fallback 路径——SshFileSystemProvider::open_read
-        // 调 client.read() 拿全 bytes 后包 Cursor。这里我们模拟 "1 个大 read 请求被
-        // SFTP 拆成 N 个 32K message 各 50ms RTT" —— sleep(N × 50ms) 后返全 bytes。
+        // 调 client.read() 拿全 bytes 后包 Cursor。**PR-F 后**生产 RusshSftpClient::read
+        // 走 K 个 worker 并发飞 ceil(N/K) 次串行 SSH_FXP_READ；fake 这里同模型镜像：
+        // K worker 并发，每个 worker 串行 chunks_per_worker 次 RTT，wall ≈
+        // chunks_per_worker × RTT 而非 N × RTT。fake 提前 sleep "1 RTT" 模拟 metadata 探测
+        // （生产路径走 self.sftp.metadata 拿 size）。
         if path != self.file_path {
             return Err(SftpClientError::NoSuchFile);
         }
-        let n_packets = (self.file_bytes.len() + PACKET_SIZE - 1) / PACKET_SIZE;
-        for _ in 0..n_packets {
-            tokio::time::sleep(RTT_PER_READ).await;
-            self.read_offset.fetch_add(PACKET_SIZE, Ordering::SeqCst);
-        }
+        let n_packets = self.file_bytes.len().div_ceil(PACKET_SIZE);
+        let n_workers = SFTP_PIPELINE_MAX_WORKERS.min(n_packets).max(1);
+        let chunks_per_worker = n_packets.div_ceil(n_workers);
+
+        let read_offset = Arc::new(AtomicUsize::new(0));
+        let workers = (0..n_workers).map(|_| {
+            let read_offset = Arc::clone(&read_offset);
+            async move {
+                for _ in 0..chunks_per_worker {
+                    tokio::time::sleep(RTT_PER_READ).await;
+                    read_offset.fetch_add(PACKET_SIZE, Ordering::SeqCst);
+                }
+            }
+        });
+        futures::future::join_all(workers).await;
+        // 把累计偏移同步回 self.read_offset（绕过 &self 限制——AtomicUsize 也是 &self 安全）。
+        self.read_offset
+            .store(read_offset.load(Ordering::SeqCst), Ordering::SeqCst);
         Ok(self.file_bytes.clone())
     }
 
@@ -119,7 +143,7 @@ fn make_5mb_jsonl() -> Vec<u8> {
 
 #[tokio::test]
 #[ignore = "perf bench; not in default CI (5MB × 50ms RTT simulation)"]
-async fn ssh_5mb_jsonl_scan_wall_under_9s() {
+async fn ssh_5mb_jsonl_scan_wall_under_2s() {
     let file_bytes = make_5mb_jsonl();
     let file_path = "/remote/home/.claude/projects/-srv/session.jsonl".to_owned();
     let client = Arc::new(ThrottledFakeSftpClient {
@@ -146,9 +170,16 @@ async fn ssh_5mb_jsonl_scan_wall_under_9s() {
     );
 
     assert!(
-        elapsed < Duration::from_secs(9),
-        "5MB SSH scan wall {:?} > 9s threshold (parsed {} messages)",
+        elapsed < Duration::from_secs(2),
+        "5MB SSH scan wall {:?} > 2s threshold (parsed {} messages); PR-F pipeline 期望
+         ceil({} packets / {} workers) × 50ms = ~{}ms 理论下限 + tokio overhead",
         elapsed,
         messages.len(),
+        (5 * 1024 * 1024_usize).div_ceil(PACKET_SIZE),
+        SFTP_PIPELINE_MAX_WORKERS,
+        (5 * 1024 * 1024_usize)
+            .div_ceil(PACKET_SIZE)
+            .div_ceil(SFTP_PIPELINE_MAX_WORKERS)
+            * 50,
     );
 }
