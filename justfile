@@ -159,14 +159,10 @@ clean-all-apply:
 # 详见 .claude/rules/bg-task-dispatch.md（拆分判断框架 + bg vs subagent 选择 + 6 个踩坑）
 # prompt 模板：.claude/templates/bg-pr-pipeline.md（通用填空）
 
-# 起一个 background claude session 跑 PR 流水线
-# 用法（两种皆可，推荐 inline）：
-#   just bg-pr <name> '<inline prompt>'        # 短任务直接 inline（含 backtick / 双引号 / $ 都安全）
-#   just bg-pr <name> <path-to-prompt-file>    # 长任务 / 想留审计 trail 落文件
-# PROMPT 是文件路径还是 inline 字符串由 `[ -f "$PROMPT" ]` 自动判断
+# 起 background claude session 跑 PR 流水线：
+#   just bg-pr <name> '<inline prompt>'
 #
-# quote(): shell-safe 单引号字面量包 NAME / PROMPT，含 backtick / 双引号 / $ 也安全。
-# echo 段用 ASCII 半角 + ${var}：bash 3.2 + set -u 下全角标点（如 `（` U+FF08 首字节 0xEF）
+# echo 段 ASCII 半角 + ${var}：bash 3.2 + set -u 下全角标点（如 `（` U+FF08 首字节 0xEF）
 # 会被当变量名延续字符触发 `${name<...>}: unbound variable`。
 bg-pr NAME PROMPT:
     #!/usr/bin/env bash
