@@ -1,15 +1,17 @@
 #![allow(clippy::doc_markdown, clippy::cast_possible_truncation)]
 
-//! Counted `FakeRemoteSftp` helper —— 仅供 `perf_ssh_cache_hit.rs` 引入。
+//! Counted `FakeRemoteSftp` helper —— 跨 integration test 共享。
 //!
-//! 与 `ipc_contract.rs::FakeRemoteSftp` 与 `ssh_reconnect_lifecycle.rs::FakeRemoteSftp`
-//! 是独立 inline 副本；本 helper 含 `Arc<AtomicUsize>` op counter（`metadata` /
-//! `read` / `read_dir` / `read_lines_head` / `try_exists`）用于断言 SSH 路径
-//! 的真实 fs op 形态。
+//! 含 `Arc<AtomicUsize>` op counter（`metadata` / `read` / `read_dir` /
+//! `read_lines_head` / `try_exists`）用于断言 SSH 路径的真实 fs op 形态。
 //!
-//! `ipc_contract.rs` 副本加 counter 的 PR 见 `openspec/followups.md`
-//! `[coverage-gap] active context dispatch contract test 缺 read 计数器`，与
-//! 本 PR scope 解耦——本 helper 仅供本 PR 的 perf bench 使用。
+//! 现有 consumer：
+//! - `perf_ssh_cache_hit.rs` —— SSH cache hit hot path 零 fs op 形态守护
+//! - `ipc_contract.rs` —— `active_ssh_context_reads_remote_projects_and_sessions`
+//!   每个 IPC method 调用后断言至少一次远端 fs op，防止退化为 local fs 的假阳性
+//!
+//! 历史背景：`ssh_reconnect_lifecycle.rs` 仍是独立 inline 副本，未接入 counter；
+//! 那条路径核心是 reconnect lifecycle 不是 fs op 守护，迁移收益低。
 //!
 //! 详 change `ssh-batch-readdir-with-metadata` design D4。
 //!
@@ -17,10 +19,10 @@
 //! ```rust,ignore
 //! #[path = "fake_remote_sftp.rs"]
 //! mod fake_remote_sftp;
-//! use fake_remote_sftp::CountedFakeRemoteSftp;
+//! use fake_remote_sftp::{CountedFakeRemoteSftp, FakeCounters};
 //! ```
 
-#![allow(dead_code)] // 仅供 perf_ssh_cache_hit.rs 引入，其它测试文件不用。
+#![allow(dead_code)] // 各 consumer 用到的 helper 子集不同（new / add_session 等仅 perf 用）。
 
 use std::collections::HashMap;
 use std::sync::Arc;

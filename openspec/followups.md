@@ -260,9 +260,11 @@ change `fix-ssh-active-context-dispatch` 的 SSH 分支用 `fs.read_to_string(pa
 
 change `fix-ssh-active-context-dispatch` 的 SSH 分支让 `get_project_memory` 返 has_memory=false / empty layers，`read_memory_file` 返 not_found——UI 隐藏 memory 入口。远端 memory CRUD 完整支持需要 `discover_memory_layers` / `validate_memory_file_name` 改接 `Arc<dyn FileSystemProvider>` 入参 + 写路径（add/delete memory）也走 fs trait。
 
-### [coverage-gap] active context dispatch contract test 缺 read 计数器
+### [coverage-gap → done] active context dispatch contract test 缺 read 计数器 ✅
 
-`crates/cdt-api/tests/ipc_contract.rs::active_ssh_context_reads_remote_projects_and_sessions` 用 `FakeRemoteSftp` 验证返回值形状，但 fake provider 未暴露 `read_count` / `read_dir_count` 等内部计数——如果未来某个 IPC method 误退化为 local fs 但 fake 也返回合理默认值，测试可能假阳性通过。后续：扩展 `FakeRemoteSftp` 加 `Arc<AtomicUsize>` 计数 + 每个 method 测试断言 `read_count >= 1`。
+原 gap：`crates/cdt-api/tests/ipc_contract.rs::active_ssh_context_reads_remote_projects_and_sessions` 用 inline `FakeRemoteSftp` 验证返回值形状，但 fake provider 未暴露 `read_count` / `read_dir_count` 等内部计数——如果未来某个 IPC method 误退化为 local fs 但 fake 也返回合理默认值，测试可能假阳性通过。
+
+**已修复**：`ipc_contract.rs` 删除 inline `FakeRemoteSftp` 副本，改 `#[path = "common/fake_remote_sftp.rs"]` 引入既有 `CountedFakeRemoteSftp`（含 `metadata` / `read` / `read_dir` / `read_lines_head` / `try_exists` 五类 `Arc<AtomicUsize>` op counter）。`active_ssh_context_reads_remote_projects_and_sessions` 给 10 个 IPC method 调用各加 before/after `snapshot_counters()` + `assert_remote_fs_touched()` helper（任一类 op 增量 ≥ 1）。`get_project_memory` / `read_memory_file` 走 `BackendPolicy::supports_memory=false` graceful skip 不触 fs，故显式不做 counter 断言（spec 行为保留）。`ssh_reconnect_lifecycle.rs` 仍是独立 inline 副本未接入 counter——那条路径核心是 reconnect lifecycle 不是 fs op 守护，迁移 ROI 低。
 
 ### [coverage-gap → done] SSH 后台 batch read_dir_with_metadata + SSE 推差量（PR-D2）
 
