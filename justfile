@@ -162,15 +162,15 @@ clean-all-apply:
 # 起 background claude session 跑 PR 流水线：
 #   just bg-pr <name> '<inline prompt>'
 #
-# echo 段 ASCII 半角 + ${var}：bash 3.2 + set -u 下全角标点（如 `（` U+FF08 首字节 0xEF）
-# 会被当变量名延续字符触发 `${name<...>}: unbound variable`。
+# echo 段纯 ASCII：bash 3.2 + set -u 下任何非 ASCII 字节（中文/全角标点）
+# 都可能被当变量名延续字符触发 `${name<...>}: unbound variable`。
 bg-pr NAME PROMPT:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{justfile_directory()}}"
     name={{quote(NAME)}}
     prompt={{quote(PROMPT)}}
-    echo "起 bg session: ${name}"
+    echo "[bg-pr] starting session: ${name}"
     claude --bg --name "$name" -- "$prompt"
 
 # 列所有 background session 状态摘要（grep result:/needs input:/failed:）
