@@ -18,8 +18,7 @@ use cdt_config::{
     validate_file_path,
 };
 use cdt_discover::{
-    FileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
-    local_handle,
+    FileSystemProvider, ProjectScanner, SearchTextCache, SessionSearcher, local_handle,
 };
 use cdt_parse::{ParseError, parse_entry_at};
 use cdt_ssh::{
@@ -173,30 +172,6 @@ fn find_first_ai_after(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core
 ///   `post - pre`；任一缺值 → `None`
 ///
 /// 两趟扫描避免可变借用冲突：Pass 1 不可变借用算 (delta, phase)，Pass 2 可变借用写入。
-/// SSH context 下取代 `LocalGitIdentityResolver` 用于 `list_repository_groups`——
-/// 远端无 git 解析能力（不能 spawn 子进程，也不能 SFTP 读容器内 `.git` 因为
-/// 大多数远端是非 git 项目），所有 git 字段返回 None / true 兜底。
-/// 修复 codex R3 P1[1]：避免容器内 cwd 与本机宿主路径重合时泄漏本地 gitBranch。
-struct NoopGitIdentityResolver;
-
-#[async_trait::async_trait]
-impl cdt_discover::GitIdentityResolver for NoopGitIdentityResolver {
-    async fn resolve_identity(
-        &self,
-        _path: &std::path::Path,
-    ) -> Option<cdt_core::RepositoryIdentity> {
-        None
-    }
-
-    async fn get_branch(&self, _path: &std::path::Path) -> Option<String> {
-        None
-    }
-
-    async fn is_main_worktree(&self, _path: &std::path::Path) -> bool {
-        true
-    }
-}
-
 #[allow(dead_code)]
 fn parse_jsonl_content(content: &str) -> Result<Vec<cdt_core::ParsedMessage>, ParseError> {
     let mut out = Vec::new();
@@ -1145,6 +1120,38 @@ impl LocalDataApi {
         Ok((local_handle(), projects_dir, ctx))
     }
 
+    /// `active_fs_and_context_strict()` 的扩展版本：额外返 `BackendPolicy` +
+    /// `Arc<BackendResolvers>`，让 IPC handler 一次 await 拿全 fs / ctx / 后端
+    /// 策略五元组，避免每个 callsite 各自 `fs.kind()` 分支（design D5）。
+    ///
+    /// `fs.kind()` 比对仅允许在本 helper + `BackendResolvers::from_fs` 内部使用——
+    /// 业务 callsite SHALL 通过 `policy.<field>` / `resolvers.<field>` 读取后端
+    /// 相关行为（fs-abstraction spec scenario "业务代码通过 `BackendPolicy` 字段
+    /// 选择行为"）。
+    ///
+    /// `BackendPolicy` by-value：`Copy` 类型包 Arc 是反 idiom。`BackendResolvers`
+    /// 包 Arc 因为持 `Arc<dyn>` + 通过 `LazyLock` 静态缓存避免每次重建（D4）。
+    pub(crate) async fn active_fs_and_policy(
+        &self,
+    ) -> Result<
+        (
+            Arc<dyn FileSystemProvider>,
+            PathBuf,
+            cdt_fs::ContextId,
+            cdt_fs::BackendPolicy,
+            Arc<crate::ipc::backend_resolvers::BackendResolvers>,
+        ),
+        ApiError,
+    > {
+        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
+        let policy = match fs.kind() {
+            cdt_fs::FsKind::Local => cdt_fs::BackendPolicy::for_local(),
+            cdt_fs::FsKind::Ssh => cdt_fs::BackendPolicy::for_ssh(),
+        };
+        let resolvers = crate::ipc::backend_resolvers::BackendResolvers::from_fs(&*fs);
+        Ok((fs, projects_dir, ctx, policy, resolvers))
+    }
+
     pub fn new(
         scanner: ProjectScanner,
         config_mgr: ConfigManager,
@@ -1985,6 +1992,286 @@ async fn scan_metadata_for_page(
     }
 }
 
+/// 按 `context_id.backend_kind` 分流后台 metadata 扫描路径。
+///
+/// - **Local backend**：调既有 `scan_metadata_for_page`（per-session via fs trait）
+/// - **SSH backend**：调 `scan_metadata_for_page_batched`（per `project_dir` 一次
+///   `fs.read_dir_with_metadata` + `MetadataCache::lookup_with_known_signature`
+///   批量校验跳 stat；详 change `ssh-batch-readdir-with-metadata` design D2）
+///
+/// 两条路径共享 `active_scans` 注册表、`Semaphore(METADATA_SCAN_CONCURRENCY=8)`
+/// 限流、`context_generation` race-free 校验；`ssh_disconnect` 触发的 abort 通过
+/// `abort_scans_for_context` 自然覆盖（既有路径，无需新加入口）。
+#[allow(clippy::too_many_arguments)]
+async fn scan_metadata_for_page_dispatch(
+    project_id: String,
+    dir: std::path::PathBuf,
+    page_jobs: Vec<(String, std::path::PathBuf)>,
+    tx: broadcast::Sender<SessionMetadataUpdate>,
+    active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
+    cleanup_key: String,
+    my_generation: u64,
+    metadata_cache: Arc<std::sync::Mutex<MetadataCache>>,
+    semaphore: Arc<Semaphore>,
+    root_generation: Arc<AtomicU64>,
+    expected_root_generation: u64,
+    worktree_meta_cache: Arc<std::sync::RwLock<HashMap<String, WorktreeMeta>>>,
+    fs: Arc<dyn FileSystemProvider>,
+    context_id: cdt_fs::ContextId,
+    context_generation: Arc<AtomicU64>,
+    expected_context_generation: u64,
+) {
+    if context_id.backend_kind == cdt_fs::FsKind::Ssh {
+        scan_metadata_for_page_batched(
+            project_id,
+            dir,
+            page_jobs,
+            tx,
+            active_scans,
+            cleanup_key,
+            my_generation,
+            metadata_cache,
+            semaphore,
+            root_generation,
+            expected_root_generation,
+            worktree_meta_cache,
+            fs,
+            context_id,
+            context_generation,
+            expected_context_generation,
+        )
+        .await;
+    } else {
+        scan_metadata_for_page(
+            project_id,
+            dir,
+            page_jobs,
+            tx,
+            active_scans,
+            cleanup_key,
+            my_generation,
+            metadata_cache,
+            semaphore,
+            root_generation,
+            expected_root_generation,
+            worktree_meta_cache,
+            fs,
+            context_id,
+            context_generation,
+            expected_context_generation,
+        )
+        .await;
+    }
+}
+
+/// SSH ctx 专用批量校验路径：一次 `fs.read_dir_with_metadata(dir)` 拿全 dir
+/// entry metadata（SFTP READDIR reply 1 RTT 含 attrs），对 `page_jobs` 每条
+/// session 调 `MetadataCache::lookup_with_known_signature` 命中跳 stat；
+/// mismatch / 新增 / dir metadata 缺该 path → spawn sub-task 走既有
+/// `extract_session_metadata_cached` cache wrapper miss 路径。
+///
+/// dir read 失败 → fallback 到 `scan_metadata_for_page`（功能正确性优先；
+/// 性能退化为 PR-D 既有 per-session 形态）。
+///
+/// 详 change `ssh-batch-readdir-with-metadata` design D2 + ssh-remote-context
+/// spec Scenarios "SSH ctx 后台 batch 校验 fs op 形态钉死 (all-hit/partial/all-miss)"。
+#[allow(clippy::too_many_arguments)]
+async fn scan_metadata_for_page_batched(
+    project_id: String,
+    dir: std::path::PathBuf,
+    page_jobs: Vec<(String, std::path::PathBuf)>,
+    tx: broadcast::Sender<SessionMetadataUpdate>,
+    active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
+    cleanup_key: String,
+    my_generation: u64,
+    metadata_cache: Arc<std::sync::Mutex<MetadataCache>>,
+    semaphore: Arc<Semaphore>,
+    root_generation: Arc<AtomicU64>,
+    expected_root_generation: u64,
+    worktree_meta_cache: Arc<std::sync::RwLock<HashMap<String, WorktreeMeta>>>,
+    fs: Arc<dyn FileSystemProvider>,
+    context_id: cdt_fs::ContextId,
+    context_generation: Arc<AtomicU64>,
+    expected_context_generation: u64,
+) {
+    use crate::cache_signature::FileSignature;
+
+    // early bail：fs / ctx / root generation 校验同 scan_metadata_for_page
+    if context_generation.load(Ordering::SeqCst) != expected_context_generation {
+        return;
+    }
+    if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+        return;
+    }
+
+    // 1. 一次 fs.read_dir_with_metadata 拿全 dir entry attrs（占 1 个 semaphore
+    //    permit 与其它 in-flight scan 共享 8 上限，避免 batch 路径绕过限流）。
+    let Ok(dir_permit) = semaphore.clone().acquire_owned().await else {
+        return;
+    };
+    let entries = match fs.read_dir_with_metadata(&dir).await {
+        Ok(e) => e,
+        Err(err) => {
+            // dir read 失败 fallback：调既有 per-session 路径保证功能正确性。
+            // 性能退化为 PR-D 形态（N 次串行 stat），用户感知层仍 hot path
+            // cache trust。详 design D2 + spec Scenario "SSH ctx batch helper
+            // 在 dir read 失败时 fallback 到 per-session 路径"。
+            drop(dir_permit);
+            tracing::warn!(
+                target: "cdt_api::perf",
+                project_id = %project_id,
+                error = %err,
+                "batch read_dir_with_metadata failed, falling back to per-session scan",
+            );
+            scan_metadata_for_page(
+                project_id,
+                dir,
+                page_jobs,
+                tx,
+                active_scans,
+                cleanup_key,
+                my_generation,
+                metadata_cache,
+                semaphore,
+                root_generation,
+                expected_root_generation,
+                worktree_meta_cache,
+                fs,
+                context_id,
+                context_generation,
+                expected_context_generation,
+            )
+            .await;
+            return;
+        }
+    };
+
+    // build path → metadata map；filter 掉 metadata = None 条（如 mtime_missing
+    // 已被 SshFileSystemProvider 翻译为 None，详 design D1）—— 这些条会走
+    // mismatch sub-task 路径补齐。
+    let by_name: HashMap<PathBuf, cdt_fs::FsMetadata> = entries
+        .into_iter()
+        .filter_map(|e| {
+            let meta = e.metadata?;
+            Some((dir.join(e.name), meta))
+        })
+        .collect();
+    drop(dir_permit);
+
+    // 2. 逐条 page_jobs：命中直 broadcast；mismatch / 新增 / metadata 缺该 path
+    //    → spawn sub-task 走 cache wrapper miss 路径。
+    let mut set = JoinSet::new();
+
+    for (session_id, jsonl_path) in page_jobs {
+        // 尝试命中 batch hit
+        let cache_entry = by_name.get(&jsonl_path).and_then(|meta| {
+            let sig = FileSignature::from_fs_metadata(meta);
+            metadata_cache
+                .lock()
+                .expect("metadata cache mutex poisoned")
+                .lookup_with_known_signature(&context_id, &jsonl_path, &sig)
+        });
+
+        if let Some(entry) = cache_entry {
+            // 命中：每次 broadcast 前 SHALL 双重校验 context_generation +
+            // root_generation 不变（与 scan_metadata_for_page 既有路径同语义；
+            // codex commit 二审 #1 修订——fs.read_dir_with_metadata await 期间
+            // root 可能被 reconfigure，命中分支也必须 root_generation 校验避免
+            // 把旧 root 的 cache update 推给前端破坏 race-free 契约）。
+            if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+                continue;
+            }
+            if context_generation.load(Ordering::SeqCst) != expected_context_generation {
+                continue;
+            }
+            let group_id = worktree_meta_cache
+                .read()
+                .ok()
+                .and_then(|c| c.get(&project_id).map(|m| m.group_id.clone()));
+            // SSH 跳 stale check：与 extract_session_metadata_cached SSH 分支
+            // （session_metadata.rs:567+ `backend_skips_stale`）同语义——远端
+            // mtime 与本机 SystemTime::now() 跨 clock domain 不可比对。详
+            // change ssh-batch-readdir-with-metadata design D2 / Risks 表
+            // "messages_ongoing 双处一致性"项。
+            let _ = tx.send(SessionMetadataUpdate {
+                project_id: project_id.clone(),
+                session_id,
+                title: entry.title,
+                message_count: entry.message_count,
+                is_ongoing: entry.messages_ongoing,
+                git_branch: entry.git_branch,
+                group_id,
+            });
+            continue;
+        }
+
+        // mismatch / 新增 / metadata 缺该 path → spawn sub-task 走 cache wrapper
+        // miss 路径。JoinSet 持有 sub-task；顶层 batch task abort 时 JoinSet drop
+        // 自动联级 abort 全部 sub-task（tokio 语义）—— SHALL NOT 重复注册
+        // active_scans（design D3）。
+        let permit_sem = semaphore.clone();
+        let tx = tx.clone();
+        let project_id_clone = project_id.clone();
+        let cache = metadata_cache.clone();
+        let root_generation = root_generation.clone();
+        let context_generation = context_generation.clone();
+        let worktree_meta_cache = worktree_meta_cache.clone();
+        let fs_clone = fs.clone();
+        let ctx_clone = context_id.clone();
+        set.spawn(async move {
+            let Ok(_permit) = permit_sem.acquire_owned().await else {
+                return;
+            };
+            if context_generation.load(Ordering::SeqCst) != expected_context_generation {
+                return;
+            }
+            let meta =
+                extract_session_metadata_cached(&cache, &*fs_clone, &ctx_clone, &jsonl_path).await;
+            if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+                return;
+            }
+            if context_generation.load(Ordering::SeqCst) != expected_context_generation {
+                return;
+            }
+            let group_id = worktree_meta_cache
+                .read()
+                .ok()
+                .and_then(|c| c.get(&project_id_clone).map(|m| m.group_id.clone()));
+            let _ = tx.send(SessionMetadataUpdate {
+                project_id: project_id_clone,
+                session_id,
+                title: meta.title,
+                message_count: meta.message_count,
+                is_ongoing: meta.is_ongoing,
+                git_branch: meta.git_branch,
+                group_id,
+            });
+        });
+    }
+
+    // codex commit 二审 #2 修订：JoinSet 内 sub-task panic 时显式日志，避免
+    // "某些 session 永远没 metadata"的静默失败（既有 scan_metadata_for_page
+    // 也未显式日志，但 batched 路径有 JoinSet 二级嵌套——sub-task panic 更隐蔽）。
+    while let Some(res) = set.join_next().await {
+        if let Err(err) = res {
+            tracing::error!(
+                target: "cdt_api::perf",
+                error = %err,
+                "scan_metadata_for_page_batched sub-task failed",
+            );
+        }
+    }
+
+    // 3. cleanup（与 scan_metadata_for_page 同形 race-free pattern）
+    if let Ok(mut scans) = active_scans.lock() {
+        if let Some(entry) = scans.get(&cleanup_key) {
+            if entry.generation == my_generation {
+                scans.remove(&cleanup_key);
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl DataApi for LocalDataApi {
     // =========================================================================
@@ -2112,7 +2399,7 @@ impl DataApi for LocalDataApi {
                 // expected_context_generation（与 fs/ctx 同 snapshot），而非 spawn 时
                 // 才 load——避免 reconfigure 在 fs/ctx 已 await 完成、spawn 之前跑过
                 // 让 reader 拿到旧 ctx + 新 generation 的 race。
-                let handle = tokio::spawn(scan_metadata_for_page(
+                let handle = tokio::spawn(scan_metadata_for_page_dispatch(
                     project_id_owned,
                     dir,
                     page_jobs,
@@ -2202,9 +2489,8 @@ impl DataApi for LocalDataApi {
         // 同步 tokio::fs，无法直接复用走远端 SFTP）。返回 has_memory=false
         // 让 UI 显示"无 memory"而非读宿主机错误数据。
         // followup：openspec/followups.md 已记 SSH context memory 支持（TODO）
-        let (fs, _projects_dir) = self.active_fs_and_projects_dir().await?;
-        // policy fork: PR-E lift to BackendPolicy::supports_memory
-        if fs.kind() == cdt_discover::FsKind::Ssh {
+        let (fs, _projects_dir, _ctx, policy, _resolvers) = self.active_fs_and_policy().await?;
+        if !policy.supports_memory {
             return Ok(ProjectMemory {
                 project_id: project_id.to_owned(),
                 has_memory: false,
@@ -2235,9 +2521,8 @@ impl DataApi for LocalDataApi {
         file: &str,
     ) -> Result<MemoryFileContent, ApiError> {
         // SSH context 下 graceful degradation——同 get_project_memory 同款理由。
-        let (fs, _projects_dir) = self.active_fs_and_projects_dir().await?;
-        // policy fork: PR-E lift to BackendPolicy::supports_memory
-        if fs.kind() == cdt_discover::FsKind::Ssh {
+        let (fs, _projects_dir, _ctx, policy, _resolvers) = self.active_fs_and_policy().await?;
+        if !policy.supports_memory {
             return Err(ApiError::not_found(format!(
                 "memory file {file}: SSH context 下远端 memory 文件读取尚不支持"
             )));
@@ -2274,8 +2559,9 @@ impl DataApi for LocalDataApi {
         let t_locate = std::time::Instant::now();
         // change `unify-fs-direct-calls` design D2 (line 2102): 用 strict 快照让 fs / ctx /
         // projects_dir 来自同一次 provider 调用，避免 SSH disconnect 中间态降级。
-        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
-        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
+        // change `backend-policy-struct` D5：用 active_fs_and_policy() 一次拿全五元组，
+        // 后续 subagent scan / stale check 走 policy 字段而非 fs.kind() 比对。
+        let (fs, projects_dir, ctx, policy, _resolvers) = self.active_fs_and_policy().await?;
         let project_dir =
             projects_dir.join(cdt_discover::path_decoder::extract_base_dir(project_id));
         let primary_jsonl = project_dir.join(format!("{session_id}.jsonl"));
@@ -2312,8 +2598,7 @@ impl DataApi for LocalDataApi {
         let message_count = messages.len();
 
         let t_scan = std::time::Instant::now();
-        // policy fork: PR-E lift to BackendPolicy::supports_subagent_scan
-        let candidates = if is_remote {
+        let candidates = if !policy.supports_subagent_scan {
             Vec::new()
         } else if CROSS_PROJECT_SUBAGENT_SCAN {
             scan_subagent_candidates_cross_project(&*fs, &projects_dir, &project_dir, session_id)
@@ -2327,14 +2612,18 @@ impl DataApi for LocalDataApi {
         let t_build = std::time::Instant::now();
         let messages_ongoing = cdt_analyze::check_messages_ongoing(&messages);
         // stale check 与 list_sessions 路径对齐（issue #94）：mtime > 5min 的
-        // ongoing 视为 crashed/killed。
-        // policy fork: SSH mtime/local clock 跨 domain (远端时钟回拨/时差导致 5min
-        // 阈值不可比对)，PR-E lift to BackendPolicy::stale_check_strategy 或加 SSH-aware
-        // clock skew compensation；本 change unify-fs-direct-calls design D2 line 2171。
-        let is_ongoing = if messages_ongoing && !is_remote {
-            !crate::ipc::session_metadata::is_file_stale(&*fs, &jsonl_path).await
+        // ongoing 视为 crashed/killed。SSH 用 SkipUntilClockSync 跳过 stale check：
+        // 远端 mtime 与本机 clock 跨 domain，5min 阈值不可比对。clock skew
+        // compensation 留 follow-up（design Open Question 2）。
+        let is_ongoing = if messages_ongoing {
+            match policy.stale_check_strategy {
+                cdt_fs::StaleCheckStrategy::LocalClock5min => {
+                    !crate::ipc::session_metadata::is_file_stale(&*fs, &jsonl_path).await
+                }
+                cdt_fs::StaleCheckStrategy::SkipUntilClockSync => messages_ongoing,
+            }
         } else {
-            messages_ongoing
+            false
         };
         let chunks = build_chunks_with_subagents(&messages, &candidates);
         let build_ms = t_build.elapsed().as_millis();
@@ -2732,11 +3021,10 @@ impl DataApi for LocalDataApi {
             .as_deref()
             .ok_or_else(|| ApiError::validation("project_id is required for search"))?;
 
-        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
-        // active context = SSH 时启用 SearchConfig.is_ssh=true，开 stage-limit
-        // 避免远端 SFTP 全量扫描（local 默认 is_ssh=false）
-        // policy fork: PR-E lift to BackendPolicy::search_config
-        let config = SearchConfig::from_fs_kind(fs.kind());
+        let (fs, projects_dir, _ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
+        // SSH 走 SearchConfig.is_ssh=true（stage-limit 避免远端 SFTP 全量扫描），
+        // Local 走默认；选择由 BackendResolvers 在 LazyLock 实例化时一次决定（D1）。
+        let config = resolvers.search_config.clone();
         let searcher = SessionSearcher::new(fs, self.search_cache.clone(), projects_dir);
         let result = searcher
             .search_sessions(project_id, &request.query, max_results, &config)
@@ -3146,10 +3434,9 @@ impl DataApi for LocalDataApi {
         // D3b：grouper 无状态轻量，每次 lazy 构造，避免 LocalDataApi 字段污染。
         // active context = SSH 时 SHALL NOT 用 LocalGitIdentityResolver——容器内远端
         // cwd 与本机宿主路径重合时（如 docker 挂载 `~/.claude` 复现场景），会读宿主机
-        // `.git` 泄漏本地 gitBranch。SSH 路径用 NoopGitIdentityResolver 让 git 字段全 None。
-        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
-        // policy fork: PR-E lift to BackendPolicy::git_identity_resolver
-        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
+        // `.git` 泄漏本地 gitBranch。BackendResolvers 在 LazyLock 实例化时按 fs.kind()
+        // 选 Local / Noop resolver（change `backend-policy-struct` D1 + D7）。
+        let (fs, projects_dir, _ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
         let mut scanner = ProjectScanner::new_with_semaphore(
             fs,
             projects_dir,
@@ -3159,15 +3446,9 @@ impl DataApi for LocalDataApi {
             .scan()
             .await
             .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
-        // policy fork: PR-E lift to BackendPolicy::git_identity_resolver
-        let groups = if is_remote {
-            let grouper = cdt_discover::WorktreeGrouper::new(NoopGitIdentityResolver);
-            grouper.group_by_repository(projects).await
-        } else {
-            let grouper =
-                cdt_discover::WorktreeGrouper::new(cdt_discover::LocalGitIdentityResolver::new());
-            grouper.group_by_repository(projects).await
-        };
+        let grouper =
+            cdt_discover::WorktreeGrouper::new_dyn(resolvers.git_identity_resolver.clone());
+        let groups = grouper.group_by_repository(projects).await;
         // 刷新 worktree_meta_cache（scheme c, D2）：让后续 list_sessions /
         // list_group_sessions / get_worktree_sessions 序列化 SessionSummary 时
         // 能 join 拿到 worktreeName / groupId / cwdRelativeToRepoRoot。

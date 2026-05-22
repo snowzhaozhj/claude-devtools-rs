@@ -53,6 +53,8 @@ pub trait GitIdentityResolver: Send + Sync {
     async fn resolve_identity(&self, path: &Path) -> Option<RepositoryIdentity>;
     async fn get_branch(&self, path: &Path) -> Option<String>;
     async fn is_main_worktree(&self, path: &Path) -> bool;
+    // resolve_all 的 default impl 在下方 trait body 内提供——blanket impl forward
+    // 时需要显式列出方法签名以保证 `Arc<T>` 自动实现该 trait。
 
     /// 一次取回 `identity` + `branch` + `is_main_worktree`。默认实现 fallback 到三个
     /// 独立调用（Fake / SSH impl 走默认路径无需改造）；`LocalGitIdentityResolver`
@@ -72,6 +74,30 @@ pub trait GitIdentityResolver: Send + Sync {
             // 需要更精确语义时应 override `resolve_all`。
             is_repo_root: false,
         }
+    }
+}
+
+/// Blanket impl 让 `Arc<dyn GitIdentityResolver>` / `Arc<T: GitIdentityResolver>`
+/// 直接满足 trait —— `WorktreeGrouper<Arc<dyn GitIdentityResolver>>::new(arc)`
+/// 复用 generic `new` 入口。`async-trait` macro **不会**自动为 `Arc<T>` 生成
+/// trait impl，需要这里显式声明（change `backend-policy-struct` design D7
+/// + tasks 2.1）。
+#[async_trait]
+impl<T: GitIdentityResolver + ?Sized + Send + Sync> GitIdentityResolver for std::sync::Arc<T> {
+    async fn resolve_identity(&self, path: &Path) -> Option<RepositoryIdentity> {
+        (**self).resolve_identity(path).await
+    }
+
+    async fn get_branch(&self, path: &Path) -> Option<String> {
+        (**self).get_branch(path).await
+    }
+
+    async fn is_main_worktree(&self, path: &Path) -> bool {
+        (**self).is_main_worktree(path).await
+    }
+
+    async fn resolve_all(&self, path: &Path) -> RepoLookup {
+        (**self).resolve_all(path).await
     }
 }
 
@@ -314,7 +340,17 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
     pub fn new(git: G) -> Self {
         Self { git }
     }
+}
 
+impl WorktreeGrouper<std::sync::Arc<dyn GitIdentityResolver>> {
+    /// dyn 入口——caller 持 `Arc<dyn GitIdentityResolver>` 时复用 generic `new`。
+    /// 依赖上方 `impl GitIdentityResolver for Arc<T>` blanket impl。
+    pub fn new_dyn(git: std::sync::Arc<dyn GitIdentityResolver>) -> Self {
+        Self::new(git)
+    }
+}
+
+impl<G: GitIdentityResolver> WorktreeGrouper<G> {
     pub async fn group_by_repository(&self, projects: Vec<Project>) -> Vec<RepositoryGroup> {
         if projects.is_empty() {
             return Vec::new();

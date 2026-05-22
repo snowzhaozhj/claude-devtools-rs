@@ -2,6 +2,7 @@
 //!
 //! Spec：`openspec/specs/ipc-data-api/spec.md`。
 
+pub(crate) mod backend_resolvers;
 pub mod error;
 pub mod events;
 pub(crate) mod image_disk_cache;
