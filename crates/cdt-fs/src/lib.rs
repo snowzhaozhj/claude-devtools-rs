@@ -26,7 +26,7 @@ mod local;
 mod metadata;
 mod provider;
 
-pub use backend_policy::{BackendPolicy, InitialLoadPolicy, PrefetchPolicy};
+pub use backend_policy::{BackendPolicy, InitialLoadPolicy, PrefetchPolicy, StaleCheckStrategy};
 pub use context_id::{ContextId, HostSignature, SshConfigDigestInput};
 pub use dir_entry::{DirEntry, EntryKind};
 pub use error::FsError;
