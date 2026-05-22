@@ -70,7 +70,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR（PR 描述 Perf impact 四维齐全 + 引用 followups.md L286-290 第二条 closure）
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex 二审通过（重点查 6 个怀疑点：背压 / 错误传播 / Limited 单 handle / cache wrapper counter / cancellation 联级 / ParseError::Io 包装；如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
-- [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
+- [x] N.1 push 分支 + 开 PR（PR 描述 Perf impact 四维齐全 + 引用 followups.md L286-290 第二条 closure）
+- [x] N.2 wait-ci 全绿
+- [x] N.3 codex 二审通过（重点查 6 个怀疑点：背压 / 错误传播 / Limited 单 handle / cache wrapper counter / cancellation 联级 / ParseError::Io 包装；如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
+- [x] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
