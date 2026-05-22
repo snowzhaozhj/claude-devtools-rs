@@ -329,6 +329,7 @@ dependencies = [
  "axum",
  "base64",
  "cdt-analyze",
+ "cdt-api",
  "cdt-config",
  "cdt-core",
  "cdt-discover",

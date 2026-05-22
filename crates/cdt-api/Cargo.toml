@@ -44,3 +44,6 @@ regex = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 filetime = { workspace = true }
+# 集成测试 SHALL 启用 `test-utils` feature，让 cfg-gated 计数器与 helper 可被
+# `tests/*.rs` 访问（含 change `generation-race-audit` 的 invariant 测试）。
+cdt-api = { path = ".", features = ["test-utils"] }
