@@ -18,8 +18,7 @@ use cdt_config::{
     validate_file_path,
 };
 use cdt_discover::{
-    FileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
-    local_handle,
+    FileSystemProvider, ProjectScanner, SearchTextCache, SessionSearcher, local_handle,
 };
 use cdt_parse::{ParseError, parse_entry_at};
 use cdt_ssh::{
@@ -173,30 +172,6 @@ fn find_first_ai_after(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core
 ///   `post - pre`；任一缺值 → `None`
 ///
 /// 两趟扫描避免可变借用冲突：Pass 1 不可变借用算 (delta, phase)，Pass 2 可变借用写入。
-/// SSH context 下取代 `LocalGitIdentityResolver` 用于 `list_repository_groups`——
-/// 远端无 git 解析能力（不能 spawn 子进程，也不能 SFTP 读容器内 `.git` 因为
-/// 大多数远端是非 git 项目），所有 git 字段返回 None / true 兜底。
-/// 修复 codex R3 P1[1]：避免容器内 cwd 与本机宿主路径重合时泄漏本地 gitBranch。
-struct NoopGitIdentityResolver;
-
-#[async_trait::async_trait]
-impl cdt_discover::GitIdentityResolver for NoopGitIdentityResolver {
-    async fn resolve_identity(
-        &self,
-        _path: &std::path::Path,
-    ) -> Option<cdt_core::RepositoryIdentity> {
-        None
-    }
-
-    async fn get_branch(&self, _path: &std::path::Path) -> Option<String> {
-        None
-    }
-
-    async fn is_main_worktree(&self, _path: &std::path::Path) -> bool {
-        true
-    }
-}
-
 #[allow(dead_code)]
 fn parse_jsonl_content(content: &str) -> Result<Vec<cdt_core::ParsedMessage>, ParseError> {
     let mut out = Vec::new();
@@ -1143,6 +1118,38 @@ impl LocalDataApi {
         let projects_dir = self.projects_dir.lock().await.clone();
         let ctx = cdt_fs::ContextId::local(projects_dir.clone());
         Ok((local_handle(), projects_dir, ctx))
+    }
+
+    /// `active_fs_and_context_strict()` 的扩展版本：额外返 `BackendPolicy` +
+    /// `Arc<BackendResolvers>`，让 IPC handler 一次 await 拿全 fs / ctx / 后端
+    /// 策略五元组，避免每个 callsite 各自 `fs.kind()` 分支（design D5）。
+    ///
+    /// `fs.kind()` 比对仅允许在本 helper + `BackendResolvers::from_fs` 内部使用——
+    /// 业务 callsite SHALL 通过 `policy.<field>` / `resolvers.<field>` 读取后端
+    /// 相关行为（fs-abstraction spec scenario "业务代码通过 `BackendPolicy` 字段
+    /// 选择行为"）。
+    ///
+    /// `BackendPolicy` by-value：`Copy` 类型包 Arc 是反 idiom。`BackendResolvers`
+    /// 包 Arc 因为持 `Arc<dyn>` + 通过 `LazyLock` 静态缓存避免每次重建（D4）。
+    pub(crate) async fn active_fs_and_policy(
+        &self,
+    ) -> Result<
+        (
+            Arc<dyn FileSystemProvider>,
+            PathBuf,
+            cdt_fs::ContextId,
+            cdt_fs::BackendPolicy,
+            Arc<crate::ipc::backend_resolvers::BackendResolvers>,
+        ),
+        ApiError,
+    > {
+        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
+        let policy = match fs.kind() {
+            cdt_fs::FsKind::Local => cdt_fs::BackendPolicy::for_local(),
+            cdt_fs::FsKind::Ssh => cdt_fs::BackendPolicy::for_ssh(),
+        };
+        let resolvers = crate::ipc::backend_resolvers::BackendResolvers::from_fs(&*fs);
+        Ok((fs, projects_dir, ctx, policy, resolvers))
     }
 
     pub fn new(
@@ -2202,9 +2209,8 @@ impl DataApi for LocalDataApi {
         // 同步 tokio::fs，无法直接复用走远端 SFTP）。返回 has_memory=false
         // 让 UI 显示"无 memory"而非读宿主机错误数据。
         // followup：openspec/followups.md 已记 SSH context memory 支持（TODO）
-        let (fs, _projects_dir) = self.active_fs_and_projects_dir().await?;
-        // policy fork: PR-E lift to BackendPolicy::supports_memory
-        if fs.kind() == cdt_discover::FsKind::Ssh {
+        let (fs, _projects_dir, _ctx, policy, _resolvers) = self.active_fs_and_policy().await?;
+        if !policy.supports_memory {
             return Ok(ProjectMemory {
                 project_id: project_id.to_owned(),
                 has_memory: false,
@@ -2235,9 +2241,8 @@ impl DataApi for LocalDataApi {
         file: &str,
     ) -> Result<MemoryFileContent, ApiError> {
         // SSH context 下 graceful degradation——同 get_project_memory 同款理由。
-        let (fs, _projects_dir) = self.active_fs_and_projects_dir().await?;
-        // policy fork: PR-E lift to BackendPolicy::supports_memory
-        if fs.kind() == cdt_discover::FsKind::Ssh {
+        let (fs, _projects_dir, _ctx, policy, _resolvers) = self.active_fs_and_policy().await?;
+        if !policy.supports_memory {
             return Err(ApiError::not_found(format!(
                 "memory file {file}: SSH context 下远端 memory 文件读取尚不支持"
             )));
@@ -2274,8 +2279,9 @@ impl DataApi for LocalDataApi {
         let t_locate = std::time::Instant::now();
         // change `unify-fs-direct-calls` design D2 (line 2102): 用 strict 快照让 fs / ctx /
         // projects_dir 来自同一次 provider 调用，避免 SSH disconnect 中间态降级。
-        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
-        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
+        // change `backend-policy-struct` D5：用 active_fs_and_policy() 一次拿全五元组，
+        // 后续 subagent scan / stale check 走 policy 字段而非 fs.kind() 比对。
+        let (fs, projects_dir, ctx, policy, _resolvers) = self.active_fs_and_policy().await?;
         let project_dir =
             projects_dir.join(cdt_discover::path_decoder::extract_base_dir(project_id));
         let primary_jsonl = project_dir.join(format!("{session_id}.jsonl"));
@@ -2312,8 +2318,7 @@ impl DataApi for LocalDataApi {
         let message_count = messages.len();
 
         let t_scan = std::time::Instant::now();
-        // policy fork: PR-E lift to BackendPolicy::supports_subagent_scan
-        let candidates = if is_remote {
+        let candidates = if !policy.supports_subagent_scan {
             Vec::new()
         } else if CROSS_PROJECT_SUBAGENT_SCAN {
             scan_subagent_candidates_cross_project(&*fs, &projects_dir, &project_dir, session_id)
@@ -2327,14 +2332,18 @@ impl DataApi for LocalDataApi {
         let t_build = std::time::Instant::now();
         let messages_ongoing = cdt_analyze::check_messages_ongoing(&messages);
         // stale check 与 list_sessions 路径对齐（issue #94）：mtime > 5min 的
-        // ongoing 视为 crashed/killed。
-        // policy fork: SSH mtime/local clock 跨 domain (远端时钟回拨/时差导致 5min
-        // 阈值不可比对)，PR-E lift to BackendPolicy::stale_check_strategy 或加 SSH-aware
-        // clock skew compensation；本 change unify-fs-direct-calls design D2 line 2171。
-        let is_ongoing = if messages_ongoing && !is_remote {
-            !crate::ipc::session_metadata::is_file_stale(&*fs, &jsonl_path).await
+        // ongoing 视为 crashed/killed。SSH 用 SkipUntilClockSync 跳过 stale check：
+        // 远端 mtime 与本机 clock 跨 domain，5min 阈值不可比对。clock skew
+        // compensation 留 follow-up（design Open Question 2）。
+        let is_ongoing = if messages_ongoing {
+            match policy.stale_check_strategy {
+                cdt_fs::StaleCheckStrategy::LocalClock5min => {
+                    !crate::ipc::session_metadata::is_file_stale(&*fs, &jsonl_path).await
+                }
+                cdt_fs::StaleCheckStrategy::SkipUntilClockSync => messages_ongoing,
+            }
         } else {
-            messages_ongoing
+            false
         };
         let chunks = build_chunks_with_subagents(&messages, &candidates);
         let build_ms = t_build.elapsed().as_millis();
@@ -2732,11 +2741,10 @@ impl DataApi for LocalDataApi {
             .as_deref()
             .ok_or_else(|| ApiError::validation("project_id is required for search"))?;
 
-        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
-        // active context = SSH 时启用 SearchConfig.is_ssh=true，开 stage-limit
-        // 避免远端 SFTP 全量扫描（local 默认 is_ssh=false）
-        // policy fork: PR-E lift to BackendPolicy::search_config
-        let config = SearchConfig::from_fs_kind(fs.kind());
+        let (fs, projects_dir, _ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
+        // SSH 走 SearchConfig.is_ssh=true（stage-limit 避免远端 SFTP 全量扫描），
+        // Local 走默认；选择由 BackendResolvers 在 LazyLock 实例化时一次决定（D1）。
+        let config = resolvers.search_config.clone();
         let searcher = SessionSearcher::new(fs, self.search_cache.clone(), projects_dir);
         let result = searcher
             .search_sessions(project_id, &request.query, max_results, &config)
@@ -3146,10 +3154,9 @@ impl DataApi for LocalDataApi {
         // D3b：grouper 无状态轻量，每次 lazy 构造，避免 LocalDataApi 字段污染。
         // active context = SSH 时 SHALL NOT 用 LocalGitIdentityResolver——容器内远端
         // cwd 与本机宿主路径重合时（如 docker 挂载 `~/.claude` 复现场景），会读宿主机
-        // `.git` 泄漏本地 gitBranch。SSH 路径用 NoopGitIdentityResolver 让 git 字段全 None。
-        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
-        // policy fork: PR-E lift to BackendPolicy::git_identity_resolver
-        let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
+        // `.git` 泄漏本地 gitBranch。BackendResolvers 在 LazyLock 实例化时按 fs.kind()
+        // 选 Local / Noop resolver（change `backend-policy-struct` D1 + D7）。
+        let (fs, projects_dir, _ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
         let mut scanner = ProjectScanner::new_with_semaphore(
             fs,
             projects_dir,
@@ -3159,15 +3166,9 @@ impl DataApi for LocalDataApi {
             .scan()
             .await
             .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
-        // policy fork: PR-E lift to BackendPolicy::git_identity_resolver
-        let groups = if is_remote {
-            let grouper = cdt_discover::WorktreeGrouper::new(NoopGitIdentityResolver);
-            grouper.group_by_repository(projects).await
-        } else {
-            let grouper =
-                cdt_discover::WorktreeGrouper::new(cdt_discover::LocalGitIdentityResolver::new());
-            grouper.group_by_repository(projects).await
-        };
+        let grouper =
+            cdt_discover::WorktreeGrouper::new_dyn(resolvers.git_identity_resolver.clone());
+        let groups = grouper.group_by_repository(projects).await;
         // 刷新 worktree_meta_cache（scheme c, D2）：让后续 list_sessions /
         // list_group_sessions / get_worktree_sessions 序列化 SessionSummary 时
         // 能 join 拿到 worktreeName / groupId / cwdRelativeToRepoRoot。

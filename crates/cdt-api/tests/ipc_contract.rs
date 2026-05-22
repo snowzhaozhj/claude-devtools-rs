@@ -1267,6 +1267,37 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
         !results.is_empty(),
         "SSH context 下 search SHALL 通过 active provider 搜到远端 jsonl 内容，actual: {search_res:?}"
     );
+
+    // ====== change `backend-policy-struct` 新增（tasks 6b.1）======
+    // 覆盖 BackendPolicy::supports_memory=false 时 memory IPC 的 graceful skip 契约
+
+    // get_project_memory：SSH context 下 SHALL 返 empty ProjectMemory（has_memory=false）
+    let memory = api.get_project_memory(project_id).await.unwrap();
+    assert_eq!(
+        memory.project_id, project_id,
+        "ProjectMemory.project_id SHALL 回显请求 id"
+    );
+    assert!(
+        !memory.has_memory,
+        "SSH context 下 supports_memory=false → has_memory SHALL 为 false"
+    );
+    assert_eq!(memory.count, 0, "SSH context 下 count SHALL 为 0");
+    assert!(memory.layers.is_empty(), "SSH context 下 layers SHALL 为空");
+    assert!(
+        memory.default_file.is_none(),
+        "SSH context 下 default_file SHALL 为 None"
+    );
+
+    // read_memory_file：SSH context 下 SHALL 返 not_found 错误消息含 "SSH context"
+    let read_err = api
+        .read_memory_file(project_id, "CLAUDE.md")
+        .await
+        .expect_err("SSH context 下 read_memory_file SHALL 返 Err");
+    let err_str = format!("{read_err:?}");
+    assert!(
+        err_str.contains("SSH context"),
+        "SSH context 下 read_memory_file 错误消息 SHALL 含 \"SSH context\"，actual: {err_str}"
+    );
 }
 
 #[tokio::test]
