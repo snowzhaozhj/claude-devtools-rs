@@ -33,22 +33,27 @@ shift || true
 SCALE_PROJECTS=3
 SCALE_SESSIONS=1
 SCALE_MSGS=4
+log()  { printf '[fixture] %s\n' "$*"; }
+fail() { printf '[fixture][FAIL] %s\n' "$*" >&2; exit 1; }
+
+is_positive_int() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --scale)
             SCALE_PROJECTS="${2:?--scale requires PROJECTS}"
             SCALE_SESSIONS="${3:?--scale requires SESSIONS}"
             SCALE_MSGS="${4:?--scale requires MSGS}"
+            is_positive_int "$SCALE_PROJECTS" || fail "--scale PROJECTS must be a positive integer, got: $SCALE_PROJECTS"
+            is_positive_int "$SCALE_SESSIONS" || fail "--scale SESSIONS must be a positive integer, got: $SCALE_SESSIONS"
+            is_positive_int "$SCALE_MSGS" || fail "--scale MSGS must be a positive integer, got: $SCALE_MSGS"
             shift 4
             ;;
         *) echo "[fixture] unknown arg: $1" >&2; exit 1 ;;
     esac
 done
 
-log()  { printf '[fixture] %s\n' "$*"; }
-fail() { printf '[fixture][FAIL] %s\n' "$*" >&2; exit 1; }
-
-container_exists() { docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; }
+container_exists() { docker ps -a --format '{{.Names}}' | grep -Fqx "$CONTAINER"; }
 container_running() { [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo false)" = "true" ]; }
 
 find_public_key() {

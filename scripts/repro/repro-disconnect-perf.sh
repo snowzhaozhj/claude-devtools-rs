@@ -25,6 +25,10 @@ now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 log() { printf '[repro-A2 %s] %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$JOB_DIR/repro-A2.log"; }
 fail() { log "FAIL: $*"; exit 1; }
 
+DOCKER_NAME="${CDT_SSH_TEST_CONTAINER:-cdt-ssh-test}"
+docker ps --format '{{.Names}}' | grep -Fqx "$DOCKER_NAME" \
+    || fail "docker container '$DOCKER_NAME' not running"
+
 cleanup() {
     if [ -n "${SERVER_PID:-}" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
         kill "$SERVER_PID" 2>/dev/null || true
@@ -49,15 +53,17 @@ HOME="$JOB_DIR/home-A2" \
     cargo run -q -p cdt-cli --bin cdt > "$JOB_DIR/cdt-server-A2.log" 2>&1 &
 SERVER_PID=$!
 
+SERVER_READY=0
 for i in $(seq 1 60); do
     if curl -fsS "http://127.0.0.1:$PORT/api/projects" >/dev/null 2>&1; then
-        log "server ready"; break
+        log "server ready"; SERVER_READY=1; break
     fi
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
         cat "$JOB_DIR/cdt-server-A2.log"; fail "cdt-cli failed to start"
     fi
     sleep 1
 done
+[ "$SERVER_READY" = "1" ] || { cat "$JOB_DIR/cdt-server-A2.log"; fail "cdt-cli not ready after 60s"; }
 
 log "===== Stage 0: Local baseline (pre-connect) ====="
 T0=$(now_ms)
@@ -84,7 +90,7 @@ log "ssh list_repository_groups: $((T1-T0))ms (groups=$(jq 'length' "$JOB_DIR/A2
 
 SSH_PROJECT=$(jq -r '[.[].worktrees[]?.id] | unique | .[0] // ""' "$JOB_DIR/A2-ssh-groups.json")
 if [ -n "$SSH_PROJECT" ] && [ "$SSH_PROJECT" != "null" ]; then
-    SSH_ENC=$(python3 -c "from urllib.parse import quote; print(quote('''$SSH_PROJECT''', safe=''))")
+    SSH_ENC=$(SSH_PROJECT="$SSH_PROJECT" python3 -c "import os, urllib.parse; print(urllib.parse.quote(os.environ['SSH_PROJECT'], safe=''))")
     T0=$(now_ms)
     curl -sS "http://127.0.0.1:$PORT/api/projects/$SSH_ENC/sessions?page=1&pageSize=50" > "$JOB_DIR/A2-ssh-sessions.json"
     T1=$(now_ms)
@@ -112,7 +118,7 @@ done
 
 POST_PROJECT=$(jq -r '[.[].worktrees[]?.id] | unique | .[0] // ""' "$JOB_DIR/A2-post-groups-1.json")
 if [ -n "$POST_PROJECT" ] && [ "$POST_PROJECT" != "null" ]; then
-    POST_ENC=$(python3 -c "from urllib.parse import quote; print(quote('''$POST_PROJECT''', safe=''))")
+    POST_ENC=$(POST_PROJECT="$POST_PROJECT" python3 -c "import os, urllib.parse; print(urllib.parse.quote(os.environ['POST_PROJECT'], safe=''))")
     for call in 1 2; do
         T0=$(now_ms)
         curl -sS "http://127.0.0.1:$PORT/api/projects/$POST_ENC/sessions?page=1&pageSize=50" > "$JOB_DIR/A2-post-sessions-$call.json"

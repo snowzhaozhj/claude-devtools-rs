@@ -31,6 +31,11 @@ now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 log() { printf '[repro-A1 %s] %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$JOB_DIR/repro-A1.log"; }
 fail() { log "FAIL: $*"; exit 1; }
 
+require_docker_container() {
+    docker ps --format '{{.Names}}' | grep -Fqx "$DOCKER_NAME" \
+        || fail "docker container '$DOCKER_NAME' not running. start it via docker run lscr.io/linuxserver/openssh-server (see scripts/verify-ssh-docker-e2e.sh for ref)"
+}
+
 cleanup() {
     log "cleanup: resume sshd (CONT) + kill cdt server"
     docker exec "$DOCKER_NAME" pkill -CONT sshd 2>/dev/null || true
@@ -41,6 +46,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+require_docker_container
 PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
 mkdir -p "$JOB_DIR/home/.claude"
 [ -d "$HOME/.ssh" ] && [ ! -L "$JOB_DIR/home/.ssh" ] && ln -s "$HOME/.ssh" "$JOB_DIR/home/.ssh"
@@ -57,9 +63,11 @@ HOME="$JOB_DIR/home" \
     cargo run -q -p cdt-cli --bin cdt > "$JOB_DIR/cdt-server.log" 2>&1 &
 SERVER_PID=$!
 
+SERVER_READY=0
 for i in $(seq 1 60); do
     if curl -fsS "http://127.0.0.1:$PORT/api/projects" >/dev/null 2>&1; then
         log "server ready"
+        SERVER_READY=1
         break
     fi
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -68,6 +76,7 @@ for i in $(seq 1 60); do
     fi
     sleep 1
 done
+[ "$SERVER_READY" = "1" ] || { cat "$JOB_DIR/cdt-server.log"; fail "cdt-cli server not ready after 60s"; }
 
 CONNECT_BODY=$(jq -nc --arg h "$SSH_HOST" --argjson p "$SSH_PORT" --arg u "$SSH_USER" \
     '{host:$h,port:$p,username:$u,authMethod:"sshConfig"}')
@@ -88,7 +97,7 @@ log "list_repository_groups baseline: $((T1-T0))ms"
 
 PROJECT_ID=$(jq -r '[.[].worktrees[]?.id] | unique | .[0]' "$JOB_DIR/groups.json")
 [ -n "$PROJECT_ID" ] && [ "$PROJECT_ID" != "null" ] || fail "no project_id: $(cat "$JOB_DIR/groups.json")"
-ENCODED=$(python3 -c "from urllib.parse import quote; print(quote('''$PROJECT_ID''', safe=''))")
+ENCODED=$(PROJECT_ID="$PROJECT_ID" python3 -c "import os, urllib.parse; print(urllib.parse.quote(os.environ['PROJECT_ID'], safe=''))")
 
 T0=$(now_ms)
 curl -sS "http://127.0.0.1:$PORT/api/projects/$ENCODED/sessions?page=1&pageSize=50" > "$JOB_DIR/sessions-baseline.json"
@@ -119,7 +128,10 @@ for i in $(seq 1 60); do
     sleep 0.5
 done
 
-log "post-recovery: list_sessions (sshd CONT, should be fast)"
+log "===== resume sshd (CONT) before measuring post-recovery ====="
+docker exec "$DOCKER_NAME" pkill -CONT sshd
+sleep 1  # let sshd schedule + accept queued packets
+log "post-recovery: list_sessions (should be fast IF self-heal triggered & re-connected)"
 T0=$(now_ms)
 curl -sS --max-time 10 "http://127.0.0.1:$PORT/api/projects/$ENCODED/sessions?page=1&pageSize=50" > "$JOB_DIR/sessions-after-recover.json" 2>&1 || true
 T1=$(now_ms)
