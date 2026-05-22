@@ -255,9 +255,29 @@ impl FileSystemProvider for SshFileSystemProvider {
     /// `Box<dyn AsyncRead + Send + Unpin>`，让调用方不需 downcast 即能流式读。
     ///
     /// 设计：`openspec/changes/unify-fs-abstraction/design.md` D4。
+    ///
+    /// 测试路径（`with_client`，无真实 `sftp` session）会让 `open_read_stream`
+    /// 返 `FsError::Unsupported`——此时降级到 `self.client.read()` 拿全 bytes
+    /// 后包装 `Cursor` 模拟流式读（保证 `ipc_contract` 等用 fake 跑的测试在
+    /// scanner 切到 `fs.open_read` 后仍能 round-trip；change
+    /// `unify-fs-direct-calls` design D1）。生产路径（有真实 sftp）仍走流式
+    /// stream，不退化。
     async fn open_read(&self, path: &Path) -> Result<Box<dyn AsyncRead + Send + Unpin>, FsError> {
-        let file = self.open_read_stream(path).await?;
-        Ok(Box::new(file))
+        if self.sftp.is_some() {
+            let file = self.open_read_stream(path).await?;
+            return Ok(Box::new(file));
+        }
+        // Fake / test path：用 client.read 拿全 bytes + Cursor 模拟流式 AsyncRead。
+        let path_str = path_to_string(path);
+        let client = Arc::clone(&self.client);
+        let bytes = with_retry(move || {
+            let client = Arc::clone(&client);
+            let path_str = path_str.clone();
+            async move { client.read(&path_str).await }
+        })
+        .await
+        .map_err(|e| map_client_error(path, e))?;
+        Ok(Box::new(std::io::Cursor::new(bytes)))
     }
 }
 

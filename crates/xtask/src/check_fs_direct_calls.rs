@@ -38,13 +38,64 @@ pub fn run(workspace_root: &Path, args: &[String]) -> ExitCode {
         }
     };
 
-    let mut hits: Vec<Hit> = Vec::new();
+    // change `unify-fs-direct-calls` design D4：校验 reason 列非空 / 非占位。
+    let reason_violations = validate_allowlist_reasons(&allowlist);
+    if !reason_violations.is_empty() && !warn_only {
+        for v in &reason_violations {
+            eprintln!("error: {v}");
+        }
+        eprintln!(
+            "xtask: ALLOWLIST.md has {} entries with empty/placeholder reason; \
+             refer to ALLOWLIST.md \"豁免准则\" section",
+            reason_violations.len()
+        );
+        return ExitCode::FAILURE;
+    } else if !reason_violations.is_empty() {
+        for v in &reason_violations {
+            eprintln!("warning: {v}");
+        }
+    }
+
     let crates_root = workspace_root.join("crates");
     if !crates_root.exists() {
         eprintln!("error: crates/ root not found at {}", crates_root.display());
         return ExitCode::FAILURE;
     }
-    walk_rs_files(&crates_root, workspace_root, &allowlist, &mut hits);
+
+    let mut hits: Vec<Hit> = Vec::new();
+    let mut allowlist_match_counts = vec![0usize; allowlist.len()];
+    walk_rs_files(
+        &crates_root,
+        workspace_root,
+        &allowlist,
+        &mut allowlist_match_counts,
+        &mut hits,
+    );
+
+    // change `unify-fs-direct-calls` design D4：每条 allowlist pattern SHALL 至少匹配 ≥1 文件。
+    // 0 匹配视为死规则（拼错 / 文件挪走未清理），exit 1（warn-only 时仅 warning）。
+    let stale_patterns: Vec<&AllowEntry> = allowlist
+        .iter()
+        .zip(allowlist_match_counts.iter())
+        .filter_map(|(e, &c)| if c == 0 { Some(e) } else { None })
+        .collect();
+    if !stale_patterns.is_empty() && !warn_only {
+        for e in &stale_patterns {
+            eprintln!(
+                "error: ALLOWLIST entry '{}' matches 0 files (likely typo or stale)",
+                e.pattern
+            );
+        }
+        eprintln!(
+            "xtask: ALLOWLIST.md has {} stale pattern(s); each pattern SHALL match ≥ 1 file",
+            stale_patterns.len()
+        );
+        return ExitCode::FAILURE;
+    } else if !stale_patterns.is_empty() {
+        for e in &stale_patterns {
+            eprintln!("warning: ALLOWLIST entry '{}' matches 0 files", e.pattern);
+        }
+    }
 
     if hits.is_empty() {
         println!("xtask: check-fs-direct-calls passed — 0 violation under crates/.");
@@ -66,7 +117,7 @@ pub fn run(workspace_root: &Path, args: &[String]) -> ExitCode {
 
     if warn_only {
         println!(
-            "xtask: --warn-only is on (PR-A 过渡期默认行为)，exit 0；PR-D 后切到 fail-on-match"
+            "xtask: --warn-only on（仅本地诊断 opt-in），exit 0；CI 默认 enforce fail-on-match"
         );
         ExitCode::SUCCESS
     } else {
@@ -85,6 +136,7 @@ struct Hit {
 #[derive(Debug)]
 struct AllowEntry {
     pattern: String,
+    reason: String,
 }
 
 impl AllowEntry {
@@ -93,13 +145,18 @@ impl AllowEntry {
     }
 }
 
+/// Reason 列最少字符数。change `unify-fs-direct-calls` design D4 钉死：
+/// 空字符串 / 仅 `--` / 长度 < 此阈值 视为占位（不严肃），exit 1 报错。
+const MIN_REASON_LEN: usize = 10;
+
 fn load_allowlist(workspace_root: &Path) -> Result<Vec<AllowEntry>, String> {
     let rules_path = workspace_root.join("crates/cdt-fs/ALLOWLIST.md");
     let text = std::fs::read_to_string(&rules_path)
         .map_err(|e| format!("read {}: {e}", rules_path.display()))?;
 
-    // 找到 "### Allowlist" 标题（兼容前后不同标题层级，落到一个 H1 section 下表）。
-    let needle_lower = "allowlist";
+    // 找到 H2 `## Allowlist` 标题精确匹配（避免误命中 H2 `## 豁免准则`）。
+    // change `unify-fs-direct-calls` design D4：ALLOWLIST.md 顶部加豁免准则段落，
+    // xtask 只取真正的 `## Allowlist` table 段。
     let mut in_table = false;
     let mut header_passed = false;
     let mut found_marker = false;
@@ -107,10 +164,8 @@ fn load_allowlist(workspace_root: &Path) -> Result<Vec<AllowEntry>, String> {
     for line in text.lines() {
         let l = line.trim();
         if !found_marker {
-            // 找到含 "Allowlist" 的 H3 / H2 / 段落标识
-            if (l.starts_with("###") || l.starts_with("##"))
-                && l.to_ascii_lowercase().contains(needle_lower)
-            {
+            // 精确匹配 `## Allowlist`（区分大小写 / 限定 H2）
+            if l == "## Allowlist" {
                 found_marker = true;
             }
             continue;
@@ -132,9 +187,9 @@ fn load_allowlist(workspace_root: &Path) -> Result<Vec<AllowEntry>, String> {
                 }
                 continue;
             }
-            if let Some(first) = extract_first_cell(l) {
-                if !first.is_empty() {
-                    entries.push(AllowEntry { pattern: first });
+            if let Some((pattern, reason)) = extract_pattern_and_reason(l) {
+                if !pattern.is_empty() {
+                    entries.push(AllowEntry { pattern, reason });
                 }
             }
         } else if in_table {
@@ -150,6 +205,25 @@ fn load_allowlist(workspace_root: &Path) -> Result<Vec<AllowEntry>, String> {
     Ok(entries)
 }
 
+/// 校验每条 allowlist entry 的 reason 列非空 / 非占位（design D4）。
+/// 返回违反清单；空 vec 表示全部 OK。
+fn validate_allowlist_reasons(entries: &[AllowEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|e| {
+            let r = e.reason.trim();
+            r.is_empty() || r == "--" || r.chars().count() < MIN_REASON_LEN
+        })
+        .map(|e| {
+            format!(
+                "ALLOWLIST entry '{}' has empty/placeholder reason (got '{}', need ≥ {} chars)",
+                e.pattern, e.reason, MIN_REASON_LEN
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
 fn extract_first_cell(row: &str) -> Option<String> {
     let trimmed = row.trim();
     let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
@@ -162,7 +236,28 @@ fn extract_first_cell(row: &str) -> Option<String> {
     }
 }
 
-fn walk_rs_files(dir: &Path, workspace_root: &Path, allow: &[AllowEntry], hits: &mut Vec<Hit>) {
+/// 解析 markdown table row 取 pattern + reason 两列。
+/// 行格式：`| <pattern> | <reason> |`
+fn extract_pattern_and_reason(row: &str) -> Option<(String, String)> {
+    let trimmed = row.trim();
+    let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
+    let mut parts = inner.split('|');
+    let pattern = parts.next()?.trim().trim_matches('`').trim().to_string();
+    let reason = parts.next().map_or("", str::trim).to_string();
+    if pattern.is_empty() {
+        None
+    } else {
+        Some((pattern, reason))
+    }
+}
+
+fn walk_rs_files(
+    dir: &Path,
+    workspace_root: &Path,
+    allow: &[AllowEntry],
+    match_counts: &mut [usize],
+    hits: &mut Vec<Hit>,
+) {
     let Ok(read) = std::fs::read_dir(dir) else {
         return;
     };
@@ -175,12 +270,14 @@ fn walk_rs_files(dir: &Path, workspace_root: &Path, allow: &[AllowEntry], hits: 
             if matches!(name.as_ref(), "target" | "node_modules" | ".git") {
                 continue;
             }
-            walk_rs_files(&path, workspace_root, allow, hits);
+            walk_rs_files(&path, workspace_root, allow, match_counts, hits);
         } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
             let rel = path
                 .strip_prefix(workspace_root)
                 .map_or_else(|_| normalize_path(&path), normalize_path);
-            if allow.iter().any(|e| e.matches(&rel)) {
+            // 找首个匹配 entry 累加计数；命中即跳过 scan
+            if let Some(idx) = allow.iter().position(|e| e.matches(&rel)) {
+                match_counts[idx] += 1;
                 continue;
             }
             scan_file(&path, &rel, hits);
