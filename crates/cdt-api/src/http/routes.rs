@@ -50,7 +50,7 @@ impl IntoResponse for ApiError {
 /// `static_serve` 决定未命中 `/api/*` 的请求如何处理（详 `StaticServe` doc）：
 /// - `None`：直接 404
 /// - `Dir(p)`：SPA `ServeDir` fallback；路径无效仅 `tracing::warn!` 后退化为 `None`
-/// - `Redirect(base)`：HTTP 302 重定向到 `<base><path>?<query>&http=1`
+/// - `Redirect(base)`：HTTP 307 重定向到 `<base><path>?<query>&http=1&apiBase=...`
 ///
 /// CORS：所有路由统一 layer `localhost_cors_layer`，仅放行 localhost / 127.0.0.1
 /// origin（详 `crate::http::cors`）。
@@ -181,10 +181,12 @@ pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
         }
         StaticServe::Redirect(base) => {
             let base = Arc::new(base);
-            api_router.fallback(move |uri: axum::http::Uri| {
-                let base = Arc::clone(&base);
-                async move { redirect_to_upstream(&base, &uri) }
-            })
+            api_router.fallback(
+                move |uri: axum::http::Uri, headers: axum::http::HeaderMap| {
+                    let base = Arc::clone(&base);
+                    async move { redirect_to_upstream(&base, &uri, &headers) }
+                },
+            )
         }
         StaticServe::None => api_router,
     };
@@ -192,20 +194,62 @@ pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
     router_with_static.layer(localhost_cors_layer())
 }
 
-/// dev 模式下把非 `/api/*` 的请求 302 重定向到 vite dev server 的同路径，并
-/// 自动追加 `http=1` query 触发前端 BrowserTransport（main.ts 的 `params.has("http")`
-/// 分支）。`base` 例如 `http://127.0.0.1:5173`。
+/// dev 模式下把非 `/api/*` 的请求 307 重定向到 vite dev server 的同路径，并
+/// 自动追加 `http=1` + `apiBase=<incoming origin>` query。
 ///
-/// path / query 透传，避免破坏 vite HMR 自动建链路径（`/@vite/client` 等）。
-fn redirect_to_upstream(base: &str, uri: &axum::http::Uri) -> axum::response::Response {
+/// - `http=1` 触发前端 `main.ts` 走 `BrowserTransport`
+/// - `apiBase` 让前端 `getServerBaseUrl()` 锁定**真实 API server origin**——
+///   server-mode 用户改端口（如启动到 `:4000`）时不会因 vite proxy 写死的
+///   `:3456` target 错连（codex PR review 必修）
+///
+/// `base` 例如 `http://127.0.0.1:5173`。path / query 透传，避免破坏 vite HMR
+/// 自动建链路径（`/@vite/client` 等）。**path traversal 不做 guard**——redirect
+/// 不读本地文件，path 透传给浏览器再让 vite 处理（vite dev server 自身已防
+/// `..` 越界至 ui/ 目录外）。
+///
+/// 用 `Redirect::temporary`（307）而非 302：保留请求方法对非 GET fallback 安全；
+/// 实际 HMR / nav 都是 GET，行为等价。
+fn redirect_to_upstream(
+    base: &str,
+    uri: &axum::http::Uri,
+    headers: &axum::http::HeaderMap,
+) -> axum::response::Response {
     let path = uri.path();
-    let merged_query = match uri.query() {
-        Some(q) if q.split('&').any(|kv| kv == "http=1") => q.to_string(),
-        Some(q) => format!("{q}&http=1"),
-        None => "http=1".to_string(),
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(q) = uri.query() {
+        parts.push(q.to_string());
+    }
+    if !parts.iter().any(|p| p.split('&').any(|kv| kv == "http=1")) {
+        parts.push("http=1".to_string());
+    }
+    if let Some(api_base) = api_base_from_host(headers)
+        && !parts
+            .iter()
+            .any(|p| p.split('&').any(|kv| kv.starts_with("apiBase=")))
+    {
+        parts.push(format!(
+            "apiBase={}",
+            percent_encoding::utf8_percent_encode(&api_base, percent_encoding::NON_ALPHANUMERIC)
+        ));
+    }
+    let merged_query = parts.join("&");
+    let target = if merged_query.is_empty() {
+        format!("{base}{path}")
+    } else {
+        format!("{base}{path}?{merged_query}")
     };
-    let target = format!("{base}{path}?{merged_query}");
     axum::response::Redirect::temporary(&target).into_response()
+}
+
+/// 从 `Host` header 推 server origin（HTTP server 走 plain HTTP，监听
+/// 127.0.0.1）。Host 缺失返 `None`——前端 fallback `window.location.origin`
+/// （vite domain）+ vite proxy 默认 target 仍能服务默认 `:3456` 场景。
+fn api_base_from_host(headers: &axum::http::HeaderMap) -> Option<String> {
+    let host = headers.get(axum::http::header::HOST)?.to_str().ok()?;
+    if host.is_empty() {
+        return None;
+    }
+    Some(format!("http://{host}"))
 }
 
 /// 静态文件 + SPA fallback handler。

@@ -278,21 +278,45 @@ fn location_of(resp: &axum::http::Response<Body>) -> String {
         .to_string()
 }
 
+/// 构造一个带 `Host` header 的 GET 请求——redirect handler 需要 Host 推 apiBase。
+fn redirect_get(uri: &str, host: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header(axum::http::header::HOST, host)
+        .body(Body::empty())
+        .unwrap()
+}
+
+/// 期望的 default apiBase query 段：`apiBase=http%3A%2F%2F<encoded host>`
+fn expected_api_base_query(host: &str) -> String {
+    let raw = format!("http://{host}");
+    let encoded: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_string()
+            } else {
+                format!("%{:02X}", c as u32)
+            }
+        })
+        .collect();
+    format!("apiBase={encoded}")
+}
+
 #[tokio::test]
-async fn redirect_root_appends_http_query() {
+async fn redirect_root_appends_http_query_and_api_base() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
     let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+    let host = "localhost:3456";
 
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/")
-        .body(Body::empty())
-        .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
-
+    let resp = app.oneshot(redirect_get("/", host)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
-    assert_eq!(location_of(&resp), format!("{VITE_BASE}/?http=1"));
+    assert_eq!(
+        location_of(&resp),
+        format!("{VITE_BASE}/?http=1&{}", expected_api_base_query(host))
+    );
 }
 
 #[tokio::test]
@@ -300,18 +324,19 @@ async fn redirect_preserves_path_and_appends_http_query() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
     let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+    let host = "localhost:3456";
 
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/foo/bar.svelte")
-        .body(Body::empty())
+    let resp = app
+        .oneshot(redirect_get("/foo/bar.svelte", host))
+        .await
         .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
     assert_eq!(
         location_of(&resp),
-        format!("{VITE_BASE}/foo/bar.svelte?http=1"),
+        format!(
+            "{VITE_BASE}/foo/bar.svelte?http=1&{}",
+            expected_api_base_query(host)
+        ),
         "vite HMR / @vite/client 等路径 SHALL 透传"
     );
 }
@@ -321,16 +346,20 @@ async fn redirect_merges_existing_query() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
     let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+    let host = "localhost:3456";
 
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/?token=abc")
-        .body(Body::empty())
+    let resp = app
+        .oneshot(redirect_get("/?token=abc", host))
+        .await
         .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
-    assert_eq!(location_of(&resp), format!("{VITE_BASE}/?token=abc&http=1"));
+    assert_eq!(
+        location_of(&resp),
+        format!(
+            "{VITE_BASE}/?token=abc&http=1&{}",
+            expected_api_base_query(host)
+        )
+    );
 }
 
 #[tokio::test]
@@ -338,19 +367,79 @@ async fn redirect_does_not_double_append_http_query() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
     let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+    let host = "localhost:3456";
 
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/?http=1&foo=bar")
-        .body(Body::empty())
+    let resp = app
+        .oneshot(redirect_get("/?http=1&foo=bar", host))
+        .await
         .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
-
     assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
     assert_eq!(
         location_of(&resp),
-        format!("{VITE_BASE}/?http=1&foo=bar"),
+        format!(
+            "{VITE_BASE}/?http=1&foo=bar&{}",
+            expected_api_base_query(host)
+        ),
         "已有 http=1 SHALL NOT 再追加"
+    );
+}
+
+#[tokio::test]
+async fn redirect_does_not_double_append_api_base() {
+    let tmp = TempDir::new().unwrap();
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+
+    let resp = app
+        .oneshot(redirect_get(
+            "/?apiBase=http%3A%2F%2Fmanually.set",
+            "localhost:3456",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        location_of(&resp),
+        format!("{VITE_BASE}/?apiBase=http%3A%2F%2Fmanually.set&http=1"),
+        "已有 apiBase= SHALL NOT 被 incoming Host 覆盖"
+    );
+}
+
+#[tokio::test]
+async fn redirect_carries_custom_server_port_in_api_base() {
+    // server-mode 用户改端口到 :4000 时，浏览器 Host header = "localhost:4000"。
+    // redirect 必须把 :4000 编进 apiBase，让前端 getServerBaseUrl 锁定真实 server。
+    let tmp = TempDir::new().unwrap();
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+    let host = "localhost:4000";
+
+    let resp = app.oneshot(redirect_get("/", host)).await.unwrap();
+    let loc = location_of(&resp);
+    assert!(
+        loc.contains("apiBase=http%3A%2F%2Flocalhost%3A4000"),
+        "apiBase SHALL 携带真实 server port，actual = {loc}"
+    );
+}
+
+#[tokio::test]
+async fn redirect_omits_api_base_when_host_header_missing() {
+    let tmp = TempDir::new().unwrap();
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+
+    // 不显式设 Host header——hyper 默认会补一个，构造 raw Request 跳过。
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let loc = location_of(&resp);
+    // 至少要有 http=1；apiBase 缺失场景下前端 fallback location.origin
+    assert!(
+        loc.starts_with(&format!("{VITE_BASE}/?http=1")),
+        "actual = {loc}"
     );
 }
 
@@ -360,13 +449,10 @@ async fn redirect_does_not_intercept_api_routes() {
     let state = build_state(&tmp).await;
     let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
 
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/api/projects")
-        .body(Body::empty())
+    let resp = app
+        .oneshot(redirect_get("/api/projects", "localhost:3456"))
+        .await
         .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
-
     assert_eq!(
         resp.status(),
         StatusCode::OK,
