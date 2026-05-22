@@ -14,7 +14,6 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use cdt_api::{
     ConfigUpdateRequest, DataApi, LocalDataApi, MemoryFileContent, MemoryLayer, MemoryLayerKind,
     PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
@@ -24,13 +23,15 @@ use cdt_api::{
 use cdt_config::{
     ConfigManager, NotificationManager, NotificationTrigger, TriggerContentType, TriggerMode,
 };
-use cdt_discover::{EntryKind, FsMetadata, LocalFileSystemProvider, ProjectScanner};
-use cdt_ssh::{
-    RemoteEntry, SftpClient, SftpClientError, SshConnectionManager, SshFileSystemProvider,
-};
+use cdt_discover::{LocalFileSystemProvider, ProjectScanner};
+use cdt_ssh::{SshConnectionManager, SshFileSystemProvider};
 use chrono::{TimeZone, Utc};
 use serde_json::json;
 use tempfile::TempDir;
+
+#[path = "common/fake_remote_sftp.rs"]
+mod fake_remote_sftp;
+use fake_remote_sftp::{CountedFakeRemoteSftp, FakeCounters};
 
 use cdt_core::chunk::{
     AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep, SlashCommand,
@@ -122,99 +123,6 @@ pub async fn setup_api() -> (Arc<LocalDataApi>, TempDir) {
 
 fn ts() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 4, 11, 0, 0, 0).unwrap()
-}
-
-#[derive(Default)]
-struct FakeRemoteSftp {
-    files: std::collections::HashMap<String, Vec<u8>>,
-    dirs: std::collections::HashMap<String, Vec<RemoteEntry>>,
-}
-
-impl FakeRemoteSftp {
-    fn with_session(
-        remote_home: &str,
-        project_id: &str,
-        session_id: &str,
-        content: String,
-    ) -> Self {
-        let mut fake = Self::default();
-        let project_dir = format!("{remote_home}/{project_id}");
-        let file_path = format!("{project_dir}/{session_id}.jsonl");
-        fake.dirs.insert(
-            remote_home.to_owned(),
-            vec![RemoteEntry {
-                name: project_id.to_owned(),
-                kind: EntryKind::Dir,
-                metadata: None,
-                mtime_missing: false,
-            }],
-        );
-        fake.dirs.insert(
-            project_dir,
-            vec![RemoteEntry {
-                name: format!("{session_id}.jsonl"),
-                kind: EntryKind::File,
-                metadata: Some(FsMetadata {
-                    size: content.len() as u64,
-                    mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
-                    identity: None,
-                }),
-                mtime_missing: false,
-            }],
-        );
-        fake.files.insert(file_path, content.into_bytes());
-        fake
-    }
-}
-
-#[async_trait]
-impl SftpClient for FakeRemoteSftp {
-    async fn metadata(&self, path: &str) -> Result<FsMetadata, SftpClientError> {
-        if let Some(bytes) = self.files.get(path) {
-            Ok(FsMetadata {
-                size: bytes.len() as u64,
-                mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
-                identity: None,
-            })
-        } else if self.dirs.contains_key(path) {
-            Ok(FsMetadata {
-                size: 0,
-                mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
-                identity: None,
-            })
-        } else {
-            Err(SftpClientError::NoSuchFile)
-        }
-    }
-
-    async fn try_exists(&self, path: &str) -> Result<bool, SftpClientError> {
-        Ok(self.files.contains_key(path) || self.dirs.contains_key(path))
-    }
-
-    async fn read(&self, path: &str) -> Result<Vec<u8>, SftpClientError> {
-        self.files
-            .get(path)
-            .cloned()
-            .ok_or(SftpClientError::NoSuchFile)
-    }
-
-    async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, SftpClientError> {
-        self.dirs
-            .get(path)
-            .cloned()
-            .ok_or(SftpClientError::NoSuchFile)
-    }
-
-    async fn read_lines_head(
-        &self,
-        path: &str,
-        max: usize,
-    ) -> Result<Vec<String>, SftpClientError> {
-        let bytes = self.read(path).await?;
-        let content =
-            String::from_utf8(bytes).map_err(|e| SftpClientError::Other(e.to_string()))?;
-        Ok(content.lines().take(max).map(ToOwned::to_owned).collect())
-    }
 }
 
 async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, text: &str) {
@@ -1106,6 +1014,25 @@ async fn list_projects_returns_camelcase_array() {
     assert_eq!(json.as_array().unwrap().len(), 0);
 }
 
+/// 任一 fs op counter 增量 ≥ 1 才算"真走了远端 fake provider"。
+///
+/// 用途：每个 IPC method 调用前后 snapshot，断言至少一类 op（`metadata` / `read` /
+/// `read_dir` / `read_lines_head` / `try_exists`）触发——防止某个 IPC method
+/// 误退化为 local fs 仍返合理默认值的假阳性（followups.md
+/// `[coverage-gap] active context dispatch contract test 缺 read 计数器`）。
+fn assert_remote_fs_touched(before: FakeCounters, after: FakeCounters, method: &str) {
+    let touched = after.metadata > before.metadata
+        || after.read > before.read
+        || after.read_dir > before.read_dir
+        || after.read_lines_head > before.read_lines_head
+        || after.try_exists > before.try_exists;
+    assert!(
+        touched,
+        "{method} SHALL 触发至少一次远端 fs op（before: {before:?} → after: {after:?}）；\
+         若 counter 全 0，意味着 IPC method 误退化为 local fs 而非走 SSH provider"
+    );
+}
+
 #[tokio::test]
 async fn active_ssh_context_reads_remote_projects_and_sessions() {
     let (api, _tmp) = setup_api().await;
@@ -1116,11 +1043,15 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
     let line = format!(
         r#"{{"type":"user","uuid":"{session_id}","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":"from remote"}}}}"#,
     );
-    let fake =
-        FakeRemoteSftp::with_session(remote_home, project_id, session_id, format!("{line}\n"));
+    let fake = Arc::new(CountedFakeRemoteSftp::with_session(
+        remote_home,
+        project_id,
+        session_id,
+        format!("{line}\n"),
+    ));
     let provider = SshFileSystemProvider::with_client(
         "ctx-remote",
-        Arc::new(fake),
+        fake.clone() as Arc<dyn cdt_ssh::SftpClient>,
         std::path::PathBuf::from(remote_home),
     );
     api.insert_test_ssh_context(
@@ -1133,16 +1064,19 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
     )
     .await;
 
+    let before = fake.snapshot_counters();
     let projects = api.list_projects().await.unwrap();
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].id, project_id);
     assert_eq!(projects[0].path, cwd);
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "list_projects");
 
     let pagination = PaginatedRequest {
         page_size: 10,
         cursor: None,
     };
     let mut metadata_rx = api.subscribe_session_metadata();
+    let before = fake.snapshot_counters();
     let sessions = api.list_sessions(project_id, &pagination).await.unwrap();
     assert_eq!(sessions.items[0].session_id, session_id);
     // change `unify-fs-direct-calls` design D2/D3：SSH 改走 SkeletonThenStream 后
@@ -1162,7 +1096,10 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
     assert_eq!(update.session_id, session_id);
     assert_eq!(update.title.as_deref(), Some("from remote"));
     assert_eq!(update.message_count, 1);
+    // list_sessions 骨架走 read_dir + 后台 batch scan 触发 read（async update 收齐后断言）
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "list_sessions");
 
+    let before = fake.snapshot_counters();
     let sync_sessions = api
         .list_sessions_sync(project_id, &pagination)
         .await
@@ -1170,19 +1107,23 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
     assert_eq!(sync_sessions.items[0].session_id, session_id);
     assert_eq!(sync_sessions.items[0].title.as_deref(), Some("from remote"));
     assert_eq!(sync_sessions.items[0].message_count, 1);
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "list_sessions_sync");
 
+    let before = fake.snapshot_counters();
     let detail = api
         .get_session_detail(project_id, session_id)
         .await
         .unwrap();
     assert_eq!(detail.session_id, session_id);
     assert_eq!(detail.metrics["message_count"], json!(1));
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "get_session_detail");
 
     // ====== 本 change `fix-ssh-active-context-dispatch` 新增 ======
     // 覆盖 8 处修复的 IPC method 走 SSH provider 的契约（design.md D4）
 
     // list_repository_groups：active context = SSH 时返回远端项目集合，
     // 而不是宿主机本地的 git repo（容器内/fake 远端无 .git，所以无 gitBranch）
+    let before = fake.snapshot_counters();
     let repo_groups = api.list_repository_groups().await.unwrap();
     assert!(
         !repo_groups.is_empty(),
@@ -1200,20 +1141,29 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
         "SSH context 的 worktree.path SHALL 来自远端 jsonl 的 cwd; \
          git_branch SHALL 为 None（远端无 .git）。actual: {repo_groups:?}"
     );
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "list_repository_groups");
 
     // find_session_project：返回 fake fixture 的 project_id
+    let before = fake.snapshot_counters();
     let found = api.find_session_project(session_id).await.unwrap();
     assert_eq!(found.as_deref(), Some(project_id));
     let missing = api.find_session_project("nonexistent-sid").await.unwrap();
     assert_eq!(missing, None);
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "find_session_project");
 
     // get_session_summaries_by_ids：返回 fake fixture 的 summaries
+    let before = fake.snapshot_counters();
     let summaries = api
         .get_session_summaries_by_ids(project_id, &[session_id.to_owned()])
         .await
         .unwrap();
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].session_id, session_id);
+    assert_remote_fs_touched(
+        before,
+        fake.snapshot_counters(),
+        "get_session_summaries_by_ids",
+    );
 
     // project_memory_dir 是 LocalDataApi 私有 inherent method，由 add/delete
     // claude_md 等公开 API 间接调用。本测试通过 list_projects 走 active_scanner
@@ -1221,6 +1171,7 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
     // 拼路径，行为正确性由 line 698 `active_fs_and_projects_dir` 调用即可保证。
 
     // get_subagent_trace：fake fixture 无 subagent 数据，返回空 array
+    let before = fake.snapshot_counters();
     let trace = api
         .get_subagent_trace(session_id, "subagent-not-exists")
         .await
@@ -1229,8 +1180,10 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
         trace.is_array() && trace.as_array().unwrap().is_empty(),
         "无 subagent fixture 时 SHALL 返回空数组，actual: {trace:?}"
     );
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "get_subagent_trace");
 
     // get_image_asset：jsonl 内无 image block，返回 empty data URI
+    let before = fake.snapshot_counters();
     let image = api
         .get_image_asset(session_id, session_id, "chunk-uuid:0")
         .await
@@ -1239,8 +1192,10 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
         image.starts_with("data:") || image.is_empty(),
         "无 image fixture 时 SHALL 返回 placeholder data URI，actual: {image}"
     );
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "get_image_asset");
 
     // get_tool_output：jsonl 内无 tool_use 匹配，返回 ToolOutput::Missing
+    let before = fake.snapshot_counters();
     let tool_out = api
         .get_tool_output(session_id, session_id, "tool-not-exists")
         .await
@@ -1249,9 +1204,11 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
         matches!(tool_out, cdt_core::ToolOutput::Missing),
         "无 tool_use_id 时 SHALL 返回 ToolOutput::Missing，actual: {tool_out:?}"
     );
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "get_tool_output");
 
     // search：fake provider 包含 "from remote" 文本，SSH context 下应能搜到
     // (SearchRequest 已在文件顶部 use cdt_api::{...} 引入)
+    let before = fake.snapshot_counters();
     let search_req = SearchRequest {
         query: "from remote".to_owned(),
         project_id: Some(project_id.to_owned()),
@@ -1267,9 +1224,14 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
         !results.is_empty(),
         "SSH context 下 search SHALL 通过 active provider 搜到远端 jsonl 内容，actual: {search_res:?}"
     );
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "search");
 
     // ====== change `backend-policy-struct` 新增（tasks 6b.1）======
     // 覆盖 BackendPolicy::supports_memory=false 时 memory IPC 的 graceful skip 契约
+    //
+    // 注：以下两个 memory IPC 走 BackendPolicy.supports_memory=false 的 graceful
+    // skip 路径，**不**触发远端 fs op（spec 行为：SSH context 下 memory 直接返
+    // empty / SSH error）——故不做 counter 断言。
 
     // get_project_memory：SSH context 下 SHALL 返 empty ProjectMemory（has_memory=false）
     let memory = api.get_project_memory(project_id).await.unwrap();
