@@ -167,7 +167,11 @@ async fn current_active_context_id_under_lock(&self) -> cdt_fs::ContextId {
 
 **为什么不直接 `_ops` 锁住整段 inner**：inner 内含 scan + grouper（cache miss 时数百 ms），锁住会让 switch_context 等同时间——把瞬时锁变成"ScanLock"，破坏 switch 响应性。锁仅在 refresh 之前短暂获取（active_context_id + provider_and_context_id 调用 + projects_dir.lock + cache write 耗时 < 1ms），不影响吞吐。
 
-**对 reconfigure_claude_root / shutdown_ssh_all 的覆盖**：reconfigure 改 Local projects_dir 时 `ContextId::Local` 字段变 → ctx-equality 判 mismatch；shutdown 把 ssh_mgr 全清后 active = None + context_generation bump → ctx + generation 双 mismatch。两条路径都被本 D1 双重校验覆盖（**取消原 follow-up #5.1**——不再列入 followups）。
+**对 reconfigure_claude_root / shutdown_ssh_all 的覆盖**：reconfigure 改 Local projects_dir 时 `ContextId::Local` 字段变 → ctx-equality 判 mismatch；shutdown 把 ssh_mgr 全清后 active = None + context_generation bump → ctx + generation 双 mismatch。两条路径都被本 D1 双重校验覆盖。
+
+**codex commit-stage Bug 1 + Bug 2 修订（2026-05-22）**：仅有"ContextId 比较"还不够，需要 reconfigure / shutdown 自身也持 `ssh_watcher_ops` 锁与 refresh 路径互斥。原实现：(a) `reconfigure_claude_root` 完全不持锁，仅依赖 `_scanner.lock + _projects_dir.lock` 间接序列化——但这两个 mutex 与 refresh 路径用的 `ssh_watcher_ops` **不是同一个**。reconfigure 已 bump generation 但未写新 projects_dir 的 window 内，refresh wrapper 的 `current_active_context_id_under_lock` 内部 `projects_dir.lock().await` 拿到的还是旧 projects_dir → 与 captured 等同 → 通过 → 旧 groups 写入 cache 污染随后切到新 projects_dir 的查询。修法：`reconfigure_claude_root` 函数开头 `let _ops = self.ssh_watcher_ops.lock().await;` 持锁覆盖整段 mutate（bump → abort → swap scanner / projects_dir → respawn watcher）。(b) `shutdown_ssh_all` 用 `try_lock()`，失败即绕过锁直接调 `ssh_mgr.shutdown_all` —— 同破坏前提。改 `lock().await` 排队等同锁持有者；shutdown 自身已是 app exit 路径，等几毫秒可接受。两个 fix 把"5 处 mutate 入口与 refresh 路径同锁互斥"从 spec 文档约束变成代码事实。
+
+**取消原 follow-up #5.1**——reconfigure_claude_root 已加锁后 ContextId.Local 字段比较 + (ctx + generation) 双重校验完整闭合，不再列入 followups。
 
 ### D2: Race 2 fix —— `build_group_session_page` 用 inner 单一 snapshot + spawn 前锁内二次校验
 

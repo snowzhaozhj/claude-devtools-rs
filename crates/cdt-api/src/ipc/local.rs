@@ -1628,6 +1628,13 @@ impl LocalDataApi {
     }
 
     pub async fn shutdown_ssh_all(&self, deadline: std::time::Duration) {
+        // change `generation-race-audit` codex commit-stage Bug 2 修订：原实现在
+        // `try_lock` 失败时**无锁** mutate ssh_mgr —— 与 spec 固化的"5 处 mutate
+        // 入口持 ssh_watcher_ops 锁互斥"前提冲突；refresh / spawn 守卫持锁期间
+        // 并发 shutdown 会让 generation 已 bump 但 ssh_mgr.shutdown 未完成的
+        // window 内，wrapper 守卫读到旧 ctx + 新 generation 仍误判通过。改 `lock().await`
+        // 排队等同锁持有者完成；shutdown 自身已是 app exit 路径，等几毫秒可接受。
+        let _ops = self.ssh_watcher_ops.lock().await;
         self.ssh_shutdown_generation.fetch_add(1, Ordering::SeqCst);
         // codex 二审第五轮 Missing Entry：shutdown_ssh_all 也是 context 变更入口
         // （内部 ssh_mgr.shutdown_all 会 disconnect 所有 SSH ctx 并 emit context
@@ -1636,11 +1643,7 @@ impl LocalDataApi {
         // 状态。app exit 路径理论上无前端可观察者，但 deadline 后 process 仍
         // 存活时（如 graceful shutdown 失败）broadcast 仍可能到达——保守 bump。
         self.context_generation.fetch_add(1, Ordering::SeqCst);
-        {
-            let Ok(mut scans) = self.active_scans.lock() else {
-                self.ssh_mgr.shutdown_all(deadline).await;
-                return;
-            };
+        if let Ok(mut scans) = self.active_scans.lock() {
             scans.retain(|_key, entry| {
                 if entry.context_id.backend_kind == cdt_fs::FsKind::Ssh {
                     entry.handle.abort();
@@ -1650,10 +1653,6 @@ impl LocalDataApi {
                 }
             });
         }
-        let Ok(_ops) = self.ssh_watcher_ops.try_lock() else {
-            self.ssh_mgr.shutdown_all(deadline).await;
-            return;
-        };
         self.cancel_all_remote_watchers().await;
         self.ssh_mgr.shutdown_all(deadline).await;
     }
@@ -1773,6 +1772,17 @@ impl LocalDataApi {
         let claude_root = claude_root_path.map(PathBuf::from);
         let projects_dir =
             cdt_discover::path_decoder::projects_base_path_for(claude_root.as_deref());
+        // change `generation-race-audit` codex commit-stage Bug 1 修订：
+        // reconfigure 是 5 处 mutate 入口之一（spec ssh-remote-context::Reconnect
+        // lifecycle preserves SFTP session integrity 与 ipc-data-api::SessionSummary
+        // 增加 worktree 元信息字段 的"映射缓存刷新约束"段已固化），SHALL 持
+        // `ssh_watcher_ops` 锁与 `list_repository_groups` / `build_group_session_page`
+        // 的派生 cache 写入路径 + `switch_context` / `ssh_connect` / `ssh_disconnect` /
+        // `shutdown_ssh_all` 互斥。否则 wrapper 锁内的 (ctx + generation) 双重校验
+        // 仍可能在 reconfigure 已 bump 但未写新 projects_dir 的窗口内误判 match
+        // （current_ctx 仍是旧 Local{old_dir}，与 captured 等同 → 通过 → 旧 groups
+        // 写入 cache 污染随后切到新 projects_dir 的查询）。
+        let _ops = self.ssh_watcher_ops.lock().await;
         // codex 二审第四轮 Blocker：reconfigure 改 Local projects_dir = Local
         // ContextId 变化，与 SSH 切换语义同型。必须在 abort 之前先 bump
         // `context_generation` + `root_generation`，关闭"in-flight list_sessions

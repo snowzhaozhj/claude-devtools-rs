@@ -8,12 +8,12 @@
 
 实施约束（与 PR #171 现有实现一致，本 Requirement 主要为加自动化回归屏障）：
 
-- 三处调用路径 SHALL 持 `ssh_watcher_ops: Mutex<()>` 序列化整段 cancel-then-mutate 操作
+- **5 处 mutate 入口** SHALL 在 mutate 之前持 `ssh_watcher_ops: Mutex<()>`：`ssh_connect` / `switch_context` / `ssh_disconnect` / `reconfigure_claude_root` / `shutdown_ssh_all`。`shutdown_ssh_all` 实现 SHALL 用 `lock().await` 而非 `try_lock()`——`try_lock` 失败时绕过锁直接 mutate `ssh_mgr` 会破坏与 refresh 路径同锁互斥的前提（详 change `generation-race-audit` codex commit-stage Bug 2 修订）。
 - `cancel_remote_watcher(prev_context_id).await` SHALL 在 `ssh_mgr.connect / switch_context / disconnect` 之前调用
 - `attach_remote_watcher(new_context_id).await` SHALL 在 `ssh_mgr` 完成插入新 `SshSessionResources` 之后调用，且与 `ssh_shutdown_generation` 双检（shutdown 中途的 attach 被丢弃）
 - watcher 归属保持在 `LocalDataApi.remote_watchers`，`SshSessionManager` 不直接管 watcher 生命周期（保持 crate 边界：`cdt-ssh` 不依赖 `cdt-api` 的 broadcast tx）
 
-**bump-first 顺序契约（不变）**：三处路径 SHALL 在 `ssh_mgr.connect / switch_context / disconnect` 这一步 await **之前** 完成 `context_generation.fetch_add(1, SeqCst)`。理由：保留这一顺序让任何 in-flight `list_sessions_skeleton` / `build_group_session_page` 在 spawn 时记录的 `expected_context_generation` 立即失效（broadcast 前 check `current != expected` → silent drop）。如果反转为"先 await 后 bump"，await 期间 ssh_mgr 状态部分切换但 generation 未 bump，in-flight scan task 的 broadcast 校验 `current == expected` 仍通过，会向前端串扰旧 ctx 的 metadata update。
+**bump-first 顺序契约（不变）**：5 处路径 SHALL 在 `ssh_mgr.connect / switch_context / disconnect` / `ssh_mgr.shutdown_all` / 写新 `projects_dir` 这一步 await **之前** 完成 `context_generation.fetch_add(1, SeqCst)`（`reconfigure_claude_root` 同时 bump `root_generation`）。理由：保留这一顺序让任何 in-flight `list_sessions_skeleton` / `build_group_session_page` 在 spawn 时记录的 `expected_context_generation` 立即失效（broadcast 前 check `current != expected` → silent drop）。如果反转为"先 await 后 bump"，await 期间 ssh_mgr 状态部分切换但 generation 未 bump，in-flight scan task 的 broadcast 校验 `current == expected` 仍通过，会向前端串扰旧 ctx 的 metadata update。
 
 **派生 cache 写入的双重校验**：依赖 `worktree_meta_cache` 等"全局 flat-key、随 list_repository_groups 刷新"的派生 cache 的实现 SHALL 在 cache 写入路径前用 `ssh_watcher_ops` 锁与本路径互斥，并在锁内做 (current ContextId == captured ContextId) **AND** (current `context_generation` == captured `context_generation`) 双重校验——任一 mismatch 时 SHALL skip 写入（safe degrade，不污染派生 cache）。详 `ipc-data-api::SessionSummary 增加 worktree 元信息字段` Requirement 的"映射缓存刷新约束"段。理由：bump-first 顺序使 `context_generation` 在 `ssh_mgr.switch_context` 网络 RTT 期间已经领先于实际 ssh_mgr 状态；caller 的 generation pre/post snapshot 都可能整段落在该 window 内（pre = post = bumped 后值），漏判 "context 已切"。**单 ctx-equality** 又无法识别"同 host 快速 disconnect+reconnect 期间 ContextId 等价但 generation bumped 两次"边角；**单 generation-equality** 无法识别"reconfigure_claude_root 改 Local projects_dir 但 ssh_mgr.active 不变"边角。结构性修法是 refresh 路径用同锁同步读 ssh_mgr active + 重建 ContextId（含 Local 时的 projects_dir 字段）+ 二次比较 captured generation 做综合判断。
 

@@ -302,9 +302,9 @@ change `unify-fs-direct-calls` §12 micro-bench / SSH cache hit integration / SS
 
 `ipc_contract.rs::FakeRemoteSftp` 加 counter 是独立 PR（见本文 `active context dispatch contract test 缺 read 计数器` 条），与本 PR scope 解耦。
 
-### [coverage-gap → done] context_generation 模式 sub-window race（PR #198 codex 三轮 verify 残留）
+### [coverage-gap → mostly done] context_generation 模式 sub-window race（PR #198 codex 三轮 verify 残留）
 
-✅ 已在 change `generation-race-audit` 修复（2026-05-22）。
+✅ 实现路径已闭合（change `generation-race-audit`，2026-05-22）；真并发 race 触发测试待 follow-up 5.2（依赖 `cdt-ssh::FakeSshManager` 加 delay injection 钩子，跨 crate scope）。本 change 已通过结构性 invariant（4 条计数器断言：`active_fs_and_policy_call_count == 1` / refresh counter / metadata_scan spawn counter / panic-free 并发）覆盖契约关键不变量。
 
 修法：抽 `list_repository_groups_inner` 拿 (groups, fs, projects_dir, ctx, captured_context_generation) 同源五元组；wrapper `list_repository_groups` 在 `ssh_watcher_ops` 锁内做 (current_ctx == captured_ctx) **AND** (current_generation == captured_generation) 双重校验，任一 mismatch 跳 refresh（safe degrade）。`build_group_session_page` 改用 inner 单一抽样（删第二次 active_fs_and_context_strict 抽样），并在 spawn `scan_metadata_for_page` 前同形锁内二次校验：mismatch 时返页面骨架但不 spawn 后台 metadata scan。
 
