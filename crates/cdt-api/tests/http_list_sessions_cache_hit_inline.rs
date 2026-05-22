@@ -107,7 +107,15 @@ async fn http_get_sessions_cache_hit_inlines_real_values_with_zero_emit() {
     let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
     let (_error_tx, error_rx) = broadcast::channel(16);
     let metadata_rx = api.subscribe_session_metadata();
-    spawn_event_bridge(events_tx.clone(), file_rx, todo_rx, error_rx, metadata_rx);
+    let context_rx = api.subscribe_context_changed();
+    spawn_event_bridge(
+        events_tx.clone(),
+        file_rx,
+        todo_rx,
+        error_rx,
+        metadata_rx,
+        context_rx,
+    );
 
     let state = AppState {
         api: api as Arc<dyn DataApi>,

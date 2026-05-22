@@ -100,4 +100,46 @@ mod tests {
             "Lagged SHALL emit sse_lagged sentinel, got: {dbg}"
         );
     }
+
+    /// `ContextChanged` SHALL 走 SSE 推到浏览器——历史 bug：HTTP server 缺
+    /// 这个桥，浏览器 `?http=1` 模式下 contextStore 在 SSH 切换后永远 stale。
+    /// 序列化 payload 形态与桌面 Tauri 桥保持一致：
+    /// `{"type":"context_changed", "active_context_id": "...", "kind": "ssh"}`。
+    #[test]
+    fn context_changed_serializes_with_snake_case_payload() {
+        let event = PushEvent::ContextChanged {
+            active_context_id: Some("localhost".into()),
+            kind: "ssh".into(),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(
+            json.contains("\"type\":\"context_changed\""),
+            "SHALL tag with snake_case type, got: {json}"
+        );
+        assert!(
+            json.contains("\"active_context_id\":\"localhost\""),
+            "SHALL emit active_context_id field, got: {json}"
+        );
+        assert!(
+            json.contains("\"kind\":\"ssh\""),
+            "SHALL emit kind field, got: {json}"
+        );
+    }
+
+    #[test]
+    fn context_changed_local_serializes_with_null_active() {
+        let event = PushEvent::ContextChanged {
+            active_context_id: None,
+            kind: "local".into(),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(
+            json.contains("\"active_context_id\":null"),
+            "Local SHALL serialize active_context_id=null, got: {json}"
+        );
+        assert!(
+            json.contains("\"kind\":\"local\""),
+            "Local SHALL serialize kind=local, got: {json}"
+        );
+    }
 }

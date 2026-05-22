@@ -12,11 +12,13 @@
 
 use cdt_config::DetectedError;
 use cdt_core::{FileChangeEvent, TodoChangeEvent};
+use cdt_ssh::{ContextChanged, ContextKind};
 use tokio::sync::broadcast;
 
 use crate::ipc::{PushEvent, SessionMetadataUpdate};
 
-/// 启动三个 producer task：file / todo / detected-error → `PushEvent`。
+/// 启动 producer task：file / todo / detected-error / metadata / context-changed
+/// → `PushEvent`。
 ///
 /// 调用方持有 `events_tx`（与 `AppState.events_tx` 同 sender）；只要 sender
 /// 存活，task 就持续运行。`*_rx` 关闭时对应 task 退出。task 句柄不返回——
@@ -27,11 +29,13 @@ pub fn spawn_event_bridge(
     todo_rx: broadcast::Receiver<TodoChangeEvent>,
     error_rx: broadcast::Receiver<DetectedError>,
     metadata_rx: broadcast::Receiver<SessionMetadataUpdate>,
+    context_rx: broadcast::Receiver<ContextChanged>,
 ) {
     spawn_file_bridge(events_tx.clone(), file_rx);
     spawn_todo_bridge(events_tx.clone(), todo_rx);
     spawn_detected_error_bridge(events_tx.clone(), error_rx);
-    spawn_metadata_bridge(events_tx, metadata_rx);
+    spawn_metadata_bridge(events_tx.clone(), metadata_rx);
+    spawn_context_changed_bridge(events_tx, context_rx);
 }
 
 fn spawn_file_bridge(
@@ -119,6 +123,34 @@ fn spawn_metadata_bridge(
                         is_ongoing: event.is_ongoing,
                         git_branch: event.git_branch,
                         group_id: event.group_id,
+                    });
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+/// 桥 `cdt_ssh::ContextChanged` → `PushEvent::ContextChanged`。`kind` 序列化为
+/// `"local"` / `"ssh"` 与桌面 Tauri 桥 `app.emit("context_changed", ...)`
+/// payload 形态保持一致——浏览器 `?http=1` 调试与桌面端 listener 共用同一份
+/// `contextStore` 状态机。
+fn spawn_context_changed_bridge(
+    events_tx: broadcast::Sender<PushEvent>,
+    mut context_rx: broadcast::Receiver<ContextChanged>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match context_rx.recv().await {
+                Ok(event) => {
+                    let kind = match event.kind {
+                        ContextKind::Local => "local",
+                        ContextKind::Ssh => "ssh",
+                    };
+                    let _ = events_tx.send(PushEvent::ContextChanged {
+                        active_context_id: event.active_context_id,
+                        kind: kind.to_owned(),
                     });
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}

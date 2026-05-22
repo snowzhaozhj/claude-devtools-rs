@@ -161,7 +161,15 @@ impl ServerState {
         let todo_rx = self.api.subscribe_todo_changes();
         let error_rx = self.api.subscribe_detected_errors();
         let metadata_rx = self.api.subscribe_session_metadata();
-        spawn_event_bridge(events_tx, file_rx, todo_rx, error_rx, metadata_rx);
+        let context_rx = self.api.subscribe_context_changed();
+        spawn_event_bridge(
+            events_tx,
+            file_rx,
+            todo_rx,
+            error_rx,
+            metadata_rx,
+            context_rx,
+        );
 
         let static_dir = self.static_dir.clone();
         let task = tokio::spawn(async move {

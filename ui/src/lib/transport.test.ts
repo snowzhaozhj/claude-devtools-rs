@@ -617,6 +617,11 @@ describe('BrowserTransport', () => {
   })
 
   test('SSE context_changed 事件转换为 context_changed payload', async () => {
+    // 与 cdt_ssh::ContextChanged + 桌面 Tauri 桥 app.emit("context_changed", ...)
+    // 形态对齐：payload 含 `{ activeContextId, kind }`，前端 contextStore listener
+    // 直接消费这两个字段（refreshAfterContextChange(change)）。
+    // 历史 bug：normalizePushPayload 曾返 `{ activeContext: payload.active_context }`
+    // 与 listener 期望字段名永久失配，浏览器 ?http=1 模式 contextStore stale。
     const instances: FakeEventSource[] = []
     vi.stubGlobal('EventSource', class extends FakeEventSource {
       constructor(url: string) {
@@ -629,13 +634,41 @@ describe('BrowserTransport', () => {
     const unsubscribe = await subscribeEvent('context_changed', handler)
     instances[0].emit({
       type: 'context_changed',
-      active_context: { id: 'ctx-1', name: 'Local' },
+      active_context_id: 'ctx-1',
+      kind: 'ssh',
     })
 
     expect(handler).toHaveBeenCalledWith({
       event: 'context_changed',
       id: 0,
-      payload: { activeContext: { id: 'ctx-1', name: 'Local' } },
+      payload: { activeContextId: 'ctx-1', kind: 'ssh' },
+    })
+    unsubscribe()
+  })
+
+  test('SSE context_changed local(null active) 转换正确', async () => {
+    // disconnect / 手动 switch_context("local") 路径——payload.active_context_id
+    // = null，前端 listener 看到 null 不更新（context.svelte.ts:30 守卫）。
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('context_changed', handler)
+    instances[0].emit({
+      type: 'context_changed',
+      active_context_id: null,
+      kind: 'local',
+    })
+
+    expect(handler).toHaveBeenCalledWith({
+      event: 'context_changed',
+      id: 0,
+      payload: { activeContextId: null, kind: 'local' },
     })
     unsubscribe()
   })

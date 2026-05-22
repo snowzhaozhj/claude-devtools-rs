@@ -79,19 +79,23 @@ async fn main() -> Result<()> {
     let todo_rx = api.subscribe_todo_changes();
     let error_rx = api.subscribe_detected_errors();
     let metadata_rx = api.subscribe_session_metadata();
+    let context_rx = api.subscribe_context_changed();
 
     // 与 src-tauri/server_mode 保持一致：page_size=50 默认 × 多 SSE
     // subscriber 时 256 容量易被打满（codex 二审 issue 2）。1024 给约 20×
     // headroom；仍 lag 时由 SSE handler 的 `sse_lagged` sentinel 兜底。
     let state = AppState::new(api, 1024);
 
-    // 把 file / todo / detected-error / metadata 桥到 AppState.events_tx，供 SSE 推送
+    // 把 file / todo / detected-error / metadata / context-changed 桥到
+    // AppState.events_tx，供 SSE 推送（浏览器 `?http=1` 调试模式与远端 HTTP
+    // 客户端都从这里订阅；桌面 Tauri runtime 用 app.emit 独立桥不走 SSE）。
     spawn_event_bridge(
         state.events_tx.clone(),
         file_rx,
         todo_rx,
         error_rx,
         metadata_rx,
+        context_rx,
     );
 
     tracing::info!("Starting claude-devtools-rs on port {port}");
