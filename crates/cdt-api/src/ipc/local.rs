@@ -17,6 +17,7 @@ use cdt_config::{
     read_all_claude_md_files_with_base, read_mentioned_file as config_read_mentioned_file,
     validate_file_path,
 };
+use cdt_core::Project;
 use cdt_discover::{
     FileSystemProvider, ProjectScanner, SearchTextCache, SessionSearcher, local_handle,
 };
@@ -32,6 +33,7 @@ use super::error::ApiError;
 use super::events::SessionMetadataUpdate;
 use super::image_disk_cache::{empty_data_uri, format_data_uri, materialize_image_asset};
 use super::parsed_message_cache::{ParsedMessageCache, extract_parsed_messages_cached};
+use super::project_scan_cache::{ProjectScanCache, spawn_project_scan_cache_invalidator};
 use super::session_metadata::{
     MetadataCache, SessionMetadata, extract_session_metadata_cached, try_lookup_cached_metadata,
 };
@@ -418,6 +420,13 @@ pub struct LocalDataApi {
     /// `cwd_relative_to_repo_root`。未刷新时 fallback 为 None，UI 退化到
     /// 用 `project_id` 当 group id。
     worktree_meta_cache: Arc<std::sync::RwLock<HashMap<String, WorktreeMeta>>>,
+    /// `ProjectScanner::scan()` 结果的进程级缓存。key=`ContextId`，value=
+    /// `Arc<Vec<Project>>` + `root_generation` + `context_generation` +
+    /// `inserted_at`；watcher 主动 invalidate Local entry，SSH entry 走
+    /// TTL（10s）。让 `list_projects` / `list_repository_groups` 第二次
+    /// IPC 调用 cache hit 时跳过 ~14K fs op 的全量 scan。change
+    /// `unify-fs-abstraction` FU-4 `ProjectScanner` memoize 部分。
+    project_scan_cache: Arc<std::sync::Mutex<ProjectScanCache>>,
 }
 
 /// IPC `SessionSummary` 序列化时从 `worktree_meta_cache` 查到的派生字段。
@@ -1152,6 +1161,85 @@ impl LocalDataApi {
         Ok((fs, projects_dir, ctx, policy, resolvers))
     }
 
+    /// `ProjectScanner::scan()` 的进程级 cache 入口。返回 `Arc<Vec<Project>>`
+    /// 让调用方零分配 iter；写入 cache 后下次同 `ContextId` 调用直接命中，
+    /// 跳过 ~14K fs op 的全量扫描。
+    ///
+    /// 失效层级（详 `project_scan_cache.rs` 模块头）：
+    /// 1. watcher 主动 invalidate Local entry（任意 `FileChangeEvent` 触发）
+    /// 2. `root_generation` / `context_generation` 校验
+    /// 3. TTL（Local 5 分钟、SSH 10 秒）
+    ///
+    /// `active_fs_and_context_strict()` 保证 SSH disconnect 中间态报错而非
+    /// 静默降级——cache 写入与读取使用同一 `ContextId`。
+    pub(crate) async fn scan_projects_cached(&self) -> Result<Arc<Vec<Project>>, ApiError> {
+        let cur_root_generation = self.root_generation.load(Ordering::SeqCst);
+        let cur_context_generation = self.context_generation.load(Ordering::SeqCst);
+        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
+        // 命中检查：generation snapshot 先于 fs/ctx 拿，避免 reconfigure / SSH
+        // switch 在 await 中跑完后把旧 generation 的 cache entry 当 fresh 命中
+        // （与 `list_sessions_skeleton` 第五轮 codex 修订同模式）。
+        {
+            let mut cache = self
+                .project_scan_cache
+                .lock()
+                .expect("project scan cache mutex poisoned");
+            if let Some(hit) = cache.lookup(&ctx, cur_root_generation, cur_context_generation) {
+                tracing::debug!(
+                    target: "cdt_api::perf",
+                    context = ?ctx.backend_kind,
+                    "project_scan_cache hit"
+                );
+                return Ok(hit);
+            }
+        }
+
+        // miss：真正 scan
+        let mut scanner = ProjectScanner::new_with_semaphore(
+            fs.clone(),
+            projects_dir,
+            self.shared_read_semaphore.clone(),
+        );
+        let projects = scanner
+            .scan()
+            .await
+            .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
+        let snapshot = Arc::new(projects);
+        let fs_kind = fs.kind();
+        // 写入 cache：再次取 generation 与 lookup 时一致（generation 由 atomic
+        // 保护，单调递增；如果 await 期间被 reconfigure 跨过，下次 lookup 会
+        // mismatch miss）。
+        {
+            let mut cache = self
+                .project_scan_cache
+                .lock()
+                .expect("project scan cache mutex poisoned");
+            cache.insert(
+                ctx,
+                snapshot.clone(),
+                cur_root_generation,
+                cur_context_generation,
+                fs_kind,
+            );
+        }
+        tracing::debug!(
+            target: "cdt_api::perf",
+            project_count = snapshot.len(),
+            backend = ?fs_kind,
+            "project_scan_cache populated"
+        );
+        Ok(snapshot)
+    }
+
+    /// 测试 / perf bench 用：返回累计命中 / lookup 数。
+    #[allow(dead_code)]
+    pub fn project_scan_cache_stats(&self) -> super::project_scan_cache::ProjectScanCacheStats {
+        self.project_scan_cache
+            .lock()
+            .expect("project scan cache mutex poisoned")
+            .stats()
+    }
+
     pub fn new(
         scanner: ProjectScanner,
         config_mgr: ConfigManager,
@@ -1192,6 +1280,7 @@ impl LocalDataApi {
             // 跨 crate 暴露内部常量。
             shared_read_semaphore: Arc::new(Semaphore::new(64)),
             worktree_meta_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            project_scan_cache: Arc::new(std::sync::Mutex::new(ProjectScanCache::new())),
         }
     }
 
@@ -1234,6 +1323,11 @@ impl LocalDataApi {
         // remove。详 change `parsed-message-lru-cache` design D9；spec
         // `ipc-data-api/spec.md` §"parsed-message 缓存按 file-change 广播主动失效"。
         let parsed_msg_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
+        // ProjectScanner 结果缓存主动失效路径：订阅 file-change 广播，任何
+        // 事件都 invalidate Local entry——scan 结果是 immutable Arc，partial
+        // invalidation 不划算。SSH entry 由 TTL 自然过期。详 change
+        // `unify-fs-abstraction` FU-4 + `crates/cdt-api/src/ipc/project_scan_cache.rs`。
+        let project_scan_cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
         let watcher_tasks = Mutex::new(spawn_watcher_runtime(
             FileWatcher::with_paths(
                 projects_dir.clone(),
@@ -1247,6 +1341,7 @@ impl LocalDataApi {
                 todos: todo_tx.clone(),
             },
             parsed_msg_cache.clone(),
+            project_scan_cache.clone(),
             projects_dir.clone(),
         ));
 
@@ -1280,6 +1375,7 @@ impl LocalDataApi {
             // 跨 crate 暴露内部常量。
             shared_read_semaphore: Arc::new(Semaphore::new(64)),
             worktree_meta_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            project_scan_cache,
         }
     }
 
@@ -1528,6 +1624,7 @@ impl LocalDataApi {
                     todos: todo_tx.clone(),
                 },
                 self.parsed_msg_cache.clone(),
+                self.project_scan_cache.clone(),
                 projects_dir,
             );
         }
@@ -1772,6 +1869,7 @@ fn spawn_watcher_runtime(
     notif_mgr: Arc<Mutex<NotificationManager>>,
     channels: WatcherRuntimeChannels,
     parsed_msg_cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
+    project_scan_cache: Arc<std::sync::Mutex<ProjectScanCache>>,
     projects_dir: PathBuf,
 ) -> Vec<JoinHandle<()>> {
     let watcher = Arc::new(watcher);
@@ -1823,12 +1921,20 @@ fn spawn_watcher_runtime(
         projects_dir,
     );
 
+    // ProjectScanner 结果缓存的 Local 主动失效任务。订阅同一 file-watcher
+    // 广播；scan 结果是 immutable Arc，任意 FileChangeEvent 都直接清掉
+    // Local entry（partial invalidation 复杂度不划算）。change
+    // `unify-fs-abstraction` FU-4 ProjectScanner memoize。
+    let scan_cache_invalidator_task =
+        spawn_project_scan_cache_invalidator(project_scan_cache, watcher.subscribe_files());
+
     vec![
         start_task,
         bridge_task,
         todo_bridge_task,
         notifier_task,
         invalidator_task,
+        scan_cache_invalidator_task,
     ]
 }
 
@@ -2279,14 +2385,12 @@ impl DataApi for LocalDataApi {
     // =========================================================================
 
     async fn list_projects(&self) -> Result<Vec<ProjectInfo>, ApiError> {
-        let mut scanner = self.active_scanner().await?;
-        let projects = scanner
-            .scan()
-            .await
-            .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
-
+        // 走进程级 cache（FU-4 ProjectScanner memoize）：命中时 0 fs op，
+        // miss 时一次 `ProjectScanner::scan()` 全扫并写入 Arc<Vec<Project>>。
+        // `scan_projects_cached` 内部用 `active_fs_and_context_strict()` 选 fs。
+        let projects = self.scan_projects_cached().await?;
         Ok(projects
-            .into_iter()
+            .iter()
             .map(|p| ProjectInfo {
                 id: p.id.clone(),
                 path: p.path.to_string_lossy().into_owned(),
@@ -3436,19 +3540,20 @@ impl DataApi for LocalDataApi {
         // cwd 与本机宿主路径重合时（如 docker 挂载 `~/.claude` 复现场景），会读宿主机
         // `.git` 泄漏本地 gitBranch。BackendResolvers 在 LazyLock 实例化时按 fs.kind()
         // 选 Local / Noop resolver（change `backend-policy-struct` D1 + D7）。
-        let (fs, projects_dir, _ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
-        let mut scanner = ProjectScanner::new_with_semaphore(
-            fs,
-            projects_dir,
-            self.shared_read_semaphore.clone(),
-        );
-        let projects = scanner
-            .scan()
-            .await
-            .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
+        //
+        // FU-4 ProjectScanner memoize：scan 结果走 `scan_projects_cached` 进程级
+        // cache，命中时跳过全量 fs op；grouper 仍每次跑（git resolve 本身已 cache）。
+        // `(*projects).clone()` 把 Arc 下的 Vec 拷一份给 grouper 的 owned 入参——
+        // Vec<Project> 几百 KB 量级的 clone 远低于全量 scan 的 ~14K fs ops 成本。
+        let projects = self.scan_projects_cached().await?;
+        let resolvers = {
+            let (_fs, _projects_dir, _ctx, _policy, resolvers) =
+                self.active_fs_and_policy().await?;
+            resolvers
+        };
         let grouper =
             cdt_discover::WorktreeGrouper::new_dyn(resolvers.git_identity_resolver.clone());
-        let groups = grouper.group_by_repository(projects).await;
+        let groups = grouper.group_by_repository((*projects).clone()).await;
         // 刷新 worktree_meta_cache（scheme c, D2）：让后续 list_sessions /
         // list_group_sessions / get_worktree_sessions 序列化 SessionSummary 时
         // 能 join 拿到 worktreeName / groupId / cwdRelativeToRepoRoot。

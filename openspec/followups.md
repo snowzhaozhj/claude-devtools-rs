@@ -296,6 +296,18 @@ change `unify-fs-direct-calls` §12 micro-bench / SSH cache hit integration / SS
 
 `ipc_contract.rs::FakeRemoteSftp` 加 counter 是独立 PR（见本文 `active context dispatch contract test 缺 read 计数器` 条），与本 PR scope 解耦。
 
+### [coverage-gap → done] ProjectScanner 结果 in-memory 复用（FU-4 收尾）
+
+change `unify-fs-abstraction` 的 FU-4 "ProjectScanner 结果在 LocalDataApi 内 in-memory 复用 + BackendPolicy wire 到业务" **已分两步完成** ✅：
+
+- **BackendPolicy wire 部分**已在 change `backend-policy-struct`（PR-E）落地：6 处 `fs.kind()` callsite 上移到 `BackendPolicy` + `BackendResolvers` 字段读取
+- **ProjectScanner memoize 部分**已在 change `project-scanner-memoize`（本 PR）落地：
+  - `crates/cdt-api/src/ipc/project_scan_cache.rs` 新增 `ProjectScanCache` —— key=`ContextId`，value=`Arc<Vec<Project>>` + `(root_generation, context_generation, inserted_at, fs_kind)`
+  - 失效层级：(1) Local watcher 主动失效 —— 任意 `FileChangeEvent` 触发 `invalidate_local`；(2) `root_generation` / `context_generation` 校验；(3) TTL 兜底（Local 5min 给 watcher 漏掉时兜底，SSH 10s 给无 watcher 路径）
+  - `LocalDataApi::scan_projects_cached()` helper 让 `list_projects` / `list_repository_groups` 第二次 IPC 调用 cache hit
+  - bench `crates/cdt-api/tests/perf_project_scan_cache.rs`（`#[ignore]`）实测：`list_projects` cold 146ms → warm 0ms；`list_repository_groups` cold 150ms → warm 3ms（50× 提速，只剩 grouper git resolve）
+  - 不在 scope：`read_agent_configs` 用全局 `self.scanner.lock()` 走固定 Local 路径不变；`build_group_session_page` / `list_sessions_skeleton` 用 `scanner.list_sessions(project_id)` 是 per-project 列表（需另一层 cache，不在本 PR）
+
 ---
 
 ## notification-triggers
