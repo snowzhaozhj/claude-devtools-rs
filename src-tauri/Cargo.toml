@@ -45,3 +45,21 @@ cdt-watch = { path = "../crates/cdt-watch" }
 
 [dev-dependencies]
 tempfile = "3"
+
+# Dev profile 体积/速度优化（与根 Cargo.toml 同模式；src-tauri 独立 workspace 必须独立配）。
+# 配合全局 ~/.cargo/config.toml 的 sccache rustc-wrapper 跨 build 共享缓存。
+[profile.dev]
+opt-level = 0
+debug = true
+# 关 incremental 缓存（src-tauri/target/debug/incremental 典型占 3-5G）。
+incremental = false
+# cargo 在 incremental=false 时 codegen-units 默认从 256 降到 16；显式锁回保留多核并行度。
+codegen-units = 256
+
+# 依赖 crate 仅保留 line tables——足够 panic backtrace 用源码定位，但不能 IDE 看变量值。
+# `*` 在 src-tauri 这个 single-crate workspace 里匹配所有非 claude-devtools-tauri 的 crate，
+# 包括 path dep `cdt-*`（它们在这个 workspace 视角下不是成员、是依赖）：所以 cargo tauri dev
+# 上下文里 cdt-* 也只有 line tables。要调试 cdt-* 内部变量值请走 `cargo test -p cdt-x`
+# （根 workspace），那里 cdt-* 是成员保留完整 debug info。
+[profile.dev.package."*"]
+debug = "line-tables-only"
