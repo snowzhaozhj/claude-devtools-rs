@@ -40,6 +40,10 @@
   function toggleOpen() {
     if (canSwitch && !contextStore.switching) open = !open;
   }
+
+  $effect(() => {
+    if (!canSwitch && open) open = false;
+  });
 </script>
 
 <div class="workspace-indicator" bind:this={root}>
@@ -72,6 +76,7 @@
     class="pill"
     class:static={!canSwitch}
     disabled={contextStore.switching}
+    aria-disabled={!canSwitch || undefined}
     aria-expanded={canSwitch ? open : undefined}
     aria-haspopup={canSwitch ? "menu" : undefined}
     aria-label={canSwitch ? "切换工作区" : `当前工作区：${activeLabel}`}
