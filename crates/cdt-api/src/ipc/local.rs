@@ -2824,24 +2824,30 @@ impl DataApi for LocalDataApi {
     ) -> Result<ProjectMemory, ApiError> {
         // change `ssh-project-memory-remote-rw`: 写路径走 fs trait `write_atomic` + `create_dir_all`；
         // 写完 re-discover layers 直接返新 ProjectMemory（避免前端二次 IPC，详 design D9）。
+        //
+        // 错误路径 sanitize（codex PR 二审 ITEM 5）：返给前端 webview 的 ApiError
+        // message 仅含用户可见信息（safe_file 文件名）；详细 fs error（含远端
+        // home path）只写 tracing::error，不暴露给前端。
         let (fs, _projects_dir, _ctx, _policy, _resolvers) = self.active_fs_and_policy().await?;
         let memory_dir = self.project_memory_dir(project_id).await?;
         let safe_file = validate_memory_file_name(file)?;
         // 自动创建 memory 目录（不存在则创建，已存在不报错）
-        fs.create_dir_all(&memory_dir)
-            .await
-            .map_err(|e| ApiError::internal(format!("create memory dir failed: {e}")))?;
+        fs.create_dir_all(&memory_dir).await.map_err(|e| {
+            tracing::error!(project_id = %project_id, error = %e, "create memory dir failed");
+            ApiError::internal("create memory dir failed".to_owned())
+        })?;
         let path = memory_dir.join(&safe_file);
-        fs.write_atomic(&path, content.as_bytes())
-            .await
-            .map_err(|e| ApiError::internal(format!("write memory file {safe_file}: {e}")))?;
+        fs.write_atomic(&path, content.as_bytes()).await.map_err(|e| {
+            tracing::error!(project_id = %project_id, file = %safe_file, error = %e, "write memory file failed");
+            ApiError::internal(format!("write memory file {safe_file} failed"))
+        })?;
         let layers = discover_memory_layers(&*fs, &memory_dir).await?;
         Ok(build_project_memory(project_id, layers))
     }
 
     async fn delete_memory(&self, project_id: &str, file: &str) -> Result<ProjectMemory, ApiError> {
         // change `ssh-project-memory-remote-rw`: 删路径走 fs trait `remove_file`；
-        // 删完 re-discover layers 直接返新 ProjectMemory。
+        // 删完 re-discover layers 直接返新 ProjectMemory。错误路径 sanitize 同 add_memory。
         let (fs, _projects_dir, _ctx, _policy, _resolvers) = self.active_fs_and_policy().await?;
         let memory_dir = self.project_memory_dir(project_id).await?;
         let safe_file = validate_memory_file_name(file)?;
@@ -2850,7 +2856,10 @@ impl DataApi for LocalDataApi {
             cdt_discover::FsError::NotFound(_) => {
                 ApiError::not_found(format!("memory file {safe_file} not found"))
             }
-            other => ApiError::internal(format!("delete memory file {safe_file}: {other}")),
+            other => {
+                tracing::error!(project_id = %project_id, file = %safe_file, error = %other, "delete memory file failed");
+                ApiError::internal(format!("delete memory file {safe_file} failed"))
+            }
         })?;
         let layers = discover_memory_layers(&*fs, &memory_dir).await?;
         Ok(build_project_memory(project_id, layers))

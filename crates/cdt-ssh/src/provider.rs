@@ -487,18 +487,23 @@ impl FileSystemProvider for SshFileSystemProvider {
         Ok(())
     }
 
-    /// SSH 远端 `create_dir_all` —— 自上而下迭代 ancestors，per-comp `try_exists` + `mkdir`。
+    /// SSH 远端 `create_dir_all` —— 自 `remote_home` 起的相对路径逐层 `try_exists` + `mkdir`。
     /// 标准 SFTP 不支持 mkdir -p。
+    ///
+    /// **优化**（codex PR 二审 ITEM 2）：从 `<remote_home>` 之后的相对组件开始迭代——
+    /// `<remote_home>` 在 SSH connect 时已探测过存在，无需再 `try_exists` 各祖先；
+    /// 6-7 次 RTT (~300ms) 降到 N 次（典型 N=2：`.claude/projects/<id>/memory` 已存在 → 0 `mkdir`，
+    /// 仅 1 次 `try_exists`；首次 add 全新 project → 2 次 `mkdir` + 2 次 `try_exists` ~150ms）。
     async fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
-        // 收集 path + 祖先（含自身），从根到叶
-        let mut ancestors: Vec<&Path> = path.ancestors().collect();
-        ancestors.reverse();
-        for comp in ancestors {
-            // 跳过 root 和空路径
-            if comp.as_os_str().is_empty() || comp == Path::new("/") {
-                continue;
-            }
-            let comp_str = path_to_string(comp);
+        // path 必形如 `<remote_home>/<base>/memory`（caller 永远从 projects_dir
+        // 拼接），从 remote_home 之后开始逐层创建避免穿越 / .. 等无意义祖先 RTT。
+        let relative = path.strip_prefix(&self.remote_home).unwrap_or(path);
+
+        // 累积构造 `<remote_home>/<comp1>/<comp2>/...`，逐层 try_exists + mkdir
+        let mut current = self.remote_home.clone();
+        for comp in relative.components() {
+            current = current.join(comp.as_os_str());
+            let comp_str = path_to_string(&current);
 
             let client = Arc::clone(&self.client);
             let cs = comp_str.clone();
@@ -508,7 +513,7 @@ impl FileSystemProvider for SshFileSystemProvider {
                 async move { client.try_exists(&cs).await }
             })
             .await
-            .map_err(|e| map_client_error(comp, e))?;
+            .map_err(|e| map_client_error(&current, e))?;
 
             if !exists {
                 let client = Arc::clone(&self.client);
@@ -519,7 +524,7 @@ impl FileSystemProvider for SshFileSystemProvider {
                     async move { client.mkdir(&cs).await }
                 })
                 .await
-                .map_err(|e| map_client_error(comp, e))?;
+                .map_err(|e| map_client_error(&current, e))?;
             }
         }
         Ok(())
