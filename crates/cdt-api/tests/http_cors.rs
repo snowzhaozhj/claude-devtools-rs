@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use cdt_api::http::{AppState, build_router};
+use cdt_api::http::{AppState, StaticServe, build_router};
 use cdt_api::{DataApi, LocalDataApi};
 use cdt_config::{ConfigManager, NotificationManager};
 use cdt_discover::{LocalFileSystemProvider, ProjectScanner};
@@ -44,7 +44,7 @@ async fn build_state(tmp: &TempDir) -> AppState {
 async fn localhost_origin_echoes_in_cors_response() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     let req = Request::builder()
         .method(Method::GET)
@@ -71,7 +71,7 @@ async fn localhost_origin_echoes_in_cors_response() {
 async fn ipv4_loopback_origin_echoes_in_cors_response() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     let req = Request::builder()
         .method(Method::GET)
@@ -94,7 +94,7 @@ async fn ipv4_loopback_origin_echoes_in_cors_response() {
 async fn lookalike_subdomain_origin_rejected_by_cors() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     let req = Request::builder()
         .method(Method::GET)
@@ -119,7 +119,7 @@ async fn lookalike_subdomain_origin_rejected_by_cors() {
 async fn preflight_options_request_includes_method_and_headers() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     let req = Request::builder()
         .method(Method::OPTIONS)

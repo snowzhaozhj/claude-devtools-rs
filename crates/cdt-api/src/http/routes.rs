@@ -16,6 +16,7 @@ use crate::ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, PaginatedRequest, SearchRequest, SshConnectRequest,
 };
 
+use super::StaticServe;
 use super::cors::localhost_cors_layer;
 use super::sse::sse_handler;
 use super::state::AppState;
@@ -44,16 +45,16 @@ impl IntoResponse for ApiError {
 // Router builder
 // =============================================================================
 
-/// 构建完整的 `/api` 路由 + 可选静态文件 serve。
+/// 构建完整的 `/api` 路由 + 可选静态文件 serve / redirect。
 ///
-/// `static_dir` 为 `Some(<existing dir>)` 时挂 `ServeDir`：未命中 `/api/*`
-/// 路由的 GET 请求 SHALL fallback 到该目录（前端 client-side router）。
-/// 路径不存在或非目录时仅 `tracing::warn!` 后跳过 ServeDir，行为退化为
-/// 之前的"仅 API"模式。
+/// `static_serve` 决定未命中 `/api/*` 的请求如何处理（详 `StaticServe` doc）：
+/// - `None`：直接 404
+/// - `Dir(p)`：SPA `ServeDir` fallback；路径无效仅 `tracing::warn!` 后退化为 `None`
+/// - `Redirect(base)`：HTTP 307 重定向到 `<base><path>?<query>&http=1&apiBase=...`
 ///
 /// CORS：所有路由统一 layer `localhost_cors_layer`，仅放行 localhost / 127.0.0.1
 /// origin（详 `crate::http::cors`）。
-pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
+pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
     let api_router = Router::new()
         // 项目 + 会话
         .route("/api/projects", get(list_projects))
@@ -155,11 +156,12 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
         .route("/api/events", get(sse_handler))
         .with_state(state);
 
-    // 顺序：CORS layer 在最外层（先看 Origin）；静态文件 fallback 仅在传入
-    // static_dir 且其存在时挂载；不存在 / None 时未命中 `/api/*` 的请求自然
-    // 返 404（与本 change 之前行为一致）。
-    let router_with_static = match static_dir {
-        Some(p) if p.is_dir() => {
+    // 顺序：CORS layer 在最外层（先看 Origin）；fallback 按 StaticServe 选分支：
+    // - Dir 走 SPA static_fallback；路径无效退化为 None
+    // - Redirect 走 redirect_to_upstream（dev 重定向浏览器到 vite）
+    // - None 不挂 fallback，未命中 `/api/*` 自然 404（与本 change 之前行为一致）
+    let router_with_static = match static_serve {
+        StaticServe::Dir(p) if p.is_dir() => {
             // 用 closure + Arc::clone 捕获 dir，避免引入第二个 with_state 与
             // api_router 已设的 AppState 冲突（axum 0.8 一个 Router 只能持有
             // 单一 State 类型）。
@@ -169,7 +171,7 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
                 async move { static_fallback(dir, uri).await }
             })
         }
-        Some(p) => {
+        StaticServe::Dir(p) => {
             tracing::warn!(
                 target: "cdt_api::http",
                 path = %p.display(),
@@ -177,10 +179,149 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
             );
             api_router
         }
-        None => api_router,
+        StaticServe::Redirect(base) => {
+            let base = Arc::new(base);
+            api_router.fallback(
+                move |uri: axum::http::Uri, headers: axum::http::HeaderMap| {
+                    let base = Arc::clone(&base);
+                    async move { redirect_to_upstream(&base, &uri, &headers) }
+                },
+            )
+        }
+        StaticServe::None => api_router,
     };
 
     router_with_static.layer(localhost_cors_layer())
+}
+
+/// dev 模式下把非 `/api/*` 的请求 307 重定向到 vite dev server 的同路径，并
+/// 自动追加 `http=1` + `apiBase=<incoming origin>` query。
+///
+/// - `http=1` 触发前端 `main.ts` 走 `BrowserTransport`
+/// - `apiBase` 让前端 `getServerBaseUrl()` 锁定**真实 API server origin**——
+///   server-mode 用户改端口（如启动到 `:4000`）时不会因 vite proxy 写死的
+///   `:3456` target 错连（codex PR review 必修）
+///
+/// `base` 例如 `http://127.0.0.1:5173`。path / query 透传，避免破坏 vite HMR
+/// 自动建链路径（`/@vite/client` 等）。**path traversal 不做 guard**——redirect
+/// handler 本身不读本地文件，仅把 path 反映到 Location header 让浏览器跳到
+/// 上游 vite，由 vite 自行决定如何处理。
+///
+/// 用 `Redirect::temporary`（307）而非 302：保留请求方法对非 GET fallback 安全；
+/// 实际 HMR / nav 都是 GET，行为等价。
+fn redirect_to_upstream(
+    base: &str,
+    uri: &axum::http::Uri,
+    headers: &axum::http::HeaderMap,
+) -> axum::response::Response {
+    let path = uri.path();
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(q) = uri.query() {
+        parts.push(q.to_string());
+    }
+    if !parts.iter().any(|p| p.split('&').any(|kv| kv == "http=1")) {
+        parts.push("http=1".to_string());
+    }
+    if let Some(api_base) = api_base_from_host(headers)
+        && !parts
+            .iter()
+            .any(|p| p.split('&').any(|kv| kv.starts_with("apiBase=")))
+    {
+        parts.push(format!(
+            "apiBase={}",
+            percent_encoding::utf8_percent_encode(&api_base, percent_encoding::NON_ALPHANUMERIC)
+        ));
+    }
+    let merged_query = parts.join("&");
+    let target = if merged_query.is_empty() {
+        format!("{base}{path}")
+    } else {
+        format!("{base}{path}?{merged_query}")
+    };
+    axum::response::Redirect::temporary(&target).into_response()
+}
+
+/// 从 `Host` header 推 server origin（HTTP server 走 plain HTTP，监听
+/// 127.0.0.1）。Host 缺失 / 非 localhost 形态返 `None`——前端 fallback
+/// `window.location.origin`（vite domain）+ vite proxy 默认 target 仍能
+///服务默认 `:3456` 场景。
+///
+/// 形态白名单：`localhost[:port]` / `127.0.0.1[:port]` / IPv6 `[::1][:port]`。
+/// 拒绝带路径 / 字母端口 / 其它 host 防御 Host header 注入污染前端 base URL
+/// 拼接（codex CR 第 3 点）。
+fn api_base_from_host(headers: &axum::http::HeaderMap) -> Option<String> {
+    let host = headers.get(axum::http::header::HOST)?.to_str().ok()?;
+    if !is_localhost_host(host) {
+        return None;
+    }
+    Some(format!("http://{host}"))
+}
+
+fn is_localhost_host(host: &str) -> bool {
+    if host.is_empty() || host.contains('/') || host.contains('?') || host.contains('#') {
+        return false;
+    }
+    let (hostname, port_part) = if let Some(rest) = host.strip_prefix('[') {
+        // IPv6 literal: `[::1]` / `[::1]:port`
+        let Some(close) = rest.find(']') else {
+            return false;
+        };
+        let bracket = &rest[..close];
+        let after = &rest[close + 1..];
+        if after.is_empty() {
+            (bracket, None)
+        } else if let Some(port) = after.strip_prefix(':') {
+            (bracket, Some(port))
+        } else {
+            return false;
+        }
+    } else {
+        match host.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (host, None),
+        }
+    };
+    if !matches!(hostname, "localhost" | "127.0.0.1" | "::1") {
+        return false;
+    }
+    if let Some(p) = port_part
+        && (p.is_empty() || !p.chars().all(|c| c.is_ascii_digit()))
+    {
+        return false;
+    }
+    true
+}
+
+#[cfg(test)]
+mod host_validation_tests {
+    use super::is_localhost_host;
+
+    #[test]
+    fn allows_localhost_variants() {
+        assert!(is_localhost_host("localhost"));
+        assert!(is_localhost_host("localhost:3456"));
+        assert!(is_localhost_host("127.0.0.1"));
+        assert!(is_localhost_host("127.0.0.1:4000"));
+        assert!(is_localhost_host("[::1]"));
+        assert!(is_localhost_host("[::1]:8080"));
+    }
+
+    #[test]
+    fn rejects_other_hosts() {
+        assert!(!is_localhost_host(""));
+        assert!(!is_localhost_host("evil.com"));
+        assert!(!is_localhost_host("localhost.evil.com"));
+        assert!(!is_localhost_host("8.8.8.8:3456"));
+        assert!(!is_localhost_host("0.0.0.0:3456"));
+    }
+
+    #[test]
+    fn rejects_malformed() {
+        assert!(!is_localhost_host("localhost/path"));
+        assert!(!is_localhost_host("localhost?x=1"));
+        assert!(!is_localhost_host("localhost:abc"));
+        assert!(!is_localhost_host("localhost:"));
+    }
 }
 
 /// 静态文件 + SPA fallback handler。

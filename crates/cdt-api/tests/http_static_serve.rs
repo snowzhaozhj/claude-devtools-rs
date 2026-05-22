@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
-use cdt_api::http::{AppState, build_router};
+use cdt_api::http::{AppState, StaticServe, build_router};
 use cdt_api::{DataApi, LocalDataApi};
 use cdt_config::{ConfigManager, NotificationManager};
 use cdt_discover::{LocalFileSystemProvider, ProjectScanner};
@@ -62,7 +62,7 @@ async fn get_root_returns_index_html_when_static_dir_set() {
     let tmp = TempDir::new().unwrap();
     let static_dir = build_static_dir(&tmp);
     let state = build_state(&tmp).await;
-    let app = build_router(state, Some(static_dir));
+    let app = build_router(state, StaticServe::Dir(static_dir));
 
     let req = Request::builder()
         .method(Method::GET)
@@ -80,7 +80,7 @@ async fn get_known_static_asset_hits_serve_dir() {
     let tmp = TempDir::new().unwrap();
     let static_dir = build_static_dir(&tmp);
     let state = build_state(&tmp).await;
-    let app = build_router(state, Some(static_dir));
+    let app = build_router(state, StaticServe::Dir(static_dir));
 
     let req = Request::builder()
         .method(Method::GET)
@@ -101,7 +101,7 @@ async fn unknown_frontend_route_falls_back_to_index_html() {
     let tmp = TempDir::new().unwrap();
     let static_dir = build_static_dir(&tmp);
     let state = build_state(&tmp).await;
-    let app = build_router(state, Some(static_dir));
+    let app = build_router(state, StaticServe::Dir(static_dir));
 
     let req = Request::builder()
         .method(Method::GET)
@@ -122,7 +122,7 @@ async fn path_traversal_attempts_are_rejected() {
     let tmp = TempDir::new().unwrap();
     let static_dir = build_static_dir(&tmp);
     let state = build_state(&tmp).await;
-    let app = build_router(state, Some(static_dir));
+    let app = build_router(state, StaticServe::Dir(static_dir));
 
     for url in [
         "/foo/../bar",        // 裸 `..` 段
@@ -165,7 +165,7 @@ async fn missing_asset_with_extension_returns_404_not_index_html() {
     let tmp = TempDir::new().unwrap();
     let static_dir = build_static_dir(&tmp);
     let state = build_state(&tmp).await;
-    let app = build_router(state, Some(static_dir));
+    let app = build_router(state, StaticServe::Dir(static_dir));
 
     for url in [
         "/assets/missing.js",
@@ -196,7 +196,7 @@ async fn api_routes_not_intercepted_by_serve_dir() {
     let tmp = TempDir::new().unwrap();
     let static_dir = build_static_dir(&tmp);
     let state = build_state(&tmp).await;
-    let app = build_router(state, Some(static_dir));
+    let app = build_router(state, StaticServe::Dir(static_dir));
 
     let req = Request::builder()
         .method(Method::GET)
@@ -222,7 +222,7 @@ async fn api_routes_not_intercepted_by_serve_dir() {
 async fn static_dir_none_returns_404_for_root() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     let req = Request::builder()
         .method(Method::GET)
@@ -242,7 +242,7 @@ async fn invalid_static_dir_path_only_warns_and_serves_api() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
     let bogus = tmp.path().join("nonexistent-dir-for-test");
-    let app = build_router(state, Some(bogus));
+    let app = build_router(state, StaticServe::Dir(bogus));
 
     // /api/projects SHALL 仍 serve
     let req_api = Request::builder()
@@ -261,4 +261,201 @@ async fn invalid_static_dir_path_only_warns_and_serves_api() {
         .unwrap();
     let resp_root = app.oneshot(req_root).await.unwrap();
     assert_eq!(resp_root.status(), StatusCode::NOT_FOUND);
+}
+
+// =============================================================================
+// StaticServe::Redirect — dev mode 反代 vite 的行为契约
+// =============================================================================
+
+const VITE_BASE: &str = "http://127.0.0.1:5173";
+
+fn location_of(resp: &axum::http::Response<Body>) -> String {
+    resp.headers()
+        .get(axum::http::header::LOCATION)
+        .expect("redirect SHALL set Location header")
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+/// 构造一个带 `Host` header 的 GET 请求——redirect handler 需要 Host 推 apiBase。
+fn redirect_get(uri: &str, host: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header(axum::http::header::HOST, host)
+        .body(Body::empty())
+        .unwrap()
+}
+
+/// 期望的 default apiBase query 段：`apiBase=http%3A%2F%2F<encoded host>`
+fn expected_api_base_query(host: &str) -> String {
+    let raw = format!("http://{host}");
+    let encoded: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_string()
+            } else {
+                format!("%{:02X}", c as u32)
+            }
+        })
+        .collect();
+    format!("apiBase={encoded}")
+}
+
+#[tokio::test]
+async fn redirect_root_appends_http_query_and_api_base() {
+    let tmp = TempDir::new().unwrap();
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+    let host = "localhost:3456";
+
+    let resp = app.oneshot(redirect_get("/", host)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        location_of(&resp),
+        format!("{VITE_BASE}/?http=1&{}", expected_api_base_query(host))
+    );
+}
+
+#[tokio::test]
+async fn redirect_preserves_path_and_appends_http_query() {
+    let tmp = TempDir::new().unwrap();
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+    let host = "localhost:3456";
+
+    let resp = app
+        .oneshot(redirect_get("/foo/bar.svelte", host))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        location_of(&resp),
+        format!(
+            "{VITE_BASE}/foo/bar.svelte?http=1&{}",
+            expected_api_base_query(host)
+        ),
+        "vite HMR / @vite/client 等路径 SHALL 透传"
+    );
+}
+
+#[tokio::test]
+async fn redirect_merges_existing_query() {
+    let tmp = TempDir::new().unwrap();
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+    let host = "localhost:3456";
+
+    let resp = app
+        .oneshot(redirect_get("/?token=abc", host))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        location_of(&resp),
+        format!(
+            "{VITE_BASE}/?token=abc&http=1&{}",
+            expected_api_base_query(host)
+        )
+    );
+}
+
+#[tokio::test]
+async fn redirect_does_not_double_append_http_query() {
+    let tmp = TempDir::new().unwrap();
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+    let host = "localhost:3456";
+
+    let resp = app
+        .oneshot(redirect_get("/?http=1&foo=bar", host))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        location_of(&resp),
+        format!(
+            "{VITE_BASE}/?http=1&foo=bar&{}",
+            expected_api_base_query(host)
+        ),
+        "已有 http=1 SHALL NOT 再追加"
+    );
+}
+
+#[tokio::test]
+async fn redirect_does_not_double_append_api_base() {
+    let tmp = TempDir::new().unwrap();
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+
+    let resp = app
+        .oneshot(redirect_get(
+            "/?apiBase=http%3A%2F%2Fmanually.set",
+            "localhost:3456",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        location_of(&resp),
+        format!("{VITE_BASE}/?apiBase=http%3A%2F%2Fmanually.set&http=1"),
+        "已有 apiBase= SHALL NOT 被 incoming Host 覆盖"
+    );
+}
+
+#[tokio::test]
+async fn redirect_carries_custom_server_port_in_api_base() {
+    // server-mode 用户改端口到 :4000 时，浏览器 Host header = "localhost:4000"。
+    // redirect 必须把 :4000 编进 apiBase，让前端 getServerBaseUrl 锁定真实 server。
+    let tmp = TempDir::new().unwrap();
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+    let host = "localhost:4000";
+
+    let resp = app.oneshot(redirect_get("/", host)).await.unwrap();
+    let loc = location_of(&resp);
+    assert!(
+        loc.contains("apiBase=http%3A%2F%2Flocalhost%3A4000"),
+        "apiBase SHALL 携带真实 server port，actual = {loc}"
+    );
+}
+
+#[tokio::test]
+async fn redirect_omits_api_base_when_host_header_missing() {
+    let tmp = TempDir::new().unwrap();
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+
+    // 不显式设 Host header——hyper 默认会补一个，构造 raw Request 跳过。
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let loc = location_of(&resp);
+    // 至少要有 http=1；apiBase 缺失场景下前端 fallback location.origin
+    assert!(
+        loc.starts_with(&format!("{VITE_BASE}/?http=1")),
+        "actual = {loc}"
+    );
+}
+
+#[tokio::test]
+async fn redirect_does_not_intercept_api_routes() {
+    let tmp = TempDir::new().unwrap();
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::Redirect(VITE_BASE.to_string()));
+
+    let resp = app
+        .oneshot(redirect_get("/api/projects", "localhost:3456"))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "/api/* SHALL 走真路由不被 redirect 拦截"
+    );
 }

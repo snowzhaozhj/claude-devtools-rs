@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # 校验三处 Tauri command 清单 1:1 同步：
-#   1. crates/cdt-api/tests/ipc_contract.rs::EXPECTED_TAURI_COMMANDS
+#   1. crates/cdt-api/tests/contract_data.rs::EXPECTED_TAURI_COMMANDS
+#      （历史在 ipc_contract.rs，PR feat/dev-http-proxy-vite 起抽到 contract_data.rs
+#       供 ipc_contract / http_contract 共享一份避免漂移）
 #   2. ui/src/lib/tauriMock.ts::KNOWN_TAURI_COMMANDS
 #   3. src-tauri/src/lib.rs::invoke_handler!(tauri::generate_handler![...])
 #
@@ -30,7 +32,7 @@ set -euo pipefail
 project_dir="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$project_dir"
 
-CONTRACT="crates/cdt-api/tests/ipc_contract.rs"
+CONTRACT="crates/cdt-api/tests/contract_data.rs"
 MOCK="ui/src/lib/tauriMock.ts"
 LIB="src-tauri/src/lib.rs"
 

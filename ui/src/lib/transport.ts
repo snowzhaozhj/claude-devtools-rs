@@ -24,6 +24,11 @@ const unsupportedBrowserCommands = new Set([
   "http_server_stop",
   "http_server_status",
   "read_agent_configs",
+  // pre-existing gap：add/delete memory 漏 mirror 到 HTTP route，浏览器
+  // ?http=1 模式调 add/delete 没意义先 block，等单独 PR 补 axum route 后移除。
+  // 详见 crates/cdt-api/tests/contract_data.rs::BROWSER_UNSUPPORTED_COMMANDS。
+  "add_memory",
+  "delete_memory",
 ]);
 
 class TauriTransport implements Transport {

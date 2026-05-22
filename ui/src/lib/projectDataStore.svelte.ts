@@ -68,18 +68,32 @@ async function fallbackProjectData(): Promise<ProjectData> {
 }
 
 async function fetchProjectData(): Promise<ProjectData> {
+  let repositoryGroups: RepositoryGroup[];
   try {
-    const repositoryGroups = await listRepositoryGroups();
-    if (repositoryGroups.length === 0) return await fallbackProjectData();
-    return {
-      repositoryGroups,
-      projects: summarizeRepositoryGroups(repositoryGroups),
-      worktreeProjects: flattenRepositoryGroups(repositoryGroups),
-    };
+    repositoryGroups = await listRepositoryGroups();
   } catch (groupError) {
-    console.warn("listRepositoryGroups failed, fallback to listProjects:", groupError);
+    // dev 模式下抛错让两端不对齐 / 后端 bug 立刻暴露——history：dev 模式下
+    // 浏览器访问 Tauri 内置 HTTP server 拿到旧 ui/dist bundle 与新桌面端
+    // 不一致时，silent fallback 把"后端返回 grouped data 但前端 store 误用
+    // listProjects 平铺"伪装成"看起来还能用"，让 dev 看不出 root cause。
+    // prod 模式保留 fallback 给用户兜底（避免后端短暂故障 = UI 整体崩）。
+    if (import.meta.env.DEV) {
+      console.error(
+        "[projectDataStore] listRepositoryGroups failed in DEV; rethrowing instead of silent fallback. " +
+          "Check backend logs / network tab. Fallback path is for production resilience only.",
+        groupError,
+      );
+      throw groupError;
+    }
+    console.warn("[projectDataStore] listRepositoryGroups failed, fallback to listProjects:", groupError);
     return await fallbackProjectData();
   }
+  if (repositoryGroups.length === 0) return await fallbackProjectData();
+  return {
+    repositoryGroups,
+    projects: summarizeRepositoryGroups(repositoryGroups),
+    worktreeProjects: flattenRepositoryGroups(repositoryGroups),
+  };
 }
 
 export function getProjectData(): ProjectData | null {

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
-use cdt_api::http::{AppState, build_router};
+use cdt_api::http::{AppState, StaticServe, build_router};
 use cdt_api::{DataApi, LocalDataApi};
 use cdt_config::{
     ConfigManager, NotificationManager, NotificationTrigger, TriggerContentType, TriggerMode,
@@ -84,7 +84,7 @@ fn sample_trigger() -> NotificationTrigger {
 async fn get_project_memory_mirrors_ipc_for_unknown_project() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     // unknown project_id：path encoding 在 LocalDataApi 内自动处理。
     // 期望返 200 + ProjectMemory（has_memory=false）或 not_found——实现选择前者
@@ -114,7 +114,7 @@ async fn get_project_memory_mirrors_ipc_for_unknown_project() {
 async fn add_trigger_returns_generated_id() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     let trigger_json = serde_json::to_value(sample_trigger()).unwrap();
     let req = Request::builder()
@@ -149,7 +149,7 @@ async fn add_trigger_returns_generated_id() {
 async fn pin_and_unpin_session_round_trip() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     // POST pin
     let pin = Request::builder()
@@ -202,7 +202,7 @@ async fn pin_and_unpin_session_round_trip() {
 async fn hide_and_unhide_session_round_trip() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     let hide = Request::builder()
         .method(Method::POST)
@@ -249,7 +249,7 @@ async fn hide_and_unhide_session_round_trip() {
 async fn remove_trigger_returns_updated_config() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     // 先加一个 trigger
     let trigger_json = serde_json::to_value(sample_trigger()).unwrap();
@@ -301,7 +301,7 @@ async fn remove_trigger_returns_updated_config() {
 async fn read_memory_file_returns_404_for_missing_project() {
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     let body = json!({ "file": "INDEX.md" });
     let req = Request::builder()
@@ -324,7 +324,7 @@ async fn lazy_endpoints_are_routed_not_404() {
     // 或 LocalDataApi 默认空字符串 / Missing。本测试只检查"不是 axum 路由层 404"。
     let tmp = TempDir::new().unwrap();
     let state = build_state(&tmp).await;
-    let app = build_router(state, None);
+    let app = build_router(state, StaticServe::None);
 
     let urls = [
         "/api/sessions/root/subagents/sub/trace",

@@ -10,10 +10,9 @@
 //! - `start` 失败 → **不**写持久化（保持上次成功值），仅在内存 `last_error` 记录
 //! - `stop` → 写 `enabled=false`，**不**改 `port`
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use cdt_api::{AppState, LocalDataApi, serve_with_listener, spawn_event_bridge};
+use cdt_api::{AppState, LocalDataApi, StaticServe, serve_with_listener, spawn_event_bridge};
 use cdt_config::validate_http_port;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -74,19 +73,19 @@ pub struct ServerState {
     handle: Mutex<Option<ServerHandle>>,
     last_error: Mutex<Option<String>>,
     api: Arc<LocalDataApi>,
-    static_dir: Option<PathBuf>,
+    static_serve: StaticServe,
     emitter: Arc<dyn StatusEmitter>,
 }
 
 impl ServerState {
-    pub fn new(api: Arc<LocalDataApi>, static_dir: Option<PathBuf>, app_handle: AppHandle) -> Self {
-        Self::with_emitter(api, static_dir, Arc::new(app_handle))
+    pub fn new(api: Arc<LocalDataApi>, static_serve: StaticServe, app_handle: AppHandle) -> Self {
+        Self::with_emitter(api, static_serve, Arc::new(app_handle))
     }
 
     /// 测试可见构造器：注入任意 `StatusEmitter` 实现验证 emit 行为。
     pub fn with_emitter(
         api: Arc<LocalDataApi>,
-        static_dir: Option<PathBuf>,
+        static_serve: StaticServe,
         emitter: Arc<dyn StatusEmitter>,
     ) -> Self {
         Self {
@@ -94,7 +93,7 @@ impl ServerState {
             handle: Mutex::new(None),
             last_error: Mutex::new(None),
             api,
-            static_dir,
+            static_serve,
             emitter,
         }
     }
@@ -171,9 +170,9 @@ impl ServerState {
             context_rx,
         );
 
-        let static_dir = self.static_dir.clone();
+        let static_serve = self.static_serve.clone();
         let task = tokio::spawn(async move {
-            if let Err(e) = serve_with_listener(state, listener, static_dir).await {
+            if let Err(e) = serve_with_listener(state, listener, static_serve).await {
                 tracing::warn!(
                     target: "cdt_tauri::server_mode",
                     error = %e,
@@ -345,7 +344,7 @@ mod tests {
         let emitter = Arc::new(RecordingEmitter::new());
         let state = Arc::new(ServerState::with_emitter(
             api.clone(),
-            None,
+            StaticServe::None,
             emitter.clone() as Arc<dyn StatusEmitter>,
         ));
         (state, emitter, tmp)
