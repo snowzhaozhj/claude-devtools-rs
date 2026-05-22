@@ -275,6 +275,12 @@ change `unify-fs-direct-calls` 的 §5 段在 design.md G/D/E 三件套里只落
 
 PR-F SFTP message-id pipeline 之前，本 PR 已把批量做完——首次连 SSH 30+ projects wall 从 N×RTT 降到 N_projects×RTT。
 
+**PR-F SFTP message-id pipeline ✅（PR #199 / 2026-05-22）**：`SshFileSystemProvider::open_read` 大文件（≥ 256K）走 K=16 worker 并发飞 `SSH_FXP_READ`，wall 从 N×RTT 压到 ceil(N/K)×RTT。fake bench 5MB jsonl wall 8.36s → 600ms（~14×）。架构改动：`Arc<Mutex<SftpSession>>` → `Arc<SftpSession>`（`SftpSession` 公共 API 全 `&self`，Mutex 是冗余 over-protection）；`SftpError::Limited` fallback 到单 handle 串行避 server `open_handles` limit。trade-off：放弃 BufReader 流式（peak RSS = file_size）换 N×RTT 消除——SSH 场景 RTT 是关键瓶颈。
+
+PR-F **未做** 的（已知 limitation，留 follow-up）：
+- 真实 SSH server 上的 e2e 验证（fake bench 测算法形状不测真 IO）；目前生产路径 unit test 覆盖需要 fork russh-sftp / mock RawSftpSession，工作量与价值倒挂——punt 到 next time
+- 流式 `open_read_stream` K-worker prefetch（保留作为 escape hatch，caller 显式调用拿原生 `russh_sftp::client::fs::File`，不走全量预取）
+
 ### [coverage-gap → done] SSH cache hit 路径计数器 + scanner dyn AsyncRead 性能基线（PR-D2）
 
 change `unify-fs-direct-calls` §12 micro-bench / SSH cache hit integration / SSH chunked read perf 三项**已在 change `ssh-batch-readdir-with-metadata` 落地** ✅：
