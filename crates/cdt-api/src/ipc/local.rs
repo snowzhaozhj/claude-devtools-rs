@@ -336,6 +336,83 @@ struct ScanEntry {
     handle: AbortHandle,
 }
 
+/// Polling watcher 检测到 SFTP channel 死亡时的自愈 disconnect 完整流程。
+///
+/// 与 `LocalDataApi::ssh_disconnect` IPC 路径的清理动作对齐——SHALL 同时做：
+/// bump `context_generation` + abort SSH ctx scans + `ssh_mgr.disconnect`，
+/// 不能只调 disconnect 否则 in-flight `list_sessions` scan 会继续 broadcast
+/// 旧 SSH metadata 污染切回 local 后的 UI（codex 二审第二轮 major fix）。
+///
+/// 由 `attach_remote_watcher` spawn 的 dead-signal monitor task 调用——free
+/// function 而非 `&self` method 是因为 monitor 是 detached task 拿不到
+/// `Arc<LocalDataApi>`，所需资源全部通过 Arc clone 入参传入。
+async fn perform_polling_self_heal_disconnect(
+    ops: Arc<Mutex<()>>,
+    gen_counter: Arc<AtomicU64>,
+    captured_generation: u64,
+    active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
+    ssh_mgr: cdt_ssh::SshSessionManager,
+    context_id: String,
+) {
+    let _ops = ops.lock().await;
+    // Guard 1: context_generation 没换代（任何 ssh_connect / switch_context /
+    // ssh_disconnect / 同 ctx 重连都会 bump 它）
+    let current_gen = gen_counter.load(Ordering::SeqCst);
+    if current_gen != captured_generation {
+        tracing::debug!(
+            target: "cdt_ssh::lifecycle",
+            context_id = %context_id,
+            captured_generation,
+            current_gen,
+            "skip stale auto-disconnect: context_generation changed since watcher attach",
+        );
+        return;
+    }
+    // Guard 2: active context 仍是这个 watcher 守护的 context
+    let active = ssh_mgr.active_context_id().await;
+    if active.as_deref() != Some(context_id.as_str()) {
+        tracing::debug!(
+            target: "cdt_ssh::lifecycle",
+            context_id = %context_id,
+            ?active,
+            "skip stale auto-disconnect: active context no longer matches",
+        );
+        return;
+    }
+    tracing::warn!(
+        target: "cdt_ssh::lifecycle",
+        context_id = %context_id,
+        "polling reported SFTP channel dead; auto-disconnecting to sync active context",
+    );
+    // Bump generation —— 关闭 in-flight list_sessions late insert 串扰新
+    // local UI 的窗口（与 ssh_disconnect IPC 路径同形）。
+    gen_counter.fetch_add(1, Ordering::SeqCst);
+    // abort 当前 SSH ctx 下 active scans —— SHALL 在 ssh_mgr.disconnect
+    // 之前做，让 ssh_mgr 仍能 lookup ContextId（disconnect 后 provider 被
+    // 删，无法解析 ctx）。silent no-op 若 provider 已 gone（与
+    // abort_scans_for_ssh_context_id 同语义）。
+    if let Some((_provider, ctx)) = ssh_mgr.provider_and_context_id(&context_id).await {
+        if let Ok(mut scans) = active_scans.lock() {
+            scans.retain(|_key, entry| {
+                if entry.context_id == ctx {
+                    entry.handle.abort();
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+    }
+    if let Err(e) = ssh_mgr.disconnect(&context_id).await {
+        tracing::warn!(
+            target: "cdt_ssh::lifecycle",
+            context_id = %context_id,
+            error = %e,
+            "auto-disconnect after polling dead-signal failed",
+        );
+    }
+}
+
 /// 本地文件系统 `DataApi` 实现。
 pub struct LocalDataApi {
     scanner: Mutex<ProjectScanner>,
@@ -1702,6 +1779,7 @@ impl LocalDataApi {
         let context_id_for_monitor = context_id.to_owned();
         let ops_for_monitor = Arc::clone(&self.ssh_watcher_ops);
         let gen_for_monitor = Arc::clone(&self.context_generation);
+        let active_scans_for_monitor = Arc::clone(&self.active_scans);
         let captured_generation = self.context_generation.load(Ordering::SeqCst);
         tokio::spawn(async move {
             tokio::select! {
@@ -1714,41 +1792,15 @@ impl LocalDataApi {
                     );
                 }
                 () = dead_signal.notified() => {
-                    let _ops = ops_for_monitor.lock().await;
-                    let current_gen = gen_for_monitor.load(Ordering::SeqCst);
-                    if current_gen != captured_generation {
-                        tracing::debug!(
-                            target: "cdt_ssh::lifecycle",
-                            context_id = %context_id_for_monitor,
-                            captured_generation,
-                            current_gen,
-                            "skip stale auto-disconnect: context_generation changed since watcher attach",
-                        );
-                        return;
-                    }
-                    let active = ssh_mgr_for_monitor.active_context_id().await;
-                    if active.as_deref() != Some(context_id_for_monitor.as_str()) {
-                        tracing::debug!(
-                            target: "cdt_ssh::lifecycle",
-                            context_id = %context_id_for_monitor,
-                            ?active,
-                            "skip stale auto-disconnect: active context no longer matches",
-                        );
-                        return;
-                    }
-                    tracing::warn!(
-                        target: "cdt_ssh::lifecycle",
-                        context_id = %context_id_for_monitor,
-                        "polling reported SFTP channel dead; auto-disconnecting to sync active context",
-                    );
-                    if let Err(e) = ssh_mgr_for_monitor.disconnect(&context_id_for_monitor).await {
-                        tracing::warn!(
-                            target: "cdt_ssh::lifecycle",
-                            context_id = %context_id_for_monitor,
-                            error = %e,
-                            "auto-disconnect after polling dead-signal failed",
-                        );
-                    }
+                    perform_polling_self_heal_disconnect(
+                        ops_for_monitor,
+                        gen_for_monitor,
+                        captured_generation,
+                        active_scans_for_monitor,
+                        ssh_mgr_for_monitor,
+                        context_id_for_monitor,
+                    )
+                    .await;
                 }
             }
         });
@@ -1762,6 +1814,28 @@ impl LocalDataApi {
         }
     }
 
+    /// 自愈 disconnect 完整流程（monitor task 触发）——与 `ssh_disconnect`
+    /// IPC 路径的清理动作对齐：
+    ///
+    /// 1. 拿 `ssh_watcher_ops` 锁与所有 SSH 状态变更入口互斥
+    /// 2. (`context_generation`, `active_context_id`) 双校验：旧 monitor 若
+    ///    在自身被 cancel 前已 select 中 dead 分支但还没跑到这里，期间用户
+    ///    主动 disconnect / reconnect / `switch_context` 都会 bump generation
+    ///    或改 active；任一不匹配即放弃自愈（新 watcher 自己会触发自己的
+    ///    `dead_signal`）
+    /// 3. **bump `context_generation`** —— 关闭 in-flight `list_sessions`
+    ///    late insert 串扰新 local UI 的窗口（与 `ssh_disconnect` line 3675
+    ///    同形）
+    /// 4. **abort 当前 SSH ctx 下 active scans** —— 避免旧 SSH scan 切回 Local
+    ///    后继续 broadcast 旧 SSH metadata 污染 local UI（与 `ssh_disconnect`
+    ///    line 3676 同形）；SHALL 在 `ssh_mgr.disconnect` 之前做，让 `ssh_mgr`
+    ///    仍能 lookup `ContextId`（disconnect 后 provider 被删，无法解析 ctx）
+    /// 5. `ssh_mgr.disconnect` —— 把 active 切回 None + emit
+    ///    `ContextChanged(None)`，前端 listener 自动切回 local
+    ///
+    /// `remote_watchers` map 内的旧 handle 不主动清理——watcher 自己已经 break
+    /// loop，handle 在 map 里只是个已 finished `JoinHandle`，下次同 ctx attach
+    /// 时 `insert` 自然替换，或者 `ssh_disconnect` / shutdown 时统一清掉。
     async fn cancel_remote_watcher(&self, context_id: &str) {
         if let Some(handle) = self.remote_watchers.lock().await.remove(context_id) {
             handle.cancel_and_join().await;
@@ -3617,21 +3691,28 @@ impl DataApi for LocalDataApi {
                 target = %target_context_id,
                 "ssh_watcher_ops locked"
             );
-            if previous_context_id.as_deref() != Some(target_context_id.as_str()) {
-                // codex 二审第三轮 H2-R-2：先 bump context_generation 防御 in-flight
-                // list_sessions 的 late insert 串扰，再 abort 已注册 scan。
-                self.context_generation.fetch_add(1, Ordering::SeqCst);
-                if let Some(prev) = previous_context_id {
-                    tracing::debug!(target: "cdt_ssh::lifecycle", phase = "cancel_prev_watcher", context_id = %prev);
-                    self.cancel_remote_watcher(&prev).await;
-                    // codex 二审第二轮 H2-R：ssh_connect(A→B) 也 SHALL abort 旧 A
-                    // 下 page_jobs scan，避免旧 A scan 跨切换继续 broadcast 串扰 B 渲染。
-                    self.abort_scans_for_ssh_context_id(&prev).await;
-                } else {
-                    // Local → SSH 切换路径：abort Local scan 避免 Local metadata
-                    // 跨切换串扰 SSH UI。
-                    self.abort_local_scans();
-                }
+            // 无条件 bump generation + cancel 旧 watcher + abort 旧 scan ——
+            // 即便 previous_context_id == target_context_id（同 ctx 重连）也要做。
+            //
+            // 修复 codex 二审第二轮 critical（2026-05-22）：同 ctx 重连若不 bump
+            // generation，旧 watcher 的 dead-signal monitor 在新 attach 后仍能
+            // 通过 (context_generation == captured) + (active == ctx) 二次校验
+            // 误删新连接。无条件 bump 让任何已 capture 的旧 generation 必失配 →
+            // monitor stale 路径 silent return → race 关闭。
+            //
+            // 同 ctx 重连侧只需多付出"主动 emit ContextChanged(same_ctx) + 前端
+            // listener 多 refresh 一次"的开销，远比 race 误删可接受。
+            self.context_generation.fetch_add(1, Ordering::SeqCst);
+            if let Some(prev) = previous_context_id {
+                tracing::debug!(target: "cdt_ssh::lifecycle", phase = "cancel_prev_watcher", context_id = %prev);
+                self.cancel_remote_watcher(&prev).await;
+                // codex 二审第二轮 H2-R：ssh_connect(A→B) 也 SHALL abort 旧 A
+                // 下 page_jobs scan，避免旧 A scan 跨切换继续 broadcast 串扰 B 渲染。
+                self.abort_scans_for_ssh_context_id(&prev).await;
+            } else {
+                // Local → SSH 切换路径：abort Local scan 避免 Local metadata
+                // 跨切换串扰 SSH UI。
+                self.abort_local_scans();
             }
             tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_mgr_connect");
             let context_id = self
