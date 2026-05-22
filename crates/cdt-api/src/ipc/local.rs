@@ -3702,6 +3702,13 @@ impl DataApi for LocalDataApi {
             //
             // 同 ctx 重连侧只需多付出"主动 emit ContextChanged(same_ctx) + 前端
             // listener 多 refresh 一次"的开销，远比 race 误删可接受。
+            //
+            // `prev_for_failure_reattach` 在 `if let Some(prev)` move 之前保留一份
+            // clone —— 给下方 `ssh_mgr.connect` 失败路径用：若 prev == target 且
+            // `ssh_mgr` 内旧 session 仍在（同 ctx 重连 + 握手失败但旧 session 未
+            // 清），SHALL re-attach 旧 watcher，否则 active=SSH + 旧 SFTP 还活但
+            // **无 watcher 监控** → SFTP 真死也无人自愈（codex 二审第三轮 major）。
+            let prev_for_failure_reattach = previous_context_id.clone();
             self.context_generation.fetch_add(1, Ordering::SeqCst);
             if let Some(prev) = previous_context_id {
                 tracing::debug!(target: "cdt_ssh::lifecycle", phase = "cancel_prev_watcher", context_id = %prev);
@@ -3715,11 +3722,35 @@ impl DataApi for LocalDataApi {
                 self.abort_local_scans();
             }
             tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_mgr_connect");
-            let context_id = self
-                .ssh_mgr
-                .connect(request.clone().into())
-                .await
-                .map_err(|e| ApiError::internal(format!("{e}")))?;
+            let context_id = match self.ssh_mgr.connect(request.clone().into()).await {
+                Ok(id) => id,
+                Err(e) => {
+                    // 同 ctx 重连握手失败的 reattach 补救（codex 二审第三轮 major）：
+                    // `ssh_mgr.connect` 在 prev == target 时不主动 disconnect 旧
+                    // session（详 `cdt-ssh::session.rs:383-388`），失败时旧 session
+                    // 仍在 `ssh_mgr.sessions` 内但我们上面已经 cancel 了旧 watcher。
+                    // 若不补 attach，active=SSH + 旧 SFTP 仍可用但**无 watcher 监控** →
+                    // SFTP 后续死掉也无人触发自愈，用户被永久卡 stale active。
+                    //
+                    // 补救条件三连：(1) 有 prev (2) prev == target (3) 旧 provider
+                    // 仍在 ssh_mgr（握手失败未污染旧 session）。任一不满足走原 Err
+                    // 路径（fresh ctx 失败 / Local→SSH 失败 / 旧 session 已不存在）。
+                    if let Some(prev) = prev_for_failure_reattach.as_deref() {
+                        if prev == target_context_id.as_str()
+                            && self.ssh_mgr.provider(prev).await.is_some()
+                        {
+                            tracing::warn!(
+                                target: "cdt_ssh::lifecycle",
+                                phase = "reattach_after_failed_reconnect",
+                                context_id = %prev,
+                                "same-ctx reconnect failed; re-attaching watcher to preserve self-heal coverage",
+                            );
+                            self.attach_remote_watcher(prev).await;
+                        }
+                    }
+                    return Err(ApiError::internal(format!("{e}")));
+                }
+            };
             if self.ssh_shutdown_generation.load(Ordering::SeqCst) == shutdown_generation {
                 tracing::debug!(target: "cdt_ssh::lifecycle", phase = "attach_new_watcher", context_id = %context_id);
                 self.attach_remote_watcher(&context_id).await;
