@@ -1001,6 +1001,26 @@ mod tests {
         ) -> Result<Vec<String>, crate::provider::SftpClientError> {
             Ok(vec![])
         }
+        async fn write(
+            &self,
+            _path: &str,
+            _data: &[u8],
+        ) -> Result<(), crate::provider::SftpClientError> {
+            Err(crate::provider::SftpClientError::Other("dummy fake".into()))
+        }
+        async fn mkdir(&self, _path: &str) -> Result<(), crate::provider::SftpClientError> {
+            Err(crate::provider::SftpClientError::Other("dummy fake".into()))
+        }
+        async fn remove(&self, _path: &str) -> Result<(), crate::provider::SftpClientError> {
+            Err(crate::provider::SftpClientError::Other("dummy fake".into()))
+        }
+        async fn rename(
+            &self,
+            _src: &str,
+            _dst: &str,
+        ) -> Result<(), crate::provider::SftpClientError> {
+            Err(crate::provider::SftpClientError::Other("dummy fake".into()))
+        }
     }
 
     fn fake_provider(context_id: &str, remote_home: &str) -> SshFileSystemProvider {

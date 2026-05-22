@@ -63,6 +63,19 @@ pub trait FileSystemProvider: Send + Sync + 'static {
         let futures = paths.iter().map(|p| self.stat(p));
         futures::future::join_all(futures).await
     }
+
+    /// Atomic 写文件——SHALL 通过 tmp file + rename 实现，写失败 best-effort 清理 tmp。
+    /// reader 永远观察到旧内容或新内容整版，不观察到截断 / 半写状态。
+    /// 设计：fs-abstraction spec `Requirement: FileSystemProvider trait 暴露 7 个核心方法`
+    /// 写方法 atomic 契约段（change `ssh-project-memory-remote-rw` 引入）。
+    async fn write_atomic(&self, path: &Path, content: &[u8]) -> Result<(), FsError>;
+
+    /// 递归创建目录——已存在 SHALL NOT 报错。等价 `tokio::fs::create_dir_all`。
+    async fn create_dir_all(&self, path: &Path) -> Result<(), FsError>;
+
+    /// 删文件——不存在 SHALL 返 `FsError::NotFound(path)`，路径是目录 SHALL 返
+    /// `FsError::Io`，**不**递归删。
+    async fn remove_file(&self, path: &Path) -> Result<(), FsError>;
 }
 
 /// `Arc<dyn FileSystemProvider>` 的简写。

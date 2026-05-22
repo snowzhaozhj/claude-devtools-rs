@@ -812,6 +812,26 @@ mod tests {
             }
             Err(SftpClientError::NoSuchFile)
         }
+        async fn write(&self, _path: &str, _data: &[u8]) -> Result<(), SftpClientError> {
+            Err(SftpClientError::Other(
+                "write not used in watcher fake".into(),
+            ))
+        }
+        async fn mkdir(&self, _path: &str) -> Result<(), SftpClientError> {
+            Err(SftpClientError::Other(
+                "mkdir not used in watcher fake".into(),
+            ))
+        }
+        async fn remove(&self, _path: &str) -> Result<(), SftpClientError> {
+            Err(SftpClientError::Other(
+                "remove not used in watcher fake".into(),
+            ))
+        }
+        async fn rename(&self, _src: &str, _dst: &str) -> Result<(), SftpClientError> {
+            Err(SftpClientError::Other(
+                "rename not used in watcher fake".into(),
+            ))
+        }
     }
 
     fn remote_session(name: &str, size: u64) -> RemoteEntry {

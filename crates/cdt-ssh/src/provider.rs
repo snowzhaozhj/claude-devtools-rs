@@ -100,6 +100,27 @@ pub trait SftpClient: Send + Sync + 'static {
     async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, SftpClientError>;
     async fn read_lines_head(&self, path: &str, max: usize)
     -> Result<Vec<String>, SftpClientError>;
+
+    /// 写文件 —— SFTP write，**不**保证原子性（atomic 由 [`SshFileSystemProvider::write_atomic`]
+    /// 在上层 tmp+rename 实现）。
+    async fn write(&self, path: &str, data: &[u8]) -> Result<(), SftpClientError>;
+
+    /// 创建单层目录 —— 已存在 SHALL 返 [`SftpClientError::Other`]（caller 自行判 EEXIST 后跳过）。
+    /// 递归 mkdir -p 由 [`SshFileSystemProvider::create_dir_all`] 在上层迭代实现（标准 SFTP 不支持 mkdir -p）。
+    async fn mkdir(&self, path: &str) -> Result<(), SftpClientError>;
+
+    /// 删文件 —— 不存在 SHALL 返 [`SftpClientError::NoSuchFile`]，目录 SHALL 返 [`SftpClientError::Other`]。
+    async fn remove(&self, path: &str) -> Result<(), SftpClientError>;
+
+    /// 重命名/移动 —— 走 SFTP `SSH_FXP_RENAME` 标准 op。
+    ///
+    /// **注意**：russh-sftp 2.1.2 不暴露 `posix-rename@openssh.com` 扩展 API
+    /// （`Features` struct 仅含 hardlink/fsync/statvfs/limits 四个 flag）。
+    /// OpenSSH server 标准 RENAME 默认拒绝覆盖已存在 target——caller [`SshFileSystemProvider::write_atomic`]
+    /// SHALL 走"先 [`Self::remove`] target（ignore `NoSuchFile`）+ 再 rename" 两步降级路径，
+    /// 接受极短窗口期 reader 可见 `target missing` 的 trade-off（设计 D2 钉死）。
+    /// 后续 russh-sftp 暴露 extensions API 时再升级真原子路径。
+    async fn rename(&self, src: &str, dst: &str) -> Result<(), SftpClientError>;
 }
 
 /// SSH 文件系统 provider —— 实现 [`FileSystemProvider`] 用于远端 SFTP。
@@ -387,6 +408,147 @@ impl FileSystemProvider for SshFileSystemProvider {
         .map_err(|e| map_client_error(path, e))?;
         Ok(Box::new(std::io::Cursor::new(bytes)))
     }
+
+    /// SSH 远端 `write_atomic` —— tmp + rename 两步降级路径。
+    ///
+    /// 设计：fs-abstraction spec 写方法 atomic 契约段 + design `ssh-project-memory-remote-rw` D2。
+    /// russh-sftp 2.1.2 不暴露 `posix-rename@openssh.com` 扩展 API，标准 SFTP RENAME 拒覆盖目标，
+    /// 实现走"`remove(target)` ignore `NoSuchFile` + `rename(tmp, target)`"两步降级。
+    async fn write_atomic(&self, path: &Path, content: &[u8]) -> Result<(), FsError> {
+        let target = path_to_string(path);
+        let tmp = format!(
+            "{}.tmp.{:016x}.{:08x}",
+            target,
+            atomic_write_seq(),
+            std::process::id()
+        );
+
+        // 写 tmp 文件
+        let client = Arc::clone(&self.client);
+        let tmp_for_write = tmp.clone();
+        let data = content.to_vec();
+        with_retry(move || {
+            let client = Arc::clone(&client);
+            let tmp_path = tmp_for_write.clone();
+            let data = data.clone();
+            async move { client.write(&tmp_path, &data).await }
+        })
+        .await
+        .map_err(|e| map_client_error(path, e))?;
+
+        // 先 remove target（ignore NoSuchFile）—— 标准 SFTP RENAME 拒覆盖
+        let client = Arc::clone(&self.client);
+        let target_for_remove = target.clone();
+        let remove_result = with_retry(move || {
+            let client = Arc::clone(&client);
+            let target = target_for_remove.clone();
+            async move { client.remove(&target).await }
+        })
+        .await;
+        if let Err(SftpClientError::NoSuchFile) = remove_result {
+            // 不存在是正常路径——首次创建文件
+        } else if let Err(e) = remove_result {
+            // 删 target 失败 → cleanup tmp + 抛错
+            let cleanup_client = Arc::clone(&self.client);
+            let tmp_for_cleanup = tmp.clone();
+            let _ = with_retry(move || {
+                let client = Arc::clone(&cleanup_client);
+                let tmp = tmp_for_cleanup.clone();
+                async move { client.remove(&tmp).await }
+            })
+            .await;
+            return Err(map_client_error(path, e));
+        }
+
+        // rename tmp → target
+        let client = Arc::clone(&self.client);
+        let src = tmp.clone();
+        let dst = target.clone();
+        if let Err(e) = with_retry(move || {
+            let client = Arc::clone(&client);
+            let src = src.clone();
+            let dst = dst.clone();
+            async move { client.rename(&src, &dst).await }
+        })
+        .await
+        {
+            // rename 失败 → best-effort 清理 tmp
+            let cleanup_client = Arc::clone(&self.client);
+            let tmp_for_cleanup = tmp.clone();
+            let _ = with_retry(move || {
+                let client = Arc::clone(&cleanup_client);
+                let tmp = tmp_for_cleanup.clone();
+                async move { client.remove(&tmp).await }
+            })
+            .await;
+            return Err(map_client_error(path, e));
+        }
+
+        Ok(())
+    }
+
+    /// SSH 远端 `create_dir_all` —— 自 `remote_home` 起的相对路径逐层 `try_exists` + `mkdir`。
+    /// 标准 SFTP 不支持 mkdir -p。
+    ///
+    /// **优化**（codex PR 二审 ITEM 2）：从 `<remote_home>` 之后的相对组件开始迭代——
+    /// `<remote_home>` 在 SSH connect 时已探测过存在，无需再 `try_exists` 各祖先；
+    /// 6-7 次 RTT (~300ms) 降到 N 次（典型 N=2：`.claude/projects/<id>/memory` 已存在 → 0 `mkdir`，
+    /// 仅 1 次 `try_exists`；首次 add 全新 project → 2 次 `mkdir` + 2 次 `try_exists` ~150ms）。
+    async fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
+        // path 必形如 `<remote_home>/<base>/memory`（caller 永远从 projects_dir
+        // 拼接），从 remote_home 之后开始逐层创建避免穿越 / .. 等无意义祖先 RTT。
+        let relative = path.strip_prefix(&self.remote_home).unwrap_or(path);
+
+        // 累积构造 `<remote_home>/<comp1>/<comp2>/...`，逐层 try_exists + mkdir
+        let mut current = self.remote_home.clone();
+        for comp in relative.components() {
+            current = current.join(comp.as_os_str());
+            let comp_str = path_to_string(&current);
+
+            let client = Arc::clone(&self.client);
+            let cs = comp_str.clone();
+            let exists = with_retry(move || {
+                let client = Arc::clone(&client);
+                let cs = cs.clone();
+                async move { client.try_exists(&cs).await }
+            })
+            .await
+            .map_err(|e| map_client_error(&current, e))?;
+
+            if !exists {
+                let client = Arc::clone(&self.client);
+                let cs = comp_str.clone();
+                with_retry(move || {
+                    let client = Arc::clone(&client);
+                    let cs = cs.clone();
+                    async move { client.mkdir(&cs).await }
+                })
+                .await
+                .map_err(|e| map_client_error(&current, e))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// SSH 远端 `remove_file` —— 走 SFTP `SSH_FXP_REMOVE`。
+    async fn remove_file(&self, path: &Path) -> Result<(), FsError> {
+        let path_str = path_to_string(path);
+        let client = Arc::clone(&self.client);
+        with_retry(move || {
+            let client = Arc::clone(&client);
+            let path_str = path_str.clone();
+            async move { client.remove(&path_str).await }
+        })
+        .await
+        .map_err(|e| map_client_error(path, e))
+    }
+}
+
+/// 进程内单调递增 sequence 防 SSH `write_atomic` tmp path 冲突（同 [`crate::cdt-fs::local`] 同模式）。
+static SSH_WRITE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn atomic_write_seq() -> u64 {
+    SSH_WRITE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// 重试 helper：瞬时错误最多 3 次，指数退避（75ms × attempt）。
@@ -943,6 +1105,34 @@ impl SftpClient for RusshSftpClient {
         let text = String::from_utf8_lossy(&bytes);
         Ok(text.lines().take(max).map(ToOwned::to_owned).collect())
     }
+
+    async fn write(&self, path: &str, data: &[u8]) -> Result<(), SftpClientError> {
+        self.sftp
+            .write(path.to_owned(), data)
+            .await
+            .map_err(|e| classify_sftp_error(&e))
+    }
+
+    async fn mkdir(&self, path: &str) -> Result<(), SftpClientError> {
+        self.sftp
+            .create_dir(path.to_owned())
+            .await
+            .map_err(|e| classify_sftp_error(&e))
+    }
+
+    async fn remove(&self, path: &str) -> Result<(), SftpClientError> {
+        self.sftp
+            .remove_file(path.to_owned())
+            .await
+            .map_err(|e| classify_sftp_error(&e))
+    }
+
+    async fn rename(&self, src: &str, dst: &str) -> Result<(), SftpClientError> {
+        self.sftp
+            .rename(src.to_owned(), dst.to_owned())
+            .await
+            .map_err(|e| classify_sftp_error(&e))
+    }
 }
 
 fn file_type_to_entry_kind(ft: FileType) -> EntryKind {
@@ -1061,6 +1251,27 @@ mod tests {
                 .await
                 .clone()
                 .unwrap_or(Err(SftpClientError::Other("not configured".into())))
+        }
+        async fn write(&self, _path: &str, _data: &[u8]) -> Result<(), SftpClientError> {
+            // FakeSftpClient 当前测试不覆盖写路径——CountedFakeRemoteSftp 才是写路径主测试 fixture
+            Err(SftpClientError::Other(
+                "write not configured in FakeSftpClient".into(),
+            ))
+        }
+        async fn mkdir(&self, _path: &str) -> Result<(), SftpClientError> {
+            Err(SftpClientError::Other(
+                "mkdir not configured in FakeSftpClient".into(),
+            ))
+        }
+        async fn remove(&self, _path: &str) -> Result<(), SftpClientError> {
+            Err(SftpClientError::Other(
+                "remove not configured in FakeSftpClient".into(),
+            ))
+        }
+        async fn rename(&self, _src: &str, _dst: &str) -> Result<(), SftpClientError> {
+            Err(SftpClientError::Other(
+                "rename not configured in FakeSftpClient".into(),
+            ))
         }
     }
 

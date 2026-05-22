@@ -102,6 +102,26 @@ impl SftpClient for FakeRemoteSftp {
             String::from_utf8(bytes).map_err(|e| SftpClientError::Other(e.to_string()))?;
         Ok(content.lines().take(max).map(ToOwned::to_owned).collect())
     }
+    async fn write(&self, _path: &str, _data: &[u8]) -> Result<(), SftpClientError> {
+        Err(SftpClientError::Other(
+            "write not used in reconnect fake".into(),
+        ))
+    }
+    async fn mkdir(&self, _path: &str) -> Result<(), SftpClientError> {
+        Err(SftpClientError::Other(
+            "mkdir not used in reconnect fake".into(),
+        ))
+    }
+    async fn remove(&self, _path: &str) -> Result<(), SftpClientError> {
+        Err(SftpClientError::Other(
+            "remove not used in reconnect fake".into(),
+        ))
+    }
+    async fn rename(&self, _src: &str, _dst: &str) -> Result<(), SftpClientError> {
+        Err(SftpClientError::Other(
+            "rename not used in reconnect fake".into(),
+        ))
+    }
 }
 
 async fn setup_api() -> (Arc<LocalDataApi>, TempDir) {

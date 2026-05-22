@@ -91,7 +91,7 @@ async fn setup_ssh_with_5_sessions() -> (
     let cwd = "/srv/remote";
     let session_ids: Vec<String> = (0..5).map(|i| format!("session-{i:03}")).collect();
 
-    let mut fake = CountedFakeRemoteSftp::new();
+    let fake = CountedFakeRemoteSftp::new();
     for sid in &session_ids {
         let line = make_session_line(sid, cwd, &format!("from {sid}"));
         fake.add_session(remote_home, &project_id, sid, format!("{line}\n"));
@@ -256,7 +256,7 @@ async fn ssh_get_tool_output_second_call_one_stat_zero_read() {
     let tool_use_b = "tool-use-b";
 
     // 双 tool_use 同 session 同 jsonl
-    let mut fake = CountedFakeRemoteSftp::new();
+    let fake = CountedFakeRemoteSftp::new();
     let user_a = format!(
         r#"{{"type":"user","uuid":"u-a","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":"a"}}}}"#,
     );
@@ -363,7 +363,7 @@ async fn ssh_get_image_asset_second_call_one_stat_zero_read() {
     let img_uuid_b = "img-uuid-b";
 
     // 双 image block 同 session 同 jsonl，分别在 uuid_a / uuid_b 的 user 消息 block_index=0
-    let mut fake = CountedFakeRemoteSftp::new();
+    let fake = CountedFakeRemoteSftp::new();
     let user_a = format!(
         r#"{{"type":"user","uuid":"{img_uuid_a}","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":[{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"AAAA"}}}}]}}}}"#,
     );

@@ -597,6 +597,31 @@ export async function readMemoryFile(
 }
 
 /**
+ * 写入 / 覆盖项目 memory 目录内的 Markdown 文件——atomic 语义。
+ * 返回写入后最新 ProjectMemory（前端无需再调 getProjectMemory）。
+ *
+ * change `ssh-project-memory-remote-rw`: SSH context 下走远端 SFTP write_atomic。
+ */
+export async function addMemory(
+  projectId: string,
+  file: string,
+  content: string,
+): Promise<ProjectMemory> {
+  return await invoke("add_memory", { projectId, file, content });
+}
+
+/**
+ * 删除项目 memory 目录内的 Markdown 文件。
+ * 返回删除后最新 ProjectMemory。
+ */
+export async function deleteMemory(
+  projectId: string,
+  file: string,
+): Promise<ProjectMemory> {
+  return await invoke("delete_memory", { projectId, file });
+}
+
+/**
  * 按需拉取 subagent 完整 chunks 流。SubagentCard 展开时使用——首屏 IPC 默认
  * 把 SubagentProcess.messages 裁空，前端再单独拉取，砍 60% payload。
  *

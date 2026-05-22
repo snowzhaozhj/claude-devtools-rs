@@ -58,6 +58,8 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "get_session_detail",
     "get_project_memory",
     "read_memory_file",
+    "add_memory",
+    "delete_memory",
     "get_subagent_trace",
     "get_image_asset",
     "get_tool_output",
@@ -139,13 +141,14 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_45() {
+fn expected_tauri_commands_count_is_47() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        45,
+        47,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 45 个 Tauri command（含 SSH + server-mode + \
-         simplify-repository-as-project change 加的 list_group_sessions）"
+         以及本文件常量；当前 src-tauri 注册 47 个 Tauri command（含 SSH + server-mode + \
+         simplify-repository-as-project change 加的 list_group_sessions + change \
+         ssh-project-memory-remote-rw 加的 add_memory / delete_memory）"
     );
 }
 
@@ -1233,39 +1236,99 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
     );
     assert_remote_fs_touched(before, fake.snapshot_counters(), "search");
 
-    // ====== change `backend-policy-struct` 新增（tasks 6b.1）======
-    // 覆盖 BackendPolicy::supports_memory=false 时 memory IPC 的 graceful skip 契约
-    //
-    // 注：以下两个 memory IPC 走 BackendPolicy.supports_memory=false 的 graceful
-    // skip 路径，**不**触发远端 fs op（spec 行为：SSH context 下 memory 直接返
-    // empty / SSH error）——故不做 counter 断言。
+    // ====== change `ssh-project-memory-remote-rw` 修订 ======
+    // SSH context 下 memory CRUD 走真实远端 fs ops（不再 graceful skip）。
+    // 覆盖 4 个 memory IPC：get_project_memory / read_memory_file / add_memory / delete_memory
 
-    // get_project_memory：SSH context 下 SHALL 返 empty ProjectMemory（has_memory=false）
+    // 准备远端 memory 目录 fixture：base_dir = `extract_base_dir(project_id)` = project_id 本身
+    // （已 encoded 形态），与 `project_memory_dir` helper 一致
+    let remote_memory_dir = format!("{remote_home}/{project_id}/memory");
+    fake.add_dir(&format!("{remote_home}/{project_id}"), "memory");
+    fake.add_file(
+        &remote_memory_dir,
+        "MEMORY.md",
+        "# Project Memory\n- [Note](note.md)\n",
+    );
+    fake.add_file(&remote_memory_dir, "note.md", "Test note content");
+
+    // get_project_memory：SSH context 下 SHALL 走远端 fs ops 返真数据
+    let before = fake.snapshot_counters();
     let memory = api.get_project_memory(project_id).await.unwrap();
-    assert_eq!(
-        memory.project_id, project_id,
-        "ProjectMemory.project_id SHALL 回显请求 id"
+    assert_eq!(memory.project_id, project_id);
+    assert!(
+        memory.has_memory,
+        "SSH context 下 memory 目录有 .md 文件 SHALL has_memory=true"
+    );
+    assert!(memory.count >= 2, "SHALL 至少含 MEMORY.md + note.md");
+    assert_eq!(memory.default_file.as_deref(), Some("MEMORY.md"));
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "get_project_memory");
+
+    // read_memory_file：SSH context 下 SHALL 走远端 fs.read_to_string
+    let before = fake.snapshot_counters();
+    let content = api
+        .read_memory_file(project_id, "MEMORY.md")
+        .await
+        .expect("SSH context 下 read_memory_file SHALL 成功");
+    assert!(content.content.contains("Project Memory"));
+    assert_remote_fs_touched(before, fake.snapshot_counters(), "read_memory_file");
+
+    // add_memory：SSH context 下 SHALL 走远端 fs.write_atomic（含 tmp + remove + rename 三步）
+    let before_writes = fake.snapshot_write_counters();
+    let updated = api
+        .add_memory(project_id, "feedback_test.md", "new note body")
+        .await
+        .expect("add_memory SHALL succeed in SSH context");
+    assert!(
+        updated.layers.iter().any(|l| l.file == "feedback_test.md"),
+        "add_memory 返新 ProjectMemory SHALL 含新文件"
+    );
+    let after_writes = fake.snapshot_write_counters();
+    assert!(
+        after_writes.write > before_writes.write,
+        "SSH add_memory SHALL 触发远端 SFTP write"
     );
     assert!(
-        !memory.has_memory,
-        "SSH context 下 supports_memory=false → has_memory SHALL 为 false"
-    );
-    assert_eq!(memory.count, 0, "SSH context 下 count SHALL 为 0");
-    assert!(memory.layers.is_empty(), "SSH context 下 layers SHALL 为空");
-    assert!(
-        memory.default_file.is_none(),
-        "SSH context 下 default_file SHALL 为 None"
+        after_writes.rename > before_writes.rename,
+        "SSH add_memory SHALL 触发远端 SFTP rename"
     );
 
-    // read_memory_file：SSH context 下 SHALL 返 not_found 错误消息含 "SSH context"
-    let read_err = api
-        .read_memory_file(project_id, "CLAUDE.md")
+    // delete_memory：SSH context 下 SHALL 走远端 fs.remove_file
+    let before_writes = fake.snapshot_write_counters();
+    let updated = api
+        .delete_memory(project_id, "feedback_test.md")
         .await
-        .expect_err("SSH context 下 read_memory_file SHALL 返 Err");
-    let err_str = format!("{read_err:?}");
+        .expect("delete_memory SHALL succeed");
     assert!(
-        err_str.contains("SSH context"),
-        "SSH context 下 read_memory_file 错误消息 SHALL 含 \"SSH context\"，actual: {err_str}"
+        !updated.layers.iter().any(|l| l.file == "feedback_test.md"),
+        "delete_memory 后 layers SHALL 不含被删文件"
+    );
+    let after_writes = fake.snapshot_write_counters();
+    assert!(
+        after_writes.remove > before_writes.remove,
+        "SSH delete_memory SHALL 触发远端 SFTP remove"
+    );
+
+    // 校验：路径穿越 / 非 .md 文件名 SHALL 拒绝且不触发任何远端写
+    let before_writes = fake.snapshot_write_counters();
+    assert!(
+        api.add_memory(project_id, "../etc/passwd", "x")
+            .await
+            .is_err()
+    );
+    assert!(
+        api.add_memory(project_id, "secret.json", "x")
+            .await
+            .is_err()
+    );
+    assert!(
+        api.delete_memory(project_id, "subdir/note.md")
+            .await
+            .is_err()
+    );
+    let after_writes = fake.snapshot_write_counters();
+    assert_eq!(
+        before_writes, after_writes,
+        "validation 失败 SHALL NOT 触发任何远端写 op"
     );
 }
 

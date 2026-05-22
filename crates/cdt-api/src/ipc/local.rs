@@ -2785,35 +2785,12 @@ impl DataApi for LocalDataApi {
     }
 
     async fn get_project_memory(&self, project_id: &str) -> Result<ProjectMemory, ApiError> {
-        // SSH context 下 graceful degradation：远端 memory 文件读取暂不支持
-        // （`discover_memory_layers` / `validate_memory_file_name` 内部走
-        // 同步 tokio::fs，无法直接复用走远端 SFTP）。返回 has_memory=false
-        // 让 UI 显示"无 memory"而非读宿主机错误数据。
-        // followup：openspec/followups.md 已记 SSH context memory 支持（TODO）
-        let (fs, _projects_dir, _ctx, policy, _resolvers) = self.active_fs_and_policy().await?;
-        if !policy.supports_memory {
-            return Ok(ProjectMemory {
-                project_id: project_id.to_owned(),
-                has_memory: false,
-                count: 0,
-                default_file: None,
-                layers: Vec::new(),
-            });
-        }
+        // change `ssh-project-memory-remote-rw`: 删除 supports_memory graceful skip 短路；
+        // SSH 与 Local 统一走 fs trait 调 `discover_memory_layers`。
+        let (fs, _projects_dir, _ctx, _policy, _resolvers) = self.active_fs_and_policy().await?;
         let memory_dir = self.project_memory_dir(project_id).await?;
         let layers = discover_memory_layers(&*fs, &memory_dir).await?;
-        let default_file = layers
-            .iter()
-            .find(|layer| layer.kind == MemoryLayerKind::Index)
-            .or_else(|| layers.first())
-            .map(|layer| layer.file.clone());
-        Ok(ProjectMemory {
-            project_id: project_id.to_owned(),
-            has_memory: !layers.is_empty(),
-            count: layers.len(),
-            default_file,
-            layers,
-        })
+        Ok(build_project_memory(project_id, layers))
     }
 
     async fn read_memory_file(
@@ -2821,13 +2798,9 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         file: &str,
     ) -> Result<MemoryFileContent, ApiError> {
-        // SSH context 下 graceful degradation——同 get_project_memory 同款理由。
-        let (fs, _projects_dir, _ctx, policy, _resolvers) = self.active_fs_and_policy().await?;
-        if !policy.supports_memory {
-            return Err(ApiError::not_found(format!(
-                "memory file {file}: SSH context 下远端 memory 文件读取尚不支持"
-            )));
-        }
+        // change `ssh-project-memory-remote-rw`: 删除 supports_memory graceful skip 短路；
+        // SSH 与 Local 统一走 fs trait `read_to_string`。
+        let (fs, _projects_dir, _ctx, _policy, _resolvers) = self.active_fs_and_policy().await?;
         let memory_dir = self.project_memory_dir(project_id).await?;
         let safe_file = validate_memory_file_name(file)?;
         let path = memory_dir.join(&safe_file);
@@ -2841,6 +2814,55 @@ impl DataApi for LocalDataApi {
             file_path: path.to_string_lossy().into_owned(),
             content,
         })
+    }
+
+    async fn add_memory(
+        &self,
+        project_id: &str,
+        file: &str,
+        content: &str,
+    ) -> Result<ProjectMemory, ApiError> {
+        // change `ssh-project-memory-remote-rw`: 写路径走 fs trait `write_atomic` + `create_dir_all`；
+        // 写完 re-discover layers 直接返新 ProjectMemory（避免前端二次 IPC，详 design D9）。
+        //
+        // 错误路径 sanitize（codex PR 二审 ITEM 5）：返给前端 webview 的 ApiError
+        // message 仅含用户可见信息（safe_file 文件名）；详细 fs error（含远端
+        // home path）只写 tracing::error，不暴露给前端。
+        let (fs, _projects_dir, _ctx, _policy, _resolvers) = self.active_fs_and_policy().await?;
+        let memory_dir = self.project_memory_dir(project_id).await?;
+        let safe_file = validate_memory_file_name(file)?;
+        // 自动创建 memory 目录（不存在则创建，已存在不报错）
+        fs.create_dir_all(&memory_dir).await.map_err(|e| {
+            tracing::error!(project_id = %project_id, error = %e, "create memory dir failed");
+            ApiError::internal("create memory dir failed".to_owned())
+        })?;
+        let path = memory_dir.join(&safe_file);
+        fs.write_atomic(&path, content.as_bytes()).await.map_err(|e| {
+            tracing::error!(project_id = %project_id, file = %safe_file, error = %e, "write memory file failed");
+            ApiError::internal(format!("write memory file {safe_file} failed"))
+        })?;
+        let layers = discover_memory_layers(&*fs, &memory_dir).await?;
+        Ok(build_project_memory(project_id, layers))
+    }
+
+    async fn delete_memory(&self, project_id: &str, file: &str) -> Result<ProjectMemory, ApiError> {
+        // change `ssh-project-memory-remote-rw`: 删路径走 fs trait `remove_file`；
+        // 删完 re-discover layers 直接返新 ProjectMemory。错误路径 sanitize 同 add_memory。
+        let (fs, _projects_dir, _ctx, _policy, _resolvers) = self.active_fs_and_policy().await?;
+        let memory_dir = self.project_memory_dir(project_id).await?;
+        let safe_file = validate_memory_file_name(file)?;
+        let path = memory_dir.join(&safe_file);
+        fs.remove_file(&path).await.map_err(|e| match e {
+            cdt_discover::FsError::NotFound(_) => {
+                ApiError::not_found(format!("memory file {safe_file} not found"))
+            }
+            other => {
+                tracing::error!(project_id = %project_id, file = %safe_file, error = %other, "delete memory file failed");
+                ApiError::internal(format!("delete memory file {safe_file} failed"))
+            }
+        })?;
+        let layers = discover_memory_layers(&*fs, &memory_dir).await?;
+        Ok(build_project_memory(project_id, layers))
     }
 
     async fn get_session_detail(
@@ -4010,6 +4032,23 @@ impl LocalDataApi {
         .await
         .map_err(|e| ApiError::internal(format!("join error: {e}")))?;
         Ok(configs)
+    }
+}
+
+/// 把 layers Vec 拼成完整 [`ProjectMemory`]——共用给 `get_project_memory` /
+/// `add_memory` / `delete_memory` 三个 IPC 路径，避免逻辑分叉。
+fn build_project_memory(project_id: &str, layers: Vec<MemoryLayer>) -> ProjectMemory {
+    let default_file = layers
+        .iter()
+        .find(|layer| layer.kind == MemoryLayerKind::Index)
+        .or_else(|| layers.first())
+        .map(|layer| layer.file.clone());
+    ProjectMemory {
+        project_id: project_id.to_owned(),
+        has_memory: !layers.is_empty(),
+        count: layers.len(),
+        default_file,
+        layers,
     }
 }
 

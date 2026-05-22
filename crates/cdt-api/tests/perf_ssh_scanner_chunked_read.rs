@@ -129,6 +129,18 @@ impl SftpClient for ThrottledFakeSftpClient {
             String::from_utf8(bytes).map_err(|e| SftpClientError::Other(e.to_string()))?;
         Ok(content.lines().take(max).map(ToOwned::to_owned).collect())
     }
+    async fn write(&self, _p: &str, _d: &[u8]) -> Result<(), SftpClientError> {
+        Err(SftpClientError::Other("not used".into()))
+    }
+    async fn mkdir(&self, _p: &str) -> Result<(), SftpClientError> {
+        Err(SftpClientError::Other("not used".into()))
+    }
+    async fn remove(&self, _p: &str) -> Result<(), SftpClientError> {
+        Err(SftpClientError::Other("not used".into()))
+    }
+    async fn rename(&self, _s: &str, _d: &str) -> Result<(), SftpClientError> {
+        Err(SftpClientError::Other("not used".into()))
+    }
 }
 
 fn make_5mb_jsonl() -> Vec<u8> {

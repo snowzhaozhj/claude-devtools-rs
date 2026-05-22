@@ -213,6 +213,15 @@ async fn list_sessions_does_not_cross_project_boundary() {
         ) -> Result<Box<dyn tokio::io::AsyncRead + Send + Unpin>, FsError> {
             self.inner.open_read(path).await
         }
+        async fn write_atomic(&self, path: &Path, content: &[u8]) -> Result<(), FsError> {
+            self.inner.write_atomic(path, content).await
+        }
+        async fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
+            self.inner.create_dir_all(path).await
+        }
+        async fn remove_file(&self, path: &Path) -> Result<(), FsError> {
+            self.inner.remove_file(path).await
+        }
     }
 
     let root = tempfile::tempdir().unwrap();

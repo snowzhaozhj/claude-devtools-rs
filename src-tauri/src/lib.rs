@@ -104,6 +104,35 @@ async fn read_memory_file(
 }
 
 #[tauri::command]
+async fn add_memory(
+    data: State<'_, AppData>,
+    project_id: String,
+    file: String,
+    content: String,
+) -> Result<serde_json::Value, String> {
+    let memory = data
+        .api
+        .add_memory(&project_id, &file, &content)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&memory).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_memory(
+    data: State<'_, AppData>,
+    project_id: String,
+    file: String,
+) -> Result<serde_json::Value, String> {
+    let memory = data
+        .api
+        .delete_memory(&project_id, &file)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&memory).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_subagent_trace(
     data: State<'_, AppData>,
     root_session_id: String,
@@ -1070,6 +1099,8 @@ pub fn run() {
             get_session_detail,
             get_project_memory,
             read_memory_file,
+            add_memory,
+            delete_memory,
             get_subagent_trace,
             get_image_asset,
             get_tool_output,

@@ -30,6 +30,9 @@ pub struct FsOpCounts {
     pub open_read: u32,
     pub stat_many: u32,
     pub exists: u32,
+    pub write_atomic: u32,
+    pub create_dir_all: u32,
+    pub remove_file: u32,
 }
 
 /// 通过 `tokio::task_local!` 注入当前任务上下文的 fs op counter。
@@ -89,6 +92,15 @@ impl FsOpCounter {
     fn record_exists(&self) {
         self.counts.lock().expect("counter poisoned").exists += 1;
     }
+    fn record_write_atomic(&self) {
+        self.counts.lock().expect("counter poisoned").write_atomic += 1;
+    }
+    fn record_create_dir_all(&self) {
+        self.counts.lock().expect("counter poisoned").create_dir_all += 1;
+    }
+    fn record_remove_file(&self) {
+        self.counts.lock().expect("counter poisoned").remove_file += 1;
+    }
 }
 
 tokio::task_local! {
@@ -125,6 +137,9 @@ where
         open_read = snapshot.open_read,
         stat_many = snapshot.stat_many,
         exists = snapshot.exists,
+        write_atomic = snapshot.write_atomic,
+        create_dir_all = snapshot.create_dir_all,
+        remove_file = snapshot.remove_file,
         "fs ops summary"
     );
     (result, snapshot)
@@ -205,6 +220,27 @@ impl<P: FileSystemProvider> FileSystemProvider for InstrumentedFs<P> {
             c.record_stat_many();
         }
         self.inner.stat_many(paths).await
+    }
+
+    async fn write_atomic(&self, path: &Path, content: &[u8]) -> Result<(), FsError> {
+        if let Some(c) = FsOpCounter::current() {
+            c.record_write_atomic();
+        }
+        self.inner.write_atomic(path, content).await
+    }
+
+    async fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
+        if let Some(c) = FsOpCounter::current() {
+            c.record_create_dir_all();
+        }
+        self.inner.create_dir_all(path).await
+    }
+
+    async fn remove_file(&self, path: &Path) -> Result<(), FsError> {
+        if let Some(c) = FsOpCounter::current() {
+            c.record_remove_file();
+        }
+        self.inner.remove_file(path).await
     }
 }
 

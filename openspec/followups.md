@@ -262,9 +262,22 @@ change `fix-ssh-active-context-dispatch` 引入 `find_subagent_jsonl_via_fs` / `
 - `LocalDataApi::get_image_asset` / `get_tool_output` 两个 IPC handler 在 SSH 与 Local 分支统一走 `extract_parsed_messages_cached` wrapper（`crates/cdt-api/src/ipc/local.rs:2900` / `:2940`），消除 SSH inline `read_to_string + parse` 旁路；原 `parse_jsonl_content` helper 已无 callsite（标 `#[allow(dead_code)]`）
 - 覆盖测试：`crates/cdt-api/tests/perf_ssh_cache_hit.rs::ssh_get_tool_output_second_call_one_stat_zero_read` + `ssh_get_image_asset_second_call_one_stat_zero_read`（**进默认 CI**）—— `CountedFakeRemoteSftp` 断言二次同 session 不同 block / tool_use_id 调用 `metadata_count` 增 1（wrapper 内 stat 拿 signature）、`read_count` 不增（cache 命中复用 `Arc<Vec<ParsedMessage>>`）
 
-### [coverage-gap] SSH context 下 project memory 不支持远端读写
+### [coverage-gap → done] SSH context 下 project memory 不支持远端读写 ✅
 
-change `fix-ssh-active-context-dispatch` 的 SSH 分支让 `get_project_memory` 返 has_memory=false / empty layers，`read_memory_file` 返 not_found——UI 隐藏 memory 入口。远端 memory CRUD 完整支持需要 `discover_memory_layers` / `validate_memory_file_name` 改接 `Arc<dyn FileSystemProvider>` 入参 + 写路径（add/delete memory）也走 fs trait。
+原 gap：change `fix-ssh-active-context-dispatch` 的 SSH 分支让 `get_project_memory` 返 has_memory=false / empty layers，`read_memory_file` 返 not_found——UI 隐藏 memory 入口。远端 memory CRUD 完整支持需要 `discover_memory_layers` / `validate_memory_file_name` 改接 `Arc<dyn FileSystemProvider>` 入参 + 写路径（add/delete memory）也走 fs trait。
+
+**已修复**（change `ssh-project-memory-remote-rw`）：
+- `cdt-fs::FileSystemProvider` trait 加 3 个写方法 `write_atomic` / `create_dir_all` / `remove_file`（`crates/cdt-fs/src/provider.rs`），所有 5 个 impl 同步实现：`LocalFileSystemProvider` 走 tmp+rename，`InstrumentedFs<P>` 加 hook，`SshFileSystemProvider` 走"先 remove ignore-not-found 后 rename"两步降级（russh-sftp 2.1.2 不暴露 `posix-rename@openssh.com` 扩展 API），`SpyFs` / `FakeSshFs` 测试 fixture 占位
+- `cdt-ssh::SftpClient` trait 加 `write` / `mkdir` / `remove` / `rename` 4 方法（位于 `crates/cdt-ssh/src/provider.rs`），`RusshSftpClient` delegate 到 `russh_sftp::client::SftpSession::{write,create_dir,remove_file,rename}`
+- `BackendPolicy::for_ssh().supports_memory: false → true`，删 `LocalDataApi::get_project_memory` / `read_memory_file` 中 graceful skip 短路分支
+- 新增 `add_memory(project_id, file, content)` / `delete_memory(project_id, file)` 两个 IPC method（TS 原版只读，本 change 扩 spec），写完调 `discover_memory_layers` 直接返新 `ProjectMemory`，前端无需二次 IPC
+- `EXPECTED_TAURI_COMMANDS` 45 → 47，Tauri `invoke_handler!` 同步登记，`ui/src/lib/api.ts` 加 `addMemory` / `deleteMemory` binding（**不**接 UI 按钮，留 follow-up）
+- `CountedFakeRemoteSftp` 扩展 4 类 write counter + 实现 SFTP write/mkdir/remove/rename mock + 内存 `Mutex<HashMap>` 让写修改可见
+- 覆盖测试：`crates/cdt-api/tests/ipc_contract.rs::active_ssh_context_reads_remote_projects_and_sessions` 加 4 个 memory IPC 调用 + before/after counter 断言（read 路径走 read_dir + read_to_string，write 路径走 write+rename 序列，delete 走 remove）+ 路径穿越/非 .md 校验失败不触发任何 fs 写 op；新增 cdt-fs `write_atomic_concurrent_writes_yield_intact_content` 多线程并发原子覆盖 spec 守护
+
+### [follow-up] memory-viewer UI 接入 add/delete 按钮
+
+`change `ssh-project-memory-remote-rw`` 已就位 IPC 行为契约 + 前端 `addMemory` / `deleteMemory` API binding，但 `memory-viewer` UI 当前只有 Open / Copy 操作，未接入 add/delete 按钮。后续 change 可在 `ui/src/lib/views/MemoryView.svelte` 加新建文件对话框 + 删除确认 dialog，纯 UI 侧改动不需要新行为契约 spec。
 
 ### [coverage-gap → done] active context dispatch contract test 缺 read 计数器 ✅
 
