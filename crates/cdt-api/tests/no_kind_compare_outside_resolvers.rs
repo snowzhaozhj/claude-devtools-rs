@@ -29,12 +29,12 @@ use std::path::PathBuf;
 
 const MAX_LET_IS_REMOTE: usize = 2;
 const MAX_FS_KIND_EQ: usize = 3;
+const MAX_MATCH_FS_KIND: usize = 1;
+const MAX_MATCHES_KIND_MACRO: usize = 0;
 
 #[test]
 fn local_rs_has_at_most_two_let_is_remote_bindings() {
-    let path = local_rs_path();
-    let src =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let src = read_local_rs();
     let count = count_occurrences(&src, "let is_remote =");
     assert!(
         count <= MAX_LET_IS_REMOTE,
@@ -46,9 +46,7 @@ fn local_rs_has_at_most_two_let_is_remote_bindings() {
 
 #[test]
 fn local_rs_has_at_most_three_fs_kind_eq_comparisons() {
-    let path = local_rs_path();
-    let src =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let src = read_local_rs();
     let count = count_occurrences(&src, "fs.kind() ==");
     assert!(
         count <= MAX_FS_KIND_EQ,
@@ -57,6 +55,45 @@ fn local_rs_has_at_most_three_fs_kind_eq_comparisons() {
          `fs.kind()` 比对仅允许在 active_fs_and_policy / BackendResolvers::from_fs 派生点使用。\
          若需调阈值，按本测试顶部 docstring 的步骤更新 + PR 描述写明合理性。"
     );
+}
+
+#[test]
+fn local_rs_has_at_most_one_match_fs_kind_block() {
+    // codex apply-stage 二审 Blocking #2 防绕过：`match fs.kind()` 是等价分支语法，
+    // 不能被纯 substring 计数 `fs.kind() ==` 拦截。本测试单独守护该模式。
+    let src = read_local_rs();
+    let count = count_occurrences(&src, "match fs.kind()");
+    assert!(
+        count <= MAX_MATCH_FS_KIND,
+        "`match fs.kind()` 出现 {count} 次，超过阈值 {MAX_MATCH_FS_KIND}。\
+         唯一合理出处：`active_fs_and_policy()` 内部派生 helper；其它位置 SHALL 走 BackendPolicy 字段。"
+    );
+}
+
+#[test]
+fn local_rs_forbids_matches_macro_kind_evasion() {
+    // codex apply-stage 二审 Non-blocking #2 防绕过：`matches!(fs.kind(), FsKind::Ssh)`
+    // 是 substring + match 都抓不到的等价写法。session_metadata.rs 已存在该模式，
+    // 说明 lint 时该写法真实可发生。local.rs 严禁出现。
+    let src = read_local_rs();
+    let count = src.matches("matches!(").filter(|_| true).count();
+    // 仅当 matches!( 出现且其后含 .kind() 时才视为违反 —— 简化为同时含两 substring
+    // 的行数计数。
+    let violations = src
+        .lines()
+        .filter(|line| line.contains("matches!(") && line.contains(".kind()"))
+        .count();
+    assert_eq!(
+        violations, MAX_MATCHES_KIND_MACRO,
+        "`matches!(<expr>.kind(), ...)` 出现 {violations} 次（substring `matches!(` 总计 {count}），\
+         超过阈值 {MAX_MATCHES_KIND_MACRO}。该写法是 substring + match 等价绕过——\
+         business handler SHALL 走 BackendPolicy 字段。"
+    );
+}
+
+fn read_local_rs() -> String {
+    let path = local_rs_path();
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
 fn local_rs_path() -> PathBuf {

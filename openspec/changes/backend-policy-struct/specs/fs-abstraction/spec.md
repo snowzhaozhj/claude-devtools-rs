@@ -76,10 +76,15 @@ pub enum StaleCheckStrategy {
 
 #### Scenario: 业务代码通过 BackendPolicy 字段选择行为
 
-- **WHEN** `cdt-api::ipc::local::LocalDataApi` 的 IPC handler 需要根据后端类型选择行为
-- **THEN** handler SHALL 读 `BackendPolicy` 字段（如 `policy.supports_memory` / `policy.stale_check_strategy`），**不得**直接 `if fs.kind() == FsKind::Ssh` 或等价 `let is_remote = fs.kind() == Ssh` 后做策略分支
-- **AND** `fs.kind() ==` 比较仅允许出现在 `active_fs_and_policy()` 顶层派生 helper 内 + `cdt-api::ipc::backend_resolvers::BackendResolvers::from_fs()` 内 + cdt-fs / cdt-discover provider 实现内部
-- **AND** `crates/cdt-api/tests/no_kind_compare_outside_resolvers.rs` 集成测试 SHALL 扫 `crates/cdt-api/src/ipc/local.rs` 统计 `fs.kind() ==` / `let is_remote =` 出现次数并断言 ≤ 阈值（本 change 后期望 ≤ 1，仅 `active_fs_and_policy` 内部）
+- **WHEN** `cdt-api::ipc::local::LocalDataApi` 的 IPC handler 需要根据后端类型选择**新**行为
+- **THEN** handler SHALL 读 `BackendPolicy` 字段（如 `policy.supports_memory` / `policy.stale_check_strategy`），**不得**新增 `if fs.kind() == FsKind::Ssh` / `let is_remote = fs.kind() == Ssh` / `matches!(fs.kind(), FsKind::Ssh)` 等任一等价直接派生
+- **AND** 派生点 fs.kind() 比对仅允许出现在 `active_fs_and_policy()` 顶层 helper 内 + `cdt-api::ipc::backend_resolvers::BackendResolvers::from_fs()` 内 + cdt-fs / cdt-discover provider 实现内部
+- **AND** `crates/cdt-api/tests/no_kind_compare_outside_resolvers.rs` 集成测试 SHALL 扫 `crates/cdt-api/src/ipc/local.rs` 用 substring 计数 + line-level 白名单两层守护：
+  - `fs.kind() ==` 出现 ≤ 3 处（PR-D 残留派生 line ~812 / ~1601 + read_mentioned_file SSH gate line ~3133，全部已登记为已知例外）
+  - `let is_remote =` 出现 ≤ 2 处（同 PR-D 残留派生 line ~812 / ~1601）
+  - `match fs.kind()` 出现 ≤ 1 处（仅 `active_fs_and_policy` 派生 helper 内部）
+  - `matches!(<expr>.kind(),` 出现 == 0 处（local.rs 内严禁此等价写法绕过）
+- **AND** 已登记例外（PR-D 残留 + `read_mentioned_file`）SHALL 在 followup / 后续 PR 收口；其中 `read_mentioned_file` 预期 PR-G 加 `BackendPolicy::supports_mention_file_resolution: bool` 字段消除
 
 #### Scenario: StaleCheckStrategy enum 至少包含 LocalClock5min 与 SkipUntilClockSync
 
