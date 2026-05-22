@@ -1062,14 +1062,13 @@ pub fn run() {
             // openspec/specs/server-mode/spec.md::Tauri 桌面应用启动时 SHALL
             // 按持久化配置自动恢复 server）。
             //
-            // static_dir 解析：dev mode 走 Vite proxy 不需要静态 serve，传 None；
-            // release 走 resource_dir 下的前端 bundle 子路径——实测后填正确子路径
-            // （已记 design.md Open Question；当前 release 默认尝试 resource_dir
-            // 本身，子路径回填见 task 6.3）。
-            let static_dir = resolve_static_dir(app.handle());
+            // static_serve 解析：dev mode 默认 Redirect 到 vite dev server 让浏览器
+            // 与 Tauri 窗口共享同一份热重载 UI（见 `resolve_static_serve` doc）；
+            // release 走 resource_dir ServeDir 提供完整 bundle。
+            let static_serve = resolve_static_serve(app.handle());
             let server_state = Arc::new(ServerState::new(
                 api.clone(),
-                static_dir,
+                static_serve,
                 app.handle().clone(),
             ));
             app.manage(server_state.clone());
@@ -1169,16 +1168,19 @@ pub fn run() {
 /// 实测子路径见 task 6.3，必要时改成 `resource_dir().join("<subpath>")`。
 /// **未来分叉风险**（codex D5）：若 tauri-action 改成嵌套子路径（如
 /// `resource_dir().join("dist")`），dev 端基于 `<repo>/ui/dist` 的硬编码会与
-/// release 分叉——届时**两个 `resolve_static_dir` 必须同时改**。另：以 resource
+/// release 分叉——届时**两个 `resolve_static_serve` 必须同时改**。另：以 resource
 /// 根作为静态根会同时暴露同目录其他打包资源，加入非前端资源时应收窄静态根。
 ///
-/// **dev 模式**（`cfg!(debug_assertions)`）：指向**编译时 src-tauri manifest
-/// 目录的兄弟** `<src-tauri parent>/ui/dist`（pnpm build 产物）——让 dev 启用
-/// server-mode 时浏览器访问命中**与 release 完全一致的 `static_fallback` 代码
-/// 路径**（path traversal 防御 / SPA fallback / mime 推断），便于端到端验证
-/// 真实 server 代码。代价是 ui/dist 与 Vite hot reload 不同步——浏览器看到
-/// pre-build 版本，桌面 webview 通过 Vite 看到 hot reload 版本。用户需手动
-/// `pnpm --dir ui build` 刷新 dist；缺失时降级返 None + warn 引导。
+/// **dev 模式**（`cfg!(debug_assertions)`）：默认返回
+/// `StaticServe::Redirect("http://127.0.0.1:5173")`——浏览器访问 Tauri 内置
+/// HTTP server 的根路径会被 302 跳到 vite dev server，让浏览器和桌面 Tauri
+/// 窗口共享同一份 HMR UI（消除"浏览器看 dist 旧 bundle / 桌面看 vite 新代码"
+/// 的两端分叉）。`/api/*` / `/api/events` 仍由 axum 处理保证 HTTP 后端行为
+/// 真实可测。
+///
+/// 设 `CDT_DEV_USE_PREBUILT_DIST=1` 切回 ServeDir(`<repo>/ui/dist`) 验证
+/// release 形态（path traversal / mime 推断 / SPA fallback 真实链路）；缺失
+/// `ui/dist` 时降级到 `None` + warn 引导跑 `pnpm --dir ui build`。
 ///
 /// **worktree 路径绑定的是编译时源树**（codex D2）：`env!("CARGO_MANIFEST_DIR")`
 /// 在编译期固定。正常 worktree 内 `cargo tauri dev` → 指向本 worktree 自己的
@@ -1197,38 +1199,51 @@ pub fn run() {
 /// 自定义 cargo profile 里强制 `debug-assertions = true`（如 release-with-debug-
 /// info 类配置），release-name profile 仍走 dev 路径——dev 字面量会进 binary。
 /// 标准 `cargo build --release` 不受影响。**结果速查**：release binary 走
-/// `resource_dir()`；dev / debug-assertions=on 的 binary 走
-/// `CARGO_MANIFEST_DIR` 拼路径。
+/// `resource_dir()` ServeDir；dev / debug-assertions=on 的 binary 默认走
+/// Redirect to vite。
 #[cfg(debug_assertions)]
-fn resolve_static_dir(_app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    let src_tauri_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let resolved = resolve_dev_static_dir_from(&src_tauri_dir);
-    match resolved.as_ref() {
-        Some(p) => tracing::info!(
-            target: "cdt_tauri::server_mode",
-            path = %p.display(),
-            "dev mode static_dir resolved to ui/dist (pre-built); browser is out of sync with Vite hot reload"
-        ),
-        None => tracing::warn!(
-            target: "cdt_tauri::server_mode",
-            src_tauri_dir = %src_tauri_dir.display(),
-            "dev mode ui/dist missing; run `pnpm --dir ui build` to enable browser access to server mode"
-        ),
+fn resolve_static_serve(_app: &tauri::AppHandle) -> cdt_api::StaticServe {
+    if std::env::var_os("CDT_DEV_USE_PREBUILT_DIST").is_some() {
+        let src_tauri_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        return match resolve_dev_static_dir_from(&src_tauri_dir) {
+            Some(p) => {
+                tracing::info!(
+                    target: "cdt_tauri::server_mode",
+                    path = %p.display(),
+                    "CDT_DEV_USE_PREBUILT_DIST set; dev mode serving ui/dist directly"
+                );
+                cdt_api::StaticServe::Dir(p)
+            }
+            None => {
+                tracing::warn!(
+                    target: "cdt_tauri::server_mode",
+                    src_tauri_dir = %src_tauri_dir.display(),
+                    "CDT_DEV_USE_PREBUILT_DIST set but ui/dist missing; serving /api/* only"
+                );
+                cdt_api::StaticServe::None
+            }
+        };
     }
-    resolved
+    let upstream = "http://127.0.0.1:5173".to_string();
+    tracing::info!(
+        target: "cdt_tauri::server_mode",
+        upstream = %upstream,
+        "dev mode redirecting non-/api/* to vite dev server (set CDT_DEV_USE_PREBUILT_DIST=1 to test ui/dist)"
+    );
+    cdt_api::StaticServe::Redirect(upstream)
 }
 
 #[cfg(not(debug_assertions))]
-fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+fn resolve_static_serve(app: &tauri::AppHandle) -> cdt_api::StaticServe {
     match app.path().resource_dir() {
-        Ok(dir) => Some(dir),
+        Ok(dir) => cdt_api::StaticServe::Dir(dir),
         Err(e) => {
             tracing::warn!(
                 target: "cdt_tauri::server_mode",
                 error = %e,
                 "failed to resolve resource_dir for static serve"
             );
-            None
+            cdt_api::StaticServe::None
         }
     }
 }

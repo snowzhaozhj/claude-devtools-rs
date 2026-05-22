@@ -16,6 +16,7 @@ use crate::ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, PaginatedRequest, SearchRequest, SshConnectRequest,
 };
 
+use super::StaticServe;
 use super::cors::localhost_cors_layer;
 use super::sse::sse_handler;
 use super::state::AppState;
@@ -44,16 +45,16 @@ impl IntoResponse for ApiError {
 // Router builder
 // =============================================================================
 
-/// 构建完整的 `/api` 路由 + 可选静态文件 serve。
+/// 构建完整的 `/api` 路由 + 可选静态文件 serve / redirect。
 ///
-/// `static_dir` 为 `Some(<existing dir>)` 时挂 `ServeDir`：未命中 `/api/*`
-/// 路由的 GET 请求 SHALL fallback 到该目录（前端 client-side router）。
-/// 路径不存在或非目录时仅 `tracing::warn!` 后跳过 ServeDir，行为退化为
-/// 之前的"仅 API"模式。
+/// `static_serve` 决定未命中 `/api/*` 的请求如何处理（详 `StaticServe` doc）：
+/// - `None`：直接 404
+/// - `Dir(p)`：SPA `ServeDir` fallback；路径无效仅 `tracing::warn!` 后退化为 `None`
+/// - `Redirect(base)`：HTTP 302 重定向到 `<base><path>?<query>&http=1`
 ///
 /// CORS：所有路由统一 layer `localhost_cors_layer`，仅放行 localhost / 127.0.0.1
 /// origin（详 `crate::http::cors`）。
-pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
+pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
     let api_router = Router::new()
         // 项目 + 会话
         .route("/api/projects", get(list_projects))
@@ -155,11 +156,12 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
         .route("/api/events", get(sse_handler))
         .with_state(state);
 
-    // 顺序：CORS layer 在最外层（先看 Origin）；静态文件 fallback 仅在传入
-    // static_dir 且其存在时挂载；不存在 / None 时未命中 `/api/*` 的请求自然
-    // 返 404（与本 change 之前行为一致）。
-    let router_with_static = match static_dir {
-        Some(p) if p.is_dir() => {
+    // 顺序：CORS layer 在最外层（先看 Origin）；fallback 按 StaticServe 选分支：
+    // - Dir 走 SPA static_fallback；路径无效退化为 None
+    // - Redirect 走 redirect_to_upstream（dev 重定向浏览器到 vite）
+    // - None 不挂 fallback，未命中 `/api/*` 自然 404（与本 change 之前行为一致）
+    let router_with_static = match static_serve {
+        StaticServe::Dir(p) if p.is_dir() => {
             // 用 closure + Arc::clone 捕获 dir，避免引入第二个 with_state 与
             // api_router 已设的 AppState 冲突（axum 0.8 一个 Router 只能持有
             // 单一 State 类型）。
@@ -169,7 +171,7 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
                 async move { static_fallback(dir, uri).await }
             })
         }
-        Some(p) => {
+        StaticServe::Dir(p) => {
             tracing::warn!(
                 target: "cdt_api::http",
                 path = %p.display(),
@@ -177,10 +179,33 @@ pub fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Router {
             );
             api_router
         }
-        None => api_router,
+        StaticServe::Redirect(base) => {
+            let base = Arc::new(base);
+            api_router.fallback(move |uri: axum::http::Uri| {
+                let base = Arc::clone(&base);
+                async move { redirect_to_upstream(&base, &uri) }
+            })
+        }
+        StaticServe::None => api_router,
     };
 
     router_with_static.layer(localhost_cors_layer())
+}
+
+/// dev 模式下把非 `/api/*` 的请求 302 重定向到 vite dev server 的同路径，并
+/// 自动追加 `http=1` query 触发前端 BrowserTransport（main.ts 的 `params.has("http")`
+/// 分支）。`base` 例如 `http://127.0.0.1:5173`。
+///
+/// path / query 透传，避免破坏 vite HMR 自动建链路径（`/@vite/client` 等）。
+fn redirect_to_upstream(base: &str, uri: &axum::http::Uri) -> axum::response::Response {
+    let path = uri.path();
+    let merged_query = match uri.query() {
+        Some(q) if q.split('&').any(|kv| kv == "http=1") => q.to_string(),
+        Some(q) => format!("{q}&http=1"),
+        None => "http=1".to_string(),
+    };
+    let target = format!("{base}{path}?{merged_query}");
+    axum::response::Redirect::temporary(&target).into_response()
 }
 
 /// 静态文件 + SPA fallback handler。

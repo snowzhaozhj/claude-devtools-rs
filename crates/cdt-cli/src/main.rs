@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use tokio::sync::Semaphore;
 
 use cdt_api::http::spawn_event_bridge;
-use cdt_api::{AppState, LocalDataApi, start_server};
+use cdt_api::{AppState, LocalDataApi, StaticServe, start_server};
 use cdt_config::{ConfigManager, NotificationManager};
 use cdt_discover::{ProjectScanner, local_handle, path_decoder};
 use cdt_ssh::SshConnectionManager;
@@ -101,7 +101,7 @@ async fn main() -> Result<()> {
     tracing::info!("Starting claude-devtools-rs on port {port}");
     // CLI 不挂静态文件 serve（CLI 只是 API server 用途；UI 走 Tauri runtime
     // 或浏览器打开 Tauri build 出的 bundle），传 None 让 router 仅 serve `/api/*`。
-    start_server(state, port, None)
+    start_server(state, port, StaticServe::None)
         .await
         .context("HTTP server failed")?;
 

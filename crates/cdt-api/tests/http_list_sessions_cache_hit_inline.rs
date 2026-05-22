@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
-use cdt_api::http::{AppState, build_router};
+use cdt_api::http::{AppState, StaticServe, build_router};
 use cdt_api::{DataApi, LocalDataApi, PushEvent, spawn_event_bridge};
 use cdt_config::{ConfigManager, NotificationManager};
 use cdt_core::{FileChangeEvent, TodoChangeEvent};
@@ -121,7 +121,7 @@ async fn http_get_sessions_cache_hit_inlines_real_values_with_zero_emit() {
         api: api as Arc<dyn DataApi>,
         events_tx,
     };
-    let router = build_router(state, None);
+    let router = build_router(state, StaticServe::None);
 
     // 第一次 GET：cache miss → 骨架返 + 后台扫描 → events_tx 收 3 条 emit
     let url = format!("/api/projects/{project_id}/sessions?pageSize=20");

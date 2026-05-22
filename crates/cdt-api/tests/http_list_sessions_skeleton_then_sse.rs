@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
-use cdt_api::http::{AppState, build_router};
+use cdt_api::http::{AppState, StaticServe, build_router};
 use cdt_api::{DataApi, LocalDataApi, PushEvent, spawn_event_bridge};
 use cdt_config::{ConfigManager, NotificationManager};
 use cdt_core::{FileChangeEvent, TodoChangeEvent};
@@ -119,7 +119,7 @@ async fn build_harness(titles: &[&str]) -> Harness {
         api: api as Arc<dyn DataApi>,
         events_tx,
     };
-    let router = build_router(state, None);
+    let router = build_router(state, StaticServe::None);
 
     Harness {
         _tmp: tmp,
