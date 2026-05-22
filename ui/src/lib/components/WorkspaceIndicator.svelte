@@ -13,6 +13,7 @@
       ?? { id: "local", kind: "local", label: "Local", status: "connected" },
   );
   const activeLabel = $derived(activeContext.label ?? activeContext.host ?? activeContext.id.replace(/^ssh-/, ""));
+  const canSwitch = $derived(contextStore.availableContexts.length > 1);
 
   onMount(() => {
     void contextStore.initialize();
@@ -35,56 +36,62 @@
     open = false;
     void contextStore.switchContext(id);
   }
+
+  function toggleOpen() {
+    if (canSwitch && !contextStore.switching) open = !open;
+  }
 </script>
 
-{#if contextStore.availableContexts.length > 1}
-  <div class="workspace-indicator" bind:this={root}>
-    {#if open && !contextStore.switching}
-      <div class="menu" role="menu" aria-label="切换工作区">
-        <div class="menu-title">工作区</div>
-        {#each contextStore.availableContexts as ctx (ctx.id)}
-          {@const selected = ctx.id === contextStore.activeContextId}
-          {@const label = ctx.label ?? ctx.host ?? ctx.id.replace(/^ssh-/, "")}
-          <button
-            type="button"
-            class="menu-item"
-            class:selected
-            role="menuitemradio"
-            aria-checked={selected}
-            onclick={() => choose(ctx.id)}
-          >
-            <ConnectionStatusBadge contextId={ctx.id} status={ctx.status} showText={false} />
-            <span class="item-label">{label}</span>
-            {#if selected}
-              <span class="check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html CHECK_SVG}</svg></span>
-            {/if}
-          </button>
-        {/each}
-      </div>
-    {/if}
+<div class="workspace-indicator" bind:this={root}>
+  {#if open && canSwitch && !contextStore.switching}
+    <div class="menu" role="menu" aria-label="切换工作区">
+      <div class="menu-title">工作区</div>
+      {#each contextStore.availableContexts as ctx (ctx.id)}
+        {@const selected = ctx.id === contextStore.activeContextId}
+        {@const label = ctx.label ?? ctx.host ?? ctx.id.replace(/^ssh-/, "")}
+        <button
+          type="button"
+          class="menu-item"
+          class:selected
+          role="menuitemradio"
+          aria-checked={selected}
+          onclick={() => choose(ctx.id)}
+        >
+          <ConnectionStatusBadge contextId={ctx.id} status={ctx.status} showText={false} />
+          <span class="item-label">{label}</span>
+          {#if selected}
+            <span class="check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html CHECK_SVG}</svg></span>
+          {/if}
+        </button>
+      {/each}
+    </div>
+  {/if}
 
-    <button
-      type="button"
-      class="pill"
-      disabled={contextStore.switching}
-      aria-expanded={open}
-      aria-haspopup="menu"
-      onclick={() => (open = !open)}
-    >
-      <span class="pill-icon" aria-hidden="true">
-        {#if activeContext.kind === "ssh"}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html WIFI_SVG}</svg>
-        {:else}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html WIFI_OFF_SVG}</svg>
-        {/if}
-      </span>
-      <span class="pill-label">{activeLabel}</span>
+  <button
+    type="button"
+    class="pill"
+    class:static={!canSwitch}
+    disabled={contextStore.switching}
+    aria-expanded={canSwitch ? open : undefined}
+    aria-haspopup={canSwitch ? "menu" : undefined}
+    aria-label={canSwitch ? "切换工作区" : `当前工作区：${activeLabel}`}
+    onclick={toggleOpen}
+  >
+    <span class="pill-icon" aria-hidden="true">
+      {#if activeContext.kind === "ssh"}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html WIFI_SVG}</svg>
+      {:else}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html WIFI_OFF_SVG}</svg>
+      {/if}
+    </span>
+    <span class="pill-label">{activeLabel}</span>
+    {#if canSwitch}
       <span class="chevron" class:open aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_DOWN} /></svg>
       </span>
-    </button>
-  </div>
-{/if}
+    {/if}
+  </button>
+</div>
 
 <style>
   .workspace-indicator {
@@ -109,7 +116,7 @@
     font-weight: 600;
     cursor: pointer;
   }
-  .pill:hover:not(:disabled) {
+  .pill:hover:not(:disabled):not(.static) {
     background: var(--color-surface-overlay);
   }
   .pill:focus-visible {
@@ -119,6 +126,9 @@
   .pill:disabled {
     opacity: 0.6;
     cursor: wait;
+  }
+  .pill.static {
+    cursor: default;
   }
   .pill-icon,
   .chevron,
