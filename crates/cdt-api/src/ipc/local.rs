@@ -1992,6 +1992,286 @@ async fn scan_metadata_for_page(
     }
 }
 
+/// 按 `context_id.backend_kind` 分流后台 metadata 扫描路径。
+///
+/// - **Local backend**：调既有 `scan_metadata_for_page`（per-session via fs trait）
+/// - **SSH backend**：调 `scan_metadata_for_page_batched`（per `project_dir` 一次
+///   `fs.read_dir_with_metadata` + `MetadataCache::lookup_with_known_signature`
+///   批量校验跳 stat；详 change `ssh-batch-readdir-with-metadata` design D2）
+///
+/// 两条路径共享 `active_scans` 注册表、`Semaphore(METADATA_SCAN_CONCURRENCY=8)`
+/// 限流、`context_generation` race-free 校验；`ssh_disconnect` 触发的 abort 通过
+/// `abort_scans_for_context` 自然覆盖（既有路径，无需新加入口）。
+#[allow(clippy::too_many_arguments)]
+async fn scan_metadata_for_page_dispatch(
+    project_id: String,
+    dir: std::path::PathBuf,
+    page_jobs: Vec<(String, std::path::PathBuf)>,
+    tx: broadcast::Sender<SessionMetadataUpdate>,
+    active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
+    cleanup_key: String,
+    my_generation: u64,
+    metadata_cache: Arc<std::sync::Mutex<MetadataCache>>,
+    semaphore: Arc<Semaphore>,
+    root_generation: Arc<AtomicU64>,
+    expected_root_generation: u64,
+    worktree_meta_cache: Arc<std::sync::RwLock<HashMap<String, WorktreeMeta>>>,
+    fs: Arc<dyn FileSystemProvider>,
+    context_id: cdt_fs::ContextId,
+    context_generation: Arc<AtomicU64>,
+    expected_context_generation: u64,
+) {
+    if context_id.backend_kind == cdt_fs::FsKind::Ssh {
+        scan_metadata_for_page_batched(
+            project_id,
+            dir,
+            page_jobs,
+            tx,
+            active_scans,
+            cleanup_key,
+            my_generation,
+            metadata_cache,
+            semaphore,
+            root_generation,
+            expected_root_generation,
+            worktree_meta_cache,
+            fs,
+            context_id,
+            context_generation,
+            expected_context_generation,
+        )
+        .await;
+    } else {
+        scan_metadata_for_page(
+            project_id,
+            dir,
+            page_jobs,
+            tx,
+            active_scans,
+            cleanup_key,
+            my_generation,
+            metadata_cache,
+            semaphore,
+            root_generation,
+            expected_root_generation,
+            worktree_meta_cache,
+            fs,
+            context_id,
+            context_generation,
+            expected_context_generation,
+        )
+        .await;
+    }
+}
+
+/// SSH ctx 专用批量校验路径：一次 `fs.read_dir_with_metadata(dir)` 拿全 dir
+/// entry metadata（SFTP READDIR reply 1 RTT 含 attrs），对 `page_jobs` 每条
+/// session 调 `MetadataCache::lookup_with_known_signature` 命中跳 stat；
+/// mismatch / 新增 / dir metadata 缺该 path → spawn sub-task 走既有
+/// `extract_session_metadata_cached` cache wrapper miss 路径。
+///
+/// dir read 失败 → fallback 到 `scan_metadata_for_page`（功能正确性优先；
+/// 性能退化为 PR-D 既有 per-session 形态）。
+///
+/// 详 change `ssh-batch-readdir-with-metadata` design D2 + ssh-remote-context
+/// spec Scenarios "SSH ctx 后台 batch 校验 fs op 形态钉死 (all-hit/partial/all-miss)"。
+#[allow(clippy::too_many_arguments)]
+async fn scan_metadata_for_page_batched(
+    project_id: String,
+    dir: std::path::PathBuf,
+    page_jobs: Vec<(String, std::path::PathBuf)>,
+    tx: broadcast::Sender<SessionMetadataUpdate>,
+    active_scans: Arc<std::sync::Mutex<HashMap<String, ScanEntry>>>,
+    cleanup_key: String,
+    my_generation: u64,
+    metadata_cache: Arc<std::sync::Mutex<MetadataCache>>,
+    semaphore: Arc<Semaphore>,
+    root_generation: Arc<AtomicU64>,
+    expected_root_generation: u64,
+    worktree_meta_cache: Arc<std::sync::RwLock<HashMap<String, WorktreeMeta>>>,
+    fs: Arc<dyn FileSystemProvider>,
+    context_id: cdt_fs::ContextId,
+    context_generation: Arc<AtomicU64>,
+    expected_context_generation: u64,
+) {
+    use crate::cache_signature::FileSignature;
+
+    // early bail：fs / ctx / root generation 校验同 scan_metadata_for_page
+    if context_generation.load(Ordering::SeqCst) != expected_context_generation {
+        return;
+    }
+    if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+        return;
+    }
+
+    // 1. 一次 fs.read_dir_with_metadata 拿全 dir entry attrs（占 1 个 semaphore
+    //    permit 与其它 in-flight scan 共享 8 上限，避免 batch 路径绕过限流）。
+    let Ok(dir_permit) = semaphore.clone().acquire_owned().await else {
+        return;
+    };
+    let entries = match fs.read_dir_with_metadata(&dir).await {
+        Ok(e) => e,
+        Err(err) => {
+            // dir read 失败 fallback：调既有 per-session 路径保证功能正确性。
+            // 性能退化为 PR-D 形态（N 次串行 stat），用户感知层仍 hot path
+            // cache trust。详 design D2 + spec Scenario "SSH ctx batch helper
+            // 在 dir read 失败时 fallback 到 per-session 路径"。
+            drop(dir_permit);
+            tracing::warn!(
+                target: "cdt_api::perf",
+                project_id = %project_id,
+                error = %err,
+                "batch read_dir_with_metadata failed, falling back to per-session scan",
+            );
+            scan_metadata_for_page(
+                project_id,
+                dir,
+                page_jobs,
+                tx,
+                active_scans,
+                cleanup_key,
+                my_generation,
+                metadata_cache,
+                semaphore,
+                root_generation,
+                expected_root_generation,
+                worktree_meta_cache,
+                fs,
+                context_id,
+                context_generation,
+                expected_context_generation,
+            )
+            .await;
+            return;
+        }
+    };
+
+    // build path → metadata map；filter 掉 metadata = None 条（如 mtime_missing
+    // 已被 SshFileSystemProvider 翻译为 None，详 design D1）—— 这些条会走
+    // mismatch sub-task 路径补齐。
+    let by_name: HashMap<PathBuf, cdt_fs::FsMetadata> = entries
+        .into_iter()
+        .filter_map(|e| {
+            let meta = e.metadata?;
+            Some((dir.join(e.name), meta))
+        })
+        .collect();
+    drop(dir_permit);
+
+    // 2. 逐条 page_jobs：命中直 broadcast；mismatch / 新增 / metadata 缺该 path
+    //    → spawn sub-task 走 cache wrapper miss 路径。
+    let mut set = JoinSet::new();
+
+    for (session_id, jsonl_path) in page_jobs {
+        // 尝试命中 batch hit
+        let cache_entry = by_name.get(&jsonl_path).and_then(|meta| {
+            let sig = FileSignature::from_fs_metadata(meta);
+            metadata_cache
+                .lock()
+                .expect("metadata cache mutex poisoned")
+                .lookup_with_known_signature(&context_id, &jsonl_path, &sig)
+        });
+
+        if let Some(entry) = cache_entry {
+            // 命中：每次 broadcast 前 SHALL 双重校验 context_generation +
+            // root_generation 不变（与 scan_metadata_for_page 既有路径同语义；
+            // codex commit 二审 #1 修订——fs.read_dir_with_metadata await 期间
+            // root 可能被 reconfigure，命中分支也必须 root_generation 校验避免
+            // 把旧 root 的 cache update 推给前端破坏 race-free 契约）。
+            if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+                continue;
+            }
+            if context_generation.load(Ordering::SeqCst) != expected_context_generation {
+                continue;
+            }
+            let group_id = worktree_meta_cache
+                .read()
+                .ok()
+                .and_then(|c| c.get(&project_id).map(|m| m.group_id.clone()));
+            // SSH 跳 stale check：与 extract_session_metadata_cached SSH 分支
+            // （session_metadata.rs:567+ `backend_skips_stale`）同语义——远端
+            // mtime 与本机 SystemTime::now() 跨 clock domain 不可比对。详
+            // change ssh-batch-readdir-with-metadata design D2 / Risks 表
+            // "messages_ongoing 双处一致性"项。
+            let _ = tx.send(SessionMetadataUpdate {
+                project_id: project_id.clone(),
+                session_id,
+                title: entry.title,
+                message_count: entry.message_count,
+                is_ongoing: entry.messages_ongoing,
+                git_branch: entry.git_branch,
+                group_id,
+            });
+            continue;
+        }
+
+        // mismatch / 新增 / metadata 缺该 path → spawn sub-task 走 cache wrapper
+        // miss 路径。JoinSet 持有 sub-task；顶层 batch task abort 时 JoinSet drop
+        // 自动联级 abort 全部 sub-task（tokio 语义）—— SHALL NOT 重复注册
+        // active_scans（design D3）。
+        let permit_sem = semaphore.clone();
+        let tx = tx.clone();
+        let project_id_clone = project_id.clone();
+        let cache = metadata_cache.clone();
+        let root_generation = root_generation.clone();
+        let context_generation = context_generation.clone();
+        let worktree_meta_cache = worktree_meta_cache.clone();
+        let fs_clone = fs.clone();
+        let ctx_clone = context_id.clone();
+        set.spawn(async move {
+            let Ok(_permit) = permit_sem.acquire_owned().await else {
+                return;
+            };
+            if context_generation.load(Ordering::SeqCst) != expected_context_generation {
+                return;
+            }
+            let meta =
+                extract_session_metadata_cached(&cache, &*fs_clone, &ctx_clone, &jsonl_path).await;
+            if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+                return;
+            }
+            if context_generation.load(Ordering::SeqCst) != expected_context_generation {
+                return;
+            }
+            let group_id = worktree_meta_cache
+                .read()
+                .ok()
+                .and_then(|c| c.get(&project_id_clone).map(|m| m.group_id.clone()));
+            let _ = tx.send(SessionMetadataUpdate {
+                project_id: project_id_clone,
+                session_id,
+                title: meta.title,
+                message_count: meta.message_count,
+                is_ongoing: meta.is_ongoing,
+                git_branch: meta.git_branch,
+                group_id,
+            });
+        });
+    }
+
+    // codex commit 二审 #2 修订：JoinSet 内 sub-task panic 时显式日志，避免
+    // "某些 session 永远没 metadata"的静默失败（既有 scan_metadata_for_page
+    // 也未显式日志，但 batched 路径有 JoinSet 二级嵌套——sub-task panic 更隐蔽）。
+    while let Some(res) = set.join_next().await {
+        if let Err(err) = res {
+            tracing::error!(
+                target: "cdt_api::perf",
+                error = %err,
+                "scan_metadata_for_page_batched sub-task failed",
+            );
+        }
+    }
+
+    // 3. cleanup（与 scan_metadata_for_page 同形 race-free pattern）
+    if let Ok(mut scans) = active_scans.lock() {
+        if let Some(entry) = scans.get(&cleanup_key) {
+            if entry.generation == my_generation {
+                scans.remove(&cleanup_key);
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl DataApi for LocalDataApi {
     // =========================================================================
@@ -2119,7 +2399,7 @@ impl DataApi for LocalDataApi {
                 // expected_context_generation（与 fs/ctx 同 snapshot），而非 spawn 时
                 // 才 load——避免 reconfigure 在 fs/ctx 已 await 完成、spawn 之前跑过
                 // 让 reader 拿到旧 ctx + 新 generation 的 race。
-                let handle = tokio::spawn(scan_metadata_for_page(
+                let handle = tokio::spawn(scan_metadata_for_page_dispatch(
                     project_id_owned,
                     dir,
                     page_jobs,

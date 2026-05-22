@@ -222,9 +222,32 @@ impl FileSystemProvider for SshFileSystemProvider {
             .map(|e| DirEntry {
                 name: e.name,
                 kind: e.kind,
-                metadata: e.metadata,
+                // SFTP server 未返 modify time 时 RusshSftpClient::read_dir 会填
+                // 占位 UNIX_EPOCH metadata 并标 mtime_missing=true。fs trait 层
+                // 把 mtime_missing 翻译为 metadata=None，让上层 batch lookup 路径
+                // （MetadataCache::lookup_with_known_signature）跳过该条走 cache
+                // wrapper miss 路径，避免占位 UNIX_EPOCH signature 与 cache 永
+                // 远 mismatch 的浪费路径（详 change ssh-batch-readdir-with-metadata
+                // design D1 + codex 二审 #1）。
+                metadata: if e.mtime_missing { None } else { e.metadata },
             })
             .collect())
+    }
+
+    /// SFTP READDIR reply 1 RTT 返完整 dir + 每个 file entry 的 attrs。trait
+    /// default 实现是 `read_dir` + 逐项 `stat`（N+1 RTT），SSH 上对每条 entry
+    /// 再 stat 一次浪费 N RTT；本 override 直接复用 `self.read_dir(path)`
+    /// （已经把 SFTP READDIR reply 的 attrs 翻译为 `DirEntry.metadata` 含
+    /// size + mtime，且 `mtime_missing` 已翻译为 `None`）。
+    ///
+    /// caller SHALL 把 `DirEntry.metadata = None` 视同 cache mismatch 走 cache
+    /// wrapper miss 路径补齐——本 override 不在 trait 实现层补 stat（避免
+    /// missing 场景退化为 N+1 RTT）。详 change `ssh-batch-readdir-with-metadata`
+    /// design D1 + `ssh-remote-context` spec `Read sessions and files over SSH
+    /// with same contract` Scenario "SSH override `read_dir_with_metadata` 复用
+    /// `read_dir` 不退化"。
+    async fn read_dir_with_metadata(&self, path: &Path) -> Result<Vec<DirEntry>, FsError> {
+        self.read_dir(path).await
     }
 
     async fn stat(&self, path: &Path) -> Result<FsMetadata, FsError> {
@@ -678,6 +701,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_dir_maps_remote_entries() {
+        let now = SystemTime::now();
         let fake = FakeSftpClient::arc();
         fake.set_read_dir(Ok(vec![
             RemoteEntry {
@@ -685,10 +709,10 @@ mod tests {
                 kind: EntryKind::File,
                 metadata: Some(FsMetadata {
                     size: 100,
-                    mtime: SystemTime::UNIX_EPOCH,
+                    mtime: now,
                     identity: None,
                 }),
-                mtime_missing: true,
+                mtime_missing: false,
             },
             RemoteEntry {
                 name: "sub".into(),
@@ -707,8 +731,100 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name, "a.jsonl");
         assert_eq!(entries[0].kind, EntryKind::File);
-        assert_eq!(entries[0].metadata.unwrap().size, 100);
+        let meta = entries[0]
+            .metadata
+            .expect("file entry SHALL carry metadata");
+        assert_eq!(meta.size, 100);
+        assert_eq!(meta.mtime, now);
         assert_eq!(entries[1].kind, EntryKind::Dir);
+    }
+
+    /// codex 二审 #1 修订 + change `ssh-batch-readdir-with-metadata` design D1：
+    /// `SshFileSystemProvider::read_dir` 在 `RemoteEntry → DirEntry` 映射时把
+    /// `mtime_missing = true` 翻译为 `DirEntry.metadata = None`——避免
+    /// `RusshSftpClient::read_dir` 占位 `UNIX_EPOCH` metadata 透传到上层 batch
+    /// lookup 路径用错的 signature 永远 mismatch 再走 stat 补齐的浪费路径。
+    #[tokio::test]
+    async fn read_dir_translates_mtime_missing_to_metadata_none() {
+        let fake = FakeSftpClient::arc();
+        fake.set_read_dir(Ok(vec![RemoteEntry {
+            name: "missing-mtime.jsonl".into(),
+            kind: EntryKind::File,
+            metadata: Some(FsMetadata {
+                size: 200,
+                mtime: SystemTime::UNIX_EPOCH, // RusshSftpClient 填的占位
+                identity: None,
+            }),
+            mtime_missing: true,
+        }]))
+        .await;
+        let provider = make_provider(fake.clone());
+        let entries = provider
+            .read_dir(Path::new("/remote/projects"))
+            .await
+            .expect("ok");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, EntryKind::File);
+        assert!(
+            entries[0].metadata.is_none(),
+            "mtime_missing entry SHALL translate to DirEntry.metadata = None"
+        );
+    }
+
+    /// change `ssh-batch-readdir-with-metadata` D1：`read_dir_with_metadata`
+    /// override 直接复用 `read_dir`（SFTP READDIR reply 1 RTT 拿全 attrs），
+    /// 不调任何额外 `metadata` 拿 stat。验证 fs op 形态：1 `read_dir` + 0 `metadata`。
+    #[tokio::test]
+    async fn read_dir_with_metadata_uses_sftp_attrs_no_extra_stat() {
+        let now = SystemTime::now();
+        let fake = FakeSftpClient::arc();
+        fake.set_read_dir(Ok(vec![
+            RemoteEntry {
+                name: "a.jsonl".into(),
+                kind: EntryKind::File,
+                metadata: Some(FsMetadata {
+                    size: 100,
+                    mtime: now,
+                    identity: None,
+                }),
+                mtime_missing: false,
+            },
+            RemoteEntry {
+                name: "b.jsonl".into(),
+                kind: EntryKind::File,
+                metadata: Some(FsMetadata {
+                    size: 200,
+                    mtime: now,
+                    identity: None,
+                }),
+                mtime_missing: false,
+            },
+            RemoteEntry {
+                name: "c.jsonl".into(),
+                kind: EntryKind::File,
+                metadata: Some(FsMetadata {
+                    size: 300,
+                    mtime: now,
+                    identity: None,
+                }),
+                mtime_missing: false,
+            },
+        ]))
+        .await;
+        // metadata_response 仍未配置——若 override 错误地调 stat（fallback default
+        // impl），FakeSftpClient::metadata 会返 Err("not configured") 让测试失败。
+        let provider = make_provider(fake.clone());
+        let entries = provider
+            .read_dir_with_metadata(Path::new("/remote/projects"))
+            .await
+            .expect("read_dir_with_metadata SHALL succeed without per-entry stat");
+        assert_eq!(entries.len(), 3);
+        for entry in &entries {
+            assert!(
+                entry.metadata.is_some(),
+                "non-missing entry SHALL carry metadata from SFTP READDIR reply"
+            );
+        }
     }
 
     #[tokio::test]
