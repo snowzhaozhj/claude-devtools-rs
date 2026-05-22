@@ -323,6 +323,21 @@ cache 全命中场景下 `page_jobs.is_empty()` 时 `list_sessions` SHALL 跳过
 
 `active_scans` 注册表的 key SHALL 为 `(projectId, cursor)` 组合编码字符串（实现以 `format!("{project_id}|{cursor_or_empty}")`，`|` 字符为 reserved 分隔符；当前 cursor 由 offset 数字字符串生成，不会冲突）。同 key 抢占 + per-key generation cleanup 的 race-free 语义不变。
 
+**后台扫描按 `ContextId.backend_kind` 分流**（change `ssh-batch-readdir-with-metadata` 引入）：cache miss 后 `list_sessions` 调用 `tokio::spawn(scan_metadata_for_page_dispatch(...))` 而非直接 `scan_metadata_for_page`。dispatch 函数 SHALL 按 `context_id.backend_kind` 选择：
+
+- **Local backend**：调既有 `scan_metadata_for_page`（per-session via fs trait，每条 session task 内部 `extract_session_metadata_cached` 走 `fs.stat` + cache miss 调 scanner）
+- **SSH backend**：调新 helper `scan_metadata_for_page_batched`，工作流为：
+  1. 一次 `fs.read_dir_with_metadata(project_dir)` 拿全 dir entry metadata（acquire 全局 Semaphore permit 限流 ≤ 8 并发）
+  2. build `by_name: HashMap<PathBuf, FsMetadata>`
+  3. 逐条 page_jobs：若 `by_name` 含对应 path → 调 `MetadataCache::lookup_with_known_signature(&ctx, path, &sig)`；命中 → broadcast 既有 cache 值的 `SessionMetadataUpdate`（`is_ongoing = entry.messages_ongoing`，与 `extract_session_metadata_cached` SSH 跳 stale check 分支语义一致）；mismatch 或 path missing → spawn 单 task 走既有 cache wrapper miss 路径（`extract_session_metadata_cached`）
+  4. dir read 失败 SHALL fallback 到 `scan_metadata_for_page`（保证功能正确性，性能退化为既有 PR-D 形态），SHALL 通过 `tracing::warn!(target: "cdt_api::perf", ...)` 让运维侧可见
+
+两条路径 SHALL 共享 `active_scans` 注册表（同形 `ScanEntry { generation, handle, context_id }`）、`Semaphore(METADATA_SCAN_CONCURRENCY=8)` 限流、`context_generation` 与 `root_generation` 双轴 race-free 校验、broadcast 形态（`SessionMetadataUpdate { project_id, session_id, title, message_count, is_ongoing, git_branch, group_id }`）。所有 `tx.send(SessionMetadataUpdate)` 调用前 SHALL 校验 `root_generation.load() == expected_root_generation` **与** `context_generation.load() == expected_context_generation` 同时成立，否则 silent drop（避免把 reconfigure 前的旧 root / 旧 ctx 状态推给前端）—— 对 batched 路径的命中分支同样 SHALL 满足（codex commit 二审 #1 修订：fs.read_dir_with_metadata await 期间 root 可能被 reconfigure）。
+
+`scan_metadata_for_page_batched` 内部的 mismatch sub-task SHALL 通过 `JoinSet` 持有，顶层 batch task abort 时 sub-task 跟随 JoinSet drop 自动 abort（tokio 语义），**SHALL NOT** 重复注册到 `active_scans`。JoinSet `join_next` cleanup 循环 SHALL 显式处理 `JoinError`（至少 `tracing::error!`），避免 sub-task panic 时静默吞掉"某些 session 永远没 metadata"症状（codex commit 二审 #2 修订）。
+
+**SSH backend 全命中 broadcast 例外**：SSH ctx 下即使 `try_lookup_cached_metadata` hot path 全命中（`page_jobs.is_empty()` 不成立——本规约下文 Scenario "Cache 全命中时不触发 spawn 不触碰 active_scans" 仅约束 Local backend，SSH backend `need_background_validation = is_remote || cached_meta.is_none()` 在 local.rs:896 实现），SSH 路径仍 SHALL spawn batched task 异步校验 cache freshness 并 broadcast 命中条 cache 现值——这是 SSH "cache 不信新鲜度"语义的必要补丁；Local backend 全命中仍 SHALL 不 spawn 不 broadcast 与既有 PR-A/B 契约一致。
+
 #### Scenario: 订阅接收当前页未命中条的元数据更新
 
 - **WHEN** 调用方先 `subscribe_session_metadata()` 取得 receiver
@@ -356,6 +371,7 @@ cache 全命中场景下 `page_jobs.is_empty()` 时 `list_sessions` SHALL 跳过
 
 - **WHEN** 扫描任务在并发处理某页 50 个 cache-miss session 文件
 - **THEN** 同一时刻打开的 JSONL 文件句柄数 SHALL 不超过 8（通过 `tokio::sync::Semaphore` 或等价机制限流）
+- **AND** SSH backend 走 `scan_metadata_for_page_batched` 时，顶层 batch task 的 `fs.read_dir_with_metadata` 也 SHALL 占用同一 Semaphore permit，与其它 in-flight scan 共享 8 上限（避免新 batch 路径绕过限流）
 
 #### Scenario: 骨架 lookup 并发度限制
 
@@ -368,13 +384,14 @@ cache 全命中场景下 `page_jobs.is_empty()` 时 `list_sessions` SHALL 跳过
 - **AND** 调用方 `subscribe_session_metadata()`
 - **THEN** 返回有效 `broadcast::Receiver`；`list_sessions` 仍能正常推送（broadcast 不依赖 watcher）
 
-#### Scenario: Cache 命中时骨架直接带值且零 emit
+#### Scenario: Local backend cache 命中时骨架直接带值且零 emit
 
-- **WHEN** 调用方先 `subscribe_session_metadata()` 取得 receiver
+- **WHEN** Local active context 下调用方先 `subscribe_session_metadata()` 取得 receiver
 - **AND** 已对 "projectA" 调用过一次 `list_sessions`，期间 `MetadataCache` 已写入该页所有 session 的元数据
 - **AND** 在 session jsonl 文件 mtime/size 未变化的前提下，再次调用 `list_sessions("projectA", { pageSize: 3, cursor: null })`
 - **THEN** 第二次 `list_sessions` 返回的 `SessionSummary[]` SHALL 在骨架阶段直接携带每条的真实 `title` / `messageCount` / `isOngoing` / `gitBranch`（非占位）
 - **AND** receiver SHALL 在第二次调用后短时间内（如 300 ms）**不**收到任何新的 `SessionMetadataUpdate`
+- **AND** SSH backend 在等价场景仍 SHALL spawn batched 校验（详 Scenario "SSH backend cache 全命中仍 spawn batched 校验"），二者不冲突——本 Scenario 限定 Local，零 emit 是 Local "cache 信新鲜度" 语义
 
 #### Scenario: Cache 部分命中时未命中条仍走后台扫描
 
@@ -382,18 +399,46 @@ cache 全命中场景下 `page_jobs.is_empty()` 时 `list_sessions` SHALL 跳过
 - **THEN** 返回的 `SessionSummary[]` 中 2 个命中条骨架阶段 SHALL 已带真实元数据，1 个 miss 条骨架阶段 SHALL 仍为占位（`title=null` / `messageCount=0` / `isOngoing=false`）
 - **AND** 该 miss 条 SHALL 入 `page_jobs` 走后台扫描，扫完通过 broadcast 推送 1 条 `SessionMetadataUpdate`；receiver 收到的 update 数 SHALL 为 1（只覆盖 miss 条）
 
-#### Scenario: Cache 全命中时不触发 spawn 不触碰 active_scans
+#### Scenario: Local backend cache 全命中时不触发 spawn 不触碰 active_scans
 
-- **WHEN** `list_sessions` 骨架阶段对所有 session 都 cache 命中（page_jobs 为空）
-- **THEN** 实现 SHALL NOT 调用 `tokio::spawn(scan_metadata_for_page(...))`
+- **WHEN** Local active context 下 `list_sessions` 骨架阶段对所有 session 都 cache 命中（page_jobs 为空，`is_remote = false`）
+- **THEN** 实现 SHALL NOT 调用 `tokio::spawn(scan_metadata_for_page_dispatch(...))`
 - **AND** SHALL NOT 改动 `active_scans` 注册表（既不 abort 旧 entry 也不 insert 新 entry）
 - **AND** receiver SHALL 不收到任何对应该次调用的 `SessionMetadataUpdate`
+
+#### Scenario: SSH backend cache 全命中仍 spawn batched 校验
+
+- **WHEN** SSH active context 下 `list_sessions` 骨架阶段对所有 session 都通过 `lookup_trust_cached` cache 命中（response inline 含真 title），但 `need_background_validation = is_remote || cached_meta.is_none()` 在 SSH 路径恒为 true（local.rs:896 PR-D 实现）
+- **THEN** 实现 SHALL 仍把 page_jobs 入 spawn 调 `scan_metadata_for_page_dispatch` → SSH 走 `scan_metadata_for_page_batched`
+- **AND** batched 路径全命中条 SHALL 通过 `MetadataCache::lookup_with_known_signature` 命中直 broadcast cache 现值给 receiver——这是 SSH "cache 不信新鲜度"语义的必要补丁（外部进程改远端文件需要后台校验 mismatch 触发 cache miss → SSE 推差量）
+- **AND** receiver SHALL 在二次调用后短时间内收到 N 条 SessionMetadataUpdate（N = session 数）——形态与首次冷启动 broadcast 相同，前端按 sessionId 增量 patch UI 不受 race 影响
 
 #### Scenario: lookup stat 失败 fallback 到后台扫描
 
 - **WHEN** `try_lookup_cached_metadata` 内 `tokio::fs::metadata(path).await` 返回 `Err`（罕见 IO 错误）
 - **THEN** 函数 SHALL 返回 `None`
 - **AND** 该 session SHALL 入 `page_jobs` 走后台扫描，由 `extract_session_metadata_cached` 内部的 uncached 路径处理（详见 `extract_session_metadata` 按 `FileSignature` 缓存 Requirement）
+
+#### Scenario: SSH ctx 后台校验走 batch read_dir_with_metadata 而非 per-session stat
+
+- **WHEN** `list_sessions` 在 SSH active context 下入 `page_jobs` 非空 → spawn `scan_metadata_for_page_dispatch` task
+- **THEN** dispatch SHALL 检查 `context_id.backend_kind == FsKind::Ssh` 走新 helper `scan_metadata_for_page_batched`
+- **AND** batched helper SHALL 首先调一次 `fs.read_dir_with_metadata(project_dir)` 拿全 dir entry metadata（SFTP READDIR reply 1 RTT 含 entry attrs）
+- **AND** 对每条 `(session_id, jsonl_path)` page_job：若 dir metadata 含对应 path → `MetadataCache::lookup_with_known_signature(&ctx, jsonl_path, &FileSignature::from_fs_metadata(meta))` 命中 → 直 broadcast `SessionMetadataUpdate { is_ongoing: entry.messages_ongoing, ... }`（**SHALL NOT** 调 `fs.stat` / `fs.open_read`）
+- **AND** mismatch / 新增 / dir metadata 缺该 path → spawn sub-task 调既有 `extract_session_metadata_cached` 走 cache wrapper miss 路径（`fs.stat` + `fs.open_read`）
+
+#### Scenario: SSH ctx batch helper dir read 失败时 fallback per-session
+
+- **WHEN** `scan_metadata_for_page_batched` 调 `fs.read_dir_with_metadata(project_dir)` 返 `Err`
+- **THEN** 函数 SHALL fallback 到既有 `scan_metadata_for_page`（per-session via fs trait）继续异步刷新——保证功能正确性
+- **AND** SHALL 通过 `tracing::warn!(target: "cdt_api::perf", project_id = %project_id, ...)` 让运维侧可见
+- **AND** fallback 路径下 page_jobs 每条 session 仍能被推 SessionMetadataUpdate（性能退化为既有 PR-D 形态：N 次串行 stat），无功能丢失
+
+#### Scenario: Local ctx 后台扫描走既有 per-session 路径不变
+
+- **WHEN** `list_sessions` 在 Local active context 下入 `page_jobs` 非空 → spawn `scan_metadata_for_page_dispatch` task
+- **THEN** dispatch SHALL 检查 `context_id.backend_kind == FsKind::Local` 走既有 `scan_metadata_for_page`（per-session via fs trait），**不**走 batched 路径
+- **AND** 行为契约与本 Requirement 既有 Scenario "订阅接收当前页未命中条的元数据更新" / "Cache 部分命中" 等完全一致——Local backend SHALL NOT 受本 change 影响
 
 ### Requirement: Lazy load subagent trace
 

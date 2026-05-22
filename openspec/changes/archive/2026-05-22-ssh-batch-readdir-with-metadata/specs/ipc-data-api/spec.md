@@ -73,13 +73,14 @@ cache 全命中场景下 `page_jobs.is_empty()` 时 `list_sessions` SHALL 跳过
 - **AND** 调用方 `subscribe_session_metadata()`
 - **THEN** 返回有效 `broadcast::Receiver`；`list_sessions` 仍能正常推送（broadcast 不依赖 watcher）
 
-#### Scenario: Cache 命中时骨架直接带值且零 emit
+#### Scenario: Local backend cache 命中时骨架直接带值且零 emit
 
-- **WHEN** 调用方先 `subscribe_session_metadata()` 取得 receiver
+- **WHEN** Local active context 下调用方先 `subscribe_session_metadata()` 取得 receiver
 - **AND** 已对 "projectA" 调用过一次 `list_sessions`，期间 `MetadataCache` 已写入该页所有 session 的元数据
 - **AND** 在 session jsonl 文件 mtime/size 未变化的前提下，再次调用 `list_sessions("projectA", { pageSize: 3, cursor: null })`
 - **THEN** 第二次 `list_sessions` 返回的 `SessionSummary[]` SHALL 在骨架阶段直接携带每条的真实 `title` / `messageCount` / `isOngoing` / `gitBranch`（非占位）
 - **AND** receiver SHALL 在第二次调用后短时间内（如 300 ms）**不**收到任何新的 `SessionMetadataUpdate`
+- **AND** SSH backend 在等价场景仍 SHALL spawn batched 校验（详 Scenario "SSH backend cache 全命中仍 spawn batched 校验"），二者不冲突——本 Scenario 限定 Local，零 emit 是 Local "cache 信新鲜度" 语义
 
 #### Scenario: Cache 部分命中时未命中条仍走后台扫描
 
