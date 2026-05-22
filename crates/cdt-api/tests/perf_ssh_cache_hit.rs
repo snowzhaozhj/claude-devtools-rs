@@ -342,6 +342,107 @@ async fn ssh_get_tool_output_second_call_one_stat_zero_read() {
     );
 }
 
+/// 4.4-bis SSH get_image_asset cache hit byte-equal：
+/// 与 `ssh_get_tool_output_second_call_one_stat_zero_read` 对称——`get_image_asset`
+/// 与 `get_tool_output` 共用 `extract_parsed_messages_cached` wrapper，spec fidelity
+/// 要求两个 IPC 各自有 SSH cache hit 形态测试（详 `openspec/followups.md`
+/// "SSH context 下 get_image_asset / get_tool_output 不走 LRU cache" gap →
+/// 代码层 PR #191 已统一切 wrapper，本测试守护回归）。
+///
+/// - 首次 `get_image_asset` 写入 cache（fs.read_to_string 经 parse_file_via_fs）
+/// - 二次同 session 不同 block_id → 走 `extract_parsed_messages_cached` cache hit
+///   → `metadata_count` 增 1（wrapper 内部 fs.stat 拿 signature）、`read_count` 不增
+#[tokio::test]
+async fn ssh_get_image_asset_second_call_one_stat_zero_read() {
+    let (api, _tmp) = setup_api().await;
+    let remote_home = "/remote/home/.claude/projects";
+    let project_id = "-srv-remote";
+    let cwd = "/srv/remote";
+    let session_id = "image-session";
+    let img_uuid_a = "img-uuid-a";
+    let img_uuid_b = "img-uuid-b";
+
+    // 双 image block 同 session 同 jsonl，分别在 uuid_a / uuid_b 的 user 消息 block_index=0
+    let mut fake = CountedFakeRemoteSftp::new();
+    let user_a = format!(
+        r#"{{"type":"user","uuid":"{img_uuid_a}","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":[{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"AAAA"}}}}]}}}}"#,
+    );
+    let user_b = format!(
+        r#"{{"type":"user","uuid":"{img_uuid_b}","parentUuid":"{img_uuid_a}","timestamp":"2026-04-11T10:00:01Z","isSidechain":false,"userType":"external","cwd":"{cwd}","sessionId":"{session_id}","version":"1","message":{{"role":"user","content":[{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"BBBB"}}}}]}}}}"#,
+    );
+    fake.add_session(
+        remote_home,
+        project_id,
+        session_id,
+        format!("{user_a}\n{user_b}\n"),
+    );
+    let fake = Arc::new(fake);
+
+    let provider = SshFileSystemProvider::with_client(
+        "ctx-remote",
+        fake.clone() as Arc<dyn cdt_ssh::SftpClient>,
+        PathBuf::from(remote_home),
+    );
+    api.insert_test_ssh_context(
+        "ctx-remote",
+        "remote-host",
+        22,
+        Some("alice".into()),
+        PathBuf::from(remote_home),
+        provider,
+    )
+    .await;
+
+    // 1st get_image_asset：cache miss 路径 → fs.open_read → parse_file_via_fs → 写 cache
+    let url_a = api
+        .get_image_asset(session_id, session_id, &format!("{img_uuid_a}:0"))
+        .await
+        .expect("first get_image_asset succeeds");
+    assert!(
+        url_a.starts_with("data:image/png;base64,"),
+        "image_cache_dir 未注入时 SHALL fallback 到 data: URI (got: {url_a})",
+    );
+    let before = fake.snapshot_counters();
+    assert!(
+        before.read >= 1,
+        "first get_image_asset SHALL read jsonl content (cur: {})",
+        before.read,
+    );
+
+    // 2nd get_image_asset 同 session 不同 block → cache wrapper hit byte-equal
+    let url_b = api
+        .get_image_asset(session_id, session_id, &format!("{img_uuid_b}:0"))
+        .await
+        .expect("second get_image_asset succeeds");
+    assert!(
+        url_b.starts_with("data:image/png;base64,"),
+        "second call 也 SHALL 走 data: fallback (got: {url_b})",
+    );
+    let after = fake.snapshot_counters();
+
+    // 关键断言：metadata_count 增 1（wrapper 内部 fs.stat 拿 signature），read_count 不增
+    assert_eq!(
+        after.metadata - before.metadata,
+        1,
+        "cache hit byte-equal SHALL trigger exactly 1 fs.stat (signature lookup) (before={}, after={})",
+        before.metadata,
+        after.metadata,
+    );
+    assert_eq!(
+        after.read, before.read,
+        "cache hit byte-equal SHALL NOT trigger fs.read_to_string (before={}, after={})",
+        before.read, after.read,
+    );
+    // get_image_asset 每次都跑 locate_session_jsonl → fs.read_dir 拿 project dirs 列表
+    assert_eq!(
+        after.read_dir - before.read_dir,
+        1,
+        "locate_session_jsonl SHALL invoke fs.read_dir once (before={}, after={})",
+        before.read_dir,
+        after.read_dir,
+    );
+}
+
 /// 4.5 ssh_disconnect aborts batch task no orphan broadcast：
 /// - spawn list_sessions 触发后台 batch → 立刻 ssh_disconnect → 顶层 batch task abort
 ///   + JoinSet drop 联级 sub-task abort
