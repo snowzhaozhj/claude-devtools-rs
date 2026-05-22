@@ -353,7 +353,14 @@ pub struct LocalDataApi {
     todo_tx: Option<broadcast::Sender<cdt_core::TodoChangeEvent>>,
     watcher_tasks: Mutex<Vec<JoinHandle<()>>>,
     remote_watchers: Mutex<HashMap<String, RemoteWatcherHandle>>,
-    ssh_watcher_ops: Mutex<()>,
+    /// SSH 状态变更 + remote watcher attach/detach 的串行化锁。
+    ///
+    /// `Arc` 包裹让 `attach_remote_watcher` 内 spawn 的 monitor task 也能
+    /// clone 一份，在自愈 disconnect 路径上拿锁 +（`context_generation`,
+    /// `active_context`）二次校验，避免旧 watcher 的 `dead_signal` 在用户已
+    /// disconnect+reconnect 同 context 后误删新 sessions entry（codex 二审
+    /// critical race，2026-05-22）。
+    ssh_watcher_ops: Arc<Mutex<()>>,
     ssh_shutdown_generation: AtomicU64,
     /// `list_sessions` 后台元数据扫描的广播发送端。`subscribe_session_metadata()`
     /// 返回 receiver，Tauri host 桥接为前端 `session-metadata-update` 事件。
@@ -1438,7 +1445,7 @@ impl LocalDataApi {
             todo_tx: None,
             watcher_tasks: Mutex::new(Vec::new()),
             remote_watchers: Mutex::new(HashMap::new()),
-            ssh_watcher_ops: Mutex::new(()),
+            ssh_watcher_ops: Arc::new(Mutex::new(())),
             ssh_shutdown_generation: AtomicU64::new(0),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -1539,7 +1546,7 @@ impl LocalDataApi {
             todo_tx: Some(todo_tx),
             watcher_tasks,
             remote_watchers: Mutex::new(HashMap::new()),
-            ssh_watcher_ops: Mutex::new(()),
+            ssh_watcher_ops: Arc::new(Mutex::new(())),
             ssh_shutdown_generation: AtomicU64::new(0),
             session_metadata_tx,
             active_scans: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -1683,9 +1690,19 @@ impl LocalDataApi {
         // 不持有 monitor JoinHandle：cancel_token 共享 + select 双分支让
         // monitor 永远会随 polling 退出（dead 触发 → 走 disconnect 分支退出；
         // 外部 cancel → 走 cancelled 分支退出），不会泄漏后台 task。
+        //
+        // **代际校验防 race**（codex 二审 critical，2026-05-22）：
+        // 若旧 watcher 的 monitor 已选中 dead 分支但还没跑 disconnect，期间
+        // 用户主动 disconnect+reconnect 同 context_id，旧 monitor 仍会 disconnect
+        // 把新 sessions entry 误删。修法：monitor 拿 ssh_watcher_ops 锁后
+        // 校验 (context_generation, active_context_id) 仍是 capture 时的值，
+        // mismatch 即放弃自愈（新 watcher 的 dead_signal 自己会触发）。
         let dead_signal = watcher.dead_signal();
         let ssh_mgr_for_monitor = self.ssh_mgr.clone();
         let context_id_for_monitor = context_id.to_owned();
+        let ops_for_monitor = Arc::clone(&self.ssh_watcher_ops);
+        let gen_for_monitor = Arc::clone(&self.context_generation);
+        let captured_generation = self.context_generation.load(Ordering::SeqCst);
         tokio::spawn(async move {
             tokio::select! {
                 biased;
@@ -1697,6 +1714,28 @@ impl LocalDataApi {
                     );
                 }
                 () = dead_signal.notified() => {
+                    let _ops = ops_for_monitor.lock().await;
+                    let current_gen = gen_for_monitor.load(Ordering::SeqCst);
+                    if current_gen != captured_generation {
+                        tracing::debug!(
+                            target: "cdt_ssh::lifecycle",
+                            context_id = %context_id_for_monitor,
+                            captured_generation,
+                            current_gen,
+                            "skip stale auto-disconnect: context_generation changed since watcher attach",
+                        );
+                        return;
+                    }
+                    let active = ssh_mgr_for_monitor.active_context_id().await;
+                    if active.as_deref() != Some(context_id_for_monitor.as_str()) {
+                        tracing::debug!(
+                            target: "cdt_ssh::lifecycle",
+                            context_id = %context_id_for_monitor,
+                            ?active,
+                            "skip stale auto-disconnect: active context no longer matches",
+                        );
+                        return;
+                    }
                     tracing::warn!(
                         target: "cdt_ssh::lifecycle",
                         context_id = %context_id_for_monitor,

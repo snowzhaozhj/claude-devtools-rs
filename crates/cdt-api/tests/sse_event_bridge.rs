@@ -266,6 +266,96 @@ async fn session_metadata_forwarded_as_push_event() {
     }
 }
 
+/// 验证 `ssh_mgr.subscribe_context_changed` 的 broadcast 真的被
+/// `spawn_context_changed_bridge` 转成 `PushEvent::ContextChanged` 喂给 SSE。
+/// 修历史 bug：HTTP server 缺这个桥让浏览器 `?http=1` 模式下 contextStore
+/// 在 SSH 切换后永远 stale 在 local。
+#[tokio::test]
+async fn context_changed_forwarded_as_push_event_ssh() {
+    let (events_tx, mut events_rx) = broadcast::channel::<PushEvent>(64);
+    let (_file_tx, file_rx) = broadcast::channel::<FileChangeEvent>(16);
+    let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
+    let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
+    let (_metadata_tx, metadata_rx) = broadcast::channel::<SessionMetadataUpdate>(16);
+    let (context_tx, context_rx) = broadcast::channel::<ContextChanged>(16);
+
+    spawn_event_bridge(
+        events_tx,
+        file_rx,
+        todo_rx,
+        error_rx,
+        metadata_rx,
+        context_rx,
+    );
+
+    context_tx
+        .send(ContextChanged {
+            active_context_id: Some("ctx-A".into()),
+            kind: cdt_ssh::ContextKind::Ssh,
+        })
+        .unwrap();
+
+    let event = timeout(Duration::from_secs(2), events_rx.recv())
+        .await
+        .expect("recv timed out")
+        .expect("recv ok");
+    match event {
+        PushEvent::ContextChanged {
+            active_context_id,
+            kind,
+        } => {
+            assert_eq!(active_context_id.as_deref(), Some("ctx-A"));
+            assert_eq!(kind, "ssh");
+        }
+        other => panic!("expected ContextChanged, got {other:?}"),
+    }
+}
+
+/// disconnect / `switch_context("local")` 路径——`active_context_id=None` +
+/// `kind=local`。前端 `refreshAfterContextChange` 看到 null active 不更新
+/// `contextStore.activeContextId`（`context.svelte.ts:30` guard），靠
+/// `loadContexts()` 异步刷新拿权威 active。
+#[tokio::test]
+async fn context_changed_forwarded_as_push_event_local() {
+    let (events_tx, mut events_rx) = broadcast::channel::<PushEvent>(64);
+    let (_file_tx, file_rx) = broadcast::channel::<FileChangeEvent>(16);
+    let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
+    let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
+    let (_metadata_tx, metadata_rx) = broadcast::channel::<SessionMetadataUpdate>(16);
+    let (context_tx, context_rx) = broadcast::channel::<ContextChanged>(16);
+
+    spawn_event_bridge(
+        events_tx,
+        file_rx,
+        todo_rx,
+        error_rx,
+        metadata_rx,
+        context_rx,
+    );
+
+    context_tx
+        .send(ContextChanged {
+            active_context_id: None,
+            kind: cdt_ssh::ContextKind::Local,
+        })
+        .unwrap();
+
+    let event = timeout(Duration::from_secs(2), events_rx.recv())
+        .await
+        .expect("recv timed out")
+        .expect("recv ok");
+    match event {
+        PushEvent::ContextChanged {
+            active_context_id,
+            kind,
+        } => {
+            assert!(active_context_id.is_none());
+            assert_eq!(kind, "local");
+        }
+        other => panic!("expected ContextChanged, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn multiple_subscribers_each_receive_event_exactly_once() {
     let (events_tx, mut rx_a) = broadcast::channel::<PushEvent>(64);

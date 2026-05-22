@@ -229,19 +229,24 @@ enum PollOutcome {
 /// 判定一条 SFTP 错误是否表征 SFTP channel 已永久死亡。
 ///
 /// 命中字串清单（小写匹配）：`session closed` / `eof` / `broken pipe` /
-/// `connection reset` —— 实测 docker openssh + russh-sftp 2.1.2 在 idle
-/// 一段时间后报 `Other("session closed")`（详 followups.md SSH/SFTP keepalive
-/// 条目附录的真实复现 log）。`Transient` variant 已被 [`SftpClientError::is_transient`]
-/// 单独归类，本判定只看 `Other` 路径的字面错误消息。
+/// `connection reset` / `epipe` —— 实测 docker openssh + russh-sftp 2.1.2
+/// 在 idle 一段时间后报 `Other("session closed")`（详 followups.md SSH/SFTP
+/// keepalive 条目附录的真实复现 log）。
+///
+/// **同时覆盖 `Transient` 路径**（codex 二审 major fix，2026-05-22）：
+/// `provider.rs::is_transient_io_reason` 把 `broken pipe` / `connection reset`
+/// / `epipe` 都归 `Transient`，`with_retry` 3 次后仍上抛 transient 错误——这
+/// 类错误已经是 transport dead，不是真"瞬时"。polling 层在 `with_retry` 之后
+/// 看到的就是已耗尽 retry 的最终错误，按错误消息字面统一识别。`Transient`
+/// 中不含上述关键字的（如纯 `timeout` / `eagain`）仍归 transient 跳过本轮。
 fn is_permanent_sftp_failure(err: &SftpClientError) -> bool {
-    if err.is_transient() {
-        return false;
-    }
     let s = err.to_string().to_ascii_lowercase();
     s.contains("session closed")
         || s.contains("eof")
         || s.contains("broken pipe")
+        || s.contains("epipe")
         || s.contains("connection reset")
+        || s.contains("econnreset")
 }
 
 async fn run_polling_loop(
@@ -1082,14 +1087,20 @@ mod tests {
     }
 
     /// 瞬时错误 SHALL NOT 累计到永久 counter——已被 `SftpClientError::Transient`
-    /// + `with_retry` 单独消化的临时网络抖动不应触发 SFTP-dead 自愈。
+    /// + `with_retry` 单独消化的纯网络瞬时抖动（timeout / eagain）不应触发
+    /// SFTP-dead 自愈。
+    ///
+    /// 注意：`ECONNRESET` / `broken pipe` / `EPIPE` 虽然 provider 归类为
+    /// `Transient`，但 polling 层（`with_retry` 之后）SHALL 当作 permanent
+    /// 处理——retry 3 次仍是这类错误意味着 channel 真死。本测试用纯 timeout
+    /// / eagain 等不含 transport-dead 关键字的瞬时错误，验证它们不会触发自愈。
     #[tokio::test(start_paused = true)]
     async fn transient_errors_do_not_trigger_dead_signal() {
         let client = FakeSftpClient::arc(
             projects_root_str(),
             vec![
                 Err(SftpClientError::Transient("ETIMEDOUT".into())),
-                Err(SftpClientError::Transient("ECONNRESET".into())),
+                Err(SftpClientError::Transient("timeout".into())),
                 Err(SftpClientError::Transient("EAGAIN".into())),
                 Err(SftpClientError::Transient("ETIMEDOUT".into())),
                 Err(SftpClientError::Transient("ETIMEDOUT".into())),
@@ -1122,6 +1133,7 @@ mod tests {
 
     #[test]
     fn is_permanent_sftp_failure_classifies_session_closed_as_permanent() {
+        // `Other` 路径
         assert!(is_permanent_sftp_failure(&SftpClientError::Other(
             "sftp error: session closed".into()
         )));
@@ -1134,13 +1146,29 @@ mod tests {
         assert!(is_permanent_sftp_failure(&SftpClientError::Other(
             "connection reset by peer".into()
         )));
-        // 非永久关键字的 Other（如 unsupported / 协议异常）SHALL NOT 触发自愈
+        // `Transient` 路径——含 transport-dead 关键字的 retry-exhausted 也算
+        // permanent（codex 二审 major fix）：provider::is_transient_io_reason
+        // 把 broken pipe / connection reset / epipe 归 Transient，with_retry
+        // 3 次后仍是这类错误就是 channel 真死了。
+        assert!(is_permanent_sftp_failure(&SftpClientError::Transient(
+            "broken pipe".into()
+        )));
+        assert!(is_permanent_sftp_failure(&SftpClientError::Transient(
+            "EPIPE".into()
+        )));
+        assert!(is_permanent_sftp_failure(&SftpClientError::Transient(
+            "ECONNRESET while reading".into()
+        )));
+        // 非永久关键字的 Other / Transient（unsupported 协议 / 纯 timeout / EAGAIN）
+        // SHALL NOT 触发自愈
         assert!(!is_permanent_sftp_failure(&SftpClientError::Other(
             "unsupported sftp version".into()
         )));
-        // Transient + NoSuchFile + PermissionDenied 都不是 permanent
         assert!(!is_permanent_sftp_failure(&SftpClientError::Transient(
-            "session closed".into() // 即使消息含关键字，Transient variant 优先
+            "timeout".into()
+        )));
+        assert!(!is_permanent_sftp_failure(&SftpClientError::Transient(
+            "EAGAIN".into()
         )));
         assert!(!is_permanent_sftp_failure(&SftpClientError::NoSuchFile));
         assert!(!is_permanent_sftp_failure(
