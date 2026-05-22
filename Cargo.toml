@@ -75,6 +75,9 @@ debug = true
 # 关 incremental 缓存（典型占 2-5G/worktree）。sccache wrapper 跨 build/worktree 共享 rustc 输出，
 # 命中率比 incremental 在单 target 内复用更高，多 worktree 场景整体反而更快。
 incremental = false
+# 注意：cargo 在 incremental=false 时会把 codegen-units 默认降到 16（incremental=true 时默认 256），
+# 多核机器 LLVM codegen 并行度会被砍。显式锁回 256 恢复 sccache 未命中时的并行度。
+codegen-units = 256
 
 # 依赖 crate 仅保留 line tables（文件名 + 行号 + 函数名），砍掉变量/类型/参数等占大头的
 # debug 段——足够 panic backtrace / profiler 用源码定位，但不能 IDE 调试器看变量值。
