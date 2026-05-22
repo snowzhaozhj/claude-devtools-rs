@@ -159,29 +159,19 @@ clean-all-apply:
 # 详见 .claude/rules/bg-task-dispatch.md（拆分判断框架 + bg vs subagent 选择 + 6 个踩坑）
 # prompt 模板：.claude/templates/bg-pr-pipeline.md（通用填空）
 
-# 起一个 background claude session 跑 PR 流水线
-# 用法（两种皆可，推荐 inline）：
-#   just bg-pr <name> '<inline prompt>'        # 短任务直接 inline（含 backtick / 双引号 / $ 都安全）
-#   just bg-pr <name> <path-to-prompt-file>    # 长任务 / 想留审计 trail 落文件
-# PROMPT 是文件路径还是 inline 字符串由 `[ -f "$PROMPT" ]` 自动判断
+# 起 background claude session 跑 PR 流水线：
+#   just bg-pr <name> '<inline prompt>'
 #
-# Quoting 安全性：用 just `quote()` 函数把 NAME / PROMPT 编码为 shell-safe 单引号字面量，
-# 避免 inline prompt 含双引号 / 反引号 / `$` 时被 shell 解释（change `unify-fs-direct-calls` 修订）。
+# echo 段 ASCII 半角 + ${var}：bash 3.2 + set -u 下全角标点（如 `（` U+FF08 首字节 0xEF）
+# 会被当变量名延续字符触发 `${name<...>}: unbound variable`。
 bg-pr NAME PROMPT:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{justfile_directory()}}"
     name={{quote(NAME)}}
     prompt={{quote(PROMPT)}}
-    if [ -f "$prompt" ]; then
-        echo "起 bg session：$name（prompt 文件: $prompt）"
-        # `cat -- "$prompt"` 避免文件名以 `-` 开头被当 flag；外层 `"$(...)"` 保整个文件内容作单参数
-        claude --bg --name "$name" --effort high -- "$(cat -- "$prompt")"
-    else
-        echo "起 bg session：$name（inline prompt）"
-        # `--` 隔断让后续 `$prompt`（即便以 `-` 开头）不被当作 flag 解析
-        claude --bg --name "$name" --effort high -- "$prompt"
-    fi
+    echo "起 bg session: ${name}"
+    claude --bg --name "$name" -- "$prompt"
 
 # 列所有 background session 状态摘要（grep result:/needs input:/failed:）
 bg-status:
