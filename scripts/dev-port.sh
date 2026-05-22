@@ -33,7 +33,10 @@ if ! command -v lsof >/dev/null 2>&1; then
   esac
 fi
 
-pids=$(lsof -ti "tcp:$PORT" 2>/dev/null || true)
+# 精确限定到 vite 实际 bind 的 `127.0.0.1:$PORT` LISTEN socket：宽松写法
+# `lsof -ti tcp:$PORT` 会把 IPv6 `::1:$PORT` 监听 / 远端 :$PORT 的 outbound
+# 连接也算冲突（vite host=127.0.0.1 与 IPv6 共存不冲突 → 误判 + kill 误伤）。
+pids=$(lsof -nP -tiTCP@127.0.0.1:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
 
 case "$cmd" in
   check)
@@ -41,7 +44,9 @@ case "$cmd" in
       exit 0
     fi
     echo "❌ :$PORT 已被占用："
-    lsof -i "tcp:$PORT" -P -n 2>/dev/null | head -5
+    # `head` 提前关 pipe 在占用进程多于 5 行时 SIGPIPE → pipefail 下整管道
+    # 非零 → set -e 中止后续 echo / exit 1 行；尾巴加 `|| true` 兜底。
+    lsof -nP -iTCP@127.0.0.1:"$PORT" -sTCP:LISTEN 2>/dev/null | head -5 || true
     echo ""
     echo "→ 跑 \`just dev-kill-port\` 一键清理（通常是上次 dev 没退干净）"
     echo "→ 或手动 \`kill -9 $pids\`"
