@@ -33,10 +33,25 @@ if ! command -v lsof >/dev/null 2>&1; then
   esac
 fi
 
-# 精确限定到 vite 实际 bind 的 `127.0.0.1:$PORT` LISTEN socket：宽松写法
-# `lsof -ti tcp:$PORT` 会把 IPv6 `::1:$PORT` 监听 / 远端 :$PORT 的 outbound
-# 连接也算冲突（vite host=127.0.0.1 与 IPv6 共存不冲突 → 误判 + kill 误伤）。
-pids=$(lsof -nP -tiTCP@127.0.0.1:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
+# 选出"真能阻塞 vite bind 127.0.0.1:$PORT"的 IPv4 LISTEN：
+#   - 127.0.0.1:PORT       直接冲突
+#   - 0.0.0.0:PORT / *:PORT  IPv4 wildcard 也阻塞 127.0.0.1 bind
+#   排除 IPv6 ::1（vite host=127.0.0.1 不冲突）+ 排除 outbound 远端连接（-sTCP:LISTEN）+
+#   排除非 5173 IPv4 LISTEN（理论上 -i4TCP 已限定，awk 二次确认 hostname:port 字面）
+# 用 `-F pn` 输出机器可解析格式（p<pid> / n<host:port>），awk 配对解析。
+pids=$(
+  lsof -nP -a -i4TCP:"$PORT" -sTCP:LISTEN -F pn 2>/dev/null |
+    awk -v port="$PORT" '
+      /^p/ { pid = substr($0, 2) }
+      /^n/ {
+        name = substr($0, 2)
+        if (name ~ ("(^|[[:space:]])(127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\*):" port "([[:space:]]|$)")) {
+          print pid
+        }
+      }
+    ' |
+    sort -u || true
+)
 
 case "$cmd" in
   check)
@@ -46,7 +61,7 @@ case "$cmd" in
     echo "❌ :$PORT 已被占用："
     # `head` 提前关 pipe 在占用进程多于 5 行时 SIGPIPE → pipefail 下整管道
     # 非零 → set -e 中止后续 echo / exit 1 行；尾巴加 `|| true` 兜底。
-    lsof -nP -iTCP@127.0.0.1:"$PORT" -sTCP:LISTEN 2>/dev/null | head -5 || true
+    lsof -nP -a -i4TCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -5 || true
     echo ""
     echo "→ 跑 \`just dev-kill-port\` 一键清理（通常是上次 dev 没退干净）"
     echo "→ 或手动 \`kill -9 $pids\`"
