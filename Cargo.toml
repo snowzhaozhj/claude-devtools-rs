@@ -72,6 +72,16 @@ too_many_lines = "allow"
 [profile.dev]
 opt-level = 0
 debug = true
+# 关 incremental 缓存（典型占 2-5G/worktree）。sccache wrapper 跨 build/worktree 共享 rustc 输出，
+# 命中率比 incremental 在单 target 内复用更高，多 worktree 场景整体反而更快。
+incremental = false
+
+# 依赖 crate 不带 debug info——target 体积大头（依赖 ~500 个 crate）。
+# `*` 通配符在 cargo profile 里只匹配非 workspace 成员，workspace 内 crate（cdt-*）不受影响：
+# 自己写的代码仍完整可调试，panic backtrace 行号完整。
+# 若需排查 tokio/tauri 内部 panic，临时把这条改回 `debug = true` 重 build 一次即可恢复。
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 opt-level = 3
