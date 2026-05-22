@@ -50,7 +50,7 @@ prompt 列**任务范围 + 起点 + 怀疑点 + 完成条件**就够，bg sessio
 
 裸命令（subshell 隔离主 session cwd）：
 ```bash
-(cd /path/to/repo-root && claude --bg --name "<name>" --effort high "<prompt>")
+(cd /path/to/repo-root && claude --bg --name "<name>" "<prompt>")
 ```
 
 监控 / 清理：

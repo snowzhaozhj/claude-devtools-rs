@@ -171,7 +171,7 @@ bg-pr NAME PROMPT:
     name={{quote(NAME)}}
     prompt={{quote(PROMPT)}}
     echo "起 bg session: ${name}"
-    claude --bg --name "$name" --effort high -- "$prompt"
+    claude --bg --name "$name" -- "$prompt"
 
 # 列所有 background session 状态摘要（grep result:/needs input:/failed:）
 bg-status:
