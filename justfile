@@ -13,9 +13,16 @@ build:
 build-tauri:
     cargo build --manifest-path src-tauri/Cargo.toml
 
-# 启动桌面应用（dev 模式）
+# 启动桌面应用（dev 模式）。先跑 5173 端口预检——被占就给清晰报错 + 提示
+# `just dev-kill-port`，避免落入 "vite 一行红字 / Tauri 白屏" 体验黑洞。
+# 详 `scripts/dev-port.sh` 头部注释（含 `strictPort` 不能 fallback 的原因）。
 dev:
+    @bash scripts/dev-port.sh check
     cargo tauri dev
+
+# 杀掉占用 5173 的进程（通常是上次 dev 残留的 vite/tauri）。幂等：未占也不报错。
+dev-kill-port:
+    @bash scripts/dev-port.sh kill
 
 # 首次 clone 后的一次性依赖安装
 bootstrap:
