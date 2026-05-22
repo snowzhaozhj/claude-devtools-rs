@@ -13,6 +13,7 @@ use std::time::Duration;
 use cdt_api::{PushEvent, SessionMetadataUpdate, spawn_event_bridge};
 use cdt_config::{DetectedError, DetectedErrorContext};
 use cdt_core::{FileChangeEvent, TodoChangeEvent};
+use cdt_ssh::ContextChanged;
 use tokio::sync::broadcast;
 use tokio::time::timeout;
 
@@ -23,7 +24,15 @@ fn spawn_test_event_bridge(
     error_rx: broadcast::Receiver<DetectedError>,
 ) {
     let (_metadata_tx, metadata_rx) = broadcast::channel::<SessionMetadataUpdate>(16);
-    spawn_event_bridge(events_tx, file_rx, todo_rx, error_rx, metadata_rx);
+    let (_context_tx, context_rx) = broadcast::channel::<ContextChanged>(16);
+    spawn_event_bridge(
+        events_tx,
+        file_rx,
+        todo_rx,
+        error_rx,
+        metadata_rx,
+        context_rx,
+    );
 }
 
 fn sample_detected_error(id: &str, msg: &str) -> DetectedError {
@@ -201,8 +210,16 @@ async fn session_metadata_forwarded_as_push_event() {
     let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
     let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
     let (metadata_tx, metadata_rx) = broadcast::channel::<SessionMetadataUpdate>(16);
+    let (_context_tx, context_rx) = broadcast::channel::<ContextChanged>(16);
 
-    spawn_event_bridge(events_tx, file_rx, todo_rx, error_rx, metadata_rx);
+    spawn_event_bridge(
+        events_tx,
+        file_rx,
+        todo_rx,
+        error_rx,
+        metadata_rx,
+        context_rx,
+    );
 
     metadata_tx
         .send(SessionMetadataUpdate {

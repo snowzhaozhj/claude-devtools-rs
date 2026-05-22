@@ -1664,12 +1664,55 @@ impl LocalDataApi {
         let Some(provider) = self.ssh_mgr.provider(context_id).await else {
             return;
         };
+        // 共享 cancel_token 让 polling watcher + dead-signal monitor 同时被
+        // disconnect 路径 cancel；clone 给 monitor 让它在外部 cancel 时也退出。
+        let cancel_token = cdt_ssh::CancelToken::new();
+        let cancel_for_monitor = cancel_token.clone();
         let watcher = RemotePollingWatcher::spawn(
             provider.sftp_client(),
             provider.remote_home().to_path_buf(),
             file_tx.clone(),
-            cdt_ssh::CancelToken::new(),
+            cancel_token,
         );
+        // dead-signal monitor：watcher 内连续 PERMANENT_FAILURE_THRESHOLD 轮
+        // 永久 SFTP 错误时 notify dead_signal；本 task 触发 ssh_mgr.disconnect
+        // 让 active context 同步翻回 Local 并 emit ContextChanged(None)，
+        // 让前端 listener 自动切回 local，不被 stale active 困住。
+        // 详见 followups.md "[impl-bug] SSH/SFTP channel idle..." 条目。
+        //
+        // 不持有 monitor JoinHandle：cancel_token 共享 + select 双分支让
+        // monitor 永远会随 polling 退出（dead 触发 → 走 disconnect 分支退出；
+        // 外部 cancel → 走 cancelled 分支退出），不会泄漏后台 task。
+        let dead_signal = watcher.dead_signal();
+        let ssh_mgr_for_monitor = self.ssh_mgr.clone();
+        let context_id_for_monitor = context_id.to_owned();
+        tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                () = cancel_for_monitor.cancelled() => {
+                    tracing::debug!(
+                        target: "cdt_ssh::lifecycle",
+                        context_id = %context_id_for_monitor,
+                        "dead-signal monitor cancelled (watcher cancelled externally)",
+                    );
+                }
+                () = dead_signal.notified() => {
+                    tracing::warn!(
+                        target: "cdt_ssh::lifecycle",
+                        context_id = %context_id_for_monitor,
+                        "polling reported SFTP channel dead; auto-disconnecting to sync active context",
+                    );
+                    if let Err(e) = ssh_mgr_for_monitor.disconnect(&context_id_for_monitor).await {
+                        tracing::warn!(
+                            target: "cdt_ssh::lifecycle",
+                            context_id = %context_id_for_monitor,
+                            error = %e,
+                            "auto-disconnect after polling dead-signal failed",
+                        );
+                    }
+                }
+            }
+        });
         if let Some(old) = self
             .remote_watchers
             .lock()

@@ -146,6 +146,13 @@ impl client::Handler for RusshClientHandler {
 /// SSH session 管理器：真握手 + 资源生命周期 + 状态广播。
 ///
 /// 与 `connection::SshConnectionManager`（占位）独立——Phase C 时 `cdt-api` 切换。
+///
+/// `Clone` 是浅拷贝——所有字段都是 `Arc<Mutex<...>>` / `broadcast::Sender<_>`
+/// （后者本身实现 `Clone` 共享底层 channel）。clone 出来的 manager 与原始
+/// 共享同一 sessions / active state，让 spawn 的后台 task（如 polling watcher
+/// 的 dead-signal monitor，详 [`crate::polling_watcher`]）可以拥有 owned
+/// handle 调 `disconnect` 而不引入循环借用。
+#[derive(Clone)]
 pub struct SshSessionManager {
     /// `context_id` → 资源；连接成功才插入。
     sessions: Arc<Mutex<HashMap<String, SshSessionResources>>>,

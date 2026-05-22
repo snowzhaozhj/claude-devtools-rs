@@ -4,7 +4,8 @@
 
 import { describe, expect, test, afterEach, beforeEach, vi } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/svelte'
-import { clearMocks } from '@tauri-apps/api/mocks'
+import { clearMocks, mockIPC, mockWindows } from '@tauri-apps/api/mocks'
+import type { InvokeArgs } from '@tauri-apps/api/core'
 import { tick } from 'svelte'
 
 import Sidebar from './Sidebar.svelte'
@@ -128,6 +129,136 @@ describe('Sidebar smoke', () => {
       expect(container.querySelector('.session-filter-bar')).not.toBeNull()
     })
     expect(container.querySelector('.worktree-filter-bar')).toBeNull()
+  })
+
+  test('loadMoreSessions inflight 期间切到别的 group → 老 promise resolve 时 sessionsLoadingMore 必须复位（防 Bug #N 回归）', async () => {
+    // 回归场景：用户在 group A 滚到底触发 loadMoreSessions（捕获 groupId=A）→
+    // SSH 断开 / 切 project 让 selectedGroupId 变 B → 老 IPC 终于 resolve →
+    // finally 若用 `if (groupId === selectedGroupId)` 守卫则永卡 true（PR #202
+    // 引入），sidebar 翻页死锁 + ".sidebar-status-inline" 加载更多... 常驻。
+    // 现行 finally 是无条件 `sessionsLoadingMore = false`——本测试用 deferred
+    // promise 模拟"老 IPC 在切 group 后才完成"，断言 status-inline 不残留。
+    mockWindows('main')
+    type Resolver = (value: { sessions: unknown[]; nextCursor: string | null }) => void
+    const deferred: Resolver[] = []
+    let listGroupSessionsCalls = 0
+
+    // 第一次 list_group_sessions 直接返"有 nextCursor"让 loadMore 入口能触发；
+    // 第二次 (loadMore) 把 resolve 函数留下让我们手动 release。
+    // 其它 IPC 走最小占位返回让 Sidebar onMount 流程不抛即可。
+    mockIPC((cmd: string, _args?: InvokeArgs): unknown => {
+      switch (cmd) {
+        case 'list_projects':
+          return [{ id: 'g-A', path: '/a', displayName: 'A', sessionCount: 100 }]
+        case 'list_repository_groups':
+          return [
+            {
+              id: 'g-A',
+              identity: { id: 'g-A', name: 'A' },
+              name: 'A',
+              mostRecentSession: 0,
+              totalSessions: 100,
+              worktrees: [{
+                id: 'g-A', path: '/a', name: 'A', gitBranch: null,
+                isMainWorktree: true, isRepoRoot: true, sessions: [],
+                createdAt: null, mostRecentSession: 0,
+              }],
+            },
+            {
+              id: 'g-B',
+              identity: { id: 'g-B', name: 'B' },
+              name: 'B',
+              mostRecentSession: 0,
+              totalSessions: 5,
+              worktrees: [{
+                id: 'g-B', path: '/b', name: 'B', gitBranch: null,
+                isMainWorktree: true, isRepoRoot: true, sessions: [],
+                createdAt: null, mostRecentSession: 0,
+              }],
+            },
+          ]
+        case 'list_group_sessions': {
+          listGroupSessionsCalls += 1
+          // 第一次：返一页 + nextCursor 让 loadMoreSessions 入口可激活
+          if (listGroupSessionsCalls === 1) {
+            const sessions = Array.from({ length: 50 }, (_, i) => ({
+              sessionId: `sess-A-${i}`, projectId: 'g-A', worktreeId: 'g-A',
+              title: null, messageCount: 0, isOngoing: false, lastTimestamp: 0,
+              gitBranch: null,
+            }))
+            return { sessions, nextCursor: 'cursor-A-1' }
+          }
+          // 第二次：deferred，模拟"老 IPC 还在飞"
+          return new Promise((resolve) => deferred.push(resolve as Resolver))
+        }
+        case 'get_project_memory':
+          return { has_memory: false, layers: [], count: 0 }
+        case 'get_project_session_prefs':
+          return { pinned: [], hidden: [] }
+        case 'get_session_summaries_by_ids':
+          return []
+        default:
+          return null
+      }
+    }, { shouldMockEvents: true })
+
+    const { container, rerender } = render(Sidebar, {
+      props: {
+        selectedGroupId: 'g-A',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+
+    // 等 group A 首页加载完
+    await waitFor(() => {
+      expect(container.querySelector('.session-list')).not.toBeNull()
+    })
+    await tick()
+
+    // 触发 loadMoreSessions：模拟 scroll bottom → maybeLoadMoreSessions(true)
+    // 由于直接构造 scroll 比较脆弱，这里通过 rerender 触发 sidebar 内部 effects；
+    // loadMoreSessions 由 onSessionListScroll → maybeLoadMoreSessions 触发，
+    // 我们直接通过 DOM 触发 scroll 事件让 vlist + maybe 判定走起来。
+    const sessionListEl = container.querySelector('.session-list') as HTMLElement | null
+    if (sessionListEl) {
+      // jsdom 不支持 scrollHeight/clientHeight 真渲染，给它做手脚让 remaining=0
+      Object.defineProperty(sessionListEl, 'scrollHeight', { value: 10000, configurable: true })
+      Object.defineProperty(sessionListEl, 'scrollTop', { value: 9000, configurable: true })
+      Object.defineProperty(sessionListEl, 'clientHeight', { value: 1000, configurable: true })
+      sessionListEl.dispatchEvent(new Event('scroll'))
+    }
+
+    // 等 loadMoreSessions 被调（list_group_sessions 第二次调用 = deferred 入队）
+    await waitFor(() => expect(deferred.length).toBeGreaterThanOrEqual(1), { timeout: 1000 })
+    expect(listGroupSessionsCalls).toBeGreaterThanOrEqual(2)
+    // 确认 sessionsLoadingMore=true 在 release 之前是 true（status-inline 显示）
+    expect(container.querySelector('.sidebar-status-inline')).not.toBeNull()
+
+    // 关键：模拟"SSH 断开 → loadProjects auto-select 切到 g-B"——通过 prop 切 group
+    await rerender({
+      selectedGroupId: 'g-B',
+      activeSessionId: null,
+      onSelectProject: () => {},
+      onSelectSession: () => {},
+    })
+    // 多 tick 让 effect 跑、loadSessions(g-B) 入 await（也会推 deferred[1]）
+    await tick()
+    await tick()
+
+    // 现在 release 老 promise（捕获的 groupId='g-A' 此时已不等于 selectedGroupId='g-B'）
+    // finally 修复后 SHALL 无条件 sessionsLoadingMore=false
+    deferred[0]({ sessions: [], nextCursor: null })
+    // 多轮 microtask + svelte reactivity flush
+    for (let i = 0; i < 6; i++) {
+      await Promise.resolve()
+      await tick()
+    }
+
+    // 断言：sessionsLoadingMore 必须被清零——".sidebar-status-inline"（"加载更多..."）
+    // SHALL NOT 残留。若 finally 守卫还在，这个元素会永显。
+    expect(container.querySelector('.sidebar-status-inline')).toBeNull()
   })
 
   test('切回已访问过的 project 时 memory-entry 通过 cache 同步 hydrate', async () => {

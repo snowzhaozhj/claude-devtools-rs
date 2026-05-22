@@ -35,6 +35,23 @@ pub enum PushEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group_id: Option<String>,
     },
+    /// Active context 切换（SSH connect / disconnect / `switch_context` /
+    /// polling watcher 检测到 SFTP 死亡触发的自愈 disconnect）。
+    ///
+    /// 桌面 Tauri runtime 走 `app.emit("context_changed", ...)` 桥（详
+    /// `src-tauri/src/lib.rs`），浏览器 `?http=1` 调试 / 远端 HTTP 客户端
+    /// 走本 variant + `/api/events` SSE 路径。两路 payload 形态 **必须一致**：
+    /// `active_context_id: Option<String>` + `kind: "local"|"ssh"`，对齐
+    /// `cdt_ssh::ContextChanged`。前端 `transport.ts::normalizePushPayload`
+    /// 转成 `{ activeContextId, kind }` 喂给 `contextStore` listener。
+    ///
+    /// 加这个 variant 修历史 bug：HTTP server 缺 `ContextChanged` 桥让浏览器
+    /// `?http=1` 下 `contextStore.activeContextId` 在 SSH 切换后永远 stale，
+    /// 表现为 SSH 状态指示符与实际后端 active context 不一致。
+    ContextChanged {
+        active_context_id: Option<String>,
+        kind: String,
+    },
 }
 
 /// 单个 session 元数据增量推送 payload。

@@ -512,7 +512,15 @@
     } catch (e) {
       console.error("Failed to load more sessions:", e);
     } finally {
-      if (groupId === selectedGroupId) sessionsLoadingMore = false;
+      // 无条件复位：防 stale 数据写回的责任已被上方 `groupId !== selectedGroupId
+      // || cursor !== sessionsNextCursor` 早返担住；`sessionsLoadingMore` 是
+      // 纯 UI 闸门，SHALL 在 IPC 返回后无条件清零。
+      //
+      // 回归：PR #202 为 sub-window race 加 `if (groupId === selectedGroupId)`
+      // 守卫，但忽略了"SSH 断开 → loadProjects 自动 onSelectProject(local 第一个
+      // group) → selectedGroupId 已变"路径——旧 SSH IPC 完成时守卫不放，
+      // sessionsLoadingMore 永卡 true，sidebar 翻页死锁 + "加载更多..."常驻。
+      sessionsLoadingMore = false;
     }
   }
 

@@ -454,7 +454,16 @@ function normalizePushPayload(type: string | undefined, payload: Record<string, 
         gitBranch: payload.git_branch,
       };
     case "context_changed":
-      return { activeContext: payload.active_context };
+      // 与 `ContextChanged` TS 类型 + 桌面 Tauri 桥 (`app.emit("context_changed", ...)`)
+      // payload 形态对齐：`{ activeContextId, kind }`——前端 `contextStore`
+      // 的 `refreshAfterContextChange(change)` 直接消费这两个字段。
+      // 历史 bug：曾经返 `{ activeContext: payload.active_context }`，
+      // listener 期望 `change.activeContextId`，永久失配，浏览器 `?http=1`
+      // 模式下 contextStore 在 SSH 切换后永远 stale 在 `local`。
+      return {
+        activeContextId: payload.active_context_id ?? null,
+        kind: payload.kind,
+      };
     default:
       return payload;
   }
