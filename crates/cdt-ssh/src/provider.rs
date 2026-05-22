@@ -287,23 +287,22 @@ impl FileSystemProvider for SshFileSystemProvider {
         .map_err(|e| map_client_error(path, e))
     }
 
-    /// trait `open_read` 实现——包装现有 `open_read_stream` inherent 方法返
-    /// `Box<dyn AsyncRead + Send + Unpin>`，让调用方不需 downcast 即能流式读。
+    /// trait `open_read` 实现——返 `Box<dyn AsyncRead + Send + Unpin>`，让调用方
+    /// 不需 downcast 即能流式读。
     ///
     /// 设计：`openspec/changes/unify-fs-abstraction/design.md` D4。
     ///
-    /// 测试路径（`with_client`，无真实 `sftp` session）会让 `open_read_stream`
-    /// 返 `FsError::Unsupported`——此时降级到 `self.client.read()` 拿全 bytes
-    /// 后包装 `Cursor` 模拟流式读（保证 `ipc_contract` 等用 fake 跑的测试在
-    /// scanner 切到 `fs.open_read` 后仍能 round-trip；change
-    /// `unify-fs-direct-calls` design D1）。生产路径（有真实 sftp）仍走流式
-    /// stream，不退化。
+    /// **PR-F 后**生产路径与 fake 路径**统一**走 `self.client.read()`：
+    /// - 大文件（≥ `SFTP_PIPELINE_MIN_BYTES`=256K）走 `read_pipelined`，K 个 worker
+    ///   并发飞 `SSH_FXP_READ`，wall ≈ ceil(N/K)×RTT 而非 N×RTT
+    /// - 小文件（< 256K）走库 `SftpSession::read`，单 RTT 全量预取
+    ///
+    /// trade-off：放弃 `BufReader` 流式（peak RSS = `file_size`）换 N×RTT 消除——
+    /// SSH 场景下 RTT 是关键瓶颈（远端 50ms vs 本地 0.05ms），5MB jsonl 进内存
+    /// 5MB peak 可接受；GB 级文件目前不在 SSH 用户故事范围内。原 `open_read_stream`
+    /// 仍保留为 inherent 方法（caller 显式调用拿原生 `russh_sftp::client::fs::File`，
+    /// 不强制 pipeline）。
     async fn open_read(&self, path: &Path) -> Result<Box<dyn AsyncRead + Send + Unpin>, FsError> {
-        if self.sftp.is_some() {
-            let file = self.open_read_stream(path).await?;
-            return Ok(Box::new(file));
-        }
-        // Fake / test path：用 client.read 拿全 bytes + Cursor 模拟流式 AsyncRead。
         let path_str = path_to_string(path);
         let client = Arc::clone(&self.client);
         let bytes = with_retry(move || {
@@ -529,9 +528,25 @@ impl SftpClient for RusshSftpClient {
                 .await
                 .map_err(|e| classify_sftp_error(&e));
         }
-        read_pipelined(&self.sftp, path, size)
-            .await
-            .map_err(|e| classify_sftp_error(&e))
+        match read_pipelined(&self.sftp, path, size).await {
+            Ok(bytes) => Ok(bytes),
+            // server `open_handles` limit 可能拒第 N 个 open；降级到单 file
+            // handle 串行读保证读得到（wall 退回 N×RTT 但用户仍能看到数据）。
+            // codex review #199 finding 2。
+            Err(SftpError::Limited(reason)) => {
+                tracing::warn!(
+                    path = %path,
+                    workers = SFTP_PIPELINE_MAX_WORKERS,
+                    reason = %reason,
+                    "SFTP pipeline open hit server handle limit; falling back to serial read"
+                );
+                self.sftp
+                    .read(path.to_owned())
+                    .await
+                    .map_err(|e| classify_sftp_error(&e))
+            }
+            Err(e) => Err(classify_sftp_error(&e)),
+        }
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, SftpClientError> {
