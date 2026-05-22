@@ -21,7 +21,11 @@ cache 全命中场景下 `page_jobs.is_empty()` 时 `list_sessions` SHALL 跳过
   3. 逐条 page_jobs：若 `by_name` 含对应 path → 调 `MetadataCache::lookup_with_known_signature(&ctx, path, &sig)`；命中 → broadcast 既有 cache 值的 `SessionMetadataUpdate`（`is_ongoing = entry.messages_ongoing`，与 `extract_session_metadata_cached` SSH 跳 stale check 分支语义一致）；mismatch 或 path missing → spawn 单 task 走既有 cache wrapper miss 路径（`extract_session_metadata_cached`）
   4. dir read 失败 SHALL fallback 到 `scan_metadata_for_page`（保证功能正确性，性能退化为既有 PR-D 形态），SHALL 通过 `tracing::warn!(target: "cdt_api::perf", ...)` 让运维侧可见
 
-两条路径 SHALL 共享 `active_scans` 注册表（同形 `ScanEntry { generation, handle, context_id }`）、`Semaphore(METADATA_SCAN_CONCURRENCY=8)` 限流、`context_generation` race-free 校验、broadcast 形态（`SessionMetadataUpdate { project_id, session_id, title, message_count, is_ongoing, git_branch, group_id }`）。`scan_metadata_for_page_batched` 内部的 mismatch sub-task SHALL 通过 `JoinSet` 持有，顶层 batch task abort 时 sub-task 跟随 JoinSet drop 自动 abort（tokio 语义），**SHALL NOT** 重复注册到 `active_scans`。
+两条路径 SHALL 共享 `active_scans` 注册表（同形 `ScanEntry { generation, handle, context_id }`）、`Semaphore(METADATA_SCAN_CONCURRENCY=8)` 限流、`context_generation` 与 `root_generation` 双轴 race-free 校验、broadcast 形态（`SessionMetadataUpdate { project_id, session_id, title, message_count, is_ongoing, git_branch, group_id }`）。所有 `tx.send(SessionMetadataUpdate)` 调用前 SHALL 校验 `root_generation.load() == expected_root_generation` **与** `context_generation.load() == expected_context_generation` 同时成立，否则 silent drop（避免把 reconfigure 前的旧 root / 旧 ctx 状态推给前端）—— 对 batched 路径的命中分支同样 SHALL 满足（codex commit 二审 #1 修订：fs.read_dir_with_metadata await 期间 root 可能被 reconfigure）。
+
+`scan_metadata_for_page_batched` 内部的 mismatch sub-task SHALL 通过 `JoinSet` 持有，顶层 batch task abort 时 sub-task 跟随 JoinSet drop 自动 abort（tokio 语义），**SHALL NOT** 重复注册到 `active_scans`。JoinSet `join_next` cleanup 循环 SHALL 显式处理 `JoinError`（至少 `tracing::error!`），避免 sub-task panic 时静默吞掉"某些 session 永远没 metadata"症状（codex commit 二审 #2 修订）。
+
+**SSH backend 全命中 broadcast 例外**：SSH ctx 下即使 `try_lookup_cached_metadata` hot path 全命中（`page_jobs.is_empty()` 不成立——本规约下文 Scenario "Cache 全命中时不触发 spawn 不触碰 active_scans" 仅约束 Local backend，SSH backend `need_background_validation = is_remote || cached_meta.is_none()` 在 local.rs:896 实现），SSH 路径仍 SHALL spawn batched task 异步校验 cache freshness 并 broadcast 命中条 cache 现值——这是 SSH "cache 不信新鲜度"语义的必要补丁；Local backend 全命中仍 SHALL 不 spawn 不 broadcast 与既有 PR-A/B 契约一致。
 
 #### Scenario: 订阅接收当前页未命中条的元数据更新
 
@@ -83,12 +87,19 @@ cache 全命中场景下 `page_jobs.is_empty()` 时 `list_sessions` SHALL 跳过
 - **THEN** 返回的 `SessionSummary[]` 中 2 个命中条骨架阶段 SHALL 已带真实元数据，1 个 miss 条骨架阶段 SHALL 仍为占位（`title=null` / `messageCount=0` / `isOngoing=false`）
 - **AND** 该 miss 条 SHALL 入 `page_jobs` 走后台扫描，扫完通过 broadcast 推送 1 条 `SessionMetadataUpdate`；receiver 收到的 update 数 SHALL 为 1（只覆盖 miss 条）
 
-#### Scenario: Cache 全命中时不触发 spawn 不触碰 active_scans
+#### Scenario: Local backend cache 全命中时不触发 spawn 不触碰 active_scans
 
-- **WHEN** `list_sessions` 骨架阶段对所有 session 都 cache 命中（page_jobs 为空）
+- **WHEN** Local active context 下 `list_sessions` 骨架阶段对所有 session 都 cache 命中（page_jobs 为空，`is_remote = false`）
 - **THEN** 实现 SHALL NOT 调用 `tokio::spawn(scan_metadata_for_page_dispatch(...))`
 - **AND** SHALL NOT 改动 `active_scans` 注册表（既不 abort 旧 entry 也不 insert 新 entry）
 - **AND** receiver SHALL 不收到任何对应该次调用的 `SessionMetadataUpdate`
+
+#### Scenario: SSH backend cache 全命中仍 spawn batched 校验
+
+- **WHEN** SSH active context 下 `list_sessions` 骨架阶段对所有 session 都通过 `lookup_trust_cached` cache 命中（response inline 含真 title），但 `need_background_validation = is_remote || cached_meta.is_none()` 在 SSH 路径恒为 true（local.rs:896 PR-D 实现）
+- **THEN** 实现 SHALL 仍把 page_jobs 入 spawn 调 `scan_metadata_for_page_dispatch` → SSH 走 `scan_metadata_for_page_batched`
+- **AND** batched 路径全命中条 SHALL 通过 `MetadataCache::lookup_with_known_signature` 命中直 broadcast cache 现值给 receiver——这是 SSH "cache 不信新鲜度"语义的必要补丁（外部进程改远端文件需要后台校验 mismatch 触发 cache miss → SSE 推差量）
+- **AND** receiver SHALL 在二次调用后短时间内收到 N 条 SessionMetadataUpdate（N = session 数）——形态与首次冷启动 broadcast 相同，前端按 sessionId 增量 patch UI 不受 race 影响
 
 #### Scenario: lookup stat 失败 fallback 到后台扫描
 

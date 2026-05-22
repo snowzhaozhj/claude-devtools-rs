@@ -2166,8 +2166,14 @@ async fn scan_metadata_for_page_batched(
         });
 
         if let Some(entry) = cache_entry {
-            // 命中：每次 broadcast 前 SHALL 校验 context_generation 不变
-            // （与 scan_metadata_for_page 既有路径同语义）。
+            // 命中：每次 broadcast 前 SHALL 双重校验 context_generation +
+            // root_generation 不变（与 scan_metadata_for_page 既有路径同语义；
+            // codex commit 二审 #1 修订——fs.read_dir_with_metadata await 期间
+            // root 可能被 reconfigure，命中分支也必须 root_generation 校验避免
+            // 把旧 root 的 cache update 推给前端破坏 race-free 契约）。
+            if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+                continue;
+            }
             if context_generation.load(Ordering::SeqCst) != expected_context_generation {
                 continue;
             }
@@ -2236,7 +2242,18 @@ async fn scan_metadata_for_page_batched(
         });
     }
 
-    while set.join_next().await.is_some() {}
+    // codex commit 二审 #2 修订：JoinSet 内 sub-task panic 时显式日志，避免
+    // "某些 session 永远没 metadata"的静默失败（既有 scan_metadata_for_page
+    // 也未显式日志，但 batched 路径有 JoinSet 二级嵌套——sub-task panic 更隐蔽）。
+    while let Some(res) = set.join_next().await {
+        if let Err(err) = res {
+            tracing::error!(
+                target: "cdt_api::perf",
+                error = %err,
+                "scan_metadata_for_page_batched sub-task failed",
+            );
+        }
+    }
 
     // 3. cleanup（与 scan_metadata_for_page 同形 race-free pattern）
     if let Ok(mut scans) = active_scans.lock() {

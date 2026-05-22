@@ -1,8 +1,4 @@
-#![allow(
-    clippy::doc_markdown,
-    clippy::uninlined_format_args,
-    clippy::ptr_arg
-)]
+#![allow(clippy::doc_markdown, clippy::uninlined_format_args, clippy::ptr_arg)]
 
 //! `perf_scanner_open_read` —— scanner dyn `AsyncRead` vs direct `tokio::fs::File` 微基准。
 //!
