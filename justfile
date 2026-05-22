@@ -168,6 +168,10 @@ clean-all-apply:
 # Quoting 安全性：用 just `quote()` 函数把 NAME / PROMPT 编码为 shell-safe 单引号字面量，
 # 避免 inline prompt 含双引号 / 反引号 / `$` 时被 shell 解释（change `unify-fs-direct-calls` 修订）。
 #
+# **inline prompt only**——禁止落 prompt 文件作 escape hatch（详
+# `.claude/rules/bg-task-dispatch.md::禁止落 prompt 文件`）。recipe 不再支持
+# 文件路径自动展开，PROMPT 永远当 inline 字符串传给 `claude --bg`。
+#
 # echo 段用 ASCII 半角 + ${var} 显式分隔变量名 —— bash 3.2 (macOS) + `set -u` 下
 # 全角中文标点（如 `（` U+FF08 起首字节 0xEF）会被当作变量名延续字符，触发
 # `${name<全角字节>}: unbound variable`。
@@ -177,15 +181,9 @@ bg-pr NAME PROMPT:
     cd "{{justfile_directory()}}"
     name={{quote(NAME)}}
     prompt={{quote(PROMPT)}}
-    if [ -f "$prompt" ]; then
-        echo "起 bg session: ${name} (prompt 文件: ${prompt})"
-        # `cat -- "$prompt"` 避免文件名以 `-` 开头被当 flag；外层 `"$(...)"` 保整个文件内容作单参数
-        claude --bg --name "$name" --effort high -- "$(cat -- "$prompt")"
-    else
-        echo "起 bg session: ${name} (inline prompt)"
-        # `--` 隔断让后续 `$prompt`（即便以 `-` 开头）不被当作 flag 解析
-        claude --bg --name "$name" --effort high -- "$prompt"
-    fi
+    echo "起 bg session: ${name} (inline prompt)"
+    # `--` 隔断让后续 `$prompt`（即便以 `-` 开头）不被当作 flag 解析
+    claude --bg --name "$name" --effort high -- "$prompt"
 
 # 列所有 background session 状态摘要（grep result:/needs input:/failed:）
 bg-status:

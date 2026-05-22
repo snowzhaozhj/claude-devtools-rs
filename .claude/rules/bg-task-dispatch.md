@@ -48,7 +48,7 @@ just bg-pr fix-foo '修 `fn foo()` 的 bug，参考 "原版行为" 与 $HOME 路
 
 **禁止落 prompt 文件**——觉得 prompt 长到必须落 `.md` 才能起 bg = **prompt 写得不合理**：重抄了 `.claude/rules/*` / `CLAUDE.md` / `openspec/changes/<slug>/design.md` 内容、或啰嗦了背景。bg session 自己会读真相源——prompt 只需列**任务范围 + 起点 + 怀疑点 + 完成条件**，30 行内必能写完。落文件是 escape hatch，治标不治本，禁止。
 
-`bg-pr` recipe 仍能识别文件路径（兼容历史 / 误传），但**不要主动写 prompt 文件喂进去**；若 inline 起 bg 失败 → debug `bg-pr` 或简化 prompt，不要回退到落文件。**禁止**手写 `claude --bg "..."` 直接绕过 `bg-pr` —— 历史踩过 inline prompt 双引号嵌套被 shell 吃的坑。
+`bg-pr` recipe 已彻底去掉"PROMPT 是文件路径就 cat"分支——PROMPT 永远当 inline 字符串传给 `claude --bg`，不留 escape hatch。inline 起 bg 失败 → debug `bg-pr` 或简化 prompt，不要回退到落文件。**禁止**手写 `claude --bg "..."` 直接绕过 `bg-pr` —— 历史踩过 inline prompt 双引号嵌套被 shell 吃的坑。
 
 裸命令（subshell 隔离主 session cwd）：
 ```bash
