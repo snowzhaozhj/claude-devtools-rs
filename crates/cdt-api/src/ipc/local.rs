@@ -427,6 +427,21 @@ pub struct LocalDataApi {
     /// IPC 调用 cache hit 时跳过 ~14K fs op 的全量 scan。change
     /// `unify-fs-abstraction` FU-4 `ProjectScanner` memoize 部分。
     project_scan_cache: Arc<std::sync::Mutex<ProjectScanCache>>,
+    /// `cfg(test)` 计数器：`refresh_worktree_meta_cache` 实际被调用次数（spec
+    /// `ipc-data-api::SessionSummary 增加 worktree 元信息字段` 的"映射缓存刷新约束"
+    /// (ctx + generation) 双重校验测试用）。change `generation-race-audit` Test 1/2。
+    #[cfg(any(test, feature = "test-utils"))]
+    refresh_worktree_meta_cache_call_count: Arc<AtomicU64>,
+    /// `cfg(test)` 计数器：`build_group_session_page` 内 spawn `scan_metadata_for_page`
+    /// 的次数。change `generation-race-audit` Test 3：断言 spawn 前锁内 (ctx + gen)
+    /// 二次校验 mismatch 时 spawn 不发生。
+    #[cfg(any(test, feature = "test-utils"))]
+    metadata_scan_spawn_count: Arc<AtomicU64>,
+    /// `cfg(test)` 计数器：`active_fs_and_policy` 被调用次数。change
+    /// `generation-race-audit` Test 4：断言 `build_group_session_page` 整段调用
+    /// 仅触发一次 `active_fs` 抽样（来自 inner），不再有第二次独立 `active_fs_and_context_strict`。
+    #[cfg(any(test, feature = "test-utils"))]
+    active_fs_and_policy_call_count: Arc<AtomicU64>,
 }
 
 /// IPC `SessionSummary` 序列化时从 `worktree_meta_cache` 查到的派生字段。
@@ -514,6 +529,9 @@ impl LocalDataApi {
         let Ok(mut cache) = self.worktree_meta_cache.write() else {
             return;
         };
+        #[cfg(any(test, feature = "test-utils"))]
+        self.refresh_worktree_meta_cache_call_count
+            .fetch_add(1, Ordering::Relaxed);
         cache.clear();
         for g in groups {
             for w in &g.worktrees {
@@ -527,6 +545,29 @@ impl LocalDataApi {
                 );
             }
         }
+    }
+
+    /// `cfg(test)` accessor：返回 `refresh_worktree_meta_cache` 至今被调用的次数。
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn refresh_worktree_meta_cache_call_count(&self) -> u64 {
+        self.refresh_worktree_meta_cache_call_count
+            .load(Ordering::Relaxed)
+    }
+
+    /// `cfg(test)` accessor：返回 `build_group_session_page` 内 spawn metadata
+    /// scan task 的次数（per worktree per call）。
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn metadata_scan_spawn_count(&self) -> u64 {
+        self.metadata_scan_spawn_count.load(Ordering::Relaxed)
+    }
+
+    /// `cfg(test)` accessor：返回 `active_fs_and_policy` 至今被调用的次数。
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn active_fs_and_policy_call_count(&self) -> u64 {
+        self.active_fs_and_policy_call_count.load(Ordering::Relaxed)
     }
 
     /// `list_sessions` / `list_group_sessions` / `get_worktree_sessions` 序列化
@@ -563,25 +604,25 @@ impl LocalDataApi {
         page_size: usize,
         cursor: Option<&str>,
     ) -> Result<GroupSessionPage, ApiError> {
-        // codex 二审第五轮 Blocker + 第六轮 修订：generation snapshot SHALL **先于
-        // 函数内任何 await**，与 fs/ctx 同源属于"reconfigure 前的 snapshot"。
-        // `list_repository_groups()` 也 await，本身可能跨 reconfigure 边界——所以
-        // 必须 load 在它之前；同样 root_generation 在 spawn 时复用早 load 的 expected
-        // 值（不 late-load）。
-        let expected_context_generation = self.context_generation.load(Ordering::SeqCst);
+        // change `generation-race-audit` D2：单一 snapshot 通过
+        // `list_repository_groups_inner()` 一次性拿 (groups, fs, projects_dir, ctx,
+        // captured_context_generation) 五元组——避免旧实现 `list_repository_groups()`
+        // 与 `active_fs_and_context_strict()` 两次独立 await 之间被 ssh switch /
+        // reconfigure 跨过引发 (groups OLD, fs NEW) 拼接 race。
+        //
+        // expected_root_generation 仍单独 load——后台 scan task 沿用既有
+        // expected_root_generation / expected_context_generation 双轴校验语义；
+        // expected_context_generation = captured_context_generation（与 fs/ctx 同源）。
+        let (groups, fs, projects_dir, ctx, captured_context_generation) =
+            self.list_repository_groups_inner().await?;
         let expected_root_generation = self.root_generation.load(Ordering::SeqCst);
-
-        let groups = self.list_repository_groups().await?;
+        let expected_context_generation = captured_context_generation;
         let group = groups
             .into_iter()
             .find(|g| g.id == group_id)
             .ok_or_else(|| ApiError::not_found(format!("repository group {group_id}")))?;
 
         let cursor_state = parse_group_cursor(cursor);
-        // 用户可见列表 handler 走 strict 变体——SSH disconnect 中间态 SHALL 报错
-        // 而非静默降级（PR-C codex commit-stage round-2 Q1：原 PR-B 引入 relaxed
-        // 在用户可见列表路径，本 PR 加 strict 时一并修齐）。
-        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
         let pinned = std::collections::BTreeSet::<String>::new();
         let scanner = ProjectScanner::new_with_semaphore(
             fs.clone(),
@@ -909,52 +950,75 @@ impl LocalDataApi {
         //    metadata 永远扫不出来（codex 第三轮二审 Bug 1）。改用完整 cursor
         //    字符串作 namespace key 后缀，无碰撞、deterministic，与
         //    `list_sessions` 走 `(project_id, cursor)` 双键的并存语义一致。
-        // codex 第五轮 + 第六轮 Blocker：用 fn 顶部早 load 的 expected_*_generation
-        // （与 fs/ctx 同 snapshot），避免 reconfigure 在 list_repository_groups /
-        // active_fs_and_context_strict 任一 await 期间跑过让 reader 拿到旧 ctx +
-        // 新 generation 的 race。
+        // change `generation-race-audit` D2：spawn `scan_metadata_for_page` 后台 task
+        // 之前 SHALL 持 `ssh_watcher_ops` 锁 + (ctx + generation) 二次校验。理由：
+        // bump-first 顺序使得 inner 拿到的 captured_context_generation 可能等于
+        // ssh_mgr.switch_context 完成后的 current（同值都为 bumped 后值），spawn 后
+        // task 自身的 broadcast-time 校验 `current == expected` 仍误判通过 → 向新 ctx
+        // UI 发旧 ctx update。spawn 前在锁内识别 ctx mismatch 结构性闭合该 sub-window；
+        // spawn 在锁内进行确保 spawn 期间 5 处 mutate 入口不可能跑（持同锁互斥）。
         let cur_root_generation = expected_root_generation;
         let cur_context_generation = expected_context_generation;
         let scan_cursor_id = format!("group:{}", cursor.unwrap_or("none"));
-        for (wt_id, (dir, jobs)) in page_jobs_by_wt {
-            if jobs.is_empty() {
-                continue;
-            }
-            let scan_key = metadata_scan_key(&wt_id, Some(&scan_cursor_id));
-            let key_for_cleanup = scan_key.clone();
-            let tx = self.session_metadata_tx.clone();
-            let active_scans_clone = self.active_scans.clone();
-            if let Ok(mut scans) = self.active_scans.lock() {
-                if let Some(old) = scans.remove(&scan_key) {
-                    old.handle.abort();
-                }
-                let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
-                let handle = tokio::spawn(scan_metadata_for_page(
-                    wt_id.clone(),
-                    dir,
-                    jobs,
-                    tx,
-                    active_scans_clone,
-                    key_for_cleanup,
-                    my_generation,
-                    self.metadata_cache.clone(),
-                    self.metadata_scan_semaphore.clone(),
-                    self.root_generation.clone(),
-                    cur_root_generation,
-                    self.worktree_meta_cache.clone(),
-                    fs.clone(),
-                    ctx.clone(),
-                    self.context_generation.clone(),
-                    cur_context_generation,
-                ));
-                scans.insert(
-                    scan_key,
-                    ScanEntry {
-                        generation: my_generation,
-                        context_id: ctx.clone(),
-                        handle: handle.abort_handle(),
-                    },
+        {
+            let _ops = self.ssh_watcher_ops.lock().await;
+            let current_ctx = self.current_active_context_id_under_lock().await;
+            let current_context_generation = self.context_generation.load(Ordering::SeqCst);
+            if current_ctx != ctx || current_context_generation != captured_context_generation {
+                tracing::debug!(
+                    target: "cdt_api::perf",
+                    captured_ctx = ?ctx,
+                    current_ctx = ?current_ctx,
+                    captured_gen = captured_context_generation,
+                    current_gen = current_context_generation,
+                    "build_group_session_page: state changed mid-page-build, skip metadata scan task spawn"
                 );
+                // 返页面骨架但不 spawn 后台 metadata scan——避免向新 ctx UI broadcast 旧 ctx update。
+            } else {
+                for (wt_id, (dir, jobs)) in page_jobs_by_wt {
+                    if jobs.is_empty() {
+                        continue;
+                    }
+                    let scan_key = metadata_scan_key(&wt_id, Some(&scan_cursor_id));
+                    let key_for_cleanup = scan_key.clone();
+                    let tx = self.session_metadata_tx.clone();
+                    let active_scans_clone = self.active_scans.clone();
+                    if let Ok(mut scans) = self.active_scans.lock() {
+                        if let Some(old) = scans.remove(&scan_key) {
+                            old.handle.abort();
+                        }
+                        let my_generation = self.scan_generation.fetch_add(1, Ordering::Relaxed);
+                        let handle = tokio::spawn(scan_metadata_for_page(
+                            wt_id.clone(),
+                            dir,
+                            jobs,
+                            tx,
+                            active_scans_clone,
+                            key_for_cleanup,
+                            my_generation,
+                            self.metadata_cache.clone(),
+                            self.metadata_scan_semaphore.clone(),
+                            self.root_generation.clone(),
+                            cur_root_generation,
+                            self.worktree_meta_cache.clone(),
+                            fs.clone(),
+                            ctx.clone(),
+                            self.context_generation.clone(),
+                            cur_context_generation,
+                        ));
+                        #[cfg(any(test, feature = "test-utils"))]
+                        self.metadata_scan_spawn_count
+                            .fetch_add(1, Ordering::Relaxed);
+                        scans.insert(
+                            scan_key,
+                            ScanEntry {
+                                generation: my_generation,
+                                context_id: ctx.clone(),
+                                handle: handle.abort_handle(),
+                            },
+                        );
+                    }
+                }
             }
         }
 
@@ -1152,6 +1216,9 @@ impl LocalDataApi {
         ),
         ApiError,
     > {
+        #[cfg(any(test, feature = "test-utils"))]
+        self.active_fs_and_policy_call_count
+            .fetch_add(1, Ordering::Relaxed);
         let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
         let policy = match fs.kind() {
             cdt_fs::FsKind::Local => cdt_fs::BackendPolicy::for_local(),
@@ -1159,6 +1226,79 @@ impl LocalDataApi {
         };
         let resolvers = crate::ipc::backend_resolvers::BackendResolvers::from_fs(&*fs);
         Ok((fs, projects_dir, ctx, policy, resolvers))
+    }
+
+    /// 在已持有 `ssh_watcher_ops` 锁的前提下读 `ssh_mgr` 当前 active 状态，构造与
+    /// `active_fs_and_context_strict` 同形的 `ContextId`。SHALL 仅在锁内调用——
+    /// 否则与 `switch_context` / `ssh_connect` / `ssh_disconnect` /
+    /// `shutdown_ssh_all` 路径互斥不成立，结果可能与下一刻 `ssh_mgr` 真实状态偏离。
+    ///
+    /// 用途：change `generation-race-audit` 在 `list_repository_groups` /
+    /// `build_group_session_page` 的派生 cache 写入路径前做 (ctx + generation)
+    /// 双重校验，闭合 bump-first 顺序导致的 sub-window race。
+    pub(crate) async fn current_active_context_id_under_lock(&self) -> cdt_fs::ContextId {
+        if let Some(id) = self.ssh_mgr.active_context_id().await {
+            if let Some((_provider, ctx)) = self.ssh_mgr.provider_and_context_id(&id).await {
+                return ctx;
+            }
+            // active=Some 但 provider lookup miss（disconnect 中间态）→ fall through Local
+        }
+        let projects_dir = self.projects_dir.lock().await.clone();
+        cdt_fs::ContextId::local(projects_dir)
+    }
+
+    /// `list_repository_groups` 的内部抽样函数：返回 `(groups, fs, projects_dir,
+    /// ctx, captured_context_generation)` 同源五元组。`captured_context_generation`
+    /// 在 `active_fs_and_policy()` 完成之**后**立即 load——与 `(fs, ctx)` 同 snapshot；
+    /// 函数内后续不再 `fetch_add`，wrapper 路径用此值与锁内 current 比较即可识别
+    /// inner 期间 / inner 完成到 wrapper 拿锁之间任何 mutate。
+    ///
+    /// change `generation-race-audit` D1 / D2：被 `list_repository_groups` (作为
+    /// 派生 cache 刷新入口) 与 `build_group_session_page` (作为单一 snapshot
+    /// 抽样) 共用，避免后者独立调 `active_fs_and_context_strict` 引发跨快照
+    /// (groups OLD, fs NEW) 拼接 race。
+    pub(crate) async fn list_repository_groups_inner(
+        &self,
+    ) -> Result<
+        (
+            Vec<cdt_core::RepositoryGroup>,
+            Arc<dyn FileSystemProvider>,
+            PathBuf,
+            cdt_fs::ContextId,
+            u64,
+        ),
+        ApiError,
+    > {
+        // pre 抽样保留作 fast-path tracing；wrapper 锁内的 (ctx + generation)
+        // 双重校验是权威，pre/post 不再决定 refresh 与否。
+        let pre_root_generation = self.root_generation.load(Ordering::SeqCst);
+        let pre_context_generation = self.context_generation.load(Ordering::SeqCst);
+        let (fs, projects_dir, ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
+        // captured_generation：与 (fs, ctx) 同 snapshot。SHALL 在 active_fs_and_policy
+        // 完成后立即 load；inner 内后续 await 不影响该值。
+        let captured_context_generation = self.context_generation.load(Ordering::SeqCst);
+        let projects = self
+            .scan_projects_cached_with(&fs, &projects_dir, &ctx)
+            .await?;
+        let grouper =
+            cdt_discover::WorktreeGrouper::new_dyn(resolvers.git_identity_resolver.clone());
+        let groups = grouper.group_by_repository((*projects).clone()).await;
+        let post_root_generation = self.root_generation.load(Ordering::SeqCst);
+        let post_context_generation = self.context_generation.load(Ordering::SeqCst);
+        if pre_root_generation != post_root_generation
+            || pre_context_generation != post_context_generation
+        {
+            tracing::debug!(
+                target: "cdt_api::perf",
+                pre_root = pre_root_generation,
+                post_root = post_root_generation,
+                pre_ctx = pre_context_generation,
+                post_ctx = post_context_generation,
+                captured_ctx_gen = captured_context_generation,
+                "list_repository_groups_inner: context shifted mid-scan (fast-path mismatch); wrapper lock will skip refresh"
+            );
+        }
+        Ok((groups, fs, projects_dir, ctx, captured_context_generation))
     }
 
     /// `ProjectScanner::scan()` 的进程级 cache 入口。返回 `Arc<Vec<Project>>`
@@ -1316,6 +1456,12 @@ impl LocalDataApi {
             shared_read_semaphore: Arc::new(Semaphore::new(64)),
             worktree_meta_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
             project_scan_cache: Arc::new(std::sync::Mutex::new(ProjectScanCache::new())),
+            #[cfg(any(test, feature = "test-utils"))]
+            refresh_worktree_meta_cache_call_count: Arc::new(AtomicU64::new(0)),
+            #[cfg(any(test, feature = "test-utils"))]
+            metadata_scan_spawn_count: Arc::new(AtomicU64::new(0)),
+            #[cfg(any(test, feature = "test-utils"))]
+            active_fs_and_policy_call_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -1411,6 +1557,12 @@ impl LocalDataApi {
             shared_read_semaphore: Arc::new(Semaphore::new(64)),
             worktree_meta_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
             project_scan_cache,
+            #[cfg(any(test, feature = "test-utils"))]
+            refresh_worktree_meta_cache_call_count: Arc::new(AtomicU64::new(0)),
+            #[cfg(any(test, feature = "test-utils"))]
+            metadata_scan_spawn_count: Arc::new(AtomicU64::new(0)),
+            #[cfg(any(test, feature = "test-utils"))]
+            active_fs_and_policy_call_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -3581,49 +3733,35 @@ impl DataApi for LocalDataApi {
         // `(*projects).clone()` 把 Arc 下的 Vec 拷一份给 grouper 的 owned 入参——
         // Vec<Project> 几百 KB 量级的 clone 远低于全量 scan 的 ~14K fs ops 成本。
         //
-        // **一次 await** 拿 fs/projects_dir/ctx/policy/resolvers 五元组，再用
-        // 同一组 fs/ctx 调 `scan_projects_cached_with`——避免两次 `active_*().await`
-        // 之间被 SSH switch / reconfigure 跨过导致 projects 与 resolvers 属于
-        // 不同 context snapshot（codex 二审第一轮 #3）。
-        //
-        // generation snapshot **先于** active_fs_and_policy await：reconfigure /
-        // ssh_switch 在该 await 期间跑完时，下方 post-await 校验能识别。
-        let pre_root_generation = self.root_generation.load(Ordering::SeqCst);
-        let pre_context_generation = self.context_generation.load(Ordering::SeqCst);
-        let (fs, projects_dir, ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
-        let projects = self
-            .scan_projects_cached_with(&fs, &projects_dir, &ctx)
-            .await?;
-        let grouper =
-            cdt_discover::WorktreeGrouper::new_dyn(resolvers.git_identity_resolver.clone());
-        let groups = grouper.group_by_repository((*projects).clone()).await;
-        // post-await generation 校验：scan + grouper 两次 await 期间若 SSH
-        // switch / reconfigure 跨过，groups 内容仍属于旧 ctx；写入全局
-        // `worktree_meta_cache` 会让后续不同 ctx 的 list_sessions /
-        // get_worktree_sessions 用旧 worktree_id → meta 映射污染 UI。
-        // **safe degrade**：保留旧 groups 给本次 caller（数据本身正确）但
-        // 跳过 `refresh_worktree_meta_cache`，让 `apply_worktree_meta` 在
-        // 新 ctx 查不到映射走 None fallback；下次 IPC 自然重做刷新到新 ctx
-        // 的 meta（codex 二审第二轮 D）。
-        let post_root_generation = self.root_generation.load(Ordering::SeqCst);
-        let post_context_generation = self.context_generation.load(Ordering::SeqCst);
-        if pre_root_generation != post_root_generation
-            || pre_context_generation != post_context_generation
+        // change `generation-race-audit`：抽 inner 拿 (groups, fs, projects_dir,
+        // ctx, captured_generation) 同源快照；refresh 路径在 `ssh_watcher_ops` 锁内
+        // 做 (ctx + generation) 双重校验，任一 mismatch skip refresh（safe degrade）。
+        // 闭合 bump-first 顺序导致的两类 sub-window race：(a) 普通 ssh switch +
+        // generation 在 ssh_mgr.switch_context 网络 RTT 期间已领先；(b) 同 host 快速
+        // disconnect+reconnect 期间 ContextId 等价但 generation bumped 两次。
+        let (groups, _fs, _projects_dir, captured_ctx, captured_context_generation) =
+            self.list_repository_groups_inner().await?;
         {
-            tracing::debug!(
-                target: "cdt_api::perf",
-                pre_root = pre_root_generation,
-                post_root = post_root_generation,
-                pre_ctx = pre_context_generation,
-                post_ctx = post_context_generation,
-                "list_repository_groups: context switched mid-await, skip refresh_worktree_meta_cache"
-            );
-            return Ok(groups);
+            let _ops = self.ssh_watcher_ops.lock().await;
+            let current_ctx = self.current_active_context_id_under_lock().await;
+            let current_context_generation = self.context_generation.load(Ordering::SeqCst);
+            if current_ctx != captured_ctx
+                || current_context_generation != captured_context_generation
+            {
+                tracing::debug!(
+                    target: "cdt_api::perf",
+                    captured_ctx = ?captured_ctx,
+                    current_ctx = ?current_ctx,
+                    captured_gen = captured_context_generation,
+                    current_gen = current_context_generation,
+                    "list_repository_groups: state changed mid-scan (ctx or generation), skip refresh_worktree_meta_cache"
+                );
+                return Ok(groups);
+            }
+            // match：在锁内 refresh，与 5 处 mutate 入口（switch / connect / disconnect /
+            // reconfigure / shutdown）互斥；下游序列化 SessionSummary 能 join 到最新 mapping。
+            self.refresh_worktree_meta_cache(&groups);
         }
-        // 刷新 worktree_meta_cache（scheme c, D2）：让后续 list_sessions /
-        // list_group_sessions / get_worktree_sessions 序列化 SessionSummary 时
-        // 能 join 拿到 worktreeName / groupId / cwdRelativeToRepoRoot。
-        self.refresh_worktree_meta_cache(&groups);
         Ok(groups)
     }
 
