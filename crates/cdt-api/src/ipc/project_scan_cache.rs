@@ -20,6 +20,21 @@
 //!   `ssh_disconnect`）保证；本 cache 仅消费 atomic 值。
 //! - SSH disconnect 后旧 `ContextId` 对应 entry 走 TTL 自然过期；命中也
 //!   不会有读者，因为 `active_fs_and_context_strict()` 已经报错挡掉。
+//!
+//! ## In-flight scan 与 watcher invalidation 的 race（codex 二审 #2）
+//!
+//! 普通文件变化（新建 session / 删 session）只 bump cache 内部
+//! `invalidation_generation`，**不** bump `root_generation` /
+//! `context_generation`。因此 `scan_projects_cached()` miss 后 `await`
+//! 期间 watcher 收到事件 → `invalidate_local()` 清空 entry +
+//! `invalidation_generation += 1`。在 scan 完成回写前若直接 insert，
+//! 旧 snapshot 会盖掉 watcher 的清空信号，最长 Local TTL（5min）内
+//! 一直返回旧数据。
+//!
+//! 解法：`scan_projects_cached()` 在 miss 路径 scan 前先记下当前
+//! `invalidation_generation`，scan 完成后 insert 时比较；mismatch
+//! → 丢弃本次 snapshot，让下次 lookup 走真实 miss 重 scan。
+//! `try_insert` 内部完成校验，hot path 单 lock 临界区。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -55,6 +70,10 @@ struct CacheEntry {
 #[derive(Default)]
 pub struct ProjectScanCache {
     entries: HashMap<ContextId, CacheEntry>,
+    /// 单调递增的内部失效计数器。`invalidate_local` / `invalidate` 都会
+    /// `+= 1`，让 in-flight scan 完成回写前能识别"期间 cache 被清过"
+    /// 从而丢弃旧 snapshot（codex 二审 #2 race）。
+    invalidation_generation: u64,
     /// 累计命中次数 / 累计 lookup 次数，调试 / perf bench 用。
     hits: u64,
     lookups: u64,
@@ -95,8 +114,18 @@ impl ProjectScanCache {
         Some(entry.snapshot.clone())
     }
 
-    /// 写入 / 覆盖 `ContextId` 对应 entry。
-    pub fn insert(
+    /// `scan_projects_cached()` miss 前 snapshot 当前
+    /// `invalidation_generation` 的辅助。`try_insert` 据此判断 scan 期间
+    /// 是否被 invalidate 过。
+    pub fn invalidation_generation(&self) -> u64 {
+        self.invalidation_generation
+    }
+
+    /// 无条件写入 / 覆盖 entry（**不**带 race 校验）。仅用于直接构造
+    /// cache 的测试场景；生产路径用 [`Self::try_insert`] 防 in-flight
+    /// scan race。
+    #[cfg(test)]
+    fn insert(
         &mut self,
         ctx: ContextId,
         snapshot: Arc<Vec<Project>>,
@@ -116,17 +145,60 @@ impl ProjectScanCache {
         );
     }
 
+    /// 条件写入：仅在 `recorded_generation == 当前 invalidation_generation`
+    /// 时落 entry；mismatch → 丢弃本次 snapshot，返回 `false`。让
+    /// in-flight scan 不覆盖 watcher 在 scan 期间发出的 invalidate 信号
+    /// （codex 二审 #2）。
+    pub fn try_insert(
+        &mut self,
+        ctx: ContextId,
+        snapshot: Arc<Vec<Project>>,
+        root_generation: u64,
+        context_generation: u64,
+        fs_kind: FsKind,
+        recorded_generation: u64,
+    ) -> bool {
+        if recorded_generation != self.invalidation_generation {
+            return false;
+        }
+        self.entries.insert(
+            ctx,
+            CacheEntry {
+                snapshot,
+                root_generation,
+                context_generation,
+                inserted_at: Instant::now(),
+                fs_kind,
+            },
+        );
+        true
+    }
+
     /// 清除 Local `ContextId` 对应 entry。watcher invalidator 用。SSH entry
     /// 由 TTL 自然过期，本接口不动 SSH entry（避免 Local 文件变化误清远端）。
+    /// 同步 bump `invalidation_generation` —— 让 in-flight scan 完成回写时
+    /// 通过 `try_insert` 自检并丢弃旧 snapshot。
     pub fn invalidate_local(&mut self) {
         self.entries
             .retain(|_, entry| !matches!(entry.fs_kind, FsKind::Local));
+        self.invalidation_generation = self.invalidation_generation.wrapping_add(1);
+    }
+
+    /// 清除所有 entry（Local + SSH）。`reconfigure_claude_root` / SSH
+    /// context 切换等显式 hook 用；同步 bump `invalidation_generation`。
+    /// 测试也可用本入口让 SSH 路径测试用例之间不串扰。
+    pub fn invalidate_all(&mut self) {
+        self.entries.clear();
+        self.invalidation_generation = self.invalidation_generation.wrapping_add(1);
     }
 
     /// 单 entry 删除（test / `reconfigure_claude_root` 等显式 hook 用）。
+    /// 同步 bump `invalidation_generation`。
     #[allow(dead_code)]
     pub fn invalidate(&mut self, ctx: &ContextId) {
-        self.entries.remove(ctx);
+        if self.entries.remove(ctx).is_some() {
+            self.invalidation_generation = self.invalidation_generation.wrapping_add(1);
+        }
     }
 
     /// 当前缓存条目数。perf bench / 调试用。
@@ -162,22 +234,18 @@ pub struct ProjectScanCacheStats {
 /// 触发 `invalidate_local()`。watcher 自身已 debounce（详 `cdt-watch`），
 /// 高频写入也只会让 Local entry 在下次 IPC 调用时重扫一次，可接受。
 ///
-/// Lagged 时不视为强失效信号（watcher debounce 已经过滤大多数噪声，
-/// 即便错过几条事件，generation + TTL 仍能兜底正确性）；Closed 时退出。
+/// `Lagged` **同样**触发 `invalidate_local()`——表示已丢失至少一条事件，
+/// 不能假设丢的那条不重要（典型：新建 project / 删除 session）。Local TTL
+/// 5min 太长不能等，必须主动清掉 entry 让下次 IPC 真扫一次（codex 二审 #1）。
+/// `Closed` 时退出 loop。
 pub fn spawn_project_scan_cache_invalidator(
     cache: Arc<std::sync::Mutex<ProjectScanCache>>,
     mut rx: broadcast::Receiver<cdt_core::FileChangeEvent>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(_) => {
-                    if let Ok(mut cache) = cache.lock() {
-                        cache.invalidate_local();
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => {}
-                Err(broadcast::error::RecvError::Closed) => break,
+        while let Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) = rx.recv().await {
+            if let Ok(mut cache) = cache.lock() {
+                cache.invalidate_local();
             }
         }
     })
@@ -280,5 +348,51 @@ mod tests {
         assert!(c.lookup(&local_ctx(), 1, 2).is_some());
         assert!(c.lookup(&ssh_ctx(), 1, 2).is_none());
         assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn try_insert_succeeds_when_generation_unchanged() {
+        let mut c = ProjectScanCache::new();
+        let gen_snapshot = c.invalidation_generation();
+        let ok = c.try_insert(local_ctx(), snapshot(), 1, 2, FsKind::Local, gen_snapshot);
+        assert!(ok);
+        assert!(c.lookup(&local_ctx(), 1, 2).is_some());
+    }
+
+    #[test]
+    fn try_insert_drops_snapshot_when_invalidate_local_ran_during_scan() {
+        // 模拟：scan 开始前 snapshot 当前 invalidation_generation
+        // → 期间 watcher 触发 invalidate_local（bump generation）
+        // → scan 完成 try_insert 时 mismatch 应该丢弃
+        let mut c = ProjectScanCache::new();
+        let recorded = c.invalidation_generation();
+        c.invalidate_local(); // 期间 watcher 事件
+        let inserted =
+            c.try_insert(local_ctx(), snapshot(), 1, 2, FsKind::Local, recorded);
+        assert!(
+            !inserted,
+            "watcher 在 scan 期间 invalidate 后 SHALL NOT 让旧 snapshot 写入"
+        );
+        assert!(c.lookup(&local_ctx(), 1, 2).is_none());
+    }
+
+    #[test]
+    fn invalidate_all_clears_local_and_ssh() {
+        let mut c = ProjectScanCache::new();
+        c.insert(local_ctx(), snapshot(), 1, 2, FsKind::Local);
+        c.insert(ssh_ctx(), snapshot(), 1, 2, FsKind::Ssh);
+        c.invalidate_all();
+        assert!(c.lookup(&local_ctx(), 1, 2).is_none());
+        assert!(c.lookup(&ssh_ctx(), 1, 2).is_none());
+        assert!(c.is_empty());
+    }
+
+    #[test]
+    fn invalidate_local_bumps_invalidation_generation() {
+        let mut c = ProjectScanCache::new();
+        let g0 = c.invalidation_generation();
+        c.invalidate_local();
+        let g1 = c.invalidation_generation();
+        assert_ne!(g0, g1);
     }
 }

@@ -1169,22 +1169,36 @@ impl LocalDataApi {
     /// 1. watcher 主动 invalidate Local entry（任意 `FileChangeEvent` 触发）
     /// 2. `root_generation` / `context_generation` 校验
     /// 3. TTL（Local 5 分钟、SSH 10 秒）
+    /// 4. cache 内部 `invalidation_generation`（in-flight scan race 保护）
     ///
     /// `active_fs_and_context_strict()` 保证 SSH disconnect 中间态报错而非
     /// 静默降级——cache 写入与读取使用同一 `ContextId`。
     pub(crate) async fn scan_projects_cached(&self) -> Result<Arc<Vec<Project>>, ApiError> {
+        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
+        self.scan_projects_cached_with(&fs, &projects_dir, &ctx)
+            .await
+    }
+
+    /// 同 `scan_projects_cached`，但调用方已通过 `active_fs_and_policy()` /
+    /// `active_fs_and_context_strict()` 一次性拿到 `(fs, projects_dir, ctx)`——
+    /// 避免两次 `active_*().await` 之间被 SSH switch / reconfigure 跨过让
+    /// projects 与下游 resolver 不属于同一 context snapshot（codex 二审 #3）。
+    pub(crate) async fn scan_projects_cached_with(
+        &self,
+        fs: &Arc<dyn FileSystemProvider>,
+        projects_dir: &std::path::Path,
+        ctx: &cdt_fs::ContextId,
+    ) -> Result<Arc<Vec<Project>>, ApiError> {
         let cur_root_generation = self.root_generation.load(Ordering::SeqCst);
         let cur_context_generation = self.context_generation.load(Ordering::SeqCst);
-        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
-        // 命中检查：generation snapshot 先于 fs/ctx 拿，避免 reconfigure / SSH
-        // switch 在 await 中跑完后把旧 generation 的 cache entry 当 fresh 命中
-        // （与 `list_sessions_skeleton` 第五轮 codex 修订同模式）。
-        {
+        // 命中检查 + 记录 `invalidation_generation`（用于 scan miss 完成后
+        // `try_insert` race 检测，详 `project_scan_cache.rs::try_insert`）。
+        let recorded_invalidation = {
             let mut cache = self
                 .project_scan_cache
                 .lock()
                 .expect("project scan cache mutex poisoned");
-            if let Some(hit) = cache.lookup(&ctx, cur_root_generation, cur_context_generation) {
+            if let Some(hit) = cache.lookup(ctx, cur_root_generation, cur_context_generation) {
                 tracing::debug!(
                     target: "cdt_api::perf",
                     context = ?ctx.backend_kind,
@@ -1192,12 +1206,13 @@ impl LocalDataApi {
                 );
                 return Ok(hit);
             }
-        }
+            cache.invalidation_generation()
+        };
 
         // miss：真正 scan
         let mut scanner = ProjectScanner::new_with_semaphore(
             fs.clone(),
-            projects_dir,
+            projects_dir.to_path_buf(),
             self.shared_read_semaphore.clone(),
         );
         let projects = scanner
@@ -1206,28 +1221,37 @@ impl LocalDataApi {
             .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
         let snapshot = Arc::new(projects);
         let fs_kind = fs.kind();
-        // 写入 cache：再次取 generation 与 lookup 时一致（generation 由 atomic
-        // 保护，单调递增；如果 await 期间被 reconfigure 跨过，下次 lookup 会
-        // mismatch miss）。
-        {
+        // 写入 cache：`try_insert` 校验"scan 期间 cache 未被 invalidate"。
+        // race 时（典型：watcher 在 scan await 期间收到 `FileChangeEvent`）
+        // 丢弃本次 snapshot，下次 lookup 走真实 miss 重 scan。
+        let inserted = {
             let mut cache = self
                 .project_scan_cache
                 .lock()
                 .expect("project scan cache mutex poisoned");
-            cache.insert(
-                ctx,
+            cache.try_insert(
+                ctx.clone(),
                 snapshot.clone(),
                 cur_root_generation,
                 cur_context_generation,
                 fs_kind,
+                recorded_invalidation,
+            )
+        };
+        if inserted {
+            tracing::debug!(
+                target: "cdt_api::perf",
+                project_count = snapshot.len(),
+                backend = ?fs_kind,
+                "project_scan_cache populated"
+            );
+        } else {
+            tracing::debug!(
+                target: "cdt_api::perf",
+                backend = ?fs_kind,
+                "project_scan_cache snapshot dropped — invalidated during scan"
             );
         }
-        tracing::debug!(
-            target: "cdt_api::perf",
-            project_count = snapshot.len(),
-            backend = ?fs_kind,
-            "project_scan_cache populated"
-        );
         Ok(snapshot)
     }
 
@@ -1238,6 +1262,17 @@ impl LocalDataApi {
             .lock()
             .expect("project scan cache mutex poisoned")
             .stats()
+    }
+
+    /// 显式清空 scan cache（Local + SSH 所有 entry）。供 IPC contract 测试
+    /// 让 SSH 路径多个 method 调用之间不互相 cache hit；同时也是 future
+    /// `ssh_disconnect` / 切 SSH context 显式 hook 可调用入口（当前由
+    /// `context_generation` bump + 自然 TTL 兜底，本入口供未来扩展）。
+    pub fn invalidate_project_scan_cache(&self) {
+        self.project_scan_cache
+            .lock()
+            .expect("project scan cache mutex poisoned")
+            .invalidate_all();
     }
 
     pub fn new(
@@ -3541,16 +3576,19 @@ impl DataApi for LocalDataApi {
         // `.git` 泄漏本地 gitBranch。BackendResolvers 在 LazyLock 实例化时按 fs.kind()
         // 选 Local / Noop resolver（change `backend-policy-struct` D1 + D7）。
         //
-        // FU-4 ProjectScanner memoize：scan 结果走 `scan_projects_cached` 进程级
+        // FU-4 ProjectScanner memoize：scan 结果走 `scan_projects_cached_with` 进程级
         // cache，命中时跳过全量 fs op；grouper 仍每次跑（git resolve 本身已 cache）。
         // `(*projects).clone()` 把 Arc 下的 Vec 拷一份给 grouper 的 owned 入参——
         // Vec<Project> 几百 KB 量级的 clone 远低于全量 scan 的 ~14K fs ops 成本。
-        let projects = self.scan_projects_cached().await?;
-        let resolvers = {
-            let (_fs, _projects_dir, _ctx, _policy, resolvers) =
-                self.active_fs_and_policy().await?;
-            resolvers
-        };
+        //
+        // **一次 await** 拿 fs/projects_dir/ctx/policy/resolvers 五元组，再用
+        // 同一组 fs/ctx 调 `scan_projects_cached_with`——避免两次 `active_*().await`
+        // 之间被 SSH switch / reconfigure 跨过导致 projects 与 resolvers 属于
+        // 不同 context snapshot（codex 二审 #3）。
+        let (fs, projects_dir, ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
+        let projects = self
+            .scan_projects_cached_with(&fs, &projects_dir, &ctx)
+            .await?;
         let grouper =
             cdt_discover::WorktreeGrouper::new_dyn(resolvers.git_identity_resolver.clone());
         let groups = grouper.group_by_repository((*projects).clone()).await;
