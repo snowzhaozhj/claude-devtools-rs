@@ -609,16 +609,21 @@ impl PipelinedSftpReader {
             }
         }
 
-        // 非 Limited 错误优先上抛（永久性问题，复用 handle 无意义）
-        if let Some(e) = other_err {
-            drop(partial_handles);
-            return Err(PipelinedOpenError::Sftp(e));
-        }
+        // **Limited 优先**：spec `ssh-remote-context` Scenario "SftpError::Limited
+        // 降级到单 handle 流式且优先复用已开 handle" 写"任一 Err Limited → 降级"。
+        // 即使混合 Limited + 其它 Err，仍走 Limited fallback——partial_handles 中已
+        // 成功 open 的 File 可被 caller 复用做单 handle 流式 reader 仍能服务请求；
+        // 反之若先抛非 Limited Err，caller 重试整次 open_read 还会再撞同样的瞬时
+        // 问题。原优先级是 codex PR 二审 Blocker 修正。
         if let Some(reason) = limited_reason {
             return Err(PipelinedOpenError::Limited {
                 reason,
                 partial_handles,
             });
+        }
+        if let Some(e) = other_err {
+            drop(partial_handles);
+            return Err(PipelinedOpenError::Sftp(e));
         }
         debug_assert_eq!(partial_handles.len(), n_workers);
 
@@ -1540,26 +1545,18 @@ mod tests {
         );
     }
 
-    /// `next_worker` None + 累计字节 == expected → 真 EOF。
-    /// 单 worker（K=1）形态：chunk 发完后 sender drop → next 轮回到 worker 0 收 None →
-    /// 立即按字节计数判 == expected → EOF（标准 `AsyncRead` 语义）。
+    /// 单 worker（K=1）形态：`next_worker` None + 累计字节 == expected → 真 EOF。
+    /// chunk 发完后 sender drop → next 轮回到 worker 0 收 None → 立即按字节计数
+    /// 判 == expected → EOF（标准 `AsyncRead` 语义）。
+    ///
+    /// 备注：生产路径多 worker 场景下"任一 receiver close + 字节 == expected"
+    /// 自然由 round-robin 顺序保证——`n_workers = min(K, n_chunks)`，所有 worker
+    /// 各完整发完自己的 chunk 后顺次 close，每个 worker close 时 consumer 必已
+    /// 读完该 worker 发的所有字节；`pipelined_reader_round_robin_pull_order`
+    /// (K=3, 5 chunks) 已天然覆盖此 EOF 路径不 panic。
     #[tokio::test]
     async fn pipelined_reader_eof_on_next_worker_close_with_full_bytes() {
         let chunk = vec![42u8; 8];
-        let (tx0, rx0) = mpsc::channel::<Result<Vec<u8>, io::Error>>(1);
-        let (_tx1, rx1) = mpsc::channel::<Result<Vec<u8>, io::Error>>(1); // 故意保留 sender 不 close
-        tx0.send(Ok(chunk.clone())).await.unwrap();
-        drop(tx0); // worker 0 channel close
-
-        // 该 K=2 case 在 round-robin 下不会触发 EOF（next_worker=1 时 worker 1 channel
-        // 仍 open 会 pending hang），所以下面忽略 K=2 形态、改单 worker（K=1）验
-        // "next 回到 worker 0 看到 None + bytes match → EOF"。
-
-        // 删去最初的 K=2 探索 case——多 worker 场景下 next_worker=1 collide pending；
-        // 正确测试用单 worker（K=1）：chunk 8 字节 + channel close → next 回到 0 看到 None
-        // → 立即按字节计数判 EOF（== expected）。
-        drop((rx0, rx1));
-
         let (tx_solo, rx_solo) = mpsc::channel::<Result<Vec<u8>, io::Error>>(1);
         tx_solo.send(Ok(chunk.clone())).await.unwrap();
         drop(tx_solo); // close → next round 拉到 None
