@@ -18,25 +18,28 @@ export function isTauriRuntime(): boolean {
  */
 export function getServerBaseUrl(): string {
   if (typeof window === "undefined") return "";
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const apiBase = params.get("apiBase");
-    if (apiBase && isAllowedApiBase(apiBase)) {
-      return apiBase.replace(/\/$/, "");
-    }
-  } catch {
-    // URLSearchParams 不会抛；防御性 catch 万一以后 location 类型变化
-  }
+  const apiBase = readAndValidateApiBase(window.location.search);
+  if (apiBase) return apiBase;
   return window.location.origin;
 }
 
-function isAllowedApiBase(value: string): boolean {
-  let url: URL;
+/**
+ * 从 query string 提 `apiBase` 并校验，通过返回 normalize 后的 origin（不含
+ * path / query / fragment），防止类似 `?apiBase=http://localhost:3456/evil?x=1`
+ * 注入污染 `${base}/api/...` 的拼接。失败返 `null`，调用方走 fallback。
+ *
+ * exported for vitest 单测覆盖（合法 / 注入 / IPv6 / 非 localhost / 非 http）。
+ */
+export function readAndValidateApiBase(search: string): string | null {
   try {
-    url = new URL(value);
+    const params = new URLSearchParams(search);
+    const raw = params.get("apiBase");
+    if (!raw) return null;
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return null;
+    return url.origin;
   } catch {
-    return false;
+    return null;
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-  return url.hostname === "localhost" || url.hostname === "127.0.0.1";
 }

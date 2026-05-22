@@ -204,8 +204,8 @@ pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
 ///
 /// `base` 例如 `http://127.0.0.1:5173`。path / query 透传，避免破坏 vite HMR
 /// 自动建链路径（`/@vite/client` 等）。**path traversal 不做 guard**——redirect
-/// 不读本地文件，path 透传给浏览器再让 vite 处理（vite dev server 自身已防
-/// `..` 越界至 ui/ 目录外）。
+/// handler 本身不读本地文件，仅把 path 反映到 Location header 让浏览器跳到
+/// 上游 vite，由 vite 自行决定如何处理。
 ///
 /// 用 `Redirect::temporary`（307）而非 302：保留请求方法对非 GET fallback 安全；
 /// 实际 HMR / nav 都是 GET，行为等价。
@@ -242,14 +242,86 @@ fn redirect_to_upstream(
 }
 
 /// 从 `Host` header 推 server origin（HTTP server 走 plain HTTP，监听
-/// 127.0.0.1）。Host 缺失返 `None`——前端 fallback `window.location.origin`
-/// （vite domain）+ vite proxy 默认 target 仍能服务默认 `:3456` 场景。
+/// 127.0.0.1）。Host 缺失 / 非 localhost 形态返 `None`——前端 fallback
+/// `window.location.origin`（vite domain）+ vite proxy 默认 target 仍能
+///服务默认 `:3456` 场景。
+///
+/// 形态白名单：`localhost[:port]` / `127.0.0.1[:port]` / IPv6 `[::1][:port]`。
+/// 拒绝带路径 / 字母端口 / 其它 host 防御 Host header 注入污染前端 base URL
+/// 拼接（codex CR 第 3 点）。
 fn api_base_from_host(headers: &axum::http::HeaderMap) -> Option<String> {
     let host = headers.get(axum::http::header::HOST)?.to_str().ok()?;
-    if host.is_empty() {
+    if !is_localhost_host(host) {
         return None;
     }
     Some(format!("http://{host}"))
+}
+
+fn is_localhost_host(host: &str) -> bool {
+    if host.is_empty() || host.contains('/') || host.contains('?') || host.contains('#') {
+        return false;
+    }
+    let (hostname, port_part) = if let Some(rest) = host.strip_prefix('[') {
+        // IPv6 literal: `[::1]` / `[::1]:port`
+        let Some(close) = rest.find(']') else {
+            return false;
+        };
+        let bracket = &rest[..close];
+        let after = &rest[close + 1..];
+        if after.is_empty() {
+            (bracket, None)
+        } else if let Some(port) = after.strip_prefix(':') {
+            (bracket, Some(port))
+        } else {
+            return false;
+        }
+    } else {
+        match host.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (host, None),
+        }
+    };
+    if !matches!(hostname, "localhost" | "127.0.0.1" | "::1") {
+        return false;
+    }
+    if let Some(p) = port_part
+        && (p.is_empty() || !p.chars().all(|c| c.is_ascii_digit()))
+    {
+        return false;
+    }
+    true
+}
+
+#[cfg(test)]
+mod host_validation_tests {
+    use super::is_localhost_host;
+
+    #[test]
+    fn allows_localhost_variants() {
+        assert!(is_localhost_host("localhost"));
+        assert!(is_localhost_host("localhost:3456"));
+        assert!(is_localhost_host("127.0.0.1"));
+        assert!(is_localhost_host("127.0.0.1:4000"));
+        assert!(is_localhost_host("[::1]"));
+        assert!(is_localhost_host("[::1]:8080"));
+    }
+
+    #[test]
+    fn rejects_other_hosts() {
+        assert!(!is_localhost_host(""));
+        assert!(!is_localhost_host("evil.com"));
+        assert!(!is_localhost_host("localhost.evil.com"));
+        assert!(!is_localhost_host("8.8.8.8:3456"));
+        assert!(!is_localhost_host("0.0.0.0:3456"));
+    }
+
+    #[test]
+    fn rejects_malformed() {
+        assert!(!is_localhost_host("localhost/path"));
+        assert!(!is_localhost_host("localhost?x=1"));
+        assert!(!is_localhost_host("localhost:abc"));
+        assert!(!is_localhost_host("localhost:"));
+    }
 }
 
 /// 静态文件 + SPA fallback handler。
