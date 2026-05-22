@@ -76,12 +76,14 @@ debug = true
 # 命中率比 incremental 在单 target 内复用更高，多 worktree 场景整体反而更快。
 incremental = false
 
-# 依赖 crate 不带 debug info——target 体积大头（依赖 ~500 个 crate）。
+# 依赖 crate 仅保留 line tables（文件名 + 行号 + 函数名），砍掉变量/类型/参数等占大头的
+# debug 段——足够 panic backtrace / profiler 用源码定位，但不能 IDE 调试器看变量值。
 # `*` 通配符在 cargo profile 里只匹配非 workspace 成员，workspace 内 crate（cdt-*）不受影响：
-# 自己写的代码仍完整可调试，panic backtrace 行号完整。
-# 若需排查 tokio/tauri 内部 panic，临时把这条改回 `debug = true` 重 build 一次即可恢复。
+# 自己写的代码完整可调试 + backtrace 行号完整。
+# 注意 src-tauri/ 是独立 workspace (`exclude = [...]`)，本条不影响 tauri 自身的依赖。
+# 若需在 IDE 里单步看 tokio 等依赖内部变量值，临时改回 `debug = true` 重 build 一次即可恢复。
 [profile.dev.package."*"]
-debug = false
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = 3
