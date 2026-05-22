@@ -3,7 +3,8 @@
 //! 单态、内部无状态；本 crate 内部允许调 `tokio::fs::*`，但其它业务 crate
 //! 通过 trait 调用——`crates/cdt-fs/ALLOWLIST.md` H1 allowlist 列在这里。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use async_trait::async_trait;
@@ -189,6 +190,49 @@ impl FileSystemProvider for LocalFileSystemProvider {
             .map_err(|e| wrap_io(path, e))?;
         Ok(Box::new(file))
     }
+
+    async fn write_atomic(&self, path: &Path, content: &[u8]) -> Result<(), FsError> {
+        let tmp = atomic_tmp_path(path);
+        tokio::fs::write(&tmp, content)
+            .await
+            .map_err(|e| wrap_io(&tmp, e))?;
+        if let Err(err) = tokio::fs::rename(&tmp, path).await {
+            // best-effort 清理 tmp（清理失败不向上传播——rename 失败已是 primary error）
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(wrap_io(path, err));
+        }
+        Ok(())
+    }
+
+    async fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
+        match tokio::fs::create_dir_all(path).await {
+            Ok(()) => Ok(()),
+            // tokio::fs::create_dir_all 对已存在目录返 Ok，不会进 AlreadyExists 分支；
+            // 这里仍显式接住作防御性 forward-compat。
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(err) => Err(wrap_io(path, err)),
+        }
+    }
+
+    async fn remove_file(&self, path: &Path) -> Result<(), FsError> {
+        tokio::fs::remove_file(path)
+            .await
+            .map_err(|e| wrap_io(path, e))
+    }
+}
+
+/// 进程内单调递增 + pid suffix，避免并发 `write_atomic` 同 path tmp 冲突。
+///
+/// 设计：fs-abstraction spec 写方法 atomic 契约段——**不**用 `SystemTime::now()` 纳秒
+/// （Windows 100ns 时钟精度并发碰撞 race，详 design `ssh-project-memory-remote-rw` D2）。
+static WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn atomic_tmp_path(path: &Path) -> PathBuf {
+    let seq = WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp.{seq:016x}.{pid:08x}"));
+    PathBuf::from(tmp)
 }
 
 #[must_use]
@@ -300,6 +344,100 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].as_ref().unwrap().size, 3);
         assert_eq!(results[1].as_ref().unwrap().size, 4);
+    }
+
+    #[tokio::test]
+    async fn write_atomic_overwrites_existing_content() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("note.md");
+        tokio::fs::write(&file, b"old content").await.unwrap();
+
+        let fs = LocalFileSystemProvider::new();
+        fs.write_atomic(&file, b"new content body").await.unwrap();
+
+        let actual = tokio::fs::read_to_string(&file).await.unwrap();
+        assert_eq!(actual, "new content body");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_no_tmp_residue_on_success() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("note.md");
+
+        let fs = LocalFileSystemProvider::new();
+        fs.write_atomic(&file, b"hello").await.unwrap();
+
+        let entries = fs.read_dir(dir.path()).await.unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["note.md"]);
+        assert!(!names.iter().any(|n| n.contains(".tmp.")));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn write_atomic_concurrent_writes_yield_intact_content() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("contended.md");
+        let fs = LocalFileSystemProvider::new();
+
+        let mut joins = Vec::new();
+        for i in 0..8u8 {
+            let f = file.clone();
+            joins.push(tokio::spawn(async move {
+                let provider = LocalFileSystemProvider::new();
+                let content = vec![b'A' + i; 16 * 1024];
+                provider.write_atomic(&f, &content).await.unwrap();
+            }));
+        }
+        for j in joins {
+            j.await.unwrap();
+        }
+
+        let final_content = fs.read_to_string(&file).await.unwrap();
+        // 必须是某一次写的完整内容（16 KiB 同字节），而不是混合 / 截断
+        assert_eq!(final_content.len(), 16 * 1024);
+        let first_byte = final_content.as_bytes()[0];
+        assert!(final_content.bytes().all(|b| b == first_byte));
+
+        // tmp 残留检查
+        let entries = fs.read_dir(dir.path()).await.unwrap();
+        for e in &entries {
+            assert!(!e.name.contains(".tmp."), "tmp 残留: {}", e.name);
+        }
+    }
+
+    #[tokio::test]
+    async fn create_dir_all_idempotent() {
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("a").join("b").join("c");
+
+        let fs = LocalFileSystemProvider::new();
+        fs.create_dir_all(&nested).await.unwrap();
+        // 第二次调不报错
+        fs.create_dir_all(&nested).await.unwrap();
+
+        assert!(fs.exists(&nested).await);
+    }
+
+    #[tokio::test]
+    async fn remove_file_returns_not_found_for_missing() {
+        let dir = tempdir().unwrap();
+        let fs = LocalFileSystemProvider::new();
+        let err = fs
+            .remove_file(&dir.path().join("ghost.md"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FsError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn remove_file_deletes_existing_file() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("victim.md");
+        tokio::fs::write(&file, b"x").await.unwrap();
+
+        let fs = LocalFileSystemProvider::new();
+        fs.remove_file(&file).await.unwrap();
+        assert!(!fs.exists(&file).await);
     }
 
     #[tokio::test]

@@ -76,6 +76,21 @@ pub trait DataApi: Send + Sync {
         file: &str,
     ) -> Result<MemoryFileContent, ApiError>;
 
+    /// 写入（新增 / 覆盖）指定项目 memory 目录内的 Markdown 文件——atomic 语义；
+    /// 返回写入后的最新 [`ProjectMemory`]，前端无需再调 [`Self::get_project_memory`]。
+    /// 设计：change `ssh-project-memory-remote-rw` D9。
+    async fn add_memory(
+        &self,
+        project_id: &str,
+        file: &str,
+        content: &str,
+    ) -> Result<ProjectMemory, ApiError>;
+
+    /// 删除指定项目 memory 目录内的 Markdown 文件；
+    /// 返回删除后的最新 [`ProjectMemory`]。
+    /// 文件不存在 SHALL 返 [`ApiError::not_found`]。
+    async fn delete_memory(&self, project_id: &str, file: &str) -> Result<ProjectMemory, ApiError>;
+
     /// 通过仅 `session_id` 反查所属 `project_id`。
     ///
     /// HTTP `GET /api/sessions/:id` 不携带 `project_id`，需要全局查找；同样

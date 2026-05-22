@@ -29,6 +29,8 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'get_session_detail',
   'get_project_memory',
   'read_memory_file',
+  'add_memory',
+  'delete_memory',
   'get_subagent_trace',
   'get_image_asset',
   'get_tool_output',
@@ -385,6 +387,59 @@ function buildHandler(fx: Fixture) {
           )
         }
         return { projectId, file, filePath: `/mock/${projectId}/memory/${file}`, content }
+      }
+
+      case 'add_memory': {
+        const projectId = getArg<string>(payload, 'projectId') ?? ''
+        const file = getArg<string>(payload, 'file') ?? ''
+        const content = getArg<string>(payload, 'content') ?? ''
+        // mock 直接更新 fixture 内存态，返新的 ProjectMemory
+        if (!fx.memoryFiles) fx.memoryFiles = {}
+        fx.memoryFiles[`${projectId}:${file}`] = content
+        const existing = fx.memories?.[projectId] ?? {
+          projectId,
+          hasMemory: false,
+          count: 0,
+          defaultFile: null,
+          layers: [],
+        }
+        const layers = [...existing.layers]
+        if (!layers.some((l: { file: string }) => l.file === file)) {
+          layers.push({ file, title: file, hook: null, kind: 'orphan' })
+        }
+        const updated = {
+          projectId,
+          hasMemory: true,
+          count: layers.length,
+          defaultFile: existing.defaultFile ?? layers[0]?.file ?? null,
+          layers,
+        }
+        if (!fx.memories) fx.memories = {}
+        fx.memories[projectId] = updated
+        return updated
+      }
+
+      case 'delete_memory': {
+        const projectId = getArg<string>(payload, 'projectId') ?? ''
+        const file = getArg<string>(payload, 'file') ?? ''
+        if (!fx.memoryFiles?.[`${projectId}:${file}`]) {
+          return Promise.reject(new Error(`memory file ${file} not found`))
+        }
+        delete fx.memoryFiles[`${projectId}:${file}`]
+        const existing = fx.memories?.[projectId]
+        const layers = (existing?.layers ?? []).filter(
+          (l: { file: string }) => l.file !== file,
+        )
+        const updated = {
+          projectId,
+          hasMemory: layers.length > 0,
+          count: layers.length,
+          defaultFile: layers[0]?.file ?? null,
+          layers,
+        }
+        if (!fx.memories) fx.memories = {}
+        fx.memories[projectId] = updated
+        return updated
       }
 
       case 'get_subagent_trace':

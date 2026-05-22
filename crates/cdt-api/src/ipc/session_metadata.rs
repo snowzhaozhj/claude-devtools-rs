@@ -2130,6 +2130,15 @@ mod tests {
                 .ok_or_else(|| FsError::NotFound(path.to_path_buf()))?;
             Ok(Box::new(std::io::Cursor::new(content.into_bytes())))
         }
+        async fn write_atomic(&self, _path: &StdPath, _content: &[u8]) -> Result<(), FsError> {
+            unimplemented!("FakeSshFs perf bench fixture 当前不走写路径")
+        }
+        async fn create_dir_all(&self, _path: &StdPath) -> Result<(), FsError> {
+            unimplemented!("FakeSshFs perf bench fixture 当前不走写路径")
+        }
+        async fn remove_file(&self, _path: &StdPath) -> Result<(), FsError> {
+            unimplemented!("FakeSshFs perf bench fixture 当前不走写路径")
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

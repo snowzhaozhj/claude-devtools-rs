@@ -529,6 +529,26 @@ mod tests {
                 })
                 .collect())
         }
+        async fn write(&self, _path: &str, _data: &[u8]) -> Result<(), SftpClientError> {
+            Err(SftpClientError::Other(
+                "write not used in polling fake".into(),
+            ))
+        }
+        async fn mkdir(&self, _path: &str) -> Result<(), SftpClientError> {
+            Err(SftpClientError::Other(
+                "mkdir not used in polling fake".into(),
+            ))
+        }
+        async fn remove(&self, _path: &str) -> Result<(), SftpClientError> {
+            Err(SftpClientError::Other(
+                "remove not used in polling fake".into(),
+            ))
+        }
+        async fn rename(&self, _src: &str, _dst: &str) -> Result<(), SftpClientError> {
+            Err(SftpClientError::Other(
+                "rename not used in polling fake".into(),
+            ))
+        }
     }
 
     fn meta(size: u64, mtime: SystemTime) -> FsMetadata {
