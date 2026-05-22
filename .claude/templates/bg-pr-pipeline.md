@@ -2,13 +2,11 @@
 
 bg session 自己会读 `.claude/rules/{rust,perf,opsx-apply-cadence,codex-usage,bg-task-dispatch}.md` + `CLAUDE.md`——**不要**在 prompt 里重抄规则内容。本骨架只列任务格式 + 关键不变量。
 
-填空后**只走** inline：
+填空后直接起：
 
 ```bash
 just bg-pr <name> '<填好的 prompt>'
 ```
-
-**禁止落 prompt 文件**——觉得长到必须落文件 = prompt 写得不合理（重抄了规则 / spec / design.md）。详 `.claude/rules/bg-task-dispatch.md::禁止落 prompt 文件`。
 
 ---
 
