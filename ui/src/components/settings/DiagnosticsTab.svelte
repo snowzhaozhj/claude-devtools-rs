@@ -168,7 +168,14 @@
 
     {#if error}
       <div class="banner-inline-error" role="alert">
-        {snapshot ? `刷新失败：${error}` : `无法加载 telemetry：${error}`}
+        <span class="banner-text">
+          {snapshot ? `刷新失败：${error}` : `无法加载 telemetry：${error}`}
+        </span>
+        {#if !snapshot}
+          <SettingsButton variant="ghost" onClick={load} disabled={loading}>
+            {loading ? "重试中…" : "重试"}
+          </SettingsButton>
+        {/if}
       </div>
     {/if}
 
@@ -385,6 +392,9 @@
 
   /* ===== inline banner（refresh / load 失败） ===== */
   .banner-inline-error {
+    display: flex;
+    align-items: center;
+    gap: 12px;
     padding: 10px 14px;
     border: 1px solid color-mix(in oklch, var(--color-danger-bright) 35%, var(--color-border));
     border-radius: 8px;
@@ -392,6 +402,11 @@
     color: var(--tool-result-error-text);
     font-size: 13px;
     line-height: 1.5;
+  }
+  .banner-inline-error .banner-text {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .copy-toast {
