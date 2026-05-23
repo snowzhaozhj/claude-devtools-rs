@@ -174,7 +174,7 @@ cold scan baseline（`cargo test --release -p cdt-api --test perf_cold_scan -- -
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR（含 §0 baseline 表 + §7 改后对比 + §8 前端验证截图）
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex 二审通过（性能关键路径 + cache 状态机 + 三档判定，必调；若发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
+- [x] N.1 push 分支 + 开 PR（含 §0 baseline 表 + §7 改后对比 + §8 前端验证截图）
+- [x] N.2 wait-ci 全绿
+- [x] N.3 codex 二审通过（性能关键路径 + cache 状态机 + 三档判定，必调；若发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
