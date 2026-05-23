@@ -10,6 +10,13 @@
 
 系统 SHALL 按 `HOME` → `USERPROFILE` → `HOMEDRIVE` + `HOMEPATH` → 平台默认（`dirs::home_dir()`）的优先级解析用户 home 目录。这与 TS 原版 `pathDecoder.ts::getHomeDir` 的 fallback 链一致：让 WSL / Git Bash / Cygwin 用户可经 `HOME` 覆写，同时仍能在 Windows 原生 shell 里定位到 `%USERPROFILE%\.claude\`。
 
+**SSH 模式下单 project 扫描错误处理**：当 `fs.kind() == FsKind::Ssh` 时，scanner 对每个 sub-project 调 `scan_project_dir` 的错误 SHALL 按 `FsError::is_likely_channel_dead()` 元方法分流：
+
+- `is_likely_channel_dead() == true`（含 `Disconnected` 任意 / `TransientExhausted { last_reason }` 含 transport-dead 关键字 / `Io { source.kind() }` 是 `BrokenPipe / ConnectionReset / ConnectionAborted`）：scanner SHALL **立即** `return Err(DiscoverError::Fs(err))` abort 整轮 scan，让上层 `list_repository_groups` 拿到 hard error 触发自愈路径，**不**得 silent skip 凑半成品列表
+- `is_likely_channel_dead() == false`（普通单文件 IO / NotFound / 单 project 临时不可读）：保留现有 `tracing::warn!(dir, error, "skip unreadable project dir")` + 跳过该 project 行为
+
+理由：SSH channel-dead 时 silent skip 让用户 sidebar 看到不完整列表 + UI 表现"还在加载"，自愈路径瘫痪；而普通单 project 失败（典型权限 / 单文件损坏）silent skip 让其它 project 仍可见是合理的。
+
 #### Scenario: Empty root directory
 
 - **WHEN** projects 根目录存在但无任何子目录
@@ -50,6 +57,33 @@
 
 - **WHEN** 当前 Claude root 从 `/data/claude-alt` 清空为 `null`
 - **THEN** scanner SHALL 重新使用默认 home 下 `.claude/projects/`
+
+#### Scenario: SSH channel-dead error aborts full scan instead of silent skip
+
+- **WHEN** active context 是 `Ssh<host>`，scanner 调 `scan_project_dir(dir_name_a)` 返 `DiscoverError::Fs(FsError::Disconnected { ... })`
+- **AND** 仍有未扫描的 sub-project `dir_name_b` / `dir_name_c` 在迭代队列中
+- **THEN** scanner SHALL **立即** return `Err(DiscoverError::Fs(err))` 跳出整轮 scan
+- **AND** SHALL NOT 继续尝试 `scan_project_dir(dir_name_b)` / `scan_project_dir(dir_name_c)`
+- **AND** SHALL `tracing::error!(dir, error, "ssh channel appears dead; aborting full scan")` 记录决策
+- **AND** 上层 `list_repository_groups` SHALL 把该错误传播到 IPC caller（与 issue #231 触发自愈路径预期一致，避免半成品列表误导用户）
+
+#### Scenario: SSH TransientExhausted with transport-dead keyword aborts scan
+
+- **WHEN** active context 是 `Ssh<host>`，scanner 调 `scan_project_dir(dir_name)` 返 `DiscoverError::Fs(FsError::TransientExhausted { last_reason: "session closed", attempts: 3, ... })`
+- **THEN** scanner SHALL 识别 `last_reason` 含 transport-dead 关键字 → `is_likely_channel_dead() == true`
+- **AND** SHALL 立即 abort 整轮 scan return `Err(...)`
+
+#### Scenario: SSH per-project NotFound 仍 silent skip 不 abort
+
+- **WHEN** active context 是 `Ssh<host>`，scanner 调 `scan_project_dir(dir_name_a)` 返 `DiscoverError::Fs(FsError::NotFound(_))`（典型场景：扫描期间该 project 被远端进程删除）
+- **THEN** scanner SHALL `tracing::warn!` + continue，继续扫描后续 sub-project
+- **AND** 最终 `scan` 返 `Ok(Vec<Project>)` 包含其它扫描成功的 project（缺失 dir_name_a）
+
+#### Scenario: SSH per-project pure timeout TransientExhausted 仍 silent skip 不 abort
+
+- **WHEN** active context 是 `Ssh<host>`，scanner 调 `scan_project_dir(dir_name_a)` 返 `DiscoverError::Fs(FsError::TransientExhausted { last_reason: "timeout", attempts: 3, ... })`
+- **THEN** scanner SHALL 识别 `last_reason` 不含 transport-dead 关键字 → `is_likely_channel_dead() == false`
+- **AND** SHALL `tracing::warn!` + continue 保持现有容错行为（避免误把远端 readdir 慢盘当 channel 死）
 
 ### Requirement: Decode encoded project paths
 

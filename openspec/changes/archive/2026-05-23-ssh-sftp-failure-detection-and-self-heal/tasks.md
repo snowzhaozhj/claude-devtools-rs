@@ -43,7 +43,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
-- [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
+- [x] N.1 push 分支 + 开 PR（PR #253）
+- [x] N.2 wait-ci 全绿（14 job 全 pass：rustfmt / clippy × 3 平台 / test × 3 平台 / perf bench / vitest + svelte-check / playwright / openspec / ipc command sync / hot-path no event! / xtask check-fs-direct-calls）
+- [x] N.3 codex 二审通过（0 bug；8 个怀疑点全部 codex 确认无问题——关键字优先级 / OtherTransient reset / scan_once escalate / SSH-Local 不对称 / 关键字重复维护 / 测试 flakiness / shim 删除 / spec 实现对齐）
+- [x] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
