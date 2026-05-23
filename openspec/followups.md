@@ -656,18 +656,6 @@ Phase 1 已落地：UI registry / dispatcher / 17 条 default + Settings 录键 
 - **风险**：系统级 shortcut 会与其它 app 冲突（macOS Spotlight `Cmd+Space` / Raycast 等），SHALL 在 Settings panel 加"启用全局快捷键"开关 + 默认关闭；需实现 conflict detection（同 binding 在 macOS 上可能被静默吞掉）。
 - **触发条件**：用户主动反馈"想从后台拉起"，或观察到 active session 之外仍频繁需要 CommandPalette 时再做。
 
-### [coverage-gap → deferred] Playwright e2e 用户故事
-
-本 PR `tasks.md::§10` deferred，待 QA teammate 独立 PR 落地：
-
-- 14+ 条快捷键 happy path（每条 mockIPC + dispatch keydown + 验证效果）
-- 录键交互 e2e（进 Settings → 改 binding → save → 验证旧组合不再触发、新组合触发）
-- 冲突检测 e2e（录入已占用 binding → 验证 conflict 反馈 + Save disabled）
-- 重置全部 e2e（自定义 3 条后点重置全部 → 验证 cdt-config 写入 empty + UI 显示 default）
-- IPC error 回滚 e2e（mockIPC `setConfig` 返回 error → 验证 UI inline 错误 + registry 内存回滚）
-
-vitest mockIPC 单测 + svelte-check 已覆盖契约层；e2e 跑真 Svelte mount + DOM 事件链路，是 §9 单测的补充验证而非替代。
-
 ### [windows-compat → followup] 跨平台 config 同步与录键归一化
 
 windows-compat-reviewer 在 §11.2 输出 0 P0 / 1 P1 / 4 P2 / 2 nit；§11.2 严格 scope（`event.code` 物理键兜底无 Windows 误判）已 PASS（`platform.ts` AltGraph 守卫 + Numpad 归一化 + non-mac 禁识 metaKey 全部正确）。以下条目超出本 PR scope，独立处理：
