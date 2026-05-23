@@ -1,11 +1,17 @@
-// User story: 折叠/展开 sidebar + git 分支 chip 在每条 SessionItem 行内
+// User story: 折叠/展开 sidebar + 多 wt group 下 worktree 标签在每条 SessionItem 行内
 //
 // Spec：openspec/specs/sidebar-navigation/spec.md
-//   §"侧栏折叠/展开" / §"会话项展示"（含 git 分支 chip）
+//   §"侧栏折叠/展开" / §"会话项展示"
+//
+// 历史：原版 PR #142 在每条 session 行尾显示 gitBranch chip（`.session-branch`）。
+// PR-A 视觉重排后 gitBranch 行内不再展示——理由是 gitBranch 与 worktreeName
+// 在 git worktree 设计意图下 90%+ 重叠（一 wt 一 branch），重复显示浪费列宽
+// 且 branch 名长易截断；多 wt group 改用 `.session-wt-label` 显示 worktreeName
+// 短名前缀，行末截断保留前缀（用户对 wt 名记忆主体在前段）。完整 branch 留 SessionDetail。
 
 import { expect, test } from '@playwright/test'
 
-test.describe('sidebar collapse and git branch chip', () => {
+test.describe('sidebar collapse and worktree label', () => {
   test('点折叠按钮 → sidebar 隐藏 → TabBar 展开按钮出现 → 点展开恢复', async ({ page }) => {
     await page.goto('/?mock=1&fixture=multi-project-rich')
 
@@ -56,28 +62,27 @@ test.describe('sidebar collapse and git branch chip', () => {
     await expect(page.locator('aside.sidebar')).not.toHaveClass(/sidebar-collapsed/, { timeout: 2_000 })
   })
 
-  test('git 分支 chip 在每条 SessionItem 行内显示', async ({ page }) => {
+  test('多 wt group 下 worktree 标签在每条 SessionItem 行内显示', async ({ page }) => {
     await page.goto('/?mock=1&fixture=multi-project-rich')
     await page.locator('.dash-row, .dash-card').filter({ hasText: 'rust-port' }).first().click()
 
     // SidebarHeader 不再有 .branch-row（已移到 SessionItem 行内）
     await expect(page.locator('.branch-row')).toHaveCount(0)
 
-    // fixture 中：sess-rust-active gitBranch=feat/frontend-test-infrastructure，
-    // sess-rust-2 / sess-rust-3 gitBranch=main——每条 SessionItem 第二行 meta
-    // 末尾应有对应 .session-branch chip。
-    const branchNames = page.locator('aside.sidebar .session-branch-name')
-    await expect(branchNames.first()).toContainText(
-      /feat\/frontend-test-infrastructure|main/,
-      { timeout: 5_000 },
-    )
+    // PR-A 行为：多 wt group（rust-port 含主仓 + feat-x worktree）每条 SessionItem
+    // 在 meta 行末尾用 .session-wt-label 显示 ⌗{worktreeName}。
+    // fixture 中：mock-rich-rust 的 worktreeName=rust-port，mock-rich-rust-wt-feat 的
+    // worktreeName=feat-x——sidebar 应同时出现两个 wt label。
+    const wtLabels = page.locator('aside.sidebar .session-wt-label')
+    await expect(wtLabels.first()).toContainText(/⌗(rust-port|feat-x)/, { timeout: 5_000 })
 
-    // 至少能看到不同的两个 branch（rust-port 项目下 active 在 feat 分支，
-    // 其他在 main）
-    const allBranchTexts = await branchNames.allInnerTexts()
-    const uniqueBranches = new Set(allBranchTexts.map((t) => t.trim()))
-    expect(uniqueBranches.size).toBeGreaterThanOrEqual(2)
-    expect(uniqueBranches).toContain('feat/frontend-test-infrastructure')
-    expect(uniqueBranches).toContain('main')
+    const allWtTexts = await wtLabels.allInnerTexts()
+    const uniqueWts = new Set(allWtTexts.map((t) => t.trim()))
+    expect(uniqueWts.size).toBeGreaterThanOrEqual(2)
+    expect(uniqueWts).toContain('⌗rust-port')
+    expect(uniqueWts).toContain('⌗feat-x')
+
+    // gitBranch 行内不再渲染（已沉到 SessionDetail）—— DOM 上不应存在 .session-branch
+    await expect(page.locator('aside.sidebar .session-branch')).toHaveCount(0)
   })
 })

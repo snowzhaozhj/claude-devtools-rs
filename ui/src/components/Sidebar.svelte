@@ -1530,14 +1530,16 @@
     line-height: 1.4;
   }
 
-  /* 行内 pin 标识：与顶部 PINNED group label 的 📌 同色族（暖中性灰），
-     不再使用 accent-blue——blue 在 sidebar 已被 ongoing/瞬时焦点 / 链接占用
-     （DESIGN.md `The Ongoing Owns Blue Rule`）；行内 pin 只是在 PINNED group
-     滚出视口时的 fallback 识别，视觉权重应低于 ongoing dot。尺寸 12→10px
-     进一步降权重。 */
+  /* 行内 pin 标识：与顶部 PINNED group label 的 📌 同色（`--sidebar-pinned`
+     pin indigo），保持 DESIGN.md `Pin / Hide 等专属状态指示器使用各自专属
+     颜色（pin indigo）` 的颜色契约（codex 二审 PR #215 finding #2）；
+     accent-blue 不能用（已被 ongoing / 瞬时焦点 / 链接占用，DESIGN.md
+     `The Ongoing Owns Blue Rule`），text-muted 也不行（弱化 pin 专属语义）。
+     尺寸 12→10px 单独降权重——pin icon 在 PINNED group label 已带 📌 的
+     前提下是冗余 fallback（group label 滚出视口时识别）。 */
   .pin-icon {
     flex-shrink: 0;
-    color: var(--color-text-muted);
+    color: var(--sidebar-pinned);
   }
 
   /* meta 行：grid 三列 [count fixed | time fixed | wt flex]。固定前两列
