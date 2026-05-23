@@ -7,12 +7,18 @@
 **判定规则（三档）**：
 
 1. `event.project_list_changed == true` **OR** `event.deleted == true` → 调 `ProjectScanCache::invalidate_local()`，inc counter `project_scan_cache.invalidate.structural`
-2. `event.session_id` 非空 **AND** `ProjectScanCache::has_entry(local_ctx) == true` **AND** `ProjectScanCache::contains_session_id(local_ctx, &event.project_id, &event.session_id) == false`（cache 已有该 ctx 的 entry 且 snapshot 不含此 session）→ 同规则 1：`invalidate_local()` + structural counter
-3. 其他（普通 JSONL append + watcher 折叠的 subagent 修改 + 空 sid 事件 + cache 无 entry 时的任意非 structural 事件）→ **不**调任何失效 API，保留现有 cache，inc counter `project_scan_cache.invalidate.content_append_skipped`
+2. `event.session_id` 非空 **AND** (`ProjectScanCache::has_entry(local_ctx) == true` **OR** `ProjectScanCache::has_in_flight_scan() == true`) **AND** `ProjectScanCache::contains_session_id(local_ctx, &event.project_id, &event.session_id) == false`（cache 已有该 ctx 的 entry 或当前有 in-flight scan 在跑，且 snapshot 不含此 session）→ 同规则 1：`invalidate_local()` + structural counter
+3. 其他（普通 JSONL append + watcher 折叠的 subagent 修改 + 空 sid 事件 + cache 无 entry **且**无 in-flight scan 时的任意非 structural 事件）→ **不**调任何失效 API，保留现有 cache，inc counter `project_scan_cache.invalidate.content_append_skipped`
 
 **为何需要规则 2**：`cdt-watch::FileWatcher` 在构造时**预填**当前已存在的 project 目录到 `known_projects` HashSet（`crates/cdt-watch/src/watcher.rs:30-41,79`）。已知 project 下新建 session 时 `mark_project_seen` 不会返回 true，watcher 输出 `plc=false, deleted=false`——与"已知 session JSONL 追加"在事件字段上**外观完全相同**。仅靠 (plc, deleted) 两 bool 判定会让新 session 最长 `LOCAL_CACHE_TTL = 300s` 不可见。规则 2 用 cache snapshot 反向查询补这个语义缺口。
 
-**为何需要 `has_entry` 守护**：lag 路径调 `invalidate_local()` 后 cache 被清空，若不守护，后续普通 append 事件 `contains_session_id` 一律返 false → unknown_session 命中 → 又调 `invalidate_local()` 反复 bump `invalidation_generation` → 在重扫期间 `try_insert` 因 generation mismatch 一直丢弃 snapshot → cache 长期无法 repopulate（持续重扫风暴）。`has_entry` 守护让 cache 空时直接走规则 3 等待业务路径重扫填回。
+**为何需要 `has_entry || has_in_flight_scan` 守护组合**：
+
+- **`has_entry` 单条件不足以防风暴**：lag 路径调 `invalidate_local()` 后 cache 被清空，若不守护，后续普通 append 事件 `contains_session_id` 一律返 false → unknown_session 命中 → 又调 `invalidate_local()` 反复 bump `invalidation_generation` → 在重扫期间 `finish_scan_with_insert` 因 generation mismatch 一直丢弃 snapshot → cache 长期无法 repopulate（持续重扫风暴）。`has_entry` 守护让 cache 空时直接走规则 3 等待业务路径重扫填回。
+
+- **仅 `has_entry` 又会漏掉 in-flight scan 期间结构事件**：cache 空 + 业务路径已经 `begin_scan` 在跑 scan 期间到达"已知 project 下新 session"事件被吞 → generation 不 bump → scan 完成 `finish_scan_with_insert` 旧 snapshot 因 generation 未变成功落地 → 新 session 最长等 TTL 5min 才能看到。
+
+- **联合条件 `has_entry || has_in_flight_scan` 二者兼得**：cache 有 entry 或 scan 在途时走规则 2 判定 bump；cache 空且无 scan 在途时走规则 3 不 bump。
 
 **对各类真实 fs 事件的语义覆盖**（对应 `cdt-watch::FileWatcher::parse_project_event` 的输出）：
 
@@ -33,6 +39,10 @@
 **`ProjectScanCache::contains_session_id` API 契约**：`ProjectScanCache` SHALL 暴露公开方法 `contains_session_id(&self, ctx: &ContextId, project_id: &str, session_id: &str) -> bool`，遍历指定 ctx 对应 entry 的 `Arc<Vec<Project>>`，定位 `Project.id == project_id` 后检查 `Project.sessions: Vec<String>` 是否含 `session_id`；ctx 无 entry 或 project 不存在时返回 `false`。复杂度 O(N project × N session_per_project)，对 30 project × 538 session corpus 单次 ~10µs，可在 hot 路径调用。
 
 **`ProjectScanCache::has_entry` API 契约**：`ProjectScanCache` SHALL 暴露公开方法 `has_entry(&self, ctx: &ContextId) -> bool`，返回 `entries` 是否含此 ctx 的 entry。invalidator 在规则 2 判定前 SHALL 先用本方法守护——cache 空时跳过 unknown_session 判定，避免 lag 后被普通 append 事件持续触发 invalidate 导致重扫风暴。
+
+**`ProjectScanCache::has_in_flight_scan` API 契约**：`ProjectScanCache` SHALL 暴露公开方法 `has_in_flight_scan(&self) -> bool`，返回当前 `in_flight_scans > 0`。invalidator 在规则 2 判定前 SHALL 与 `has_entry` 共同 OR 守护——cache 空但有 scan 在途时仍 bump generation，让 in-flight scan 完成回写时识别 race 丢弃 stale snapshot。
+
+**`ProjectScanCache::begin_scan` / `finish_scan_with_insert` / `abort_scan` API 契约**：业务路径 `scan_projects_cached_with` SHALL 用 `begin_scan` 替代裸 `invalidation_generation()` 拿 recorded_generation 同时 `in_flight_scans += 1`；scan 成功时 SHALL 用 `finish_scan_with_insert` 替代 `try_insert`（内部 `in_flight_scans -= 1` + race 校验）；scan 失败时 SHALL 调 `abort_scan` 配对 `begin_scan` 不漏减。这三 API 联合保护 in-flight scan 与 invalidator 之间的 race 协议。
 
 **SSH context entry 不受 file-change 影响**：watcher 是 Tauri 本地 fs 的硬不变量。invalidator 推算 `ContextId::local(projects_dir)` 决定失效作用域；`ProjectScanCache::invalidate_local()` 实现仅对 `FsKind::Local` entry 生效，SSH entry 仍按既有 TTL 自然过期。
 
@@ -123,15 +133,26 @@
 - **AND** counter `project_scan_cache.invalidate.structural` MUST NOT inc
 - **AND** loop SHALL 继续等待下一条事件
 
-#### Scenario: lag 后 cache 空时后续普通 append SHALL NOT 引发 structural storm
+#### Scenario: lag 后 cache 空且无 scan 在途时后续普通 append SHALL NOT 引发 structural storm
 
 - **WHEN** `broadcast::Receiver::recv` 返回 `Err(RecvError::Lagged(_))` 触发 `invalidate_local()` 清空 Local entry
+- **AND** 当前无业务路径调用 `begin_scan`（即 `has_in_flight_scan() == false`）
 - **AND** 紧接着收到若干普通 append 事件 `FileChangeEvent { ..., deleted: false, project_list_changed: false, session_id != "" }`
-- **THEN** 后台 invalidator MUST 用 `has_entry(local_ctx)` 守护规则 2，发现 cache 已空时 SHALL 跳过 `contains_session_id` 反查
+- **THEN** 后台 invalidator MUST 用 `has_entry || has_in_flight_scan` 守护规则 2，二者皆 false 时 SHALL 跳过 `contains_session_id` 反查
 - **AND** 这些 append 事件 MUST 全部走规则 3（content_append_skipped）
 - **AND** counter `project_scan_cache.invalidate.structural` MUST NOT 因后续 append 事件而递增
-- **AND** `ProjectScanCache::invalidation_generation` MUST NOT 因后续 append 事件而递增——避免 in-flight scan 完成回写时 `try_insert` 反复 mismatch 让 cache 长期无法 repopulate
-- **AND** 业务路径下次调 `list_repository_groups` 走 cache miss 重扫并通过 `try_insert` 成功填回 snapshot
+- **AND** `ProjectScanCache::invalidation_generation` MUST NOT 因后续 append 事件而递增——避免 in-flight scan 完成回写时反复 mismatch 让 cache 长期无法 repopulate
+- **AND** 业务路径下次调 `list_repository_groups` 走 cache miss 重扫并通过 `finish_scan_with_insert` 成功填回 snapshot
+
+#### Scenario: in-flight scan 期间 cache 空时新 session 事件 SHALL bump generation
+
+- **WHEN** 业务路径 `scan_projects_cached_with` miss 后调 `begin_scan` 拿 `recorded_invalidation` 并开始 async scan（`has_in_flight_scan() == true`）
+- **AND** scan 期间 `FileWatcher` 广播 `FileChangeEvent { project_id: "pa", session_id: "sa_new", deleted: false, project_list_changed: false }`，`pa` 是已知 project（`mark_project_seen` 预填）
+- **AND** cache 当前为空（`has_entry(local_ctx) == false`）
+- **THEN** 后台 invalidator MUST 因 `has_in_flight_scan() == true` 走规则 2 判定，`contains_session_id == false` → unknown_session=true → `invalidate_local()` + bump `invalidation_generation`
+- **AND** counter `project_scan_cache.invalidate.structural` MUST inc 1
+- **AND** scan 完成后 `finish_scan_with_insert(..., recorded_invalidation)` MUST 因 generation mismatch 返回 `false`，丢弃可能不含 `sa_new` 的 stale snapshot
+- **AND** 下次 `list_repository_groups` 走 cache miss 重扫，新一轮 scan 看到 `sa_new` 并填回 cache（不需要等到 `LOCAL_CACHE_TTL = 300s` 自然过期）
 
 #### Scenario: broadcast close 退出 loop
 

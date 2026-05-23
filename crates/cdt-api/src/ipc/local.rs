@@ -1416,8 +1416,11 @@ impl LocalDataApi {
     ) -> Result<Arc<Vec<Project>>, ApiError> {
         let cur_root_generation = self.root_generation.load(Ordering::SeqCst);
         let cur_context_generation = self.context_generation.load(Ordering::SeqCst);
-        // 命中检查 + 记录 `invalidation_generation`（用于 scan miss 完成后
-        // `try_insert` race 检测，详 `project_scan_cache.rs::try_insert`）。
+        // 命中检查 + `begin_scan` 标记 in-flight：返回当前 invalidation_generation
+        // 给 scan 完成后 `finish_scan_with_insert` race 检测，同时 in_flight_scans
+        // += 1 让 invalidator 在 cache 空 + scan 在途场景下也 bump generation
+        // （详 spec `ProjectScanCache 按事件语义分级失效` Requirement
+        // `has_entry || has_in_flight_scan` 守护）。
         let recorded_invalidation = {
             let mut cache = self
                 .project_scan_cache
@@ -1431,30 +1434,36 @@ impl LocalDataApi {
                 );
                 return Ok(hit);
             }
-            cache.invalidation_generation()
+            cache.begin_scan()
         };
 
-        // miss：真正 scan
+        // miss：真正 scan。错误路径 SHALL `abort_scan` 配对 begin_scan。
         let mut scanner = ProjectScanner::new_with_semaphore(
             fs.clone(),
             projects_dir.to_path_buf(),
             self.shared_read_semaphore.clone(),
         );
-        let projects = scanner
-            .scan()
-            .await
-            .map_err(|e| ApiError::internal(format!("scan error: {e}")))?;
+        let projects = match scanner.scan().await {
+            Ok(p) => p,
+            Err(e) => {
+                self.project_scan_cache
+                    .lock()
+                    .expect("project scan cache mutex poisoned")
+                    .abort_scan();
+                return Err(ApiError::internal(format!("scan error: {e}")));
+            }
+        };
         let snapshot = Arc::new(projects);
         let fs_kind = fs.kind();
-        // 写入 cache：`try_insert` 校验"scan 期间 cache 未被 invalidate"。
-        // race 时（典型：watcher 在 scan await 期间收到 `FileChangeEvent`）
-        // 丢弃本次 snapshot，下次 lookup 走真实 miss 重 scan。
+        // 写入 cache：`finish_scan_with_insert` 内部 in_flight_scans -= 1 +
+        // generation race 检查。race 时（典型：watcher 在 scan await 期间收到
+        // `FileChangeEvent`）丢弃本次 snapshot，下次 lookup 走真实 miss 重 scan。
         let inserted = {
             let mut cache = self
                 .project_scan_cache
                 .lock()
                 .expect("project scan cache mutex poisoned");
-            cache.try_insert(
+            cache.finish_scan_with_insert(
                 ctx.clone(),
                 snapshot.clone(),
                 cur_root_generation,

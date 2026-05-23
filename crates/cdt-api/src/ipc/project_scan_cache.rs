@@ -79,6 +79,14 @@ pub struct ProjectScanCache {
     /// `+= 1`，让 in-flight scan 完成回写前能识别"期间 cache 被清过"
     /// 从而丢弃旧 snapshot（codex 二审 #2 race）。
     invalidation_generation: u64,
+    /// 当前在途的 scan 数（`begin_scan()` += 1 / `finish_scan_with_insert()`
+    /// / `abort_scan()` -= 1）。invalidator 在三档判定 `unknown_session` 时
+    /// `has_entry || has_in_flight_scan` 共同决定是否 bump generation——
+    /// cache 空但 scan 在途时 SHALL 仍 bump，让 in-flight scan 完成回写时
+    /// 通过 `try_insert` 识别 race 丢弃 stale snapshot（codex PR 二审第二轮
+    /// BLOCK 修复：原 `has_entry` 单条件守护漏掉"启动后第一次扫描"期间
+    /// 新 session 事件 → snapshot 落地后等 TTL 5min 才能看到的问题）。
+    in_flight_scans: u32,
     /// 累计命中次数 / 累计 lookup 次数，调试 / perf bench 用。
     hits: u64,
     lookups: u64,
@@ -119,9 +127,11 @@ impl ProjectScanCache {
         Some(entry.snapshot.clone())
     }
 
-    /// `scan_projects_cached()` miss 前 snapshot 当前
-    /// `invalidation_generation` 的辅助。`try_insert` 据此判断 scan 期间
-    /// 是否被 invalidate 过。
+    /// 当前 `invalidation_generation` 的 read-only snapshot。
+    /// 仅用于测试断言；生产路径走 [`Self::begin_scan`] /
+    /// [`Self::finish_scan_with_insert`] 自动管理。
+    #[cfg(any(test, feature = "test-utils"))]
+    #[allow(dead_code)]
     pub fn invalidation_generation(&self) -> u64 {
         self.invalidation_generation
     }
@@ -191,10 +201,67 @@ impl ProjectScanCache {
         self.entries.contains_key(ctx)
     }
 
+    /// 当前是否有 in-flight scan 在跑。invalidator 在 cache 空但 scan 在途
+    /// 时 SHALL 仍走 `unknown_session` 判定 bump generation，让 in-flight scan
+    /// 完成回写时 `try_insert` 识别 race（codex PR 二审第二轮 BLOCK 修复）。
+    #[must_use]
+    pub fn has_in_flight_scan(&self) -> bool {
+        self.in_flight_scans > 0
+    }
+
+    /// 标记一次 scan 开始：`in_flight_scans` += 1，返回当前
+    /// `invalidation_generation` 给调用方记录。配对 [`Self::finish_scan_with_insert`]
+    /// （成功路径）或 [`Self::abort_scan`]（错误路径）使用。
+    pub fn begin_scan(&mut self) -> u64 {
+        self.in_flight_scans = self.in_flight_scans.saturating_add(1);
+        self.invalidation_generation
+    }
+
+    /// scan 失败时调，`in_flight_scans` -= 1。不动 entries。
+    pub fn abort_scan(&mut self) {
+        self.in_flight_scans = self.in_flight_scans.saturating_sub(1);
+    }
+
+    /// scan 成功时调：`in_flight_scans` -= 1 + 校验 generation 未变并写入 entry。
+    /// `recorded_generation` 是 [`Self::begin_scan`] 时拿的 snapshot；若期间
+    /// `invalidation_generation` 被 invalidator bump → mismatch → 丢弃 snapshot
+    /// 返 `false`，下次 lookup 走真实 miss 重 scan。
+    pub fn finish_scan_with_insert(
+        &mut self,
+        ctx: ContextId,
+        snapshot: Arc<Vec<Project>>,
+        root_generation: u64,
+        context_generation: u64,
+        fs_kind: FsKind,
+        recorded_generation: u64,
+    ) -> bool {
+        self.in_flight_scans = self.in_flight_scans.saturating_sub(1);
+        if recorded_generation != self.invalidation_generation {
+            return false;
+        }
+        self.entries.insert(
+            ctx,
+            CacheEntry {
+                snapshot,
+                root_generation,
+                context_generation,
+                inserted_at: Instant::now(),
+                fs_kind,
+            },
+        );
+        true
+    }
+
     /// 条件写入：仅在 `recorded_generation == 当前 invalidation_generation`
     /// 时落 entry；mismatch → 丢弃本次 snapshot，返回 `false`。让
     /// in-flight scan 不覆盖 watcher 在 scan 期间发出的 invalidate 信号
     /// （codex 二审 #2）。
+    ///
+    /// 仅用于测试场景；生产路径走 [`Self::finish_scan_with_insert`]，
+    /// 内部含 `in_flight_scans` -= 1 + race 校验。本方法不动
+    /// `in_flight_scans`，便于测试单独构造 race 场景。
+    #[cfg(any(test, feature = "test-utils"))]
+    #[allow(dead_code)]
     pub fn try_insert(
         &mut self,
         ctx: ContextId,
@@ -318,14 +385,18 @@ pub fn spawn_project_scan_cache_invalidator(
                             Ok(g) => g,
                             Err(poisoned) => poisoned.into_inner(),
                         };
-                        // **`has_entry` 守护**（codex PR 二审 WARN 1 修复）：
-                        // ctx 无 entry 时不把"cache 空"误判为 unknown_session。
-                        // 否则 lag 后 cache 被清，后续普通 append 事件会全部
-                        // 触发 unknown_session=true 反复 bump generation，导致
-                        // in-flight scan 完成回写时 try_insert 一直 mismatch
-                        // → cache 长期无法 repopulate（持续重扫风暴）。
+                        // **守护组合**（codex PR 二审两轮迭代）：
+                        // - `has_entry`（WARN 1）：ctx 无 entry 时跳过 unknown_session
+                        //   判定，避免 lag 后续普通 append 反复 bump 引发风暴
+                        // - `has_in_flight_scan`（BLOCK 修复）：cache 空但有 scan
+                        //   在途时仍走 unknown_session 判定 bump generation，让
+                        //   in-flight scan 完成回写时 `finish_scan_with_insert`
+                        //   识别 race 丢弃可能 stale 的 snapshot（不漏新 session
+                        //   first-appearance 等结构事件）
+                        let track_unknown =
+                            cache.has_entry(&local_ctx) || cache.has_in_flight_scan();
                         let unknown_session = !event.session_id.is_empty()
-                            && cache.has_entry(&local_ctx)
+                            && track_unknown
                             && !cache.contains_session_id(
                                 &local_ctx,
                                 &event.project_id,

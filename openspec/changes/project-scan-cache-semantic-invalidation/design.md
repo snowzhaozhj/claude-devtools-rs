@@ -103,11 +103,26 @@ match recv_result {
 }
 ```
 
-### D2b：`has_entry` 守护（apply 阶段反转 / codex PR 二审 WARN 1 修订）
+### D2b：`has_entry || has_in_flight_scan` 守护组合（apply 阶段两轮迭代修订）
 
-原 D2 的规则 2 在 lag 路径触发后会引发死锁：lag 调 `invalidate_local()` 清空 Local entry → 后续普通 append 事件 `contains_session_id` 一律返 false → unknown_session 命中 → 又调 `invalidate_local()` + bump `invalidation_generation` → 在重扫期间 `try_insert` 因 generation mismatch 一直丢弃 snapshot → cache 长期无法 repopulate（持续重扫风暴）。
+**第一轮（codex PR 二审 WARN 1）**：原 D2 的规则 2 在 lag 路径触发后会引发死锁——lag 调 `invalidate_local()` 清空 Local entry → 后续普通 append 事件 `contains_session_id` 一律返 false → unknown_session 命中 → 又调 `invalidate_local()` + bump `invalidation_generation` → 在重扫期间 `try_insert` 因 generation mismatch 一直丢弃 snapshot → cache 长期无法 repopulate（持续重扫风暴）。
 
-**修订**：规则 2 加 `cache.has_entry(local_ctx)` 守护——cache 空时 unknown_session 不成立，走规则 3 等待业务路径下次 `list_repository_groups` 触发重扫填回。`ProjectScanCache` 同步加 `pub fn has_entry(&self, ctx: &ContextId) -> bool` API。spec delta 同步说明四档判定与 `has_entry` 守护契约（详 spec `ProjectScanCache 按事件语义分级失效` Requirement）。
+修订一：规则 2 加 `cache.has_entry(local_ctx)` 守护——cache 空时 unknown_session 不成立，走规则 3 等待业务路径下次 `list_repository_groups` 触发重扫填回。
+
+**第二轮（codex PR 二审第二轮 BLOCK）**：仅 `has_entry` 单条件守护引入反向问题——cache 空 + in-flight scan 期间到达的"已知 project 下新 session"事件被吞（unknown_session=false）导致 generation 不 bump → scan 完成 `try_insert` 旧 snapshot 因 generation 未变成功落地 → 新 session 最长等 TTL 5min 才能看到。
+
+修订二：`ProjectScanCache` 加 `in_flight_scans: u32` 字段 + `begin_scan()` / `abort_scan()` / `finish_scan_with_insert()` API。`scan_projects_cached_with` 改用 `begin_scan` 替代裸 `invalidation_generation()`、用 `finish_scan_with_insert` 替代 `try_insert`、错误路径 `abort_scan`。invalidator unknown_session 判定改为 `has_entry || has_in_flight_scan` 双条件——cache 空但 scan 在途时仍走 unknown_session 判定 bump generation，让 in-flight scan 完成回写时识别 race 丢弃 stale snapshot。
+
+**最终决策表**（D2 三档 + D2b 守护组合）：
+
+| 状态 | has_entry | has_in_flight_scan | 普通 append 事件处理 |
+|---|---|---|---|
+| 启动后未扫 / 无 IPC | false | false | 规则 3 SKIPPED（无副作用） |
+| lag 后清空 / 无业务调用 | false | false | 规则 3 SKIPPED（防风暴） |
+| in-flight scan 期间 cache 空 | false | true | 规则 2 判定 → 触发 bump → finish drop stale snapshot ✓ |
+| 业务正常稳态 | true | false 或 true | 规则 2 contains_session_id 反查正常工作 |
+
+spec delta 同步描述"`has_entry` 与 `has_in_flight_scan` 联合守护"契约（详 spec `ProjectScanCache 按事件语义分级失效` Requirement + 新加 Scenario "lag 后 cache 空时后续普通 append SHALL NOT 引发 structural storm"）。
 
 **为何三档不可压缩到二档**：codex 第三轮 BLOCK 1 实证 `mark_project_seen` 在构造时预填 known_projects（`watcher.rs:30-41,79`）。已知 project 下新建 session 时 watcher 输出 `plc=false, deleted=false`——与"已知 session 追加"在事件字段上**外观一致**。仅靠 (plc, deleted) 两 bool 判定会让新 session 最长 `LOCAL_CACHE_TTL = 300s` 不可见，dealbreaker。第三档 cache lookup 是**最低代价**的精确化方案（无须改 watcher / 不引入 path 字段）。
 
@@ -157,7 +172,7 @@ pub fn contains_session_id(
 
 **为何不维护反向索引**：每 ctx 单 lookup ~10µs，活跃场景下每秒 ≤ 几次 fsevents，CPU 成本 < 50µs/s = 0.005% CPU——远低于反向索引维护成本（写入路径加 HashMap insert + invalidate 时清理，且 codex 已警告"invalidate_path 重建 snapshot 超 scope"）。直接遍历足够。
 
-**为何接受 cache miss 时返回 false**：cache 没有 entry → `contains_session_id` 返 false → 第三档判 structural → invalidate（no-op，因为 cache 本来就没东西）。无副作用。
+**关于 cache miss 时返回 false 的语义**：本节最初论述"cache 没有 entry → `contains_session_id` 返 false → 第三档判 structural → invalidate（no-op，因为 cache 本来就没东西）。无副作用"。**此论述已被 D2b 两轮迭代覆盖**——`contains_session_id` 仍然在 ctx 无 entry 时返 false（API 语义不变），但 invalidator 调用方现在用 `has_entry || has_in_flight_scan` 双条件守护决定是否走 unknown_session 判定，而不是无条件信任 contains 返回值。`contains_session_id` 的 API 用途从"独立判定 unknown vs known"降为"配合 has_entry 守护后的二次确认"。详 D2b 决策表与守护组合契约。
 
 ### D4：cwd hidden risk 处理（`extract_session_cwd` 仅读首行的不变量）
 

@@ -388,6 +388,58 @@ async fn lag_followed_by_repopulation_does_not_storm() {
 }
 
 #[tokio::test]
+async fn in_flight_scan_event_bumps_generation_so_finish_drops_stale_snapshot() {
+    // codex PR 二审第二轮 BLOCK 修复回归：cache 空但 scan 在途时，
+    // unknown session event SHALL 触发 bump invalidation_generation，让
+    // finish_scan_with_insert 通过 generation mismatch 丢弃可能 stale 的
+    // snapshot。这是"启动后第一次扫描期间新 session"等结构事件不被吞的
+    // 关键守护——否则旧 snapshot 落地后等 TTL 5min 才能看到新 session。
+    let _g = lock_serial().await;
+    let cache = Arc::new(StdMutex::new(ProjectScanCache::new())); // cache 空
+    let (tx, rx) = broadcast::channel::<FileChangeEvent>(16);
+
+    // 模拟业务路径 begin_scan：开始一次 in-flight scan
+    let recorded = {
+        let mut c = cache.lock().unwrap();
+        c.begin_scan()
+    };
+
+    let st_before = counter(STRUCTURAL);
+
+    let _h = spawn_project_scan_cache_invalidator(
+        Arc::clone(&cache),
+        rx,
+        PathBuf::from("/test/projects"),
+    );
+
+    // scan 在途 + cache 空：发新 session 事件（plc=false, deleted=false, sid 非空）
+    tx.send(ev("pa", "sa_new", false, false)).unwrap();
+    wait_counter_delta(STRUCTURAL, st_before, 1).await;
+
+    // 模拟 async scan 完成后 finish_scan_with_insert——recorded_generation
+    // 已与当前不一致，SHALL 丢弃 stale snapshot
+    let inserted = {
+        let mut c = cache.lock().unwrap();
+        c.finish_scan_with_insert(
+            local_ctx(),
+            Arc::new(vec![proj("pa", &["sa_old_only"])]), // 不含 sa_new 的 stale snapshot
+            0,
+            0,
+            FsKind::Local,
+            recorded,
+        )
+    };
+    assert!(
+        !inserted,
+        "in-flight scan 期间事件 bump 后 finish SHALL 丢弃 stale snapshot"
+    );
+    assert!(
+        cache.lock().unwrap().lookup(&local_ctx(), 0, 0).is_none(),
+        "stale snapshot 已被丢弃，cache 仍空"
+    );
+}
+
+#[tokio::test]
 async fn empty_cache_skipped_event_does_not_bump_invalidation_generation() {
     // codex PR 二审 WARN 1 / has_entry 守护回归：cache 空时收到普通 append
     // 事件 SHALL 走 SKIPPED 路径，不调 invalidate_local，不 bump
