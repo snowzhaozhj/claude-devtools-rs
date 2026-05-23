@@ -118,6 +118,10 @@
   let isProgrammaticScroll = $state(false);
   let progScrollTimer: ReturnType<typeof setTimeout> | null = null;
   let rAFid: number | null = null;
+  // 每次 scroll 同步写入此变量，作为 onDestroy 保存 scrollTop 的可靠来源。
+  // 直接 `conversationEl.scrollTop` 在 Svelte 5 onDestroy 时 element 已 detach
+  // → scrollTop=0 永远写错。详 onDestroy 注释。
+  let latestScrollTop = 0;
 
   function isJumpToLatestKey(e: KeyboardEvent): boolean {
     if (isMac()) {
@@ -193,7 +197,11 @@
 
   function attachConversationScroll(el: HTMLElement) {
     // bind:this 已经把 conversationEl 设上，attach 仅负责挂 listener + cleanup
-    const onScroll = () => scheduleUpdateIsFar();
+    const onScroll = () => {
+      // 同步写入 latestScrollTop 供 onDestroy 用——element detach 后 scrollTop=0
+      latestScrollTop = el.scrollTop;
+      scheduleUpdateIsFar();
+    };
     const onScrollEnd = () => stopProgrammaticScroll();
     const onUserInput = () => {
       // 用户主动 wheel / touchmove 打断 smooth scroll → 立即清抑制
@@ -301,6 +309,11 @@
       // background refresh 与紧随而至的 file-change refresh 并发触发两次
       // IPC，旧返回覆盖新 detail（codex review 找到的 bug）。
       scheduleRefresh(`detail:${projectId}|${sessionId}`, refreshDetail);
+      // 等 Svelte commit `{:else if detail}` 分支，让 .conversation 真正
+      // mount + bind:this 把 conversationEl 接上；否则下面 scrollTop 恢复
+      // 条件 (conversationEl && ...) 在 cached hit 路径下静默失败，违反
+      // spec `tab-management::滚动位置恢复` Scenario。
+      await tick();
     } else {
       try {
         const t_ipc = performance.now();
@@ -322,9 +335,12 @@
       console.info(`[perf] SessionDetail ${sessionId.slice(0, 8)} first-paint ${total_ms.toFixed(0)}ms`);
     }
 
-    // 恢复滚动位置
+    // 恢复滚动位置（cached path 在前面已 await tick，conversationEl 必绑定）
     if (conversationEl && uiState.scrollTop > 0) {
       conversationEl.scrollTop = uiState.scrollTop;
+      // 同步初始化 latestScrollTop——避免恢复后用户没 scroll 时 onDestroy
+      // 写入 0 把刚保存的值覆盖丢
+      latestScrollTop = conversationEl.scrollTop;
     }
 
     // 注册 file-change handler：命中当前 (projectId, sessionId) 时合并刷新
@@ -348,13 +364,19 @@
     // openOrReplaceTab 会保留 tabId 仅换 sessionId 触发 destroy/recreate；
     // 若此处无条件 save，旧 session 的状态会覆盖 openOrReplaceTab 刚清掉的 slot，
     // 新 session mount 时 getTabUIState(tabId) 拿到的就是旧 session 残留（codex 二审 #1）。
+    //
+    // scrollTop 必须用 `latestScrollTop` 而非 `conversationEl?.scrollTop`：Svelte 5
+    // onDestroy 在 element unmount **之后**触发，conversationEl 仍指向原 ref 但
+    // `.isConnected=false`、scrollTop 永远是 0（detached element 行为）。
+    // `latestScrollTop` 由 scroll listener 在每次滚动时同步写入，element 离开 DOM
+    // 前的最后一次 scroll 值已被捕获，不依赖 onDestroy 那一刻的读取。
     if (getTabSessionId(tabId) === sessionId) {
       saveTabUIState(tabId, {
         expandedChunks: new Set(expandedChunks),
         expandedItems: new Set(expandedItems),
         searchVisible,
         contextPanelVisible,
-        scrollTop: conversationEl?.scrollTop ?? 0,
+        scrollTop: latestScrollTop,
       });
     }
   });

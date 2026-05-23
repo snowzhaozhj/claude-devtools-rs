@@ -11,7 +11,13 @@ import { clearMocks } from '@tauri-apps/api/mocks'
 
 import SessionDetail from '../routes/SessionDetail.svelte'
 import { setupMockIPC } from '../lib/tauriMock'
-import { saveTabUIState } from '../lib/tabStore.svelte'
+import {
+  saveTabUIState,
+  getTabUIState,
+  openTab,
+  getActiveTab,
+  closeTab,
+} from '../lib/tabStore.svelte'
 import { singleProjectFixture } from '../lib/__fixtures__'
 import type { Fixture } from '../lib/__fixtures__'
 import type { AIChunk, Chunk, CompactChunk } from '../lib/api'
@@ -233,6 +239,47 @@ describe('SessionDetail smoke', () => {
     const title = btn?.getAttribute('title') ?? ''
     expect(title.startsWith('跳到最新消息')).toBe(true)
     expect(/⌘↓|Ctrl\+End/.test(title)).toBe(true)
+  })
+
+  // ── 滚动位置保留（spec tab-management::滚动位置恢复）──
+  // Svelte 5 onDestroy 在 element unmount 之后触发，conversationEl 已 detach
+  // → 真浏览器 detached element 的 scrollTop 永远是 0；jsdom 不复现这个行为
+  // （unmount 后 scrollTop 仍可读），所以核心契约（latestScrollTop 通路）的回归
+  // 测试只能 Playwright e2e 兜底（见 ui/tests/e2e/tab-scroll-preserve.spec.ts）。
+  // 本节 unit 测试只覆盖 jsdom 能模拟的 sessionId guard 行为。
+  test('滚动位置保留：tab 已被替换 sessionId 时不写脏 scrollTop', async () => {
+    openTab(SESSION_ID, PROJECT_ID, 'preserve-replaced')
+    const tabId = getActiveTab()!.id
+    saveTabUIState(tabId, {
+      expandedChunks: new Set(),
+      expandedItems: new Set(),
+      searchVisible: false,
+      contextPanelVisible: false,
+      scrollTop: 999,
+    })
+
+    const { container, unmount } = render(SessionDetail, {
+      props: {
+        tabId,
+        projectId: PROJECT_ID,
+        // 故意与 tabStore 内 tab.sessionId 不一致 → guard 拒写
+        sessionId: 'orphan-session-not-in-any-tab',
+      },
+    })
+    await waitFor(() => {
+      expect(container.querySelector('.session-detail')).not.toBeNull()
+    })
+    const conv = container.querySelector('.conversation') as HTMLElement | null
+    if (conv) {
+      conv.scrollTop = 333
+      conv.dispatchEvent(new Event('scroll'))
+    }
+    unmount()
+
+    // guard 应拒写——保留之前的 999
+    expect(getTabUIState(tabId).scrollTop).toBe(999)
+
+    closeTab(tabId)
   })
 
   test('jump-to-latest：未打开 ContextPanel 时按钮不带 shifted class', async () => {
