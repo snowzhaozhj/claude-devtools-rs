@@ -487,9 +487,7 @@ async fn get_project_session_prefs(
 }
 
 #[tauri::command]
-async fn get_telemetry_snapshot(
-    data: State<'_, AppData>,
-) -> Result<serde_json::Value, String> {
+async fn get_telemetry_snapshot(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
     let snap = data
         .api
         .get_telemetry_snapshot()
@@ -577,10 +575,7 @@ async fn list_wsl_distros(data: State<'_, AppData>) -> Result<serde_json::Value,
 // =============================================================================
 
 #[tauri::command]
-async fn http_server_start(
-    state: State<'_, Arc<ServerState>>,
-    port: u16,
-) -> Result<(), String> {
+async fn http_server_start(state: State<'_, Arc<ServerState>>, port: u16) -> Result<(), String> {
     state.start(port).await
 }
 
@@ -851,9 +846,9 @@ async fn run_startup_update_check(api: Arc<LocalDataApi>, app: tauri::AppHandle)
 ///
 /// `init` 一次幂等；多次调用后续无效（tracing global subscriber 单例语义）。
 fn install_tracing_subscriber() {
+    use tracing_subscriber::Layer;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::Layer;
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
@@ -973,218 +968,217 @@ pub fn run() {
         .setup({
             let api = api.clone();
             move |app| {
-            #[cfg(debug_assertions)]
-            {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-                if let Some(window) = app.get_webview_window("main") {
-                    window.open_devtools();
-                }
-            }
-
-            // 系统托盘：左键点击 toggle 主窗口；菜单 Show / Quit
-            let show_item = MenuItemBuilder::with_id("show", "显示窗口").build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
-            let tray_menu = MenuBuilder::new(app)
-                .items(&[&show_item, &quit_item])
-                .build()?;
-            let _tray = TrayIconBuilder::with_id("main-tray")
-                .icon(
-                    app.default_window_icon()
-                        .cloned()
-                        .expect("app should have default icon"),
-                )
-                .tooltip("Claude DevTools")
-                .menu(&tray_menu)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.unminimize();
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                #[cfg(debug_assertions)]
+                {
+                    // 注：不再注册 tauri_plugin_log——`tracing_subscriber::try_init()`
+                    // 默认开 `tracing-log` feature，启动期已经把 `log::set_logger`
+                    // 占走（LogTracer 转发到 tracing），二次 set 会 panic。
+                    // `log::*` 宏的输出通过 LogTracer 桥接到 tracing fmt layer。
+                    if let Some(window) = app.get_webview_window("main") {
+                        window.open_devtools();
                     }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let is_visible = window.is_visible().unwrap_or(false);
-                            if is_visible {
-                                let _ = window.hide();
-                            } else {
+                }
+
+                // 系统托盘：左键点击 toggle 主窗口；菜单 Show / Quit
+                let show_item = MenuItemBuilder::with_id("show", "显示窗口").build(app)?;
+                let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+                let tray_menu = MenuBuilder::new(app)
+                    .items(&[&show_item, &quit_item])
+                    .build()?;
+                let _tray = TrayIconBuilder::with_id("main-tray")
+                    .icon(
+                        app.default_window_icon()
+                            .cloned()
+                            .expect("app should have default icon"),
+                    )
+                    .tooltip("Claude DevTools")
+                    .menu(&tray_menu)
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.unminimize();
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
                         }
-                    }
-                })
-                .build(app)?;
-
-            // 把 LocalDataApi 的稳定 FileChangeEvent 广播桥到前端 `file-change` 事件。
-            // Claude root 运行时重配会重建内部 watcher，但此订阅保持有效。
-            let mut file_rx = api.subscribe_file_changes();
-            let app_handle_for_files = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    match file_rx.recv().await {
-                        Ok(event) => {
-                            let _ = app_handle_for_files.emit("file-change", &event);
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-
-            let mut ssh_status_rx = api.subscribe_ssh_status();
-            let app_handle_for_ssh_status = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    match ssh_status_rx.recv().await {
-                        Ok(event) => {
-                            let _ = app_handle_for_ssh_status.emit("ssh_status", &event);
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-
-            let mut context_rx = api.subscribe_context_changed();
-            let app_handle_for_context = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    match context_rx.recv().await {
-                        Ok(event) => {
-                            let _ = app_handle_for_context.emit("context_changed", &event);
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-
-            // 把 list_sessions 后台元数据扫描的 SessionMetadataUpdate 桥到前端
-            // `session-metadata-update` 事件，供 Sidebar 增量 patch 列表项。
-            // 详见 openspec/specs/ipc-data-api/spec.md §"Emit session metadata updates"。
-            let mut metadata_rx = api.subscribe_session_metadata();
-            let app_handle_for_metadata = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    match metadata_rx.recv().await {
-                        Ok(update) => {
-                            let _ =
-                                app_handle_for_metadata.emit("session-metadata-update", &update);
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-
-            // 启动 5 秒后台静默检查更新
-            // 详见 openspec/specs/app-auto-update/spec.md `Requirement: 启动后台静默检查`
-            let api_for_updater = api.clone();
-            let app_handle_for_updater = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                run_startup_update_check(api_for_updater, app_handle_for_updater).await;
-            });
-
-            // 把自动通知管线产出的 DetectedError 桥到前端 `notification-added` 事件
-            // 同时按 config.notifications.{enabled,soundEnabled} 发 OS native 通知
-            let mut error_rx = api.subscribe_detected_errors();
-            let app_handle = app.handle().clone();
-            let api_for_notif = api.clone();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    match error_rx.recv().await {
-                        Ok(err) => {
-                            let _ = app_handle.emit("notification-added", &err);
-
-                            // 读最新 config 判断是否发 OS 通知
-                            let cfg = api_for_notif.get_config().await.ok();
-                            let enabled = cfg
-                                .as_ref()
-                                .and_then(|c| c.get("notifications"))
-                                .and_then(|n| n.get("enabled"))
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(true);
-                            let sound_enabled = cfg
-                                .as_ref()
-                                .and_then(|c| c.get("notifications"))
-                                .and_then(|n| n.get("soundEnabled"))
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(true);
-                            let snoozed_until = cfg
-                                .as_ref()
-                                .and_then(|c| c.get("notifications"))
-                                .and_then(|n| n.get("snoozedUntil"))
-                                .and_then(serde_json::Value::as_i64);
-                            let now_ms = i64::try_from(
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis(),
-                            )
-                            .unwrap_or(i64::MAX);
-                            let snoozed = snoozed_until.is_some_and(|until| until > now_ms);
-
-                            if enabled && !snoozed {
-                                let body: String = err.message.chars().take(200).collect();
-                                let mut builder = app_handle
-                                    .notification()
-                                    .builder()
-                                    .title("Claude Code Error")
-                                    .body(format!("[{}] {}", err.context.project_name, body));
-                                if sound_enabled {
-                                    builder = builder.sound("default");
-                                }
-                                if let Err(e) = builder.show() {
-                                    log::warn!("failed to show OS notification: {e}");
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                let is_visible = window.is_visible().unwrap_or(false);
+                                if is_visible {
+                                    let _ = window.hide();
+                                } else {
+                                    let _ = window.unminimize();
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
                                 }
                             }
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    })
+                    .build(app)?;
+
+                // 把 LocalDataApi 的稳定 FileChangeEvent 广播桥到前端 `file-change` 事件。
+                // Claude root 运行时重配会重建内部 watcher，但此订阅保持有效。
+                let mut file_rx = api.subscribe_file_changes();
+                let app_handle_for_files = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match file_rx.recv().await {
+                            Ok(event) => {
+                                let _ = app_handle_for_files.emit("file-change", &event);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
                     }
-                }
-            });
+                });
 
-            // server-mode：构建 ServerState + 自动恢复（详
-            // openspec/specs/server-mode/spec.md::Tauri 桌面应用启动时 SHALL
-            // 按持久化配置自动恢复 server）。
-            //
-            // static_serve 解析：dev mode 默认 Redirect 到 vite dev server 让浏览器
-            // 与 Tauri 窗口共享同一份热重载 UI（见 `resolve_static_serve` doc）；
-            // release 走 resource_dir ServeDir 提供完整 bundle。
-            let static_serve = resolve_static_serve(app.handle());
-            let server_state = Arc::new(ServerState::new(
-                api.clone(),
-                static_serve,
-                app.handle().clone(),
-            ));
-            app.manage(server_state.clone());
+                let mut ssh_status_rx = api.subscribe_ssh_status();
+                let app_handle_for_ssh_status = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match ssh_status_rx.recv().await {
+                            Ok(event) => {
+                                let _ = app_handle_for_ssh_status.emit("ssh_status", &event);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
 
-            let server_state_for_restore = server_state.clone();
-            tauri::async_runtime::spawn(async move {
-                server_state_for_restore.restore_if_enabled().await;
-            });
+                let mut context_rx = api.subscribe_context_changed();
+                let app_handle_for_context = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match context_rx.recv().await {
+                            Ok(event) => {
+                                let _ = app_handle_for_context.emit("context_changed", &event);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
 
-            Ok(())
-        }
+                // 把 list_sessions 后台元数据扫描的 SessionMetadataUpdate 桥到前端
+                // `session-metadata-update` 事件，供 Sidebar 增量 patch 列表项。
+                // 详见 openspec/specs/ipc-data-api/spec.md §"Emit session metadata updates"。
+                let mut metadata_rx = api.subscribe_session_metadata();
+                let app_handle_for_metadata = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match metadata_rx.recv().await {
+                            Ok(update) => {
+                                let _ = app_handle_for_metadata
+                                    .emit("session-metadata-update", &update);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+
+                // 启动 5 秒后台静默检查更新
+                // 详见 openspec/specs/app-auto-update/spec.md `Requirement: 启动后台静默检查`
+                let api_for_updater = api.clone();
+                let app_handle_for_updater = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    run_startup_update_check(api_for_updater, app_handle_for_updater).await;
+                });
+
+                // 把自动通知管线产出的 DetectedError 桥到前端 `notification-added` 事件
+                // 同时按 config.notifications.{enabled,soundEnabled} 发 OS native 通知
+                let mut error_rx = api.subscribe_detected_errors();
+                let app_handle = app.handle().clone();
+                let api_for_notif = api.clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match error_rx.recv().await {
+                            Ok(err) => {
+                                let _ = app_handle.emit("notification-added", &err);
+
+                                // 读最新 config 判断是否发 OS 通知
+                                let cfg = api_for_notif.get_config().await.ok();
+                                let enabled = cfg
+                                    .as_ref()
+                                    .and_then(|c| c.get("notifications"))
+                                    .and_then(|n| n.get("enabled"))
+                                    .and_then(serde_json::Value::as_bool)
+                                    .unwrap_or(true);
+                                let sound_enabled = cfg
+                                    .as_ref()
+                                    .and_then(|c| c.get("notifications"))
+                                    .and_then(|n| n.get("soundEnabled"))
+                                    .and_then(serde_json::Value::as_bool)
+                                    .unwrap_or(true);
+                                let snoozed_until = cfg
+                                    .as_ref()
+                                    .and_then(|c| c.get("notifications"))
+                                    .and_then(|n| n.get("snoozedUntil"))
+                                    .and_then(serde_json::Value::as_i64);
+                                let now_ms = i64::try_from(
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis(),
+                                )
+                                .unwrap_or(i64::MAX);
+                                let snoozed = snoozed_until.is_some_and(|until| until > now_ms);
+
+                                if enabled && !snoozed {
+                                    let body: String = err.message.chars().take(200).collect();
+                                    let mut builder = app_handle
+                                        .notification()
+                                        .builder()
+                                        .title("Claude Code Error")
+                                        .body(format!("[{}] {}", err.context.project_name, body));
+                                    if sound_enabled {
+                                        builder = builder.sound("default");
+                                    }
+                                    if let Err(e) = builder.show() {
+                                        log::warn!("failed to show OS notification: {e}");
+                                    }
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+
+                // server-mode：构建 ServerState + 自动恢复（详
+                // openspec/specs/server-mode/spec.md::Tauri 桌面应用启动时 SHALL
+                // 按持久化配置自动恢复 server）。
+                //
+                // static_serve 解析：dev mode 默认 Redirect 到 vite dev server 让浏览器
+                // 与 Tauri 窗口共享同一份热重载 UI（见 `resolve_static_serve` doc）；
+                // release 走 resource_dir ServeDir 提供完整 bundle。
+                let static_serve = resolve_static_serve(app.handle());
+                let server_state = Arc::new(ServerState::new(
+                    api.clone(),
+                    static_serve,
+                    app.handle().clone(),
+                ));
+                app.manage(server_state.clone());
+
+                let server_state_for_restore = server_state.clone();
+                tauri::async_runtime::spawn(async move {
+                    server_state_for_restore.restore_if_enabled().await;
+                });
+
+                Ok(())
+            }
         })
         .on_window_event({
             move |_window, event| {
