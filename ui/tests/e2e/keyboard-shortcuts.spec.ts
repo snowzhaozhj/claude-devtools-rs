@@ -43,6 +43,39 @@ async function pressMod(page: Page, init: KeyboardEventInit & { key: string }) {
   }, { ...init, metaKey: true, ctrlKey: true })
 }
 
+/**
+ * 派一个 mod-key keydown 给 KeyRecorderInput 的 activeElement——按平台条件 set 一种主修饰键，
+ * **不**双发 metaKey + ctrlKey（与 `pressMod` 给 dispatcher 的策略不同）：录键 widget 含
+ * Win 键守卫（non-mac + event.metaKey === true 时不 commit），同时设两个会被守卫拦下，
+ * 不能进 commit 路径。
+ */
+async function pressRecorderMod(
+  page: Page,
+  init: { key: string; code: string; shiftKey?: boolean; altKey?: boolean },
+) {
+  await page.evaluate(async (init) => {
+    // 通过 vite dev module graph 直接 import KeyRecorderInput 同源的 isMac 函数——确保
+    // helper 与 widget 共享同一判定（KeyRecorderInput 的 Win 键守卫读同一函数，避免
+    // navigator 探测的边角差异引发错位）。
+    const platform = (await import(
+      /* @vite-ignore */ '/src/lib/platform.ts'
+    )) as { isMac: () => boolean }
+    const isMac = platform.isMac()
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: init.key,
+        code: init.code,
+        shiftKey: init.shiftKey ?? false,
+        altKey: init.altKey ?? false,
+        metaKey: isMac,
+        ctrlKey: !isMac,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  }, init)
+}
+
 async function openSettingsKeyboardSection(page: Page) {
   await page.evaluate(() => {
     ;(window as unknown as { __cdtTest: { openSettingsTab: () => void } }).__cdtTest.openSettingsTab()
@@ -172,21 +205,9 @@ test.describe('keyboard-shortcuts §10', () => {
     const recorder = getRecorder(page, 'sidebar.toggle')
     await expect(recorder).toBeVisible({ timeout: 3_000 })
 
-    // focus 进 recording → 录 mod+shift+B
+    // focus 进 recording → 录 mod+shift+B（按平台分发，避免触发 Win 键守卫）
     await recorder.focus()
-    await page.evaluate(() => {
-      document.activeElement?.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 'B',
-          code: 'KeyB',
-          metaKey: true,
-          ctrlKey: true,
-          shiftKey: true,
-          bubbles: true,
-          cancelable: true,
-        }),
-      )
-    })
+    await pressRecorderMod(page, { key: 'B', code: 'KeyB', shiftKey: true })
 
     // 等 pending bar 出现（commit 写 overlay）
     await expect(page.locator('.pending-bar')).toBeVisible({ timeout: 3_000 })
@@ -250,18 +271,7 @@ test.describe('keyboard-shortcuts §10', () => {
     // 在 command-palette.toggle 行录入 mod+B（与 sidebar.toggle 默认 binding 冲突）
     const recorder = getRecorder(page, 'command-palette.toggle')
     await recorder.focus()
-    await page.evaluate(() => {
-      document.activeElement?.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 'b',
-          code: 'KeyB',
-          metaKey: true,
-          ctrlKey: true,
-          bubbles: true,
-          cancelable: true,
-        }),
-      )
-    })
+    await pressRecorderMod(page, { key: 'b', code: 'KeyB' })
 
     // 行级 conflict warning：双向冲突（command-palette 行 + sidebar.toggle 行各一条）。
     // 我们 scope 到 command-palette.toggle 所在 .row 验证它指向 "切换侧栏"。
@@ -375,19 +385,7 @@ test.describe('keyboard-shortcuts §10', () => {
     await openSettingsKeyboardSection(page)
     const recorder = getRecorder(page, 'sidebar.toggle')
     await recorder.focus()
-    await page.evaluate(() => {
-      document.activeElement?.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 'x',
-          code: 'KeyX',
-          metaKey: true,
-          ctrlKey: true,
-          shiftKey: true,
-          bubbles: true,
-          cancelable: true,
-        }),
-      )
-    })
+    await pressRecorderMod(page, { key: 'x', code: 'KeyX', shiftKey: true })
     await expect(page.locator('.pending-bar')).toBeVisible({ timeout: 3_000 })
 
     await page.getByRole('button', { name: /^保存/ }).click()

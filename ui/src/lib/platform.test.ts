@@ -207,9 +207,27 @@ describe('platform.normalizeBindingToMod', () => {
     expect(normalizeBindingToMod('')).toBe('')
   })
 
-  test('mod+ctrl+x（mod 已含 + 多余 ctrl 在 modifier 位置）→ mod+x', () => {
-    // 防御异常字面量：mod 已存在但还有多余 ctrl token
-    expect(normalizeBindingToMod('mod+ctrl+x')).toBe('mod+x')
+  test('mod+ctrl+x（mod 已含 + ctrl 作为辅助修饰键）→ mod+ctrl+x（保留 ctrl）', () => {
+    // ctrl 是合法辅助修饰键（mac Cmd+Ctrl+X 的非主修饰键），SHALL 保留；hasMod 分支只
+    // 删除与 mod 矛盾的 meta token
+    expect(normalizeBindingToMod('mod+ctrl+x')).toBe('mod+ctrl+x')
+  })
+
+  test('ctrl+mod+x 幂等（record 产出的 mac 双修饰键 binding 再次迁移不变）', () => {
+    // mac record 把 Cmd+Ctrl+X 产出 ctrl+mod+x，bootstrap 再调 normalizeBindingToMod 须幂等
+    expect(normalizeBindingToMod('ctrl+mod+x')).toBe('ctrl+mod+x')
+  })
+
+  test('alt+mod+x 幂等（仅含 alt 辅助修饰键）', () => {
+    expect(normalizeBindingToMod('alt+mod+x')).toBe('alt+mod+x')
+  })
+
+  test('alt+ctrl+mod+x（mod + alt + ctrl 三修饰键）→ alt+ctrl+mod+x（保留 alt 与 ctrl）', () => {
+    expect(normalizeBindingToMod('alt+ctrl+mod+x')).toBe('alt+ctrl+mod+x')
+  })
+
+  test('mod+meta+x → mod+x（mod 已含但混入异常 meta token，移除 meta）', () => {
+    expect(normalizeBindingToMod('mod+meta+x')).toBe('mod+x')
   })
 })
 

@@ -245,8 +245,11 @@ export function recordBindingFromEvent(event: KeyboardEvent): string | null {
  *
  * **token-level 算法**（不依赖 token 位置或前缀，鲁棒覆盖用户手编非 sorted 字面量）：
  * 1. `binding.split("+")` 得 token 数组
- * 2. 若数组中**已含** `mod` token：保留 token 顺序，移除主键之外位置的 `meta` / `ctrl`（防御
- *    异常字面量如 `meta+mod+x` → `mod+x`）；不重排
+ * 2. 若数组中**已含** `mod` token：保留 token 顺序，仅移除主键之外位置的 `meta` token
+ *    （防御异常字面量如 `meta+mod+x` → `mod+x`；mod 在 mac 已展开为 meta，二者矛盾）；
+ *    `ctrl` token 作为辅助修饰键 SHALL 保留（如 record 产出的 `ctrl+mod+x` 是 mac
+ *    `Cmd+Ctrl+X` 的合法表达，再次跑 normalizeBindingToMod 应幂等返回 `ctrl+mod+x`）；
+ *    不重排
  * 3. 否则按 **主修饰键优先级 meta > ctrl** 在 modifier 位置（除主键外）找替换目标：
  *    - 优先找第一个 `meta` token 替换为 `mod`（mac 双修饰键 `ctrl+meta+x` 优先替 meta 得
  *      `ctrl+mod+x`，保留 ctrl 为辅助修饰键）
@@ -270,10 +273,11 @@ export function normalizeBindingToMod(binding: string): string {
   const hasMod = tokens.slice(0, lastIdx).includes("mod");
 
   if (hasMod) {
-    // 移除主键之外位置的 meta / ctrl（防御异常字面量）
+    // 仅移除主键之外位置的 meta（mod 在 mac 已展开为 meta，二者矛盾）；ctrl 作为辅助
+    // 修饰键保留（mac `Cmd+Ctrl+X` → record 产出 `ctrl+mod+x` 须幂等）
     const cleaned = tokens.filter((t, i) => {
       if (i === lastIdx) return true;
-      return t !== "meta" && t !== "ctrl";
+      return t !== "meta";
     });
     return cleaned.join("+");
   }

@@ -9,7 +9,7 @@
 字面量迁移函数 `normalizeBindingToMod(binding: string): string` SHALL 把存量平台特化字面量转为 `mod` 表达，按 **token-level 算法**实现（不依赖 token 位置或前缀）：
 
 1. `binding.split("+")` 得 token 数组
-2. 若数组中**已含** `mod` token：保留所有 token 顺序，移除主键之外位置的 `meta` / `ctrl` token（防御异常字面量如 `meta+mod+x`）；不重排
+2. 若数组中**已含** `mod` token：保留所有 token 顺序，仅移除主键之外位置的 `meta` token（mod 在 mac 已展开为 meta，二者矛盾，防御异常字面量如 `meta+mod+x` → `mod+x`）；`ctrl` token 作为辅助修饰键 SHALL 保留（mac record 产出的 `ctrl+mod+x` 是 `Cmd+Ctrl+X` 的合法表达，再次跑迁移须幂等返回 `ctrl+mod+x`）；不重排
 3. 否则按 **"主修饰键优先级 meta > ctrl"** 在 modifier 位置（除主键外）找替换目标：
    1. 优先找第一个 `meta` token 替换为 `mod`
    2. 若数组无 `meta`，再找第一个 `ctrl` token 替换为 `mod`
@@ -91,6 +91,14 @@
 #### Scenario: 字面量迁移处理异常 meta+mod 共存
 - **WHEN** 调用 `normalizeBindingToMod("meta+mod+x")`（异常字面量，可能源自历史代码 bug 或用户手编）
 - **THEN** SHALL 返回 `"mod+x"`（移除多余 `meta` token，保留 `mod`）
+
+#### Scenario: 字面量迁移幂等保留 ctrl 辅助修饰键
+- **WHEN** 调用 `normalizeBindingToMod("ctrl+mod+x")`（mac 双修饰键 record 产物，第二次 bootstrap 走迁移）
+- **THEN** SHALL 返回 `"ctrl+mod+x"`（hasMod 分支保留 ctrl 作为辅助修饰键，仅会移除与 mod 矛盾的 meta token；不重排）
+
+#### Scenario: 字面量迁移保留 alt 辅助修饰键
+- **WHEN** 调用 `normalizeBindingToMod("alt+mod+x")`
+- **THEN** SHALL 返回 `"alt+mod+x"`（mod 已存在，alt 是合法辅助修饰键，原样保留）
 
 #### Scenario: 字面量迁移处理 mac 双修饰键 binding
 - **WHEN** 调用 `normalizeBindingToMod("ctrl+meta+x")`（mac `Cmd+Ctrl+X` 经 `normalize` sort 后的输出）

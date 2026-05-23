@@ -456,4 +456,28 @@ describe("KeyRecorderInput 录键归一化 + Win 键守卫", () => {
     expect(hint.getAttribute("aria-live")).toBe("polite");
     expect(recorder.getAttribute("aria-live")).toBeNull();
   });
+
+  test("Windows: Win+B → blur 退出，warning 清除（spec 录键守卫 'recorder blur / Tab 失焦' 路径）", async () => {
+    setPlatform("Windows");
+    const platform = await import("../../lib/platform");
+    platform._resetPlatformCache();
+    const onCommit = vi.fn();
+    const { container } = render(KeyRecorderInput, {
+      props: { currentBinding: "", onCommit },
+    });
+    const recorder = getRecorder(container);
+    await fireEvent.focus(recorder);
+    await fireEvent.keyDown(recorder, {
+      key: "b",
+      code: "KeyB",
+      metaKey: true,
+    });
+    expect(recorder.classList.contains("warning")).toBe(true);
+
+    // blur 走 stopRecording 路径，warning 应一同清除
+    await fireEvent.blur(recorder);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(recorder.classList.contains("warning")).toBe(false);
+    expect(recorder.classList.contains("recording")).toBe(false);
+  });
 });
