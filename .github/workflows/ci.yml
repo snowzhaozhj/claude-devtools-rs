@@ -37,6 +37,16 @@ jobs:
       - name: Check Tauri command sync (3 sources)
         run: bash scripts/check-ipc-command-sync.sh
 
+  hot-path-no-event:
+    name: hot-path no event!()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check no cdt_telemetry::event!() in hot-path files
+        run: bash scripts/check-no-hot-event.sh
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest

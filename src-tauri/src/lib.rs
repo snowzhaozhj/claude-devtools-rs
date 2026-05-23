@@ -486,6 +486,30 @@ async fn get_project_session_prefs(
     serde_json::to_value(&prefs).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_telemetry_snapshot(
+    data: State<'_, AppData>,
+) -> Result<serde_json::Value, String> {
+    let snap = data
+        .api
+        .get_telemetry_snapshot()
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&snap).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn record_correctness_events(
+    data: State<'_, AppData>,
+    items: Vec<cdt_api::CorrectnessEventItem>,
+) -> Result<serde_json::Value, String> {
+    data.api
+        .record_correctness_events(items)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({"ok": true}))
+}
+
 // =============================================================================
 // Repository Groups / Worktree Sessions
 // =============================================================================
@@ -818,8 +842,89 @@ async fn run_startup_update_check(api: Arc<LocalDataApi>, app: tauri::AppHandle)
     }
 }
 
+/// 装一个 tracing_subscriber，含 EnvFilter + fmt 层 + cdt-telemetry 桥 layer。
+///
+/// 注意：EnvFilter 仅挂到 fmt layer（per-layer filter），TelemetryLayer 不受
+/// `RUST_LOG` 过滤——否则 `RUST_LOG=cdt_api=error` 会让 cdt_api.warn event 永远
+/// 到不了 telemetry，破坏 spec 契约（tracing layer 自动归类 ERROR + WARN）。
+/// TelemetryLayer 内部已自带 ERROR/WARN level 过滤，不依赖 RUST_LOG。
+///
+/// `init` 一次幂等；多次调用后续无效（tracing global subscriber 单例语义）。
+fn install_tracing_subscriber() {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::Layer;
+
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_filter(env_filter);
+    let _ = tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(cdt_telemetry::TelemetryLayer::new())
+        .try_init();
+}
+
+/// 注册 panic hook：先 take 既有 hook（保留 Tauri/Tokio 默认行为），再用闭包包装：
+/// 既有 hook → counter inc → critical channel push。
+fn install_telemetry_panic_hook() {
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        prev_hook(info);
+        cdt_telemetry::counter!("panic.recovered").inc();
+        let location = info.location().map_or_else(
+            || "unknown".to_string(),
+            |l| format!("{}:{}", l.file(), l.line()),
+        );
+        let msg = panic_payload_str(info.payload());
+        let truncated_msg = if msg.chars().count() > 1024 {
+            // 按字符边界截断（非 ASCII panic message 超 1024 bytes 用 byte 切会
+            // 落在 UTF-8 中间触发 double-panic 把 telemetry 也丢掉）。
+            let mut out: String = msg.chars().take(1024).collect();
+            out.push_str("...(truncated)");
+            out
+        } else {
+            msg
+        };
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("unnamed").to_string();
+        let ev = cdt_telemetry::Event {
+            kind: "panic.recovered",
+            ts_unix_ms: u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis()),
+            )
+            .unwrap_or(0),
+            fields: vec![
+                cdt_telemetry::EventField::Str("location", location),
+                cdt_telemetry::EventField::Str("panic_message", truncated_msg),
+                cdt_telemetry::EventField::Str("thread_name", thread_name),
+            ],
+        };
+        cdt_telemetry::registry().panic_events().push(ev);
+    }));
+}
+
+fn panic_payload_str(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Telemetry：启动期一次性 init Registry + 读 CDT_TELEMETRY_ENABLED env。
+    // 必须在 tracing_subscriber 装 layer 之前调（layer 内会 lookup Registry）。
+    cdt_telemetry::init_registry();
+    install_telemetry_panic_hook();
+    install_tracing_subscriber();
+
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     let api = rt.block_on(async {
         let mut config_mgr = ConfigManager::new(None);
@@ -1139,6 +1244,8 @@ pub fn run() {
             http_server_start,
             http_server_stop,
             http_server_status,
+            get_telemetry_snapshot,
+            record_correctness_events,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

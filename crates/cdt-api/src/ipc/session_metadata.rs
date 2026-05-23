@@ -523,15 +523,28 @@ pub(crate) async fn try_lookup_cached_metadata(
     context_id: &ContextId,
     path: &Path,
 ) -> Option<SessionMetadata> {
-    let meta = fs.stat(path).await.ok()?;
+    let Ok(meta) = fs.stat(path).await else {
+        cdt_telemetry::counter!("metadata.cache.stat_err").inc();
+        return None;
+    };
     let sig = FileSignature::from_fs_metadata(&meta);
-    let entry = cache
-        .lock()
-        .expect("metadata cache mutex poisoned")
-        .lookup(context_id, path)?;
+    let entry = {
+        let lookup = cache
+            .lock()
+            .expect("metadata cache mutex poisoned")
+            .lookup(context_id, path);
+        if let Some(e) = lookup {
+            e
+        } else {
+            cdt_telemetry::counter!("metadata.cache.miss").inc();
+            return None;
+        }
+    };
     if entry.signature != sig {
+        cdt_telemetry::counter!("metadata.cache.sig_mismatch").inc();
         return None;
     }
+    cdt_telemetry::counter!("metadata.cache.hit").inc();
     let is_ongoing = entry.messages_ongoing && !is_session_stale(sig.mtime, SystemTime::now());
     Some(SessionMetadata {
         title: entry.title,

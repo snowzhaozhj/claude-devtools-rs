@@ -96,14 +96,15 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_47() {
+fn expected_tauri_commands_count_is_49() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        47,
+        49,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 47 个 Tauri command（含 SSH + server-mode + \
+         以及本文件常量；当前 src-tauri 注册 49 个 Tauri command（含 SSH + server-mode + \
          simplify-repository-as-project change 加的 list_group_sessions + change \
-         ssh-project-memory-remote-rw 加的 add_memory / delete_memory）"
+         ssh-project-memory-remote-rw 加的 add_memory / delete_memory + change \
+         add-telemetry-signal-bus 加的 get_telemetry_snapshot / record_correctness_events）"
     );
 }
 
@@ -2804,5 +2805,132 @@ async fn update_config_http_server_round_trip() {
         next["httpServer"]["port"],
         json!(3456),
         "仅 enabled 更新 SHALL 不影响 port"
+    );
+}
+
+// =============================================================================
+// telemetry: get_telemetry_snapshot 字段契约
+// =============================================================================
+
+#[tokio::test]
+async fn get_telemetry_snapshot_returns_camelcase_fields() {
+    cdt_telemetry::init_registry();
+    let (api, _tmp) = setup_api().await;
+    let snap = api.get_telemetry_snapshot().await.expect("snapshot ok");
+    let v = serde_json::to_value(&snap).expect("snapshot serializes");
+
+    // 顶层字段：camelCase
+    assert!(v.get("schemaVersion").is_some(), "schemaVersion present");
+    assert!(v.get("uptimeSecs").is_some(), "uptimeSecs present");
+    assert!(v.get("capturedAt").is_some(), "capturedAt present");
+    assert!(v.get("counters").is_some(), "counters present");
+    assert!(v.get("histograms").is_some(), "histograms present");
+    assert!(v.get("recentEvents").is_some(), "recentEvents present");
+    assert!(
+        v.get("schema_version").is_none(),
+        "snake_case schema_version SHALL NOT appear"
+    );
+
+    // schemaVersion = 1
+    assert_eq!(v["schemaVersion"], serde_json::json!(1));
+
+    // counters 至少含核心几个 name
+    let counters = v["counters"].as_object().expect("counters is object");
+    for name in [
+        "metadata.cache.hit",
+        "metadata.cache.miss",
+        "panic.recovered",
+        "cdt_ssh.error",
+        "cdt_api.error",
+    ] {
+        assert!(counters.contains_key(name), "counter {name} missing");
+    }
+
+    // histograms 至少 4 个 + 字段 camelCase
+    let histograms = v["histograms"].as_object().expect("histograms is object");
+    for name in [
+        "ipc.list_sessions.duration_ns",
+        "ipc.get_session_detail.duration_ns",
+        "ipc.list_repository_groups.duration_ns",
+        "ipc.list_projects.duration_ns",
+    ] {
+        let h = histograms
+            .get(name)
+            .unwrap_or_else(|| panic!("histogram {name}"));
+        assert!(h.get("count").is_some(), "{name}.count present");
+        assert!(h.get("buckets").is_some(), "{name}.buckets present");
+        assert_eq!(
+            h["buckets"].as_array().unwrap().len(),
+            32,
+            "{name}.buckets length 32"
+        );
+        assert!(h.get("p50Ns").is_some(), "{name}.p50Ns present (camelCase)");
+        assert!(h.get("p95Ns").is_some(), "{name}.p95Ns present");
+        assert!(h.get("p99Ns").is_some(), "{name}.p99Ns present");
+        assert!(h.get("maxBucket").is_some(), "{name}.maxBucket present");
+        assert!(
+            h.get("p50_ns").is_none(),
+            "{name}.p50_ns snake_case SHALL NOT appear"
+        );
+    }
+}
+
+#[tokio::test]
+async fn record_correctness_events_validates_whitelist_and_batches() {
+    cdt_telemetry::init_registry();
+    let (api, _tmp) = setup_api().await;
+
+    let snap_before = api.get_telemetry_snapshot().await.unwrap();
+    let stale_before = snap_before
+        .counters
+        .get("stale_update.triggered")
+        .copied()
+        .unwrap_or(0);
+    let unreg_before = snap_before
+        .counters
+        .get("telemetry.unregistered_correctness_event")
+        .copied()
+        .unwrap_or(0);
+
+    // 白名单 kind 批量 inc
+    api.record_correctness_events(vec![
+        cdt_api::CorrectnessEventItem {
+            kind: "stale_update.triggered".into(),
+            count: 5,
+        },
+        cdt_api::CorrectnessEventItem {
+            kind: "stale_update.triggered".into(),
+            count: 3,
+        },
+        // 未在白名单的 kind: silently ignore
+        cdt_api::CorrectnessEventItem {
+            kind: "fake.event".into(),
+            count: 100,
+        },
+    ])
+    .await
+    .unwrap();
+
+    let snap_after = api.get_telemetry_snapshot().await.unwrap();
+    let stale_after = snap_after
+        .counters
+        .get("stale_update.triggered")
+        .copied()
+        .unwrap_or(0);
+    let unreg_after = snap_after
+        .counters
+        .get("telemetry.unregistered_correctness_event")
+        .copied()
+        .unwrap_or(0);
+
+    assert_eq!(
+        stale_after - stale_before,
+        8,
+        "stale_update.triggered SHALL inc by 5 + 3 = 8"
+    );
+    // unregistered counter 应 inc 一次（一条 fake.event 进 fallback）
+    assert!(
+        unreg_after > unreg_before,
+        "unregistered_correctness_event SHALL inc when kind not whitelisted"
     );
 }

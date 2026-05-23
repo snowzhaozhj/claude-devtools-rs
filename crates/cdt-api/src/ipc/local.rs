@@ -2405,11 +2405,13 @@ async fn scan_metadata_for_page(
             // 到 active_scans，绕过 abort 窗口。每次 broadcast 前 SHALL 检查
             // context_generation 不变；不变才 broadcast，变了 silent drop。
             if context_generation.load(Ordering::SeqCst) != expected_context_generation {
+                cdt_telemetry::counter!("generation.mismatch").inc();
                 return;
             }
             let meta =
                 extract_session_metadata_cached(&cache, &*fs_clone, &ctx_clone, &jsonl_path).await;
             if root_generation.load(Ordering::SeqCst) != expected_root_generation {
+                cdt_telemetry::counter!("generation.mismatch").inc();
                 return;
             }
             // 同上：scan 内部 await 完成后再次检查 context_generation，避免在
@@ -2422,6 +2424,7 @@ async fn scan_metadata_for_page(
             // 校验有效——这是设计的正确行为而非 bug。本 check 仅 enforce
             // "不向前端 broadcast 旧 ctx update" 这一可观察契约。
             if context_generation.load(Ordering::SeqCst) != expected_context_generation {
+                cdt_telemetry::counter!("generation.mismatch").inc();
                 return;
             }
             let group_id = worktree_meta_cache
@@ -2738,6 +2741,8 @@ impl DataApi for LocalDataApi {
     // =========================================================================
 
     async fn list_projects(&self) -> Result<Vec<ProjectInfo>, ApiError> {
+        let _telemetry_timer =
+            cdt_telemetry::histogram!("ipc.list_projects.duration_ns").start_timer();
         // 走进程级 cache（FU-4 ProjectScanner memoize）：命中时 0 fs op，
         // miss 时一次 `ProjectScanner::scan()` 全扫并写入 Arc<Vec<Project>>。
         // `scan_projects_cached` 内部用 `active_fs_and_context_strict()` 选 fs。
@@ -2811,6 +2816,8 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
+        let _telemetry_timer =
+            cdt_telemetry::histogram!("ipc.list_sessions.duration_ns").start_timer();
         let (
             page,
             next_cursor,
@@ -3026,6 +3033,8 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         session_id: &str,
     ) -> Result<SessionDetail, ApiError> {
+        let _telemetry_timer =
+            cdt_telemetry::histogram!("ipc.get_session_detail.duration_ns").start_timer();
         // 性能探针：拆 5 段计时——locate / parse / scan_subagents / build_chunks /
         // context+claude_md / serialize。`tracing::info!` 由订阅者过滤，开销极低。
         // 不要把这些段塞进一个汇总 log——分开打才能据此判断瓶颈走向。
@@ -3948,6 +3957,8 @@ impl DataApi for LocalDataApi {
     }
 
     async fn list_repository_groups(&self) -> Result<Vec<cdt_core::RepositoryGroup>, ApiError> {
+        let _telemetry_timer =
+            cdt_telemetry::histogram!("ipc.list_repository_groups.duration_ns").start_timer();
         // D3b：grouper 无状态轻量，每次 lazy 构造，避免 LocalDataApi 字段污染。
         // active context = SSH 时 SHALL NOT 用 LocalGitIdentityResolver——容器内远端
         // cwd 与本机宿主路径重合时（如 docker 挂载 `~/.claude` 复现场景），会读宿主机

@@ -501,4 +501,44 @@ pub trait DataApi: Send + Sync {
     ) -> Result<ProjectSessionPrefs, ApiError> {
         Ok(ProjectSessionPrefs::default())
     }
+
+    /// 拉一次当前 telemetry 快照（pull-based）。详 `OpenSpec` change
+    /// `add-telemetry-signal-bus`。默认实现走 [`cdt_telemetry::take_snapshot`]——
+    /// 所有实现共用全局 Registry，不需要在 trait 实现里持有状态。
+    async fn get_telemetry_snapshot(&self) -> Result<cdt_telemetry::TelemetrySnapshot, ApiError> {
+        Ok(cdt_telemetry::take_snapshot())
+    }
+
+    /// 批量上报 correctness event 计数（前端 5s/50 累计窗口 flush）。
+    /// 详 `OpenSpec` change `add-telemetry-signal-bus` D10。
+    /// 白名单 kind: `stale_update.triggered` / `cache.signature_skew_observed_in_ui`。
+    /// 未在白名单的 kind silently ignore + inc `telemetry.unregistered_correctness_event`。
+    async fn record_correctness_events(
+        &self,
+        items: Vec<CorrectnessEventItem>,
+    ) -> Result<(), ApiError> {
+        let r = cdt_telemetry::registry();
+        for item in items {
+            if r.check_correctness_kind(&item.kind) {
+                // SAFETY: kind 来自前端，但已通过白名单校验后只增 counter；
+                // counter name 必须是 &'static str — 用 match 转 static literal。
+                match item.kind.as_str() {
+                    "stale_update.triggered" => r.counter("stale_update.triggered").add(item.count),
+                    "cache.signature_skew_observed_in_ui" => r
+                        .counter("cache.signature_skew_observed_in_ui")
+                        .add(item.count),
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 单条 correctness event 计数请求项。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectnessEventItem {
+    pub kind: String,
+    pub count: u64,
 }

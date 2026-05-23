@@ -35,6 +35,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] 
 dirs = "6"
 semver = "1"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Data layer crates
 cdt-api = { path = "../crates/cdt-api" }
@@ -42,6 +43,7 @@ cdt-discover = { path = "../crates/cdt-discover" }
 cdt-config = { path = "../crates/cdt-config" }
 cdt-ssh = { path = "../crates/cdt-ssh" }
 cdt-watch = { path = "../crates/cdt-watch" }
+cdt-telemetry = { path = "../crates/cdt-telemetry" }
 
 [dev-dependencies]
 tempfile = "3"

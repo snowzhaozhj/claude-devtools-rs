@@ -22,6 +22,7 @@ cdt-watch = { path = "crates/cdt-watch" }
 cdt-config = { path = "crates/cdt-config" }
 cdt-ssh = { path = "crates/cdt-ssh" }
 cdt-api = { path = "crates/cdt-api" }
+cdt-telemetry = { path = "crates/cdt-telemetry" }
 
 # Runtime / infrastructure — only leaf crates add these as direct deps.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time", "process"] }
@@ -53,6 +54,8 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 percent-encoding = "2"
 syn = { version = "2", features = ["full", "parsing"] }
 criterion = { version = "0.5", features = ["async_tokio"] }
+crossbeam-queue = "0.3"
+parking_lot = "0.12"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

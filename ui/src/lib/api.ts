@@ -972,3 +972,49 @@ export async function stopHttpServer(): Promise<void> {
 export async function getHttpServerStatus(): Promise<HttpServerStatus> {
   return await invoke("http_server_status");
 }
+
+// ---------------------------------------------------------------------------
+// Telemetry：应用健康度 Signal Bus 快照（只读）+ correctness event 批量上报
+//
+// 详见 openspec/specs/application-telemetry/spec.md。pull-based 快照供 Settings
+// → Diagnostics tab 渲染；correctness events 由前端 store 5s/50 累计窗口 flush。
+// ---------------------------------------------------------------------------
+
+export interface HistogramSnapshot {
+  count: number;
+  buckets: number[];
+  p50Ns: number | null;
+  p95Ns: number | null;
+  p99Ns: number | null;
+  maxBucket: number | null;
+}
+
+export interface TelemetryEvent {
+  kind: string;
+  tsUnixMs: number;
+  fields: Record<string, string>;
+}
+
+export interface TelemetrySnapshot {
+  schemaVersion: number;
+  uptimeSecs: number;
+  capturedAt: number;
+  counters: Record<string, number>;
+  histograms: Record<string, HistogramSnapshot>;
+  recentEvents: TelemetryEvent[];
+}
+
+export interface CorrectnessEventItem {
+  kind: string;
+  count: number;
+}
+
+export async function getTelemetrySnapshot(): Promise<TelemetrySnapshot> {
+  return await invoke("get_telemetry_snapshot");
+}
+
+export async function recordCorrectnessEvents(
+  items: CorrectnessEventItem[],
+): Promise<void> {
+  await invoke("record_correctness_events", { items });
+}

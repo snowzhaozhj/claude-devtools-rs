@@ -46,7 +46,7 @@ claude-devtools-rs/
 
 ## Capability → crate map（一句话）
 
-`cdt-parse`(session-parsing)、`cdt-analyze`(chunk-building / tool-linking / context-tracking / team-metadata)、`cdt-discover`(project-discovery / session-search)、`cdt-watch`(file-watching)、`cdt-config`(configuration-management / notification-triggers)、`cdt-ssh`(ssh-remote-context)、`cdt-api`(ipc-data-api / http-data-api)。详见 `openspec/README.md`。
+`cdt-parse`(session-parsing)、`cdt-analyze`(chunk-building / tool-linking / context-tracking / team-metadata)、`cdt-discover`(project-discovery / session-search)、`cdt-watch`(file-watching)、`cdt-config`(configuration-management / notification-triggers)、`cdt-ssh`(ssh-remote-context)、`cdt-api`(ipc-data-api / http-data-api)、`cdt-telemetry`(application-telemetry — Signal Bus)。详见 `openspec/README.md`。
 
 ## Common commands
 

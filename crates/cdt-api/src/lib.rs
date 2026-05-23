@@ -17,10 +17,10 @@ pub use http::{
 };
 pub use ipc::session_metadata::TITLE_MAX_CHARS;
 pub use ipc::{
-    ApiError, ApiErrorCode, ConfigUpdateRequest, ContextInfo, DataApi, LocalDataApi,
-    METADATA_SCAN_CONCURRENCY, MemoryFileContent, MemoryLayer, MemoryLayerKind, PaginatedRequest,
-    PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs, PushEvent, SearchRequest,
-    SessionDetail, SessionMetadataUpdate, SessionSummary, SshAuthMethod, SshConnectRequest,
-    SshConnectionResult, SshState, WslDistroCandidate, WslDistroScanReport,
+    ApiError, ApiErrorCode, ConfigUpdateRequest, ContextInfo, CorrectnessEventItem, DataApi,
+    LocalDataApi, METADATA_SCAN_CONCURRENCY, MemoryFileContent, MemoryLayer, MemoryLayerKind,
+    PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
+    PushEvent, SearchRequest, SessionDetail, SessionMetadataUpdate, SessionSummary, SshAuthMethod,
+    SshConnectRequest, SshConnectionResult, SshState, WslDistroCandidate, WslDistroScanReport,
 };
 pub use notifier::NotificationPipeline;
