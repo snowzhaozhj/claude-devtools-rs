@@ -589,6 +589,51 @@ fn ai_chunk_serializes_camelcase_fields() {
 }
 
 #[test]
+fn aichunk_with_empty_responses_and_teammate_messages_round_trips() {
+    // Spec: chunk-building::Embed teammate messages into AIChunk 第 5 条规则。
+    // 守住 empty-responses + 非空 teammate_messages 的 AIChunk 可序列化 +
+    // 反序列化等价（前端 type 与 displayItemBuilder 假设依赖此形态）。
+    let chunk = AIChunk {
+        chunk_id: "tm1:0".into(),
+        timestamp: ts(),
+        duration_ms: None,
+        responses: vec![],
+        metrics: ChunkMetrics::default(),
+        semantic_steps: vec![],
+        tool_executions: vec![],
+        subagents: vec![],
+        slash_commands: vec![],
+        teammate_messages: vec![TeammateMessage {
+            uuid: "tm1".into(),
+            teammate_id: "alice".into(),
+            color: Some("blue".into()),
+            summary: Some("you are frontend".into()),
+            body: "你是 kb-shortcuts team 的 frontend teammate".into(),
+            timestamp: ts(),
+            reply_to_tool_use_id: None,
+            token_count: Some(42),
+            is_noise: false,
+            is_resend: false,
+        }],
+    };
+    let json = serde_json::to_string(&chunk).expect("serialize empty-AI");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("re-parse json");
+    assert_eq!(
+        parsed["responses"],
+        json!([]),
+        "responses should serialize as empty array"
+    );
+    assert!(
+        parsed["teammateMessages"].is_array(),
+        "teammateMessages should be array"
+    );
+    assert_eq!(parsed["teammateMessages"][0]["teammateId"], json!("alice"));
+
+    let round_tripped: AIChunk = serde_json::from_str(&json).expect("deserialize empty-AI");
+    assert_eq!(round_tripped, chunk, "round-trip identity");
+}
+
+#[test]
 fn ai_chunk_empty_teammate_messages_omitted() {
     let chunk = AIChunk {
         chunk_id: "ai:a1:0".into(),
