@@ -76,6 +76,10 @@ const MAC_SYMBOLS: Record<string, string> = {
   meta: "⌘",
 };
 
+// `meta: "Win"` 是防御性 fallback——`recordBindingFromEvent` 与 `normalizeBindingToMod`
+// 已把所有录入与持久化路径统一到 `mod` 字面量，正常 binding 不会出现 `meta` token 在
+// non-mac 平台被 formatShortcut 渲染。保留该映射防止"用户手工编辑 cdt-config 写死
+// `meta+x`" 等极端 case 时 formatShortcut 输出 undefined 引发渲染错乱。
 const WIN_TEXT: Record<string, string> = {
   ctrl: "Ctrl",
   alt: "Alt",
@@ -203,6 +207,96 @@ export function normalize(event: KeyboardEvent): string {
 }
 
 /**
+ * 录键产物函数：把 KeyboardEvent 转为跨平台 `mod` 字面量 binding（如 `"mod+shift+p"`）。
+ *
+ * 流程：
+ * 1. 调 `normalize(event)` 得平台特化字符串（mac `meta+shift+p` / win `ctrl+shift+p`）
+ * 2. 把当前平台主修饰键反写为 `mod`：mac 上替换 `meta` → `mod`、win/linux 上替换 `ctrl` → `mod`
+ *
+ * 仅按下 modifier（无主键）时返回 `null`。
+ *
+ * 这是 `KeyRecorderInput` commit binding 的唯一来源——录键产物 SHALL NOT 直接使用
+ * `normalize(event)` 的平台特化字面量，确保 cdt-config 持久化 binding 跨平台一致。
+ *
+ * 注意 mac 双修饰键 case：`Cmd+Ctrl+X` 经 normalize 输出 `ctrl+meta+x`（按内部排序），
+ * 反写主修饰键 `meta` → `mod` 得 `ctrl+mod+x`，dispatcher 入口 `normalizeBinding` 在 mac
+ * 展开为 `ctrl+meta+x` 与原事件等价。
+ */
+export function recordBindingFromEvent(event: KeyboardEvent): string | null {
+  const normalized = normalize(event);
+  if (!normalized) return null;
+
+  const platformMod = isMac() ? "meta" : "ctrl";
+  const tokens = normalized.split("+");
+  const lastIdx = tokens.length - 1;
+  // 仅在 modifier 位置（除主键外）找平台主修饰键
+  for (let i = 0; i < lastIdx; i++) {
+    if (tokens[i] === platformMod) {
+      tokens[i] = "mod";
+      return tokens.join("+");
+    }
+  }
+  // 没主修饰键（如 alt+x / shift+x），原样返回
+  return normalized;
+}
+
+/**
+ * 字面量迁移函数：把存量平台特化字面量（`meta+x` / `ctrl+x`）转为 `mod` 字面量。
+ *
+ * **token-level 算法**（不依赖 token 位置或前缀，鲁棒覆盖用户手编非 sorted 字面量）：
+ * 1. `binding.split("+")` 得 token 数组
+ * 2. 若数组中**已含** `mod` token：保留 token 顺序，移除主键之外位置的 `meta` / `ctrl`（防御
+ *    异常字面量如 `meta+mod+x` → `mod+x`）；不重排
+ * 3. 否则按 **主修饰键优先级 meta > ctrl** 在 modifier 位置（除主键外）找替换目标：
+ *    - 优先找第一个 `meta` token 替换为 `mod`（mac 双修饰键 `ctrl+meta+x` 优先替 meta 得
+ *      `ctrl+mod+x`，保留 ctrl 为辅助修饰键）
+ *    - 若数组无 `meta`，再找第一个 `ctrl` token 替换为 `mod`
+ *    - 找到一个即返回
+ * 4. 不含 `meta` / `ctrl` 主修饰键的 binding（如 `alt+x`、`shift+x`、`F1`）原样返回
+ *
+ * 不在内部重排 sort——sort 由 dispatcher 入口 `normalizeBinding` 在 register 时统一处理。
+ *
+ * 详见 `openspec/specs/keyboard-shortcuts/spec.md::跨平台修饰键归一化`。
+ */
+export function normalizeBindingToMod(binding: string): string {
+  if (!binding) return "";
+  const tokens = binding
+    .split("+")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (tokens.length === 0) return "";
+
+  const lastIdx = tokens.length - 1;
+  const hasMod = tokens.slice(0, lastIdx).includes("mod");
+
+  if (hasMod) {
+    // 移除主键之外位置的 meta / ctrl（防御异常字面量）
+    const cleaned = tokens.filter((t, i) => {
+      if (i === lastIdx) return true;
+      return t !== "meta" && t !== "ctrl";
+    });
+    return cleaned.join("+");
+  }
+
+  // 优先替换 meta（mac 主修饰键）
+  for (let i = 0; i < lastIdx; i++) {
+    if (tokens[i] === "meta") {
+      tokens[i] = "mod";
+      return tokens.join("+");
+    }
+  }
+  // 退而替换 ctrl（win/linux 主修饰键）
+  for (let i = 0; i < lastIdx; i++) {
+    if (tokens[i] === "ctrl") {
+      tokens[i] = "mod";
+      return tokens.join("+");
+    }
+  }
+  // 无主修饰键，原样返回
+  return tokens.join("+");
+}
+
+/**
  * 把 binding 字符串（`"mod+shift+K"`）归一化到当前平台对应的 NormalizedKey
  * （mac → `"meta+shift+k"`、其他 → `"ctrl+shift+k"`）。
  * 修饰键按字母顺序排列，字母键统一小写，命名键保持 PascalCase。
@@ -282,6 +376,8 @@ function formatMainKey(key: string): string {
   if (key in ARROW_DISPLAY) return ARROW_DISPLAY[key];
   // 内部 token "Plus" 用于避免与 binding 分隔符 "+" 冲突；展示层还原为字面 "+"
   if (key === "Plus") return "+";
+  // Space 在 mac 用 U+2423 OPEN BOX 符号（对齐 Apple HIG 推荐表达），其他平台保留文本
+  if (key === "Space") return isMac() ? "␣" : "Space";
   return key;
 }
 
