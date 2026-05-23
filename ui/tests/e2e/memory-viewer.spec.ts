@@ -8,13 +8,15 @@ test.describe('memory viewer', () => {
 
     // 切到 rust-port group（含 main + feat-x 双 worktree）
     await page.locator('.dash-row, .dash-card', { hasText: 'rust-port' }).first().click()
-    // sidebar 顶部 worktree filter dropdown 切到 feat-x（spec D6）。
+    // sidebar 顶部 worktree filter chip cluster 切到 feat-x（spec D6）。
     // change `sidebar-memory-anchor-uses-group-root`：memory 入口 anchor SHALL 恒定
     // 指向 group 内 repo 根 worktree（不跟随 worktree filter）。即使 feat-x 自己
     // 没 memory（fixture: count=0），sidebar 入口 SHALL 仍显示 main worktree 的
     // count=3。
-    await page.locator('.worktree-filter-bar .dd-anchor').click()
-    await page.locator('.dd-popover .dd-opt-label', { hasText: 'feat-x' }).click()
+    await page
+      .locator('.worktree-filter-bar [role="radio"]')
+      .filter({ hasText: 'feat-x' })
+      .click()
 
     await expect(page.getByRole('button', { name: /Memory \(3\)/ })).toBeVisible({ timeout: 5_000 })
   })

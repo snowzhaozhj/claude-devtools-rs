@@ -16,7 +16,7 @@
   import SessionContextMenu from "./SessionContextMenu.svelte";
   import OngoingIndicator from "./OngoingIndicator.svelte";
   import SkeletonList from "./SkeletonList.svelte";
-  import Dropdown from "../lib/components/Dropdown.svelte";
+  import WorktreeChipCluster from "../lib/components/WorktreeChipCluster.svelte";
   import { openTab, openOrReplaceTab, openTabInNewPane, getPaneLayout, openMemoryTab } from "../lib/tabStore.svelte";
   import { MAX_PANES } from "../lib/paneTypes";
   import {
@@ -88,9 +88,9 @@
   let sessionsLoading = $state(false);
   let sessionsLoadingMore = $state(false);
   let sessionsNextCursor: string | null = $state(null);
-  // "可见 / 总" tooltip 右半的 "总"——取 `selectedGroup.totalSessions`
-  // （grouper 计算的整个 group 跨 worktree 的 session 总数）。
-  // 切 group / 切 worktree filter 时由 derived 自动更新，无需手动维护。
+  // 当前 scope 总量由 `scopeTotal` derived 派生，按 worktreeFilter 走（spec
+  // sidebar-navigation §"会话总数显示口径"）：filter=ALL → group 全集；
+  // filter=具体 wt → 该 wt 集合。切 group / 切 chip 时 derived 自动更新。
   /** 当前 worktree filter（`ALL_WORKTREES` = "全部"；否则为 worktree.id）。
    * session-scoped，切 group 时 reset 为 "全部"（不跨会话持久化）。 */
   let worktreeFilter: string = $state(ALL_WORKTREES);
@@ -362,7 +362,7 @@
             // listener 同时直接走 sessions.map in-place patch，buffer 兜底
             // 路径在 recovery 场景下无必要。
             sessions = mergeRecoveryResponse(sessions, result.sessions);
-            cacheSessions(cacheKey, sessions, sessionsNextCursor, totalSessions);
+            cacheSessions(cacheKey, sessions, sessionsNextCursor, scopeTotal);
           } catch (e) {
             console.warn("[sidebar] sse-recovery rescan failed:", e);
           }
@@ -505,9 +505,9 @@
       sessions = applyPendingMetadata(fresh, pendingMetadataUpdates);
       sessionsNextCursor = nextCursor;
       // 同步写 by-(groupId + filter) 缓存供下次切回立即 hydrate；total 取
-      // `selectedGroup.totalSessions`（derived `totalSessions`）让 cache 与 UI
-      // 显示口径一致。GroupSessionPage 无 `.total`，total 由 derived 维护。
-      cacheSessions(cacheKey, sessions, sessionsNextCursor, totalSessions);
+      // 当前 scope 的 `scopeTotal` derived，让 cache 与 UI 顶部 count 显示
+      // 口径一致。GroupSessionPage 无 `.total`，total 由 derived 维护。
+      cacheSessions(cacheKey, sessions, sessionsNextCursor, scopeTotal);
       hasDeferredSessionRefresh = false;
       queueMicrotask(() => maybeLoadMoreSessions(true));
     } catch (e) {
@@ -538,10 +538,10 @@
       sessions = applyPendingMetadata(mergeSessions(sessions, result.sessions, false), pendingMetadataUpdates);
       sessionsNextCursor = result.nextCursor;
       // spec sidebar-navigation §"会话总数显示口径"：loadMore **不**改
-      // totalSessions——total 由 `selectedGroup.totalSessions` derived 维护，
-      // 翻页累加 sessions 不影响 group 总数。
+      // scopeTotal——total 由 `selectedGroup.totalSessions` /
+      // `Worktree.sessions.length` derived 维护，翻页累加 sessions 不影响 scope 总量。
       // 同步写 store 缓存（保留 total 不变，nextCursor 推进）
-      cacheSessions(cacheKey, sessions, sessionsNextCursor, totalSessions);
+      cacheSessions(cacheKey, sessions, sessionsNextCursor, scopeTotal);
     } catch (e) {
       console.error("Failed to load more sessions:", e);
     } finally {
@@ -602,6 +602,14 @@
     worktreeFilter;
     untrack(() => {
       if (gid) void loadSessions(gid);
+      // spec §"切 chip 构造 server-side filter cursor" / §"切 group 时
+      // session-list 滚动位置重置"：任何使 sessions 集合整体替换的操作
+      // SHALL 滚回顶部，避免旧 scrollTop 残留导致新列表停在中段或空白。
+      // try/catch 容错单测里 Object.defineProperty mock 出 read-only scrollTop
+      // 的场景；浏览器 / WKWebView 真实环境 scrollTop 永远可写。
+      try {
+        if (sessionListEl) sessionListEl.scrollTop = 0;
+      } catch { /* noop */ }
     });
   });
 
@@ -650,6 +658,17 @@
       scheduleRefresh(`sidebar:${currentGroupId}`, () =>
         untrack(() => loadSessions(currentGroupId, true)),
       );
+      // session 增 / 删事件 SHALL 同步触发 list_repository_groups SWR revalidate，
+      // 让 `selectedGroup.totalSessions` / `wt.sessions.length`（scopeTotal 唯一权威源）
+      // 与列表 silent refresh 一起跟新，否则顶部 count 会停在旧值——spec
+      // sidebar-navigation §"会话总数显示口径" 要求 silent 刷新时 scopeTotal
+      // 同步下降 / 上升。仅在 projectListChanged 未走过该 schedule 时触发，
+      // 避免同 payload 重复入队（codex round 2 Minor）。
+      if (!payload.projectListChanged) {
+        scheduleRefresh("sidebar:projects", () =>
+          untrack(() => loadProjects(true)),
+        );
+      }
     });
     return () => {
       unregisterHandler("sidebar");
@@ -749,12 +768,41 @@
   );
 
   const dateGroups = $derived(groupByDate(unpinnedSessions));
-  // Group 维度的全量 session 计数。`selectedGroup.totalSessions` 由 grouper
-  // 计算的整个 group 跨 worktree 的真值（spec sidebar-navigation §"会话总数
-  // 显示口径"）；fallback `sessions.length` 应对 selectedGroup 暂时为 null
-  // 的早期渲染窗口（loadProjects 未完成）。loadMore 累加 sessions 不影响
-  // total——derived 直接消费 group 维度计数。
-  const totalSessions = $derived(selectedGroup?.totalSessions ?? sessions.length);
+  // 当前 scope 内的 session 总量——按 worktreeFilter 派生（spec
+  // sidebar-navigation §"会话总数显示口径"）：filter=ALL → group 全集；
+  // filter=具体 wt → 该 wt 集合。fallback 仅在 selectedGroup 暂未就绪
+  // 的早期渲染窗口（loadProjects 未完成）兜底。loadMore 累加 sessions
+  // 不影响 scopeTotal——derived 直接消费 list_repository_groups 已返回的
+  // RepositoryGroup.totalSessions / Worktree.sessions.length。
+  const scopeTotal = $derived.by(() => {
+    if (worktreeFilter === ALL_WORKTREES) {
+      return selectedGroup?.totalSessions ?? sessions.length;
+    }
+    const wt = groupWorktrees.find((w) => w.id === worktreeFilter);
+    return wt?.sessions.length ?? sessions.length;
+  });
+  // 搜索激活时的命中数——visibleSessions 已经过 filter + hide 过滤。
+  const matchCount = $derived(visibleSessions.length);
+  // chip cluster 选项：「全部」chip 永远在最前（无 ⌗ 前缀）；其余按
+  // 「isRepoRoot 优先 → isMainWorktree 次之 → mostRecentSession 倒序」
+  // 排序（spec sidebar-navigation §"chip 数据顺序"），label 加 `⌗` 前缀
+  // 与 PR-A 行内 `.session-wt-label` 的 mono 信号语言对齐。排序责任归
+  // Sidebar 调用方，WorktreeChipCluster 子组件按传入顺序渲染。
+  const chipOptions = $derived.by(() => {
+    const sorted = groupWorktrees.slice().sort((a, b) => {
+      if ((a.isRepoRoot ?? false) !== (b.isRepoRoot ?? false)) {
+        return a.isRepoRoot ? -1 : 1;
+      }
+      if (a.isMainWorktree !== b.isMainWorktree) {
+        return a.isMainWorktree ? -1 : 1;
+      }
+      return (b.mostRecentSession ?? 0) - (a.mostRecentSession ?? 0);
+    });
+    return [
+      { value: ALL_WORKTREES, label: "全部" },
+      ...sorted.map((wt) => ({ value: wt.id, label: `⌗${wt.name}` })),
+    ];
+  });
   const hiddenCount = $derived(getHiddenCount(anchorWorktreeId));
   const memoryCount = $derived.by(() => projectMemory ? projectMemory.count : 0);
   const sidebarWidth = $derived(getSidebarWidth());
@@ -820,20 +868,17 @@
        count span 在 sessionsLoading 时仍隐藏避免显 "0" 误导用户。 -->
   {#if selectedGroupId}
     {#if showWorktreeFilter}
-      <!-- 多 worktree group 顶部 worktree filter dropdown（D6）：值变化通过
-           $effect 触发 loadSessions 重拉，cursor 让非选 worktree Exhausted。
-           SHALL 走 `lib/components/Dropdown.svelte` size="sm"——ui/CLAUDE.md 硬约束：
-           原生 <select> 在 macOS WKWebView 会遮盖当前选值。 -->
+      <!-- 多 worktree group 顶部 worktree filter chip cluster（spec
+           sidebar-navigation §"Worktree filter chip cluster for multi-worktree
+           group"）：所有 wt 一眼可见 + 一次点击切换；切 chip 通过 worktreeFilter
+           state → $effect → loadSessions 链路重拉，cursor 让非选 wt Exhausted。
+           chip 顺序（「全部」→ isRepoRoot → 其余按 mostRecentSession 倒序）由
+           Sidebar 端 chipOptions derived 维护，子组件按传入顺序渲染。 -->
       <div class="worktree-filter-bar">
-        <Dropdown
-          size="sm"
-          minWidth={140}
+        <WorktreeChipCluster
           ariaLabel="按 worktree 过滤会话"
           value={worktreeFilter}
-          options={[
-            { value: ALL_WORKTREES, label: "全部 worktree" },
-            ...groupWorktrees.map((wt) => ({ value: wt.id, label: wt.name })),
-          ]}
+          options={chipOptions}
           onChange={(v) => (worktreeFilter = v)}
         />
       </div>
@@ -850,12 +895,18 @@
         spellcheck="false"
         enterkeyhint="search"
         aria-label="搜索会话"
+        aria-describedby="session-search-hint"
+        title="在已加载范围内搜索"
       />
+      <span id="session-search-hint" class="visually-hidden">在已加载范围内搜索</span>
       {#if !sessionsLoading}
+        <!-- 双态显示（spec §"会话总数显示口径"）：默认显单数字 scopeTotal；
+             搜索激活显 `{matchCount} 匹配`。tooltip 基础一层「总 N」，
+             hiddenCount > 0 时追加「· N 已隐藏」。 -->
         <span
           class="session-count-num"
-          title="可见 {visibleSessions.length} / 总 {totalSessions}"
-        >{visibleSessions.length}</span>
+          title={hiddenCount > 0 ? `总 ${scopeTotal} · ${hiddenCount} 已隐藏` : `总 ${scopeTotal}`}
+        >{filterQuery ? `${matchCount} 匹配` : `${scopeTotal}`}</span>
       {/if}
       {#if hasDeferredSessionRefresh}
         <button
@@ -1002,12 +1053,12 @@
         <button
           class="load-more-row load-more-btn"
           onclick={() => void loadMoreSessions()}
-          aria-label="加载更多会话，剩余 {Math.max(totalSessions - sessions.length, 1)} 条"
+          aria-label="加载更多会话，剩余 {Math.max(scopeTotal - sessions.length, 1)} 条"
         >
           <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <polyline points="6 9 12 15 18 9"/>
           </svg>
-          <span>加载更多 · 剩 {Math.max(totalSessions - sessions.length, 1)} 条</span>
+          <span>加载更多 · 剩 {Math.max(scopeTotal - sessions.length, 1)} 条</span>
         </button>
       {:else if sessions.length > 0}
         <div class="load-more-row load-more-end">已显示全部 {sessions.length} 条</div>
@@ -1160,13 +1211,36 @@
     color: var(--color-text-muted);
   }
 
-  /* 多 worktree group filter dropdown 容器：跟 .session-filter-bar 视觉同
-     行级，padding 与之对齐；底部不留分隔线，避免与下方 session-filter-bar 之
-     间出现双线，跟右侧 TabBar 横线对不齐。Dropdown anchor 自带边框 / 高度。 */
+  /* 多 worktree group filter chip cluster 容器：与 Memory entry / Session
+     search bar 同行高族（32 px），padding 与 .session-filter-bar 对齐；底部
+     不留分隔线避免与下方 session-filter-bar 之间出现双线。chip cluster 子
+     组件自带横向滚动 + 右侧 fade mask（spec §"chip overflow 处理"）。 */
   .worktree-filter-bar {
     display: flex;
     align-items: center;
-    padding: 6px 12px 0;
+    height: 32px;
+    padding: 4px 12px 0;
+    /* min-width 0 让内层 chip cluster 可触发 overflow-x:auto 而不是把
+       sidebar 撑出去——flex 子项默认 min-width:auto 不收缩。 */
+    min-width: 0;
+  }
+  .worktree-filter-bar :global(.worktree-chip-cluster) {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* a11y 隐藏文本（aria-describedby 引用目标）：视觉不渲染但屏幕阅读器
+     可读。沿用 WAI-ARIA 推荐的 visually-hidden 模式。 */
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .session-filter-bar {

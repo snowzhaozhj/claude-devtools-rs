@@ -10,3 +10,4 @@
 ui/node_modules
 src-tauri/target
 .playwright-mcp/
+.claude/screenshots/
