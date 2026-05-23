@@ -3,14 +3,15 @@
   import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
   import { getToolSummary, getToolStatus, getToolDurationMs, isToolPending, cleanDisplayText, parseTaskNotifications, getToolContextTokens, estimateTokens, viewerUsesOutput, shouldPrefetchOnChunkExpand } from "../lib/toolHelpers";
   import { buildDisplayItemsCached, buildSummary } from "../lib/displayItemBuilder";
-  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, LAYERS, CLOCK_SVG, USER_SVG, ALERT_TRIANGLE_SVG } from "../lib/icons";
+  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, LAYERS, CLOCK_SVG, USER_SVG, ALERT_TRIANGLE_SVG, CHEVRONS_DOWN_SVG } from "../lib/icons";
   import { formatClock, formatTokensCompact } from "../lib/formatters";
   import { getTimeFormat } from "../lib/displayPrefs.svelte";
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
   import { createLazyMarkdownObserver, estimatePlaceholderHeight } from "../lib/lazyMarkdown.svelte";
-  import { getTabUIState, saveTabUIState, getTabSessionId, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
+  import { getTabUIState, saveTabUIState, getTabSessionId, getCachedSession, setCachedSession, getActiveTabId } from "../lib/tabStore.svelte";
+  import { isMac } from "../lib/platform";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
@@ -100,12 +101,159 @@
     return expandedChunks.has(chunk.chunkId);
   }
 
+  // ── Quick Anchor Navigation（change `session-jump-to-latest`）──
+  //
+  // 距底 > JUMP_THRESHOLD 时浮现"跳到最新消息"按钮 + 跨平台键盘快捷键
+  // （mac ⌘+↓ / Win+Linux Ctrl+End）触发 smooth scroll 到末尾。状态机
+  // 由 scrollend 主条件 + 1500ms fallback timer + 距底 ≤ 16px 兜底 + 用户
+  // 主动输入打断 四路终止，详 design.md::D-V4。
+  /** 距底距离阈值：> 此值时显按钮，与 wasAtBottom 16px 阈值用途不同（后者是自动跟随判定） */
+  const JUMP_THRESHOLD = 300;
+  /** programmatic-scroll fallback timer：scrollend 不触发的边缘环境兜底 */
+  const PROG_SCROLL_FALLBACK_MS = 1500;
+  /** 距底兜底：与 wasAtBottom 同阈值，programmatic-scroll 进入此距离即视为完成 */
+  const PROG_SCROLL_BOTTOM_GUARD_PX = 16;
+
+  let isFar = $state(false);
+  let isProgrammaticScroll = $state(false);
+  let progScrollTimer: ReturnType<typeof setTimeout> | null = null;
+  let rAFid: number | null = null;
+
+  function isJumpToLatestKey(e: KeyboardEvent): boolean {
+    if (isMac()) {
+      return e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.key === "ArrowDown";
+    }
+    return e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.key === "End";
+  }
+
+  function isInputElement(el: Element | null): boolean {
+    if (!el) return false;
+    const tag = el.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") return true;
+    if ((el as HTMLElement).isContentEditable) return true;
+    return false;
+  }
+
+  function startProgrammaticScroll() {
+    isProgrammaticScroll = true;
+    if (progScrollTimer !== null) clearTimeout(progScrollTimer);
+    progScrollTimer = setTimeout(stopProgrammaticScroll, PROG_SCROLL_FALLBACK_MS);
+  }
+
+  function stopProgrammaticScroll() {
+    isProgrammaticScroll = false;
+    if (progScrollTimer !== null) {
+      clearTimeout(progScrollTimer);
+      progScrollTimer = null;
+    }
+  }
+
+  function scrollToLatest() {
+    if (!conversationEl) return;
+    const reduceMotion = typeof matchMedia !== "undefined"
+      && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    startProgrammaticScroll();
+    conversationEl.scrollTo({
+      top: conversationEl.scrollHeight,
+      behavior: reduceMotion ? "auto" : "smooth",
+    });
+    // reduced-motion 走 'auto' 立即到位 → 不会触发 scrollend，立即清 flag
+    if (reduceMotion) {
+      // 用 microtask 让浏览器先 commit scrollTop 更新再清 flag，避免 isFar derived 在
+      // 同一 task 内还读到旧值
+      queueMicrotask(stopProgrammaticScroll);
+    }
+  }
+
+  function updateIsFar() {
+    rAFid = null;
+    if (!conversationEl) {
+      isFar = false;
+      return;
+    }
+    const { scrollTop, scrollHeight, clientHeight } = conversationEl;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    // programmatic-scroll 期间走两件事：
+    // 1. 距底 ≤ 16px 时立即 stop，让 isFar derived 重新生效（提前结束）
+    // 2. 否则保持当前 isFar，不让按钮在滚动半路重显
+    if (isProgrammaticScroll) {
+      if (distanceFromBottom <= PROG_SCROLL_BOTTOM_GUARD_PX) {
+        stopProgrammaticScroll();
+        isFar = false;
+      }
+      return;
+    }
+    isFar = distanceFromBottom > JUMP_THRESHOLD;
+  }
+
+  function scheduleUpdateIsFar() {
+    if (rAFid !== null) return;
+    rAFid = requestAnimationFrame(updateIsFar);
+  }
+
+  function attachConversationScroll(el: HTMLElement) {
+    // bind:this 已经把 conversationEl 设上，attach 仅负责挂 listener + cleanup
+    const onScroll = () => scheduleUpdateIsFar();
+    const onScrollEnd = () => stopProgrammaticScroll();
+    const onUserInput = () => {
+      // 用户主动 wheel / touchmove 打断 smooth scroll → 立即清抑制
+      if (isProgrammaticScroll) stopProgrammaticScroll();
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("scrollend", onScrollEnd);
+    el.addEventListener("wheel", onUserInput, { passive: true });
+    el.addEventListener("touchmove", onUserInput, { passive: true });
+    // 初次同步一次（首屏 long session 直接 scrollTop=0 + scrollHeight 巨大 → 立即显示）
+    updateIsFar();
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("scrollend", onScrollEnd);
+      el.removeEventListener("wheel", onUserInput);
+      el.removeEventListener("touchmove", onUserInput);
+      if (rAFid !== null) {
+        cancelAnimationFrame(rAFid);
+        rAFid = null;
+      }
+      if (progScrollTimer !== null) {
+        clearTimeout(progScrollTimer);
+        progScrollTimer = null;
+      }
+    };
+  }
+
   function handleKeydown(e: KeyboardEvent) {
+    // Cmd+F 全局拦——既有逻辑保留
     if ((e.metaKey || e.ctrlKey) && e.key === "f") {
       e.preventDefault();
       searchVisible = true;
+      return;
+    }
+    // ── Quick Anchor Navigation 快捷键 ──
+    // 顺序很关键：中断 programmatic-scroll 必须**前置**于 input guard 与 pane guard。
+    // 理由：spec 要求"滚动期间用户主动 wheel/touchmove/非本快捷键 keydown 立即清 flag"。
+    // 如果先 input guard return，input focused 期间任何 keydown 都被吞掉，programmatic
+    // scroll 即使被打断也不会停 —— spec 与实现不一致（codex PR 二审第一轮 #1）。
+    // 中断条件仅 `!isJumpToLatestKey`：scrollTo() 不会 dispatch 新 keydown，所以
+    // "自我打断 race"不存在；用户连按本快捷键走"重复触发"路径（startProgrammaticScroll
+    //  内 clearTimeout 旧 timer + 重新 setTimeout）（codex PR 二审第二轮 #1）。
+    if (isProgrammaticScroll && !isJumpToLatestKey(e)) {
+      stopProgrammaticScroll();
+    }
+    // Guard 1：input/textarea/contenteditable focused 时不拦快捷键，让浏览器原生
+    // 光标导航生效。注意此 guard 在中断逻辑**之后**——input typing 触发的 keydown
+    // 仍能中断 smooth scroll（用户认知焦点已切到 input）
+    if (isInputElement(document.activeElement)) return;
+    // Guard 2：active pane focus —— PaneView 多 pane 场景下每个 SessionDetail 都各自挂
+    // document.keydown listener，仅 focused pane 内 active SessionDetail 拦截，避免一次
+    // 按键 N 个 pane 同时滚到底（codex design #2）
+    if (getActiveTabId() !== tabId) return;
+    if (isJumpToLatestKey(e)) {
+      e.preventDefault();
+      scrollToLatest();
     }
   }
+
+  const jumpTooltip = $derived(isMac() ? "跳到最新消息 (⌘↓)" : "跳到最新消息 (Ctrl+End)");
 
   const fileChangeKey = `session-detail-${untrack(() => tabId)}`;
 
@@ -622,7 +770,7 @@
   <!-- Content area (conversation + optional context panel) -->
   <div class="content-area">
   <!-- Conversation -->
-  <div class="conversation" bind:this={conversationEl}>
+  <div class="conversation" bind:this={conversationEl} {@attach attachConversationScroll}>
     {#each detail.chunks as chunk, i (chunkKey(chunk))}
 
       <!-- User -->
@@ -1006,6 +1154,23 @@
     {/each}
   </div>
 
+  <!-- Quick Anchor Navigation：距底 > 300px 时浮现的"跳到最新消息"按钮 -->
+  <button
+    type="button"
+    class="jump-to-latest"
+    class:jump-to-latest-visible={isFar}
+    class:jump-to-latest-shifted={contextPanelVisible && contextCount > 0}
+    onclick={scrollToLatest}
+    title={jumpTooltip}
+    aria-label="跳到最新消息"
+    aria-hidden={!isFar}
+    tabindex={isFar ? 0 : -1}
+  >
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      {@html CHEVRONS_DOWN_SVG}
+    </svg>
+  </button>
+
   {#if contextPanelVisible && contextCount > 0 && detail}
     <ContextPanel
       {detail}
@@ -1350,6 +1515,90 @@
   }
 
   .msg-spacer { flex: 1; min-width: 80px; }
+
+  /* ── Jump to latest（floating affordance；DESIGN.md::Floating affordances）──
+     contextPanelVisible 时按钮 right offset 让位（CSS-only，不读 JS 常量；
+     min(320px, 50vw) 与 ContextPanel 实际 width: min(320px, 100%) 同源对齐——
+     50vw 让按钮在窄屏 < 320px 时仍位于可见 conversation 区域内，不被推出
+  */
+  .jump-to-latest {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 20;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 6px;
+    background: var(--color-surface-raised);
+    color: var(--color-text-secondary);
+    border: 1px solid var(--color-border-emphasis);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    cursor: pointer;
+    /* 默认隐藏：opacity + translateY 进出，不动 layout 属性 */
+    opacity: 0;
+    transform: translateY(8px);
+    pointer-events: none;
+    transition:
+      opacity 150ms ease-out,
+      transform 150ms ease-out,
+      right 200ms ease-out,
+      box-shadow 120ms ease-out,
+      background-color 120ms ease-out;
+  }
+  .jump-to-latest svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+  .jump-to-latest-visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+    transition:
+      opacity 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      right 200ms ease-out,
+      box-shadow 120ms ease-out,
+      background-color 120ms ease-out;
+  }
+  .jump-to-latest:hover {
+    background: var(--color-surface-overlay);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  }
+  .jump-to-latest:focus-visible {
+    outline: none;
+    box-shadow:
+      0 2px 8px rgba(0, 0, 0, 0.06),
+      0 0 0 2px rgba(59, 130, 246, 0.15);
+    border-color: var(--color-text-secondary);
+  }
+  .jump-to-latest:active {
+    transform: translateY(0) scale(0.96);
+    background: var(--color-surface-overlay);
+    transition: transform 200ms ease-out, background-color 80ms ease-out;
+  }
+  .jump-to-latest-shifted {
+    right: calc(min(320px, 50vw) + 16px);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .jump-to-latest,
+    .jump-to-latest-visible,
+    .jump-to-latest:active {
+      transition: right 0s, box-shadow 0s, background-color 0s;
+      transform: none;
+    }
+    .jump-to-latest-visible { transform: none; }
+  }
+  :global([data-theme="dark"]) .jump-to-latest {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  }
+  :global([data-theme="dark"]) .jump-to-latest:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
 
   /* ── User bubble ──
      时间外置在 bubble 上方右对齐到 conversation 内 right padding（即与 AI

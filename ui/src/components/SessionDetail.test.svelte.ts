@@ -204,4 +204,51 @@ describe('SessionDetail smoke', () => {
       expect(container.querySelector('.session-detail')).not.toBeNull()
     })
   })
+
+  // ── Quick Anchor Navigation（change `session-jump-to-latest`）──
+  // jsdom 不实现真 scroll 物理（scrollHeight / clientHeight = 0），无法测距底
+  // 判定与状态机；这部分由 playwright e2e 兜底（真浏览器有真 scroll）。
+  // 单测仅做 DOM 存在性 + 初始 a11y 状态 smoke——验证按钮渲染、初始隐藏、
+  // aria-label 与平台分流 tooltip 正确。
+  test('jump-to-latest：按钮存在，初始隐藏（aria-hidden + tabindex=-1）', async () => {
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId: 'tab-jump-1',
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+    await waitFor(() => {
+      expect(container.querySelector('.conversation')).not.toBeNull()
+    })
+    const btn = container.querySelector('.jump-to-latest') as HTMLButtonElement | null
+    expect(btn).not.toBeNull()
+    // 初始 isFar=false → aria-hidden=true + tabindex=-1（不在 Tab 序列）
+    expect(btn?.getAttribute('aria-hidden')).toBe('true')
+    expect(btn?.getAttribute('tabindex')).toBe('-1')
+    expect(btn?.getAttribute('aria-label')).toBe('跳到最新消息')
+    // 默认隐藏 visual class：不带 .jump-to-latest-visible
+    expect(btn?.classList.contains('jump-to-latest-visible')).toBe(false)
+    // tooltip 文案含快捷键提示（mac ⌘↓ 或 Win/Linux Ctrl+End，按 navigator.platform 分流）
+    const title = btn?.getAttribute('title') ?? ''
+    expect(title.startsWith('跳到最新消息')).toBe(true)
+    expect(/⌘↓|Ctrl\+End/.test(title)).toBe(true)
+  })
+
+  test('jump-to-latest：未打开 ContextPanel 时按钮不带 shifted class', async () => {
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId: 'tab-jump-2',
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+    await waitFor(() => {
+      expect(container.querySelector('.conversation')).not.toBeNull()
+    })
+    const btn = container.querySelector('.jump-to-latest') as HTMLButtonElement | null
+    expect(btn).not.toBeNull()
+    // 默认 contextPanelVisible=false → 不带 shifted class（right offset = 16px）
+    expect(btn?.classList.contains('jump-to-latest-shifted')).toBe(false)
+  })
 })

@@ -33,6 +33,12 @@ export const SETTINGS =
 /** Lucide chevron-down — 下拉箭头（单 path） */
 export const CHEVRON_DOWN = "M6 9l6 6 6-6";
 
+/** Lucide chevrons-down — 双下箭头，用于"跳到最新消息"浮层按钮（多段，使用 {@html}） */
+export const CHEVRONS_DOWN_SVG = `
+<path d="m7 6 5 5 5-5"/>
+<path d="m7 13 5 5 5-5"/>
+`;
+
 /** Lucide git-branch — 分支显示（多段，使用 {@html}） */
 export const GIT_BRANCH_SVG = `
 <line x1="6" x2="6" y1="3" y2="15"/>
