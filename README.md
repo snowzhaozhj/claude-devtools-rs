@@ -98,8 +98,8 @@ crates/
 ui/                # Svelte 5 + Vite 前端
 src-tauri/         # Tauri 2 Rust 后端（excluded from workspace）
 openspec/
-├── specs/         # 行为契约真相源（authoritative）
-└── followups.md   # TS impl-bug 反向修复清单 + 性能待办
+├── specs/                       # 行为契约真相源（authoritative）
+└── TS_BASELINE_DEVIATIONS.md    # TS port 偏差预警 + UI 隐式契约（main 既有 bug 走 GitHub Issue）
 ```
 
 ## 开发与贡献

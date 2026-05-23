@@ -20,7 +20,7 @@
 
 ### 3. 引用约定
 
-CLAUDE.md / followups.md / commit message 引用一个已归档 change 时：
+CLAUDE.md / TS_BASELINE_DEVIATIONS.md / commit message 引用一个已归档 change 时：
 
 - **只**写 `change <slug>`（如 `change session-detail-lazy-render`）
 - **不要**写 `archive 2026-XX-XX-<slug>` 也**不要**写 `openspec/changes/archive/...` 路径

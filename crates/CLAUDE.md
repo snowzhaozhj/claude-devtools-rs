@@ -62,7 +62,7 @@
 
 ## subagent JSONL 跨 project_dir 关联当前不支持
 
-Claude Code 父 process cwd 被切（worktree / `EnterWorktree`）后，subagent JSONL 写到 cwd 编码的 project_dir，**不是**父 session 的 project_dir。`scan_subagent_candidates` 当前只扫同 project，跨 dir 找不到 candidate → UI 上 Agent 工具显示为 ToolItem 无明细。普通用户不触发；dev / worktree 场景下会复现。关联线索（值得日后修）：父 sessionId 在路径 `<project>/<父sessionId>/subagents/agent-*.jsonl` 目录名里 + `agent-<id>.meta.json` 含 `{agentType, description}` 可二次匹配父 session 的 Agent `tool_use.input.description`。详 `openspec/followups.md::tool-execution-linking [deviation] subagent 关联不支持跨 project_dir`。
+Claude Code 父 process cwd 被切（worktree / `EnterWorktree`）后，subagent JSONL 写到 cwd 编码的 project_dir，**不是**父 session 的 project_dir。`scan_subagent_candidates` 当前只扫同 project，跨 dir 找不到 candidate → UI 上 Agent 工具显示为 ToolItem 无明细。普通用户不触发；dev / worktree 场景下会复现。关联线索（值得日后修）：父 sessionId 在路径 `<project>/<父sessionId>/subagents/agent-*.jsonl` 目录名里 + `agent-<id>.meta.json` 含 `{agentType, description}` 可二次匹配父 session 的 Agent `tool_use.input.description`。已在 change `worktree-support-and-cross-project-subagent` 修复（`scan_subagent_candidates_cross_project` + `CROSS_PROJECT_SUBAGENT_SCAN: bool` gate）。
 
 ## `LocalDataApi` 构造器扩展
 
@@ -117,4 +117,4 @@ workspace 开启 pedantic，PostToolUse hook 每次 `.rs` 编辑后自动跑 cli
 
 - capability 实现以 `openspec/specs/<cap>/spec.md` 为真相源
 - 每个 `SHALL` 至少一个测试
-- TS 与 spec 冲突时（见 `openspec/followups.md`）跟 **spec**，不跟 TS；在 change 的 tasks.md 里记下 deliberate divergence
+- TS 与 spec 冲突时（见 `openspec/TS_BASELINE_DEVIATIONS.md`）跟 **spec**，不跟 TS；在 change 的 tasks.md 里记下 deliberate divergence

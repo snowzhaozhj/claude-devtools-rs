@@ -1,6 +1,6 @@
 ---
 name: ts-parity-check
-description: 对比 TS 源（`../claude-devtools`）与 Rust 端口指定 capability 的文件映射，并列出 `openspec/followups.md` 里该 capability 下的 impl-bug / coverage-gap / deviation / implicit 条目 + 各自的 Rust 落地状态。**用户说 `/ts-parity-check <capability>` 或"对比一下 chunk-building 的 TS 与 Rust / 我们 port 这个 cap 时漏了什么 / 这个 cap 的 followups 都修了吗"时都用这个 skill**——不要自己手 grep 比一遍，容易漏 followups 章节里的"未修"条目。
+description: 对比 TS 源（`../claude-devtools`）与 Rust 端口指定 capability 的文件映射，并查 `openspec/TS_BASELINE_DEVIATIONS.md` 看是否有该 capability 相关的 TS 偏差预警 + 当前 GitHub Issues backlog 里的相关项。**用户说 `/ts-parity-check <capability>` 或"对比一下 chunk-building 的 TS 与 Rust / 这个 cap 还有 TS 偏差吗"时都用这个 skill**——不要自己手 grep 比一遍。
 ---
 
 # ts-parity-check
@@ -24,7 +24,8 @@ port 阶段（13 个 capability）已全部归档。这个 skill 现在的价值
 - Rust 端口仓库根：`/Users/zhaohejie/RustroverProjects/Project/claude-devtools-rs/`
 - TS 参考源：`/Users/zhaohejie/RustroverProjects/claude-devtools/`（已在 Claude Code 的 `additionalDirectories` 中允许读取）
 - Spec：`openspec/specs/<capability>/spec.md`
-- Followups：`openspec/followups.md`（按 `^## <capability>` 切章节）
+- TS 偏差预警：`openspec/TS_BASELINE_DEVIATIONS.md`（grep capability 名 / 关键词；不再按章节切）
+- 跨 cap backlog：`gh issue list --state open --search "<capability 关键词>"`
 
 ## 工作步骤
 
@@ -60,14 +61,14 @@ port 阶段（13 个 capability）已全部归档。这个 skill 现在的价值
 
    若表中没有精确匹配，用 Grep 按 capability 关键词在 TS 源里搜索。
 
-3. **读 spec 和 followups**
+3. **读 spec、TS 偏差预警、open issues**
    - 完整读 `openspec/specs/<capability>/spec.md` 的 Requirements
-   - 在 `openspec/followups.md` 里抓该 capability 的 section（`## <capability>`），列出每条 `### [impl-bug?]` / `### [coverage-gap]` / `### [spec-gap]` / `### [deviation]` / `### [implicit]`
-   - 区分"已修 ✅"（标题或正文含"✅ 已在 ... 修正"/"已修复" / "**Rust 实现**："）vs "pending"
+   - 在 `openspec/TS_BASELINE_DEVIATIONS.md` 里 grep capability 名 / 关键词，列出该 cap 相关的 deviation / spec-gap / implicit 条目
+   - 跑 `gh issue list --state open --search "<capability 关键词>"` 拿当前 backlog 里相关 issue（含 #230-#239 这批从原 followups.md 迁出的）
 
 4. **对照 Rust 现状**
    - 在 owning crate 下用 Glob 列出所有 `.rs` 文件
-   - 对每个 followup 条目：grep Rust 实现确认对应函数 / 模块是否真的存在；尤其留意已标"✅"但实现可能漂移的条目
+   - 对每个 deviation / open issue：grep Rust 实现确认对应函数 / 模块状态；尤其留意 issue 描述里的"修法候选"在 Rust 里有没有 partial 实现
 
 5. **输出报告**（≤ 500 字）
 
@@ -84,15 +85,16 @@ port 阶段（13 个 capability）已全部归档。这个 skill 现在的价值
    | SessionParser.ts | crates/cdt-parse/src/parser.rs | ✓ |
    | jsonl.ts (dedupe) | crates/cdt-parse/src/dedupe.rs | ✓ |
 
-   ## Followups 清单
-   - [impl-bug?] <摘要> — Rust：✅ 已修（grep 到 `<fn>` at <file:line>）
-   - [coverage-gap] <摘要> — Rust：⚠️ 标了"✅"但 Rust 里找不到对应实现
-   - [deviation] <摘要> — Rust：pending（建议补 spec scenario 或在 Rust 修正）
+   ## TS 偏差预警（TS_BASELINE_DEVIATIONS.md 命中）
+   - [deviation] <摘要> — Rust：<状态>
+
+   ## Open Issues（gh issue list）
+   - #N <标题> — Rust：<相关位置>
 
    ## 建议
-   - <若仍有 pending followup>: 列出每条对应的下一步动作
-   - <若发现"标 ✅ 但 Rust 找不到">: ⚠️ followup 引用漂移，建议核对
-   - <若全部已修>: 报告"全部落地"
+   - <若仍有相关 open issue>: 列出每个 issue 的下一步动作
+   - <若 spec 与 Rust 实现不符 / TS deviation 加深>: ⚠️ 建议核对或开新 issue
+   - <若全部一致>: 报告"全部落地"
    ```
 
 ## 硬性约束
@@ -101,4 +103,4 @@ port 阶段（13 个 capability）已全部归档。这个 skill 现在的价值
 - 引用 TS 或 Rust 文件时必须带**行号区间**——避免凭印象引用
 - 如果用户没给 capability 名，用 `ls openspec/specs/` 列出选项让用户选（不要硬编码列表）
 - 不要假装比较了没读过的文件——每个"✓"都必须对应一次实际的 Read/Grep
-- 发现"followup 标 ✅ 但 Rust 实现找不到"——在报告里高亮，但**不要**自己 Edit followups.md / Rust 代码；交给用户决定
+- 发现"open issue 描述与 Rust 实现已不匹配"——在报告里高亮，但**不要**自己 close issue / 改 Rust 代码；交给用户决定

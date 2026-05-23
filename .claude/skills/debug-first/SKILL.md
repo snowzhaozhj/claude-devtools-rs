@@ -98,9 +98,9 @@ ls .claude/skills/
 
 ## 3 条贯穿全程的约束（cross-cutting）
 
-### 顺路抓到的不相关 bug：记 `openspec/followups.md`，不立刻修
+### 顺路抓到的不相关 bug：开 GitHub Issue（默认 `bug` label），不立刻修
 
-调查中发现 N 个相关但非本次任务的 bug → **立即写 followups 条目** + 不就地修。PR scope 越小越好审。例外：与当前 bug 同一用户感知路径的小修可顺路做，但不要把"需要正经 design"的工作顺手扩到 PR 里。
+调查中发现 N 个相关但非本次任务的 bug → **立即 `gh issue create --label bug --title "..." --body "..."`** + 不就地修。PR scope 越小越好审。例外：与当前 bug 同一用户感知路径的小修可顺路做，但不要把"需要正经 design"的工作顺手扩到 PR 里。归宿规则详 `CLAUDE.md::遗留事项归宿`。
 
 ### 加测试后 SHALL 反转 fix 验证抓得到回归
 
