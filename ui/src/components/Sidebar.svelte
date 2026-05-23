@@ -189,7 +189,7 @@
   const groupWorktrees: Worktree[] = $derived(selectedGroup?.worktrees ?? []);
   const showWorktreeFilter = $derived(groupWorktrees.length > 1);
 
-  /** "锚点" worktree —— 用于 Pin/Hide / Memory 等 per-project state 的
+  /** "锚点" worktree —— 用于 Pin/Hide 等 per-project state 的
    * projectId。spec sidebar-navigation D7："per-project memory / prefs 维持
    * per-worktree"——worktree filter 选了具体 worktree 时锚点 SHALL 跟随；
    * "全部" 模式下 fallback 到 repo 根 → 主 worktree → 第一个。 */
@@ -199,6 +199,26 @@
       const filtered = groupWorktrees.find((w) => w.id === worktreeFilter);
       if (filtered) return filtered.id;
     }
+    return (
+      groupWorktrees.find((w) => w.isRepoRoot)?.id
+      ?? groupWorktrees.find((w) => w.isMainWorktree)?.id
+      ?? groupWorktrees[0].id
+    );
+  });
+
+  /** Memory 入口专用锚点 —— **不**跟随 worktree filter，恒定指向 group
+   * 的 repo 根 worktree。
+   *
+   * Memory 文件物理上写在 Claude Code 父进程 cwd 编码出的 project_dir 下
+   * （`~/.claude/projects/<encoded-cwd>/memory/`）。绝大多数用户只在 repo
+   * 根目录跑 Claude Code，每个 worktree 各自的 encoded project_dir 下根本
+   * 不存在 memory 目录——若 anchor 跟随 worktree filter，切到具体 worktree
+   * 后端按 worktree id 查 → `count=0` → sidebar 顶部 memory 入口消失。
+   *
+   * pin/hide 仍跟随 anchorWorktreeId（per-worktree 有意义：worktree 间 session
+   * 列表不同，置顶/隐藏 应该 per-worktree 隔离）。 */
+  const memoryAnchorWorktreeId = $derived.by(() => {
+    if (groupWorktrees.length === 0) return selectedGroupId;
     return (
       groupWorktrees.find((w) => w.isRepoRoot)?.id
       ?? groupWorktrees.find((w) => w.isMainWorktree)?.id
@@ -369,14 +389,14 @@
     const cached = memoryCache.get(projectId);
     if (cached !== undefined) {
       projectMemory = cached;
-      // SWR 后台 refresh 拉新值并写 cache；只有 anchorWorktreeId 仍是
+      // SWR 后台 refresh 拉新值并写 cache；只有 memoryAnchorWorktreeId 仍是
       // 当前 projectId 时才回写 projectMemory，避免覆盖用户期间已切换到
       // 其它 group 的显示。
       void (async () => {
         try {
           const fresh = await getProjectMemory(projectId);
           memoryCache.set(projectId, fresh);
-          if (projectId === anchorWorktreeId) projectMemory = fresh;
+          if (projectId === memoryAnchorWorktreeId) projectMemory = fresh;
         } catch (e) {
           console.warn("Failed to refresh project memory:", e);
         }
@@ -386,10 +406,10 @@
     try {
       const memory = await getProjectMemory(projectId);
       memoryCache.set(projectId, memory);
-      if (projectId === anchorWorktreeId) projectMemory = memory;
+      if (projectId === memoryAnchorWorktreeId) projectMemory = memory;
     } catch (e) {
       console.warn("Failed to load project memory:", e);
-      if (projectId === anchorWorktreeId) projectMemory = null;
+      if (projectId === memoryAnchorWorktreeId) projectMemory = null;
     }
   }
 
@@ -552,8 +572,9 @@
 
   $effect(() => {
     if (selectedGroupId) {
-      // memory / pin/hide prefs 仍是 per-worktree 持久化——用 anchor worktree id
-      void loadProjectMemory(anchorWorktreeId);
+      // memory 走 memoryAnchorWorktreeId（恒定 group repo 根，不随 filter 漂）；
+      // pin/hide 仍 per-worktree 持久化——用 anchorWorktreeId 跟随 filter。
+      void loadProjectMemory(memoryAnchorWorktreeId);
       // 首次访问此 group 的 anchor worktree 时从后端拉取 pin/hide 持久化状态（幂等）
       void loadProjectPrefs(anchorWorktreeId);
     }
@@ -769,7 +790,7 @@
   {#if selectedGroupId && memoryCount > 0}
     <button
       class="memory-entry"
-      onclick={() => openMemoryTab(anchorWorktreeId, "Memory")}
+      onclick={() => openMemoryTab(memoryAnchorWorktreeId, "Memory")}
     >
       <svg class="memory-entry-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         {@html BOOK_OPEN_TEXT_SVG}
