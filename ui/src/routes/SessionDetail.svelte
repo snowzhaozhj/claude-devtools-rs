@@ -910,6 +910,7 @@
                   onclick={() => toggleChunk(chunk)}
                   aria-expanded={toolsVisible}
                   aria-label={toolsVisible ? "折叠工具调用列表" : "展开工具调用列表"}
+                  title={summaryText}
                 >
                   <span class="ai-tool-chevron" class:ai-tool-chevron-open={toolsVisible}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT} /></svg>
@@ -1902,9 +1903,10 @@
     background: var(--color-surface-raised);
     border: 1px solid var(--color-border);
     transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
-    flex-shrink: 0;
+    flex-shrink: 1;
+    min-width: 0;
     font-family: inherit;
-    max-width: 380px;
+    max-width: min(640px, calc(100% - 240px));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
