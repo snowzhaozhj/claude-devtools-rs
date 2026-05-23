@@ -655,6 +655,15 @@ export const multiProjectRichFixture: Fixture = {
       defaultFile: null,
       layers: [],
     },
+    // 单 worktree group 显式标 hasMemory:false / count:0 —— 避免 e2e 依赖
+    // mock IPC 缺省 fallback 行为（codex round 2 non-blocking #2）。
+    'mock-rich-ts': {
+      projectId: 'mock-rich-ts',
+      hasMemory: false,
+      count: 0,
+      defaultFile: null,
+      layers: [],
+    },
   },
   memoryFiles: {
     'mock-rich-rust:MEMORY.md': '- [始终使用中文](feedback_chinese_language.md) — 对话/注释/文档全部简体中文\n- [UI 功能路线图](project_ui_todo.md) — 剩余待办等痛点再做\n',

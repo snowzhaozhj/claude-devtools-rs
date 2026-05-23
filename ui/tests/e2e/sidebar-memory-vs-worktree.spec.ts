@@ -69,8 +69,9 @@ test.describe('sidebar memory entry vs worktree filter', () => {
     page,
   }) => {
     // codex 二审 coverage gap：anchor 选择正确不仅意味着可见性，更意味着点击行为；
-    // 应打开 mock-rich-rust（repo 根）的 memory layers，而不是 mock-rich-rust-wt-feat 的空 memory。
+    // 应打开 mock-rich-rust（repo 根）的 memory tab，不是 mock-rich-rust-wt-feat。
     await page.goto('/?mock=1&fixture=multi-project-rich')
+    await page.waitForFunction(() => '__cdtTest' in window, { timeout: 5_000 })
 
     await page.locator('.project-selector').first().click()
     await page.locator('.dropdown-item').filter({ hasText: 'rust-port' }).first().click()
@@ -82,12 +83,27 @@ test.describe('sidebar memory entry vs worktree filter', () => {
     // 点击 sidebar memory 入口
     await page.locator('.memory-entry').click()
 
-    // memory tab 应渲染 mock-rich-rust 的 layers——"始终使用中文" 来自 fixture
-    // memories['mock-rich-rust'].layers，不来自 mock-rich-rust-wt-feat（其 layers 空）
+    // 等 memory tab 渲染稳定
     await expect(page.locator('.memory-layers')).toBeVisible({ timeout: 5_000 })
-    await expect(page.locator('.layer-title').filter({ hasText: '始终使用中文' })).toBeVisible()
-    // 反向断言：不应渲染 wt-feat 的空 memory 状态
-    await expect(page.getByText('当前项目没有 Memory。')).toHaveCount(0)
+
+    // 直接断言 active memory tab 的 projectId（codex round 2 反馈：比间接字符串匹配更稳）
+    const activeProjectId = await page.evaluate(() => {
+      const cdt = (
+        window as unknown as {
+          __cdtTest: {
+            getPaneLayout: () => {
+              focusedPaneId: string
+              panes: { id: string; activeTabId: string | null; tabs: { id: string; type: string; projectId: string }[] }[]
+            }
+          }
+        }
+      ).__cdtTest
+      const layout = cdt.getPaneLayout()
+      const focused = layout.panes.find((p) => p.id === layout.focusedPaneId)
+      const active = focused?.tabs.find((t) => t.id === focused.activeTabId)
+      return active?.type === 'memory' ? active.projectId : null
+    })
+    expect(activeProjectId).toBe('mock-rich-rust')
   })
 
   test('切到无 memory 的单 worktree group 时 memory 入口隐藏', async ({ page }) => {

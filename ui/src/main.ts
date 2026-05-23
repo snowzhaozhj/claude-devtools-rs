@@ -20,8 +20,14 @@ async function maybeSetupMock(): Promise<void> {
     // 任何 dev 入口（?http=1 真后端 / ?mock=1 / Tauri dev runtime）都注入——
     // 历史上只在 mockIPC 分支注入，导致 e2e-http-verify skill 推荐的 ?http=1 入口
     // 拿不到 helper 只能靠 sidebar click + virtualization 文本模糊匹配，flake 高。
-    const { openSettingsTab, openNotificationsTab, openMemoryTab, openTab, setActiveTab } =
-      await import('./lib/tabStore.svelte')
+    const {
+      openSettingsTab,
+      openNotificationsTab,
+      openMemoryTab,
+      openTab,
+      setActiveTab,
+      getPaneLayout,
+    } = await import('./lib/tabStore.svelte')
     Object.assign(window, {
       __cdtTest: {
         openSettingsTab,
@@ -29,6 +35,7 @@ async function maybeSetupMock(): Promise<void> {
         openMemoryTab,
         openTab,
         setActiveTab,
+        getPaneLayout,
       },
     })
 
