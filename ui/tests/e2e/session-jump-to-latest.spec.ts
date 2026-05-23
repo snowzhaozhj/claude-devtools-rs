@@ -11,6 +11,27 @@ import { expect, test, type Page } from '@playwright/test'
 const SESSION_ID = 'sess-rust-active'
 const PROJECT_ID = 'mock-rich-rust'
 
+/**
+ * 用 dispatchEvent 派 mod-key keydown。playwright `keyboard.press('Meta+f')` 在
+ * body focus 漂走时事件不冒泡到 document（registry dispatcher 的 listen 点），
+ * 故走 evaluate 内 document.dispatchEvent + bubbles:true。
+ *
+ * 与 keyboard-shortcuts.spec.ts L36-44 同款 helper。
+ */
+async function pressMod(page: Page, key: string) {
+  await page.evaluate((k) => {
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: k,
+        metaKey: true,
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  }, key)
+}
+
 async function openLongSession(page: Page) {
   await page.goto('/?mock=1&fixture=multi-project-rich')
   await page.waitForFunction(() => '__cdtTest' in window, { timeout: 5_000 })
@@ -112,8 +133,10 @@ test.describe('Quick Anchor Navigation：跳到最新消息', () => {
   test('SearchBar input focused 时按快捷键不拦截，conversation 不滚', async ({ page }) => {
     await openLongSession(page)
     // 打开 SearchBar：Cmd+F / Ctrl+F
+    // mod-key 走 dispatchEvent（registry dispatcher 在 document）；platform-aware
+    // ctrlKey/metaKey 都置 true 由 normalize 展开。详 pressMod 注释。
+    await pressMod(page, 'f')
     const isMac = await page.evaluate(() => /mac/i.test(navigator.platform || navigator.userAgent || ''))
-    await page.keyboard.press(isMac ? 'Meta+f' : 'Control+f')
     const searchInput = page.locator('.search-bar input').first()
     await searchInput.waitFor({ state: 'visible', timeout: 2_000 })
     await searchInput.focus()
