@@ -23,7 +23,18 @@
 
 ## Parent repo
 
-TS 原版位于同级目录 `../claude-devtools`，仅作历史参考；**所有行为契约以 `openspec/specs/` 为准**。已知 TS impl-bug 见 `openspec/followups.md`——按 spec 走，**不复刻** TS 的 bug。
+TS 原版位于同级目录 `../claude-devtools`，仅作历史参考；**所有行为契约以 `openspec/specs/` 为准**。port 期发现的 TS 偏差预警见 `openspec/TS_BASELINE_DEVIATIONS.md`——按 spec 走，**不复刻** TS 的 bug。main 上的既有 bug / coverage gap 走 GitHub Issue（默认 `bug` label）。
+
+## 遗留事项归宿
+
+| 性质 | 归宿 |
+|---|---|
+| TS port 偏差预警 / UI 隐式契约 | `openspec/TS_BASELINE_DEVIATIONS.md` |
+| change 内 deferred | `tasks.md` 保留未勾（archive 冻结） |
+| main 既有 bug / coverage gap / 跨 cap 跟踪 | GitHub Issue（默认 `bug` label） |
+| 路线图候选 | `openspec/README.md::路线图` |
+
+原则：问题在 main 上才开 issue；不在 main 上留在 PR / design.md / tasks.md。
 
 ## Workspace layout
 
@@ -39,8 +50,8 @@ claude-devtools-rs/
 │   ├── specs/<cap>/spec.md   # 主 spec（行为契约真相源，由 archive 自动 sync）
 │   ├── changes/<slug>/       # 进行中 change：proposal.md + design.md + tasks.md + specs/<cap>/spec.md (delta)
 │   ├── changes/archive/YYYY-MM-DD-<slug>/  # 冻结历史快照
-│   ├── followups.md          # TS impl-bugs to fix, not replicate
-│   └── README.md             # workflow + capability map
+│   ├── TS_BASELINE_DEVIATIONS.md  # TS port 偏差预警 + UI 隐式契约
+│   └── README.md             # workflow + capability map + 路线图
 └── .claude/rules/            # 跨域规则散文件（4 个：parallelism-modes / codex-usage / opsx-apply-cadence / perf）
 ```
 

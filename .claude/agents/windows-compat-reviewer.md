@@ -166,5 +166,5 @@ home.join(rest.trim_start_matches(['/', '\\']))
 
 - 契约：`CLAUDE.md` "跨平台路径工具统一入口" + "Windows NTFS 目录名禁用字符" + "`tokio::time::pause` 测试的 send-advance 顺序"
 - spec：`openspec/specs/project-discovery/spec.md` 的 `Scan Claude projects directory` / `Decode encoded project paths` / `Encode absolute paths into directory names` Requirements
-- followups：`openspec/followups.md` "Windows 平台" 段（WSL distro 扫描 / Authenticode / 大小写不敏感）
+- 跨域跟踪：GitHub Issues #233（Authenticode 签名）/ #234（WSL distro 扫描）；TS port 偏差预警见 `openspec/TS_BASELINE_DEVIATIONS.md`
 - 回归案例：`openspec/changes/archive/2026-04-20-windows-platform-support/proposal.md`

@@ -1,11 +1,19 @@
 ---
 name: port-dashboard
-description: 扫描 `openspec/changes/archive/` 与 `openspec/followups.md` 两处真相源，输出统一 port / followups 看板，并高亮不一致（archive 已 port 的 capability 在 followups 中还有未标 ✅ 的条目；某 followup 已写"已修"但找不到对应 archive）。**用户说 "看一下当前进度 / 我们做到哪了 / followups 还剩什么 / port 进度 / 哪些没修"或显式 `/port-dashboard` 时都用这个 skill**——不要自己 grep archive 后口算，容易漏 followup 章节。
+description: ⚠️ **已过期**（2026-05-23）：原依赖 `openspec/followups.md` 按 capability 切章节，已迁移到 GitHub Issues + `openspec/TS_BASELINE_DEVIATIONS.md` + `openspec/README.md::路线图`，本 skill 不再有承载场景。看进度用 `gh issue list` / `gh issue list --milestone vX.Y`；TS 偏差预警直接 Read `openspec/TS_BASELINE_DEVIATIONS.md`。仅显式 `/port-dashboard` 时才调用。
+disable-model-invocation: true
 ---
 
-# port-dashboard
+# port-dashboard ⚠️ 已过期
 
-claude-devtools-rs 的 port 阶段（13 个 capability）已全部归档（截至 2026-04-12），但 `openspec/followups.md` 持续记 TS 实现 bug / coverage gap / spec gap + 这些条目在 Rust port 后的处理状态。这个 skill 把两处真相源拉一遍，给用户一个"还有什么没消化"的看板。
+claude-devtools-rs 的 port 阶段（13 个 capability）已全部归档（截至 2026-04-12）。原依赖的 `openspec/followups.md` 已于 2026-05-23 改造为 `TS_BASELINE_DEVIATIONS.md`——只装 TS 偏差预警 + UI 隐式契约 + 少量 backlog，**不再按 capability 切章节**。本 skill 的扫描/对照逻辑已无目标。
+
+新流程：
+- "看进度" → `gh issue list --state open` + `gh issue list --milestone vX.Y`
+- "TS 偏差预警" → `Read openspec/TS_BASELINE_DEVIATIONS.md`
+- "路线图" → `Read openspec/README.md`（路线图段）
+
+下面是历史逻辑，仅供需要时手动跑一次参考：
 
 ## 输入
 

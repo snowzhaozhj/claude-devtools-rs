@@ -30,7 +30,7 @@
 
 **用**：[`repro-ssh-dead-channel.sh`](#repro-ssh-dead-channelsh)
 
-> 当前跑这个脚本会**复现失败**——polling watcher 60s 内不会切回 Local。这正是 `openspec/followups.md::ssh-remote-context` 记录的 SFTP timeout 不识别 bug。修复 PR 落地后跑这个脚本应该在 ~9s 内切回 Local，作为回归 fixture。
+> 当前跑这个脚本会**复现失败**——polling watcher 60s 内不会切回 Local。这正是 GitHub Issue #231（SFTP timeout 不识别 + project_scanner silent skip）记录的 bug。修复 PR 落地后跑这个脚本应该在 ~9s 内切回 Local，作为回归 fixture。
 
 ---
 

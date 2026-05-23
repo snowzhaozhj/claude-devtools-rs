@@ -82,7 +82,7 @@ cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --no
 
 ## 硬性约束
 
-- **只读 + 跑命令**：不改任何代码、不改 samples 数组、不动 followups.md / CLAUDE.md。
+- **只读 + 跑命令**：不改任何代码、不改 samples 数组、不动 TS_BASELINE_DEVIATIONS.md / CLAUDE.md。
 - **不能编造数字**：每个数字必须能从 stdout 找到对应行；解析失败就如实说"输出格式不符预期，请检查测试文件"。
 - **两套吞吐都报**：6.5（含 parse e2e）+ 13（纯字节），不要只挑一个——CLAUDE.md "IPC payload 瘦身模式"条已说明区别。未来如换平台需重新校准两个数字。
 - **不主动启动 `just dev`**：bench 不依赖 UI；要前端实测让用户自己跑 `just dev` 看 console `[perf]` 探针。

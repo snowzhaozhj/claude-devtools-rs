@@ -35,4 +35,4 @@ tools: Read, Grep, Glob
 - 不写文件、不跑 cargo。
 - 只用 Read / Grep / Glob。
 - 引用文件时必须带行号。
-- `openspec/followups.md` 里标记为 "不要复刻" 的 TS impl-bugs 对应的 scenario 也必须有测试，缺则同样标 ✗。
+- `openspec/TS_BASELINE_DEVIATIONS.md` 里 `## TS deviations` 段的条目对应的 scenario 也必须有测试，缺则同样标 ✗。
