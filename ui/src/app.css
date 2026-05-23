@@ -157,9 +157,10 @@
   --color-info-text: #1d4ed8;
 
   /* 键盘快捷键录键 widget 状态色（change `add-keyboard-shortcut-system`）。
-     录键中（recording）= info/accent indigo 表达"等待输入"焦点态；
-     冲突（conflict）= warning（不是 danger）—— 冲突是用户可纠正的"warning 而非 error"，
-     详 DESIGN.md `The Conflict Is Warning Not Error Rule.`（待 §13.2 提进 DESIGN.md）。 */
+     录键中（recording）= accent-indigo 表达"等待输入"confirmed-state 焦点态——
+     详 DESIGN.md `The Recorder Idle State Rule.`（idle/recording 视觉规约 + 选 indigo 而非 blue 的论证）；
+     冲突（conflict）= warning（不是 danger）——冲突是用户可纠正的 actionable 反馈，
+     详 DESIGN.md `The Conflict Is Warning Not Error Rule.`（warning vs error red 的边界）。 */
   --surface-recording-bg: rgba(99, 102, 241, 0.08);
   --border-recording: var(--color-accent-indigo);
   --surface-conflict-bg: var(--color-warning-bg);

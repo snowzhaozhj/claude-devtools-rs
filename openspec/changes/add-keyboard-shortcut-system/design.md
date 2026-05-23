@@ -316,6 +316,12 @@ handler 返回 `false` 让 dispatcher 跳过 preventDefault（按 D1）——act
 - recording 用 spinner（不是 dot ping），符合 `The Static-vs-Live Shape Rule` "动态 live 信号用 circular spinner"。
 - conflict 用 warning 而非 red，因为冲突是 actionable warning（"你需要解掉冲突"），而非 error（"系统坏了"）；用 red 会过度报警。
 
+**§13 extract（archive 前一刻）已落 `DESIGN.md`**：
+- "暖色 conflict（warning 而非 red）" → `DESIGN.md::The Conflict Is Warning Not Error Rule.`（Color §Named Rules 末尾）
+- "idle neutral / recording accent + secondary spinner" → `DESIGN.md::The Recorder Idle State Rule.`（Components §Named Rules cross-cutting 末尾，含 indigo 而非 blue 的 accent 选择论证）
+- 4 token（`--surface-recording-bg / --border-recording / --surface-conflict-bg / --border-conflict`）已在 `app.css` 浅 / 深 / system 三处落地，并在两条 Named Rule 中显式引用
+- motion timing（idle ↔ recording 80ms / recording ↔ conflict 60ms）**不单独 extract**——实际落地是 `transition: 0.12s` 统一过渡，已被 `DESIGN.md::Motion and transitions` 第 1 条"Hover / color / border 过渡通常 0.1–0.15s"覆盖，无需新增子规则
+
 ## Visual Contract
 
 ### Surface Decision
@@ -360,18 +366,18 @@ handler 返回 `false` 让 dispatcher 跳过 preventDefault（按 D1）——act
 
 ### DESIGN.md delta plan
 
-archive 前跑 `/impeccable extract` 提取以下进 `DESIGN.md`：
+> **§13 extract 已完成（archive 前一刻）**——本节是历史规划，落地见上方 D-V2 末尾「§13 extract 已落 `DESIGN.md`」段。Named Rule 1 / 2 入主文档，4 token 入 `app.css`，motion 规则被全局 §5 Motion 覆盖未单独沉淀。
 
-1. **新 Named Rule 候选**：
-   - `The Conflict Is Warning Not Error Rule.` 用户输入冲突的快捷键、表单未通过校验、可解决的临时阻塞 SHALL 用 warning（暖色 border + bg）而非 error red；error red 仅用于"系统已坏 / 操作不可恢复"。归属 Color §Named Rules 末尾。
-   - `The Recorder Idle State Rule.` 录入类组件（录键 / 录手势 / 录笔画）idle 态 SHALL 是 neutral surface + 弱 border + mono 当前值；不允许常驻 accent 边框或动画——避免在 Settings 类长列表中持续抢眼。归属 Components §Inputs and search。
-2. **新 token 候选**：
-   - `--surface-recording-bg` / `--border-recording`（accent low-saturation）
-   - `--surface-conflict-bg` / `--border-conflict`（warm warning，区别于 error red）
+archive 前跑 `/impeccable extract` 提取以下进 `DESIGN.md`（实际落地同 commit）：
+
+1. **新 Named Rule**：
+   - ✓ `The Conflict Is Warning Not Error Rule.` 用户输入冲突的快捷键、表单未通过校验、可解决的临时阻塞 SHALL 用 warning（暖色 border + bg）而非 error red；error red 仅用于"系统已坏 / 操作不可恢复"。**已落** Color §Named Rules 末尾。
+   - ✓ `The Recorder Idle State Rule.` 录入类组件（录键 / 录手势 / 录笔画）idle 态 SHALL 是 neutral surface + 弱 border + mono 当前值；不允许常驻 accent 边框或动画——避免在 Settings 类长列表中持续抢眼。**已落** Components §Named Rules cross-cutting 末尾（落地实际 accent 选 indigo 而非 blue，论证写进 Rule 体）。
+2. **新 token**：
+   - ✓ `--surface-recording-bg` / `--border-recording`（accent-indigo low-saturation）—— 已在 `app.css` 浅 / 深 / system 三处落地
+   - ✓ `--surface-conflict-bg` / `--border-conflict`（默认 alias 到 `--color-warning-bg / --color-warning-border`）—— 已在 `app.css` 三处落地
 3. **新组件规则**：
-   - `KeyRecorderInput` 三态切换的 motion timing（idle ↔ recording 80ms ease-out、recording ↔ conflict 60ms instant）
-
-extract 由设计师 teammate 在 apply 阶段 archive 前一刻执行，作为本 PR 一部分提交。
+   - ✗ `KeyRecorderInput` 三态切换的 motion timing（原稿 idle ↔ recording 80ms ease-out / recording ↔ conflict 60ms instant）—— **不 extract**：实际落地是 `transition: 0.12s` 统一过渡，已被 `DESIGN.md::Motion and transitions` 第 1 条"Hover / color / border 过渡通常 0.1–0.15s"覆盖；新增子规则会与全局 motion 范围冗余。
 
 ## Risks / Trade-offs
 

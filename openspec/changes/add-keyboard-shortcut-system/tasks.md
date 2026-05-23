@@ -108,12 +108,13 @@
 
 ## 13. impeccable extract 提取 DESIGN.md delta（archive 前一刻）
 
-- [ ] 13.1 跑 `/impeccable extract add-keyboard-shortcut-system` 提取候选 Named Rule + token + 组件规则
-- [ ] 13.2 提进 `DESIGN.md`：
-   - 新 Named Rule `The Conflict Is Warning Not Error Rule.`（Color §Named Rules 末尾）
-   - 新 Named Rule `The Recorder Idle State Rule.`（Components §Inputs and search）
-   - 新 token `--surface-recording-bg` / `--border-recording` / `--surface-conflict-bg` / `--border-conflict`
-- [ ] 13.3 把 DESIGN.md 改动 commit 进同 PR
+- [x] 13.1 跑 `/impeccable extract add-keyboard-shortcut-system` 提取候选 Named Rule + token + 组件规则（手动按 design.md::DESIGN.md delta plan extract，对照实际落地修订 accent 选 indigo / motion 不 extract）
+- [x] 13.2 提进 `DESIGN.md`：
+   - 新 Named Rule `The Conflict Is Warning Not Error Rule.`（Color §Named Rules 末尾，紧接边界说明 live signal 子规则后）
+   - 新 Named Rule `The Recorder Idle State Rule.`（Components §Named Rules cross-cutting 末尾，紧接 The Floating Is Affordance, Not Decoration Rule 后；含 indigo 而非 blue 的 accent 选择论证）
+   - 4 token `--surface-recording-bg` / `--border-recording` / `--surface-conflict-bg` / `--border-conflict` 已在 `app.css` 落地，DESIGN.md 在两条 Named Rule 中显式引用
+   - motion timing（原 delta plan 第 3 条）不单独 extract——已被全局 §5 Motion "0.1–0.15s 范围" 覆盖（决策记录在 design.md::D-V2 §13 extract 段）
+- [x] 13.3 把 DESIGN.md 改动 commit 进同 PR（commit 模板 `docs(design): keyboard shortcuts visual tokens → DESIGN.md（§13 extract）`）
 
 ## N. 发布
 
