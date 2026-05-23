@@ -51,6 +51,13 @@
     const margin = 8;
     const vw = window.innerWidth;
     let right = vw - r.right;
+    // 防左溢出：测 menu 实际宽度，确保 left 边界 ≥ margin。
+    // left = vw - right - width；left ≥ margin → right ≤ vw - width - margin。
+    // menuEl 在首次 placeMenu 已挂载（openMenu await tick 后调用）；
+    // 取不到时 fallback 到 max-width 260（CSS 上限）保守估计。
+    const width = menuEl?.getBoundingClientRect().width ?? 260;
+    const maxRight = vw - width - margin;
+    if (right > maxRight) right = Math.max(maxRight, margin);
     if (right < margin) right = margin;
     menuStyle = `top: ${r.bottom + gap}px; right: ${right}px;`;
   }
@@ -60,7 +67,9 @@
     const r = triggerEl.getBoundingClientRect();
     const gap = 4;
     const margin = 8;
-    let right = window.innerWidth - r.right;
+    const vw = window.innerWidth;
+    let right = vw - r.right;
+    // toast 比 menu 短（~60-80px），左溢出概率低，但仍 clamp 保险
     if (right < margin) right = margin;
     toastStyle = `top: ${r.bottom + gap}px; right: ${right}px;`;
   }

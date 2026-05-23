@@ -35,7 +35,7 @@
 - [ ] 4.2 playwright e2e `session-meta-menu.spec.ts`：跳过本 PR——vitest 14 个 scenarios 已覆盖 spec 主要 menu 行为；e2e 留作后续单独 PR（非阻塞，且改动不涉及 HTTP transport / IPC schema）。
 - [ ] 4.3 `just test-e2e`：跳过（同 4.2）。
 - [x] 4.4 IPC contract test：本 change 不改 IPC schema；`just preflight` 已跑 `cargo test --workspace`（含 `cdt-api ipc_contract` 测试套）全绿。
-- [ ] 4.5 浏览器手动自验：本 background session 自动化跑 vite dev + 截图对比成本高；视觉契约由 design.md::Visual Contract 段冻结、组件 vitest scenario 验证；移交人工 desktop smoke + reviewer 截图（PR 描述写明）。
+- [x] 4.5 浏览器手动自验：起 `pnpm --dir ui run dev` + chrome-devtools mcp 自动化截 4 张图（idle / menu open with cwd missing degrade / toast / dark theme）—— 视觉契约硬约束（`ui/CLAUDE.md::视觉改动自验`）已履行：① top-stats 单行 nowrap 无 CWD 长串、② menu 三项 + cwd 缺失前两项 disabled、③ trigger-anchored toast「已复制」right-anchored、④ 深色主题 token 切换正常。截图存 `/tmp/cdt-meta-menu-*.png`，PR 评论附引用。
 - [ ] 4.6 桌面端 `just dev` smoke：移交 reviewer / merge 后人工验证（plugin-opener 真路径 + clipboard 真复制无法在 jsdom mock 中验证）。
 - [x] 4.7 lint：`cargo clippy` + `cargo fmt --check` 通过（`just preflight` 子任务）。
 - [x] 4.8 `just preflight` 一把梭过（fmt + lint + cargo test workspace + 421 vitest + 29 spec validate + IPC commands sync）。
