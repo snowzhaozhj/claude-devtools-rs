@@ -742,7 +742,6 @@
               </SettingsField>
               {#if serverStatus?.running}
                 <div class="server-status-row" role="status" data-testid="browser-access-running">
-                  <span class="server-live-spinner" aria-hidden="true"></span>
                   <span class="server-status-text">
                     运行中 · <code>http://localhost:{serverStatus.port}</code>
                   </span>
@@ -1572,7 +1571,10 @@
     background: color-mix(in oklch, var(--color-danger-bright) 10%, transparent);
   }
 
-  /* server-mode: Browser Access subsection */
+  /* server-mode: Browser Access subsection
+     已就绪稳态服务（HTTP server 监听）不需要 indicator——URL 出现 = 在线，
+     toggle 已表达 enabled/disabled，瞬态启停由 toggle 自身 disabled 表达。
+     社区惯例参照 Vite / Next.js dev server / ngrok ready 输出。 */
   .server-status-row {
     display: flex;
     align-items: center;
@@ -1593,31 +1595,6 @@
     font-family: var(--font-mono);
     font-size: 12px;
     color: var(--color-text);
-  }
-  /* DESIGN.md::Static-vs-Live Shape Rule + Ongoing Owns Blue：
-     运行中是 live process，用 Focus Blue spinner 而非 success-green halo dot。
-     primary 尺寸 14×14 + 2px border（独立状态条带，参照 OngoingBanner）。 */
-  .server-live-spinner {
-    flex-shrink: 0;
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    border: 2px solid color-mix(in oklch, var(--color-accent-blue) 22%, transparent);
-    border-top-color: var(--color-accent-blue);
-    border-radius: 50%;
-    animation: server-live-spin 1.2s linear infinite;
-  }
-  @keyframes server-live-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .server-live-spinner {
-      animation: none;
-      border-color: var(--color-accent-blue);
-      border-top-color: var(--color-accent-blue);
-    }
   }
   .copy-url-btn {
     margin-left: auto;
