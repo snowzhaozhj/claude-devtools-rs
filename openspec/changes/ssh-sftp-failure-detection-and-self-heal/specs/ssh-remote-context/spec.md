@@ -7,7 +7,7 @@
 watcher SHALL 把每轮 poll 失败按错误特征分到三类（在 polling 层 `with_retry` 之后做语义升级，**不**改 `cdt-ssh::SftpClient` trait 错误分类）：
 
 - `Permanent`：错误消息含 `session closed` / `eof` / `broken pipe` / `epipe` / `connection reset` / `econnreset` 任一关键字（不区分 `Other` / `Transient` 来源——`provider::is_transient_io_reason` 把 `broken pipe` / `connection reset` / `epipe` 归 Transient，`with_retry` 3 次后仍是 transport-dead 即视同 channel 真死）
-- `Timeout`：错误消息含 `timeout` / `etimedout` / `timed out` / `eagain` 任一关键字（来自 `provider::is_transient_io_reason` 列表减去 transport-dead 子集）
+- `Timeout`：错误消息含 `timeout` / `etimedout` / `timed out` / `eagain` / `would block` 任一关键字（来自 `provider::is_transient_io_reason` 列表减去 transport-dead 子集；含 `would block` 即 `std::io::ErrorKind::WouldBlock`，与 EAGAIN 同源——不纳入 timeout 类会让"反复 WouldBlock"序列只能落 OtherTransient 重置计数，与 timeout 漏检对称）
 - `OtherTransient`：其它 `Transient` / `Other` / `NoSuchFile` / `PermissionDenied`（含 `Status::Failure` 的 `error_message` 等不带 transport-dead / timeout 关键字的失败）
 
 watcher SHALL 维护两个独立 counter：
@@ -15,13 +15,15 @@ watcher SHALL 维护两个独立 counter：
 - `consecutive_permanent: u32`，阈值 `PERMANENT_FAILURE_THRESHOLD = 3`（≈ 9s 持续 transport 错误）
 - `consecutive_timeout: u32`，阈值 `TIMEOUT_FAILURE_THRESHOLD = 6`（≈ 18s 持续 timeout，远高于网络瞬时抖动 1-3s window，远低于用户感知 sidebar 僵死的 60s）
 
-counter 演化规则：
+counter 演化规则（codex 二审收紧 reset 规则，避免攻击序列推迟 dead_signal）：
 
-- `Ok` / `OtherTransient`：两 counter 都 reset 为 0
-- `Permanent`：`consecutive_permanent += 1`；`consecutive_timeout` reset 为 0
-- `Timeout`：`consecutive_timeout += 1`；`consecutive_permanent` reset 为 0
+- `Ok` / `OtherTransient`：两 counter 都 SHALL reset 为 0（唯一 reset 入口；只有"channel 真活着"的强证据才清零）
+- `Permanent`：仅 `consecutive_permanent += 1`，**不动** `consecutive_timeout`
+- `Timeout`：仅 `consecutive_timeout += 1`，**不动** `consecutive_permanent`
 
 任一 counter ≥ 自己阈值时，watcher SHALL `dead_signal.notify_one()` + 跳出主 loop。
+
+理由：早期"互斥重置"规则被 `5T → 1P → 5T → 1P → ...` 攻击序列利用让 timeout 永不达 6；新规则下 dead-向量单调累积，攻击序列只能拖延无法阻止——`5T + 1P` 后下一轮 `1T` 即触发（`timeout=6 ≥ 6`）。
 
 `scan_once` 内 sub-project 子目录 `read_dir` 失败时：
 
@@ -74,12 +76,13 @@ counter 演化规则：
 - **THEN** `consecutive_timeout` SHALL 立即 reset 为 0
 - **AND** 后续即使再来 5 轮 timeout 也 SHALL NOT 触发 `dead_signal`（因为新 streak < 6）
 
-#### Scenario: Permanent counter resets on intervening timeout (and vice versa)
+#### Scenario: Permanent and timeout counters accumulate independently (mixed sequence still triggers)
 
-- **WHEN** 2 轮 permanent error 后来 1 轮 timeout
-- **THEN** `consecutive_permanent` SHALL reset 为 0；`consecutive_timeout` SHALL = 1
-- **AND** 后续若再来 2 轮 permanent 仅累到 `consecutive_permanent = 2 < 3`，SHALL NOT 触发 dead_signal
-- **AND** 该规则同样反向适用：timeout 序列被 permanent 中断时 timeout counter SHALL reset
+- **WHEN** 5 轮 timeout 后来 1 轮 permanent
+- **THEN** `consecutive_timeout` SHALL = 5（不被 permanent 重置）；`consecutive_permanent` SHALL = 1
+- **AND** 下一轮 timeout SHALL 让 `consecutive_timeout = 6 ≥ TIMEOUT_FAILURE_THRESHOLD` → 立即触发 `dead_signal`
+- **AND** 反向同理：2 轮 permanent + 1 轮 timeout 后 `consecutive_permanent = 2`、`consecutive_timeout = 1`；下一轮 permanent 让 `consecutive_permanent = 3 ≥ PERMANENT_FAILURE_THRESHOLD` → 触发
+- **AND** 攻击序列 `5T → 1P → 5T → 1P → ...` SHALL **不能**永远推迟 dead_signal——任一 dead 向量单调累积
 
 #### Scenario: OtherTransient errors do not trigger dead_signal
 

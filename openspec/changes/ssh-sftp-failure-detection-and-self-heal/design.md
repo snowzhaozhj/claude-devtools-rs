@@ -69,7 +69,7 @@ fn classify_failure(err: &SftpClientError) -> PollFailureKind { ... }
 
 **为什么不直接加第二个 bool helper**：单一函数 + enum 比 `is_permanent` + `is_timeout` 两个 bool 更难写出"两个都返 true"的歧义；switch on enum 让外层 match 完整覆盖 + clippy 拦未来漏 case。
 
-**关键字选择**：`Timeout` 命中 `timeout` / `etimedout` / `timed out` / `eagain`（来自 `provider.rs::is_transient_io_reason` 的瞬时清单减去 transport-dead 子集）；其它 Transient 字符串（如 `Status::Failure` 的 `error_message`）走 OtherTransient。
+**关键字选择**：`Timeout` 命中 `timeout` / `etimedout` / `timed out` / `eagain` / `would block`（来自 `provider.rs::is_transient_io_reason` 的瞬时清单减去 transport-dead 子集——`would block` 即 `std::io::ErrorKind::WouldBlock`，语义上是"远端短暂不可写"，与 EAGAIN 同源；不纳入 timeout 类会让"反复 WouldBlock"序列只能落 OtherTransient 重置计数，永远触发不到 dead_signal，与 timeout 报"持续不可达"漏检对称）；其它 Transient 字符串（如 `Status::Failure` 的 `error_message`）走 OtherTransient。
 
 ### D2：独立 `consecutive_timeout` counter + `TIMEOUT_FAILURE_THRESHOLD=6`
 
@@ -85,11 +85,12 @@ let mut consecutive_timeout: u32 = 0;
 fn update_counters(outcome: PollOutcome, perm: &mut u32, timeout: &mut u32) {
     match outcome {
         PollOutcome::Ok | PollOutcome::OtherTransient => {
+            // 唯一 reset 入口：channel 真活着的强证据（成功或非 channel-related 错误）
             *perm = 0;
             *timeout = 0;
         }
-        PollOutcome::Permanent => { *perm = perm.saturating_add(1); *timeout = 0; }
-        PollOutcome::Timeout => { *timeout = timeout.saturating_add(1); *perm = 0; }
+        PollOutcome::Permanent => *perm = perm.saturating_add(1),
+        PollOutcome::Timeout => *timeout = timeout.saturating_add(1),
     }
     // 任一计数达阈值 → caller 触发 dead_signal
 }
@@ -99,7 +100,13 @@ fn update_counters(outcome: PollOutcome, perm: &mut u32, timeout: &mut u32) {
 
 **为什么不复用同 counter**：现有测试 `transient_errors_do_not_trigger_dead_signal` 显式断言"纯 timeout 5 轮不触发"——若把 timeout 计入同 counter（哪怕阈值高），测试要重写且语义变模糊（"timeout 当 permanent 算"）。独立 counter 让"timeout 单独高阈值"语义清晰可读。
 
-**为什么 reset 规则是"任一非该类成功 / OtherTransient → 两 counter 都 reset"**：与现有 `Ok / Transient → reset; Permanent → bump` 行为对齐——单次 OK 即视为 channel 活着，不该让旧的 timeout 半累计状态影响后续判定。但 Permanent 出现时 timeout reset（避免"3 timeout + 1 permanent + 3 timeout = dead"误判，应该是 permanent 自走 permanent 路径）；Timeout 出现时 permanent reset（同理）。
+**reset 规则修订（codex 二审 fix）**：早期版本"Permanent 出现时 timeout reset / Timeout 出现时 permanent reset"会被攻击序列利用——如 `5T → 1P → 5T → 1P → ...` 让 timeout 永远 reset 不到 6，或 `2P → 1T → 2P → 1T → ...` 让 permanent 永远 reset 不到 3，dead_signal 被无限推迟。新规则收紧为：
+
+- **`Ok` / `OtherTransient`：reset 两 counter 为 0**——只有"channel 真活着"的强证据（成功或非 channel-related 错误）才清零
+- **`Permanent`：仅 `consecutive_permanent += 1`，**不动** `consecutive_timeout`**
+- **`Timeout`：仅 `consecutive_timeout += 1`，**不动** `consecutive_permanent`**
+
+新规则下任一 dead-向量持续累积，攻击序列只能拖延而无法阻止：`5T + 1P` → `permanent=1, timeout=5`；下一轮 `1T` → `timeout=6 ≥ 6` → fire。`2P + 1T + 1P` → `permanent=3, timeout=1` → fire。混合序列单调推进至阈值。
 
 ### D3：`scan_once` 子目录 read_dir 永久错误 escalate 到顶层错误
 
@@ -246,8 +253,8 @@ Err(SftpClientError::Transient("ETIMEDOUT".into())),
 - **[scanner abort 让冷启动半失败更刺眼]**：之前用户连不稳定 SSH 时"sidebar 缺一两个 project"，现在变成"sidebar 完全空 + 错误提示"
   → Mitigation：channel-dead 错误本来就是用户该感知的故障；sidebar 半破坏反而误导用户以为"扫完了"。后续配合 list_repository_groups 加 partial 字段（follow-up change）让"非 channel-dead 的单 project 失败"仍能展示其它 project + 错误徽标，但本 change 不做。
 
-- **[reset 规则争议]：Permanent 出现时为什么 reset timeout（而不累加）**
-  → Mitigation：`update_counters` 文档注释明确写"Permanent / Timeout 互斥重置"决策；如果未来发现"timeout 后跟一个 permanent 应该让 dead 提前触发"再调，先按最简洁规则上线。
+- **[reset 规则收紧后老 spec scenario 重写]**：spec 早期 "Permanent counter resets on intervening timeout" 描述已删——因新规则下 Permanent / Timeout 互不重置；改为 "Permanent / Timeout counters accumulate independently and only reset on Ok / OtherTransient"
+  → Mitigation：D2 段落已记录修订原因（codex 二审揭示攻击序列）；测试用例同步覆盖混合序列触发边界。
 
 - **[backward-compat shim 增加维护负担]**
   → Mitigation：`is_permanent_sftp_failure` 仅 1 行（`matches!`），维护成本接近 0；后续清理可在独立 cleanup PR 做。

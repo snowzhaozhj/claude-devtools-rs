@@ -18,10 +18,10 @@
 ## 3. `cdt-ssh::polling_watcher` 单测扩展
 
 - [ ] 3.1 加 `classify_failure_classifies_three_kinds` 覆盖 timeout / permanent / other 三态分类
-- [ ] 3.2 加 `timeout_threshold_triggers_dead_signal_at_6_consecutive` —— 6 轮 `Transient("timeout")` 后 dead_signal fire + watcher 退出（用 `tokio::time::advance` + `start_paused`）
-- [ ] 3.3 加 `timeout_below_threshold_does_not_trigger` —— 5 轮 timeout 不触发（5 < 6）
-- [ ] 3.4 加 `timeout_counter_resets_on_intervening_success` —— 5 timeout + 1 ok + 5 timeout 不触发
-- [ ] 3.5 加 `permanent_and_timeout_counters_reset_each_other` —— 2 permanent + 1 timeout 后 permanent counter reset，反向同理
+- [ ] 3.2 加 `timeout_threshold_triggers_dead_signal_at_6_consecutive` —— `tokio::test(start_paused = true)` + 严格驱动顺序：每轮 `tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await; tokio::task::yield_now().await; tokio::task::yield_now().await;`（共 ×6 轮喂入 `Transient("timeout")` snapshot）后断言 `dead_signal.notified()` 在 100ms 内 ready + watcher join 立即返
+- [ ] 3.3 加 `timeout_below_threshold_does_not_trigger` —— 5 轮 timeout（5 < 6）后 `dead.notified()` 50ms timeout 必须 Err
+- [ ] 3.4 加 `timeout_counter_resets_on_intervening_success` —— 5 timeout + 1 ok + 5 timeout 不触发；同样按 advance + yield + yield 顺序驱动每轮
+- [ ] 3.5 加 `mixed_permanent_timeout_sequence_still_triggers` —— 验证 codex 二审收紧的 reset 规则：5 timeout + 1 permanent + 1 timeout 序列 SHALL 触发（`consecutive_timeout=6` 在第 7 轮）；反向 2 permanent + 1 timeout + 1 permanent SHALL 触发
 - [ ] 3.6 加 `subdir_permanent_error_escalates_scan_once` —— FakeSftpClient 顶层 read_dir 成功 + sub-project read_dir 返 `Other("session closed")`，断言外层 `consecutive_permanent` 累计；3 轮后触发 dead_signal
 - [ ] 3.7 修订老测试 `transient_errors_do_not_trigger_dead_signal`：序列从 5 轮 timeout/eagain → 现在改为 5 轮纯 EAGAIN（OtherTransient）+ 注释更新引用 issue #231，确保不与新行为冲突；测试名重命名为 `pure_eagain_resets_counters_no_dead_signal`
 - [ ] 3.8 跑 `cargo test -p cdt-ssh --lib polling_watcher` 全部通过
