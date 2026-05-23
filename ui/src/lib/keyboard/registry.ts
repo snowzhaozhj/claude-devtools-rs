@@ -13,6 +13,12 @@
  *   MemoryView / Connection 内部的 Escape / Enter / 方向键）**SHALL NOT** 并入
  *   registry——这些与"关闭当前 surface"语义紧耦合，强行抽出会破坏 dispatcher 的纯函数
  *   性质。组件 SHALL 通过 `event.stopPropagation()` 阻止局部键继续冒泡到 dispatcher。
+ * - **多 instance shared shortcut**（如 SessionDetail per-tab 的 jump-to-latest /
+ *   in-session search）：D8 强制每条 binding 只能 `registerShortcut` 一次，多 instance
+ *   注册同 ID 会触发"重复 ID 抛错"。解法是同层 controller（`PaneContainer.svelte`）
+ *   作为单 instance 注册点，按 active tabId 经 `session-detail-handlers.ts` registry
+ *   fanout 到对应实例回调；active tab 非该 surface 时 trigger 返回 `false` 让
+ *   dispatcher 不 preventDefault，保留浏览器原生行为（如 mod+f 浏览器查找）。
  *
  * 详细行为契约见 `openspec/specs/keyboard-shortcuts/spec.md`。
  */

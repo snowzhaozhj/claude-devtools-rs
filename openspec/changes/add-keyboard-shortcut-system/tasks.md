@@ -65,8 +65,8 @@
 
 ## 7. UI 局部 keydown 保持原样（owner: 前端 teammate）
 
-- [ ] 7.1 验证以下组件**不动**任何 keydown 处理：`Modal.svelte` / `Dropdown.svelte` / `CommandPalette.svelte`（内部方向键 / Enter / Escape）/ `SearchBar.svelte`（Enter / Shift+Enter / Escape）/ `ImageBlock.svelte`（lightbox Escape）/ `TabContextMenu` / `SessionContextMenu` / `UpdatePopover` / `WorkspaceIndicator` / `MemoryView` / `Connection.svelte`
-- [ ] 7.2 在 `ui/src/lib/keyboard/registry.ts` 顶部加注释说明"局部 keydown 不并入 registry"的边界（详 design D6）
+- [x] 7.1 验证以下组件**不动**任何 keydown 处理：`Modal.svelte`（Escape close + Tab focus trap）/ `Dropdown.svelte`（onAnchorKeydown）/ `CommandPalette.svelte`（内部方向键 / Enter / Escape，handleKeyDown）/ `SearchBar.svelte`（onKeydown）/ `ImageBlock.svelte`（lightbox Escape，svelte:window）/ `TabContextMenu`（document keydown for Escape）/ `SessionContextMenu`（document keydown for Escape）/ `UpdatePopover`（document keydown for Escape + outside click）/ `WorkspaceIndicator`（document keydown）/ `MemoryView`（document keydown）/ `Connection.svelte`（document keydown + 行内 Enter handler 保存 profile）—— 11/11 git diff main..HEAD 路径下未有改动，全部保留原始 listener
+- [x] 7.2 在 `ui/src/lib/keyboard/registry.ts` 顶部加注释说明"局部 keydown 不并入 registry"的边界（详 design D6），并新增"多 instance shared shortcut 走同层 controller fanout"小节（D8 PaneContainer + session-detail-handlers 模式）
 
 ## 8. UI Settings 录键 widget（owner: 设计师 + 前端 teammate）
 
