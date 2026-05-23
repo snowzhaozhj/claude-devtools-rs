@@ -50,22 +50,9 @@
 
 ## 键盘快捷键
 
-行为契约见 `openspec/specs/keyboard-shortcuts/spec.md`，模块入口 `ui/src/lib/keyboard/`（`registry.ts` / `defaults.ts` / `customization.ts`，平台工具在 `ui/src/lib/platform.ts`）。
+行为契约：`openspec/specs/keyboard-shortcuts/spec.md`；模块：`ui/src/lib/keyboard/` + `ui/src/lib/platform.ts`。
 
-**全局 vs 局部边界**（D6 / D8，违反就走错路）：
-
-- **全局 mod-key 走 registry**：跨页面 / 跨组件的 mod+X 单一职责快捷键（`sidebar.toggle` / `command-palette.toggle` / `tab.switch.*` / `session.jump-to-latest` 等）SHALL 在 `defaults.ts` 注册一条 `ShortcutMeta`，启动期 `registerShortcut(spec)` 落到 dispatcher——**不**在组件里 `document.addEventListener("keydown", ...)`。
-- **多 instance shared shortcut 走同层 controller fanout**：`SessionDetail` 这类多 pane 同时挂载的组件，shared handler（`session.jump-to-latest` / `search.in-session`）由**单 instance 同层 controller**（`PaneContainer.svelte`）注册一次，handler 内通过 `getActiveTabId()` + `session-detail-handlers.ts` registry 路由到当前 active 实例；组件内**禁止** `registerShortcut` 同 ID（重复 ID 抛错）。
-- **局部 keydown 不并入 registry**：Modal Escape close / Tab focus trap、Dropdown 方向键、CommandPalette 内部方向键 / Enter / Escape、SearchBar / 录键 widget / lightbox Escape、context menu Escape、行内 Enter 保存——SHALL 各组件自管 keydown listener（不走 registry）。dispatcher bubble phase（`{ capture: false }`）会让局部 listener 先触发，`stopPropagation` 时 dispatcher 不响应。
-- **录键 widget suspend dispatcher**：`KeyRecorderInput.svelte` focus 进 recording 调 `registry.suspend()` 引用计数 + 自调 `event.preventDefault()`；blur 调 `resume()` 减计数。多 instance 嵌套 / 取消路径 SHALL 走 try/finally 确保 resume 与 suspend 配对。
-
-**Settings 录键 panel pendingOverrides overlay**（D3b 仅 Save 触发持久化）：
-
-- panel 内部维护 `pendingOverrides: Record<id, binding>`；录键 commit 仅写 overlay，**不动** registry / cdt-config。
-- Save 路径：单次 `updateConfig("keyboardShortcuts", finalOverrides)` IPC + `applyOverrides` batch update registry 内存 keymap + 清空 overlay。
-- 保存前再走一遍 `findConflict(binding, sourceId, finalOverrides)` 防御串行注入。
-- `__RESET__` sentinel：reset 已提交 override 时 pending 写 `__RESET__` 占位，Save 时 finalOverrides 删该 key 让 cdt-config 落 default。
-- IPC 失败 fallback：`bootstrapOverrides` `getConfig` try/catch 失败时清 pending + 暴露 `setConfigLoadError(reason)` store；UI 显示错误条 + 重试按钮调 `retryBootstrap()`。
+**边界口诀**：全局 mod-key 走 registry / 组件级 Escape/Enter/方向键各组件自管 / 多 instance shared shortcut 由同层 controller fanout（不在每 instance 重复注册）。详细 SHALL 句、pendingOverrides overlay、IPC fallback 等行为契约在 spec/design，**不**在此重述。
 
 ## 渲染依赖与高亮
 
