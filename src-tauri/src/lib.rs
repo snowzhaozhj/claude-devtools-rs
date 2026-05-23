@@ -844,16 +844,23 @@ async fn run_startup_update_check(api: Arc<LocalDataApi>, app: tauri::AppHandle)
 
 /// 装一个 tracing_subscriber，含 EnvFilter + fmt 层 + cdt-telemetry 桥 layer。
 ///
+/// 注意：EnvFilter 仅挂到 fmt layer（per-layer filter），TelemetryLayer 不受
+/// `RUST_LOG` 过滤——否则 `RUST_LOG=cdt_api=error` 会让 cdt_api.warn event 永远
+/// 到不了 telemetry，破坏 spec 契约（tracing layer 自动归类 ERROR + WARN）。
+/// TelemetryLayer 内部已自带 ERROR/WARN level 过滤，不依赖 RUST_LOG。
+///
 /// `init` 一次幂等；多次调用后续无效（tracing global subscriber 单例语义）。
 fn install_tracing_subscriber() {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::Layer;
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    let fmt_layer = tracing_subscriber::fmt::layer().with_target(true);
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_filter(env_filter);
     let _ = tracing_subscriber::registry()
-        .with(env_filter)
         .with(fmt_layer)
         .with(cdt_telemetry::TelemetryLayer::new())
         .try_init();
@@ -871,8 +878,12 @@ fn install_telemetry_panic_hook() {
             |l| format!("{}:{}", l.file(), l.line()),
         );
         let msg = panic_payload_str(info.payload());
-        let truncated_msg = if msg.len() > 1024 {
-            format!("{}...(truncated)", &msg[..1024])
+        let truncated_msg = if msg.chars().count() > 1024 {
+            // 按字符边界截断（非 ASCII panic message 超 1024 bytes 用 byte 切会
+            // 落在 UTF-8 中间触发 double-panic 把 telemetry 也丢掉）。
+            let mut out: String = msg.chars().take(1024).collect();
+            out.push_str("...(truncated)");
+            out
         } else {
             msg
         };

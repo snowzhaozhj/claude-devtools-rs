@@ -14,7 +14,9 @@ pub struct Registry {
     events: EventQueue,
     panic_events: CriticalEventChannel,
     correctness_kinds: HashSet<&'static str>,
-    tracing_targets: HashMap<&'static str, &'static str>,
+    /// 顶级 crate 名 → (error counter name, warn counter name) 双映射。
+    /// 启动期一次性建表；tracing layer hot path 只读 O(1) lookup，零分配。
+    tracing_targets: HashMap<&'static str, (&'static str, &'static str)>,
     started_at: Instant,
 }
 
@@ -134,12 +136,10 @@ fn build() -> Registry {
     for &name in HISTOGRAM_NAMES {
         histograms.insert(name, Histogram::new());
     }
-    let mut tracing_targets = HashMap::new();
+    let mut tracing_targets: HashMap<&'static str, (&'static str, &'static str)> =
+        HashMap::with_capacity(TRACING_TARGET_WHITELIST.len());
     for &(target, error, warn) in TRACING_TARGET_WHITELIST {
-        tracing_targets.insert(format!("{target}::error").leak() as &'static str, error);
-        tracing_targets.insert(format!("{target}::warn").leak() as &'static str, warn);
-        // 同时注册顶级 crate 名（split("::").next() 命中时用）
-        tracing_targets.insert(target, error);
+        tracing_targets.insert(target, (error, warn));
     }
     let mut correctness_kinds = HashSet::with_capacity(CORRECTNESS_KIND_WHITELIST.len());
     for &kind in CORRECTNESS_KIND_WHITELIST {
@@ -215,6 +215,8 @@ impl Registry {
     }
 
     /// tracing bridge 用：按顶级 crate 名查 counter name。返回 None 表示未在白名单。
+    ///
+    /// hot path：单次 hashmap O(1) lookup + 一次按 level 选 tuple 字段，零分配 / 零字符串扫描。
     #[must_use]
     pub fn tracing_counter_name_for(
         &self,
@@ -222,21 +224,10 @@ impl Registry {
         level: tracing::Level,
     ) -> Option<&'static str> {
         let crate_name = target.split("::").next().unwrap_or(target);
-        let counter_name = self.tracing_targets.get(crate_name)?;
-        // 上面 hashmap 存了 crate name → error counter；按 level 切到 .warn
+        let (error_name, warn_name) = self.tracing_targets.get(crate_name)?;
         match level {
-            tracing::Level::ERROR => Some(*counter_name),
-            tracing::Level::WARN => {
-                // .error suffix 切 .warn
-                let warn_name = counter_name.trim_end_matches(".error");
-                let combined = format!("{warn_name}.warn");
-                // 因为白名单 build 时同时塞了 .warn 进 counters map，可以在这层只返回静态 str
-                // 简化：直接在 counters map 里查找静态 leaked str
-                self.counters
-                    .keys()
-                    .find(|k| **k == combined.as_str())
-                    .copied()
-            }
+            tracing::Level::ERROR => Some(*error_name),
+            tracing::Level::WARN => Some(*warn_name),
             _ => None,
         }
     }

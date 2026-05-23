@@ -84,8 +84,14 @@ pub struct CriticalEventChannel {
 }
 
 impl CriticalEventChannel {
+    /// `cap` SHALL ≥ 2，否则压缩为 0 条不变量失效。值 < 2 时构造失败 panic
+    /// （critical channel 是启动期 fixed 配置，misuse 应在 dev 阶段及早爆出）。
     #[must_use]
     pub fn new(cap: usize) -> Self {
+        assert!(
+            cap >= 2,
+            "CriticalEventChannel cap MUST be >= 2 (got {cap}); 半压缩策略要求 cap/2 >= 1"
+        );
         Self {
             inner: RwLock::new(Vec::with_capacity(cap)),
             cap,
@@ -96,8 +102,8 @@ impl CriticalEventChannel {
     pub fn push(&self, ev: Event) {
         let mut guard = self.inner.write();
         if guard.len() >= self.cap {
-            // 满时移除最老 50%
-            let half = self.cap / 2;
+            // 满时移除最老 50%（cap >= 2 时 half >= 1）
+            let half = (self.cap / 2).max(1);
             let removed = guard.drain(..half).count() as u64;
             self.dropped.fetch_add(removed, Ordering::Relaxed);
         }
