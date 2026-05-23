@@ -103,6 +103,24 @@ describe('UnifiedTitleBar 跨平台 padding', () => {
     })
     expect(container.querySelector('.zone-platform-padding')).toBeNull()
   })
+
+  test('macOS UA + 无 Tauri runtime（HTTP server mode）不渲染 platform-padding', () => {
+    // beforeEach 已 setupMockIPC 注入 __TAURI_INTERNALS__；模拟 ?http=1 浏览器
+    // 入口需手工删掉，让 isTauriRuntime() 返回 false。
+    setUA('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)')
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+    const { container } = render(UnifiedTitleBar, {
+      props: {
+        projects: [],
+        repositoryGroups: [],
+        selectedGroupId: '',
+        onSelectProject: () => undefined,
+        rosettaVisible: false,
+      },
+    })
+    expect(container.querySelector('.zone-platform-padding')).toBeNull()
+    expect(container.querySelector('header.chrome')!.classList.contains('chrome-mac')).toBe(false)
+  })
 })
 
 describe('UnifiedTitleBar status zone 容纳契约', () => {

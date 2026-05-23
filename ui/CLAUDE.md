@@ -4,7 +4,7 @@
 
 ## 架构与布局
 
-- **chrome 三层**：`UnifiedTitleBar`（顶部 44 px，macOS 内部 80 px 让位 traffic light，含 ProjectSwitcher / UpdateStatusPill / RosettaStatusIcon / 通知 / 设置）+ Sidebar（200~500 px 可拖拽）+ TabBar（pane 内独立，仅 tab 列表，**不再**含通知/设置/traffic-light padding）+ Main。
+- **chrome 三层**：`UnifiedTitleBar`（顶部 44 px，**仅 macOS Tauri 桌面/mock** 内部 80 px 让位 traffic light——HTTP server mode `?http=1` 浏览器下无 traffic light 不让位，判定 SHALL 同时含 `isTauriRuntime()` 而非只看 UA；含 ProjectSwitcher / UpdateStatusPill / RosettaStatusIcon / 通知 / 设置）+ Sidebar（200~500 px 可拖拽）+ TabBar（pane 内独立，仅 tab 列表，**不再**含通知/设置/traffic-light padding）+ Main。
 - **页面**：SessionDetail、SettingsView、NotificationsView、DashboardView（项目卡片网格，替代空状态）。Tab 类型 4 种：session / settings / notifications / memory（后三者单例）。
 - **chrome 组件细节**（change `unified-title-bar`）：
   - `UnifiedTitleBar.svelte` 四 zone flex（platform-padding · left-center · drag-flex · status）

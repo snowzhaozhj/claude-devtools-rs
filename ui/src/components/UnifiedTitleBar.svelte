@@ -9,6 +9,7 @@
   import ProjectSwitcher from "./ProjectSwitcher.svelte";
   import RosettaStatusIcon from "./RosettaStatusIcon.svelte";
   import UpdateStatusPill from "./UpdateStatusPill.svelte";
+  import { isTauriRuntime } from "../lib/runtime";
 
   interface Props {
     projects: ProjectInfo[];
@@ -28,10 +29,17 @@
     projectsLoading = false,
   }: Props = $props();
 
-  // macOS 隐藏原生 title bar，traffic light 浮绘在 chrome 左上 (12, 20)；
-  // 80px = 12 (window margin) + 3 × 14 (traffic lights) + 2 × 8 (gaps) + 14 (留白)
-  const isMac =
+  // tauri.conf.json 的 titleBarStyle:"Overlay" + hiddenTitle 让 macOS 桌面端
+  // 隐藏原生 title bar，traffic light 浮绘在 chrome 左上 (12, 20)，需要 80px
+  // 让位（12 window margin + 3×14 traffic lights + 2×8 gaps + 14 留白）。这两
+  // 个字段是 macOS 专属——HTTP server mode 浏览器（?http=1）下既无 Tauri
+  // runtime 也无 traffic light，光靠 UA 判 OS 会让 ProjectSwitcher 前出现 80px
+  // 假留白，故 SHALL 同时验证 isTauriRuntime()。
+  // mock 模式（?mock=1）通过 mockIPC 注入 __TAURI_INTERNALS__，isTauriRuntime()
+  // 仍为 true，与真桌面同分支——mock 是 dev 调试入口，理应模拟桌面视觉。
+  const isMacOS =
     typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh");
+  const needsTrafficLightPadding = isMacOS && isTauriRuntime();
 
   const collapsed = $derived(getSidebarCollapsed());
   const unreadCount = $derived(getUnreadCount());
@@ -39,11 +47,11 @@
 
 <header
   class="chrome"
-  class:chrome-mac={isMac}
+  class:chrome-mac={needsTrafficLightPadding}
   data-tauri-drag-region
   aria-label="应用工具栏"
 >
-  {#if isMac}
+  {#if needsTrafficLightPadding}
     <div class="zone-platform-padding" aria-hidden="true"></div>
   {/if}
 
