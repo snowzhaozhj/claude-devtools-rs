@@ -137,7 +137,9 @@ describe('SessionDetail smoke', () => {
       expandedItems: new Set(['ai:a1:0-tool-tu1']),
       searchVisible: false,
       contextPanelVisible: false,
-      scrollTop: 0,
+      atBottom: false,
+      anchorChunkId: null,
+      anchorOffsetPx: 0,
     })
 
     const { container } = render(SessionDetail, {
@@ -242,12 +244,12 @@ describe('SessionDetail smoke', () => {
   })
 
   // ── 滚动位置保留（spec tab-management::滚动位置恢复）──
-  // Svelte 5 onDestroy 在 element unmount 之后触发，conversationEl 已 detach
-  // → 真浏览器 detached element 的 scrollTop 永远是 0；jsdom 不复现这个行为
-  // （unmount 后 scrollTop 仍可读），所以核心契约（latestScrollTop 通路）的回归
-  // 测试只能 Playwright e2e 兜底（见 ui/tests/e2e/tab-scroll-preserve.spec.ts）。
-  // 本节 unit 测试只覆盖 jsdom 能模拟的 sessionId guard 行为。
-  test('滚动位置保留：tab 已被替换 sessionId 时不写脏 scrollTop', async () => {
+  // 真浏览器特异行为（detached element scrollTop=0、lazy markdown 占位 vs 真实
+  // 渲染高度差、IntersectionObserver / MutationObserver 时序）jsdom 都不复现，
+  // 锚点法核心契约（捕获 / 恢复 / 粘底 pin）的回归测试只能 Playwright e2e 兜底
+  // （见 ui/tests/e2e/tab-scroll-preserve.spec.ts）。本节 unit 测试只覆盖
+  // jsdom 能模拟的 sessionId guard 行为：用 anchorChunkId sentinel 验证不被覆盖。
+  test('滚动位置保留：tab 已被替换 sessionId 时不写脏 anchor', async () => {
     openTab(SESSION_ID, PROJECT_ID, 'preserve-replaced')
     const tabId = getActiveTab()!.id
     saveTabUIState(tabId, {
@@ -255,7 +257,9 @@ describe('SessionDetail smoke', () => {
       expandedItems: new Set(),
       searchVisible: false,
       contextPanelVisible: false,
-      scrollTop: 999,
+      atBottom: false,
+      anchorChunkId: 'sentinel-from-prior-session',
+      anchorOffsetPx: 42,
     })
 
     const { container, unmount } = render(SessionDetail, {
@@ -276,8 +280,10 @@ describe('SessionDetail smoke', () => {
     }
     unmount()
 
-    // guard 应拒写——保留之前的 999
-    expect(getTabUIState(tabId).scrollTop).toBe(999)
+    // guard 应拒写——保留之前的 sentinel
+    const after = getTabUIState(tabId)
+    expect(after.anchorChunkId).toBe('sentinel-from-prior-session')
+    expect(after.anchorOffsetPx).toBe(42)
 
     closeTab(tabId)
   })

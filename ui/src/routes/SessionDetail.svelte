@@ -10,6 +10,7 @@
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
   import { createLazyMarkdownObserver, estimatePlaceholderHeight } from "../lib/lazyMarkdown.svelte";
+  import { isAtBottom, captureScrollAnchor, restoreScrollAnchor, type ScrollAnchorState } from "../lib/scrollAnchor";
   import { getTabUIState, saveTabUIState, getTabSessionId, getCachedSession, setCachedSession, getActiveTabId } from "../lib/tabStore.svelte";
   import { isMac } from "../lib/platform";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
@@ -119,10 +120,21 @@
   let isProgrammaticScroll = $state(false);
   let progScrollTimer: ReturnType<typeof setTimeout> | null = null;
   let rAFid: number | null = null;
-  // 每次 scroll 同步写入此变量，作为 onDestroy 保存 scrollTop 的可靠来源。
-  // 直接 `conversationEl.scrollTop` 在 Svelte 5 onDestroy 时 element 已 detach
-  // → scrollTop=0 永远写错。详 onDestroy 注释。
-  let latestScrollTop = 0;
+
+  // ── 滚动状态：锚点法（change `tab-scroll-restore-anchor`） ──
+  //
+  // 算法实现在 `lib/scrollAnchor.ts`，本组件持有「最后捕获的锚点快照」+
+  // 「bottom pin 状态机的 cleanup 引用」两份组件级状态。
+  //
+  // `latestAnchor` 由 scroll listener 同步维护——element detach 后 onDestroy
+  // 仍能读到切走前最后一帧的快照（rect/scrollTop 在 detached 状态不可靠）。
+  let latestAnchor: ScrollAnchorState = {
+    atBottom: false,
+    anchorChunkId: null,
+    anchorOffsetPx: 0,
+  };
+  /** bottom pin 状态机的 cleanup 引用——新一轮启动前 / onDestroy 都强制收敛 */
+  let currentBottomPinCleanup: (() => void) | null = null;
 
   function isJumpToLatestKey(e: KeyboardEvent): boolean {
     if (isMac()) {
@@ -199,8 +211,8 @@
   function attachConversationScroll(el: HTMLElement) {
     // bind:this 已经把 conversationEl 设上，attach 仅负责挂 listener + cleanup
     const onScroll = () => {
-      // 同步写入 latestScrollTop 供 onDestroy 用——element detach 后 scrollTop=0
-      latestScrollTop = el.scrollTop;
+      // 同步写入 latestAnchor 供 onDestroy 用——element detach 后无法读 rect/scrollTop
+      latestAnchor = captureScrollAnchor(conversationEl);
       scheduleUpdateIsFar();
     };
     const onScrollEnd = () => stopProgrammaticScroll();
@@ -267,9 +279,7 @@
   const fileChangeKey = `session-detail-${untrack(() => tabId)}`;
 
   async function refreshDetail() {
-    const wasAtBottom = !!conversationEl
-      && conversationEl.scrollTop + conversationEl.clientHeight
-        >= conversationEl.scrollHeight - 16;
+    const wasAtBottom = !!conversationEl && isAtBottom(conversationEl);
     try {
       const d = await getSessionDetail(projectId, sessionId);
       detail = d;
@@ -336,12 +346,20 @@
       console.info(`[perf] SessionDetail ${sessionId.slice(0, 8)} first-paint ${total_ms.toFixed(0)}ms`);
     }
 
-    // 恢复滚动位置（cached path 在前面已 await tick，conversationEl 必绑定）
-    if (conversationEl && uiState.scrollTop > 0) {
-      conversationEl.scrollTop = uiState.scrollTop;
-      // 同步初始化 latestScrollTop——避免恢复后用户没 scroll 时 onDestroy
-      // 写入 0 把刚保存的值覆盖丢
-      latestScrollTop = conversationEl.scrollTop;
+    // 恢复滚动位置（cached path 在前面已 await tick；非 cached path 也已 await tick）
+    // —— 锚点法替代旧 scrollTop 数值方案。详 design.md::D2 / D3。
+    if (conversationEl) {
+      const initialState: ScrollAnchorState = {
+        atBottom: uiState.atBottom,
+        anchorChunkId: uiState.anchorChunkId,
+        anchorOffsetPx: uiState.anchorOffsetPx,
+      };
+      // 强制收敛上一轮可能残留的 bottom pin（理论 onDestroy 已清，跨 mount 防御）
+      currentBottomPinCleanup?.();
+      currentBottomPinCleanup = restoreScrollAnchor(conversationEl, initialState);
+      // 同步初始化 latestAnchor——避免恢复后用户没 scroll 时 onDestroy
+      // 用初始空值覆盖刚恢复的锚点（与 PR #223 旧 latestScrollTop 同步原则）
+      latestAnchor = initialState;
     }
 
     // 注册 file-change handler：命中当前 (projectId, sessionId) 时合并刷新
@@ -361,23 +379,30 @@
     cancelScheduledRefresh(`detail:${projectId}|${sessionId}`);
     lazyObserver?.disconnect();
     lazyObserver = null;
+    // 强制收敛 bottom pin 状态机——element unmount 后 MutationObserver / timer
+    // 若没 disconnect 会持续持有 detached element 引用 + 触发回调写入 detached
+    // scrollTop（无效但浪费）
+    currentBottomPinCleanup?.();
+    currentBottomPinCleanup = null;
     // 保存 per-tab UI 状态 —— 但仅在 tab 仍指向当前 sessionId 时保存。
     // openOrReplaceTab 会保留 tabId 仅换 sessionId 触发 destroy/recreate；
     // 若此处无条件 save，旧 session 的状态会覆盖 openOrReplaceTab 刚清掉的 slot，
     // 新 session mount 时 getTabUIState(tabId) 拿到的就是旧 session 残留（codex 二审 #1）。
     //
-    // scrollTop 必须用 `latestScrollTop` 而非 `conversationEl?.scrollTop`：Svelte 5
+    // 滚动状态用 `latestAnchor` 而非 `captureScrollAnchor()` 当场读：Svelte 5
     // onDestroy 在 element unmount **之后**触发，conversationEl 仍指向原 ref 但
-    // `.isConnected=false`、scrollTop 永远是 0（detached element 行为）。
-    // `latestScrollTop` 由 scroll listener 在每次滚动时同步写入，element 离开 DOM
-    // 前的最后一次 scroll 值已被捕获，不依赖 onDestroy 那一刻的读取。
+    // `.isConnected=false`，rect / scrollTop / scrollHeight 都不可靠。
+    // `latestAnchor` 由 scroll listener 在每次滚动时同步写入，element 离开 DOM
+    // 前的最后一帧锚点已被捕获，不依赖 onDestroy 那一刻的读取。
     if (getTabSessionId(tabId) === sessionId) {
       saveTabUIState(tabId, {
         expandedChunks: new Set(expandedChunks),
         expandedItems: new Set(expandedItems),
         searchVisible,
         contextPanelVisible,
-        scrollTop: latestScrollTop,
+        atBottom: latestAnchor.atBottom,
+        anchorChunkId: latestAnchor.anchorChunkId,
+        anchorOffsetPx: latestAnchor.anchorOffsetPx,
       });
     }
   });
