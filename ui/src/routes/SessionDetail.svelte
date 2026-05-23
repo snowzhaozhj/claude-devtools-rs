@@ -118,8 +118,6 @@
   let isProgrammaticScroll = $state(false);
   let progScrollTimer: ReturnType<typeof setTimeout> | null = null;
   let rAFid: number | null = null;
-  /** programmatic-scroll 期间忽略下一次 keydown 的"自我打断"（避免 ⌘+↓ 触发的 keydown 立即清自己） */
-  let suppressNextSelfKeydown = false;
 
   function isJumpToLatestKey(e: KeyboardEvent): boolean {
     if (isMac()) {
@@ -155,7 +153,6 @@
     const reduceMotion = typeof matchMedia !== "undefined"
       && matchMedia("(prefers-reduced-motion: reduce)").matches;
     startProgrammaticScroll();
-    suppressNextSelfKeydown = true;
     conversationEl.scrollTo({
       top: conversationEl.scrollHeight,
       behavior: reduceMotion ? "auto" : "smooth",
@@ -235,12 +232,13 @@
     // 顺序很关键：中断 programmatic-scroll 必须**前置**于 input guard 与 pane guard。
     // 理由：spec 要求"滚动期间用户主动 wheel/touchmove/非本快捷键 keydown 立即清 flag"。
     // 如果先 input guard return，input focused 期间任何 keydown 都被吞掉，programmatic
-    // scroll 即使被打断也不会停 —— spec 与实现不一致（codex PR 二审 #1 反馈）。
-    // suppressNextSelfKeydown 仅放行"我们自己 scrollToLatest 触发的 ⌘+↓ 自我打断"。
-    if (isProgrammaticScroll && !isJumpToLatestKey(e) && !suppressNextSelfKeydown) {
+    // scroll 即使被打断也不会停 —— spec 与实现不一致（codex PR 二审第一轮 #1）。
+    // 中断条件仅 `!isJumpToLatestKey`：scrollTo() 不会 dispatch 新 keydown，所以
+    // "自我打断 race"不存在；用户连按本快捷键走"重复触发"路径（startProgrammaticScroll
+    //  内 clearTimeout 旧 timer + 重新 setTimeout）（codex PR 二审第二轮 #1）。
+    if (isProgrammaticScroll && !isJumpToLatestKey(e)) {
       stopProgrammaticScroll();
     }
-    suppressNextSelfKeydown = false;
     // Guard 1：input/textarea/contenteditable focused 时不拦快捷键，让浏览器原生
     // 光标导航生效。注意此 guard 在中断逻辑**之后**——input typing 触发的 keydown
     // 仍能中断 smooth scroll（用户认知焦点已切到 input）
