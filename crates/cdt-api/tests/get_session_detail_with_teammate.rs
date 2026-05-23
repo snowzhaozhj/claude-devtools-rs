@@ -209,6 +209,83 @@ fn ai_chunk_without_teammate_omits_field_in_json() {
 }
 
 #[test]
+fn orphan_teammate_session_emits_empty_ai_chunk_first() {
+    // 命中真实 sessionId=6290f9d4-c982-4ec8-89c7-5c6de88fad1a 头序列的 IPC fixture：
+    // teammate-message → synthetic+isApiErrorMessage assistant (HardNoise) → user "继续"
+    // → frontend assistant turn
+    //
+    // 修复前：UserChunk("继续") 先 emit，第一条 teammate-message 跑到下一个 AIChunk
+    // 修复后：empty-AI 含 teammate 在前，UserChunk 在中，frontend AIChunk 在后
+    use cdt_core::{HardNoiseReason, MessageCategory};
+
+    let mut synthetic_assistant = assistant_text("a-err", 1, "API Error: 400 模型提供方错误");
+    synthetic_assistant.category = MessageCategory::HardNoise(HardNoiseReason::SyntheticAssistant);
+
+    let msgs = vec![
+        teammate(
+            "tm1",
+            0,
+            "team-lead",
+            "you are frontend",
+            "你是 kb-shortcuts team 的 frontend teammate",
+        ),
+        synthetic_assistant,
+        user("u1", 2, "继续"),
+        assistant_text("a1", 3, "frontend reply"),
+    ];
+
+    let chunks: Vec<Chunk> = build_chunks(&msgs);
+    assert_eq!(
+        chunks.len(),
+        3,
+        "expected empty-AI + UserChunk + AIChunk, got {chunks:#?}"
+    );
+
+    // chunks[0]：empty-AI 含 teammate
+    let Chunk::Ai(empty_ai) = &chunks[0] else {
+        panic!("chunks[0] expected empty-AI, got {:?}", chunks[0]);
+    };
+    assert!(
+        empty_ai.responses.is_empty(),
+        "empty-AI should have no responses"
+    );
+    assert_eq!(empty_ai.teammate_messages.len(), 1);
+    assert_eq!(
+        empty_ai.teammate_messages[0].body,
+        "你是 kb-shortcuts team 的 frontend teammate"
+    );
+
+    // 验证 IPC payload 形态：Chunk 是 internally-tagged (`tag = "kind"`)，
+    // AIChunk 字段 flat 在 root；序列化后 responses 字段是空数组、teammateMessages 非空。
+    let json = serde_json::to_value(&chunks[0]).expect("empty-AI serializes");
+    assert_eq!(json.get("kind").and_then(|v| v.as_str()), Some("ai"));
+    assert!(
+        json.get("responses")
+            .and_then(|v| v.as_array())
+            .is_some_and(Vec::is_empty),
+        "responses 应序列化为空数组：{json:#?}"
+    );
+    assert!(
+        json.get("teammateMessages")
+            .and_then(|v| v.as_array())
+            .is_some_and(|arr| !arr.is_empty()),
+        "teammateMessages 应非空"
+    );
+
+    // chunks[1]：UserChunk("继续")
+    let Chunk::User(continue_user) = &chunks[1] else {
+        panic!("chunks[1] expected UserChunk");
+    };
+    let cdt_core::MessageContent::Text(text) = &continue_user.content else {
+        panic!("expected Text content");
+    };
+    assert_eq!(text, "继续");
+
+    // chunks[2]：真实 frontend reply
+    assert!(matches!(&chunks[2], Chunk::Ai(ai) if !ai.responses.is_empty()));
+}
+
+#[test]
 fn multiple_teammates_each_pair_with_their_send_message() {
     let msgs = vec![
         user("u1", 0, "create team"),

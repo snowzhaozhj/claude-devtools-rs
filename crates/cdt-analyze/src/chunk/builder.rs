@@ -85,15 +85,23 @@ pub fn build_chunks(messages: &[ParsedMessage]) -> Vec<Chunk> {
         &follow_ups,
     );
 
-    flush_buffer(
-        &mut buffer,
-        &mut out,
-        &mut executions_by_assistant,
-        &mut pending_slashes,
-        &mut pending_teammates,
-        &mut used_send_message_ids,
-        &mut used_chunk_ids,
-    );
+    // 末尾 flush 仅处理仍有真实 assistant buffer 的情况——buffer 空 +
+    // pending teammate 非空的场景留给 drain_trailing_teammates 兜底（trailing
+    // teammate 追加到最后一个已 emit 的 AIChunk，无 AIChunk 则丢弃，符合
+    // spec Scenario "Trailing teammate message attaches to last AIChunk" 与
+    // "Orphan teammate when no AIChunk exists"）。这样 mid-stream 的新规则 5
+    // 不会在主循环结束后又"补一发" empty-AI chunk。
+    if !buffer.is_empty() {
+        flush_buffer(
+            &mut buffer,
+            &mut out,
+            &mut executions_by_assistant,
+            &mut pending_slashes,
+            &mut pending_teammates,
+            &mut used_send_message_ids,
+            &mut used_chunk_ids,
+        );
+    }
     drain_trailing_teammates(&mut out, &mut pending_teammates, &mut used_send_message_ids);
     out
 }
@@ -500,15 +508,23 @@ pub fn build_chunks_with_subagents(
         &follow_ups,
     );
 
-    flush_buffer(
-        &mut buffer,
-        &mut out,
-        &mut executions_by_assistant,
-        &mut pending_slashes,
-        &mut pending_teammates,
-        &mut used_send_message_ids,
-        &mut used_chunk_ids,
-    );
+    // 末尾 flush 仅处理仍有真实 assistant buffer 的情况——buffer 空 +
+    // pending teammate 非空的场景留给 drain_trailing_teammates 兜底（trailing
+    // teammate 追加到最后一个已 emit 的 AIChunk，无 AIChunk 则丢弃，符合
+    // spec Scenario "Trailing teammate message attaches to last AIChunk" 与
+    // "Orphan teammate when no AIChunk exists"）。这样 mid-stream 的新规则 5
+    // 不会在主循环结束后又"补一发" empty-AI chunk。
+    if !buffer.is_empty() {
+        flush_buffer(
+            &mut buffer,
+            &mut out,
+            &mut executions_by_assistant,
+            &mut pending_slashes,
+            &mut pending_teammates,
+            &mut used_send_message_ids,
+            &mut used_chunk_ids,
+        );
+    }
     drain_trailing_teammates(&mut out, &mut pending_teammates, &mut used_send_message_ids);
 
     // 把 resolved subagent Process 分配到对应 AIChunk
@@ -625,8 +641,37 @@ fn flush_buffer(
     used_chunk_ids: &mut HashSet<String>,
 ) {
     if buffer.is_empty() {
-        // buffer 空但 pending teammate 非空（极少见）：保留 pending 给下一轮 flush
-        // 配对，drain_trailing_teammates 兜底。
+        if pending_teammates.is_empty() {
+            return;
+        }
+        // buffer 空但 pending teammate 非空：产一条 responses 为空、
+        // teammate_messages 非空的 AIChunk 收容 orphan teammate，
+        // 避免后续真实 user-side chunk 先被 emit 导致 teammate-message
+        // 顺序倒置。Spec：`chunk-building::Embed teammate messages
+        // into AIChunk` 第 5 条规则。
+        let base = pending_teammates[0].uuid.clone();
+        let timestamp = pending_teammates[0].timestamp;
+        let chunk_id = next_chunk_id(&base, used_chunk_ids);
+        let slash_commands = std::mem::take(pending_slashes);
+        let mut new_chunk = AIChunk {
+            chunk_id,
+            timestamp,
+            duration_ms: None,
+            responses: Vec::new(),
+            metrics: ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: Vec::new(),
+            subagents: Vec::new(),
+            slash_commands,
+            teammate_messages: Vec::new(),
+        };
+        link_pending_teammates_into(
+            &mut new_chunk,
+            pending_teammates,
+            out,
+            used_send_message_ids,
+        );
+        out.push(Chunk::Ai(new_chunk));
         return;
     }
     let responses = std::mem::take(buffer);
@@ -673,33 +718,51 @@ fn flush_buffer(
         teammate_messages: Vec::new(),
     };
 
-    // 把 pending teammate 注入新构造的 AIChunk：先按"自身 + 历史 N-1 个"配对
-    // reply_to_tool_use_id，再 move 到 new_chunk.teammate_messages。
-    if !pending_teammates.is_empty() {
-        let drained: Vec<TeammateMessage> = std::mem::take(pending_teammates);
-        let last_emitted_idx = out.iter().rposition(|c| matches!(c, Chunk::Ai(_)));
-        let mut linked: Vec<TeammateMessage> = Vec::with_capacity(drained.len());
-        for mut tm in drained {
-            let link_target = if let Some(idx) = last_emitted_idx {
-                link_against_chunks(
-                    &tm.teammate_id,
-                    out,
-                    idx,
-                    used_send_message_ids,
-                    Some(&new_chunk),
-                )
-            } else {
-                // out 中无 AIChunk：仅在 new_chunk 自身扫描
-                let chain: Vec<&AIChunk> = vec![&new_chunk];
-                link_teammate_to_send_message(&tm.teammate_id, &chain, used_send_message_ids)
-            };
-            tm.reply_to_tool_use_id = link_target;
-            linked.push(tm);
-        }
-        new_chunk.teammate_messages = linked;
-    }
+    link_pending_teammates_into(
+        &mut new_chunk,
+        pending_teammates,
+        out,
+        used_send_message_ids,
+    );
 
     out.push(Chunk::Ai(new_chunk));
+}
+
+/// 把 `pending_teammates` 中的 teammate 注入 `new_chunk`：先按"自身 + 历史
+/// N-1 个 AIChunk"链上 [`link_teammate_to_send_message`] 配对
+/// `reply_to_tool_use_id`，再 move 到 `new_chunk.teammate_messages`。
+///
+/// `pending_teammates` 空时直接返回不动 chunk。被 [`flush_buffer`] 在
+/// buffer 非空路径与 buffer 空 + pending 非空（empty-AI orphan）路径共用。
+fn link_pending_teammates_into(
+    new_chunk: &mut AIChunk,
+    pending_teammates: &mut Vec<TeammateMessage>,
+    out: &[Chunk],
+    used_send_message_ids: &mut HashSet<String>,
+) {
+    if pending_teammates.is_empty() {
+        return;
+    }
+    let drained: Vec<TeammateMessage> = std::mem::take(pending_teammates);
+    let last_emitted_idx = out.iter().rposition(|c| matches!(c, Chunk::Ai(_)));
+    let mut linked: Vec<TeammateMessage> = Vec::with_capacity(drained.len());
+    for mut tm in drained {
+        let link_target = if let Some(idx) = last_emitted_idx {
+            link_against_chunks(
+                &tm.teammate_id,
+                out,
+                idx,
+                used_send_message_ids,
+                Some(new_chunk),
+            )
+        } else {
+            let chain: Vec<&AIChunk> = vec![new_chunk];
+            link_teammate_to_send_message(&tm.teammate_id, &chain, used_send_message_ids)
+        };
+        tm.reply_to_tool_use_id = link_target;
+        linked.push(tm);
+    }
+    new_chunk.teammate_messages = linked;
 }
 
 /// 从 isMeta 消息内容中提取 slash 命令信息。
@@ -2035,5 +2098,209 @@ mod tests {
         assert_eq!(bob.teammate_id, "bob");
         assert_eq!(alice.reply_to_tool_use_id.as_deref(), Some("tu-a1"));
         assert_eq!(bob.reply_to_tool_use_id.as_deref(), Some("tu-a2"));
+    }
+
+    // ---- orphan teammate before user-side flush ----
+    //
+    // Spec：`openspec/specs/chunk-building/spec.md` 第 5 条规则与对应 5 个新 Scenario
+    // （change `fix-teammate-orphan-before-user-message`）。
+    // 第 6 个测试 `synthetic_api_error_..._does_not_break_order` 不在 spec 中，
+    // 是命中真实 sessionId=`6290f9d4-c982-4ec8-89c7-5c6de88fad1a` 序列的回归守门。
+
+    #[test]
+    fn teammate_before_real_user_emits_empty_ai_then_user() {
+        let msgs = vec![
+            teammate_user("tm1", 0, "team prompt body"),
+            user("u1", 1, "real input"),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 2);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected empty-AI as chunks[0], got {:?}", chunks[0]);
+        };
+        assert!(ai.responses.is_empty(), "empty-AI should have no responses");
+        assert_eq!(ai.teammate_messages.len(), 1);
+        assert_eq!(ai.teammate_messages[0].body, "team prompt body");
+        assert!(
+            ai.teammate_messages[0].reply_to_tool_use_id.is_none(),
+            "no SendMessage predecessor → reply_to is None"
+        );
+        assert_eq!(ai.timestamp, ts(0));
+        assert!(ai.semantic_steps.is_empty());
+        assert!(ai.tool_executions.is_empty());
+        assert!(ai.subagents.is_empty());
+        assert!(ai.slash_commands.is_empty());
+        let Chunk::User(u) = &chunks[1] else {
+            panic!("expected UserChunk as chunks[1]");
+        };
+        assert_eq!(u.uuid, "u1");
+    }
+
+    #[test]
+    fn teammate_before_local_command_stdout_emits_empty_ai_then_system() {
+        let msgs = vec![
+            teammate_user("tm1", 0, "team prompt body"),
+            user(
+                "u1",
+                1,
+                "<local-command-stdout>ls output</local-command-stdout>",
+            ),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 2);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected empty-AI as chunks[0]");
+        };
+        assert!(ai.responses.is_empty());
+        assert_eq!(ai.teammate_messages.len(), 1);
+        let Chunk::System(sys) = &chunks[1] else {
+            panic!("expected SystemChunk as chunks[1]");
+        };
+        assert_eq!(sys.content_text, "ls output");
+    }
+
+    #[test]
+    fn teammate_before_compact_summary_emits_empty_ai_then_compact() {
+        let mut compact = user("c1", 1, "conversation summary text");
+        compact.category = MessageCategory::Compact;
+        compact.is_compact_summary = true;
+        let msgs = vec![teammate_user("tm1", 0, "team prompt body"), compact];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 2);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected empty-AI as chunks[0]");
+        };
+        assert!(ai.responses.is_empty());
+        assert_eq!(ai.teammate_messages.len(), 1);
+        let Chunk::Compact(c) = &chunks[1] else {
+            panic!("expected CompactChunk as chunks[1]");
+        };
+        assert_eq!(c.summary_text, "conversation summary text");
+    }
+
+    #[test]
+    fn slash_then_teammate_then_user_emits_empty_ai_with_slash_and_teammate() {
+        let slash = user(
+            "s1",
+            0,
+            "<command-name>/clear</command-name><command-message>clear</command-message>",
+        );
+        let msgs = vec![
+            slash,
+            teammate_user("tm1", 1, "team prompt body"),
+            user("u1", 2, "real input"),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 3);
+        // chunks[0]：slash 的 UserChunk
+        let Chunk::User(slash_user) = &chunks[0] else {
+            panic!("expected slash UserChunk as chunks[0]");
+        };
+        assert_eq!(slash_user.uuid, "s1");
+        // chunks[1]：empty-AI 含 slash_commands + teammate
+        let Chunk::Ai(ai) = &chunks[1] else {
+            panic!("expected empty-AI as chunks[1]");
+        };
+        assert!(ai.responses.is_empty());
+        assert_eq!(ai.slash_commands.len(), 1);
+        assert_eq!(ai.slash_commands[0].name, "clear");
+        assert_eq!(ai.teammate_messages.len(), 1);
+        assert_eq!(ai.teammate_messages[0].body, "team prompt body");
+        // chunks[2]：真实 user 的 UserChunk
+        let Chunk::User(real_user) = &chunks[2] else {
+            panic!("expected real UserChunk as chunks[2]");
+        };
+        assert_eq!(real_user.uuid, "u1");
+    }
+
+    #[test]
+    fn teammate_before_interrupt_appends_to_empty_ai() {
+        let msgs = vec![
+            teammate_user("tm1", 0, "team prompt body"),
+            interruption("u1", 1, "[Request interrupted by user]"),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 1);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected single empty-AI chunk");
+        };
+        assert!(ai.responses.is_empty());
+        assert_eq!(ai.teammate_messages.len(), 1);
+        assert_eq!(ai.teammate_messages[0].body, "team prompt body");
+        // interrupt 追加到 empty-AI 的 semantic_steps
+        let Some(SemanticStep::Interruption { text, .. }) = ai.semantic_steps.last() else {
+            panic!(
+                "expected SemanticStep::Interruption in empty-AI, got {:?}",
+                ai.semantic_steps
+            );
+        };
+        assert_eq!(text, "[Request interrupted by user]");
+    }
+
+    #[test]
+    fn synthetic_api_error_between_teammate_and_user_does_not_break_order() {
+        // 命中真实 sessionId=6290f9d4-c982-4ec8-89c7-5c6de88fad1a 头序列的回归守门：
+        // L3 teammate-message → L4 synthetic+isApiErrorMessage assistant → L7 user "继续"
+        // 修复前：UserChunk("继续") 先 emit，teammate 跑到下一个 AIChunk（顺序倒置）
+        // 修复后：empty-AI 含 teammate 在前，UserChunk("继续") 在中
+        let mut synthetic_assistant = assistant(
+            "a-err",
+            1,
+            &[ContentBlock::Text {
+                text: "API Error: 400".into(),
+            }],
+        );
+        synthetic_assistant.category =
+            MessageCategory::HardNoise(HardNoiseReason::SyntheticAssistant);
+        let msgs = vec![
+            teammate_user("tm1", 0, "team prompt body"),
+            synthetic_assistant,
+            user("u1", 2, "继续"),
+            assistant(
+                "a1",
+                3,
+                &[ContentBlock::Text {
+                    text: "frontend reply".into(),
+                }],
+            ),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 3, "expected empty-AI + UserChunk + AIChunk");
+        // chunks[0]：empty-AI 含 teammate
+        let Chunk::Ai(empty_ai) = &chunks[0] else {
+            panic!("chunks[0] expected empty-AI");
+        };
+        assert!(empty_ai.responses.is_empty());
+        assert_eq!(empty_ai.teammate_messages.len(), 1);
+        assert_eq!(empty_ai.teammate_messages[0].body, "team prompt body");
+        // chunks[1]：UserChunk("继续")
+        let Chunk::User(continue_user) = &chunks[1] else {
+            panic!("chunks[1] expected UserChunk");
+        };
+        let cdt_core::MessageContent::Text(text) = &continue_user.content else {
+            panic!("expected Text content");
+        };
+        assert_eq!(text, "继续");
+        // chunks[2]：真实 frontend reply AIChunk
+        let Chunk::Ai(real_ai) = &chunks[2] else {
+            panic!("chunks[2] expected real AIChunk");
+        };
+        assert_eq!(real_ai.responses.len(), 1);
+        assert_eq!(real_ai.responses[0].uuid, "a1");
+        // teammate 没双重 emit
+        let total_teammate_count: usize = chunks
+            .iter()
+            .filter_map(|c| {
+                if let Chunk::Ai(ai) = c {
+                    Some(ai.teammate_messages.len())
+                } else {
+                    None
+                }
+            })
+            .sum();
+        assert_eq!(
+            total_teammate_count, 1,
+            "teammate should be emitted exactly once"
+        );
     }
 }
