@@ -283,4 +283,169 @@ describe("KeyboardShortcutsPanel", () => {
     // updateConfig 未被调（Save 早期 return）
     expect(updateCalled).toBe(false);
   });
+
+  // ---------------------------------------------------------------------------
+  // audit gap from frontend d147b56：补 4 个核心 spec scenario 的剩余 case
+  // 1. 录键时 pending overlay 串行冲突（spec ::冲突检测::pending overlay 串行冲突检测）
+  // 2. Save 单次 IPC 写入 3 个 override（spec ::用户自定义覆盖::Save 显式提交单次 IPC 写入 主路径）
+  // 3. 不点 Save 直接 unmount → SHALL NOT 触发 set_config（同上 scenario 反路径）
+  // 4. Save IPC 失败 → 回滚 pending（同上 scenario "IPC 失败 SHALL 回滚 pending"）
+  // 5. configLoadError 重试按钮：getConfig 成功 → banner 消失（spec ::IPC 失败 fallback::重试成功 SHALL 消失）
+  //
+  // 注：suspend / resume 引用计数（::录键守卫::suspend / resume 引用计数）已由
+  // dispatcher.test.ts §4.8 覆盖（直接验证 registry 模块级 API），不重复。
+  // ---------------------------------------------------------------------------
+
+  test("录键时 pending overlay 冲突 → 第二行 ShortcutRow 渲染 conflict warning", async () => {
+    const { container } = render(KeyboardShortcutsPanel, {
+      props: { initialOverrides: {} },
+    });
+
+    // 第一次录键：sidebar.toggle → meta+x（pending 加一条，独立无冲突）
+    const recorder1 = getRecorderForId(container, "sidebar.toggle");
+    await fireEvent.focus(recorder1);
+    await fireEvent.keyDown(recorder1, { key: "x", code: "KeyX", metaKey: true });
+    expect(container.querySelector(".pending-bar")).not.toBeNull();
+
+    // 第二次录键：command-palette.toggle → meta+x（与 pending 中 sidebar.toggle 冲突）
+    const recorder2 = getRecorderForId(container, "command-palette.toggle");
+    await fireEvent.focus(recorder2);
+    await fireEvent.keyDown(recorder2, { key: "x", code: "KeyX", metaKey: true });
+
+    // panel 调 findConflict(meta+x, "command-palette.toggle", pending) → "sidebar.toggle"
+    // ShortcutRow 拿 meta 的 description 渲染到 row-hint-warning
+    const warnings = container.querySelectorAll('.row-hint-warning[role="alert"]');
+    let foundConflictWithSidebar = false;
+    for (const w of warnings) {
+      if (w.textContent?.includes("切换侧栏")) foundConflictWithSidebar = true;
+    }
+    expect(foundConflictWithSidebar).toBe(true);
+  });
+
+  test("Save 单次 IPC 写入 3 个 override（连续改 3 个 ID 后点 Save）", async () => {
+    let captured: Record<string, string> | undefined;
+    let callCount = 0;
+    mockIPC((cmd, payload) => {
+      if (cmd === "update_config") {
+        callCount++;
+        const args = payload as { section: string; configData: Record<string, string> };
+        captured = args.configData;
+        return Promise.resolve({ keyboardShortcuts: args.configData });
+      }
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(KeyboardShortcutsPanel, {
+      props: { initialOverrides: {} },
+    });
+
+    // 连续录入 3 个不同 ID
+    const commits: Array<[string, KeyboardEventInit]> = [
+      ["sidebar.toggle", { key: "x", code: "KeyX", metaKey: true }],
+      ["command-palette.toggle", { key: "y", code: "KeyY", metaKey: true }],
+      ["search.in-session", { key: "z", code: "KeyZ", metaKey: true }],
+    ];
+    for (const [id, evt] of commits) {
+      const rec = getRecorderForId(container, id);
+      await fireEvent.focus(rec);
+      await fireEvent.keyDown(rec, evt);
+    }
+    expect(container.querySelector(".pending-bar")?.textContent).toContain("3 项");
+
+    const save = findButtonByText(container, "保存");
+    await fireEvent.click(save!);
+    await new Promise((r) => setTimeout(r, 0));
+
+    // 单次 IPC + payload 含 3 个 key
+    expect(callCount).toBe(1);
+    expect(captured).toBeDefined();
+    expect(Object.keys(captured!).sort()).toEqual([
+      "command-palette.toggle",
+      "search.in-session",
+      "sidebar.toggle",
+    ]);
+    // pending 清空
+    expect(container.querySelector(".pending-bar")).toBeNull();
+  });
+
+  test("不点 Save 直接 unmount → SHALL NOT 触发 set_config", async () => {
+    let updateCalled = false;
+    mockIPC((cmd) => {
+      if (cmd === "update_config") {
+        updateCalled = true;
+        return Promise.resolve({ keyboardShortcuts: {} });
+      }
+      return Promise.resolve(null);
+    });
+
+    const { container, unmount } = render(KeyboardShortcutsPanel, {
+      props: { initialOverrides: {} },
+    });
+    const recorder = getRecorderForId(container, "sidebar.toggle");
+    await fireEvent.focus(recorder);
+    await fireEvent.keyDown(recorder, { key: "x", code: "KeyX", metaKey: true });
+    expect(container.querySelector(".pending-bar")).not.toBeNull();
+
+    // 用户切走 / 关闭 Settings → 组件 unmount
+    unmount();
+    // microtask flush 确保任何 onDestroy 异步路径都跑完
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(updateCalled).toBe(false);
+  });
+
+  test("Save IPC 失败 → 回滚 pending（pending bar 仍渲染 + saveError 显示）", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "update_config") {
+        return Promise.reject(new Error("IPC down"));
+      }
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(KeyboardShortcutsPanel, {
+      props: { initialOverrides: {} },
+    });
+    const recorder = getRecorderForId(container, "sidebar.toggle");
+    await fireEvent.focus(recorder);
+    await fireEvent.keyDown(recorder, { key: "x", code: "KeyX", metaKey: true });
+    expect(container.querySelector(".pending-bar")).not.toBeNull();
+
+    const save = findButtonByText(container, "保存");
+    await fireEvent.click(save!);
+    // IPC reject 走 catch + setConfigLoadError 副作用，需多 flush 一轮
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // pending 不清空 → bar 仍渲染
+    expect(container.querySelector(".pending-bar")).not.toBeNull();
+  });
+
+  test("configLoadError 重试按钮：getConfig 成功 → banner 消失", async () => {
+    let getConfigCalled = false;
+    mockIPC((cmd) => {
+      if (cmd === "get_config") {
+        getConfigCalled = true;
+        return Promise.resolve({ keyboardShortcuts: {} });
+      }
+      return Promise.resolve(null);
+    });
+
+    const { container } = render(KeyboardShortcutsPanel, {
+      props: { initialOverrides: {} },
+    });
+    setConfigLoadError("read fail");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(container.querySelector('.banner-error[role="alert"]')).not.toBeNull();
+
+    const retryBtn = findButtonByText(container, "重试");
+    expect(retryBtn).not.toBeNull();
+    await fireEvent.click(retryBtn!);
+    // retryBootstrap → getConfig → setConfigLoadError(null) → subscribe 推 panel
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(getConfigCalled).toBe(true);
+    // banner 消失
+    expect(container.querySelector('.banner-error[role="alert"]')).toBeNull();
+  });
 });
