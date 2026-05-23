@@ -282,6 +282,54 @@ describe('SessionDetail smoke', () => {
     closeTab(tabId)
   })
 
+  test('detail.title 存在时 <h1> 直接渲染该值（与 sidebar 派生一致）', async () => {
+    const fx = {
+      ...singleProjectFixture,
+      sessionDetails: {
+        [`${PROJECT_ID}:${SESSION_ID}`]: {
+          ...singleProjectFixture.sessionDetails[`${PROJECT_ID}:${SESSION_ID}`],
+          title: '修复登录页样式',
+        },
+      },
+    }
+    setupMockIPC(fx)
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId: 'tab-title-1',
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+    await waitFor(() => {
+      const h1 = container.querySelector('h1.top-title')
+      expect(h1?.textContent).toBe('修复登录页样式')
+    })
+  })
+
+  test('detail.title 缺失时 <h1> fallback 到 sessionId.slice(0, 8)（与 sidebar 一致）', async () => {
+    const fx = {
+      ...singleProjectFixture,
+      sessionDetails: {
+        [`${PROJECT_ID}:${SESSION_ID}`]: {
+          ...singleProjectFixture.sessionDetails[`${PROJECT_ID}:${SESSION_ID}`],
+          title: null,
+        },
+      },
+    }
+    setupMockIPC(fx)
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId: 'tab-title-2',
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+    await waitFor(() => {
+      const h1 = container.querySelector('h1.top-title')
+      expect(h1?.textContent).toBe(SESSION_ID.slice(0, 8))
+    })
+  })
+
   test('jump-to-latest：未打开 ContextPanel 时按钮不带 shifted class', async () => {
     const { container } = render(SessionDetail, {
       props: {

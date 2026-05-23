@@ -410,6 +410,12 @@ export interface SessionDetail {
   /** session 级 phase 元数据；前端按 `phases.length > 1` 决定 Phase Selector 显隐。 */
   phaseInfo?: ContextPhaseInfo;
   isOngoing: boolean;
+  /**
+   * 会话标题（清洗后），与 `SessionSummary.title` 共用单一派生源。
+   * `null` / `undefined` 时前端 fallback 到 `sessionId.slice(0, 8)`，与 sidebar 一致。
+   * Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
+   */
+  title?: string | null;
 }
 
 // ---------------------------------------------------------------------------

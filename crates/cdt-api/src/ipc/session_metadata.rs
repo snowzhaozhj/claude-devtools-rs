@@ -2234,4 +2234,174 @@ mod tests {
             "cache hit 每个 path SHALL 仍调一次 fs.stat 校验 signature"
         );
     }
+
+    // ============================================================================
+    // detail.title parity scenarios
+    //
+    // Spec：`openspec/specs/ipc-data-api/spec.md` §`SessionDetail 暴露与
+    // SessionSummary 同源派生的 title`。覆盖 9 条派生分叉规则——保证 detail
+    // 端 title 与 sidebar 字节级一致。
+    //
+    // 直接调 `extract_session_metadata_from_parsed`（detail 与 sidebar 共用此
+    // 派生函数），断言 `SessionMetadata.title` 输出。
+    // ============================================================================
+    use chrono::TimeZone;
+
+    fn parsed_user_msg(uuid: &str, secs: i64, text: &str) -> ParsedMessage {
+        ParsedMessage {
+            uuid: uuid.into(),
+            parent_uuid: None,
+            message_type: cdt_core::MessageType::User,
+            category: MessageCategory::User,
+            timestamp: chrono::Utc.timestamp_opt(1_700_000_000 + secs, 0).unwrap(),
+            role: None,
+            content: MessageContent::Text(text.into()),
+            usage: None,
+            model: None,
+            cwd: None,
+            git_branch: None,
+            agent_id: None,
+            is_sidechain: false,
+            is_meta: false,
+            user_type: None,
+            tool_calls: Vec::new(),
+            tool_results: Vec::new(),
+            source_tool_use_id: None,
+            source_tool_assistant_uuid: None,
+            is_compact_summary: false,
+            request_id: None,
+            tool_use_result: None,
+        }
+    }
+
+    fn parsed_user_meta(uuid: &str, secs: i64, text: &str) -> ParsedMessage {
+        ParsedMessage {
+            is_meta: true,
+            ..parsed_user_msg(uuid, secs, text)
+        }
+    }
+
+    #[test]
+    fn detail_title_extracts_first_user_text() {
+        let msgs = vec![parsed_user_msg("u1", 0, "修复登录页样式")];
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        assert_eq!(meta.title.as_deref(), Some("修复登录页样式"));
+    }
+
+    #[test]
+    fn detail_title_skips_request_interrupted_and_uses_next_user() {
+        let msgs = vec![
+            parsed_user_msg("u1", 0, "[Request interrupted by user for tool use"),
+            parsed_user_msg("u2", 1, "重试一次"),
+        ];
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        assert_eq!(meta.title.as_deref(), Some("重试一次"));
+    }
+
+    #[test]
+    fn detail_title_uses_slash_with_args_directly() {
+        let msgs = vec![parsed_user_msg(
+            "u1",
+            0,
+            "<command-name>/model</command-name><command-args>sonnet</command-args>",
+        )];
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        assert_eq!(meta.title.as_deref(), Some("/model sonnet"));
+    }
+
+    #[test]
+    fn detail_title_extracts_teammate_summary_attribute() {
+        let msgs = vec![parsed_user_msg(
+            "u1",
+            0,
+            r#"<teammate-message teammate_id="m1" color="blue" summary="审查 PR 137">body</teammate-message>"#,
+        )];
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        assert_eq!(meta.title.as_deref(), Some("审查 PR 137"));
+    }
+
+    #[test]
+    fn detail_title_skips_local_command_stdout_and_uses_next_user() {
+        let msgs = vec![
+            parsed_user_msg(
+                "u1",
+                0,
+                "<local-command-stdout>foo bar baz</local-command-stdout>",
+            ),
+            parsed_user_msg("u2", 1, "继续"),
+        ];
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        assert_eq!(meta.title.as_deref(), Some("继续"));
+    }
+
+    #[test]
+    fn detail_title_truncated_to_title_max_chars() {
+        let long: String = "汉".repeat(600);
+        let msgs = vec![parsed_user_msg("u1", 0, &long)];
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        let title = meta.title.expect("title 应非空");
+        assert_eq!(
+            title.chars().count(),
+            TITLE_MAX_CHARS,
+            "title SHALL 截断到 TITLE_MAX_CHARS={TITLE_MAX_CHARS}"
+        );
+    }
+
+    #[test]
+    fn detail_title_none_when_messages_empty() {
+        let msgs: Vec<ParsedMessage> = Vec::new();
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        assert!(meta.title.is_none());
+    }
+
+    #[test]
+    fn detail_title_falls_back_to_command_name_when_args_empty() {
+        // slash 无 args 不当主标题（同 sidebar），但作为 command_fallback 兜底
+        let msgs = vec![parsed_user_msg(
+            "u1",
+            0,
+            "<command-name>/clear</command-name><command-args></command-args>",
+        )];
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        assert_eq!(
+            meta.title.as_deref(),
+            Some("/clear"),
+            "无 args 的 slash SHALL 走 command_fallback 路径"
+        );
+    }
+
+    #[test]
+    fn detail_title_skips_is_meta_user_messages() {
+        let msgs = vec![
+            parsed_user_meta("u1", 0, "内部追问"),
+            parsed_user_msg("u2", 1, "用户实际输入"),
+        ];
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        assert_eq!(meta.title.as_deref(), Some("用户实际输入"));
+    }
+
+    #[test]
+    fn detail_title_continues_when_sanitize_yields_empty() {
+        let msgs = vec![
+            parsed_user_msg("u1", 0, "<system-reminder>noise only</system-reminder>"),
+            parsed_user_msg("u2", 1, "实际请求"),
+        ];
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        assert_eq!(meta.title.as_deref(), Some("实际请求"));
+    }
+
+    #[test]
+    fn detail_title_teammate_without_summary_falls_back_to_body() {
+        // teammate-message 无 summary 属性时 SHALL 取 body 文本作 title（与
+        // sidebar 派生函数 `extract_teammate_summary_title` 行为一致；codex PR
+        // 二审 C5：补一个经完整 `extract_session_metadata_from_parsed` 全链路
+        // 的 case，此前仅 helper 级 unit 覆盖该分支）。
+        let msgs = vec![parsed_user_msg(
+            "u1",
+            0,
+            r#"<teammate-message teammate_id="alice" color="blue">实际 body 文本</teammate-message>"#,
+        )];
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        assert_eq!(meta.title.as_deref(), Some("实际 body 文本"));
+    }
 }
