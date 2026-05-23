@@ -32,6 +32,7 @@
   import { decideWslAction } from "../lib/wslDecision";
   import SkeletonList from "../components/SkeletonList.svelte";
   import DiagnosticsTab from "../components/settings/DiagnosticsTab.svelte";
+  import KeyboardShortcutsPanel from "../components/settings/KeyboardShortcutsPanel.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { updateStore } from "../lib/updateStore.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -48,9 +49,10 @@
     DOWNLOAD_CLOUD_SVG,
     ALERT_CIRCLE_SVG,
     BELL_RING_SVG,
+    KEYBOARD_SVG,
   } from "../lib/icons";
 
-  type SectionId = "general" | "display" | "notifications" | "connection" | "diagnostics" | "about";
+  type SectionId = "general" | "display" | "notifications" | "connection" | "keyboard" | "diagnostics" | "about";
 
   let config: AppConfig | null = $state(null);
   let loading = $state(true);
@@ -103,6 +105,7 @@
     ...(isTauriDesktop
       ? [{ id: "connection" as const, label: "连接", description: "SSH 远端工作区", icon: MONITOR_SVG }]
       : []),
+    { id: "keyboard", label: "键盘快捷键", description: "查看与自定义快捷键", icon: KEYBOARD_SVG },
     { id: "diagnostics", label: "诊断", description: "应用状态与事件", icon: INFO_SVG },
     { id: "about", label: "关于", description: "版本与更新", icon: INFO_SVG },
   ];
@@ -944,6 +947,8 @@
               {/if}
             {/snippet}
           </SettingsGroup>
+        {:else if activeSection === "keyboard"}
+          <KeyboardShortcutsPanel initialOverrides={config!.keyboardShortcuts ?? {}} />
         {:else if activeSection === "diagnostics"}
           <DiagnosticsTab />
         {:else if activeSection === "about"}

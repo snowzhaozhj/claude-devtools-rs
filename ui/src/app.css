@@ -156,6 +156,15 @@
   --color-info-border: rgba(59, 130, 246, 0.3);
   --color-info-text: #1d4ed8;
 
+  /* 键盘快捷键录键 widget 状态色（change `add-keyboard-shortcut-system`）。
+     录键中（recording）= info/accent indigo 表达"等待输入"焦点态；
+     冲突（conflict）= warning（不是 danger）—— 冲突是用户可纠正的"warning 而非 error"，
+     详 DESIGN.md `The Conflict Is Warning Not Error Rule.`（待 §13.2 提进 DESIGN.md）。 */
+  --surface-recording-bg: rgba(99, 102, 241, 0.08);
+  --border-recording: var(--color-accent-indigo);
+  --surface-conflict-bg: var(--color-warning-bg);
+  --border-conflict: var(--color-warning-border);
+
   /* Elevation */
   --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.08);
 
@@ -352,6 +361,12 @@
   --color-info-border: rgba(96, 165, 250, 0.35);
   --color-info-text: #93c5fd;
 
+  /* 键盘快捷键录键 widget 状态色（深色主题，详 :root 同名 token 注释）。 */
+  --surface-recording-bg: rgba(129, 140, 248, 0.14);
+  --border-recording: var(--color-accent-indigo);
+  --surface-conflict-bg: var(--color-warning-bg);
+  --border-conflict: var(--color-warning-border);
+
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
 
   /* 深色主题：accent-blue 是浅蓝 (#60a5fa)，文字用深 slate 才达 AA */
@@ -476,6 +491,12 @@
     --color-info-bg: rgba(96, 165, 250, 0.1);
     --color-info-border: rgba(96, 165, 250, 0.35);
     --color-info-text: #93c5fd;
+
+    /* 键盘快捷键录键 widget 状态色（system 跟随深色主题）。 */
+    --surface-recording-bg: rgba(129, 140, 248, 0.14);
+    --border-recording: var(--color-accent-indigo);
+    --surface-conflict-bg: var(--color-warning-bg);
+    --border-conflict: var(--color-warning-border);
 
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
 
