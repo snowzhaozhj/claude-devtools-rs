@@ -233,8 +233,8 @@ describe('Sidebar smoke', () => {
     // 等 loadMoreSessions 被调（list_group_sessions 第二次调用 = deferred 入队）
     await waitFor(() => expect(deferred.length).toBeGreaterThanOrEqual(1), { timeout: 1000 })
     expect(listGroupSessionsCalls).toBeGreaterThanOrEqual(2)
-    // 确认 sessionsLoadingMore=true 在 release 之前是 true（status-inline 显示）
-    expect(container.querySelector('.sidebar-status-inline')).not.toBeNull()
+    // 确认 sessionsLoadingMore=true 在 release 之前是 true（load-more-loading 显示）
+    expect(container.querySelector('.load-more-loading')).not.toBeNull()
 
     // 关键：模拟"SSH 断开 → loadProjects auto-select 切到 g-B"——通过 prop 切 group
     await rerender({
@@ -256,9 +256,9 @@ describe('Sidebar smoke', () => {
       await tick()
     }
 
-    // 断言：sessionsLoadingMore 必须被清零——".sidebar-status-inline"（"加载更多..."）
+    // 断言：sessionsLoadingMore 必须被清零——".load-more-loading"（"加载中…"）
     // SHALL NOT 残留。若 finally 守卫还在，这个元素会永显。
-    expect(container.querySelector('.sidebar-status-inline')).toBeNull()
+    expect(container.querySelector('.load-more-loading')).toBeNull()
   })
 
   test('切回已访问过的 project 时 memory-entry 通过 cache 同步 hydrate', async () => {
