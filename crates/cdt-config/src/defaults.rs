@@ -118,5 +118,6 @@ pub fn default_config() -> AppConfig {
             port: 3456,
         },
         updater: UpdaterConfig::default(),
+        keyboard_shortcuts: HashMap::new(),
     }
 }

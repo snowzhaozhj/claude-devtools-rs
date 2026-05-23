@@ -463,3 +463,186 @@ async fn trigger_crud_round_trip_through_independent_methods() {
         );
     }
 }
+
+// =============================================================================
+// keyboardShortcuts (configuration-management spec delta · 2026-05-23)
+// =============================================================================
+
+/// (K1) 默认配置：`keyboardShortcuts` 字段在磁盘上序列化为空 object `{}`，
+/// **而非** 缺失或 `null`——前端 customization 层依赖稳定 shape。
+/// 见 `openspec/specs/configuration-management/spec.md::keyboardShortcuts.serialize-empty`。
+#[tokio::test]
+async fn empty_keyboard_shortcuts_serializes_as_object_in_disk_json() {
+    let (_dir, path) = temp_config_path();
+    let mut mgr = ConfigManager::new(Some(path.clone()));
+    mgr.load().await.expect("load defaults");
+    // 触发首次写盘（任意 update 都行；这里走 general 不动 keyboardShortcuts）
+    mgr.update_general(serde_json::json!({ "theme": "dark" }))
+        .await
+        .expect("write baseline");
+
+    let raw = tokio::fs::read_to_string(&path).await.expect("read disk");
+    let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse disk json");
+    let shortcuts = parsed
+        .get("keyboardShortcuts")
+        .expect("keyboardShortcuts must be present (camelCase, not omitted)");
+    assert!(
+        shortcuts.is_object(),
+        "keyboardShortcuts must serialize as object, got {shortcuts:?}"
+    );
+    assert_eq!(
+        shortcuts.as_object().unwrap().len(),
+        0,
+        "default keyboardShortcuts must be empty object"
+    );
+    // 确认 snake_case 字段名没有泄漏到磁盘
+    assert!(
+        parsed.get("keyboard_shortcuts").is_none(),
+        "snake_case must not appear on disk: {raw}"
+    );
+}
+
+/// (K2) 整体替换语义（同 `notifications.triggers`）：
+/// `update_keyboard_shortcuts({"sidebar.toggle": "mod+shift+b"})` → 持久化 → 新 manager 重读 → 字段一致；
+/// 后续 `update_keyboard_shortcuts({"foo": "ctrl+x"})` SHALL **替换**而非合并。
+#[tokio::test]
+async fn keyboard_shortcuts_round_trip_and_whole_replace() {
+    let (_dir, path) = temp_config_path();
+    let mut mgr = ConfigManager::new(Some(path.clone()));
+    mgr.load().await.expect("load defaults");
+    assert!(mgr.get_config().keyboard_shortcuts.is_empty());
+
+    // 第一次写入
+    mgr.update_keyboard_shortcuts(serde_json::json!({
+        "sidebar.toggle": "mod+shift+b",
+        "command-palette.open": "mod+k",
+    }))
+    .await
+    .expect("set initial shortcuts");
+
+    drop(mgr);
+
+    // 新 manager 重读，确认两条都在
+    let mut mgr2 = ConfigManager::new(Some(path.clone()));
+    mgr2.load().await.expect("reload");
+    let cfg = mgr2.get_config();
+    assert_eq!(cfg.keyboard_shortcuts.len(), 2);
+    assert_eq!(
+        cfg.keyboard_shortcuts
+            .get("sidebar.toggle")
+            .map(String::as_str),
+        Some("mod+shift+b")
+    );
+    assert_eq!(
+        cfg.keyboard_shortcuts
+            .get("command-palette.open")
+            .map(String::as_str),
+        Some("mod+k")
+    );
+
+    // 整体替换：只传一条 → 旧两条全部消失
+    mgr2.update_keyboard_shortcuts(serde_json::json!({
+        "foo": "ctrl+x",
+    }))
+    .await
+    .expect("whole replace");
+
+    let cfg2 = mgr2.get_config();
+    assert_eq!(
+        cfg2.keyboard_shortcuts.len(),
+        1,
+        "whole replace must drop old entries"
+    );
+    assert_eq!(
+        cfg2.keyboard_shortcuts.get("foo").map(String::as_str),
+        Some("ctrl+x")
+    );
+    assert!(!cfg2.keyboard_shortcuts.contains_key("sidebar.toggle"));
+
+    // 空 object 替换 → 清空
+    mgr2.update_keyboard_shortcuts(serde_json::json!({}))
+        .await
+        .expect("clear via empty object");
+    assert!(mgr2.get_config().keyboard_shortcuts.is_empty());
+}
+
+/// (K3) 老配置缺 `keyboardShortcuts` 字段 → 加载后等价于空 HashMap，其他字段保留。
+#[tokio::test]
+async fn legacy_config_missing_keyboard_shortcuts_defaults_to_empty_map() {
+    let (_dir, path) = temp_config_path();
+
+    // v0.5.x 之前的配置完全没有 `keyboardShortcuts` key
+    let legacy = serde_json::json!({
+        "general": { "theme": "light" },
+        "httpServer": { "enabled": true, "port": 17000 },
+    });
+    tokio::fs::write(&path, serde_json::to_string_pretty(&legacy).unwrap())
+        .await
+        .expect("write legacy");
+
+    let mut mgr = ConfigManager::new(Some(path));
+    mgr.load().await.expect("load legacy");
+    let cfg = mgr.get_config();
+
+    assert!(
+        cfg.keyboard_shortcuts.is_empty(),
+        "missing keyboardShortcuts must default to empty map"
+    );
+    // 确认旧字段保留
+    assert_eq!(cfg.general.theme, "light");
+    assert_eq!(cfg.http_server.port, 17000);
+}
+
+/// (K4) 非法输入拒绝：非对象、键空串、值空串 SHALL 返回 `ConfigError::Validation`，
+/// 且**不**修改内存状态。
+#[tokio::test]
+async fn keyboard_shortcuts_rejects_invalid_inputs() {
+    let (_dir, path) = temp_config_path();
+    let mut mgr = ConfigManager::new(Some(path));
+    mgr.load().await.unwrap();
+
+    // 先注入一条合法 entry，作为"非法调用不应破坏旧状态"的基线
+    mgr.update_keyboard_shortcuts(serde_json::json!({
+        "sidebar.toggle": "mod+shift+b",
+    }))
+    .await
+    .unwrap();
+
+    // 非对象（数组）
+    let err = mgr
+        .update_keyboard_shortcuts(serde_json::json!(["mod+x"]))
+        .await
+        .expect_err("array must be rejected");
+    assert!(matches!(err, ConfigError::Validation(_)));
+
+    // 值类型错（数字）
+    let err = mgr
+        .update_keyboard_shortcuts(serde_json::json!({ "foo": 42 }))
+        .await
+        .expect_err("non-string value must be rejected");
+    assert!(matches!(err, ConfigError::Validation(_)));
+
+    // 空键
+    let err = mgr
+        .update_keyboard_shortcuts(serde_json::json!({ "": "mod+x" }))
+        .await
+        .expect_err("empty actionId must be rejected");
+    assert!(matches!(err, ConfigError::Validation(_)));
+
+    // 空值
+    let err = mgr
+        .update_keyboard_shortcuts(serde_json::json!({ "foo": "" }))
+        .await
+        .expect_err("empty combo must be rejected");
+    assert!(matches!(err, ConfigError::Validation(_)));
+
+    // 旧状态未被破坏
+    let cfg = mgr.get_config();
+    assert_eq!(cfg.keyboard_shortcuts.len(), 1);
+    assert_eq!(
+        cfg.keyboard_shortcuts
+            .get("sidebar.toggle")
+            .map(String::as_str),
+        Some("mod+shift+b")
+    );
+}

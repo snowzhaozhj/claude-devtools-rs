@@ -7,6 +7,7 @@
 //! - 分 section 更新 + 持久化
 //! - Session pin/unpin、hide/unhide、snooze
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -562,6 +563,37 @@ impl ConfigManager {
                 }
             }
         }
+        self.commit_next_config(next).await
+    }
+
+    /// 整体替换 `keyboard_shortcuts` 映射（同 `notifications.triggers` 的整体替换语义）。
+    ///
+    /// `updates` SHALL 是一个 JSON object，键为 `actionId`、值为非空 key combo 字符串。
+    /// 空 object 等价于"清空所有自定义快捷键，回退默认"。详
+    /// `openspec/specs/configuration-management/spec.md::keyboardShortcuts.update`。
+    pub async fn update_keyboard_shortcuts(
+        &mut self,
+        updates: serde_json::Value,
+    ) -> Result<AppConfig, ConfigError> {
+        let new_map: HashMap<String, String> = serde_json::from_value(updates).map_err(|e| {
+            ConfigError::validation(format!(
+                "keyboardShortcuts must be a Record<string, string>: {e}"
+            ))
+        })?;
+        for (action_id, combo) in &new_map {
+            if action_id.trim().is_empty() {
+                return Err(ConfigError::validation(
+                    "keyboardShortcuts: actionId must be a non-empty string",
+                ));
+            }
+            if combo.trim().is_empty() {
+                return Err(ConfigError::validation(format!(
+                    "keyboardShortcuts.{action_id}: combo must be a non-empty string"
+                )));
+            }
+        }
+        let mut next = self.config.clone();
+        next.keyboard_shortcuts = new_map;
         self.commit_next_config(next).await
     }
 

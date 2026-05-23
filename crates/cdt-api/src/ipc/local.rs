@@ -3544,6 +3544,7 @@ impl DataApi for LocalDataApi {
             "ssh" => mgr.update_ssh(request.data.clone()).await,
             "httpServer" => mgr.update_http_server(request.data.clone()).await,
             "updater" => mgr.update_updater(request.data.clone()).await,
+            "keyboardShortcuts" => mgr.update_keyboard_shortcuts(request.data.clone()).await,
             _ => {
                 return Err(ApiError::validation(format!(
                     "unknown section: {}",

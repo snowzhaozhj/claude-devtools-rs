@@ -30,6 +30,7 @@ export const emptyFixture: Fixture = {
       enabled: false,
       port: 3456,
     },
+    keyboardShortcuts: {},
   },
   notifications: {
     notifications: [],
