@@ -120,12 +120,8 @@ function dispatcher(event: KeyboardEvent): void {
 }
 
 function ensureListener(): void {
-  if (listenerInstalled || typeof window === "undefined") return;
-  // window（不是 document）：playwright `page.keyboard.press(...)` 在 body focus
-  // 漂走时事件不冒泡到 document；社区习惯（Electron Accelerator / Mousetrap /
-  // Hotkeys.js）也都是 window-level。OS 真实键盘事件 element → document → window
-  // 全程冒泡，绑 window 不漏；单测需 `bubbles: true` 或直接 `window.dispatchEvent`。
-  window.addEventListener("keydown", dispatcher, { capture: false });
+  if (listenerInstalled || typeof document === "undefined") return;
+  document.addEventListener("keydown", dispatcher, { capture: false });
   listenerInstalled = true;
 }
 
@@ -361,8 +357,8 @@ export function subscribeConfigLoadError(fn: (err: string | null) => void): () =
 
 /** 仅 vitest / playwright 用：清空 registry 状态 + 卸 listener。 */
 export function _resetForTest(): void {
-  if (listenerInstalled && typeof window !== "undefined") {
-    window.removeEventListener("keydown", dispatcher, { capture: false });
+  if (listenerInstalled && typeof document !== "undefined") {
+    document.removeEventListener("keydown", dispatcher, { capture: false });
   }
   listenerInstalled = false;
   specs.clear();
