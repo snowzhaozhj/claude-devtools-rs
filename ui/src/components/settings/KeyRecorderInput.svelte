@@ -210,7 +210,7 @@
     width: 12px;
     height: 12px;
     color: var(--border-recording);
-    animation: recorder-spin 1.2s linear infinite;
+    animation: recorder-spin 0.9s linear infinite;
   }
   .recorder-spinner :global(svg) {
     width: 12px;
