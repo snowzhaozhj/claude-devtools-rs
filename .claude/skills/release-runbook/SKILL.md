@@ -34,7 +34,7 @@ Agent / 人工只在 **CI 红 / workflow build job 失败 / verify-asset 缺件*
 ## 何时用 bg dispatch
 
 - **不用**：发版本身是主线流程，需要随时看 CI 红绿决策——不要用 `claude --bg`。
-- 例外：如果发版触发的 CI 期间你想并行干**另一件不相关的事**，那件事可以走 bg dispatch（参考 `.claude/rules/bg-task-dispatch.md`）。发版自身留主线。
+- 例外：如果发版触发的 CI 期间你想并行干**另一件不相关的事**，那件事可以走 bg dispatch（参考 `.claude/rules/parallelism-modes.md`）。发版自身留主线。
 
 ## 已知失败 playbook（按历史出现频次排序）
 

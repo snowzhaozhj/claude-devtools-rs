@@ -28,20 +28,24 @@ preflight → 实现 → 本地验证 → commit → push → PR → wait-ci 与
 
 #### 2. impeccable visual contract 钩子（含 UI 改动时强制）
 
-design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 2 个核心面板 / 加 Settings tab / 新 modal）→ SHALL 跑 `/impeccable shape <feature>`，把关键决定摘进 design.md 四段：
+design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 2 个核心面板 / 加 Settings tab / 新 modal）→ SHALL 跑 `/impeccable shape <feature>`，把产物按下面分配进 design.md：
 
-- `## Surface Decision` —— 入口选 Settings / menu bar / modal / inline 等的论证（链回 `PRODUCT.md` anti-references / Design Principles）
-- `## Visual Contract` —— 这次新组件的视觉决定，**引用** `DESIGN.md` §X 段号而**不抄**
-- `## State Coverage` —— 新组件所有状态（loading / empty / error / disabled / hover）及实现位置
-- `## DESIGN.md delta plan` —— 这次引入值得沉淀的 token / 组件，archive 前跑 `/impeccable extract` 提进 `DESIGN.md` 作为同 PR 一部分落地
+- **关键视觉决策** → 写进 design.md 已有的 `## Decisions` 段，与现有 D1/D2 编号并列，用 `D-V<n>` 前缀（V = Visual）标记，例如 `D-V1：Surface 选 Diagnostics tab 而非独立 menu item，因 ...`。这样视觉选择和 IPC / 算法选择共享同一审计 + 反转规则
+- **以下 4 段写进新增的 `## Visual Contract` 顶级段**（这是 checklist / 规约，不是单点决策，不进 D 编号）：
+  - `### Surface Decision` —— 入口选择论证（链回 `PRODUCT.md` anti-references / Design Principles）
+  - `### Visual Layer` —— 新组件的视觉决定，**引用** `DESIGN.md` 的 Named Rule 名称（如 `DESIGN.md::Components::Cards and settings rows`、`DESIGN.md::Colors::Named Rules`）；段号会随重排漂移，Named Rule 是稳定锚点
+  - `### State Coverage` —— 新组件所有状态（loading / empty / error / disabled / hover）及实现位置
+  - `### DESIGN.md delta plan` —— 这次引入值得沉淀的 token / 组件，archive 前跑 `/impeccable extract` 提进 `DESIGN.md` 作为同 PR 一部分落地
 
-**禁止**：design.md 里抄 `PRODUCT.md` / `DESIGN.md` 已有内容（per-change 文档 ≠ 项目级设计契约）；与 `DESIGN.md` 不一致的视觉选择必须显式说明 + 决定"改 `DESIGN.md` 还是这次例外"。
+**禁止**：design.md 里抄 `PRODUCT.md` / `DESIGN.md` 已有内容（per-change 文档 ≠ 项目级设计契约）；与 `DESIGN.md` 不一致的视觉选择必须显式作为 `D-V<n>` 决策记录，并选定 "改 `DESIGN.md` 还是这次例外"。
 
-`PRODUCT.md` / `DESIGN.md` 缺失或为占位时，先按 impeccable skill 的 `setup` 流程跑 `/impeccable teach` 或 `/impeccable document` 补齐，再回到 4 段产出。
+`PRODUCT.md` / `DESIGN.md` 缺失或为占位时，先按 impeccable skill 的 `setup` 流程跑 `/impeccable teach` 或 `/impeccable document` 补齐，再回到 D-V / Visual Contract 产出。
 
-#### 3. 形态升级判断（按 `.claude/rules/bg-task-dispatch.md`「形态选择决策树」）
+#### 3. 形态升级判断（按 `.claude/rules/parallelism-modes.md`「形态选择决策树」）
 
-评估改动规模 + 协作复杂度，决定 apply 阶段用主 session / agent team / N 个 bg。**大改动**（>2 天 + 多角色协作 + 视觉重构 + 跨 capability）→ SHALL 改用 **Agent team**（lead + 设计师 + 前端 + 后端 + QA）；切忌 lead 单线程一把梭或用 subagent 串行——会撑爆主 context。
+评估改动规模 + 协作复杂度，决定 apply 阶段用主 session / agent team / N 个 bg。**大改动判定**：`> 2 天工作量 AND (多角色协作 OR 视觉重构 OR 跨 capability)` 中任一特征命中 → SHALL 改用 **Agent team**（lead + 设计师 + 前端 + 后端 + QA）；切忌 lead 单线程一把梭或用 subagent 串行——会撑爆主 context。
+
+**Mid-apply 升级路径**（apply 中途才发现需 agent team 的回退）：在主 session 把当前进度落成 `tasks.md` checkbox + 一段 `progress note`（关键已做 / 阻塞点 / 下一步），`git commit -m "WIP: ..."` 暂存改动，然后启用 agent team 让 lead 接续。**禁止**直接抛弃主 session 进度起 team——丢失上下文比开 team 慢。
 
 **design 阶段拦下问题的回炉成本是 apply 阶段的 10×**——代码扩散后再回炉很痛。视觉契约在 propose 阶段冻结的成本是 apply 阶段救火的几分之一。
 
