@@ -7,7 +7,12 @@
 //! - value = `Arc<Vec<Project>>` + `root_generation` + `context_generation` + `inserted_at`。
 //!   命中时直接返回 `Arc`，调用方零分配 iter 即可生成 `ProjectInfo` / `RepositoryGroup` 输入。
 //! - 失效层级：
-//!   1. **主动 watcher**（Local 唯一）：`spawn_project_scan_cache_invalidator` 订阅 `FileWatcher` 广播，任何 `FileChangeEvent` 都清掉 Local entry — `scan()` 结果是 immutable Arc，partial invalidation 复杂度不划算。
+//!   1. **主动 watcher**（Local 唯一）：`spawn_project_scan_cache_invalidator`
+//!      订阅 `FileWatcher` 广播，按事件语义**三档判定**调 `invalidate_local()`：
+//!      `project_list_changed` / `deleted` / `contains_session_id` 反查未命中
+//!      （已知 project 下新 session 首次出现）任一条件触发，普通 JSONL append
+//!      与 watcher 折叠的 subagent 修改放行。详 `openspec/specs/ipc-data-api/spec.md`
+//!      §`ProjectScanCache 按事件语义分级失效`。
 //!   2. **被动 generation 校验**：cache hit 时若 `root_generation` 或 `context_generation` 与 entry 写入时不符 → miss。
 //!   3. **TTL 兜底**：Local 5 分钟（watcher 已主动）、SSH 10 秒（无 watcher，靠 TTL 保证用户操作"切了 SSH context 后新建 session 几秒后能看到"）。
 //!
@@ -124,8 +129,14 @@ impl ProjectScanCache {
     /// 无条件写入 / 覆盖 entry（**不**带 race 校验）。仅用于直接构造
     /// cache 的测试场景；生产路径用 [`Self::try_insert`] 防 in-flight
     /// scan race。
-    #[cfg(test)]
-    fn insert(
+    ///
+    /// `cfg(test)` + `feature = "test-utils"` 双门——同 crate 单测可用，
+    /// 集成测试（`crates/cdt-api/tests/`）通过 `dev-deps cdt-api = { features = ["test-utils"] }`
+    /// 可见。
+    /// Spec：`openspec/specs/ipc-data-api/spec.md` §`ProjectScanCache 按事件语义分级失效`。
+    #[cfg(any(test, feature = "test-utils"))]
+    #[allow(dead_code)] // 集成测试通过 test-utils feature 调用；本 crate lib 内部不调
+    pub fn insert(
         &mut self,
         ctx: ContextId,
         snapshot: Arc<Vec<Project>>,
@@ -143,6 +154,26 @@ impl ProjectScanCache {
                 fs_kind,
             },
         );
+    }
+
+    /// 反向查询：指定 ctx 的 entry snapshot 是否含 `(project_id, session_id)`
+    /// 这一 session。`spawn_project_scan_cache_invalidator` 用于"已知 session
+    /// 追加" vs "已知 project 下新 session 首次出现"的区分（D2 第三档判定）。
+    ///
+    /// 复杂度 O(N project × N `session_per_project`)；30 project × 538 session
+    /// corpus 单次 ~10µs，可在 hot 路径调用。ctx 无 entry 或 project 不存在
+    /// 时返回 `false`。
+    /// Spec：`openspec/specs/ipc-data-api/spec.md` §`ProjectScanCache 按事件语义分级失效`。
+    #[must_use]
+    pub fn contains_session_id(&self, ctx: &ContextId, project_id: &str, session_id: &str) -> bool {
+        let Some(entry) = self.entries.get(ctx) else {
+            return false;
+        };
+        entry
+            .snapshot
+            .iter()
+            .find(|p| p.id == project_id)
+            .is_some_and(|p| p.sessions.iter().any(|s| s == session_id))
     }
 
     /// 条件写入：仅在 `recorded_generation == 当前 invalidation_generation`
@@ -230,22 +261,81 @@ pub struct ProjectScanCacheStats {
     pub lookups: u64,
 }
 
-/// 启动后台 invalidator —— 订阅 file-watcher 广播，任何 `FileChangeEvent`
-/// 触发 `invalidate_local()`。watcher 自身已 debounce（详 `cdt-watch`），
-/// 高频写入也只会让 Local entry 在下次 IPC 调用时重扫一次，可接受。
+/// 启动后台 invalidator —— 订阅 file-watcher 广播，按事件语义**三档判定**
+/// 是否调 `invalidate_local()`。watcher 自身已 debounce（详 `cdt-watch`）。
 ///
-/// `Lagged` **同样**触发 `invalidate_local()`——表示已丢失至少一条事件，
-/// 不能假设丢的那条不重要（典型：新建 project / 删除 session）。Local TTL
-/// 5min 太长不能等，必须主动清掉 entry 让下次 IPC 真扫一次（codex 二审 #1）。
-/// `Closed` 时退出 loop。
+/// **判定规则**（详 `openspec/specs/ipc-data-api/spec.md` §`ProjectScanCache 按事件语义分级失效`）：
+///
+/// 1. `event.project_list_changed == true` **OR** `event.deleted == true` →
+///    `invalidate_local()` + counter `project_scan_cache.invalidate.structural`
+/// 2. `event.session_id` 非空 **AND** `contains_session_id(local_ctx, pid, sid) == false`
+///    → 同规则 1（已知 project 下新 session 首次出现；watcher
+///    `mark_project_seen` 构造时预填 `known_projects`，输出 `plc=false` 与
+///    "已知 session 追加"外观相同，需 cache snapshot 反查）
+/// 3. 其他（普通 JSONL append + watcher 折叠的 subagent 修改）→ no-op +
+///    counter `project_scan_cache.invalidate.content_append_skipped`
+///
+/// `Err(Lagged)` 走保守 `invalidate_local()` + counter
+/// `project_scan_cache.invalidate.lag_conservative`——`ProjectScanCache`
+/// 无 path-level 被动校验机制，lag 期间错过的结构性事件没有兜底兑现，
+/// 必须保守清空（与 `parsed-message 缓存按 file-change 广播主动失效`
+/// 的 lag 静默继续策略**有意不一致**，详 design D7）。
+/// `Err(Closed)` 时退出 loop。
+///
+/// `projects_dir` 用于构造作用域 `ContextId::local`；invalidator 只动
+/// 该 ctx 的 entry，SSH entry 由 `invalidate_local()` 自身按 `FsKind::Local`
+/// 隔离保留（详 design D5）。
 pub fn spawn_project_scan_cache_invalidator(
     cache: Arc<std::sync::Mutex<ProjectScanCache>>,
     mut rx: broadcast::Receiver<cdt_core::FileChangeEvent>,
+    projects_dir: std::path::PathBuf,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        while let Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) = rx.recv().await {
-            if let Ok(mut cache) = cache.lock() {
-                cache.invalidate_local();
+        let local_ctx = ContextId::local(projects_dir);
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let structural = {
+                        // sync mutex（poison 走 into_inner 兜底，参照 cdt-api
+                        // 既有模式）。counter inc 在 drop guard 之后避免
+                        // 持锁期间走 atomic 路径加大临界区。
+                        let mut cache = match cache.lock() {
+                            Ok(g) => g,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        let unknown_session = !event.session_id.is_empty()
+                            && !cache.contains_session_id(
+                                &local_ctx,
+                                &event.project_id,
+                                &event.session_id,
+                            );
+                        let structural =
+                            event.project_list_changed || event.deleted || unknown_session;
+                        if structural {
+                            cache.invalidate_local();
+                        }
+                        structural
+                    };
+                    let counter_name = if structural {
+                        "project_scan_cache.invalidate.structural"
+                    } else {
+                        "project_scan_cache.invalidate.content_append_skipped"
+                    };
+                    cdt_telemetry::registry().counter(counter_name).inc();
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    {
+                        let mut cache = match cache.lock() {
+                            Ok(g) => g,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        cache.invalidate_local();
+                    }
+                    cdt_telemetry::registry()
+                        .counter("project_scan_cache.invalidate.lag_conservative")
+                        .inc();
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     })
@@ -393,5 +483,91 @@ mod tests {
         c.invalidate_local();
         let g1 = c.invalidation_generation();
         assert_ne!(g0, g1);
+    }
+
+    fn snapshot_with(projects: Vec<Project>) -> Arc<Vec<Project>> {
+        Arc::new(projects)
+    }
+
+    fn proj(id: &str, sessions: &[&str]) -> Project {
+        Project {
+            id: id.into(),
+            name: id.into(),
+            path: PathBuf::new(),
+            sessions: sessions.iter().map(|s| (*s).to_string()).collect(),
+            most_recent_session: None,
+            created_at: None,
+            distinct_cwds: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn contains_session_id_returns_false_when_no_entry() {
+        let c = ProjectScanCache::new();
+        assert!(!c.contains_session_id(&local_ctx(), "pa", "sa"));
+    }
+
+    #[test]
+    fn contains_session_id_returns_false_when_project_absent() {
+        let mut c = ProjectScanCache::new();
+        c.insert(
+            local_ctx(),
+            snapshot_with(vec![proj("pb", &["sb"])]),
+            1,
+            2,
+            FsKind::Local,
+        );
+        assert!(!c.contains_session_id(&local_ctx(), "pa", "sb"));
+    }
+
+    #[test]
+    fn contains_session_id_returns_false_when_session_absent() {
+        let mut c = ProjectScanCache::new();
+        c.insert(
+            local_ctx(),
+            snapshot_with(vec![proj("pa", &["sa1", "sa2"])]),
+            1,
+            2,
+            FsKind::Local,
+        );
+        assert!(!c.contains_session_id(&local_ctx(), "pa", "sa3"));
+    }
+
+    #[test]
+    fn contains_session_id_returns_true_on_hit() {
+        let mut c = ProjectScanCache::new();
+        c.insert(
+            local_ctx(),
+            snapshot_with(vec![proj("pa", &["sa1", "sa2"])]),
+            1,
+            2,
+            FsKind::Local,
+        );
+        assert!(c.contains_session_id(&local_ctx(), "pa", "sa2"));
+    }
+
+    #[test]
+    fn contains_session_id_isolates_across_contexts() {
+        let mut c = ProjectScanCache::new();
+        c.insert(
+            local_ctx(),
+            snapshot_with(vec![proj("pa", &["sa"])]),
+            1,
+            2,
+            FsKind::Local,
+        );
+        c.insert(
+            ssh_ctx(),
+            snapshot_with(vec![proj("pb", &["sb"])]),
+            1,
+            2,
+            FsKind::Ssh,
+        );
+        // Local ctx 命中 sa 不会让 SSH ctx 见到 sa
+        assert!(c.contains_session_id(&local_ctx(), "pa", "sa"));
+        assert!(!c.contains_session_id(&ssh_ctx(), "pa", "sa"));
+        // SSH ctx 命中 sb 不会让 Local ctx 见到 sb
+        assert!(c.contains_session_id(&ssh_ctx(), "pb", "sb"));
+        assert!(!c.contains_session_id(&local_ctx(), "pb", "sb"));
     }
 }

@@ -2272,15 +2272,17 @@ fn spawn_watcher_runtime(
     let invalidator_task = spawn_parsed_msg_cache_invalidator(
         parsed_msg_cache,
         watcher.subscribe_files(),
-        projects_dir,
+        projects_dir.clone(),
     );
 
-    // ProjectScanner 结果缓存的 Local 主动失效任务。订阅同一 file-watcher
-    // 广播；scan 结果是 immutable Arc，任意 FileChangeEvent 都直接清掉
-    // Local entry（partial invalidation 复杂度不划算）。change
-    // `unify-fs-abstraction` FU-4 ProjectScanner memoize。
-    let scan_cache_invalidator_task =
-        spawn_project_scan_cache_invalidator(project_scan_cache, watcher.subscribe_files());
+    // ProjectScanner 结果缓存的 Local 失效任务。订阅同一 file-watcher 广播；
+    // 按事件语义**三档判定**调 `invalidate_local()`，避免普通 JSONL append
+    // 触发风暴重扫（详 spec `ipc-data-api` §`ProjectScanCache 按事件语义分级失效`）。
+    let scan_cache_invalidator_task = spawn_project_scan_cache_invalidator(
+        project_scan_cache,
+        watcher.subscribe_files(),
+        projects_dir,
+    );
 
     vec![
         start_task,

@@ -423,7 +423,10 @@ struct SessionStat {
 mod tests {
     use super::*;
     use crate::fs_provider::LocalFileSystemProvider;
+    use cdt_fs::{InstrumentedFs, with_fs_counter};
+    use std::fmt::Write as _;
     use tempfile::tempdir;
+    use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
     async fn missing_root_returns_empty() {
@@ -442,5 +445,91 @@ mod tests {
         let mut scanner = ProjectScanner::new(fs, dir.path().to_path_buf());
         let projects = scanner.scan().await.unwrap();
         assert!(projects.is_empty());
+    }
+
+    /// 契约：`extract_session_cwd` SHALL 在首行命中 cwd，MUST NOT 走
+    /// `read_to_string` 整文件兜底。
+    /// Spec：`openspec/specs/project-discovery/spec.md` §`extract_session_cwd 仅读首行的不变量`。
+    #[tokio::test]
+    async fn extract_session_cwd_uses_first_line_only() {
+        let dir = tempdir().unwrap();
+        let jsonl_path = dir.path().join("session.jsonl");
+        let mut content = String::new();
+        content.push_str(
+            r#"{"uuid":"u1","type":"user","cwd":"/path/to/proj","message":{"role":"user"}}"#,
+        );
+        content.push('\n');
+        for i in 0..999 {
+            writeln!(
+                content,
+                r#"{{"uuid":"u{}","type":"assistant","message":{{"role":"assistant"}}}}"#,
+                i + 2
+            )
+            .unwrap();
+        }
+        tokio::fs::write(&jsonl_path, content.as_bytes())
+            .await
+            .unwrap();
+
+        let fs: Arc<dyn FileSystemProvider> =
+            Arc::new(InstrumentedFs::new(LocalFileSystemProvider::new()));
+        let scanner = ProjectScanner::new(fs, dir.path().to_path_buf());
+
+        let (cwd, counts) =
+            with_fs_counter(|| async { scanner.extract_session_cwd(&jsonl_path).await }).await;
+
+        assert_eq!(cwd, Some("/path/to/proj".to_string()));
+        assert_eq!(
+            counts.read_to_string, 0,
+            "read_to_string fallback MUST NOT 触发——首行 cwd 已命中"
+        );
+        assert_eq!(counts.read_lines_head, 1, "SHALL 仅调一次 read_lines_head");
+    }
+
+    /// 契约：JSONL 后续 append SHALL NOT 改变 `extract_session_cwd` 抽取结果。
+    /// 这是 `ipc-data-api::ProjectScanCache 按事件语义分级失效` 的"普通 append 不
+    /// 失效 cache"决策的前提。
+    #[tokio::test]
+    async fn jsonl_append_after_first_line_does_not_change_cwd() {
+        let dir = tempdir().unwrap();
+        let jsonl_path = dir.path().join("session.jsonl");
+        tokio::fs::write(
+            &jsonl_path,
+            br#"{"uuid":"u1","type":"user","cwd":"/path/to/proj","message":{"role":"user"}}
+"#,
+        )
+        .await
+        .unwrap();
+
+        let fs: Arc<dyn FileSystemProvider> =
+            Arc::new(InstrumentedFs::new(LocalFileSystemProvider::new()));
+        let scanner = ProjectScanner::new(fs, dir.path().to_path_buf());
+
+        let (r1, counts1) =
+            with_fs_counter(|| async { scanner.extract_session_cwd(&jsonl_path).await }).await;
+        assert_eq!(r1, Some("/path/to/proj".to_string()));
+        assert_eq!(counts1.read_to_string, 0);
+
+        // append 100 行 assistant message，不含 cwd
+        let mut f = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&jsonl_path)
+            .await
+            .unwrap();
+        for i in 0..100 {
+            let line = format!(
+                r#"{{"uuid":"u{}","type":"assistant","message":{{"role":"assistant"}}}}
+"#,
+                i + 2
+            );
+            f.write_all(line.as_bytes()).await.unwrap();
+        }
+        f.flush().await.unwrap();
+        drop(f);
+
+        let (r2, counts2) =
+            with_fs_counter(|| async { scanner.extract_session_cwd(&jsonl_path).await }).await;
+        assert_eq!(r2, r1, "append 后 cwd SHALL 不变");
+        assert_eq!(counts2.read_to_string, 0);
     }
 }

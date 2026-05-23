@@ -33,6 +33,10 @@ pub const COUNTER_NAMES: &[&str] = &[
     "metadata.cache.miss",
     "metadata.cache.sig_mismatch",
     "metadata.cache.stat_err",
+    // Performance — project scan cache invalidation（change `project-scan-cache-semantic-invalidation`）
+    "project_scan_cache.invalidate.structural",
+    "project_scan_cache.invalidate.content_append_skipped",
+    "project_scan_cache.invalidate.lag_conservative",
     // Reliability — runtime
     "panic.recovered",
     "panic.dropped_count",

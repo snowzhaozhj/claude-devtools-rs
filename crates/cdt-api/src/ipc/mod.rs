@@ -8,7 +8,13 @@ pub mod events;
 pub(crate) mod image_disk_cache;
 pub mod local;
 pub(crate) mod parsed_message_cache;
+// project_scan_cache 在 test/test-utils feature 下暴露给集成测试访问
+// `spawn_project_scan_cache_invalidator` + `ProjectScanCache::insert` 等
+// 测试 helper（详 change `project-scan-cache-semantic-invalidation` §5）。
+#[cfg(not(any(test, feature = "test-utils")))]
 pub(crate) mod project_scan_cache;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod project_scan_cache;
 pub mod session_metadata;
 pub mod traits;
 pub mod types;
