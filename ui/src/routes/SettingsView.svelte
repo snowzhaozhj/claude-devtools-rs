@@ -97,13 +97,13 @@
   );
 
   const sections: Array<{ id: SectionId; label: string; description: string; icon: string }> = [
-    { id: "general", label: "常规", description: "主题、启动行为、数据目录", icon: SLIDERS_HORIZONTAL_SVG },
+    { id: "general", label: "常规", description: "主题、启动与数据目录", icon: SLIDERS_HORIZONTAL_SVG },
     { id: "display", label: "显示", description: "界面字体与视觉密度", icon: MONITOR_SVG },
     { id: "notifications", label: "通知", description: "事件触发与提示音", icon: BELL },
     ...(isTauriDesktop
       ? [{ id: "connection" as const, label: "连接", description: "SSH 远端工作区", icon: MONITOR_SVG }]
       : []),
-    { id: "diagnostics", label: "诊断", description: "性能 / 可靠性 / 正确性快照", icon: INFO_SVG },
+    { id: "diagnostics", label: "诊断", description: "应用状态与事件", icon: INFO_SVG },
     { id: "about", label: "关于", description: "版本与更新", icon: INFO_SVG },
   ];
 
@@ -1162,6 +1162,11 @@
     font-size: 11px;
     color: var(--color-text-muted);
     line-height: 1.35;
+    /* 单行 + 省略号兜底，防御未来 desc 文案过长撕裂 nav 列对齐 */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
   }
   .nav-item-active .nav-label-desc {
     color: var(--color-text-secondary);
