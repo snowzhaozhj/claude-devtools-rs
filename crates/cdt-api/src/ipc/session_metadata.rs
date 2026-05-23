@@ -2389,4 +2389,19 @@ mod tests {
         let meta = extract_session_metadata_from_parsed(&msgs, false);
         assert_eq!(meta.title.as_deref(), Some("实际请求"));
     }
+
+    #[test]
+    fn detail_title_teammate_without_summary_falls_back_to_body() {
+        // teammate-message 无 summary 属性时 SHALL 取 body 文本作 title（与
+        // sidebar 派生函数 `extract_teammate_summary_title` 行为一致；codex PR
+        // 二审 C5：补一个经完整 `extract_session_metadata_from_parsed` 全链路
+        // 的 case，此前仅 helper 级 unit 覆盖该分支）。
+        let msgs = vec![parsed_user_msg(
+            "u1",
+            0,
+            r#"<teammate-message teammate_id="alice" color="blue">实际 body 文本</teammate-message>"#,
+        )];
+        let meta = extract_session_metadata_from_parsed(&msgs, false);
+        assert_eq!(meta.title.as_deref(), Some("实际 body 文本"));
+    }
 }
