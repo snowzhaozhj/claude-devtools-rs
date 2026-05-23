@@ -1,19 +1,23 @@
 <script lang="ts">
   // Diagnostics tab — pull-based telemetry snapshot dashboard.
   //
-  // 详见 OpenSpec change `add-telemetry-signal-bus` D7 + spec settings-ui §
-  // Diagnostics tab 暴露 telemetry 快照。
-  //
-  // 仅读不写：4 仪表盘卡片 + 2 延迟分布柱状图 + 最近 events + 复制按钮。
-  // 不做轮询；用户主动点"刷新"按钮触发。
+  // Visual contract（详 PR description D-V1/D-V2/D-V3）：
+  //   ① 健康度横幅 —— success/warning/danger 三态，复用 DESIGN.md 状态色 token
+  //   ② 关键指标 —— SettingsField 风格的 list 行，避开 hero metric 反模式
+  //   ③ 详细技术数据 —— <details> inline disclosure，开发者排错入口
 
   import { onMount } from "svelte";
   import { getTelemetrySnapshot, type TelemetrySnapshot } from "../../lib/api";
+  import SettingsGroup from "../../lib/components/SettingsGroup.svelte";
+  import SettingsButton from "../../lib/components/SettingsButton.svelte";
+  import SkeletonList from "../SkeletonList.svelte";
+  import { CHECK_CIRCLE_SVG, ALERT_CIRCLE_SVG } from "../../lib/icons";
 
   let snapshot = $state<TelemetrySnapshot | null>(null);
   let loading = $state(true);
-  let error = $state<string | null>(null);
-  let copyToast = $state<string | null>(null);
+  let refreshing = $state(false);
+  let error: string | null = $state(null);
+  let copyToast: string | null = $state(null);
 
   onMount(() => {
     void load();
@@ -32,13 +36,17 @@
   }
 
   async function refresh() {
-    // silent=true 模式：保留旧数据展示，新数据到达后 in-place 替换
+    if (refreshing) return;
+    refreshing = true;
     error = null;
     try {
+      // silent reload：保留旧 snapshot 直到新数据到达，避免闪烁
       const next = await getTelemetrySnapshot();
       snapshot = next;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    } finally {
+      refreshing = false;
     }
   }
 
@@ -47,41 +55,71 @@
     try {
       await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
       copyToast = "已复制完整 snapshot 到剪贴板";
-      setTimeout(() => (copyToast = null), 2000);
     } catch (e) {
       copyToast = "复制失败";
-      setTimeout(() => (copyToast = null), 2000);
       console.warn("[DiagnosticsTab] copy failed", e);
     }
+    setTimeout(() => (copyToast = null), 2000);
   }
 
-  // ---- Counter helpers ----
+  // ===== counter helpers =====
   function counterValue(name: string): number {
     return snapshot?.counters[name] ?? 0;
   }
 
-  const cacheHitRate = $derived.by(() => {
-    if (!snapshot) return null;
-    const hit = counterValue("metadata.cache.hit");
-    const miss = counterValue("metadata.cache.miss");
-    const sigSkew = counterValue("metadata.cache.sig_mismatch");
-    const statErr = counterValue("metadata.cache.stat_err");
-    const total = hit + miss + sigSkew + statErr;
-    return total > 0 ? hit / total : null;
-  });
+  const cacheHits = $derived(counterValue("metadata.cache.hit"));
+  const cacheMiss = $derived(counterValue("metadata.cache.miss"));
+  const cacheSigSkew = $derived(counterValue("metadata.cache.sig_mismatch"));
+  const cacheStatErr = $derived(counterValue("metadata.cache.stat_err"));
+  const cacheTotal = $derived(cacheHits + cacheMiss + cacheSigSkew + cacheStatErr);
+  const cacheHitRate = $derived(cacheTotal > 0 ? cacheHits / cacheTotal : null);
+  const cacheHitRateText = $derived(
+    cacheHitRate == null ? "—" : `${(cacheHitRate * 100).toFixed(1)}%`,
+  );
 
-  const ipcErrorTotal = $derived.by(() => {
-    if (!snapshot) return 0;
-    return counterValue("cdt_api.error") + counterValue("cdt_api.warn");
-  });
-
+  const ipcErrorTotal = $derived(
+    counterValue("cdt_api.error") + counterValue("cdt_api.warn"),
+  );
   const panicCount = $derived(counterValue("panic.recovered"));
-
   const sshReconnectCount = $derived(counterValue("ssh.reconnect"));
 
-  const histogramNames = [
-    "ipc.list_sessions.duration_ns",
-    "ipc.get_session_detail.duration_ns",
+  // ===== health derivation =====
+  // 阈值：panic > 0 → red；ipc.error+warn > 0 或 cache 命中率 < 70% → amber；
+  //       否则 → green。ssh.reconnect 不参与判定（远端工作区天然偶尔重连）。
+  type HealthLevel = "green" | "amber" | "red";
+  const health = $derived.by((): { level: HealthLevel; headline: string; detail: string } => {
+    if (panicCount > 0) {
+      return {
+        level: "red",
+        headline: `检测到崩溃恢复 × ${panicCount}`,
+        detail: "应用本次运行中遇到内部错误并自动恢复，建议复制下方 snapshot 反馈。",
+      };
+    }
+    if (ipcErrorTotal > 0) {
+      return {
+        level: "amber",
+        headline: `检测到 ${ipcErrorTotal} 次内部调用错误`,
+        detail: "可能与卡顿、刷新失败等异常相关，详情见下方技术数据。",
+      };
+    }
+    if (cacheHitRate !== null && cacheHitRate < 0.7) {
+      return {
+        level: "amber",
+        headline: `缓存命中率偏低（${(cacheHitRate * 100).toFixed(1)}%）`,
+        detail: "文件加载将更频繁触发磁盘扫描，体感可能稍慢。",
+      };
+    }
+    return {
+      level: "green",
+      headline: "一切正常",
+      detail: "本次运行未发现异常。",
+    };
+  });
+
+  // ===== histogram config =====
+  const histogramConfig: Array<{ name: string; label: string }> = [
+    { name: "ipc.list_sessions.duration_ns", label: "会话列表加载耗时" },
+    { name: "ipc.get_session_detail.duration_ns", label: "会话详情加载耗时" },
   ];
 
   function fmtNs(n: number | null | undefined): string {
@@ -92,302 +130,502 @@
     return `${(n / 1_000_000_000).toFixed(2)} s`;
   }
 
-  function maxBucketHeight(buckets: number[]): number {
-    return Math.max(...buckets, 1);
-  }
-
   function bucketRect(buckets: number[], i: number): { x: number; y: number; h: number; opacity: number } {
     const v = buckets[i] ?? 0;
-    const max = maxBucketHeight(buckets);
+    const max = Math.max(...buckets, 1);
     const h = (v / max) * 70;
     return { x: i * 10, y: 80 - h, h, opacity: v > 0 ? 0.85 : 0.15 };
   }
 </script>
 
 <div class="diagnostics">
-  <header class="diag-header">
-    <div>
-      <h2 class="diag-title">应用健康度</h2>
-      <p class="diag-desc">
-        cdt-telemetry Phase 1 — Performance / Reliability / Correctness 信号快照。
-      </p>
-    </div>
-    <div class="diag-actions">
-      <button type="button" class="diag-btn" onclick={refresh} disabled={loading}>
-        刷新
-      </button>
-      <button
-        type="button"
-        class="diag-btn diag-btn-primary"
-        onclick={copySnapshot}
-        disabled={!snapshot}
-      >
-        复制完整 snapshot
-      </button>
-    </div>
-  </header>
-
-  {#if copyToast}
-    <div class="diag-toast" role="status" aria-live="polite">{copyToast}</div>
-  {/if}
-
-  {#if error}
-    <div class="diag-error">无法加载 telemetry：{error}</div>
-  {/if}
-
   {#if loading && !snapshot}
-    <div class="diag-loading">加载中...</div>
-  {/if}
-
-  {#if snapshot}
-    <section class="diag-cards">
-      <article class="diag-card">
-        <div class="diag-card-label">Metadata cache 命中率</div>
-        <div class="diag-card-value">
-          {cacheHitRate == null ? "—" : `${(cacheHitRate * 100).toFixed(1)}%`}
+    <SkeletonList count={3} rowHeight={64} gap={12} padding="0" label="正在加载 telemetry" />
+  {:else}
+    {#if snapshot}
+      <!-- ① 健康度横幅 -->
+      <div class="health-banner health-banner-{health.level}" role="status">
+        <span class="health-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            {#if health.level === "green"}
+              {@html CHECK_CIRCLE_SVG}
+            {:else}
+              {@html ALERT_CIRCLE_SVG}
+            {/if}
+          </svg>
+        </span>
+        <div class="health-text">
+          <div class="health-headline">{health.headline}</div>
+          <div class="health-detail">{health.detail}</div>
         </div>
-        <div class="diag-card-sub">
-          hit {counterValue("metadata.cache.hit")} / miss {counterValue("metadata.cache.miss")} /
-          sig {counterValue("metadata.cache.sig_mismatch")} / stat_err {counterValue("metadata.cache.stat_err")}
+        <div class="health-action">
+          <SettingsButton variant="ghost" onClick={refresh} disabled={refreshing}>
+            {refreshing ? "刷新中…" : "刷新"}
+          </SettingsButton>
         </div>
-      </article>
-      <article class="diag-card">
-        <div class="diag-card-label">IPC 错误累计</div>
-        <div class="diag-card-value">{ipcErrorTotal}</div>
-        <div class="diag-card-sub">cdt_api.error + cdt_api.warn</div>
-      </article>
-      <article class="diag-card">
-        <div class="diag-card-label">Panic 计数</div>
-        <div class="diag-card-value">{panicCount}</div>
-        <div class="diag-card-sub">本进程启动后累计</div>
-      </article>
-      <article class="diag-card">
-        <div class="diag-card-label">SSH 重连次数</div>
-        <div class="diag-card-value">{sshReconnectCount}</div>
-        <div class="diag-card-sub">ssh.reconnect 累计</div>
-      </article>
-    </section>
+      </div>
+    {/if}
 
-    <section class="diag-histograms">
-      {#each histogramNames as name (name)}
-        {@const h = snapshot.histograms[name]}
-        {#if h}
-          <article class="diag-hist">
-            <h3 class="diag-hist-name">{name}</h3>
-            <div class="diag-hist-meta">
-              count={h.count} ·
-              p50≤{fmtNs(h.p50Ns)} · p95≤{fmtNs(h.p95Ns)} · p99≤{fmtNs(h.p99Ns)}
-            </div>
-            <p class="diag-hist-hint">
-              power-of-2 bucket upper bound（实际值 ≤ 此值，最坏 2x 偏差）
-            </p>
-            <svg class="diag-hist-svg" viewBox="0 0 320 80" preserveAspectRatio="none" aria-hidden="true">
-              {#each h.buckets as _, i (i)}
-                {@const r = bucketRect(h.buckets, i)}
-                <rect x={r.x} y={r.y} width="9" height={r.h} fill="currentColor" opacity={r.opacity} />
-              {/each}
+    {#if error}
+      <div class="banner-inline-error" role="alert">
+        {snapshot ? `刷新失败：${error}` : `无法加载 telemetry：${error}`}
+      </div>
+    {/if}
+
+    {#if copyToast}
+      <div class="copy-toast" role="status" aria-live="polite">{copyToast}</div>
+    {/if}
+
+    {#if snapshot}
+      <!-- ② 关键指标（list 行列表） -->
+      <SettingsGroup title="关键指标">
+        <div class="metric-row">
+          <div class="metric-line">
+            <span class="metric-label">缓存命中率</span>
+            <span class="metric-value">{cacheHitRateText}</span>
+          </div>
+          <div class="metric-hint">越高代表越少重复扫描文件</div>
+          <div class="metric-raw">hit {cacheHits} / miss {cacheMiss} / sig {cacheSigSkew} / stat_err {cacheStatErr}</div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-line">
+            <span class="metric-label">内部调用错误</span>
+            <span class="metric-value">{ipcErrorTotal}</span>
+          </div>
+          <div class="metric-hint">本次运行 IPC 调用累计错误次数</div>
+          <div class="metric-raw">cdt_api.error + cdt_api.warn</div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-line">
+            <span class="metric-label">崩溃自愈次数</span>
+            <span class="metric-value">{panicCount}</span>
+          </div>
+          <div class="metric-hint">系统级错误自动恢复，理想为 0</div>
+          <div class="metric-raw">panic.recovered</div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-line">
+            <span class="metric-label">SSH 远端重连</span>
+            <span class="metric-value">{sshReconnectCount}</span>
+          </div>
+          <div class="metric-hint">仅使用远端工作区时有意义</div>
+          <div class="metric-raw">ssh.reconnect</div>
+        </div>
+      </SettingsGroup>
+
+      <!-- ③ 详细技术数据（默认折叠） -->
+      <details class="tech-details">
+        <summary class="tech-summary">
+          <span class="tech-summary-chevron" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 18 15 12 9 6" />
             </svg>
-            <div class="diag-hist-axis">
-              <span>1 ns</span>
-              <span>1 μs</span>
-              <span>1 ms</span>
-              <span>1 s</span>
-            </div>
-          </article>
-        {/if}
-      {/each}
-    </section>
+          </span>
+          <div class="tech-summary-text">
+            <span class="tech-summary-title">详细技术数据</span>
+            <span class="tech-summary-subtitle">开发者排错用</span>
+          </div>
+        </summary>
 
-    <section class="diag-events">
-      <h3 class="diag-events-title">最近 events ({snapshot.recentEvents.length})</h3>
-      {#if snapshot.recentEvents.length === 0}
-        <p class="diag-events-empty">尚无 event。</p>
-      {:else}
-        <table class="diag-events-table">
-          <thead>
-            <tr>
-              <th>时间</th>
-              <th>kind</th>
-              <th>fields</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each snapshot.recentEvents.slice(-50).reverse() as ev (ev.tsUnixMs + ev.kind)}
-              <tr>
-                <td>{new Date(ev.tsUnixMs).toLocaleTimeString()}</td>
-                <td><code>{ev.kind}</code></td>
-                <td class="diag-events-fields">
-                  {Object.entries(ev.fields).map(([k, v]) => `${k}=${v}`).join(", ")}
-                </td>
-              </tr>
+        <div class="tech-body">
+          <SettingsGroup title="延迟分布">
+            {#each histogramConfig as cfg (cfg.name)}
+              {@const h = snapshot.histograms[cfg.name]}
+              {#if h}
+                <div class="hist-row">
+                  <div class="hist-line">
+                    <span class="hist-label">{cfg.label}</span>
+                    <span class="hist-name">{cfg.name}</span>
+                  </div>
+                  <div class="hist-meta">
+                    count={h.count} · p50≤{fmtNs(h.p50Ns)} · p95≤{fmtNs(h.p95Ns)} · p99≤{fmtNs(h.p99Ns)}
+                  </div>
+                  <div class="hist-caveat">power-of-2 bucket（实际值 ≤ 此值，最坏 2× 偏差）</div>
+                  <svg class="hist-svg" viewBox="0 0 320 80" preserveAspectRatio="none" aria-hidden="true">
+                    {#each h.buckets as _, i (i)}
+                      {@const r = bucketRect(h.buckets, i)}
+                      <rect x={r.x} y={r.y} width="9" height={r.h} fill="currentColor" opacity={r.opacity} />
+                    {/each}
+                  </svg>
+                  <div class="hist-axis">
+                    <span>1 ns</span>
+                    <span>1 μs</span>
+                    <span>1 ms</span>
+                    <span>1 s</span>
+                  </div>
+                </div>
+              {/if}
             {/each}
-          </tbody>
-        </table>
-      {/if}
-    </section>
+          </SettingsGroup>
+
+          <SettingsGroup title="最近 50 条事件">
+            {#if snapshot.recentEvents.length === 0}
+              <div class="events-empty">尚无 event。</div>
+            {:else}
+              <div class="events-table-wrap">
+                <table class="events-table">
+                  <thead>
+                    <tr>
+                      <th class="events-col-time">时间</th>
+                      <th class="events-col-kind">kind</th>
+                      <th class="events-col-fields">fields</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each snapshot.recentEvents.slice(-50).reverse() as ev (ev.tsUnixMs + ev.kind)}
+                      <tr>
+                        <td>{new Date(ev.tsUnixMs).toLocaleTimeString()}</td>
+                        <td><code>{ev.kind}</code></td>
+                        <td class="events-fields">
+                          {Object.entries(ev.fields).map(([k, v]) => `${k}=${v}`).join(", ")}
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
+          </SettingsGroup>
+
+          <div class="tech-actions">
+            <SettingsButton variant="primary" onClick={copySnapshot} disabled={!snapshot}>
+              复制完整 snapshot 给作者
+            </SettingsButton>
+          </div>
+        </div>
+      </details>
+    {/if}
   {/if}
 </div>
 
 <style>
   .diagnostics {
-    padding: 1.5rem;
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
+    gap: 24px;
   }
-  .diag-header {
+
+  /* ===== ① health banner ===== */
+  .health-banner {
     display: flex;
-    justify-content: space-between;
     align-items: flex-start;
-    gap: 1rem;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-surface-raised);
+    color: var(--color-text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
   }
-  .diag-title {
-    margin: 0;
-    font-size: 1.05rem;
-    font-weight: 600;
+  .health-icon {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    margin-top: 1px;
   }
-  .diag-desc {
-    margin: 0.25rem 0 0;
-    color: var(--text-secondary, #888);
-    font-size: 0.85rem;
+  .health-icon :global(svg) {
+    width: 18px;
+    height: 18px;
   }
-  .diag-actions {
-    display: flex;
-    gap: 0.5rem;
-  }
-  .diag-btn {
-    padding: 0.4rem 0.75rem;
-    border: 1px solid var(--border, #ccc);
-    background: var(--surface, transparent);
-    color: inherit;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.85rem;
-  }
-  .diag-btn:hover:not(:disabled) {
-    background: var(--surface-hover, #f5f5f5);
-  }
-  .diag-btn-primary {
-    background: var(--accent, #2563eb);
-    color: var(--accent-foreground, #fff);
-    border-color: transparent;
-  }
-  .diag-btn-primary:hover:not(:disabled) {
-    background: var(--accent-hover, #1d4ed8);
-  }
-  .diag-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .diag-toast {
-    background: var(--surface-success, #d1fae5);
-    border: 1px solid var(--border-success, #6ee7b7);
-    padding: 0.5rem 0.75rem;
-    border-radius: 4px;
-    font-size: 0.85rem;
-  }
-  .diag-error {
-    background: var(--surface-error, #fef2f2);
-    border: 1px solid var(--border-error, #fca5a5);
-    padding: 0.5rem 0.75rem;
-    border-radius: 4px;
-    font-size: 0.85rem;
-    color: var(--text-error, #991b1b);
-  }
-  .diag-loading {
-    color: var(--text-secondary, #888);
-    font-size: 0.9rem;
-  }
-  .diag-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 0.75rem;
-  }
-  .diag-card {
-    border: 1px solid var(--border, #ddd);
-    border-radius: 6px;
-    padding: 0.75rem 1rem;
-    background: var(--surface, transparent);
-  }
-  .diag-card-label {
-    font-size: 0.8rem;
-    color: var(--text-secondary, #888);
-  }
-  .diag-card-value {
-    font-size: 1.5rem;
-    font-weight: 600;
-    margin-top: 0.25rem;
-  }
-  .diag-card-sub {
-    font-size: 0.75rem;
-    color: var(--text-secondary, #888);
-    margin-top: 0.25rem;
-  }
-  .diag-histograms {
+  .health-text {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 2px;
   }
-  .diag-hist {
-    border: 1px solid var(--border, #ddd);
-    border-radius: 6px;
-    padding: 0.75rem 1rem;
-    background: var(--surface, transparent);
-  }
-  .diag-hist-name {
-    margin: 0;
-    font-size: 0.85rem;
+  .health-headline {
+    font-size: 14px;
     font-weight: 600;
-    font-family: var(--font-mono, monospace);
+    color: var(--color-text);
+    line-height: 1.35;
   }
-  .diag-hist-meta {
-    margin-top: 0.25rem;
-    font-size: 0.8rem;
-    color: var(--text-secondary, #888);
+  .health-detail {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    line-height: 1.55;
   }
-  .diag-hist-hint {
-    margin: 0.25rem 0;
-    font-size: 0.75rem;
-    color: var(--text-tertiary, #aaa);
+  .health-action {
+    flex-shrink: 0;
+  }
+
+  /* green：复用 SettingsView .banner-success 同模式（color-mix） */
+  .health-banner-green {
+    border-color: color-mix(in oklch, var(--color-success-bright) 35%, var(--color-border));
+    background: color-mix(in oklch, var(--color-success-bright) 8%, var(--color-surface));
+  }
+  .health-banner-green .health-icon,
+  .health-banner-green .health-headline {
+    color: var(--color-success);
+  }
+
+  /* amber：用预制 --color-warning-* 三件套（已 paired light/dark） */
+  .health-banner-amber {
+    border-color: var(--color-warning-border);
+    background: var(--color-warning-bg);
+  }
+  .health-banner-amber .health-icon,
+  .health-banner-amber .health-headline {
+    color: var(--color-warning-text);
+  }
+
+  /* red：复用 SettingsView .banner-error 同模式 */
+  .health-banner-red {
+    border-color: color-mix(in oklch, var(--color-danger-bright) 35%, var(--color-border));
+    background: color-mix(in oklch, var(--color-danger-bright) 8%, var(--color-surface));
+  }
+  .health-banner-red .health-icon,
+  .health-banner-red .health-headline {
+    color: var(--color-danger);
+  }
+
+  /* ===== inline banner（refresh / load 失败） ===== */
+  .banner-inline-error {
+    padding: 10px 14px;
+    border: 1px solid color-mix(in oklch, var(--color-danger-bright) 35%, var(--color-border));
+    border-radius: 8px;
+    background: color-mix(in oklch, var(--color-danger-bright) 8%, var(--color-surface));
+    color: var(--tool-result-error-text);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .copy-toast {
+    align-self: flex-start;
+    padding: 6px 12px;
+    border: 1px solid color-mix(in oklch, var(--color-success-bright) 35%, var(--color-border));
+    border-radius: 9999px;
+    background: color-mix(in oklch, var(--color-success-bright) 10%, var(--color-surface));
+    color: var(--color-success);
+    font-size: 12px;
+  }
+
+  /* ===== ② metric list rows ===== */
+  .metric-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 14px 16px;
+    background: var(--color-surface);
+  }
+  .metric-line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .metric-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text);
+  }
+  .metric-value {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--color-text);
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+  .metric-hint {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    line-height: 1.5;
+  }
+  .metric-raw {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-muted);
+    line-height: 1.45;
+    word-break: break-all;
+  }
+
+  /* ===== ③ details disclosure ===== */
+  .tech-details {
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-surface);
+  }
+  .tech-summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+  }
+  .tech-summary::-webkit-details-marker {
+    display: none;
+  }
+  .tech-summary:focus-visible {
+    outline: 2px solid var(--color-switch-on);
+    outline-offset: -2px;
+    border-radius: 8px;
+  }
+  .tech-summary-chevron {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-muted);
+    transition: transform 0.15s ease;
+  }
+  .tech-summary-chevron :global(svg) {
+    width: 14px;
+    height: 14px;
+  }
+  .tech-details[open] .tech-summary-chevron {
+    transform: rotate(90deg);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tech-summary-chevron {
+      transition: none;
+    }
+  }
+  .tech-summary-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .tech-summary-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text);
+  }
+  .tech-summary-subtitle {
+    font-size: 11px;
+    color: var(--color-text-muted);
+  }
+  .tech-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 4px 16px 16px;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  /* ===== histogram rows ===== */
+  .hist-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 14px 16px;
+    background: var(--color-surface);
+  }
+  .hist-line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .hist-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-text);
+  }
+  .hist-name {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .hist-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-secondary);
+  }
+  .hist-caveat {
+    font-size: 10px;
     font-style: italic;
+    color: var(--color-text-muted);
+    line-height: 1.4;
   }
-  .diag-hist-svg {
+  .hist-svg {
     width: 100%;
     height: 80px;
-    color: var(--accent, #2563eb);
-    margin-top: 0.5rem;
+    color: var(--color-switch-on);
+    margin-top: 6px;
   }
-  .diag-hist-axis {
+  .hist-axis {
     display: flex;
     justify-content: space-between;
-    font-size: 0.7rem;
-    color: var(--text-secondary, #888);
-    margin-top: 0.25rem;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-muted);
+    margin-top: 2px;
   }
-  .diag-events-title {
-    margin: 0 0 0.5rem;
-    font-size: 0.9rem;
-    font-weight: 600;
+
+  /* ===== events table ===== */
+  .events-table-wrap {
+    background: var(--color-surface);
+    overflow-x: auto;
   }
-  .diag-events-empty {
-    color: var(--text-secondary, #888);
-    font-size: 0.85rem;
-    margin: 0;
-  }
-  .diag-events-table {
+  .events-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.85rem;
+    font-size: 12px;
   }
-  .diag-events-table th,
-  .diag-events-table td {
+  .events-table th {
     text-align: left;
-    padding: 0.4rem 0.5rem;
-    border-bottom: 1px solid var(--border, #eee);
+    padding: 8px 16px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--color-border);
   }
-  .diag-events-fields {
-    font-family: var(--font-mono, monospace);
-    font-size: 0.78rem;
-    color: var(--text-secondary, #555);
+  .events-table td {
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--color-border-subtle);
+    vertical-align: top;
+  }
+  .events-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+  .events-col-time {
+    width: 96px;
+  }
+  .events-col-kind {
+    width: 38%;
+  }
+  .events-table td:first-child {
+    font-family: var(--font-mono);
+    color: var(--color-text-secondary);
+  }
+  .events-table code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-text);
+  }
+  .events-fields {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    word-break: break-all;
+  }
+  .events-empty {
+    padding: 14px 16px;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    background: var(--color-surface);
+  }
+
+  .tech-actions {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 4px;
   }
 </style>
