@@ -106,11 +106,30 @@ impl ProjectScanner {
         // SSH 模式保持顺序遍历（远端 ssh provider 串行更稳）；本地走并发上限受
         // `PROJECT_SCAN_CONCURRENCY` 控制的 `FuturesUnordered`。`scan_project_dir`
         // 只读 fs（`&self`），无内部 mutation，可并发跑。
+        //
+        // SSH 错误分流（修 GitHub issue #231 #2）：单 project scan 错误按
+        // `FsError::is_likely_channel_dead()` 元方法分流——
+        // - channel-dead（`Disconnected` / `TransientExhausted` 含 transport-dead
+        //   关键字 / `Io` source kind 是 BrokenPipe/ConnectionReset/ConnectionAborted）
+        //   SHALL 立即 abort 整轮 scan + 返 Err，让上层 `list_repository_groups`
+        //   拿到 hard error 触发自愈路径，避免凑半成品列表误导用户
+        // - 其它（普通单文件 IO / NotFound / 单 project 临时不可读）保留 silent
+        //   skip + warn，让其它 project 仍可见
         if self.fs.kind() == FsKind::Ssh {
             for dir_name in dirs {
                 match self.scan_project_dir(&dir_name).await {
                     Ok(projects) => all_projects.extend(projects),
                     Err(err) => {
+                        if let crate::error::DiscoverError::Fs(fs_err) = &err {
+                            if fs_err.is_likely_channel_dead() {
+                                tracing::error!(
+                                    dir = %dir_name,
+                                    error = %fs_err,
+                                    "ssh channel appears dead; aborting full scan to surface error",
+                                );
+                                return Err(err);
+                            }
+                        }
                         tracing::warn!(dir = %dir_name, error = ?err, "skip unreadable project dir");
                     }
                 }

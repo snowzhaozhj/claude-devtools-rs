@@ -206,9 +206,13 @@ if self.fs.kind() == FsKind::Ssh {
 
 **为什么 timeout 不命中 `is_likely_channel_dead`**：scanner 与 watcher 节奏不同——scanner 是用户触发的 IPC（一次性），timeout 在 with_retry 3 次后仍 timeout（即 `TransientExhausted { last_reason: "timeout" }`）反而是"远端短暂不可达"，让 scanner abort 给用户报"扫描失败"比 silent skip 更刺眼。但本 change 保守只命中 transport-dead 关键字，纯 timeout 仍走 silent skip 路径——保留现有行为（issue 第 4 点的"自动重连"留 follow-up，那里再决定 timeout escalate 与否）。
 
-### D5：保留 `is_permanent_sftp_failure` 公共签名 backward-compat
+### D5：`is_permanent_sftp_failure` 直接删除（apply 阶段反转 D5b）
 
-`is_permanent_sftp_failure(err) -> bool` 是 `pub fn`（line 242 没 `pub`，实际是 mod-private），但 mod 内单测和外部 mod 引用都假定它存在。本 change 保留它作为 `matches!(classify_failure(err), PollFailureKind::Permanent)` 的 alias——避免一次 PR 同时改公有 fn 名 + 行为，让 review diff 集中在新逻辑。
+**原决策**：保留 `is_permanent_sftp_failure(err) -> bool` 作为 backward-compat shim 调 `classify_failure`，避免一次 PR 同时改公有 fn 名 + 行为。
+
+**D5b（apply 反转，2026-05-24）**：实测发现该函数仅 mod-internal（`fn` 而非 `pub fn`）+ 仅被同 mod 内一个 test fn 调用；test fn 本身按 task 3.7 D7 计划要重写为 `classify_failure_classifies_three_kinds`，重写后 shim 已无任何调用方。clippy `dead_code` warning 落到 lib build 上（lib 阶段 `cfg(test)` 是 false）。删除 shim 比 `#[allow(dead_code)]` 更干净——backward-compat 论据不成立（mod-private 无外部依赖）。
+
+修订：D5 改为"删除 `is_permanent_sftp_failure`，所有调用点迁移到 `classify_failure`"；spec delta 与 task 3.7 描述同步。
 
 ### D6：单测策略
 
