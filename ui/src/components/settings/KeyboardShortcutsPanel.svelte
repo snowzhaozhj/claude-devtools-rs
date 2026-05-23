@@ -94,7 +94,11 @@
       const overrideRaw = pending.has(meta.id)
         ? pending.get(meta.id)!
         : committed[meta.id];
-      const raw = overrideRaw !== undefined ? overrideRaw : null;
+      // `__RESET__` sentinel：reset 单条 committed override → 行展示走 default。
+      // **不可** resolveBinding("__RESET__") —— 那会把 "__RESET__" 当 main key 字面
+      // 输出到 UI（"effective binding 显示 __RESET__" bug）。
+      const useDefault = overrideRaw === undefined || overrideRaw === "__RESET__";
+      const raw = useDefault ? null : overrideRaw;
       // 行展示用 normalized binding（与 KeyRecorderInput 内 formatShortcut 接受 string 一致）
       const normalized = raw !== null ? resolveBinding(raw) : resolveBinding(meta.defaultBinding);
       map.set(meta.id, normalized);

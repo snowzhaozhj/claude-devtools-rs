@@ -173,11 +173,31 @@ describe('canonicalKey event.code 物理位置兜底', () => {
 
   test('Numpad 功能键归一为对应 main row', () => {
     expect(canonicalKey('Enter', 'NumpadEnter')).toBe('Enter')
-    expect(canonicalKey('+', 'NumpadAdd')).toBe('+')
+    // NumpadAdd → "Plus" 而非字面 "+"：codex P1-2 修复，避免与 binding 分隔符 "+" 冲突
+    // （normalizeBinding split("+") 会把字面 "+" 当 join 符吃掉主键）
+    expect(canonicalKey('+', 'NumpadAdd')).toBe('Plus')
     expect(canonicalKey('-', 'NumpadSubtract')).toBe('-')
     expect(canonicalKey('*', 'NumpadMultiply')).toBe('*')
     expect(canonicalKey('/', 'NumpadDivide')).toBe('/')
     expect(canonicalKey('.', 'NumpadDecimal')).toBe('.')
+  })
+
+  test('NumpadAdd → Plus token round-trip 不丢主键（codex P1-2 regression guard）', () => {
+    // 1) normalize event{code:NumpadAdd, ctrlKey} → "ctrl+Plus"（不再是错误的 "ctrl+"）
+    pinMac(false)
+    const out = normalize(evt({ key: '+', code: 'NumpadAdd', ctrlKey: true }))
+    expect(out).toBe('ctrl+Plus')
+
+    // 2) normalizeBinding 接受字面 "ctrl+plus" 与 "ctrl+Plus" 都归一到内部 "ctrl+Plus"
+    expect(normalizeBinding('ctrl+plus')).toBe('ctrl+Plus')
+    expect(normalizeBinding('ctrl+Plus')).toBe('ctrl+Plus')
+
+    // 3) formatShortcut Windows 平台仍显示字面 "Ctrl++"（用户可读）
+    expect(formatShortcut('ctrl+plus')).toBe('Ctrl++')
+
+    // 4) mac 平台：⌃+
+    pinMac(true)
+    expect(formatShortcut('ctrl+plus')).toBe('⌃+')
   })
 
   test('Digit0-9 code 兜底（即便 key 是空 / 非数字）', () => {

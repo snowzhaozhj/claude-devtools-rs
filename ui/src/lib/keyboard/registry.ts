@@ -230,6 +230,11 @@ function findConflictAt(
     // 第二遍：把 overlay 的新 binding 写入视图（excludeId 自身的 overlay 不写入）
     for (const [overlayId, overlayRaw] of overlay) {
       if (overlayId === excludeId) continue;
+      // `__RESET__` sentinel：仅"剥旧位置"语义（第一遍已做），不写入新位置——
+      // 该 id reset 后回到 default，default 是否冲突由其他 row 自己计算时发现。
+      // 不跳过会让 resolveBinding("__RESET__") 产 "__RESET__" 假 normalized 写入
+      // view，污染冲突检测。
+      if (overlayRaw === "__RESET__") continue;
       const overlayNormalized = resolveBinding(overlayRaw);
       if (!overlayNormalized) continue;
       view.set(overlayNormalized, overlayId);

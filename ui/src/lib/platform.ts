@@ -110,7 +110,10 @@ export function canonicalKey(key: string, code: string): string {
     case "NumpadEnter":
       return "Enter";
     case "NumpadAdd":
-      return "+";
+      // **不**返回字面 "+"——`+` 是 binding 字符串的修饰键分隔符（normalizeBinding
+      // L210 split("+")）；返回 "+" 时 `ctrl++` 被 split 成 ["ctrl",""] 主键丢失。
+      // 用 "Plus" token 避免歧义；formatShortcut Windows 仍展示字面 "+"。
+      return "Plus";
     case "NumpadSubtract":
       return "-";
     case "NumpadMultiply":
@@ -242,6 +245,10 @@ export function normalizeBinding(binding: string): string {
       // 主键
       if (p.length === 1 && /^[a-zA-Z]$/.test(p)) {
         main = p.toLowerCase();
+      } else if (lower === "plus") {
+        // 用户写 "ctrl+plus" / "ctrl+Plus" 都归一到内部 token "Plus"（PascalCase
+        // 与 canonicalKey("NumpadAdd") 输出一致），避免 case 错配
+        main = "Plus";
       } else {
         main = p; // 命名键（ArrowDown / Enter / Escape / End）保留原样
       }
@@ -273,6 +280,8 @@ export function matchEvent(binding: ShortcutBinding, event: KeyboardEvent): bool
 function formatMainKey(key: string): string {
   if (key.length === 1 && /^[a-z]$/.test(key)) return key.toUpperCase();
   if (key in ARROW_DISPLAY) return ARROW_DISPLAY[key];
+  // 内部 token "Plus" 用于避免与 binding 分隔符 "+" 冲突；展示层还原为字面 "+"
+  if (key === "Plus") return "+";
   return key;
 }
 

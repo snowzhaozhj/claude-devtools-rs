@@ -65,7 +65,9 @@ export const SHORTCUT_DEFAULTS: ReadonlyArray<ShortcutMeta> = [
     category: "search",
     description: "在当前会话内查找",
     defaultBinding: "mod+f",
-    // allowInInput 默认 false：input 焦点时浏览器原生（如复制 / 选词）
+    // input 焦点时仍打开会话内 SearchBar（spec ui-search "input focus 时仍打开
+    // 会话内搜索"）；不写 allowInInput 会被 dispatcher 跳过让浏览器 find 接管。
+    allowInInput: true,
   },
   // ---- tabs --------------------------------------------------------------
   ...Array.from({ length: 9 }, (_, i) => i + 1).map<ShortcutMeta>((n) => ({

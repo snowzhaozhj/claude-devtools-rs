@@ -186,6 +186,41 @@ describe("KeyboardShortcutsPanel", () => {
     expect(captured!["sidebar.toggle"]).toBeUndefined();
   });
 
+  test("__RESET__ sentinel：点 Reset 后行 UI 显示 default binding（不是字面 __RESET__）+ Reset 按钮变 disabled（codex P1-3 fix）", async () => {
+    mockIPC(() => Promise.resolve(null));
+
+    const { container } = render(KeyboardShortcutsPanel, {
+      props: {
+        // 已持久化 override：sidebar.toggle 改成 mod+shift+b（mac → ⇧⌘B 显示）
+        initialOverrides: { "sidebar.toggle": "mod+shift+b" },
+      },
+    });
+
+    // 录键 widget 显示当前（committed）binding：⇧⌘B
+    const recorder = getRecorderForId(container, "sidebar.toggle");
+    expect(recorder.textContent).toContain("⇧⌘B");
+    expect(recorder.textContent).not.toContain("__RESET__");
+
+    // 点 Reset 单条按钮
+    const resetBtn = container.querySelector(
+      'button[aria-label="重置 切换侧栏折叠 / 展开 为默认"]',
+    ) as HTMLButtonElement | null;
+    expect(resetBtn).not.toBeNull();
+    expect(resetBtn!.disabled).toBe(false);
+    await fireEvent.click(resetBtn!);
+
+    // P1-3 核心断言：UI 显示 default ⌘B（不是字面 "__RESET__"）
+    const recorderAfter = getRecorderForId(container, "sidebar.toggle");
+    expect(recorderAfter.textContent).toContain("⌘B");
+    expect(recorderAfter.textContent).not.toContain("__RESET__");
+
+    // Reset 按钮变 disabled（currentBinding === defaultEffective → ShortcutRow isAtDefault → disabled）
+    const resetBtnAfter = container.querySelector(
+      'button[aria-label="重置 切换侧栏折叠 / 展开 为默认"]',
+    ) as HTMLButtonElement | null;
+    expect(resetBtnAfter!.disabled).toBe(true);
+  });
+
   test("configLoadError banner：setConfigLoadError 推送 → 渲染 alert + 重试按钮", async () => {
     const { container } = render(KeyboardShortcutsPanel, {
       props: { initialOverrides: {} },
