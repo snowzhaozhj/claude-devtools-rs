@@ -90,7 +90,7 @@ pub const SSH_KEEPALIVE_MAX: usize = 3;
 ## Risks / Trade-offs
 
 - **流量小幅增加**：闲置 SSH context 每 15s 发 1 个 keepalive request + 1 个 reply，每包 < 100B → 平均 ~13B/s；对 SSH 心跳级流量来说可忽略
-- **测试覆盖**：keepalive 真实 timeout 行为难单测（需要真 SSH server + 模拟服务端不回复），本 change 仅单测配置值；行为级在 `live_connect_to_local_docker` 已有的 `#[ignore]` 集成测试里手验，回归测试 fixture（docker openssh 临时调小 ClientAliveInterval / iptables 拦 idle 等手段）留 followup
+- **测试覆盖**：keepalive 真实 timeout 行为难单测（需要真 SSH server + 模拟服务端不回复 + 等满 75s 窗口），本 change 仅单测配置入参（`build_client_config_enables_keepalive` 钉死 `keepalive_interval` / `keepalive_max` 与常量值）；现有 `live_connect_to_local_docker` `#[ignore]` 集成测试只验"开启 keepalive 配置后基础 connect 仍正常工作"，**未**断言 keepalive timeout / liveness 行为本身；真行为级回归测试 fixture（docker openssh 临时调小 `ClientAliveInterval` / iptables 拦 idle 等手段制造 idle）留 followup
 - **与 `inactivity_timeout` 互动**：保持 `inactivity_timeout = None`，所以连接生命周期由用户主动 disconnect / 自愈触发 disconnect 决定，不会被 russh 内部 GC 误关
 - **已知未覆盖（v1 接受的小概率漏洞）**：用户 `ssh_connect` 成功**但从未** `switch_context` 也从未触发任何 IPC fs 操作的纯 idle 状态（典型场景：UI 显示 SSH 列表但不切过去用）。keepalive 触发 transport 死后：
   - russh client task 退出，`Handle` 进入 dead 状态

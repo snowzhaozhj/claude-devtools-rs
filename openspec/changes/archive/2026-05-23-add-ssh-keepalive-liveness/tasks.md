@@ -18,11 +18,11 @@
 
 - [x] 3.1 `cargo test -p cdt-ssh` 全过（含新单测）
 - [x] 3.2 `cargo clippy -p cdt-ssh --all-targets -- -D warnings` 无 warning
-- [ ] 3.3 `just preflight` 一把梭通过
+- [x] 3.3 `just preflight` 一把梭通过
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
-- [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
+- [x] N.1 push 分支 + 开 PR
+- [x] N.2 wait-ci 全绿
+- [x] N.3 codex 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
+- [x] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
