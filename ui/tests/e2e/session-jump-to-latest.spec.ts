@@ -175,6 +175,36 @@ test.describe('Quick Anchor Navigation：跳到最新消息', () => {
     await expect(btn).not.toHaveClass(/jump-to-latest-visible/, { timeout: 1_000 })
   })
 
+  test('smooth scroll 期间 scrollHeight 增长（模拟 lazy markdown reveal）→ pin 兜底跟住新底部', async ({ page }) => {
+    // 回归保护：原 bug 是 smooth scroll 期间 content-visibility:auto + lazy markdown
+    // IntersectionObserver 触发的 reveal 让 scrollHeight 持续增长，浏览器 smooth 目标
+    // 仍锁在 click 那一刻的旧 scrollHeight 上 → 落点距底数百~数千 px → 按钮重显 →
+    // 用户须点多次。修法：scrollend 后启动 startBottomPin 的 200ms MutationObserver
+    // 兜底，对后续 mutation 持续把 scrollTop 推到新 scrollHeight。
+    await openLongSession(page)
+    const btn = page.locator('.jump-to-latest')
+    await expect(btn).toHaveClass(/jump-to-latest-visible/)
+
+    // click 启动 smooth scroll
+    await page.evaluate(() => {
+      document.querySelector<HTMLButtonElement>('.jump-to-latest')?.click()
+    })
+    // smooth scroll 进行中追加 2000px 内容模拟 reveal 期间高度增长
+    await page.waitForTimeout(80)
+    await page.evaluate(() => {
+      const conversation = document.querySelector<HTMLElement>('.conversation')!
+      const grow = document.createElement('div')
+      grow.style.minHeight = '2000px'
+      grow.style.flexShrink = '0'
+      grow.setAttribute('data-test-grow', '1')
+      conversation.appendChild(grow)
+    })
+    // smooth scroll 完成 → onScrollEnd 启动 pin → pin hard set scrollTop +
+    // 监听 200ms 稳定窗口；timeout 给 smooth animation + pin 稳定足够缓冲
+    await expect(btn).not.toHaveClass(/jump-to-latest-visible/, { timeout: 5_000 })
+    expect(await getDistanceFromBottom(page)).toBeLessThanOrEqual(16)
+  })
+
   test('快连点击不互扰，clearTimeout 旧 timer 让最终滚动稳定到底', async ({ page }) => {
     await openLongSession(page)
     const btn = page.locator('.jump-to-latest')

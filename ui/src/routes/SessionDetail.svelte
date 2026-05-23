@@ -10,7 +10,7 @@
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
   import { createLazyMarkdownObserver, estimatePlaceholderHeight } from "../lib/lazyMarkdown.svelte";
-  import { isAtBottom, captureScrollAnchor, restoreScrollAnchor, type ScrollAnchorState } from "../lib/scrollAnchor";
+  import { isAtBottom, captureScrollAnchor, restoreScrollAnchor, startBottomPin, type ScrollAnchorState } from "../lib/scrollAnchor";
   import { getTabUIState, saveTabUIState, getTabSessionId, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
   import { isMac } from "../lib/platform";
   import {
@@ -168,6 +168,11 @@
       // 用 microtask 让浏览器先 commit scrollTop 更新再清 flag，避免 isFar derived 在
       // 同一 task 内还读到旧值
       queueMicrotask(stopProgrammaticScroll);
+      // jump 之后 lazy markdown / content-visibility:auto 仍可能让 scrollHeight 持续
+      // 增长（落点附近的 placeholder 进入视口被真布局），启动 200ms 稳定窗口的 pin
+      // 兜底跟住底。smooth 路径在 onScrollEnd 启动同等兜底
+      currentBottomPinCleanup?.();
+      currentBottomPinCleanup = startBottomPin(conversationEl);
     }
   }
 
@@ -204,7 +209,20 @@
       latestAnchor = captureScrollAnchor(conversationEl);
       scheduleUpdateIsFar();
     };
-    const onScrollEnd = () => stopProgrammaticScroll();
+    const onScrollEnd = () => {
+      // 用户主动 wheel/touchmove/非本快捷键 keydown 都会提前清 isProgrammaticScroll；
+      // scrollend 时仍为 true 表示 smooth scroll 自然完成未被打断
+      const wasSmoothScrollFinish = isProgrammaticScroll;
+      stopProgrammaticScroll();
+      // 自然完成但仍距底 > 16 → 浏览器锁定旧 scrollHeight 作为 smooth 目标，期间
+      // lazy markdown reveal + content-visibility:auto 真布局让 scrollHeight 增长，
+      // 落点比新 bottom 短。启动 200ms 稳定窗口的 pin 兜底持续跟住增长后的 bottom，
+      // 避免"按钮重显 → 用户再点"循环
+      if (wasSmoothScrollFinish && conversationEl && !isAtBottom(conversationEl)) {
+        currentBottomPinCleanup?.();
+        currentBottomPinCleanup = startBottomPin(conversationEl);
+      }
+    };
     const onUserInput = () => {
       // 用户主动 wheel / touchmove 打断 smooth scroll → 立即清抑制
       if (isProgrammaticScroll) stopProgrammaticScroll();
