@@ -1,0 +1,32 @@
+# cargo-nextest 配置——仅本仓特化项；其余 default 行为见 https://nexte.st
+#
+# 与 `cargo test` 行为对照：
+# - 进程级隔离（每个测试 fork 独立进程）—— 避免跨测试 thread-pool / global-static 互扰
+# - 跨 binary 并行 —— 42 个 integration test binary 不再顺序跑
+# - 默认 fail-fast = true（首失败终止）；CI profile 关掉收完整失败清单
+#
+# `cargo test --doc` 不被 nextest 执行 —— justfile + ci.yml 保留单独入口（即使
+# 当前仓里 doctest 标记都是 sh/ts/ignore，没有可执行 Rust doctest，仍保兜底）
+
+[profile.default]
+# 慢测试警告——超 60s 标 SLOW；超 180s 视为 hang 并 SIGKILL
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# cdt-watch 历史 FSEvents flaky：retry 1 次抹平偶发抖动
+# `serial_test::serial` 已保证需要互斥的测试串行——进程隔离 + retry 即够，
+# 不再强制 `--test-threads=1`（cdt-watch 36 个测试可与其他 crate 并行）
+[[profile.default.overrides]]
+filter = "package(cdt-watch)"
+retries = 1
+
+[profile.ci]
+# CI 多平台 matrix 想看完整失败清单——不要首失败就终止
+fail-fast = false
+# 失败时立刻打印输出 + 末尾再汇总一次
+failure-output = "immediate-final"
+# 默认 default profile 的 slow-timeout 与 override 都被继承
+
+[[profile.ci.overrides]]
+filter = "package(cdt-watch)"
+# CI 上 GitHub runner 抖动比本地大——多 retry 一次
+retries = 2

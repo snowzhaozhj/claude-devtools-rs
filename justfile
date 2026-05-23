@@ -40,6 +40,14 @@ test-rust:
     cargo test --workspace --exclude cdt-watch --features cdt-api/test-utils
     cargo test -p cdt-watch -- --test-threads=1
 
+# Rust workspace via cargo-nextest（进程隔离 + 跨 binary 并行 + cdt-watch retry）
+# 配置在 `.config/nextest.toml`；CI 已切到此路径。本地需 `cargo install cargo-nextest --locked`
+# 一次性安装。doctest 用 `cargo test --doc` 单独跑（nextest 不支持 doctest）。
+# 与 `test-rust` 并存——开发者本地未装 nextest 时仍可用旧路径跑测。
+test-rust-nextest:
+    cargo nextest run --workspace --features cdt-api/test-utils
+    cargo test --workspace --features cdt-api/test-utils --doc
+
 # 单 crate 测试，例：`just test-crate cdt-analyze`
 test-crate CRATE:
     cargo test -p {{CRATE}}
