@@ -70,14 +70,14 @@
 
 ## 8. UI Settings 录键 widget（owner: 设计师 + 前端 teammate）
 
-- [ ] 8.1 设计师 teammate 在 Mailbox 投递 visual contract（idle / recording / conflict 三态视觉规约 + 录键 widget motion timing）
-- [ ] 8.2 新建 `ui/src/components/settings/KeyRecorderInput.svelte`：实现三态切换 / 焦点 trap / suspend-resume / commit-on-fullkey / Escape cancel；recording 期间组件自身调 `event.preventDefault()`（不依赖 dispatcher，因 dispatcher 已 suspend）
-- [ ] 8.3 新建 `ui/src/components/settings/ShortcutRow.svelte`：左 description / 中 KeyRecorderInput / 右"重置默认"按钮（spec category 之间分组样式由 KeyboardShortcutsPanel 控制）
-- [ ] 8.4 新建 `ui/src/components/settings/KeyboardShortcutsPanel.svelte`：listAll → groupBy(category) → 渲染 5 个 category section + 顶部"重置全部"按钮 + 顶部未保存提示条 + Save / 丢弃按钮 + 顶部"无法加载快捷键自定义" 错误条（IPC fallback 时显示）
-- [ ] 8.5 panel 内部维护 `pendingOverrides: Record<id, binding>` overlay；录键 commit 仅更新 overlay 不动 registry / cdt-config；Save 触发单次 `set_config` IPC + registry batch update + 清空 overlay
-- [ ] 8.6 panel 调 `findConflict(binding, sourceId, pendingOverrides)` 三参数 API；保存路径 SHALL 在 IPC 写入前对每个 pending entry 再走一遍 `findConflict` 防御串行注入
-- [ ] 8.7 `ui/src/routes/Settings.svelte`：在 `sectionList` 加 "键盘快捷键" 入口；handlers 路由到 `KeyboardShortcutsPanel`
-- [ ] 8.8 i18n：description 字段先用中文字面量（仓库未启用 i18n）
+- [x] 8.1 设计师 teammate 在 Mailbox 投递 visual contract（idle / recording / conflict 三态视觉规约 + 录键 widget motion timing）
+- [x] 8.2 新建 `ui/src/components/settings/KeyRecorderInput.svelte`：实现三态切换 / 焦点 trap / suspend-resume / commit-on-fullkey / Escape cancel；recording 期间组件自身调 `event.preventDefault()`（不依赖 dispatcher，因 dispatcher 已 suspend）
+- [x] 8.3 新建 `ui/src/components/settings/ShortcutRow.svelte`：左 description / 中 KeyRecorderInput / 右"重置默认"按钮（spec category 之间分组样式由 KeyboardShortcutsPanel 控制）
+- [x] 8.4 新建 `ui/src/components/settings/KeyboardShortcutsPanel.svelte`：listAll → groupBy(category) → 渲染 5 个 category section + 顶部"重置全部"按钮 + 顶部未保存提示条 + Save / 丢弃按钮 + 顶部"无法加载快捷键自定义" 错误条（IPC fallback 时显示）
+- [x] 8.5 panel 内部维护 `pendingOverrides: Record<id, binding>` overlay；录键 commit 仅更新 overlay 不动 registry / cdt-config；Save 触发单次 `set_config` IPC + registry batch update + 清空 overlay
+- [x] 8.6 panel 调 `findConflict(binding, sourceId, pendingOverrides)` 三参数 API；保存路径 SHALL 在 IPC 写入前对每个 pending entry 再走一遍 `findConflict` 防御串行注入
+- [x] 8.7 `ui/src/routes/Settings.svelte`：在 `sectionList` 加 "键盘快捷键" 入口；handlers 路由到 `KeyboardShortcutsPanel`
+- [x] 8.8 i18n：description 字段先用中文字面量（仓库未启用 i18n）
 
 ## 9. UI Settings 录键 widget 单测（owner: 前端 teammate）
 
@@ -96,15 +96,15 @@
 
 ## 11. 性能 & 兼容（owner: 后端 + 前端 teammate）
 
-- [ ] 11.1 跑 `bash scripts/run-perf-bench.sh` 确认 perf-baseline 未回归（dispatcher 不在启动 / IPC / 列表渲染 hot path 上，预期无影响；如有意外 regress 按 `.claude/rules/perf.md::PR Perf impact 模板` 在 PR 描述贴四维数据）
+- [x] 11.1 跑 `bash scripts/run-perf-bench.sh` 确认 perf-baseline 未回归（dispatcher 不在启动 / IPC / 列表渲染 hot path 上，预期无影响；如有意外 regress 按 `.claude/rules/perf.md::PR Perf impact 模板` 在 PR 描述贴四维数据）—— `perf_cold_scan` ✓ 无回归（wall=410ms Δ-18% / user=110ms Δ-26.7% / max_rss=32MB Δ-34.5% / user/real=0.268）；`perf_get_session_detail` SKIPPED（需 `-perf-fixture-project` corpus，本地无；keyboard dispatcher 不在 session 加载 hot path，跳过非阻塞）
 - [ ] 11.2 windows-compat-reviewer subagent 跑：确认 `event.code` 物理键兜底无 Windows 路径误判
-- [ ] 11.3 macOS Cmd+W 已知系统冲突：在 KeyboardShortcutsPanel 该行 tooltip 加提示"在 macOS 与系统关闭窗口可能冲突，建议改键"
+- [x] 11.3 macOS Cmd+W 已知系统冲突：在 KeyboardShortcutsPanel 该行 tooltip 加提示"在 macOS 与系统关闭窗口可能冲突，建议改键"
 
 ## 12. 文档与索引
 
-- [ ] 12.1 `openspec/followups.md` 新增 `keyboard-shortcuts` 段，记录 future: 引入 `tauri-plugin-global-shortcut` 让 `mod+shift+/` 可全局唤起 CommandPalette（应用未聚焦也响应）
-- [ ] 12.2 `ui/CLAUDE.md` 新增 "键盘快捷键" 段：指向 `ui/src/lib/keyboard/` registry，强调"全局 mod-key 走 registry / 局部 Escape/Enter 各组件自管"边界
-- [ ] 12.3 `crates/CLAUDE.md` 在"IPC 字段改动 checklist"段引用本次 `keyboardShortcuts: HashMap<String, String>` camelCase 字段
+- [x] 12.1 `openspec/followups.md` 新增 `keyboard-shortcuts` 段，记录 future: 引入 `tauri-plugin-global-shortcut` 让 `mod+shift+/` 可全局唤起 CommandPalette（应用未聚焦也响应）
+- [x] 12.2 `ui/CLAUDE.md` 新增 "键盘快捷键" 段：指向 `ui/src/lib/keyboard/` registry，强调"全局 mod-key 走 registry / 局部 Escape/Enter 各组件自管"边界
+- [x] 12.3 `crates/CLAUDE.md` 在"IPC 字段改动 checklist"段引用本次 `keyboardShortcuts: HashMap<String, String>` camelCase 字段
 
 ## 13. impeccable extract 提取 DESIGN.md delta（archive 前一刻）
 

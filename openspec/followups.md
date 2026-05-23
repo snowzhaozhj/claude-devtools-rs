@@ -642,3 +642,28 @@ vitest 单测 + mockIPC 路径与 Sidebar.test.svelte.ts 同 pattern，独立 fo
 - **信号爆炸退避策略**：tracing layer ERROR/WARN 风暴时（> 1000 / 秒）启用指数退避采样，避免 cdt_xxx.error counter 爆涨虚报频率
 - **tracing target 子模块归类细分**：当前按顶级 crate 归类（`cdt_ssh.error`），观察 cdt-ssh 多模块（manager / polling_watcher / session）失败模式是否需要细分到 `cdt_ssh.polling.error` 等
 - **Event ring buffer 利用率监控**：`events.dropped` counter 与队列 cap 10000 是否合适
+
+---
+
+## keyboard-shortcuts（change `add-keyboard-shortcut-system`）
+
+Phase 1 已落地：UI registry / dispatcher / 17 条 default + Settings 录键 panel + cdt-config `keyboardShortcuts: HashMap<String, String>` 持久化。以下条目本 PR scope 外，待真实使用反馈后决定是否做。
+
+### [enhancement → future] tauri-plugin-global-shortcut 全局唤起
+
+- **背景**：当前 dispatcher 走 `document.addEventListener("keydown")`——仅在应用窗口聚焦时响应。`mod+shift+/` 想做"应用未聚焦也能从其他 app 拉起 CommandPalette"无法实现。
+- **方向**：引入 [`tauri-plugin-global-shortcut`](https://v2.tauri.app/plugin/global-shortcut/) 在 Tauri 后端 `setup` 时按 cdt-config 的 `keyboardShortcuts.global.command-palette` 注册系统级 shortcut；触发后 emit 到前端 + 调 `window.show() + window.setFocus()`。
+- **风险**：系统级 shortcut 会与其它 app 冲突（macOS Spotlight `Cmd+Space` / Raycast 等），SHALL 在 Settings panel 加"启用全局快捷键"开关 + 默认关闭；需实现 conflict detection（同 binding 在 macOS 上可能被静默吞掉）。
+- **触发条件**：用户主动反馈"想从后台拉起"，或观察到 active session 之外仍频繁需要 CommandPalette 时再做。
+
+### [coverage-gap → deferred] Playwright e2e 用户故事
+
+本 PR `tasks.md::§10` deferred，待 QA teammate 独立 PR 落地：
+
+- 14+ 条快捷键 happy path（每条 mockIPC + dispatch keydown + 验证效果）
+- 录键交互 e2e（进 Settings → 改 binding → save → 验证旧组合不再触发、新组合触发）
+- 冲突检测 e2e（录入已占用 binding → 验证 conflict 反馈 + Save disabled）
+- 重置全部 e2e（自定义 3 条后点重置全部 → 验证 cdt-config 写入 empty + UI 显示 default）
+- IPC error 回滚 e2e（mockIPC `setConfig` 返回 error → 验证 UI inline 错误 + registry 内存回滚）
+
+vitest mockIPC 单测 + svelte-check 已覆盖契约层；e2e 跑真 Svelte mount + DOM 事件链路，是 §9 单测的补充验证而非替代。
