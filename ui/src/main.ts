@@ -1,6 +1,7 @@
 import { mount } from 'svelte'
 import './app.css'
 import App from './App.svelte'
+import { installGlobalContextMenuFallback } from './lib/contextMenu.svelte'
 
 // dev/test 环境注入 mockIPC：URL ?mock=1 强制开启，或浏览器无 Tauri runtime
 // 时自动开启。真 cargo tauri dev 窗口由 Tauri 注入 __TAURI_INTERNALS__，
@@ -50,6 +51,9 @@ async function maybeSetupMock(): Promise<void> {
 }
 
 async function bootstrap(): Promise<void> {
+  // 全局右键菜单兜底（spec frontend-context-menu）：在 Svelte mount 之前注册，
+  // 启动后任意位置的右键事件都被覆盖。幂等，HMR 重复调用安全。
+  installGlobalContextMenuFallback()
   await maybeSetupMock()
   mount(App, {
     target: document.getElementById('app')!,

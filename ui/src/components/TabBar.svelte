@@ -9,8 +9,11 @@
   } from "../lib/tabStore.svelte";
   import { MAX_PANES } from "../lib/paneTypes";
   import { beginDrag, getDragSource, getHit, isDragging } from "../lib/dragSession.svelte";
-  import TabContextMenu from "./TabContextMenu.svelte";
   import { BELL, SETTINGS, FILE_TEXT_SVG, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
+  import {
+    contextMenu,
+    type ContextMenuItem,
+  } from "../lib/contextMenu.svelte";
 
   interface Props {
     paneId: string;
@@ -46,12 +49,9 @@
   }
 
   // ---------- 右键菜单 ----------
-  let ctxMenu: { x: number; y: number; tabId: string } | null = $state(null);
-
-  function handleContextMenu(e: MouseEvent, tabId: string) {
-    e.preventDefault();
-    ctxMenu = { x: e.clientX, y: e.clientY, tabId };
-  }
+  // 通过 use:contextMenu action（lib/contextMenu.svelte.ts）接管右键，菜单
+  // portal 到 document.body 由 AppContextMenu 渲染——避免 .tab-list overflow:auto
+  // clipping，且统一全应用菜单视觉与 a11y。
 
   function closeOthers(keepTabId: string) {
     const p = getPaneById(paneId);
@@ -59,6 +59,31 @@
     // 复制快照避免迭代时修改
     const toClose = p.tabs.filter((t) => t.id !== keepTabId).map((t) => t.id);
     for (const id of toClose) closeTab(id);
+  }
+
+  function buildTabContextItems(tabId: string): ContextMenuItem[] {
+    const pane = getPaneById(paneId);
+    const canSplit = getPaneLayout().panes.length < MAX_PANES;
+    const canCloseOthers = (pane?.tabs.length ?? 0) > 1;
+    return [
+      { label: "关闭", action: () => closeTab(tabId) },
+      {
+        label: "关闭其他",
+        disabled: !canCloseOthers,
+        action: () => closeOthers(tabId),
+      },
+      { separator: true },
+      {
+        label: "Split Left",
+        disabled: !canSplit,
+        action: () => splitPane(paneId, tabId, "left"),
+      },
+      {
+        label: "Split Right",
+        disabled: !canSplit,
+        action: () => splitPane(paneId, tabId, "right"),
+      },
+    ];
   }
 
   function isSourceTab(index: number): boolean {
@@ -117,7 +142,7 @@
         data-pane-id={paneId}
         title={tab.label}
         onpointerdown={(e) => handlePointerDown(e, index, tab.id)}
-        oncontextmenu={(e) => handleContextMenu(e, tab.id)}
+        use:contextMenu={() => buildTabContextItems(tab.id)}
         onkeydown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
@@ -156,24 +181,6 @@
   </div>
 
 </div>
-
-{#if ctxMenu}
-  {@const ctx = ctxMenu}
-  {@const pane = getPaneById(paneId)}
-  {@const canSplit = getPaneLayout().panes.length < MAX_PANES}
-  {@const canCloseOthers = (pane?.tabs.length ?? 0) > 1}
-  <TabContextMenu
-    x={ctx.x}
-    y={ctx.y}
-    {canSplit}
-    {canCloseOthers}
-    onClose={() => { ctxMenu = null; }}
-    onCloseTab={() => closeTab(ctx.tabId)}
-    onCloseOthers={() => closeOthers(ctx.tabId)}
-    onSplitLeft={() => splitPane(paneId, ctx.tabId, "left")}
-    onSplitRight={() => splitPane(paneId, ctx.tabId, "right")}
-  />
-{/if}
 
 <style>
   .tab-bar {

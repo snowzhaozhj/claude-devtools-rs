@@ -11,7 +11,13 @@ import { clearMocks } from '@tauri-apps/api/mocks'
 
 import SessionDetail from '../routes/SessionDetail.svelte'
 import { setupMockIPC } from '../lib/tauriMock'
-import { saveTabUIState } from '../lib/tabStore.svelte'
+import {
+  saveTabUIState,
+  getTabUIState,
+  openTab,
+  getActiveTab,
+  closeTab,
+} from '../lib/tabStore.svelte'
 import { singleProjectFixture } from '../lib/__fixtures__'
 import type { Fixture } from '../lib/__fixtures__'
 import type { AIChunk, Chunk, CompactChunk } from '../lib/api'
@@ -131,7 +137,9 @@ describe('SessionDetail smoke', () => {
       expandedItems: new Set(['ai:a1:0-tool-tu1']),
       searchVisible: false,
       contextPanelVisible: false,
-      scrollTop: 0,
+      atBottom: false,
+      anchorChunkId: null,
+      anchorOffsetPx: 0,
     })
 
     const { container } = render(SessionDetail, {
@@ -233,6 +241,99 @@ describe('SessionDetail smoke', () => {
     const title = btn?.getAttribute('title') ?? ''
     expect(title.startsWith('跳到最新消息')).toBe(true)
     expect(/⌘↓|Ctrl\+End/.test(title)).toBe(true)
+  })
+
+  // ── 滚动位置保留（spec tab-management::滚动位置恢复）──
+  // 真浏览器特异行为（detached element scrollTop=0、lazy markdown 占位 vs 真实
+  // 渲染高度差、IntersectionObserver / MutationObserver 时序）jsdom 都不复现，
+  // 锚点法核心契约（捕获 / 恢复 / 粘底 pin）的回归测试只能 Playwright e2e 兜底
+  // （见 ui/tests/e2e/tab-scroll-preserve.spec.ts）。本节 unit 测试只覆盖
+  // jsdom 能模拟的 sessionId guard 行为：用 anchorChunkId sentinel 验证不被覆盖。
+  test('滚动位置保留：tab 已被替换 sessionId 时不写脏 anchor', async () => {
+    openTab(SESSION_ID, PROJECT_ID, 'preserve-replaced')
+    const tabId = getActiveTab()!.id
+    saveTabUIState(tabId, {
+      expandedChunks: new Set(),
+      expandedItems: new Set(),
+      searchVisible: false,
+      contextPanelVisible: false,
+      atBottom: false,
+      anchorChunkId: 'sentinel-from-prior-session',
+      anchorOffsetPx: 42,
+    })
+
+    const { container, unmount } = render(SessionDetail, {
+      props: {
+        tabId,
+        projectId: PROJECT_ID,
+        // 故意与 tabStore 内 tab.sessionId 不一致 → guard 拒写
+        sessionId: 'orphan-session-not-in-any-tab',
+      },
+    })
+    await waitFor(() => {
+      expect(container.querySelector('.session-detail')).not.toBeNull()
+    })
+    const conv = container.querySelector('.conversation') as HTMLElement | null
+    if (conv) {
+      conv.scrollTop = 333
+      conv.dispatchEvent(new Event('scroll'))
+    }
+    unmount()
+
+    // guard 应拒写——保留之前的 sentinel
+    const after = getTabUIState(tabId)
+    expect(after.anchorChunkId).toBe('sentinel-from-prior-session')
+    expect(after.anchorOffsetPx).toBe(42)
+
+    closeTab(tabId)
+  })
+
+  test('detail.title 存在时 <h1> 直接渲染该值（与 sidebar 派生一致）', async () => {
+    const fx = {
+      ...singleProjectFixture,
+      sessionDetails: {
+        [`${PROJECT_ID}:${SESSION_ID}`]: {
+          ...singleProjectFixture.sessionDetails[`${PROJECT_ID}:${SESSION_ID}`],
+          title: '修复登录页样式',
+        },
+      },
+    }
+    setupMockIPC(fx)
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId: 'tab-title-1',
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+    await waitFor(() => {
+      const h1 = container.querySelector('h1.top-title')
+      expect(h1?.textContent).toBe('修复登录页样式')
+    })
+  })
+
+  test('detail.title 缺失时 <h1> fallback 到 sessionId.slice(0, 8)（与 sidebar 一致）', async () => {
+    const fx = {
+      ...singleProjectFixture,
+      sessionDetails: {
+        [`${PROJECT_ID}:${SESSION_ID}`]: {
+          ...singleProjectFixture.sessionDetails[`${PROJECT_ID}:${SESSION_ID}`],
+          title: null,
+        },
+      },
+    }
+    setupMockIPC(fx)
+    const { container } = render(SessionDetail, {
+      props: {
+        tabId: 'tab-title-2',
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+    await waitFor(() => {
+      const h1 = container.querySelector('h1.top-title')
+      expect(h1?.textContent).toBe(SESSION_ID.slice(0, 8))
+    })
   })
 
   test('jump-to-latest：未打开 ContextPanel 时按钮不带 shifted class', async () => {

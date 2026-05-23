@@ -10,6 +10,7 @@
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
   import { createLazyMarkdownObserver, estimatePlaceholderHeight } from "../lib/lazyMarkdown.svelte";
+  import { isAtBottom, captureScrollAnchor, restoreScrollAnchor, type ScrollAnchorState } from "../lib/scrollAnchor";
   import { getTabUIState, saveTabUIState, getTabSessionId, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
   import { isMac } from "../lib/platform";
   import {
@@ -23,6 +24,7 @@
   import { getTeamColorSet } from "../lib/teamColors";
   import SearchBar from "../components/SearchBar.svelte";
   import ContextPanel from "../components/ContextPanel.svelte";
+  import SessionMetaMenu from "../components/SessionMetaMenu.svelte";
   import {
     parseInjections,
     selectActivePhaseInjections,
@@ -123,6 +125,21 @@
   let progScrollTimer: ReturnType<typeof setTimeout> | null = null;
   let rAFid: number | null = null;
 
+  // ── 滚动状态：锚点法（change `tab-scroll-restore-anchor`） ──
+  //
+  // 算法实现在 `lib/scrollAnchor.ts`，本组件持有「最后捕获的锚点快照」+
+  // 「bottom pin 状态机的 cleanup 引用」两份组件级状态。
+  //
+  // `latestAnchor` 由 scroll listener 同步维护——element detach 后 onDestroy
+  // 仍能读到切走前最后一帧的快照（rect/scrollTop 在 detached 状态不可靠）。
+  let latestAnchor: ScrollAnchorState = {
+    atBottom: false,
+    anchorChunkId: null,
+    anchorOffsetPx: 0,
+  };
+  /** bottom pin 状态机的 cleanup 引用——新一轮启动前 / onDestroy 都强制收敛 */
+  let currentBottomPinCleanup: (() => void) | null = null;
+
   function startProgrammaticScroll() {
     isProgrammaticScroll = true;
     if (progScrollTimer !== null) clearTimeout(progScrollTimer);
@@ -182,7 +199,11 @@
 
   function attachConversationScroll(el: HTMLElement) {
     // bind:this 已经把 conversationEl 设上，attach 仅负责挂 listener + cleanup
-    const onScroll = () => scheduleUpdateIsFar();
+    const onScroll = () => {
+      // 同步写入 latestAnchor 供 onDestroy 用——element detach 后无法读 rect/scrollTop
+      latestAnchor = captureScrollAnchor(conversationEl);
+      scheduleUpdateIsFar();
+    };
     const onScrollEnd = () => stopProgrammaticScroll();
     const onUserInput = () => {
       // 用户主动 wheel / touchmove 打断 smooth scroll → 立即清抑制
@@ -237,9 +258,7 @@
   const fileChangeKey = `session-detail-${untrack(() => tabId)}`;
 
   async function refreshDetail() {
-    const wasAtBottom = !!conversationEl
-      && conversationEl.scrollTop + conversationEl.clientHeight
-        >= conversationEl.scrollHeight - 16;
+    const wasAtBottom = !!conversationEl && isAtBottom(conversationEl);
     try {
       const d = await getSessionDetail(projectId, sessionId);
       detail = d;
@@ -290,6 +309,11 @@
       // background refresh 与紧随而至的 file-change refresh 并发触发两次
       // IPC，旧返回覆盖新 detail（codex review 找到的 bug）。
       scheduleRefresh(`detail:${projectId}|${sessionId}`, refreshDetail);
+      // 等 Svelte commit `{:else if detail}` 分支，让 .conversation 真正
+      // mount + bind:this 把 conversationEl 接上；否则下面 scrollTop 恢复
+      // 条件 (conversationEl && ...) 在 cached hit 路径下静默失败，违反
+      // spec `tab-management::滚动位置恢复` Scenario。
+      await tick();
     } else {
       try {
         const t_ipc = performance.now();
@@ -311,9 +335,20 @@
       console.info(`[perf] SessionDetail ${sessionId.slice(0, 8)} first-paint ${total_ms.toFixed(0)}ms`);
     }
 
-    // 恢复滚动位置
-    if (conversationEl && uiState.scrollTop > 0) {
-      conversationEl.scrollTop = uiState.scrollTop;
+    // 恢复滚动位置（cached path 在前面已 await tick；非 cached path 也已 await tick）
+    // —— 锚点法替代旧 scrollTop 数值方案。详 design.md::D2 / D3。
+    if (conversationEl) {
+      const initialState: ScrollAnchorState = {
+        atBottom: uiState.atBottom,
+        anchorChunkId: uiState.anchorChunkId,
+        anchorOffsetPx: uiState.anchorOffsetPx,
+      };
+      // 强制收敛上一轮可能残留的 bottom pin（理论 onDestroy 已清，跨 mount 防御）
+      currentBottomPinCleanup?.();
+      currentBottomPinCleanup = restoreScrollAnchor(conversationEl, initialState);
+      // 同步初始化 latestAnchor——避免恢复后用户没 scroll 时 onDestroy
+      // 用初始空值覆盖刚恢复的锚点（与 PR #223 旧 latestScrollTop 同步原则）
+      latestAnchor = initialState;
     }
 
     // 注册 file-change handler：命中当前 (projectId, sessionId) 时合并刷新
@@ -334,17 +369,30 @@
     cancelScheduledRefresh(`detail:${projectId}|${sessionId}`);
     lazyObserver?.disconnect();
     lazyObserver = null;
+    // 强制收敛 bottom pin 状态机——element unmount 后 MutationObserver / timer
+    // 若没 disconnect 会持续持有 detached element 引用 + 触发回调写入 detached
+    // scrollTop（无效但浪费）
+    currentBottomPinCleanup?.();
+    currentBottomPinCleanup = null;
     // 保存 per-tab UI 状态 —— 但仅在 tab 仍指向当前 sessionId 时保存。
     // openOrReplaceTab 会保留 tabId 仅换 sessionId 触发 destroy/recreate；
     // 若此处无条件 save，旧 session 的状态会覆盖 openOrReplaceTab 刚清掉的 slot，
     // 新 session mount 时 getTabUIState(tabId) 拿到的就是旧 session 残留（codex 二审 #1）。
+    //
+    // 滚动状态用 `latestAnchor` 而非 `captureScrollAnchor()` 当场读：Svelte 5
+    // onDestroy 在 element unmount **之后**触发，conversationEl 仍指向原 ref 但
+    // `.isConnected=false`，rect / scrollTop / scrollHeight 都不可靠。
+    // `latestAnchor` 由 scroll listener 在每次滚动时同步写入，element 离开 DOM
+    // 前的最后一帧锚点已被捕获，不依赖 onDestroy 那一刻的读取。
     if (getTabSessionId(tabId) === sessionId) {
       saveTabUIState(tabId, {
         expandedChunks: new Set(expandedChunks),
         expandedItems: new Set(expandedItems),
         searchVisible,
         contextPanelVisible,
-        scrollTop: conversationEl?.scrollTop ?? 0,
+        atBottom: latestAnchor.atBottom,
+        anchorChunkId: latestAnchor.anchorChunkId,
+        anchorOffsetPx: latestAnchor.anchorOffsetPx,
       });
     }
   });
@@ -597,6 +645,21 @@
     return formatClock(ts, getTimeFormat() === "12h");
   }
 
+  /** 分钟级精度，用于顶 bar `LAST` 与 sidebar 时间密度对齐（无秒） */
+  function ftimeMinutes(ts: string): string {
+    try {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return "";
+      return d.toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: getTimeFormat() === "12h",
+      });
+    } catch {
+      return "";
+    }
+  }
+
   function fduration(ms: number): string {
     if (ms < 1000) return `${ms}ms`;
     const s = ms / 1000;
@@ -652,26 +715,15 @@
   function isWriteTool(exec: ToolExecution): boolean { return exec.toolName === "Write" && !exec.isError; }
   function isBashTool(exec: ToolExecution): boolean { return ["Bash", "bash"].includes(exec.toolName); }
 
-  function firstUserTitle(chunks: Chunk[]): string {
-    for (const c of chunks) {
-      if (c.kind === "user") {
-        const t = utext(c.content);
-        if (t && !t.startsWith("/")) return t.length > 60 ? t.slice(0, 60) + "..." : t;
-        // 跳过纯命令消息（如 /model），继续找真正的用户输入
-        if (t && t.startsWith("/") && t.length > 1) {
-          // 命令消息也可以作为标题，但优先找非命令消息
-          continue;
-        }
-      }
-    }
-    // fallback: 取第一条任何 user 消息
-    for (const c of chunks) {
-      if (c.kind === "user") {
-        const t = utext(c.content);
-        if (t) return t.length > 60 ? t.slice(0, 60) + "..." : t;
-      }
-    }
-    return sessionId.slice(0, 12);
+  /**
+   * 会话标题：直接消费 backend `extract_session_metadata_from_parsed` 派生（与
+   * sidebar `SessionSummary.title` 共用单一真相源），`null/undefined` 时 fallback
+   * 到 `sessionId.slice(0, 8)` 与 sidebar 一致。
+   * Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
+   */
+  function detailTitle(d: SessionDetail | null): string {
+    if (d?.title) return d.title;
+    return sessionId.slice(0, 8);
   }
 </script>
 
@@ -685,11 +737,13 @@
   {@const counts = countByKind(detail.chunks)}
   {@const lastActivity = lastActivityTs(detail.chunks)}
   {@const totalTokens = m.inputTokens + m.outputTokens}
+  {@const metaCwdRaw = detail.metadata && typeof detail.metadata === "object" ? (detail.metadata as { cwd?: unknown }).cwd : undefined}
+  {@const metaCwd = typeof metaCwdRaw === "string" && metaCwdRaw.length > 0 ? metaCwdRaw : undefined}
 
   <!-- Top bar：18px 标题 + 副标题密度行（chunks · tools · tokens · last activity） -->
   <div class="top-bar">
     <div class="top-titles">
-      <h1 class="top-title">{firstUserTitle(detail.chunks)}</h1>
+      <h1 class="top-title">{detailTitle(detail)}</h1>
       <div class="top-stats" aria-label="Session statistics">
         <span class="top-stat">
           <span class="top-stat-num">{counts.ai}</span>
@@ -716,19 +770,13 @@
           <span class="top-stat-sep">·</span>
           <span class="top-stat top-stat-time">
             <span class="top-stat-unit">LAST</span>
-            <span class="top-stat-num">{ftime(lastActivity)}</span>
-          </span>
-        {/if}
-        {#if detail.metadata && typeof detail.metadata === 'object' && typeof (detail.metadata as { cwd?: string }).cwd === 'string'}
-          <span class="top-stat-sep">·</span>
-          <span class="top-stat top-stat-cwd" title={(detail.metadata as { cwd: string }).cwd}>
-            <span class="top-stat-unit">CWD</span>
-            <span class="top-stat-num">{(detail.metadata as { cwd: string }).cwd}</span>
+            <span class="top-stat-num">{ftimeMinutes(lastActivity)}</span>
           </span>
         {/if}
       </div>
     </div>
     <div class="top-meta">
+      <SessionMetaMenu cwd={metaCwd} sessionId={sessionId} />
       {#if contextCount > 0}
         <button
           type="button"
@@ -900,6 +948,7 @@
                   onclick={() => toggleChunk(chunk)}
                   aria-expanded={toolsVisible}
                   aria-label={toolsVisible ? "折叠工具调用列表" : "展开工具调用列表"}
+                  title={summaryText}
                 >
                   <span class="ai-tool-chevron" class:ai-tool-chevron-open={toolsVisible}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT} /></svg>
@@ -1264,7 +1313,7 @@
   .top-stats {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 7px;
     font-family: var(--font-mono);
     font-size: 11px;
@@ -1295,23 +1344,6 @@
   .top-stat-time .top-stat-num {
     color: var(--color-text-muted);
     font-weight: 500;
-  }
-
-  /* CWD：完整路径，长度变化大，让它吸收剩余横向空间并 ellipsis；
-     与时间一样降权显示。 */
-  .top-stat-cwd {
-    min-width: 0;
-    flex-shrink: 1;
-    overflow: hidden;
-  }
-
-  .top-stat-cwd .top-stat-num {
-    color: var(--color-text-muted);
-    font-weight: 500;
-    font-family: var(--font-mono);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .top-stat-sep {
@@ -1892,9 +1924,10 @@
     background: var(--color-surface-raised);
     border: 1px solid var(--color-border);
     transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
-    flex-shrink: 0;
+    flex-shrink: 1;
+    min-width: 0;
     font-family: inherit;
-    max-width: 380px;
+    max-width: min(640px, calc(100% - 240px));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

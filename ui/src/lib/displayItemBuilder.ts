@@ -399,5 +399,5 @@ export function buildSummary(items: DisplayItem[]): string {
   if (teammateMessages > 0) {
     parts.push(`${teammateMessages} teammate message${teammateMessages > 1 ? "s" : ""}`);
   }
-  return parts.join(", ");
+  return parts.join(" · ");
 }

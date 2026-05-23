@@ -257,3 +257,10 @@ export const SERVER_SVG = `
 <line x1="6" x2="6.01" y1="6" y2="6"/>
 <line x1="6" x2="6.01" y1="18" y2="18"/>
 `;
+
+/** Lucide more-horizontal — 三点 overflow menu trigger（SessionDetail meta-action） */
+export const MORE_HORIZONTAL_SVG = `
+<circle cx="12" cy="12" r="1"/>
+<circle cx="19" cy="12" r="1"/>
+<circle cx="5" cy="12" r="1"/>
+`;

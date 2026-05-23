@@ -589,6 +589,51 @@ fn ai_chunk_serializes_camelcase_fields() {
 }
 
 #[test]
+fn aichunk_with_empty_responses_and_teammate_messages_round_trips() {
+    // Spec: chunk-building::Embed teammate messages into AIChunk 第 5 条规则。
+    // 守住 empty-responses + 非空 teammate_messages 的 AIChunk 可序列化 +
+    // 反序列化等价（前端 type 与 displayItemBuilder 假设依赖此形态）。
+    let chunk = AIChunk {
+        chunk_id: "tm1:0".into(),
+        timestamp: ts(),
+        duration_ms: None,
+        responses: vec![],
+        metrics: ChunkMetrics::default(),
+        semantic_steps: vec![],
+        tool_executions: vec![],
+        subagents: vec![],
+        slash_commands: vec![],
+        teammate_messages: vec![TeammateMessage {
+            uuid: "tm1".into(),
+            teammate_id: "alice".into(),
+            color: Some("blue".into()),
+            summary: Some("you are frontend".into()),
+            body: "你是 kb-shortcuts team 的 frontend teammate".into(),
+            timestamp: ts(),
+            reply_to_tool_use_id: None,
+            token_count: Some(42),
+            is_noise: false,
+            is_resend: false,
+        }],
+    };
+    let json = serde_json::to_string(&chunk).expect("serialize empty-AI");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("re-parse json");
+    assert_eq!(
+        parsed["responses"],
+        json!([]),
+        "responses should serialize as empty array"
+    );
+    assert!(
+        parsed["teammateMessages"].is_array(),
+        "teammateMessages should be array"
+    );
+    assert_eq!(parsed["teammateMessages"][0]["teammateId"], json!("alice"));
+
+    let round_tripped: AIChunk = serde_json::from_str(&json).expect("deserialize empty-AI");
+    assert_eq!(round_tripped, chunk, "round-trip identity");
+}
+
+#[test]
 fn ai_chunk_empty_teammate_messages_omitted() {
     let chunk = AIChunk {
         chunk_id: "ai:a1:0".into(),
@@ -2471,6 +2516,7 @@ fn session_detail_single_phase_injections_by_phase_equals_context_injections() {
         injections_by_phase: serde_json::Value::Object(by_phase),
         phase_info,
         is_ongoing: false,
+        title: None,
     };
     let json_val = serde_json::to_value(&detail).unwrap();
     assert_eq!(json_val["injectionsByPhase"]["1"], json!([inj]));
@@ -2534,6 +2580,7 @@ fn session_detail_multi_phase_preserves_phase1_injections() {
         injections_by_phase: serde_json::Value::Object(by_phase),
         phase_info,
         is_ongoing: false,
+        title: None,
     };
     let json_val = serde_json::to_value(&detail).unwrap();
     // Round-trip 反序列化保持字节级相等
@@ -2547,6 +2594,52 @@ fn session_detail_multi_phase_preserves_phase1_injections() {
         json_val["contextInjections"],
         json_val["injectionsByPhase"]["2"]
     );
+}
+
+/// `SessionDetail.title` 字段以 `title` (camelCase) 序列化，round-trip 等价。
+/// Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
+#[test]
+fn session_detail_title_field_round_trip() {
+    use cdt_api::SessionDetail;
+    let detail = SessionDetail {
+        session_id: "s1".into(),
+        project_id: "p1".into(),
+        chunks: serde_json::Value::Array(vec![]),
+        metrics: json!({}),
+        metadata: json!({}),
+        context_injections: json!([]),
+        injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
+        phase_info: serde_json::Value::Null,
+        is_ongoing: false,
+        title: Some("修复登录页样式".into()),
+    };
+    let json_val = serde_json::to_value(&detail).unwrap();
+    assert_eq!(
+        json_val["title"],
+        json!("修复登录页样式"),
+        "SessionDetail.title MUST 以 camelCase `title` 字段序列化"
+    );
+    let back: SessionDetail = serde_json::from_value(json_val.clone()).unwrap();
+    assert_eq!(back.title.as_deref(), Some("修复登录页样式"));
+
+    // None 时序列化为 null（serde 默认行为）
+    let detail_none = SessionDetail {
+        session_id: "s2".into(),
+        project_id: "p1".into(),
+        chunks: serde_json::Value::Null,
+        metrics: serde_json::Value::Null,
+        metadata: serde_json::Value::Null,
+        context_injections: serde_json::Value::Array(Vec::new()),
+        injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
+        phase_info: serde_json::Value::Null,
+        is_ongoing: false,
+        title: None,
+    };
+    let json_none = serde_json::to_value(&detail_none).unwrap();
+    assert!(json_none.as_object().unwrap().contains_key("title"));
+    assert_eq!(json_none["title"], json!(null));
+    let back_none: SessionDetail = serde_json::from_value(json_none).unwrap();
+    assert!(back_none.title.is_none());
 }
 
 /// `chunk_id` 形态统一：所有 chunk 类型首次出现都用 `<base>:0`，无 `ai:` 前缀。

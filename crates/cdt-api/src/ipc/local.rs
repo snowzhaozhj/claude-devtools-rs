@@ -35,7 +35,8 @@ use super::image_disk_cache::{empty_data_uri, format_data_uri, materialize_image
 use super::parsed_message_cache::{ParsedMessageCache, extract_parsed_messages_cached};
 use super::project_scan_cache::{ProjectScanCache, spawn_project_scan_cache_invalidator};
 use super::session_metadata::{
-    MetadataCache, SessionMetadata, extract_session_metadata_cached, try_lookup_cached_metadata,
+    MetadataCache, SessionMetadata, extract_session_metadata_cached,
+    extract_session_metadata_from_parsed, try_lookup_cached_metadata,
 };
 use super::traits::DataApi;
 use super::types::{
@@ -3217,6 +3218,13 @@ impl DataApi for LocalDataApi {
         // SessionDetail 头部直接展示完整 cwd。Spec：
         // `ipc-data-api::Session 列表序列化暴露 cwd 字段::get_session_detail 元数据带 cwd`。
         let session_cwd: Option<&str> = messages.iter().find_map(|m| m.cwd.as_deref());
+        // 与同 sessionId 的 `SessionSummary.title` 共用单一派生源
+        // `extract_session_metadata_from_parsed`，让前端 SessionDetail 顶部
+        // `<h1>` 与 sidebar 列表项标题字节级一致。`is_stale` 仅参与 metadata.is_ongoing
+        // 派生不影响 title；这里传 `!is_ongoing` 让返回值的 is_ongoing 与本函数已算出的
+        // `is_ongoing` 等价（避免日后误读"detail 端 stale 语义不一致"）。
+        // Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
+        let title_metadata = extract_session_metadata_from_parsed(&messages, !is_ongoing);
         let detail = SessionDetail {
             session_id: session_id.to_owned(),
             project_id: project_id.to_owned(),
@@ -3231,6 +3239,7 @@ impl DataApi for LocalDataApi {
             injections_by_phase: injections_by_phase_value,
             phase_info: phase_info_value,
             is_ongoing,
+            title: title_metadata.title,
         };
         let serde_ms = t_serde.elapsed().as_millis();
         let total_ms = t_total.elapsed().as_millis();
@@ -3469,6 +3478,7 @@ impl DataApi for LocalDataApi {
                     injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
                     phase_info: serde_json::Value::Null,
                     is_ongoing: false,
+                    title: None,
                 });
                 continue;
             };
@@ -3484,6 +3494,7 @@ impl DataApi for LocalDataApi {
                     injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
                     phase_info: serde_json::Value::Null,
                     is_ongoing: false,
+                    title: None,
                 }),
             }
         }

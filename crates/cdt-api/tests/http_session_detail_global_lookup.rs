@@ -191,6 +191,16 @@ async fn get_session_detail_after_find_session_project_succeeds() {
         detail.context_injections.is_array(),
         "context_injections SHALL 是 array（无 CLAUDE.md 时为空数组）"
     );
+
+    // detail.title SHALL 由 backend 同源派生填入，与 sidebar SessionSummary.title
+    // 走同一 `extract_session_metadata_from_parsed`。fixture 首条 user content
+    // 为 "title A"，sanitize 后即为 title。Spec：
+    // `ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
+    assert_eq!(
+        detail.title.as_deref(),
+        Some("title A"),
+        "SessionDetail.title SHALL 由 backend 派生填入，与 sidebar 同源"
+    );
 }
 
 #[tokio::test]

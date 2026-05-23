@@ -3,7 +3,7 @@
 
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import type { AIChunk, SubagentProcess, ToolExecution } from './api'
+import type { AIChunk, SubagentProcess, TeammateMessage, ToolExecution } from './api'
 import {
   _resetDisplayItemsCacheForTest,
   buildDisplayItems,
@@ -310,5 +310,68 @@ describe('buildDisplayItems — task tool 去重与 Agent 工具识别（R3）',
     if (toolItem && toolItem.type === 'tool') {
       expect(toolItem.execution.toolName).toBe('Task')
     }
+  })
+})
+
+// =============================================================================
+// 边界：empty-responses AIChunk（chunk-building::Embed teammate messages
+// into AIChunk 第 5 条规则——orphan teammate before user-side flush）。
+// =============================================================================
+
+describe('buildDisplayItems — empty-responses AIChunk with teammate', () => {
+  function makeEmptyAIChunk(teammates: TeammateMessage[]): AIChunk {
+    const ts = '2026-05-23T22:08:00Z'
+    return {
+      kind: 'ai',
+      chunkId: 'tm-1:0',
+      timestamp: ts,
+      durationMs: null,
+      responses: [],
+      metrics: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        toolCount: 0,
+        costUsd: null,
+      },
+      semanticSteps: [],
+      toolExecutions: [],
+      subagents: [],
+      slashCommands: [],
+      teammateMessages: teammates,
+    }
+  }
+
+  test('empty-responses AIChunk 含 teammate_message SHALL 仅产 teammate_message item', () => {
+    const tm: TeammateMessage = {
+      uuid: 'tm-1',
+      teammateId: 'team-lead',
+      color: 'blue',
+      summary: 'you are frontend',
+      body: '你是 kb-shortcuts team 的 frontend teammate',
+      timestamp: '2026-05-23T22:08:00Z',
+      replyToToolUseId: null,
+      tokenCount: 100,
+      isNoise: false,
+      isResend: false,
+    }
+    const chunk = makeEmptyAIChunk([tm])
+    const { items, lastOutput } = buildDisplayItems(chunk)
+    expect(items.length).toBe(1)
+    expect(items[0].type).toBe('teammate_message')
+    if (items[0].type === 'teammate_message') {
+      expect(items[0].teammateMessage.body).toBe(
+        '你是 kb-shortcuts team 的 frontend teammate',
+      )
+    }
+    expect(lastOutput).toBeNull()
+  })
+
+  test('empty-responses AIChunk 无 teammate SHALL 产空 items', () => {
+    const chunk = makeEmptyAIChunk([])
+    const { items, lastOutput } = buildDisplayItems(chunk)
+    expect(items.length).toBe(0)
+    expect(lastOutput).toBeNull()
   })
 })
