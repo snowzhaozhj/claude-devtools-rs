@@ -166,16 +166,30 @@ function sortMods(mods: string[]): string[] {
 /**
  * 把 KeyboardEvent 归一化为 NormalizedKey 字符串（如 `"meta+shift+k"`），供 Map 索引。
  * - non-mac 平台禁止把 metaKey 识别为 mod（防 Win 键 / 神秘键盘的误触发）
+ * - **AltGraph 守卫**：Windows 德语 / 法语等键盘的 AltGr 物理键被浏览器合成为
+ *   `ctrlKey=true + altKey=true`（实际语义是输入扩展字符如 `@` / `\`），若按 mod
+ *   识别会把 `AltGr+Q` 误命中 `ctrl+alt+q`。`event.getModifierState("AltGraph")`
+ *   返回 true 时强制把 ctrl / alt 视作未按下，让用户按 AltGr+任意字符不触发任何
+ *   shortcut（Numpad 等其他主键归一仍生效）。
  * - 修饰键按字母顺序排列
  * - 主键经 `canonicalKey` 处理
  * - 仅按下修饰键自身（无主键）返回空串
  */
 export function normalize(event: KeyboardEvent): string {
+  // KeyboardEvent.ctrlKey / altKey 是 read-only，AltGraph 守卫用本地变量遮罩
+  let ctrl = event.ctrlKey;
+  let alt = event.altKey;
+  // jsdom 下 getModifierState 可能不存在，做存在性判定
+  if (typeof event.getModifierState === "function" && event.getModifierState("AltGraph")) {
+    ctrl = false;
+    alt = false;
+  }
+
   const mods: string[] = [];
   // 平台分流：non-mac 平台禁识 metaKey
   if (isMac() && event.metaKey) mods.push("meta");
-  if (event.ctrlKey) mods.push("ctrl");
-  if (event.altKey) mods.push("alt");
+  if (ctrl) mods.push("ctrl");
+  if (alt) mods.push("alt");
   if (event.shiftKey) mods.push("shift");
 
   const main = canonicalKey(event.key || "", event.code || "");
@@ -210,7 +224,19 @@ export function normalizeBinding(binding: string): string {
       mods.push("alt");
     } else if (lower === "shift") {
       mods.push("shift");
-    } else if (lower === "meta" || lower === "cmd" || lower === "command" || lower === "win") {
+    } else if (lower === "meta" || lower === "cmd" || lower === "command") {
+      mods.push("meta");
+    } else if (lower === "win") {
+      // `"win"` 是历史保留 token：mac 上展开为 meta（Command）兼容旧 binding；
+      // **non-mac 平台 normalize() 不识 metaKey**（见上面 normalize 注释），所以把
+      // Windows 用户的 `"win+x"` 当 mod 写实际永远不命中。dev mode 显式 warn
+      // 提醒作者改用 `mod` 关键字（mac 展为 meta、非 mac 展为 ctrl）。
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[keyboard] "win" token in binding has no effect on Windows; metaKey is intentionally ignored on non-mac platforms (use "mod" instead)`,
+        );
+      }
       mods.push("meta");
     } else {
       // 主键

@@ -256,3 +256,90 @@ describe('parseShortcut', () => {
     expect(parseShortcut('+++')).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// §4.16 AltGraph 守卫（Windows 德语 / 法语 / 北欧布局 AltGr 键合成 ctrl+alt）
+// ---------------------------------------------------------------------------
+
+describe('normalize AltGraph 守卫', () => {
+  /**
+   * Win/Linux 上 AltGr 物理键按下时浏览器合成 `ctrlKey=true + altKey=true`，
+   * 但 `event.getModifierState("AltGraph")` 也返回 true。这种组合的真实语义是
+   * 输入扩展字符（德语 `AltGr+Q` = `@`），不应被识别为 `ctrl+alt+q` shortcut。
+   *
+   * 通过 dispatchEvent 让 jsdom 把构造时传的 modifier states 映射到 getModifierState
+   * （直接 new KeyboardEvent 时 getModifierState 在 jsdom 下不读 init.modifierAltGraph，
+   * 所以这里直接 stub event 对象）。
+   */
+  function altGrEvent(key: string, code: string, hasAltGraph: boolean): KeyboardEvent {
+    return {
+      key,
+      code,
+      ctrlKey: true,
+      altKey: true,
+      shiftKey: false,
+      metaKey: false,
+      isComposing: false,
+      keyCode: 0,
+      repeat: false,
+      getModifierState: (name: string) => name === 'AltGraph' && hasAltGraph,
+    } as unknown as KeyboardEvent
+  }
+
+  test('Win 德语 AltGr+Q（ctrl+alt+q + AltGraph=true） → 主键 q 无 mod', () => {
+    pinMac(false)
+    const e = altGrEvent('@', 'KeyQ', true) // 德语布局 AltGr+Q 输出 @，event.key 是 @
+    // canonicalKey('@', 'KeyQ') → '@' 不在 switch 列表 → fallthrough → key '@' 长度 1 但非字母 → return '@'
+    // 实际更稳的断言：当 AltGraph 守卫生效时不带 ctrl/alt 前缀
+    const out = normalize(e)
+    expect(out).not.toContain('ctrl')
+    expect(out).not.toContain('alt')
+  })
+
+  test('Win 字母键：AltGr+1（合成 ctrl+alt + AltGraph=true） → 仅主键 1，无 mod', () => {
+    pinMac(false)
+    const e = altGrEvent('1', 'Digit1', true)
+    expect(normalize(e)).toBe('1')
+  })
+
+  test('Win 真 ctrl+alt+1（无 AltGraph） → ctrl+alt+1（守卫不误伤）', () => {
+    pinMac(false)
+    const e = altGrEvent('1', 'Digit1', false)
+    expect(normalize(e)).toBe('alt+ctrl+1')
+  })
+
+  test('AltGraph 守卫不影响 shiftKey / metaKey 判定', () => {
+    pinMac(true) // mac 平台
+    const e = {
+      key: 'k',
+      code: 'KeyK',
+      ctrlKey: true,
+      altKey: true,
+      shiftKey: true,
+      metaKey: true,
+      isComposing: false,
+      keyCode: 0,
+      repeat: false,
+      getModifierState: (name: string) => name === 'AltGraph',
+    } as unknown as KeyboardEvent
+    // AltGraph 仅遮 ctrl/alt；meta + shift 仍生效
+    expect(normalize(e)).toBe('meta+shift+k')
+  })
+
+  test('event.getModifierState 不存在时不抛错（jsdom 老版本兼容）', () => {
+    pinMac(false)
+    const e = {
+      key: 'k',
+      code: 'KeyK',
+      ctrlKey: true,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      isComposing: false,
+      keyCode: 0,
+      repeat: false,
+      // 故意不挂 getModifierState
+    } as unknown as KeyboardEvent
+    expect(normalize(e)).toBe('ctrl+k')
+  })
+})
