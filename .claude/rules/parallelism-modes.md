@@ -83,37 +83,15 @@
 - 前端 → 设计师：反查能否扩 DESIGN.md token
 - 任意 → QA：触发 spec / codex 复审
 
-## bg job 启动样板
-
-`bg-pr` recipe 用 just `quote()` 把 NAME / PROMPT 编码为 shell-safe 单引号字面量，含 backtick / 双引号 / `$` / `$HOME` 等特殊字符也能原样传入：
+## bg job 启动 / 监控
 
 ```bash
-just bg-pr <name> '<inline prompt>'
-# 含特殊字符也安全：
-just bg-pr fix-foo '修 `fn foo()` 的 bug，参考 "原版行为" 与 $HOME 路径'
+just bg-pr <name> '<inline prompt>'   # 起 bg session 跑完整 PR 流水线（quote() 安全编码 backtick / 双引号 / $）
+just bg-status                         # 状态摘要（不直接读 ANSI raw log）
+just bg-stop-all                       # 停所有
+just bg-clean <id>                     # 停 + 删 worktree
 ```
 
-prompt 列**任务范围 + 起点 + 怀疑点 + 完成条件**就够，bg session 自己会读 `.claude/rules` / `CLAUDE.md` / `openspec/changes/<slug>/`。**禁止**手写 `claude --bg "..."` 绕过 `bg-pr` —— 历史踩过 inline 双引号嵌套被 shell 吃的坑。
-
-裸命令（subshell 隔离主 session cwd）：
-```bash
-(cd /path/to/repo-root && claude --bg --name "<name>" "<prompt>")
-```
-
-监控 / 清理：
-```bash
-just bg-status        # 列所有 bg session 状态摘要
-just bg-stop-all      # 停所有
-just bg-clean <id>    # 停 + 删 worktree
-```
-
-prompt 骨架：`.claude/templates/bg-pr-pipeline.md`（占位符 ~20 行；**不要**在 prompt 里重抄 `.claude/rules` / `CLAUDE.md` 内容——bg session 自己会读）。
-
-## bg job 已踩坑速查
-
-详见 `~/.claude/projects/<encoded>/memory/feedback_bg_claude_dispatch.md`。简版：
-
-1. **不要加 `--permission-mode bypassPermissions`**——classifier 拒，需 explicit 授权；默认模式已能跑完整流水线
-2. **prompt 一次写全**——bg session 起后无法非交互注入指令（`claude attach` 是 TUI 不接 stdin）；列任务 + 起点 + 怀疑点 + 完成条件 + 走不走 openspec 即可，规则与 spec bg session 自己读
-3. **log 是 ANSI 流难解析**——用 `just bg-status` 提炼摘要不直接读 raw log
-4. **不要 merge 留用户**——bg 跑到 codex + wait-ci 全绿即止，merge 是 destructive shared state 留用户拍板
+详见：
+- **prompt 骨架**（含占位符 + 关键不变量）：`.claude/templates/bg-pr-pipeline.md`——**禁止**手写 `claude --bg "..."` 绕过 `bg-pr`（inline 引号嵌套被 shell 吃过坑）
+- **踩坑速查**（permission mode / prompt 一次写全 / 不 merge 留用户等）：`~/.claude/projects/<encoded>/memory/feedback_bg_claude_dispatch.md`
