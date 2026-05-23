@@ -100,7 +100,7 @@ describe('Sidebar smoke', () => {
     })
   })
 
-  test('多 worktree group 顶部渲染 worktree filter dropdown（spec sidebar §filter）', async () => {
+  test('多 worktree group 顶部渲染 worktree filter chip cluster（spec sidebar §filter）', async () => {
     // mock-rich-repo-rust group 含 2 个 worktree → showWorktreeFilter=true
     const { container } = render(Sidebar, {
       props: {
@@ -113,9 +113,25 @@ describe('Sidebar smoke', () => {
     await waitFor(() => {
       expect(container.querySelector('.worktree-filter-bar')).not.toBeNull()
     })
+    // chip cluster 替换原 dropdown：role="radiogroup" + 多个 role="radio"
+    const cluster = container.querySelector('.worktree-filter-bar [role="radiogroup"]')
+    expect(cluster).not.toBeNull()
+    const chips = cluster!.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+    // 「全部」+ rust-port + feat-x = 3 chip
+    expect(chips.length).toBe(3)
+    // chip 顺序：「全部」最前（无 ⌗ 前缀）→ isMainWorktree 优先 → 其余按
+    // mostRecentSession 倒序。fixture 里 rust-port isMainWorktree=true，feat-x=false。
+    expect(chips[0].textContent?.trim()).toBe('全部')
+    expect(chips[0].textContent?.includes('⌗')).toBe(false)
+    expect(chips[1].textContent?.trim()).toBe('⌗rust-port')
+    expect(chips[2].textContent?.trim()).toBe('⌗feat-x')
+    // 默认 worktreeFilter=ALL_WORKTREES → 「全部」chip aria-checked=true
+    expect(chips[0].getAttribute('aria-checked')).toBe('true')
+    expect(chips[1].getAttribute('aria-checked')).toBe('false')
+    expect(chips[2].getAttribute('aria-checked')).toBe('false')
   })
 
-  test('单 worktree group 顶部 SHALL NOT 渲染 worktree filter dropdown', async () => {
+  test('单 worktree group 顶部 SHALL NOT 渲染 worktree filter chip cluster', async () => {
     const { container } = render(Sidebar, {
       props: {
         selectedGroupId: 'mock-rich-ts',
@@ -129,6 +145,71 @@ describe('Sidebar smoke', () => {
       expect(container.querySelector('.session-filter-bar')).not.toBeNull()
     })
     expect(container.querySelector('.worktree-filter-bar')).toBeNull()
+  })
+
+  test('默认 ALL filter 顶部 count 显示单数字 scope total（spec §会话总数显示口径）', async () => {
+    // mock-rich-repo-rust totalSessions = rustSessions.length(3) + rustWtFeatSessions.length(1) = 4
+    const { container } = render(Sidebar, {
+      props: {
+        selectedGroupId: 'mock-rich-repo-rust',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+    await waitFor(() => {
+      const span = container.querySelector('.session-count-num')
+      expect(span).not.toBeNull()
+      // 默认状态（无搜索）显单数字 group total，不显分式 / 已加载条数
+      expect(span!.textContent?.trim()).toBe('4')
+    })
+    // tooltip：hidden=0 时单层「总 4」，不追加 「· 0 已隐藏」
+    const span = container.querySelector('.session-count-num')!
+    expect(span.getAttribute('title')).toBe('总 4')
+  })
+
+  test('搜索激活时 count 显示 `N 匹配`', async () => {
+    const { container } = render(Sidebar, {
+      props: {
+        selectedGroupId: 'mock-rich-repo-rust',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+    // 等首次 sessions 加载完成（count span 渲染）
+    await waitFor(() => {
+      expect(container.querySelector('.session-count-num')).not.toBeNull()
+    })
+    // 输入搜索文本（命中 fixture session 标题"IPC 字段重构"）
+    const input = container.querySelector<HTMLInputElement>('.session-filter-input')!
+    input.value = 'IPC'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    await tick()
+    const span = container.querySelector('.session-count-num')!
+    // 默认单数字切到 `N 匹配` 形式
+    expect(span.textContent?.trim()).toMatch(/\d+ 匹配/)
+  })
+
+  test('search input 含 aria-describedby 与 title 明示「在已加载范围内搜索」', async () => {
+    const { container } = render(Sidebar, {
+      props: {
+        selectedGroupId: 'mock-rich-repo-rust',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+    await waitFor(() => {
+      expect(container.querySelector('.session-filter-input')).not.toBeNull()
+    })
+    const input = container.querySelector<HTMLInputElement>('.session-filter-input')!
+    expect(input.getAttribute('title')).toBe('在已加载范围内搜索')
+    expect(input.getAttribute('aria-describedby')).toBe('session-search-hint')
+    const hint = container.querySelector('#session-search-hint')
+    expect(hint).not.toBeNull()
+    expect(hint!.textContent?.trim()).toBe('在已加载范围内搜索')
   })
 
   test('loadMoreSessions inflight 期间切到别的 group → 老 promise resolve 时 sessionsLoadingMore 必须复位（防 Bug #N 回归）', async () => {
