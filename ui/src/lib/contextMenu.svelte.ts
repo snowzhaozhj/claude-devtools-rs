@@ -207,18 +207,24 @@ function globalContextMenuHandler(e: Event): void {
   if (e.defaultPrevented) return;
   const target = e.target as HTMLElement | null;
   if (!target) return;
-  // contenteditable 检测：用 isContentEditable（HTMLElement 属性，覆盖任意
-  // truthy 值 + 继承）作为主路径；同时用 selector `[contenteditable]:not(="false")`
-  // 作为 fallback——jsdom 部分实现 isContentEditable 不返回 true，靠选择器在
-  // 测试环境兜底，同时也能正确放行显式 `="false"` 关闭可编辑的元素。
+  // contenteditable 检测分两步：
+  // (1) 现代浏览器走 HTMLElement.isContentEditable（覆盖任意 truthy 值 + 继承
+  //     + 嵌套 contenteditable="false" 关闭子树等场景，由浏览器规范实现）
+  // (2) jsdom fallback：找**最近** [contenteditable] 祖先并按其值判断。绝不能
+  //     用 `[contenteditable]:not([contenteditable="false"])` selector 跨祖先
+  //     匹配——会越过最近的 false 祖先命中外层 true，错误放行 contenteditable
+  //     ="false" 嵌套在 contenteditable="true" 内的不可编辑子树。
   if (target.isContentEditable) return;
+  const editableAncestor = target.closest(
+    "[contenteditable]",
+  ) as HTMLElement | null;
   if (
-    target.closest(
-      'input, textarea, [contenteditable]:not([contenteditable="false"]), [data-allow-native-context]',
-    )
+    editableAncestor &&
+    editableAncestor.getAttribute("contenteditable") !== "false"
   ) {
     return;
   }
+  if (target.closest("input, textarea, [data-allow-native-context]")) return;
   e.preventDefault();
 }
 
@@ -226,10 +232,14 @@ function globalContextMenuHandler(e: Event): void {
  * 在 main.ts 启动序列内调用一次，注册全局 contextmenu 兜底。
  * 幂等：HMR 重复调用不重复注册（避免 listener 叠加）。
  *
- * 用 window 全局 sentinel 而非模块级 flag——vite HMR 模块重载时模块级
- * `let` 会归零；window 全局在 HMR 间保持，旧 handler 因模块卸载变野指针
- * 但事件监听仍在（无害——activeInstance 也在 window 不到的模块作用域，
- * 不会被新 handler 触发），新 handler 跳过注册避免叠加。
+ * window sentinel + import.meta.hot.dispose 双保险：
+ * - 启动时多次调用 install：sentinel 拦住，无叠加
+ * - vite HMR 模块重载：dispose 钩子主动 remove 旧 listener 并 reset sentinel；
+ *   新模块 install 时重新注册新 closure，新 listener 闭包到新模块的
+ *   activeInstance —— Esc / 外点 / scroll 都能正确关闭新菜单（如果只用 window
+ *   sentinel 不 dispose，旧 listener 闭包到旧 activeInstance=null 永远 return，
+ *   新菜单关不掉——这是 codex PR 二审第二轮捕获的 bug）
+ * - 生产 build 中 `import.meta.hot` 是 undefined，整段 if 被 esbuild DCE
  */
 export function installGlobalContextMenuFallback(): void {
   if (window.__cdtContextMenuFallbackInstalled) return;
@@ -237,4 +247,25 @@ export function installGlobalContextMenuFallback(): void {
   // bubble 阶段，让元素自身 listener 先有机会 preventDefault；
   // 兜底仅在 e.defaultPrevented === false 时执行 preventDefault。
   window.addEventListener("contextmenu", globalContextMenuHandler, false);
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    // 模块重载前清掉本模块挂载的所有 listener，让 close action 不再持有失效
+    // closure；reset sentinel 让新模块加载时 install 重新注册新 closure。
+    document.removeEventListener("mousedown", onDocumentMouseDown, true);
+    document.removeEventListener("keydown", onDocumentKeyDown, true);
+    window.removeEventListener("blur", onWindowBlur);
+    window.removeEventListener("resize", onWindowResize);
+    window.removeEventListener("scroll", onAnyScroll, true);
+    window.removeEventListener(
+      "contextmenu",
+      globalContextMenuHandler,
+      false,
+    );
+    delete window.__cdtContextMenuCloseListenersInstalled;
+    delete window.__cdtContextMenuFallbackInstalled;
+    // 关掉残留菜单避免 HMR 时浮窗卡住
+    if (activeInstance) closeActive();
+  });
 }

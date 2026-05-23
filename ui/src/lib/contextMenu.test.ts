@@ -114,6 +114,24 @@ describe('installGlobalContextMenuFallback', () => {
     expect(e.defaultPrevented).toBe(false)
   })
 
+  test('contenteditable="false" 嵌套在 contenteditable="true" 内 → 兜底 preventDefault', () => {
+    // 嵌套关闭可编辑：内部 false 区域不可编辑（HTML 规范），right-click 应走兜底。
+    // 反例：用 [contenteditable]:not(="false") selector 跨祖先匹配会越过最近的
+    // false 命中外层 true，错误放行——这是 codex PR 二审第二轮捕获的 bug。
+    installGlobalContextMenuFallback()
+    const outer = document.createElement('div')
+    outer.setAttribute('contenteditable', 'true')
+    const inner = document.createElement('div')
+    inner.setAttribute('contenteditable', 'false')
+    const target = document.createElement('span')
+    target.textContent = 'inside disabled subtree'
+    inner.appendChild(target)
+    outer.appendChild(inner)
+    document.body.appendChild(outer)
+    const e = dispatchContextMenu(target)
+    expect(e.defaultPrevented).toBe(true)
+  })
+
   test('data-allow-native-context 元素放行', () => {
     installGlobalContextMenuFallback()
     const div = document.createElement('div')
@@ -136,16 +154,19 @@ describe('installGlobalContextMenuFallback', () => {
     // 一样），关键不变量是"不报错、不重复阻止"——见下条幂等测试。
   })
 
-  test('HMR 重复调用幂等：window 上仅 1 个 listener', () => {
+  test('install 幂等：reset sentinel 后重新 add 一次，再调用不再叠加', () => {
+    // 显式 reset window sentinel 模拟"app 启动后第一次调用"，验证：
+    //   第一次 install → contextmenu listener 真正被 add 一次
+    //   后续 install → 跳过，不再 add
+    delete window.__cdtContextMenuFallbackInstalled
     const addSpy = vi.spyOn(window, 'addEventListener')
-    addSpy.mockClear()
-    // 注：installGlobalContextMenuFallback 在前面 test 已被调用，这里再调几次
-    // 不应增加 contextmenu listener 数量
+    installGlobalContextMenuFallback()
+    let ctxAdds = addSpy.mock.calls.filter((c) => c[0] === 'contextmenu')
+    expect(ctxAdds.length).toBe(1)
     installGlobalContextMenuFallback()
     installGlobalContextMenuFallback()
-    installGlobalContextMenuFallback()
-    const ctxAdds = addSpy.mock.calls.filter((c) => c[0] === 'contextmenu')
-    expect(ctxAdds.length).toBe(0) // flag 已 true，再调不再 addEventListener
+    ctxAdds = addSpy.mock.calls.filter((c) => c[0] === 'contextmenu')
+    expect(ctxAdds.length).toBe(1) // 仍为 1，sentinel 拦住后续调用
     addSpy.mockRestore()
   })
 })
