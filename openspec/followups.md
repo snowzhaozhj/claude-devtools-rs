@@ -667,3 +667,15 @@ Phase 1 已落地：UI registry / dispatcher / 17 条 default + Settings 录键 
 - IPC error 回滚 e2e（mockIPC `setConfig` 返回 error → 验证 UI inline 错误 + registry 内存回滚）
 
 vitest mockIPC 单测 + svelte-check 已覆盖契约层；e2e 跑真 Svelte mount + DOM 事件链路，是 §9 单测的补充验证而非替代。
+
+### [windows-compat → followup] 跨平台 config 同步与录键归一化
+
+windows-compat-reviewer 在 §11.2 输出 0 P0 / 1 P1 / 4 P2 / 2 nit；§11.2 严格 scope（`event.code` 物理键兜底无 Windows 误判）已 PASS（`platform.ts` AltGraph 守卫 + Numpad 归一化 + non-mac 禁识 metaKey 全部正确）。以下条目超出本 PR scope，独立处理：
+
+- **[P1] 跨平台 config 同步：mac 录的 `meta+x` 在 Windows 失效但 UI 仍展示 `Win+X`**：用户在 mac 录 `command-palette.toggle = meta+shift+p`，cdt-config 持久化后同步到 Windows，`bootstrapOverrides → applyOverrides` 写入字面量 `meta+shift+p`；Windows `normalize(event)` 在 non-mac 平台忽略 `metaKey`（`platform.ts:190`），shortcut 永久不命中，但 Settings panel 行展示 `Win+Shift+P` 误导用户。**修法（推荐）**：`KeyRecorderInput.handleKeyDown` 在 `onCommit(binding)` 之前把"当前平台的 mod 前缀"反写为 `mod`（mac `meta` → `mod`、Windows/Linux `ctrl` → `mod`），让 cdt-config 只存 `mod+x` 跨平台 source-of-truth；同时为存量 `meta+x` overrides 在 `bootstrapOverrides` 加一道迁移（首次加载时把 mac 平台 mod 前缀替换为 `mod`），保证老 config 平滑升级。涉及 spec D1 录键归一化语义微调，开独立 change。
+- **[P2] Windows 录键按 `Win+B` 静默剥离 Win 键只录 `b`**：`KeyRecorderInput.handleKeyDown` 在 normalize 后若拿到的 binding 不含任何 mod（因为 non-mac 忽略 metaKey），但事件本身 `metaKey=true`，应**不 commit、不 blur**，停留在 recording 态并提示"Windows 不支持 Win 键作为修饰键"。修法：normalize 之后、commit 之前加 `if (event.metaKey && !isMac()) return;` 守卫 + `aria-live` 警告。与 P1 同 commit 修。
+- **[P2] `formatShortcut` 在 Windows 平台把 `meta` 渲染为 "Win" 但 dispatcher 永不命中**：与 P1 同源，存储归一后 `meta` 不会再出现在 Windows 端 binding 中自然规避；保底方案是 `formatShortcut` 在 Windows 遇到 `meta` 时显示 "Win+X (不可用)" 标注。
+- **[P2] `tab.close` advisoryHints 在 Windows + Tauri 桌面态留白**：当前只对 mac + 浏览器场景给"系统/浏览器拦截"提示；Windows + Tauri WebView2 默认能到 keydown 但依赖 webview accelerator 配置，未来 Tauri 升级或 user 启用 system menu close item 可能漂移。预防性 followup：在 src-tauri 侧显式声明 `Ctrl+W` accelerator 走 webview，或在 panel 行加"WebView2 默认行为依赖 Tauri 配置"低优先级提示。
+- **[P2 nit] `formatMainKey` 对 `Space` 不做平台特化**（mac 可显示 `␣`），polish；
+- **[nit] `register-app-shortcuts.ts` 顶部注释里"9 条 / 17 specs"表述对维护者不直观**，实际 APP_OWNED 17 / 仓库总 20（DashboardView 1 + PaneContainer 2 = 3 条由非 App 持有）；下次 touch 该文件时改注释。
+- **[nit] `WIN_TEXT.meta = "Win"` 与"non-mac 禁识 metaKey"语义冲突**：走存储归一方案后该字段不会被使用，可考虑删除或在注释里写"仅作 mac→Win fallback；正常不触发"。

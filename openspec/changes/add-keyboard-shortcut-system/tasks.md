@@ -97,7 +97,7 @@
 ## 11. 性能 & 兼容（owner: 后端 + 前端 teammate）
 
 - [x] 11.1 跑 `bash scripts/run-perf-bench.sh` 确认 perf-baseline 未回归（dispatcher 不在启动 / IPC / 列表渲染 hot path 上，预期无影响；如有意外 regress 按 `.claude/rules/perf.md::PR Perf impact 模板` 在 PR 描述贴四维数据）—— `perf_cold_scan` ✓ 无回归（wall=410ms Δ-18% / user=110ms Δ-26.7% / max_rss=32MB Δ-34.5% / user/real=0.268）；`perf_get_session_detail` SKIPPED（需 `-perf-fixture-project` corpus，本地无；keyboard dispatcher 不在 session 加载 hot path，跳过非阻塞）
-- [ ] 11.2 windows-compat-reviewer subagent 跑：确认 `event.code` 物理键兜底无 Windows 路径误判
+- [x] 11.2 windows-compat-reviewer subagent 跑：确认 `event.code` 物理键兜底无 Windows 路径误判 —— PASS（0 P0 / 1 P1 / 4 P2 / 2 nit）；严格 scope 全部 clean：`platform.ts` non-mac 禁识 metaKey + AltGraph 守卫（`ctrlKey+altKey` 不误判 mod）+ `event.code` 物理键兜底（AZERTY / Dvorak / Numpad）+ home/encode/Path::is_absolute 等传统 trap 完全没踩。P1 跨平台 config drift（mac 录 `meta+x` 同步到 Windows 失效但 UI 仍展示 `Win+X`）+ 4 P2 录键 widget UX 边角 + 2 nit → `openspec/followups.md::keyboard-shortcuts::[windows-compat → followup]` 独立追踪
 - [x] 11.3 macOS Cmd+W 已知系统冲突：在 KeyboardShortcutsPanel 该行 tooltip 加提示"在 macOS 与系统关闭窗口可能冲突，建议改键"
 
 ## 12. 文档与索引
