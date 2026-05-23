@@ -168,6 +168,34 @@ describe('Sidebar smoke', () => {
     expect(span.getAttribute('title')).toBe('总 4')
   })
 
+  test('到底（无 nextCursor）时 SHALL NOT 渲染"已显示全部 N 条" footer', async () => {
+    // 用户视角优化：列表自然结束 = 终态信号，与 IDE / Linear 工具习惯一致；
+    // group label 已承载段总数，footer 是冗余装饰。删除前文案 "已显示全部 N 条"
+    // 在小项目（≤5 条）下视觉占比过大；本测试守"到底时不渲染任何 footer 行"。
+    // multi-project-rich fixture 的 list_group_sessions 一次返完所有 session
+    // （nextCursor=null），因此默认就处于"到底"状态。
+    const { container } = render(Sidebar, {
+      props: {
+        selectedGroupId: 'mock-rich-repo-rust',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+    // 等 sessions 数组加载完成：session-count-num=totalSessions 是 sessions
+    // 数组已就位的稳定信号（jsdom 下 vlist 虚拟化可能不渲染真 session-item，
+    // 但 footer 分支不依赖渲染窗口、只读 sessions.length / sessionsNextCursor）。
+    await waitFor(() => {
+      const countSpan = container.querySelector('.session-count-num')
+      expect(countSpan?.textContent?.trim()).toBe('4')
+    })
+    // 1) 不应渲染 .load-more-end（CSS 类已删；分支也已删）
+    expect(container.querySelector('.load-more-end')).toBeNull()
+    // 2) 不应渲染 "已显示全部" / "已加载完" 任何字样
+    const sessionList = container.querySelector('.session-list')!
+    expect(sessionList.textContent ?? '').not.toMatch(/已显示全部|已加载完/)
+  })
+
   test('搜索激活时 count 显示 `N 匹配`', async () => {
     const { container } = render(Sidebar, {
       props: {
