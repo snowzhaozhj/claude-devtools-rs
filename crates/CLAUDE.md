@@ -17,63 +17,17 @@
 
 `unsafe` workspace-wide 禁用（`#![forbid(unsafe_code)]`）。
 
-## 命名
+## Rust 约定（仅列项目偏离 / 强调点）
 
-- Types / traits / enum variants: `CamelCase`
-- Functions / modules / files: `snake_case`
-- Constants: `SCREAMING_SNAKE_CASE`
-- Crate 名：`cdt-<domain>`（manifest 用 dash，`use` 路径用 underscore）
-- 谓词：`is_<x>` 返 `bool`
-- Builder：`<Noun>Builder` + `.build() -> Result<Noun, Error>`
+通用规范跟 [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) + clippy pedantic（详 §clippy pedantic 速查）。以下是**项目特有**或**易忽略**：
 
-## Error handling
-
-- **Library crates**：定义 `pub enum <Crate>Error` 用 `thiserror::Error`；**禁止** `panic!` / `unwrap()` 出现在 non-test 路径。
-- **Binary `cdt-cli`**：`anyhow::Result<()>` at `main` + `?` 传播；关键边界用 `.context("...")`。
-- 验证只在 **system boundary**（external input / filesystem / IPC / HTTP / SSH）；内部代码信任类型保证。
-- 上下文敏感时用 `Result::map_err` 优于 `From` 转换。
-
-## Async
-
-- `tokio` 只加到真做 I/O 的 leaf crate（`cdt-parse` / `cdt-watch` / `cdt-ssh` / `cdt-config` / `cdt-discover` / `cdt-api` / `cdt-cli`）。
-- `cdt-core` / `cdt-analyze` 保持 **sync**——纯数据转换无需 runtime 易于测试。
-- 解析函数双形态：`parse_entry(line) -> Result<ParsedMessage, _>`（sync，per-line）+ `parse_file(path) -> impl Stream<Item = ParsedMessage>`（async，per-file）。
-
-## Logging
-
-- 全用 `tracing`：`tracing::debug! / info! / warn! / error!`
-- `tracing_subscriber` 仅在 `cdt-cli::main` 初始化一次；**library crate 不要装 global subscriber**
-- 结构化字段：`tracing::info!(session_id = %id, chunk_count = chunks.len(), "built chunks")`
-
-## Module boundaries
-
-- 跨 crate import 走每个 crate 的 **public API**（`pub use` from `lib.rs`），**不要**伸进 `crate::internal::...`
-- 两个或更多 crate 共用的类型放 `cdt-core`，**不要**跨 leaf crate re-export
-- 测试也按此走
-
-## Dependencies
-
-- 所有版本住 workspace 根 `[workspace.dependencies]`；crate-level `Cargo.toml` 用 `dep = { workspace = true }`
-- 新依赖要 justify（自己写 vs 引入的 tradeoff）。优先 std / 主流 crate，避免冷门
-
-## Comments
-
-- 默认无注释——Rust 名字 + 类型本身承载意义
-- `pub` item 不 self-explanatory 时写 `///`，尤其 trait contract 和类型不变量
-- 模块头 `//!` 标明 capability + 链 `openspec/specs/<cap>/spec.md`
-- **不要**写 WHAT 注释；写 WHY 当不显然时（spec 引用 / TS impl-bug 故意修正 / 微妙不变量）
-
-## Formatting
-
-- `cargo fmt --all` before every commit. No exceptions.
-- Line length: rustfmt default (100). Don't fight the formatter.
-
-## Testing
-
-- 单元测试 `#[cfg(test)] mod tests` 放被测文件底部
-- 跨模块集成测试放 crate 的 `tests/`
-- snapshot-heavy 测试（chunk building / context stats）按需引入 `insta`
-- 每个 capability spec scenario 至少一个测试，命名用 prose：`#[test] fn user_question_then_ai_response_emits_two_chunks()`
+- **crate 边界**：`cdt-core` / `cdt-analyze` 保 **sync** + no runtime deps；`tokio` 只加到真做 I/O 的 leaf crate；跨 crate import 只走 public API（`pub use` from `lib.rs`），**不**伸进 `crate::internal::...`；共用类型放 `cdt-core`，不跨 leaf re-export
+- **Error 二分**：library crate 用 `thiserror` 定 `pub enum <Crate>Error`，非 test 路径**禁** `panic!` / `unwrap()`；binary `cdt-cli` 用 `anyhow::Result<()>` + `.context()`。验证只在系统边界（external input / fs / IPC / HTTP / SSH）
+- **`tracing_subscriber` 仅在 `cdt-cli::main` 初始化一次**——library crate 不装 global subscriber；用结构化字段 `tracing::info!(session_id = %id, ...)`
+- **解析双形态**：`parse_entry(line) -> Result<_>`（sync per-line）+ `parse_file(path) -> impl Stream`（async per-file）
+- **依赖版本住 workspace 根**：`[workspace.dependencies]`，crate-level 用 `dep = { workspace = true }`；新依赖要 justify
+- **测试**：每 capability spec scenario 至少一个 `#[test]`，命名用 prose（如 `fn user_question_then_ai_response_emits_two_chunks`）；snapshot-heavy 用 `insta`
+- **注释**：默认无——名字 + 类型承载意义；`pub` 不 self-explanatory 时 `///`（trait contract / 不变量），模块头 `//!` 链 `openspec/specs/<cap>/spec.md`；写 WHY 不写 WHAT
 
 ### 测试基础设施陷阱
 

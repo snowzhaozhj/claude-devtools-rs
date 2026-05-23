@@ -82,21 +82,4 @@ spec 改了但 proposal/tasks 仍写旧策略 = codex / 人审会发现脱节。
 
 design 阶段 codex 二审默认强制（IPC 字段改 / 跨 capability / 性能关键 / 状态机 / UI 重构 / BREAKING 任一命中即调）。详见 `.claude/rules/codex-usage.md` 第 3 节。
 
-## 工作目录结构
-
-```
-openspec/
-├── specs/                # 主 spec（真相源）
-│   └── <capability>/
-│       └── spec.md       # Requirements + Scenarios
-├── changes/              # 进行中的 change
-│   ├── archive/          # 冻结的历史
-│   │   └── YYYY-MM-DD-<slug>/
-│   └── <slug>/
-│       ├── proposal.md
-│       ├── design.md     # 必备
-│       ├── tasks.md      # checkbox 推进单
-│       └── specs/<cap>/spec.md  # delta
-├── followups.md          # TS impl-bug 清单（按 spec 走，不复刻 TS bug）
-└── README.md             # workflow + capability map
-```
+工作目录结构见根 `CLAUDE.md::Workspace layout` 的 `openspec/` 部分。

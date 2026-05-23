@@ -34,10 +34,12 @@ claude-devtools-rs 是**桌面辅助工具**，不是用户主线（IDE / 浏览
 
 ## bench 入口
 
-- `cdt-api/tests/perf_cold_scan.rs` — 冷启动 scan + grouper
-- `cdt-api/tests/perf_get_session_detail.rs` — 大会话首次打开
+- `cdt-api/tests/perf_cold_scan.rs` — 冷启动 scan + grouper；命令：`cargo test -p cdt-api --release --test perf_cold_scan -- --ignored --nocapture`
+- `cdt-api/tests/perf_get_session_detail.rs` — 大会话首次打开；命令：`cargo test --release -p cdt-api --test perf_get_session_detail -- --ignored --nocapture`
 - `/perf-bench` skill — 自动跑 + 解析 + verdict
 - `bash scripts/run-perf-bench.sh` — 四维 baseline gate runner（`--bench <name>` 单跑 / `--runs N` 调样本数 / 报告写到 `target/perf-report.json`）
+
+**探针**：后端用 `tracing::info!(target: "cdt_api::perf", ...)`（结构化字段）；前端用 `[perf]` console.info 前缀。两侧 grep `cdt_api::perf` / `[perf]` 拿当次 run 日志。
 
 新增关键路径 SHALL 加对应 bench + 把基线填上表。**每次会话开始 + 用户问"为什么慢" + 发版前** SHALL 先跑 bench 拿数据再讨论方向。
 
