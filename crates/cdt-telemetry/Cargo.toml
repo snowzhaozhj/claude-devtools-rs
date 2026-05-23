@@ -1,0 +1,19 @@
+[package]
+name = "cdt-telemetry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Application health Signal Bus: Counter / Histogram / Event registry + tracing bridge."
+
+[lints]
+workspace = true
+
+[dependencies]
+crossbeam-queue = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
