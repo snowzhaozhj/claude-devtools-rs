@@ -642,3 +642,71 @@ vitest 单测 + mockIPC 路径与 Sidebar.test.svelte.ts 同 pattern，独立 fo
 - **信号爆炸退避策略**：tracing layer ERROR/WARN 风暴时（> 1000 / 秒）启用指数退避采样，避免 cdt_xxx.error counter 爆涨虚报频率
 - **tracing target 子模块归类细分**：当前按顶级 crate 归类（`cdt_ssh.error`），观察 cdt-ssh 多模块（manager / polling_watcher / session）失败模式是否需要细分到 `cdt_ssh.polling.error` 等
 - **Event ring buffer 利用率监控**：`events.dropped` counter 与队列 cap 10000 是否合适
+
+---
+
+## frontend-context-menu（change `frontend-context-menu` Phase 1 已完成；Phase 2 待做）
+
+Phase 1 立基础设施：`AppContextMenu` 通用浮层 + `use:contextMenu` Svelte action + 全局 `installGlobalContextMenuFallback` 兜底——消除 macOS WKWebView 默认菜单（Reload / Look Up / Translate / Search with Baidu / Speech / Services 等）破坏 app 一体感。Phase 2 在此基础上给各 surface 加 app 内上下文菜单。
+
+### [coverage-gap] Phase 2：各 surface 上下文菜单 items 清单
+
+**目标**：把"右键 = app 自家有用动作"覆盖到所有用户高频场景；用户 Phase 1 后桌面里右键不再出系统菜单（已立），但**也没出 app 菜单**（除 sidebar 会话项 / TabBar 标签）——很多 surface 上右键变成"什么都没发生"。Phase 2 要把这些 surface 补齐 useful action，让"右键 = 快捷动作入口"成为全应用一致心智。
+
+**各 surface 候选清单**（按预期高频排序）：
+
+| Surface | 候选菜单项 | 实现要点 |
+|---|---|---|
+| **用户消息 chunk**（SessionDetail）| 复制整条 prompt / 复制为 markdown / 跳到这条之前的上下文（向上滚到本条对应的 user message） | items 在 chunk 渲染处挂 `use:contextMenu`，clipboard.writeText + scrollIntoView |
+| **AI 消息 chunk**（SessionDetail）| 复制整条回复 / 复制为 markdown（保留代码块/列表）/ 折叠这条 / 复制 chunk 链接（带 sessionId+chunkId 锚点） | markdown 复制走 `marked` 反序 / chunk 链接需要新 deeplink 设计 |
+| **Bash 工具块** | 复制命令 / 在终端运行（macOS `osascript` 调 Terminal / iTerm；Win 调 `cmd`/`wt`；Linux `xterm`/`gnome-terminal`，按 settings 选）/ 复制 stdout / 复制 stderr | 需新 Tauri command `open_in_terminal(cmd)` |
+| **Read / Edit / Write 工具块** | 复制文件路径（绝对路径 + cwd 相对路径两选）/ 在 Finder/Explorer 显示（`tauri-plugin-opener::reveal_item_in_dir`）/ 在编辑器打开（按 settings 选 VS Code/Cursor/Zed/Sublime） | 编辑器集成需 settings 加 `external_editor` 字段 + per-platform CLI 调用 |
+| **Worktree chip / 项目卡** | 复制路径 / 在 Finder/Explorer 显示 / 在终端打开 / 隐藏该 worktree | 复用工具块的同套 opener |
+| **选中文本（任意区域）"app 文本菜单"** | Copy / Copy as Plain Text（脱去 markdown 格式）/ 在浏览器搜索（Settings 选默认搜索引擎，默认 Google 不要 Baidu）/（可选）"问 Claude 这是什么"——把选中文本灌到用户输入框 | 走 `mousedown` 已有选区的预留路径（详 design.md D5）；菜单 items 在 contextmenu 时按 `window.getSelection().toString()` 是否非空决定显示 |
+
+**架构要点**（Phase 2 propose 时决策）：
+- **menu-items.ts 函数库**：每类 surface 有独立 `buildXxxContextItems()` 函数，把"动作语义"集中维护一处；不要散到 N 个组件内
+- **opener 抽象**：终端 / 文件管理器 / 编辑器 三类 opener 走 Tauri Rust 端统一接口（`open_in_terminal` / `reveal_in_file_manager` / `open_in_editor`），平台分流在 Rust，UI 只调 IPC
+- **icon 评估**：Phase 1 决策不加 icon（D3）；Phase 2 引入文件 action（"在 Finder 显示" / "在编辑器打开"）时再评估是否加 lucide icon——届时单独走一轮 design 迭代，遵循 PRODUCT.md "不为风格重造 affordance" 与 DESIGN.md `The Tool Density Rule`
+- **danger 类首次落地**：Phase 2 可能引入"删除会话历史"等 destructive action，是首次实际使用 `AppContextMenu` 的 `danger: true` 路径——记得回归测 hover bg 染红 + 文字色
+
+**Phase 2 spec delta 范围**（届时 propose 时确认）：
+- `session-display` 加"消息 chunk 右键菜单" Requirement
+- `tool-execution-linking` 加"工具块右键菜单" Requirement
+- `sidebar-navigation` 加"worktree chip / 项目卡右键菜单" Requirement
+- `frontend-context-menu` 加"文本菜单"Requirement（依赖 Phase 1 `mousedown` 已选区时不阻止的预留行为）
+- `configuration-management` 可能加"external_editor / search_engine / terminal_app" Settings 字段
+
+**Phase 2 设计开放问题**（届时回答）：
+- 文本菜单"在浏览器搜索"是否允许 Settings 配置默认搜索引擎？（倾向：是，且默认 Google）
+- 文件 action（在 Finder 显示 / 在编辑器打开）走 `tauri-plugin-opener` 还是新增专用 IPC？（倾向：opener plugin 够用 + 跨平台稳定）
+- icon 是否在文件 action 类菜单引入（lucide），还是保持纯文字？（倾向：destructive 用 icon 区分，其它不加）
+
+**用户已明确的 Phase 3 不做**：macOS Service 集成（Look Up / Translate / Speech / Share）—— 工作量大、用户平时不用，决定 v2 也不做。
+
+### [implicit] WKWebView smart-select / Ctrl+Click / trackpad 双指 tap 桌面手测未跑（CI 限制）
+
+- 来源：change `frontend-context-menu` task 7.2 / 7.3
+- 现状：vitest + jsdom 跑不出 WKWebView smart-select 行为；Playwright Chromium 也不复现 macOS WKWebView 特有 contextmenu 路径。需要在 `cargo tauri dev` 桌面真窗口手测：
+  - 任意空白区右键 → 无 Reload / Look Up 菜单
+  - Sidebar 会话项右键 → app 菜单弹出，且 worktree chip 文字不被 smart-select
+  - TabBar 标签右键 → app 菜单弹出
+  - `<input>` 右键 → 浏览器原生输入菜单（输入便利保留）
+  - 键盘 Menu 键 / Shift+F10 在 Sidebar 会话项 → 同款菜单弹在元素 bbox 中心
+  - macOS Ctrl+Click / trackpad 双指 tap 是否正确触发 contextmenu + `mousedown.button=2` 防 smart-select（codex 一审怀疑点 #4）
+  - dark 主题下菜单 token 视觉合规
+- 建议：发版前 smoke 测试或新加 Tauri-bundle e2e（`cargo tauri build --debug` + Playwright 远控）
+
+### [implicit] Shift+F10 在 macOS 系统快捷键冲突未确认
+
+- 来源：codex 一审怀疑点 #4
+- 现状：`use:contextMenu` action 监听 `e.key === "F10" && e.shiftKey` 触发键盘 contextmenu。macOS 上 Shift+F10 是否被系统占用未确认（无 Mac 键盘 Menu 键，需要 Shift+F10 兜底）
+- 影响范围：a11y / 键盘用户在 macOS 触发右键菜单的能力
+- 建议：桌面手测中专项验证；若被占用则考虑 Cmd+Shift+M 等替代快捷键，或把键盘 contextmenu 改为前端模拟事件触发（按 `keydown` Menu 键时主动 dispatch 一个 `MouseEvent('contextmenu')`，而非依赖浏览器原生事件流）
+
+### [implicit] HMR `import.meta.hot.dispose` 钩子未自动化测试
+
+- 来源：codex PR 二审第二轮 + 第三轮验证
+- 现状：HMR 模块重载时旧 listener closure 引用旧 `activeInstance` 的 bug 已通过 `import.meta.hot.dispose` 修复，但**没有**自动化测试验证 dispose 钩子真的被调（vitest 单 process 跑测，没法触发真 vite HMR；Playwright 测的是 prod-like build，HMR 路径是 dev-only）
+- 影响：dev 时若以后改坏 dispose 钩子（typo 漏 removeEventListener / 漏 delete sentinel）只能靠人工发现"HMR 后菜单关不掉"
+- 建议：开发时若改 contextMenu.svelte.ts 导出符号或 listener 函数名，pnpm dev 后手测一次 HMR 行为；或者考虑用 `import.meta.hot.accept` 让 HMR 直接 reject + 全页刷新（trade-off：开发体验稍差但避开 dispose 维护成本）
