@@ -36,7 +36,9 @@ claude-devtools-rs/
 ├── ui/                       # Svelte 5 + Vite 前端
 ├── src-tauri/                # Tauri 2 Rust 后端 (excluded from workspace)
 ├── openspec/
-│   ├── specs/                # 主 spec（行为契约真相源）
+│   ├── specs/<cap>/spec.md   # 主 spec（行为契约真相源，由 archive 自动 sync）
+│   ├── changes/<slug>/       # 进行中 change：proposal.md + design.md + tasks.md + specs/<cap>/spec.md (delta)
+│   ├── changes/archive/YYYY-MM-DD-<slug>/  # 冻结历史快照
 │   ├── followups.md          # TS impl-bugs to fix, not replicate
 │   └── README.md             # workflow + capability map
 └── .claude/rules/            # 跨域规则散文件（4 个：parallelism-modes / codex-usage / opsx-apply-cadence / perf）
