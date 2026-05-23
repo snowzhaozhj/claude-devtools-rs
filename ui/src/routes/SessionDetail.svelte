@@ -19,6 +19,7 @@
   import { getTeamColorSet } from "../lib/teamColors";
   import SearchBar from "../components/SearchBar.svelte";
   import ContextPanel from "../components/ContextPanel.svelte";
+  import SessionMetaMenu from "../components/SessionMetaMenu.svelte";
   import {
     parseInjections,
     selectActivePhaseInjections,
@@ -607,6 +608,21 @@
     return formatClock(ts, getTimeFormat() === "12h");
   }
 
+  /** 分钟级精度，用于顶 bar `LAST` 与 sidebar 时间密度对齐（无秒） */
+  function ftimeMinutes(ts: string): string {
+    try {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return "";
+      return d.toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: getTimeFormat() === "12h",
+      });
+    } catch {
+      return "";
+    }
+  }
+
   function fduration(ms: number): string {
     if (ms < 1000) return `${ms}ms`;
     const s = ms / 1000;
@@ -695,6 +711,8 @@
   {@const counts = countByKind(detail.chunks)}
   {@const lastActivity = lastActivityTs(detail.chunks)}
   {@const totalTokens = m.inputTokens + m.outputTokens}
+  {@const metaCwdRaw = detail.metadata && typeof detail.metadata === "object" ? (detail.metadata as { cwd?: unknown }).cwd : undefined}
+  {@const metaCwd = typeof metaCwdRaw === "string" && metaCwdRaw.length > 0 ? metaCwdRaw : undefined}
 
   <!-- Top bar：18px 标题 + 副标题密度行（chunks · tools · tokens · last activity） -->
   <div class="top-bar">
@@ -726,19 +744,13 @@
           <span class="top-stat-sep">·</span>
           <span class="top-stat top-stat-time">
             <span class="top-stat-unit">LAST</span>
-            <span class="top-stat-num">{ftime(lastActivity)}</span>
-          </span>
-        {/if}
-        {#if detail.metadata && typeof detail.metadata === 'object' && typeof (detail.metadata as { cwd?: string }).cwd === 'string'}
-          <span class="top-stat-sep">·</span>
-          <span class="top-stat top-stat-cwd" title={(detail.metadata as { cwd: string }).cwd}>
-            <span class="top-stat-unit">CWD</span>
-            <span class="top-stat-num">{(detail.metadata as { cwd: string }).cwd}</span>
+            <span class="top-stat-num">{ftimeMinutes(lastActivity)}</span>
           </span>
         {/if}
       </div>
     </div>
     <div class="top-meta">
+      <SessionMetaMenu cwd={metaCwd} sessionId={sessionId} />
       {#if contextCount > 0}
         <button
           type="button"
@@ -1274,7 +1286,7 @@
   .top-stats {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 7px;
     font-family: var(--font-mono);
     font-size: 11px;
@@ -1305,23 +1317,6 @@
   .top-stat-time .top-stat-num {
     color: var(--color-text-muted);
     font-weight: 500;
-  }
-
-  /* CWD：完整路径，长度变化大，让它吸收剩余横向空间并 ellipsis；
-     与时间一样降权显示。 */
-  .top-stat-cwd {
-    min-width: 0;
-    flex-shrink: 1;
-    overflow: hidden;
-  }
-
-  .top-stat-cwd .top-stat-num {
-    color: var(--color-text-muted);
-    font-weight: 500;
-    font-family: var(--font-mono);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .top-stat-sep {
