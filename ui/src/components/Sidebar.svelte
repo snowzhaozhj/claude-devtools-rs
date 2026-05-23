@@ -46,8 +46,7 @@
     applyMetadata as cacheApplyMetadata,
   } from "../lib/sessionListStore.svelte";
   import { buildFilterCursor, sessionListCacheKey } from "../lib/groupCursor";
-  import { cwdRelativeHintLabel } from "../lib/cwdHint";
-  import { MESSAGE_SQUARE, GIT_BRANCH_SVG, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
+  import { MESSAGE_SQUARE, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
 
   // 虚拟滚动行高（实测 .session-item ≈ 44px：padding 8+8 + title 13×1.4 +
   // meta 11×1.4）；header 行高强制对齐 44 让单一 windowing 单元生效。
@@ -765,19 +764,19 @@
   // ---------------------------------------------------------------------------
 
   type FlatItem =
-    | { kind: "header"; key: string; label: string }
+    | { kind: "header"; key: string; label: string; count: number }
     | { kind: "session"; key: string; session: SessionSummary; pinned: boolean };
 
   const flatItems = $derived.by<FlatItem[]>(() => {
     const items: FlatItem[] = [];
     if (pinnedSessions.length > 0) {
-      items.push({ kind: "header", key: "h:PINNED", label: "PINNED" });
+      items.push({ kind: "header", key: "h:PINNED", label: "PINNED", count: pinnedSessions.length });
       for (const s of pinnedSessions) {
         items.push({ kind: "session", key: s.sessionId, session: s, pinned: true });
       }
     }
     for (const group of dateGroups) {
-      items.push({ kind: "header", key: `h:${group.label}`, label: group.label });
+      items.push({ kind: "header", key: `h:${group.label}`, label: group.label, count: group.sessions.length });
       for (const s of group.sessions) {
         items.push({ kind: "session", key: s.sessionId, session: s, pinned: false });
       }
@@ -953,6 +952,7 @@
               </svg>
             {/if}
             <span>{item.label}</span>
+            <span class="date-group-count" aria-label="{item.count} 条">· {item.count}</span>
           </div>
         {:else}
           {@const session = item.session}
@@ -973,7 +973,7 @@
                 <OngoingIndicator />
               {/if}
               {#if item.pinned}
-                <svg class="pin-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg class="pin-icon" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M12 17v5"/>
                   <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>
                 </svg>
@@ -982,22 +982,14 @@
                 {session.title || session.sessionId}
               </span>
             </div>
-            <div class="session-meta">
+            <div class="session-meta" class:session-meta-multi-wt={showWorktreeFilter && session.worktreeName}>
               <span class="session-msg-count">
                 <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={MESSAGE_SQUARE} /></svg>
                 {session.messageCount || 0}
               </span>
               <span class="session-time">{formatTime(session.timestamp)}</span>
-              {#if session.gitBranch}
-                <span class="session-branch" title={session.gitBranch}>
-                  <svg class="meta-icon session-branch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html GIT_BRANCH_SVG}</svg>
-                  <span class="session-branch-name">{session.gitBranch}</span>
-                </span>
-              {/if}
-              {#if session.cwdRelativeToRepoRoot && cwdRelativeHintLabel(session.cwdRelativeToRepoRoot)}
-                <span class="session-path-chip" title={session.cwdRelativeToRepoRoot}>
-                  {cwdRelativeHintLabel(session.cwdRelativeToRepoRoot)}
-                </span>
+              {#if showWorktreeFilter && session.worktreeName}
+                <span class="session-wt-label" title={session.worktreeName}>⌗{session.worktreeName}</span>
               {/if}
             </div>
           </button>
@@ -1005,7 +997,20 @@
       {/each}
       <div class="vlist-spacer" style:height="{vlist.bottomSpacer()}px"></div>
       {#if sessionsLoadingMore}
-        <div class="sidebar-status sidebar-status-inline">加载更多...</div>
+        <div class="load-more-row load-more-loading">加载中…</div>
+      {:else if sessionsNextCursor}
+        <button
+          class="load-more-row load-more-btn"
+          onclick={() => void loadMoreSessions()}
+          aria-label="加载更多会话，剩余 {Math.max(totalSessions - sessions.length, 1)} 条"
+        >
+          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+          <span>加载更多 · 剩 {Math.max(totalSessions - sessions.length, 1)} 条</span>
+        </button>
+      {:else if sessions.length > 0}
+        <div class="load-more-row load-more-end">已显示全部 {sessions.length} 条</div>
       {/if}
     {/if}
   </div>
@@ -1119,22 +1124,29 @@
     pointer-events: none;
   }
 
+  /* Memory entry：group 级入口（PR #210 spec：anchor 锁 group repo 根 worktree，
+     不随 worktree filter 漂）。视觉降级 46px → 32px：从"主行动按钮"改为"轻量
+     入口 chip"，与下方 worktree filter / search bar 统一为顶部 region 三行
+     紧凑布局；group 维度的语义通过仍保持独立一行表达，不和 worktree filter
+     合并（合并会让用户误解 Memory 是 per-worktree 的，违反 spec）。 */
   .memory-entry {
     display: flex;
     align-items: center;
     gap: 8px;
+    height: 32px;
     width: calc(100% - 16px);
-    margin: 8px;
-    padding: 9px 10px;
+    margin: 8px 8px 0;
+    padding: 0 10px;
     border: none;
-    border-radius: 8px;
+    border-radius: 6px;
     background: transparent;
     color: var(--color-text);
     font: inherit;
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 12px;
+    font-weight: 500;
     text-align: left;
     cursor: pointer;
+    box-sizing: border-box;
   }
 
   .memory-entry:hover {
@@ -1142,8 +1154,8 @@
   }
 
   .memory-entry-icon {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     flex-shrink: 0;
     color: var(--color-text-muted);
   }
@@ -1197,11 +1209,6 @@
   .session-filter-input::-webkit-search-decoration {
     appearance: none;
     -webkit-appearance: none;
-  }
-
-  .sidebar-status-inline {
-    padding: 8px 0;
-    font-size: 11px;
   }
 
   /* "5" 单数字 + hover tooltip 显 "可见 5 / 总 127"。原本 "5/127"
@@ -1344,6 +1351,51 @@
     outline-offset: 1px;
   }
 
+  /* 列表底部 load-more / loading / end 三态行：原 "加载更多..." 灰字状态文本
+     升级为显式按钮 + 剩余条数提示。自动 loadMore（滚动触发）保留，按钮作为
+     额外触发器 + 进度可见性。
+     - load-more-btn: 可点击，显 "▼ 加载更多 · 剩 N 条"
+     - load-more-loading: 加载中文本（不可点）
+     - load-more-end: 已到底文本（cursor=null，muted） */
+  .load-more-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin: 4px 8px 8px;
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    line-height: 1.2;
+    text-align: center;
+  }
+
+  .load-more-btn {
+    background: transparent;
+    border: none;
+    color: var(--sidebar-accent);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+
+  .load-more-btn:hover {
+    background: var(--tool-item-hover-bg);
+  }
+
+  .load-more-btn:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: 1px;
+  }
+
+  .load-more-loading,
+  .load-more-end {
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+    cursor: default;
+  }
+
   .vlist-spacer {
     width: 100%;
     pointer-events: none;
@@ -1373,6 +1425,16 @@
     color: var(--sidebar-pinned);
     flex-shrink: 0;
     margin-bottom: 1px;
+  }
+
+  /* group 计数：标识"该 group 当前可见多少条"，让用户对 PINNED / TODAY /
+     YESTERDAY 等分组规模有数感。计数受 worktreeFilter / filterQuery /
+     showHidden 联动影响（用 group.sessions.length 实时反映）。视觉降级：
+     不抢 label 主色，用 muted 与 label 拉开权重。 */
+  .date-group-count {
+    color: var(--color-text-muted);
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
   }
 
   .session-item {
@@ -1468,23 +1530,37 @@
     line-height: 1.4;
   }
 
+  /* 行内 pin 标识：与顶部 PINNED group label 的 📌 同色族（暖中性灰），
+     不再使用 accent-blue——blue 在 sidebar 已被 ongoing/瞬时焦点 / 链接占用
+     （DESIGN.md `The Ongoing Owns Blue Rule`）；行内 pin 只是在 PINNED group
+     滚出视口时的 fallback 识别，视觉权重应低于 ongoing dot。尺寸 12→10px
+     进一步降权重。 */
   .pin-icon {
     flex-shrink: 0;
-    color: var(--color-accent-blue);
+    color: var(--color-text-muted);
   }
 
-  /* meta 行（msgCount · time · branch）：原本用显式 "·" 分隔符（10px
-     muted opacity 0.5），视觉接近噪点；改用 14px gap 留白做分隔，
-     扫读三段权重更清晰，密度不变。msgCount 与 time 保持 flex-shrink:0
-     不让出空间，branch 用默认 flex-shrink:1 + overflow ellipsis 自然
-     吸收剩余宽度——容器变窄时 branch 优先被截断而非 msgCount/time
-     被压扁（msgCount/time 本来只有 ~22px 不值得参与收缩竞争）。 */
+  /* meta 行：grid 三列 [count fixed | time fixed | wt flex]。固定前两列
+     宽度让所有行的 💬count 与 time 严格列对齐，wt label 末尾吸收剩余宽度
+     可截断——改自旧 flex 布局，旧版 4 个元素 free-flex 在窄宽下 branch +
+     path-chip 互相挤压、msgCount / time 水平位置不齐。
+     gitBranch / cwdRelativeToRepoRoot 两字段不再在 sidebar 行展示——前者
+     与 worktreeName 90%+ 重叠（git worktree 设计本意），后者已被 worktree
+     label 表达"哪个 worktree / 子目录"；详细信息留在 SessionDetail。 */
   .session-meta {
-    display: flex;
-    gap: 14px;
+    display: grid;
+    grid-template-columns: [count] 28px [time] auto;
+    column-gap: 10px;
     align-items: center;
     line-height: 1.2;
     min-width: 0;
+  }
+
+  /* 多 worktree group：加第三列 wt label，flex 吸收剩余宽度 + 末尾截断。
+     单 wt group 沿用基础 .session-meta 两列布局（用户已知所在 wt，行内
+     不必再标）。 */
+  .session-meta-multi-wt {
+    grid-template-columns: [count] 28px [time] auto [wt] minmax(0, 1fr);
   }
 
   .session-msg-count {
@@ -1494,7 +1570,6 @@
     font-size: 10px;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
-    flex-shrink: 0;
     white-space: nowrap;
   }
 
@@ -1508,52 +1583,20 @@
     font-size: 10px;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
-    flex-shrink: 0;
     white-space: nowrap;
   }
 
-  /* branch 是 "我在哪个 worktree" 的核心线索；让它吸收 meta row 剩余
-     宽度，msgCount/time 不与之竞争（见 .session-meta 注释）。删除显式
-     "·" 分隔符后，每个分隔节省 ~14px 横向空间（原 8+6+8 = 22px → 现
-     14px gap），branch 比原本多 ~16px 可见区间。 */
-  .session-branch {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
+  /* worktree label：多 wt group 行末位置，承担"哪个 worktree"识别。从尾
+     截断（保留前缀），因为用户对 worktree 名的记忆主体在前段（feat-sidebar /
+     hotfix-urgent）；不用 RTL 反向截断（branch 才需要保留末段 task 信息）。 */
+  .session-wt-label {
+    font-family: var(--font-mono);
     font-size: 10px;
     color: var(--color-text-muted);
-    font-family: var(--font-mono);
-    min-width: 0;
-    flex-shrink: 1;
-    overflow: hidden;
-  }
-
-  .session-branch-icon {
-    color: var(--color-text-muted);
-  }
-
-  .session-branch-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  /* cwd hint chip：同 group 内不同 worktree / monorepo 子目录的 session
-     通过此 chip 区分；与 session-branch 同等级，但用更弱视觉权重（无图标 +
-     略低不透明度），避免主信息行变拥挤。spec `Session row branch + cwd
-     chip` 取 cwd_relative_to_repo_root 最后两段。 */
-  .session-path-chip {
-    display: inline-flex;
-    align-items: center;
-    font-size: 10px;
-    color: var(--color-text-muted);
-    font-family: var(--font-mono);
     min-width: 0;
-    flex-shrink: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    opacity: 0.78;
   }
 
   /* Resize handle */
