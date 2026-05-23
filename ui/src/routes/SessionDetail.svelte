@@ -232,17 +232,23 @@
       return;
     }
     // ── Quick Anchor Navigation 快捷键 ──
-    // Guard 1：input/textarea/contenteditable focused 时不拦，让浏览器原生光标导航生效
-    if (isInputElement(document.activeElement)) return;
-    // Guard 2：active pane focus —— PaneView 多 pane 场景下每个 SessionDetail 都各自挂
-    // document.keydown listener，仅 focused pane 内 active SessionDetail 拦截，避免一次
-    // 按键 N 个 pane 同时滚到底（codex P1#2）
-    if (getActiveTabId() !== tabId) return;
-    // 任意非本快捷键 keydown 期间打断 programmatic-scroll
+    // 顺序很关键：中断 programmatic-scroll 必须**前置**于 input guard 与 pane guard。
+    // 理由：spec 要求"滚动期间用户主动 wheel/touchmove/非本快捷键 keydown 立即清 flag"。
+    // 如果先 input guard return，input focused 期间任何 keydown 都被吞掉，programmatic
+    // scroll 即使被打断也不会停 —— spec 与实现不一致（codex PR 二审 #1 反馈）。
+    // suppressNextSelfKeydown 仅放行"我们自己 scrollToLatest 触发的 ⌘+↓ 自我打断"。
     if (isProgrammaticScroll && !isJumpToLatestKey(e) && !suppressNextSelfKeydown) {
       stopProgrammaticScroll();
     }
     suppressNextSelfKeydown = false;
+    // Guard 1：input/textarea/contenteditable focused 时不拦快捷键，让浏览器原生
+    // 光标导航生效。注意此 guard 在中断逻辑**之后**——input typing 触发的 keydown
+    // 仍能中断 smooth scroll（用户认知焦点已切到 input）
+    if (isInputElement(document.activeElement)) return;
+    // Guard 2：active pane focus —— PaneView 多 pane 场景下每个 SessionDetail 都各自挂
+    // document.keydown listener，仅 focused pane 内 active SessionDetail 拦截，避免一次
+    // 按键 N 个 pane 同时滚到底（codex design #2）
+    if (getActiveTabId() !== tabId) return;
     if (isJumpToLatestKey(e)) {
       e.preventDefault();
       scrollToLatest();

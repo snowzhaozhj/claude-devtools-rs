@@ -136,4 +136,37 @@ test.describe('Quick Anchor Navigation：跳到最新消息', () => {
     await expect(btn).toHaveClass(/jump-to-latest-visible/)
     await expect(btn).not.toHaveClass(/jump-to-latest-shifted/)
   })
+
+  test('reduced-motion 下点击立即到底（behavior auto，不走 smooth）', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await openLongSession(page)
+    const btn = page.locator('.jump-to-latest')
+    await expect(btn).toHaveClass(/jump-to-latest-visible/)
+
+    await page.evaluate(() => {
+      document.querySelector<HTMLButtonElement>('.jump-to-latest')?.click()
+    })
+    // 'auto' behavior 同步到位 + queueMicrotask stop programmatic-scroll
+    await page.waitForTimeout(50)
+    expect(await getDistanceFromBottom(page)).toBeLessThanOrEqual(16)
+    await expect(btn).not.toHaveClass(/jump-to-latest-visible/, { timeout: 1_000 })
+  })
+
+  test('快连点击不互扰，clearTimeout 旧 timer 让最终滚动稳定到底', async ({ page }) => {
+    await openLongSession(page)
+    const btn = page.locator('.jump-to-latest')
+    await expect(btn).toHaveClass(/jump-to-latest-visible/)
+
+    // 同 task 内连点 3 次：每次 startProgrammaticScroll 都 clearTimeout 旧 timer +
+    // 重新 setTimeout，旧 timer 不应提前清掉新 scroll 的 flag
+    await page.evaluate(() => {
+      const b = document.querySelector<HTMLButtonElement>('.jump-to-latest')!
+      b.click()
+      b.click()
+      b.click()
+    })
+    // 最终 smooth scroll 完成（scrollend 触发）→ button 隐藏 + 距底 ≤ 16
+    await expect(btn).not.toHaveClass(/jump-to-latest-visible/, { timeout: 3_000 })
+    expect(await getDistanceFromBottom(page)).toBeLessThanOrEqual(16)
+  })
 })
