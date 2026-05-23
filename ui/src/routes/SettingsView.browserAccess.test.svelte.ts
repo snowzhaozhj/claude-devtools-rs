@@ -56,7 +56,7 @@ describe('SettingsView Browser Access subsection', () => {
     expect(portInput.value).toBe('3456')
   })
 
-  test('点 toggle 启动 server → 显示绿点 + Running URL + Copy 按钮', async () => {
+  test('点 toggle 启动 server → 显示运行中标识 + URL + Copy 按钮', async () => {
     const { container } = render(SettingsView)
     await waitFor(() =>
       expect(container.querySelector('[data-testid="browser-access-port"]')).not.toBeNull(),
