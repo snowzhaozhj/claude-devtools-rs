@@ -1060,8 +1060,6 @@
           </svg>
           <span>加载更多 · 剩 {Math.max(scopeTotal - sessions.length, 1)} 条</span>
         </button>
-      {:else if sessions.length > 0}
-        <div class="load-more-row load-more-end">已显示全部 {sessions.length} 条</div>
       {/if}
     {/if}
   </div>
@@ -1383,7 +1381,9 @@
   .session-list {
     flex: 1;
     overflow-y: auto;
-    padding: 4px 8px;
+    /* bottom 8 给末项留呼吸感：原依赖 .load-more-end footer（已删）撑出
+       与底部 sidebar-status 之间的间距，移除后由 padding 直接接住。 */
+    padding: 4px 8px 8px;
   }
 
   .sidebar-status {
@@ -1425,12 +1425,11 @@
     outline-offset: 1px;
   }
 
-  /* 列表底部 load-more / loading / end 三态行：原 "加载更多..." 灰字状态文本
-     升级为显式按钮 + 剩余条数提示。自动 loadMore（滚动触发）保留，按钮作为
-     额外触发器 + 进度可见性。
+  /* 列表底部 load-more / loading 二态行：
      - load-more-btn: 可点击，显 "▼ 加载更多 · 剩 N 条"
      - load-more-loading: 加载中文本（不可点）
-     - load-more-end: 已到底文本（cursor=null，muted） */
+     已到底（cursor=null）不渲染——列表自然结束即终态信号，与 IDE / Linear
+     等工具习惯一致；group label 已承载 PINNED/TODAY/YESTERDAY 段总数。 */
   .load-more-row {
     display: flex;
     align-items: center;
@@ -1463,8 +1462,7 @@
     outline-offset: 1px;
   }
 
-  .load-more-loading,
-  .load-more-end {
+  .load-more-loading {
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
     cursor: default;
