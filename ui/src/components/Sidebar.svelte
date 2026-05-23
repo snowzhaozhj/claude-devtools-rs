@@ -13,7 +13,6 @@
     type GroupSessionPage,
   } from "../lib/api";
   import { loadProjectData } from "../lib/projectDataStore.svelte";
-  import SessionContextMenu from "./SessionContextMenu.svelte";
   import OngoingIndicator from "./OngoingIndicator.svelte";
   import SkeletonList from "./SkeletonList.svelte";
   import WorktreeChipCluster from "../lib/components/WorktreeChipCluster.svelte";
@@ -47,6 +46,10 @@
   } from "../lib/sessionListStore.svelte";
   import { buildFilterCursor, sessionListCacheKey } from "../lib/groupCursor";
   import { MESSAGE_SQUARE, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
+  import {
+    contextMenu,
+    type ContextMenuItem,
+  } from "../lib/contextMenu.svelte";
 
   // 虚拟滚动行高（实测 .session-item ≈ 44px：padding 8+8 + title 13×1.4 +
   // meta 11×1.4）；header 行高强制对齐 44 让单一 windowing 单元生效。
@@ -140,12 +143,56 @@
   // ---------------------------------------------------------------------------
   // Context menu
   // ---------------------------------------------------------------------------
+  // 通过 use:contextMenu action（lib/contextMenu.svelte.ts）接管右键，菜单
+  // portal 到 document.body 由 AppContextMenu 渲染——避免被 sidebar 虚拟滚动
+  // 容器 overflow clip，且统一全应用菜单视觉与 a11y。
 
-  let ctxMenu: { x: number; y: number; session: SessionSummary } | null = $state(null);
-
-  function onContextMenu(e: MouseEvent, session: SessionSummary) {
-    e.preventDefault();
-    ctxMenu = { x: e.clientX, y: e.clientY, session };
+  function buildSessionContextItems(
+    session: SessionSummary,
+  ): ContextMenuItem[] {
+    const sessionProjectId = session.worktreeId ?? selectedGroupId;
+    const canSplit = getPaneLayout().panes.length < MAX_PANES;
+    const pinned = isPinned(sessionProjectId, session.sessionId);
+    const hidden = isHidden(sessionProjectId, session.sessionId);
+    const label = sessionLabel(session);
+    return [
+      {
+        label: "在当前标签页打开",
+        action: () =>
+          openOrReplaceTab(session.sessionId, sessionProjectId, label),
+      },
+      {
+        label: "在新标签页打开",
+        action: () => openTab(session.sessionId, sessionProjectId, label),
+      },
+      {
+        label: "在新 Pane 打开",
+        disabled: !canSplit,
+        action: () =>
+          openTabInNewPane(session.sessionId, sessionProjectId, label),
+      },
+      { separator: true },
+      {
+        label: pinned ? "取消置顶" : "置顶会话",
+        action: () => togglePin(sessionProjectId, session.sessionId),
+      },
+      {
+        label: hidden ? "取消隐藏" : "隐藏会话",
+        action: () => toggleHide(sessionProjectId, session.sessionId),
+      },
+      { separator: true },
+      {
+        label: "复制 Session ID",
+        action: () => navigator.clipboard.writeText(session.sessionId),
+        feedback: { label: "已复制!" },
+      },
+      {
+        label: "复制恢复命令",
+        action: () =>
+          navigator.clipboard.writeText(`claude --resume ${session.sessionId}`),
+        feedback: { label: "已复制!" },
+      },
+    ];
   }
 
   // ---------------------------------------------------------------------------
@@ -1017,7 +1064,7 @@
             data-session-id={session.sessionId}
             data-project-id={sessionProjectId}
             onclick={(e) => onSelectSession(session.sessionId, sessionProjectId, selectedGroupId, sessionLabel(session), e)}
-            oncontextmenu={(e) => onContextMenu(e, session)}
+            use:contextMenu={() => buildSessionContextItems(session)}
           >
             <div class="session-title">
               {#if session.isOngoing}
@@ -1100,27 +1147,6 @@
     }}
   ></div>
 </aside>
-
-<!-- Context menu (rendered outside sidebar to avoid overflow clipping) -->
-{#if ctxMenu}
-  {@const ctx = ctxMenu}
-  {@const canSplit = getPaneLayout().panes.length < MAX_PANES}
-  {@const sessionProjectId = ctx.session.worktreeId ?? selectedGroupId}
-  <SessionContextMenu
-    x={ctx.x}
-    y={ctx.y}
-    sessionId={ctx.session.sessionId}
-    isPinned={isPinned(sessionProjectId, ctx.session.sessionId)}
-    isHidden={isHidden(sessionProjectId, ctx.session.sessionId)}
-    {canSplit}
-    onOpenInCurrentTab={() => openOrReplaceTab(ctx.session.sessionId, sessionProjectId, sessionLabel(ctx.session))}
-    onOpenInNewTab={() => openTab(ctx.session.sessionId, sessionProjectId, sessionLabel(ctx.session))}
-    onOpenInNewPane={() => openTabInNewPane(ctx.session.sessionId, sessionProjectId, sessionLabel(ctx.session))}
-    onTogglePin={() => togglePin(sessionProjectId, ctx.session.sessionId)}
-    onToggleHide={() => toggleHide(sessionProjectId, ctx.session.sessionId)}
-    onClose={() => { ctxMenu = null; }}
-  />
-{/if}
 
 <style>
   /* sidebar 高度撑满父容器（app-layout）而非 100vh——chrome 拍平后顶
@@ -1526,6 +1552,13 @@
     text-align: left;
     box-sizing: border-box;
     transition: background 0.1s, opacity 0.15s;
+    /* 兜底防 WKWebView smart-select：右键时光标下"词"被自动选中。
+       use:contextMenu 的 mousedown 防护是主防线，CSS 是双保险——
+       会话标题 / metadata 不是用户用来选词复制的内容（复制 sessionId /
+       恢复命令均从右键菜单走）。spec frontend-context-menu 第 8 个
+       Requirement。 */
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .session-item:hover {
