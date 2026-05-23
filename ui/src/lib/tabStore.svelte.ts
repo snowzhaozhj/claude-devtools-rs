@@ -49,7 +49,15 @@ export interface TabUIState {
   expandedItems: Set<string>;
   searchVisible: boolean;
   contextPanelVisible: boolean;
-  scrollTop: number;
+  // 滚动状态用「视觉位置」语义而非绝对 scrollTop——后者在 lazy markdown 占位
+  // 高度 ≠ 真实渲染高度的场景下被浏览器 clamp，导致切回时位置漂移。详
+  // change `tab-scroll-restore-anchor::design.md::Context`。
+  /** 保存时点是否粘底（distanceFromBottom <= 16） */
+  atBottom: boolean;
+  /** 视口顶第一个 bottom > containerTop 的 chunk 的 chunkId；atBottom=true 时为 null */
+  anchorChunkId: string | null;
+  /** anchor 元素 rect.top - container rect.top；可正（视口内）可负（跨越视口顶） */
+  anchorOffsetPx: number;
 }
 
 function createDefaultUIState(): TabUIState {
@@ -58,7 +66,9 @@ function createDefaultUIState(): TabUIState {
     expandedItems: new Set(),
     searchVisible: false,
     contextPanelVisible: false,
-    scrollTop: 0,
+    atBottom: false,
+    anchorChunkId: null,
+    anchorOffsetPx: 0,
   };
 }
 
