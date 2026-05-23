@@ -6,14 +6,17 @@
 ## Requirements
 ### Requirement: Cmd+F 激活会话内搜索
 
-用户在 SessionDetail 视图中按 Cmd+F（或 Ctrl+F）SHALL 显示搜索栏。搜索栏 SHALL 出现在会话内容上方，输入框 SHALL 自动获得焦点。当用户在搜索框输入文本（300 ms debounce 后）触发 `doSearch` 时，系统 MUST 先把 conversation 容器内所有处于 lazy markdown 占位态的 chunk 强制渲染为真实 HTML，再调用 DOM `TreeWalker` 高亮匹配项 — 即匹配总数与全文文本一致，不受 lazy 视口渲染节奏影响。SearchBar 处于可见 + 有 query 状态时，若 conversation 容器内容因 file-change 自动刷新等原因发生变化（调用方通过 `contentVersion` prop 递增信号通知），SearchBar SHALL 自动重跑 `doSearch` 同步匹配索引，使新增 chunk 参与高亮、`totalMatches` 反映最新内容。
+用户在 SessionDetail 视图中按下 `keyboard-shortcuts` registry 的 `search.in-session` 当前 binding（默认 mac `⌘F` / Win+Linux `Ctrl+F`）SHALL 显示搜索栏。搜索栏 SHALL 出现在会话内容上方，输入框 SHALL 自动获得焦点。当用户在搜索框输入文本（300 ms debounce 后）触发 `doSearch` 时，系统 MUST 先把 conversation 容器内所有处于 lazy markdown 占位态的 chunk 强制渲染为真实 HTML，再调用 DOM `TreeWalker` 高亮匹配项 — 即匹配总数与全文文本一致，不受 lazy 视口渲染节奏影响。SearchBar 处于可见 + 有 query 状态时，若 conversation 容器内容因 file-change 自动刷新等原因发生变化（调用方通过 `contentVersion` prop 递增信号通知），SearchBar SHALL 自动重跑 `doSearch` 同步匹配索引，使新增 chunk 参与高亮、`totalMatches` 反映最新内容。
+
+`search.in-session` spec 的 `allowInInput` SHALL 为 `true`（当用户已在某 input focus 时按 Cmd+F 仍能调出搜索栏）；spec 的 handler SHALL 调用 `event.preventDefault()` 阻止浏览器默认 find 弹窗。该快捷键 SHALL 由用户在 `Settings → Keyboard Shortcuts` 中自定义。
 
 #### Scenario: 快捷键激活
-- **WHEN** 用户在 SessionDetail 视图中按 Cmd+F 或 Ctrl+F
-- **THEN** SearchBar SHALL 变为可见，输入框 SHALL 自动 focus 并 select 已有文本
+- **WHEN** 用户在 SessionDetail 视图中按下 `search.in-session` 当前 binding
+- **THEN** registry dispatcher SHALL 命中 `search.in-session` spec
+- **AND** SearchBar SHALL 变为可见，输入框 SHALL 自动 focus 并 select 已有文本
 
 #### Scenario: 重复按 Cmd+F
-- **WHEN** SearchBar 已可见时用户再次按 Cmd+F
+- **WHEN** SearchBar 已可见时用户再次按 `search.in-session` 当前 binding
 - **THEN** 输入框 SHALL 重新获得 focus 并 select 全部文本
 
 #### Scenario: 搜索激活时全量 hydrate lazy markdown
@@ -24,7 +27,7 @@
 
 #### Scenario: 视口外 chunk 含唯一关键词时也能命中
 - **WHEN** SessionDetail 含 96 条 chunk，唯一关键词 "uniquekeyword" 仅出现在第 80 条（首屏视口外、未渲染状态）
-- **WHEN** 用户按 Cmd+F 输入 "uniquekeyword"
+- **WHEN** 用户按 `search.in-session` 当前 binding 输入 "uniquekeyword"
 - **THEN** SearchBar 显示 `1 / 1`（命中 1 项）
 - **AND** 第 80 条 chunk SHALL 已渲染为真实 HTML
 - **AND** scrollIntoView SHALL 把当前匹配项滚动至视口中心
@@ -40,6 +43,11 @@
 - **WHEN** `contentVersion` 因 file-change 递增
 - **THEN** SearchBar SHALL NOT 触发 `highlightMatches` 等 DOM 操作（避免无效计算）
 - **AND** 当用户重新打开 SearchBar 输入 query 时，正常走首次 `doSearch` 流程
+
+#### Scenario: 用户自定义 binding 后生效
+- **WHEN** 用户在 `Settings → Keyboard Shortcuts` 把 `search.in-session` 改为 `mod+shift+F`
+- **THEN** 后续按下 `mod+shift+F` SHALL 显示 SearchBar
+- **AND** 按下原默认 `mod+F` SHALL NOT 触发 SearchBar（除非另一 spec 占用了 `mod+F`）
 
 ### Requirement: 会话内文本搜索与高亮
 
@@ -107,19 +115,26 @@
 
 ### Requirement: Command Palette 触发
 
-用户 SHALL 可以通过 Cmd+K（macOS）/ Ctrl+K 快捷键在任意界面打开 Command Palette 模态面板。
+用户 SHALL 可以通过 `keyboard-shortcuts` registry 的 `command-palette.toggle` 当前 binding（默认 mac `⌘K` / Win+Linux `Ctrl+K`）在任意界面打开 Command Palette 模态面板。该 spec 的 `allowInInput` SHALL 为 `true`（input focus 时仍可调出）；handler SHALL `event.preventDefault()`；handler SHALL 实现 toggle 行为（已打开则关闭）。该快捷键 SHALL 由用户在 `Settings → Keyboard Shortcuts` 中自定义。
 
 #### Scenario: Cmd+K 打开
-- **WHEN** 用户按下 Cmd+K（或 Ctrl+K）
-- **THEN** SHALL 弹出模态面板，搜索框自动聚焦
+- **WHEN** 用户按下 `command-palette.toggle` 当前 binding
+- **THEN** registry dispatcher SHALL 命中 `command-palette.toggle` spec
+- **AND** SHALL 弹出模态面板，搜索框自动聚焦
 
 #### Scenario: Esc 关闭
 - **WHEN** Command Palette 打开时用户按 Escape 或点击遮罩
 - **THEN** 面板 SHALL 关闭，焦点回到之前的内容
+- **AND** 该 Escape 处理 SHALL 由 `CommandPalette.svelte` 自身 listener 处理（不通过 registry）
 
 #### Scenario: 重复打开
-- **WHEN** Command Palette 已打开时再次按 Cmd+K
+- **WHEN** Command Palette 已打开时再次按 `command-palette.toggle` 当前 binding
 - **THEN** SHALL 关闭面板（toggle 行为）
+
+#### Scenario: 用户自定义 binding 后生效
+- **WHEN** 用户在 `Settings → Keyboard Shortcuts` 把 `command-palette.toggle` 改为 `mod+P`
+- **THEN** 后续按下 `mod+P` SHALL 切换 Command Palette
+- **AND** 按下原默认 `mod+K` SHALL NOT 触发 Command Palette
 
 ### Requirement: Command Palette 搜索模式
 

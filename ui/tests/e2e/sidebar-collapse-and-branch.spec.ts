@@ -9,7 +9,29 @@
 // 且 branch 名长易截断；多 wt group 改用 `.session-wt-label` 显示 worktreeName
 // 短名前缀，行末截断保留前缀（用户对 wt 名记忆主体在前段）。完整 branch 留 SessionDetail。
 
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+/**
+ * 用 dispatchEvent 派 mod-key keydown。playwright `keyboard.press('Meta+b')` 在
+ * body focus 漂走时事件不冒泡到 document（registry dispatcher 的 listen 点），
+ * 故走 evaluate 内 document.dispatchEvent + bubbles:true。mac 下 metaKey + 其他
+ * 平台 ctrlKey 都置 true，registry 的 normalize 按平台展开 mod。
+ *
+ * 与 keyboard-shortcuts.spec.ts L36-44 同款 helper。
+ */
+async function pressMod(page: Page, key: string) {
+  await page.evaluate((k) => {
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: k,
+        metaKey: true,
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  }, key)
+}
 
 test.describe('sidebar collapse and worktree label', () => {
   test('点折叠按钮 → sidebar 隐藏 → TabBar 展开按钮出现 → 点展开恢复', async ({ page }) => {
@@ -51,14 +73,18 @@ test.describe('sidebar collapse and worktree label', () => {
     await expect(page.locator('aside.sidebar')).toHaveCount(1)
 
     // 按 Meta+B → 折叠
-    await page.keyboard.press('Meta+b')
+    // 用 page.evaluate + document.dispatchEvent + bubbles:true 派 keydown：
+    // playwright `keyboard.press` 在 body focus 漂走时不冒泡到 document（registry
+    // dispatcher listen 点）；走 dispatchEvent 是 keyboard-shortcuts.spec.ts 同款
+    // pressMod 模式（详 keyboard-shortcuts.spec.ts L13-16 caveat）。
+    await pressMod(page, 'b')
     // sidebar 始终挂载（避免 destroy/recreate 闪烁），collapsed 时通过
      // CSS width:0 + pointer-events:none 隐藏；用 .sidebar-collapsed class
      // 断言折叠态而非 DOM count
     await expect(page.locator('aside.sidebar')).toHaveClass(/sidebar-collapsed/, { timeout: 2_000 })
 
     // 再按一次 → 展开
-    await page.keyboard.press('Meta+b')
+    await pressMod(page, 'b')
     await expect(page.locator('aside.sidebar')).not.toHaveClass(/sidebar-collapsed/, { timeout: 2_000 })
   })
 

@@ -470,6 +470,9 @@ function buildHandler(fx: Fixture) {
           }
         } else if (section === 'httpServer' && data) {
           fx.config.httpServer = { ...(fx.config.httpServer ?? { enabled: false, port: 3456 }), ...(data as object) }
+        } else if (section === 'keyboardShortcuts' && data) {
+          // 整体替换语义（同 notifications.triggers），data 直接是 Record<string, string>
+          fx.config.keyboardShortcuts = data as Record<string, string>
         }
         return fx.config
       }

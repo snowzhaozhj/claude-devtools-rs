@@ -19,6 +19,8 @@
     scheduleRefresh,
     cancelScheduledRefresh,
   } from "../lib/fileChangeStore.svelte";
+  import { registerShortcut } from "../lib/keyboard/registry";
+  import { getShortcutMeta } from "../lib/keyboard/defaults";
 
   const SORT_OPTIONS: { value: DashboardSortKey; label: string }[] = [
     { value: "recent", label: "最近活动" },
@@ -64,6 +66,8 @@
   // 给当前行/卡片打短暂 pulse 触发 ring 动画，让点击被"听到"。
   let pulsingId = $state<string | null>(null);
   let pulseTimer: ReturnType<typeof setTimeout> | undefined;
+  // `/` 聚焦搜索快捷键的 unregister 闭包；onMount 注册 / onDestroy 释放。
+  let unregisterFocusShortcut: (() => void) | null = null;
 
   function handleSelect(p: DashboardProject) {
     if (p.id === selectedProjectId) {
@@ -93,9 +97,27 @@
       if (!payload.projectListChanged) return;
       scheduleRefresh("dashboard:projects", () => untrack(() => loadData(true)));
     });
+    // `/` 聚焦搜索：迁出 svelte:window onkeydown，统一进 keyboard registry。
+    // dispatcher 内置 input 焦点守卫（meta.allowInInput=false 默认值）已等价覆盖
+    // "input/textarea/contenteditable focus 时让浏览器原生处理"；handler 仅做
+    // 实际的 focus + select。`searchEl` 缺失 → return false 让 dispatcher 不
+    // preventDefault（首屏极短窗口尚未 bind 时 fallthrough）。
+    const meta = getShortcutMeta("search.focus");
+    if (meta) {
+      unregisterFocusShortcut = registerShortcut({
+        ...meta,
+        handler: () => {
+          if (!searchEl) return false;
+          searchEl.focus();
+          searchEl.select();
+        },
+      });
+    }
   });
 
   onDestroy(() => {
+    unregisterFocusShortcut?.();
+    unregisterFocusShortcut = null;
     unregisterHandler("dashboard-projects");
     cancelScheduledRefresh("dashboard:projects");
     if (pulseTimer) clearTimeout(pulseTimer);
@@ -128,24 +150,7 @@
   const sortLabel = $derived(
     sortKey === "recent" ? "最近活动" : sortKey === "sessions" ? "会话数最多" : "字母序",
   );
-
-  // `/` 全局聚焦搜索（IDE 通用），仅当焦点不在 input/textarea 时生效。
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
-    const t = e.target as HTMLElement | null;
-    if (
-      t &&
-      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)
-    ) {
-      return;
-    }
-    e.preventDefault();
-    searchEl?.focus();
-    searchEl?.select();
-  }
 </script>
-
-<svelte:window onkeydown={handleKeydown} />
 
 <div class="dashboard">
   <div class="dashboard-inner">

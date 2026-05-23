@@ -23,6 +23,11 @@ pub struct AppConfig {
     pub http_server: HttpServerConfig,
     #[serde(default)]
     pub updater: UpdaterConfig,
+    /// 用户自定义键盘快捷键映射：`actionId` → key combo（如 `"sidebar.toggle" → "mod+shift+b"`）。
+    /// 空 `HashMap` 在 IPC / 文件序列化为 `{}`（无 `skip_serializing_if`），让前端 customization 层
+    /// 永远拿到稳定 shape；详 `openspec/specs/configuration-management/spec.md` & `keyboard-shortcuts/spec.md`。
+    #[serde(default)]
+    pub keyboard_shortcuts: HashMap<String, String>,
 }
 
 // =============================================================================
@@ -343,6 +348,7 @@ pub enum ConfigSection {
     Ssh,
     HttpServer,
     Updater,
+    KeyboardShortcuts,
 }
 
 impl ConfigSection {
@@ -356,6 +362,7 @@ impl ConfigSection {
             "ssh" => Some(Self::Ssh),
             "httpServer" => Some(Self::HttpServer),
             "updater" => Some(Self::Updater),
+            "keyboardShortcuts" => Some(Self::KeyboardShortcuts),
             _ => None,
         }
     }

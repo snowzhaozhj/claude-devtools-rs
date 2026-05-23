@@ -767,6 +767,12 @@ export interface AppConfig {
   ssh?: SshConfig;
   updater?: UpdaterConfig;
   httpServer?: HttpServerConfig;
+  /**
+   * 用户自定义键盘快捷键映射：actionId → key combo（如 "sidebar.toggle" → "mod+shift+b"）。
+   * 后端 SHALL 总是返回该字段（默认空 object，不会缺失或 null），前端 customization 层依赖
+   * 稳定 shape；详 openspec/specs/configuration-management/spec.md::keyboardShortcuts。
+   */
+  keyboardShortcuts: Record<string, string>;
 }
 
 // =============================================================================

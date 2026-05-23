@@ -39,6 +39,8 @@
   import { subscribeEvent } from "./lib/transport";
   import { getSidebarCollapsed, toggleSidebarCollapsed } from "./lib/sidebarStore.svelte";
   import { attachExternalLinkInterceptor } from "./lib/externalLinks";
+  import { bootstrapOverrides } from "./lib/keyboard/customization";
+  import { registerAppShortcuts } from "./lib/keyboard/register-app-shortcuts";
 
   let selectedGroupId: string = $state("");
   let selectedProjectName: string = $state("");
@@ -47,6 +49,7 @@
   let unlistenNotifAdded: UnlistenFn | null = null;
   let unlistenUpdater: UnlistenFn | null = null;
   let detachExternalLinks: (() => void) | null = null;
+  let unregisterShortcuts: (() => void) | null = null;
   let notificationPollTimer: ReturnType<typeof setInterval> | undefined;
   // macOS 上 Tauri 进程跑 Rosetta 翻译时为 true；其他平台 / 非 Rosetta 时永远 false
   let rosettaWarningVisible = $state(false);
@@ -73,84 +76,87 @@
     } catch { /* 静默 */ }
   }
 
-  function handleGlobalKeydown(e: KeyboardEvent) {
-    if (!(e.metaKey || e.ctrlKey)) return;
+  // 全局快捷键迁移到 keyboard registry（change `add-keyboard-shortcut-system`）：
+  // 17 条 App-owned spec 通过 `registerAppShortcuts` 在 onMount 注册；详见
+  // `ui/src/lib/keyboard/register-app-shortcuts.ts` 与 design.md::D6 边界。
+  // dispatcher 的单一 document keydown listener 由 registry 自管，这里 **不再**
+  // 自挂 keydown listener / 自实 IME 与 input-focus 守卫。
+  function switchToTabByIndex(idx: number): boolean | void {
+    const list = getTabs();
+    if (idx >= list.length) return false; // 超界 → 不消费、不 preventDefault
+    setActiveTab(list[idx].id);
+  }
 
-    if (e.key === "k") {
-      e.preventDefault();
-      commandPaletteOpen = !commandPaletteOpen;
-      return;
-    }
-
-    // Cmd/Ctrl + B → 切换 sidebar 折叠/展开
-    // 详见 openspec/specs/sidebar-navigation/spec.md §"侧栏折叠/展开"
-    if (e.key === "b") {
-      e.preventDefault();
-      toggleSidebarCollapsed();
-      return;
-    }
-
-    // Cmd/Ctrl + 1~9 → 切到对应索引的 tab（1-based；超界忽略）
-    if (/^[1-9]$/.test(e.key)) {
-      const idx = Number(e.key) - 1;
-      const list = getTabs();
-      if (idx < list.length) {
-        e.preventDefault();
-        setActiveTab(list[idx].id);
-      }
-      return;
-    }
-
-    // Cmd/Ctrl + W → 关闭当前 tab
-    if (e.key === "w") {
-      const activeId = getActiveTabId();
-      if (activeId) {
-        e.preventDefault();
+  function buildAppShortcutHandlers() {
+    const handlers: Record<string, (e: KeyboardEvent) => boolean | void> = {
+      "command-palette.toggle": () => {
+        commandPaletteOpen = !commandPaletteOpen;
+      },
+      // Cmd/Ctrl + B → 切换 sidebar 折叠/展开
+      // 详见 openspec/specs/sidebar-navigation/spec.md §"侧栏折叠/展开"
+      "sidebar.toggle": () => {
+        toggleSidebarCollapsed();
+      },
+      // Cmd/Ctrl + W → 关闭当前 tab；无 active tab 时不消费让浏览器原生
+      "tab.close": () => {
+        const activeId = getActiveTabId();
+        if (!activeId) return false;
         closeTab(activeId);
-      }
-      return;
+      },
+      // Cmd/Ctrl + ] → 下一个 tab（循环）
+      "tab.next": () => {
+        const list = getTabs();
+        if (list.length === 0) return false;
+        const activeId = getActiveTabId();
+        const currentIdx = activeId ? list.findIndex((t) => t.id === activeId) : -1;
+        if (currentIdx === -1) return false;
+        const nextIdx = (currentIdx + 1) % list.length;
+        setActiveTab(list[nextIdx].id);
+      },
+      // Cmd/Ctrl + [ → 上一个 tab（循环）
+      "tab.prev": () => {
+        const list = getTabs();
+        if (list.length === 0) return false;
+        const activeId = getActiveTabId();
+        const currentIdx = activeId ? list.findIndex((t) => t.id === activeId) : -1;
+        if (currentIdx === -1) return false;
+        const nextIdx = (currentIdx - 1 + list.length) % list.length;
+        setActiveTab(list[nextIdx].id);
+      },
+      // Cmd/Ctrl + \ → split focused pane 的 activeTab 到右侧（新 pane）
+      "pane.split": () => {
+        const layout = getPaneLayout();
+        if (layout.panes.length >= MAX_PANES) return false;
+        const focusedId = getFocusedPaneId();
+        const activeId = getActiveTabId();
+        if (!activeId) return false;
+        splitPane(focusedId, activeId, "right");
+      },
+      // Cmd/Ctrl + Option/Alt + → → focus 下一个 pane（循环）
+      "pane.focus.next": () => {
+        const layout = getPaneLayout();
+        if (layout.panes.length <= 1) return false;
+        const idx = layout.panes.findIndex((p) => p.id === layout.focusedPaneId);
+        if (idx === -1) return false;
+        const nextIdx = (idx + 1) % layout.panes.length;
+        focusPane(layout.panes[nextIdx].id);
+      },
+      // Cmd/Ctrl + Option/Alt + ← → focus 上一个 pane（循环）
+      "pane.focus.prev": () => {
+        const layout = getPaneLayout();
+        if (layout.panes.length <= 1) return false;
+        const idx = layout.panes.findIndex((p) => p.id === layout.focusedPaneId);
+        if (idx === -1) return false;
+        const nextIdx = (idx - 1 + layout.panes.length) % layout.panes.length;
+        focusPane(layout.panes[nextIdx].id);
+      },
+    };
+    // tab.switch.1 ~ tab.switch.9（1-based；超界 → return false）
+    for (let n = 1; n <= 9; n += 1) {
+      const idx = n - 1;
+      handlers[`tab.switch.${n}`] = () => switchToTabByIndex(idx);
     }
-
-    // Cmd/Ctrl + [ / ] → 上一个 / 下一个 tab（循环）
-    if (e.key === "[" || e.key === "]") {
-      const list = getTabs();
-      if (list.length === 0) return;
-      const activeId = getActiveTabId();
-      const currentIdx = activeId ? list.findIndex((t) => t.id === activeId) : -1;
-      if (currentIdx === -1) return;
-      e.preventDefault();
-      const nextIdx = e.key === "["
-        ? (currentIdx - 1 + list.length) % list.length
-        : (currentIdx + 1) % list.length;
-      setActiveTab(list[nextIdx].id);
-      return;
-    }
-
-    // Cmd/Ctrl + \ → split focused pane 的 activeTab 到右侧（新 pane）
-    if (e.key === "\\") {
-      const layout = getPaneLayout();
-      if (layout.panes.length >= MAX_PANES) return;
-      const focusedId = getFocusedPaneId();
-      const activeId = getActiveTabId();
-      if (!activeId) return;
-      e.preventDefault();
-      splitPane(focusedId, activeId, "right");
-      return;
-    }
-
-    // Cmd/Ctrl + Option/Alt + ← / → → focus 上/下一个 pane（循环）
-    if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-      const layout = getPaneLayout();
-      if (layout.panes.length <= 1) return;
-      const idx = layout.panes.findIndex((p) => p.id === layout.focusedPaneId);
-      if (idx === -1) return;
-      e.preventDefault();
-      const nextIdx = e.key === "ArrowLeft"
-        ? (idx - 1 + layout.panes.length) % layout.panes.length
-        : (idx + 1) % layout.panes.length;
-      focusPane(layout.panes[nextIdx].id);
-      return;
-    }
+    return handlers;
   }
 
   const openCommandPalette = () => {
@@ -158,7 +164,11 @@
   };
 
   onMount(async () => {
-    document.addEventListener("keydown", handleGlobalKeydown);
+    // 先 bootstrap 用户 overrides 进 registry pendingOverrides，再 register；
+    // register 时自动用 override 替代 defaultBinding。IPC 失败 → registry 走
+    // builtin defaults + setConfigLoadError（详 customization.ts::bootstrapOverrides）。
+    await bootstrapOverrides();
+    unregisterShortcuts = registerAppShortcuts(buildAppShortcutHandlers());
     window.addEventListener("cdt-open-command-palette", openCommandPalette);
     // 拦截 markdown 内的外链点击，走系统默认浏览器而非 webview 窗口内导航
     detachExternalLinks = attachExternalLinkInterceptor();
@@ -219,7 +229,7 @@
   });
 
   onDestroy(() => {
-    document.removeEventListener("keydown", handleGlobalKeydown);
+    unregisterShortcuts?.();
     window.removeEventListener("cdt-open-command-palette", openCommandPalette);
     unlistenNotif?.();
     unlistenNotifAdded?.();

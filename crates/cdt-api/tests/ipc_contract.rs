@@ -1765,6 +1765,25 @@ async fn get_config_returns_camelcase_top_level_sections() {
     );
     assert!(!obj.contains_key("http_server"), "MUST 不出现 snake_case");
 
+    // keyboardShortcuts 是 camelCase 后的形式（spec configuration-management:keyboardShortcuts）
+    assert!(
+        obj.contains_key("keyboardShortcuts"),
+        "keyboard_shortcuts section SHALL 序列化为 keyboardShortcuts"
+    );
+    assert!(
+        !obj.contains_key("keyboard_shortcuts"),
+        "MUST 不出现 snake_case keyboard_shortcuts"
+    );
+    assert!(
+        config["keyboardShortcuts"].is_object(),
+        "keyboardShortcuts 默认 SHALL 序列化为 object（即使为空，不可缺失或 null）"
+    );
+    assert_eq!(
+        config["keyboardShortcuts"].as_object().unwrap().len(),
+        0,
+        "keyboardShortcuts 默认 MUST 为空 object"
+    );
+
     // notifications.triggers 是数组
     assert!(config["notifications"]["triggers"].is_array());
     // notifications.soundEnabled 是 camelCase
@@ -2898,6 +2917,100 @@ async fn update_config_http_server_round_trip() {
         next["httpServer"]["port"],
         json!(3456),
         "仅 enabled 更新 SHALL 不影响 port"
+    );
+}
+
+/// `update_config` section=`keyboardShortcuts`：整体替换语义 + camelCase 字段契约。
+/// 见 `openspec/specs/configuration-management/spec.md::keyboardShortcuts.update`。
+#[tokio::test]
+async fn update_config_keyboard_shortcuts_round_trip() {
+    let (api, _tmp) = setup_api().await;
+
+    // 默认值：空 object（不是 null / missing）
+    let cfg = api.get_config().await.unwrap();
+    assert!(
+        cfg["keyboardShortcuts"].is_object(),
+        "默认 keyboardShortcuts SHALL 是 object"
+    );
+    assert_eq!(cfg["keyboardShortcuts"].as_object().unwrap().len(), 0);
+
+    // 写入两条
+    let req = ConfigUpdateRequest {
+        section: "keyboardShortcuts".into(),
+        data: json!({
+            "sidebar.toggle": "mod+shift+b",
+            "command-palette.open": "mod+k",
+        }),
+    };
+    let next = api.update_config(&req).await.unwrap();
+    let map = next["keyboardShortcuts"].as_object().unwrap();
+    assert_eq!(map.len(), 2);
+    assert_eq!(map["sidebar.toggle"], json!("mod+shift+b"));
+    assert_eq!(map["command-palette.open"], json!("mod+k"));
+
+    // 整体替换：只传一条 → 旧两条全没
+    let req = ConfigUpdateRequest {
+        section: "keyboardShortcuts".into(),
+        data: json!({ "foo": "ctrl+x" }),
+    };
+    let next = api.update_config(&req).await.unwrap();
+    let map = next["keyboardShortcuts"].as_object().unwrap();
+    assert_eq!(
+        map.len(),
+        1,
+        "整体替换语义：旧 entries SHALL 全部丢弃（不合并）"
+    );
+    assert_eq!(map["foo"], json!("ctrl+x"));
+    assert!(!map.contains_key("sidebar.toggle"));
+
+    // 空 object → 清空
+    let req = ConfigUpdateRequest {
+        section: "keyboardShortcuts".into(),
+        data: json!({}),
+    };
+    let next = api.update_config(&req).await.unwrap();
+    assert_eq!(
+        next["keyboardShortcuts"].as_object().unwrap().len(),
+        0,
+        "空 object SHALL 清空所有自定义快捷键"
+    );
+
+    // 非法输入：非对象 → 拒绝
+    let req = ConfigUpdateRequest {
+        section: "keyboardShortcuts".into(),
+        data: json!(["mod+x"]),
+    };
+    let err = api.update_config(&req).await.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.to_lowercase().contains("record")
+            || msg.to_lowercase().contains("string")
+            || msg.to_lowercase().contains("keyboardshortcuts"),
+        "非对象输入 SHALL 拒绝并附类型文案，got: {msg}"
+    );
+
+    // 非法输入：值非字符串 → 拒绝
+    let req = ConfigUpdateRequest {
+        section: "keyboardShortcuts".into(),
+        data: json!({ "foo": 42 }),
+    };
+    let err = api.update_config(&req).await.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.to_lowercase().contains("string") || msg.to_lowercase().contains("keyboardshortcuts"),
+        "数字值 SHALL 拒绝，got: {msg}"
+    );
+
+    // 非法输入：空 combo → 拒绝
+    let req = ConfigUpdateRequest {
+        section: "keyboardShortcuts".into(),
+        data: json!({ "foo": "" }),
+    };
+    let err = api.update_config(&req).await.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.to_lowercase().contains("non-empty") || msg.to_lowercase().contains("combo"),
+        "空 combo SHALL 拒绝，got: {msg}"
     );
 }
 

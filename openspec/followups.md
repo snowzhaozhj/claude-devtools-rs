@@ -645,6 +645,82 @@ vitest 单测 + mockIPC 路径与 Sidebar.test.svelte.ts 同 pattern，独立 fo
 
 ---
 
+## keyboard-shortcuts（change `add-keyboard-shortcut-system`）
+
+Phase 1 已落地：UI registry / dispatcher / 17 条 default + Settings 录键 panel + cdt-config `keyboardShortcuts: HashMap<String, String>` 持久化。以下条目本 PR scope 外，待真实使用反馈后决定是否做。
+
+### [enhancement → future] tauri-plugin-global-shortcut 全局唤起
+
+- **背景**：当前 dispatcher 走 `document.addEventListener("keydown")`——仅在应用窗口聚焦时响应。`mod+shift+/` 想做"应用未聚焦也能从其他 app 拉起 CommandPalette"无法实现。
+- **方向**：引入 [`tauri-plugin-global-shortcut`](https://v2.tauri.app/plugin/global-shortcut/) 在 Tauri 后端 `setup` 时按 cdt-config 的 `keyboardShortcuts.global.command-palette` 注册系统级 shortcut；触发后 emit 到前端 + 调 `window.show() + window.setFocus()`。
+- **风险**：系统级 shortcut 会与其它 app 冲突（macOS Spotlight `Cmd+Space` / Raycast 等），SHALL 在 Settings panel 加"启用全局快捷键"开关 + 默认关闭；需实现 conflict detection（同 binding 在 macOS 上可能被静默吞掉）。
+- **触发条件**：用户主动反馈"想从后台拉起"，或观察到 active session 之外仍频繁需要 CommandPalette 时再做。
+
+### [windows-compat → followup] 跨平台 config 同步与录键归一化
+
+windows-compat-reviewer 在 §11.2 输出 0 P0 / 1 P1 / 4 P2 / 2 nit；§11.2 严格 scope（`event.code` 物理键兜底无 Windows 误判）已 PASS（`platform.ts` AltGraph 守卫 + Numpad 归一化 + non-mac 禁识 metaKey 全部正确）。以下条目超出本 PR scope，独立处理：
+
+- **[P1] 跨平台 config 同步：mac 录的 `meta+x` 在 Windows 失效但 UI 仍展示 `Win+X`**：用户在 mac 录 `command-palette.toggle = meta+shift+p`，cdt-config 持久化后同步到 Windows，`bootstrapOverrides → applyOverrides` 写入字面量 `meta+shift+p`；Windows `normalize(event)` 在 non-mac 平台忽略 `metaKey`（`platform.ts:190`），shortcut 永久不命中，但 Settings panel 行展示 `Win+Shift+P` 误导用户。**修法（推荐）**：`KeyRecorderInput.handleKeyDown` 在 `onCommit(binding)` 之前把"当前平台的 mod 前缀"反写为 `mod`（mac `meta` → `mod`、Windows/Linux `ctrl` → `mod`），让 cdt-config 只存 `mod+x` 跨平台 source-of-truth；同时为存量 `meta+x` overrides 在 `bootstrapOverrides` 加一道迁移（首次加载时把 mac 平台 mod 前缀替换为 `mod`），保证老 config 平滑升级。涉及 spec D1 录键归一化语义微调，开独立 change。
+- **[P2] Windows 录键按 `Win+B` 静默剥离 Win 键只录 `b`**：`KeyRecorderInput.handleKeyDown` 在 normalize 后若拿到的 binding 不含任何 mod（因为 non-mac 忽略 metaKey），但事件本身 `metaKey=true`，应**不 commit、不 blur**，停留在 recording 态并提示"Windows 不支持 Win 键作为修饰键"。修法：normalize 之后、commit 之前加 `if (event.metaKey && !isMac()) return;` 守卫 + `aria-live` 警告。与 P1 同 commit 修。
+- **[P2] `formatShortcut` 在 Windows 平台把 `meta` 渲染为 "Win" 但 dispatcher 永不命中**：与 P1 同源，存储归一后 `meta` 不会再出现在 Windows 端 binding 中自然规避；保底方案是 `formatShortcut` 在 Windows 遇到 `meta` 时显示 "Win+X (不可用)" 标注。
+- **[P2] `tab.close` advisoryHints 在 Windows + Tauri 桌面态留白**：当前只对 mac + 浏览器场景给"系统/浏览器拦截"提示；Windows + Tauri WebView2 默认能到 keydown 但依赖 webview accelerator 配置，未来 Tauri 升级或 user 启用 system menu close item 可能漂移。预防性 followup：在 src-tauri 侧显式声明 `Ctrl+W` accelerator 走 webview，或在 panel 行加"WebView2 默认行为依赖 Tauri 配置"低优先级提示。
+- **[P2 nit] `formatMainKey` 对 `Space` 不做平台特化**（mac 可显示 `␣`），polish；
+- **[nit] `register-app-shortcuts.ts` 顶部注释里"9 条 / 17 specs"表述对维护者不直观**，实际 APP_OWNED 17 / 仓库总 20（DashboardView 1 + PaneContainer 2 = 3 条由非 App 持有）；下次 touch 该文件时改注释。
+- **[nit] `WIN_TEXT.meta = "Win"` 与"non-mac 禁识 metaKey"语义冲突**：走存储归一方案后该字段不会被使用，可考虑删除或在注释里写"仅作 mac→Win fallback；正常不触发"。
+
+### [coverage-gap → deferred] add-keyboard-shortcut-system spec-fidelity FAIL（2026-05-23）
+
+`spec-fidelity-reviewer` 跑 7 capability spec delta（`keyboard-shortcuts` + 6 affected：`configuration-management` / `settings-ui` / `session-display` / `sidebar-navigation` / `tab-management` / `ui-search`）总 92 Scenario：**PASS 65 / WARN 11 / FAIL 16**。FAIL 多落在 affected capability 既有行为漏测里（**非**本 change 引入），按 capability 拆独立 PR 分批补，**不阻塞**本 change archive。本 PR keyboard-shortcuts capability 自身已闭环：`registry/defaults/customization/dispatcher/platform.test.ts` + `KeyRecorderInput.test.ts` + `ShortcutRow.test.ts` + `KeyboardShortcutsPanel.test.ts` 共 50+ vitest unit + `tests/e2e/keyboard-shortcuts.spec.ts` 8 Playwright e2e。
+
+#### tab-management (6)
+
+- 初始单 pane
+- Split 创建新 pane（向右）
+- Split 达到 MAX_PANES 上限
+- 关闭 pane
+- 唯一 pane 不可关闭
+- 切换 focused pane 快捷键
+
+候选 follow-up slug：`tab-management-pane-lifecycle-tests`
+
+#### ui-search (7)
+
+- 重复按 Cmd+F
+- 搜索激活时全量 hydrate lazy markdown
+- 视口外 chunk 含唯一关键词时也能命中
+- file-change 后自动重搜同步索引
+- 用户自定义 binding 后生效（Cmd+F search.in-session）
+- 重复打开（Cmd+K palette toggle）
+- 用户自定义 binding 后生效（Cmd+K command-palette.toggle）
+
+候选 follow-up slug：`ui-search-fidelity-tests`
+
+#### session-display (1)
+
+- 切 tab 来回时按钮可见性重新判定
+
+候选 follow-up slug：`session-display-jump-to-bottom-visibility-test`
+
+#### sidebar-navigation (1)
+
+- 重启后回归展开
+
+候选 follow-up slug：`sidebar-navigation-restart-state-test`
+
+#### tab-management 杂项 (1)
+
+- reviewer 报告 tab-management 共计 7 FAIL，主组已列 6 条；第 7 条具体 scenario 字面 reviewer 原报告未保留，需重跑 `spec-fidelity-reviewer` 复核确认（候选可能是 e2e §10.1 已覆盖的 `切换 tab 快捷键` / `关闭 tab 快捷键` / `上一个 / 下一个 tab 快捷键` 三条之一被 reviewer 误判为 FAIL，应反转为 PASS；或本组某条 partial 转计）。
+
+总览 **76/92 (83%) 已测**，未测 16 条按 capability 分批补。
+
+**WARN 11 条**（partial coverage）：archive 不阻塞，作 follow-up 加测提醒；scenario 列表见 reviewer 原报告（mailbox 给 team-lead，2026-05-23），需要时重跑 reviewer 拿精确字面。
+
+**spec 内部矛盾已修复**（本 PR scope 内）：`keyboard-shortcuts/spec.md` `Scenario: 仅持久化覆盖` 原 AND 子句写 `serde(skip_serializing_if = "HashMap::is_empty")` 让 empty 不出现，与 `configuration-management/spec.md::Persist keyboard shortcut overrides`（empty MUST 序列化为 `{}`）矛盾；实现已走后者（`crates/cdt-config/src/types.rs` 注释明确 reason、§10.4 e2e 验证 `update_config({}, …)` round-trip）。本 change 内四处同步反转：design.md 加 D3c 修订块 / spec delta `Scenario: 仅持久化覆盖` AND 子句改写 / proposal.md L28 / tasks.md §2.2（参见 git log）。
+
+### [visual-consistency → followup] spinner timing 0.9s vs 1.2s 对齐
+
+`KeyRecorderInput.svelte` recorder spinner 实际是 `0.9s` linear（与 ConnectionStatusBadge 同款），但 §13 落进 DESIGN.md 的 `The Recorder Idle State Rule` 引用了 `The Static-vs-Live Shape Rule` 1.2s linear 标准（OngoingBanner / SubagentCard 同节奏）。1 行修法：`KeyRecorderInput.svelte::recorder-spin` `0.9s` → `1.2s` + 同步 timing 单测断言（如有）。followup PR 处理。
+
 ## frontend-context-menu（change `frontend-context-menu` Phase 1 已完成；Phase 2 待做）
 
 Phase 1 立基础设施：`AppContextMenu` 通用浮层 + `use:contextMenu` Svelte action + 全局 `installGlobalContextMenuFallback` 兜底——消除 macOS WKWebView 默认菜单（Reload / Look Up / Translate / Search with Baidu / Speech / Services 等）破坏 app 一体感。Phase 2 在此基础上给各 surface 加 app 内上下文菜单。

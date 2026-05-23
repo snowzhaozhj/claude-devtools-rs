@@ -45,6 +45,7 @@
 - **缩写处理**：`auto_expand_ai_groups` → `autoExpandAiGroups`（缩写当普通词，**不**会大写成 `AIGroups`）。所有 `xx_ai_yy` / `xx_http_yy` / `xx_ssh_yy` 类字段在前后端两侧的 key 都按 `xxAiYy` 写；用 ipc_contract round-trip test 拦截大小写错配（历史 bug：`autoExpandAIGroups` 与前端 `autoExpandAiGroups` 错配，toggle 历久不持久化）。
 - **`ConfigManager::update_<section>` 是手写白名单 dispatch**：未列出 key 走 `_ => {}` 静默丢弃——加 `GeneralConfig` / `DisplayConfig` / `UpdaterConfig` 等字段时 SHALL 同步在 `crates/cdt-config/src/manager.rs::update_<section>` 加 match 分支（含 enum 字符串校验），并在 `crates/cdt-api/tests/ipc_contract.rs` 加 `update_config_<section>_<field>_round_trip` 测试（默认值 + 改写 + 改回 + 非法值拒绝）。否则 SettingsView 改完看似生效（前端乐观更新），重启后丢失。
 - **`ContextInjection` serde 格式**：`#[serde(tag = "category", rename_all = "kebab-case")]` 是 internally-tagged，JSON 为 `{ "category": "claude-md", "id": "...", ... }`（**不是** `{ "ClaudeMd": {...} }`）。前端按 `inj.category` 字段 switch 匹配。
+- **`AppConfig::keyboard_shortcuts: HashMap<String, String>`**（change `add-keyboard-shortcut-system`）：序列化为 `keyboardShortcuts: { "sidebar.toggle": "mod+b", ... }`（struct-level `rename_all = "camelCase"` 自动转），仅 `#[serde(default)]` 不带 `skip_serializing_if`——empty HashMap **必须** 序列化为 `{}` 让前端 IPC contract 字段必含；同时 cdt-config 文件持久化时 empty 也保持 `{}` 简洁形态。`update_config_keyboard_shortcuts_round_trip` 在 `cdt-api/tests/ipc_contract.rs` 守 camelCase + 空 / 非空 / 改回 三状态。
 
 ## chunk-building 语义契约（详 `openspec/specs/chunk-building/spec.md`）
 
