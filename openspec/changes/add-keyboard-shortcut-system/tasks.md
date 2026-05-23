@@ -81,10 +81,10 @@
 
 ## 9. UI Settings 录键 widget 单测（owner: 前端 teammate）
 
-- [ ] 9.1 `KeyRecorderInput.test.ts`：进 recording 调 suspend / 退 recording 调 resume / commit 后 conflict 检测 / Escape cancel
-- [ ] 9.2 `ShortcutRow.test.ts`："重置默认"按钮在 currentBinding=defaultBinding 时 disabled
-- [ ] 9.3 `KeyboardShortcutsPanel.test.ts`：5 category 渲染 / 未保存提示条 / Save / 丢弃 / 重置全部
-- [ ] 9.4 录键时 dispatcher 不触发已注册快捷键（mock dispatch + 验证 sidebar.toggle 不被调用）
+- [x] 9.1 `KeyRecorderInput.test.ts`：进 recording 调 suspend / 退 recording 调 resume / commit 后 conflict 检测 / Escape cancel
+- [x] 9.2 `ShortcutRow.test.ts`："重置默认"按钮在 currentBinding=defaultBinding 时 disabled
+- [x] 9.3 `KeyboardShortcutsPanel.test.ts`：5 category 渲染 / 未保存提示条 / Save / 丢弃 / 重置全部
+- [x] 9.4 录键时 dispatcher 不触发已注册快捷键（mock dispatch + 验证 sidebar.toggle 不被调用）
 
 ## 10. UI Playwright 用户故事（owner: QA teammate）
 
