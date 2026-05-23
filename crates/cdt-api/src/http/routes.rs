@@ -12,6 +12,7 @@ use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 
+use crate::ipc::traits::CorrectnessEventItem;
 use crate::ipc::{
     ApiError, ApiErrorCode, ConfigUpdateRequest, PaginatedRequest, SearchRequest, SshConnectRequest,
 };
@@ -151,6 +152,12 @@ pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
         .route(
             "/api/sessions/{root_session_id}/subagents/{session_id}/tools/{tool_use_id}/output",
             get(get_tool_output),
+        )
+        // Telemetry (cdt-telemetry Phase 1)
+        .route("/api/telemetry/snapshot", get(get_telemetry_snapshot_route))
+        .route(
+            "/api/telemetry/correctness-events",
+            post(record_correctness_events_route),
         )
         // SSE
         .route("/api/events", get(sse_handler))
@@ -897,6 +904,26 @@ async fn get_project_session_prefs(
 ) -> Result<impl IntoResponse, ApiError> {
     let prefs = s.api.get_project_session_prefs(&project_id).await?;
     Ok(Json(prefs))
+}
+
+async fn get_telemetry_snapshot_route(
+    State(s): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let snap = s.api.get_telemetry_snapshot().await?;
+    Ok(Json(snap))
+}
+
+#[derive(serde::Deserialize)]
+struct RecordCorrectnessEventsRequest {
+    items: Vec<CorrectnessEventItem>,
+}
+
+async fn record_correctness_events_route(
+    State(s): State<AppState>,
+    Json(payload): Json<RecordCorrectnessEventsRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.record_correctness_events(payload.items).await?;
+    Ok(Json(serde_json::json!({"ok": true})))
 }
 
 #[cfg(test)]

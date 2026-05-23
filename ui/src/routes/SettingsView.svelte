@@ -31,6 +31,7 @@
   import Connection from "./settings/Connection.svelte";
   import { decideWslAction } from "../lib/wslDecision";
   import SkeletonList from "../components/SkeletonList.svelte";
+  import DiagnosticsTab from "../components/settings/DiagnosticsTab.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { updateStore } from "../lib/updateStore.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -49,7 +50,7 @@
     BELL_RING_SVG,
   } from "../lib/icons";
 
-  type SectionId = "general" | "display" | "notifications" | "connection" | "about";
+  type SectionId = "general" | "display" | "notifications" | "connection" | "diagnostics" | "about";
 
   let config: AppConfig | null = $state(null);
   let loading = $state(true);
@@ -102,6 +103,7 @@
     ...(isTauriDesktop
       ? [{ id: "connection" as const, label: "连接", description: "SSH 远端工作区", icon: MONITOR_SVG }]
       : []),
+    { id: "diagnostics", label: "诊断", description: "性能 / 可靠性 / 正确性快照", icon: INFO_SVG },
     { id: "about", label: "关于", description: "版本与更新", icon: INFO_SVG },
   ];
 
@@ -943,6 +945,8 @@
               {/if}
             {/snippet}
           </SettingsGroup>
+        {:else if activeSection === "diagnostics"}
+          <DiagnosticsTab />
         {:else if activeSection === "about"}
           <div class="about-hero">
             <div class="about-app">

@@ -31,6 +31,7 @@
   } from "../lib/sidebarStore.svelte";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { subscribeEvent, type Unsubscribe } from "../lib/transport";
+  import { accumulate as telemetryAccumulateCorrectness } from "../lib/correctnessTelemetryStore.svelte";
   import { isTauriRuntime } from "../lib/runtime";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
   import {
@@ -250,6 +251,19 @@
         // 让 update 是最终 source of truth）；buffer 在切 group / sessions 重置
         // 时清空，避免 stale。详见上方 `pendingMetadataUpdates` doc-comment。
         pendingMetadataUpdates.set(payload.sessionId, payload);
+        // Telemetry: 检测 stale-update —— 旧 title 已是 not-null 真值且与新值不
+        // 一致时累计 `stale_update.triggered` counter。store 内部 5s/50 阈值节流
+        // 批量 flush 给 IPC `record_correctness_events`，避免 file-change 风暴
+        // 把这条低频信号变成 IPC 热点（详见 add-telemetry-signal-bus design D10）。
+        const prev = sessions.find((s) => s.sessionId === payload.sessionId);
+        if (
+          prev &&
+          prev.title != null &&
+          payload.title != null &&
+          prev.title !== payload.title
+        ) {
+          telemetryAccumulateCorrectness("stale_update.triggered");
+        }
         sessions = sessions.map((s) =>
           s.sessionId === payload.sessionId
             ? {

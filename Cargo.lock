@@ -336,6 +336,7 @@ dependencies = [
  "cdt-fs",
  "cdt-parse",
  "cdt-ssh",
+ "cdt-telemetry",
  "cdt-watch",
  "chrono",
  "filetime",

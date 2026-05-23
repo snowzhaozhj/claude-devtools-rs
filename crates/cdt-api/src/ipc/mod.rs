@@ -17,7 +17,7 @@ pub use cdt_discover::{WslDistroCandidate, WslDistroScanReport};
 pub use error::{ApiError, ApiErrorCode};
 pub use events::{PushEvent, SessionMetadataUpdate};
 pub use local::{LocalDataApi, METADATA_SCAN_CONCURRENCY};
-pub use traits::DataApi;
+pub use traits::{CorrectnessEventItem, DataApi};
 pub use types::{
     ConfigUpdateRequest, ContextInfo, MemoryFileContent, MemoryLayer, MemoryLayerKind,
     PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,

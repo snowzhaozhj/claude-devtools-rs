@@ -369,6 +369,10 @@ function httpRequestForCommand(cmd: string, args: InvokeArgs): HttpRequest {
       return { method: "POST", path: `/api/projects/${enc(a.projectId)}/sessions/${enc(a.sessionId)}/hide` };
     case "unhide_session":
       return { method: "DELETE", path: `/api/projects/${enc(a.projectId)}/sessions/${enc(a.sessionId)}/hide` };
+    case "get_telemetry_snapshot":
+      return { method: "GET", path: "/api/telemetry/snapshot" };
+    case "record_correctness_events":
+      return { method: "POST", path: "/api/telemetry/correctness-events", body: { items: a.items } };
     default:
       throw new BrowserUnsupportedError(cmd);
   }

@@ -57,6 +57,8 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "http_server_start",
     "http_server_stop",
     "http_server_status",
+    "get_telemetry_snapshot",
+    "record_correctness_events",
 ];
 
 /// 浏览器 runtime 不实现的 IPC command 集合——这些 command 在 `?http=1` 模式

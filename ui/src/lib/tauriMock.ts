@@ -70,6 +70,8 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'http_server_start',
   'http_server_stop',
   'http_server_status',
+  'get_telemetry_snapshot',
+  'record_correctness_events',
 ] as const
 
 export { KNOWN_TAURI_COMMANDS }
@@ -504,6 +506,61 @@ function buildHandler(fx: Fixture) {
         if (fx.mockHttpServer) return { ...fx.mockHttpServer }
         const persisted = fx.config.httpServer ?? { enabled: false, port: 3456 }
         return { running: false, port: persisted.port, lastError: null }
+      }
+
+      case 'get_telemetry_snapshot': {
+        return {
+          schemaVersion: 1,
+          uptimeSecs: 42,
+          capturedAt: Date.now(),
+          counters: {
+            'metadata.cache.hit': 1234,
+            'metadata.cache.miss': 12,
+            'panic.recovered': 0,
+            'cdt_ssh.error': 0,
+            'cdt_api.error': 0,
+            'stale_update.triggered': 0,
+          },
+          histograms: {
+            'ipc.list_sessions.duration_ns': {
+              count: 100,
+              buckets: Array.from({ length: 32 }, (_, i) => (i === 27 ? 100 : 0)),
+              p50Ns: 1 << 28,
+              p95Ns: 1 << 28,
+              p99Ns: 1 << 28,
+              maxBucket: 27,
+            },
+            'ipc.get_session_detail.duration_ns': {
+              count: 50,
+              buckets: Array.from({ length: 32 }, (_, i) => (i === 26 ? 50 : 0)),
+              p50Ns: 1 << 27,
+              p95Ns: 1 << 27,
+              p99Ns: 1 << 27,
+              maxBucket: 26,
+            },
+            'ipc.list_repository_groups.duration_ns': {
+              count: 0,
+              buckets: Array.from({ length: 32 }, () => 0),
+              p50Ns: null,
+              p95Ns: null,
+              p99Ns: null,
+              maxBucket: null,
+            },
+            'ipc.list_projects.duration_ns': {
+              count: 0,
+              buckets: Array.from({ length: 32 }, () => 0),
+              p50Ns: null,
+              p95Ns: null,
+              p99Ns: null,
+              maxBucket: null,
+            },
+          },
+          recentEvents: [],
+        }
+      }
+
+      case 'record_correctness_events': {
+        return { ok: true }
       }
 
       case 'get_notifications':
