@@ -54,12 +54,14 @@
 
 ## 6. UI 全局快捷键迁移：SessionDetail / DashboardView（owner: 前端 teammate）
 
-- [ ] 6.1 **`PaneView`（或同层 controller）**注册 `session.jump-to-latest` shared handler **一次**（不在 SessionDetail 内注册——D8 单 binding 单 spec 1:1 关系；多 instance 注册同 ID 会触发"重复 ID 抛错"）；handler 内通过 `getActiveTabId()` 找当前 active SessionDetail 实例并调 `jumpToLatest()`；active tab 非 SessionDetail 时返回 `false` 让浏览器原生行为放行
-- [ ] 6.2 `SessionDetail.svelte` 删除 `isJumpToLatestKey` 自实现 + 自有 keydown listener；暴露 `jumpToLatest()` instance method 供 PaneView shared handler 调用（通过 tab registry / store）
-- [ ] 6.3 `DashboardView.svelte` 把 `/` 聚焦搜索改为 `registerShortcut("search.focus", "/", handler)`；handler 检查焦点不在 input 才 focus 搜索框（spec.allowInInput=false 已覆盖）
-- [ ] 6.4 删除 SessionDetail / DashboardView 内冗余 `keydown` listener
-- [ ] 6.5 `ui/src/lib/keyboard/__tests__/migration.test.ts` 端到端：mockIPC 启动 + 模拟 `dispatchEvent(new KeyboardEvent("keydown", ...))` 验证每条快捷键效果
-- [ ] 6.6 多 pane 场景测试：2 个 pane 各开一个 SessionDetail，focused pane 切换后 `mod+ArrowDown` 仅滚动 active SessionDetail；active tab 切到 Dashboard 时 dispatcher 不消费
+- [x] 6.1 **`PaneContainer.svelte`（同层 controller，单 instance）**注册 `session.jump-to-latest` + `search.in-session` 两条 shared handler **各一次**（不在 SessionDetail 内注册——D8 单 binding 单 spec 1:1 关系；多 instance 注册同 ID 会触发"重复 ID 抛错"）；handler 内通过 `getActiveTabId()` 经 `session-detail-handlers.ts` registry 找到当前 active SessionDetail 实例并调对应回调；active tab 非 SessionDetail 时 trigger 返回 `false` 让浏览器原生行为放行
+- [x] 6.2 `SessionDetail.svelte` 删除 `isJumpToLatestKey` / `isInputElement` 自实现 + 删除自有 keydown 中的 `Cmd+F / 跳到最新 / 多 pane 守卫` 三段；onMount 调 `registerSessionDetailHandlers(tabId, { jumpToLatest, openSearch })`，onDestroy `unregisterSessionDetailHandlers(tabId)`；保留极薄 keydown listener 仅做 programmatic-scroll 中断（用 `e.defaultPrevented` 替代自实现按键判定，对用户重绑鲁棒）
+- [x] 6.3 `DashboardView.svelte` 把 `/` 聚焦搜索改为 `registerShortcut(search.focus, ...)`；handler 仅做 focus + select（dispatcher 内置 input 焦点守卫 + meta.allowInInput=false 等价覆盖原 input 早返）
+- [x] 6.4 删除 SessionDetail（`Cmd+F / 跳到最新 / 多 pane 守卫` 三段）/ DashboardView（`<svelte:window onkeydown>` + `handleKeydown`）内冗余 `keydown` listener；SessionDetail 极薄 listener 保留仅为 programmatic-scroll 中断（不属冗余）
+- [x] 6.5 `ui/src/lib/keyboard/__tests__/migration.test.ts` 端到端：覆盖 register/unregister/trigger（active 命中 + null/未注册返回 false）+ 同 tabId 重复 register 覆盖 + 回调隔离（jumpToLatest/openSearch 互不影响）共 9 个 case；不覆盖真实 Svelte 组件 mount lifecycle（属 §10 e2e 范畴）
+- [x] 6.6 多 pane 场景：D8 fanout 模型下 `getActiveTabId()` 全局唯一返回当前 active tab，切 active 后 trigger 自然路由到新 tab 回调；active tab 非 SessionDetail（Dashboard / Settings / Notifications / Memory）时 registry 未注册该 tabId → trigger 返回 false → dispatcher 不 preventDefault 让浏览器原生 mod+f 等放行（migration.test.ts `unknown tabId` + `null/empty tabId` 两 case 覆盖此语义）
+
+> §6 同步附带：`defaults.ts` 补齐缺失的 `search.in-session` 入口（spec line 259 强制 18 条之一，原实现仅 17 条；属 spec 与实现 gap，与 §6 同 commit 修复——非 D-decision 反转，design.md 不需 D<n>b 增量）
 
 ## 7. UI 局部 keydown 保持原样（owner: 前端 teammate）
 

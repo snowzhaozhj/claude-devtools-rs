@@ -10,8 +10,12 @@
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
   import { createLazyMarkdownObserver, estimatePlaceholderHeight } from "../lib/lazyMarkdown.svelte";
-  import { getTabUIState, saveTabUIState, getTabSessionId, getCachedSession, setCachedSession, getActiveTabId } from "../lib/tabStore.svelte";
+  import { getTabUIState, saveTabUIState, getTabSessionId, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
   import { isMac } from "../lib/platform";
+  import {
+    registerSessionDetailHandlers,
+    unregisterSessionDetailHandlers,
+  } from "../lib/keyboard/session-detail-handlers";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import BaseItem from "../components/BaseItem.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
@@ -119,21 +123,6 @@
   let progScrollTimer: ReturnType<typeof setTimeout> | null = null;
   let rAFid: number | null = null;
 
-  function isJumpToLatestKey(e: KeyboardEvent): boolean {
-    if (isMac()) {
-      return e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.key === "ArrowDown";
-    }
-    return e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.key === "End";
-  }
-
-  function isInputElement(el: Element | null): boolean {
-    if (!el) return false;
-    const tag = el.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA") return true;
-    if ((el as HTMLElement).isContentEditable) return true;
-    return false;
-  }
-
   function startProgrammaticScroll() {
     isProgrammaticScroll = true;
     if (progScrollTimer !== null) clearTimeout(progScrollTimer);
@@ -221,35 +210,25 @@
     };
   }
 
+  // ── 仅保留：programmatic-scroll 中断 ──
+  // Cmd+F / 跳到最新消息 / 多 pane 守卫 已迁出到 keyboard registry（PaneContainer
+  // 的 shared dispatcher 走 `getActiveTabId()` 派发到本 tab 的回调，详 design.md::D8
+  // 与 lib/keyboard/session-detail-handlers.ts）。本 listener 只负责一件事：
+  //
+  // 用户在 smooth-scroll 进行中按下"非本快捷键"按键 → 立即清 isProgrammaticScroll
+  // 让按钮可重新显隐（spec scenario "用户主动 wheel/touchmove/非本快捷键 keydown 立即清 flag"）。
+  //
+  // **判定**：registry 命中 jump-to-latest 的 keydown 会在 dispatcher 内 preventDefault
+  // → `e.defaultPrevented === true`；其它键（含用户自定义重绑后的别的 binding）不在此
+  // 列。该信号比"自定义实现 isJumpToLatestKey 重判一遍"更鲁棒——用户改键后无需同步
+  // 此处逻辑，事件已被 dispatcher 标记。
+  //
+  // dispatcher 走 bubble phase（capture: false）；本 listener 不指定 capture 也走
+  // bubble，二者按注册先后顺序执行——dispatcher 先于本 handler 命中（App.svelte mount
+  // 时已注册），preventDefault 已落，`e.defaultPrevented` 在本 handler 可读。
   function handleKeydown(e: KeyboardEvent) {
-    // Cmd+F 全局拦——既有逻辑保留
-    if ((e.metaKey || e.ctrlKey) && e.key === "f") {
-      e.preventDefault();
-      searchVisible = true;
-      return;
-    }
-    // ── Quick Anchor Navigation 快捷键 ──
-    // 顺序很关键：中断 programmatic-scroll 必须**前置**于 input guard 与 pane guard。
-    // 理由：spec 要求"滚动期间用户主动 wheel/touchmove/非本快捷键 keydown 立即清 flag"。
-    // 如果先 input guard return，input focused 期间任何 keydown 都被吞掉，programmatic
-    // scroll 即使被打断也不会停 —— spec 与实现不一致（codex PR 二审第一轮 #1）。
-    // 中断条件仅 `!isJumpToLatestKey`：scrollTo() 不会 dispatch 新 keydown，所以
-    // "自我打断 race"不存在；用户连按本快捷键走"重复触发"路径（startProgrammaticScroll
-    //  内 clearTimeout 旧 timer + 重新 setTimeout）（codex PR 二审第二轮 #1）。
-    if (isProgrammaticScroll && !isJumpToLatestKey(e)) {
+    if (isProgrammaticScroll && !e.defaultPrevented) {
       stopProgrammaticScroll();
-    }
-    // Guard 1：input/textarea/contenteditable focused 时不拦快捷键，让浏览器原生
-    // 光标导航生效。注意此 guard 在中断逻辑**之后**——input typing 触发的 keydown
-    // 仍能中断 smooth scroll（用户认知焦点已切到 input）
-    if (isInputElement(document.activeElement)) return;
-    // Guard 2：active pane focus —— PaneView 多 pane 场景下每个 SessionDetail 都各自挂
-    // document.keydown listener，仅 focused pane 内 active SessionDetail 拦截，避免一次
-    // 按键 N 个 pane 同时滚到底（codex design #2）
-    if (getActiveTabId() !== tabId) return;
-    if (isJumpToLatestKey(e)) {
-      e.preventDefault();
-      scrollToLatest();
     }
   }
 
@@ -280,6 +259,16 @@
 
   onMount(async () => {
     document.addEventListener("keydown", handleKeydown);
+    // 注册本 tab 的 SessionDetail 回调到共享派发表——PaneContainer 的 dispatcher
+    // 命中 `session.jump-to-latest` / `search.in-session` 时按 active tabId 路由
+    // 到这里。registry → trigger → 本 closure 回调（详 design.md::D8 与
+    // session-detail-handlers.ts）。
+    registerSessionDetailHandlers(tabId, {
+      jumpToLatest: scrollToLatest,
+      openSearch: () => {
+        searchVisible = true;
+      },
+    });
 
     // 性能探针：拆 IPC / DOM-mount / mermaid 三段。仅首次（无缓存）首屏采样。
     // 走 console，便于在 Tauri devtools 里直接看；不接入正式 telemetry。
@@ -340,6 +329,7 @@
 
   onDestroy(() => {
     document.removeEventListener("keydown", handleKeydown);
+    unregisterSessionDetailHandlers(tabId);
     unregisterHandler(fileChangeKey);
     cancelScheduledRefresh(`detail:${projectId}|${sessionId}`);
     lazyObserver?.disconnect();

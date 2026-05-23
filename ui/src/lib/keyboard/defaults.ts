@@ -26,10 +26,10 @@ export interface ShortcutMeta {
 }
 
 /**
- * 17 条内置快捷键 across 5 category：
+ * 18 条内置快捷键 across 5 category：
  * - global   : command-palette.toggle
  * - sidebar  : sidebar.toggle
- * - search   : search.focus
+ * - search   : search.focus / search.in-session
  * - tabs     : tab.switch.1-9 (9 条) / tab.close / tab.next / tab.prev /
  *              pane.split / pane.focus.next / pane.focus.prev
  * - session  : session.jump-to-latest
@@ -59,6 +59,13 @@ export const SHORTCUT_DEFAULTS: ReadonlyArray<ShortcutMeta> = [
     description: "聚焦 Dashboard 搜索框",
     defaultBinding: "/",
     // allowInInput 默认 false：input 焦点时浏览器原生 / 字符直接输入
+  },
+  {
+    id: "search.in-session",
+    category: "search",
+    description: "在当前会话内查找",
+    defaultBinding: "mod+f",
+    // allowInInput 默认 false：input 焦点时浏览器原生（如复制 / 选词）
   },
   // ---- tabs --------------------------------------------------------------
   ...Array.from({ length: 9 }, (_, i) => i + 1).map<ShortcutMeta>((n) => ({
