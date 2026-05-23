@@ -55,7 +55,8 @@ export function captureScrollAnchor(conversationEl: HTMLElement | undefined): Sc
 /**
  * MutationObserver 粘底 pin 状态机。返回 cleanup 函数。
  *
- * - 单次 scrollTop = scrollHeight
+ * - 单次 scrollTop = scrollHeight（除非 `skipInitialJump`，调用方已在 smooth scroll
+ *   到位 / 'auto' 已同步落地，再 hard set 会取消 smooth animation 或视觉冗余）
  * - 监听 conversationEl 子树（dataset.rendered / innerHTML / childList / characterData）
  *   每次 mutation 重写 scrollTop 并 reset 200 ms 稳定 timer
  * - 用户主动 scroll（distanceFromBottom > 16）/ 200 ms 内无 mutation / 5 s 上限 三路终止
@@ -63,9 +64,14 @@ export function captureScrollAnchor(conversationEl: HTMLElement | undefined): Sc
  * ResizeObserver(conversationEl) 不行：容器外框尺寸 fixed，lazy hydrate 改的是
  * 内部子节点高度 → 不触发。MutationObserver `subtree: true` 才能覆盖。
  */
-export function startBottomPin(conversationEl: HTMLElement): () => void {
+export function startBottomPin(
+  conversationEl: HTMLElement,
+  opts: { skipInitialJump?: boolean } = {},
+): () => void {
   const el = conversationEl;
-  el.scrollTop = el.scrollHeight;
+  if (!opts.skipInitialJump) {
+    el.scrollTop = el.scrollHeight;
+  }
 
   let pinning = true;
   let stableTimer: ReturnType<typeof setTimeout> | null = null;

@@ -122,6 +122,13 @@
 
   let isFar = $state(false);
   let isProgrammaticScroll = $state(false);
+  /**
+   * 本轮 jump 完成后是否还需启动 bottom pin 兜底——独立于 `isProgrammaticScroll`：
+   * `updateIsFar` 的 ≤16px bottom guard 会提前清 `isProgrammaticScroll` 让按钮立即
+   * 消失，但 lazy markdown reveal 在那之后仍可能让 `scrollHeight` 继续增长。用单独
+   * 标志避免 false-negative（codex 二审 PR #250 round 1 命中点）。
+   */
+  let pendingBottomPinAfterJump = $state(false);
   let progScrollTimer: ReturnType<typeof setTimeout> | null = null;
   let rAFid: number | null = null;
 
@@ -142,8 +149,9 @@
 
   function startProgrammaticScroll() {
     isProgrammaticScroll = true;
+    pendingBottomPinAfterJump = true;
     if (progScrollTimer !== null) clearTimeout(progScrollTimer);
-    progScrollTimer = setTimeout(stopProgrammaticScroll, PROG_SCROLL_FALLBACK_MS);
+    progScrollTimer = setTimeout(progScrollFallback, PROG_SCROLL_FALLBACK_MS);
   }
 
   function stopProgrammaticScroll() {
@@ -152,6 +160,30 @@
       clearTimeout(progScrollTimer);
       progScrollTimer = null;
     }
+  }
+
+  /** scrollend 没触发的边缘环境兜底：仍尝试启动 pin，避免遗漏 reveal 增长 */
+  function progScrollFallback() {
+    stopProgrammaticScroll();
+    triggerBottomPinAfterJump();
+  }
+
+  /**
+   * 启动 bottom pin 兜底：处理 smooth scroll 锁定旧 scrollHeight 为目标 + 期间
+   * lazy markdown reveal / content-visibility:auto 真布局让 scrollHeight 增长
+   * 导致的"按钮重显 → 用户再点"循环。pin 200ms 稳定窗口收敛 + 用户主动 scroll 终止。
+   *
+   * 不在 `isAtBottom(el)` 早退：bottom guard 触发后 scrollend 可能在 reveal 实际
+   * 发生之前 fire（lazyMarkdown IntersectionObserver 异步），此时虽已到旧底但
+   * scrollHeight 在 200ms 内仍可能跳变。始终启动 pin 让 MO 监听后续 mutation；
+   * 已到底场景下 first hard set 是 no-op，无 mutation 时 200ms 后 stopPin 收敛。
+   */
+  function triggerBottomPinAfterJump() {
+    if (!pendingBottomPinAfterJump) return;
+    pendingBottomPinAfterJump = false;
+    if (!conversationEl) return;
+    currentBottomPinCleanup?.();
+    currentBottomPinCleanup = startBottomPin(conversationEl);
   }
 
   function scrollToLatest() {
@@ -168,12 +200,14 @@
       // 用 microtask 让浏览器先 commit scrollTop 更新再清 flag，避免 isFar derived 在
       // 同一 task 内还读到旧值
       queueMicrotask(stopProgrammaticScroll);
-      // jump 之后 lazy markdown / content-visibility:auto 仍可能让 scrollHeight 持续
-      // 增长（落点附近的 placeholder 进入视口被真布局），启动 200ms 稳定窗口的 pin
-      // 兜底跟住底。smooth 路径在 onScrollEnd 启动同等兜底
+      // 'auto' 已同步落地 → skip initial hard jump（视觉冗余），仅启动 MO 监听后续
+      // reveal 期间的高度增长。直接消费这一轮的 pending flag，避免 onScrollEnd / fallback
+      // 重复触发
+      pendingBottomPinAfterJump = false;
       currentBottomPinCleanup?.();
-      currentBottomPinCleanup = startBottomPin(conversationEl);
+      currentBottomPinCleanup = startBottomPin(conversationEl, { skipInitialJump: true });
     }
+    // smooth 路径：scrollend / progScrollFallback 调 triggerBottomPinAfterJump 启动 pin
   }
 
   function updateIsFar() {
@@ -191,6 +225,11 @@
       if (distanceFromBottom <= PROG_SCROLL_BOTTOM_GUARD_PX) {
         stopProgrammaticScroll();
         isFar = false;
+        // 同步启动 pin 监听后续 reveal——bottom guard 触发后 onScrollEnd 才启动 pin
+        // 是 race-prone（reveal mutation 可能在 startBottomPin subscribe 前已发生），
+        // 这里提前启动让 MO 在 200ms 稳定窗口内捕获 mutation。`triggerBottomPinAfterJump`
+        // 内 `pendingBottomPinAfterJump = false` 保证只启动一次（onScrollEnd 调时 early return）
+        triggerBottomPinAfterJump();
       }
       return;
     }
@@ -210,22 +249,17 @@
       scheduleUpdateIsFar();
     };
     const onScrollEnd = () => {
-      // 用户主动 wheel/touchmove/非本快捷键 keydown 都会提前清 isProgrammaticScroll；
-      // scrollend 时仍为 true 表示 smooth scroll 自然完成未被打断
-      const wasSmoothScrollFinish = isProgrammaticScroll;
       stopProgrammaticScroll();
-      // 自然完成但仍距底 > 16 → 浏览器锁定旧 scrollHeight 作为 smooth 目标，期间
-      // lazy markdown reveal + content-visibility:auto 真布局让 scrollHeight 增长，
-      // 落点比新 bottom 短。启动 200ms 稳定窗口的 pin 兜底持续跟住增长后的 bottom，
-      // 避免"按钮重显 → 用户再点"循环
-      if (wasSmoothScrollFinish && conversationEl && !isAtBottom(conversationEl)) {
-        currentBottomPinCleanup?.();
-        currentBottomPinCleanup = startBottomPin(conversationEl);
-      }
+      // smooth 自然完成 → 启动 pin 兜底处理 lazy markdown reveal +
+      // content-visibility:auto 在 animation 期间让 scrollHeight 增长导致落点偏离
+      // 实际新 bottom 的"点多次"bug。pendingBottomPinAfterJump 独立于 isProgrammaticScroll，
+      // bottom guard (updateIsFar :≤16) 提前清 isProgrammaticScroll 不影响这里
+      triggerBottomPinAfterJump();
     };
     const onUserInput = () => {
-      // 用户主动 wheel / touchmove 打断 smooth scroll → 立即清抑制
+      // 用户主动 wheel / touchmove 打断 smooth scroll → 立即清抑制 + 不启动 pin
       if (isProgrammaticScroll) stopProgrammaticScroll();
+      pendingBottomPinAfterJump = false;
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     el.addEventListener("scrollend", onScrollEnd);
@@ -268,6 +302,7 @@
   function handleKeydown(e: KeyboardEvent) {
     if (isProgrammaticScroll && !e.defaultPrevented) {
       stopProgrammaticScroll();
+      pendingBottomPinAfterJump = false;  // 用户其它键打断 → 不启动 pin
     }
   }
 
