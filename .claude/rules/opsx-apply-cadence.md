@@ -18,11 +18,32 @@ preflight → 实现 → 本地验证 → commit → push → PR → wait-ci 与
 
 ## 节拍
 
-### Propose → Apply 之间：design 阶段 codex 二审
+### Propose → Apply 之间：三道二审 / 钩子（可并行）
 
-`/opsx:propose` 写完 design.md / spec delta / tasks.md + `openspec validate <slug> --strict` 过之后，**进 `/opsx:apply` 之前** SHALL 按 `.claude/rules/codex-usage.md` 第 3 节判断是否调 codex。任一命中即调（IPC 字段改 / 跨 capability / 性能关键 / 状态机 / UI 重构 / BREAKING）。codex 报问题 → 修 design / spec / tasks 三处 → re-validate → 才进 apply。
+`/opsx:propose` 写完 design.md / spec delta / tasks.md + `openspec validate <slug> --strict` 过之后，进 `/opsx:apply` 之前 SHALL 完成以下三道动作（彼此独立，可并行触发）：
 
-**design 阶段拦下问题的回炉成本是 apply 阶段的 10×**——代码扩散后再回炉很痛。
+#### 1. codex design 二审
+
+按 `.claude/rules/codex-usage.md` 第 3 节判断。任一命中即调（IPC 字段改 / 跨 capability / 性能关键 / 状态机 / UI 重构 / BREAKING）。codex 报问题 → 修 design / spec / tasks 三处 → re-validate → 才进 apply。
+
+#### 2. impeccable visual contract 钩子（含 UI 改动时强制）
+
+design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 2 个核心面板 / 加 Settings tab / 新 modal）→ SHALL 跑 `/impeccable shape <feature>`，把关键决定摘进 design.md 四段：
+
+- `## Surface Decision` —— 入口选 Settings / menu bar / modal / inline 等的论证（链回 `PRODUCT.md` anti-references / Design Principles）
+- `## Visual Contract` —— 这次新组件的视觉决定，**引用** `DESIGN.md` §X 段号而**不抄**
+- `## State Coverage` —— 新组件所有状态（loading / empty / error / disabled / hover）及实现位置
+- `## DESIGN.md delta plan` —— 这次引入值得沉淀的 token / 组件，archive 前跑 `/impeccable extract` 提进 `DESIGN.md` 作为同 PR 一部分落地
+
+**禁止**：design.md 里抄 `PRODUCT.md` / `DESIGN.md` 已有内容（per-change 文档 ≠ 项目级设计契约）；与 `DESIGN.md` 不一致的视觉选择必须显式说明 + 决定"改 `DESIGN.md` 还是这次例外"。
+
+`PRODUCT.md` / `DESIGN.md` 缺失或为占位时，先按 impeccable skill 的 `setup` 流程跑 `/impeccable teach` 或 `/impeccable document` 补齐，再回到 4 段产出。
+
+#### 3. 形态升级判断（按 `.claude/rules/bg-task-dispatch.md`「形态选择决策树」）
+
+评估改动规模 + 协作复杂度，决定 apply 阶段用主 session / agent team / N 个 bg。**大改动**（>2 天 + 多角色协作 + 视觉重构 + 跨 capability）→ SHALL 改用 **Agent team**（lead + 设计师 + 前端 + 后端 + QA）；切忌 lead 单线程一把梭或用 subagent 串行——会撑爆主 context。
+
+**design 阶段拦下问题的回炉成本是 apply 阶段的 10×**——代码扩散后再回炉很痛。视觉契约在 propose 阶段冻结的成本是 apply 阶段救火的几分之一。
 
 ### 业务推进段
 
