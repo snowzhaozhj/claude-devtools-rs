@@ -36,7 +36,9 @@
 
 ### D2：flush 触发点不变，只改 `flush_buffer` 内部行为
 
-不引入新 helper `flush_orphan_teammates`、不在 chunk_loop 的 user / Compact / SystemChunk / Slash / Interruption 分支前 inline 检查。**只改 `flush_buffer` 函数本身**——把 buffer 空时的 early return 替换为：
+实际调用 `flush_buffer` 的分支共 5 处：普通 user message（`crates/cdt-analyze/src/chunk/builder.rs:262`）/ `<local-command-stdout>` SystemChunk（`:237`）/ Compact 边界（`:165`）/ Slash user message（`:217`）/ Interruption（`:288`）。**`is_meta` 分支不调 `flush_buffer`**——它只在 tool_result-only 时 `append_tool_results(buffer.last_mut())` + `continue`，不消费 `pending_teammates`，因此与本 change 无关。
+
+不引入新 helper `flush_orphan_teammates`、不在 chunk_loop 的 5 个调用分支前 inline 检查。**只改 `flush_buffer` 函数本身**——把 buffer 空时的 early return 替换为：
 
 ```rust
 if buffer.is_empty() {
@@ -64,8 +66,10 @@ if buffer.is_empty() {
 
 **Alternatives considered:**
 
-- 显式 helper 让调用点逐处加 `flush_orphan_teammates(...)`：分散 + 易漏一个分支；既有 5 个调用点（`MessageCategory::Compact` / `extract_local_command_stdout` 命中 / `is_meta` 命中 / 普通 user / Interruption）改 5 处，破坏面大于"单点函数行为收敛"。**否决**。
+- 显式 helper 让调用点逐处加 `flush_orphan_teammates(...)`：分散 + 易漏一个分支；既有 5 个调用点（`MessageCategory::Compact` / `extract_local_command_stdout` 命中 / 普通 user / Slash user / Interruption）改 5 处，破坏面大于"单点函数行为收敛"。**否决**。
 - 选定 D2：单点改 `flush_buffer`，所有调用方语义不变（"flush 把 pending_teammates 处理掉"），符合 Goals「破坏最小」。
+
+**Interruption 分支的副作用**：Interruption 通过 `flush_buffer` 后 `append_interruption_to_last_ai`，新 D2 行为下，若 teammate 后紧跟 interrupt 标记（无 buffer），先产 empty-AI 含 teammate；随后 `append_interruption_to_last_ai` 找到这个 empty-AI 把 `SemanticStep::Interruption` 追加进它的 `semantic_steps`。视觉上"teammate-only turn 末尾紧跟一次中断"——边界罕见但语义合理（interrupt 标记代表用户在 teammate prompt 之后立刻中断，挂到最近 AIChunk 是既有契约延续，没有更好的归宿）。Spec Scenario「Teammate message before interrupt marker appends to empty-AI」明确该期望。
 
 ### D3：empty-responses AIChunk 的 `chunk_id` base 取 `pending_teammates[0].uuid`
 

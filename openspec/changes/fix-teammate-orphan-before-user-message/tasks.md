@@ -2,12 +2,13 @@
 
 - [ ] 1.1 在 `crates/cdt-analyze/src/chunk/builder.rs::flush_buffer` 内把 `if buffer.is_empty() { return; }` 改为：buffer 空 + `pending_teammates` 非空时构造 `responses: Vec::new()` / `metrics: ChunkMetrics::zero()` / `duration_ms: None` / `semantic_steps: Vec::new()` / `tool_executions: Vec::new()` / `subagents: Vec::new()` 的 `AIChunk`，`chunk_id` base 用 `pending_teammates[0].uuid` 走 `next_chunk_id`，`timestamp` 用 `pending_teammates[0].timestamp`，`slash_commands` 用 `std::mem::take(pending_slashes)` 消费，`teammate_messages` 走既有 `link_against_chunks` 链接逻辑（`out` 中 `last_emitted_idx` + 自身 `new_chunk` placeholder 不存在则 fallback 单链）；buffer 空 + `pending_teammates` 空时仍直接 `return`。
 - [ ] 1.2 复用既有 `link_against_chunks` 接受 `pending_chunk: Option<&AIChunk>` 参数；empty 路径下传 `Some(&new_chunk)` 让 self-scan 仍能命中（即使 `tool_executions` 空也保持调用一致性）。
-- [ ] 1.3 把 spec delta 的 5 个 Scenario 各落到 `crates/cdt-analyze/src/chunk/builder.rs::tests` 模块新增单测：
-  - `teammate_before_real_user_emits_empty_ai_then_user`
-  - `teammate_before_local_command_stdout_emits_empty_ai_then_system`
-  - `teammate_before_compact_summary_emits_empty_ai_then_compact`
-  - `slash_then_teammate_then_user_emits_empty_ai_with_slash_and_teammate`
-  - `synthetic_api_error_between_teammate_and_user_does_not_break_order`（命中真实 sessionId=`6290f9d4...` 序列：teammate → synthetic hard-noise → user "继续"）
+- [ ] 1.3 把 spec delta 的 5 个新增 Scenario 各落到 `crates/cdt-analyze/src/chunk/builder.rs::tests` 模块新增单测，外加 1 个真实序列回归测试，共 6 个：
+  - `teammate_before_real_user_emits_empty_ai_then_user`（spec Scenario "Teammate message before non-AI user message produces standalone empty-AI chunk"）
+  - `teammate_before_local_command_stdout_emits_empty_ai_then_system`（spec Scenario "Teammate message before SystemChunk-triggering user message produces standalone empty-AI chunk"）
+  - `teammate_before_compact_summary_emits_empty_ai_then_compact`（spec Scenario "Teammate message before Compact boundary produces standalone empty-AI chunk"）
+  - `slash_then_teammate_then_user_emits_empty_ai_with_slash_and_teammate`（spec Scenario "Slash command then teammate then real user emits empty-AI with both slash and teammate"）
+  - `teammate_before_interrupt_appends_to_empty_ai`（spec Scenario "Teammate message before interrupt marker appends to empty-AI"）
+  - `synthetic_api_error_between_teammate_and_user_does_not_break_order`（命中真实 sessionId=`6290f9d4...` 序列：teammate → synthetic hard-noise → user "继续"；不在 spec 中，作为完整数据回归守门）
 - [ ] 1.4 跑红→绿 cycle 验证 1.3 测试是有效防回归：先 `git stash` 保留测试代码、临时把 1.1 的修改 revert 回旧 `if buffer.is_empty() { return; }`，跑测试应**全部 fail**；再 `git stash pop` 恢复 fix，跑测试应全部 pass。
 - [ ] 1.5 跑 `cargo test -p cdt-analyze` 确认既有 3 个 teammate Scenario 测试（`teammate_message_does_not_produce_user_chunk` / `teammate_message_embedded_into_ai_chunk_with_reply_to` / `trailing_teammate_attaches_to_last_ai_chunk` / `orphan_teammate_with_no_ai_chunk_is_silently_dropped` / `multiple_teammates_grouped_under_their_send_message`）全部仍 pass，无回归。
 
