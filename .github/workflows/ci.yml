@@ -139,9 +139,19 @@ jobs:
           # prefix-key bump 跳出污染池：v0→v1（首次），v1→v2（PR #57），
           # v2→v3（cache-bin: false 上线时清池，确保不再 hit 含 toolchain 的旧 cache）。
           prefix-key: v3-rust
-      - name: cargo test --workspace (cdt-watch excluded)
+      # cargo-nextest 走 GitHub Release 直下二进制（~5s vs `cargo install` ~30s），
+      # 与 `cache-bin: false` 兼容（不依赖 ~/.cargo/bin 缓存）
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: cargo nextest run --workspace
         # `cdt-api/test-utils` feature 启用集成测试访问 cache 内部状态的 helper
         # （详 change `parsed-message-lru-cache`）；release/默认构建不含。
-        run: cargo test --workspace --exclude cdt-watch --features cdt-api/test-utils --locked
-      - name: cargo test -p cdt-watch (single-threaded)
-        run: cargo test -p cdt-watch --locked -- --test-threads=1
+        # `--profile ci`：fail-fast 关闭收完整失败清单 + cdt-watch retries=2
+        # cdt-watch override 在 `.config/nextest.toml`：进程隔离 + retry 抹平 FSEvents flaky
+        run: cargo nextest run --workspace --features cdt-api/test-utils --locked --profile ci
+      # nextest 不跑 doctest——单独 `cargo test --doc` 兜底
+      # 当前仓内 ` ``` ` 标记多为 sh/ts/ignore，可执行 Rust doctest 极少，开销忽略
+      - name: cargo test --doc (nextest 不覆盖)
+        run: cargo test --workspace --features cdt-api/test-utils --locked --doc
