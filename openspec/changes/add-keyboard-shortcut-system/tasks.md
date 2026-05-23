@@ -47,10 +47,10 @@
 
 ## 5. UI 全局快捷键迁移：App.svelte（owner: 前端 teammate）
 
-- [ ] 5.1 把 `App.svelte::handleGlobalKeydown` 内联 9 条全局快捷键迁出，改为启动期 `registerShortcut` 调用：`command-palette.toggle` / `sidebar.toggle` / `tab.switch.1~9` / `tab.close` / `tab.next` / `tab.prev` / `pane.split` / `pane.focus.next` / `pane.focus.prev`
-- [ ] 5.2 删除 `App.svelte` 内 `document.addEventListener("keydown", handleGlobalKeydown)`（dispatcher 已挂 listener）
-- [ ] 5.3 保留 IME 与 input focus 跳过逻辑——确认 dispatcher 内置守卫已等价覆盖；删除 `App.svelte` 内冗余判定
-- [ ] 5.4 验证：vitest mockIPC 单测 `App.svelte` 启动后 `registry.listAll()` 包含 9 条 spec
+- [x] 5.1 把 `App.svelte::handleGlobalKeydown` 内联 9 条全局快捷键迁出，改为启动期 `registerShortcut` 调用：`command-palette.toggle` / `sidebar.toggle` / `tab.switch.1~9` / `tab.close` / `tab.next` / `tab.prev` / `pane.split` / `pane.focus.next` / `pane.focus.prev`
+- [x] 5.2 删除 `App.svelte` 内 `document.addEventListener("keydown", handleGlobalKeydown)`（dispatcher 已挂 listener）
+- [x] 5.3 保留 IME 与 input focus 跳过逻辑——确认 dispatcher 内置守卫已等价覆盖；删除 `App.svelte` 内冗余判定
+- [x] 5.4 验证：vitest mockIPC 单测 `App.svelte` 启动后 `registry.listAll()` 包含 9 条 spec
 
 ## 6. UI 全局快捷键迁移：SessionDetail / DashboardView（owner: 前端 teammate）
 
