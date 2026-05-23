@@ -12,6 +12,7 @@
 - `cdt-config`：configuration-management / notification-triggers
 - `cdt-ssh`：ssh-remote-context
 - `cdt-api`：ipc-data-api + http-data-api facade
+- `cdt-telemetry`：application-telemetry — Counter / Histogram / Event Signal Registry + tracing bridge layer（hot path < 0.2% 增量；详 `openspec/specs/application-telemetry/spec.md`）
 - `cdt-cli`：binary entrypoint（`bin = cdt`，`anyhow::Result` + `tracing_subscriber` init）
 
 `unsafe` workspace-wide 禁用（`#![forbid(unsafe_code)]`）。
