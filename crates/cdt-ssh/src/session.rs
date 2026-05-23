@@ -45,6 +45,34 @@ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 /// 状态广播 `broadcast::channel` 容量（design.md D6 备注 128）。
 pub const STATUS_CHANNEL_CAP: usize = 128;
 
+/// SSH transport 层 keepalive 间隔（spec `Requirement: Keep SSH transport alive
+/// via russh keepalive`）。每隔该时长 client 向 server 发一次
+/// `SSH_MSG_GLOBAL_REQUEST keepalive@openssh.com`（`want_reply=true`），让 channel
+/// 永远不进入 idle 状态以躲开 server-side `ClientAliveInterval=0` / NAT idle /
+/// firewall idle 这三个杀手。
+pub const SSH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// 累计未应答 keepalive 次数上限。russh 0.52.x `client::session` 的判断条件是
+/// `alive_timeouts > keepalive_max`（先比较再增加再发送）—— 实际触发
+/// `Error::KeepaliveTimeout` 总窗口 = `(SSH_KEEPALIVE_MAX + 2) ×
+/// SSH_KEEPALIVE_INTERVAL`，当前默认 `(3 + 2) × 15s = 75s`。
+pub const SSH_KEEPALIVE_MAX: usize = 3;
+
+/// 构造启用 keepalive 的 russh client config。
+///
+/// spec `Requirement: Keep SSH transport alive via russh keepalive`：从 russh
+/// 默认 config 起步，仅覆盖 `keepalive_interval` 与 `keepalive_max` 两个字段，
+/// 其它字段通过 `..Default::default()` 语法继承。`russh::client::Config` 不
+/// 实现 `Clone` / `PartialEq`，"其它字段一致" 由构造方式保证而非运行时全
+/// 字段断言。
+fn build_client_config() -> Arc<client::Config> {
+    Arc::new(client::Config {
+        keepalive_interval: Some(SSH_KEEPALIVE_INTERVAL),
+        keepalive_max: SSH_KEEPALIVE_MAX,
+        ..Default::default()
+    })
+}
+
 /// 与 `connect` payload 对齐 `SshSessionManager::connect` 的状态变更事件。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -526,8 +554,9 @@ impl SshSessionManager {
             }
         };
 
-        // 阶段 2：russh transport 握手
-        let config = Arc::new(client::Config::default());
+        // 阶段 2：russh transport 握手（开 keepalive，详 spec `Requirement: Keep
+        // SSH transport alive via russh keepalive`）
+        let config = build_client_config();
         let mut handle = client::connect_stream(config, tcp, RusshClientHandler)
             .await
             .map_err(|e| SshError::Tcp {
@@ -918,6 +947,25 @@ async fn query_launchctl_ssh_auth_sock() -> Option<String> {
 mod tests {
     use super::*;
     use crate::auth::AuthMethodKind;
+
+    #[test]
+    fn build_client_config_enables_keepalive() {
+        // spec `Requirement: Keep SSH transport alive via russh keepalive`
+        // Scenario: build_client_config enables keepalive with documented constants
+        let cfg = build_client_config();
+        assert_eq!(
+            cfg.keepalive_interval,
+            Some(SSH_KEEPALIVE_INTERVAL),
+            "keepalive_interval SHALL be Some(SSH_KEEPALIVE_INTERVAL)"
+        );
+        assert_eq!(
+            cfg.keepalive_max, SSH_KEEPALIVE_MAX,
+            "keepalive_max SHALL equal SSH_KEEPALIVE_MAX"
+        );
+        // 钉死常量值（防意外回退）：spec / design D2 钉死 15s + 3
+        assert_eq!(SSH_KEEPALIVE_INTERVAL, Duration::from_secs(15));
+        assert_eq!(SSH_KEEPALIVE_MAX, 3);
+    }
 
     #[tokio::test]
     async fn manager_default_active_is_none_local() {
