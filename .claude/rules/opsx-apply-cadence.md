@@ -33,7 +33,7 @@ design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 
 - **关键视觉决策** → 写进 design.md 已有的 `## Decisions` 段，与现有 D1/D2 编号并列，用 `D-V<n>` 前缀（V = Visual）标记，例如 `D-V1：Surface 选 Diagnostics tab 而非独立 menu item，因 ...`。这样视觉选择和 IPC / 算法选择共享同一审计 + 反转规则
 - **以下 4 段写进新增的 `## Visual Contract` 顶级段**（这是 checklist / 规约，不是单点决策，不进 D 编号）：
   - `### Surface Decision` —— 入口选择论证（链回 `PRODUCT.md` anti-references / Design Principles）
-  - `### Visual Layer` —— 新组件的视觉决定，**引用** `DESIGN.md` 的 Named Rule 名称（如 `DESIGN.md::Components::Cards and settings rows`、`DESIGN.md::Colors::Named Rules`）；段号会随重排漂移，Named Rule 是稳定锚点
+  - `### Visual Layer` —— 新组件的视觉决定，**引用** `DESIGN.md` 的 Named Rule 名称（即 `**The XXX Rule.**` 形式的命名规则，如 `DESIGN.md::The Border Before Shadow Rule`、`DESIGN.md::The Status Owns the Color Rule`、`DESIGN.md::The Tool Density Rule`）；段号会随重排漂移，Named Rule 是稳定锚点
   - `### State Coverage` —— 新组件所有状态（loading / empty / error / disabled / hover）及实现位置
   - `### DESIGN.md delta plan` —— 这次引入值得沉淀的 token / 组件，archive 前跑 `/impeccable extract` 提进 `DESIGN.md` 作为同 PR 一部分落地
 
