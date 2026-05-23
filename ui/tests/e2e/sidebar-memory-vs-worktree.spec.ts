@@ -64,4 +64,50 @@ test.describe('sidebar memory entry vs worktree filter', () => {
     await expect(memoryEntry).toBeVisible()
     await expect(memoryEntry).toContainText(/Memory \(3\)/)
   })
+
+  test('切到 feat-x 后点击 memory 入口打开的是 repo 根 worktree 的 Memory tab', async ({
+    page,
+  }) => {
+    // codex 二审 coverage gap：anchor 选择正确不仅意味着可见性，更意味着点击行为；
+    // 应打开 mock-rich-rust（repo 根）的 memory layers，而不是 mock-rich-rust-wt-feat 的空 memory。
+    await page.goto('/?mock=1&fixture=multi-project-rich')
+
+    await page.locator('.project-selector').first().click()
+    await page.locator('.dropdown-item').filter({ hasText: 'rust-port' }).first().click()
+
+    // 切到 feat-x worktree
+    await page.locator('.worktree-filter-bar .dd-anchor').first().click()
+    await page.locator('.dd-popover .dd-opt').filter({ hasText: 'feat-x' }).first().click()
+
+    // 点击 sidebar memory 入口
+    await page.locator('.memory-entry').click()
+
+    // memory tab 应渲染 mock-rich-rust 的 layers——"始终使用中文" 来自 fixture
+    // memories['mock-rich-rust'].layers，不来自 mock-rich-rust-wt-feat（其 layers 空）
+    await expect(page.locator('.memory-layers')).toBeVisible({ timeout: 5_000 })
+    await expect(page.locator('.layer-title').filter({ hasText: '始终使用中文' })).toBeVisible()
+    // 反向断言：不应渲染 wt-feat 的空 memory 状态
+    await expect(page.getByText('当前项目没有 Memory。')).toHaveCount(0)
+  })
+
+  test('切到无 memory 的单 worktree group 时 memory 入口隐藏', async ({ page }) => {
+    // codex 二审 coverage gap：group 切换路径——从有 memory 的 rust-port 切到无 memory
+    // 的单 worktree group（claude-devtools，fixture 内没显式设 memories 字段，mock IPC
+    // fallback 返 count=0 / hasMemory=false）后 memory 入口 SHALL 隐藏，不残留旧 count。
+    await page.goto('/?mock=1&fixture=multi-project-rich')
+
+    await page.locator('.project-selector').first().click()
+    await page.locator('.dropdown-item').filter({ hasText: 'rust-port' }).first().click()
+
+    // 先看到 rust-port 的 memory 入口
+    await expect(page.locator('.memory-entry')).toBeVisible({ timeout: 5_000 })
+
+    // 切到 claude-devtools 单 worktree group（无 memory fixture）
+    await page.locator('.project-selector').first().click()
+    await page.locator('.dropdown-item').filter({ hasText: 'claude-devtools' }).first().click()
+
+    // 等 sidebar 切换稳定后，memory 入口 SHALL 不再渲染
+    await expect(page.locator('.session-filter-bar')).toBeVisible({ timeout: 5_000 })
+    await expect(page.locator('.memory-entry')).toHaveCount(0)
+  })
 })
