@@ -213,6 +213,9 @@ slash 命令消息（content 以 `<command-name>/xxx</command-name>` 起首的**
 2. 在 `flush_buffer` 即将产出 `AIChunk` 之前，对 `pending_teammates` 中每条 teammate 调用 `link_teammate_to_send_message(&teammate, &chain)`（详见 `team-coordination-metadata::Link teammate messages to triggering SendMessage`），把 `reply_to_tool_use_id` 字段填好。
 3. 把 pending teammates 整批 move 到新构造的 `AIChunk.teammate_messages` 字段；清空 `pending_teammates`。
 4. 若主循环结束时 `pending_teammates` 非空（无后续 AIChunk 接收），SHALL 把它们追加到最后一条已 emit 的 AIChunk 的 `teammate_messages`；若整个 session 没有任何 AIChunk，SHALL 静默丢弃这些 pending teammate（罕见边界）。
+5. 当 `flush_buffer` 被 chunk_loop 中任意分支触发（共 5 处：普通 user message / `<local-command-stdout>` SystemChunk / Compact 边界 / Slash user message / Interruption marker），且 `assistant_buffer` 为空但 `pending_teammates` 非空时，SHALL emit 一条 `responses` 为空、`teammate_messages` 非空的 `AIChunk` 收容这些 teammate，再让调用方处理后续 chunk。该 `AIChunk` 的 `chunk_id` base 取 `pending_teammates[0].uuid`、`timestamp` 取 `pending_teammates[0].timestamp`、`metrics` 为 `ChunkMetrics::zero()`、`duration_ms` 为 `None`、`semantic_steps` / `tool_executions` / `subagents` 全为空，`slash_commands` 由调用方既有的 `pending_slashes` 通过 `std::mem::take` 消费（与 buffer 非空路径一致）。该规则保证 teammate-message 的 emit 顺序在 chunk 列表中严格遵循 timestamp 早于后续 chunk，避免序列倒置。
+
+   `is_meta` 分支不调 `flush_buffer`（仅 `append_tool_results` + `continue`），不消费 `pending_teammates`，与本规则无关。Interruption 分支调 `flush_buffer` 触发本规则后，再调用 `append_interruption_to_last_ai` 把 `SemanticStep::Interruption` 追加到刚产出的 empty-AI 的 `semantic_steps`——这是既有 "interrupt 挂到最近 AIChunk" 契约的自然延续。
 
 回滚开关：`cdt-analyze::chunk::builder` 顶部 `const EMBED_TEAMMATES: bool = true;`；为 `false` 时 SHALL 退回旧行为——teammate user 消息直接 `continue`，`AIChunk.teammate_messages` 永远为空。该常量 MUST 与 enrichment 函数（`apply_teammate_embed`）以及调用点同一轮 Edit 落地，不得分批提交（避免 clippy `dead_code`）。
 
@@ -237,6 +240,34 @@ slash 命令消息（content 以 `<command-name>/xxx</command-name>` 起首的**
 #### Scenario: EMBED_TEAMMATES=false reverts to legacy drop behavior
 - **WHEN** 常量 `EMBED_TEAMMATES` 设为 `false`，chunk-building 跑过含 teammate 消息的 session
 - **THEN** 每条 teammate user 消息 SHALL 被跳过（旧 `continue` 行为），每条产出的 `AIChunk.teammate_messages` SHALL 为空
+
+#### Scenario: Teammate message before non-AI user message produces standalone empty-AI chunk
+- **WHEN** 消息流为 `user(<teammate-message ...>body</teammate-message>) → user("real input")`，其间无任何 assistant 消息或所有 assistant 都被 `MessageCategory::HardNoise(_)`（典型 `<synthetic>` model + `isApiErrorMessage=true`）过滤
+- **THEN** 产出的 chunk 列表 SHALL 含两条按时序排列的 chunk：
+  - `chunks[0]` SHALL 为 `AIChunk { responses: [], teammate_messages: [TeammateMessage { body: "body", .. }], chunk_id: <pending_teammates[0].uuid>:0, timestamp: <teammate.timestamp>, metrics: zero, semantic_steps: [], tool_executions: [], subagents: [], slash_commands: [] }`
+  - `chunks[1]` SHALL 为 `UserChunk { content: "real input", .. }`
+- **AND** `chunks[0].teammate_messages[0].reply_to_tool_use_id` SHALL 为 `None`（无前驱 SendMessage 可配对）
+
+#### Scenario: Teammate message before SystemChunk-triggering user message produces standalone empty-AI chunk
+- **WHEN** 消息流为 `user(<teammate-message ...>body</teammate-message>) → user("<local-command-stdout>ls output</local-command-stdout>")`，其间无 assistant
+- **THEN** 产出的 chunk 列表 SHALL 含两条按时序排列的 chunk：先 `AIChunk { responses: [], teammate_messages: [..], slash_commands: [] }`，再 `SystemChunk { content_text: "ls output", .. }`
+
+#### Scenario: Teammate message before Compact boundary produces standalone empty-AI chunk
+- **WHEN** 消息流为 `user(<teammate-message ...>body</teammate-message>) → compact_summary("conversation summary text")`，其间无 assistant
+- **THEN** 产出的 chunk 列表 SHALL 含两条按时序排列的 chunk：先 `AIChunk { responses: [], teammate_messages: [..] }`，再 `CompactChunk { summary_text: "conversation summary text", .. }`
+
+#### Scenario: Slash command then teammate then real user emits empty-AI with both slash and teammate
+- **WHEN** 消息流为 `user(slash "<command-name>/clear</command-name>") → user(<teammate-message ...>body</teammate-message>) → user("real input")`，其间无 assistant
+- **THEN** 产出的 chunk 列表 SHALL 含三条按时序排列的 chunk：
+  - `chunks[0]` SHALL 为 slash 的 `UserChunk`
+  - `chunks[1]` SHALL 为 `AIChunk { responses: [], slash_commands: [{ name: "clear", .. }], teammate_messages: [{ body: "body", .. }] }`
+  - `chunks[2]` SHALL 为真实 user 的 `UserChunk`
+- **AND** `chunks[1].slash_commands` 来自调用方 `pending_slashes` 通过 `std::mem::take` 消费
+
+#### Scenario: Teammate message before interrupt marker appends to empty-AI
+- **WHEN** 消息流为 `user(<teammate-message ...>body</teammate-message>) → interrupt("[Request interrupted by user]")`，其间无 assistant 或所有 assistant 都被 hard-noise 过滤
+- **THEN** 产出的 chunk 列表 SHALL 恰好含一条 chunk：`AIChunk { responses: [], teammate_messages: [{ body: "body", .. }], semantic_steps: [SemanticStep::Interruption { text: "[Request interrupted by user]", .. }], tool_executions: [], subagents: [], slash_commands: [] }`
+- **AND** 此为既有「Emit interruption semantic step for interrupt-marker messages」Requirement 的延续——interrupt 仍被追加到最近 AIChunk 的 `semantic_steps`，本场景下"最近 AIChunk"即新产生的 empty-AI
 
 ### Requirement: CompactChunk carries optional derived metadata
 
