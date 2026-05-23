@@ -77,27 +77,37 @@ watcher path 形态压缩到事件字段的实际语义表（B 路线 invalidato
 ```rust
 match recv_result {
     Ok(event) => {
-        let structural =
-            event.project_list_changed
-            || event.deleted
-            || (!event.session_id.is_empty()
-                && !cache.lock().expect("cache mutex poisoned")
-                        .contains_session_id(&local_ctx, &event.project_id, &event.session_id));
-        if structural {
-            cache.lock().expect("...").invalidate_local();
-            counter("project_scan_cache.invalidate.structural").inc();
+        let structural = {
+            let mut cache = cache.lock().unwrap_or_else(|p| p.into_inner());
+            // has_entry 守护：cache 空时不把"普通 append"误判为 unknown_session
+            // → 防 lag 后续事件 storm（D2b 修订；codex PR 二审 WARN 1）
+            let unknown_session = !event.session_id.is_empty()
+                && cache.has_entry(&local_ctx)
+                && !cache.contains_session_id(&local_ctx, &event.project_id, &event.session_id);
+            let s = event.project_list_changed || event.deleted || unknown_session;
+            if s { cache.invalidate_local(); }
+            s
+        };
+        let counter_name = if structural {
+            "project_scan_cache.invalidate.structural"
         } else {
-            counter("project_scan_cache.invalidate.content_append_skipped").inc();
-            // no-op
-        }
+            "project_scan_cache.invalidate.content_append_skipped"
+        };
+        counter(counter_name).inc();
     }
     Err(RecvError::Lagged(_)) => {
-        cache.lock().expect("...").invalidate_local();
+        cache.lock().unwrap_or_else(|p| p.into_inner()).invalidate_local();
         counter("project_scan_cache.invalidate.lag_conservative").inc();
     }
     Err(RecvError::Closed) => break,
 }
 ```
+
+### D2b：`has_entry` 守护（apply 阶段反转 / codex PR 二审 WARN 1 修订）
+
+原 D2 的规则 2 在 lag 路径触发后会引发死锁：lag 调 `invalidate_local()` 清空 Local entry → 后续普通 append 事件 `contains_session_id` 一律返 false → unknown_session 命中 → 又调 `invalidate_local()` + bump `invalidation_generation` → 在重扫期间 `try_insert` 因 generation mismatch 一直丢弃 snapshot → cache 长期无法 repopulate（持续重扫风暴）。
+
+**修订**：规则 2 加 `cache.has_entry(local_ctx)` 守护——cache 空时 unknown_session 不成立，走规则 3 等待业务路径下次 `list_repository_groups` 触发重扫填回。`ProjectScanCache` 同步加 `pub fn has_entry(&self, ctx: &ContextId) -> bool` API。spec delta 同步说明四档判定与 `has_entry` 守护契约（详 spec `ProjectScanCache 按事件语义分级失效` Requirement）。
 
 **为何三档不可压缩到二档**：codex 第三轮 BLOCK 1 实证 `mark_project_seen` 在构造时预填 known_projects（`watcher.rs:30-41,79`）。已知 project 下新建 session 时 watcher 输出 `plc=false, deleted=false`——与"已知 session 追加"在事件字段上**外观一致**。仅靠 (plc, deleted) 两 bool 判定会让新 session 最长 `LOCAL_CACHE_TTL = 300s` 不可见，dealbreaker。第三档 cache lookup 是**最低代价**的精确化方案（无须改 watcher / 不引入 path 字段）。
 

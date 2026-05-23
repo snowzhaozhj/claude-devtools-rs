@@ -163,6 +163,11 @@ impl ProjectScanCache {
     /// 复杂度 O(N project × N `session_per_project`)；30 project × 538 session
     /// corpus 单次 ~10µs，可在 hot 路径调用。ctx 无 entry 或 project 不存在
     /// 时返回 `false`。
+    ///
+    /// **注意**：调用方 SHALL 先用 [`Self::has_entry`] 守护，避免 ctx 无 entry
+    /// 时把"cache 空"误判为"unknown session"——后者会让 invalidator 在 lag 后
+    /// 持续 bump `invalidation_generation`，导致 in-flight scan `try_insert`
+    /// 一直 mismatch，cache 长期无法 repopulate（codex PR 二审 WARN 1）。
     /// Spec：`openspec/specs/ipc-data-api/spec.md` §`ProjectScanCache 按事件语义分级失效`。
     #[must_use]
     pub fn contains_session_id(&self, ctx: &ContextId, project_id: &str, session_id: &str) -> bool {
@@ -174,6 +179,16 @@ impl ProjectScanCache {
             .iter()
             .find(|p| p.id == project_id)
             .is_some_and(|p| p.sessions.iter().any(|s| s == session_id))
+    }
+
+    /// 指定 ctx 是否有 cache entry。`spawn_project_scan_cache_invalidator`
+    /// 在三档判定的"unknown session"档前先用本方法守护——cache 空时跳过
+    /// `invalidate_local()` 与 generation bump，避免 lag 后清空状态被持续
+    /// 普通 append 事件引发的"在重扫期间反复 bump → `try_insert` 一直 mismatch
+    /// → cache 长期无法 repopulate"风暴（codex PR 二审 WARN 1）。
+    #[must_use]
+    pub fn has_entry(&self, ctx: &ContextId) -> bool {
+        self.entries.contains_key(ctx)
     }
 
     /// 条件写入：仅在 `recorded_generation == 当前 invalidation_generation`
@@ -303,7 +318,14 @@ pub fn spawn_project_scan_cache_invalidator(
                             Ok(g) => g,
                             Err(poisoned) => poisoned.into_inner(),
                         };
+                        // **`has_entry` 守护**（codex PR 二审 WARN 1 修复）：
+                        // ctx 无 entry 时不把"cache 空"误判为 unknown_session。
+                        // 否则 lag 后 cache 被清，后续普通 append 事件会全部
+                        // 触发 unknown_session=true 反复 bump generation，导致
+                        // in-flight scan 完成回写时 try_insert 一直 mismatch
+                        // → cache 长期无法 repopulate（持续重扫风暴）。
                         let unknown_session = !event.session_id.is_empty()
+                            && cache.has_entry(&local_ctx)
                             && !cache.contains_session_id(
                                 &local_ctx,
                                 &event.project_id,

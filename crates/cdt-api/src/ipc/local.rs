@@ -1589,10 +1589,12 @@ impl LocalDataApi {
         // remove。详 change `parsed-message-lru-cache` design D9；spec
         // `ipc-data-api/spec.md` §"parsed-message 缓存按 file-change 广播主动失效"。
         let parsed_msg_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
-        // ProjectScanner 结果缓存主动失效路径：订阅 file-change 广播，任何
-        // 事件都 invalidate Local entry——scan 结果是 immutable Arc，partial
-        // invalidation 不划算。SSH entry 由 TTL 自然过期。详 change
-        // `unify-fs-abstraction` FU-4 + `crates/cdt-api/src/ipc/project_scan_cache.rs`。
+        // ProjectScanner 结果缓存主动失效路径：订阅 file-change 广播，按事件
+        // 语义**三档判定**调 `invalidate_local()`（plc / deleted / 反查
+        // contains_session_id+has_entry 守护），普通 JSONL append 与 watcher
+        // 折叠的 subagent 修改放行。SSH entry 由 TTL 自然过期。详 change
+        // `project-scan-cache-semantic-invalidation` + spec
+        // `ipc-data-api/spec.md` §`ProjectScanCache 按事件语义分级失效`。
         let project_scan_cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
         let watcher_tasks = Mutex::new(spawn_watcher_runtime(
             FileWatcher::with_paths(

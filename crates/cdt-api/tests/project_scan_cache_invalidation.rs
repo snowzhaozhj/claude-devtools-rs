@@ -303,6 +303,7 @@ async fn broadcast_lagged_invalidates_with_lag_counter() {
     let (tx, rx) = broadcast::channel::<FileChangeEvent>(2);
 
     let lag_before = counter(LAG);
+    let st_before = counter(STRUCTURAL);
 
     let _h = spawn_project_scan_cache_invalidator(
         Arc::clone(&cache),
@@ -318,12 +319,109 @@ async fn broadcast_lagged_invalidates_with_lag_counter() {
 
     // lag_conservative SHALL inc 至少 1
     wait_counter_delta(LAG, lag_before, 1).await;
+    // 等所有事件处理完（队列积压消化）让任何潜在风暴显形
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // **重要**：lag 路径调 `invalidate_local()` 清空 cache，后续事件
-    // `contains_session_id` 一律返 false → 走 `unknown_session=true` 触发
-    // structural inc。STRUCTURAL counter 在 lag 后会不可预测地增加；本测试
-    // 不变量仅检查 LAG counter ≥ 1（design D7：lag 后保守清空 → 再来事件按
-    // 规则正常处理）。
+    // **WARN 1 修复**：lag 后 cache 被清；后续普通 append 事件因 `has_entry`
+    // 守护跳过 unknown_session 判定，走 SKIPPED 路径——SHALL NOT 引起
+    // STRUCTURAL counter storm。spec 契约：lag 仅触发 `lag_conservative`，
+    // 不连带 `structural`。
+    assert_eq!(
+        counter(STRUCTURAL),
+        st_before,
+        "lag 后续事件 SHALL NOT 持续触发 structural（has_entry 守护防风暴）"
+    );
+}
+
+#[tokio::test]
+async fn lag_followed_by_repopulation_does_not_storm() {
+    // codex PR 二审 WARN 1 回归：lag 触发清空 cache 后，业务路径"重扫
+    // 填回 snapshot"应当成功，且后续普通 append 走 SKIPPED 不再清空。
+    let _g = lock_serial().await;
+    let cache = cache_with_local_entry(vec![proj("pa", &["sa"])]);
+    let (tx, rx) = broadcast::channel::<FileChangeEvent>(2);
+
+    let lag_before = counter(LAG);
+    let st_before = counter(STRUCTURAL);
+    let s_before = counter(SKIPPED);
+
+    let _h = spawn_project_scan_cache_invalidator(
+        Arc::clone(&cache),
+        rx,
+        PathBuf::from("/test/projects"),
+    );
+
+    for _ in 0..8 {
+        let _ = tx.send(ev("pa", "sa", false, false));
+    }
+    wait_counter_delta(LAG, lag_before, 1).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 模拟"业务重扫"：list_repository_groups miss → ProjectScanner::scan →
+    // try_insert。recorded_generation 抓本次 invalidation_generation
+    {
+        let mut c = cache.lock().unwrap();
+        let recorded = c.invalidation_generation();
+        let inserted = c.try_insert(
+            local_ctx(),
+            Arc::new(vec![proj("pa", &["sa"])]),
+            0,
+            0,
+            FsKind::Local,
+            recorded,
+        );
+        assert!(inserted, "lag 已结束，业务重扫 SHALL 能成功 try_insert");
+    }
+
+    // 重填后再发普通 append——SHALL 走 SKIPPED 不再触发 structural
+    let st_mid = counter(STRUCTURAL);
+    for _ in 0..3 {
+        tx.send(ev("pa", "sa", false, false)).unwrap();
+    }
+    wait_counter_delta(SKIPPED, s_before, 3).await;
+    assert_eq!(
+        counter(STRUCTURAL),
+        st_mid,
+        "repopulate 后普通 append SHALL 走 SKIPPED 不再触发 structural"
+    );
+    let _ = st_before; // 保留以便定位语境
+}
+
+#[tokio::test]
+async fn empty_cache_skipped_event_does_not_bump_invalidation_generation() {
+    // codex PR 二审 WARN 1 / has_entry 守护回归：cache 空时收到普通 append
+    // 事件 SHALL 走 SKIPPED 路径，不调 invalidate_local，不 bump
+    // invalidation_generation——保护 in-flight scan 的 try_insert 不被
+    // 反复 mismatch 阻塞。
+    let _g = lock_serial().await;
+    let cache = Arc::new(StdMutex::new(ProjectScanCache::new())); // 空 cache
+    let (tx, rx) = broadcast::channel::<FileChangeEvent>(16);
+
+    let s_before = counter(SKIPPED);
+    let st_before = counter(STRUCTURAL);
+    let gen_before = cache.lock().unwrap().invalidation_generation();
+
+    let _h = spawn_project_scan_cache_invalidator(
+        Arc::clone(&cache),
+        rx,
+        PathBuf::from("/test/projects"),
+    );
+
+    for _ in 0..3 {
+        tx.send(ev("pa", "sa", false, false)).unwrap();
+    }
+    wait_counter_delta(SKIPPED, s_before, 3).await;
+
+    assert_eq!(
+        counter(STRUCTURAL),
+        st_before,
+        "cache 空 + 普通 append SHALL NOT 触发 structural"
+    );
+    let gen_after = cache.lock().unwrap().invalidation_generation();
+    assert_eq!(
+        gen_before, gen_after,
+        "cache 空时 SHALL NOT bump invalidation_generation——保护 in-flight scan try_insert"
+    );
 }
 
 #[tokio::test]
