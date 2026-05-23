@@ -2497,6 +2497,7 @@ fn session_detail_single_phase_injections_by_phase_equals_context_injections() {
         injections_by_phase: serde_json::Value::Object(by_phase),
         phase_info,
         is_ongoing: false,
+        title: None,
     };
     let json_val = serde_json::to_value(&detail).unwrap();
     assert_eq!(json_val["injectionsByPhase"]["1"], json!([inj]));
@@ -2560,6 +2561,7 @@ fn session_detail_multi_phase_preserves_phase1_injections() {
         injections_by_phase: serde_json::Value::Object(by_phase),
         phase_info,
         is_ongoing: false,
+        title: None,
     };
     let json_val = serde_json::to_value(&detail).unwrap();
     // Round-trip 反序列化保持字节级相等
@@ -2573,6 +2575,52 @@ fn session_detail_multi_phase_preserves_phase1_injections() {
         json_val["contextInjections"],
         json_val["injectionsByPhase"]["2"]
     );
+}
+
+/// `SessionDetail.title` 字段以 `title` (camelCase) 序列化，round-trip 等价。
+/// Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
+#[test]
+fn session_detail_title_field_round_trip() {
+    use cdt_api::SessionDetail;
+    let detail = SessionDetail {
+        session_id: "s1".into(),
+        project_id: "p1".into(),
+        chunks: serde_json::Value::Array(vec![]),
+        metrics: json!({}),
+        metadata: json!({}),
+        context_injections: json!([]),
+        injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
+        phase_info: serde_json::Value::Null,
+        is_ongoing: false,
+        title: Some("修复登录页样式".into()),
+    };
+    let json_val = serde_json::to_value(&detail).unwrap();
+    assert_eq!(
+        json_val["title"],
+        json!("修复登录页样式"),
+        "SessionDetail.title MUST 以 camelCase `title` 字段序列化"
+    );
+    let back: SessionDetail = serde_json::from_value(json_val.clone()).unwrap();
+    assert_eq!(back.title.as_deref(), Some("修复登录页样式"));
+
+    // None 时序列化为 null（serde 默认行为）
+    let detail_none = SessionDetail {
+        session_id: "s2".into(),
+        project_id: "p1".into(),
+        chunks: serde_json::Value::Null,
+        metrics: serde_json::Value::Null,
+        metadata: serde_json::Value::Null,
+        context_injections: serde_json::Value::Array(Vec::new()),
+        injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
+        phase_info: serde_json::Value::Null,
+        is_ongoing: false,
+        title: None,
+    };
+    let json_none = serde_json::to_value(&detail_none).unwrap();
+    assert!(json_none.as_object().unwrap().contains_key("title"));
+    assert_eq!(json_none["title"], json!(null));
+    let back_none: SessionDetail = serde_json::from_value(json_none).unwrap();
+    assert!(back_none.title.is_none());
 }
 
 /// `chunk_id` 形态统一：所有 chunk 类型首次出现都用 `<base>:0`，无 `ai:` 前缀。

@@ -684,26 +684,15 @@
   function isWriteTool(exec: ToolExecution): boolean { return exec.toolName === "Write" && !exec.isError; }
   function isBashTool(exec: ToolExecution): boolean { return ["Bash", "bash"].includes(exec.toolName); }
 
-  function firstUserTitle(chunks: Chunk[]): string {
-    for (const c of chunks) {
-      if (c.kind === "user") {
-        const t = utext(c.content);
-        if (t && !t.startsWith("/")) return t.length > 60 ? t.slice(0, 60) + "..." : t;
-        // 跳过纯命令消息（如 /model），继续找真正的用户输入
-        if (t && t.startsWith("/") && t.length > 1) {
-          // 命令消息也可以作为标题，但优先找非命令消息
-          continue;
-        }
-      }
-    }
-    // fallback: 取第一条任何 user 消息
-    for (const c of chunks) {
-      if (c.kind === "user") {
-        const t = utext(c.content);
-        if (t) return t.length > 60 ? t.slice(0, 60) + "..." : t;
-      }
-    }
-    return sessionId.slice(0, 12);
+  /**
+   * 会话标题：直接消费 backend `extract_session_metadata_from_parsed` 派生（与
+   * sidebar `SessionSummary.title` 共用单一真相源），`null/undefined` 时 fallback
+   * 到 `sessionId.slice(0, 8)` 与 sidebar 一致。
+   * Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
+   */
+  function detailTitle(d: SessionDetail | null): string {
+    if (d?.title) return d.title;
+    return sessionId.slice(0, 8);
   }
 </script>
 
@@ -721,7 +710,7 @@
   <!-- Top bar：18px 标题 + 副标题密度行（chunks · tools · tokens · last activity） -->
   <div class="top-bar">
     <div class="top-titles">
-      <h1 class="top-title">{firstUserTitle(detail.chunks)}</h1>
+      <h1 class="top-title">{detailTitle(detail)}</h1>
       <div class="top-stats" aria-label="Session statistics">
         <span class="top-stat">
           <span class="top-stat-num">{counts.ai}</span>

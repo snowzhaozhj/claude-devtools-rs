@@ -168,6 +168,13 @@ pub struct SessionDetail {
     /// 计算，值应与同 session 的 `SessionSummary.is_ongoing` 一致。
     #[serde(default)]
     pub is_ongoing: bool,
+    /// 会话标题（清洗后），与同 sessionId 的 `SessionSummary.title` 共用单一派生
+    /// 源 `extract_session_metadata_from_parsed`。前端 `SessionDetail.svelte` 顶
+    /// `<h1>` SHALL 直接消费，`None` 时 fallback 到 `sessionId.slice(0, 8)`，与
+    /// sidebar 行为一致。Spec：
+    /// `ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 // =============================================================================
