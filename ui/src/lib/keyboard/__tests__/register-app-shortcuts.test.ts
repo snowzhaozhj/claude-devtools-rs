@@ -119,8 +119,10 @@ describe('register-app-shortcuts', () => {
       sidebarCalled += 1
     }
     registerAppShortcuts(handlers)
+    // listener 现在绑 window；KeyboardEvent 默认 bubbles=false，需显式开冒泡
+    // 才能从 document 派 → window 收（与 e2e/keyboard-shortcuts.spec.ts 一致）
     document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'b', metaKey: true }),
+      new KeyboardEvent('keydown', { key: 'b', metaKey: true, bubbles: true }),
     )
     expect(sidebarCalled).toBe(1)
   })
