@@ -185,6 +185,13 @@ pub keyboard_shortcuts: HashMap<String, String>,  // id -> normalized binding st
 - 持久化全量映射：升级时新增的内置快捷键被用户存档"冻结"在旧默认值上，需要迁移逻辑。diff-only 自然规避。
 - 独立 `keyboard.toml` 文件：增加 IO + 多一层 path 抽象，本期 `cdt-config` 已有完整 IPC 通道，复用最省。
 
+**D3c：apply 阶段反转 `skip_serializing_if = "HashMap::is_empty"` 草案**：原稿 L141 `#[serde(default, skip_serializing_if = "HashMap::is_empty")]` 与 `configuration-management/spec.md::Persist keyboard shortcut overrides` 既有契约（empty `HashMap<String, String>` MUST 序列化为 `{}`）+ `crates/CLAUDE.md::serde camelCase` 约定冲突。`skip_serializing_if` 让"用户重置全部"（值 `{}`）与"老 config 不含该字段"（缺失 → undefined）合并为同一 undefined 形态，前端 `customization` 层失去区分依据，重置后下次 bootstrap 误回退到老 config 的语义。修订决策：**不**加 `skip_serializing_if`，empty `HashMap` 始终序列化为 `{}`。落地：
+
+- `crates/cdt-config/src/types.rs::AppConfig::keyboard_shortcuts` 仅加 `#[serde(default)]`，注释明确 reason
+- §10.4 Playwright e2e `update_config(keyboardShortcuts={})` 验证空 HashMap round-trip 仍含 `{}` 字段
+- `crates/cdt-config/tests/` round-trip 单测同步覆盖 empty 场景
+- spec delta `Scenario: 仅持久化覆盖` AND 子句、proposal.md L28、tasks.md §2.1/§2.2 三处文字同步反转
+
 ### D4：冲突检测时机
 
 **决策**：录键 widget 在每次按键 commit（用户松开所有键，即 `keyup` 把"修饰+主键"凑齐之后）时实时校验 + UI 反馈；保存路径再校验一次防御。

@@ -9,7 +9,7 @@
 ## 2. 后端 `cdt-config` 字段 + IPC contract test（owner: 后端 teammate）
 
 - [x] 2.1 `crates/cdt-config/src/types.rs::AppConfig` 加字段 `pub keyboard_shortcuts: HashMap<String, String>`，仅加 `#[serde(default)]`（**不**加 `skip_serializing_if`——empty HashMap 序列化为 `{}` 同时满足 IPC 必含 + 文件持久化简洁双约束，详 spec configuration-management::Persist keyboard shortcut overrides）；struct-level 已有 `rename_all = "camelCase"`，无需单独 rename
-- [x] 2.2 `crates/cdt-config/tests/` 新增 round-trip 测试：empty HashMap 不出现在序列化输出；`{"sidebar.toggle": "mod+b"}` 序列化为 `keyboardShortcuts: {sidebar.toggle: "mod+b"}` 反序列化等价
+- [x] 2.2 `crates/cdt-config/tests/` 新增 round-trip 测试：**empty HashMap 序列化为 `{}` 始终在输出**（与 §2.1 一致）；`{"sidebar.toggle": "mod+b"}` 序列化为 `keyboardShortcuts: {sidebar.toggle: "mod+b"}` 反序列化等价
 - [x] 2.3 `cdt-api/tests/ipc_contract.rs` 新增 case：`get_config` 返回包含 `keyboardShortcuts` 字段（empty 也要 default 在结构里）；`set_config` 接收该字段并持久化；camelCase 序列化断言
 - [x] 2.4 同步 `ui/src/lib/api.ts::AppConfig`（或同名导出类型）增加 `keyboardShortcuts: Record<string, string>` 字段；TypeScript 严格模式下 vitest mockIPC 用 `getConfig` fixture 必须含该字段
 - [x] 2.5 同步前端 mockIPC fixture（`ui/src/lib/__mocks__/tauriMock.ts` 或同等位置）：`getConfig` 默认返回值加 `keyboardShortcuts: {}`；`setConfig` mock SHALL 接受并 echo 该字段

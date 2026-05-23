@@ -162,7 +162,7 @@ dispatcher 命中路径（步骤 3-5）SHALL 在 baseline 测试条件下 ≤ 0.
 - **WHEN** 用户改动 `sidebar.toggle` 的绑定从 `mod+b` 到 `mod+shift+b`
 - **AND** 其他 13+ 条均未改动
 - **THEN** `cdt-config::keyboard_shortcuts` SHALL 仅包含 `{"sidebar.toggle": "mod+shift+b"}` 一项
-- **AND** `Cargo.toml` `serde(skip_serializing_if = "HashMap::is_empty")` 在用户从未改动任何快捷键时 SHALL 让该字段不出现在 config 文件
+- **AND** 用户从未改动任何快捷键时 `Config::keyboard_shortcuts` 为 empty HashMap SHALL 序列化为 `"keyboardShortcuts": {}`（详 `configuration-management/spec.md::Persist keyboard shortcut overrides`）—— **不**加 `skip_serializing_if`，让 IPC 字段必含 + 文件 reader 不需 undefined fallback
 
 #### Scenario: 启动时 merge defaults + overrides
 - **WHEN** `cdt-config::keyboard_shortcuts` 持有 `{"sidebar.toggle": "mod+shift+b"}`

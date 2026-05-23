@@ -25,7 +25,7 @@
 - `ui-search`: `Cmd+K` Command Palette / `Cmd+F` 会话搜索两条 SHALL 改写为通过 registry 触发 + 可自定义；`/` 聚焦搜索同步纳入。
 - `tab-management`: `Cmd+1~9` / `Cmd+W` / `Cmd+[]` / `Cmd+\\` / `Cmd+Alt+←/→` 五组 SHALL 改写为通过 registry 触发 + 可自定义；明确 `Cmd+W` 与系统关闭窗口冲突时用户改键的回退路径。
 - `session-display`: PR #218 的"跳到最新消息" `Cmd+↓` / `Ctrl+End` 快捷键 SHALL 改写为通过 PaneView 顶层注册的 shared handler 在 registry 中 dispatch + 可自定义（多 instance 共享单 spec 1:1，详 design.md::D8）。
-- `configuration-management`: ADDED 新字段 `keyboard_shortcuts: HashMap<String, String>` 持久化契约（IPC `keyboardShortcuts` camelCase / 旧 config 兼容性 / empty HashMap 不序列化）。
+- `configuration-management`: ADDED 新字段 `keyboard_shortcuts: HashMap<String, String>` 持久化契约（IPC `keyboardShortcuts` camelCase / 旧 config 兼容性 / **empty `HashMap` 仍序列化为 `{}`**——与 configuration-management 既有契约对齐，让前端 `{}` vs `undefined` 区分"重置全部"与"老 config 缺字段"，详 design.md::D3c）。
 
 ## Impact
 
