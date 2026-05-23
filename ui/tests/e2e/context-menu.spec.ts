@@ -121,6 +121,29 @@ test.describe('frontend-context-menu Phase 1', () => {
     expect(result.defaultPrevented).toBe(false)
   })
 
+  test('键盘 ContextMenu 键触发菜单（focus 在 trigger 元素时）', async ({ page }) => {
+    await page.goto('/?mock=1&fixture=multi-project-rich')
+    await page.getByText('rust-port').first().click()
+    await page.keyboard.press('Escape')
+    const firstSession = page.locator('.session-item').first()
+    await expect(firstSession).toBeVisible({ timeout: 5_000 })
+
+    // focus 到 session-item 后派发 ContextMenu 键事件（模拟键盘触发）
+    await page.evaluate(() => {
+      const el = document.querySelector('.session-item') as HTMLElement | null
+      if (!el) throw new Error('no session-item')
+      el.focus()
+      el.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }),
+      )
+    })
+
+    const menu = page.locator('[role="menu"]').first()
+    await expect(menu).toBeVisible({ timeout: 2_000 })
+    // 菜单应在 trigger bbox 中心位置（不严格断言 px，只确认菜单可见）
+    await expect(menu).toContainText('在新标签页打开')
+  })
+
   test('多个右键：仅保留 1 个菜单 instance', async ({ page }) => {
     await page.goto('/?mock=1&fixture=multi-project-rich')
     await page.getByText('rust-port').first().click()

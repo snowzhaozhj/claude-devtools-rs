@@ -66,12 +66,51 @@ describe('installGlobalContextMenuFallback', () => {
     expect(e.defaultPrevented).toBe(false)
   })
 
-  test('contenteditable 元素放行', () => {
+  test('contenteditable="true" 元素放行', () => {
     installGlobalContextMenuFallback()
     const div = document.createElement('div')
     div.setAttribute('contenteditable', 'true')
     document.body.appendChild(div)
     const e = dispatchContextMenu(div)
+    expect(e.defaultPrevented).toBe(false)
+  })
+
+  test('contenteditable="" 空值放行（HTML 规范合法的 truthy 形式）', () => {
+    installGlobalContextMenuFallback()
+    const div = document.createElement('div')
+    div.setAttribute('contenteditable', '')
+    document.body.appendChild(div)
+    const e = dispatchContextMenu(div)
+    expect(e.defaultPrevented).toBe(false)
+  })
+
+  test('contenteditable="plaintext-only" 放行', () => {
+    installGlobalContextMenuFallback()
+    const div = document.createElement('div')
+    div.setAttribute('contenteditable', 'plaintext-only')
+    document.body.appendChild(div)
+    const e = dispatchContextMenu(div)
+    expect(e.defaultPrevented).toBe(false)
+  })
+
+  test('contenteditable="false" 仍然兜底 preventDefault（编辑被显式关闭）', () => {
+    installGlobalContextMenuFallback()
+    const div = document.createElement('div')
+    div.setAttribute('contenteditable', 'false')
+    document.body.appendChild(div)
+    const e = dispatchContextMenu(div)
+    expect(e.defaultPrevented).toBe(true)
+  })
+
+  test('contenteditable 父元素的子节点也放行（继承可编辑）', () => {
+    installGlobalContextMenuFallback()
+    const parent = document.createElement('div')
+    parent.setAttribute('contenteditable', 'true')
+    const child = document.createElement('span')
+    child.textContent = 'child text'
+    parent.appendChild(child)
+    document.body.appendChild(parent)
+    const e = dispatchContextMenu(child)
     expect(e.defaultPrevented).toBe(false)
   })
 

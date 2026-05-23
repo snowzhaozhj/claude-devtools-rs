@@ -21,6 +21,15 @@ export type ContextMenuProvider =
   | ContextMenuItem[]
   | ((event: MouseEvent | KeyboardEvent) => ContextMenuItem[] | null);
 
+// HMR 持久化 sentinel 挂在 window 全局，避免 vite 模块重载时模块级 flag 归零
+// 导致 listener 重复注册（详 ensureGlobalCloseListeners / installGlobalContextMenuFallback）。
+declare global {
+  interface Window {
+    __cdtContextMenuFallbackInstalled?: boolean;
+    __cdtContextMenuCloseListenersInstalled?: boolean;
+  }
+}
+
 // ---------- portal mount 实例管理 ----------
 
 interface MenuInstance {
@@ -79,6 +88,11 @@ function openMenu(
 // ---------- 全局关闭触发（在所有 instance 上共享）----------
 // 注意：这些 listener **常驻** document/window，避免每个菜单实例 attach/detach
 // 的开销，也避免菜单关闭瞬间 listener race。handler 内若 activeInstance===null 直接 return。
+//
+// HMR 持久化：模块级 flag 在 vite HMR 重载后归零，会让旧 listener 残留 + 新 listener
+// 叠加。把 sentinel 挂到 window 全局后再判幂等——HMR 时 window 不重建，旧 handler
+// 因模块作用域消失变成无效引用 + 新 handler 跳过注册，避免叠加。
+
 
 function onDocumentMouseDown(e: MouseEvent): void {
   if (!activeInstance) return;
@@ -109,10 +123,10 @@ function onAnyScroll(): void {
   if (activeInstance) closeActive();
 }
 
-let globalCloseListenersInstalled = false;
 function ensureGlobalCloseListeners(): void {
-  if (globalCloseListenersInstalled) return;
-  globalCloseListenersInstalled = true;
+  // window 全局 sentinel 让 vite HMR 模块重载后仍幂等（详上方注释）
+  if (window.__cdtContextMenuCloseListenersInstalled) return;
+  window.__cdtContextMenuCloseListenersInstalled = true;
   document.addEventListener("mousedown", onDocumentMouseDown, true);
   document.addEventListener("keydown", onDocumentKeyDown, true);
   window.addEventListener("blur", onWindowBlur);
@@ -187,17 +201,20 @@ export function contextMenu(node: HTMLElement, provider: ContextMenuProvider) {
 
 // ---------- 全局兜底（main.ts 启动时调）----------
 
-let globalFallbackInstalled = false;
-
 function globalContextMenuHandler(e: Event): void {
   // contextmenu 事件触发；input/textarea/contenteditable/data-allow-native-context
   // 的元素放行系统菜单（保留输入便利）；defaultPrevented 表示元素自身已处理。
   if (e.defaultPrevented) return;
   const target = e.target as HTMLElement | null;
   if (!target) return;
+  // contenteditable 检测：用 isContentEditable（HTMLElement 属性，覆盖任意
+  // truthy 值 + 继承）作为主路径；同时用 selector `[contenteditable]:not(="false")`
+  // 作为 fallback——jsdom 部分实现 isContentEditable 不返回 true，靠选择器在
+  // 测试环境兜底，同时也能正确放行显式 `="false"` 关闭可编辑的元素。
+  if (target.isContentEditable) return;
   if (
     target.closest(
-      'input, textarea, [contenteditable="true"], [data-allow-native-context]',
+      'input, textarea, [contenteditable]:not([contenteditable="false"]), [data-allow-native-context]',
     )
   ) {
     return;
@@ -208,10 +225,15 @@ function globalContextMenuHandler(e: Event): void {
 /**
  * 在 main.ts 启动序列内调用一次，注册全局 contextmenu 兜底。
  * 幂等：HMR 重复调用不重复注册（避免 listener 叠加）。
+ *
+ * 用 window 全局 sentinel 而非模块级 flag——vite HMR 模块重载时模块级
+ * `let` 会归零；window 全局在 HMR 间保持，旧 handler 因模块卸载变野指针
+ * 但事件监听仍在（无害——activeInstance 也在 window 不到的模块作用域，
+ * 不会被新 handler 触发），新 handler 跳过注册避免叠加。
  */
 export function installGlobalContextMenuFallback(): void {
-  if (globalFallbackInstalled) return;
-  globalFallbackInstalled = true;
+  if (window.__cdtContextMenuFallbackInstalled) return;
+  window.__cdtContextMenuFallbackInstalled = true;
   // bubble 阶段，让元素自身 listener 先有机会 preventDefault；
   // 兜底仅在 e.defaultPrevented === false 时执行 preventDefault。
   window.addEventListener("contextmenu", globalContextMenuHandler, false);
