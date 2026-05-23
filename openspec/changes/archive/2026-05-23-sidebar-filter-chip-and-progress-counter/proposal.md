@@ -3,7 +3,7 @@
 PR-A（合并 commit `908aee9`）落地了 sidebar 会话列表区块的纯视觉重排（meta 行 grid、worktreeName 行内 label、删 branch / cwd 字段、Memory entry 紧凑、pin icon 简化、date label 加计数、加载更多按钮三态）。但当时识别为「行为契约级」的两块改动留给本 PR-B 走 openspec 路径：
 
 1. **Worktree filter 形态**：当前 sidebar-navigation spec D6 写明「顶部渲染 worktree filter dropdown」，多 wt group 时是个孤立的 macOS 风格 select，与 sidebar 整体「调试工作台」语言脱节；用户切 worktree 要"打开 → 选 → 关闭"两步交互，且只能看到当前选中值，不能扫到所有 wt 名。chip cluster 风格能让所有 wt 一眼可见 + 一次点击切换。
-2. **Session count 显示口径**：当前实现 `Sidebar.svelte:822` 仅渲染 `{visibleSessions.length}` 单数字（"5"），用户读不出含义；hover tooltip 才显 `可见 5 / 总 127`。spec 现状写 `{visibleSessions.length}/{totalSessions}` 但 visibleSessions 受 filter / hide 影响，与「分页进度」语义不一致——用户更想看「已加载 30 / 总 127」直观把握"还差多少没翻到"。
+2. **Session count 显示口径**：当前实现 `Sidebar.svelte:822` 仅渲染 `{visibleSessions.length}` 单数字（"5"），用户读不出含义；hover tooltip 才显 `可见 5 / 总 127`。spec 现状写 `{visibleSessions.length}/{totalSessions}` 但 visibleSessions 受 filter / hide 影响，单数字脱离 hide/search 上下文表达不准。本 PR 改成「默认单数字 = 当前 scope 总量；搜索激活 = 命中数」双态，hover tooltip 暴露完整含义；分页进度由 PR-A 已落地的底部 `▼ 加载更多 · 剩 N 条` 按钮承担——用户不感知客户端分页内部状态，顶部 count 不必表达。
 
 ## What Changes
 

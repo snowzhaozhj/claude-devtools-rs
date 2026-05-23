@@ -662,11 +662,13 @@
       // 让 `selectedGroup.totalSessions` / `wt.sessions.length`（scopeTotal 唯一权威源）
       // 与列表 silent refresh 一起跟新，否则顶部 count 会停在旧值——spec
       // sidebar-navigation §"会话总数显示口径" 要求 silent 刷新时 scopeTotal
-      // 同步下降 / 上升。scheduleRefresh 同 key 合并，与 projectListChanged
-      // 路径共用 "sidebar:projects" key 不会重复 IPC。
-      scheduleRefresh("sidebar:projects", () =>
-        untrack(() => loadProjects(true)),
-      );
+      // 同步下降 / 上升。仅在 projectListChanged 未走过该 schedule 时触发，
+      // 避免同 payload 重复入队（codex round 2 Minor）。
+      if (!payload.projectListChanged) {
+        scheduleRefresh("sidebar:projects", () =>
+          untrack(() => loadProjects(true)),
+        );
+      }
     });
     return () => {
       unregisterHandler("sidebar");

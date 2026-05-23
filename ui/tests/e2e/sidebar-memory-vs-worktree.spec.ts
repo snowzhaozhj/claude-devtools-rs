@@ -26,12 +26,10 @@ test.describe('sidebar memory entry vs worktree filter', () => {
     await expect(memoryEntry).toBeVisible({ timeout: 5_000 })
     await expect(memoryEntry).toContainText(/Memory \(3\)/)
 
-    // 切 worktree filter 到 feat-x（fixture 里 mock-rich-rust-wt-feat 自己 count=0 / hasMemory=false）
-    await page.locator('.worktree-filter-bar .dd-anchor').first().click()
+    // 切 worktree filter chip 到 feat-x（fixture 里 mock-rich-rust-wt-feat 自己 count=0 / hasMemory=false）
     await page
-      .locator('.dd-popover .dd-opt')
+      .locator('.worktree-filter-bar [role="radio"]')
       .filter({ hasText: 'feat-x' })
-      .first()
       .click()
 
     // 修复后：memory anchor 不跟 filter 漂，仍读 repo 根 count=3
@@ -54,13 +52,11 @@ test.describe('sidebar memory entry vs worktree filter', () => {
     await expect(memoryEntry).toBeVisible({ timeout: 5_000 })
 
     // 切到 feat-x 再切回全部 → 入口始终显示
-    const filterAnchor = page.locator('.worktree-filter-bar .dd-anchor').first()
-    await filterAnchor.click()
-    await page.locator('.dd-popover .dd-opt').filter({ hasText: 'feat-x' }).first().click()
+    const chips = page.locator('.worktree-filter-bar [role="radio"]')
+    await chips.filter({ hasText: 'feat-x' }).click()
     await expect(memoryEntry).toBeVisible()
 
-    await filterAnchor.click()
-    await page.locator('.dd-popover .dd-opt').filter({ hasText: '全部' }).first().click()
+    await chips.filter({ hasText: '全部' }).click()
     await expect(memoryEntry).toBeVisible()
     await expect(memoryEntry).toContainText(/Memory \(3\)/)
   })
@@ -76,9 +72,11 @@ test.describe('sidebar memory entry vs worktree filter', () => {
     await page.locator('.project-selector').first().click()
     await page.locator('.dropdown-item').filter({ hasText: 'rust-port' }).first().click()
 
-    // 切到 feat-x worktree
-    await page.locator('.worktree-filter-bar .dd-anchor').first().click()
-    await page.locator('.dd-popover .dd-opt').filter({ hasText: 'feat-x' }).first().click()
+    // 切到 feat-x worktree chip
+    await page
+      .locator('.worktree-filter-bar [role="radio"]')
+      .filter({ hasText: 'feat-x' })
+      .click()
 
     // 点击 sidebar memory 入口
     await page.locator('.memory-entry').click()
