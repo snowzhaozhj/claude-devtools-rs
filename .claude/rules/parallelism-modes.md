@@ -92,6 +92,11 @@ just bg-stop-all                       # 停所有
 just bg-clean <id>                     # 停 + 删 worktree
 ```
 
-详见：
-- **prompt 骨架**（含占位符 + 关键不变量）：`.claude/templates/bg-pr-pipeline.md`——**禁止**手写 `claude --bg "..."` 绕过 `bg-pr`（inline 引号嵌套被 shell 吃过坑）
-- **踩坑速查**（permission mode / prompt 一次写全 / 不 merge 留用户等）：`~/.claude/projects/<encoded>/memory/feedback_bg_claude_dispatch.md`
+prompt 骨架（含占位符 + 关键不变量）：`.claude/templates/bg-pr-pipeline.md`——**禁止**手写 `claude --bg "..."` 绕过 `bg-pr`（inline 引号嵌套被 shell 吃过坑）。
+
+## bg job 已踩坑速查
+
+1. **不要加 `--permission-mode bypassPermissions`**——classifier 拒，需 explicit 授权；默认模式已能跑完整流水线
+2. **prompt 一次写全**——bg session 起后无法非交互注入指令（`claude attach` 是 TUI 不接 stdin）；prompt 列任务范围 + 起点 + 怀疑点 + 完成条件 + 走不走 openspec 即可，规则与 spec bg session 自己读
+3. **log 是 ANSI 流难解析**——用 `just bg-status` 提炼摘要不直接读 raw log
+4. **不要 merge 留用户**——bg 跑到 codex + wait-ci 全绿即止，merge 是 destructive shared state 留用户拍板
