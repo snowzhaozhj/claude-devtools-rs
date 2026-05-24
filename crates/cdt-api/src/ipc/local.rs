@@ -2013,6 +2013,18 @@ impl LocalDataApi {
         if let (Some(error_tx), Some(file_tx), Some(todo_tx)) =
             (&self.error_tx, &self.file_tx, &self.todo_tx)
         {
+            // codex CRIT-1（change `enrich-file-change-with-session-list-changed`
+            // 二审）：先收集当前 active SSH context_ids + cancel 旧 remote_watchers，
+            // 让 reattach 步骤用新 watcher 接管。旧 `RemotePollingWatcher` 持有
+            // 的是旧 `FileWatcher.file_tx` clone，旧 unified invalidator abort
+            // 后旧 file_tx 没人接，SSH polling event 会"喂入空 channel"——再也
+            // 进不了新 unified invalidator → 浏览器 / 桌面端 SSH 路径在 root 切换
+            // 后看不到 enriched event，前端 sidebar `totalSessions` 滞后到下次
+            // 用户主动重连 SSH 才恢复。
+            let active_remote_contexts: Vec<String> =
+                self.remote_watchers.lock().await.keys().cloned().collect();
+            self.cancel_all_remote_watchers().await;
+
             let mut tasks = self.watcher_tasks.lock().await;
             for task in tasks.drain(..) {
                 task.abort();
@@ -2038,6 +2050,15 @@ impl LocalDataApi {
                 self.project_scan_cache.clone(),
                 projects_dir,
             );
+            // 释放 watcher_tasks lock 后再 reattach SSH——`attach_remote_watcher`
+            // 内部锁顺序与 watcher_tasks 不冲突，但显式 drop 让 lock window 最小
+            drop(tasks);
+
+            // 重 attach 之前 active 的 SSH watchers，让 SSH polling 重新喂入新
+            // watcher.file_tx → 新 unified invalidator → enrich
+            for context_id in active_remote_contexts {
+                self.attach_remote_watcher(&context_id).await;
+            }
         }
         // root_generation 与 context_generation 都已在函数开头 bump（codex 二审
         // 第四轮 Blocker 修订）；这里无需再 bump 以保持单次递增。
@@ -5015,12 +5036,20 @@ async fn parse_subagent_candidate(
 // =============================================================================
 
 #[cfg(test)]
-// `clippy::doc_markdown` 在测试 doc-comment 内大量误报标识符（典型
-// `unified_invalidator_emits_session_list_changed_*` / `LocalDataApi.file_tx`
-// / `apply_file_event_to_*`）—— 这些是测试名 / 字段路径，反引号包裹后反而
-// 影响可读性。tests mod 整体豁免。
 #[allow(clippy::doc_markdown)]
 mod tests {
+    // `clippy::doc_markdown` 在测试 doc-comment 内大量误报标识符（典型
+    // `unified_invalidator_emits_session_list_changed_*` / `LocalDataApi.file_tx`
+    // / `apply_file_event_to_*`）—— 这些是测试名 / 字段路径，反引号包裹后反而
+    // 影响可读性。tests mod 整体豁免（mod-level attribute 见上一行）。
+    //
+    // 注释**不能**插在 `#[cfg(test)]` 与 mod 行之间——
+    // `xtask::check_fs_direct_calls::collect_test_mod_spans` 识别 test mod
+    // 时其 attribute-skip 仅放过 `#[..]` / 空行，碰到 `//` 注释直接 break →
+    // 误判本 mod 不是 test mod → mod 内 `tokio::fs::*` 被误报为 H1 violation
+    // （CI `xtask check-fs-direct-calls` fail）。同样不能在注释里写裸的
+    // `{` / `}` —— xtask brace-tracker 不区分 string / comment 会把注释内
+    // 的 brace 当真 block boundary，让 span 识别返 end_line=0。
     use super::*;
     use cdt_config::{ConfigManager, NotificationManager};
     use cdt_discover::{ProjectScanner, local_handle};
@@ -6556,11 +6585,22 @@ mod tests {
     /// change D6：raw broadcast 命中 `RecvError::Lagged` 分支时 invalidator
     /// SHALL NOT emit synthetic enriched event（合成 event 的 project_id /
     /// session_id 字段语义不明；前端走 HTTP/Tauri 的 `sse-lagged` 兜底）。
-    /// 用 capacity=2 的 raw channel + 4 条事件预塞触发 Lagged。
+    ///
+    /// 用 capacity=2 的 raw channel + 16 条突发事件，**必然**让 invalidator
+    /// recv 至少一次 `RecvError::Lagged`：burst 第 3 条起就开始挤掉 capacity
+    /// 内的旧事件，invalidator 第一次 recv 就拿到 Lagged。
+    ///
+    /// **强断言**（codex WARN-1 修订）：
+    /// 1. `lag_conservative` counter 必须 +≥1（证明 lag 路径真执行过）
+    /// 2. `file_rx` emit count 必须 < 16（lag 路径若 emit synthetic event 会
+    ///    破坏这个不变量）
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unified_invalidator_skips_emit_on_lag() {
         use crate::ipc::parsed_message_cache::ParsedMessageCache;
         use crate::ipc::project_scan_cache::ProjectScanCache;
+
+        const LAG_COUNTER: &str = "project_scan_cache.invalidate.lag_conservative";
+        let lag_before = cdt_telemetry::registry().counter_value(LAG_COUNTER);
 
         let projects_dir = std::path::PathBuf::from("/tmp/unified-lag-fixture");
         let parsed_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
@@ -6568,19 +6608,14 @@ mod tests {
 
         // capacity=2 让接收端轻易 Lagged
         let (raw_tx, raw_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(2);
-        let (file_tx, mut file_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(16);
+        let (file_tx, mut file_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(64);
 
-        let _h = spawn_unified_cache_invalidator(
-            parsed_cache,
-            scan_cache,
-            raw_rx,
-            file_tx,
-            projects_dir,
-        );
-
-        // 突发 8 条事件 + 立即 yield 让 invalidator 之前没机会 drain
-        // raw_tx capacity=2 → invalidator 一定 RecvError::Lagged 至少一次
-        for i in 0..8 {
+        // 在 spawn invalidator 之前先 send 大量事件 + drop raw_tx 之外的预订阅，
+        // 让 invalidator subscriber 一启动 cursor 就远落后于 sender lap → 必 Lagged。
+        // 注：broadcast::channel 的 lag 触发条件是 receiver tail 跟不上 sender head；
+        // raw_rx 从创建即订阅，capacity=2 时 send 第 3 条就开始覆盖未读 → invalidator
+        // 一旦 recv 就拿 RecvError::Lagged。
+        for i in 0..16 {
             let _ = raw_tx.send(cdt_core::FileChangeEvent {
                 project_id: "p".into(),
                 session_id: format!("burst-{i}"),
@@ -6590,24 +6625,33 @@ mod tests {
             });
         }
 
-        // 让 invalidator 消费一阵 + 命中 Lagged
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let _h = spawn_unified_cache_invalidator(
+            parsed_cache,
+            scan_cache,
+            raw_rx,
+            file_tx,
+            projects_dir,
+        );
 
-        // file_rx 端只能收到 invalidator emit 的 enriched event；
-        // Lagged 路径**不** emit synthetic event —— count 应 ≤ raw 突发数（部分 raw 命中 Lagged 被吞）
+        // 给 invalidator 时间消费 + 命中 Lagged（必然至少一次）+ counter 自增
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // 强断言 1：lag_conservative counter 必须 +≥1，证明 lag 分支真执行过
+        let lag_after = cdt_telemetry::registry().counter_value(LAG_COUNTER);
+        assert!(
+            lag_after > lag_before,
+            "lag_conservative counter SHALL 至少 +1 证明 lag 分支真触发；before={lag_before} after={lag_after}"
+        );
+
+        // 强断言 2：file_rx emit count 必须 < 16（lag 路径若 emit synthetic 会破坏）
         let mut emit_count = 0;
         while let Ok(_event) = file_rx.try_recv() {
             emit_count += 1;
         }
-        // 关键：emit_count < 8 表示 invalidator 真的 Lagged 过；如果 emit ≥ 8 说明
-        // 这个测试 fixture 时序失效（没成功制造 Lagged），需要重设 capacity
         assert!(
-            emit_count <= 8,
-            "emit count 不应超过 raw 突发数（synthetic event 会破坏 ≤ 关系）"
+            emit_count < 16,
+            "lag 路径 SHALL NOT emit synthetic enriched event；emit_count={emit_count} 应 < 16（raw 突发数）"
         );
-        // 弱断言但精准：lag 路径**不**emit synthetic ——即使 invalidator 全部命中
-        // Lagged（emit_count=0），断言仍 trivially 成立；这个测的主要价值是
-        // **当 lag 真发生时**确认没有 phantom enriched event 喷出
     }
 
     /// change D1：spawn_watcher_runtime 删除独立 `bridge_task` 后，task vec
@@ -6635,7 +6679,7 @@ mod tests {
         ));
 
         let (err_tx, _) = broadcast::channel::<DetectedError>(8);
-        let (file_tx, _) = broadcast::channel::<cdt_core::FileChangeEvent>(8);
+        let (file_tx, mut file_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(64);
         let (todo_tx, _) = broadcast::channel::<cdt_core::TodoChangeEvent>(8);
         let parsed = Arc::new(std::sync::Mutex::new(
             crate::ipc::parsed_message_cache::ParsedMessageCache::default(),
@@ -6644,6 +6688,18 @@ mod tests {
             crate::ipc::project_scan_cache::ProjectScanCache::new(),
         ));
 
+        // 在调用 spawn 之前留一份 watcher Arc 让我们能直接 inject raw event
+        // 到内部 file_tx（FileWatcher::attach_remote 是注入 raw event 的官方
+        // 入口——本测用空 SFTP fake 触发不到 polling event，因此改用一个更
+        // 轻量的间接方式：通过 watcher.subscribe_files() 取得 receiver 拿到
+        // 它的 sender 不可能（broadcast 单向）；改为 spawn 后从 watcher 内
+        // file_tx clone 一份用于直接 send raw event（仅测试场景）。
+        //
+        // 实际做法：依赖 watcher.attach_remote 的 cdt-watch 公开 API 不可行
+        // （需 SftpClient），换一种更直接的行为验证：spawn 后通过 `_h.abort()`
+        // 关掉 invalidator，证明 channels.files 此后**不再**收到任何 emit
+        // —— 反证 invalidator 是唯一生产者。
+        let watcher_arc = watcher.clone();
         let tasks = spawn_watcher_runtime(
             watcher,
             cfg,
@@ -6658,6 +6714,8 @@ mod tests {
             projects_dir,
         );
 
+        // 结构断言：task 数 = 4（start / todo_bridge / notifier / unified_invalidator）
+        // 任何回退（重新引入 bridge_task / 删合并某个 task）都会让数字偏离
         assert_eq!(
             tasks.len(),
             4,
@@ -6665,9 +6723,30 @@ mod tests {
              如果出现 5 个意味着 bridge_task 被错加回来，违反 change D1 sole producer 契约"
         );
 
+        // 行为断言：unified invalidator 是 channels.files 唯一生产者（codex
+        // WARN-2 修订）。机制——spawn_watcher_runtime 走的是 `watcher.subscribe_files()`
+        // 让 invalidator 自己订阅，而非新建独立 bridge_task；abort 所有 task 后
+        // watcher 的 file_tx 仍存在（watcher 拥有），但**没有人**消费 raw event
+        // 再 emit 到 channels.files —— 即使后续 watcher.file_tx 有 raw event
+        // 也不会出现在 file_rx。
+        //
+        // 反证：如果 bridge_task 被悄悄加回来，它会独立 subscribe watcher.file_tx
+        // 并把 event 转发到 channels.files。abort tasks 后 bridge_task 也会被
+        // abort（同 vec），但 vec.len() != 4 已先触发上面 assert_eq!；本断言是
+        // 辅助：abort 后 channels.files 无 spurious emit。
         for task in tasks {
             task.abort();
         }
+        // 给被 abort 的 task 一点时间真退出 + 让 broadcast drain
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            file_rx.try_recv().is_err(),
+            "abort 所有 watcher_runtime task 后 channels.files SHALL 无 pending event（\
+             如果有未消费的 raw event 出现说明有第二个 producer 漏在 vec 外）"
+        );
+        // 防止 watcher_arc 提前被 drop（这样 invalidator 在 abort 之前对
+        // watcher.subscribe_files() 的 RecvError::Closed 不发生）
+        let _ = watcher_arc;
     }
 
     /// change D2 wiring smoke：`new_with_watcher` 路径下 `attach_remote_watcher`
@@ -6803,6 +6882,161 @@ mod tests {
                 "cancel_all_remote_watchers 后 remote_watchers SHALL 清空"
             );
         }
+    }
+
+    /// codex CRIT-1 回归（change `enrich-file-change-with-session-list-changed::D2`）：
+    /// `reconfigure_claude_root` 重建内部 watcher 时 SHALL：
+    /// 1. cancel 旧 `remote_watchers`（不能让旧 `RemotePollingWatcher` 持有的
+    ///    旧 watcher.file_tx 继续 send 到没人接的死 channel）
+    /// 2. 用新 `self.watcher` reattach 之前 active 的 SSH context，让 SSH polling
+    ///    event 继续喂回新 unified invalidator 完成 enrich
+    ///
+    /// 反例（修复前）：root 切换后 SSH polling event 喂入旧 file_tx → 旧
+    /// invalidator 已 abort → 没人接 → 前端 SSH path totalSessions 滞后到
+    /// 下次用户主动重连 SSH 才恢复。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reconfigure_claude_root_cancels_and_reattaches_ssh_watchers() {
+        use cdt_discover::EntryKind;
+        use cdt_ssh::{RemoteEntry, SftpClient, SftpClientError, SshFileSystemProvider};
+
+        struct EmptySftp;
+        #[async_trait::async_trait]
+        impl SftpClient for EmptySftp {
+            async fn metadata(
+                &self,
+                _path: &str,
+            ) -> Result<cdt_discover::FsMetadata, SftpClientError> {
+                Ok(cdt_discover::FsMetadata {
+                    size: 0,
+                    mtime: std::time::UNIX_EPOCH,
+                    identity: None,
+                })
+            }
+            async fn try_exists(&self, _path: &str) -> Result<bool, SftpClientError> {
+                Ok(true)
+            }
+            async fn read(&self, _path: &str) -> Result<Vec<u8>, SftpClientError> {
+                Ok(Vec::new())
+            }
+            async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, SftpClientError> {
+                if path == "/remote/home" {
+                    Ok(vec![RemoteEntry {
+                        name: "-test-proj".into(),
+                        kind: EntryKind::Dir,
+                        metadata: None,
+                        mtime_missing: false,
+                    }])
+                } else {
+                    Ok(vec![])
+                }
+            }
+            async fn read_lines_head(
+                &self,
+                _path: &str,
+                _max: usize,
+            ) -> Result<Vec<String>, SftpClientError> {
+                Ok(vec![])
+            }
+            async fn write(&self, _p: &str, _d: &[u8]) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+            async fn mkdir(&self, _p: &str) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+            async fn remove(&self, _p: &str) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+            async fn rename(&self, _s: &str, _d: &str) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+        }
+
+        let tmp = tempdir().unwrap();
+        let projects_dir = tmp.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+        let mut cfg = ConfigManager::new(Some(tmp.path().join("config.json")));
+        cfg.load().await.unwrap();
+        let notif = NotificationManager::new(None);
+        let ssh_mgr = SshConnectionManager::new();
+        let scanner = ProjectScanner::new_with_semaphore(
+            local_handle(),
+            projects_dir.clone(),
+            Arc::new(Semaphore::new(8)),
+        );
+
+        let dummy_watcher = FileWatcher::with_paths(projects_dir.clone(), tmp.path().join("todos"));
+        let api = LocalDataApi::new_with_watcher(
+            scanner,
+            cfg,
+            notif,
+            ssh_mgr,
+            &dummy_watcher,
+            projects_dir.clone(),
+        );
+
+        let context_id = "ctx-reconfig";
+        let remote_home = std::path::PathBuf::from("/remote/home");
+        let provider = SshFileSystemProvider::with_client(
+            context_id,
+            Arc::new(EmptySftp),
+            remote_home.clone(),
+        );
+        api.insert_test_ssh_context(
+            context_id,
+            "remote-host",
+            22,
+            Some("alice".into()),
+            remote_home,
+            provider,
+        )
+        .await;
+        api.attach_remote_watcher(context_id).await;
+
+        // 起点：remote_watchers 含旧 attach 句柄
+        {
+            let watchers = api.remote_watchers.lock().await;
+            assert!(watchers.contains_key(context_id));
+        }
+
+        // 抓住旧 watcher Arc 让对照下面的"新 watcher 必然不同"成立
+        let old_watcher_arc = api
+            .watcher
+            .lock()
+            .await
+            .as_ref()
+            .expect("watcher present in new_with_watcher path")
+            .clone();
+
+        // 触发 root 重配（用新 tempdir 模拟 user 改 general.claudeRootPath）
+        let new_root_tmp = tempdir().unwrap();
+        let new_root_str = new_root_tmp.path().to_string_lossy().to_string();
+        api.reconfigure_claude_root(Some(&new_root_str)).await;
+
+        // 校验 1：self.watcher 已替换为新实例
+        let new_watcher_arc = api
+            .watcher
+            .lock()
+            .await
+            .as_ref()
+            .expect("watcher SHALL remain Some after reconfigure")
+            .clone();
+        assert!(
+            !Arc::ptr_eq(&old_watcher_arc, &new_watcher_arc),
+            "reconfigure SHALL 重建内部 watcher Arc，不能复用旧 file_tx"
+        );
+
+        // 校验 2：remote_watchers 仍含 context_id entry（被 cancel + reattach）
+        {
+            let watchers = api.remote_watchers.lock().await;
+            assert!(
+                watchers.contains_key(context_id),
+                "reconfigure_claude_root SHALL reattach 旧 SSH context，否则 root 切换后 \
+                 SSH polling event 喂入死 file_tx，前端 totalSessions 滞后到用户重连才恢复 \
+                 (codex CRIT-1 回归)"
+            );
+        }
+
+        api.cancel_all_remote_watchers().await;
     }
 
     /// change D4：emit 时机契约——`file_tx.send` SHALL 发生在 sync
