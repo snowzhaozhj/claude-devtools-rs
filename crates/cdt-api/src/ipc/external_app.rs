@@ -116,15 +116,17 @@ async fn validate_and_canonicalize_path(path: &str) -> Result<PathBuf, ApiError>
     if !looks_like_absolute_path(path) {
         return Err(ApiError::validation("path must be absolute"));
     }
-    tokio::fs::canonicalize(path).await.map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => {
-            ApiError::not_found(format!("path does not exist: {path} ({e})"))
-        }
-        std::io::ErrorKind::PermissionDenied => ApiError::external_app(format!(
-            "permission denied accessing path: {path} ({e})"
-        )),
-        _ => ApiError::external_app(format!("failed to resolve path: {path} ({e})")),
-    })
+    tokio::fs::canonicalize(path)
+        .await
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                ApiError::not_found(format!("path does not exist: {path} ({e})"))
+            }
+            std::io::ErrorKind::PermissionDenied => {
+                ApiError::external_app(format!("permission denied accessing path: {path} ({e})"))
+            }
+            _ => ApiError::external_app(format!("failed to resolve path: {path} ({e})")),
+        })
 }
 
 /// 文件路径自动取父目录（仅 `open_in_terminal` 用）。
