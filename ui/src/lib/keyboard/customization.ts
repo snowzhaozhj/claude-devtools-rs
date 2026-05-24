@@ -15,6 +15,7 @@
  */
 
 import { getConfig, updateConfig } from "../api";
+import { normalizeBindingToMod } from "../platform";
 import {
   applyOverrides,
   setPendingOverrides,
@@ -27,6 +28,9 @@ import { SHORTCUT_DEFAULTS } from "./defaults";
  * 把 overrides 映射套到 defaults 之上。返回 `{id → effectiveBinding}`：
  * - overrides[id] 存在且 id 在 defaults 中：用 override（已是 binding string）
  * - overrides[id] 不在 defaults：跳过（"幽灵 ID"——定义已删除的旧快捷键）
+ * - 每条 override 的 binding 字面量经 `normalizeBindingToMod` 迁移：把存量平台特化
+ *   字面量（mac 录入的 `meta+x`、win 录入的 `ctrl+x`）转为跨平台 `mod+x`，确保
+ *   cdt-config 跨设备同步后在异平台启动时正确归一。该迁移幂等且无信息丢失。
  *
  * 注意返回值类型是 `Record<id, string>`——只含 override 的项；调用方按需 fallback
  * 到 defaults 的 defaultBinding。
@@ -40,7 +44,7 @@ export function mergeOverrides(
   for (const [id, binding] of Object.entries(overrides)) {
     if (!known.has(id)) continue; // 幽灵 ID 跳过
     if (typeof binding !== "string" || binding.length === 0) continue;
-    result[id] = binding;
+    result[id] = normalizeBindingToMod(binding);
   }
   return result;
 }

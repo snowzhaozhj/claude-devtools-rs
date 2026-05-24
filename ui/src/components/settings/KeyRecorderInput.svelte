@@ -1,29 +1,34 @@
 <script lang="ts">
   /**
-   * 录键 widget——三态：idle / recording / conflict。
+   * 录键 widget——四态：idle / recording / conflict / warning（Win 键守卫）。
    *
    * **行为契约**（spec keyboard-shortcuts::Settings 录键 widget）：
    * - **focus 进 recording**：调 `suspend()` 暂停 dispatcher，避免录入时触发已注册快捷键。
    * - **commit-on-fullkey**：捕到第一个含主键（非纯 modifier）的 keydown 就 `onCommit` 并 blur。
+   *   commit binding 由 `recordBindingFromEvent` 产出 `mod+x` 字面量（跨平台 source-of-truth），
+   *   不直接产出平台特化 `meta+x` / `ctrl+x`。
+   * - **Win 键守卫**（non-mac 平台 + `event.metaKey`）：先于 `recordBindingFromEvent` 守卫，
+   *   不 commit 不 blur，进 warning 子态显示提示文本，下次不含 metaKey 的 keydown 自动清除。
    * - **Escape cancel**：直接 blur 不 commit。
    * - **录键期间 preventDefault**：不依赖 dispatcher（已 suspend），组件自身吞键防浏览器原生行为。
    * - **blur resume**：调 `resume()` 还 dispatcher 控制权。
    *
-   * **a11y 6 件套**（参考 ui/CLAUDE.md 搜索框规范的同等密度）：
+   * **a11y**（参考 ui/CLAUDE.md 搜索框规范的同等密度）：
    * - role="button" + tabindex=0：让 `<div>` 表现成可聚焦按钮（避免 `<button>` 嵌套）。
    * - aria-label：明确"按 X 键重绑 / 录键中"语义。
    * - aria-pressed：true=recording、false=idle，宣告"toggle 状态"。
-   * - aria-describedby：指向 hint 区域（"按 Esc 取消 / 按组合键确认"），conflict 态时
-   *   stateLabel 朗读"冲突：与「X」重叠"——`aria-invalid` 在 ARIA 1.1 spec 不被 button role
-   *   支持，故走 describedby + ShortcutRow 的 `role="alert"` 视觉行替代。
-   * - aria-live="polite"：状态变化时让 SR 朗读。
+   * - aria-describedby：指向 hint span，stateLabel 含状态文本变化（recording / conflict / warning）。
+   * - aria-live="polite"：声明在 hint span 而非 recorder 容器，避免 SR 在 focus / pressed
+   *   等容器属性变化时双宣告 noise；仅 hint 文本切换才是用户关心的语义。
    * - tabindex 与点击：键盘 / 鼠标双入口 enter recording。
    *
-   * 4 设计 token（占位实现，最终由 designer 定稿——`The Recorder Idle State Rule.`）：
+   * 设计 token（`DESIGN.md::The Recorder Idle State Rule` + `The Conflict Is Warning Not Error Rule`）：
    *   --surface-recording-bg / --border-recording / --surface-conflict-bg / --border-conflict
+   * warning 子态视觉复用 conflict token（按 `The Conflict Is Warning Not Error Rule` 鼓励的复用），
+   * 靠 hint 文本与 conflict 区分。
    */
   import { suspend, resume } from "../../lib/keyboard/registry";
-  import { formatShortcut, normalize } from "../../lib/platform";
+  import { formatShortcut, isMac, recordBindingFromEvent } from "../../lib/platform";
 
   interface Props {
     /** 当前 binding（normalized 字符串如 "meta+k"）。空串表示无绑定。 */
@@ -47,6 +52,8 @@
   }: Props = $props();
 
   let recording = $state(false);
+  /** Win 键守卫子态：non-mac 平台 + event.metaKey === true 时触发。下次不含 metaKey 的 keydown / Esc / blur 时清除。 */
+  let winKeyWarning = $state(false);
   let containerEl: HTMLDivElement | null = $state(null);
 
   function startRecording() {
@@ -58,6 +65,7 @@
   function stopRecording() {
     if (!recording) return;
     recording = false;
+    winKeyWarning = false;
     resume();
   }
 
@@ -88,17 +96,25 @@
     event.preventDefault();
     event.stopPropagation();
 
-    // Escape 取消，不 commit
+    // Escape 取消，不 commit；stopRecording 会清 winKeyWarning
     if (event.key === "Escape") {
       stopRecording();
       containerEl?.blur();
       return;
     }
 
-    // commit-on-fullkey：normalize 返回非空（即含主键）才 commit
-    const normalized = normalize(event);
-    if (!normalized) return; // 仅按下 modifier 时继续等
-    onCommit(normalized);
+    // Win 键守卫：non-mac 平台 + event.metaKey 时不 commit、不 blur，进 warning 子态等待用户重录
+    if (!isMac() && event.metaKey) {
+      winKeyWarning = true;
+      return;
+    }
+    // 不含 metaKey 的下一次 keydown 自动清除 warning（无论是否触发 commit）
+    winKeyWarning = false;
+
+    // commit-on-fullkey：recordBindingFromEvent 产出 `mod+x` 字面量；返回非空才 commit
+    const recorded = recordBindingFromEvent(event);
+    if (!recorded) return; // 仅按下 modifier 时继续等
+    onCommit(recorded);
     stopRecording();
     containerEl?.blur();
   }
@@ -112,6 +128,8 @@
   });
 
   let stateLabel = $derived.by(() => {
+    // 优先级：winKeyWarning > conflict > recording > idle
+    if (winKeyWarning) return "Windows 不支持 Win 键作为修饰键，按目标组合键重新录入";
     if (recording) return "录键中，按目标组合键确认，按 Esc 取消";
     if (conflict) return `冲突：与「${conflict.conflictLabel}」重叠`;
     return "按 Enter 或点击进入录键";
@@ -125,13 +143,13 @@
   class="recorder"
   class:recording
   class:conflict={!!conflict && !recording}
+  class:warning={winKeyWarning}
   class:disabled
   role="button"
   tabindex={disabled ? -1 : 0}
   aria-label={`快捷键 ${displayText}`}
   aria-pressed={recording}
   aria-describedby={hintId}
-  aria-live="polite"
   aria-disabled={disabled}
   onfocus={handleFocus}
   onblur={handleBlur}
@@ -149,7 +167,7 @@
     </span>
   {/if}
 </div>
-<span id={hintId} class="recorder-hint">{stateLabel}</span>
+<span id={hintId} class="recorder-hint" aria-live="polite">{stateLabel}</span>
 
 <style>
   .recorder {
@@ -186,6 +204,12 @@
     cursor: default;
   }
   .recorder.conflict {
+    background: var(--surface-conflict-bg);
+    border-color: var(--border-conflict);
+  }
+  .recorder.warning {
+    /* Win 键守卫态视觉与 conflict 等同（DESIGN.md::The Conflict Is Warning Not Error Rule
+       鼓励的复用），靠 hint 文本与 conflict 区分。优先级：warning 覆盖 recording / conflict 视觉。 */
     background: var(--surface-conflict-bg);
     border-color: var(--border-conflict);
   }

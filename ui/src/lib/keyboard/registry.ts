@@ -26,6 +26,7 @@
 import {
   resolveBinding,
   normalize,
+  normalizeBindingToMod,
   type ShortcutBinding,
 } from "../platform";
 
@@ -197,7 +198,13 @@ export function update(
       error: { kind: "Conflict", conflictId: "<unknown-id>", sourceId: id },
     };
   }
-  const newEffective = resolveBinding(newBinding);
+  // 护栏：把可能传入的 `meta+x` / `ctrl+x` 字面量归一为 `mod+x`，确保 update 路径与
+  // bootstrapOverrides 路径表达一致（spec keyboard-shortcuts::用户自定义覆盖）
+  const sanitized: ShortcutBinding =
+    typeof newBinding === "string"
+      ? normalizeBindingToMod(newBinding)
+      : { mac: normalizeBindingToMod(newBinding.mac), other: normalizeBindingToMod(newBinding.other) };
+  const newEffective = resolveBinding(sanitized);
   const conflictId = findConflictAt(newEffective, id, overlay);
   if (conflictId) {
     return {

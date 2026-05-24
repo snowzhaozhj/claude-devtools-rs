@@ -214,3 +214,270 @@ describe("KeyRecorderInput", () => {
     expect(suspendSpy).toHaveBeenCalledTimes(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 录键归一化为 mod 字面量 + Win 键守卫（spec keyboard-shortcuts::录键守卫 / 跨平台修饰键归一化）
+// ---------------------------------------------------------------------------
+
+describe("KeyRecorderInput 录键归一化 + Win 键守卫", () => {
+  const origUaData = Object.getOwnPropertyDescriptor(navigator, "userAgentData");
+
+  function setPlatform(platform: "macOS" | "Windows" | "Linux") {
+    Object.defineProperty(navigator, "userAgentData", {
+      value: { platform },
+      configurable: true,
+      writable: true,
+    });
+  }
+
+  beforeEach(() => {
+    // 默认让 suspend / resume 是 no-op，避免污染 dispatcher
+    vi.spyOn(registry, "suspend").mockImplementation(() => {});
+    vi.spyOn(registry, "resume").mockImplementation(() => {});
+  });
+
+  afterEach(async () => {
+    cleanup();
+    vi.restoreAllMocks();
+    if (origUaData) {
+      Object.defineProperty(navigator, "userAgentData", origUaData);
+    } else {
+      Object.defineProperty(navigator, "userAgentData", {
+        value: undefined,
+        configurable: true,
+      });
+    }
+    const platform = await import("../../lib/platform");
+    platform._resetPlatformCache();
+  });
+
+  function getRecorder(container: HTMLElement): HTMLElement {
+    const el = container.querySelector('[role="button"]');
+    if (!el) throw new Error("recorder root not found");
+    return el as HTMLElement;
+  }
+
+  function getHint(container: HTMLElement): HTMLElement {
+    const el = container.querySelector(".recorder-hint");
+    if (!el) throw new Error("recorder hint not found");
+    return el as HTMLElement;
+  }
+
+  test("Windows: Ctrl+Shift+P 录键产物为 mod+shift+p（不是 ctrl+shift+p）", async () => {
+    setPlatform("Windows");
+    const platform = await import("../../lib/platform");
+    platform._resetPlatformCache();
+    const onCommit = vi.fn();
+    const { container } = render(KeyRecorderInput, {
+      props: { currentBinding: "", onCommit },
+    });
+    const recorder = getRecorder(container);
+    await fireEvent.focus(recorder);
+    await fireEvent.keyDown(recorder, {
+      key: "P",
+      code: "KeyP",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    expect(onCommit).toHaveBeenCalledWith("mod+shift+p");
+  });
+
+  test("macOS: Cmd+B 录键产物为 mod+b，warning 不触发", async () => {
+    setPlatform("macOS");
+    const platform = await import("../../lib/platform");
+    platform._resetPlatformCache();
+    const onCommit = vi.fn();
+    const { container } = render(KeyRecorderInput, {
+      props: { currentBinding: "", onCommit },
+    });
+    const recorder = getRecorder(container);
+    await fireEvent.focus(recorder);
+    await fireEvent.keyDown(recorder, {
+      key: "b",
+      code: "KeyB",
+      metaKey: true,
+    });
+    expect(onCommit).toHaveBeenCalledWith("mod+b");
+    expect(recorder.classList.contains("warning")).toBe(false);
+  });
+
+  test("macOS: Cmd+Ctrl+X 录键产物为 ctrl+mod+x（双修饰键）", async () => {
+    setPlatform("macOS");
+    const platform = await import("../../lib/platform");
+    platform._resetPlatformCache();
+    const onCommit = vi.fn();
+    const { container } = render(KeyRecorderInput, {
+      props: { currentBinding: "", onCommit },
+    });
+    const recorder = getRecorder(container);
+    await fireEvent.focus(recorder);
+    await fireEvent.keyDown(recorder, {
+      key: "x",
+      code: "KeyX",
+      metaKey: true,
+      ctrlKey: true,
+    });
+    expect(onCommit).toHaveBeenCalledWith("ctrl+mod+x");
+  });
+
+  test("Windows: Win+B 触发 warning 子态，不 commit、不 blur、保持 recording", async () => {
+    setPlatform("Windows");
+    const platform = await import("../../lib/platform");
+    platform._resetPlatformCache();
+    const onCommit = vi.fn();
+    const { container } = render(KeyRecorderInput, {
+      props: { currentBinding: "", onCommit },
+    });
+    const recorder = getRecorder(container);
+    await fireEvent.focus(recorder);
+    expect(recorder.classList.contains("recording")).toBe(true);
+
+    await fireEvent.keyDown(recorder, {
+      key: "b",
+      code: "KeyB",
+      metaKey: true,
+    });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(recorder.classList.contains("warning")).toBe(true);
+    expect(recorder.classList.contains("recording")).toBe(true); // 仍处于 recording 态
+    expect(getHint(container).textContent).toContain("Windows 不支持 Win 键作为修饰键");
+  });
+
+  test("Windows: Win+B 触发 warning 后下一次 Ctrl+Shift+P commit 成功且 warning 清除", async () => {
+    setPlatform("Windows");
+    const platform = await import("../../lib/platform");
+    platform._resetPlatformCache();
+    const onCommit = vi.fn();
+    const { container } = render(KeyRecorderInput, {
+      props: { currentBinding: "", onCommit },
+    });
+    const recorder = getRecorder(container);
+    await fireEvent.focus(recorder);
+
+    // 先按 Win+B 触发 warning
+    await fireEvent.keyDown(recorder, {
+      key: "b",
+      code: "KeyB",
+      metaKey: true,
+    });
+    expect(recorder.classList.contains("warning")).toBe(true);
+
+    // 再按 Ctrl+Shift+P 应正常 commit + warning 清除
+    await fireEvent.keyDown(recorder, {
+      key: "P",
+      code: "KeyP",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    expect(onCommit).toHaveBeenCalledWith("mod+shift+p");
+    // commit 后 stopRecording 把 warning reset，且 recording 也退出
+    expect(recorder.classList.contains("warning")).toBe(false);
+    expect(recorder.classList.contains("recording")).toBe(false);
+  });
+
+  test("Windows: Win+B → 仅按 Shift 单键，warning 清除且保持 recording", async () => {
+    setPlatform("Windows");
+    const platform = await import("../../lib/platform");
+    platform._resetPlatformCache();
+    const onCommit = vi.fn();
+    const { container } = render(KeyRecorderInput, {
+      props: { currentBinding: "", onCommit },
+    });
+    const recorder = getRecorder(container);
+    await fireEvent.focus(recorder);
+    await fireEvent.keyDown(recorder, {
+      key: "b",
+      code: "KeyB",
+      metaKey: true,
+    });
+    expect(recorder.classList.contains("warning")).toBe(true);
+
+    // 仅按 Shift（normalize 返 null，不 commit），但 warning 应清除
+    await fireEvent.keyDown(recorder, {
+      key: "Shift",
+      code: "ShiftLeft",
+      shiftKey: true,
+    });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(recorder.classList.contains("warning")).toBe(false);
+    expect(recorder.classList.contains("recording")).toBe(true); // 保持 recording 等主键
+  });
+
+  test("Windows: Win+B → Esc 退出，warning 清除 + 不 commit", async () => {
+    setPlatform("Windows");
+    const platform = await import("../../lib/platform");
+    platform._resetPlatformCache();
+    const onCommit = vi.fn();
+    const { container } = render(KeyRecorderInput, {
+      props: { currentBinding: "", onCommit },
+    });
+    const recorder = getRecorder(container);
+    await fireEvent.focus(recorder);
+    await fireEvent.keyDown(recorder, {
+      key: "b",
+      code: "KeyB",
+      metaKey: true,
+    });
+    expect(recorder.classList.contains("warning")).toBe(true);
+
+    await fireEvent.keyDown(recorder, { key: "Escape", code: "Escape" });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(recorder.classList.contains("warning")).toBe(false);
+    expect(recorder.classList.contains("recording")).toBe(false);
+  });
+
+  test("Windows: Ctrl+Win+X 也走 Win 键守卫（不静默 commit ctrl+x）", async () => {
+    setPlatform("Windows");
+    const platform = await import("../../lib/platform");
+    platform._resetPlatformCache();
+    const onCommit = vi.fn();
+    const { container } = render(KeyRecorderInput, {
+      props: { currentBinding: "", onCommit },
+    });
+    const recorder = getRecorder(container);
+    await fireEvent.focus(recorder);
+    await fireEvent.keyDown(recorder, {
+      key: "x",
+      code: "KeyX",
+      ctrlKey: true,
+      metaKey: true,
+    });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(recorder.classList.contains("warning")).toBe(true);
+  });
+
+  test("hint span 上声明 aria-live=polite（recorder div 不再有 aria-live）", () => {
+    setPlatform("Windows");
+    const { container } = render(KeyRecorderInput, {
+      props: { currentBinding: "", onCommit: vi.fn() },
+    });
+    const recorder = getRecorder(container);
+    const hint = getHint(container);
+    expect(hint.getAttribute("aria-live")).toBe("polite");
+    expect(recorder.getAttribute("aria-live")).toBeNull();
+  });
+
+  test("Windows: Win+B → blur 退出，warning 清除（spec 录键守卫 'recorder blur / Tab 失焦' 路径）", async () => {
+    setPlatform("Windows");
+    const platform = await import("../../lib/platform");
+    platform._resetPlatformCache();
+    const onCommit = vi.fn();
+    const { container } = render(KeyRecorderInput, {
+      props: { currentBinding: "", onCommit },
+    });
+    const recorder = getRecorder(container);
+    await fireEvent.focus(recorder);
+    await fireEvent.keyDown(recorder, {
+      key: "b",
+      code: "KeyB",
+      metaKey: true,
+    });
+    expect(recorder.classList.contains("warning")).toBe(true);
+
+    // blur 走 stopRecording 路径，warning 应一同清除
+    await fireEvent.blur(recorder);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(recorder.classList.contains("warning")).toBe(false);
+    expect(recorder.classList.contains("recording")).toBe(false);
+  });
+});

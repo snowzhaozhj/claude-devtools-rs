@@ -1,7 +1,9 @@
 /**
  * App.svelte 全局快捷键批量注册器（§5 迁移产物）。
  *
- * 把"曾内联在 `App.svelte::handleGlobalKeydown` 内的 9 条 / 17 specs 全局快捷键"
+ * 把"曾内联在 `App.svelte::handleGlobalKeydown` 内的 17 条 App-owned 全局快捷键"
+ * （其中 `tab.switch.1` ~ `tab.switch.9` 占 9 条，外加 `command-palette.toggle` / `sidebar.toggle` /
+ * `tab.close` / `tab.next` / `tab.prev` / `pane.split` / `pane.focus.next` / `pane.focus.prev` 8 条 = 17）
  * 抽出为可单测的纯函数：调用方按 id 给 handler，本模块按 `SHORTCUT_DEFAULTS`
  * 提供 spec meta（description / defaultBinding / allowInInput / preventDefault）
  * 调 `registerShortcut` 并返回汇总 unregister 闭包。

@@ -85,6 +85,60 @@ describe('§4.10 mergeOverrides', () => {
   test('空 overrides → 空 result', () => {
     expect(mergeOverrides(SHORTCUT_DEFAULTS, {})).toEqual({})
   })
+
+  // ---------------------------------------------------------------------------
+  // 跨平台 binding 字面量迁移（spec keyboard-shortcuts::用户自定义覆盖
+  // 「存量 meta / ctrl 字面量启动迁移为 mod」）
+  // ---------------------------------------------------------------------------
+
+  test('mac 录入的 meta+x 字面量迁移为 mod+x', () => {
+    const r = mergeOverrides(SHORTCUT_DEFAULTS, {
+      'command-palette.toggle': 'meta+shift+p',
+    })
+    expect(r['command-palette.toggle']).toBe('mod+shift+p')
+  })
+
+  test('win 录入的 ctrl+x 字面量迁移为 mod+x', () => {
+    const r = mergeOverrides(SHORTCUT_DEFAULTS, {
+      'sidebar.toggle': 'ctrl+b',
+    })
+    expect(r['sidebar.toggle']).toBe('mod+b')
+  })
+
+  test('已含 mod 的 binding 幂等返回', () => {
+    const r = mergeOverrides(SHORTCUT_DEFAULTS, {
+      'sidebar.toggle': 'mod+shift+b',
+    })
+    expect(r['sidebar.toggle']).toBe('mod+shift+b')
+  })
+
+  test('alt+ctrl+x 迁移为 alt+mod+x（仅替换主修饰键 ctrl）', () => {
+    const r = mergeOverrides(SHORTCUT_DEFAULTS, {
+      'sidebar.toggle': 'alt+ctrl+b',
+    })
+    expect(r['sidebar.toggle']).toBe('alt+mod+b')
+  })
+
+  test('mac 双修饰键 ctrl+meta+x 迁移为 ctrl+mod+x（meta 优先级 > ctrl）', () => {
+    const r = mergeOverrides(SHORTCUT_DEFAULTS, {
+      'sidebar.toggle': 'ctrl+meta+b',
+    })
+    expect(r['sidebar.toggle']).toBe('ctrl+mod+b')
+  })
+
+  test('异常字面量 meta+mod+x 迁移为 mod+x', () => {
+    const r = mergeOverrides(SHORTCUT_DEFAULTS, {
+      'sidebar.toggle': 'meta+mod+b',
+    })
+    expect(r['sidebar.toggle']).toBe('mod+b')
+  })
+
+  test('alt+x（无主修饰键）原样返回', () => {
+    const r = mergeOverrides(SHORTCUT_DEFAULTS, {
+      'sidebar.toggle': 'alt+b',
+    })
+    expect(r['sidebar.toggle']).toBe('alt+b')
+  })
 })
 
 // ---------------------------------------------------------------------------

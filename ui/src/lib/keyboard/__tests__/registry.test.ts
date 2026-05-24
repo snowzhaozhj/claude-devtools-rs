@@ -91,6 +91,28 @@ describe('§4.1 register / update / unregister 基本路径', () => {
     expect(listAll()).toHaveLength(0)
     expect(findConflict('mod+k')).toBeNull()
   })
+
+  test('update 把 meta+x 字面量归一为 mod+x（runtime 护栏）', () => {
+    registerShortcut(makeSpec({ id: 'a', defaultBinding: 'mod+l' }))
+    const r = update('a', 'meta+shift+k')
+    expect(r.ok).toBe(true)
+    // 内存 keymap 走 mod 展开（mac 平台 mod → meta），所以 normalizeBinding('mod+shift+k') 与
+    // normalizeBinding('meta+shift+k') 同 effective key——但护栏的核心是确保 update 不留
+    // 平台特化字面量在 entry.effective 里。直接断言：findConflict 命中新展开 key
+    expect(findConflict('meta+shift+k')).toBe('a')
+    // 命中后老 default 也已让出
+    expect(findConflict('mod+l')).toBeNull()
+  })
+
+  test('update 把 ctrl+x 字面量归一为 mod+x（dual-platform binding 护栏）', () => {
+    registerShortcut(makeSpec({ id: 'a', defaultBinding: 'mod+l' }))
+    // 传 dual-platform 字面量，两边都不是 mod
+    const r = update('a', { mac: 'meta+shift+k', other: 'ctrl+shift+k' })
+    expect(r.ok).toBe(true)
+    // 在 mac 平台上 effective 应该是 meta+shift+k（mac 分支被 normalizeBindingToMod
+    // 转 mod+shift+k 后由 normalizeBinding 在 mac 展开为 meta+shift+k）
+    expect(findConflict('meta+shift+k')).toBe('a')
+  })
 })
 
 // ---------------------------------------------------------------------------
