@@ -45,8 +45,17 @@ async function maybeSetupMock(): Promise<void> {
     const noTauriRuntime = !('__TAURI_INTERNALS__' in window)
     if (!forceMock && !noTauriRuntime) return
     const fixtureName = params.get('fixture')
-    const { setupMockIPC } = await import('./lib/tauriMock')
+    const { setupMockIPC, simulateNotificationAdded, resetSimulatedNotifications } =
+      await import('./lib/tauriMock')
     setupMockIPC(fixtureName)
+    // mock-only e2e helper：让 Playwright 能在不依赖真 Tauri runtime / 真后端的
+    // 情况下精确触发 `notification-added` push event 路径（issue #258 验收用）。
+    // 仅在已注入 mockIPC 的 mock 分支暴露——`?http=1` 真后端 + 真 Tauri runtime
+    // 都不会走到这里，自然不污染。
+    Object.assign((window as unknown as { __cdtTest: Record<string, unknown> }).__cdtTest, {
+      simulateNotificationAdded,
+      resetSimulatedNotifications,
+    })
   }
 }
 

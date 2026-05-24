@@ -12,7 +12,7 @@ import { render, cleanup, fireEvent, waitFor } from '@testing-library/svelte'
 import { clearMocks } from '@tauri-apps/api/mocks'
 
 import SettingsView from './SettingsView.svelte'
-import { setupMockIPC } from '../lib/tauriMock'
+import { setupMockIPC, getActiveFixtureRef } from '../lib/tauriMock'
 import { emptyFixture } from '../lib/__fixtures__/empty'
 
 class ResizeObserverStub {
@@ -108,7 +108,9 @@ describe('SettingsView Browser Access subsection', () => {
     await fireEvent.blur(portInput)
 
     await waitFor(() => {
-      expect(emptyFixture.config.httpServer?.port).toBe(3500)
+      // setupMockIPC `structuredClone` fixture 后 IPC handler 持有的是副本而非
+      // `emptyFixture` 模块原对象，断言走 `getActiveFixtureRef()` 拿副本。
+      expect(getActiveFixtureRef()?.config.httpServer?.port).toBe(3500)
     })
   })
 
