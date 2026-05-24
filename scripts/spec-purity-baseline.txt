@@ -1,3 +1,4 @@
+change/revert-scroll-jitter-content-visibility/session-display 1
 spec/agent-configs 1
 spec/app-auto-update 29
 spec/app-chrome 7
