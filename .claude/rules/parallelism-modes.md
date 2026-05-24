@@ -64,7 +64,10 @@
 
 **teammate 资产**：可复用 teammate 定义沉淀在 `.claude/agents/`：
 - 实施型（写代码）：`designer` / `frontend-engineer` / `backend-engineer`
+- 验证型（常驻 team 跑端到端真数据）：`qa-engineer`
 - 审查型（只读 ad-hoc 调，不立 teammate）：`rust-conventions-reviewer` / `spec-fidelity-reviewer` / `tauri-config-reviewer` / `ui-reviewer` / `windows-compat-reviewer`
+
+QA 与 reviewer 不重叠：reviewer 静态审 PR diff（lead 按域 ad-hoc 触发）；`qa-engineer` 在 team 内常驻**会跑**测试（`e2e-http-verify` / Playwright / 真启 `just dev` 桌面端 smoke），抓 mockIPC fixture ≠ 真后端数据这种伪覆盖。
 
 具体角色组合由 lead 按 change 性质裁剪。teammate 之间 Mailbox 直发不经 lead，省 lead context；典型通信路径已在各 teammate 文件 `## 协作` 段定义。
 
