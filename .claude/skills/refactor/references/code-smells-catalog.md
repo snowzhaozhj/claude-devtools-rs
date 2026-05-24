@@ -1,6 +1,6 @@
 # 通用 code smells catalog
 
-任何 scope 都先过一遍这 10 项。命中后的处理路径走 SKILL.md::§2 4 路分流。
+任何 scope 都先过一遍这 10 项。命中后按 SKILL.md §5 输出格式记到 findings 表（结构反模式打 category 名；若同时命中 SKILL.md §2 boundary guard 5 类则改打 `boundary-<n>-<short>`）。
 
 ## 命名 + 一句话定义
 
