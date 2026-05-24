@@ -926,7 +926,51 @@ pub fn run() {
     install_telemetry_panic_hook();
     install_tracing_subscriber();
 
-    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    // 单一 multi-thread runtime + 显式 Tauri 共享：避免 lib.rs 自建 + Tauri 内置
+    // `default_runtime` 双 runtime 并存（issue #257：sample 287 线程 / 10s 内 140 次
+    // pthread_join 周期销毁）。
+    //
+    // - `worker_threads(4)`：base user/real ratio = 0.13-0.17（强 I/O-bound），4 worker
+    //   已覆盖；未来若转 CPU-bound（chunk-building 大批解析）按 telemetry 实测调
+    // - `max_blocking_threads(64)`：严格等于 `cdt_discover::project_scanner::FILE_READ_CONCURRENCY=64`。
+    //   不能小：应用层 Semaphore 放行 64 个任务后每个走 `tokio::fs` 隐式 spawn_blocking，
+    //   pool 容量 < 64 → permit 持有者在 blocking FIFO 排队 → 吞噬其他 waiter 的 permit
+    //   → 反而引入隐性延迟。根治 fan-out 走 issue #262（显式有界队列替代隐式 spawn_blocking）
+    // - `thread_keep_alive(60s)`：让 idle blocking 线程真正复用，消除 create/destroy 循环。
+    //   Tokio 默认 10s 在 sidebar 切换 / metadata 扫描的 burst 节奏下持续制造短生命线程；
+    //   60s 让 pool 跨多次切换复用。验收：warm 30s 内线程不会回落，75s 后才稳态
+    // - `thread_stack_size(2 MiB)`：显式锁栈预算，避免平台/未来 tokio 默认变化
+    // - `thread_name_fn`：每个 runtime 线程独立序号 `cdt-rt-N`，sample / Activity
+    //   Monitor / `ps -M` 输出能数出 worker 0..3 + blocking 4..67 各做什么；同名 `cdt-rt`
+    //   会丢失 287→~90 这类线程构成的诊断信号
+    // - `enable_all()`：裸 Builder 默认 timer/IO 全 off，少这一行 `tokio::time::sleep` /
+    //   `tokio::fs` 直接 panic（`Runtime::new()` 隐式 enable_all）
+    //
+    // 因果分两条不要混淆：
+    // 1. `rt.block_on(...)` 进入 tokio context → 覆盖 cdt-api 初始化期裸 `tokio::spawn`
+    //    （`tokio::spawn` 看 thread context，与 `tauri::async_runtime::set` 无关）
+    // 2. `tauri::async_runtime::set(handle)` → 覆盖后续 `tauri::async_runtime::*` API，
+    //    防 Tauri lazy-init 自己的 default runtime
+    //
+    // `set` 必须紧跟 `rt` 创建之后、任何 `tauri::async_runtime::*` 或
+    // `tauri::Builder::default()` 之前——`set` 是 OnceLock，二次调用 panic；若 Tauri
+    // 默认 runtime 已 lazy-init，`set` 也 panic。`rt` 必须活到 `.run(...)` 返回
+    // （drop runtime 会让 set 注册的 handle 失效）。
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .max_blocking_threads(64)
+        .thread_keep_alive(std::time::Duration::from_secs(60))
+        .thread_stack_size(2 * 1024 * 1024)
+        .thread_name_fn(|| {
+            static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let id = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            format!("cdt-rt-{id}")
+        })
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime");
+    tauri::async_runtime::set(rt.handle().clone());
+
     let api = rt.block_on(async {
         let mut config_mgr = ConfigManager::new(None);
         let _ = config_mgr.load().await;
