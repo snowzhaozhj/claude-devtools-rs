@@ -595,6 +595,7 @@ fn build_change_event(projects_root: &Path, path: &Path, deleted: bool) -> Optio
         session_id,
         deleted,
         project_list_changed: false,
+        session_list_changed: false,
     })
 }
 

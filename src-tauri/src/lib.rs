@@ -1126,6 +1126,12 @@ pub fn run() {
 
                 // 把 LocalDataApi 的稳定 FileChangeEvent 广播桥到前端 `file-change` 事件。
                 // Claude root 运行时重配会重建内部 watcher，但此订阅保持有效。
+                //
+                // Lagged 路径 SHALL 显式 emit `sse-lagged` event 让前端 silent
+                // refresh 兜底（change `enrich-file-change-with-session-list-changed::D6`）。
+                // 原实现 `continue` 不通知前端，lag 期间错过的 structural 信号会让
+                // `totalSessions` 滞后到 LOCAL_CACHE_TTL=5min 才被动恢复。形态与
+                // HTTP `PushEvent::SseLagged` 对齐，前端 transport 走同一 handler。
                 let mut file_rx = api.subscribe_file_changes();
                 let app_handle_for_files = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -1134,7 +1140,16 @@ pub fn run() {
                             Ok(event) => {
                                 let _ = app_handle_for_files.emit("file-change", &event);
                             }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                let _ = app_handle_for_files.emit(
+                                    "sse-lagged",
+                                    &serde_json::json!({
+                                        "source": "file-change",
+                                        "missed": n,
+                                    }),
+                                );
+                                continue;
+                            }
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                     }

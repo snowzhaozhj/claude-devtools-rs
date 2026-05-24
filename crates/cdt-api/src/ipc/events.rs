@@ -12,6 +12,16 @@ pub enum PushEvent {
         session_id: String,
         deleted: bool,
         project_list_changed: bool,
+        /// 结构性变化提示：true 时表示 group 内 session 集合可能变化
+        /// （新增 / 删除 / 重命名），前端 SHALL revalidate
+        /// `list_repository_groups` 让 `RepositoryGroup.totalSessions` 同步；
+        /// false（典型 JSONL append 场景）放行，不触发整张列表重拉。
+        /// 字段由后端 `spawn_unified_cache_invalidator` 在三档判定后 enrich
+        /// （change `enrich-file-change-with-session-list-changed::D3` /
+        /// `D4`）。`#[serde(default)]` 兼容旧 fixture / 旧客户端：缺字段时反序列化
+        /// 拿 `false`，行为退化为不触发 loadProjects。
+        #[serde(default)]
+        session_list_changed: bool,
     },
     /// Todo 文件变更。
     TodoChange {
@@ -52,6 +62,22 @@ pub enum PushEvent {
         active_context_id: Option<String>,
         kind: String,
     },
+    /// broadcast 链路 lag 信号——`LocalDataApi.file_tx → events_tx` 或
+    /// `events_tx → SSE` client 任一跳 `broadcast::error::RecvError::Lagged`
+    /// 时由对应 bridge 显式 emit，让前端 silent refresh 兜底（change
+    /// `enrich-file-change-with-session-list-changed::D6`）。
+    ///
+    /// 与既有 `crate::http::sse::SSE_LAGGED_SENTINEL` （`{"type":"sse_lagged"}`）
+    /// **向后兼容**：旧 sentinel 不含 `source` / `missed`，前端 transport
+    /// 按 `payload.source ?? ""` / `payload.missed ?? 0` 读 undefined 不报错；
+    /// 新形态 `{"type":"sse_lagged","source":"file-change","missed":7}` 给
+    /// 前端 telemetry 用。
+    ///
+    /// `tag = "type"` + 既有 `rename_all = snake_case` 已让 variant 序列化
+    /// 为 `"sse_lagged"`；字段 `source` / `missed` 单词无下划线，`snake_case`
+    /// 即字面。**禁止**给 enum 加 `rename_all_fields = camelCase`——会破坏
+    /// 既有 `project_id` / `session_id` 等字段的 wire 形态。
+    SseLagged { source: String, missed: u64 },
 }
 
 /// 单个 session 元数据增量推送 payload。

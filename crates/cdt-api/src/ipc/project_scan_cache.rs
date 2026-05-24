@@ -406,12 +406,17 @@ pub fn spawn_project_scan_cache_invalidator(
 /// 的 sync 快路径（issue #261，scan-first 顺序，避免被 parsed-cache 的
 /// `fs.stat().await` 拖慢结构判定）。
 ///
+/// 返回 `true` 时表示该事件被判定为 structural（命中三档之一），调用方可
+/// 据此 enrich `FileChangeEvent.session_list_changed` 后再 emit 给下游
+/// 消费者（change `enrich-file-change-with-session-list-changed`，D4 emit
+/// 时机契约：sync 判定 → emit → async parsed invalidate）。
+///
 /// 行为契约：spec `ipc-data-api/spec.md` §"`ProjectScanCache` 按事件语义分级失效"。
 pub(crate) fn apply_file_event_to_project_scan_cache(
     cache: &Arc<std::sync::Mutex<ProjectScanCache>>,
     local_ctx: &ContextId,
     event: &cdt_core::FileChangeEvent,
-) {
+) -> bool {
     let structural = {
         // sync mutex（poison 走 into_inner 兜底，参照 cdt-api 既有模式）。
         // counter inc 在 drop guard 之后避免持锁期间走 atomic 路径加大临界区。
@@ -442,6 +447,7 @@ pub(crate) fn apply_file_event_to_project_scan_cache(
     } else {
         cdt_telemetry::counter!("project_scan_cache.invalidate.content_append_skipped").inc();
     }
+    structural
 }
 
 /// `broadcast::Receiver::recv` 返回 `Err(Lagged)` 时的保守清空逻辑——

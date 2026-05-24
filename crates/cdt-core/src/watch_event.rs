@@ -16,6 +16,11 @@ pub struct FileChangeEvent {
     /// 项目列表是否可能已变化。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub project_list_changed: bool,
+    /// group 内 session 集合是否变化（"已知 project 下首次见 session" /
+    /// 删除 / 重命名等场景）。watcher 层构造时恒为 `false`，由
+    /// `cdt-api` `spawn_unified_cache_invalidator` 三档判定后 enrich。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub session_list_changed: bool,
 }
 
 /// Todo 文件变更事件。

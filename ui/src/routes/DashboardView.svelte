@@ -115,7 +115,19 @@
   onMount(async () => {
     await loadData();
     registerHandler("dashboard-projects", (payload) => {
-      if (!payload.projectListChanged) return;
+      // 三档触发条件（change `enrich-file-change-with-session-list-changed::D3`）：
+      // dashboard 卡片显示 `sessionCount` per project，新 session 出现（unknown_session
+      // 命中 → `sessionListChanged=true`）或删除 session（`deleted=true`）都会
+      // 改变这个数字；纯 JSONL append（三个标志全 false）不动 → 不重拉。旧
+      // 后端缺 `sessionListChanged` 字段时退化为只看 `projectListChanged ||
+      // deleted`，与历史行为对齐。
+      if (
+        !payload.projectListChanged &&
+        !payload.sessionListChanged &&
+        !payload.deleted
+      ) {
+        return;
+      }
       scheduleRefresh("dashboard:projects", () => untrack(() => loadData(true)));
     });
     // `/` 聚焦搜索：迁出 svelte:window onkeydown，统一进 keyboard registry。

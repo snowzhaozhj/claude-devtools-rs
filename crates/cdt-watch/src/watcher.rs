@@ -96,19 +96,35 @@ impl FileWatcher {
         self.todo_tx.subscribe()
     }
 
+    /// 测试专用：暴露 `file_tx` Sender clone 让测试直接 inject raw `FileChangeEvent`
+    /// 进 broadcast channel，无需走 inotify / `FSEvents` / SSH polling 真路径。
+    ///
+    /// 用例：cdt-api inline test 验证 unified invalidator 是 `LocalDataApi.file_tx`
+    /// 唯一生产者（change `enrich-file-change-with-session-list-changed::D1`
+    /// 行为级验证 + codex round 2 WARN-1 修订）—— 注入 raw event 后断言
+    /// channels.files 只收到 invalidator emit 的 enriched event 一次。
+    ///
+    /// SHALL **不**在 production code 调用——`#[cfg(test)]` 限制 test binary 内
+    /// 可见（同 binary inline test）；feature `test-utils` 让外部 crate（如
+    /// `cdt-api`）的集成 test 也能用（参考 cdt-api 的 `test-utils` feature 模式）。
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn file_tx_for_test(&self) -> broadcast::Sender<FileChangeEvent> {
+        self.file_tx.clone()
+    }
+
     /// 接入远端 SSH polling watcher，把远端 `FileChangeEvent` 注入同一
     /// `file_tx` broadcast channel。
+    ///
+    /// `cancel` 由调用方注入：`cdt-api::LocalDataApi::attach_remote_watcher`
+    /// 持有 token clone 用于 dead-signal monitor 路径，外部 disconnect 时仍
+    /// 能 cancel SSH polling（detail: change `enrich-file-change-with-session-list-changed::D2`）。
     pub fn attach_remote(
         &self,
         client: Arc<dyn SftpClient>,
         remote_projects_root: PathBuf,
+        cancel: CancelToken,
     ) -> RemoteWatcherHandle {
-        RemotePollingWatcher::spawn(
-            client,
-            remote_projects_root,
-            self.file_tx.clone(),
-            CancelToken::new(),
-        )
+        RemotePollingWatcher::spawn(client, remote_projects_root, self.file_tx.clone(), cancel)
     }
 
     /// 启动监听，阻塞直到出错或被取消。
@@ -198,6 +214,7 @@ impl FileWatcher {
                 session_id: String::new(),
                 deleted: false,
                 project_list_changed: true,
+                session_list_changed: false,
             });
         }
 
@@ -220,6 +237,7 @@ impl FileWatcher {
                     session_id,
                     deleted,
                     project_list_changed: false,
+                    session_list_changed: false,
                 });
             }
             return None;
@@ -245,6 +263,7 @@ impl FileWatcher {
             session_id,
             deleted,
             project_list_changed,
+            session_list_changed: false,
         })
     }
 
@@ -859,7 +878,7 @@ mod tests {
             ],
         );
         let mut rx = watcher.subscribe_files();
-        let handle = watcher.attach_remote(fake, PathBuf::from(projects_root));
+        let handle = watcher.attach_remote(fake, PathBuf::from(projects_root), CancelToken::new());
 
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
@@ -875,6 +894,10 @@ mod tests {
         assert_eq!(event.session_id, "sess-r");
         assert!(!event.deleted);
         assert!(!event.project_list_changed);
+        assert!(
+            !event.session_list_changed,
+            "watcher 层恒为 false，由 cdt-api invalidator enrich"
+        );
 
         handle.cancel_and_join().await;
     }

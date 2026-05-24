@@ -10,6 +10,12 @@ description = "Debounced file system watching for Claude Code session files (own
 [lints]
 workspace = true
 
+[features]
+# 仅供集成测试启用的 helpers（如 `file_tx_for_test` 让外部 crate test
+# 直接 inject raw `FileChangeEvent` 不走 inotify / SSH polling 真路径）。
+# release / 默认构建 SHALL NOT 含这些 API。
+test-utils = []
+
 [dependencies]
 cdt-core = { workspace = true }
 cdt-fs = { workspace = true }

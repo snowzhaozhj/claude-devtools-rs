@@ -68,11 +68,18 @@ fn proj(id: &str, sessions: &[&str]) -> Project {
 }
 
 fn ev(pid: &str, sid: &str, deleted: bool, plc: bool) -> FileChangeEvent {
+    // raw event 形态恒 `session_list_changed: false`——watcher 层不知道
+    // session 集合是否变；该字段在 `spawn_unified_cache_invalidator` 内
+    // 由三档判定结果 enrich（change
+    // `enrich-file-change-with-session-list-changed::D3`）。本 helper 给
+    // invalidator 单测构造 raw event，新测试若要校验 enriched 字段请走
+    // `subscribe_files` 拿到 invalidator emit 出来的结果。
     FileChangeEvent {
         project_id: pid.into(),
         session_id: sid.into(),
         deleted,
         project_list_changed: plc,
+        session_list_changed: false,
     }
 }
 

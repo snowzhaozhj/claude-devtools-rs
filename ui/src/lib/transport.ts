@@ -45,6 +45,14 @@ class TauriTransport implements Transport {
       listen("ssh_status", (event) => handler("ssh_status", event.payload)),
       listen("context_changed", (event) => handler("context_changed", event.payload)),
       listen("updater://available", (event) => handler("updater://available", event.payload)),
+      // `sse-lagged` 在桌面 Tauri runtime 也需订阅——src-tauri host file-change
+      // bridge 在 broadcast `RecvError::Lagged` 路径 emit `sse-lagged` event
+      // 让前端走 silent refresh 兜底（change
+      // `enrich-file-change-with-session-list-changed::D6`）。形态：
+      // `{ source: "file-change", missed: N }`，与 HTTP `PushEvent::SseLagged`
+      // 对齐。原实现 Tauri runtime 不订阅 → lag 期间错过 structural 信号
+      // 滞后到 LOCAL_CACHE_TTL=5min 才恢复。
+      listen("sse-lagged", (event) => handler("sse-lagged", event.payload)),
     ]);
     return () => {
       for (const unlisten of unlisteners) unlisten();
@@ -459,13 +467,26 @@ function normalizePushPayload(type: string | undefined, payload: Record<string, 
         sessionId: payload.session_id,
         deleted: payload.deleted,
         projectListChanged: payload.project_list_changed,
+        // 后端 `PushEvent::FileChange.session_list_changed` 透传（change
+        // `enrich-file-change-with-session-list-changed::D5`）。旧后端缺字段
+        // 时拿 undefined，Sidebar handler 走 `?? false` 退化分支。
+        sessionListChanged: payload.session_list_changed,
       };
     case "todo_change":
       return { projectId: payload.project_id, sessionId: payload.session_id };
     case "new_notification":
       return payload.notification;
     case "session_metadata_update":
+      // `group_id` 是 sidebar handler 按 `selectedGroupId` 过滤 stale event 的
+      // 主匹配键（`Sidebar.svelte::onMount metadataUnlisten` 内 `eventGroupId =
+      // payload.groupId ?? payload.projectId`）。Tauri runtime 走 serde camelCase
+      // 直接拿 `groupId`，HTTP/SSE wire 是 snake_case 必须在此 map——否则多
+      // worktree group 下 `payload.projectId` 是 worktree-level id，永不等于
+      // `.git` 后缀的 group.id，所有 metadata patch 被全量丢弃，sidebar 永久
+      // 卡 skeleton（本 change 把 file_change 三档收缩后暴露的既有 bug：原先
+      // file_change 风暴会顺带触发 sessions refetch 间接掩盖此失配）。
       return {
+        groupId: payload.group_id,
         projectId: payload.project_id,
         sessionId: payload.session_id,
         title: payload.title,
@@ -483,6 +504,35 @@ function normalizePushPayload(type: string | undefined, payload: Record<string, 
       return {
         activeContextId: payload.active_context_id ?? null,
         kind: payload.kind,
+      };
+    case "ssh_status_change":
+      // 与 `session_metadata_update` 同类的 HTTP/SSE wire normalize：后端
+      // `PushEvent::SshStatusChange { context_id, state }`（`crates/cdt-api/
+      // src/ipc/events.rs:34`）走 enum 默认 `rename_all = "snake_case"`，wire
+      // 字段是 snake_case。Tauri runtime 通过 `listen("ssh_status", ...)`
+      // 拿到的是真 `cdt_ssh::SshStatusChange` struct（`#[serde(rename_all =
+      // "camelCase")]`）camelCase payload，前端消费侧（如
+      // `ui/src/lib/connection.svelte.ts::change.contextId / change.status`）
+      // 读 camelCase。HTTP 路径 SHALL 在此 map，否则浏览器 `?http=1` 下
+      // SSH 连接状态指示符永久拿 undefined。
+      //
+      // 备注：PushEvent::SshStatusChange 当前只 emit `{context_id, state}` 两
+      // 字段（与 cdt_ssh::SshStatusChange 的 `{context_id, status, auth_chain,
+      // error}` 全字段不对齐——HTTP 路径缺 auth_chain / error）。本次 normalize
+      // 仅修字段名失配（最小回归暴露面），HTTP 路径补全 auth_chain / error
+      // 走另一个 change（不属本 PR scope）。
+      return {
+        contextId: payload.context_id,
+        status: payload.state,
+      };
+    case "sse_lagged":
+      // 后端新形态 `PushEvent::SseLagged { source, missed }` 透传（change
+      // `enrich-file-change-with-session-list-changed::D6`）。旧 sentinel
+      // `{"type":"sse_lagged"}` 缺字段时 source / missed 为 undefined，
+      // 前端 handler 按可选字段处理向后兼容。
+      return {
+        source: payload.source,
+        missed: payload.missed,
       };
     default:
       return payload;

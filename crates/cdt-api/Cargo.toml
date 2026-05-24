@@ -48,3 +48,8 @@ filetime = { workspace = true }
 # 集成测试 SHALL 启用 `test-utils` feature，让 cfg-gated 计数器与 helper 可被
 # `tests/*.rs` 访问（含 change `generation-race-audit` 的 invariant 测试）。
 cdt-api = { path = ".", features = ["test-utils"] }
+# inline test 用 `cdt-watch::FileWatcher::file_tx_for_test` 注入 raw event 验
+# unified invalidator sole producer 行为（codex round 2 WARN-1 修订）。dev-deps
+# 仅 cargo test 时启用，prod binary 不依赖 dev-deps → file_tx_for_test 不被
+# release build 暴露。
+cdt-watch = { workspace = true, features = ["test-utils"] }

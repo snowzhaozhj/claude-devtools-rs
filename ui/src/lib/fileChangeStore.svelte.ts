@@ -6,6 +6,19 @@ export interface FileChangePayload {
   sessionId: string;
   deleted: boolean;
   projectListChanged?: boolean;
+  /**
+   * 结构性变化提示：true 时 group 内 session 集合可能变化（新增 / 删除 /
+   * 重命名）。由后端 `spawn_unified_cache_invalidator` 三档判定后 enrich
+   * （change `enrich-file-change-with-session-list-changed::D3`）。前端
+   * SHALL 仅在 `projectListChanged || sessionListChanged || deleted` 时
+   * revalidate `list_repository_groups`（让 `totalSessions` 同步）；普通
+   * JSONL append（三个标志全 false）放行不重拉。
+   *
+   * 字段可选——旧后端反序列化为 undefined → 退化为不触发 loadProjects
+   * （`projectListChanged || deleted` 仍能覆盖大部分 structural 事件，
+   * 仅 `unknown_session` 这类后端 enrich 出的细分被旧前端漏掉）。
+   */
+  sessionListChanged?: boolean;
 }
 
 type Handler = (payload: FileChangePayload) => void;

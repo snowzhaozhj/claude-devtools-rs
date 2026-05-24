@@ -130,15 +130,56 @@ describe('BrowserTransport', () => {
       session_id: 's1',
       deleted: false,
       project_list_changed: true,
+      session_list_changed: true,
     })
 
     expect(handler).toHaveBeenCalledWith({
       event: 'file-change',
       id: 0,
-      payload: { projectId: 'p1', sessionId: 's1', deleted: false, projectListChanged: true },
+      payload: {
+        projectId: 'p1',
+        sessionId: 's1',
+        deleted: false,
+        projectListChanged: true,
+        sessionListChanged: true,
+      },
     })
     unsubscribe()
     expect(instances[0].closed).toBe(true)
+  })
+
+  test('SSE file_change 缺 session_list_changed 字段时 normalize 为 undefined（旧后端兼容）', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('file-change', handler)
+    instances[0].emit({
+      type: 'file_change',
+      project_id: 'p1',
+      session_id: 's1',
+      deleted: false,
+      project_list_changed: false,
+      // session_list_changed 缺
+    })
+
+    expect(handler).toHaveBeenCalledWith({
+      event: 'file-change',
+      id: 0,
+      payload: {
+        projectId: 'p1',
+        sessionId: 's1',
+        deleted: false,
+        projectListChanged: false,
+        sessionListChanged: undefined,
+      },
+    })
+    unsubscribe()
   })
 
   test('SSE session_metadata_update 事件转换为 Sidebar payload', async () => {
@@ -160,12 +201,14 @@ describe('BrowserTransport', () => {
       message_count: 12,
       is_ongoing: true,
       git_branch: 'main',
+      group_id: '/Users/me/proj/.git',
     })
 
     expect(handler).toHaveBeenCalledWith({
       event: 'session-metadata-update',
       id: 0,
       payload: {
+        groupId: '/Users/me/proj/.git',
         projectId: 'p1',
         sessionId: 's1',
         title: 'Hello',
@@ -174,6 +217,68 @@ describe('BrowserTransport', () => {
         gitBranch: 'main',
       },
     })
+    unsubscribe()
+  })
+
+  test('SSE ssh_status_change normalize 为 ssh_status payload (context_id → contextId, state → status)', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('ssh_status', handler)
+    instances[0].emit({
+      type: 'ssh_status_change',
+      context_id: 'ssh-host-a',
+      state: 'connected',
+    })
+
+    expect(handler).toHaveBeenCalledWith({
+      event: 'ssh_status',
+      id: 0,
+      payload: {
+        contextId: 'ssh-host-a',
+        status: 'connected',
+      },
+    })
+    unsubscribe()
+  })
+
+  test('SSE session_metadata_update 缺 group_id 时 groupId=undefined（向后兼容旧后端 / 单 worktree fallback）', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('session-metadata-update', handler)
+    instances[0].emit({
+      type: 'session_metadata_update',
+      project_id: 'p1',
+      session_id: 's1',
+      title: 'Hello',
+      message_count: 1,
+      is_ongoing: false,
+      git_branch: null,
+    })
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'session-metadata-update',
+        payload: expect.objectContaining({
+          groupId: undefined,
+          projectId: 'p1',
+          sessionId: 's1',
+        }),
+      }),
+    )
     unsubscribe()
   })
 
@@ -595,7 +700,7 @@ describe('BrowserTransport', () => {
     vi.useRealTimers()
   })
 
-  test('SSE sse_lagged 事件转换为 sse-lagged event（broadcast 容量打满兜底）', async () => {
+  test('SSE sse_lagged 旧 sentinel（缺 source/missed）转换为空 payload（向后兼容）', async () => {
     const instances: FakeEventSource[] = []
     vi.stubGlobal('EventSource', class extends FakeEventSource {
       constructor(url: string) {
@@ -611,7 +716,31 @@ describe('BrowserTransport', () => {
     expect(handler).toHaveBeenCalledWith({
       event: 'sse-lagged',
       id: 0,
-      payload: {},
+      payload: { source: undefined, missed: undefined },
+    })
+    unsubscribe()
+  })
+
+  test('SSE sse_lagged 新形态（含 source/missed）透传字段', async () => {
+    // change `enrich-file-change-with-session-list-changed::D6`：
+    // PushEvent::SseLagged { source: "file-change", missed: 7 } 序列化为
+    // `{"type":"sse_lagged","source":"file-change","missed":7}` 形态。
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('sse-lagged', handler)
+    instances[0].emit({ type: 'sse_lagged', source: 'file-change', missed: 7 })
+
+    expect(handler).toHaveBeenCalledWith({
+      event: 'sse-lagged',
+      id: 0,
+      payload: { source: 'file-change', missed: 7 },
     })
     unsubscribe()
   })
