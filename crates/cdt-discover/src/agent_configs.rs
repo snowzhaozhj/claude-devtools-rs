@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::path_decoder;
+
 /// Agent config 的作用域。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "projectId", rename_all = "camelCase")]
@@ -49,11 +51,13 @@ pub struct AgentConfig {
 ///
 /// `projects` 的元素为 `(project_id, cwd)`。返回值按 `(scope_global_first, name)`
 /// 稳定排序。
-#[must_use]
-pub fn read_agent_configs(projects: &[(String, String)]) -> Vec<AgentConfig> {
-    let mut all = scan_global();
+///
+/// 实现为 `async`：调用方位于 tokio runtime 内（`cdt-api` IPC handler 路径），
+/// 用 `tokio::fs` 避免阻塞 worker 线程。
+pub async fn read_agent_configs(projects: &[(String, String)]) -> Vec<AgentConfig> {
+    let mut all = scan_global().await;
     for (pid, cwd) in projects {
-        all.extend(scan_project(pid, Path::new(cwd)));
+        all.extend(scan_project(pid, Path::new(cwd)).await);
     }
     all.sort_by(|a, b| {
         a.scope
@@ -65,33 +69,34 @@ pub fn read_agent_configs(projects: &[(String, String)]) -> Vec<AgentConfig> {
 }
 
 /// 扫全局作用域 `~/.claude/agents/*.md`。目录缺失返回空。
-#[must_use]
-pub fn scan_global() -> Vec<AgentConfig> {
-    let Some(home) = dirs::home_dir() else {
+///
+/// home 解析走 `path_decoder::home_dir()` 四级 fallback，对齐 Windows 兼容硬约束
+/// （`crates/CLAUDE.md::Windows 兼容硬约束`）。
+pub async fn scan_global() -> Vec<AgentConfig> {
+    let Some(home) = path_decoder::home_dir() else {
         return Vec::new();
     };
     let dir = home.join(".claude").join("agents");
-    scan_dir(&dir, &AgentConfigScope::Global)
+    scan_dir(&dir, &AgentConfigScope::Global).await
 }
 
 /// 扫某个项目作用域 `<cwd>/.claude/agents/*.md`。目录缺失返回空。
-#[must_use]
-pub fn scan_project(project_id: &str, cwd: &Path) -> Vec<AgentConfig> {
+pub async fn scan_project(project_id: &str, cwd: &Path) -> Vec<AgentConfig> {
     let dir = cwd.join(".claude").join("agents");
-    scan_dir(&dir, &AgentConfigScope::Project(project_id.to_owned()))
+    scan_dir(&dir, &AgentConfigScope::Project(project_id.to_owned())).await
 }
 
-fn scan_dir(dir: &Path, scope: &AgentConfigScope) -> Vec<AgentConfig> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+async fn scan_dir(dir: &Path, scope: &AgentConfigScope) -> Vec<AgentConfig> {
+    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for entry in entries.flatten() {
+    while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
         if path.extension().is_none_or(|ext| ext != "md") {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(&path) else {
+        let Ok(content) = tokio::fs::read_to_string(&path).await else {
             continue;
         };
         let fallback_name = path
@@ -231,16 +236,16 @@ mod tests {
         assert_eq!(fm.get("color").map(String::as_str), Some("red"));
     }
 
-    #[test]
-    fn missing_dir_returns_empty() {
+    #[tokio::test]
+    async fn missing_dir_returns_empty() {
         let tmp = TempDir::new().unwrap();
         let nope = tmp.path().join("does-not-exist");
-        let out = scan_dir(&nope, &AgentConfigScope::Global);
+        let out = scan_dir(&nope, &AgentConfigScope::Global).await;
         assert!(out.is_empty());
     }
 
-    #[test]
-    fn scan_project_reads_md_and_uses_filename_fallback() {
+    #[tokio::test]
+    async fn scan_project_reads_md_and_uses_filename_fallback() {
         let tmp = TempDir::new().unwrap();
         let agents_dir = tmp.path().join(".claude").join("agents");
         write_md(
@@ -249,7 +254,7 @@ mod tests {
             "---\nname: code-reviewer\ncolor: purple\n---\nbody",
         );
         write_md(&agents_dir, "no-frontmatter.md", "just body");
-        let mut out = scan_project("proj-1", tmp.path());
+        let mut out = scan_project("proj-1", tmp.path()).await;
         out.sort_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].name, "code-reviewer");
@@ -258,15 +263,15 @@ mod tests {
         assert!(out[1].color.is_none());
     }
 
-    #[test]
-    fn both_scopes_merged_and_sorted() {
+    #[tokio::test]
+    async fn both_scopes_merged_and_sorted() {
         // 全局目录是 ~/.claude/agents——测试用 project 级多条，再确认排序按 name 字典序。
         let tmp = TempDir::new().unwrap();
         let agents_dir = tmp.path().join(".claude").join("agents");
         write_md(&agents_dir, "zebra.md", "---\nname: zebra\n---\n");
         write_md(&agents_dir, "alpha.md", "---\nname: alpha\n---\n");
         let cwd_str = tmp.path().to_string_lossy().to_string();
-        let configs = read_agent_configs(&[("p1".to_owned(), cwd_str)]);
+        let configs = read_agent_configs(&[("p1".to_owned(), cwd_str)]).await;
         // 仅来自项目的两条（global 目录可能存在，也可能不存在；此处只校验排序不变式）。
         let names: Vec<&str> = configs.iter().map(|c| c.name.as_str()).collect();
         let alpha = names.iter().position(|n| *n == "alpha").unwrap();
