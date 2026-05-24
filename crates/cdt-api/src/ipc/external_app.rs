@@ -325,16 +325,20 @@ fn format_goto_target(path: &Path, line: u32, column: Option<u32>) -> OsString {
 /// codex PR 二审 CRITICAL #1 修订：Windows fallback **不**走 `cmd.exe`——
 /// `cmd /C start "" <path>` 仍受 cmd parser shell injection 风险（path 含 `&` /
 /// `^` / `(` / `)` / `%VAR%` 等会被 cmd re-tokenize 解释）。改用 PowerShell
-/// `Start-Process -LiteralPath $env:CDT_TARGET_PATH`：path 走环境变量 `CDT_TARGET_PATH`
+/// `Invoke-Item -LiteralPath $env:CDT_TARGET_PATH`：path 走环境变量 `CDT_TARGET_PATH`
 /// 进入 PowerShell process address space，**不**经任何 shell 字符串拼接，零注入面。
 /// 这与 Windows Terminal fallback 同模式（详 `design.md::D1` 安全实现细则）。
+///
+/// codex PR 二审 round 2 修订：之前用 `Start-Process -LiteralPath` 不可用——
+/// `Start-Process` 仅支持 `-FilePath` 不支持 `-LiteralPath`。改用 `Invoke-Item`，
+/// 它真支持 `-LiteralPath`，效果与 Windows Explorer 双击一致（按文件类型关联应用打开）。
 fn build_system_open_command(path: &Path) -> Command {
     let mut cmd = if cfg!(target_os = "macos") {
         let mut c = Command::new("open");
         c.arg(path);
         c
     } else if cfg!(target_os = "windows") {
-        // PowerShell `Start-Process -LiteralPath $env:CDT_TARGET_PATH`：
+        // PowerShell `Invoke-Item -LiteralPath $env:CDT_TARGET_PATH`：
         // - `-LiteralPath` 阻止通配符展开
         // - path 通过 `CDT_TARGET_PATH` env var 传入 PowerShell process，**不**拼进
         //   `-Command` 字符串——避免 cmd / PowerShell parser 看到 path 任何字符
@@ -342,7 +346,7 @@ fn build_system_open_command(path: &Path) -> Command {
         c.args([
             "-NoProfile",
             "-Command",
-            "Start-Process -LiteralPath $env:CDT_TARGET_PATH",
+            "Invoke-Item -LiteralPath $env:CDT_TARGET_PATH",
         ]);
         c.env("CDT_TARGET_PATH", path);
         c
@@ -803,7 +807,7 @@ mod tests {
             vec![
                 "-NoProfile",
                 "-Command",
-                "Start-Process -LiteralPath $env:CDT_TARGET_PATH"
+                "Invoke-Item -LiteralPath $env:CDT_TARGET_PATH"
             ]
         );
         // path 在 env var 而不在 argv（零 shell injection 面）
