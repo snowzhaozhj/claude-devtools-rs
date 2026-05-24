@@ -55,8 +55,21 @@ pub const CANCEL_DEADLINE: Duration = Duration::from_secs(1);
 /// 与 `with_retry` 内部消化）；3 × `POLL_INTERVAL` ≈ 9s 内连续报错才认为
 /// channel 真的死了，调用方（cdt-api `attach_remote_watcher`）SHALL 借此信号
 /// 触发 `ssh_mgr.disconnect`，避免 `active_context_id()` 与底层 SFTP liveness
-/// 长期撒谎（详 `openspec/followups.md` "[impl-bug] SSH/SFTP channel idle..."）。
+/// 长期撒谎。
 pub const PERMANENT_FAILURE_THRESHOLD: u32 = 3;
+
+/// 连续多少轮"timeout 类瞬时错误"后判定 SFTP channel 已半死，触发 `dead_signal`。
+///
+/// 修 GitHub issue #231：`SftpError::Timeout` 经 `provider::classify_sftp_error`
+/// 归 `SftpClientError::Transient("timeout")`，错误字符串不含 `session closed` 等
+/// 永久关键字，永远不计 `consecutive_permanent`，永远不发 `dead_signal`。复现
+/// 场景：`pkill -STOP sshd` 让 SFTP 协议层 hang 但 TCP 未断，watcher 6+ 轮
+/// `transient sftp error: timeout permanent=false` 仍判 channel 活。
+///
+/// 阈值取 6 = 让短暂网络抖动（典型 1-3s）不误触发，但远低于"用户感知 sidebar
+/// 已僵死"的 60s——6 × `POLL_INTERVAL` ≈ 18s 持续 timeout 视同 channel 真的
+/// 死了。issue #231 提议同值。
+pub const TIMEOUT_FAILURE_THRESHOLD: u32 = 6;
 
 /// 取消令牌——多 owner 可 clone，调 [`CancelToken::cancel`] 通知所有
 /// 等待 [`CancelToken::cancelled`] 的 future 立即退出。
@@ -213,40 +226,77 @@ impl RemotePollingWatcher {
     }
 }
 
-/// 单轮 polling 的结果——给 [`run_polling_loop`] 累计永久错误次数用。
+/// 单轮 polling 失败的语义分类——给 [`run_polling_loop`] 双 counter 演化用。
+///
+/// 修 GitHub issue #231：旧设计单一 `is_permanent_sftp_failure -> bool` 让纯
+/// `Transient("timeout")` 永远不进 counter；新设计三态分类 + 独立 timeout
+/// counter（高阈值 6 ≈ 18s）覆盖"sshd hang 但 TCP 未断"场景。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PollOutcome {
-    /// scan 成功（无论是否有事件 emit）。
-    Ok,
-    /// 瞬时错误——单次跳过，**不** bump permanent counter。
-    Transient,
-    /// 永久错误（错误消息含 `session closed` / `Eof` / `BrokenPipe` 等不可
-    /// 恢复字样）——bump permanent counter，达 [`PERMANENT_FAILURE_THRESHOLD`]
-    /// 时触发 `dead_signal`。
+enum PollFailureKind {
+    /// 永久 transport 错误：错误消息含 `session closed` / `eof` / `broken pipe` /
+    /// `epipe` / `connection reset` / `econnreset` 任一关键字。不区分 `Other` 与
+    /// `Transient` 来源——`provider::is_transient_io_reason` 把 `broken pipe` /
+    /// `connection reset` / `epipe` 都归 `Transient`，`with_retry` 3 次后仍是
+    /// transport-dead 即视同 channel 真死。
     Permanent,
+    /// timeout 类瞬时错误：错误消息含 `timeout` / `etimedout` / `timed out` /
+    /// `eagain` / `would block` 任一关键字。来自 `provider::is_transient_io_reason`
+    /// 列表减去 transport-dead 子集；`would block` 即 `std::io::ErrorKind::WouldBlock`，
+    /// 与 EAGAIN 同源——不纳入 timeout 类会让"反复 `WouldBlock`"序列只能落
+    /// `OtherTransient` 重置计数永远不触发 `dead_signal`。
+    Timeout,
+    /// 其它非 channel-related 错误：`NoSuchFile` / `PermissionDenied` /
+    /// `Status::Failure` 的 `error_message` 等不带 transport-dead / timeout
+    /// 关键字的失败——本轮 silent skip，**reset** 两个 counter（视同 channel
+    /// 真活着的强证据）。
+    OtherTransient,
 }
 
-/// 判定一条 SFTP 错误是否表征 SFTP channel 已永久死亡。
+/// 单轮 polling 的结果——给 [`run_polling_loop`] 双 counter 演化用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PollOutcome {
+    /// scan 成功（无论是否有事件 emit）—— reset 两个 counter。
+    Ok,
+    /// 永久错误（[`PollFailureKind::Permanent`]）—— bump `consecutive_permanent`，
+    /// 达 [`PERMANENT_FAILURE_THRESHOLD`] 时触发 `dead_signal`。
+    Permanent,
+    /// timeout 类错误（[`PollFailureKind::Timeout`]）—— bump `consecutive_timeout`，
+    /// 达 [`TIMEOUT_FAILURE_THRESHOLD`] 时触发 `dead_signal`。
+    Timeout,
+    /// 其它非 channel-related 错误（[`PollFailureKind::OtherTransient`]）——
+    /// **reset** 两个 counter（与 `Ok` 等价，视同 channel 真活着的强证据）。
+    OtherTransient,
+}
+
+/// 把 SFTP 错误分到 [`PollFailureKind`] 三态。
 ///
-/// 命中字串清单（小写匹配）：`session closed` / `eof` / `broken pipe` /
-/// `connection reset` / `epipe` —— 实测 docker openssh + russh-sftp 2.1.2
-/// 在 idle 一段时间后报 `Other("session closed")`（详 followups.md SSH/SFTP
-/// keepalive 条目附录的真实复现 log）。
+/// 关键字小写匹配，按以下优先级（同一字符串可能同时含 transport-dead 与 timeout
+/// 关键字时，transport-dead 优先——permanent 比 timeout 更"严重"）：
 ///
-/// **同时覆盖 `Transient` 路径**（codex 二审 major fix，2026-05-22）：
-/// `provider.rs::is_transient_io_reason` 把 `broken pipe` / `connection reset`
-/// / `epipe` 都归 `Transient`，`with_retry` 3 次后仍上抛 transient 错误——这
-/// 类错误已经是 transport dead，不是真"瞬时"。polling 层在 `with_retry` 之后
-/// 看到的就是已耗尽 retry 的最终错误，按错误消息字面统一识别。`Transient`
-/// 中不含上述关键字的（如纯 `timeout` / `eagain`）仍归 transient 跳过本轮。
-fn is_permanent_sftp_failure(err: &SftpClientError) -> bool {
+/// 1. transport-dead 任一关键字 → [`PollFailureKind::Permanent`]
+/// 2. timeout-class 任一关键字 → [`PollFailureKind::Timeout`]
+/// 3. 其它（含 `NoSuchFile` / `PermissionDenied` / 不带关键字的 `Status::Failure`）
+///    → [`PollFailureKind::OtherTransient`]
+fn classify_failure(err: &SftpClientError) -> PollFailureKind {
     let s = err.to_string().to_ascii_lowercase();
-    s.contains("session closed")
+    if s.contains("session closed")
         || s.contains("eof")
         || s.contains("broken pipe")
         || s.contains("epipe")
         || s.contains("connection reset")
         || s.contains("econnreset")
+    {
+        return PollFailureKind::Permanent;
+    }
+    if s.contains("timeout")
+        || s.contains("etimedout")
+        || s.contains("timed out")
+        || s.contains("eagain")
+        || s.contains("would block")
+    {
+        return PollFailureKind::Timeout;
+    }
+    PollFailureKind::OtherTransient
 }
 
 async fn run_polling_loop(
@@ -258,15 +308,28 @@ async fn run_polling_loop(
 ) {
     let mut warned_missing_mtime: BTreeSet<PathBuf> = BTreeSet::new();
     let mut consecutive_permanent: u32 = 0;
+    let mut consecutive_timeout: u32 = 0;
 
     // Eager 第一次 scan 建 baseline——spec "First poll establishes baseline"。
     // 顶层 `read_dir` 失败时 baseline 取空（首次连接刚好远端 home 临时不可读时
-    // 也不让 watcher 死掉；下一轮 catch-up 会再尝试）。
+    // 也不让 watcher 死掉；下一轮 catch-up 会再尝试）。baseline 失败也按
+    // classify_failure 三态 bump 对应 counter—— baseline 一次跑不可能达阈值，
+    // 但让"connect 后立刻 timeout"序列首轮就计入提前推进 dead 检测。
     let mut baseline = match scan_once(&client, &projects_root, &mut warned_missing_mtime).await {
         Ok(b) => b,
         Err(e) => {
-            if is_permanent_sftp_failure(&e) {
-                consecutive_permanent = consecutive_permanent.saturating_add(1);
+            match classify_failure(&e) {
+                PollFailureKind::Permanent => {
+                    consecutive_permanent = consecutive_permanent.saturating_add(1);
+                }
+                PollFailureKind::Timeout => {
+                    consecutive_timeout = consecutive_timeout.saturating_add(1);
+                }
+                PollFailureKind::OtherTransient => {
+                    // baseline 失败若是非 channel-related，**不 reset** 已有 counter
+                    // （baseline 阶段两 counter 都还是 0，reset 也是 no-op；保持
+                    // 与 run_one_pass `OtherTransient` 同语义即可）
+                }
             }
             tracing::warn!(
                 target: "cdt_watch::ssh_polling",
@@ -289,11 +352,11 @@ async fn run_polling_loop(
             () = cancel_token.cancelled() => break,
             _ = poll_interval.tick() => {
                 let outcome = run_one_pass(&client, &projects_root, &sender, &mut baseline, &mut warned_missing_mtime, &cancel_token).await;
-                update_permanent_counter(outcome, &mut consecutive_permanent);
-                if consecutive_permanent >= PERMANENT_FAILURE_THRESHOLD {
+                if update_counters(outcome, &mut consecutive_permanent, &mut consecutive_timeout) {
                     tracing::warn!(
                         target: "cdt_watch::ssh_polling",
-                        consecutive_failures = consecutive_permanent,
+                        consecutive_permanent,
+                        consecutive_timeout,
                         "SFTP channel appears dead; signaling dead_signal and exiting watcher",
                     );
                     // notify_one 存 permit——后注册的 monitor task 仍能消费，
@@ -307,16 +370,13 @@ async fn run_polling_loop(
                 // 30s catch-up 与 3s poll 算法相同——兜底 SFTP 偶发漏事件
                 // （spec D5：catch-up 同样按 size + mtime 双维度比对）。
                 let outcome = run_one_pass(&client, &projects_root, &sender, &mut baseline, &mut warned_missing_mtime, &cancel_token).await;
-                update_permanent_counter(outcome, &mut consecutive_permanent);
-                if consecutive_permanent >= PERMANENT_FAILURE_THRESHOLD {
+                if update_counters(outcome, &mut consecutive_permanent, &mut consecutive_timeout) {
                     tracing::warn!(
                         target: "cdt_watch::ssh_polling",
-                        consecutive_failures = consecutive_permanent,
+                        consecutive_permanent,
+                        consecutive_timeout,
                         "SFTP channel appears dead; signaling dead_signal and exiting watcher",
                     );
-                    // notify_one 存 permit——后注册的 monitor task 仍能消费，
-                    // 与 notify_waiters 仅唤醒"已在等待"的 waiters 不同（后者
-                    // 在 monitor 还没 .notified().await 时发出会丢失信号）。
                     dead_signal.notify_one();
                     break;
                 }
@@ -325,11 +385,36 @@ async fn run_polling_loop(
     }
 }
 
-fn update_permanent_counter(outcome: PollOutcome, counter: &mut u32) {
+/// 按 [`PollOutcome`] 演化两个独立 counter，返 `true` 表示任一 counter 达
+/// 自己阈值（caller 据此触发 `dead_signal` + 退 loop）。
+///
+/// 演化规则（codex 二审收紧 reset 规则，避免攻击序列推迟 `dead_signal`）：
+/// - `Ok` / `OtherTransient`：两 counter 都 reset 为 0（唯一 reset 入口；
+///   只有 channel 真活着的强证据才清零）
+/// - `Permanent`：仅 `consecutive_permanent += 1`，**不动** `consecutive_timeout`
+/// - `Timeout`：仅 `consecutive_timeout += 1`，**不动** `consecutive_permanent`
+///
+/// 早期"互斥重置"规则被 `5T → 1P → 5T → 1P → ...` 攻击序列利用让 timeout 永远
+/// reset 不到 6；新规则下 dead-向量单调累积，攻击序列只能拖延无法阻止。
+fn update_counters(
+    outcome: PollOutcome,
+    consecutive_permanent: &mut u32,
+    consecutive_timeout: &mut u32,
+) -> bool {
     match outcome {
-        PollOutcome::Ok | PollOutcome::Transient => *counter = 0,
-        PollOutcome::Permanent => *counter = counter.saturating_add(1),
+        PollOutcome::Ok | PollOutcome::OtherTransient => {
+            *consecutive_permanent = 0;
+            *consecutive_timeout = 0;
+        }
+        PollOutcome::Permanent => {
+            *consecutive_permanent = consecutive_permanent.saturating_add(1);
+        }
+        PollOutcome::Timeout => {
+            *consecutive_timeout = consecutive_timeout.saturating_add(1);
+        }
     }
+    *consecutive_permanent >= PERMANENT_FAILURE_THRESHOLD
+        || *consecutive_timeout >= TIMEOUT_FAILURE_THRESHOLD
 }
 
 /// 执行单轮 scan + diff + emit + baseline 更新；瞬时错误跳过本轮（不传播）。
@@ -348,17 +433,17 @@ async fn run_one_pass(
     let current = match scan_once(client, projects_root, warned_missing_mtime).await {
         Ok(c) => c,
         Err(e) => {
-            let permanent = is_permanent_sftp_failure(&e);
+            let kind = classify_failure(&e);
             tracing::warn!(
                 target: "cdt_watch::ssh_polling",
                 error = %e,
-                permanent,
+                kind = ?kind,
                 "polling scan failed (skipping this round)",
             );
-            return if permanent {
-                PollOutcome::Permanent
-            } else {
-                PollOutcome::Transient
+            return match kind {
+                PollFailureKind::Permanent => PollOutcome::Permanent,
+                PollFailureKind::Timeout => PollOutcome::Timeout,
+                PollFailureKind::OtherTransient => PollOutcome::OtherTransient,
             };
         }
     };
@@ -411,23 +496,32 @@ async fn scan_once(
         let session_entries = match client.read_dir(&proj_dir_str).await {
             Ok(entries) => entries,
             Err(SftpClientError::NoSuchFile | SftpClientError::PermissionDenied) => continue,
-            Err(SftpClientError::Transient(reason)) => {
-                tracing::warn!(
-                    target: "cdt_watch::ssh_polling",
-                    project = %proj.name,
-                    %reason,
-                    "transient sftp error reading project dir; skipping",
-                );
-                continue;
-            }
-            Err(SftpClientError::Other(reason)) => {
-                tracing::warn!(
-                    target: "cdt_watch::ssh_polling",
-                    project = %proj.name,
-                    %reason,
-                    "permanent sftp error reading project dir; skipping",
-                );
-                continue;
+            Err(err) => {
+                // sub-project read_dir 错误按 classify_failure 三态分流：
+                // - Permanent → escalate 整个 scan_once 返 Err，让外层
+                //   counter 累计 + dead_signal 触发自愈（修 issue #231 #2）
+                // - Timeout / OtherTransient → silent skip 该 project，下轮
+                //   catch-up 重试（保留容错避免单 project 临时不可读误杀）
+                match classify_failure(&err) {
+                    PollFailureKind::Permanent => {
+                        tracing::warn!(
+                            target: "cdt_watch::ssh_polling",
+                            project = %proj.name,
+                            error = %err,
+                            "permanent sftp error reading project dir; escalating scan_once",
+                        );
+                        return Err(err);
+                    }
+                    PollFailureKind::Timeout | PollFailureKind::OtherTransient => {
+                        tracing::warn!(
+                            target: "cdt_watch::ssh_polling",
+                            project = %proj.name,
+                            error = %err,
+                            "transient sftp error reading project dir; skipping",
+                        );
+                        continue;
+                    }
+                }
             }
         };
         for session in session_entries {
@@ -1086,24 +1180,330 @@ mod tests {
         handle.cancel_and_join().await;
     }
 
-    /// 瞬时错误 SHALL NOT 累计到永久 counter——已被 `SftpClientError::Transient`
-    /// + `with_retry` 单独消化的纯网络瞬时抖动（timeout / eagain）不应触发
-    /// SFTP-dead 自愈。
-    ///
-    /// 注意：`ECONNRESET` / `broken pipe` / `EPIPE` 虽然 provider 归类为
-    /// `Transient`，但 polling 层（`with_retry` 之后）SHALL 当作 permanent
-    /// 处理——retry 3 次仍是这类错误意味着 channel 真死。本测试用纯 timeout
-    /// / eagain 等不含 transport-dead 关键字的瞬时错误，验证它们不会触发自愈。
+    /// 修 GitHub issue #231：旧测试断言"5 轮 timeout/eagain 不触发"——前提是
+    /// timeout 永远不触发；新行为下 timeout 走独立 counter 阈值 6，5 轮 < 6
+    /// 仍然不触发，但语义从"永远不触发"变为"低于阈值不触发"。本测试覆盖
+    /// timeout 类 5 轮（< `TIMEOUT_FAILURE_THRESHOLD = 6`）不触发；6+ 轮触发
+    /// 由 `timeout_threshold_triggers_dead_signal_at_6_consecutive` 单独覆盖。
     #[tokio::test(start_paused = true)]
-    async fn transient_errors_do_not_trigger_dead_signal() {
+    async fn timeout_below_threshold_does_not_trigger() {
         let client = FakeSftpClient::arc(
             projects_root_str(),
             vec![
+                // baseline = 1 个 timeout（counter=1）
                 Err(SftpClientError::Transient("ETIMEDOUT".into())),
+                // 4 个 poll tick 各贡献 1 个 timeout-class（counter=2..5）
                 Err(SftpClientError::Transient("timeout".into())),
                 Err(SftpClientError::Transient("EAGAIN".into())),
+                Err(SftpClientError::Transient("would block".into())),
+                Err(SftpClientError::Transient("timed out".into())),
+            ],
+        );
+        let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let dead = handle.dead_signal();
+
+        // baseline scan
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        // 4 个 poll tick：advance + yield + yield 严格顺序（避免 flaky）
+        for _ in 0..4 {
+            tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+        }
+
+        // 共 5 轮 timeout < 6 → dead_signal SHALL NOT fire
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), dead.notified())
+                .await
+                .is_err(),
+            "dead_signal MUST NOT fire on 5 < 6 timeout-class errors",
+        );
+
+        cancel.cancel();
+        handle.cancel_and_join().await;
+    }
+
+    /// 修 GitHub issue #231 主诉求：连续 6 轮 timeout 类错误（典型 `pkill -STOP
+    /// sshd` 场景：SFTP 协议层 hang 但 TCP 未断）SHALL 触发 `dead_signal`。
+    ///
+    /// 严格驱动顺序：每轮 `advance(POLL_INTERVAL + 50ms) + yield * 2`，避免 `select!`
+    /// tick 与 fake snapshot 消耗 race（参考 `crates/CLAUDE.md` `tokio::time::pause`
+    /// 测试基础设施陷阱）。
+    #[tokio::test(start_paused = true)]
+    async fn timeout_threshold_triggers_dead_signal_at_6_consecutive() {
+        let client = FakeSftpClient::arc(
+            projects_root_str(),
+            vec![
+                // baseline (1)
                 Err(SftpClientError::Transient("ETIMEDOUT".into())),
+                // 5 个 poll tick (2..6)，第 6 个 tick 后 consecutive_timeout=6 ≥ 阈值 → dead
+                Err(SftpClientError::Transient("timeout".into())),
+                Err(SftpClientError::Transient("EAGAIN".into())),
+                Err(SftpClientError::Transient("would block".into())),
+                Err(SftpClientError::Transient("timed out".into())),
                 Err(SftpClientError::Transient("ETIMEDOUT".into())),
+            ],
+        );
+        let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let dead = handle.dead_signal();
+
+        // baseline scan = 1 个 timeout (counter=1)
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        // 5 个 poll tick 各贡献 1 个 timeout = 累计 6 ≥ TIMEOUT_FAILURE_THRESHOLD → dead_signal 触发
+        for _ in 0..5 {
+            tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+        }
+
+        tokio::time::timeout(Duration::from_millis(100), dead.notified())
+            .await
+            .expect("dead_signal SHALL fire after TIMEOUT_FAILURE_THRESHOLD=6 consecutive timeout errors");
+
+        // watcher 自己退出
+        tokio::time::timeout(Duration::from_millis(100), handle.join())
+            .await
+            .expect("watcher SHALL exit loop after timeout dead_signal fires");
+    }
+
+    /// timeout counter SHALL 在中间出现成功 / `OtherTransient` 时**重置**为 0——
+    /// 避免长期累积导致单次偶发 timeout 也触发自愈。`5 timeout + 1 ok + 5 timeout`
+    /// 序列任一时刻 counter ≤ 5 < 6 → 不触发。
+    #[tokio::test(start_paused = true)]
+    async fn timeout_counter_resets_on_intervening_success() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let snap = snap_one_project("proj-A", vec![("a.jsonl", meta(100, now))]);
+        let mut scripted: Vec<Result<DirSnapshot, SftpClientError>> = Vec::new();
+        // baseline 成功（counter=0）
+        scripted.push(Ok(snap.clone()));
+        // 5 个 timeout（counter=1..5）
+        for _ in 0..5 {
+            scripted.push(Err(SftpClientError::Transient("timeout".into())));
+        }
+        // 1 个 ok（counter reset 0）
+        scripted.push(Ok(snap.clone()));
+        // 5 个 timeout 再来（counter=1..5）
+        for _ in 0..5 {
+            scripted.push(Err(SftpClientError::Transient("timeout".into())));
+        }
+        let client = FakeSftpClient::arc(projects_root_str(), scripted);
+        let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let dead = handle.dead_signal();
+
+        // baseline
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        // 11 个 poll tick：5 timeout + 1 ok + 5 timeout
+        for _ in 0..11 {
+            tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+        }
+
+        // counter 任一时刻 ≤ 5 < 6 → SHALL NOT fire
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), dead.notified())
+                .await
+                .is_err(),
+            "dead_signal MUST NOT fire when intervening Ok resets timeout counter",
+        );
+
+        cancel.cancel();
+        handle.cancel_and_join().await;
+    }
+
+    /// codex 二审收紧 reset 规则的回归保障：`5 timeout + 1 permanent + 1 timeout`
+    /// SHALL 触发 `dead_signal`（`consecutive_timeout = 6` 在第 7 轮，`Permanent`
+    /// **不动** timeout counter——避免攻击序列 `5T → 1P → 5T → 1P → ...` 永远
+    /// 推迟 `dead_signal`）。
+    #[tokio::test(start_paused = true)]
+    async fn mixed_permanent_timeout_sequence_still_triggers() {
+        let mut scripted: Vec<Result<DirSnapshot, SftpClientError>> = Vec::new();
+        // baseline = timeout (timeout=1)
+        scripted.push(Err(SftpClientError::Transient("timeout".into())));
+        // 4 个 poll tick = timeout (timeout=2..5)
+        for _ in 0..4 {
+            scripted.push(Err(SftpClientError::Transient("timeout".into())));
+        }
+        // 1 个 permanent (permanent=1, timeout 不动仍 5)
+        scripted.push(Err(SftpClientError::Other("session closed".into())));
+        // 1 个 timeout (timeout=6 ≥ 阈值 → fire)
+        scripted.push(Err(SftpClientError::Transient("timeout".into())));
+        let client = FakeSftpClient::arc(projects_root_str(), scripted);
+        let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let dead = handle.dead_signal();
+
+        // baseline + 6 poll ticks 共 7 round
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        for _ in 0..6 {
+            tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+        }
+
+        tokio::time::timeout(Duration::from_millis(100), dead.notified())
+            .await
+            .expect("dead_signal SHALL fire when timeout reaches 6 even after 1 permanent (codex reset rule)");
+    }
+
+    /// codex 二审收紧 reset 规则的反向回归：`2 permanent + 1 timeout + 1 permanent`
+    /// SHALL 触发 `dead_signal`（`consecutive_permanent = 3` 在第 4 轮，`Timeout`
+    /// **不动** permanent counter）。
+    #[tokio::test(start_paused = true)]
+    async fn mixed_timeout_permanent_sequence_still_triggers() {
+        let scripted = vec![
+            // baseline = permanent (permanent=1)
+            Err(SftpClientError::Other("session closed".into())),
+            // poll = permanent (permanent=2)
+            Err(SftpClientError::Other("session closed".into())),
+            // poll = timeout (timeout=1, permanent 不动仍 2)
+            Err(SftpClientError::Transient("timeout".into())),
+            // poll = permanent (permanent=3 ≥ 阈值 → fire)
+            Err(SftpClientError::Other("session closed".into())),
+        ];
+        let client = FakeSftpClient::arc(projects_root_str(), scripted);
+        let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let dead = handle.dead_signal();
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        for _ in 0..3 {
+            tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+        }
+
+        tokio::time::timeout(Duration::from_millis(100), dead.notified())
+            .await
+            .expect("dead_signal SHALL fire when permanent reaches 3 even after 1 timeout (codex reset rule)");
+    }
+
+    /// `scan_once` 子目录 `read_dir` `Permanent` 错误 SHALL escalate 到外层（修
+    /// issue #231 #2：旧版 `scan_once` 内 `Other(reason)` silent continue
+    /// 让 sub-project channel-dead 错误被静默吞掉、watcher 误以为 baseline
+    /// 完整后下轮报"全部 session deleted"事件）。
+    ///
+    /// fake：顶层 `read_dir` 返 Ok 列出 1 个 sub-project，sub-project `read_dir`
+    /// 返 `Other("session closed")` `Permanent` 错误。3 轮后外层 counter=3 ≥ 阈值
+    /// → `dead_signal` 触发。
+    #[tokio::test(start_paused = true)]
+    async fn subdir_permanent_error_escalates_scan_once() {
+        struct SubdirErrorFake {
+            projects_root: String,
+            subdir_error_count: TokioMutex<u32>,
+        }
+
+        #[async_trait]
+        impl SftpClient for SubdirErrorFake {
+            async fn metadata(&self, _path: &str) -> Result<FsMetadata, SftpClientError> {
+                Err(SftpClientError::Other("not used".into()))
+            }
+            async fn try_exists(&self, _path: &str) -> Result<bool, SftpClientError> {
+                Err(SftpClientError::Other("not used".into()))
+            }
+            async fn read(&self, _path: &str) -> Result<Vec<u8>, SftpClientError> {
+                Err(SftpClientError::Other("not used".into()))
+            }
+            async fn read_lines_head(
+                &self,
+                _path: &str,
+                _max: usize,
+            ) -> Result<Vec<String>, SftpClientError> {
+                Err(SftpClientError::Other("not used".into()))
+            }
+            async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, SftpClientError> {
+                if path == self.projects_root {
+                    // 顶层成功列出 1 个 sub-project
+                    return Ok(vec![RemoteEntry {
+                        name: "proj-A".to_owned(),
+                        kind: EntryKind::Dir,
+                        metadata: None,
+                        mtime_missing: false,
+                    }]);
+                }
+                // sub-project read_dir → 永久错误 escalate
+                *self.subdir_error_count.lock().await += 1;
+                Err(SftpClientError::Other("sftp error: session closed".into()))
+            }
+            async fn write(&self, _path: &str, _data: &[u8]) -> Result<(), SftpClientError> {
+                Err(SftpClientError::Other("not used".into()))
+            }
+            async fn mkdir(&self, _path: &str) -> Result<(), SftpClientError> {
+                Err(SftpClientError::Other("not used".into()))
+            }
+            async fn remove(&self, _path: &str) -> Result<(), SftpClientError> {
+                Err(SftpClientError::Other("not used".into()))
+            }
+            async fn rename(&self, _src: &str, _dst: &str) -> Result<(), SftpClientError> {
+                Err(SftpClientError::Other("not used".into()))
+            }
+        }
+
+        let fake = Arc::new(SubdirErrorFake {
+            projects_root: projects_root_str().to_owned(),
+            subdir_error_count: TokioMutex::new(0),
+        });
+        let counter_handle = Arc::clone(&fake);
+        let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(fake, projects_root(), tx, cancel.clone());
+        let dead = handle.dead_signal();
+
+        // baseline scan = 1 次 sub-project permanent 错误（escalate 到 outer scan_once
+        // 返 Err → counter=1）
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        // 2 次 poll tick = 2 次 sub-project permanent 错误（counter=2..3）→ 第 3 轮
+        // 后达 PERMANENT_FAILURE_THRESHOLD → dead_signal 触发
+        for _ in 0..2 {
+            tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+        }
+
+        tokio::time::timeout(Duration::from_millis(100), dead.notified())
+            .await
+            .expect(
+                "subdir Permanent error SHALL escalate scan_once and trigger dead_signal at 3 consecutive rounds",
+            );
+
+        let n_subdir_errors = *counter_handle.subdir_error_count.lock().await;
+        assert!(
+            n_subdir_errors >= 3,
+            "expected at least 3 sub-project read_dir attempts, got {n_subdir_errors}",
+        );
+    }
+
+    /// `OtherTransient` 错误 SHALL reset 两 counter——视同 channel 真活着的
+    /// 强证据（与 `Ok` 等价）。10 轮纯 `OtherTransient` 不触发任何阈值。
+    #[tokio::test(start_paused = true)]
+    async fn other_transient_does_not_trigger_dead_signal() {
+        let client = FakeSftpClient::arc(
+            projects_root_str(),
+            vec![
+                // 不带 transport-dead / timeout 关键字的 Other 错误
+                Err(SftpClientError::Other("unsupported sftp version".into())),
+                Err(SftpClientError::Other("status failure: unknown".into())),
+                Err(SftpClientError::Other("unsupported sftp version".into())),
+                Err(SftpClientError::Other("status failure: unknown".into())),
+                Err(SftpClientError::Other("unsupported sftp version".into())),
             ],
         );
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
@@ -1113,7 +1513,6 @@ mod tests {
 
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
-
         for _ in 0..4 {
             tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
             tokio::task::yield_now().await;
@@ -1124,56 +1523,68 @@ mod tests {
             tokio::time::timeout(Duration::from_millis(50), dead.notified())
                 .await
                 .is_err(),
-            "dead_signal MUST NOT fire on transient errors only",
+            "OtherTransient errors SHALL NOT trigger dead_signal (视同 channel 真活着)",
         );
 
         cancel.cancel();
         handle.cancel_and_join().await;
     }
 
+    /// 三态分类覆盖——修 GitHub issue #231：旧版 `is_permanent_sftp_failure -> bool`
+    /// 让 `Transient("timeout")` 永远落 false 永远不计 dead 检测；新版三态 +
+    /// 双独立 counter 让 timeout 走独立高阈值（6 ≈ 18s）触发自愈。
     #[test]
-    fn is_permanent_sftp_failure_classifies_session_closed_as_permanent() {
-        // `Other` 路径
-        assert!(is_permanent_sftp_failure(&SftpClientError::Other(
-            "sftp error: session closed".into()
-        )));
-        assert!(is_permanent_sftp_failure(&SftpClientError::Other(
-            "russh: Eof".into()
-        )));
-        assert!(is_permanent_sftp_failure(&SftpClientError::Other(
-            "Broken pipe".into()
-        )));
-        assert!(is_permanent_sftp_failure(&SftpClientError::Other(
-            "connection reset by peer".into()
-        )));
-        // `Transient` 路径——含 transport-dead 关键字的 retry-exhausted 也算
-        // permanent（codex 二审 major fix）：provider::is_transient_io_reason
-        // 把 broken pipe / connection reset / epipe 归 Transient，with_retry
-        // 3 次后仍是这类错误就是 channel 真死了。
-        assert!(is_permanent_sftp_failure(&SftpClientError::Transient(
-            "broken pipe".into()
-        )));
-        assert!(is_permanent_sftp_failure(&SftpClientError::Transient(
-            "EPIPE".into()
-        )));
-        assert!(is_permanent_sftp_failure(&SftpClientError::Transient(
-            "ECONNRESET while reading".into()
-        )));
-        // 非永久关键字的 Other / Transient（unsupported 协议 / 纯 timeout / EAGAIN）
-        // SHALL NOT 触发自愈
-        assert!(!is_permanent_sftp_failure(&SftpClientError::Other(
-            "unsupported sftp version".into()
-        )));
-        assert!(!is_permanent_sftp_failure(&SftpClientError::Transient(
-            "timeout".into()
-        )));
-        assert!(!is_permanent_sftp_failure(&SftpClientError::Transient(
-            "EAGAIN".into()
-        )));
-        assert!(!is_permanent_sftp_failure(&SftpClientError::NoSuchFile));
-        assert!(!is_permanent_sftp_failure(
-            &SftpClientError::PermissionDenied
-        ));
+    fn classify_failure_classifies_three_kinds() {
+        // === Permanent：transport-dead 关键字（无论 Other / Transient 来源）===
+        for case in [
+            SftpClientError::Other("sftp error: session closed".into()),
+            SftpClientError::Other("russh: Eof".into()),
+            SftpClientError::Other("Broken pipe".into()),
+            SftpClientError::Other("connection reset by peer".into()),
+            // Transient 路径——provider::is_transient_io_reason 把 broken pipe /
+            // connection reset / epipe 归 Transient，with_retry 3 次后仍是这类
+            // 错误就是 channel 真死了。
+            SftpClientError::Transient("broken pipe".into()),
+            SftpClientError::Transient("EPIPE".into()),
+            SftpClientError::Transient("ECONNRESET while reading".into()),
+        ] {
+            assert_eq!(
+                classify_failure(&case),
+                PollFailureKind::Permanent,
+                "transport-dead 关键字 SHALL classify Permanent: {case:?}",
+            );
+        }
+
+        // === Timeout：timeout / etimedout / timed out / eagain / would block ===
+        // 修 issue #231 主诉求：纯 timeout 现在走独立 counter 而非永远不计
+        for case in [
+            SftpClientError::Transient("timeout".into()),
+            SftpClientError::Transient("ETIMEDOUT".into()),
+            SftpClientError::Transient("timed out".into()),
+            SftpClientError::Transient("EAGAIN".into()),
+            SftpClientError::Transient("would block".into()),
+        ] {
+            assert_eq!(
+                classify_failure(&case),
+                PollFailureKind::Timeout,
+                "timeout-class 关键字 SHALL classify Timeout: {case:?}",
+            );
+        }
+
+        // === OtherTransient：不带任何关键字的 Transient / Other / NoSuchFile /
+        // PermissionDenied —— 视同 channel 真活着的强证据，reset 两 counter ===
+        for case in [
+            SftpClientError::Other("unsupported sftp version".into()),
+            SftpClientError::Transient("status failure: weird code".into()),
+            SftpClientError::NoSuchFile,
+            SftpClientError::PermissionDenied,
+        ] {
+            assert_eq!(
+                classify_failure(&case),
+                PollFailureKind::OtherTransient,
+                "non-channel-related error SHALL classify OtherTransient: {case:?}",
+            );
+        }
     }
 
     #[tokio::test]

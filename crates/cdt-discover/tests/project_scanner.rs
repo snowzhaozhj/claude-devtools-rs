@@ -454,3 +454,265 @@ fn cdt_core_session_does_not_have_cwd_relative_to_repo_root_field() {
          #5. block:\n{session_block}"
     );
 }
+
+// =============================================================================
+// SSH 模式 channel-dead fail-fast 回归（修 GitHub issue #231 #2）
+// =============================================================================
+//
+// 旧版 `scan` SSH 分支单 project read_dir 报 `session closed` 时只 warn +
+// continue，错误信号不传导到 IPC caller，用户 sidebar 看到不完整列表。
+// 新版按 `FsError::is_likely_channel_dead()` fail-fast，channel-dead 立即
+// abort 整轮 scan 返 Err。
+//
+// 这些测试用一个 fake SSH provider（`kind() == FsKind::Ssh`）注入特定错误
+// 到第一个 sub-project 的 read_dir，验证 fail-fast 路径。
+
+mod ssh_channel_dead_fail_fast {
+    use super::*;
+    use cdt_discover::{DirEntry, FsError, FsKind, FsMetadata};
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    /// 注入 per-path 错误的 fake SSH provider；命中错误返 Err，否则委托给
+    /// 内部 `LocalFileSystemProvider` 走真实 fs。`kind()` 强制返 SSH。
+    struct FakeSshFs {
+        local: cdt_discover::LocalFileSystemProvider,
+        /// path string → 错误工厂函数（多次调用每次返新错误）
+        errors: Mutex<HashMap<PathBuf, Box<dyn Fn() -> FsError + Send + Sync>>>,
+    }
+
+    impl FakeSshFs {
+        fn new(local: cdt_discover::LocalFileSystemProvider) -> Self {
+            Self {
+                local,
+                errors: Mutex::new(HashMap::new()),
+            }
+        }
+
+        fn inject_error<F>(&self, path: PathBuf, factory: F)
+        where
+            F: Fn() -> FsError + Send + Sync + 'static,
+        {
+            self.errors.lock().unwrap().insert(path, Box::new(factory));
+        }
+
+        fn maybe_inject(&self, path: &Path) -> Option<FsError> {
+            self.errors.lock().unwrap().get(path).map(|f| f())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl FileSystemProvider for FakeSshFs {
+        fn kind(&self) -> FsKind {
+            FsKind::Ssh
+        }
+        async fn exists(&self, path: &Path) -> bool {
+            self.local.exists(path).await
+        }
+        async fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>, FsError> {
+            if let Some(err) = self.maybe_inject(path) {
+                return Err(err);
+            }
+            self.local.read_dir(path).await
+        }
+        async fn read_dir_with_metadata(&self, path: &Path) -> Result<Vec<DirEntry>, FsError> {
+            if let Some(err) = self.maybe_inject(path) {
+                return Err(err);
+            }
+            self.local.read_dir_with_metadata(path).await
+        }
+        async fn read_to_string(&self, path: &Path) -> Result<String, FsError> {
+            self.local.read_to_string(path).await
+        }
+        async fn stat(&self, path: &Path) -> Result<FsMetadata, FsError> {
+            self.local.stat(path).await
+        }
+        async fn read_lines_head(&self, path: &Path, max: usize) -> Result<Vec<String>, FsError> {
+            self.local.read_lines_head(path, max).await
+        }
+        async fn open_read(
+            &self,
+            path: &Path,
+        ) -> Result<Box<dyn tokio::io::AsyncRead + Send + Unpin>, FsError> {
+            self.local.open_read(path).await
+        }
+        async fn write_atomic(&self, path: &Path, content: &[u8]) -> Result<(), FsError> {
+            self.local.write_atomic(path, content).await
+        }
+        async fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
+            self.local.create_dir_all(path).await
+        }
+        async fn remove_file(&self, path: &Path) -> Result<(), FsError> {
+            self.local.remove_file(path).await
+        }
+    }
+
+    /// 铺 3 个 project 目录，每个含 1 个 session jsonl（让 `scan_project_dir`
+    /// 真正进入 `read_dir_with_metadata` 调用，从而触发注入的错误）。
+    async fn setup_three_projects(projects_dir: &Path) {
+        for name in &["-P-A", "-P-B", "-P-C"] {
+            let proj = projects_dir.join(name);
+            tokio::fs::create_dir_all(&proj).await.unwrap();
+            super::write_session(&proj, "s1", &format!("/path{name}")).await;
+        }
+    }
+
+    /// spec `project-discovery::Scan Claude projects directory` Scenario
+    /// "SSH channel-dead error aborts full scan instead of silent skip"。
+    #[tokio::test]
+    async fn ssh_channel_dead_aborts_scan() {
+        let root = tempfile::tempdir().unwrap();
+        let projects_dir = root.path().join("projects");
+        setup_three_projects(&projects_dir).await;
+
+        let fake = Arc::new(FakeSshFs::new(LocalFileSystemProvider::new()));
+        // 给第一个被扫到的 project 注入 Disconnected 错误
+        // dirs 是 read_dir 拿到后排序前的顺序——LocalFileSystemProvider 按
+        // os 默认顺序返，3 个 fixture 里挑任一即可
+        fake.inject_error(projects_dir.join("-P-A"), || FsError::Disconnected {
+            path: PathBuf::from("/p"),
+            reason: "channel closed".into(),
+        });
+        fake.inject_error(projects_dir.join("-P-B"), || FsError::Disconnected {
+            path: PathBuf::from("/p"),
+            reason: "channel closed".into(),
+        });
+        fake.inject_error(projects_dir.join("-P-C"), || FsError::Disconnected {
+            path: PathBuf::from("/p"),
+            reason: "channel closed".into(),
+        });
+
+        let fs: Arc<dyn FileSystemProvider> = fake;
+        let mut scanner = ProjectScanner::new(fs, projects_dir);
+        let result = scanner.scan().await;
+
+        assert!(
+            result.is_err(),
+            "channel-dead error SHALL abort scan, got: {result:?}",
+        );
+    }
+
+    /// spec `project-discovery::Scan Claude projects directory` Scenario
+    /// "SSH `TransientExhausted` with transport-dead keyword aborts scan"。
+    #[tokio::test]
+    async fn ssh_transient_exhausted_with_transport_dead_aborts_scan() {
+        let root = tempfile::tempdir().unwrap();
+        let projects_dir = root.path().join("projects");
+        setup_three_projects(&projects_dir).await;
+
+        let fake = Arc::new(FakeSshFs::new(LocalFileSystemProvider::new()));
+        // 任一 project 触发 channel-dead transient exhausted → abort
+        for name in &["-P-A", "-P-B", "-P-C"] {
+            fake.inject_error(projects_dir.join(name), || FsError::TransientExhausted {
+                path: PathBuf::from("/p"),
+                attempts: 3,
+                last_reason: "session closed".into(),
+            });
+        }
+
+        let fs: Arc<dyn FileSystemProvider> = fake;
+        let mut scanner = ProjectScanner::new(fs, projects_dir);
+        let result = scanner.scan().await;
+
+        assert!(
+            result.is_err(),
+            "TransientExhausted with transport-dead keyword SHALL abort scan, got: {result:?}",
+        );
+    }
+
+    /// spec `project-discovery::Scan Claude projects directory` Scenario
+    /// "SSH per-project pure timeout `TransientExhausted` 仍 silent skip 不 abort"。
+    #[tokio::test]
+    async fn ssh_pure_timeout_does_not_abort() {
+        let root = tempfile::tempdir().unwrap();
+        let projects_dir = root.path().join("projects");
+        setup_three_projects(&projects_dir).await;
+
+        let fake = Arc::new(FakeSshFs::new(LocalFileSystemProvider::new()));
+        // 仅 -P-A 注入 pure timeout（不含 transport-dead 关键字）→ silent skip
+        // -P-B 与 -P-C 仍真实扫描，scan 整体应 Ok 且包含两个 project
+        fake.inject_error(projects_dir.join("-P-A"), || FsError::TransientExhausted {
+            path: PathBuf::from("/p"),
+            attempts: 3,
+            last_reason: "timeout".into(),
+        });
+
+        let fs: Arc<dyn FileSystemProvider> = fake;
+        let mut scanner = ProjectScanner::new(fs, projects_dir);
+        let projects = scanner
+            .scan()
+            .await
+            .expect("pure timeout SHALL NOT abort scan");
+
+        // -P-A 被 silent skip，-P-B / -P-C 仍出现
+        let ids: Vec<&String> = projects.iter().map(|p| &p.id).collect();
+        assert!(
+            !ids.iter().any(|id| id.as_str() == "-P-A"),
+            "P-A SHALL be silent-skipped, got ids: {ids:?}",
+        );
+        assert!(
+            ids.iter().any(|id| id.as_str() == "-P-B"),
+            "P-B SHALL be present, got ids: {ids:?}",
+        );
+        assert!(
+            ids.iter().any(|id| id.as_str() == "-P-C"),
+            "P-C SHALL be present, got ids: {ids:?}",
+        );
+    }
+
+    /// spec `project-discovery::Scan Claude projects directory` Scenario
+    /// "SSH per-project `NotFound` 仍 silent skip 不 abort"。
+    #[tokio::test]
+    async fn ssh_notfound_does_not_abort() {
+        let root = tempfile::tempdir().unwrap();
+        let projects_dir = root.path().join("projects");
+        setup_three_projects(&projects_dir).await;
+
+        let fake = Arc::new(FakeSshFs::new(LocalFileSystemProvider::new()));
+        fake.inject_error(projects_dir.join("-P-A"), || {
+            FsError::NotFound(PathBuf::from("/p"))
+        });
+
+        let fs: Arc<dyn FileSystemProvider> = fake;
+        let mut scanner = ProjectScanner::new(fs, projects_dir);
+        let projects = scanner.scan().await.expect("NotFound SHALL NOT abort scan");
+
+        let ids: Vec<&String> = projects.iter().map(|p| &p.id).collect();
+        assert!(
+            !ids.iter().any(|id| id.as_str() == "-P-A"),
+            "P-A NotFound SHALL be silent-skipped, got ids: {ids:?}",
+        );
+        assert!(
+            ids.iter().any(|id| id.as_str() == "-P-B"),
+            "P-B SHALL be present, got ids: {ids:?}",
+        );
+    }
+
+    /// spec `fs-abstraction::FsError 提供错误语义元方法` Scenario `Io` `BrokenPipe`
+    /// 触发 channel-dead——经由 `project_scanner` 集成路径再验一次（双层契约
+    /// 锚定）。
+    #[tokio::test]
+    async fn ssh_io_broken_pipe_aborts_scan() {
+        let root = tempfile::tempdir().unwrap();
+        let projects_dir = root.path().join("projects");
+        setup_three_projects(&projects_dir).await;
+
+        let fake = Arc::new(FakeSshFs::new(LocalFileSystemProvider::new()));
+        for name in &["-P-A", "-P-B", "-P-C"] {
+            fake.inject_error(projects_dir.join(name), || FsError::Io {
+                path: PathBuf::from("/p"),
+                source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "broken"),
+            });
+        }
+
+        let fs: Arc<dyn FileSystemProvider> = fake;
+        let mut scanner = ProjectScanner::new(fs, projects_dir);
+        let result = scanner.scan().await;
+
+        assert!(
+            result.is_err(),
+            "Io BrokenPipe SHALL abort scan, got: {result:?}",
+        );
+    }
+}

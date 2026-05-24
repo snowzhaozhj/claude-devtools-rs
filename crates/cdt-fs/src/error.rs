@@ -79,6 +79,48 @@ impl FsError {
             | FsError::TransientExhausted { .. } => false,
         }
     }
+
+    /// 该错误是否暗示底层 transport channel（典型 SSH SFTP）已死 / 半死。
+    ///
+    /// caller（典型 `cdt-discover::ProjectScanner` SSH 分支）SHALL 据此 fail-fast
+    /// abort 整轮 scan 而非 silent continue 凑半成品列表，让上层（`list_repository_groups`
+    /// → IPC caller）拿到 hard error 触发自愈路径而非误以为 scan 已完成。
+    ///
+    /// 语义独立于 [`Self::is_retryable`]：channel-dead 是更强的"该不该 abort 整轮 scan"
+    /// 信号——`Disconnected.is_retryable() == true` 但 `is_likely_channel_dead() == true`
+    /// 同时成立（表达"重连后能 retry，但当前 scan 已不该继续"）。
+    ///
+    /// 命中规则（spec `fs-abstraction::FsError 提供错误语义元方法`）：
+    /// - `Disconnected`：恒 true
+    /// - `TransientExhausted { last_reason }`：含 `session closed` / `eof` / `broken pipe`
+    ///   / `epipe` / `connection reset` / `econnreset` 任一 transport-dead 关键字时 true；
+    ///   纯 `timeout` / `eagain` / `would block` 返 false（保留容错语义，留给 polling
+    ///   watcher 的独立 timeout counter 在持续 18s 后自行触发 `dead_signal`）
+    /// - `Io { source }`：`source.kind()` 是 `BrokenPipe` / `ConnectionReset` /
+    ///   `ConnectionAborted` 时 true
+    /// - `NotFound` / `Utf8` / `Unsupported`：恒 false（与 channel 状态无关）
+    #[must_use]
+    pub fn is_likely_channel_dead(&self) -> bool {
+        match self {
+            FsError::Disconnected { .. } => true,
+            FsError::TransientExhausted { last_reason, .. } => {
+                let s = last_reason.to_ascii_lowercase();
+                s.contains("session closed")
+                    || s.contains("eof")
+                    || s.contains("broken pipe")
+                    || s.contains("epipe")
+                    || s.contains("connection reset")
+                    || s.contains("econnreset")
+            }
+            FsError::Io { source, .. } => matches!(
+                source.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+            ),
+            FsError::NotFound(_) | FsError::Utf8 { .. } | FsError::Unsupported(_) => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -162,5 +204,91 @@ mod tests {
             source: io::Error::new(io::ErrorKind::PermissionDenied, "denied"),
         };
         assert!(!err.should_invalidate_cache());
+    }
+
+    /// spec `fs-abstraction::FsError 提供错误语义元方法` Scenario "Disconnected
+    /// 触发 channel-dead"。
+    #[test]
+    fn is_likely_channel_dead_classifies_disconnected() {
+        let err = FsError::Disconnected {
+            path: PathBuf::from("/p"),
+            reason: "anything".into(),
+        };
+        assert!(err.is_likely_channel_dead());
+        // 与 is_retryable 语义独立：Disconnected 同时是 retryable
+        assert!(err.is_retryable());
+    }
+
+    /// spec `fs-abstraction::FsError 提供错误语义元方法` Scenario `TransientExhausted`
+    /// 含 transport-dead 关键字触发 channel-dead。
+    #[test]
+    fn is_likely_channel_dead_classifies_transient_exhausted_with_transport_dead_keyword() {
+        for reason in [
+            "session closed",
+            "Eof",
+            "broken pipe",
+            "EPIPE while writing",
+            "connection reset by peer",
+            "ECONNRESET",
+        ] {
+            let err = FsError::TransientExhausted {
+                path: PathBuf::from("/p"),
+                attempts: 3,
+                last_reason: reason.into(),
+            };
+            assert!(
+                err.is_likely_channel_dead(),
+                "transport-dead keyword {reason:?} SHALL trigger is_likely_channel_dead",
+            );
+        }
+    }
+
+    /// spec `fs-abstraction::FsError 提供错误语义元方法` Scenario `TransientExhausted`
+    /// 仅含纯 timeout 不触发 channel-dead。
+    #[test]
+    fn is_likely_channel_dead_pure_timeout_returns_false() {
+        for reason in ["timeout", "ETIMEDOUT", "timed out", "EAGAIN", "would block"] {
+            let err = FsError::TransientExhausted {
+                path: PathBuf::from("/p"),
+                attempts: 3,
+                last_reason: reason.into(),
+            };
+            assert!(
+                !err.is_likely_channel_dead(),
+                "pure timeout-class reason {reason:?} SHALL NOT trigger is_likely_channel_dead",
+            );
+        }
+    }
+
+    /// spec `fs-abstraction::FsError 提供错误语义元方法` Scenario `Io` `BrokenPipe` /
+    /// `ConnectionReset` / `ConnectionAborted` 触发 channel-dead。
+    #[test]
+    fn is_likely_channel_dead_io_kinds() {
+        let mk = |kind: io::ErrorKind| FsError::Io {
+            path: PathBuf::from("/p"),
+            source: io::Error::new(kind, "x"),
+        };
+        assert!(mk(io::ErrorKind::BrokenPipe).is_likely_channel_dead());
+        assert!(mk(io::ErrorKind::ConnectionReset).is_likely_channel_dead());
+        assert!(mk(io::ErrorKind::ConnectionAborted).is_likely_channel_dead());
+        // 非 transport-dead IO kind 不触发
+        assert!(!mk(io::ErrorKind::PermissionDenied).is_likely_channel_dead());
+        assert!(!mk(io::ErrorKind::TimedOut).is_likely_channel_dead());
+        assert!(!mk(io::ErrorKind::WouldBlock).is_likely_channel_dead());
+    }
+
+    /// spec `fs-abstraction::FsError 提供错误语义元方法` Scenario `NotFound` / `Utf8` /
+    /// `Unsupported` 不触发 channel-dead。
+    #[test]
+    fn is_likely_channel_dead_notfound_utf8_unsupported_returns_false() {
+        assert!(!FsError::NotFound(PathBuf::from("/p")).is_likely_channel_dead());
+        assert!(
+            !FsError::Utf8 {
+                path: PathBuf::from("/p"),
+                source: String::from_utf8(vec![0xFFu8]).unwrap_err(),
+            }
+            .is_likely_channel_dead()
+        );
+        assert!(!FsError::Unsupported("op").is_likely_channel_dead());
     }
 }
