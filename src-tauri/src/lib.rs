@@ -947,7 +947,13 @@ pub fn run() {
         .worker_threads(4)
         .max_blocking_threads(64)
         .thread_keep_alive(std::time::Duration::from_secs(60))
-        .thread_name("cdt-rt")
+        .thread_name_fn(|| {
+            // 给每个 runtime 线程独立序号，sample / Activity Monitor 输出里
+            // 可数 cdt-rt-N 区分诊断（同名 cdt-rt 会丢失 287→90 这类线程构成信号）。
+            static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let id = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            format!("cdt-rt-{id}")
+        })
         .enable_all()
         .build()
         .expect("failed to create tokio runtime");
