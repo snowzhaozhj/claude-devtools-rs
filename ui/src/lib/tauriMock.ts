@@ -7,6 +7,7 @@
 // 契约见 openspec/specs/frontend-test-pyramid/spec.md。
 
 import type { InvokeArgs } from '@tauri-apps/api/core'
+import { emit } from '@tauri-apps/api/event'
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks'
 
 import { selectFixture, type Fixture } from './__fixtures__'
@@ -862,16 +863,30 @@ function buildHandler(fx: Fixture) {
   }
 }
 
+/** 当前 setup 持有的 fixture 引用——dev-only e2e helper 用，没 setupMockIPC 时为 null。 */
+let activeFixtureRef: Fixture | null = null
+
 /**
  * 注入 mockIPC 与 mockWindows。MUST 在 mount(App) 之前调用。
  *
  * 多次调用安全：每次都 clearMocks 后重新注入；fixture 切换走这条路径。
+ *
+ * 每次 setup deep-clone fixture——`__fixtures__/*` 模块导出的对象是 vite dev
+ * server 内 module-level 引用，所有并发 page / playwright worker 都拿到同一
+ * 引用。`mark_notification_read` / `simulateNotificationAdded` 等 mutate 操作
+ * 会跨 page 污染 → 并发 e2e 截图 race（issue #258 e2e PR 踩到：通知 badge 数
+ * 在 worker A 跑 push event 测试时变 4，worker B 截 startup 截图时看到 "4"
+ * 而非默认 "1"）。深拷贝后每个 page setup 拿独立副本，本 page 内 mutation
+ * 不外溢。`structuredClone` Node 17+ / 所有现代浏览器都支持，覆盖 vitest
+ * jsdom + chromium playwright runner。
  */
 export function setupMockIPC(fixtureName?: string | Fixture | null): void {
-  const fx = typeof fixtureName === 'object' && fixtureName !== null
+  const original = typeof fixtureName === 'object' && fixtureName !== null
     ? fixtureName
     : selectFixture(fixtureName)
+  const fx = structuredClone(original) as Fixture
   activeFixtureName = fx.name
+  activeFixtureRef = fx
 
   // mockWindows 必须在 mockIPC 之前 / 同时——否则 getCurrentWindow() 等会失败
   mockWindows('main')
@@ -885,6 +900,79 @@ export function setupMockIPC(fixtureName?: string | Fixture | null): void {
   )
 }
 
+/**
+ * dev-only e2e helper：模拟后端 `app.emit("notification-added")` push event。
+ * 同时 mutate fixture state（unreadCount++，notifications.unshift），让随后
+ * `App.svelte::onNotificationUpdate` 走 `refreshUnreadCount` → `get_notifications`
+ * 拿到新数。issue #258 验收用：trigger 后 < 100 ms 红点出现 e2e 验证入口。
+ *
+ * MUST 仅在 `setupMockIPC` 之后调用——否则 fx 引用未确立时抛错。production
+ * bundle 不暴露：`main.ts::maybeSetupMock` 只在 `import.meta.env.DEV` 块内
+ * dynamic import 本模块，整块被 vite DCE。
+ */
+export async function simulateNotificationAdded(
+  override?: Partial<Fixture['notifications']['notifications'][number]>,
+): Promise<void> {
+  if (!activeFixtureRef) {
+    throw new Error('simulateNotificationAdded called before setupMockIPC')
+  }
+  const fx = activeFixtureRef
+  const id = override?.id ?? `notif-sim-${Date.now()}`
+  const now = override?.timestamp ?? Date.now()
+  const newNotif = {
+    id,
+    timestamp: now,
+    sessionId: 'sess-sim',
+    projectId: 'mock-rich-rust',
+    filePath: '/sim/path.jsonl',
+    source: 'tool_result' as const,
+    message: 'simulated notification',
+    triggerName: 'Sim Trigger',
+    triggerColor: '#3b82f6',
+    isRead: false,
+    createdAt: now,
+    ...override,
+  }
+  fx.notifications.notifications.unshift(newNotif)
+  fx.notifications.totalCount = fx.notifications.notifications.length
+  fx.notifications.total = fx.notifications.totalCount
+  fx.notifications.unreadCount = fx.notifications.notifications.filter(
+    (x) => !x.isRead,
+  ).length
+  await emit('notification-added', newNotif)
+}
+
+/**
+ * dev-only e2e helper：清掉 `simulateNotificationAdded` 添加的所有模拟通知，
+ * 把 fixture 状态复位回原始数据。`simulateNotificationAdded` 会 mutate fixture
+ * （fx 是 module-level shared 引用），跨 spec 复用 vite dev server 时下一个 spec
+ * 会拿到上一轮残留——`playwright.config.ts::reuseExistingServer` 本地 true 时
+ * spec `afterEach` SHALL 调本函数显式复位。规则：清掉所有 id 以 `notif-sim-`
+ * 开头的模拟通知 + 重新计算 totalCount / unreadCount，原始 fixture 数据不动。
+ */
+export function resetSimulatedNotifications(): void {
+  if (!activeFixtureRef) return
+  const fx = activeFixtureRef
+  fx.notifications.notifications = fx.notifications.notifications.filter(
+    (x) => !x.id.startsWith('notif-sim-'),
+  )
+  fx.notifications.totalCount = fx.notifications.notifications.length
+  fx.notifications.total = fx.notifications.totalCount
+  fx.notifications.unreadCount = fx.notifications.notifications.filter(
+    (x) => !x.isRead,
+  ).length
+}
+
 export function getActiveFixtureName(): string | null {
   return activeFixtureName
+}
+
+/**
+ * 当前 setupMockIPC 持有的 fixture 引用——`structuredClone` 后的副本，**不是**
+ * `__fixtures__/*` 模块导出的原对象。单测需要断言"IPC handler 内部 mutate
+ * 后的 state"时（如 `update_config` 改 httpServer.port）SHALL 读这个引用，而
+ * **不是** import 原 fixture 模块对象——deep clone 后两者已脱钩。
+ */
+export function getActiveFixtureRef(): Fixture | null {
+  return activeFixtureRef
 }

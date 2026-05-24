@@ -206,7 +206,13 @@
     await initFileChangeStore();
     // 启动时同步一次 Dock badge（显示持久化的未读数）
     await onNotificationUpdate();
-    notificationPollTimer = setInterval(onNotificationUpdate, 30000);
+    // 主路径走 push event：`notification-update`（mark-as-read）+ `notification-added`
+    // （新通知）订阅在 onMount 顶部完成。这里只保留 5 min 兜底轮询防 event 丢失
+    // （Tauri runtime listener 失效 / 浏览器 SSE 重连窗口期错过 notification-update
+    // 等少数路径）。30s 高频轮询会阻止 WKWebView 进入 idle（power nap）→ idle 1 min
+    // 主线程 mach_msg wait 占比受影响，反 perf.md "辅助工具 idle 稳态 < 2%" 约束
+    // （详 issue #258）。
+    notificationPollTimer = setInterval(onNotificationUpdate, 300000);
     // Rosetta 翻译运行检测：Apple Silicon 上跑 Intel binary 时提示用户换 ARM 包。
     // localStorage 内 dismissed 状态由 RosettaStatusIcon 自身管理。
     try {

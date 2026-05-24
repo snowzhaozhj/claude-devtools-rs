@@ -25,7 +25,7 @@
 
 - **Context Panel**：后端 `cdt-api` → `cdt-analyze::context::process_session_context_with_phases` → `ContextInjection[]`；CLAUDE.md 来源通过 `cdt-config::read_all_claude_md_files` 文件系统扫描。
 - **session 元数据**：`list_sessions` IPC 与 HTTP 路径共用骨架 + push 实现（change `unify-session-list-loading-strategy`）——返回**骨架** SessionSummary（`title=null` / `messageCount=0` / `isOngoing=false`），后台 `JoinSet + Semaphore(8)` 并发扫描，每条通过 `subscribe_session_metadata()` broadcast → Tauri emit / SSE `/api/events` push 同形的 `session-metadata-update` → Sidebar 按 sessionId **in-place patch**（不要替换 SessionSummary 实例引用，会触发整行 DOM 重建）。冷启视觉过渡由 `.metadata-pending` shimmer + `transition: opacity 150ms` fade-in 承载；切 project 来回时 `ui/src/lib/sessionListStore.svelte.ts` 提供 by-projectId LRU 缓存让 hydrate 立即生效。
-- **通知**：后端 `mark_notification_read` 后 `app.emit("notification-update")` 推送；前端 `listen()` 立即刷 badge + TabBar 每 30 秒轮询 unreadCount 兜底。
+- **通知**：后端 `mark_notification_read` 后 `app.emit("notification-update")` / 自动通知管线产新通知后 `app.emit("notification-added")` 推送；前端 `App.svelte::onMount` `subscribeEvent` 双路监听 → `refreshUnreadCount` → setUnreadCount + `setBadgeCount`。**5 min 兜底轮询**（`notificationPollTimer`）防 event 丢失：30 s 轮询会阻止 WKWebView idle / power nap → 反 perf.md "辅助工具 idle 稳态" 约束（issue #258）。
 - **file-change 节流链**：后端 `cdt-watch::FileWatcher` debounce 100 ms；前端 `ui/src/lib/fileChangeStore::dedupeRefresh` 仅合并 in-flight 期间的并发调用，**不做时间节流**。高频写 JSONL 会每几百 ms re-render——如需降频加 250 ms cooldown 或 trailing debounce。
 
 ## Svelte 5 陷阱（high frequency 全部踩过）
