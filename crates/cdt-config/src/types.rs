@@ -6,6 +6,32 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// 磁盘加载路径用的"宽松"枚举反序列化：未知字面值（如老版本写过的
+/// `"theme": "auto"`）fallback 到 `Default`，并 `tracing::warn!` 一行让 dev
+/// 知情。**不**让整个 `AppConfig` 反序列化失败 → `merge_with_defaults`
+/// 整体回退到默认值的回归（codex PR #285 review 指出的 blocking 路径）。
+///
+/// `update_*` 路径走 `PartialXConfig` 仍用 serde 默认严格 deserialize，
+/// 拒绝非法值（保 spec configuration-management 字段校验 Scenario）。
+fn deserialize_lenient_enum<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+where
+    T: serde::de::DeserializeOwned + Default,
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match serde_json::from_value::<T>(value.clone()) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            tracing::warn!(
+                value = %value,
+                error = %e,
+                "Unknown enum variant in stored config; falling back to Default"
+            );
+            Ok(T::default())
+        }
+    }
+}
+
 // =============================================================================
 // Top-level config
 // =============================================================================
@@ -133,41 +159,79 @@ impl NotificationTrigger {
 // General
 // =============================================================================
 
+/// 主题偏好。
+///
+/// 序列化形态保持原 `theme: "dark" | "light" | "system"` 字符串契约
+/// （`#[serde(rename_all = "kebab-case")]` 单词产出小写）；前端 / 旧
+/// 配置文件不感知 enum 化。详 `crates/cdt-config/src/manager.rs::PartialGeneralConfig`
+/// 决策：String → typed enum 让 serde 接管字面量校验。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Theme {
+    Dark,
+    Light,
+    #[default]
+    System,
+}
+
+/// 启动默认 tab 偏好。序列化为 `"dashboard" | "last-session"`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum DefaultTab {
+    #[default]
+    Dashboard,
+    LastSession,
+}
+
+/// 点击 sidebar 会话项的默认行为。序列化为 `"replace" | "new-tab"`。
+/// Cmd/Ctrl + 点击始终翻转该默认（对齐 Chrome 浏览器交互）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionClickBehavior {
+    #[default]
+    Replace,
+    NewTab,
+}
+
 /// 应用全局设置。
+///
+/// 三个 enum 字段（`theme` / `default_tab` / `session_click_behavior`）走 lenient
+/// deserialize：磁盘配置含历史版本写过的未知字面量（如 `theme: "auto"`）时
+/// fallback 到 `Default`，**不**让整个 `AppConfig` 反序列化失败 → `merge_with_defaults`
+/// 整体回退到默认。`update_*` 路径走 `PartialGeneralConfig` 仍是严格 enum
+/// 反序列化（拒绝非法值），保 spec configuration-management 校验契约。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::struct_excessive_bools)]
 pub struct GeneralConfig {
     pub launch_at_login: bool,
     pub show_dock_icon: bool,
-    pub theme: String,
-    pub default_tab: String,
+    #[serde(default, deserialize_with = "deserialize_lenient_enum")]
+    pub theme: Theme,
+    #[serde(default, deserialize_with = "deserialize_lenient_enum")]
+    pub default_tab: DefaultTab,
     pub claude_root_path: Option<String>,
     pub auto_expand_ai_groups: bool,
     pub use_native_title_bar: bool,
     /// 点击 sidebar 会话项时的默认行为："replace" 替换当前 tab，"new-tab" 总开新 tab。
     /// Cmd/Ctrl + 点击始终翻转该默认（对齐 Chrome 浏览器交互）。
-    #[serde(default = "default_session_click_behavior")]
-    pub session_click_behavior: String,
+    #[serde(default, deserialize_with = "deserialize_lenient_enum")]
+    pub session_click_behavior: SessionClickBehavior,
     /// 用户偏好外部编辑器（用于"在编辑器打开"右键菜单 IPC `open_in_editor`）。
     /// 默认 `System`：走 OS 默认 app（macOS `open` / Win `start` / Linux `xdg-open`）。
     /// 详 `openspec/specs/configuration-management/spec.md` §"持久化外部编辑器偏好"。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_lenient_enum")]
     pub external_editor: ExternalEditor,
     /// 用户偏好搜索引擎（用于"在浏览器搜索"右键菜单 action）。
     /// 默认 `Google`；`Custom { url_template }` 中 `url_template` SHALL 含 `{query}`
     /// 占位符且 scheme ∈ `{http, https}`（详 §"持久化浏览器搜索引擎偏好"）。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_lenient_enum")]
     pub search_engine: SearchEngine,
     /// 用户偏好终端 app（用于"在终端打开"右键菜单 IPC `open_in_terminal`）。
     /// 统一跨平台 enum：配置可在不同平台间同步，不匹配当前 OS 时运行时
     /// `tracing::warn!` + fallback 到平台默认（不报错）。详 §"持久化首选终端 app"。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_lenient_enum")]
     pub terminal_app: TerminalApp,
-}
-
-fn default_session_click_behavior() -> String {
-    "replace".to_string()
 }
 
 // =============================================================================
