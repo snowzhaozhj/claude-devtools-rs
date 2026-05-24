@@ -4273,12 +4273,8 @@ impl LocalDataApi {
                 }
             }
         }
-        // 扫描涉及文件系统 I/O，放到 blocking 线程池避免阻塞 runtime
-        let configs = tokio::task::spawn_blocking(move || {
-            cdt_discover::agent_configs::read_agent_configs(&pairs)
-        })
-        .await
-        .map_err(|e| ApiError::internal(format!("join error: {e}")))?;
+        // 文件系统 I/O 走 `tokio::fs`，不阻塞 runtime worker。
+        let configs = cdt_discover::agent_configs::read_agent_configs(&pairs).await;
         Ok(configs)
     }
 }
