@@ -1,3 +1,5 @@
+change/enrich-file-change-with-session-list-changed/ipc-data-api 26
+change/enrich-file-change-with-session-list-changed/sidebar-navigation 3
 spec/agent-configs 1
 spec/app-auto-update 29
 spec/app-chrome 7
