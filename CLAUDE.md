@@ -12,14 +12,14 @@
 | Rust workspace | `crates/CLAUDE.md` | Rust 命名/error/async/log/clippy、serde camelCase、Windows 兼容、后台任务 per-key cancel、IPC vs HTTP 分叉、chunk-building 语义契约 |
 | openspec | `openspec/CLAUDE.md` | spec 变更约定 7 条、spec delta 写法、archive 顺序坑、引用约定 |
 
-**跨域规则**散文件（按需 Read，模型自行决策）：
+**跨域规则**（`.claude/rules/*.md`，按 [Claude Code 官方文档](https://code.claude.com/docs/en/memory#organize-rules-with-claude%2Frules%2F) **每次 session 启动时全部自动加载**到 context，priority 与 `.claude/CLAUDE.md` 同；如需路径限定在 frontmatter 加 `paths:` 字段——目前 4 个 rules **均无 paths**，即每次 session 必读）：
 
-| 文件 | 何时读 |
+| 文件 | 覆盖范围 |
 |---|---|
-| `.claude/rules/opsx-apply-cadence.md` | 任何 PR 推进流水线（业务段 + 发布尾段 N.1-N.4） |
-| `.claude/rules/codex-usage.md` | 何时调 codex 二审 / rescue + prompt 模板 |
-| `.claude/rules/perf.md` | 涉及启动路径 / IPC / 后端算法 / 列表渲染的 PR |
-| `.claude/rules/parallelism-modes.md` | 主 session 之外起并行执行单元前（覆盖三形态：subagent / agent team / bg） |
+| `.claude/rules/opsx-apply-cadence.md` | PR 推进流水线节拍（业务段 + 发布尾段 N.1-N.4）|
+| `.claude/rules/codex-usage.md` | codex 二审 / rescue 何时调 + prompt 模板 |
+| `.claude/rules/perf.md` | 性能预算 / 反模式 / bench 入口 / PR 模板 |
+| `.claude/rules/parallelism-modes.md` | 三种并行执行形态（subagent / agent team / bg）的分派 |
 
 ## Parent repo
 
@@ -100,7 +100,7 @@ worktree 编译产物每个 ~6 G，merge PR 后忘清会快速吃光磁盘。半
 
 ## 性能（硬约束 — 详 `.claude/rules/perf.md`）
 
-本仓 Rust 重写原 TS 项目的根本动机就是性能。**预算 / 反模式 / bench 入口 / PR 模板**全部沉淀在 `.claude/rules/perf.md`——任何涉及启动路径 / IPC / 后端算法 / 列表渲染的 PR 都 SHALL 读一遍那个文件并按规则评估 perf impact。
+本仓 Rust 重写原 TS 项目的根本动机就是性能。**预算 / 反模式 / bench 入口 / PR 模板**全部沉淀在 `.claude/rules/perf.md`（rules 每次 session 自动加载到 context，无需主动 Read）——任何涉及启动路径 / IPC / 后端算法 / 列表渲染的 PR 都 SHALL 按那里的规则评估 perf impact。
 
 大会话首屏卡顿走 IPC payload 瘦身路径——模式见 `src-tauri/CLAUDE.md::IPC payload 瘦身模式`；bench 入口 / 探针 target 详 `perf.md::bench 入口`；历次实现查 `git log --grep="feat(perf)"`。
 
