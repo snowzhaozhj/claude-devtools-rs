@@ -17,7 +17,7 @@ spec/notification-triggers 3
 spec/notification-ui 0
 spec/project-discovery 29
 spec/server-mode 14
-spec/session-display 24
+spec/session-display 23
 spec/session-parsing 2
 spec/session-search 0
 spec/settings-ui 6
