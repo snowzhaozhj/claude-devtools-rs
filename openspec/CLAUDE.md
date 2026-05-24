@@ -69,16 +69,6 @@ CLAUDE.md / TS_BASELINE_DEVIATIONS.md / commit message 引用一个已归档 cha
 
 spec 改了但 proposal/tasks 仍写旧策略 = codex / 人审会发现脱节。
 
-### 8. spec 写作准则（行为契约 vs 实现细节）
-
-`spec.md` 是 behavior contract，**不是**实现计划。OpenSpec 官方反模式与本仓六类反模式列表的**真相源**是 `openspec/config.yaml::rules.specs`——OpenSpec 1.3.1 通过 `openspec instructions specs --change <slug>` 把 rules 注入 agent prompt 的 `<rules>` 段；**生成 specs artifact 时**自动看到。本节给 Claude 直接 Edit 的兜底口诀：
-
-- **Quick test**：实现可改而外部行为不变 → 该内容**不**属于 spec，迁 `design.md`
-- **apply 阶段反转 design 改 spec delta 前**（参第 7 条）SHALL 重跑 `openspec instructions specs --change <slug>` 拉最新 rules 再写——`/opsx:apply` 默认走 apply artifact，不会自动重新拉 specs rules
-- **CI ratchet 兜底**：`scripts/check-spec-purity.sh`（CI openspec job 第三步）按 `scripts/spec-purity-baseline.txt` 双向拦截：超 baseline 拒、低于 baseline 也拒（防 silent degradation）。看哪类反模式 + 命中行：`bash scripts/check-spec-purity.sh --report`
-- **清理 spec 让 total 下降**：与 spec 改动**同 commit** 跑 `bash scripts/check-spec-purity.sh --baseline > scripts/spec-purity-baseline.txt` 刷新基线（CI 默认对下降 fail，强制刷新落地）
-- **诊断溯源**（commit hash / PR# / issue# / 实测 KB / ms / baseline 数）属 design.md 的论证段，**不**写 spec
-
 ## spec delta 写法
 
 `ADDED/MODIFIED Requirement` 体的**第一段**必须含 `SHALL` 或 `MUST`，否则 `openspec validate --strict` 报 `must contain SHALL or MUST`；中文背景描述要放在规约句之后。
