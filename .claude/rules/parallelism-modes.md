@@ -53,35 +53,20 @@
 
 ## Agent team 启用与限制
 
-**启用**：项目 `settings.json` 的 `env` 段加 `"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"`（需 Claude Code v2.1.32+）。`teammateMode` 推荐 `"auto"`。启用方式：自然语言告诉 lead "创建 team / 起 N 个 teammate"即可，无需配置文件。
+启用：`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` 已在本仓生效（shell env 或 `settings.json` 任一即可，需 Claude Code v2.1.32+）。lead 自然语言起 team，无需手写配置。
 
-**官方文档明示限制**（权威来源 docs.claude.com/agent-teams，评估是否值得开 team 的硬约束）：
-1. 不支持 session resume 恢复 teammate
-2. 同时只能存在 1 个 team
-3. 不能嵌套（teammate 不能再 spawn 子 team）
-4. token 消耗线性增长（4 个 teammate ≈ 4× context 成本）
-
-**实操推断**（待本仓首次实跑后回填验证）：
-- teammate 通信走 Mailbox + 共享 task list 模式，状态**最终一致**而非实时——teammate A 给 B 投递消息后不能假定 B 立即看到，需 B 自己拉取 mailbox 或通过 task list 状态变化触发
-- lead 进程退出后 teammate 子进程的精确生命周期（自动收敛 vs 残留）官方未明示，开 team 时**不要长时间挂起 lead**
+硬限制（评估值不值得开 team 时看）：
+1. 同时只能存在 1 个 team
+2. 不能嵌套（teammate 不能再 spawn 子 team）
+3. 代价：每多一个 teammate ≈ 1× context 成本，且不支持 session resume
 
 **Agent team 与 bg job 共存**：bg job 用于"独立完整 PR 在另一个 worktree 自治推进"，agent team 用于"单个 PR 内多角色协作"。二者可并存（bg 跑 PR-X 同时主 session 起 team 跑 PR-Y），但**不能同 PR 内混用**——同 PR 多 worktree 会破坏分支原子性。
 
-**teammate 角色建议**（含 UI 大改动场景，仅参考——具体角色由 lead 按 change 性质裁剪）：
+**teammate 资产**：可复用 teammate 定义沉淀在 `.claude/agents/`：
+- 实施型（写代码）：`designer` / `frontend-engineer` / `backend-engineer`
+- 审查型（只读 ad-hoc 调，不立 teammate）：`rust-conventions-reviewer` / `spec-fidelity-reviewer` / `tauri-config-reviewer` / `ui-reviewer` / `windows-compat-reviewer`
 
-| teammate | 常驻 context | 职责 |
-|---|---|---|
-| **lead**（主 session） | 全局 + propose / decision | 整体节拍、archive、与用户对齐 |
-| **设计师** | `PRODUCT.md` + `DESIGN.md` | 跑 `/impeccable shape & critique`，输出 visual contract |
-| **前端工程师** | `ui/` + `ui/CLAUDE.md` | Svelte 5 实现 + mockIPC 单测 |
-| **后端工程师** | `crates/` + `crates/CLAUDE.md` | Rust crate + IPC contract test |
-| **QA / 二审** | `openspec/` + spec | 跑 codex / spec-fidelity 复审 |
-
-**典型通信场景**（teammate 之间 Mailbox 直发，不经 lead）：
-- 设计师 → 前端：投递 visual contract
-- 后端 → 前端：投递 IPC fixture（contract test 通过后）
-- 前端 → 设计师：反查能否扩 DESIGN.md token
-- 任意 → QA：触发 spec / codex 复审
+具体角色组合由 lead 按 change 性质裁剪。teammate 之间 Mailbox 直发不经 lead，省 lead context；典型通信路径已在各 teammate 文件 `## 协作` 段定义。
 
 ## bg job 启动 / 监控
 
