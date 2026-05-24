@@ -310,6 +310,7 @@ mod tests {
                 session_id: "s1".into(),
                 deleted: true,
                 project_list_changed: false,
+                session_list_changed: false,
             })
             .await;
         // 仅断言不 panic 且不 I/O
@@ -326,6 +327,7 @@ mod tests {
                 session_id: "s-nope".into(),
                 deleted: false,
                 project_list_changed: false,
+                session_list_changed: false,
             })
             .await;
 
@@ -360,6 +362,7 @@ mod tests {
             session_id: session_id.into(),
             deleted: false,
             project_list_changed: false,
+            session_list_changed: false,
         }
     }
 

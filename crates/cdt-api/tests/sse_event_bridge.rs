@@ -71,6 +71,7 @@ async fn file_change_forwarded_as_push_event() {
             session_id: "s1".into(),
             deleted: false,
             project_list_changed: false,
+            session_list_changed: false,
         })
         .unwrap();
 
@@ -84,11 +85,13 @@ async fn file_change_forwarded_as_push_event() {
             session_id,
             deleted,
             project_list_changed,
+            session_list_changed,
         } => {
             assert_eq!(project_id, "p1");
             assert_eq!(session_id, "s1");
             assert!(!deleted);
             assert!(!project_list_changed);
+            assert!(!session_list_changed);
         }
         other => panic!("expected FileChange, got {other:?}"),
     }
@@ -109,6 +112,7 @@ async fn project_list_changed_forwarded_to_sse() {
             session_id: String::new(),
             deleted: false,
             project_list_changed: true,
+            session_list_changed: true,
         })
         .unwrap();
 
@@ -122,11 +126,13 @@ async fn project_list_changed_forwarded_to_sse() {
             session_id,
             deleted,
             project_list_changed,
+            session_list_changed,
         } => {
             assert_eq!(project_id, "p-new");
             assert_eq!(session_id, "");
             assert!(!deleted);
             assert!(project_list_changed);
+            assert!(session_list_changed);
         }
         other => panic!("expected FileChange, got {other:?}"),
     }
@@ -373,6 +379,7 @@ async fn multiple_subscribers_each_receive_event_exactly_once() {
             session_id: "s".into(),
             deleted: false,
             project_list_changed: false,
+            session_list_changed: false,
         })
         .unwrap();
 
@@ -404,6 +411,7 @@ async fn producer_continues_after_lagged_recv() {
             session_id: format!("burst-{i}"),
             deleted: false,
             project_list_changed: false,
+            session_list_changed: false,
         });
     }
 
@@ -417,6 +425,7 @@ async fn producer_continues_after_lagged_recv() {
             session_id: "tail".into(),
             deleted: false,
             project_list_changed: false,
+            session_list_changed: false,
         })
         .unwrap();
 
@@ -442,5 +451,57 @@ async fn producer_continues_after_lagged_recv() {
     assert!(
         saw_tail,
         "producer SHALL 不因 Lagged 退出 loop；尾条事件 'tail' 应被转发"
+    );
+}
+
+/// change `enrich-file-change-with-session-list-changed::D6` 阻塞 3：
+/// `spawn_file_bridge` 的 `file_rx → events_tx` 一跳遇到 `RecvError::Lagged(n)`
+/// 时 SHALL emit `PushEvent::SseLagged { source: "file-change", missed: n }`，
+/// **不**再静默吞掉（原实现让下游 SSE 客户端永远拿不到信号，sidebar
+/// `totalSessions` 滞后到 `LOCAL_CACHE_TTL`=5min 才被动恢复）。
+#[tokio::test]
+async fn spawn_file_bridge_emits_sse_lagged_on_file_rx_lag() {
+    let (events_tx, mut events_rx) = broadcast::channel::<PushEvent>(256);
+    // file 输入 channel capacity = 2 → 突发 16 条强制让 producer Lagged
+    let (file_tx, file_rx) = broadcast::channel::<FileChangeEvent>(2);
+    let (_todo_tx, todo_rx) = broadcast::channel::<TodoChangeEvent>(16);
+    let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
+
+    spawn_test_event_bridge(events_tx, file_rx, todo_rx, error_rx);
+
+    for i in 0..16 {
+        let _ = file_tx.send(FileChangeEvent {
+            project_id: "p".into(),
+            session_id: format!("burst-{i}"),
+            deleted: false,
+            project_list_changed: false,
+            session_list_changed: false,
+        });
+    }
+
+    // 在 2s 内 events_rx SHALL 至少收到一次 SseLagged（source="file-change"）
+    let mut saw_sse_lagged = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        match timeout(deadline - now, events_rx.recv()).await {
+            Ok(Ok(PushEvent::SseLagged { source, missed })) => {
+                assert_eq!(source, "file-change");
+                assert!(missed > 0, "missed count SHALL > 0 表示真有事件被丢");
+                saw_sse_lagged = true;
+                break;
+            }
+            // 其它 PushEvent（FileChange 等）跳过；events_rx 自己 Lagged 容忍
+            Ok(Ok(_) | Err(broadcast::error::RecvError::Lagged(_))) => {}
+            Ok(Err(broadcast::error::RecvError::Closed)) | Err(_) => break,
+        }
+    }
+    assert!(
+        saw_sse_lagged,
+        "spawn_file_bridge SHALL 在 file_rx Lagged 路径 emit PushEvent::SseLagged \
+         (source=\"file-change\")。原实现静默吞掉 -> sidebar totalSessions 滞后 5min"
     );
 }

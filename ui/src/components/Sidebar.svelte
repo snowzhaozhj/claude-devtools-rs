@@ -31,7 +31,6 @@
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { subscribeEvent, type Unsubscribe } from "../lib/transport";
   import { accumulate as telemetryAccumulateCorrectness } from "../lib/correctnessTelemetryStore.svelte";
-  import { isTauriRuntime } from "../lib/runtime";
   import { createVirtualWindow } from "../lib/virtualList.svelte";
   import {
     applySilentRefresh,
@@ -352,16 +351,24 @@
     // SSE 恢复兜底（codex 二审 issue 1 / issue 2 修法的 UI 层）：
     // - `sse-recovered`：transport 层 ensureSseReady 1000 ms 超时放行 fetch 后，
     //   后端发出的 metadata patch 在 SSE OPEN 前已丢失，OPEN 时通知 UI 重拉
-    // - `sse-lagged`：HTTP server 端 broadcast 容量打满 + slow client 跟不上时
-    //   sse handler 推送的 sentinel，告知 UI "中间已丢若干 PushEvent"
-    // 两条都触发当前 project 一次 silent refresh，让后端重启扫描 + emit 新
-    // 一轮 metadata patch；silent merge 不会用骨架 null 覆盖已 patch 真值。
+    // - `sse-lagged`：两个来源同形态（change
+    //   `enrich-file-change-with-session-list-changed::D6`）：
+    //   1. HTTP server `BroadcastStream → SSE client` 一跳 lag → 走 SSE
+    //      sentinel `{type:"sse_lagged",source,missed}`
+    //   2. HTTP server `spawn_file_bridge` 的 `file_rx → events_tx` 一跳 lag
+    //      → `PushEvent::SseLagged { source:"file-change", missed:N }`
+    //   3. 桌面 Tauri host file-change bridge 的 `RecvError::Lagged` → `app.emit("sse-lagged", {source,missed})`
+    // 两条都触发当前 group 一次 silent refresh + 当前 projects 列表 refresh，
+    // 让后端重启扫描 + emit 新一轮 metadata patch；silent merge 不会用骨架
+    // null 覆盖已 patch 真值。
     //
-    // 仅 BrowserTransport 会 synthesize 这两个事件——Tauri runtime 直接走
-    // `@tauri-apps/api` 的 listen()，不存在 SSE OPEN/lag 概念。Tauri runtime
-    // 跳过订阅避免在测试 mock 环境下额外触发 listen() 调用让 transformCallback
-    // 路径报错，同时也省掉真桌面运行时无谓的 listen() 注册。
-    if (!isTauriRuntime()) {
+    // **打通两 runtime**（change D6）：原实现 `if (!isTauriRuntime())` 让 Tauri
+    // 下永远不订阅 sse-lagged，桌面端在 broadcast lag 期间错过 structural 信号
+    // 滞后到 LOCAL_CACHE_TTL=5min 才恢复。`TauriTransport.subscribeEvents` 已
+    // 增加 `listen("sse-lagged", ...)`，桌面 host bridge 在 lag 路径会 emit。
+    // sse-recovered 仅由 BrowserTransport 在 SSE OPEN 时 synthesize，Tauri
+    // runtime 永不触发——注册 listener 在 Tauri 下是无副作用 noop。
+    {
       const recoverHandler = () => {
         const groupId = selectedGroupId;
         if (!groupId) return;
@@ -415,9 +422,32 @@
             console.warn("[sidebar] sse-recovery rescan failed:", e);
           }
         })();
+        // sse-lagged 路径同步触发 projects 列表 silent refresh——broadcast lag
+        // 期间错过的 file-change 事件可能含结构性变化（unknown_session / deleted），
+        // 仅 loadSessions 会让 sidebar `selectedGroup.totalSessions` 滞后到
+        // LOCAL_CACHE_TTL=5min 才被动恢复。`scheduleRefresh` 同 key 节流保证
+        // 与 file-change handler 入队的 schedule 不会双跑（change
+        // `enrich-file-change-with-session-list-changed::D6` 阻塞 2）。
+        scheduleRefresh("sidebar:projects", () =>
+          untrack(() => loadProjects(true)),
+        );
       };
-      sseRecoveredUnlisten = await subscribeEvent<unknown>("sse-recovered", recoverHandler);
-      sseLaggedUnlisten = await subscribeEvent<unknown>("sse-lagged", recoverHandler);
+      // 单个 listen 失败不阻塞 sidebar onMount——sse-recovered/sse-lagged 是
+      // 兜底信号，失败时本地 fallback（按 file-change handler 三档触发 +
+      // 5min LOCAL_CACHE_TTL）仍可用；测试 mock 环境下 transformCallback
+      // 注入时序偶发缺失也不该破坏 sidebar 主流程。
+      sseRecoveredUnlisten = await subscribeEvent<unknown>("sse-recovered", recoverHandler).catch(
+        (e) => {
+          console.warn("[sidebar] sse-recovered subscribe failed:", e);
+          return (() => {}) as Unsubscribe;
+        },
+      );
+      sseLaggedUnlisten = await subscribeEvent<unknown>("sse-lagged", recoverHandler).catch(
+        (e) => {
+          console.warn("[sidebar] sse-lagged subscribe failed:", e);
+          return (() => {}) as Unsubscribe;
+        },
+      );
     }
 
     refreshProjectsListener = () => {
@@ -706,13 +736,26 @@
       scheduleRefresh(`sidebar:${currentGroupId}`, () =>
         untrack(() => loadSessions(currentGroupId, true)),
       );
-      // session 增 / 删事件 SHALL 同步触发 list_repository_groups SWR revalidate，
-      // 让 `selectedGroup.totalSessions` / `wt.sessions.length`（scopeTotal 唯一权威源）
-      // 与列表 silent refresh 一起跟新，否则顶部 count 会停在旧值——spec
-      // sidebar-navigation §"会话总数显示口径" 要求 silent 刷新时 scopeTotal
-      // 同步下降 / 上升。仅在 projectListChanged 未走过该 schedule 时触发，
-      // 避免同 payload 重复入队（codex round 2 Minor）。
-      if (!payload.projectListChanged) {
+      // 结构性事件 SHALL 同步触发 list_repository_groups SWR revalidate，
+      // 让 `selectedGroup.totalSessions` / `wt.sessions.length`（scopeTotal 唯一
+      // 权威源）与列表 silent refresh 一起跟新——spec sidebar-navigation
+      // §"会话总数显示口径" 要求 silent 刷新时 scopeTotal 同步下降 / 上升。
+      //
+      // 三档触发条件（change `enrich-file-change-with-session-list-changed::D3`）：
+      // - `projectListChanged`（已在 L692 走过，此处避免同 payload 重复入队）
+      // - `sessionListChanged`：后端 unified invalidator enrich 的结构信号
+      //   （unknown_session / deleted 命中三档判定）
+      // - `deleted`：兜底——deleted=true 但 invalidator enrich 路径若失效仍触发
+      //
+      // 普通 JSONL append（三个标志全 false）放行不触发 IPC，让 1437 次 IPC
+      // 降到 ~109 次 structural（telemetry 实测）。旧后端缺
+      // `sessionListChanged` 字段时退化为 `projectListChanged || deleted`，
+      // 与历史行为对齐（不引入新退化）。
+      if (
+        payload.projectListChanged ||
+        payload.sessionListChanged ||
+        payload.deleted
+      ) {
         scheduleRefresh("sidebar:projects", () =>
           untrack(() => loadProjects(true)),
         );

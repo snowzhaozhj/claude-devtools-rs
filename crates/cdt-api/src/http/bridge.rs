@@ -51,9 +51,21 @@ fn spawn_file_bridge(
                         session_id: event.session_id,
                         deleted: event.deleted,
                         project_list_changed: event.project_list_changed,
+                        session_list_changed: event.session_list_changed,
                     });
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    // `file_rx → events_tx` 一跳的 lag：原实现直接吞，下游 SSE
+                    // 客户端永远拿不到信号，sidebar `totalSessions` 滞后到
+                    // LOCAL_CACHE_TTL（5min）才被动恢复。改为显式 emit
+                    // `PushEvent::SseLagged { source: "file-change", missed: n }`
+                    // 让前端 silent refresh 兜底（change
+                    // `enrich-file-change-with-session-list-changed::D6` 阻塞 3）。
+                    let _ = events_tx.send(PushEvent::SseLagged {
+                        source: "file-change".into(),
+                        missed: n,
+                    });
+                }
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }

@@ -98,17 +98,17 @@ impl FileWatcher {
 
     /// 接入远端 SSH polling watcher，把远端 `FileChangeEvent` 注入同一
     /// `file_tx` broadcast channel。
+    ///
+    /// `cancel` 由调用方注入：`cdt-api::LocalDataApi::attach_remote_watcher`
+    /// 持有 token clone 用于 dead-signal monitor 路径，外部 disconnect 时仍
+    /// 能 cancel SSH polling（detail: change `enrich-file-change-with-session-list-changed::D2`）。
     pub fn attach_remote(
         &self,
         client: Arc<dyn SftpClient>,
         remote_projects_root: PathBuf,
+        cancel: CancelToken,
     ) -> RemoteWatcherHandle {
-        RemotePollingWatcher::spawn(
-            client,
-            remote_projects_root,
-            self.file_tx.clone(),
-            CancelToken::new(),
-        )
+        RemotePollingWatcher::spawn(client, remote_projects_root, self.file_tx.clone(), cancel)
     }
 
     /// 启动监听，阻塞直到出错或被取消。
@@ -198,6 +198,7 @@ impl FileWatcher {
                 session_id: String::new(),
                 deleted: false,
                 project_list_changed: true,
+                session_list_changed: false,
             });
         }
 
@@ -220,6 +221,7 @@ impl FileWatcher {
                     session_id,
                     deleted,
                     project_list_changed: false,
+                    session_list_changed: false,
                 });
             }
             return None;
@@ -245,6 +247,7 @@ impl FileWatcher {
             session_id,
             deleted,
             project_list_changed,
+            session_list_changed: false,
         })
     }
 
@@ -859,7 +862,7 @@ mod tests {
             ],
         );
         let mut rx = watcher.subscribe_files();
-        let handle = watcher.attach_remote(fake, PathBuf::from(projects_root));
+        let handle = watcher.attach_remote(fake, PathBuf::from(projects_root), CancelToken::new());
 
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
@@ -875,6 +878,10 @@ mod tests {
         assert_eq!(event.session_id, "sess-r");
         assert!(!event.deleted);
         assert!(!event.project_list_changed);
+        assert!(
+            !event.session_list_changed,
+            "watcher 层恒为 false，由 cdt-api invalidator enrich"
+        );
 
         handle.cancel_and_join().await;
     }

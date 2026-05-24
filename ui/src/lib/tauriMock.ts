@@ -1025,6 +1025,33 @@ export function getActiveFixtureName(): string | null {
  * 后的 state"时（如 `update_config` 改 httpServer.port）SHALL 读这个引用，而
  * **不是** import 原 fixture 模块对象——deep clone 后两者已脱钩。
  */
+/**
+ * dev-only e2e helper：模拟后端 `app.emit("file-change", payload)` push event。
+ * 用于在 unit test / e2e 中触发 Sidebar 的 file-change handler，验证三档触发
+ * 条件（change `enrich-file-change-with-session-list-changed::D3`）：
+ * - `projectListChanged=true` 或 `sessionListChanged=true` 或 `deleted=true`
+ *   SHALL trigger `list_repository_groups` revalidate
+ * - 普通 JSONL append（三个标志全 false）SHALL NOT trigger
+ *
+ * 字段默认值与后端 `FileChangeEvent` 对齐：`deleted=false` /
+ * `projectListChanged=false` / `sessionListChanged=false`。
+ */
+export async function simulateFileChange(payload: {
+  projectId: string
+  sessionId?: string
+  deleted?: boolean
+  projectListChanged?: boolean
+  sessionListChanged?: boolean
+}): Promise<void> {
+  await emit('file-change', {
+    projectId: payload.projectId,
+    sessionId: payload.sessionId ?? '',
+    deleted: payload.deleted ?? false,
+    projectListChanged: payload.projectListChanged ?? false,
+    sessionListChanged: payload.sessionListChanged ?? false,
+  })
+}
+
 export function getActiveFixtureRef(): Fixture | null {
   return activeFixtureRef
 }

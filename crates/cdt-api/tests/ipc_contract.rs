@@ -3644,3 +3644,135 @@ async fn open_in_editor_rejects_nonexistent_path_with_not_found() {
         .unwrap_err();
     assert_eq!(err.code, cdt_api::ApiErrorCode::NotFound);
 }
+
+/// change `enrich-file-change-with-session-list-changed::D3` SHALL：
+/// `FileChangeEvent` 新增 `session_list_changed` 字段——`FileChangeEvent`
+/// 是 `#[serde(rename_all = "camelCase")]`，wire 形态为
+/// `sessionListChanged`；`#[serde(default, skip_serializing_if = "Not::not")]`
+/// 让 `true` 时显式 emit，`false` 时省略，缺字段时反序列化默认 `false`。
+#[test]
+fn file_change_event_session_list_changed_round_trip() {
+    use cdt_core::FileChangeEvent;
+
+    let enriched = FileChangeEvent {
+        project_id: "pa".into(),
+        session_id: "sa".into(),
+        deleted: false,
+        project_list_changed: false,
+        session_list_changed: true,
+    };
+    let json = serde_json::to_string(&enriched).expect("serialize enriched");
+    assert!(
+        json.contains("\"sessionListChanged\":true"),
+        "true SHALL 显式序列化 camelCase，got: {json}"
+    );
+
+    // round-trip 等价：camelCase wire → 反序列化拿到 session_list_changed=true
+    let decoded: FileChangeEvent = serde_json::from_str(&json).expect("deserialize enriched");
+    assert!(decoded.session_list_changed);
+
+    // false 时 skip_serializing_if 让字段消失（payload 瘦身）
+    let raw = FileChangeEvent {
+        project_id: "pa".into(),
+        session_id: "sa".into(),
+        deleted: false,
+        project_list_changed: false,
+        session_list_changed: false,
+    };
+    let json_raw = serde_json::to_string(&raw).expect("serialize raw");
+    assert!(
+        !json_raw.contains("sessionListChanged"),
+        "false SHALL 被 skip_serializing_if 省略，got: {json_raw}"
+    );
+
+    // 旧 fixture / 旧客户端缺字段 SHALL 反序列化为 false（`#[serde(default)]` 兜底）
+    let legacy_json =
+        r#"{"projectId":"pa","sessionId":"sa","deleted":false,"projectListChanged":false}"#;
+    let legacy: FileChangeEvent = serde_json::from_str(legacy_json).expect("deserialize legacy");
+    assert!(!legacy.session_list_changed);
+}
+
+/// change `enrich-file-change-with-session-list-changed::D6` SHALL：
+/// `PushEvent::SseLagged { source, missed }` 序列化为
+/// `{"type":"sse_lagged","source":"...","missed":N}`；与既有
+/// `SSE_LAGGED_SENTINEL = r#"{"type":"sse_lagged"}"#` 向后兼容
+/// （旧 sentinel 缺 source / missed，前端读 undefined 不报错）。
+#[test]
+fn push_event_sse_lagged_round_trip() {
+    use cdt_api::PushEvent;
+
+    let event = PushEvent::SseLagged {
+        source: "file-change".into(),
+        missed: 7,
+    };
+    let json = serde_json::to_string(&event).expect("serialize SseLagged");
+    assert!(
+        json.contains("\"type\":\"sse_lagged\""),
+        "SHALL tag with snake_case type, got: {json}"
+    );
+    assert!(
+        json.contains("\"source\":\"file-change\""),
+        "SHALL serialize source field, got: {json}"
+    );
+    assert!(
+        json.contains("\"missed\":7"),
+        "SHALL serialize missed field as integer, got: {json}"
+    );
+
+    // round-trip
+    let decoded: PushEvent = serde_json::from_str(&json).expect("deserialize SseLagged");
+    match decoded {
+        PushEvent::SseLagged { source, missed } => {
+            assert_eq!(source, "file-change");
+            assert_eq!(missed, 7);
+        }
+        other => panic!("expected SseLagged, got {other:?}"),
+    }
+
+    // 既有 SSE_LAGGED_SENTINEL 形态缺 source / missed —— 反序列化失败是允许的
+    // （sentinel 是 SSE wire-level fallback，不期望前端走 serde 解析；
+    // 前端 transport 直接读 `type` 字段判定）。本断言留作设计契约说明：
+    // 新形态字段缺失时 PushEvent 反序列化会失败，**禁止**直接拿 sentinel
+    // 复用为 `serde_json::from_str::<PushEvent>` 的输入。
+    let sentinel = r#"{"type":"sse_lagged"}"#;
+    assert!(
+        serde_json::from_str::<PushEvent>(sentinel).is_err(),
+        "sentinel 形态缺字段，PushEvent 反序列化 SHALL 失败 (前端 transport 解析时按 `type` 字段直接判，不走 serde round-trip)"
+    );
+}
+
+/// change `enrich-file-change-with-session-list-changed::D5` SHALL：
+/// `PushEvent::FileChange.session_list_changed` 字段贯穿 HTTP/SSE wire 形态；
+/// 缺字段反序列化默认 `false`；序列化时显式 emit `false` 或 `true`（不省略——
+/// 与 `PushEvent` 现有 `project_list_changed` 等字段风格一致）。
+#[test]
+fn push_event_file_change_session_list_changed_field_present() {
+    use cdt_api::PushEvent;
+
+    let event = PushEvent::FileChange {
+        project_id: "pa".into(),
+        session_id: "sa".into(),
+        deleted: false,
+        project_list_changed: false,
+        session_list_changed: true,
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    assert!(
+        json.contains("\"session_list_changed\":true"),
+        "SHALL emit session_list_changed snake_case field, got: {json}"
+    );
+
+    // 旧 SSE wire 形态缺字段 SHALL 反序列化为 false（`#[serde(default)]` 兜底）
+    let legacy = r#"{"type":"file_change","project_id":"pa","session_id":"sa","deleted":false,"project_list_changed":false}"#;
+    let decoded: PushEvent = serde_json::from_str(legacy).expect("deserialize legacy");
+    match decoded {
+        PushEvent::FileChange {
+            session_list_changed,
+            ..
+        } => assert!(
+            !session_list_changed,
+            "legacy SHALL 默认 false（前端不感知 → 退化为不触发 loadProjects）"
+        ),
+        other => panic!("expected FileChange, got {other:?}"),
+    }
+}

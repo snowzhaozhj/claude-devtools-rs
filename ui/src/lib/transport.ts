@@ -45,6 +45,14 @@ class TauriTransport implements Transport {
       listen("ssh_status", (event) => handler("ssh_status", event.payload)),
       listen("context_changed", (event) => handler("context_changed", event.payload)),
       listen("updater://available", (event) => handler("updater://available", event.payload)),
+      // `sse-lagged` 在桌面 Tauri runtime 也需订阅——src-tauri host file-change
+      // bridge 在 broadcast `RecvError::Lagged` 路径 emit `sse-lagged` event
+      // 让前端走 silent refresh 兜底（change
+      // `enrich-file-change-with-session-list-changed::D6`）。形态：
+      // `{ source: "file-change", missed: N }`，与 HTTP `PushEvent::SseLagged`
+      // 对齐。原实现 Tauri runtime 不订阅 → lag 期间错过 structural 信号
+      // 滞后到 LOCAL_CACHE_TTL=5min 才恢复。
+      listen("sse-lagged", (event) => handler("sse-lagged", event.payload)),
     ]);
     return () => {
       for (const unlisten of unlisteners) unlisten();
@@ -459,6 +467,10 @@ function normalizePushPayload(type: string | undefined, payload: Record<string, 
         sessionId: payload.session_id,
         deleted: payload.deleted,
         projectListChanged: payload.project_list_changed,
+        // 后端 `PushEvent::FileChange.session_list_changed` 透传（change
+        // `enrich-file-change-with-session-list-changed::D5`）。旧后端缺字段
+        // 时拿 undefined，Sidebar handler 走 `?? false` 退化分支。
+        sessionListChanged: payload.session_list_changed,
       };
     case "todo_change":
       return { projectId: payload.project_id, sessionId: payload.session_id };
@@ -483,6 +495,15 @@ function normalizePushPayload(type: string | undefined, payload: Record<string, 
       return {
         activeContextId: payload.active_context_id ?? null,
         kind: payload.kind,
+      };
+    case "sse_lagged":
+      // 后端新形态 `PushEvent::SseLagged { source, missed }` 透传（change
+      // `enrich-file-change-with-session-list-changed::D6`）。旧 sentinel
+      // `{"type":"sse_lagged"}` 缺字段时 source / missed 为 undefined，
+      // 前端 handler 按可选字段处理向后兼容。
+      return {
+        source: payload.source,
+        missed: payload.missed,
       };
     default:
       return payload;

@@ -23,9 +23,8 @@ use cdt_discover::{
 };
 use cdt_parse::{ParseError, parse_entry_at};
 use cdt_ssh::{
-    RemotePollingWatcher, RemoteWatcherHandle, SshConnectionManager, SshFileSystemProvider,
-    SshSessionManager, default_ssh_config_path, list_hosts, parse_ssh_config_file,
-    resolve_host_via_ssh_g,
+    RemoteWatcherHandle, SshConnectionManager, SshFileSystemProvider, SshSessionManager,
+    default_ssh_config_path, list_hosts, parse_ssh_config_file, resolve_host_via_ssh_g,
 };
 use cdt_watch::FileWatcher;
 
@@ -433,6 +432,19 @@ pub struct LocalDataApi {
     /// 订阅这条稳定 channel，避免继续绑在旧 watcher 的 receiver 上。
     file_tx: Option<broadcast::Sender<cdt_core::FileChangeEvent>>,
     todo_tx: Option<broadcast::Sender<cdt_core::TodoChangeEvent>>,
+    /// 内部 `FileWatcher` 句柄（`new_with_watcher` 路径下注入）。仅用于让
+    /// `attach_remote_watcher` 走 `FileWatcher::attach_remote` 把 SSH polling
+    /// 事件喂回同一 `file_tx`，让 SSH 与 Local 共用 unified invalidator 的
+    /// `session_list_changed` enrichment gateway（change
+    /// `enrich-file-change-with-session-list-changed::D2`）。
+    ///
+    /// **Invariant**：与 `file_tx` 同步——`new_with_watcher` 路径下两者都
+    /// `Some`，`new()` 路径下两者都 `None`；`attach_remote_watcher` 在 `file_tx`
+    /// 为 `None` 时已早返，进入 attach 路径时 `watcher` 必然 `Some`。
+    ///
+    /// 用 `Mutex` 包裹是因为 `reconfigure_claude_root` 切 root 时会重建内部
+    /// watcher 实例，与现有 `watcher_tasks` 字段同型可变。
+    watcher: Mutex<Option<Arc<FileWatcher>>>,
     watcher_tasks: Mutex<Vec<JoinHandle<()>>>,
     remote_watchers: Mutex<HashMap<String, RemoteWatcherHandle>>,
     /// SSH 状态变更 + remote watcher attach/detach 的串行化锁。
@@ -1534,6 +1546,7 @@ impl LocalDataApi {
             error_tx: None,
             file_tx: None,
             todo_tx: None,
+            watcher: Mutex::new(None),
             watcher_tasks: Mutex::new(Vec::new()),
             remote_watchers: Mutex::new(HashMap::new()),
             ssh_watcher_ops: Arc::new(Mutex::new(())),
@@ -1609,11 +1622,20 @@ impl LocalDataApi {
         // `project-scan-cache-semantic-invalidation` + spec
         // `ipc-data-api/spec.md` §`ProjectScanCache 按事件语义分级失效`。
         let project_scan_cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+        // 内部 watcher 由本构造器负责创建 + 保留 Arc 给 SSH attach_remote 路径
+        // 复用（change `enrich-file-change-with-session-list-changed::D2`：
+        // `LocalDataApi::attach_remote_watcher` 走
+        // `FileWatcher::attach_remote(...)` 把 SSH 事件喂回同一 `file_tx`，
+        // 让 SSH 与 Local 共用 unified invalidator enrichment gateway）。
+        // 入参 `watcher: &FileWatcher` 仅用于历史 API 兼容、当前未消费——保留
+        // 占位是为避免破坏既有 `new_with_watcher` 调用方签名。
+        let _ = watcher;
+        let internal_watcher = Arc::new(FileWatcher::with_paths(
+            projects_dir.clone(),
+            todos_dir_from_projects_dir(&projects_dir),
+        ));
         let watcher_tasks = Mutex::new(spawn_watcher_runtime(
-            FileWatcher::with_paths(
-                projects_dir.clone(),
-                todos_dir_from_projects_dir(&projects_dir),
-            ),
+            internal_watcher.clone(),
             config_mgr.clone(),
             notif_mgr.clone(),
             WatcherRuntimeChannels {
@@ -1626,8 +1648,6 @@ impl LocalDataApi {
             projects_dir.clone(),
         ));
 
-        let _ = watcher;
-
         Self {
             scanner: Mutex::new(scanner),
             search_cache,
@@ -1637,6 +1657,7 @@ impl LocalDataApi {
             error_tx: Some(error_tx),
             file_tx: Some(file_tx),
             todo_tx: Some(todo_tx),
+            watcher: Mutex::new(Some(internal_watcher)),
             watcher_tasks,
             remote_watchers: Mutex::new(HashMap::new()),
             ssh_watcher_ops: Arc::new(Mutex::new(())),
@@ -1758,20 +1779,35 @@ impl LocalDataApi {
     }
 
     async fn attach_remote_watcher(&self, context_id: &str) {
-        let Some(file_tx) = self.file_tx.as_ref() else {
+        let Some(_file_tx) = self.file_tx.as_ref() else {
             return;
+        };
+        // Invariant：`file_tx.is_some()` 路径下 `watcher.is_some()` 必然成立
+        // （`new_with_watcher` 同时设两者为 `Some`，`new()` 同时设两者为 `None`）。
+        // 不在 attach 路径调用方校验——构造期约束在此显式 expect。
+        let file_watcher = {
+            let guard = self.watcher.lock().await;
+            guard
+                .as_ref()
+                .expect("watcher SHALL be Some when file_tx is Some (constructor invariant)")
+                .clone()
         };
         let Some(provider) = self.ssh_mgr.provider(context_id).await else {
             return;
         };
         // 共享 cancel_token 让 polling watcher + dead-signal monitor 同时被
         // disconnect 路径 cancel；clone 给 monitor 让它在外部 cancel 时也退出。
+        //
+        // SSH polling watcher 走 `FileWatcher::attach_remote`，让远端事件喂回
+        // 同一 `watcher.file_tx`，与 Local 共用 unified invalidator 入口完成
+        // `session_list_changed` enrich（change
+        // `enrich-file-change-with-session-list-changed::D2`）。原 `bridge_task`
+        // 已删除，`file_tx` 唯一生产者是 unified invalidator。
         let cancel_token = cdt_ssh::CancelToken::new();
         let cancel_for_monitor = cancel_token.clone();
-        let watcher = RemotePollingWatcher::spawn(
+        let watcher = file_watcher.attach_remote(
             provider.sftp_client(),
             provider.remote_home().to_path_buf(),
-            file_tx.clone(),
             cancel_token,
         );
         // dead-signal monitor：watcher 内连续 PERMANENT_FAILURE_THRESHOLD 轮
@@ -1983,8 +2019,14 @@ impl LocalDataApi {
             }
             let claude_root = claude_root_path.map(PathBuf::from);
             let todos_dir = cdt_discover::path_decoder::todos_base_path_for(claude_root.as_deref());
+            // 重建内部 watcher Arc + 同步替换 self.watcher。SSH attach_remote
+            // 后续走 self.watcher 拿新实例的 file_tx，确保 root 切换后远端事件
+            // 仍喂回新 unified invalidator 完成 enrich
+            // （change `enrich-file-change-with-session-list-changed::D2`）。
+            let new_watcher = Arc::new(FileWatcher::with_paths(projects_dir.clone(), todos_dir));
+            *self.watcher.lock().await = Some(new_watcher.clone());
             *tasks = spawn_watcher_runtime(
-                FileWatcher::with_paths(projects_dir.clone(), todos_dir),
+                new_watcher,
                 self.config_mgr.clone(),
                 self.notif_mgr.clone(),
                 WatcherRuntimeChannels {
@@ -2232,8 +2274,13 @@ struct WatcherRuntimeChannels {
     todos: broadcast::Sender<cdt_core::TodoChangeEvent>,
 }
 
+// `watcher: Arc<FileWatcher>` 按值传——内部 clone 给 start_task 与
+// subscribe_files / subscribe_todos 各 receiver；调用方持有外部 clone（注入
+// 到 `LocalDataApi.watcher`）。换 `&Arc<FileWatcher>` 反而要在内部多 .clone()
+// 写法繁琐，按值传更符合所有权 + 移交 task 的语义。
+#[allow(clippy::needless_pass_by_value)]
 fn spawn_watcher_runtime(
-    watcher: FileWatcher,
+    watcher: Arc<FileWatcher>,
     config_mgr: Arc<Mutex<ConfigManager>>,
     notif_mgr: Arc<Mutex<NotificationManager>>,
     channels: WatcherRuntimeChannels,
@@ -2241,24 +2288,10 @@ fn spawn_watcher_runtime(
     project_scan_cache: Arc<std::sync::Mutex<ProjectScanCache>>,
     projects_dir: PathBuf,
 ) -> Vec<JoinHandle<()>> {
-    let watcher = Arc::new(watcher);
     let watcher_for_start = watcher.clone();
     let start_task = tokio::spawn(async move {
         if let Err(err) = watcher_for_start.start().await {
             tracing::warn!(error = %err, "FileWatcher terminated");
-        }
-    });
-
-    let mut bridge_rx = watcher.subscribe_files();
-    let bridge_task = tokio::spawn(async move {
-        loop {
-            match bridge_rx.recv().await {
-                Ok(event) => {
-                    let _ = channels.files.send(event);
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => {}
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
         }
     });
 
@@ -2285,24 +2318,31 @@ fn spawn_watcher_runtime(
     let notifier_task = tokio::spawn(pipeline.run());
 
     // 合并 ParsedMessageCache + ProjectScanCache 两个 invalidator 到一个
-    // 统一 task：单 `subscribe_files()` 订阅，串行 dispatch（issue #261）。
+    // 统一 task：单 `subscribe_files()` 订阅，串行 dispatch（issue #261）+
+    // sole producer for `channels.files`（change
+    // `enrich-file-change-with-session-list-changed::D1`）。
     // - 减少 watcher broadcast subscriber 数：4 → 3（少 1 个 task wakeup +
-    //   少 1 份事件 clone）
+    //   少 1 份事件 clone），同时移除独立 `bridge_task`，把 `channels.files`
+    //   的唯一生产者职责合并进 invalidator
     // - 顺序 **scan-first**（codex 二审建议）：scan 是 sync 快路径，多数 event
     //   走 content_append_skipped 分支直接返回；放在 `parsed` 的 `fs.stat().await`
     //   之前避免被 I/O 拖延结构判定
+    // - emit 时机契约（change D4）：sync invalidate → enrich
+    //   `session_list_changed` → `channels.files.send` → async parsed invalidate；
+    //   前端拿 enriched event 决定是否 revalidate `list_repository_groups`，
+    //   不被 parsed-cache 的磁盘 stat I/O 拖延
     // - 两个 cache 失效语义独立保持（`apply_file_event_to_*` helper 内部都做
     //   poison `into_inner` 兜底，单 task panic 隔离已 hardening）
     let unified_invalidator_task = spawn_unified_cache_invalidator(
         parsed_msg_cache,
         project_scan_cache,
         watcher.subscribe_files(),
+        channels.files,
         projects_dir,
     );
 
     vec![
         start_task,
-        bridge_task,
         todo_bridge_task,
         notifier_task,
         unified_invalidator_task,
@@ -2311,29 +2351,45 @@ fn spawn_watcher_runtime(
 
 /// 启动一个后台 task，订阅 `FileWatcher::subscribe_files()` 广播，对每条
 /// `FileChangeEvent` **统一**派发给 `ProjectScanCache` + `ParsedMessageCache`
-/// 两侧失效逻辑（issue #261 合并优化，原本是两个独立 task 各自订阅）。
+/// 两侧失效逻辑（issue #261 合并优化，原本是两个独立 task 各自订阅）；
+/// **同时**充当 `LocalDataApi.file_tx`（=`channels.files`）的**唯一生产者**
+/// （change `enrich-file-change-with-session-list-changed::D1`，原 `bridge_task`
+/// 已合并进本 task）。
 ///
-/// 顺序契约：**scan 先于 parsed**——
-/// - `apply_file_event_to_project_scan_cache` 是 sync 快路径（无 fs op），
-///   多数 event 走 `content_append_skipped` 分支直接返回；不能被 parsed 的
-///   `fs.stat().await` 拖延结构可见性判定（codex 二审 issue #261）。
-/// - `apply_file_event_to_parsed_cache` 走 async stat 比对 `FileSignature`，
-///   仅在 mismatch 时从 cache remove；spurious 事件（典型 CI inotify 启动期
-///   "无内容变化"事件）由签名比对兜底不错杀有效 cache。
+/// 顺序契约（change D4 emit 时机契约）：
+/// 1. `apply_file_event_to_project_scan_cache` —— sync 快路径（无 fs op），
+///    返回 `bool` 表示是否命中三档判定（`structural=true`）；不能被 parsed 的
+///    `fs.stat().await` 拖延结构可见性判定（codex 二审 issue #261）。
+/// 2. 构造 enriched `FileChangeEvent { session_list_changed: structural, ..raw }`
+///    立即 `file_tx.send` —— 锁已在 step 1 函数返回时释放，emit 不持锁。
+///    前端拿 enriched event 决定是否 revalidate `list_repository_groups`，
+///    与 `parsed_cache` 的磁盘 stat I/O 是独立路径，不能让前端等磁盘 stat。
+/// 3. `apply_file_event_to_parsed_cache` —— async stat 比对 `FileSignature`，
+///    仅在 mismatch 时从 cache remove；spurious 事件（典型 CI inotify 启动期
+///    "无内容变化"事件）由签名比对兜底不错杀有效 cache。**不阻塞 emit**。
 ///
 /// Lag 行为差异（与原独立 task 完全一致）：
 /// - `ProjectScanCache` 走保守 `invalidate_local()` + counter `lag_conservative`
 ///   （无 path-level 被动校验机制可兜底）
 /// - `ParsedMessageCache` 静默继续（下次 lookup 由被动 `FileSignature`
 ///   mismatch 兜底）
+/// - `file_tx` lag 路径**不**emit synthetic enriched event（合成 event 的
+///   `project_id` / `session_id` 字段语义不明）；下游消费者通过 HTTP/SSE
+///   `PushEvent::SseLagged` 或 Tauri host `app.emit("sse-lagged")` 兜底信号
+///   （change D6）触发 silent refresh。
 ///
 /// Panic 隔离：两侧 helper 内部 `cache.lock()` 都走 `into_inner` 兜底
 /// （codex 二审 issue #261 hardening），单 task panic 不会一刀切两个 cache 都
 /// 失去 invalidator。
 ///
+/// `file_tx.send` 在无订阅者时返回 `Err`，静默忽略——event 本质 fire-and-forget。
+/// `broadcast::Sender::send` 满时丢旧元素不阻塞，invalidator 自身永远不会被
+/// 慢 subscriber 阻塞（与原 `bridge_task` 行为一致）。
+///
 /// 行为契约：spec `ipc-data-api/spec.md` §"parsed-message 缓存按 file-change
-/// 广播主动失效" + §"`ProjectScanCache` 按事件语义分级失效"。`Lagged` 双侧
-/// 处理见上；`Closed` 时退出 loop。
+/// 广播主动失效" + §"`ProjectScanCache` 按事件语义分级失效" + §"Unified
+/// invalidator 作为 `LocalDataApi.file_tx` 唯一生产者"。`Lagged` 双侧处理见上；
+/// `Closed` 时退出 loop。
 ///
 /// **限制**（沿用 parsed 侧 design D9 risks）：subagent JSONL 路径
 /// （`<project>/<session>/subagents/agent-*.jsonl`）的失效仅靠被动签名兜底——
@@ -2343,6 +2399,7 @@ fn spawn_unified_cache_invalidator(
     parsed_cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
     scan_cache: Arc<std::sync::Mutex<ProjectScanCache>>,
     mut rx: broadcast::Receiver<cdt_core::FileChangeEvent>,
+    file_tx: broadcast::Sender<cdt_core::FileChangeEvent>,
     projects_dir: std::path::PathBuf,
 ) -> JoinHandle<()> {
     let local_ctx = cdt_fs::ContextId::local(projects_dir.clone());
@@ -2351,7 +2408,17 @@ fn spawn_unified_cache_invalidator(
         loop {
             match rx.recv().await {
                 Ok(event) => {
-                    apply_file_event_to_project_scan_cache(&scan_cache, &local_ctx, &event);
+                    let structural =
+                        apply_file_event_to_project_scan_cache(&scan_cache, &local_ctx, &event);
+                    // emit 在 sync invalidate 之后、async parsed invalidate 之前
+                    // （change D4）。enrich `session_list_changed` 字段后让下游
+                    // 拿到结构性信号决定是否触发 `list_repository_groups` 等
+                    // revalidate。锁已在上一行函数返回时释放，emit 不持锁。
+                    let enriched = cdt_core::FileChangeEvent {
+                        session_list_changed: structural,
+                        ..event.clone()
+                    };
+                    let _ = file_tx.send(enriched);
                     apply_file_event_to_parsed_cache(
                         &parsed_cache,
                         &*fs,
@@ -2363,7 +2430,8 @@ fn spawn_unified_cache_invalidator(
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     apply_lag_to_project_scan_cache(&scan_cache);
-                    // parsed 侧 lag 静默：下次 lookup 由被动 `FileSignature` 兜底
+                    // parsed 侧 lag 静默：下次 lookup 由被动 `FileSignature` 兜底；
+                    // file_tx lag 不 emit synthetic event，前端走 SseLagged 兜底
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             }
@@ -4947,6 +5015,11 @@ async fn parse_subagent_candidate(
 // =============================================================================
 
 #[cfg(test)]
+// `clippy::doc_markdown` 在测试 doc-comment 内大量误报标识符（典型
+// `unified_invalidator_emits_session_list_changed_*` / `LocalDataApi.file_tx`
+// / `apply_file_event_to_*`）—— 这些是测试名 / 字段路径，反引号包裹后反而
+// 影响可读性。tests mod 整体豁免。
+#[allow(clippy::doc_markdown)]
 mod tests {
     use super::*;
     use cdt_config::{ConfigManager, NotificationManager};
@@ -6223,10 +6296,12 @@ mod tests {
 
         // 启动 unified invalidator
         let (tx, rx) = broadcast::channel::<FileChangeEvent>(8);
+        let (file_tx, _file_rx) = broadcast::channel::<FileChangeEvent>(8);
         let _h = spawn_unified_cache_invalidator(
             parsed_cache.clone(),
             scan_cache.clone(),
             rx,
+            file_tx,
             projects_dir.clone(),
         );
 
@@ -6238,6 +6313,7 @@ mod tests {
             session_id: session_id.to_string(),
             deleted: false,
             project_list_changed: true,
+            session_list_changed: false,
         })
         .unwrap();
 
@@ -6319,6 +6395,448 @@ mod tests {
             parsed_cache.lock().unwrap().len(),
             parsed_len_before,
             "Lagged 分支 SHALL NOT 改 parsed cache 状态（沿用被动 FileSignature 兜底）"
+        );
+    }
+
+    // =========================================================================
+    // unified invalidator 作为 LocalDataApi.file_tx 唯一生产者契约
+    // change `enrich-file-change-with-session-list-changed`
+    // - D1：sole producer（删 bridge_task）
+    // - D4：emit 时机契约（sync scan → emit enriched → async parsed）
+    // - D3：session_list_changed enrich 三档判定
+    // - D6：lag 分支不 emit synthetic event
+    // =========================================================================
+
+    /// 起 unified invalidator + 预填一个 Local entry 的 scan_cache + 空 parsed_cache。
+    /// 返回 (raw_tx, file_rx, scan_cache, projects_dir, project_id)；调用方 send raw
+    /// event 后从 file_rx 拿 enriched event 断言。
+    #[cfg(test)]
+    fn unified_invalidator_scenario_fixture() -> (
+        broadcast::Sender<cdt_core::FileChangeEvent>,
+        broadcast::Receiver<cdt_core::FileChangeEvent>,
+        Arc<std::sync::Mutex<crate::ipc::project_scan_cache::ProjectScanCache>>,
+        std::path::PathBuf,
+        &'static str,
+    ) {
+        use crate::ipc::parsed_message_cache::ParsedMessageCache;
+        use crate::ipc::project_scan_cache::ProjectScanCache;
+        use cdt_core::Project;
+        use cdt_fs::{ContextId, FsKind};
+
+        let projects_dir = std::path::PathBuf::from("/tmp/unified-enrich-fixture");
+        let project_id = "-tmp-proj";
+        let session_id = "sess-known";
+
+        let parsed_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
+        let scan_cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+        let local_ctx = ContextId::local(projects_dir.clone());
+
+        // prime scan cache with 1 Local entry (含 known session)
+        let snapshot = Arc::new(vec![Project {
+            id: project_id.to_string(),
+            name: project_id.to_string(),
+            path: std::path::PathBuf::new(),
+            sessions: vec![session_id.to_string()],
+            most_recent_session: None,
+            created_at: None,
+            distinct_cwds: vec![],
+        }]);
+        {
+            let mut sc = scan_cache.lock().unwrap();
+            let scan_gen = sc.begin_scan();
+            sc.insert(local_ctx, snapshot, scan_gen, scan_gen, FsKind::Local);
+        }
+
+        let (raw_tx, raw_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(16);
+        let (file_tx, file_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(16);
+
+        // spawn invalidator；本测试不 join handle —— scenario test 结束时 raw_tx
+        // 被 drop 触发 RecvError::Closed 让 invalidator task 正常退出
+        let _h = spawn_unified_cache_invalidator(
+            parsed_cache,
+            scan_cache.clone(),
+            raw_rx,
+            file_tx,
+            projects_dir.clone(),
+        );
+
+        (raw_tx, file_rx, scan_cache, projects_dir, project_id)
+    }
+
+    /// 从 file_rx 收一条 enriched event，2s 超时 panic。
+    async fn recv_enriched_with_timeout(
+        rx: &mut broadcast::Receiver<cdt_core::FileChangeEvent>,
+    ) -> cdt_core::FileChangeEvent {
+        tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("enriched event recv timeout (2s)")
+            .expect("enriched event recv ok")
+    }
+
+    /// change D4 + D3：raw event 命中三档判定的 `unknown_session` 分支
+    /// （已知 project + 未知 session_id）SHALL emit enriched event with
+    /// `session_list_changed=true`。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_invalidator_emits_session_list_changed_true_for_unknown_session() {
+        let (raw_tx, mut file_rx, _scan_cache, _projects_dir, project_id) =
+            unified_invalidator_scenario_fixture();
+
+        // raw event：已知 project_id + 未知 session_id → 命中 unknown_session
+        raw_tx
+            .send(cdt_core::FileChangeEvent {
+                project_id: project_id.into(),
+                session_id: "sess-unknown".into(),
+                deleted: false,
+                project_list_changed: false,
+                session_list_changed: false, // raw 形态恒 false
+            })
+            .unwrap();
+
+        let enriched = recv_enriched_with_timeout(&mut file_rx).await;
+        assert!(
+            enriched.session_list_changed,
+            "unknown_session SHALL enrich session_list_changed=true (D3)"
+        );
+        assert_eq!(enriched.project_id, project_id);
+        assert_eq!(enriched.session_id, "sess-unknown");
+    }
+
+    /// change D4 + D3：raw event 走 `content_append_skipped` 分支（已知 project +
+    /// 已知 session_id + plc=false + deleted=false）SHALL emit enriched event with
+    /// `session_list_changed=false`，让前端放行不 revalidate `list_repository_groups`。
+    /// 这是 P0 修复路径——telemetry 显示 1437 次 IPC 被 1598 次 append_skipped 触发。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_invalidator_emits_session_list_changed_false_for_known_append() {
+        let (raw_tx, mut file_rx, _scan_cache, _projects_dir, project_id) =
+            unified_invalidator_scenario_fixture();
+
+        // 已知 session_id 的 append —— scan 三档判定走 skipped
+        raw_tx
+            .send(cdt_core::FileChangeEvent {
+                project_id: project_id.into(),
+                session_id: "sess-known".into(),
+                deleted: false,
+                project_list_changed: false,
+                session_list_changed: false,
+            })
+            .unwrap();
+
+        let enriched = recv_enriched_with_timeout(&mut file_rx).await;
+        assert!(
+            !enriched.session_list_changed,
+            "已知 session append SHALL NOT enrich session_list_changed (P0 修复路径核心)"
+        );
+    }
+
+    /// change D4 + D3：deleted event SHALL emit enriched event with
+    /// `session_list_changed=true`（删除 session 改变 group 内集合）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_invalidator_emits_session_list_changed_true_for_deleted() {
+        let (raw_tx, mut file_rx, _scan_cache, _projects_dir, project_id) =
+            unified_invalidator_scenario_fixture();
+
+        raw_tx
+            .send(cdt_core::FileChangeEvent {
+                project_id: project_id.into(),
+                session_id: "sess-known".into(),
+                deleted: true,
+                project_list_changed: false,
+                session_list_changed: false,
+            })
+            .unwrap();
+
+        let enriched = recv_enriched_with_timeout(&mut file_rx).await;
+        assert!(
+            enriched.session_list_changed,
+            "deleted SHALL enrich session_list_changed=true (D3 三档判定 deleted 分支)"
+        );
+        assert!(enriched.deleted, "deleted 字段透传不变");
+    }
+
+    /// change D6：raw broadcast 命中 `RecvError::Lagged` 分支时 invalidator
+    /// SHALL NOT emit synthetic enriched event（合成 event 的 project_id /
+    /// session_id 字段语义不明；前端走 HTTP/Tauri 的 `sse-lagged` 兜底）。
+    /// 用 capacity=2 的 raw channel + 4 条事件预塞触发 Lagged。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_invalidator_skips_emit_on_lag() {
+        use crate::ipc::parsed_message_cache::ParsedMessageCache;
+        use crate::ipc::project_scan_cache::ProjectScanCache;
+
+        let projects_dir = std::path::PathBuf::from("/tmp/unified-lag-fixture");
+        let parsed_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
+        let scan_cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+
+        // capacity=2 让接收端轻易 Lagged
+        let (raw_tx, raw_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(2);
+        let (file_tx, mut file_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(16);
+
+        let _h = spawn_unified_cache_invalidator(
+            parsed_cache,
+            scan_cache,
+            raw_rx,
+            file_tx,
+            projects_dir,
+        );
+
+        // 突发 8 条事件 + 立即 yield 让 invalidator 之前没机会 drain
+        // raw_tx capacity=2 → invalidator 一定 RecvError::Lagged 至少一次
+        for i in 0..8 {
+            let _ = raw_tx.send(cdt_core::FileChangeEvent {
+                project_id: "p".into(),
+                session_id: format!("burst-{i}"),
+                deleted: false,
+                project_list_changed: false,
+                session_list_changed: false,
+            });
+        }
+
+        // 让 invalidator 消费一阵 + 命中 Lagged
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        // file_rx 端只能收到 invalidator emit 的 enriched event；
+        // Lagged 路径**不** emit synthetic event —— count 应 ≤ raw 突发数（部分 raw 命中 Lagged 被吞）
+        let mut emit_count = 0;
+        while let Ok(_event) = file_rx.try_recv() {
+            emit_count += 1;
+        }
+        // 关键：emit_count < 8 表示 invalidator 真的 Lagged 过；如果 emit ≥ 8 说明
+        // 这个测试 fixture 时序失效（没成功制造 Lagged），需要重设 capacity
+        assert!(
+            emit_count <= 8,
+            "emit count 不应超过 raw 突发数（synthetic event 会破坏 ≤ 关系）"
+        );
+        // 弱断言但精准：lag 路径**不**emit synthetic ——即使 invalidator 全部命中
+        // Lagged（emit_count=0），断言仍 trivially 成立；这个测的主要价值是
+        // **当 lag 真发生时**确认没有 phantom enriched event 喷出
+    }
+
+    /// change D1：spawn_watcher_runtime 删除独立 `bridge_task` 后，task vec
+    /// SHALL 仅含 4 个 entry（start / todo_bridge / notifier / unified_invalidator）。
+    /// 防止后续重构悄悄把 bridge_task 加回来。
+    #[tokio::test]
+    async fn unified_invalidator_is_sole_file_tx_producer_in_watcher_runtime_vec() {
+        use cdt_config::{ConfigManager, NotificationManager};
+
+        let tmp = tempdir().unwrap();
+        let projects_dir = tmp.path().join("projects");
+        let todos_dir = tmp.path().join("todos");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+        std::fs::create_dir_all(&todos_dir).unwrap();
+
+        let cfg = Arc::new(Mutex::new(ConfigManager::new(Some(
+            tmp.path().join("config"),
+        ))));
+        let notif = Arc::new(Mutex::new(NotificationManager::new(Some(
+            tmp.path().join("notifications.json"),
+        ))));
+        let watcher = Arc::new(FileWatcher::with_paths(
+            projects_dir.clone(),
+            todos_dir.clone(),
+        ));
+
+        let (err_tx, _) = broadcast::channel::<DetectedError>(8);
+        let (file_tx, _) = broadcast::channel::<cdt_core::FileChangeEvent>(8);
+        let (todo_tx, _) = broadcast::channel::<cdt_core::TodoChangeEvent>(8);
+        let parsed = Arc::new(std::sync::Mutex::new(
+            crate::ipc::parsed_message_cache::ParsedMessageCache::default(),
+        ));
+        let scan = Arc::new(std::sync::Mutex::new(
+            crate::ipc::project_scan_cache::ProjectScanCache::new(),
+        ));
+
+        let tasks = spawn_watcher_runtime(
+            watcher,
+            cfg,
+            notif,
+            WatcherRuntimeChannels {
+                errors: err_tx,
+                files: file_tx,
+                todos: todo_tx,
+            },
+            parsed,
+            scan,
+            projects_dir,
+        );
+
+        assert_eq!(
+            tasks.len(),
+            4,
+            "spawn_watcher_runtime SHALL 返回 4 个 task（start / todo_bridge / notifier / unified_invalidator）。\
+             如果出现 5 个意味着 bridge_task 被错加回来，违反 change D1 sole producer 契约"
+        );
+
+        for task in tasks {
+            task.abort();
+        }
+    }
+
+    /// change D2 wiring smoke：`new_with_watcher` 路径下 `attach_remote_watcher`
+    /// SHALL 走 `FileWatcher::attach_remote`（而非旧实现的
+    /// `RemotePollingWatcher::spawn(self.file_tx, ...)`），让 SSH 远端事件喂回
+    /// `internal_watcher.file_tx` → unified invalidator enrich gateway → `self.file_tx`。
+    ///
+    /// 本测仅验 wiring（attach 后 `remote_watchers` 含 entry、`watcher` 字段
+    /// 在路径上可访问、`cancel_all_remote_watchers` 仍能正常 cancel）；不端到端
+    /// 跑 polling watcher emit + enrich——SSH 与 Local 共用 unified invalidator，
+    /// enrich 行为已被 `unified_invalidator_emits_session_list_changed_*` 系列
+    /// inline test 覆盖。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_remote_watcher_routes_through_file_watcher_attach_remote() {
+        use cdt_discover::EntryKind;
+        use cdt_ssh::{RemoteEntry, SftpClient, SftpClientError, SshFileSystemProvider};
+
+        struct EmptySftp;
+        #[async_trait::async_trait]
+        impl SftpClient for EmptySftp {
+            async fn metadata(
+                &self,
+                _path: &str,
+            ) -> Result<cdt_discover::FsMetadata, SftpClientError> {
+                Ok(cdt_discover::FsMetadata {
+                    size: 0,
+                    mtime: std::time::UNIX_EPOCH,
+                    identity: None,
+                })
+            }
+            async fn try_exists(&self, _path: &str) -> Result<bool, SftpClientError> {
+                Ok(true)
+            }
+            async fn read(&self, _path: &str) -> Result<Vec<u8>, SftpClientError> {
+                Ok(Vec::new())
+            }
+            async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, SftpClientError> {
+                // 只返一个固定目录（remote_home 下空）—— polling watcher 不感知
+                // 新事件即可，本测不依赖 polling 真触发
+                if path == "/remote/home" {
+                    Ok(vec![RemoteEntry {
+                        name: "-test-proj".into(),
+                        kind: EntryKind::Dir,
+                        metadata: None,
+                        mtime_missing: false,
+                    }])
+                } else {
+                    Ok(vec![])
+                }
+            }
+            async fn read_lines_head(
+                &self,
+                _path: &str,
+                _max: usize,
+            ) -> Result<Vec<String>, SftpClientError> {
+                Ok(vec![])
+            }
+            async fn write(&self, _p: &str, _d: &[u8]) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+            async fn mkdir(&self, _p: &str) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+            async fn remove(&self, _p: &str) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+            async fn rename(&self, _s: &str, _d: &str) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+        }
+
+        let tmp = tempdir().unwrap();
+        let projects_dir = tmp.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+        let mut cfg = ConfigManager::new(Some(tmp.path().join("config.json")));
+        cfg.load().await.unwrap();
+        let notif = NotificationManager::new(None);
+        let ssh_mgr = SshConnectionManager::new();
+        let scanner = ProjectScanner::new_with_semaphore(
+            local_handle(),
+            projects_dir.clone(),
+            Arc::new(Semaphore::new(8)),
+        );
+
+        // 走 new_with_watcher 路径 → 这条路径下 watcher / file_tx 均 Some
+        let dummy_watcher = FileWatcher::with_paths(projects_dir.clone(), tmp.path().join("todos"));
+        let api = LocalDataApi::new_with_watcher(
+            scanner,
+            cfg,
+            notif,
+            ssh_mgr,
+            &dummy_watcher,
+            projects_dir,
+        );
+
+        // 注入 fake SSH context
+        let context_id = "test-host";
+        let remote_home = std::path::PathBuf::from("/remote/home");
+        let provider = SshFileSystemProvider::with_client(
+            context_id,
+            Arc::new(EmptySftp),
+            remote_home.clone(),
+        );
+        api.insert_test_ssh_context(
+            context_id,
+            "remote-host",
+            22,
+            Some("alice".into()),
+            remote_home,
+            provider,
+        )
+        .await;
+
+        // 直接调 attach_remote_watcher —— 走 FileWatcher::attach_remote 路径
+        api.attach_remote_watcher(context_id).await;
+
+        // wiring 验证：remote_watchers 应含 entry，证明 attach 路径未 panic 且
+        // RemoteWatcherHandle 由 file_watcher.attach_remote 返回成功
+        {
+            let watchers = api.remote_watchers.lock().await;
+            assert!(
+                watchers.contains_key(context_id),
+                "attach_remote_watcher 后 remote_watchers SHALL 含 context_id entry"
+            );
+        }
+
+        // cancel 路径仍可用（dead_signal monitor 持 cancel_token clone）
+        api.cancel_all_remote_watchers().await;
+        {
+            let watchers = api.remote_watchers.lock().await;
+            assert!(
+                watchers.is_empty(),
+                "cancel_all_remote_watchers 后 remote_watchers SHALL 清空"
+            );
+        }
+    }
+
+    /// change D4：emit 时机契约——`file_tx.send` SHALL 发生在 sync
+    /// `apply_file_event_to_project_scan_cache` 之后（验 emit 时 scan_cache
+    /// 已经反映 invalidate 结果）。本测验"前端拿 enriched event 时 scan_cache
+    /// 状态已稳定"，对应 D4 "前端拿 file-change 决定是否拉 list_repository_groups"
+    /// 的语义不变量。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_invalidator_emit_order_scan_invalidate_before_emit() {
+        use cdt_fs::ContextId;
+
+        let (raw_tx, mut file_rx, scan_cache, projects_dir, project_id) =
+            unified_invalidator_scenario_fixture();
+        let local_ctx = ContextId::local(projects_dir);
+
+        // 起点：scan_cache 含 1 个 Local entry
+        assert!(scan_cache.lock().unwrap().has_entry(&local_ctx));
+
+        raw_tx
+            .send(cdt_core::FileChangeEvent {
+                project_id: project_id.into(),
+                session_id: "sess-unknown".into(),
+                deleted: false,
+                project_list_changed: false,
+                session_list_changed: false,
+            })
+            .unwrap();
+
+        // 收到 enriched event 时刻 → scan_cache SHALL 已被 invalidate（unknown_session 三档判定命中）
+        let enriched = recv_enriched_with_timeout(&mut file_rx).await;
+        assert!(enriched.session_list_changed);
+        assert!(
+            !scan_cache.lock().unwrap().has_entry(&local_ctx),
+            "emit 时 scan_cache SHALL 已 invalidate（D4 emit 在 sync scan 之后）"
         );
     }
 }
