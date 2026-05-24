@@ -91,13 +91,15 @@ describe("groupClaudeMdByScope", () => {
   });
 });
 
-function makeDetail(injectionsByPhase?: Record<string, unknown[]>): SessionDetail {
+function makeDetail(
+  injectionsByPhase?: Record<string, ContextInjection[]>,
+): SessionDetail {
   return {
     sessionId: "s",
     projectId: "p",
     chunks: [],
-    metrics: {},
-    metadata: {},
+    metrics: { message_count: 0 },
+    metadata: { last_modified: null, size: null, cwd: null },
     contextInjections: [
       { category: "user-message", id: "latest", turnIndex: 2, aiGroupId: "a:0", estimatedTokens: 5, textPreview: "latest" },
     ],
@@ -108,10 +110,10 @@ function makeDetail(injectionsByPhase?: Record<string, unknown[]>): SessionDetai
 
 describe("selectActivePhaseInjections", () => {
   test("selectedPhase=null + has injectionsByPhase → latest phase", () => {
-    const phase1Inj = [
+    const phase1Inj: ContextInjection[] = [
       { category: "claude-md", id: "p1", path: "/p1", displayName: "p1", scope: "user", estimatedTokens: 10, firstSeenTurnIndex: 0 },
     ];
-    const phase2Inj = [
+    const phase2Inj: ContextInjection[] = [
       { category: "user-message", id: "p2", turnIndex: 1, aiGroupId: "a:1", estimatedTokens: 5, textPreview: "p2" },
     ];
     const detail = makeDetail({ "1": phase1Inj, "2": phase2Inj });
@@ -128,7 +130,7 @@ describe("selectActivePhaseInjections", () => {
   });
 
   test("selectedPhase=N returns injectionsByPhase[N]", () => {
-    const phase1Inj = [
+    const phase1Inj: ContextInjection[] = [
       { category: "claude-md", id: "p1", path: "/p1", displayName: "p1", scope: "user", estimatedTokens: 10, firstSeenTurnIndex: 0 },
     ];
     const detail = makeDetail({ "1": phase1Inj, "2": [] });

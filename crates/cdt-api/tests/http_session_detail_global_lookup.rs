@@ -177,20 +177,16 @@ async fn get_session_detail_after_find_session_project_succeeds() {
     // 后 SHALL 产 2 个 chunk（user + ai）；context_injections SHALL 是 JSON
     // array 形态（fixture 无 CLAUDE.md，应为空数组），证明 detail 真走过
     // build_chunks → process_session_context_with_phases 完整路径。
-    let chunks = detail
-        .chunks
-        .as_array()
-        .expect("chunks SHALL 是 JSON array");
     assert_eq!(
-        chunks.len(),
+        detail.chunks.len(),
         2,
         "fixture 1 user + 1 assistant SHALL 产 2 chunks，实际 {}",
-        chunks.len()
+        detail.chunks.len()
     );
-    assert!(
-        detail.context_injections.is_array(),
-        "context_injections SHALL 是 array（无 CLAUDE.md 时为空数组）"
-    );
+    // typed `Vec<ContextInjection>`：编译期保证 array 形态。fixture 实际产生
+    // 一些 user-message / 内置 system-prompt injection（不为 0），断言为 Vec
+    // 即可——精确数量由 cdt-analyze::context 测试覆盖。
+    let _injections_len = detail.context_injections.len(); // typed Vec，运行期总能取到长度
 
     // detail.title SHALL 由 backend 同源派生填入，与 sidebar SessionSummary.title
     // 走同一 `extract_session_metadata_from_parsed`。fixture 首条 user content
@@ -224,13 +220,38 @@ async fn get_sessions_by_ids_handles_mixed_existence() {
         "存在的 sid SHALL 反查到正确 project_id"
     );
     assert_eq!(results[0].session_id, "sid-existing");
+    // 找不到的 sid 走 typed default 占位，前端按 `projectId == ""` 判定 not-found。
+    // change `typed-ipc-payload::design.md::D9` 移除 ad-hoc `{"status":"not_found"}`
+    // 带外标记：metadata 改 typed default（全 None），chunks 改空 Vec，
+    // phase_info 改 ContextPhaseInfo::default()。前端 grep 0 命中
+    // `metadata.status` 已确认 dead wire；HTTP transport / 未来 consumer 仍可
+    // 按 `projectId === ""` 信号判定。
     assert_eq!(
         results[1].project_id, "",
-        "找不到的 sid SHALL projectId 为空字符串占位"
+        "找不到的 sid SHALL projectId 为空字符串占位（前端据此判定 not-found）"
+    );
+    assert!(
+        results[1].metadata.last_modified.is_none(),
+        "not-found 占位 SHALL metadata.last_modified 为 None"
+    );
+    assert!(
+        results[1].metadata.size.is_none(),
+        "not-found 占位 SHALL metadata.size 为 None"
+    );
+    assert!(
+        results[1].metadata.cwd.is_none(),
+        "not-found 占位 SHALL metadata.cwd 为 None"
+    );
+    assert!(
+        results[1].chunks.is_empty(),
+        "not-found 占位 SHALL chunks 为空 Vec"
     );
     assert_eq!(
-        results[1].metadata,
-        serde_json::json!({"status": "not_found"}),
-        "找不到的 sid SHALL metadata.status 为 not_found"
+        results[1].metrics.message_count, 0,
+        "not-found 占位 SHALL metrics.message_count 为 0"
+    );
+    assert!(
+        results[1].phase_info.phases.is_empty(),
+        "not-found 占位 SHALL phase_info.phases 为空"
     );
 }

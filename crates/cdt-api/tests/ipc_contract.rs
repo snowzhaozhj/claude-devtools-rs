@@ -1121,7 +1121,11 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
         .await
         .unwrap();
     assert_eq!(detail.session_id, session_id);
-    assert_eq!(detail.metrics["message_count"], json!(1));
+    // typed 化后 metrics 是 SessionDetailMetrics struct（wire 仍为
+    // snake_case `message_count`），用 typed field 访问；序列化形状
+    // 由 ipc_contract::session_detail_typed_metrics_metadata_round_trip
+    // 等覆盖。
+    assert_eq!(detail.metrics.message_count, 1);
     assert_remote_fs_touched(before, fake.snapshot_counters(), "get_session_detail");
 
     // ====== 本 change `fix-ssh-active-context-dispatch` 新增 ======
@@ -1190,8 +1194,9 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
         .await
         .unwrap();
     assert!(
-        trace.is_array() && trace.as_array().unwrap().is_empty(),
-        "无 subagent fixture 时 SHALL 返回空数组，actual: {trace:?}"
+        trace.is_empty(),
+        "无 subagent fixture 时 SHALL 返回空 Vec<Chunk>，actual len={}",
+        trace.len()
     );
     assert_remote_fs_touched(before, fake.snapshot_counters(), "get_subagent_trace");
 
@@ -1228,13 +1233,8 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
         session_id: None,
     };
     let search_res = api.search(&search_req).await.unwrap();
-    let results = search_res
-        .get("results")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
     assert!(
-        !results.is_empty(),
+        !search_res.results.is_empty(),
         "SSH context 下 search SHALL 通过 active provider 搜到远端 jsonl 内容，actual: {search_res:?}"
     );
     assert_remote_fs_touched(before, fake.snapshot_counters(), "search");
@@ -1670,8 +1670,8 @@ async fn get_subagent_trace_missing_returns_empty_array() {
         .get_subagent_trace("ghost-root", "ghost-sub")
         .await
         .expect("get_subagent_trace SHALL Ok 即使找不到");
-    assert!(value.is_array(), "返回值 SHALL 是 JSON array");
-    assert_eq!(value.as_array().unwrap().len(), 0);
+    // typed `Vec<Chunk>`：编译期保证形态，运行期断言长度为 0。
+    assert_eq!(value.len(), 0, "找不到 subagent SHALL 返回空 Vec<Chunk>");
 }
 
 #[tokio::test]
@@ -1753,7 +1753,7 @@ async fn search_without_project_id_returns_validation_err() {
 #[tokio::test]
 async fn get_config_returns_camelcase_top_level_sections() {
     let (api, _tmp) = setup_api().await;
-    let config = api.get_config().await.unwrap();
+    let config = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
     assert!(config.is_object(), "get_config SHALL 返回 object");
     let obj = config.as_object().unwrap();
     // AppConfig 顶层 sections（camelCase 后）
@@ -1802,7 +1802,7 @@ async fn get_config_returns_camelcase_top_level_sections() {
 #[tokio::test]
 async fn get_config_display_section_exposes_font_fields_camelcase() {
     let (api, _tmp) = setup_api().await;
-    let config = api.get_config().await.unwrap();
+    let config = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
     let display = &config["display"];
     assert!(display.is_object(), "display SHALL 为 object");
     // 默认值：fontSans / fontMono 都是 None → 序列化后 skip（与 skipped_update_version 一致）
@@ -1820,7 +1820,7 @@ async fn get_config_display_section_exposes_font_fields_camelcase() {
 #[tokio::test]
 async fn update_config_ssh_round_trip_and_validation() {
     let (api, _tmp) = setup_api().await;
-    let config = api.get_config().await.unwrap();
+    let config = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
     assert_eq!(config["ssh"]["profiles"], json!([]));
     assert_eq!(config["ssh"]["lastConnection"], json!(null));
     assert_eq!(config["ssh"]["autoReconnect"], json!(false));
@@ -1841,7 +1841,7 @@ async fn update_config_ssh_round_trip_and_validation() {
     })
     .await
     .expect("valid ssh profile SHALL persist");
-    let config = api.get_config().await.unwrap();
+    let config = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
     assert_eq!(
         config["ssh"]["profiles"][0]["authMethod"],
         json!("sshConfig")
@@ -1894,7 +1894,7 @@ async fn update_config_general_auto_expand_ai_groups_round_trip() {
     let (api, _tmp) = setup_api().await;
     // 默认 false
     assert_eq!(
-        api.get_config().await.unwrap()["general"]["autoExpandAiGroups"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["general"]["autoExpandAiGroups"],
         json!(false)
     );
     // 前端发送的 camelCase key 是 serde 默认产出形态（'ai' 不当作缩写大写）；
@@ -1906,7 +1906,7 @@ async fn update_config_general_auto_expand_ai_groups_round_trip() {
     .await
     .expect("autoExpandAiGroups=true SHALL 接受");
     assert_eq!(
-        api.get_config().await.unwrap()["general"]["autoExpandAiGroups"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["general"]["autoExpandAiGroups"],
         json!(true)
     );
 }
@@ -1945,7 +1945,7 @@ async fn update_config_general_claude_root_path_reconfigures_local_api() {
         })
         .await
         .unwrap();
-    assert_eq!(search["results"].as_array().unwrap().len(), 1);
+    assert_eq!(search.results.len(), 1);
 
     api.update_config(&ConfigUpdateRequest {
         section: "general".into(),
@@ -1954,7 +1954,7 @@ async fn update_config_general_claude_root_path_reconfigures_local_api() {
     .await
     .expect("claudeRootPath=null SHALL restore default");
     assert_eq!(
-        api.get_config().await.unwrap()["general"]["claudeRootPath"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["general"]["claudeRootPath"],
         json!(null)
     );
 }
@@ -1977,7 +1977,7 @@ async fn update_config_general_session_click_behavior_round_trip() {
     let (api, _tmp) = setup_api().await;
     // 默认 "replace"
     assert_eq!(
-        api.get_config().await.unwrap()["general"]["sessionClickBehavior"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["general"]["sessionClickBehavior"],
         json!("replace")
     );
     // 改为 "new-tab" SHALL 持久化
@@ -1988,7 +1988,7 @@ async fn update_config_general_session_click_behavior_round_trip() {
     .await
     .expect("general.sessionClickBehavior='new-tab' SHALL 接受");
     assert_eq!(
-        api.get_config().await.unwrap()["general"]["sessionClickBehavior"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["general"]["sessionClickBehavior"],
         json!("new-tab")
     );
     // 改回 "replace" 也 SHALL 生效
@@ -1999,7 +1999,7 @@ async fn update_config_general_session_click_behavior_round_trip() {
     .await
     .unwrap();
     assert_eq!(
-        api.get_config().await.unwrap()["general"]["sessionClickBehavior"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["general"]["sessionClickBehavior"],
         json!("replace")
     );
     // 非法值 SHALL Err
@@ -2021,7 +2021,7 @@ async fn update_config_display_time_format_round_trip() {
     let (api, _tmp) = setup_api().await;
     // 默认 "24h"
     assert_eq!(
-        api.get_config().await.unwrap()["display"]["timeFormat"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["display"]["timeFormat"],
         json!("24h"),
         "display.timeFormat MUST 默认序列化为 '24h'"
     );
@@ -2033,7 +2033,7 @@ async fn update_config_display_time_format_round_trip() {
     .await
     .expect("display.timeFormat='12h' SHALL 接受");
     assert_eq!(
-        api.get_config().await.unwrap()["display"]["timeFormat"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["display"]["timeFormat"],
         json!("12h")
     );
     // 改回 "24h" 也 SHALL 生效
@@ -2044,7 +2044,7 @@ async fn update_config_display_time_format_round_trip() {
     .await
     .unwrap();
     assert_eq!(
-        api.get_config().await.unwrap()["display"]["timeFormat"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["display"]["timeFormat"],
         json!("24h")
     );
     // 非法字符串 SHALL Err 且已存储值不变
@@ -2060,7 +2060,7 @@ async fn update_config_display_time_format_round_trip() {
         "Err message SHALL 提及字段名，实际：{err}"
     );
     assert_eq!(
-        api.get_config().await.unwrap()["display"]["timeFormat"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["display"]["timeFormat"],
         json!("24h"),
         "拒绝非法值后 timeFormat SHALL 保持 '24h' 不变"
     );
@@ -2089,7 +2089,7 @@ async fn update_config_display_accepts_null_to_clear_font_sans() {
         .await
         .expect("display fontSans=null SHALL 反序列化成功");
 
-    let cfg = api.get_config().await.unwrap();
+    let cfg = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
     // fontSans 为 None 时 skip_serializing → 字段不在响应中即等价于 null
     assert!(cfg["display"].get("fontSans").is_none());
 }
@@ -2106,7 +2106,7 @@ async fn update_config_display_accepts_custom_font_mono_string() {
         .await
         .expect("display fontMono 字符串 SHALL 反序列化成功");
 
-    let cfg = api.get_config().await.unwrap();
+    let cfg = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
     assert_eq!(cfg["display"]["fontMono"], json!(custom));
 }
 
@@ -2120,7 +2120,7 @@ async fn update_config_display_whitespace_font_normalizes_to_null() {
     };
     api.update_config(&set_req).await.unwrap();
     assert_eq!(
-        api.get_config().await.unwrap()["display"]["fontSans"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["display"]["fontSans"],
         json!("Arial")
     );
 
@@ -2131,7 +2131,7 @@ async fn update_config_display_whitespace_font_normalizes_to_null() {
     };
     api.update_config(&clear_req).await.unwrap();
 
-    let cfg = api.get_config().await.unwrap();
+    let cfg = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
     assert!(
         cfg["display"].get("fontSans").is_none(),
         "全空白 SHALL 归一化为 None（序列化后字段缺失）"
@@ -2491,31 +2491,34 @@ fn session_summary_skips_worktree_fields_when_none() {
 /// 单 phase 会话：`injectionsByPhase` 含 key `"1"`，等价于 `contextInjections`。
 #[test]
 fn session_detail_single_phase_injections_by_phase_equals_context_injections() {
+    use std::collections::BTreeMap;
+
     use cdt_api::SessionDetail;
-    let inj = serde_json::to_value(ContextInjection::UserMessage(UserMessageInjection {
+    let inj_typed = ContextInjection::UserMessage(UserMessageInjection {
         id: "u1".into(),
         turn_index: 0,
         ai_group_id: "a:0".into(),
         estimated_tokens: 2,
         text_preview: "hi".into(),
-    }))
-    .unwrap();
-    let mut by_phase = serde_json::Map::new();
-    by_phase.insert("1".to_string(), json!([inj.clone()]));
-    let phase_info = json!({
+    });
+    let inj = serde_json::to_value(&inj_typed).unwrap();
+    let mut by_phase: BTreeMap<String, Vec<ContextInjection>> = BTreeMap::new();
+    by_phase.insert("1".to_string(), vec![inj_typed.clone()]);
+    let phase_info: cdt_core::ContextPhaseInfo = serde_json::from_value(json!({
         "phases": [{"phaseNumber": 1, "firstAiGroupId": "a:0", "lastAiGroupId": "a:0"}],
         "compactionCount": 0,
         "aiGroupPhaseMap": {"a:0": 1},
         "compactionTokenDeltas": {},
-    });
+    }))
+    .unwrap();
     let detail = SessionDetail {
         session_id: "s1".into(),
         project_id: "p1".into(),
-        chunks: serde_json::Value::Array(vec![]),
-        metrics: json!({}),
-        metadata: json!({}),
-        context_injections: json!([inj.clone()]),
-        injections_by_phase: serde_json::Value::Object(by_phase),
+        chunks: Vec::new(),
+        metrics: cdt_api::SessionDetailMetrics::default(),
+        metadata: cdt_api::SessionDetailMetadata::default(),
+        context_injections: vec![inj_typed.clone()],
+        injections_by_phase: by_phase,
         phase_info,
         is_ongoing: false,
         title: None,
@@ -2539,31 +2542,32 @@ fn session_detail_single_phase_injections_by_phase_equals_context_injections() {
 /// 多 phase 会话：Phase 1 的 injections 在 compact 后不丢失，仍在 `injectionsByPhase["1"]`。
 #[test]
 fn session_detail_multi_phase_preserves_phase1_injections() {
+    use std::collections::BTreeMap;
+
     use cdt_api::SessionDetail;
-    let phase1_inj =
-        serde_json::to_value(ContextInjection::MentionedFile(MentionedFileInjection {
-            id: "m1".into(),
-            path: "/p/file.rs".into(),
-            display_name: "file.rs".into(),
-            estimated_tokens: 10,
-            first_seen_turn_index: 0,
-            first_seen_in_group: "a:0".into(),
-            exists: true,
-        }))
-        .unwrap();
-    let phase2_inj = serde_json::to_value(ContextInjection::ToolOutput(ToolOutputInjection {
+    let phase1_inj_typed = ContextInjection::MentionedFile(MentionedFileInjection {
+        id: "m1".into(),
+        path: "/p/file.rs".into(),
+        display_name: "file.rs".into(),
+        estimated_tokens: 10,
+        first_seen_turn_index: 0,
+        first_seen_in_group: "a:0".into(),
+        exists: true,
+    });
+    let phase2_inj_typed = ContextInjection::ToolOutput(ToolOutputInjection {
         id: "t1".into(),
         turn_index: 1,
         ai_group_id: "b:0".into(),
         estimated_tokens: 50,
         tool_count: 1,
         tool_breakdown: vec![],
-    }))
-    .unwrap();
-    let mut by_phase = serde_json::Map::new();
-    by_phase.insert("1".into(), json!([phase1_inj.clone()]));
-    by_phase.insert("2".into(), json!([phase2_inj.clone()]));
-    let phase_info = json!({
+    });
+    let phase1_inj = serde_json::to_value(&phase1_inj_typed).unwrap();
+    let phase2_inj = serde_json::to_value(&phase2_inj_typed).unwrap();
+    let mut by_phase: BTreeMap<String, Vec<ContextInjection>> = BTreeMap::new();
+    by_phase.insert("1".into(), vec![phase1_inj_typed.clone()]);
+    by_phase.insert("2".into(), vec![phase2_inj_typed.clone()]);
+    let phase_info: cdt_core::ContextPhaseInfo = serde_json::from_value(json!({
         "phases": [
             {"phaseNumber": 1, "firstAiGroupId": "a:0", "lastAiGroupId": "a:0"},
             {"phaseNumber": 2, "firstAiGroupId": "b:0", "lastAiGroupId": "b:0", "compactGroupId": "c:0"},
@@ -2571,15 +2575,16 @@ fn session_detail_multi_phase_preserves_phase1_injections() {
         "compactionCount": 1,
         "aiGroupPhaseMap": {"a:0": 1, "b:0": 2},
         "compactionTokenDeltas": {},
-    });
+    }))
+    .unwrap();
     let detail = SessionDetail {
         session_id: "s2".into(),
         project_id: "p1".into(),
-        chunks: serde_json::Value::Array(vec![]),
-        metrics: json!({}),
-        metadata: json!({}),
-        context_injections: json!([phase2_inj.clone()]), // = latest phase
-        injections_by_phase: serde_json::Value::Object(by_phase),
+        chunks: Vec::new(),
+        metrics: cdt_api::SessionDetailMetrics::default(),
+        metadata: cdt_api::SessionDetailMetadata::default(),
+        context_injections: vec![phase2_inj_typed.clone()], // = latest phase
+        injections_by_phase: by_phase,
         phase_info,
         is_ongoing: false,
         title: None,
@@ -2602,16 +2607,18 @@ fn session_detail_multi_phase_preserves_phase1_injections() {
 /// Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
 #[test]
 fn session_detail_title_field_round_trip() {
+    use std::collections::BTreeMap;
+
     use cdt_api::SessionDetail;
     let detail = SessionDetail {
         session_id: "s1".into(),
         project_id: "p1".into(),
-        chunks: serde_json::Value::Array(vec![]),
-        metrics: json!({}),
-        metadata: json!({}),
-        context_injections: json!([]),
-        injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
-        phase_info: serde_json::Value::Null,
+        chunks: Vec::new(),
+        metrics: cdt_api::SessionDetailMetrics::default(),
+        metadata: cdt_api::SessionDetailMetadata::default(),
+        context_injections: Vec::new(),
+        injections_by_phase: BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
         is_ongoing: false,
         title: Some("修复登录页样式".into()),
     };
@@ -2628,12 +2635,12 @@ fn session_detail_title_field_round_trip() {
     let detail_none = SessionDetail {
         session_id: "s2".into(),
         project_id: "p1".into(),
-        chunks: serde_json::Value::Null,
-        metrics: serde_json::Value::Null,
-        metadata: serde_json::Value::Null,
-        context_injections: serde_json::Value::Array(Vec::new()),
-        injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
-        phase_info: serde_json::Value::Null,
+        chunks: Vec::new(),
+        metrics: cdt_api::SessionDetailMetrics::default(),
+        metadata: cdt_api::SessionDetailMetadata::default(),
+        context_injections: Vec::new(),
+        injections_by_phase: BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
         is_ongoing: false,
         title: None,
     };
@@ -2642,6 +2649,163 @@ fn session_detail_title_field_round_trip() {
     assert_eq!(json_none["title"], json!(null));
     let back_none: SessionDetail = serde_json::from_value(json_none).unwrap();
     assert!(back_none.title.is_none());
+}
+
+/// change `typed-ipc-payload`：`SessionDetail` 6 字段 typed 化 round-trip。
+/// wire 形状 SHALL 与 typed 化前一致（详 spec delta `ipc-data-api::SessionDetail
+/// 与高频 DataApi 方法 SHALL 用 typed Rust struct 暴露字段` Scenario）：
+/// - 顶层 `SessionDetail` 字段 `camelCase`（`sessionId` / `projectId` /
+///   `chunks` / `metrics` / `metadata` / `contextInjections` /
+///   `injectionsByPhase` / `phaseInfo` / `isOngoing` / `title`）
+/// - `metrics` / `metadata` 内部字段 `snake_case`（`message_count` /
+///   `last_modified` / `size` / `cwd`，详 `design.md::D5` + `D7`）
+/// - `chunks[*].kind` enum tag 取值 ∈ `{user, ai, system, compact}`
+/// - `injectionsByPhase` key 是 `String`（`phase_number.to_string()`），
+///   value 是 `ContextInjection` array
+#[test]
+fn session_detail_typed_metrics_metadata_round_trip() {
+    use std::collections::BTreeMap;
+
+    use cdt_api::SessionDetail;
+
+    let detail = SessionDetail {
+        session_id: "s1".into(),
+        project_id: "p1".into(),
+        chunks: Vec::new(),
+        metrics: cdt_api::SessionDetailMetrics { message_count: 42 },
+        metadata: cdt_api::SessionDetailMetadata {
+            last_modified: Some(1_700_000_000_000),
+            size: Some(2048),
+            cwd: Some("/home/user/proj".into()),
+        },
+        context_injections: Vec::new(),
+        injections_by_phase: BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
+        is_ongoing: false,
+        title: Some("typed test".into()),
+    };
+
+    let json_val = serde_json::to_value(&detail).unwrap();
+
+    // 顶层 key 集合 SHALL 是 camelCase
+    let top_keys: std::collections::BTreeSet<&str> = json_val
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    for required in [
+        "sessionId",
+        "projectId",
+        "chunks",
+        "metrics",
+        "metadata",
+        "contextInjections",
+        "injectionsByPhase",
+        "phaseInfo",
+        "isOngoing",
+        "title",
+    ] {
+        assert!(
+            top_keys.contains(required),
+            "顶层 SHALL 含 camelCase key {required}, actual keys: {top_keys:?}",
+        );
+    }
+
+    // metrics 内部字段 SHALL 是 snake_case（与历史 hand-built wire 一致）
+    assert_eq!(json_val["metrics"]["message_count"], json!(42));
+    assert!(
+        json_val["metrics"].get("messageCount").is_none(),
+        "metrics MUST 不出现 camelCase messageCount（详 D5/D7）"
+    );
+
+    // metadata 内部字段 SHALL 是 snake_case
+    assert_eq!(
+        json_val["metadata"]["last_modified"],
+        json!(1_700_000_000_000_i64)
+    );
+    assert_eq!(json_val["metadata"]["size"], json!(2048));
+    assert_eq!(json_val["metadata"]["cwd"], json!("/home/user/proj"));
+    assert!(
+        json_val["metadata"].get("lastModified").is_none(),
+        "metadata MUST 不出现 camelCase lastModified（详 D5/D7）"
+    );
+
+    // round-trip 反序列化 SHALL PartialEq 等价
+    let back: SessionDetail = serde_json::from_value(json_val.clone()).unwrap();
+    assert_eq!(
+        back, detail,
+        "SessionDetail typed round-trip MUST PartialEq 等价"
+    );
+}
+
+/// change `typed-ipc-payload`：`Chunk.kind` enum tag 取值在 {user, ai, system,
+/// compact} 集合内，**不**得漂移（前端 discriminated union 依赖此 tag）。
+/// 防御 `cdt-core::Chunk` 误加 `rename_all_fields` 等导致 wire tag 命名变化。
+#[test]
+fn chunk_kind_tag_value_preserved() {
+    let user = cdt_core::Chunk::User(UserChunk {
+        chunk_id: "u:0".into(),
+        uuid: "u-uuid".into(),
+        timestamp: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        duration_ms: None,
+        content: MessageContent::Text("hi".into()),
+        metrics: ChunkMetrics::zero(),
+    });
+    let user_val = serde_json::to_value(&user).unwrap();
+    assert_eq!(user_val["kind"], json!("user"));
+
+    let sys = cdt_core::Chunk::System(SystemChunk {
+        chunk_id: "s:0".into(),
+        uuid: "s-uuid".into(),
+        timestamp: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        duration_ms: None,
+        content_text: "init".into(),
+        metrics: ChunkMetrics::zero(),
+    });
+    let sys_val = serde_json::to_value(&sys).unwrap();
+    assert_eq!(sys_val["kind"], json!("system"));
+}
+
+/// change `typed-ipc-payload`：`injectionsByPhase` JSON object key 是 `String`
+/// （`phase_number.to_string()`），value 是 `ContextInjection` array。
+/// `BTreeMap` 序列化 key 字典序稳定（详 `design.md::D4`）。
+#[test]
+fn injections_by_phase_btreemap_key_is_string() {
+    use std::collections::BTreeMap;
+
+    use cdt_api::SessionDetail;
+
+    let inj = ContextInjection::UserMessage(UserMessageInjection {
+        id: "u1".into(),
+        turn_index: 0,
+        ai_group_id: "a:0".into(),
+        estimated_tokens: 2,
+        text_preview: "hi".into(),
+    });
+    let mut by_phase: BTreeMap<String, Vec<ContextInjection>> = BTreeMap::new();
+    by_phase.insert("2".into(), vec![inj.clone()]);
+    by_phase.insert("10".into(), vec![inj.clone()]); // BTreeMap 字典序：10 < 2
+    by_phase.insert("1".into(), vec![inj.clone()]);
+
+    let detail = SessionDetail {
+        session_id: "s".into(),
+        project_id: "p".into(),
+        chunks: Vec::new(),
+        metrics: cdt_api::SessionDetailMetrics::default(),
+        metadata: cdt_api::SessionDetailMetadata::default(),
+        context_injections: Vec::new(),
+        injections_by_phase: by_phase,
+        phase_info: cdt_core::ContextPhaseInfo::default(),
+        is_ongoing: false,
+        title: None,
+    };
+    let json_val = serde_json::to_value(&detail).unwrap();
+    let by_phase_val = json_val["injectionsByPhase"].as_object().unwrap();
+    let keys: Vec<&str> = by_phase_val.keys().map(String::as_str).collect();
+    // BTreeMap 字典序：1 < 10 < 2
+    assert_eq!(keys, vec!["1", "10", "2"], "BTreeMap key SHALL 字典序输出");
+    assert!(by_phase_val["1"].is_array());
 }
 
 /// `chunk_id` 形态统一：所有 chunk 类型首次出现都用 `<base>:0`，无 `ai:` 前缀。
@@ -2870,7 +3034,7 @@ async fn update_config_http_server_round_trip() {
     let (api, _tmp) = setup_api().await;
 
     // 默认值
-    let cfg = api.get_config().await.unwrap();
+    let cfg = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
     assert_eq!(cfg["httpServer"]["enabled"], json!(false));
     assert_eq!(cfg["httpServer"]["port"], json!(3456));
 
@@ -2879,7 +3043,7 @@ async fn update_config_http_server_round_trip() {
         section: "httpServer".into(),
         data: json!({ "port": 3500 }),
     };
-    let next = api.update_config(&req).await.unwrap();
+    let next = serde_json::to_value(api.update_config(&req).await.unwrap()).unwrap();
     assert_eq!(next["httpServer"]["port"], json!(3500));
     assert_eq!(
         next["httpServer"]["enabled"],
@@ -2892,7 +3056,7 @@ async fn update_config_http_server_round_trip() {
         section: "httpServer".into(),
         data: json!({ "port": 3456 }),
     };
-    let next = api.update_config(&req).await.unwrap();
+    let next = serde_json::to_value(api.update_config(&req).await.unwrap()).unwrap();
     assert_eq!(next["httpServer"]["port"], json!(3456));
 
     // 非法 port（< 1024）拒绝；ConfigManager::update_http_server 内部走
@@ -2913,7 +3077,7 @@ async fn update_config_http_server_round_trip() {
         section: "httpServer".into(),
         data: json!({ "enabled": true }),
     };
-    let next = api.update_config(&req).await.unwrap();
+    let next = serde_json::to_value(api.update_config(&req).await.unwrap()).unwrap();
     assert_eq!(next["httpServer"]["enabled"], json!(true));
     assert_eq!(
         next["httpServer"]["port"],
@@ -2929,7 +3093,7 @@ async fn update_config_keyboard_shortcuts_round_trip() {
     let (api, _tmp) = setup_api().await;
 
     // 默认值：空 object（不是 null / missing）
-    let cfg = api.get_config().await.unwrap();
+    let cfg = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
     assert!(
         cfg["keyboardShortcuts"].is_object(),
         "默认 keyboardShortcuts SHALL 是 object"
@@ -2944,7 +3108,7 @@ async fn update_config_keyboard_shortcuts_round_trip() {
             "command-palette.open": "mod+k",
         }),
     };
-    let next = api.update_config(&req).await.unwrap();
+    let next = serde_json::to_value(api.update_config(&req).await.unwrap()).unwrap();
     let map = next["keyboardShortcuts"].as_object().unwrap();
     assert_eq!(map.len(), 2);
     assert_eq!(map["sidebar.toggle"], json!("mod+shift+b"));
@@ -2955,7 +3119,7 @@ async fn update_config_keyboard_shortcuts_round_trip() {
         section: "keyboardShortcuts".into(),
         data: json!({ "foo": "ctrl+x" }),
     };
-    let next = api.update_config(&req).await.unwrap();
+    let next = serde_json::to_value(api.update_config(&req).await.unwrap()).unwrap();
     let map = next["keyboardShortcuts"].as_object().unwrap();
     assert_eq!(
         map.len(),
@@ -2970,7 +3134,7 @@ async fn update_config_keyboard_shortcuts_round_trip() {
         section: "keyboardShortcuts".into(),
         data: json!({}),
     };
-    let next = api.update_config(&req).await.unwrap();
+    let next = serde_json::to_value(api.update_config(&req).await.unwrap()).unwrap();
     assert_eq!(
         next["keyboardShortcuts"].as_object().unwrap().len(),
         0,
@@ -3260,7 +3424,7 @@ fn terminal_app_enum_serializes_snake_case_iterm_to_i_term() {
 #[tokio::test]
 async fn get_config_general_includes_three_phase_2_fields_camel_case() {
     let (api, _tmp) = setup_api().await;
-    let config = api.get_config().await.unwrap();
+    let config = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
     // 默认值 SHALL 出现在 IPC 返回内
     assert_eq!(config["general"]["externalEditor"], json!("system"));
     assert_eq!(
@@ -3284,7 +3448,7 @@ async fn update_config_general_external_editor_round_trip() {
     .await
     .expect("externalEditor='vs_code' SHALL 接受");
     assert_eq!(
-        api.get_config().await.unwrap()["general"]["externalEditor"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["general"]["externalEditor"],
         json!("vs_code")
     );
 
@@ -3296,7 +3460,7 @@ async fn update_config_general_external_editor_round_trip() {
     .await
     .expect("externalEditor='system' SHALL 接受");
     assert_eq!(
-        api.get_config().await.unwrap()["general"]["externalEditor"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["general"]["externalEditor"],
         json!("system")
     );
 }
@@ -3329,7 +3493,7 @@ async fn update_config_general_search_engine_custom_round_trip() {
     .await
     .expect("custom searchEngine with {query} SHALL 接受");
 
-    let config = api.get_config().await.unwrap();
+    let config = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
     assert_eq!(
         config["general"]["searchEngine"],
         json!({
@@ -3386,7 +3550,7 @@ async fn update_config_general_terminal_app_iterm_round_trip() {
     .expect("terminalApp='i_term' SHALL 接受");
     // 注意 ITerm 序列化为 "i_term" 不是 "iterm"
     assert_eq!(
-        api.get_config().await.unwrap()["general"]["terminalApp"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["general"]["terminalApp"],
         json!("i_term")
     );
 }
@@ -3402,7 +3566,7 @@ async fn update_config_general_terminal_app_cross_platform_value_no_error() {
     .await
     .expect("terminalApp='konsole' SHALL 接受 (跨平台值不报错)");
     assert_eq!(
-        api.get_config().await.unwrap()["general"]["terminalApp"],
+        serde_json::to_value(api.get_config().await.unwrap()).unwrap()["general"]["terminalApp"],
         json!("konsole")
     );
 }
