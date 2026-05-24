@@ -21,6 +21,27 @@
   } from "../lib/fileChangeStore.svelte";
   import { registerShortcut } from "../lib/keyboard/registry";
   import { getShortcutMeta } from "../lib/keyboard/defaults";
+  import { contextMenu } from "../lib/contextMenu.svelte";
+  import { buildProjectCardItems, type MenuItemContext } from "../lib/contextMenu/menu-items";
+  import { getMenuSettings } from "../lib/contextMenu/settings.svelte";
+  import { getMenuItemDispatch } from "../lib/contextMenu/dispatch";
+
+  // ── Project card right-click menu（Task 9.6 / spec frontend-context-menu Phase 2）──
+  function buildProjectCtx(): MenuItemContext {
+    return {
+      sessionId: "",
+      projectId: "",
+      settings: getMenuSettings(),
+      selectionText: window.getSelection()?.toString() ?? "",
+      dispatch: getMenuItemDispatch(),
+    };
+  }
+  function projectMenuProvider(p: DashboardProject) {
+    return () => buildProjectCardItems(
+      { path: p.path, name: p.displayName },
+      buildProjectCtx(),
+    );
+  }
 
   const SORT_OPTIONS: { value: DashboardSortKey; label: string }[] = [
     { value: "recent", label: "最近活动" },
@@ -272,6 +293,7 @@
               class:dash-row-active={isActive}
               class:dash-row-pulse={isPulsing}
               onclick={() => handleSelect(project)}
+              use:contextMenu={projectMenuProvider(project)}
             >
               <!-- 双 sub-flex：left(name + 当前 badge) | right(time + worktree + 💬N)
                    用 justify-content: space-between 把右侧 metadata 永久推到行尾，
@@ -315,6 +337,7 @@
             class:dash-card-active={isActive}
             class:dash-card-pulse={isPulsing}
             onclick={() => handleSelect(project)}
+            use:contextMenu={projectMenuProvider(project)}
           >
             <div class="dash-card-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

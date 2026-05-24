@@ -16,6 +16,8 @@
     type WslDistroCandidate,
     type HttpServerStatus,
   } from "../lib/api";
+  import { invoke } from "@tauri-apps/api/core";
+  import { setMenuSettings } from "../lib/contextMenu/settings.svelte";
   import { isTauriRuntime } from "../lib/runtime";
   import { applyTheme } from "../lib/theme";
   import { applyFonts } from "../lib/fonts";
@@ -110,6 +112,75 @@
     { id: "about", label: "关于", description: "版本与更新", icon: INFO_SVG },
   ];
 
+  // ── External-app settings（Phase 2 / spec configuration-management 三字段）──
+  // `availableTerminals` 由 list_available_terminals IPC 提供，按当前平台过滤
+  // dropdown 选项；跨平台同步配置不匹配时显示 fallback 提示。
+  let availableTerminals: string[] = $state([]);
+  let customSearchUrlInput = $state("");
+  let customSearchValidationError: string | null = $state(null);
+  // 搜索引擎 dropdown 当前显示值（独立 state 让"自定义"被选中后但 URL 未提交时
+  // dropdown 仍显示"自定义"，与 config.general.searchEngine 状态分离）
+  let searchEngineSelection: "google" | "bing" | "duck_duck_go" | "custom" = $state("google");
+
+  // 终端 enum → 用户友好 label 映射
+  const TERMINAL_LABELS: Record<string, string> = {
+    terminal: "Terminal",
+    i_term: "iTerm",
+    warp: "Warp",
+    windows_terminal: "Windows Terminal",
+    cmd: "Command Prompt",
+    power_shell: "PowerShell",
+    x_terminal_emulator: "X Terminal Emulator",
+    gnome_terminal: "GNOME Terminal",
+    konsole: "Konsole",
+    alacritty: "Alacritty",
+  };
+
+  // 编辑器 enum → label
+  const EDITOR_OPTIONS: Array<{ value: string; label: string }> = [
+    { value: "system", label: "系统默认（不支持跳行号）" },
+    { value: "vs_code", label: "VS Code" },
+    { value: "cursor", label: "Cursor" },
+    { value: "zed", label: "Zed" },
+    { value: "sublime", label: "Sublime Text" },
+  ];
+
+  // 搜索引擎 type → label
+  const SEARCH_ENGINE_OPTIONS: Array<{ value: "google" | "bing" | "duck_duck_go" | "custom"; label: string }> = [
+    { value: "google", label: "Google" },
+    { value: "bing", label: "Bing" },
+    { value: "duck_duck_go", label: "DuckDuckGo" },
+    { value: "custom", label: "自定义 URL 模板" },
+  ];
+
+  // 当前平台默认 terminal value（IPC list_available_terminals 返回首项即平台默认）
+  const platformDefaultTerminal = $derived(availableTerminals[0] ?? "terminal");
+
+  // 跨平台 mismatch 检测：config.terminalApp ∉ availableTerminals
+  const isTerminalCrossPlatformMismatch = $derived.by(() => {
+    if (!config) return false;
+    const current = config.general.terminalApp ?? "terminal";
+    if (availableTerminals.length === 0) return false; // 还没加载完
+    return !availableTerminals.includes(current);
+  });
+
+  // dropdown 实际选中值——mismatch 时 dropdown 显示平台默认而非 config 值
+  // （后端 fallback 行为 + 显式 hint 让用户知道）
+  const effectiveTerminalDropdownValue = $derived.by(() => {
+    if (!config) return "terminal";
+    const current = config.general.terminalApp ?? "terminal";
+    if (isTerminalCrossPlatformMismatch) return platformDefaultTerminal;
+    return current;
+  });
+
+  // dropdown 选项：当前平台合法集 + label 映射
+  const availableTerminalOptions = $derived(
+    availableTerminals.map((value) => ({
+      value,
+      label: TERMINAL_LABELS[value] ?? value,
+    })),
+  );
+
   // server-mode: Browser Access subsection 状态（详 openspec/specs/server-mode/spec.md）
   const showBrowserAccess = isTauriRuntime();
   let serverStatus: HttpServerStatus | null = $state(null);
@@ -125,10 +196,24 @@
       fontMonoInput = config.display?.fontMono ?? "";
       claudeRootInput = config!.general.claudeRootPath ?? "";
       portInput = String(config.httpServer?.port ?? 3456);
+      // 初始化外部应用相关 state
+      const se = config.general.searchEngine ?? { type: "google" };
+      searchEngineSelection = se.type;
+      customSearchUrlInput = se.type === "custom" ? se.urlTemplate : "";
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
+    }
+    // 加载当前平台合法 terminal 列表（IPC `list_available_terminals`）。
+    // 失败 fallback 到 macOS 集合（mock 模式 / 非 Tauri runtime / 老后端兼容）。
+    try {
+      const terms = await invoke<string[]>("list_available_terminals");
+      availableTerminals = Array.isArray(terms) && terms.length > 0
+        ? terms
+        : ["terminal", "i_term", "warp"];
+    } catch {
+      availableTerminals = ["terminal", "i_term", "warp"];
     }
     try {
       appVersion = await getVersion();
@@ -348,16 +433,53 @@
       if (key === "claudeRootPath") {
         window.dispatchEvent(new CustomEvent("cdt-refresh-projects"));
       }
+      // 三外部应用字段改动后同步 context menu settings 快照（spec
+      // configuration-management Phase 2 三字段 / Task 10.5）
+      if (key === "externalEditor" || key === "searchEngine" || key === "terminalApp") {
+        setMenuSettings(config.general);
+      }
     } catch (e) {
       saveError = `保存失败: ${e}`;
       try {
         config = await getConfig();
         claudeRootInput = config!.general.claudeRootPath ?? "";
         applyTheme(config!.general.theme);
+        // rollback 后也同步快照（避免菜单读到本地乐观更新后但后端未实际持久化的脏值）
+        setMenuSettings(config.general);
       } catch {
         /* ignore */
       }
     }
+  }
+
+  /** 搜索引擎类型 dropdown 改变：非 custom 直接保存；custom 仅切换显示，URL
+   *  由用户填后通过 commitCustomSearchUrl 真正持久化。 */
+  async function onSearchEngineTypeChange(v: string) {
+    if (v !== "google" && v !== "bing" && v !== "duck_duck_go" && v !== "custom") return;
+    searchEngineSelection = v;
+    customSearchValidationError = null;
+    if (v === "custom") {
+      // 切到自定义但 URL 还没填——保留当前 config.searchEngine（不立即保存到
+      // type:custom 缺 urlTemplate 的非法状态）。dropdown 视觉显示"自定义"，
+      // 用户填写 URL 后调 commitCustomSearchUrl 才真正持久化。
+      // 把现有 customSearchUrlInput 暴露在 input；首次切到 custom 时为空字符串
+      return;
+    }
+    await updateGeneral("searchEngine", { type: v });
+  }
+
+  async function commitCustomSearchUrl() {
+    const tpl = customSearchUrlInput.trim();
+    customSearchValidationError = null;
+    if (!tpl.includes("{query}")) {
+      customSearchValidationError = "URL 模板必须含 {query} 占位符";
+      return;
+    }
+    if (!/^https?:\/\//i.test(tpl)) {
+      customSearchValidationError = "URL 模板必须以 http:// 或 https:// 起首";
+      return;
+    }
+    await updateGeneral("searchEngine", { type: "custom", urlTemplate: tpl });
   }
 
   async function commitClaudeRoot() {
@@ -639,6 +761,78 @@
                 />
               {/snippet}
             </SettingsField>
+          </SettingsGroup>
+
+          <SettingsGroup
+            title="外部应用"
+            description="右键菜单的「在编辑器打开 / 在终端打开 / 在浏览器搜索」调用的目标"
+          >
+            <SettingsField label="编辑器" description="代码编辑器；选 VS Code / Cursor / Zed / Sublime 时支持跳行号">
+              {#snippet control()}
+                <Dropdown
+                  value={config!.general.externalEditor ?? "system"}
+                  options={EDITOR_OPTIONS}
+                  onChange={(v) => updateGeneral("externalEditor", v)}
+                  ariaLabel="外部编辑器"
+                />
+              {/snippet}
+            </SettingsField>
+
+            <SettingsField label="搜索引擎" description="用于「在浏览器搜索」item 的目标 URL">
+              {#snippet control()}
+                <Dropdown
+                  value={searchEngineSelection}
+                  options={SEARCH_ENGINE_OPTIONS}
+                  onChange={(v) => onSearchEngineTypeChange(v)}
+                  ariaLabel="搜索引擎"
+                />
+              {/snippet}
+            </SettingsField>
+
+            {#if searchEngineSelection === "custom"}
+              <SettingsField
+                label="自定义搜索 URL 模板"
+                description={"必须含 {query} 占位符；scheme 限 http / https"}
+                layout="stack"
+                labelFor="custom-search-url-input"
+              >
+                {#snippet control()}
+                  <input
+                    id="custom-search-url-input"
+                    class="control-input control-input-mono"
+                    type="url"
+                    placeholder={"https://example.com/search?q={query}"}
+                    aria-label="自定义搜索 URL 模板"
+                    bind:value={customSearchUrlInput}
+                    onkeydown={(e) => {
+                      if (e.key === "Enter") commitCustomSearchUrl();
+                    }}
+                  />
+                  <SettingsButton variant="ghost" onClick={commitCustomSearchUrl}>保存</SettingsButton>
+                {/snippet}
+              </SettingsField>
+              {#if customSearchValidationError}
+                <p class="wsl-inline wsl-inline-error" role="status">
+                  {customSearchValidationError}
+                </p>
+              {/if}
+            {/if}
+
+            <SettingsField label="终端" description="按当前平台过滤；从其它平台同步过来的设置不可用时降级到平台默认">
+              {#snippet control()}
+                <Dropdown
+                  value={effectiveTerminalDropdownValue}
+                  options={availableTerminalOptions}
+                  onChange={(v) => updateGeneral("terminalApp", v)}
+                  ariaLabel="终端应用"
+                />
+              {/snippet}
+            </SettingsField>
+            {#if isTerminalCrossPlatformMismatch && config}
+              <p class="wsl-inline" role="status">
+                同步自其它平台的设置「{TERMINAL_LABELS[config.general.terminalApp ?? ""] ?? config.general.terminalApp}」在当前 OS 不可用，已降级到「{TERMINAL_LABELS[platformDefaultTerminal] ?? platformDefaultTerminal}」。
+              </p>
+            {/if}
           </SettingsGroup>
 
           <SettingsGroup

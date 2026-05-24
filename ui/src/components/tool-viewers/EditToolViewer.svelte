@@ -3,12 +3,18 @@
   import { toolErrorText, toolOutputText } from "../../lib/toolHelpers";
   import DiffViewer from "../DiffViewer.svelte";
   import OutputBlock from "../OutputBlock.svelte";
+  import { contextMenu } from "../../lib/contextMenu.svelte";
+  import { buildFileToolItems, type MenuItemContext } from "../../lib/contextMenu/menu-items";
+  import { getMenuSettings } from "../../lib/contextMenu/settings.svelte";
+  import { getMenuItemDispatch } from "../../lib/contextMenu/dispatch";
 
   interface Props {
     exec: ToolExecution;
+    sessionId?: string;
+    projectId?: string;
   }
 
-  let { exec }: Props = $props();
+  let { exec, sessionId = "", projectId = "" }: Props = $props();
 
   const input = $derived(exec.input as Record<string, unknown>);
   const filePath = $derived(String(input?.file_path ?? input?.filePath ?? ""));
@@ -18,26 +24,46 @@
   // 错误详情（红色），成功时展示后端 toolUseResult.content（如有）。否则该区段
   // 直接折叠不渲染。
   const resultText = $derived(exec.isError ? toolErrorText(exec) : toolOutputText(exec.output));
+
+  function buildCtx(): MenuItemContext {
+    return {
+      sessionId,
+      projectId,
+      settings: getMenuSettings(),
+      selectionText: window.getSelection()?.toString() ?? "",
+      dispatch: getMenuItemDispatch(),
+    };
+  }
 </script>
 
-{#if oldString && newString}
-  <DiffViewer fileName={filePath} {oldString} {newString} />
-{:else if newString}
-  <DiffViewer fileName={filePath} oldString="" {newString} />
-{:else}
-  <DiffViewer fileName={filePath} {oldString} newString="" />
-{/if}
+<!-- contextMenu 覆盖整个工具块（diff + result）；display: contents 让 wrapping
+     div 不影响外层 grid/flex 布局——视觉上等价旧的"无 wrapper"形态 -->
+<div class="edit-tool-wrap" use:contextMenu={() => buildFileToolItems(exec, buildCtx())}>
+  {#if oldString && newString}
+    <DiffViewer fileName={filePath} {oldString} {newString} />
+  {:else if newString}
+    <DiffViewer fileName={filePath} oldString="" {newString} />
+  {:else}
+    <DiffViewer fileName={filePath} {oldString} newString="" />
+  {/if}
 
-{#if resultText}
-  <div class="edit-result">
-    <span class="edit-result-label" class:edit-result-label-err={exec.isError}>
-      {exec.isError ? "ERROR" : "RESULT"}
-    </span>
-    <OutputBlock code={resultText} isError={exec.isError} />
-  </div>
-{/if}
+  {#if resultText}
+    <div class="edit-result">
+      <span class="edit-result-label" class:edit-result-label-err={exec.isError}>
+        {exec.isError ? "ERROR" : "RESULT"}
+      </span>
+      <OutputBlock code={resultText} isError={exec.isError} />
+    </div>
+  {/if}
+</div>
 
 <style>
+  /* display: contents 让 wrapping div 不影响 layout——子节点视觉上仍然是
+     EditToolViewer 的直接孩子，仅作为 use:contextMenu 的事件挂载点 */
+  .edit-tool-wrap {
+    display: contents;
+  }
+
   .edit-result {
     display: flex;
     flex-direction: column;

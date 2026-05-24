@@ -41,6 +41,7 @@
   import { attachExternalLinkInterceptor } from "./lib/externalLinks";
   import { bootstrapOverrides } from "./lib/keyboard/customization";
   import { registerAppShortcuts } from "./lib/keyboard/register-app-shortcuts";
+  import { setMenuSettings } from "./lib/contextMenu/settings.svelte";
 
   let selectedGroupId: string = $state("");
   let selectedProjectName: string = $state("");
@@ -195,6 +196,9 @@
       } else {
         setTimeFormat("24h");
       }
+      // 同步 context menu 用 settings 快照（spec frontend-context-menu Phase 2
+      // / D6）：让 selectionMenu ctxProvider + 各 surface 组件读取的快照一致
+      setMenuSettings(config.general);
     } catch {
       // 加载失败保持默认浅色 + 默认字体；显式复位 timeFormat 防 HMR / 重挂载场景
       // 下模块级 $state 残留前一次 setTimeFormat("12h") 的旧值（codex CR #1）

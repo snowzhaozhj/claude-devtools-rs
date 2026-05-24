@@ -509,6 +509,39 @@ pub trait DataApi: Send + Sync {
         Ok(cdt_telemetry::take_snapshot())
     }
 
+    // =========================================================================
+    // 外部应用交互（右键菜单：在终端打开 / 在编辑器打开 / 列出当前平台终端）
+    // 详 openspec/specs/frontend-context-menu/spec.md 三个 Requirement +
+    // openspec/changes/frontend-context-menu-phase-2/design.md::D1-D5
+    // =========================================================================
+
+    /// 在用户偏好终端 app 中打开目录（仅 cd 不执行命令）。默认实现返回
+    /// `not implemented`——`LocalDataApi` override 真版本（HTTP 镜像同名）。
+    async fn open_in_terminal(&self, _path: &str) -> Result<(), ApiError> {
+        Err(ApiError::internal(
+            "open_in_terminal not implemented on this transport",
+        ))
+    }
+
+    /// 在用户偏好编辑器中打开文件（含可选行号 / 列号）。
+    async fn open_in_editor(
+        &self,
+        _path: &str,
+        _line: Option<u32>,
+        _column: Option<u32>,
+    ) -> Result<(), ApiError> {
+        Err(ApiError::internal(
+            "open_in_editor not implemented on this transport",
+        ))
+    }
+
+    /// 当前平台支持的 `TerminalApp` 列表（`snake_case` 序列化值）。
+    /// 默认实现走 `cdt_api::ipc::external_app::list_available_terminals`——
+    /// 该函数无状态依赖，所有 transport 共用同一份逻辑。
+    async fn list_available_terminals(&self) -> Result<Vec<String>, ApiError> {
+        Ok(super::external_app::list_available_terminals())
+    }
+
     /// 批量上报 correctness event 计数（前端 5s/50 累计窗口 flush）。
     /// 详 `OpenSpec` change `add-telemetry-signal-bus` D10。
     /// 白名单 kind: `stale_update.triggered` / `cache.signature_skew_observed_in_ui`。

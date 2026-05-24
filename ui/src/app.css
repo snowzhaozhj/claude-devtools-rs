@@ -231,6 +231,18 @@
   /* spinner stroke 与 --bubble-icon-md 联动：14px icon → 2px stroke 比例 ~14%
      视觉合适。若未来 icon-md 改值，按比例同步 stroke 以保视觉密度（codex 二审）。*/
   --bubble-spinner-stroke: 2px;
+
+  /* ─── Context menu（capability `frontend-context-menu`，change phase 2）───
+     `AppContextMenu.svelte` 的视觉契约 token。设计契约见 DESIGN.md
+     `### Context menu` 段（submenu / shortcut hint / max-width）与 candidate
+     Named Rules `The Submenu Follows Parent Rule` / `The Shortcut Hint Is
+     Whisper Rule`（archive 前 /impeccable extract 决策是否提升为正式 Named Rule）。
+     三主题（:root / dark / system）同步显式声明保持契约表达一致——color 走
+     `--color-text-muted` alias 各主题自动跟随；font / max-width 在浅深主题数值
+     相同（不与色温变化挂钩），三处声明仅为表达显式性。 */
+  --cm-shortcut-color: var(--color-text-muted);
+  --cm-shortcut-font: 11px var(--font-mono);
+  --cm-max-width: 320px;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -372,6 +384,11 @@
 
   /* 深色主题：accent-blue 是浅蓝 (#60a5fa)，文字用深 slate 才达 AA */
   --color-text-on-accent: #0f172a;
+
+  /* Context menu（详 :root 同名 token 注释）—— 三主题同步显式声明 */
+  --cm-shortcut-color: var(--color-text-muted);
+  --cm-shortcut-font: 11px var(--font-mono);
+  --cm-max-width: 320px;
 }
 
 /* System preference — dark mode follows OS */
@@ -502,6 +519,11 @@
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
 
     --color-text-on-accent: #0f172a;
+
+    /* Context menu（详 :root 同名 token 注释）—— 三主题同步显式声明 */
+    --cm-shortcut-color: var(--color-text-muted);
+    --cm-shortcut-font: 11px var(--font-mono);
+    --cm-max-width: 320px;
   }
 }
 

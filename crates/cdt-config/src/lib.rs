@@ -39,11 +39,12 @@ pub use regex_safety::{create_safe_regex, validate_regex_pattern};
 pub use trigger::{TriggerManager, TriggerValidationResult, merge_triggers, validate_trigger};
 pub use trigger_matcher::{matches_ignore_patterns, matches_pattern};
 pub use types::{
-    AppConfig, ConfigSection, DisplayConfig, GeneralConfig, HttpServerConfig, NotificationConfig,
-    NotificationTrigger, SessionsConfig, SshAuthMethod, SshConfig, SshConnectionProfile,
-    SshLastConnection, SshPersistConfig, SshProfile, TimeFormat, TriggerContentType, TriggerMode,
+    AppConfig, ConfigSection, DisplayConfig, ExternalEditor, GeneralConfig, HttpServerConfig,
+    NotificationConfig, NotificationTrigger, SearchEngine, SessionsConfig, SshAuthMethod,
+    SshConfig, SshConnectionProfile, SshLastConnection, SshPersistConfig, SshProfile, TerminalApp,
+    TimeFormat, TriggerContentType, TriggerMode,
 };
 pub use validation::{
-    normalize_claude_root_path, validate_claude_root_path, validate_http_port, validate_section,
-    validate_ssh_config,
+    normalize_claude_root_path, validate_claude_root_path, validate_http_port,
+    validate_search_engine, validate_section, validate_ssh_config,
 };

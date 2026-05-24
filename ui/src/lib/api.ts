@@ -703,6 +703,32 @@ export interface GeneralConfig {
   autoExpandAiGroups: boolean;
   /** "replace" | "new-tab"，默认 "replace" */
   sessionClickBehavior?: string;
+  /**
+   * 外部编辑器（spec frontend-context-menu::Phase 2 / configuration-management）。
+   * 与后端 `cdt-config::ExternalEditor` enum snake_case 序列化对齐。
+   * 老后端缺字段时为 undefined，前端 fallback 到 `"system"`。
+   */
+  externalEditor?: "system" | "vs_code" | "cursor" | "zed" | "sublime";
+  /**
+   * 浏览器搜索引擎（spec frontend-context-menu::Phase 2 / configuration-management）。
+   * Internally tagged enum：`{ type: "google" | "bing" | "duck_duck_go" | "custom" }`，
+   * Custom 还附 `urlTemplate: string`（含 `{query}` 占位符 + http/https scheme）。
+   * 老后端缺字段时为 undefined，前端 fallback 到 `{ type: "google" }`。
+   */
+  searchEngine?:
+    | { type: "google" }
+    | { type: "bing" }
+    | { type: "duck_duck_go" }
+    | { type: "custom"; urlTemplate: string };
+  /**
+   * 终端 app（spec frontend-context-menu::Phase 2 / configuration-management）。
+   * 与后端 `cdt-config::TerminalApp` enum snake_case 序列化对齐——10 值跨平台
+   * 并集（macOS: terminal/i_term/warp；Windows: windows_terminal/cmd/power_shell；
+   * Linux: x_terminal_emulator/gnome_terminal/konsole/alacritty）。
+   * 跨平台 mismatch 时后端按 `cfg!(target_os)` fallback 到当前平台默认。
+   * 老后端缺字段时为 undefined，前端 fallback 到 `"terminal"`。
+   */
+  terminalApp?: string;
 }
 
 /** 时间格式偏好；详见 `openspec/specs/configuration-management/spec.md`。 */

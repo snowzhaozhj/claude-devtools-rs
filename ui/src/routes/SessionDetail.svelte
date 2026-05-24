@@ -18,6 +18,10 @@
     unregisterSessionDetailHandlers,
   } from "../lib/keyboard/session-detail-handlers";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
+  import { contextMenu } from "../lib/contextMenu.svelte";
+  import { buildUserMessageItems, buildAssistantMessageItems, type MenuItemContext } from "../lib/contextMenu/menu-items";
+  import { getMenuSettings } from "../lib/contextMenu/settings.svelte";
+  import { getMenuItemDispatch } from "../lib/contextMenu/dispatch";
   import BaseItem from "../components/BaseItem.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
   import TeammateMessageItem from "../components/TeammateMessageItem.svelte";
@@ -423,6 +427,33 @@
       if (payload.projectId !== projectId || payload.sessionId !== sessionId) return;
       scheduleRefresh(`detail:${projectId}|${sessionId}`, refreshDetail);
     });
+
+    // 消费 deeplink 触发的 pendingScrollChunkId（spec session-display
+    // "pendingScrollChunkId 绑定 tab lifecycle 消费一次"）。
+    //
+    // 已满足三条件：
+    // (a) tab focused —— SessionDetail 仅在 tab active 时 mount（PaneView {#key}）
+    // (b) SessionDetail mount —— 走到此处即满足
+    // (c) chunks 加载完成 —— cached 路径直接命中；非 cached 路径上面 await 了 IPC
+    //
+    // 找不到 chunk 时弹 toast + clear 避免后续重试。
+    if (uiState.pendingScrollChunkId && detail) {
+      const target = uiState.pendingScrollChunkId;
+      uiState.pendingScrollChunkId = null;
+      saveTabUIState(tabId, uiState);
+      const exists = detail.chunks.some((c) => c.chunkId === target);
+      if (exists) {
+        // tick 让 chunk DOM 完成首屏 commit 再 scroll（cached 路径下 detail 已就位
+        // 但 anchor restore 刚跑完，再让 scrollAnchor 抢先一帧可能与 deeplink 冲突）
+        await tick();
+        await handleNavigateToChunk(target);
+      } else {
+        // 容忍：spec "目标 chunk 不存在时弹 toast"
+        // 本仓暂无统一 toast 组件——降级到 console.warn + 不阻塞流程。
+        // 后续 follow-up 接入 toast 系统时替换此处（见 D9 风险段）。
+        console.warn(`[deeplink] target chunk not found in this session: ${target}`);
+      }
+    }
   });
 
   // Mermaid 图表后处理：旧版本在首屏 effect 全树扫描；现在迁移到
@@ -460,6 +491,10 @@
         atBottom: latestAnchor.atBottom,
         anchorChunkId: latestAnchor.anchorChunkId,
         anchorOffsetPx: latestAnchor.anchorOffsetPx,
+        // pendingScrollChunkId 由 onMount 消费一次后清；onDestroy 不需要透传——
+        // 切走再切回时若仍有 pending（消费失败 / 未激活），从 getTabUIState 读取
+        // 重新走消费路径，本地 save 不持有此字段
+        pendingScrollChunkId: uiState.pendingScrollChunkId,
       });
     }
   });
@@ -575,6 +610,20 @@
 
   function chunkKey(c: Chunk): string {
     return c.chunkId;
+  }
+
+  // ── Context menu ctx 构造（Task 9 / spec frontend-context-menu Phase 2）──
+  //
+  // 在 oncontextmenu 触发瞬间预读 selectionText 注入 ctx——factory 内部不读 DOM。
+  // selection 跨容器时 `window.getSelection()?.toString()` 总能拿到当前选中文本。
+  function buildMenuCtx(): MenuItemContext {
+    return {
+      sessionId,
+      projectId,
+      settings: getMenuSettings(),
+      selectionText: window.getSelection()?.toString() ?? "",
+      dispatch: getMenuItemDispatch(),
+    };
   }
 
   // 最后一个 AIChunk 的索引。ongoing=true 时它的 lastOutput 位置被
@@ -888,6 +937,7 @@
             class="msg-row msg-row-user msg-row-contained"
             class:msg-row-anchor-hit={highlightedChunkId === chunk.chunkId}
             data-chunk-id={chunk.chunkId}
+            use:contextMenu={() => buildUserMessageItems(chunk, buildMenuCtx())}
           >
             <div class="msg-spacer"></div>
             <div class="user-stack">
@@ -986,6 +1036,7 @@
           class="msg-row msg-row-ai"
           class:msg-row-anchor-hit={highlightedChunkId === chunk.chunkId}
           data-chunk-id={chunk.chunkId}
+          use:contextMenu={() => buildAssistantMessageItems(chunk, buildMenuCtx())}
         >
           <div
             class="msg-ai-container"
@@ -1094,13 +1145,13 @@
                       >
                         {#snippet children()}
                           {#if isReadTool(exec)}
-                            <ReadToolViewer exec={eff} />
+                            <ReadToolViewer exec={eff} {sessionId} {projectId} />
                           {:else if isEditTool(exec)}
-                            <EditToolViewer exec={eff} />
+                            <EditToolViewer exec={eff} {sessionId} {projectId} />
                           {:else if isWriteTool(exec)}
-                            <WriteToolViewer exec={eff} />
+                            <WriteToolViewer exec={eff} {sessionId} {projectId} />
                           {:else if isBashTool(exec)}
-                            <BashToolViewer exec={eff} />
+                            <BashToolViewer exec={eff} {sessionId} {projectId} />
                           {:else}
                             <DefaultToolViewer exec={eff} />
                           {/if}

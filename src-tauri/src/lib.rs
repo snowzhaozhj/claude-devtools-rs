@@ -509,6 +509,47 @@ async fn record_correctness_events(
 }
 
 // =============================================================================
+// 外部应用交互（Phase 2 frontend-context-menu 右键菜单）
+// 详 openspec/specs/frontend-context-menu/spec.md 三个 Requirement +
+// openspec/changes/frontend-context-menu-phase-2/design.md::D1-D5
+//
+// 安全不变量：
+// - command 入参 SHALL 不接受 shell command 字符串，仅接受 path / line / column
+// - 后端从 ConfigManager 读 terminal_app / external_editor，前端**无法**指定任意程序
+// - capabilities/default.json 无需新增条目（自定义 commands 默认对 default capability
+//   下所有 windows 可用，Tauri 2 capabilities 仅管控 plugin 权限；详 design.md::D4）
+// =============================================================================
+
+#[tauri::command]
+async fn open_in_terminal(data: State<'_, AppData>, path: String) -> Result<(), String> {
+    data.api
+        .open_in_terminal(&path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn open_in_editor(
+    data: State<'_, AppData>,
+    path: String,
+    line: Option<u32>,
+    column: Option<u32>,
+) -> Result<(), String> {
+    data.api
+        .open_in_editor(&path, line, column)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_available_terminals(data: State<'_, AppData>) -> Result<Vec<String>, String> {
+    data.api
+        .list_available_terminals()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// =============================================================================
 // Repository Groups / Worktree Sessions
 // =============================================================================
 
@@ -1246,6 +1287,9 @@ pub fn run() {
             http_server_status,
             get_telemetry_snapshot,
             record_correctness_events,
+            open_in_terminal,
+            open_in_editor,
+            list_available_terminals,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

@@ -3,12 +3,18 @@
   import { shortenPath, getLanguageFromPath } from "../../lib/toolHelpers";
   import { highlightCode, renderMarkdown } from "../../lib/render";
   import { lightHighlightLine } from "../../lib/lightSyntax";
+  import { contextMenu } from "../../lib/contextMenu.svelte";
+  import { buildFileToolItems, type MenuItemContext } from "../../lib/contextMenu/menu-items";
+  import { getMenuSettings } from "../../lib/contextMenu/settings.svelte";
+  import { getMenuItemDispatch } from "../../lib/contextMenu/dispatch";
 
   interface Props {
     exec: ToolExecution;
+    sessionId?: string;
+    projectId?: string;
   }
 
-  let { exec }: Props = $props();
+  let { exec, sessionId = "", projectId = "" }: Props = $props();
 
   const input = $derived(exec.input as Record<string, unknown>);
   const filePath = $derived(String(input?.file_path ?? input?.filePath ?? ""));
@@ -21,9 +27,19 @@
 
   // .md 默认 preview，可切 code（对齐原版 WriteToolViewer.tsx 第 59-62 行）
   let viewMode = $state<"preview" | "code">("preview");
+
+  function buildCtx(): MenuItemContext {
+    return {
+      sessionId,
+      projectId,
+      settings: getMenuSettings(),
+      selectionText: window.getSelection()?.toString() ?? "",
+      dispatch: getMenuItemDispatch(),
+    };
+  }
 </script>
 
-<div class="write-viewer">
+<div class="write-viewer" use:contextMenu={() => buildFileToolItems(exec, buildCtx())}>
   <div class="write-header">
     <span class="write-icon">W</span>
     <span class="write-path">{shortenPath(filePath)}</span>

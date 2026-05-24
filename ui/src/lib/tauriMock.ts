@@ -73,6 +73,9 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'http_server_status',
   'get_telemetry_snapshot',
   'record_correctness_events',
+  'open_in_terminal',
+  'open_in_editor',
+  'list_available_terminals',
 ] as const
 
 export { KNOWN_TAURI_COMMANDS }
@@ -893,6 +896,33 @@ function buildHandler(fx: Fixture) {
           window.dispatchEvent(new CustomEvent('__cdtMockRevealPath', { detail: paths[0] }))
         }
         return undefined
+      }
+
+      // ---- Phase 2 frontend-context-menu external app IPC（design.md::D1/D2/D3）----
+      // 浏览器 mockIPC 调试模式下不真 spawn 子进程，只 dispatch 自定义事件让
+      // e2e / 用户感知"点击有反馈"——真 Tauri runtime 由 cdt-api::ipc::external_app
+      // 处理。返 null 而非 undefined——`mockIPC coverage` 测试约定所有 known
+      // command 不允许 undefined（要么有值要么显式错误）。
+      case 'open_in_terminal': {
+        const path = (rawPayload as { path?: string } | undefined)?.path
+        if (typeof path === 'string' && path.length > 0) {
+          window.dispatchEvent(new CustomEvent('__cdtMockOpenInTerminal', { detail: path }))
+        }
+        return null
+      }
+
+      case 'open_in_editor': {
+        const p = rawPayload as { path?: string; line?: number; column?: number } | undefined
+        if (p && typeof p.path === 'string' && p.path.length > 0) {
+          window.dispatchEvent(new CustomEvent('__cdtMockOpenInEditor', { detail: { path: p.path, line: p.line, column: p.column } }))
+        }
+        return null
+      }
+
+      case 'list_available_terminals': {
+        // 浏览器 mock 默认返 macOS 集合（Tauri runtime 真按 cfg!(target_os) 返）；
+        // 不在 fixture 暴露平台分支——浏览器调试不依赖平台行为。
+        return ['terminal', 'i_term', 'warp']
       }
 
       default:

@@ -2,19 +2,37 @@
   import type { ToolExecution } from "../../lib/api";
   import { toolErrorText, toolOutputText } from "../../lib/toolHelpers";
   import OutputBlock from "../OutputBlock.svelte";
+  import { contextMenu } from "../../lib/contextMenu.svelte";
+  import { buildBashToolItems, type MenuItemContext } from "../../lib/contextMenu/menu-items";
+  import { getMenuSettings } from "../../lib/contextMenu/settings.svelte";
+  import { getMenuItemDispatch } from "../../lib/contextMenu/dispatch";
 
   interface Props {
     exec: ToolExecution;
+    /** Phase 2 contextMenu surface ctx——SessionDetail / SubagentCard 路径下传，
+     *  老 caller 缺省时 fallback 到空 sessionId/projectId（ctx.dispatch 仍可用） */
+    sessionId?: string;
+    projectId?: string;
   }
 
-  let { exec }: Props = $props();
+  let { exec, sessionId = "", projectId = "" }: Props = $props();
 
   const input = $derived(exec.input as Record<string, unknown>);
   const command = $derived(String(input?.command ?? ""));
   const outputStr = $derived(exec.isError ? toolErrorText(exec) : toolOutputText(exec.output));
+
+  function buildCtx(): MenuItemContext {
+    return {
+      sessionId,
+      projectId,
+      settings: getMenuSettings(),
+      selectionText: window.getSelection()?.toString() ?? "",
+      dispatch: getMenuItemDispatch(),
+    };
+  }
 </script>
 
-<div class="bash-viewer">
+<div class="bash-viewer" use:contextMenu={() => buildBashToolItems(exec, buildCtx())}>
   <!-- Command -->
   <div class="bash-command">
     <span class="bash-prompt">$</span>

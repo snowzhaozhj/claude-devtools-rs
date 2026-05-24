@@ -58,6 +58,10 @@ const GENERAL_EXPECTED_KEYS: &[&str] = &[
     "autoExpandAiGroups",
     "useNativeTitleBar",
     "sessionClickBehavior",
+    // Phase 2 frontend-context-menu-phase-2：右键菜单 IPC + Settings dropdown
+    "externalEditor",
+    "searchEngine",
+    "terminalApp",
 ];
 
 #[tokio::test]
@@ -88,6 +92,13 @@ async fn general_config_all_fields_round_trip() {
         ("autoExpandAiGroups", json!(true)),
         ("useNativeTitleBar", json!(true)),
         ("sessionClickBehavior", json!("new-tab")),
+        // Phase 2 三新字段：扁平 enum + internally-tagged enum
+        ("externalEditor", json!("vs_code")),
+        (
+            "searchEngine",
+            json!({ "type": "custom", "urlTemplate": "https://example.com/?q={query}" }),
+        ),
+        ("terminalApp", json!("i_term")),
     ];
 
     let case_keys: HashSet<String> = cases.iter().map(|(k, _)| (*k).to_owned()).collect();
@@ -136,6 +147,9 @@ async fn general_config_rejects_invalid_enum_values() {
         ("theme", json!("purple")),
         ("defaultTab", json!("inbox")),
         ("sessionClickBehavior", json!("drag")),
+        // Phase 2 enum 校验
+        ("externalEditor", json!("vim")),
+        ("terminalApp", json!("fish")),
     ];
 
     for (key, bad) in invalid_cases {

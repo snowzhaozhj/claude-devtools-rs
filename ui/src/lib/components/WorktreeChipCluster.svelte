@@ -1,9 +1,20 @@
 <script lang="ts">
   import { tick } from "svelte";
+  import { contextMenu } from "../contextMenu.svelte";
+  import { buildWorktreeChipItems, type MenuItemContext } from "../contextMenu/menu-items";
+  import { getMenuSettings } from "../contextMenu/settings.svelte";
+  import { getMenuItemDispatch } from "../contextMenu/dispatch";
 
   export interface ChipOption {
     value: string;
     label: string;
+    /** 可选：worktree 文件系统路径——有值时该 chip 弹"在终端打开 / 在编辑器打开
+     *  / 复制路径"右键菜单（Phase 2 spec sidebar-navigation::worktree chip 右键菜单）。
+     *  "全部"等聚合 chip 不传 path → 无右键菜单。 */
+    path?: string;
+    /** 可选：worktree 名称（仅 chip 自身 label 已含 `⌗` 前缀，独立 name 给菜单
+     *  用于"复制项目名"等纯文本场景） */
+    name?: string;
   }
 
   interface Props {
@@ -14,6 +25,27 @@
   }
 
   let { value, options, onChange, ariaLabel }: Props = $props();
+
+  function buildCtx(): MenuItemContext {
+    return {
+      sessionId: "",
+      projectId: "",
+      settings: getMenuSettings(),
+      selectionText: window.getSelection()?.toString() ?? "",
+      dispatch: getMenuItemDispatch(),
+    };
+  }
+
+  /** 仅含 path 的 chip 才弹菜单——"全部"等聚合 chip 跳过 */
+  function chipMenuProvider(opt: ChipOption) {
+    return () => {
+      if (!opt.path) return [];
+      return buildWorktreeChipItems(
+        { path: opt.path, name: opt.name ?? opt.label },
+        buildCtx(),
+      );
+    };
+  }
 
   let chipEls: HTMLButtonElement[] = $state([]);
 
@@ -58,6 +90,7 @@
       onclick={() => selectAt(i)}
       onkeydown={(e) => onKeydown(e, i)}
       bind:this={chipEls[i]}
+      use:contextMenu={chipMenuProvider(opt)}
     >{opt.label}</button>
   {/each}
 </div>

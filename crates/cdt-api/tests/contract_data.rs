@@ -59,6 +59,11 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "http_server_status",
     "get_telemetry_snapshot",
     "record_correctness_events",
+    // Phase 2 frontend-context-menu：右键菜单"在终端 / 编辑器打开"+ Settings dropdown
+    // 详 openspec/specs/frontend-context-menu/spec.md 三个 Requirement
+    "open_in_terminal",
+    "open_in_editor",
+    "list_available_terminals",
 ];
 
 /// 浏览器 runtime 不实现的 IPC command 集合——这些 command 在 `?http=1` 模式

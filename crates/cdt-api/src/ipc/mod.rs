@@ -5,6 +5,7 @@
 pub(crate) mod backend_resolvers;
 pub mod error;
 pub mod events;
+pub mod external_app;
 pub(crate) mod image_disk_cache;
 pub mod local;
 pub(crate) mod parsed_message_cache;

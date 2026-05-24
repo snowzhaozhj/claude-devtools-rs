@@ -3,13 +3,29 @@
   import { toolOutputText, shortenPath, getLanguageFromPath, getFileName } from "../../lib/toolHelpers";
   import { highlightCode, renderMarkdown } from "../../lib/render";
   import { lightHighlightLine } from "../../lib/lightSyntax";
+  import { contextMenu } from "../../lib/contextMenu.svelte";
+  import { buildFileToolItems, type MenuItemContext } from "../../lib/contextMenu/menu-items";
+  import { getMenuSettings } from "../../lib/contextMenu/settings.svelte";
+  import { getMenuItemDispatch } from "../../lib/contextMenu/dispatch";
 
   interface Props {
     exec: ToolExecution;
+    sessionId?: string;
+    projectId?: string;
   }
 
-  let { exec }: Props = $props();
+  let { exec, sessionId = "", projectId = "" }: Props = $props();
   let copied = $state(false);
+
+  function buildCtx(): MenuItemContext {
+    return {
+      sessionId,
+      projectId,
+      settings: getMenuSettings(),
+      selectionText: window.getSelection()?.toString() ?? "",
+      dispatch: getMenuItemDispatch(),
+    };
+  }
 
   const input = $derived(exec.input as Record<string, unknown>);
   const filePath = $derived(String(input?.file_path ?? input?.filePath ?? ""));
@@ -67,7 +83,7 @@
   }
 </script>
 
-<div class="read-viewer">
+<div class="read-viewer" use:contextMenu={() => buildFileToolItems(exec, buildCtx())}>
   <!-- File header -->
   <div class="file-header">
     <span class="file-icon">F</span>
