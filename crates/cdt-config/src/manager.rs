@@ -2025,6 +2025,120 @@ mod tests {
     }
 
     // =========================================================================
+    // Lenient enum fallback for stored config（codex PR #285 review blocking 修复）
+    //
+    // 老 / 外部修改的 config.json 含未知 enum 字面量（如 `theme: "auto"`）时，
+    // 走 `deserialize_lenient_enum`：该字段 fallback 到 Default + warn，**不**让
+    // 整个 AppConfig deserialize 失败 → merge_with_defaults 整体回退到默认。
+    // =========================================================================
+
+    #[tokio::test]
+    async fn load_unknown_theme_value_falls_back_to_default_and_keeps_other_fields() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 写入一份合法配置但 theme 是未知值（模拟老版本 / 外部工具改过）
+        let body = serde_json::json!({
+            "general": {
+                "launchAtLogin": true,
+                "showDockIcon": false,
+                "theme": "auto",
+                "defaultTab": "dashboard",
+                "claudeRootPath": null,
+                "autoExpandAiGroups": true,
+                "useNativeTitleBar": true,
+                "sessionClickBehavior": "replace"
+            },
+            "httpServer": { "enabled": true, "port": 17000 }
+        });
+        tokio::fs::write(&path, serde_json::to_string_pretty(&body).unwrap())
+            .await
+            .unwrap();
+
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+        let cfg = mgr.get_config();
+
+        // theme 单字段 fallback 到 Default
+        assert_eq!(cfg.general.theme, Theme::System);
+        // 同 section 其它字段保留（不再"整体回退到默认"）
+        assert!(cfg.general.launch_at_login);
+        assert!(!cfg.general.show_dock_icon);
+        assert!(cfg.general.auto_expand_ai_groups);
+        assert!(cfg.general.use_native_title_bar);
+        // 其它 section 也保留
+        assert!(cfg.http_server.enabled);
+        assert_eq!(cfg.http_server.port, 17000);
+    }
+
+    #[tokio::test]
+    async fn load_unknown_default_tab_value_falls_back_keeps_theme() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let body = serde_json::json!({
+            "general": {
+                "launchAtLogin": false,
+                "showDockIcon": true,
+                "theme": "dark",
+                "defaultTab": "imaginary-future-tab",
+                "claudeRootPath": null,
+                "autoExpandAiGroups": false,
+                "useNativeTitleBar": false,
+                "sessionClickBehavior": "new-tab"
+            }
+        });
+        tokio::fs::write(&path, serde_json::to_string_pretty(&body).unwrap())
+            .await
+            .unwrap();
+
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+        let cfg = mgr.get_config();
+        // 仅 default_tab 字段 fallback；其余合法 enum 字段保留
+        assert_eq!(cfg.general.default_tab, DefaultTab::Dashboard);
+        assert_eq!(cfg.general.theme, Theme::Dark);
+        assert_eq!(
+            cfg.general.session_click_behavior,
+            SessionClickBehavior::NewTab
+        );
+    }
+
+    #[tokio::test]
+    async fn update_general_strict_rejects_unknown_enum_after_load_fallback() {
+        // load 路径 lenient 但 update 路径仍严格。spec configuration-management
+        // `Validate configuration fields before persistence` Scenario 守护。
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let body = serde_json::json!({
+            "general": {
+                "theme": "auto",
+                "defaultTab": "dashboard",
+                "sessionClickBehavior": "replace",
+                "launchAtLogin": false,
+                "showDockIcon": true,
+                "claudeRootPath": null,
+                "autoExpandAiGroups": false,
+                "useNativeTitleBar": false
+            }
+        });
+        tokio::fs::write(&path, serde_json::to_string(&body).unwrap())
+            .await
+            .unwrap();
+
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+        // load fallback 后 theme = System
+        assert_eq!(mgr.get_config().general.theme, Theme::System);
+
+        // update_general 仍拒绝非法 theme
+        let err = mgr
+            .update_general(serde_json::json!({ "theme": "auto" }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+        assert_eq!(mgr.get_config().general.theme, Theme::System);
+    }
+
+    // =========================================================================
     // _version 字段：optimistic concurrency check（防 last-write-wins）
     //
     // 客户端 2 个并发 tab 改 settings 时，A 的 stale partial 不应该覆盖 B 的
