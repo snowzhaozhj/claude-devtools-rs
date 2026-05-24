@@ -1,12 +1,6 @@
 # Svelte 5 结构反模式（仓特定）
 
-本文聚焦 **结构维度** 反模式：runes 用法 / 反应式时序 / 列表 key / 组件边界。
-
-**不在本 catalog 范围**（其它 skill / reviewer 的本职）：
-- 性能向（列表 flicker / re-render 频繁）
-- 资源泄漏 / 副作用 bug（onMount 长 IPC 不取消等行为问题）
-- 测试基础设施（mockIPC fixture 同步 / Tauri smoke）
-- CSS / 视觉规范
+本文聚焦 runes 用法 / 反应式时序 / 列表 key / 组件边界。
 
 ## 1. Runes 误用
 

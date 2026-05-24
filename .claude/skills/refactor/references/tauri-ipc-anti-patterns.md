@@ -1,13 +1,6 @@
 # Tauri IPC 边界识别（仓特定）
 
-本文 **唯一职责** 是识别"看似搬代码、实际碰了 IPC 契约边界"的伪 refactor——命中即在 finding 里标 `category: boundary-3-ipc-*`，对应 SKILL.md §2 boundary guard 第 3 类。
-
-**不在本 catalog 范围**（其它 skill / reviewer 的本职）：
-- 配置链一致性（tauri-config-reviewer）
-- 通知 / 托盘 / 平台 API 行为（spec / windows-compat-reviewer）
-- updater / 发版（release-runbook）
-- Windows 跨平台兼容（windows-compat-reviewer）
-- 桌面端 smoke / mockIPC 同步（e2e-http-verify / qa-engineer）
+识别碰 IPC 契约边界的伪 refactor，命中即在 finding 里标 `category: boundary-3-ipc-*`，对应 SKILL.md §2 boundary guard 第 3 类。
 
 ## IPC 契约 / payload schema 边界
 

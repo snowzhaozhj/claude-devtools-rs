@@ -6,14 +6,9 @@ disable-model-invocation: true
 
 # refactor
 
-按 scope 跑 audit，输出 findings 表。本 skill **只**回答两件事：
+按 scope 扫描代码，识别结构反模式与碰行为契约边界的伪 refactor，输出结构化 findings 表。
 
-1. 这段代码结构上哪里糟糕（god-function / dead code / 错误处理 / 边界可见性 / serde 等结构反模式）
-2. 这是真 refactor（行为不变的结构改）还是伪 refactor（看似搬代码、实际碰了行为契约边界）
-
-**不**回答：用什么流程走 / 该走 openspec 还是直接 PR / 怎么 commit / 测试节拍——这些是 Agent 编排的事。本 skill 只识别问题，不决定流程。
-
-**Refactor 定义**（Fowler）：行为不变的结构改动。命名 / 抽函数 / 拆模块 / 删冗余 / 早返回——这些算。改性能 / 改行为 / 修 bug / 加功能 / 调样式——都不算。
+Refactor 定义（Fowler）：行为不变的结构改动。
 
 ## 1. Scope 选择
 
@@ -41,11 +36,11 @@ disable-model-invocation: true
 
 ## 2. boundary-sensitive guard（伪 refactor 识别）
 
-下面 5 类**不是 refactor**——它们看起来是搬代码，实际碰了行为契约边界。命中即在 finding 里标 `category: boundary-<n>`，**不**作为纯结构改归档。
+下面 5 类碰了行为契约边界，命中即在 finding 里标 `category: boundary-<n>-<short>`：
 
 1. 改公共 trait / 生命周期约束 / 泛型 bound（即使语义没变也可能 break crate API）
 2. async runtime / 调度 / 取消 / 背压 / 错误传播重排（可能改变可观测行为或线程安全契约）
-3. **Tauri IPC payload schema** 改动（字段名 / 序列化形状 / 错误模型——契约边界）
+3. Tauri IPC payload schema 改动（字段名 / 序列化形状 / 错误模型）
 4. Svelte 5 reactivity 状态流 / 派生值 / 事件时序变动（纯机械 `$:` → `$derived` 不算 boundary）
 5. Tauri plugin / capability 边界拆分时 API / permission / command surface 改动
 
@@ -68,36 +63,33 @@ disable-model-invocation: true
 
 ## 4. 反模式 catalog（按 scope 选读 references）
 
-以下文件本 SKILL **不预加载**，扫描时按 §1 表选读：
+按 §1 表选读对应文件：
 
 - `references/code-smells-catalog.md` — 通用结构反模式（god-function / duplicated / long-param / magic-number / nested-conditionals / dead-code / feature-envy / primitive-obsession / inappropriate-intimacy）
-- `references/rust-anti-patterns.md` — Rust 特定结构反模式（错误处理 / 边界可见性 / serde / 测试陷阱 / 模块组织）
-- `references/svelte-anti-patterns.md` — Svelte 5 特定结构反模式（runes 误用 / 反应式时序 / 列表 key / 组件边界）
-- `references/tauri-ipc-anti-patterns.md` — Tauri IPC 边界识别（contract / payload schema / 错误模型）
+- `references/rust-anti-patterns.md` — Rust 错误处理 / 边界可见性 / serde / 测试陷阱 / 模块组织
+- `references/svelte-anti-patterns.md` — Svelte 5 runes 误用 / 反应式时序 / 列表 key / 组件边界
+- `references/tauri-ipc-anti-patterns.md` — Tauri IPC 契约边界识别
 
 ## 5. 输出格式
 
 ```markdown
-## refactor audit — <scope>
+## refactor 审计报告 — <scope>
 
-### scope
-- target: <path>
-- files scanned: N（types: .rs N1, .svelte N2, .ts/.json N3）
-- LOC: M
-- baseline date: YYYY-MM-DD（便于跨次 diff）
+### 范围
+- 目标：<path>
+- 扫描文件数：N（按类型：.rs N1 个 / .svelte N2 个 / .ts/.json N3 个）
+- 总行数：M
+- 基线日期：YYYY-MM-DD（便于跨次 diff 看技术债趋势）
 
 ### findings
-| severity | category | location | issue |
+| 严重度 | 类别 | 位置 | 问题描述 |
 |---|---|---|---|
 | high | boundary-1-trait-api | crates/cdt-api/src/ipc/list.rs:42 | trait Reader::list 改 `&mut self` 影响公共 API |
 | medium | god-function | ui/src/lib/MessageList.svelte:120 | 函数 156 行做 5 件事 |
 | low | magic-number | crates/cdt-discover/src/scan.rs:201 | `if depth > 7` 应抽常量 |
 
-severity：high = 已影响维护性 / 已是 bug 候选；medium = 累积技术债；low = nice-to-have
-category：`boundary-<n>-<short>` 表示伪 refactor（命中 §2）；`structural-*` 或具体反模式名（god-function / magic-number / rust-overpub 等）表示真 refactor 候选。**不**输出 suggested path / suggested skill——那是 Agent 的事
-
-### out-of-scope（识别为非 refactor 问题）
-- 命中 perf 反模式 / 已知 bug 信号 / 视觉问题 / 测试基础设施问题的 finding 在此列出，**只列位置 + 简短描述，不分类不打 category**——交给 Agent 决定怎么处理
+严重度：high = 已影响维护性 / 已是 bug 候选；medium = 累积技术债；low = nice-to-have
+类别：`boundary-<n>-<short>` 对应 §2 boundary guard 5 类；其它命中 §4 reference 命名（god-function / magic-number / rust-overpub / svelte-key-index 等）
 ```
 
-定期跑时把每次 report 落到 `target/refactor-audit-<YYYY-MM-DD>.md` 便于跨次 diff 看技术债趋势。
+定期跑时把每次报告落到 `target/refactor-audit-<YYYY-MM-DD>.md`。

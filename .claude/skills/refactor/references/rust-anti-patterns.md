@@ -1,12 +1,6 @@
 # Rust 结构反模式（仓特定）
 
-读这份文件前先过 `code-smells-catalog.md`。本文聚焦 **结构维度** 反模式：错误处理选型 / 边界可见性 / serde 标注 / 测试陷阱 / 模块组织。
-
-**不在本 catalog 范围**（其它 skill / reviewer 的本职）：
-- 性能向反模式（async 阻塞 / runtime / cache byte cap / hot loop / clone）
-- clippy 抓得到的（unused var / needless clone / single match）
-- 跨平台兼容（Windows path / home dir）
-- 配置链 / build / release / feature flag 维护
+读这份文件前先过 `code-smells-catalog.md`。本文聚焦错误处理选型 / 边界可见性 / serde 标注 / 测试陷阱 / 模块组织。
 
 ## 1. 错误处理
 
