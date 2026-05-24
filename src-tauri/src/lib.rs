@@ -926,7 +926,32 @@ pub fn run() {
     install_telemetry_panic_hook();
     install_tracing_subscriber();
 
-    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    // 单一 multi-thread runtime + 显式 Tauri 共享：避免 lib.rs 自建 + Tauri 内置
+    // `default_runtime` 双 runtime 并存（issue #257：sample 287 线程 / 10s 内 140 次
+    // pthread_join 周期销毁）。
+    //
+    // - `worker_threads=4`：本仓 perf-bench 路径多为 I/O-bound（user/real ≈ 0.13~0.17），
+    //   4 worker 已覆盖；后端 IPC 也只是 webview 单源驱动。
+    // - `max_blocking_threads=64`：与 `cdt_discover::project_scanner::FILE_READ_CONCURRENCY=64`
+    //   严格对齐——应用层 Semaphore 放行 64 任务后每个走 `tokio::fs` 隐式 spawn_blocking，
+    //   pool 容量小于 64 → permit 持有者在 blocking FIFO 排队 → 吞噬其他 waiter 的 permit。
+    // - `thread_keep_alive=60s`：让 idle blocking 线程真正复用，消除 create/destroy 循环；
+    //   Tokio 默认 10s 在我们的 burst 节奏下持续制造短生命线程。
+    // - `tauri::async_runtime::set` 必须在任何 `tauri::async_runtime::*` API 之前调用
+    //   （`OnceLock::get_or_init` 懒初始化语义），`tauri::Builder::default()` 内部仅
+    //   填字段不触发 init，所以放在 build() 之后、Builder::default() 之前即安全。
+    //
+    // 验收（手动 sample 10s）：双 runtime 消除后总线程从 287 → ~90（含 WebView ~20 +
+    // Tokio 4 worker + 64 blocking + 系统）；pthread_join 周期销毁 < 5 次。
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .max_blocking_threads(64)
+        .thread_keep_alive(std::time::Duration::from_secs(60))
+        .thread_name("cdt-rt")
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime");
+    tauri::async_runtime::set(rt.handle().clone());
     let api = rt.block_on(async {
         let mut config_mgr = ConfigManager::new(None);
         let _ = config_mgr.load().await;
