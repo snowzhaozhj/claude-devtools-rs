@@ -46,7 +46,7 @@ Header 前缀 MUST 显示 lucide `Info` SVG icon（hover 视觉提示）；hover
 
 #### Scenario: hover 展示 breakdown
 - **WHEN** 用户 hover Info icon 或 token 数字
-- **THEN** 气泡下方 MUST 立即（<200ms，无原生 title 延迟）弹出自定义 popover 卡片，显示 Total / Input / Output / Cache create / Cache read 5 行；popover 不得依赖 `title=` HTML 原生 tooltip
+- **THEN** 气泡下方 MUST 立即弹出自定义 popover 卡片（不依赖 `title=` HTML 原生 tooltip 的内置延迟），显示 Total / Input / Output / Cache create / Cache read 5 行
 
 #### Scenario: token breakdown popover 不被容器裁剪
 - **WHEN** 用户 hover AI header 的 Info icon 或 token 数字触发 popover 显示
