@@ -121,7 +121,10 @@ export function startBottomPin(
  *
  * 三路分支：
  * - 粘底 → 启动 bottom pin 状态机，返回的 cleanup SHALL 由调用方持有引用
- * - anchorChunkId 命中 → scrollIntoView + offset 微调，返回 null（无需 cleanup）
+ * - anchorChunkId 命中 → scrollIntoView + offset 微调；若 conversation scrollHeight
+ *   不足导致 scrollIntoView 被 clamp（lazy markdown 尚未 hydrate / 子树高度还在增长
+ *   等场景，spec `tab-management::滚动位置恢复 - 切回时 lazy chunks 尚未 hydrate`），
+ *   返回 MutationObserver 状态机 cleanup，等子树后续 mutation 触发 re-align
  * - 兜底 / anchor 失效 → console.warn，保留浏览器默认 scrollTop=0，返回 null
  */
 export function restoreScrollAnchor(
@@ -136,17 +139,77 @@ export function restoreScrollAnchor(
   if (!state.anchorChunkId) {
     return null;
   }
-  const target = conversationEl.querySelector<HTMLElement>(
+  const el = conversationEl;
+  const target = el.querySelector<HTMLElement>(
     `[data-chunk-id="${CSS.escape(state.anchorChunkId)}"]`,
   );
   if (!target) {
     console.warn(`[scroll-restore] anchorChunkId not found: ${state.anchorChunkId}, falling back to top`);
     return null;
   }
-  target.scrollIntoView({ block: "start" });
-  // scrollIntoView 把 anchor 顶贴齐视口顶 → rect.top - containerTop ≈ 0；
-  // 减去 offset：offset 正 → scrollTop 减小 → 内容下移让 anchor 离开视口顶；
-  // offset 负 → scrollTop 增大 → anchor 继续被滚出视口
-  conversationEl.scrollTop -= state.anchorOffsetPx;
-  return null;
+
+  const ALIGN_TOLERANCE_PX = 16;
+  const HARD_LIMIT_MS = 5000;
+  let active = true;
+  let lastAppliedScrollTop = -1;
+
+  function applyAnchor(): void {
+    // scrollIntoView 把 anchor 顶贴齐视口顶 → rect.top - containerTop ≈ 0；
+    // 减去 offset：offset 正 → scrollTop 减小 → 内容下移让 anchor 离开视口顶；
+    // offset 负 → scrollTop 增大 → anchor 继续被滚出视口
+    target!.scrollIntoView({ block: "start" });
+    el.scrollTop -= state.anchorOffsetPx;
+    lastAppliedScrollTop = el.scrollTop;
+  }
+
+  function isAligned(): boolean {
+    const c = el.getBoundingClientRect();
+    const r = target!.getBoundingClientRect();
+    return Math.abs((r.top - c.top) - state.anchorOffsetPx) <= ALIGN_TOLERANCE_PX;
+  }
+
+  applyAnchor();
+
+  // 首次 apply 已对齐（scrollHeight 充足）→ 不挂监听
+  if (isAligned()) return null;
+
+  // 未对齐：scrollIntoView 被 clamp（典型场景：mount 时 conversation 内 chunks 真实
+  // 高度短，scrollHeight < clientHeight + anchor 累计位置）。挂 MutationObserver 等
+  // 子树 mutation（lazy markdown hydrate / 外部 append / 新内容到达）后 re-apply，
+  // 直到对齐或上限。spec `tab-management::滚动位置恢复 - 切回时 lazy chunks 尚未
+  // hydrate` 明确要求 hydrate 后 anchor 视觉位置不偏离。
+  function stop(): void {
+    if (!active) return;
+    active = false;
+    mo.disconnect();
+    el.removeEventListener("scroll", onScroll);
+    clearTimeout(hardTimer);
+  }
+
+  function onScroll(): void {
+    if (!active) return;
+    // applyAnchor 内部写 scrollTop 也触发 scroll event——lastAppliedScrollTop 记
+    // 最后一次 apply 后的真值；用户主动 scroll 让 scrollTop 偏离 last apply > 容差
+    // → 视为用户中断，停止 retry 让用户接管
+    if (Math.abs(el.scrollTop - lastAppliedScrollTop) > ALIGN_TOLERANCE_PX) {
+      stop();
+    }
+  }
+
+  const mo = new MutationObserver(() => {
+    if (!active) return;
+    applyAnchor();
+    if (isAligned()) stop();
+  });
+  mo.observe(el, {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-rendered"],
+    childList: true,
+    characterData: true,
+  });
+  el.addEventListener("scroll", onScroll, { passive: true });
+  const hardTimer = setTimeout(stop, HARD_LIMIT_MS);
+
+  return stop;
 }
