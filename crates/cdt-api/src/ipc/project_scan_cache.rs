@@ -374,6 +374,11 @@ pub fn spawn_project_scan_cache_invalidator(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let local_ctx = ContextId::local(projects_dir);
+        // hot-path counter 引用一次性缓存：原 `registry().counter(name)` 每个 file
+        // event 走一次 `&'static str` key 的 hashmap lookup（含 hash + equality）。
+        // 改用 `counter!` 宏 → 每个 callsite 内部 `OnceLock<CounterRef>` 在首次调用
+        // 后退化为 atomic load 的纯 atomic 路径（issue #255：v0.5.6 → v0.5.8 idle
+        // CPU 回归直接相关）。
         loop {
             match rx.recv().await {
                 Ok(event) => {
@@ -409,12 +414,14 @@ pub fn spawn_project_scan_cache_invalidator(
                         }
                         structural
                     };
-                    let counter_name = if structural {
-                        "project_scan_cache.invalidate.structural"
+                    if structural {
+                        cdt_telemetry::counter!("project_scan_cache.invalidate.structural").inc();
                     } else {
-                        "project_scan_cache.invalidate.content_append_skipped"
-                    };
-                    cdt_telemetry::registry().counter(counter_name).inc();
+                        cdt_telemetry::counter!(
+                            "project_scan_cache.invalidate.content_append_skipped"
+                        )
+                        .inc();
+                    }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     {
@@ -424,9 +431,7 @@ pub fn spawn_project_scan_cache_invalidator(
                         };
                         cache.invalidate_local();
                     }
-                    cdt_telemetry::registry()
-                        .counter("project_scan_cache.invalidate.lag_conservative")
-                        .inc();
+                    cdt_telemetry::counter!("project_scan_cache.invalidate.lag_conservative").inc();
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             }

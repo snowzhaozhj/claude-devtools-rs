@@ -28,11 +28,15 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        if !crate::registry::telemetry_enabled() {
-            return;
-        }
+        // level guard 排在 atomic load 之前作双保险：上游 `with_filter(LevelFilter::WARN)`
+        // 已让 subscriber 分发层在 INFO/DEBUG/TRACE 路径完全 short-circuit，本 guard 在
+        // filter 失效或调用方未挂 filter 时仍能 0 cost 跳过非目标 level 的 event
+        // （issue #255：v0.5.6 → v0.5.8 idle CPU 回归直接相关）。
         let level = *event.metadata().level();
         if level != Level::ERROR && level != Level::WARN {
+            return;
+        }
+        if !crate::registry::telemetry_enabled() {
             return;
         }
         let target = event.metadata().target();

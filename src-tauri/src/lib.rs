@@ -842,11 +842,16 @@ async fn run_startup_update_check(api: Arc<LocalDataApi>, app: tauri::AppHandle)
 /// 注意：EnvFilter 仅挂到 fmt layer（per-layer filter），TelemetryLayer 不受
 /// `RUST_LOG` 过滤——否则 `RUST_LOG=cdt_api=error` 会让 cdt_api.warn event 永远
 /// 到不了 telemetry，破坏 spec 契约（tracing layer 自动归类 ERROR + WARN）。
-/// TelemetryLayer 内部已自带 ERROR/WARN level 过滤，不依赖 RUST_LOG。
+///
+/// TelemetryLayer 走 per-layer `LevelFilter::WARN`：subscriber 分发层在 INFO/
+/// DEBUG/TRACE event 路径直接 short-circuit，函数调用本身都不发起；layer 内部
+/// `on_event` 仍保留 ERROR/WARN guard 作双保险（issue #255：v0.5.6 → v0.5.8 引入
+/// 的 idle CPU 回归直接相关的修法之一）。Phase 2 若要监控 INFO event 需先调宽。
 ///
 /// `init` 一次幂等；多次调用后续无效（tracing global subscriber 单例语义）。
 fn install_tracing_subscriber() {
     use tracing_subscriber::Layer;
+    use tracing_subscriber::filter::LevelFilter;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
@@ -855,9 +860,10 @@ fn install_tracing_subscriber() {
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
         .with_filter(env_filter);
+    let telemetry_layer = cdt_telemetry::TelemetryLayer::new().with_filter(LevelFilter::WARN);
     let _ = tracing_subscriber::registry()
         .with(fmt_layer)
-        .with(cdt_telemetry::TelemetryLayer::new())
+        .with(telemetry_layer)
         .try_init();
 }
 
