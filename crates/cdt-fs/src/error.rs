@@ -39,6 +39,28 @@ pub enum FsError {
     },
 }
 
+/// Transport-dead 关键字单源——任一 lowercase 后命中的字符串视为底层
+/// transport channel（典型 SSH SFTP）已死/半死。
+///
+/// caller SHALL 据此 fail-fast 而非凑半成品列表。caller 含：
+/// - [`FsError::is_likely_channel_dead`]（`TransientExhausted` 分支）
+/// - `cdt-ssh::polling_watcher::classify_failure`（`PollFailureKind::Permanent`
+///   判定，crate-level transport-dead vs timeout-class 三态分流）
+///
+/// 不覆盖 `cdt-ssh::provider::is_transient_io_reason`——那里走 transport-dead ∪
+/// timeout-class 并集（缺 `session closed` / `eof`，多 `timed out` /
+/// `etimedout`），是 SFTP 字符串 `io::Error` → `Transient` 归类的子集，
+/// 与本函数语义独立。
+#[must_use]
+pub fn is_transport_dead_reason(reason_lowercase: &str) -> bool {
+    reason_lowercase.contains("session closed")
+        || reason_lowercase.contains("eof")
+        || reason_lowercase.contains("broken pipe")
+        || reason_lowercase.contains("epipe")
+        || reason_lowercase.contains("connection reset")
+        || reason_lowercase.contains("econnreset")
+}
+
 impl FsError {
     /// 该错误是否值得调用方主动重试一次。
     ///
@@ -104,13 +126,7 @@ impl FsError {
         match self {
             FsError::Disconnected { .. } => true,
             FsError::TransientExhausted { last_reason, .. } => {
-                let s = last_reason.to_ascii_lowercase();
-                s.contains("session closed")
-                    || s.contains("eof")
-                    || s.contains("broken pipe")
-                    || s.contains("epipe")
-                    || s.contains("connection reset")
-                    || s.contains("econnreset")
+                is_transport_dead_reason(&last_reason.to_ascii_lowercase())
             }
             FsError::Io { source, .. } => matches!(
                 source.kind(),

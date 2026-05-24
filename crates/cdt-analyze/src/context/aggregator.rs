@@ -18,18 +18,7 @@ use cdt_core::{
     UserChunk, UserMessageInjection, estimate_content_tokens, estimate_tokens,
 };
 
-/// 作为 `task-coordination` 桶的 7 个工具名。
-///
-/// TS 侧常量的 Rust 对应，语义完全一致。
-const TASK_COORDINATION_TOOL_NAMES: &[&str] = &[
-    "SendMessage",
-    "TeamCreate",
-    "TeamDelete",
-    "TaskCreate",
-    "TaskUpdate",
-    "TaskList",
-    "TaskGet",
-];
+use crate::team::summary::TASK_COORDINATION_TOOL_NAMES;
 
 #[must_use]
 pub(super) fn is_task_coordination_tool(name: &str) -> bool {

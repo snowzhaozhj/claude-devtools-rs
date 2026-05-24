@@ -3,18 +3,23 @@
 //! Spec：`openspec/specs/team-coordination-metadata/spec.md`
 //! §"`Recognize team coordination tools`"。
 
+/// Team coordination 工具名单源——给 [`is_team_tool`]（team 摘要识别）与
+/// `context::aggregator::is_task_coordination_tool`（context-tracking task-coord
+/// 桶分流）共用，**不要**在调用方再写一份。
+pub const TASK_COORDINATION_TOOL_NAMES: &[&str] = &[
+    "TeamCreate",
+    "TaskCreate",
+    "TaskUpdate",
+    "TaskList",
+    "TaskGet",
+    "SendMessage",
+    "TeamDelete",
+];
+
 /// 是否是 team coordination 工具。
+#[must_use]
 pub fn is_team_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "TeamCreate"
-            | "TaskCreate"
-            | "TaskUpdate"
-            | "TaskList"
-            | "TaskGet"
-            | "SendMessage"
-            | "TeamDelete"
-    )
+    TASK_COORDINATION_TOOL_NAMES.contains(&name)
 }
 
 /// 格式化 team 工具摘要。
