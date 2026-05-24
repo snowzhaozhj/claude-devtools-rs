@@ -291,51 +291,6 @@ function buildHandler(fx: Fixture) {
           ? null
           : encodeCursor({ perWorktree: newPerWorktree })
 
-        // issue #259 e2e 钩子：URL `?pendingMetadataDelayMs=N` 让 mock 把
-        // 返回 sessions 全部去掉 title/messageCount/isOngoing 真值后再返回，
-        // 等同于 list_group_sessions 返回纯骨架。N 决定真值何时通过
-        // `emit('session-metadata-update')` 补回，模拟真实 lag：
-        // - 0 ≤ N < 30000：N ms 后 emit（如 300 = 快到达 < 阈值；2000 = 慢到达 > 阈值）
-        // - N ≥ 30000 / 非数 / 负数：不 schedule（如 99999 = 永不到达，验证纯阈值挂 shimmer）
-        // 注：mock 只在有 URL 参数时改返回，默认行为完全不变（不影响其他 spec）。
-        const params =
-          typeof window !== 'undefined' && window.location
-            ? new URLSearchParams(window.location.search)
-            : new URLSearchParams()
-        const pendingDelayRaw = params.get('pendingMetadataDelayMs')
-        if (pendingDelayRaw !== null) {
-          const delay = Number.parseInt(pendingDelayRaw, 10)
-          const skeletonItems = items.map((s) => ({
-            ...s,
-            title: null,
-            messageCount: 0,
-            isOngoing: false,
-            gitBranch: null,
-          }))
-          if (Number.isFinite(delay) && delay >= 0 && delay < 30_000) {
-            // schedule emit per session（不阻塞 list_group_sessions 返回）
-            const truth = items
-            setTimeout(() => {
-              void (async () => {
-                const { emit } = await import('@tauri-apps/api/event')
-                for (const s of truth) {
-                  await emit('session-metadata-update', {
-                    sessionId: s.sessionId,
-                    projectId: s.projectId,
-                    groupId: s.groupId ?? s.projectId,
-                    worktreeId: s.worktreeId,
-                    title: s.title ?? null,
-                    messageCount: s.messageCount ?? 0,
-                    isOngoing: s.isOngoing ?? false,
-                    gitBranch: s.gitBranch ?? null,
-                  })
-                }
-              })()
-            }, delay)
-          }
-          return { sessions: skeletonItems, nextCursor }
-        }
-
         return { sessions: items, nextCursor }
       }
 

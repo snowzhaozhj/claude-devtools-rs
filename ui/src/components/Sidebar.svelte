@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
-  import { SvelteMap } from "svelte/reactivity";
   import {
     listGroupSessions,
     getSessionSummariesByIds,
@@ -46,11 +45,6 @@
     applyMetadata as cacheApplyMetadata,
   } from "../lib/sessionListStore.svelte";
   import { buildFilterCursor, sessionListCacheKey } from "../lib/groupCursor";
-  import {
-    isSessionMetadataPending,
-    shouldShowMetadataShimmer,
-    METADATA_SHIMMER_DELAY_MS,
-  } from "../lib/metadataShimmer";
   import { MESSAGE_SQUARE, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
   import {
     contextMenu,
@@ -116,18 +110,6 @@
   // 详见 spec `sidebar-navigation/spec.md::会话元数据增量 patch` Scenario
   // "更新到达时 sessions 数组还未包含 sessionId 时缓冲到 pending buffer"。
   let pendingMetadataUpdates = new Map<string, SessionMetadataUpdate>();
-
-  // issue #259：仅在 metadata 请求发出后超过 `METADATA_SHIMMER_DELAY_MS`
-  // 仍未到达时才挂 .metadata-pending shimmer。`metadataRequestedAt` 在
-  // sessions 数组变化时同步——首次观察到某条 pending 时记录 Date.now()，
-  // metadata patch 抵达 / session 离开列表时删除。`metadataNow` 由 250ms
-  // 间隔 ticker 推进，仅在 map 非空时启停，避免常驻 RAF / GPU 合成帧。
-  // 阈值与判定函数沉淀在 `lib/metadataShimmer.ts` 便于单测覆盖；参见 issue
-  // 「[perf] Sidebar metadata-pending shimmer 收紧触发条件」。
-  const SHIMMER_TICK_INTERVAL_MS = 250;
-  const metadataRequestedAt = new SvelteMap<string, number>();
-  let metadataNow = $state(Date.now());
-  let shimmerTickHandle: ReturnType<typeof setInterval> | null = null;
 
   let browsingHistory = $state(false);
   let hasDeferredSessionRefresh = $state(false);
@@ -310,47 +292,6 @@
     if (worktreeFilter === ALL_WORKTREES) return null;
     return buildFilterCursor(groupWorktrees, worktreeFilter);
   }
-
-  // issue #259：sessions 变化时同步 metadataRequestedAt。读 sessions 让
-  // effect 订阅其变化；map 写入用 untrack 避免与自身的 reactive read 形成
-  // 自激依赖。逻辑：pending 且尚未记录 → 写入 Date.now()；不再 pending →
-  // 删除；session 已离开列表 → 删除。
-  $effect(() => {
-    const list = sessions;
-    untrack(() => {
-      const t = Date.now();
-      const liveIds = new Set<string>();
-      for (const s of list) {
-        liveIds.add(s.sessionId);
-        if (isSessionMetadataPending(s)) {
-          if (!metadataRequestedAt.has(s.sessionId)) {
-            metadataRequestedAt.set(s.sessionId, t);
-          }
-        } else if (metadataRequestedAt.has(s.sessionId)) {
-          metadataRequestedAt.delete(s.sessionId);
-        }
-      }
-      for (const id of [...metadataRequestedAt.keys()]) {
-        if (!liveIds.has(id)) metadataRequestedAt.delete(id);
-      }
-    });
-  });
-
-  // issue #259：仅在仍有 pending 待计时的 session 时才跑 250 ms ticker；
-  // 全部到达后立即停掉，避免 idle 状态下持续重渲染整个 sidebar 列表。
-  $effect(() => {
-    const hasPending = metadataRequestedAt.size > 0;
-    untrack(() => {
-      if (hasPending && shimmerTickHandle === null) {
-        shimmerTickHandle = setInterval(() => {
-          metadataNow = Date.now();
-        }, SHIMMER_TICK_INTERVAL_MS);
-      } else if (!hasPending && shimmerTickHandle !== null) {
-        clearInterval(shimmerTickHandle);
-        shimmerTickHandle = null;
-      }
-    });
-  });
 
   onMount(async () => {
     // 先注册 listener，再触发可能 emit 的 loadProjects 链路。否则
@@ -796,10 +737,6 @@
     sseRecoveredUnlisten = null;
     sseLaggedUnlisten?.();
     sseLaggedUnlisten = null;
-    if (shimmerTickHandle !== null) {
-      clearInterval(shimmerTickHandle);
-      shimmerTickHandle = null;
-    }
   });
 
   // ---------------------------------------------------------------------------
@@ -1119,18 +1056,11 @@
         {:else}
           {@const session = item.session}
           {@const sessionProjectId = session.worktreeId ?? selectedGroupId}
-          {@const requestedAt = metadataRequestedAt.get(session.sessionId) ?? null}
-          {@const showShimmer = shouldShowMetadataShimmer(session, requestedAt, metadataNow)}
           <button
             class="session-item"
             class:session-item-active={session.sessionId === activeSessionId}
             class:session-item-hidden={isHidden(sessionProjectId, session.sessionId)}
-            class:metadata-pending={showShimmer}
-            data-shimmer-state={showShimmer
-              ? "shimmering"
-              : isSessionMetadataPending(session)
-                ? "pending-pre-threshold"
-                : "resolved"}
+            class:metadata-pending={!session.title && session.messageCount === 0 && !session.isOngoing}
             style:height="{ITEM_HEIGHT}px"
             data-session-id={session.sessionId}
             data-project-id={sessionProjectId}
@@ -1664,18 +1594,15 @@
     opacity: 0.5;
   }
 
-  /* 骨架占位"加载中"语义：shimmer 横移 + 内容半透明，让用户感知"在加载"
-     而不是"内容会突然跳变"。Metadata patch 到达后移除 `.metadata-pending`，
-     触发 .session-item 已有的 `transition: opacity 0.15s` 让真值平滑显形。
-     Spec sidebar-navigation §"Metadata 占位字段视觉渐显"。
-
-     issue #259：触发条件已收紧——仅在 metadata 请求发出后超过 1500 ms
-     仍未抵达时才挂 .metadata-pending（详见组件脚本 metadataRequestedAt
-     状态机）。绝大多数 session 的 metadata 在阈值前到达，shimmer 不再闪烁
-     一帧；GPU 合成帧消耗仅在真实 lag 场景产生。
-
-     `content-visibility: auto` 父级 throttle 离屏 animation 是 ui/CLAUDE.md
-     提过的踩坑——但 sidebar 列表外层未设 `content-visibility`，可忽略。 */
+  /* 骨架占位"加载中"语义：静态 opacity 0.55 + 静态 linear-gradient 占位
+     背景，让用户感知"未加载"在视觉上与真值有层次差，但不通过周期动画提示
+     "加载中"——遵循 PRODUCT.md::Design Principle 5「实时但不闪烁，避免
+     loading 中间态打断阅读」与 DESIGN.md::The One Live Signal Rule 边界
+     条款（DESIGN.md:198）「Skeleton placeholder 必须**静态** opacity 占位，
+     **禁用** shimmer」。Metadata patch 到达后移除 `.metadata-pending`，子
+     元素 `transition: opacity 150ms ease-out`（见 .session-title-text /
+     .session-meta 基础规则）让真值 fade-in。
+     Spec `sidebar-navigation/spec.md::Metadata 占位字段视觉渐显`。 */
   .session-item.metadata-pending .session-title-text,
   .session-item.metadata-pending .session-meta {
     opacity: 0.55;
@@ -1686,12 +1613,6 @@
       transparent 100%
     );
     background-size: 200% 100%;
-    animation: metadata-pending-shimmer 1500ms linear infinite;
-  }
-
-  @keyframes metadata-pending-shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
   }
 
   .session-title {
@@ -1709,6 +1630,11 @@
     white-space: nowrap;
     color: var(--color-text);
     line-height: 1.4;
+    /* metadata patch 到达 → `.metadata-pending` class 被移除 → opacity
+       从 0.55 → 1 通过此 transition 渐显。spec `sidebar-navigation/
+       spec.md::Metadata 占位字段视觉渐显::Metadata patch 到达后字段渐显`
+       的 SHALL 句直接落点。 */
+    transition: opacity 150ms ease-out;
   }
 
   /* 行内 pin 标识：与顶部 PINNED group label 的 📌 同色（`--sidebar-pinned`
@@ -1737,6 +1663,9 @@
     align-items: center;
     line-height: 1.2;
     min-width: 0;
+    /* 与 .session-title-text 同源——`.metadata-pending` 移除时 opacity
+       0.55 → 1 通过 transition 渐显。 */
+    transition: opacity 150ms ease-out;
   }
 
   /* 多 worktree group：加第三列 wt label，flex 吸收剩余宽度 + 末尾截断。
