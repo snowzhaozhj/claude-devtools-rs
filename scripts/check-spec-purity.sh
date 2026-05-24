@@ -3,35 +3,72 @@
 # （active change delta）的六类反模式（与 openspec/config.yaml::rules.specs 对齐）：
 #   1. 内部模块/类/函数名（`crate::module::fn` 等）
 #   2. 源文件路径（.rs / .ts / .svelte / crates/ / src-tauri/src/ / ui/src/）
-#   3. commit hash / PR# / issue#（属诊断溯源，应进 design.md）
+#   3. commit hash / PR# / issue#（裸 12+ 位 hex 或 backtick 内 7+ 位 hex）
 #   4. 实测诊断数据（KB / MB / ms / 「实测」/ baseline）
-#   5. 回滚开关 const 名（`OMIT_*` / `CROSS_*` / `STALE_*` 等）
-#   6. 库与框架选型（tokio / serde / axum / tauri-plugin-X / vitest / playwright 等）
+#   5. 回滚/实现开关 const（`OMIT_*` / `CROSS_*` / `STALE_*` / `LEGACY_*` /
+#      `ENABLE_*` / `DISABLE_*` / `USE_*` / `FORCE_*` / `*_THRESHOLD` /
+#      `*_FLAG` / `*_ENABLED` / `*_DISABLED`）；不抓 RFC2119 关键词与协议常量
+#   6. 库与框架选型（tokio / serde / axum / vitest / playwright / svelte-check /
+#      tauri-plugin-X / @tauri-apps/X / broadcast:: / tracing:: / tauri:: /
+#      invoke_handler! / #[serde 等具名引用）
 #
 # 跳过 openspec/changes/archive/**（历史快照冻结）。
 #
 # 模式：
 #   --baseline    打印每 spec 的当前违规计数到 stdout（用于刷新 baseline 文件）
 #   --report      详细报告每 spec 各类反模式分布 + 命中行示例
-#   （默认）       与 scripts/spec-purity-baseline.txt 对比；任何 spec 超出
-#                 baseline → exit 1（ratchet 模式，只允许下降）
+#   （默认）       与 scripts/spec-purity-baseline.txt 对比；ratchet：超 baseline
+#                 拒、低于 baseline 也拒（防 silent degradation，要求同 PR 刷新
+#                 baseline）；env SPEC_PURITY_ALLOW_DECREASE=1 本地诊断时绕过
 set -euo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 cd "$ROOT"
 BASELINE_FILE="scripts/spec-purity-baseline.txt"
 
+re_p1='`[a-z][a-z_]+::[A-Za-z_:]+'
+re_p2='\.(rs|ts|svelte|tsx|jsx)\b|/src/|crates/|src-tauri/|cdt-[a-z]+/src'
+# p3: 显式 commit/PR/issue 前缀；裸 #NNN；backtick 内 7-40 位 hex；裸文本 12-40 位 hex
+re_p3='\b(commit|PR|issue)\s*#?[0-9a-f]{4,}|#[0-9]{2,}\b|`[0-9a-f]{7,40}`|\b[0-9a-f]{12,40}\b'
+re_p4='[0-9]+\s*(KB|MB|byte|ms|µs)\b|实测|baseline'
+# p5: 仅抓回滚/实现开关前缀清单 + 阈值/标志后缀，不抓 RFC2119 关键词或协议常量
+re_p5='`(OMIT|CROSS|STALE|LEGACY|ENABLE|DISABLE|USE|FORCE|SKIP|PRESERVE)_[A-Z0-9_]+`|`[A-Z][A-Za-z0-9_]*_(THRESHOLD|FLAG|ENABLED|DISABLED|TIMEOUT|LIMIT)`'
+# p6: 精准包/工具名（不抓裸 Tauri 这种合法协议名）
+re_p6='\b(tokio|serde|axum|vitest|playwright|svelte-check|reqwest|hyper)\b|\btauri-plugin-[a-z0-9-]+\b|@tauri-apps/[a-z0-9_/-]+|\b(broadcast|tracing|tauri)::|invoke_handler!|#\[serde'
+
 scan_one() {
   local file="$1"
   local p1 p2 p3 p4 p5 p6 total
-  p1=$(grep -cE '`[a-z][a-z_]+::[A-Za-z_:]+' "$file" || true)
-  p2=$(grep -cE '\.(rs|ts|svelte|tsx|jsx)\b|/src/|crates/|src-tauri/|cdt-[a-z]+/src' "$file" || true)
-  p3=$(grep -cE '\b(commit|PR|issue)\s*#?[0-9a-f]{4,}|#[0-9]{2,}\b' "$file" || true)
-  p4=$(grep -cE '[0-9]+\s*(KB|MB|byte|ms|µs)\b|实测|baseline' "$file" || true)
-  p5=$(grep -cE '`(OMIT_|CROSS_|STALE_)[A-Z_]+`|`[A-Z][A-Z_]{4,}`' "$file" || true)
-  p6=$(grep -cE '\b(tokio|serde|axum|broadcast::|tracing::|invoke_handler!)\b|#\[serde' "$file" || true)
+  p1=$(grep -cE "$re_p1" "$file" || true)
+  p2=$(grep -cE "$re_p2" "$file" || true)
+  p3=$(grep -cE "$re_p3" "$file" || true)
+  p4=$(grep -cE "$re_p4" "$file" || true)
+  p5=$(grep -cE "$re_p5" "$file" || true)
+  p6=$(grep -cE "$re_p6" "$file" || true)
   total=$((p1 + p2 + p3 + p4 + p5 + p6))
   echo "$total $p1 $p2 $p3 $p4 $p5 $p6"
+}
+
+# --report 时按文件打印每类前 3 条 grep -n 命中行
+print_examples_for() {
+  local file="$1"
+  local key="$2"
+  local emitted=0
+  for entry in "p1=$re_p1" "p2=$re_p2" "p3=$re_p3" "p4=$re_p4" "p5=$re_p5" "p6=$re_p6"; do
+    local label="${entry%%=*}"
+    local re="${entry#*=}"
+    local hits
+    hits=$(grep -nE "$re" "$file" 2>/dev/null | head -3 || true)
+    if [[ -n "$hits" ]]; then
+      if [[ "$emitted" -eq 0 ]]; then
+        echo ""
+        echo "## $key  ($file)"
+        emitted=1
+      fi
+      echo "  [$label]"
+      echo "$hits" | sed 's/^/    /'
+    fi
+  done
 }
 
 # 收集所有 spec key → file 路径（排除 archive）
@@ -51,12 +88,19 @@ while IFS= read -r f; do
 done < <(find openspec/changes -mindepth 5 -maxdepth 5 -name 'spec.md' -type f -not -path 'openspec/changes/archive/*' 2>/dev/null | sort)
 
 if [[ "${1:-}" == "--report" ]]; then
+  echo "p1=mod-path  p2=src-path  p3=commit/hash  p4=metric  p5=impl-flag  p6=lib/framework"
+  echo ""
   printf "%-50s %-6s %-3s %-3s %-3s %-3s %-3s %-3s\n" "spec key" "total" "p1" "p2" "p3" "p4" "p5" "p6"
-  printf "%-50s %-6s %-3s %-3s %-3s %-3s %-3s %-3s\n" "(p1=mod-path p2=src-path p3=commit p4=metric p5=const p6=lib)" "" "" "" "" "" "" ""
   for i in "${!KEYS[@]}"; do
     read -r total p1 p2 p3 p4 p5 p6 <<< "$(scan_one "${FILES[$i]}")"
     [[ "$total" -gt 0 ]] && printf "%-50s %-6d %-3d %-3d %-3d %-3d %-3d %-3d\n" "${KEYS[$i]}" "$total" "$p1" "$p2" "$p3" "$p4" "$p5" "$p6"
   done | sort -k2 -rn
+  echo ""
+  echo "=== 命中行示例（每 spec 每类前 3 条） ==="
+  for i in "${!KEYS[@]}"; do
+    read -r total _ <<< "$(scan_one "${FILES[$i]}")"
+    [[ "$total" -gt 0 ]] && print_examples_for "${FILES[$i]}" "${KEYS[$i]}"
+  done
   exit 0
 fi
 
@@ -82,7 +126,10 @@ for i in "${!KEYS[@]}"; do
   echo "${KEYS[$i]} $total" >> "$tmp_current"
 done
 
-awk -v baseline_file="$BASELINE_FILE" '
+# ALLOW_DECREASE=1 时下降仅警告（本地诊断用）；默认（CI）下降也 fail 强制刷 baseline
+allow_decrease="${SPEC_PURITY_ALLOW_DECREASE:-0}"
+
+awk -v baseline_file="$BASELINE_FILE" -v allow_decrease="$allow_decrease" '
   BEGIN {
     while ((getline line < baseline_file) > 0) {
       if (line == "" || line ~ /^#/) continue
@@ -91,7 +138,7 @@ awk -v baseline_file="$BASELINE_FILE" '
     }
     close(baseline_file)
     failed = 0
-    n_exc = 0; n_new = 0; n_imp = 0
+    n_exc = 0; n_new = 0; n_imp = 0; n_rem = 0
   }
   {
     key = $1; total = $2 + 0; seen[key] = 1
@@ -105,12 +152,14 @@ awk -v baseline_file="$BASELINE_FILE" '
     }
   }
   END {
-    n_rem = 0
     for (k in base) if (!(k in seen)) rem_arr[++n_rem] = k
+
+    decrease_fail = (n_imp > 0 && allow_decrease != "1") ? 1 : 0
+    removed_fail = (n_rem > 0 && allow_decrease != "1") ? 1 : 0
 
     if (failed) {
       print "" > "/dev/stderr"
-      print "✗ spec 反模式 ratchet 拦截 — 任一 spec 超过 baseline 已记录违规计数即拒" > "/dev/stderr"
+      print "✗ spec 反模式 ratchet 拦截 — 超过 baseline" > "/dev/stderr"
       print "" > "/dev/stderr"
       if (n_exc > 0) {
         print "超出 baseline:" > "/dev/stderr"
@@ -122,25 +171,42 @@ awk -v baseline_file="$BASELINE_FILE" '
       }
       print "" > "/dev/stderr"
       print "修法:" > "/dev/stderr"
-      print "  1) bash scripts/check-spec-purity.sh --report  # 看具体哪类反模式 + 命中行" > "/dev/stderr"
+      print "  1) bash scripts/check-spec-purity.sh --report  # 看哪类反模式 + 命中行" > "/dev/stderr"
       print "  2) 把函数名 / 源文件路径 / commit 引用 / 实测数据 / 回滚 const / 库选型迁到 design.md" > "/dev/stderr"
-      print "  3) 若清理后 total 下降: bash scripts/check-spec-purity.sh --baseline > scripts/spec-purity-baseline.txt" > "/dev/stderr"
+      print "  3) 清理后让 total 下降，再跑 --baseline 刷新基线（与改动同 commit 落地）" > "/dev/stderr"
       print "" > "/dev/stderr"
       print "spec 反模式定义见 openspec/config.yaml::rules.specs" > "/dev/stderr"
       exit 1
     }
 
+    if (decrease_fail || removed_fail) {
+      print "" > "/dev/stderr"
+      print "✗ spec 污染下降但 baseline 未同步刷新（防 silent degradation）" > "/dev/stderr"
+      print "" > "/dev/stderr"
+      if (n_imp > 0) {
+        print "spec 污染下降:" > "/dev/stderr"
+        for (i = 1; i <= n_imp; i++) print "  - " imp_arr[i] > "/dev/stderr"
+      }
+      if (n_rem > 0) {
+        print "baseline 残留（spec 被删 / 改名）:" > "/dev/stderr"
+        for (i = 1; i <= n_rem; i++) print "  - " rem_arr[i] > "/dev/stderr"
+      }
+      print "" > "/dev/stderr"
+      print "修法（与本次改动同 commit）:" > "/dev/stderr"
+      print "  bash scripts/check-spec-purity.sh --baseline > scripts/spec-purity-baseline.txt" > "/dev/stderr"
+      print "" > "/dev/stderr"
+      print "本地诊断绕过: SPEC_PURITY_ALLOW_DECREASE=1 bash scripts/check-spec-purity.sh" > "/dev/stderr"
+      exit 1
+    }
+
     if (n_imp > 0) {
-      print "✓ spec 污染下降（清理后刷新 baseline）:"
+      print "✓ spec 污染下降（ALLOW_DECREASE=1 模式）:"
       for (i = 1; i <= n_imp; i++) print "  - " imp_arr[i]
-      print ""
-      print "刷新基线: bash scripts/check-spec-purity.sh --baseline > scripts/spec-purity-baseline.txt"
     }
     if (n_rem > 0) {
-      print "ℹ baseline 中以下 key 在当前 specs 不存在（spec 被删 / 改名）:"
+      print "ℹ baseline 残留 key（ALLOW_DECREASE=1 模式）:"
       for (i = 1; i <= n_rem; i++) print "  - " rem_arr[i]
-      print "  考虑刷新 baseline 移除这些项。"
     }
-    print "✓ spec purity check 通过（无 spec 超过 baseline）"
+    print "✓ spec purity check 通过"
   }
 ' "$tmp_current"
