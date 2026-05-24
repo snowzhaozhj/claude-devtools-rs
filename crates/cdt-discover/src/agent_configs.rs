@@ -91,7 +91,21 @@ async fn scan_dir(dir: &Path, scope: &AgentConfigScope) -> Vec<AgentConfig> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    while let Ok(Some(entry)) = entries.next_entry().await {
+    // explicit match：单个 entry error SHALL 跳过继续后续 entry，不终止整个目录
+    // 扫描——对齐旧 sync 实现 `for entry in entries.flatten()` 的容错语义。
+    loop {
+        let entry = match entries.next_entry().await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(err) => {
+                tracing::debug!(
+                    dir = %dir.display(),
+                    error = %err,
+                    "skip unreadable agent config dir entry"
+                );
+                continue;
+            }
+        };
         let path = entry.path();
         if path.extension().is_none_or(|ext| ext != "md") {
             continue;
