@@ -44,17 +44,18 @@ if [[ ! -x scripts/check-spec-purity.sh ]]; then
   exit 0
 fi
 
-# stderr 警告但不 block；本地诊断绕过 baseline 下降 fail
-SPEC_PURITY_ALLOW_DECREASE=1 bash scripts/check-spec-purity.sh >/dev/null 2>/tmp/spec-purity-after-edit.$$
-rc=$?
-if [[ "$rc" -ne 0 ]]; then
+# stderr 警告但不 block 编辑；本地诊断绕过 baseline 下降 fail
+# 注意：set -e 下直接调用非零 cmd 会立即退出，必须用 `if ! cmd` 包住
+tmp="${TMPDIR:-/tmp}/spec-purity-after-edit.$$"
+trap 'rm -f "$tmp"' EXIT
+
+if ! SPEC_PURITY_ALLOW_DECREASE=1 bash scripts/check-spec-purity.sh >/dev/null 2>"$tmp"; then
   {
     echo ""
     echo "⚠ spec purity 警告（编辑 $rel 后）"
-    cat /tmp/spec-purity-after-edit.$$
+    cat "$tmp"
     echo ""
     echo "看命中行：bash scripts/check-spec-purity.sh --report"
   } >&2
 fi
-rm -f /tmp/spec-purity-after-edit.$$
 exit 0
