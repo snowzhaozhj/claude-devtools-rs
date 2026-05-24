@@ -81,11 +81,13 @@ done < <(find openspec/specs -mindepth 2 -maxdepth 2 -name 'spec.md' -type f 2>/
 
 while IFS= read -r f; do
   # f 形如 openspec/changes/<slug>/specs/<cap>/spec.md
+  # 相对 `openspec/changes` 起点深度 = 4（slug/specs/cap/spec.md）；
+  # archive 路径深度 = 5（archive/<date-slug>/specs/cap/spec.md），靠 -not -path 兜底排除
   slug=$(echo "$f" | awk -F/ '{print $3}')
   cap=$(basename "$(dirname "$f")")
   KEYS+=("change/$slug/$cap")
   FILES+=("$f")
-done < <(find openspec/changes -mindepth 5 -maxdepth 5 -name 'spec.md' -type f -not -path 'openspec/changes/archive/*' 2>/dev/null | sort)
+done < <(find openspec/changes -mindepth 4 -maxdepth 4 -name 'spec.md' -type f -not -path 'openspec/changes/archive/*' 2>/dev/null | sort)
 
 if [[ "${1:-}" == "--report" ]]; then
   echo "p1=mod-path  p2=src-path  p3=commit/hash  p4=metric  p5=impl-flag  p6=lib/framework"
