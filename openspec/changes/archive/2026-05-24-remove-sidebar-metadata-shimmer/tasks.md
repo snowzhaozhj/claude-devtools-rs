@@ -13,7 +13,7 @@
 - [x] 2.2 删除 `ui/src/components/Sidebar.svelte` CSS 中 `@keyframes metadata-pending-shimmer { ... }` 整段
 - [x] 2.3 把模板中 `class:metadata-pending={...}` 的判定还原为 `!session.title && session.messageCount === 0 && !session.isOngoing`（撤销 PR #270 引入的 `shouldShowMetadataShimmer` 调用），与 spec.md 当前 SHALL 句一致
 - [x] 2.4 更新 `ui/src/components/Sidebar.svelte` 中 `.session-item.metadata-pending` 上方的多行 CSS 注释（line 1596-1602）：移除"shimmer 横移 + 内容半透明 + 加载中语义视觉化"叙述，改为对齐 spec 修订后的"静态 opacity 0.55 占位 + linear-gradient 静态背景层次 + 真值到达后 CSS transition fade-in"语义；引用 `DESIGN.md::The One Live Signal Rule` 边界条款（DESIGN.md:198）作为锚点
-- [x] 2.5 修复 spec 与实现旧 bug：`Sidebar.svelte` CSS 给 `.session-title-text` 与 `.session-meta` 子元素增加 `transition: opacity 150ms ease-out`，让主 spec `Requirement: Metadata 占位字段视觉渐显::Scenario: Metadata patch 到达后字段渐显` 中"title 文本 SHALL 通过 CSS `transition: opacity 150ms ease-out` 从透明渐变到不透明"真生效（之前 PR #177 仅在 `.session-item` 容器层加 transition，子元素 opacity `0.55 → 1` 是瞬时切换、未真生效 fade-in；不改 spec，仅修实现漏）
+- [x] 2.5 修复 spec 与实现旧 bug：`Sidebar.svelte` CSS 给 `.session-title-text` 与 `.session-meta` 子元素增加 `transition: opacity 150ms ease-out`，让主 spec `Requirement: Metadata 占位字段视觉渐显::Scenario: Metadata patch 到达后字段渐显` 中"title 文本 SHALL 通过 CSS `transition: opacity 150ms ease-out` 从骨架占位的 `opacity: 0.55` 渐升到正常的 `opacity: 1`"真生效（之前 PR #177 仅在 `.session-item` 容器层加 transition，子元素 opacity `0.55 → 1` 是瞬时切换、未真生效 fade-in；本 change 同时修订 spec Scenario 措辞从"透明渐变到不透明"对齐到"0.55 → 1"——codex 三审 finding #2 / 第二轮验证残留修正）
 - [x] 2.6 占位回退文本 SHALL 显示**完整 sessionId**（CSS `text-overflow: ellipsis` 自然截断），与主 spec `Requirement: 会话项展示::Scenario: 无标题的会话` 一致——若 PR #177 / #270 路径上 `Sidebar.svelte` 的 fallback 文本曾被改为 `slice(0, 8) + "…"`，本 task SHALL 还原为完整 sessionId；grep `Sidebar.svelte` 内 `slice(0, 8)` / `substring(0, 8)` 等手动截断模式确认无遗漏
 
 ## 3. 子目录文档与注释同步
@@ -40,11 +40,11 @@
 - [x] 6.1 跑 `just preflight`（fmt + lint + test + spec validate 全过）
 - [x] 6.2 跑 `openspec validate remove-sidebar-metadata-shimmer --strict` 通过
 - [x] 6.3 propose 阶段调 codex design 二审（按 `.claude/rules/codex-usage.md` 第 3 节：UI 重构 + 性能关键路径双命中，必须 codex 二审 design.md），按 `.claude/templates/codex-prompt-design-review.md` 模板；codex 报问题先修 design / spec / tasks 三处文档再 re-validate 才进 apply
-- [ ] 6.4 perf 实测对比（替代估算）：在同一复现场景（用户切 group 制造多 session 同时 metadata-pending）下用 `/perf` skill `idle-cpu-diagnose` 子模式跑 30s sample × 2（main + WebContent），分别取 baseline（origin/main 含 PR #270）与 patch（本 change 落代码后）；按 `.claude/rules/perf.md::PR Perf impact 模板` 整理四维数据（wall / user / sys / max RSS / user/real ratio）+ 主线程活跃 % + WebKit `SharedTimer` fires/30s + paint 路径 `paintReachableBackingStoreContents` 占比 + `TextBoxPainter::paintForeground` 出现次数
+- [x] 6.4 perf 实测对比（替代估算）：在同一复现场景（用户切 group 制造多 session 同时 metadata-pending）下用 `/perf` skill `idle-cpu-diagnose` 子模式跑 30s sample × 2（main + WebContent），分别取 baseline（origin/main 含 PR #270）与 patch（本 change 落代码后）；按 `.claude/rules/perf.md::PR Perf impact 模板` 整理四维数据（wall / user / sys / max RSS / user/real ratio）+ 主线程活跃 % + WebKit `SharedTimer` fires/30s + paint 路径 `paintReachableBackingStoreContents` 占比 + `TextBoxPainter::paintForeground` 出现次数
 
 ## 7. 发布
 
 - [x] 7.1 push 分支 + 开 PR（PR 描述含本 change 链路：issue #256 诊断 + codex 二轮二审 + impeccable 加载发现 spec/DESIGN.md 三方矛盾 + 撤销 PR #270 决策；**Perf impact** 段贴 6.4 实测对比表（baseline vs patch），**禁止**仅写"预期 13.4% → < 5%"估算——按 `.claude/rules/perf.md::PR Perf impact 模板（强制）` 四维齐贴；如果实测未达 < 5% 目标，PR 描述 SHALL 显式标注实测值 + 解释剩余 CPU 来源（避免"修了但没修干净"被合并）
-- [ ] 7.2 wait-ci 全绿（`scripts/check-openspec-archives.sh` 等 CI-only check）
-- [ ] 7.3 codex 二审通过（PR push 后调 `Agent({ subagent_type: "codex:codex-rescue", ... })`；如发现 bug：修 → push → 回到 7.2 重跑；可循环 M 次）
-- [ ] 7.4 archive change（`openspec archive remove-sidebar-metadata-shimmer -y` 一步原子完成 mv + sync；archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）；PR merge 后 issue #256 自动关闭（PR 描述含 `Closes #256`）；issue #259 已由 PR #270 关闭，本 PR **不**重复 close（codex 三审 finding #3）；PR 描述含 `Refs #259` / `supersedes #270 的实现路径` 标注关系
+- [x] 7.2 wait-ci 全绿（`scripts/check-openspec-archives.sh` 等 CI-only check）
+- [x] 7.3 codex 二审通过（PR push 后调 `Agent({ subagent_type: "codex:codex-rescue", ... })`；如发现 bug：修 → push → 回到 7.2 重跑；可循环 M 次）
+- [x] 7.4 archive change（`openspec archive remove-sidebar-metadata-shimmer -y` 一步原子完成 mv + sync；archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）；PR merge 后 issue #256 自动关闭（PR 描述含 `Closes #256`）；issue #259 已由 PR #270 关闭，本 PR **不**重复 close（codex 三审 finding #3）；PR 描述含 `Refs #259` / `supersedes #270 的实现路径` 标注关系
