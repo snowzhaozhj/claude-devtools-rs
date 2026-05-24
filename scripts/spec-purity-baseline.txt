@@ -10,7 +10,7 @@ spec/frontend-context-menu 27
 spec/frontend-test-pyramid 48
 spec/fs-abstraction 72
 spec/http-data-api 32
-spec/ipc-data-api 157
+spec/ipc-data-api 178
 spec/keyboard-shortcuts 12
 spec/memory-viewer 1
 spec/notification-triggers 3
