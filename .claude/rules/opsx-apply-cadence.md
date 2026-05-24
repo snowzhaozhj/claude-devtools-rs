@@ -41,13 +41,13 @@ design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 
 
 `PRODUCT.md` / `DESIGN.md` 缺失或为占位时，先按 impeccable skill 的 `setup` 流程跑 `/impeccable teach` 或 `/impeccable document` 补齐，再回到 D-V / Visual Contract 产出。
 
-#### 3. 形态升级判断（按 `.claude/rules/parallelism-modes.md`「形态选择决策树」）
+#### 3. 形态升级判断
 
-评估改动规模 + 协作复杂度，决定 apply 阶段用主 session / agent team / N 个 bg。**大改动判定**：`> 2 天工作量 AND (多角色协作 OR 视觉重构 OR 跨 capability)` 中任一特征命中 → SHALL 改用 **Agent team**（lead + 设计师 + 前端 + 后端 + QA）；切忌 lead 单线程一把梭或用 subagent 串行——会撑爆主 context。
+**默认偏好**：小 / 中改动主 session 自跑；**大改动判定**（`> 2 天工作量 AND (多角色协作 OR 视觉重构 OR 跨 capability)` 中任一命中）→ 改用 **Agent team**（角色按 `.claude/agents/` 沉淀的 `designer` / `frontend-engineer` / `backend-engineer` 裁剪）。判断不准查 `.claude/rules/parallelism-modes.md::形态选择决策树`。
 
-**Mid-apply 升级路径**（apply 中途才发现需 agent team 的回退）：在主 session 把当前进度落成 `tasks.md` checkbox + 一段 `progress note`（关键已做 / 阻塞点 / 下一步），`git commit -m "WIP: ..."` 暂存改动，然后启用 agent team 让 lead 接续。**禁止**直接抛弃主 session 进度起 team——丢失上下文比开 team 慢。
+**Mid-apply 升级路径**（apply 中途才发现需 team）：把当前进度落成 `tasks.md` checkbox + `progress note`（关键已做 / 阻塞点 / 下一步），`git commit -m "WIP: ..."` 暂存后启用 team 让 lead 接续。**禁止**直接抛弃主 session 进度起 team。
 
-**design 阶段拦下问题的回炉成本是 apply 阶段的 10×**——代码扩散后再回炉很痛。视觉契约在 propose 阶段冻结的成本是 apply 阶段救火的几分之一。
+**design 阶段拦下问题的回炉成本是 apply 阶段的 10×**——视觉契约在 propose 阶段就让设计师 teammate 冻结，远比 apply 阶段救火便宜。
 
 ### 业务推进段
 
