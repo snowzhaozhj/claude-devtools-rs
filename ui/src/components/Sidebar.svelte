@@ -848,7 +848,14 @@
     });
     return [
       { value: ALL_WORKTREES, label: "全部" },
-      ...sorted.map((wt) => ({ value: wt.id, label: `⌗${wt.name}` })),
+      // path / name 透传给 ChipOption 让 WorktreeChipCluster 能挂右键菜单
+      // （spec sidebar-navigation Phase 2 / Task 9.5）
+      ...sorted.map((wt) => ({
+        value: wt.id,
+        label: `⌗${wt.name}`,
+        path: wt.path,
+        name: wt.name,
+      })),
     ];
   });
   const hiddenCount = $derived(getHiddenCount(anchorWorktreeId));

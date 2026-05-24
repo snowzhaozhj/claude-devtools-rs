@@ -32,7 +32,10 @@ impl IntoResponse for ApiError {
             ApiErrorCode::ValidationError | ApiErrorCode::ConfigError => StatusCode::BAD_REQUEST,
             ApiErrorCode::NotFound => StatusCode::NOT_FOUND,
             ApiErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
-            ApiErrorCode::SshError => StatusCode::BAD_GATEWAY,
+            // SshError + ExternalApp 都属"依赖外部资源失败"——SSH spawn / editor /
+            // terminal CLI 缺失或 OS 拒绝；BAD_GATEWAY 比 INTERNAL_SERVER_ERROR 更准。
+            // 前端按 message 弹 toast 引导用户去 Settings 修。
+            ApiErrorCode::SshError | ApiErrorCode::ExternalApp => StatusCode::BAD_GATEWAY,
         };
         (
             status,
@@ -158,6 +161,14 @@ pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
         .route(
             "/api/telemetry/correctness-events",
             post(record_correctness_events_route),
+        )
+        // Phase 2 frontend-context-menu：右键菜单"在终端 / 编辑器打开"+ Settings dropdown
+        // 详 openspec/specs/frontend-context-menu/spec.md 三个 Requirement
+        .route("/api/external-app/terminal", post(open_in_terminal_route))
+        .route("/api/external-app/editor", post(open_in_editor_route))
+        .route(
+            "/api/external-app/terminals",
+            get(list_available_terminals_route),
         )
         // SSE
         .route("/api/events", get(sse_handler))
@@ -924,6 +935,51 @@ async fn record_correctness_events_route(
 ) -> Result<impl IntoResponse, ApiError> {
     s.api.record_correctness_events(payload.items).await?;
     Ok(Json(serde_json::json!({"ok": true})))
+}
+
+// =============================================================================
+// Phase 2 frontend-context-menu：外部应用交互 HTTP 镜像
+// 详 openspec/specs/frontend-context-menu/spec.md 三个 Requirement
+// =============================================================================
+
+#[derive(serde::Deserialize)]
+struct OpenInTerminalRequest {
+    path: String,
+}
+
+async fn open_in_terminal_route(
+    State(s): State<AppState>,
+    Json(payload): Json<OpenInTerminalRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.open_in_terminal(&payload.path).await?;
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenInEditorRequest {
+    path: String,
+    #[serde(default)]
+    line: Option<u32>,
+    #[serde(default)]
+    column: Option<u32>,
+}
+
+async fn open_in_editor_route(
+    State(s): State<AppState>,
+    Json(payload): Json<OpenInEditorRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api
+        .open_in_editor(&payload.path, payload.line, payload.column)
+        .await?;
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
+async fn list_available_terminals_route(
+    State(s): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let list = s.api.list_available_terminals().await?;
+    Ok(Json(list))
 }
 
 #[cfg(test)]

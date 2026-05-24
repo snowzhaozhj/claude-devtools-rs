@@ -149,10 +149,146 @@ pub struct GeneralConfig {
     /// Cmd/Ctrl + 点击始终翻转该默认（对齐 Chrome 浏览器交互）。
     #[serde(default = "default_session_click_behavior")]
     pub session_click_behavior: String,
+    /// 用户偏好外部编辑器（用于"在编辑器打开"右键菜单 IPC `open_in_editor`）。
+    /// 默认 `System`：走 OS 默认 app（macOS `open` / Win `start` / Linux `xdg-open`）。
+    /// 详 `openspec/specs/configuration-management/spec.md` §"持久化外部编辑器偏好"。
+    #[serde(default)]
+    pub external_editor: ExternalEditor,
+    /// 用户偏好搜索引擎（用于"在浏览器搜索"右键菜单 action）。
+    /// 默认 `Google`；`Custom { url_template }` 中 `url_template` SHALL 含 `{query}`
+    /// 占位符且 scheme ∈ `{http, https}`（详 §"持久化浏览器搜索引擎偏好"）。
+    #[serde(default)]
+    pub search_engine: SearchEngine,
+    /// 用户偏好终端 app（用于"在终端打开"右键菜单 IPC `open_in_terminal`）。
+    /// 统一跨平台 enum：配置可在不同平台间同步，不匹配当前 OS 时运行时
+    /// `tracing::warn!` + fallback 到平台默认（不报错）。详 §"持久化首选终端 app"。
+    #[serde(default)]
+    pub terminal_app: TerminalApp,
 }
 
 fn default_session_click_behavior() -> String {
     "replace".to_string()
+}
+
+// =============================================================================
+// External editor / search engine / terminal app（Phase 2 右键菜单基础设施）
+// =============================================================================
+
+/// 用户偏好外部编辑器。
+///
+/// 用于 IPC `open_in_editor` 后端按 enum 白名单 dispatch CLI（绝不接受前端传 editor
+/// 名以防 RCE）。详 `openspec/changes/frontend-context-menu-phase-2/design.md::D2` 决策。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalEditor {
+    /// 走 OS 默认 app：macOS `open <path>` / Win `start "" "<path>"` / Linux `xdg-open`。
+    /// 不支持跳行号（line/column 参数被忽略）。
+    #[default]
+    System,
+    /// `code --goto path:line:col`
+    VsCode,
+    /// `cursor --goto path:line:col`（Cursor fork 兼容 VS Code CLI 形态）
+    Cursor,
+    /// `zed path:line:col`
+    Zed,
+    /// `subl path:line:col`
+    Sublime,
+}
+
+/// 用户偏好浏览器搜索引擎。
+///
+/// internally-tagged enum：JSON 序列化为 `{ "type": "google" }` /
+/// `{ "type": "custom", "urlTemplate": "https://example.com/search?q={query}" }`。
+/// `Custom.url_template` SHALL 满足两条：(a) 含 `{query}` 占位符；
+/// (b) URL scheme ∈ `{http, https}`。详 `design.md::D3` 决策。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SearchEngine {
+    /// `https://www.google.com/search?q=<encoded>`
+    #[default]
+    Google,
+    /// `https://www.bing.com/search?q=<encoded>`
+    Bing,
+    /// `https://duckduckgo.com/?q=<encoded>`
+    DuckDuckGo,
+    /// 用户自定义 URL 模板，含 `{query}` 占位符。
+    Custom {
+        #[serde(rename = "urlTemplate")]
+        url_template: String,
+    },
+}
+
+/// 用户偏好终端 app。
+///
+/// 统一扁平 enum：跨平台并集 10 个 variant，配置文件可跨 OS 同步——运行时
+/// `open_in_terminal` 根据 `cfg!(target_os)` 判断与当前 OS 不匹配时
+/// `tracing::warn!` + fallback 到平台默认终端，**不**返回错误。
+/// `serde(rename_all = "snake_case")` 输出形态：`Terminal` → `"terminal"`、
+/// `ITerm` → `"i_term"`（注意不是 `"iterm"`）。详 `design.md::D3` 决策。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalApp {
+    // ---- macOS ----
+    /// macOS 内置 Terminal.app（默认值；`open -a Terminal <path>`）
+    #[default]
+    Terminal,
+    /// iTerm2（`open -a iTerm <path>`）
+    ITerm,
+    /// Warp（`open -a Warp <path>`）
+    Warp,
+    // ---- Windows ----
+    /// Windows Terminal（`wt.exe -d <path>`）
+    WindowsTerminal,
+    /// `cmd.exe /K cd /d <path>`（fallback；path 含 cmd metacharacters 会被拒绝）
+    Cmd,
+    /// `powershell.exe -NoExit -Command "Set-Location -LiteralPath $env:CDT_TARGET_PATH"`
+    PowerShell,
+    // ---- Linux ----
+    /// Debian alternatives 系统统一入口（`x-terminal-emulator --working-directory <path>`）
+    XTerminalEmulator,
+    /// `gnome-terminal --working-directory=<path>`
+    GnomeTerminal,
+    /// `konsole --workdir <path>`
+    Konsole,
+    /// `alacritty --working-directory <path>`
+    Alacritty,
+}
+
+impl TerminalApp {
+    /// 当前平台默认终端，用于跨平台不匹配 fallback。
+    #[must_use]
+    pub fn platform_default() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Terminal
+        } else if cfg!(target_os = "windows") {
+            Self::WindowsTerminal
+        } else {
+            Self::XTerminalEmulator
+        }
+    }
+
+    /// 当前平台合法 `TerminalApp` 集合（`list_available_terminals` IPC 用）。
+    #[must_use]
+    pub fn available_for_current_platform() -> Vec<Self> {
+        if cfg!(target_os = "macos") {
+            vec![Self::Terminal, Self::ITerm, Self::Warp]
+        } else if cfg!(target_os = "windows") {
+            vec![Self::WindowsTerminal, Self::Cmd, Self::PowerShell]
+        } else {
+            vec![
+                Self::XTerminalEmulator,
+                Self::GnomeTerminal,
+                Self::Konsole,
+                Self::Alacritty,
+            ]
+        }
+    }
+
+    /// 该 variant 是否在当前 OS 合法（用于运行时 mismatch 判定）。
+    #[must_use]
+    pub fn is_available_on_current_platform(self) -> bool {
+        Self::available_for_current_platform().contains(&self)
+    }
 }
 
 // =============================================================================

@@ -34,3 +34,4 @@ SHALL 在运行时 parse 本表作为 allowlist 输入。表外路径命中 `tok
 | `crates/cdt-discover/src/worktree_grouper.rs` | Local-only Git plumbing 读 .git/HEAD / commondir 等文件——SSH 路径走 NoopGitIdentityResolver（local.rs:3068 policy fork），永远不调此 module |
 | `crates/cdt-ssh/src/config_parser.rs` | ssh config 文件解析——boot / connect phase Local 读取 ~/.ssh/config，与 active SSH context 的 fs trait 无关 |
 | `crates/cdt-api/src/ipc/image_disk_cache.rs` | image disk cache 永远本地 ~/.cache/，与 SSH context 无关——Local + SSH 的 image asset 都写本地 cache_dir（SSH 端 image 由 fs trait 拉到 Local 后 cache 在本地复用避免每次 SFTP 重拉），详 change unify-fs-direct-calls design D4 |
+| `crates/cdt-api/src/ipc/external_app.rs` | spawn 子进程（terminal / editor）前的 path 合法性校验（`canonicalize` / `metadata.is_dir` 降级到父目录），不是 fs read/write 业务流；永远 Local context（用户机本地路径，spawn 子进程不接 SSH context），详 change frontend-context-menu-phase-2 design D4 path 校验 5 步策略 |

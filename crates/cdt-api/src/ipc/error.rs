@@ -16,6 +16,10 @@ pub enum ApiErrorCode {
     SshError,
     /// 配置错误。
     ConfigError,
+    /// 外部应用交互错误（editor / terminal spawn 失败、CLI 不存在、跨平台不匹配等）。
+    /// 详 `openspec/changes/frontend-context-menu-phase-2/design.md::D5` 决策。
+    /// IPC 序列化值为 `"external_app"`。
+    ExternalApp,
 }
 
 /// API 结构化错误。
@@ -51,6 +55,15 @@ impl ApiError {
     pub fn ssh(msg: impl Into<String>) -> Self {
         Self {
             code: ApiErrorCode::SshError,
+            message: msg.into(),
+        }
+    }
+
+    /// 外部应用交互错误（editor/terminal CLI 不存在 / spawn 失败 / OS 拒绝等）。
+    /// 详 `openspec/changes/frontend-context-menu-phase-2/design.md::D5` 决策。
+    pub fn external_app(msg: impl Into<String>) -> Self {
+        Self {
+            code: ApiErrorCode::ExternalApp,
             message: msg.into(),
         }
     }

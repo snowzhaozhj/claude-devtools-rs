@@ -54,7 +54,18 @@ function closeActive(): void {
   if (trigger.isConnected) trigger.focus({ preventScroll: true });
 }
 
-function openMenu(
+/**
+ * 在指定位置打开 context menu 浮层。
+ *
+ * 此函数被 (a) `use:contextMenu` action（surface-level Layer 1）和
+ * (b) `installSelectionContextMenu`（window-level Layer 2，spec
+ * `frontend-context-menu::文本选区菜单`）共用。
+ *
+ * 同一刻仅允许一个菜单实例（spec portal 多次右键替换 instance）——新
+ * 实例 mount 前先 unmount 旧实例。`trigger` 元素在关闭时接回 focus
+ * （a11y）。
+ */
+export function openMenu(
   trigger: HTMLElement,
   items: ContextMenuItem[],
   x: number,
@@ -123,7 +134,14 @@ function onAnyScroll(): void {
   if (activeInstance) closeActive();
 }
 
-function ensureGlobalCloseListeners(): void {
+/**
+ * 注册全局关闭触发监听器（mousedown 外点 / keydown Esc / window blur /
+ * window resize / 任意祖先 scroll）。幂等——HMR / 重复调用安全。
+ *
+ * 被 (a) `contextMenu` action 内部、(b) `selectionMenu` 模块的 install 入口
+ * 调用——Layer 1 / Layer 2 都共享同一组监听，避免重复注册。
+ */
+export function ensureGlobalCloseListeners(): void {
   // window 全局 sentinel 让 vite HMR 模块重载后仍幂等（详上方注释）
   if (window.__cdtContextMenuCloseListenersInstalled) return;
   window.__cdtContextMenuCloseListenersInstalled = true;

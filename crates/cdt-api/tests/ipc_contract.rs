@@ -96,15 +96,17 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_49() {
+fn expected_tauri_commands_count_is_52() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        49,
+        52,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 49 个 Tauri command（含 SSH + server-mode + \
+         以及本文件常量；当前 src-tauri 注册 52 个 Tauri command（含 SSH + server-mode + \
          simplify-repository-as-project change 加的 list_group_sessions + change \
          ssh-project-memory-remote-rw 加的 add_memory / delete_memory + change \
-         add-telemetry-signal-bus 加的 get_telemetry_snapshot / record_correctness_events）"
+         add-telemetry-signal-bus 加的 get_telemetry_snapshot / record_correctness_events + \
+         change frontend-context-menu-phase-2 加的 open_in_terminal / open_in_editor / \
+         list_available_terminals）"
     );
 }
 
@@ -3139,4 +3141,342 @@ async fn record_correctness_events_validates_whitelist_and_batches() {
         unreg_after > unreg_before,
         "unregistered_correctness_event SHALL inc when kind not whitelisted"
     );
+}
+
+// =============================================================================
+// Phase 2 frontend-context-menu IPC contract（open_in_terminal / open_in_editor /
+// list_available_terminals + Settings 三新字段 + ApiErrorCode::ExternalApp 序列化）
+// 详 openspec/specs/frontend-context-menu/spec.md +
+//    openspec/specs/configuration-management/spec.md
+// =============================================================================
+
+#[test]
+fn api_error_code_external_app_serializes_as_snake_case() {
+    // codex 二审重点：ApiErrorCode::ExternalApp 序列化为 "external_app"
+    // 前端按 code === "external_app" 弹特定 toast（"editor CLI not found; ..."）
+    let err = cdt_api::ApiError::external_app("test message");
+    let json = serde_json::to_value(&err).unwrap();
+    assert_eq!(json["code"], json!("external_app"));
+    assert_eq!(json["message"], json!("test message"));
+}
+
+#[test]
+fn external_editor_enum_serializes_snake_case() {
+    use cdt_config::ExternalEditor;
+    assert_eq!(
+        serde_json::to_value(ExternalEditor::System).unwrap(),
+        json!("system")
+    );
+    assert_eq!(
+        serde_json::to_value(ExternalEditor::VsCode).unwrap(),
+        json!("vs_code")
+    );
+    assert_eq!(
+        serde_json::to_value(ExternalEditor::Cursor).unwrap(),
+        json!("cursor")
+    );
+    assert_eq!(
+        serde_json::to_value(ExternalEditor::Zed).unwrap(),
+        json!("zed")
+    );
+    assert_eq!(
+        serde_json::to_value(ExternalEditor::Sublime).unwrap(),
+        json!("sublime")
+    );
+}
+
+#[test]
+fn search_engine_enum_serializes_internally_tagged() {
+    use cdt_config::SearchEngine;
+    // unit variants
+    assert_eq!(
+        serde_json::to_value(SearchEngine::Google).unwrap(),
+        json!({ "type": "google" })
+    );
+    assert_eq!(
+        serde_json::to_value(SearchEngine::Bing).unwrap(),
+        json!({ "type": "bing" })
+    );
+    assert_eq!(
+        serde_json::to_value(SearchEngine::DuckDuckGo).unwrap(),
+        json!({ "type": "duck_duck_go" })
+    );
+    // Custom variant：urlTemplate camelCase 字段名
+    assert_eq!(
+        serde_json::to_value(SearchEngine::Custom {
+            url_template: "https://example.com/?q={query}".into()
+        })
+        .unwrap(),
+        json!({ "type": "custom", "urlTemplate": "https://example.com/?q={query}" })
+    );
+}
+
+#[test]
+fn terminal_app_enum_serializes_snake_case_iterm_to_i_term() {
+    use cdt_config::TerminalApp;
+    // codex 二审重点：rename_all = "snake_case" 对 ITerm 输出 "i_term" 不是 "iterm"
+    assert_eq!(
+        serde_json::to_value(TerminalApp::Terminal).unwrap(),
+        json!("terminal")
+    );
+    assert_eq!(
+        serde_json::to_value(TerminalApp::ITerm).unwrap(),
+        json!("i_term")
+    );
+    assert_eq!(
+        serde_json::to_value(TerminalApp::Warp).unwrap(),
+        json!("warp")
+    );
+    assert_eq!(
+        serde_json::to_value(TerminalApp::WindowsTerminal).unwrap(),
+        json!("windows_terminal")
+    );
+    assert_eq!(
+        serde_json::to_value(TerminalApp::Cmd).unwrap(),
+        json!("cmd")
+    );
+    assert_eq!(
+        serde_json::to_value(TerminalApp::PowerShell).unwrap(),
+        json!("power_shell")
+    );
+    assert_eq!(
+        serde_json::to_value(TerminalApp::XTerminalEmulator).unwrap(),
+        json!("x_terminal_emulator")
+    );
+    assert_eq!(
+        serde_json::to_value(TerminalApp::GnomeTerminal).unwrap(),
+        json!("gnome_terminal")
+    );
+    assert_eq!(
+        serde_json::to_value(TerminalApp::Konsole).unwrap(),
+        json!("konsole")
+    );
+    assert_eq!(
+        serde_json::to_value(TerminalApp::Alacritty).unwrap(),
+        json!("alacritty")
+    );
+}
+
+#[tokio::test]
+async fn get_config_general_includes_three_phase_2_fields_camel_case() {
+    let (api, _tmp) = setup_api().await;
+    let config = api.get_config().await.unwrap();
+    // 默认值 SHALL 出现在 IPC 返回内
+    assert_eq!(config["general"]["externalEditor"], json!("system"));
+    assert_eq!(
+        config["general"]["searchEngine"],
+        json!({ "type": "google" })
+    );
+    assert_eq!(config["general"]["terminalApp"], json!("terminal"));
+    // 三字段 SHALL 是 camelCase（不是 snake_case）
+    assert!(config["general"].get("external_editor").is_none());
+    assert!(config["general"].get("search_engine").is_none());
+    assert!(config["general"].get("terminal_app").is_none());
+}
+
+#[tokio::test]
+async fn update_config_general_external_editor_round_trip() {
+    let (api, _tmp) = setup_api().await;
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "externalEditor": "vs_code" }),
+    })
+    .await
+    .expect("externalEditor='vs_code' SHALL 接受");
+    assert_eq!(
+        api.get_config().await.unwrap()["general"]["externalEditor"],
+        json!("vs_code")
+    );
+
+    // round-trip back to default
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "externalEditor": "system" }),
+    })
+    .await
+    .expect("externalEditor='system' SHALL 接受");
+    assert_eq!(
+        api.get_config().await.unwrap()["general"]["externalEditor"],
+        json!("system")
+    );
+}
+
+#[tokio::test]
+async fn update_config_general_external_editor_invalid_value_rejected() {
+    let (api, _tmp) = setup_api().await;
+    let err = api
+        .update_config(&ConfigUpdateRequest {
+            section: "general".into(),
+            data: json!({ "externalEditor": "vim" }),
+        })
+        .await
+        .expect_err("invalid externalEditor SHALL be rejected");
+    assert!(err.to_string().contains("externalEditor"));
+}
+
+#[tokio::test]
+async fn update_config_general_search_engine_custom_round_trip() {
+    let (api, _tmp) = setup_api().await;
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({
+            "searchEngine": {
+                "type": "custom",
+                "urlTemplate": "https://kagi.com/search?q={query}"
+            }
+        }),
+    })
+    .await
+    .expect("custom searchEngine with {query} SHALL 接受");
+
+    let config = api.get_config().await.unwrap();
+    assert_eq!(
+        config["general"]["searchEngine"],
+        json!({
+            "type": "custom",
+            "urlTemplate": "https://kagi.com/search?q={query}"
+        })
+    );
+}
+
+#[tokio::test]
+async fn update_config_general_search_engine_custom_missing_query_rejected() {
+    let (api, _tmp) = setup_api().await;
+    let err = api
+        .update_config(&ConfigUpdateRequest {
+            section: "general".into(),
+            data: json!({
+                "searchEngine": {
+                    "type": "custom",
+                    "urlTemplate": "https://example.com/search"
+                }
+            }),
+        })
+        .await
+        .expect_err("missing {query} SHALL be rejected");
+    assert!(err.to_string().contains("{query}"));
+}
+
+#[tokio::test]
+async fn update_config_general_search_engine_custom_javascript_scheme_rejected() {
+    let (api, _tmp) = setup_api().await;
+    let err = api
+        .update_config(&ConfigUpdateRequest {
+            section: "general".into(),
+            data: json!({
+                "searchEngine": {
+                    "type": "custom",
+                    "urlTemplate": "javascript:alert({query})"
+                }
+            }),
+        })
+        .await
+        .expect_err("javascript: scheme SHALL be rejected");
+    assert!(err.to_string().contains("scheme"));
+}
+
+#[tokio::test]
+async fn update_config_general_terminal_app_iterm_round_trip() {
+    let (api, _tmp) = setup_api().await;
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "terminalApp": "i_term" }),
+    })
+    .await
+    .expect("terminalApp='i_term' SHALL 接受");
+    // 注意 ITerm 序列化为 "i_term" 不是 "iterm"
+    assert_eq!(
+        api.get_config().await.unwrap()["general"]["terminalApp"],
+        json!("i_term")
+    );
+}
+
+#[tokio::test]
+async fn update_config_general_terminal_app_cross_platform_value_no_error() {
+    let (api, _tmp) = setup_api().await;
+    // 统一扁平 enum：跨平台值都接受（仅 warn + fallback）
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "terminalApp": "konsole" }),
+    })
+    .await
+    .expect("terminalApp='konsole' SHALL 接受 (跨平台值不报错)");
+    assert_eq!(
+        api.get_config().await.unwrap()["general"]["terminalApp"],
+        json!("konsole")
+    );
+}
+
+#[tokio::test]
+async fn update_config_general_terminal_app_invalid_value_rejected() {
+    let (api, _tmp) = setup_api().await;
+    let err = api
+        .update_config(&ConfigUpdateRequest {
+            section: "general".into(),
+            data: json!({ "terminalApp": "fish" }),
+        })
+        .await
+        .expect_err("invalid terminalApp SHALL be rejected");
+    assert!(err.to_string().contains("terminalApp"));
+}
+
+#[tokio::test]
+async fn list_available_terminals_returns_current_platform_set() {
+    let (api, _tmp) = setup_api().await;
+    let list = api.list_available_terminals().await.unwrap();
+    assert!(!list.is_empty());
+
+    if cfg!(target_os = "macos") {
+        assert_eq!(list, vec!["terminal", "i_term", "warp"]);
+    } else if cfg!(target_os = "windows") {
+        assert_eq!(list, vec!["windows_terminal", "cmd", "power_shell"]);
+    } else {
+        assert_eq!(
+            list,
+            vec![
+                "x_terminal_emulator",
+                "gnome_terminal",
+                "konsole",
+                "alacritty"
+            ]
+        );
+    }
+}
+
+#[tokio::test]
+async fn open_in_terminal_rejects_relative_path_with_validation_error() {
+    let (api, _tmp) = setup_api().await;
+    let err = api.open_in_terminal("relative/path").await.unwrap_err();
+    assert_eq!(err.code, cdt_api::ApiErrorCode::ValidationError);
+    assert!(err.message.contains("absolute"));
+}
+
+#[tokio::test]
+async fn open_in_terminal_rejects_nonexistent_path_with_not_found() {
+    let (api, _tmp) = setup_api().await;
+    let err = api
+        .open_in_terminal("/nonexistent/foo/bar/baz")
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, cdt_api::ApiErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn open_in_editor_rejects_relative_path_with_validation_error() {
+    let (api, _tmp) = setup_api().await;
+    let err = api
+        .open_in_editor("relative/foo.rs", Some(1), Some(1))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, cdt_api::ApiErrorCode::ValidationError);
+}
+
+#[tokio::test]
+async fn open_in_editor_rejects_nonexistent_path_with_not_found() {
+    let (api, _tmp) = setup_api().await;
+    let err = api
+        .open_in_editor("/nonexistent/foo.rs", None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, cdt_api::ApiErrorCode::NotFound);
 }

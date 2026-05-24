@@ -17,9 +17,10 @@ use crate::trigger::{TriggerManager, merge_triggers, validate_trigger};
 use crate::types::{
     AppConfig, HiddenSession, NotificationTrigger, PinnedSession, SshConfig, SshLastConnection,
 };
+use crate::types::{ExternalEditor, SearchEngine, TerminalApp};
 use crate::validation::{
     normalize_claude_root_path, validate_claude_root_path, validate_http_port,
-    validate_snooze_minutes, validate_ssh_config,
+    validate_search_engine, validate_snooze_minutes, validate_ssh_config,
 };
 
 /// 默认配置文件路径：`~/.claude/claude-devtools-config.json`。
@@ -394,7 +395,60 @@ impl ConfigManager {
                             }
                         }
                     }
-                    _ => {}
+                    "externalEditor" => {
+                        // serde 严格枚举校验：合法值 system / vs_code / cursor / zed / sublime；
+                        // invalid 值（如 "vim"）反序列化失败 → ValidationError。
+                        let editor: ExternalEditor =
+                            serde_json::from_value(v.clone()).map_err(|e| {
+                                ConfigError::validation(format!(
+                                    "general.externalEditor must be one of: system, vs_code, cursor, zed, sublime ({e})"
+                                ))
+                            })?;
+                        candidate.external_editor = editor;
+                    }
+                    "searchEngine" => {
+                        // internally-tagged enum 反序列化 + Custom variant 额外校验
+                        // ({query} 占位符 + scheme http/https）。详 design.md::D3。
+                        let engine: SearchEngine =
+                            serde_json::from_value(v.clone()).map_err(|e| {
+                                ConfigError::validation(format!(
+                                    "general.searchEngine must be one of: \
+                                     {{type:'google'|'bing'|'duck_duck_go'}} or \
+                                     {{type:'custom', urlTemplate:'<URL with {{query}}>'}} ({e})"
+                                ))
+                            })?;
+                        validate_search_engine(&engine)?;
+                        candidate.search_engine = engine;
+                    }
+                    "terminalApp" => {
+                        // 统一扁平 enum：跨平台合法集合并集；不匹配当前 OS 时**不**报错，
+                        // 仅 tracing::warn 提示 + 运行时 fallback（详 design.md::D3 + spec
+                        // configuration-management `terminalApp 跨平台值不报错` Scenario）。
+                        let app: TerminalApp = serde_json::from_value(v.clone()).map_err(|e| {
+                            ConfigError::validation(format!(
+                                "general.terminalApp must be one of: terminal, i_term, warp, \
+                                     windows_terminal, cmd, power_shell, x_terminal_emulator, \
+                                     gnome_terminal, konsole, alacritty ({e})"
+                            ))
+                        })?;
+                        if !app.is_available_on_current_platform() {
+                            tracing::warn!(
+                                terminal_app = ?app,
+                                current_os = std::env::consts::OS,
+                                "general.terminalApp set to a value not available on the current platform; \
+                                 will fall back to platform default at open_in_terminal call site"
+                            );
+                        }
+                        candidate.terminal_app = app;
+                    }
+                    other => {
+                        // 未知字段拒绝（spec configuration-management `未知字段拒绝`
+                        // Scenario）。其它 update_xxx 仍是 warn-and-ignore 兼容；本节
+                        // 由 Phase 2 收紧——前端 Settings 改完应感知后端字段名漂移。
+                        return Err(ConfigError::validation(format!(
+                            "Unknown general config key: '{other}'"
+                        )));
+                    }
                 }
             }
         }
@@ -1658,5 +1712,267 @@ mod tests {
         let result = mgr.update_notifications(updates).await.unwrap();
 
         assert!(!result.notifications.enabled);
+    }
+
+    // =========================================================================
+    // Phase 2: external_editor / search_engine / terminal_app
+    // 详 openspec/changes/frontend-context-menu-phase-2/specs/configuration-management/spec.md
+    // =========================================================================
+
+    async fn setup_general_test_manager() -> (tempfile::TempDir, ConfigManager) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+        (dir, mgr)
+    }
+
+    #[tokio::test]
+    async fn general_external_editor_default_is_system() {
+        let (_d, mgr) = setup_general_test_manager().await;
+        assert_eq!(
+            mgr.get_config().general.external_editor,
+            ExternalEditor::System
+        );
+    }
+
+    #[tokio::test]
+    async fn general_external_editor_round_trip_vs_code() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let result = mgr
+            .update_general(serde_json::json!({ "externalEditor": "vs_code" }))
+            .await
+            .unwrap();
+        assert_eq!(result.general.external_editor, ExternalEditor::VsCode);
+
+        // serde 输出 camelCase + snake_case enum
+        let json = serde_json::to_value(&result.general).unwrap();
+        assert_eq!(json["externalEditor"], serde_json::json!("vs_code"));
+    }
+
+    #[tokio::test]
+    async fn general_external_editor_invalid_value_rejected() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let err = mgr
+            .update_general(serde_json::json!({ "externalEditor": "vim" }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("externalEditor"));
+        // 已存值未变
+        assert_eq!(
+            mgr.get_config().general.external_editor,
+            ExternalEditor::System
+        );
+    }
+
+    #[tokio::test]
+    async fn general_search_engine_default_is_google() {
+        let (_d, mgr) = setup_general_test_manager().await;
+        assert_eq!(mgr.get_config().general.search_engine, SearchEngine::Google);
+    }
+
+    #[tokio::test]
+    async fn general_search_engine_serializes_internally_tagged() {
+        let (_d, mgr) = setup_general_test_manager().await;
+        let json = serde_json::to_value(&mgr.get_config().general).unwrap();
+        // internally tagged enum 序列化为 { "type": "google" }
+        assert_eq!(
+            json["searchEngine"],
+            serde_json::json!({ "type": "google" })
+        );
+    }
+
+    #[tokio::test]
+    async fn general_search_engine_round_trip_duck_duck_go() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let result = mgr
+            .update_general(serde_json::json!({
+                "searchEngine": { "type": "duck_duck_go" }
+            }))
+            .await
+            .unwrap();
+        assert_eq!(result.general.search_engine, SearchEngine::DuckDuckGo);
+    }
+
+    #[tokio::test]
+    async fn general_search_engine_round_trip_custom() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let result = mgr
+            .update_general(serde_json::json!({
+                "searchEngine": {
+                    "type": "custom",
+                    "urlTemplate": "https://kagi.com/search?q={query}"
+                }
+            }))
+            .await
+            .unwrap();
+        let SearchEngine::Custom { url_template } = &result.general.search_engine else {
+            panic!("expected Custom variant");
+        };
+        assert_eq!(url_template, "https://kagi.com/search?q={query}");
+
+        // round-trip 序列化形态
+        let json = serde_json::to_value(&result.general).unwrap();
+        assert_eq!(
+            json["searchEngine"],
+            serde_json::json!({
+                "type": "custom",
+                "urlTemplate": "https://kagi.com/search?q={query}"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn general_search_engine_custom_missing_query_placeholder_rejected() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let err = mgr
+            .update_general(serde_json::json!({
+                "searchEngine": {
+                    "type": "custom",
+                    "urlTemplate": "https://example.com/search"
+                }
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("{query}"));
+        assert_eq!(mgr.get_config().general.search_engine, SearchEngine::Google);
+    }
+
+    #[tokio::test]
+    async fn general_search_engine_custom_javascript_scheme_rejected() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let err = mgr
+            .update_general(serde_json::json!({
+                "searchEngine": {
+                    "type": "custom",
+                    "urlTemplate": "javascript:alert({query})"
+                }
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("scheme"));
+    }
+
+    #[tokio::test]
+    async fn general_search_engine_invalid_tag_rejected() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let err = mgr
+            .update_general(serde_json::json!({
+                "searchEngine": { "type": "yahoo" }
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("searchEngine"));
+    }
+
+    #[tokio::test]
+    async fn general_terminal_app_default_is_terminal() {
+        let (_d, mgr) = setup_general_test_manager().await;
+        assert_eq!(mgr.get_config().general.terminal_app, TerminalApp::Terminal);
+    }
+
+    #[tokio::test]
+    async fn general_terminal_app_iterm_serializes_as_i_term() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let result = mgr
+            .update_general(serde_json::json!({ "terminalApp": "i_term" }))
+            .await
+            .unwrap();
+        assert_eq!(result.general.terminal_app, TerminalApp::ITerm);
+
+        // 注意 serde rename_all = "snake_case" 对 ITerm 输出 "i_term" 不是 "iterm"
+        let json = serde_json::to_value(&result.general).unwrap();
+        assert_eq!(json["terminalApp"], serde_json::json!("i_term"));
+    }
+
+    #[tokio::test]
+    async fn general_terminal_app_cross_platform_value_accepted_no_error() {
+        // 统一扁平 enum：跨平台值都合法（仅运行时 warn + fallback，不返回错误）
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        // 在任何平台上接受跨平台 enum 值；只 warn
+        let result = mgr
+            .update_general(serde_json::json!({ "terminalApp": "konsole" }))
+            .await
+            .unwrap();
+        assert_eq!(result.general.terminal_app, TerminalApp::Konsole);
+    }
+
+    #[tokio::test]
+    async fn general_terminal_app_invalid_value_rejected() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let err = mgr
+            .update_general(serde_json::json!({ "terminalApp": "fish" }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("terminalApp"));
+    }
+
+    #[tokio::test]
+    async fn general_unknown_field_rejected() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let err = mgr
+            .update_general(serde_json::json!({ "unknownField": "value" }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Unknown general config key"));
+    }
+
+    #[tokio::test]
+    async fn general_three_new_fields_persist_to_disk() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path.clone()));
+        mgr.load().await.unwrap();
+
+        mgr.update_general(serde_json::json!({
+            "externalEditor": "vs_code",
+            "searchEngine": {
+                "type": "custom",
+                "urlTemplate": "https://example.com/?q={query}"
+            },
+            "terminalApp": "i_term"
+        }))
+        .await
+        .unwrap();
+
+        // 重新 load 验证持久化
+        let mut mgr2 = ConfigManager::new(Some(path));
+        mgr2.load().await.unwrap();
+        let cfg = mgr2.get_config();
+        assert_eq!(cfg.general.external_editor, ExternalEditor::VsCode);
+        assert_eq!(cfg.general.terminal_app, TerminalApp::ITerm);
+        let SearchEngine::Custom { url_template } = &cfg.general.search_engine else {
+            panic!("expected Custom variant after reload");
+        };
+        assert_eq!(url_template, "https://example.com/?q={query}");
+    }
+
+    #[tokio::test]
+    async fn general_legacy_config_missing_three_fields_uses_defaults() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // 写入老配置：general 段没有三新字段
+        let body = serde_json::json!({
+            "general": {
+                "launchAtLogin": false,
+                "showDockIcon": true,
+                "theme": "system",
+                "defaultTab": "dashboard",
+                "claudeRootPath": null,
+                "autoExpandAiGroups": false,
+                "useNativeTitleBar": false
+            }
+        });
+        tokio::fs::write(&path, serde_json::to_string(&body).unwrap())
+            .await
+            .unwrap();
+
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+        let cfg = mgr.get_config();
+        // serde(default) 让旧配置兼容
+        assert_eq!(cfg.general.external_editor, ExternalEditor::System);
+        assert_eq!(cfg.general.search_engine, SearchEngine::Google);
+        assert_eq!(cfg.general.terminal_app, TerminalApp::Terminal);
     }
 }

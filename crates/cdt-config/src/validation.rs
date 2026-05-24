@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use cdt_discover::looks_like_absolute_path;
 
 use crate::error::ConfigError;
-use crate::types::{ConfigSection, SshConfig, SshLastConnection, SshProfile};
+use crate::types::{ConfigSection, SearchEngine, SshConfig, SshLastConnection, SshProfile};
 
 /// 校验 HTTP 端口范围 1024–65535。
 pub fn validate_http_port(port: u16) -> Result<(), ConfigError> {
@@ -77,6 +77,39 @@ pub fn validate_section(section: &str) -> Result<ConfigSection, ConfigError> {
             "Section must be one of: notifications, general, display, sessions, httpServer, ssh",
         )
     })
+}
+
+/// 校验 `SearchEngine`：仅 `Custom` variant 需要校验 (a) `url_template` 含 `{query}`
+/// 占位符；(b) URL scheme ∈ `{http, https}`（拒绝 `javascript:` / `file:` / `data:`
+/// / `chrome://` 等危险 scheme，防 XSS-into-opener 路径）。其它 variant 直接通过。
+///
+/// 详 `openspec/changes/frontend-context-menu-phase-2/design.md::D4` 决策与
+/// `openspec/specs/configuration-management/spec.md::Validate configuration fields
+/// before persistence` Requirement 的"`SearchEngine.custom` 缺 {query} 占位符拒绝"
+/// 与"危险 scheme 拒绝"两个 Scenario。
+pub fn validate_search_engine(engine: &SearchEngine) -> Result<(), ConfigError> {
+    let SearchEngine::Custom { url_template } = engine else {
+        return Ok(());
+    };
+
+    if !url_template.contains("{query}") {
+        return Err(ConfigError::validation(
+            "general.searchEngine.urlTemplate must contain {query} placeholder",
+        ));
+    }
+
+    // scheme 校验：解析 `<scheme>:` 前缀，必须是 `http` / `https`（大小写不敏感）。
+    // 不引入完整 url crate 依赖：本仓 cdt-config 走 minimal deps，单点 prefix 检查
+    // 已足够拦截 `javascript:` / `data:` / `file:` / `chrome://` 等 scheme。
+    let lower = url_template.trim_start().to_ascii_lowercase();
+    let is_http = lower.starts_with("http://");
+    let is_https = lower.starts_with("https://");
+    if !(is_http || is_https) {
+        return Err(ConfigError::validation(
+            "general.searchEngine.urlTemplate scheme must be http or https",
+        ));
+    }
+    Ok(())
 }
 
 /// 校验 snooze 分钟数（1–1440）。
@@ -280,5 +313,90 @@ mod tests {
     fn validate_snooze_invalid() {
         assert!(validate_snooze_minutes(0).is_err());
         assert!(validate_snooze_minutes(1441).is_err());
+    }
+
+    // =========================================================================
+    // SearchEngine 校验
+    // =========================================================================
+
+    #[test]
+    fn validate_search_engine_unit_variants_pass() {
+        assert!(validate_search_engine(&SearchEngine::Google).is_ok());
+        assert!(validate_search_engine(&SearchEngine::Bing).is_ok());
+        assert!(validate_search_engine(&SearchEngine::DuckDuckGo).is_ok());
+    }
+
+    #[test]
+    fn validate_search_engine_custom_with_query_placeholder_pass() {
+        let engine = SearchEngine::Custom {
+            url_template: "https://example.com/search?q={query}".into(),
+        };
+        assert!(validate_search_engine(&engine).is_ok());
+    }
+
+    #[test]
+    fn validate_search_engine_custom_http_scheme_pass() {
+        let engine = SearchEngine::Custom {
+            url_template: "http://intranet.local/?q={query}".into(),
+        };
+        assert!(validate_search_engine(&engine).is_ok());
+    }
+
+    #[test]
+    fn validate_search_engine_custom_missing_query_rejected() {
+        let engine = SearchEngine::Custom {
+            url_template: "https://example.com/search".into(),
+        };
+        let err = validate_search_engine(&engine).unwrap_err();
+        assert!(err.to_string().contains("{query}"));
+    }
+
+    #[test]
+    fn validate_search_engine_custom_javascript_scheme_rejected() {
+        let engine = SearchEngine::Custom {
+            url_template: "javascript:alert({query})".into(),
+        };
+        let err = validate_search_engine(&engine).unwrap_err();
+        assert!(err.to_string().contains("scheme"));
+    }
+
+    #[test]
+    fn validate_search_engine_custom_data_scheme_rejected() {
+        let engine = SearchEngine::Custom {
+            url_template: "data:text/html,{query}".into(),
+        };
+        assert!(validate_search_engine(&engine).is_err());
+    }
+
+    #[test]
+    fn validate_search_engine_custom_file_scheme_rejected() {
+        let engine = SearchEngine::Custom {
+            url_template: "file:///etc/passwd?q={query}".into(),
+        };
+        assert!(validate_search_engine(&engine).is_err());
+    }
+
+    #[test]
+    fn validate_search_engine_custom_chrome_scheme_rejected() {
+        let engine = SearchEngine::Custom {
+            url_template: "chrome://settings/?q={query}".into(),
+        };
+        assert!(validate_search_engine(&engine).is_err());
+    }
+
+    #[test]
+    fn validate_search_engine_custom_uppercase_scheme_pass() {
+        let engine = SearchEngine::Custom {
+            url_template: "HTTPS://example.com/?q={query}".into(),
+        };
+        assert!(validate_search_engine(&engine).is_ok());
+    }
+
+    #[test]
+    fn validate_search_engine_custom_leading_whitespace_normalized() {
+        let engine = SearchEngine::Custom {
+            url_template: "  https://example.com/?q={query}".into(),
+        };
+        assert!(validate_search_engine(&engine).is_ok());
     }
 }

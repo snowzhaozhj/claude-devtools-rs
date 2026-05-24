@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 
 use crate::types::{
-    AppConfig, DisplayConfig, GeneralConfig, HttpServerConfig, NotificationConfig,
-    NotificationTrigger, SessionsConfig, SshConfig, TriggerContentType, TriggerMode,
-    TriggerTokenType, UpdaterConfig,
+    AppConfig, DisplayConfig, ExternalEditor, GeneralConfig, HttpServerConfig, NotificationConfig,
+    NotificationTrigger, SearchEngine, SessionsConfig, SshConfig, TerminalApp, TriggerContentType,
+    TriggerMode, TriggerTokenType, UpdaterConfig,
 };
 
 /// 默认 trigger 列表（内建，不可删除）。
@@ -95,6 +95,9 @@ pub fn default_config() -> AppConfig {
             auto_expand_ai_groups: false,
             use_native_title_bar: false,
             session_click_behavior: "replace".into(),
+            external_editor: ExternalEditor::default(),
+            search_engine: SearchEngine::default(),
+            terminal_app: TerminalApp::default(),
         },
         display: DisplayConfig {
             show_timestamps: true,

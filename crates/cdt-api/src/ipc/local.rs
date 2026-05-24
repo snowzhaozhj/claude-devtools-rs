@@ -4147,6 +4147,26 @@ impl DataApi for LocalDataApi {
             .unwrap_or_default();
         Ok(ProjectSessionPrefs { pinned, hidden })
     }
+
+    // -----------------------------------------------------------------
+    // 外部应用交互（Phase 2 frontend-context-menu）
+    // 详 openspec/specs/frontend-context-menu/spec.md 三个 Requirement
+    // -----------------------------------------------------------------
+
+    async fn open_in_terminal(&self, path: &str) -> Result<(), ApiError> {
+        super::external_app::open_in_terminal(path, &self.config_mgr).await
+    }
+
+    async fn open_in_editor(
+        &self,
+        path: &str,
+        line: Option<u32>,
+        column: Option<u32>,
+    ) -> Result<(), ApiError> {
+        super::external_app::open_in_editor(path, line, column, &self.config_mgr).await
+    }
+
+    // list_available_terminals 走 trait default impl（无状态依赖）
 }
 
 // =============================================================================

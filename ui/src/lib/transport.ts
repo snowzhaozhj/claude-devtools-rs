@@ -373,6 +373,17 @@ function httpRequestForCommand(cmd: string, args: InvokeArgs): HttpRequest {
       return { method: "GET", path: "/api/telemetry/snapshot" };
     case "record_correctness_events":
       return { method: "POST", path: "/api/telemetry/correctness-events", body: { items: a.items } };
+    // Phase 2 frontend-context-menu：右键菜单"在终端 / 编辑器打开"+ Settings dropdown
+    case "open_in_terminal":
+      return { method: "POST", path: "/api/external-app/terminal", body: { path: a.path } };
+    case "open_in_editor":
+      return {
+        method: "POST",
+        path: "/api/external-app/editor",
+        body: { path: a.path, line: a.line, column: a.column },
+      };
+    case "list_available_terminals":
+      return { method: "GET", path: "/api/external-app/terminals" };
     default:
       throw new BrowserUnsupportedError(cmd);
   }
