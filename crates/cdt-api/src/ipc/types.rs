@@ -1,5 +1,7 @@
 //! API 请求/响应类型。
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -137,33 +139,66 @@ pub struct SessionSummary {
     pub cwd: Option<String>,
 }
 
+/// `SessionDetail.metrics` 字段 typed 形态。wire 内部字段保 `snake_case` 与
+/// 历史 hand-built `json!({"message_count": N})` 逐字节一致（详 change
+/// `typed-ipc-payload::design.md::D5` + `D7`：暂不修正 `camelCase` IPC 契约
+/// 违规，留 followup issue 单独 PR）。
+///
+/// 命名加 `SessionDetail` 前缀避免与 `cdt_discover::SessionMetadata`（cache
+/// 内部类型）撞名。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SessionDetailMetrics {
+    pub message_count: usize,
+}
+
+/// `SessionDetail.metadata` 字段 typed 形态。三个字段全 nullable 反映
+/// fs `metadata()` 失败 / jsonl `cwd` 字段缺失等真实 backend 行为。wire 内部
+/// 字段保 `snake_case`（详 `SessionDetailMetrics` doc）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SessionDetailMetadata {
+    pub last_modified: Option<i64>,
+    pub size: Option<u64>,
+    pub cwd: Option<String>,
+}
+
 /// 会话详情。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// 本结构 6 个字段（`chunks` / `metrics` / `metadata` / `context_injections`
+/// / `injections_by_phase` / `phase_info`）由 change `typed-ipc-payload` 从
+/// `serde_json::Value` typed 化；wire JSON 形状保持与 typed 化前 byte-for-byte
+/// 一致。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionDetail {
     pub session_id: String,
     pub project_id: String,
-    pub chunks: serde_json::Value,
-    pub metrics: serde_json::Value,
-    pub metadata: serde_json::Value,
+    pub chunks: Vec<cdt_core::Chunk>,
+    pub metrics: SessionDetailMetrics,
+    pub metadata: SessionDetailMetadata,
     /// session 级别的 context injections（6 类结构化数据），
     /// 由 `process_session_context_with_phases` 计算。
     /// 当前等同于 `injections_by_phase[最大 phaseNumber]`（latest phase），
     /// 保留独立字段是为了让 `ContextPanel` 不切 phase 时直接消费、与旧前端兼容。
     #[serde(default)]
-    pub context_injections: serde_json::Value,
+    pub context_injections: Vec<cdt_core::ContextInjection>,
     /// 每 phase 完整 accumulated injections，key = `phaseNumber.to_string()`。
     /// compact 后 Phase 1 的 injections 已 reset 不在 latest accumulated 内，
     /// 这里独立保留以供 Phase Selector 切到旧 phase 时显示。
     /// 见 spec `context-tracking` "Expose per-phase injections and phase metadata
     /// via `SessionDetail` IPC"。
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub injections_by_phase: serde_json::Value,
-    /// session 级 phase 元数据（`ContextPhaseInfo` 序列化），含 `phases` /
-    /// `ai_group_phase_map` / `compaction_token_deltas` / `compaction_count`。
-    /// 前端 Phase Selector 按 `phases.length > 1` 决定显隐。
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub phase_info: serde_json::Value,
+    ///
+    /// 用 `BTreeMap` 让 JSON object key 字典序稳定（详 change
+    /// `typed-ipc-payload::design.md::D4`）；前端按 `Number(k)` 数值排序消费，
+    /// 不依赖 wire 顺序。
+    #[serde(default)]
+    pub injections_by_phase: BTreeMap<String, Vec<cdt_core::ContextInjection>>,
+    /// session 级 phase 元数据，含 `phases` / `ai_group_phase_map` /
+    /// `compaction_token_deltas` / `compaction_count`。前端 Phase Selector
+    /// 按 `phases.length > 1` 决定显隐。
+    #[serde(default)]
+    pub phase_info: cdt_core::ContextPhaseInfo,
     /// 会话是否仍在进行。由 `cdt_analyze::check_messages_ongoing`
     /// 计算，值应与同 session 的 `SessionSummary.is_ongoing` 一致。
     #[serde(default)]

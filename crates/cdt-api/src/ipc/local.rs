@@ -2,7 +2,7 @@
 //!
 //! 组装底层 crate 调用，作为默认的数据 API 实现。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,8 +46,8 @@ use super::traits::DataApi;
 use super::types::{
     ConfigUpdateRequest, ContextInfo, GroupCursor, GroupSessionPage, MemoryFileContent,
     MemoryLayer, MemoryLayerKind, PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory,
-    ProjectSessionPrefs, SearchRequest, SessionDetail, SessionSummary, SshConnectRequest,
-    WorktreeOffset,
+    ProjectSessionPrefs, SearchRequest, SessionDetail, SessionDetailMetadata, SessionDetailMetrics,
+    SessionSummary, SshConnectRequest, WorktreeOffset,
 };
 use crate::notifier::NotificationPipeline;
 
@@ -3152,32 +3152,26 @@ impl DataApi for LocalDataApi {
         // 按 phase 切分 accumulated injections。每 phase 末尾的 AI group 在
         // stats_map 中持有该 phase 完整 accumulated（session.rs backfill 保证），
         // 中间 group 的 accumulated_injections 是 std::mem::take 后的空 Vec。
-        let mut injections_by_phase = serde_json::Map::new();
+        let mut injections_by_phase: BTreeMap<String, Vec<cdt_core::ContextInjection>> =
+            BTreeMap::new();
         for phase in &ctx_result.phase_info.phases {
             let phase_injections = ctx_result
                 .stats_map
                 .get(&phase.last_ai_group_id)
                 .map(|stats| stats.accumulated_injections.clone())
                 .unwrap_or_default();
-            injections_by_phase.insert(
-                phase.phase_number.to_string(),
-                serde_json::to_value(&phase_injections)
-                    .unwrap_or(serde_json::Value::Array(Vec::new())),
-            );
+            injections_by_phase.insert(phase.phase_number.to_string(), phase_injections);
         }
         // contextInjections 字段语义：latest phase 的 accumulated injections
         // （向后兼容旧前端，等价于 injectionsByPhase[最大 phaseNumber]）。
-        let context_injections = ctx_result
+        let context_injections: Vec<cdt_core::ContextInjection> = ctx_result
             .phase_info
             .phases
             .last()
             .and_then(|phase| ctx_result.stats_map.get(&phase.last_ai_group_id))
             .map(|stats| stats.accumulated_injections.clone())
-            .and_then(|inj| serde_json::to_value(&inj).ok())
-            .unwrap_or(serde_json::Value::Array(Vec::new()));
-        let injections_by_phase_value = serde_json::Value::Object(injections_by_phase);
-        let phase_info_value =
-            serde_json::to_value(&ctx_result.phase_info).unwrap_or(serde_json::Value::Null);
+            .unwrap_or_default();
+        let phase_info_value = ctx_result.phase_info.clone();
         let ctx_ms = t_ctx.elapsed().as_millis();
 
         let t_serde = std::time::Instant::now();
@@ -3239,15 +3233,15 @@ impl DataApi for LocalDataApi {
         let detail = SessionDetail {
             session_id: session_id.to_owned(),
             project_id: project_id.to_owned(),
-            chunks: serde_json::to_value(&chunks_for_payload).unwrap_or_default(),
-            metrics: serde_json::json!({"message_count": message_count}),
-            metadata: serde_json::json!({
-                "last_modified": last_modified,
-                "size": size,
-                "cwd": session_cwd,
-            }),
+            chunks: chunks_for_payload,
+            metrics: SessionDetailMetrics { message_count },
+            metadata: SessionDetailMetadata {
+                last_modified,
+                size,
+                cwd: session_cwd.map(String::from),
+            },
             context_injections,
-            injections_by_phase: injections_by_phase_value,
+            injections_by_phase,
             phase_info: phase_info_value,
             is_ongoing,
             title: title_metadata.title,
@@ -3311,7 +3305,7 @@ impl DataApi for LocalDataApi {
         &self,
         root_session_id: &str,
         subagent_session_id: &str,
-    ) -> Result<serde_json::Value, ApiError> {
+    ) -> Result<Vec<cdt_core::Chunk>, ApiError> {
         // `get_subagent_trace` 调用方（Tauri command）只携带 sessionId，
         // 不带 projectId，所以需跨 `projects_dir` 扫。优先按
         // `{projects_dir}/*/{root_session_id}/subagents/agent-<sub>.jsonl`
@@ -3338,7 +3332,7 @@ impl DataApi for LocalDataApi {
             // 旧结构兜底：找 root jsonl 所在 project_dir 后在该目录扫 flat（双结构 fallback
             // 由 find_subagent_jsonl 提供）。
             let Ok(entries) = fs.read_dir(&projects_dir).await else {
-                return Ok(serde_json::Value::Array(Vec::new()));
+                return Ok(Vec::new());
             };
             let mut fallback: Option<std::path::PathBuf> = None;
             for entry in entries {
@@ -3357,7 +3351,7 @@ impl DataApi for LocalDataApi {
                 }
             }
             let Some(p) = fallback else {
-                return Ok(serde_json::Value::Array(Vec::new()));
+                return Ok(Vec::new());
             };
             p
         };
@@ -3369,7 +3363,7 @@ impl DataApi for LocalDataApi {
             m.is_sidechain = false;
         }
         let chunks = cdt_analyze::build_chunks(&msgs);
-        serde_json::to_value(&chunks).map_err(|e| ApiError::internal(format!("{e}")))
+        Ok(chunks)
     }
 
     async fn get_image_asset(
@@ -3477,17 +3471,19 @@ impl DataApi for LocalDataApi {
         let mut results = Vec::new();
         for sid in session_ids {
             // 仅给 session_id 时先反查 project_id，再走标准 detail 路径。
-            // 找不到就放占位条目，调用方按 metadata.status 决定是否过滤。
+            // 找不到走 typed default 占位，调用方按 `projectId == ""` 信号判定
+            // not-found（详 change `typed-ipc-payload::design.md::D9`：移除原
+            // ad-hoc `metadata.status="not_found"` 带外标记，改 typed default）。
             let Ok(Some(project_id)) = self.find_session_project(sid).await else {
                 results.push(SessionDetail {
                     session_id: sid.clone(),
                     project_id: String::new(),
-                    chunks: serde_json::Value::Null,
-                    metrics: serde_json::Value::Null,
-                    metadata: serde_json::json!({"status": "not_found"}),
-                    context_injections: serde_json::Value::Array(Vec::new()),
-                    injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
-                    phase_info: serde_json::Value::Null,
+                    chunks: Vec::new(),
+                    metrics: SessionDetailMetrics::default(),
+                    metadata: SessionDetailMetadata::default(),
+                    context_injections: Vec::new(),
+                    injections_by_phase: BTreeMap::new(),
+                    phase_info: cdt_core::ContextPhaseInfo::default(),
                     is_ongoing: false,
                     title: None,
                 });
@@ -3498,12 +3494,12 @@ impl DataApi for LocalDataApi {
                 Err(_) => results.push(SessionDetail {
                     session_id: sid.clone(),
                     project_id,
-                    chunks: serde_json::Value::Null,
-                    metrics: serde_json::Value::Null,
-                    metadata: serde_json::json!({"status": "not_found"}),
-                    context_injections: serde_json::Value::Array(Vec::new()),
-                    injections_by_phase: serde_json::Value::Object(serde_json::Map::new()),
-                    phase_info: serde_json::Value::Null,
+                    chunks: Vec::new(),
+                    metrics: SessionDetailMetrics::default(),
+                    metadata: SessionDetailMetadata::default(),
+                    context_injections: Vec::new(),
+                    injections_by_phase: BTreeMap::new(),
+                    phase_info: cdt_core::ContextPhaseInfo::default(),
                     is_ongoing: false,
                     title: None,
                 }),
@@ -3516,12 +3512,22 @@ impl DataApi for LocalDataApi {
     // 搜索
     // =========================================================================
 
-    async fn search(&self, request: &SearchRequest) -> Result<serde_json::Value, ApiError> {
+    async fn search(
+        &self,
+        request: &SearchRequest,
+    ) -> Result<cdt_core::SearchSessionsResult, ApiError> {
         if request.query.is_empty() {
-            return Ok(serde_json::json!({
-                "query": "",
-                "results": [],
-            }));
+            // typed 化前 hand-built `{query, results}` 缺 3 字段；本 change `D8`
+            // 修法：构造完整 `SearchSessionsResult`，wire 形状从 4 字段扩为 7 字段
+            // 是 bug fix（前端 `CommandPalette.svelte:116` 走 `"totalMatches" in
+            // session ? ... : ...` 判定，新增字段不破坏现有读取）。
+            return Ok(cdt_core::SearchSessionsResult {
+                results: Vec::new(),
+                total_matches: 0,
+                sessions_searched: 0,
+                query: String::new(),
+                is_partial: false,
+            });
         }
 
         let max_results = 50;
@@ -3541,23 +3547,22 @@ impl DataApi for LocalDataApi {
             .await
             .map_err(|e| ApiError::internal(format!("search error: {e}")))?;
 
-        serde_json::to_value(&result).map_err(|e| ApiError::internal(format!("{e}")))
+        Ok(result)
     }
 
     // =========================================================================
     // 配置 + 通知
     // =========================================================================
 
-    async fn get_config(&self) -> Result<serde_json::Value, ApiError> {
+    async fn get_config(&self) -> Result<cdt_config::AppConfig, ApiError> {
         let mgr = self.config_mgr.lock().await;
-        let config = mgr.get_config();
-        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
+        Ok(mgr.get_config())
     }
 
     async fn update_config(
         &self,
         request: &ConfigUpdateRequest,
-    ) -> Result<serde_json::Value, ApiError> {
+    ) -> Result<cdt_config::AppConfig, ApiError> {
         let mut mgr = self.config_mgr.lock().await;
         let result = match request.section.as_str() {
             "general" => mgr.update_general(request.data.clone()).await,
@@ -3579,17 +3584,16 @@ impl DataApi for LocalDataApi {
             self.reconfigure_claude_root(config.general.claude_root_path.as_deref())
                 .await;
         }
-        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
+        Ok(config)
     }
 
     async fn get_notifications(
         &self,
         limit: usize,
         offset: usize,
-    ) -> Result<serde_json::Value, ApiError> {
+    ) -> Result<cdt_config::GetNotificationsResult, ApiError> {
         let mgr = self.notif_mgr.lock().await;
-        let result = mgr.get_notifications(limit, offset);
-        serde_json::to_value(&result).map_err(|e| ApiError::internal(format!("{e}")))
+        Ok(mgr.get_notifications(limit, offset))
     }
 
     async fn mark_notification_read(&self, notification_id: &str) -> Result<bool, ApiError> {

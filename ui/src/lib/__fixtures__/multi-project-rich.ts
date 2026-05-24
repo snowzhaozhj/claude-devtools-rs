@@ -400,8 +400,10 @@ export const multiProjectRichFixture: Fixture = {
       sessionId: 'sess-rust-active',
       projectId: 'mock-rich-rust',
       chunks: richChunks,
-      metrics: { totalTokens: 2800 },
-      metadata: { gitBranch: 'feat/frontend-test-infrastructure' },
+      // change `typed-ipc-payload`：fixture 历史用了 `totalTokens`/`gitBranch`
+      // 等实际 backend 不返回的字段，typed 化暴露 stale。改用真实 wire 形态。
+      metrics: { message_count: 8 },
+      metadata: { last_modified: 1_700_000_000_000, size: 4096, cwd: '/Users/mock/rust-port' },
       // Latest phase（= phase 2）的累计 injections——保留以兼容旧前端
       contextInjections: [
         {
@@ -617,8 +619,8 @@ export const multiProjectRichFixture: Fixture = {
       sessionId: 'sess-rust-2',
       projectId: 'mock-rich-rust',
       chunks: [userChunk],
-      metrics: {},
-      metadata: {},
+      metrics: { message_count: 1 },
+      metadata: { last_modified: null, size: null, cwd: null },
       contextInjections: [],
       isOngoing: false,
     },

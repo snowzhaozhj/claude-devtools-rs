@@ -138,10 +138,15 @@ async fn get_subagent_trace(
     root_session_id: String,
     subagent_session_id: String,
 ) -> Result<serde_json::Value, String> {
-    data.api
+    // change `typed-ipc-payload`：trait 返回 typed `Vec<Chunk>`，Tauri command
+    // 仍 wrap 为 `serde_json::Value` 透传（wire 形状不变；前端 typed 由
+    // `ui/src/lib/api.ts` 端独立保证）。
+    let chunks = data
+        .api
         .get_subagent_trace(&root_session_id, &subagent_session_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&chunks).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -183,12 +188,18 @@ async fn search_sessions(
         project_id: Some(project_id),
         session_id: None,
     };
-    data.api.search(&request).await.map_err(|e| e.to_string())
+    let result = data
+        .api
+        .search(&request)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn get_config(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
-    data.api.get_config().await.map_err(|e| e.to_string())
+    let config = data.api.get_config().await.map_err(|e| e.to_string())?;
+    serde_json::to_value(&config).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -201,10 +212,12 @@ async fn update_config(
         section,
         data: config_data,
     };
-    data.api
+    let config = data
+        .api
         .update_config(&request)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&config).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -213,10 +226,12 @@ async fn get_notifications(
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<serde_json::Value, String> {
-    data.api
+    let result = data
+        .api
         .get_notifications(limit.unwrap_or(50), offset.unwrap_or(0))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -792,11 +807,7 @@ async fn run_startup_update_check(api: Arc<LocalDataApi>, app: tauri::AppHandle)
             return;
         }
     };
-    let auto_check = cfg
-        .get("updater")
-        .and_then(|u| u.get("autoUpdateCheckEnabled"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true);
+    let auto_check = cfg.updater.auto_update_check_enabled;
     if !auto_check {
         tracing::debug!(
             target: "cdt_tauri::updater",
@@ -804,11 +815,7 @@ async fn run_startup_update_check(api: Arc<LocalDataApi>, app: tauri::AppHandle)
         );
         return;
     }
-    let skipped_version = cfg
-        .get("updater")
-        .and_then(|u| u.get("skippedUpdateVersion"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
+    let skipped_version = cfg.updater.skipped_update_version.clone();
 
     let updater = match app.updater() {
         Ok(u) => u,
@@ -1200,24 +1207,20 @@ pub fn run() {
                                 let _ = app_handle.emit("notification-added", &err);
 
                                 // 读最新 config 判断是否发 OS 通知
+                                // change `typed-ipc-payload`：get_config 返回
+                                // typed AppConfig，直接 field 访问取代 JSON path。
                                 let cfg = api_for_notif.get_config().await.ok();
                                 let enabled = cfg
                                     .as_ref()
-                                    .and_then(|c| c.get("notifications"))
-                                    .and_then(|n| n.get("enabled"))
-                                    .and_then(serde_json::Value::as_bool)
+                                    .map(|c| c.notifications.enabled)
                                     .unwrap_or(true);
                                 let sound_enabled = cfg
                                     .as_ref()
-                                    .and_then(|c| c.get("notifications"))
-                                    .and_then(|n| n.get("soundEnabled"))
-                                    .and_then(serde_json::Value::as_bool)
+                                    .map(|c| c.notifications.sound_enabled)
                                     .unwrap_or(true);
                                 let snoozed_until = cfg
                                     .as_ref()
-                                    .and_then(|c| c.get("notifications"))
-                                    .and_then(|n| n.get("snoozedUntil"))
-                                    .and_then(serde_json::Value::as_i64);
+                                    .and_then(|c| c.notifications.snoozed_until);
                                 let now_ms = i64::try_from(
                                     std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)

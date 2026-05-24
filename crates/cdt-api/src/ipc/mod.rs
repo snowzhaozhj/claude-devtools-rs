@@ -28,6 +28,6 @@ pub use traits::{CorrectnessEventItem, DataApi};
 pub use types::{
     ConfigUpdateRequest, ContextInfo, MemoryFileContent, MemoryLayer, MemoryLayerKind,
     PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
-    SearchRequest, SessionDetail, SessionSummary, SshAuthMethod, SshConnectRequest,
-    SshConnectionResult, SshState,
+    SearchRequest, SessionDetail, SessionDetailMetadata, SessionDetailMetrics, SessionSummary,
+    SshAuthMethod, SshConnectRequest, SshConnectionResult, SshState,
 };

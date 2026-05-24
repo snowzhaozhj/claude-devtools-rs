@@ -128,12 +128,15 @@ pub trait DataApi: Send + Sync {
     /// requirement）；前端 `SubagentCard` 展开时调本方法按需获取。
     ///
     /// 默认实现返回空数组；`LocalDataApi` 提供真实读盘版本。
+    ///
+    /// change `typed-ipc-payload`：返回类型从 `serde_json::Value` typed 化为
+    /// `Vec<cdt_core::Chunk>`（wire 形状不变）。
     async fn get_subagent_trace(
         &self,
         _root_session_id: &str,
         _subagent_session_id: &str,
-    ) -> Result<serde_json::Value, ApiError> {
-        Ok(serde_json::Value::Array(Vec::new()))
+    ) -> Result<Vec<cdt_core::Chunk>, ApiError> {
+        Ok(Vec::new())
     }
 
     /// 按需把内联 image base64 落盘到 cache 目录并返回 `asset://` URL。
@@ -176,27 +179,44 @@ pub trait DataApi: Send + Sync {
     // =========================================================================
 
     /// 搜索（单会话/单项目/全局，由 request 字段控制范围）。
-    async fn search(&self, request: &SearchRequest) -> Result<serde_json::Value, ApiError>;
+    ///
+    /// change `typed-ipc-payload`：返回类型从 `serde_json::Value` typed 化为
+    /// `cdt_core::SearchSessionsResult`（wire 形状不变；empty query 路径详
+    /// `design.md::D8` 修了缺字段 bug）。
+    async fn search(
+        &self,
+        request: &SearchRequest,
+    ) -> Result<cdt_core::SearchSessionsResult, ApiError>;
 
     // =========================================================================
     // 配置 + 通知
     // =========================================================================
 
     /// 获取当前配置。
-    async fn get_config(&self) -> Result<serde_json::Value, ApiError>;
+    ///
+    /// change `typed-ipc-payload`：返回类型从 `serde_json::Value` typed 化为
+    /// `cdt_config::AppConfig`（wire 形状不变；前端已 `Promise<AppConfig>` typed）。
+    async fn get_config(&self) -> Result<cdt_config::AppConfig, ApiError>;
 
     /// 更新配置。
+    ///
+    /// change `typed-ipc-payload`：返回类型从 `serde_json::Value` typed 化为
+    /// `cdt_config::AppConfig`（wire 形状不变）。
     async fn update_config(
         &self,
         request: &ConfigUpdateRequest,
-    ) -> Result<serde_json::Value, ApiError>;
+    ) -> Result<cdt_config::AppConfig, ApiError>;
 
     /// 获取通知列表（分页）。
+    ///
+    /// change `typed-ipc-payload`：返回类型从 `serde_json::Value` typed 化为
+    /// `cdt_config::GetNotificationsResult`（wire 形状不变；前端已
+    /// `Promise<GetNotificationsResult>` typed）。
     async fn get_notifications(
         &self,
         limit: usize,
         offset: usize,
-    ) -> Result<serde_json::Value, ApiError>;
+    ) -> Result<cdt_config::GetNotificationsResult, ApiError>;
 
     /// 标记通知已读。
     async fn mark_notification_read(&self, notification_id: &str) -> Result<bool, ApiError>;
@@ -222,6 +242,7 @@ pub trait DataApi: Send + Sync {
     async fn switch_context(&self, context_id: &str) -> Result<(), ApiError>;
 
     /// SSH 连接。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2（SSH 子集 7 个低频 method 暂留 Value）
     async fn ssh_connect(&self, request: &SshConnectRequest)
     -> Result<serde_json::Value, ApiError>;
 
@@ -229,27 +250,33 @@ pub trait DataApi: Send + Sync {
     async fn ssh_disconnect(&self, context_id: &str) -> Result<(), ApiError>;
 
     /// 测试 SSH 连接，不注册 active context。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2
     async fn ssh_test_connection(
         &self,
         request: &SshConnectRequest,
     ) -> Result<serde_json::Value, ApiError>;
 
     /// 获取 SSH/context 状态。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2
     async fn ssh_get_state(&self) -> Result<serde_json::Value, ApiError>;
 
     /// 列出 ssh config hosts。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2
     async fn ssh_get_config_hosts(&self) -> Result<serde_json::Value, ApiError>;
 
     /// 解析 SSH host alias。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2
     async fn resolve_ssh_host(&self, alias: &str) -> Result<serde_json::Value, ApiError>;
 
     /// 保存最近一次 SSH 连接。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2
     async fn ssh_save_last_connection(
         &self,
         request: &SshConnectRequest,
     ) -> Result<serde_json::Value, ApiError>;
 
     /// 读取最近一次 SSH 连接。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2
     async fn ssh_get_last_connection(&self) -> Result<serde_json::Value, ApiError>;
 
     /// 获取当前活跃 context。
@@ -260,6 +287,7 @@ pub trait DataApi: Send + Sync {
     // =========================================================================
 
     /// 校验文件路径。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2（文件 / 路径子集 4 个低频 method 暂留 Value）
     async fn validate_path(
         &self,
         path: &str,
@@ -267,10 +295,12 @@ pub trait DataApi: Send + Sync {
     ) -> Result<serde_json::Value, ApiError>;
 
     /// 读取 CLAUDE.md 文件（多 scope）。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2
     async fn read_claude_md_files(&self, project_root: &str)
     -> Result<serde_json::Value, ApiError>;
 
     /// 读取 `@mention` 文件。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2
     async fn read_mentioned_file(
         &self,
         path: &str,
@@ -282,6 +312,7 @@ pub trait DataApi: Send + Sync {
     // =========================================================================
 
     /// 读取 agent 配置。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2
     async fn read_agent_configs(&self, project_root: &str) -> Result<serde_json::Value, ApiError>;
 
     // =========================================================================
@@ -450,6 +481,7 @@ pub trait DataApi: Send + Sync {
     // =========================================================================
 
     /// 添加 notification trigger，返回更新后的完整 `AppConfig` JSON。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2（Trigger CRUD 2 个低频 method 暂留 Value；返回完整 AppConfig 时可一起 typed 化）
     async fn add_trigger(
         &self,
         _trigger: cdt_config::NotificationTrigger,
@@ -460,6 +492,7 @@ pub trait DataApi: Send + Sync {
     }
 
     /// 删除 notification trigger，返回更新后的完整 `AppConfig` JSON。
+    // TODO(typed-ipc-payload): typed 化判定准则见 design.md::D2
     async fn remove_trigger(&self, _trigger_id: &str) -> Result<serde_json::Value, ApiError> {
         Err(ApiError::internal(
             "remove_trigger not implemented on this transport",

@@ -105,7 +105,7 @@ async fn update_config_persists_triggers_and_get_enabled_reflects() {
     .await
     .expect("update_config ok");
 
-    let cfg = api.get_config().await.expect("get_config ok");
+    let cfg = serde_json::to_value(api.get_config().await.expect("get_config ok")).unwrap();
     let triggers = cfg
         .get("notifications")
         .and_then(|n| n.get("triggers"))
@@ -140,11 +140,7 @@ async fn delete_notification_removes_single() {
     assert!(!removed_missing);
 
     let list = api.get_notifications(10, 0).await.unwrap();
-    let total = list
-        .get("total")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap();
-    assert_eq!(total, 1);
+    assert_eq!(list.total, 1);
 }
 
 #[tokio::test]
@@ -155,11 +151,7 @@ async fn mark_all_read_zeros_unread_count() {
     api.mark_all_notifications_read().await.unwrap();
 
     let list = api.get_notifications(10, 0).await.unwrap();
-    let unread = list
-        .get("unreadCount")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap();
-    assert_eq!(unread, 0);
+    assert_eq!(list.unread_count, 0);
 }
 
 #[tokio::test]
@@ -171,11 +163,7 @@ async fn clear_notifications_all_removes_everything() {
     assert_eq!(removed, 2);
 
     let list = api.get_notifications(10, 0).await.unwrap();
-    let total = list
-        .get("total")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap();
-    assert_eq!(total, 0);
+    assert_eq!(list.total, 0);
 }
 
 #[tokio::test]
@@ -195,9 +183,5 @@ async fn clear_notifications_by_trigger_leaves_others() {
     assert_eq!(removed, 2);
 
     let list = api.get_notifications(10, 0).await.unwrap();
-    let total = list
-        .get("total")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap();
-    assert_eq!(total, 1);
+    assert_eq!(list.total, 1);
 }

@@ -393,20 +393,48 @@ export interface CompactChunk {
 
 export type Chunk = UserChunk | AIChunk | SystemChunk | CompactChunk;
 
+/**
+ * change `typed-ipc-payload`：与 Rust `cdt_api::SessionDetailMetrics` 镜像。
+ * wire 内部字段保 snake_case（详 `design.md::D5` + `D7`：暂不修正 camelCase
+ * IPC 契约违规，留 followup issue 单独 PR）。
+ */
+export interface SessionDetailMetrics {
+  message_count: number;
+}
+
+/**
+ * change `typed-ipc-payload`：与 Rust `cdt_api::SessionDetailMetadata` 镜像。
+ * wire 内部字段保 snake_case；三字段全 nullable 反映 fs `metadata()` 失败 /
+ * jsonl `cwd` 字段缺失等真实 backend 行为。
+ */
+export interface SessionDetailMetadata {
+  last_modified: number | null;
+  size: number | null;
+  cwd: string | null;
+}
+
+/**
+ * change `typed-ipc-payload`：直接 re-export `contextExtractor.ts` 中已存在的
+ * discriminated union（6 类 variant，与 Rust `cdt_core::ContextInjection` 镜像
+ * 含完整 typed variant 字段）。本 typed 化避免在 api.ts 重复定义。
+ */
+export type { ContextInjection } from "./contextExtractor";
+import type { ContextInjection } from "./contextExtractor";
+
 export interface SessionDetail {
   sessionId: string;
   projectId: string;
   chunks: Chunk[];
-  metrics: Record<string, unknown>;
-  metadata: Record<string, unknown>;
+  metrics: SessionDetailMetrics;
+  metadata: SessionDetailMetadata;
   /** Latest phase 的累计 injections（向后兼容；语义等价于 `injectionsByPhase[最大 phaseNumber]`）。 */
-  contextInjections: unknown[];
+  contextInjections: ContextInjection[];
   /**
    * 按 phase 切分的完整累计 injections，key = `phaseNumber.toString()`。
    * Phase Selector 切到旧 phase 时直接读这里的对应数组。
    * 老后端不返回此字段，前端 fallback 链：`injectionsByPhase[latest] ?? contextInjections ?? []`。
    */
-  injectionsByPhase?: Record<string, unknown[]>;
+  injectionsByPhase?: Record<string, ContextInjection[]>;
   /** session 级 phase 元数据；前端按 `phases.length > 1` 决定 Phase Selector 显隐。 */
   phaseInfo?: ContextPhaseInfo;
   isOngoing: boolean;
