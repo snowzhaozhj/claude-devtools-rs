@@ -926,7 +926,32 @@ pub fn run() {
     install_telemetry_panic_hook();
     install_tracing_subscriber();
 
-    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    // 显式构建 multi-thread runtime，统一 Tauri 与 cdt-api 后台任务到同一池：
+    // - `worker_threads(4)`：base user/real ratio = 0.13-0.17（强 I/O-bound），4 worker 充足；
+    //   未来若转 CPU-bound（chunk-building 大批解析）再调，按 telemetry 实测决定
+    // - `max_blocking_threads(64)`：与 cdt-api 应用层 `FILE_READ_CONCURRENCY=64` 对齐；
+    //   注意：tokio::fs 隐式 spawn_blocking 在大 fan-out 场景仍会排队，根治走 issue #262
+    // - `thread_keep_alive(60s)`：让 blocking pool 跨多次 sidebar 切换复用，消除
+    //   create/destroy 循环；warm 30s 内线程不会回落，75s 后才稳态（验收看 idle/warm 双档）
+    // - `thread_stack_size(2 MiB)`：显式锁定栈预算，避免平台/未来 tokio 默认变化
+    // - `enable_all()`：裸 Builder 默认 timer/IO 全 off，少这一行 `tokio::time::sleep` /
+    //   `tokio::fs` 直接 panic（Runtime::new() 隐式 enable_all）
+    //
+    // `tauri::async_runtime::set` 必须紧跟 rt 创建之后、任何 `tauri::async_runtime::*`
+    // 或 `tauri::Builder::default()` 之前——`set` 是 OnceLock，二次调用会 panic；若
+    // Tauri 自己的 default runtime 已 lazy-init，`set` 也会 panic。`rt` 必须活到
+    // `.run(...)` 返回（drop runtime 会让 set 注册的 handle 失效）。
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .max_blocking_threads(64)
+        .thread_keep_alive(std::time::Duration::from_secs(60))
+        .thread_stack_size(2 * 1024 * 1024)
+        .thread_name("cdt-rt")
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime");
+    tauri::async_runtime::set(rt.handle().clone());
+
     let api = rt.block_on(async {
         let mut config_mgr = ConfigManager::new(None);
         let _ = config_mgr.load().await;
