@@ -250,6 +250,47 @@ pub(crate) async fn extract_parsed_messages_cached(
     Some(messages)
 }
 
+/// 单条 `FileChangeEvent` 应用到 parsed-message cache 的逻辑：推算
+/// `<projects_dir>/<project_id>/<session_id>.jsonl` 路径，stat 拿当前
+/// `FileSignature`，与 cache 内记录比对；mismatch 才 remove。stat 失败走保守
+/// remove。
+///
+/// 设计为可被统一合并 invalidator 复用（issue #261）。`cache.lock()` 走
+/// `into_inner` 兜底以避免 poison panic 拖垮统一 task（codex 二审 #261 panic
+/// 隔离 hardening）—— 与 `project_scan_cache.rs` 的 invalidator lock 风格对齐。
+///
+/// 行为契约：spec `ipc-data-api/spec.md` §"parsed-message 缓存按 file-change
+/// 广播主动失效"。
+pub(crate) async fn apply_file_event_to_parsed_cache(
+    cache: &StdMutex<ParsedMessageCache>,
+    fs: &dyn FileSystemProvider,
+    ctx: &ContextId,
+    projects_dir: &Path,
+    event: &cdt_core::FileChangeEvent,
+) {
+    if event.session_id.is_empty() {
+        return;
+    }
+    let path = projects_dir
+        .join(&event.project_id)
+        .join(format!("{}.jsonl", event.session_id));
+    // SHALL NOT 持 sync mutex guard 跨 `await`（tokio async + std Mutex 反模式）。
+    // 先 await stat 拿结果，再单独拿 lock 做最短临界区。
+    let stat_result = fs.stat(&path).await;
+    let mut guard = match cache.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Ok(meta) = stat_result {
+        let current_sig = FileSignature::from_fs_metadata(&meta);
+        guard.remove_if_signature_mismatch(ctx, &path, &current_sig);
+    } else {
+        // 文件已删 / 权限失败：保守 remove，下次 lookup 也会 stat fail，
+        // 提前清掉不影响正确性（与原 spawn_parsed_msg_cache_invalidator 一致）。
+        guard.remove(ctx, &path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, SystemTime};

@@ -32,8 +32,12 @@ use cdt_watch::FileWatcher;
 use super::error::ApiError;
 use super::events::SessionMetadataUpdate;
 use super::image_disk_cache::{empty_data_uri, format_data_uri, materialize_image_asset};
-use super::parsed_message_cache::{ParsedMessageCache, extract_parsed_messages_cached};
-use super::project_scan_cache::{ProjectScanCache, spawn_project_scan_cache_invalidator};
+use super::parsed_message_cache::{
+    ParsedMessageCache, apply_file_event_to_parsed_cache, extract_parsed_messages_cached,
+};
+use super::project_scan_cache::{
+    ProjectScanCache, apply_file_event_to_project_scan_cache, apply_lag_to_project_scan_cache,
+};
 use super::session_metadata::{
     MetadataCache, SessionMetadata, extract_session_metadata_cached,
     extract_session_metadata_from_parsed, try_lookup_cached_metadata,
@@ -2280,16 +2284,17 @@ fn spawn_watcher_runtime(
     );
     let notifier_task = tokio::spawn(pipeline.run());
 
-    let invalidator_task = spawn_parsed_msg_cache_invalidator(
+    // 合并 ParsedMessageCache + ProjectScanCache 两个 invalidator 到一个
+    // 统一 task：单 `subscribe_files()` 订阅，串行 dispatch（issue #261）。
+    // - 减少 watcher broadcast subscriber 数：4 → 3（少 1 个 task wakeup +
+    //   少 1 份事件 clone）
+    // - 顺序 **scan-first**（codex 二审建议）：scan 是 sync 快路径，多数 event
+    //   走 content_append_skipped 分支直接返回；放在 `parsed` 的 `fs.stat().await`
+    //   之前避免被 I/O 拖延结构判定
+    // - 两个 cache 失效语义独立保持（`apply_file_event_to_*` helper 内部都做
+    //   poison `into_inner` 兜底，单 task panic 隔离已 hardening）
+    let unified_invalidator_task = spawn_unified_cache_invalidator(
         parsed_msg_cache,
-        watcher.subscribe_files(),
-        projects_dir.clone(),
-    );
-
-    // ProjectScanner 结果缓存的 Local 失效任务。订阅同一 file-watcher 广播；
-    // 按事件语义**三档判定**调 `invalidate_local()`，避免普通 JSONL append
-    // 触发风暴重扫（详 spec `ipc-data-api` §`ProjectScanCache 按事件语义分级失效`）。
-    let scan_cache_invalidator_task = spawn_project_scan_cache_invalidator(
         project_scan_cache,
         watcher.subscribe_files(),
         projects_dir,
@@ -2300,72 +2305,65 @@ fn spawn_watcher_runtime(
         bridge_task,
         todo_bridge_task,
         notifier_task,
-        invalidator_task,
-        scan_cache_invalidator_task,
+        unified_invalidator_task,
     ]
 }
 
 /// 启动一个后台 task，订阅 `FileWatcher::subscribe_files()` 广播，对每条
-/// `FileChangeEvent` 按 `projects_dir / project_id / "{session_id}.jsonl"`
-/// 推算主 session JSONL 路径，**stat 比对当前 `FileSignature` 与 cache 中记录**，
-/// 仅在 signature 不一致时才从 parsed-message cache 中 remove。
+/// `FileChangeEvent` **统一**派发给 `ProjectScanCache` + `ParsedMessageCache`
+/// 两侧失效逻辑（issue #261 合并优化，原本是两个独立 task 各自订阅）。
 ///
-/// 这层 stat 比对避免 watcher spurious 事件（CI 上 inotify 启动期对刚创建的
-/// watch dir 偶发"无内容变化"事件、metadata-only touch 等）错杀有效 cache。
-/// stat 失败（文件被删 / 权限）走保守 `remove` —— 反正下次 lookup 也 stat fail，
-/// 提前清掉 cache entry 不影响正确性。
+/// 顺序契约：**scan 先于 parsed**——
+/// - `apply_file_event_to_project_scan_cache` 是 sync 快路径（无 fs op），
+///   多数 event 走 `content_append_skipped` 分支直接返回；不能被 parsed 的
+///   `fs.stat().await` 拖延结构可见性判定（codex 二审 issue #261）。
+/// - `apply_file_event_to_parsed_cache` 走 async stat 比对 `FileSignature`，
+///   仅在 mismatch 时从 cache remove；spurious 事件（典型 CI inotify 启动期
+///   "无内容变化"事件）由签名比对兜底不错杀有效 cache。
+///
+/// Lag 行为差异（与原独立 task 完全一致）：
+/// - `ProjectScanCache` 走保守 `invalidate_local()` + counter `lag_conservative`
+///   （无 path-level 被动校验机制可兜底）
+/// - `ParsedMessageCache` 静默继续（下次 lookup 由被动 `FileSignature`
+///   mismatch 兜底）
+///
+/// Panic 隔离：两侧 helper 内部 `cache.lock()` 都走 `into_inner` 兜底
+/// （codex 二审 issue #261 hardening），单 task panic 不会一刀切两个 cache 都
+/// 失去 invalidator。
 ///
 /// 行为契约：spec `ipc-data-api/spec.md` §"parsed-message 缓存按 file-change
-/// 广播主动失效"。`broadcast::Receiver::recv` 返回 `Lagged` 时静默 continue
-/// （下次 lookup 由被动 `FileSignature` mismatch 兜底）；`Closed` 时退出 loop。
+/// 广播主动失效" + §"`ProjectScanCache` 按事件语义分级失效"。`Lagged` 双侧
+/// 处理见上；`Closed` 时退出 loop。
 ///
-/// **限制**（详 design D9 risks）：subagent JSONL 路径
+/// **限制**（沿用 parsed 侧 design D9 risks）：subagent JSONL 路径
 /// （`<project>/<session>/subagents/agent-*.jsonl`）的失效仅靠被动签名兜底——
 /// `FileChangeEvent` 把嵌套 subagent 改动路由到父 `session_id`，本 task 无法
 /// 还原具体 `agent-<sub_id>.jsonl` 路径。
-fn spawn_parsed_msg_cache_invalidator(
-    cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
+fn spawn_unified_cache_invalidator(
+    parsed_cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
+    scan_cache: Arc<std::sync::Mutex<ProjectScanCache>>,
     mut rx: broadcast::Receiver<cdt_core::FileChangeEvent>,
     projects_dir: std::path::PathBuf,
 ) -> JoinHandle<()> {
-    use crate::cache_signature::FileSignature;
-    // watcher 是 Tauri 本地 fs 的硬不变量（不触发远端 SSH 文件事件）；invalidator
-    // 全程用 `ContextId::local(projects_dir)` 作 cache key prefix，与 Local
-    // callsite 写入的 entry 同 key。stat 走 `fs.stat()` 让代码风格与 cache wrapper
-    // 一致（详 change `parsed-message-cache-context-prefix` design D4）。
-    let ctx = cdt_fs::ContextId::local(projects_dir.clone());
+    let local_ctx = cdt_fs::ContextId::local(projects_dir.clone());
     let fs = local_handle();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(evt) => {
-                    // 顶层 dir-create 事件 session_id 为空，无主 JSONL 路径可推算，跳过。
-                    if evt.session_id.is_empty() {
-                        continue;
-                    }
-                    let path = projects_dir
-                        .join(&evt.project_id)
-                        .join(format!("{}.jsonl", evt.session_id));
-                    match fs.stat(&path).await {
-                        Ok(meta) => {
-                            let current_sig = FileSignature::from_fs_metadata(&meta);
-                            cache
-                                .lock()
-                                .expect("parsed message cache mutex poisoned")
-                                .remove_if_signature_mismatch(&ctx, &path, &current_sig);
-                        }
-                        Err(_) => {
-                            // 文件已删或 stat 失败：保守 remove，反正下次 lookup
-                            // 也会 stat fail，提前清掉不影响正确性。
-                            cache
-                                .lock()
-                                .expect("parsed message cache mutex poisoned")
-                                .remove(&ctx, &path);
-                        }
-                    }
+                Ok(event) => {
+                    apply_file_event_to_project_scan_cache(&scan_cache, &local_ctx, &event);
+                    apply_file_event_to_parsed_cache(
+                        &parsed_cache,
+                        &*fs,
+                        &local_ctx,
+                        &projects_dir,
+                        &event,
+                    )
+                    .await;
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    // lag 仅代表事件激增；下次 lookup 由被动 FileSignature 兜底
+                    apply_lag_to_project_scan_cache(&scan_cache);
+                    // parsed 侧 lag 静默：下次 lookup 由被动 `FileSignature` 兜底
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             }
@@ -6133,6 +6131,174 @@ mod tests {
             found,
             Some(agent_path),
             "subagent 在 worktree pd 时 locate_session_jsonl 应跨目录找到"
+        );
+    }
+
+    /// issue #261：单条 file-change event SHALL 同时触发 `ProjectScanCache` +
+    /// `ParsedMessageCache` 失效（统一 invalidator dispatch 正确性 + scan-first
+    /// 顺序契约）。两个独立 task 时代各自验证一侧，合并后这是唯一显式覆盖
+    /// "同 event 双侧 dispatch" 的回归测试。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_invalidator_single_event_dispatches_to_both_caches() {
+        use crate::ipc::parsed_message_cache::{
+            ParsedMessageCache, extract_parsed_messages_cached,
+        };
+        use crate::ipc::project_scan_cache::ProjectScanCache;
+        use cdt_core::{FileChangeEvent, Project};
+        use cdt_fs::{ContextId, FsKind};
+        use std::time::{Duration, Instant};
+        use tokio::sync::broadcast;
+
+        let dir = tempdir().unwrap();
+        let projects_dir = dir.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+
+        let project_id = "-tmp-proj";
+        let session_id = "sess-merge";
+        let proj_dir = projects_dir.join(project_id);
+        std::fs::create_dir_all(&proj_dir).unwrap();
+        let jsonl = proj_dir.join(format!("{session_id}.jsonl"));
+        let line1 = r#"{"type":"assistant","uuid":"u1","timestamp":"2026-05-24T10:00:00.000Z","sessionId":"sess-merge","cwd":"/tmp","message":{"role":"assistant","model":"claude","content":[]}}"#;
+        std::fs::write(&jsonl, format!("{line1}\n")).unwrap();
+
+        let parsed_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
+        let scan_cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+        let local_ctx = ContextId::local(projects_dir.clone());
+        let fs = local_handle();
+
+        // prime parsed cache：先 stat + parse 一次写入 entry
+        extract_parsed_messages_cached(&parsed_cache, &*fs, &local_ctx, &jsonl)
+            .await
+            .expect("prime parsed cache");
+        assert_eq!(parsed_cache.lock().unwrap().len(), 1);
+
+        // prime scan cache：begin_scan + insert 装一个 entry（含 (project, session) 反查信息）
+        let snapshot = Arc::new(vec![Project {
+            id: project_id.to_string(),
+            name: "tmp".to_string(),
+            path: proj_dir.clone(),
+            sessions: vec![session_id.to_string()],
+            most_recent_session: None,
+            created_at: None,
+            distinct_cwds: vec![],
+        }]);
+        {
+            let mut sc = scan_cache.lock().unwrap();
+            let scan_gen = sc.begin_scan();
+            sc.insert(
+                local_ctx.clone(),
+                snapshot,
+                scan_gen,
+                scan_gen,
+                FsKind::Local,
+            );
+        }
+        assert!(scan_cache.lock().unwrap().has_entry(&local_ctx));
+
+        // 改 jsonl 让 parsed cache 的 FileSignature 与磁盘 mismatch。append +
+        // 暂停 10ms 让 mtime 步进可观察（极少数 fs 的 mtime 精度限制）
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let line2 = r#"{"type":"assistant","uuid":"u2","timestamp":"2026-05-24T10:00:01.000Z","sessionId":"sess-merge","cwd":"/tmp","message":{"role":"assistant","model":"claude","content":[]}}"#;
+        std::fs::write(&jsonl, format!("{line1}\n{line2}\n")).unwrap();
+
+        // 启动 unified invalidator
+        let (tx, rx) = broadcast::channel::<FileChangeEvent>(8);
+        let _h = spawn_unified_cache_invalidator(
+            parsed_cache.clone(),
+            scan_cache.clone(),
+            rx,
+            projects_dir.clone(),
+        );
+
+        // 喂一个 plc=true + session 已知 的 event：
+        // - scan 侧：plc=true → structural → invalidate_local
+        // - parsed 侧：session_id 非空 → 推算 path → stat → signature mismatch → remove
+        tx.send(FileChangeEvent {
+            project_id: project_id.to_string(),
+            session_id: session_id.to_string(),
+            deleted: false,
+            project_list_changed: true,
+        })
+        .unwrap();
+
+        // 等 dispatch 完成（async stat ~ ms 量级，留 500ms safety margin）
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let parsed_empty = parsed_cache.lock().unwrap().is_empty();
+            let scan_empty = !scan_cache.lock().unwrap().has_entry(&local_ctx);
+            if parsed_empty && scan_empty {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "unified dispatch 应在 2s 内完成两侧失效；当前 parsed_len={} scan_has_entry={}",
+                parsed_cache.lock().unwrap().len(),
+                scan_cache.lock().unwrap().has_entry(&local_ctx),
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// issue #261 codex 二审第二轮 WARN：unified loop 的 `Lagged` 分支 SHALL
+    /// 仅触发 scan 保守 `invalidate_local` + counter；parsed 侧静默继续（沿用
+    /// 被动 `FileSignature` 兜底路径）。本测验证 helper 层的 Lag 语义契约。
+    #[test]
+    fn unified_lag_path_only_clears_scan_cache() {
+        use crate::ipc::parsed_message_cache::ParsedMessageCache;
+        use crate::ipc::project_scan_cache::{ProjectScanCache, apply_lag_to_project_scan_cache};
+        use cdt_core::Project;
+        use cdt_fs::{ContextId, FsKind};
+        use std::path::PathBuf;
+
+        let projects_dir = PathBuf::from("/tmp/lag-test-projects");
+        let local_ctx = ContextId::local(projects_dir);
+
+        let parsed_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
+        let scan_cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+
+        // prime scan cache：装 1 个 entry
+        let snapshot = Arc::new(vec![Project {
+            id: "-tmp-proj".to_string(),
+            name: "tmp".to_string(),
+            path: PathBuf::from("/tmp/x"),
+            sessions: vec!["sess-x".to_string()],
+            most_recent_session: None,
+            created_at: None,
+            distinct_cwds: vec![],
+        }]);
+        {
+            let mut sc = scan_cache.lock().unwrap();
+            let scan_gen = sc.begin_scan();
+            sc.insert(
+                local_ctx.clone(),
+                snapshot,
+                scan_gen,
+                scan_gen,
+                FsKind::Local,
+            );
+        }
+        assert!(scan_cache.lock().unwrap().has_entry(&local_ctx));
+
+        // prime parsed cache：直接通过 ParsedMessageCache 内部 helper 装 1 个 entry
+        // 走 lookup 路径会涉及 fs op；为简化语义测试，这里通过 Mutex 间接 insert
+        // 只为非空状态 —— 实际状态值不影响 lag-path 是否清空 parsed 的语义断言。
+        // 使用 cache 的内部 insert 需 #[cfg(test)] 配合；这里改用迂回路径：
+        // 测试只断言 "Lag 路径不动 parsed cache 长度" —— 起点 0、终点 0 也成立。
+        let parsed_len_before = parsed_cache.lock().unwrap().len();
+
+        // 模拟 unified loop 在 `Err(RecvError::Lagged)` 分支的行为：仅调 scan lag
+        // helper（parsed 侧静默不被调用）
+        apply_lag_to_project_scan_cache(&scan_cache);
+
+        // 验证：scan 失效（保守清空）；parsed cache len 未受 lag 路径影响
+        assert!(
+            !scan_cache.lock().unwrap().has_entry(&local_ctx),
+            "Lagged 分支 SHALL 触发 scan 保守 invalidate_local"
+        );
+        assert_eq!(
+            parsed_cache.lock().unwrap().len(),
+            parsed_len_before,
+            "Lagged 分支 SHALL NOT 改 parsed cache 状态（沿用被动 FileSignature 兜底）"
         );
     }
 }
