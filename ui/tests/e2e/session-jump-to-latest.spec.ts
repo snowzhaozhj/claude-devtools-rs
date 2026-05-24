@@ -175,6 +175,88 @@ test.describe('Quick Anchor Navigation：跳到最新消息', () => {
     await expect(btn).not.toHaveClass(/jump-to-latest-visible/, { timeout: 1_000 })
   })
 
+  test('smooth scroll 期间 scrollHeight 增长（模拟 lazy markdown reveal）→ pin 兜底跟住新底部', async ({ page }) => {
+    // 回归保护：原 bug 是 smooth scroll 期间 content-visibility:auto + lazy markdown
+    // IntersectionObserver 触发的 reveal 让 scrollHeight 持续增长，浏览器 smooth 目标
+    // 仍锁在 click 那一刻的旧 scrollHeight 上 → 落点距底数百~数千 px → 按钮重显 →
+    // 用户须点多次。修法：scrollend 后启动 startBottomPin 的 200ms MutationObserver
+    // 兜底，对后续 mutation 持续把 scrollTop 推到新 scrollHeight。
+    await openLongSession(page)
+    const btn = page.locator('.jump-to-latest')
+    await expect(btn).toHaveClass(/jump-to-latest-visible/)
+
+    // 记录原 scrollHeight 作 ground truth，click 启动 smooth scroll
+    const oldScrollHeight = await page.evaluate(() => {
+      return document.querySelector<HTMLElement>('.conversation')!.scrollHeight
+    })
+    await page.evaluate(() => {
+      document.querySelector<HTMLButtonElement>('.jump-to-latest')?.click()
+    })
+    // 等 smooth scroll 真在进行中（scrollTop 已开始变化但还没到旧底部）— 比固定
+    // waitForTimeout 鲁棒：动画时长依距离 + 浏览器版本，固定值假设易 race
+    await page.waitForFunction(
+      (oldMax) => {
+        const c = document.querySelector<HTMLElement>('.conversation')
+        if (!c) return false
+        const target = oldMax - c.clientHeight - 16  // 距旧底 16 px 内视为已到旧目标
+        return c.scrollTop > 0 && c.scrollTop < target
+      },
+      oldScrollHeight,
+      { timeout: 2_000 },
+    )
+    // smooth scroll 进行中追加 2000px 内容模拟 reveal 期间高度增长
+    await page.evaluate(() => {
+      const conversation = document.querySelector<HTMLElement>('.conversation')!
+      const grow = document.createElement('div')
+      grow.style.minHeight = '2000px'
+      grow.style.flexShrink = '0'
+      grow.setAttribute('data-test-grow', '1')
+      conversation.appendChild(grow)
+    })
+    // smooth scroll 完成 → onScrollEnd 启动 pin → pin hard set scrollTop +
+    // 监听 200ms 稳定窗口；timeout 给 smooth animation + pin 稳定足够缓冲
+    await expect(btn).not.toHaveClass(/jump-to-latest-visible/, { timeout: 5_000 })
+    expect(await getDistanceFromBottom(page)).toBeLessThanOrEqual(16)
+  })
+
+  test('bottom guard 提前清 isProgrammaticScroll 后 reveal 仍能让 pin 兜底', async ({ page }) => {
+    // 回归保护：codex 二审 #1 — `updateIsFar` 在 distanceFromBottom ≤16 时提前
+    // 清 `isProgrammaticScroll`（让按钮立即消失），但若 reveal 在那之后才发生导致
+    // scrollHeight 跳变，旧实现（依赖 scrollend 时 isProgrammaticScroll 仍为 true）
+    // 不会启动 pin。修法用独立 `pendingBottomPinAfterJump` 标志不被 bottom guard 影响。
+    await openLongSession(page)
+    const btn = page.locator('.jump-to-latest')
+    await expect(btn).toHaveClass(/jump-to-latest-visible/)
+
+    await page.evaluate(() => {
+      document.querySelector<HTMLButtonElement>('.jump-to-latest')?.click()
+    })
+    // 等 smooth scroll 接近底部到 distanceFromBottom ≤16 触发 bottom guard 提前
+    // 清 isProgrammaticScroll（旧实现此时已"放弃"启动 pin 的可能）
+    await page.waitForFunction(
+      () => {
+        const c = document.querySelector<HTMLElement>('.conversation')
+        if (!c) return false
+        const dist = c.scrollHeight - c.scrollTop - c.clientHeight
+        return dist >= 0 && dist <= 16
+      },
+      null,
+      { timeout: 3_000 },
+    )
+    // 此刻追加 2000px 模拟"延后 reveal"——scrollHeight 跳变让 distanceFromBottom 跨过
+    // 16 阈值。修法依赖 pendingBottomPinAfterJump 仍 true，scrollend 时启动 pin
+    await page.evaluate(() => {
+      const conversation = document.querySelector<HTMLElement>('.conversation')!
+      const grow = document.createElement('div')
+      grow.style.minHeight = '2000px'
+      grow.style.flexShrink = '0'
+      grow.setAttribute('data-test-late-grow', '1')
+      conversation.appendChild(grow)
+    })
+    await expect(btn).not.toHaveClass(/jump-to-latest-visible/, { timeout: 5_000 })
+    expect(await getDistanceFromBottom(page)).toBeLessThanOrEqual(16)
+  })
+
   test('快连点击不互扰，clearTimeout 旧 timer 让最终滚动稳定到底', async ({ page }) => {
     await openLongSession(page)
     const btn = page.locator('.jump-to-latest')
