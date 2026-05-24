@@ -89,6 +89,13 @@ claude-devtools-rs 是**桌面辅助工具**，不是用户主线（IDE / 浏览
 - IPC 整页 base64 inline — 走 `asset://` URL 或 lazy IPC
 - `broadcast::channel(N)` capacity 过大 — 默认 128 起步，新加 subscriber 时 grep 退订路径防泄漏
 
+**runtime / 调度 / 监控类**：
+- `tokio::runtime::Runtime::new()` 默认配置 + Tauri 自带 multi-thread runtime 同进程并存 — 用 `Builder::new_multi_thread().worker_threads(N).max_blocking_threads(M).thread_keep_alive(60s)` + `tauri::async_runtime::set(rt.handle().clone())` 单 runtime
+- `tracing_subscriber` layer 未 `.with_filter(LevelFilter::WARN)` 包裹 — 每个 INFO/DEBUG event 调 `on_event` 即使早 return 仍有函数调用开销；layer-level filter 让分发层 bypass
+- `thread_keep_alive` 设短（< 30s）是负优化 — 加剧 blocking pool create/destroy 循环；正确做法延长（60s+）让池真正复用
+- broadcast subscriber 链式放大（同一 channel 5+ subscriber） — 合并到统一 dispatcher task 减少唤醒
+- invalidator 内 String key hashmap counter lookup — 用 `let counter = registry().counter("...");` 在 task 起始 cache `Arc<Counter>`
+
 ## codex 二审性能视角
 
 性能相关 PR 的 codex prompt SHALL 显式列：
