@@ -292,10 +292,10 @@ function buildHandler(fx: Fixture) {
 
         // issue #259 e2e 钩子：URL `?pendingMetadataDelayMs=N` 让 mock 把
         // 返回 sessions 全部去掉 title/messageCount/isOngoing 真值后再返回，
-        // 等同于 list_group_sessions 返回纯骨架。可选 schedule N ms 之后
-        // 通过 `emit('session-metadata-update')` 把真值补回，模拟真实 lag。
-        // - N 较小（如 300）：metadata 在阈值前到达 → shimmer 不显
-        // - N 较大或 0 = 不发送（沿用 99999）：永不到达 → 阈值后挂 shimmer
+        // 等同于 list_group_sessions 返回纯骨架。N 决定真值何时通过
+        // `emit('session-metadata-update')` 补回，模拟真实 lag：
+        // - 0 ≤ N < 30000：N ms 后 emit（如 300 = 快到达 < 阈值；2000 = 慢到达 > 阈值）
+        // - N ≥ 30000 / 非数 / 负数：不 schedule（如 99999 = 永不到达，验证纯阈值挂 shimmer）
         // 注：mock 只在有 URL 参数时改返回，默认行为完全不变（不影响其他 spec）。
         const params =
           typeof window !== 'undefined' && window.location
