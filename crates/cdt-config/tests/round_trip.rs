@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use cdt_config::types::NotificationTrigger;
+use cdt_config::types::{SessionClickBehavior, Theme};
 use cdt_config::{ConfigError, ConfigManager, TriggerContentType, TriggerMode};
 use tempfile::TempDir;
 
@@ -76,7 +77,7 @@ async fn failed_general_save_preserves_existing_config_file() {
         std::fs::read_to_string(&path).expect("read config after failed save"),
         baseline
     );
-    assert_eq!(mgr.get_config().general.theme, "light");
+    assert_eq!(mgr.get_config().general.theme, Theme::Light);
 }
 
 /// (1) 多 section 写盘 → 新 manager 重读 → 字段一致
@@ -137,9 +138,12 @@ async fn round_trip_general_display_updater_triggers_persists_after_reload() {
     mgr2.load().await.expect("second load");
     let cfg = mgr2.get_config();
 
-    assert_eq!(cfg.general.theme, "dark");
+    assert_eq!(cfg.general.theme, Theme::Dark);
     assert!(cfg.general.auto_expand_ai_groups);
-    assert_eq!(cfg.general.session_click_behavior, "new-tab");
+    assert_eq!(
+        cfg.general.session_click_behavior,
+        SessionClickBehavior::NewTab
+    );
 
     assert!(cfg.display.compact_mode);
     assert_eq!(
@@ -239,7 +243,7 @@ async fn legacy_config_missing_updater_section_merged_with_defaults() {
 
     // 老字段保留
     assert_eq!(cfg.http_server.port, 17000);
-    assert_eq!(cfg.general.theme, "light");
+    assert_eq!(cfg.general.theme, Theme::Light);
     assert!(cfg.display.compact_mode);
 
     // updater 整段缺失 → 用 default
@@ -321,7 +325,8 @@ async fn save_interrupted_truncated_config_falls_back_to_defaults() {
     assert!(cfg.notifications.enabled);
     assert_eq!(cfg.http_server.port, 3456);
     assert_eq!(
-        cfg.general.theme, "system",
+        cfg.general.theme,
+        Theme::System,
         "must reset to default theme, not keep stale 'dark'"
     );
 
@@ -589,7 +594,7 @@ async fn legacy_config_missing_keyboard_shortcuts_defaults_to_empty_map() {
         "missing keyboardShortcuts must default to empty map"
     );
     // 确认旧字段保留
-    assert_eq!(cfg.general.theme, "light");
+    assert_eq!(cfg.general.theme, Theme::Light);
     assert_eq!(cfg.http_server.port, 17000);
 }
 

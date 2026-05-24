@@ -133,6 +133,40 @@ impl NotificationTrigger {
 // General
 // =============================================================================
 
+/// 主题偏好。
+///
+/// 序列化形态保持原 `theme: "dark" | "light" | "system"` 字符串契约
+/// （`#[serde(rename_all = "kebab-case")]` 单词产出小写）；前端 / 旧
+/// 配置文件不感知 enum 化。详 `crates/cdt-config/src/manager.rs::PartialGeneralConfig`
+/// 决策：String → typed enum 让 serde 接管字面量校验。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Theme {
+    Dark,
+    Light,
+    #[default]
+    System,
+}
+
+/// 启动默认 tab 偏好。序列化为 `"dashboard" | "last-session"`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum DefaultTab {
+    #[default]
+    Dashboard,
+    LastSession,
+}
+
+/// 点击 sidebar 会话项的默认行为。序列化为 `"replace" | "new-tab"`。
+/// Cmd/Ctrl + 点击始终翻转该默认（对齐 Chrome 浏览器交互）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionClickBehavior {
+    #[default]
+    Replace,
+    NewTab,
+}
+
 /// 应用全局设置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,15 +174,15 @@ impl NotificationTrigger {
 pub struct GeneralConfig {
     pub launch_at_login: bool,
     pub show_dock_icon: bool,
-    pub theme: String,
-    pub default_tab: String,
+    pub theme: Theme,
+    pub default_tab: DefaultTab,
     pub claude_root_path: Option<String>,
     pub auto_expand_ai_groups: bool,
     pub use_native_title_bar: bool,
     /// 点击 sidebar 会话项时的默认行为："replace" 替换当前 tab，"new-tab" 总开新 tab。
     /// Cmd/Ctrl + 点击始终翻转该默认（对齐 Chrome 浏览器交互）。
-    #[serde(default = "default_session_click_behavior")]
-    pub session_click_behavior: String,
+    #[serde(default)]
+    pub session_click_behavior: SessionClickBehavior,
     /// 用户偏好外部编辑器（用于"在编辑器打开"右键菜单 IPC `open_in_editor`）。
     /// 默认 `System`：走 OS 默认 app（macOS `open` / Win `start` / Linux `xdg-open`）。
     /// 详 `openspec/specs/configuration-management/spec.md` §"持久化外部编辑器偏好"。
@@ -164,10 +198,6 @@ pub struct GeneralConfig {
     /// `tracing::warn!` + fallback 到平台默认（不报错）。详 §"持久化首选终端 app"。
     #[serde(default)]
     pub terminal_app: TerminalApp,
-}
-
-fn default_session_click_behavior() -> String {
-    "replace".to_string()
 }
 
 // =============================================================================

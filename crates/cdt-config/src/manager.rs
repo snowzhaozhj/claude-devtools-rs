@@ -11,11 +11,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::Deserialize;
+
 use crate::defaults::default_config;
 use crate::error::ConfigError;
 use crate::trigger::{TriggerManager, merge_triggers, validate_trigger};
 use crate::types::{
-    AppConfig, HiddenSession, NotificationTrigger, PinnedSession, SshConfig, SshLastConnection,
+    AppConfig, DefaultTab, HiddenSession, NotificationTrigger, PinnedSession, SessionClickBehavior,
+    SshConfig, SshLastConnection, SshProfile, Theme, TimeFormat,
 };
 use crate::types::{ExternalEditor, SearchEngine, TerminalApp};
 use crate::validation::{
@@ -34,6 +37,10 @@ pub struct ConfigManager {
     config: AppConfig,
     config_path: PathBuf,
     trigger_manager: TriggerManager,
+    /// 单调递增版本号；每次 `commit_next_config` 成功 +1。客户端可在 partial body
+    /// 里加 `_version` 字段做 optimistic concurrency check 防 last-write-wins
+    /// （缺省 = skip 校验，向后兼容；session-local，新建实例从 0 起）。
+    version: u64,
 }
 
 impl ConfigManager {
@@ -46,7 +53,16 @@ impl ConfigManager {
             config,
             config_path: path,
             trigger_manager,
+            version: 0,
         }
+    }
+
+    /// 当前 config 版本号。每次 `update_*` 成功 +1（session-local，不持久化）。
+    /// 客户端拿到此值后可在下一次 `update_*` partial body 里加 `_version` 字段做
+    /// optimistic concurrency check：传入值与当前不一致 → `ConfigError::Validation`。
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// 从磁盘异步加载配置。
@@ -242,7 +258,26 @@ impl ConfigManager {
         self.persist_config(&next).await?;
         self.trigger_manager = TriggerManager::new(next.notifications.triggers.clone());
         self.config = next;
+        // version 仅在持久化成功后递增——失败时客户端用旧 version 重试 partial。
+        // wrapping_add 防理论上的 overflow（实际 u64 一辈子用不完）。
+        self.version = self.version.wrapping_add(1);
         Ok(self.get_config())
+    }
+
+    /// 校验 client 传入的 `_version` 是否匹配当前 server 版本；缺省（None）= skip
+    /// 校验，保留向后兼容。spec：configuration-management 防 last-write-wins。
+    fn check_version(&self, expected: Option<u64>) -> Result<(), ConfigError> {
+        let Some(expected) = expected else {
+            return Ok(());
+        };
+        if expected != self.version {
+            return Err(ConfigError::validation(format!(
+                "Config version mismatch: client expected {expected}, server is at {}. \
+                 Re-fetch and retry.",
+                self.version
+            )));
+        }
+        Ok(())
     }
 
     // =========================================================================
@@ -252,205 +287,107 @@ impl ConfigManager {
     /// 更新 notifications section。
     pub async fn update_notifications(
         &mut self,
-        updates: serde_json::Value,
+        mut updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        let expected_version = extract_version(&mut updates)?;
+        self.check_version(expected_version)?;
+
+        // typed Partial deserialize：失败 → ConfigError::Validation。serde 默认
+        // ignore unknown fields，保 update_notifications_warn_on_unknown_key 兼容。
+        let partial: PartialNotificationConfig = deserialize_partial("notifications", updates)?;
+
         let mut next = self.config.clone();
-        if let Some(obj) = updates.as_object() {
-            for (k, v) in obj {
-                match k.as_str() {
-                    "enabled" => {
-                        if let Some(b) = v.as_bool() {
-                            next.notifications.enabled = b;
-                        }
-                    }
-                    "soundEnabled" => {
-                        if let Some(b) = v.as_bool() {
-                            next.notifications.sound_enabled = b;
-                        }
-                    }
-                    "includeSubagentErrors" => {
-                        if let Some(b) = v.as_bool() {
-                            next.notifications.include_subagent_errors = b;
-                        }
-                    }
-                    "snoozeMinutes" => {
-                        if let Some(n) = v.as_u64() {
-                            let minutes = u32::try_from(n)
-                                .map_err(|_| ConfigError::validation("snoozeMinutes overflow"))?;
-                            validate_snooze_minutes(minutes)?;
-                            next.notifications.snooze_minutes = minutes;
-                        }
-                    }
-                    "triggers" => {
-                        let list: Vec<NotificationTrigger> = serde_json::from_value(v.clone())
-                            .map_err(|e| {
-                                ConfigError::validation(format!(
-                                    "triggers must be an array of NotificationTrigger: {e}"
-                                ))
-                            })?;
-                        for t in &list {
-                            let r = validate_trigger(t);
-                            if !r.valid {
-                                return Err(ConfigError::validation(format!(
-                                    "Invalid trigger \"{}\": {}",
-                                    t.id,
-                                    r.errors.join(", ")
-                                )));
-                            }
-                        }
-                        next.notifications.triggers = list;
-                    }
-                    other => {
-                        tracing::warn!(
-                            key = %other,
-                            "unknown notifications update key ignored"
-                        );
-                    }
+        if let Some(v) = partial.enabled {
+            next.notifications.enabled = v;
+        }
+        if let Some(v) = partial.sound_enabled {
+            next.notifications.sound_enabled = v;
+        }
+        if let Some(v) = partial.include_subagent_errors {
+            next.notifications.include_subagent_errors = v;
+        }
+        if let Some(minutes) = partial.snooze_minutes {
+            validate_snooze_minutes(minutes)?;
+            next.notifications.snooze_minutes = minutes;
+        }
+        if let Some(triggers) = partial.triggers {
+            for t in &triggers {
+                let r = validate_trigger(t);
+                if !r.valid {
+                    return Err(ConfigError::validation(format!(
+                        "Invalid trigger \"{}\": {}",
+                        t.id,
+                        r.errors.join(", ")
+                    )));
                 }
             }
+            next.notifications.triggers = triggers;
         }
+
         self.commit_next_config(next).await
     }
 
     /// 更新 general section。
+    ///
+    /// 严格未知字段（`#[serde(deny_unknown_fields)]`）：未列出 key 反序列化失败 →
+    /// `Unknown general config key: '<field>'`（spec configuration-management
+    /// `未知字段拒绝` Scenario）。其它 `update_*` 仍是 ignore unknown 兼容前端。
     pub async fn update_general(
         &mut self,
-        updates: serde_json::Value,
+        mut updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        let expected_version = extract_version(&mut updates)?;
+        self.check_version(expected_version)?;
+
+        let partial: PartialGeneralConfig = deserialize_partial("general", updates)?;
+
         let mut candidate = self.config.general.clone();
-        if let Some(obj) = updates.as_object() {
-            for (k, v) in obj {
-                match k.as_str() {
-                    "launchAtLogin" => {
-                        if let Some(b) = v.as_bool() {
-                            candidate.launch_at_login = b;
-                        }
-                    }
-                    "showDockIcon" => {
-                        if let Some(b) = v.as_bool() {
-                            candidate.show_dock_icon = b;
-                        }
-                    }
-                    "theme" => {
-                        if let Some(s) = v.as_str() {
-                            match s {
-                                "dark" | "light" | "system" => {
-                                    s.clone_into(&mut candidate.theme);
-                                }
-                                _ => {
-                                    return Err(ConfigError::validation(
-                                        "general.theme must be one of: dark, light, system",
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    "defaultTab" => {
-                        if let Some(s) = v.as_str() {
-                            match s {
-                                "dashboard" | "last-session" => {
-                                    s.clone_into(&mut candidate.default_tab);
-                                }
-                                _ => {
-                                    return Err(ConfigError::validation(
-                                        "general.defaultTab must be one of: dashboard, last-session",
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    "claudeRootPath" => {
-                        let raw = if v.is_null() {
-                            None
-                        } else {
-                            Some(v.as_str().ok_or_else(|| {
-                                ConfigError::validation(
-                                    "general.claudeRootPath must be a string or null",
-                                )
-                            })?)
-                        };
-                        candidate.claude_root_path = validate_claude_root_path(raw)?;
-                    }
-                    "autoExpandAiGroups" => {
-                        if let Some(b) = v.as_bool() {
-                            candidate.auto_expand_ai_groups = b;
-                        }
-                    }
-                    "useNativeTitleBar" => {
-                        if let Some(b) = v.as_bool() {
-                            candidate.use_native_title_bar = b;
-                        }
-                    }
-                    "sessionClickBehavior" => {
-                        if let Some(s) = v.as_str() {
-                            match s {
-                                "replace" | "new-tab" => {
-                                    s.clone_into(&mut candidate.session_click_behavior);
-                                }
-                                _ => {
-                                    return Err(ConfigError::validation(
-                                        "general.sessionClickBehavior must be one of: replace, new-tab",
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    "externalEditor" => {
-                        // serde 严格枚举校验：合法值 system / vs_code / cursor / zed / sublime；
-                        // invalid 值（如 "vim"）反序列化失败 → ValidationError。
-                        let editor: ExternalEditor =
-                            serde_json::from_value(v.clone()).map_err(|e| {
-                                ConfigError::validation(format!(
-                                    "general.externalEditor must be one of: system, vs_code, cursor, zed, sublime ({e})"
-                                ))
-                            })?;
-                        candidate.external_editor = editor;
-                    }
-                    "searchEngine" => {
-                        // internally-tagged enum 反序列化 + Custom variant 额外校验
-                        // ({query} 占位符 + scheme http/https）。详 design.md::D3。
-                        let engine: SearchEngine =
-                            serde_json::from_value(v.clone()).map_err(|e| {
-                                ConfigError::validation(format!(
-                                    "general.searchEngine must be one of: \
-                                     {{type:'google'|'bing'|'duck_duck_go'}} or \
-                                     {{type:'custom', urlTemplate:'<URL with {{query}}>'}} ({e})"
-                                ))
-                            })?;
-                        validate_search_engine(&engine)?;
-                        candidate.search_engine = engine;
-                    }
-                    "terminalApp" => {
-                        // 统一扁平 enum：跨平台合法集合并集；不匹配当前 OS 时**不**报错，
-                        // 仅 tracing::warn 提示 + 运行时 fallback（详 design.md::D3 + spec
-                        // configuration-management `terminalApp 跨平台值不报错` Scenario）。
-                        let app: TerminalApp = serde_json::from_value(v.clone()).map_err(|e| {
-                            ConfigError::validation(format!(
-                                "general.terminalApp must be one of: terminal, i_term, warp, \
-                                     windows_terminal, cmd, power_shell, x_terminal_emulator, \
-                                     gnome_terminal, konsole, alacritty ({e})"
-                            ))
-                        })?;
-                        if !app.is_available_on_current_platform() {
-                            tracing::warn!(
-                                terminal_app = ?app,
-                                current_os = std::env::consts::OS,
-                                "general.terminalApp set to a value not available on the current platform; \
-                                 will fall back to platform default at open_in_terminal call site"
-                            );
-                        }
-                        candidate.terminal_app = app;
-                    }
-                    other => {
-                        // 未知字段拒绝（spec configuration-management `未知字段拒绝`
-                        // Scenario）。其它 update_xxx 仍是 warn-and-ignore 兼容；本节
-                        // 由 Phase 2 收紧——前端 Settings 改完应感知后端字段名漂移。
-                        return Err(ConfigError::validation(format!(
-                            "Unknown general config key: '{other}'"
-                        )));
-                    }
-                }
+        if let Some(v) = partial.launch_at_login {
+            candidate.launch_at_login = v;
+        }
+        if let Some(v) = partial.show_dock_icon {
+            candidate.show_dock_icon = v;
+        }
+        if let Some(v) = partial.theme {
+            candidate.theme = v;
+        }
+        if let Some(v) = partial.default_tab {
+            candidate.default_tab = v;
+        }
+        if let Some(opt) = partial.claude_root_path {
+            candidate.claude_root_path = validate_claude_root_path(opt.as_deref())?;
+        }
+        if let Some(v) = partial.auto_expand_ai_groups {
+            candidate.auto_expand_ai_groups = v;
+        }
+        if let Some(v) = partial.use_native_title_bar {
+            candidate.use_native_title_bar = v;
+        }
+        if let Some(v) = partial.session_click_behavior {
+            candidate.session_click_behavior = v;
+        }
+        if let Some(v) = partial.external_editor {
+            candidate.external_editor = v;
+        }
+        if let Some(engine) = partial.search_engine {
+            // internally-tagged enum 反序列化已过；Custom variant 额外校验
+            // ({query} 占位符 + scheme http/https），详 design.md::D3。
+            validate_search_engine(&engine)?;
+            candidate.search_engine = engine;
+        }
+        if let Some(app) = partial.terminal_app {
+            // 统一扁平 enum：跨平台合法集合并集；不匹配当前 OS 时**不**报错，
+            // 仅 tracing::warn 提示 + 运行时 fallback（spec configuration-management
+            // `terminalApp 跨平台值不报错` Scenario）。
+            if !app.is_available_on_current_platform() {
+                tracing::warn!(
+                    terminal_app = ?app,
+                    current_os = std::env::consts::OS,
+                    "general.terminalApp set to a value not available on the current platform; \
+                     will fall back to platform default at open_in_terminal call site"
+                );
             }
+            candidate.terminal_app = app;
         }
 
         let mut next = self.config.clone();
@@ -466,61 +403,38 @@ impl ConfigManager {
     /// 长度 > 500 字符拒绝。
     pub async fn update_display(
         &mut self,
-        updates: serde_json::Value,
+        mut updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
         const FONT_FAMILY_MAX_LEN: usize = 500;
 
+        let expected_version = extract_version(&mut updates)?;
+        self.check_version(expected_version)?;
+
+        let partial: PartialDisplayConfig = deserialize_partial("display", updates)?;
+
         let mut next = self.config.clone();
-        if let Some(obj) = updates.as_object() {
-            let mut candidate = next.display.clone();
-            for (k, v) in obj {
-                match k.as_str() {
-                    "showTimestamps" => {
-                        if let Some(b) = v.as_bool() {
-                            candidate.show_timestamps = b;
-                        }
-                    }
-                    "compactMode" => {
-                        if let Some(b) = v.as_bool() {
-                            candidate.compact_mode = b;
-                        }
-                    }
-                    "syntaxHighlighting" => {
-                        if let Some(b) = v.as_bool() {
-                            candidate.syntax_highlighting = b;
-                        }
-                    }
-                    "fontSans" => {
-                        candidate.font_sans =
-                            normalize_font_family_field(v, "fontSans", FONT_FAMILY_MAX_LEN)?;
-                    }
-                    "fontMono" => {
-                        candidate.font_mono =
-                            normalize_font_family_field(v, "fontMono", FONT_FAMILY_MAX_LEN)?;
-                    }
-                    "timeFormat" => {
-                        let Some(s) = v.as_str() else {
-                            return Err(ConfigError::validation(
-                                "display.timeFormat must be a string: \"24h\" or \"12h\"",
-                            ));
-                        };
-                        candidate.time_format = match s {
-                            "24h" => crate::types::TimeFormat::H24,
-                            "12h" => crate::types::TimeFormat::H12,
-                            _ => {
-                                return Err(ConfigError::validation(
-                                    "display.timeFormat must be one of: 24h, 12h",
-                                ));
-                            }
-                        };
-                    }
-                    other => {
-                        tracing::warn!(key = %other, "unknown display update key ignored");
-                    }
-                }
-            }
-            next.display = candidate;
+        let mut candidate = next.display.clone();
+        if let Some(v) = partial.show_timestamps {
+            candidate.show_timestamps = v;
         }
+        if let Some(v) = partial.compact_mode {
+            candidate.compact_mode = v;
+        }
+        if let Some(v) = partial.syntax_highlighting {
+            candidate.syntax_highlighting = v;
+        }
+        if let Some(value) = partial.font_sans {
+            candidate.font_sans =
+                normalize_font_family_value(value, "fontSans", FONT_FAMILY_MAX_LEN)?;
+        }
+        if let Some(value) = partial.font_mono {
+            candidate.font_mono =
+                normalize_font_family_value(value, "fontMono", FONT_FAMILY_MAX_LEN)?;
+        }
+        if let Some(format) = partial.time_format {
+            candidate.time_format = format;
+        }
+        next.display = candidate;
         self.commit_next_config(next).await
     }
 
@@ -531,32 +445,19 @@ impl ConfigManager {
     /// - `skippedUpdateVersion: string | null` —— null 清空、字符串写入
     pub async fn update_updater(
         &mut self,
-        updates: serde_json::Value,
+        mut updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        let expected_version = extract_version(&mut updates)?;
+        self.check_version(expected_version)?;
+
+        let partial: PartialUpdaterConfig = deserialize_partial("updater", updates)?;
+
         let mut next = self.config.clone();
-        if let Some(obj) = updates.as_object() {
-            for (k, v) in obj {
-                match k.as_str() {
-                    "autoUpdateCheckEnabled" => {
-                        if let Some(b) = v.as_bool() {
-                            next.updater.auto_update_check_enabled = b;
-                        }
-                    }
-                    "skippedUpdateVersion" => {
-                        if v.is_null() {
-                            next.updater.skipped_update_version = None;
-                        } else if let Some(s) = v.as_str() {
-                            next.updater.skipped_update_version = Some(s.to_owned());
-                        }
-                    }
-                    other => {
-                        tracing::warn!(
-                            key = %other,
-                            "unknown updater update key ignored"
-                        );
-                    }
-                }
-            }
+        if let Some(v) = partial.auto_update_check_enabled {
+            next.updater.auto_update_check_enabled = v;
+        }
+        if let Some(opt) = partial.skipped_update_version {
+            next.updater.skipped_update_version = opt;
         }
         self.commit_next_config(next).await
     }
@@ -591,44 +492,37 @@ impl ConfigManager {
     /// 更新 `httpServer` section。
     pub async fn update_http_server(
         &mut self,
-        updates: serde_json::Value,
+        mut updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        let expected_version = extract_version(&mut updates)?;
+        self.check_version(expected_version)?;
+
+        let partial: PartialHttpServerConfig = deserialize_partial("httpServer", updates)?;
+
         let mut next = self.config.clone();
-        if let Some(obj) = updates.as_object() {
-            for (k, v) in obj {
-                match k.as_str() {
-                    "enabled" => {
-                        if let Some(b) = v.as_bool() {
-                            next.http_server.enabled = b;
-                        }
-                    }
-                    "port" => {
-                        if let Some(n) = v.as_u64() {
-                            let port = u16::try_from(n).map_err(|_| {
-                                ConfigError::validation(
-                                    "httpServer.port must be an integer between 1024 and 65535",
-                                )
-                            })?;
-                            validate_http_port(port)?;
-                            next.http_server.port = port;
-                        }
-                    }
-                    _ => {}
-                }
-            }
+        if let Some(v) = partial.enabled {
+            next.http_server.enabled = v;
+        }
+        if let Some(port) = partial.port {
+            validate_http_port(port)?;
+            next.http_server.port = port;
         }
         self.commit_next_config(next).await
     }
 
     /// 整体替换 `keyboard_shortcuts` 映射（同 `notifications.triggers` 的整体替换语义）。
     ///
-    /// `updates` SHALL 是一个 JSON object，键为 `actionId`、值为非空 key combo 字符串。
+    /// `updates` SHALL 是一个 JSON object，键为 `actionId`、值为非空 key combo 字符串；
+    /// 客户端可附加 `_version: <u64>` 做 optimistic concurrency check（缺省 skip）。
     /// 空 object 等价于"清空所有自定义快捷键，回退默认"。详
     /// `openspec/specs/configuration-management/spec.md::keyboardShortcuts.update`。
     pub async fn update_keyboard_shortcuts(
         &mut self,
-        updates: serde_json::Value,
+        mut updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        let expected_version = extract_version(&mut updates)?;
+        self.check_version(expected_version)?;
+
         let new_map: HashMap<String, String> = serde_json::from_value(updates).map_err(|e| {
             ConfigError::validation(format!(
                 "keyboardShortcuts must be a Record<string, string>: {e}"
@@ -653,38 +547,22 @@ impl ConfigManager {
 
     pub async fn update_ssh(
         &mut self,
-        updates: serde_json::Value,
+        mut updates: serde_json::Value,
     ) -> Result<AppConfig, ConfigError> {
+        let expected_version = extract_version(&mut updates)?;
+        self.check_version(expected_version)?;
+
+        let partial: PartialSshConfig = deserialize_partial("ssh", updates)?;
+
         let mut candidate = self.config.ssh.clone();
-        if let Some(obj) = updates.as_object() {
-            for (k, v) in obj {
-                match k.as_str() {
-                    "profiles" => {
-                        candidate.profiles = serde_json::from_value(v.clone()).map_err(|e| {
-                            ConfigError::validation(format!(
-                                "ssh.profiles must be an array of SSH profiles: {e}"
-                            ))
-                        })?;
-                    }
-                    "lastConnection" => {
-                        candidate.last_connection = if v.is_null() {
-                            None
-                        } else {
-                            Some(serde_json::from_value(v.clone()).map_err(|e| {
-                                ConfigError::validation(format!(
-                                    "ssh.lastConnection must be an SSH connection object: {e}"
-                                ))
-                            })?)
-                        };
-                    }
-                    "autoReconnect" => {
-                        if let Some(b) = v.as_bool() {
-                            candidate.auto_reconnect = b;
-                        }
-                    }
-                    other => tracing::warn!(key = %other, "unknown ssh update key ignored"),
-                }
-            }
+        if let Some(profiles) = partial.profiles {
+            candidate.profiles = profiles;
+        }
+        if let Some(last) = partial.last_connection {
+            candidate.last_connection = last;
+        }
+        if let Some(v) = partial.auto_reconnect {
+            candidate.auto_reconnect = v;
         }
         validate_ssh_config(&candidate)?;
 
@@ -963,24 +841,19 @@ where
     true
 }
 
-/// 把传入的 JSON 值归一化为 `Option<String>` 用于 font-family 类字段：
-/// - `null` → `None`
+/// 把已 typed deserialize 的 `Option<String>`（可能为 null/empty/whitespace）归一化
+/// 为 `Option<String>` 用于 font-family 类字段：
+/// - `None`（即客户端传入 `null`）→ `None`
 /// - 字符串 trim 后为空 → `None`
 /// - 字符串长度（trim 后）> `max_len` → validation error
-/// - 非字符串 / 非 null → validation error
 /// - 其余 → `Some(s.trim())`
-fn normalize_font_family_field(
-    value: &serde_json::Value,
+fn normalize_font_family_value(
+    value: Option<String>,
     field_name: &str,
     max_len: usize,
 ) -> Result<Option<String>, ConfigError> {
-    if value.is_null() {
+    let Some(s) = value else {
         return Ok(None);
-    }
-    let Some(s) = value.as_str() else {
-        return Err(ConfigError::validation(format!(
-            "display.{field_name} must be a string or null"
-        )));
     };
     let trimmed = s.trim();
     if trimmed.is_empty() {
@@ -992,6 +865,210 @@ fn normalize_font_family_field(
         )));
     }
     Ok(Some(trimmed.to_owned()))
+}
+
+// =========================================================================
+// Partial<XConfig> structs + 通用 helpers（typed update_* 反序列化路径）
+//
+// 设计目标（详 `crates/CLAUDE.md::ConfigManager::update_<section> 是手写白名单
+// dispatch`）：把 7 个 `update_*` 的"手写 match k.as_str() → 字面量校验"统一
+// 改成"typed PartialXConfig deserialize → 应用 Some-字段 → 后置 validation"。
+// 字段类型由 serde 直接校验，enum 字面量集合由 `Theme/DefaultTab/...` 等类型
+// 表达，加字段时 struct 改一处即可（不再有"漏 match 分支静默 drop"风险）。
+//
+// `_version: Option<u64>` optimistic concurrency check：从 JSON Value 中
+// 单独抽取（`extract_version`），不放进 PartialXConfig 字段——这样
+// `update_keyboard_shortcuts`（HashMap 直接 deserialize）也能复用同一机制。
+// =========================================================================
+
+/// 从 partial JSON object 中抽取并移除 `_version` 字段。返回客户端期望的版本号
+/// （`None` = 客户端未带，跳过 concurrency check 保前向兼容）。
+fn extract_version(updates: &mut serde_json::Value) -> Result<Option<u64>, ConfigError> {
+    let Some(obj) = updates.as_object_mut() else {
+        return Ok(None);
+    };
+    let Some(v) = obj.remove("_version") else {
+        return Ok(None);
+    };
+    if v.is_null() {
+        return Ok(None);
+    }
+    v.as_u64()
+        .map(Some)
+        .ok_or_else(|| ConfigError::validation("_version must be a non-negative integer or null"))
+}
+
+/// 用 `serde_path_to_error` 反序列化 typed Partial：错误信息携带字段路径
+/// （如 `external_editor: unknown variant 'vim'...`），便于前端定位问题字段。
+/// `deny_unknown_fields` 触发的 "unknown field `xxx`" 转写成历史兼容的
+/// `"Unknown <section> config key: '<field>'"`（对应
+/// `general_unknown_field_rejected` 测试契约）。
+fn deserialize_partial<T>(section: &str, updates: serde_json::Value) -> Result<T, ConfigError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_path_to_error::deserialize::<_, T>(updates).map_err(|err| {
+        let inner_msg = err.inner().to_string();
+        if let Some(field) = parse_unknown_field(&inner_msg) {
+            return ConfigError::validation(format!("Unknown {section} config key: '{field}'"));
+        }
+        let path = err.path().to_string();
+        if path.is_empty() || path == "." {
+            ConfigError::validation(format!("Invalid {section} config update: {inner_msg}"))
+        } else {
+            // serde_path_to_error 给出的 path 是 snake_case（struct 字段名）；
+            // 把它映射回前端使用的 camelCase（与 ConfigError 历史输出形态对齐）。
+            let camel_path = snake_path_to_camel(&path);
+            ConfigError::validation(format!(
+                "Invalid {section} config update at `{camel_path}`: {inner_msg}"
+            ))
+        }
+    })
+}
+
+/// 从 serde 错误文本解析 "unknown field `xxx`" 中的字段名。
+fn parse_unknown_field(msg: &str) -> Option<String> {
+    let start = msg.find("unknown field `")?;
+    let rest = &msg[start + "unknown field `".len()..];
+    let end = rest.find('`')?;
+    Some(rest[..end].to_owned())
+}
+
+/// 把 `serde_path_to_error` 输出的 `snake_case` 字段路径（如
+/// `external_editor` / `search_engine.url_template`）转成前端 `camelCase`
+/// （`externalEditor` / `searchEngine.urlTemplate`）便于错误信息直接定位 IPC payload。
+fn snake_path_to_camel(path: &str) -> String {
+    path.split('.')
+        .map(snake_to_camel_segment)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+fn snake_to_camel_segment(seg: &str) -> String {
+    let mut out = String::with_capacity(seg.len());
+    let mut upper_next = false;
+    for ch in seg.chars() {
+        if ch == '_' {
+            upper_next = true;
+        } else if upper_next {
+            out.extend(ch.to_uppercase());
+            upper_next = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// 三态 Option 反序列化：absent → `None` / null → `Some(None)` / value → `Some(Some(v))`。
+/// 用于 `claude_root_path` / `font_sans` / `font_mono` / `skipped_update_version`
+/// / `last_connection` 等需要区分"未传"（保留旧值）与"显式清空"（写 null）的字段。
+/// `clippy::option_option` 推荐改 enum 但本场景三态正是 Option<Option<T>> 的
+/// 经典语义；改 enum 反而失去 serde 默认 Option 处理能力。
+#[allow(clippy::option_option)]
+fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PartialNotificationConfig {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    sound_enabled: Option<bool>,
+    #[serde(default)]
+    include_subagent_errors: Option<bool>,
+    #[serde(default)]
+    snooze_minutes: Option<u32>,
+    #[serde(default)]
+    triggers: Option<Vec<NotificationTrigger>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(clippy::option_option)]
+struct PartialGeneralConfig {
+    #[serde(default)]
+    launch_at_login: Option<bool>,
+    #[serde(default)]
+    show_dock_icon: Option<bool>,
+    #[serde(default)]
+    theme: Option<Theme>,
+    #[serde(default)]
+    default_tab: Option<DefaultTab>,
+    /// 三态：absent / null（清空）/ Some(s)。详 `deserialize_double_option`。
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    claude_root_path: Option<Option<String>>,
+    #[serde(default)]
+    auto_expand_ai_groups: Option<bool>,
+    #[serde(default)]
+    use_native_title_bar: Option<bool>,
+    #[serde(default)]
+    session_click_behavior: Option<SessionClickBehavior>,
+    #[serde(default)]
+    external_editor: Option<ExternalEditor>,
+    #[serde(default)]
+    search_engine: Option<SearchEngine>,
+    #[serde(default)]
+    terminal_app: Option<TerminalApp>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::option_option)]
+struct PartialDisplayConfig {
+    #[serde(default)]
+    show_timestamps: Option<bool>,
+    #[serde(default)]
+    compact_mode: Option<bool>,
+    #[serde(default)]
+    syntax_highlighting: Option<bool>,
+    /// 三态：absent / null（清空）/ Some(s)。`normalize_font_family_value`
+    /// 接管 trim/length 校验。
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    font_sans: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    font_mono: Option<Option<String>>,
+    #[serde(default)]
+    time_format: Option<TimeFormat>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::option_option)]
+struct PartialUpdaterConfig {
+    #[serde(default)]
+    auto_update_check_enabled: Option<bool>,
+    /// 三态：absent / null（清空）/ Some(s)。
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    skipped_update_version: Option<Option<String>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PartialHttpServerConfig {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    port: Option<u16>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::option_option)]
+struct PartialSshConfig {
+    #[serde(default)]
+    profiles: Option<Vec<SshProfile>>,
+    /// 三态：absent / null（清空）/ Some(连接对象）。
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    last_connection: Option<Option<SshLastConnection>>,
+    #[serde(default)]
+    auto_reconnect: Option<bool>,
 }
 
 /// 递归合并两个 JSON value（`base` 为默认值，`overlay` 为已加载值）。
@@ -1073,7 +1150,7 @@ mod tests {
         assert_eq!(config.http_server.port, 9999);
         // 其他字段应该是默认值
         assert!(config.notifications.enabled);
-        assert_eq!(config.general.theme, "system");
+        assert_eq!(config.general.theme, Theme::System);
     }
 
     #[tokio::test]
@@ -1945,6 +2022,179 @@ mod tests {
             panic!("expected Custom variant after reload");
         };
         assert_eq!(url_template, "https://example.com/?q={query}");
+    }
+
+    // =========================================================================
+    // _version 字段：optimistic concurrency check（防 last-write-wins）
+    //
+    // 客户端 2 个并发 tab 改 settings 时，A 的 stale partial 不应该覆盖 B 的
+    // commit。partial 里带 `_version` = 拿配置时的版本号；不匹配 → Err。
+    // 缺省（不带 `_version`）= skip 校验，向后兼容老前端。
+    // =========================================================================
+
+    #[tokio::test]
+    async fn version_starts_at_zero_and_increments_on_each_commit() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        assert_eq!(mgr.version(), 0, "新 manager SHALL 从 0 起");
+
+        mgr.update_general(serde_json::json!({ "theme": "dark" }))
+            .await
+            .unwrap();
+        assert_eq!(mgr.version(), 1);
+
+        mgr.update_display(serde_json::json!({ "compactMode": true }))
+            .await
+            .unwrap();
+        assert_eq!(mgr.version(), 2);
+
+        mgr.update_updater(serde_json::json!({ "autoUpdateCheckEnabled": false }))
+            .await
+            .unwrap();
+        assert_eq!(mgr.version(), 3);
+    }
+
+    #[tokio::test]
+    async fn version_does_not_increment_on_validation_failure() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let _ = mgr
+            .update_general(serde_json::json!({ "theme": "dark" }))
+            .await
+            .unwrap();
+        assert_eq!(mgr.version(), 1);
+
+        // 非法值：partial deserialize 失败 → version 不增
+        let err = mgr
+            .update_general(serde_json::json!({ "theme": "bogus" }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+        assert_eq!(mgr.version(), 1, "非法值拒绝后 version 保持不变");
+    }
+
+    #[tokio::test]
+    async fn version_check_passes_when_client_matches_server() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        // 客户端读到 v=0，立即提交 partial 带 _version=0 SHALL 成功
+        mgr.update_general(serde_json::json!({
+            "_version": 0,
+            "theme": "light",
+        }))
+        .await
+        .unwrap();
+        assert_eq!(mgr.version(), 1);
+        assert_eq!(mgr.get_config().general.theme, Theme::Light);
+    }
+
+    #[tokio::test]
+    async fn version_check_rejects_stale_client_version() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        // server 先 advance 到 v=2
+        mgr.update_general(serde_json::json!({ "theme": "dark" }))
+            .await
+            .unwrap();
+        mgr.update_general(serde_json::json!({ "theme": "light" }))
+            .await
+            .unwrap();
+        assert_eq!(mgr.version(), 2);
+
+        // 客户端 stale 拿着 v=0 提交 → 拒绝
+        let err = mgr
+            .update_general(serde_json::json!({
+                "_version": 0,
+                "theme": "system",
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+        assert!(
+            err.to_string().contains("Config version mismatch"),
+            "Err message SHALL 含 'Config version mismatch'，实际：{err}"
+        );
+        // 已存值未变 + version 未增
+        assert_eq!(mgr.get_config().general.theme, Theme::Light);
+        assert_eq!(mgr.version(), 2);
+    }
+
+    #[tokio::test]
+    async fn version_absent_skips_check_for_backward_compat() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        mgr.update_general(serde_json::json!({ "theme": "dark" }))
+            .await
+            .unwrap();
+        // 老前端不传 _version → skip check，正常提交
+        mgr.update_general(serde_json::json!({ "theme": "light" }))
+            .await
+            .unwrap();
+        assert_eq!(mgr.get_config().general.theme, Theme::Light);
+        assert_eq!(mgr.version(), 2);
+    }
+
+    #[tokio::test]
+    async fn version_null_skips_check() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        mgr.update_general(serde_json::json!({
+            "_version": serde_json::Value::Null,
+            "theme": "dark",
+        }))
+        .await
+        .unwrap();
+        assert_eq!(mgr.get_config().general.theme, Theme::Dark);
+    }
+
+    #[tokio::test]
+    async fn version_check_works_across_all_seven_update_methods() {
+        // 所有 update_* SHALL 共享同一 version counter（一处 commit 让其它 update
+        // 的 stale _version 失效）
+        let (_d, mut mgr) = setup_general_test_manager().await;
+
+        // v=0 → update_general → v=1
+        mgr.update_general(serde_json::json!({ "theme": "dark" }))
+            .await
+            .unwrap();
+        assert_eq!(mgr.version(), 1);
+
+        // 客户端持有 v=0 试图 update_display 应该被拒
+        let err = mgr
+            .update_display(serde_json::json!({
+                "_version": 0,
+                "compactMode": true,
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+
+        // 客户端 update_keyboard_shortcuts 也共享 version
+        let err = mgr
+            .update_keyboard_shortcuts(serde_json::json!({
+                "_version": 0,
+                "sidebar.toggle": "mod+b",
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+
+        // 拿 v=1 重试 update_keyboard_shortcuts 成功
+        mgr.update_keyboard_shortcuts(serde_json::json!({
+            "_version": 1,
+            "sidebar.toggle": "mod+b",
+        }))
+        .await
+        .unwrap();
+        assert_eq!(mgr.version(), 2);
+    }
+
+    #[tokio::test]
+    async fn version_non_integer_value_rejected() {
+        let (_d, mut mgr) = setup_general_test_manager().await;
+        let err = mgr
+            .update_general(serde_json::json!({
+                "_version": "not-a-number",
+                "theme": "dark",
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+        assert!(err.to_string().contains("_version"));
     }
 
     #[tokio::test]

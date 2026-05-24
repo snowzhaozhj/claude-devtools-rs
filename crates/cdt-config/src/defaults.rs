@@ -3,9 +3,10 @@
 use std::collections::HashMap;
 
 use crate::types::{
-    AppConfig, DisplayConfig, ExternalEditor, GeneralConfig, HttpServerConfig, NotificationConfig,
-    NotificationTrigger, SearchEngine, SessionsConfig, SshConfig, TerminalApp, TriggerContentType,
-    TriggerMode, TriggerTokenType, UpdaterConfig,
+    AppConfig, DefaultTab, DisplayConfig, ExternalEditor, GeneralConfig, HttpServerConfig,
+    NotificationConfig, NotificationTrigger, SearchEngine, SessionClickBehavior, SessionsConfig,
+    SshConfig, TerminalApp, Theme, TriggerContentType, TriggerMode, TriggerTokenType,
+    UpdaterConfig,
 };
 
 /// 默认 trigger 列表（内建，不可删除）。
@@ -89,12 +90,12 @@ pub fn default_config() -> AppConfig {
         general: GeneralConfig {
             launch_at_login: false,
             show_dock_icon: true,
-            theme: "system".into(),
-            default_tab: "dashboard".into(),
+            theme: Theme::default(),
+            default_tab: DefaultTab::default(),
             claude_root_path: None,
             auto_expand_ai_groups: false,
             use_native_title_bar: false,
-            session_click_behavior: "replace".into(),
+            session_click_behavior: SessionClickBehavior::default(),
             external_editor: ExternalEditor::default(),
             search_engine: SearchEngine::default(),
             terminal_app: TerminalApp::default(),
