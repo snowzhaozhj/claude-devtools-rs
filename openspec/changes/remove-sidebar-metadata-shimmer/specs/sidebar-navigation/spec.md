@@ -25,7 +25,7 @@
 
 - **WHEN** `session-metadata-update` listener 收到 sessionId 为 `S` 的更新，更新该 session 的 `title` 为 `"My Session"`
 - **THEN** 该行 SHALL 在 patch 同帧移除 `.metadata-pending` class
-- **AND** title 文本 SHALL 通过 CSS `transition: opacity 150ms ease-out` 从透明渐变到不透明
+- **AND** title 文本 SHALL 通过 CSS `transition: opacity 150ms ease-out` 从骨架占位的 `opacity: 0.55` 渐升到正常的 `opacity: 1`（不是 `0 → 1`——骨架态本身就用 `0.55` 半透明而非完全透明，避免内容彻底消失再重绘的视觉断层）
 - **AND** 整个过程中 SHALL 不出现 shimmer / 周期重绘 / `background-position` 平移等动画
 
 #### Scenario: Metadata 长时间未到达仍保持静态

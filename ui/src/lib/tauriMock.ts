@@ -291,6 +291,27 @@ function buildHandler(fx: Fixture) {
           ? null
           : encodeCursor({ perWorktree: newPerWorktree })
 
+        // E2E 视觉契约钩子：URL `?forceSkeleton=1` 让 mock 把所有返回 session
+        // 的 metadata 真值（title / messageCount / isOngoing / gitBranch）清空，
+        // 让 sidebar 自然挂 `.metadata-pending` class——专供 `sidebar-skeleton-static`
+        // 等 e2e 验证骨架行视觉契约（`spec/sidebar-navigation::Metadata 占位字段
+        // 视觉渐显`）。比 issue #259 / PR #270 的 `pendingMetadataDelayMs` 简单：
+        // 不模拟"延迟到达"、不调度 emit，只静态返骨架。
+        if (
+          typeof window !== 'undefined' &&
+          window.location &&
+          new URLSearchParams(window.location.search).get('forceSkeleton') === '1'
+        ) {
+          const skeletons = items.map((s) => ({
+            ...s,
+            title: null,
+            messageCount: 0,
+            isOngoing: false,
+            gitBranch: null,
+          }))
+          return { sessions: skeletons, nextCursor }
+        }
+
         return { sessions: items, nextCursor }
       }
 

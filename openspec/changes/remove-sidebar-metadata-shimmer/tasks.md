@@ -47,4 +47,4 @@
 - [x] 7.1 push 分支 + 开 PR（PR 描述含本 change 链路：issue #256 诊断 + codex 二轮二审 + impeccable 加载发现 spec/DESIGN.md 三方矛盾 + 撤销 PR #270 决策；**Perf impact** 段贴 6.4 实测对比表（baseline vs patch），**禁止**仅写"预期 13.4% → < 5%"估算——按 `.claude/rules/perf.md::PR Perf impact 模板（强制）` 四维齐贴；如果实测未达 < 5% 目标，PR 描述 SHALL 显式标注实测值 + 解释剩余 CPU 来源（避免"修了但没修干净"被合并）
 - [ ] 7.2 wait-ci 全绿（`scripts/check-openspec-archives.sh` 等 CI-only check）
 - [ ] 7.3 codex 二审通过（PR push 后调 `Agent({ subagent_type: "codex:codex-rescue", ... })`；如发现 bug：修 → push → 回到 7.2 重跑；可循环 M 次）
-- [ ] 7.4 archive change（`openspec archive remove-sidebar-metadata-shimmer -y` 一步原子完成 mv + sync；archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）；PR merge 后 issue #256 自动关闭（PR 描述含 `Closes #256`）；issue #259 同步关闭（PR 描述含 `Closes #259` —— 根除取代收紧）
+- [ ] 7.4 archive change（`openspec archive remove-sidebar-metadata-shimmer -y` 一步原子完成 mv + sync；archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）；PR merge 后 issue #256 自动关闭（PR 描述含 `Closes #256`）；issue #259 已由 PR #270 关闭，本 PR **不**重复 close（codex 三审 finding #3）；PR 描述含 `Refs #259` / `supersedes #270 的实现路径` 标注关系

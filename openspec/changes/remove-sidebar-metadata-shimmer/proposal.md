@@ -43,5 +43,5 @@ PR #177（2026-05-20，merge `e1a0118`）引入 shimmer 时漏读 `DESIGN.md:198
 - **文档同步**：`ui/CLAUDE.md`、`.claude/templates/codex-prompt-{pr,design}-review.md`
 - **Spec 变更**：`openspec/specs/sidebar-navigation/spec.md`（archive 时 sync）
 - **不影响**：IPC 字段 / 后端算法 / 状态判定 / 数据流语义；`session-metadata-update` 推送链路与 in-place patch 不变；`.metadata-pending` class 的挂载 / 移除条件回归 spec 原始语义（`!session.title && session.messageCount === 0 && !session.isOngoing` 判定，与 PR #177 之前一致）
-- **关闭 issue**：#256（idle WebView CPU 13.4% 来源未定位）；副作用关闭 #259（shimmer 收紧——根除取代收紧）
+- **关闭 issue**：#256（idle WebView CPU 13.4% 来源未定位）；issue #259 已由 PR #270 关闭，本 change 是**取代** PR #270 的根除路径，PR 描述用 `Refs #259` / `supersedes #270` 标注关系而**不**重复 close 已关闭 issue
 - **性能预期**：基于 issue #256 peak 数据，删除 shimmer 后预估 peak 主线程 9.5% → < 2%、Activity Monitor 13.4% → < 5%（paint 路径整段消失，CoreText 重排归零）
