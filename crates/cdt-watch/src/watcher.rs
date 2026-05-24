@@ -96,6 +96,22 @@ impl FileWatcher {
         self.todo_tx.subscribe()
     }
 
+    /// 测试专用：暴露 `file_tx` Sender clone 让测试直接 inject raw `FileChangeEvent`
+    /// 进 broadcast channel，无需走 inotify / `FSEvents` / SSH polling 真路径。
+    ///
+    /// 用例：cdt-api inline test 验证 unified invalidator 是 `LocalDataApi.file_tx`
+    /// 唯一生产者（change `enrich-file-change-with-session-list-changed::D1`
+    /// 行为级验证 + codex round 2 WARN-1 修订）—— 注入 raw event 后断言
+    /// channels.files 只收到 invalidator emit 的 enriched event 一次。
+    ///
+    /// SHALL **不**在 production code 调用——`#[cfg(test)]` 限制 test binary 内
+    /// 可见（同 binary inline test）；feature `test-utils` 让外部 crate（如
+    /// `cdt-api`）的集成 test 也能用（参考 cdt-api 的 `test-utils` feature 模式）。
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn file_tx_for_test(&self) -> broadcast::Sender<FileChangeEvent> {
+        self.file_tx.clone()
+    }
+
     /// 接入远端 SSH polling watcher，把远端 `FileChangeEvent` 注入同一
     /// `file_tx` broadcast channel。
     ///

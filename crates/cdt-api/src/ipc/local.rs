@@ -6586,39 +6586,67 @@ mod tests {
     /// SHALL NOT emit synthetic enriched event（合成 event 的 project_id /
     /// session_id 字段语义不明；前端走 HTTP/Tauri 的 `sse-lagged` 兜底）。
     ///
-    /// 用 capacity=2 的 raw channel + 16 条突发事件，**必然**让 invalidator
-    /// recv 至少一次 `RecvError::Lagged`：burst 第 3 条起就开始挤掉 capacity
-    /// 内的旧事件，invalidator 第一次 recv 就拿到 Lagged。
-    ///
-    /// **强断言**（codex WARN-1 修订）：
-    /// 1. `lag_conservative` counter 必须 +≥1（证明 lag 路径真执行过）
-    /// 2. `file_rx` emit count 必须 < 16（lag 路径若 emit synthetic event 会
-    ///    破坏这个不变量）
+    /// **测试设计**（codex round 2 WARN-2 修订——避免全局 telemetry counter
+    /// 跨 test 并发污染）：
+    /// 1. 预填本测**私有** scan_cache 1 个 entry，`project=p / session=s`
+    /// 2. burst raw event 全用**已知** `session_id=s`：raw 路径走
+    ///    `content_append_skipped`，**不**调 `invalidate_local`，cache entry 保留
+    /// 3. capacity=2 + 16 burst → invalidator 必然命中 `RecvError::Lagged` →
+    ///    lag 路径 `apply_lag_to_project_scan_cache` 走 `invalidate_local` →
+    ///    cache entry 被清空
+    /// 4. **强断言 1**：sleep 后 `scan_cache.has_entry == false` 证明 lag 分支
+    ///    真执行（本断言只能由 lag 路径触发；raw 路径走 skipped 不动 cache）。
+    ///    用私有 cache 避免与同 binary 其他 lag-counter test 并发污染
+    /// 5. **强断言 2**：`file_rx` emit count 必须 < 16（lag 路径若 emit
+    ///    synthetic event 会破坏）
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unified_invalidator_skips_emit_on_lag() {
         use crate::ipc::parsed_message_cache::ParsedMessageCache;
         use crate::ipc::project_scan_cache::ProjectScanCache;
+        use cdt_core::Project;
+        use cdt_fs::{ContextId, FsKind};
 
-        const LAG_COUNTER: &str = "project_scan_cache.invalidate.lag_conservative";
-        let lag_before = cdt_telemetry::registry().counter_value(LAG_COUNTER);
+        let projects_dir = std::path::PathBuf::from("/tmp/unified-lag-fixture-isolated");
+        let local_ctx = ContextId::local(projects_dir.clone());
 
-        let projects_dir = std::path::PathBuf::from("/tmp/unified-lag-fixture");
         let parsed_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
         let scan_cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+
+        // 预填 cache 1 个 entry：project=p, session=s
+        let snapshot = Arc::new(vec![Project {
+            id: "p".into(),
+            name: "p".into(),
+            path: std::path::PathBuf::new(),
+            sessions: vec!["s".into()],
+            most_recent_session: None,
+            created_at: None,
+            distinct_cwds: vec![],
+        }]);
+        {
+            let mut sc = scan_cache.lock().unwrap();
+            let scan_gen = sc.begin_scan();
+            sc.insert(
+                local_ctx.clone(),
+                snapshot,
+                scan_gen,
+                scan_gen,
+                FsKind::Local,
+            );
+        }
+        assert!(scan_cache.lock().unwrap().has_entry(&local_ctx));
 
         // capacity=2 让接收端轻易 Lagged
         let (raw_tx, raw_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(2);
         let (file_tx, mut file_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(64);
 
-        // 在 spawn invalidator 之前先 send 大量事件 + drop raw_tx 之外的预订阅，
-        // 让 invalidator subscriber 一启动 cursor 就远落后于 sender lap → 必 Lagged。
-        // 注：broadcast::channel 的 lag 触发条件是 receiver tail 跟不上 sender head；
-        // raw_rx 从创建即订阅，capacity=2 时 send 第 3 条就开始覆盖未读 → invalidator
-        // 一旦 recv 就拿 RecvError::Lagged。
-        for i in 0..16 {
+        // 预 burst 16 条 raw event **全用已知 session_id=s**——raw 路径走
+        // content_append_skipped，**不**调 invalidate_local。capacity=2 → 第 3
+        // 条起就开始挤掉未读，invalidator 一旦 recv 就拿 RecvError::Lagged → lag
+        // 分支调 apply_lag_to_project_scan_cache → invalidate_local → cache 清空
+        for _ in 0..16 {
             let _ = raw_tx.send(cdt_core::FileChangeEvent {
                 project_id: "p".into(),
-                session_id: format!("burst-{i}"),
+                session_id: "s".into(),
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
@@ -6627,20 +6655,21 @@ mod tests {
 
         let _h = spawn_unified_cache_invalidator(
             parsed_cache,
-            scan_cache,
+            scan_cache.clone(),
             raw_rx,
             file_tx,
             projects_dir,
         );
 
-        // 给 invalidator 时间消费 + 命中 Lagged（必然至少一次）+ counter 自增
+        // 给 invalidator 时间消费 + 命中 Lagged（必然至少一次）+ 清空 cache
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        // 强断言 1：lag_conservative counter 必须 +≥1，证明 lag 分支真执行过
-        let lag_after = cdt_telemetry::registry().counter_value(LAG_COUNTER);
+        // 强断言 1：本测私有 scan_cache entry 被清空 == lag 分支真执行过。
+        // raw 路径走 skipped 不动 cache，所以**只有** lag 路径能让 has_entry → false。
         assert!(
-            lag_after > lag_before,
-            "lag_conservative counter SHALL 至少 +1 证明 lag 分支真触发；before={lag_before} after={lag_after}"
+            !scan_cache.lock().unwrap().has_entry(&local_ctx),
+            "lag 分支 SHALL 调 invalidate_local 清空 cache；如果 has_entry 仍 true 说明 lag 路径没触发 \
+             （test 时序失效，需重设 capacity / burst 数）"
         );
 
         // 强断言 2：file_rx emit count 必须 < 16（lag 路径若 emit synthetic 会破坏）
@@ -6688,17 +6717,10 @@ mod tests {
             crate::ipc::project_scan_cache::ProjectScanCache::new(),
         ));
 
-        // 在调用 spawn 之前留一份 watcher Arc 让我们能直接 inject raw event
-        // 到内部 file_tx（FileWatcher::attach_remote 是注入 raw event 的官方
-        // 入口——本测用空 SFTP fake 触发不到 polling event，因此改用一个更
-        // 轻量的间接方式：通过 watcher.subscribe_files() 取得 receiver 拿到
-        // 它的 sender 不可能（broadcast 单向）；改为 spawn 后从 watcher 内
-        // file_tx clone 一份用于直接 send raw event（仅测试场景）。
-        //
-        // 实际做法：依赖 watcher.attach_remote 的 cdt-watch 公开 API 不可行
-        // （需 SftpClient），换一种更直接的行为验证：spawn 后通过 `_h.abort()`
-        // 关掉 invalidator，证明 channels.files 此后**不再**收到任何 emit
-        // —— 反证 invalidator 是唯一生产者。
+        // 留一份 watcher Arc 用于 raw event 注入（test-utils feature 暴露的
+        // `file_tx_for_test()`）。spawn_watcher_runtime 内部克隆 watcher 进
+        // 各 task，外部留这份 Arc 仅用于 inject + 防止 invalidator 还在跑时
+        // watcher 被 drop 触发 RecvError::Closed 提前退出 loop。
         let watcher_arc = watcher.clone();
         let tasks = spawn_watcher_runtime(
             watcher,
@@ -6723,29 +6745,44 @@ mod tests {
              如果出现 5 个意味着 bridge_task 被错加回来，违反 change D1 sole producer 契约"
         );
 
-        // 行为断言：unified invalidator 是 channels.files 唯一生产者（codex
-        // WARN-2 修订）。机制——spawn_watcher_runtime 走的是 `watcher.subscribe_files()`
-        // 让 invalidator 自己订阅，而非新建独立 bridge_task；abort 所有 task 后
-        // watcher 的 file_tx 仍存在（watcher 拥有），但**没有人**消费 raw event
-        // 再 emit 到 channels.files —— 即使后续 watcher.file_tx 有 raw event
-        // 也不会出现在 file_rx。
+        // **行为级 sole producer 断言**（codex round 2 WARN-1 修订）：
+        // 注入 1 条 raw `FileChangeEvent` 到 watcher 内部 file_tx，let unified
+        // invalidator pick up + emit 到 channels.files。**断言**：channels.files
+        // 只收到**恰好 1 条** enriched event。
         //
-        // 反证：如果 bridge_task 被悄悄加回来，它会独立 subscribe watcher.file_tx
-        // 并把 event 转发到 channels.files。abort tasks 后 bridge_task 也会被
-        // abort（同 vec），但 vec.len() != 4 已先触发上面 assert_eq!；本断言是
-        // 辅助：abort 后 channels.files 无 spurious emit。
+        // 反证：如果 bridge_task 被加回来，它会与 unified invalidator 一起
+        // subscribe watcher.file_tx → 同一 raw event 被转发**两次**到
+        // channels.files，断言 count == 1 会失败。
+        watcher_arc
+            .file_tx_for_test()
+            .send(cdt_core::FileChangeEvent {
+                project_id: "sole-producer-probe".into(),
+                session_id: "sole-s".into(),
+                deleted: false,
+                project_list_changed: false,
+                session_list_changed: false,
+            })
+            .expect("at least one subscriber (unified invalidator)");
+
+        // 等 invalidator pick up + emit；多轮 sleep 让 tokio scheduler 跑完
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let mut emit_count = 0;
+        while let Ok(event) = file_rx.try_recv() {
+            // 验证收到的就是注入的那条（按 project_id 过滤掉可能的环境噪声）
+            if event.project_id == "sole-producer-probe" {
+                emit_count += 1;
+            }
+        }
+        assert_eq!(
+            emit_count, 1,
+            "channels.files SHALL 仅收到 1 条 enriched event；emit_count={emit_count} \
+             表明 sole producer 契约破坏（>1 = bridge_task 复活，0 = invalidator 没 subscribe）"
+        );
+
         for task in tasks {
             task.abort();
         }
-        // 给被 abort 的 task 一点时间真退出 + 让 broadcast drain
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(
-            file_rx.try_recv().is_err(),
-            "abort 所有 watcher_runtime task 后 channels.files SHALL 无 pending event（\
-             如果有未消费的 raw event 出现说明有第二个 producer 漏在 vec 外）"
-        );
-        // 防止 watcher_arc 提前被 drop（这样 invalidator 在 abort 之前对
-        // watcher.subscribe_files() 的 RecvError::Closed 不发生）
         let _ = watcher_arc;
     }
 
