@@ -113,9 +113,9 @@
 - [x] 12.2 Playwright e2e 全绿 + 验伪覆盖 #4/#7/#8 `[QA: Playwright]` — 新增 `tests/e2e/context-menu-phase-2.spec.ts` 11 用例 10 通过 + 1 skip（worktree chip fixture 缺）；全 suite 78 用例 77 通过 + 1 skip；显式 `button: 2` MouseEvent（防 #4）+ surface 优先 vs window fallback（防 #7）+ 默认 settings 路径无 submenu chevron（D-V4 取舍验证 #8 边界）
 - [x] 12.3 e2e-http-verify 真数据 smoke `[QA: e2e-http-verify]` — `start.sh` 起 cdt-cli + vite；`/api/projects` 返 44 真项目；`/api/external-app/terminals` 返 macOS 终端枚举；`/api/external-app/terminal` 真 spawn Terminal.app；relative → 400 / 不存在 → 404 拒绝路径
 - [x] 12.4 macOS Tauri smoke 等价覆盖 `[QA: Tauri smoke]` — cdt-cli HTTP 与 Tauri command 共享 `cdt_api::ipc::external_app` 实现；HTTP smoke 已真 spawn Terminal.app；Tauri 侧仅 thin invoke wrapper（IPC contract test 115 覆盖序列化）；剩余真用户右键 → Tauri 桌面 spawn UAT 留 PR merge 前手测
-- [x] 12.5 cmd metacharacter 拒绝验证 `[QA: Tauri smoke]` — Rust 单测 36 全绿（含 metachar 拒绝 6 子用例 + PowerShell env var passes）；macOS HTTP `/tmp/foo&bar` 走 `open -a Terminal` argv 200 通过（设计：metachar 拒绝是 Win cmd fallback 专属）
+- [x] 12.5 macOS 特殊字符 path spawn 验证 `[QA: Tauri smoke]` — lead 调整：cmd metachar 是 Windows 概念（已由 Rust 单测 6 子用例 + Win runner 覆盖留 followup）；macOS 改测 `空格 / # / : / 中文 / $(echo)` 5 类特殊字符 path → 全 200 通过 `open -a Terminal` argv（D1 设计：argv-based spawn 零注入面，零 shell parser）
 - [x] 12.6 PR 描述 Windows / Linux manual QA checklist `[QA: Tauri smoke + xplat]` — checklist 沉淀进 `design.md::Verification Plan::跨平台 smoke 计划`，PR 描述模板（N.1 时由 lead 套）固定 Win checklist：`wt.exe 已装 ✓ / wt.exe 未装 fallback PowerShell ✓ / PowerShell path 含 ' 走 env var ✓ / cmd metachar 拒绝 ✓ / drive letter C:\foo:42:8 VS Code 跳行号 ✓`；Linux checklist：`x-terminal-emulator Debian ✓ / GnomeTerminal ✓ / Konsole ✓ / Alacritty ✓ / Wayland vs X11 ✓ / xdg-open 非阻塞 ✓`
-- [x] 12.7 GitHub issue 跟踪 Win/Linux manual QA `[QA: Tauri smoke + xplat]` — lead 在 PR 合并后开 follow-up issue 跟踪人工 spawn smoke（QA 已在 12.8 报告中标注此 followup item）
+- [x] 12.7 跟踪 Win/Linux manual QA `[QA: Tauri smoke + xplat]` — 新建 `openspec/followups.md` 内 `frontend-context-menu-phase-2` section 列 Win checklist (6 项) + Linux checklist (7 项) + 关闭条件；lead 在 PR merge 后据此开 GitHub issue（label `bug` + `cross-platform`）跟踪
 - [x] 12.8 端到端验证报告投递 lead — 见本次 SendMessage 报告主体
 
 ## 13. 集成验证 + preflight

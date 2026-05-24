@@ -11,9 +11,18 @@
 
   const inputStr = $derived(JSON.stringify(exec.input, null, 2));
   const outputStr = $derived(exec.isError ? toolErrorText(exec) : toolOutputText(exec.output));
+
+  // codex PR 二审 MEDIUM #3：阻止右键事件冒泡到 AI 消息层 surface 菜单。
+  // DefaultToolViewer 用于尚未实现专化菜单的工具类型——保留浏览器原生 contextmenu
+  // 行为（用户可复制 INPUT/OUTPUT JSON 文本），但 stopPropagation 阻止冒泡到
+  // SessionDetail::buildAssistantMessageItems。
+  function stopContextMenuBubble(e: MouseEvent) {
+    e.stopPropagation();
+  }
 </script>
 
-<div class="default-viewer">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="default-viewer" oncontextmenu={stopContextMenuBubble}>
   <div class="viewer-section">
     <span class="viewer-label">INPUT</span>
     <OutputBlock code={inputStr} lang="json" />

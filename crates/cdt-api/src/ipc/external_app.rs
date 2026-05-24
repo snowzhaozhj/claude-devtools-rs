@@ -108,13 +108,23 @@ pub fn list_available_terminals() -> Vec<String> {
 /// 校验 path 并 canonicalize 解析符号链接 / `..` / 存在性。
 ///
 /// 详 `design.md::D4` 决策的 path 校验 5 步策略 (1)-(2)。
+///
+/// 错误区分（codex PR 二审 MEDIUM #2 修订）：`io::ErrorKind::NotFound` 走
+/// `ApiError::not_found`；`PermissionDenied` / `IsADirectory` 等其他 kind 走
+/// `ApiError::external_app`，避免把"路径存在但权限不足"误报成 404。
 async fn validate_and_canonicalize_path(path: &str) -> Result<PathBuf, ApiError> {
     if !looks_like_absolute_path(path) {
         return Err(ApiError::validation("path must be absolute"));
     }
-    tokio::fs::canonicalize(path)
-        .await
-        .map_err(|e| ApiError::not_found(format!("path does not exist: {path} ({e})")))
+    tokio::fs::canonicalize(path).await.map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => {
+            ApiError::not_found(format!("path does not exist: {path} ({e})"))
+        }
+        std::io::ErrorKind::PermissionDenied => ApiError::external_app(format!(
+            "permission denied accessing path: {path} ({e})"
+        )),
+        _ => ApiError::external_app(format!("failed to resolve path: {path} ({e})")),
+    })
 }
 
 /// 文件路径自动取父目录（仅 `open_in_terminal` 用）。
@@ -309,16 +319,30 @@ fn format_goto_target(path: &Path, line: u32, column: Option<u32>) -> OsString {
 }
 
 /// `System` fallback：走 OS 默认打开应用，忽略 line / column。
+///
+/// codex PR 二审 CRITICAL #1 修订：Windows fallback **不**走 `cmd.exe`——
+/// `cmd /C start "" <path>` 仍受 cmd parser shell injection 风险（path 含 `&` /
+/// `^` / `(` / `)` / `%VAR%` 等会被 cmd re-tokenize 解释）。改用 PowerShell
+/// `Start-Process -LiteralPath $env:CDT_TARGET_PATH`：path 走环境变量 `CDT_TARGET_PATH`
+/// 进入 PowerShell process address space，**不**经任何 shell 字符串拼接，零注入面。
+/// 这与 Windows Terminal fallback 同模式（详 `design.md::D1` 安全实现细则）。
 fn build_system_open_command(path: &Path) -> Command {
     let mut cmd = if cfg!(target_os = "macos") {
         let mut c = Command::new("open");
         c.arg(path);
         c
     } else if cfg!(target_os = "windows") {
-        // `cmd /C start "" "<path>"` —— 第一个空字符串是窗口标题占位，避免
-        // path 被 `start` 误识别为标题。path 走 OS-argv 由 OS quoting 处理。
-        let mut c = Command::new("cmd.exe");
-        c.arg("/C").arg("start").arg("").arg(path);
+        // PowerShell `Start-Process -LiteralPath $env:CDT_TARGET_PATH`：
+        // - `-LiteralPath` 阻止通配符展开
+        // - path 通过 `CDT_TARGET_PATH` env var 传入 PowerShell process，**不**拼进
+        //   `-Command` 字符串——避免 cmd / PowerShell parser 看到 path 任何字符
+        let mut c = Command::new("powershell.exe");
+        c.args([
+            "-NoProfile",
+            "-Command",
+            "Start-Process -LiteralPath $env:CDT_TARGET_PATH",
+        ]);
+        c.env("CDT_TARGET_PATH", path);
         c
     } else {
         let mut c = Command::new("xdg-open");
@@ -760,6 +784,31 @@ mod tests {
         let cmd = build_editor_command(ExternalEditor::System, path, None, None);
         assert_eq!(program_string(&cmd), "xdg-open");
         assert_eq!(argv_strings(&cmd), vec!["/foo/bar.rs"]);
+    }
+
+    #[test]
+    fn build_editor_system_windows_uses_powershell_with_env_var() {
+        if !cfg!(target_os = "windows") {
+            return;
+        }
+        // codex PR 二审 CRITICAL #1 验证：Windows System 编辑器**不**走 cmd shell；
+        // path 必须通过 env var `CDT_TARGET_PATH` 传入 PowerShell process
+        let path = Path::new("C:\\path with spaces & special'chars\\foo.txt");
+        let cmd = build_editor_command(ExternalEditor::System, path, Some(42), Some(8));
+        assert_eq!(program_string(&cmd), "powershell.exe");
+        assert_eq!(
+            argv_strings(&cmd),
+            vec![
+                "-NoProfile",
+                "-Command",
+                "Start-Process -LiteralPath $env:CDT_TARGET_PATH"
+            ]
+        );
+        // path 在 env var 而不在 argv（零 shell injection 面）
+        assert_eq!(
+            env_var(&cmd, "CDT_TARGET_PATH").as_deref(),
+            Some("C:\\path with spaces & special'chars\\foo.txt")
+        );
     }
 
     // -------- format_goto_target --------
