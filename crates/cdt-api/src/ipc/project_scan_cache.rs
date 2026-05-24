@@ -48,6 +48,7 @@ use std::time::{Duration, Instant};
 
 use cdt_core::Project;
 use cdt_fs::{ContextId, FsKind};
+#[cfg(any(test, feature = "test-utils"))]
 use tokio::sync::broadcast;
 
 /// Local cache entry TTL。watcher 已经主动 invalidate，本 TTL 只在 watcher
@@ -367,6 +368,13 @@ pub struct ProjectScanCacheStats {
 /// `projects_dir` 用于构造作用域 `ContextId::local`；invalidator 只动
 /// 该 ctx 的 entry，SSH entry 由 `invalidate_local()` 自身按 `FsKind::Local`
 /// 隔离保留（详 design D5）。
+/// 单一 cache 失效 task（仅集成测试与 test-utils feature 复用）。
+///
+/// 生产路径已切到 `local.rs::spawn_unified_cache_invalidator`（issue #261，
+/// 一个 task 同时派发给 `ProjectScanCache` + `ParsedMessageCache`）。本函数保留
+/// 作为 `tests/project_scan_cache_invalidation.rs` 的薄 wrapper，让 600+ 行
+/// 三档判定 / lag conservative 行为契约测试零改动继续生效；prod 路径不再 spawn。
+#[cfg(any(test, feature = "test-utils"))]
 pub fn spawn_project_scan_cache_invalidator(
     cache: Arc<std::sync::Mutex<ProjectScanCache>>,
     mut rx: broadcast::Receiver<cdt_core::FileChangeEvent>,
@@ -382,61 +390,76 @@ pub fn spawn_project_scan_cache_invalidator(
         loop {
             match rx.recv().await {
                 Ok(event) => {
-                    let structural = {
-                        // sync mutex（poison 走 into_inner 兜底，参照 cdt-api
-                        // 既有模式）。counter inc 在 drop guard 之后避免
-                        // 持锁期间走 atomic 路径加大临界区。
-                        let mut cache = match cache.lock() {
-                            Ok(g) => g,
-                            Err(poisoned) => poisoned.into_inner(),
-                        };
-                        // **守护组合**（codex PR 二审两轮迭代）：
-                        // - `has_entry`（WARN 1）：ctx 无 entry 时跳过 unknown_session
-                        //   判定，避免 lag 后续普通 append 反复 bump 引发风暴
-                        // - `has_in_flight_scan`（BLOCK 修复）：cache 空但有 scan
-                        //   在途时仍走 unknown_session 判定 bump generation，让
-                        //   in-flight scan 完成回写时 `finish_scan_with_insert`
-                        //   识别 race 丢弃可能 stale 的 snapshot（不漏新 session
-                        //   first-appearance 等结构事件）
-                        let track_unknown =
-                            cache.has_entry(&local_ctx) || cache.has_in_flight_scan();
-                        let unknown_session = !event.session_id.is_empty()
-                            && track_unknown
-                            && !cache.contains_session_id(
-                                &local_ctx,
-                                &event.project_id,
-                                &event.session_id,
-                            );
-                        let structural =
-                            event.project_list_changed || event.deleted || unknown_session;
-                        if structural {
-                            cache.invalidate_local();
-                        }
-                        structural
-                    };
-                    if structural {
-                        cdt_telemetry::counter!("project_scan_cache.invalidate.structural").inc();
-                    } else {
-                        cdt_telemetry::counter!(
-                            "project_scan_cache.invalidate.content_append_skipped"
-                        )
-                        .inc();
-                    }
+                    apply_file_event_to_project_scan_cache(&cache, &local_ctx, &event);
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    {
-                        let mut cache = match cache.lock() {
-                            Ok(g) => g,
-                            Err(poisoned) => poisoned.into_inner(),
-                        };
-                        cache.invalidate_local();
-                    }
-                    cdt_telemetry::counter!("project_scan_cache.invalidate.lag_conservative").inc();
+                    apply_lag_to_project_scan_cache(&cache);
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     })
+}
+
+/// 单条 `FileChangeEvent` 应用到 `ProjectScanCache` 的逻辑：三档判定 +
+/// counter 记录。**无 fs op**（纯 cache snapshot 反查），适合做合并 invalidator
+/// 的 sync 快路径（issue #261，scan-first 顺序，避免被 parsed-cache 的
+/// `fs.stat().await` 拖慢结构判定）。
+///
+/// 行为契约：spec `ipc-data-api/spec.md` §"`ProjectScanCache` 按事件语义分级失效"。
+pub(crate) fn apply_file_event_to_project_scan_cache(
+    cache: &Arc<std::sync::Mutex<ProjectScanCache>>,
+    local_ctx: &ContextId,
+    event: &cdt_core::FileChangeEvent,
+) {
+    let structural = {
+        // sync mutex（poison 走 into_inner 兜底，参照 cdt-api 既有模式）。
+        // counter inc 在 drop guard 之后避免持锁期间走 atomic 路径加大临界区。
+        let mut cache = match cache.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        // **守护组合**（codex PR 二审两轮迭代）：
+        // - `has_entry`（WARN 1）：ctx 无 entry 时跳过 unknown_session
+        //   判定，避免 lag 后续普通 append 反复 bump 引发风暴
+        // - `has_in_flight_scan`（BLOCK 修复）：cache 空但有 scan
+        //   在途时仍走 unknown_session 判定 bump generation，让
+        //   in-flight scan 完成回写时 `finish_scan_with_insert`
+        //   识别 race 丢弃可能 stale 的 snapshot（不漏新 session
+        //   first-appearance 等结构事件）
+        let track_unknown = cache.has_entry(local_ctx) || cache.has_in_flight_scan();
+        let unknown_session = !event.session_id.is_empty()
+            && track_unknown
+            && !cache.contains_session_id(local_ctx, &event.project_id, &event.session_id);
+        let structural = event.project_list_changed || event.deleted || unknown_session;
+        if structural {
+            cache.invalidate_local();
+        }
+        structural
+    };
+    if structural {
+        cdt_telemetry::counter!("project_scan_cache.invalidate.structural").inc();
+    } else {
+        cdt_telemetry::counter!("project_scan_cache.invalidate.content_append_skipped").inc();
+    }
+}
+
+/// `broadcast::Receiver::recv` 返回 `Err(Lagged)` 时的保守清空逻辑——
+/// `ProjectScanCache` 无 path-level 被动校验机制，lag 期间错过的结构性事件
+/// 没有兜底兑现，必须保守 `invalidate_local()` + `lag_conservative` counter。
+///
+/// 与 `parsed-message 缓存按 file-change 广播主动失效` 的 lag 静默继续策略
+/// **有意不一致**——详 design D7 / spec ipc-data-api Requirement
+/// "`ProjectScanCache` 按事件语义分级失效"。
+pub(crate) fn apply_lag_to_project_scan_cache(cache: &Arc<std::sync::Mutex<ProjectScanCache>>) {
+    {
+        let mut cache = match cache.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        cache.invalidate_local();
+    }
+    cdt_telemetry::counter!("project_scan_cache.invalidate.lag_conservative").inc();
 }
 
 /// 给外部读 / 调试 cache 内部状态的 atomic 句柄包装。让 `LocalDataApi`
