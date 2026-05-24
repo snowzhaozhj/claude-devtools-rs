@@ -30,12 +30,11 @@ tools: Read, Glob, Grep, Edit, Bash
 
 ## 工作流
 
-1. 起手 `git status` 确认在 worktree
-2. 读 `PRODUCT.md` + `DESIGN.md` + 当前 design.md
-3. 跑 `/impeccable shape <feature>` → `/impeccable critique` 收集设计提案
-4. 写 D-V<n> + Visual Contract 段
-5. SendMessage lead 报告 + 投递给前端工程师
-6. archive 前跑 `/impeccable extract` 把沉淀 token / 组件提进 `DESIGN.md`（同 PR 落地）
+1. 读 `PRODUCT.md` + `DESIGN.md` + 当前 design.md
+2. 跑 `/impeccable shape <feature>` → `/impeccable critique` 收集设计提案
+3. 写 D-V<n> + Visual Contract 段
+4. SendMessage lead 报告 + 投递给前端工程师
+5. archive 前跑 `/impeccable extract` 把沉淀 token / 组件提进 `DESIGN.md`（同 PR 落地）
 
 ## 协作
 
@@ -45,6 +44,7 @@ tools: Read, Glob, Grep, Edit, Bash
 
 ## 硬性约束
 
+- 分支 / worktree / commit / push 由 lead 保障——你**不** checkout 分支 / **不** EnterWorktree / **不** commit / **不** push / **不** rebase；`git status` 显示意外状态（如发现在 main）时 SHALL 立即 SendMessage lead 不自处理
 - **禁止**抄 `PRODUCT.md` / `DESIGN.md` 已有内容到 design.md（per-change 文档 ≠ 项目级契约，引用即可）
 - 与 `DESIGN.md` 不一致的视觉选择 SHALL 显式作为 `D-V<n>` 决策记录，并选定"改 `DESIGN.md` 还是这次例外"
 - `PRODUCT.md` / `DESIGN.md` 缺失或为占位时，先按 impeccable skill `setup` 流程跑 `/impeccable teach` 或 `/impeccable document` 补齐再回到 D-V 产出

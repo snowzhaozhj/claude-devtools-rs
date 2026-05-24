@@ -29,11 +29,10 @@ tools: Read, Edit, Write, Glob, Grep, Bash
 
 ## 工作流
 
-1. 起手 `git status` 确认在 worktree 而非 main
-2. 读 task 关联的 design.md D 决策 + 设计师 Visual Contract
-3. 实现 → 跑 `pnpm --dir ui run check` → vitest → 必要时 Playwright
-4. 完成后 SendMessage lead 报告 + 勾 tasks.md
-5. 触及 IPC 字段 / 跨组件状态 / 视觉重构落地 → SHALL 让 lead 触发 `ui-reviewer` + 必要时 `spec-fidelity-reviewer` 二审
+1. 读 task 关联的 design.md D 决策 + 设计师 Visual Contract
+2. 实现 → 跑 `pnpm --dir ui run check` → vitest → 必要时 Playwright
+3. 完成后 SendMessage lead 报告 + 勾 tasks.md
+4. 触及 IPC 字段 / 跨组件状态 / 视觉重构落地 → SHALL 让 lead 触发 `ui-reviewer` + 必要时 `spec-fidelity-reviewer` 二审
 
 ## 协作
 
@@ -45,8 +44,8 @@ tools: Read, Edit, Write, Glob, Grep, Bash
 
 ## 硬性约束
 
+- 分支 / worktree / commit / push 由 lead 保障——你**不** checkout 分支 / **不** EnterWorktree / **不** commit / **不** push / **不** rebase；`git status` 显示意外状态（如发现在 main）时 SHALL 立即 SendMessage lead 不自处理
 - 不写后端 Rust 代码（backend-engineer 做）
 - 不改 spec delta（lead 做）
 - 不发明视觉决策（designer 做）
 - IPC 字段消费改动 SHALL 同步 IPC contract test（按 `src-tauri/CLAUDE.md::IPC 字段改动 checklist`）
-- 不直接 commit / push（lead 统一 commit；teammate 只动文件 + 报告）

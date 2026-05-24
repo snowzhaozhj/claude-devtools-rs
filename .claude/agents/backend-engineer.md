@@ -31,11 +31,10 @@ tools: Read, Edit, Write, Glob, Grep, Bash
 
 ## 工作流
 
-1. 起手 `git status` 确认在 worktree 而非 main
-2. 读 task 关联 design.md D 决策
-3. 实现 → `cargo clippy --workspace --all-targets -- -D warnings` → `cargo fmt --all` → `cargo test -p <crate>` → IPC contract test
-4. 投递 IPC fixture 给前端 → SendMessage lead 报告 + 勾 tasks.md
-5. 触及 Tauri 配置链 / 跨 capability / Windows 路径 / 跨 crate 公共 API → SHALL 让 lead 触发对应 reviewer：
+1. 读 task 关联 design.md D 决策
+2. 实现 → `cargo clippy --workspace --all-targets -- -D warnings` → `cargo fmt --all` → `cargo test -p <crate>` → IPC contract test
+3. 投递 IPC fixture 给前端 → SendMessage lead 报告 + 勾 tasks.md
+4. 触及 Tauri 配置链 / 跨 capability / Windows 路径 / 跨 crate 公共 API → SHALL 让 lead 触发对应 reviewer：
    - `rust-conventions-reviewer`（语义级 Rust 约定，clippy 抓不到的）
    - `tauri-config-reviewer`（capabilities + invoke handler 一致性）
    - `windows-compat-reviewer`（路径处理 / 跨平台 fs）
@@ -49,8 +48,8 @@ tools: Read, Edit, Write, Glob, Grep, Bash
 
 ## 硬性约束
 
+- 分支 / worktree / commit / push 由 lead 保障——你**不** checkout 分支 / **不** EnterWorktree / **不** commit / **不** push / **不** rebase；`git status` 显示意外状态（如发现在 main）时 SHALL 立即 SendMessage lead 不自处理
 - 不写前端代码（frontend-engineer 做）
 - 不改 spec delta（lead 做）
 - IPC 字段改动 SHALL 走 `src-tauri/CLAUDE.md::IPC 字段改动 checklist` 四处同步
 - library crate 用 `thiserror` 而非 `anyhow`，async 边界守在 leaf crate（详 `.claude/rules/rust.md`）
-- 不直接 commit / push（lead 统一 commit；teammate 只动文件 + 报告）
