@@ -15,7 +15,7 @@
 
 | category | 反模式 | 期望 |
 |---|---|---|
-| `svelte-cache-fallback` | `cache = source.field` + `cache ?? source.field` 兜底——cache 写完永远不为 null，fallback 永远不生效；source 替换后 UI 卡在旧值 | **只在真正派生新值时写 cache**（如 IPC 返回新结构）；rollback / IPC 失败路径 SHALL 不写 cache 让 fallback 消费实时 source。详 `ui/CLAUDE.md`（codex 三轮 CR 重复抓到）|
+| `svelte-cache-fallback` | `cache + ?? fallback` 兜底反模式（cache 写完永远不 null fallback 失效） | 详 **`ui/CLAUDE.md`**（codex 三轮 CR 重复抓到的真相源；本 skill 仅复用 category 命名作 cross-reference）|
 | `svelte-derived-stale-dep` | `$derived(expensive(deps))` 但 deps 之一是 ref / 非 reactive 值 | 拆开看每个 dep 是不是真 reactive；非 reactive 用 props |
 | `svelte-effect-loop` | `$effect` 写 state 又被自己读到，引发循环 | 加 untrack / 拆 effect / 重新设计数据流 |
 

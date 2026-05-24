@@ -2,14 +2,14 @@
 
 本仓 src-tauri 是 Tauri 2 + tauri-plugin-* + 自定义 IPC handlers。详细约束见 `src-tauri/CLAUDE.md`。
 
-## 1. IPC 字段契约
+## 1. IPC 字段契约（指针为主，不重抄真相源）
 
-| category | 反模式 | 期望 |
-|---|---|---|
-| `tauri-ipc-payload-large` | 单次 IPC payload > 1 MB（典型大会话整页 inline）| 走 `OMIT_XXX const + xxxOmitted: bool + get_xxx_lazy IPC` 瘦身模式（详 `src-tauri/CLAUDE.md::IPC payload 瘦身模式`） |
-| `tauri-ipc-schema-drift` | Rust 端字段名改了 / 加了 / 删了，前端 mockIPC + IPC contract test 没同步 | 改前 SHALL 跑 `cargo test -p cdt-api --test ipc_contract` 看哪些被锁；同步 mockIPC fixture |
-| `tauri-ipc-snake-leak` | Rust struct 默认 snake_case 序列化漏到前端 | `#[serde(rename_all = "camelCase")]` 全员；测试有 contract 卡 |
-| `tauri-ipc-error-stringify` | IPC handler 用 `Result<T, String>` 返回 stringified 错误 | 定义结构化 error enum `#[serde(tag = "kind", rename_all = "camelCase")]` 让前端可分支 |
+IPC payload 瘦身模式 / IPC 字段改动 checklist 真相源在 **`src-tauri/CLAUDE.md`** + **`.claude/rules/perf.md::反模式清单`**——本 skill **不**重抄。审计时取规则，category 命名作 cross-reference：
+
+- `tauri-ipc-payload-large`（单次 IPC payload > 1 MB；瘦身模式详 `src-tauri/CLAUDE.md::IPC payload 瘦身模式`）
+- `tauri-ipc-schema-drift`（Rust 端字段改了 / 前端 mockIPC + contract test 没同步；硬约束 + 解法详 `src-tauri/CLAUDE.md::IPC 字段改动 checklist`）
+- `tauri-ipc-snake-leak`（默认 snake_case 漏到前端；要求详 `crates/CLAUDE.md` serde camelCase）
+- `tauri-ipc-error-stringify`（`Result<T, String>` 吞掉错误分层；解法详 `crates/CLAUDE.md` 错误类型）
 
 `tauri-ipc-schema-drift` / `tauri-ipc-payload-large` 命中即 boundary guard 升级 → openspec。
 

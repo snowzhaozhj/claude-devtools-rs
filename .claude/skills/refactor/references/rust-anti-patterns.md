@@ -24,16 +24,16 @@
 
 `rust-overpub` 命中时**走 boundary guard**：缩 `pub` → `pub(crate)` 是 BREAKING change（即使下游没真用），SHALL 走 openspec 评估。
 
-## 3. async / runtime
+## 3. async / runtime（指针，**不**重复 perf.md 内容）
 
-| category | 反模式 | 期望 |
-|---|---|---|
-| `rust-async-blocking` | `async fn` 内 `std::fs::*` / `Command::output().wait()` / `std::thread::sleep` | 换 `tokio::fs` / `tokio::process` / `tokio::time::sleep` |
-| `rust-spawn-no-cancel` | `tokio::spawn` 无 cancellation handle，task 泄漏 | `JoinHandle` + 显式 abort 或 `CancellationToken`（详 `crates/CLAUDE.md::后台任务 per-key cancel`）|
-| `rust-channel-capacity` | `mpsc::channel(很大)` / `broadcast::channel(>1024)` 无背压 | 默认 128 起步；评估 subscriber 数 + 退订路径 |
-| `rust-runtime-collision` | 同进程并存多个 tokio Runtime（手 `Runtime::new()` + Tauri 自带） | 单 Runtime + `tauri::async_runtime::set` |
+完整 async / runtime / 调度 / 监控反模式清单见 **`.claude/rules/perf.md::反模式清单`**——本 skill **不**重抄。审计时直接从 perf.md 取规则，对应 finding 的 `category` 用：
 
-性能向反模式（hot loop spawn / 未限流 / clone 大对象）走 `Skill(perf)`；本 catalog 只列结构性。
+- `rust-async-blocking`（`std::fs::*` 在 async 内 / 阻塞 tokio worker）
+- `rust-spawn-no-cancel`（`tokio::spawn` 无 cancellation handle / task 泄漏；详 `crates/CLAUDE.md::后台任务 per-key cancel`）
+- `rust-channel-capacity`（`mpsc` / `broadcast` 容量不合理）
+- `rust-runtime-collision`（多 Runtime 并存）
+
+性能向反模式（hot loop spawn / 未限流 / clone 大对象）走 `Skill(perf)`；本 catalog 仅复用 category 命名作为 finding 的 cross-reference key。
 
 ## 4. 类型 / serde
 
