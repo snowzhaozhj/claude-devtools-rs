@@ -25,6 +25,7 @@ use std::time::{Duration, SystemTime};
 
 use cdt_core::FileChangeEvent;
 use cdt_discover::EntryKind;
+use cdt_fs::is_transport_dead_reason;
 use tokio::sync::{Notify, broadcast};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
@@ -233,11 +234,13 @@ impl RemotePollingWatcher {
 /// counter（高阈值 6 ≈ 18s）覆盖"sshd hang 但 TCP 未断"场景。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PollFailureKind {
-    /// 永久 transport 错误：错误消息含 `session closed` / `eof` / `broken pipe` /
-    /// `epipe` / `connection reset` / `econnreset` 任一关键字。不区分 `Other` 与
-    /// `Transient` 来源——`provider::is_transient_io_reason` 把 `broken pipe` /
-    /// `connection reset` / `epipe` 都归 `Transient`，`with_retry` 3 次后仍是
-    /// transport-dead 即视同 channel 真死。
+    /// 永久 transport 错误：错误消息（小写化后）命中
+    /// [`cdt_fs::is_transport_dead_reason`] 任一关键字（`session closed` /
+    /// `eof` / `broken pipe` / `epipe` / `connection reset` / `econnreset`，
+    /// 单源在 `cdt-fs::error`）。不区分 `Other` 与 `Transient` 来源——
+    /// `provider::is_transient_io_reason` 把 `broken pipe` / `connection reset` /
+    /// `epipe` 都归 `Transient`，`with_retry` 3 次后仍是 transport-dead 即视同
+    /// channel 真死。
     Permanent,
     /// timeout 类瞬时错误：错误消息含 `timeout` / `etimedout` / `timed out` /
     /// `eagain` / `would block` 任一关键字。来自 `provider::is_transient_io_reason`
@@ -279,13 +282,7 @@ enum PollOutcome {
 ///    → [`PollFailureKind::OtherTransient`]
 fn classify_failure(err: &SftpClientError) -> PollFailureKind {
     let s = err.to_string().to_ascii_lowercase();
-    if s.contains("session closed")
-        || s.contains("eof")
-        || s.contains("broken pipe")
-        || s.contains("epipe")
-        || s.contains("connection reset")
-        || s.contains("econnreset")
-    {
+    if is_transport_dead_reason(&s) {
         return PollFailureKind::Permanent;
     }
     if s.contains("timeout")

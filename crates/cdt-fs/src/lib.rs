@@ -29,7 +29,7 @@ mod provider;
 pub use backend_policy::{BackendPolicy, InitialLoadPolicy, PrefetchPolicy, StaleCheckStrategy};
 pub use context_id::{ContextId, HostSignature, SshConfigDigestInput};
 pub use dir_entry::{DirEntry, EntryKind};
-pub use error::FsError;
+pub use error::{FsError, is_transport_dead_reason};
 pub use instrumentation::{FsOpCounter, FsOpCounts, InstrumentedFs, with_fs_counter};
 pub use kind::FsKind;
 pub use local::{LocalFileSystemProvider, local_handle};
