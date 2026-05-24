@@ -220,6 +220,34 @@ describe('BrowserTransport', () => {
     unsubscribe()
   })
 
+  test('SSE ssh_status_change normalize 为 ssh_status payload (context_id → contextId, state → status)', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('ssh_status', handler)
+    instances[0].emit({
+      type: 'ssh_status_change',
+      context_id: 'ssh-host-a',
+      state: 'connected',
+    })
+
+    expect(handler).toHaveBeenCalledWith({
+      event: 'ssh_status',
+      id: 0,
+      payload: {
+        contextId: 'ssh-host-a',
+        status: 'connected',
+      },
+    })
+    unsubscribe()
+  })
+
   test('SSE session_metadata_update 缺 group_id 时 groupId=undefined（向后兼容旧后端 / 单 worktree fallback）', async () => {
     const instances: FakeEventSource[] = []
     vi.stubGlobal('EventSource', class extends FakeEventSource {

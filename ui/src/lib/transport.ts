@@ -505,6 +505,26 @@ function normalizePushPayload(type: string | undefined, payload: Record<string, 
         activeContextId: payload.active_context_id ?? null,
         kind: payload.kind,
       };
+    case "ssh_status_change":
+      // 与 `session_metadata_update` 同类的 HTTP/SSE wire normalize：后端
+      // `PushEvent::SshStatusChange { context_id, state }`（`crates/cdt-api/
+      // src/ipc/events.rs:34`）走 enum 默认 `rename_all = "snake_case"`，wire
+      // 字段是 snake_case。Tauri runtime 通过 `listen("ssh_status", ...)`
+      // 拿到的是真 `cdt_ssh::SshStatusChange` struct（`#[serde(rename_all =
+      // "camelCase")]`）camelCase payload，前端消费侧（如
+      // `ui/src/lib/connection.svelte.ts::change.contextId / change.status`）
+      // 读 camelCase。HTTP 路径 SHALL 在此 map，否则浏览器 `?http=1` 下
+      // SSH 连接状态指示符永久拿 undefined。
+      //
+      // 备注：PushEvent::SshStatusChange 当前只 emit `{context_id, state}` 两
+      // 字段（与 cdt_ssh::SshStatusChange 的 `{context_id, status, auth_chain,
+      // error}` 全字段不对齐——HTTP 路径缺 auth_chain / error）。本次 normalize
+      // 仅修字段名失配（最小回归暴露面），HTTP 路径补全 auth_chain / error
+      // 走另一个 change（不属本 PR scope）。
+      return {
+        contextId: payload.context_id,
+        status: payload.state,
+      };
     case "sse_lagged":
       // 后端新形态 `PushEvent::SseLagged { source, missed }` 透传（change
       // `enrich-file-change-with-session-list-changed::D6`）。旧 sentinel

@@ -141,6 +141,13 @@ emit MUST 在 step 4 完成（即 sync invalidate 之后，async parsed invalida
 - **THEN** 前端 `transport.ts::normalizePushPayload` 输出 `groupId: undefined`
 - **AND** Sidebar handler `eventGroupId = payload.groupId ?? payload.projectId` 退化到 fallback `projectId` 路径——单 worktree group 下 `projectId == groupId` 仍能匹配；多 worktree group 下保持 main 既有行为不报错
 
+#### Scenario: HTTP normalize ssh_status_change 字段名 snake_case → camelCase
+
+- **WHEN** 后端 `PushEvent::SshStatusChange { context_id: "ssh-host-a", state: "connected" }` 通过 SSE 序列化
+- **THEN** HTTP/SSE wire SHALL 是 `{"type":"ssh_status_change","context_id":"ssh-host-a","state":"connected"}`（`PushEvent` enum 默认 `rename_all = "snake_case"`，字段保留 snake_case）
+- **AND** 前端 `transport.ts::normalizePushPayload` 在 `case "ssh_status_change"` 分支 SHALL 映射 `payload.context_id` → `contextId`、`payload.state` → `status`，输出 `{ contextId: "ssh-host-a", status: "connected" }`
+- **AND** 前端 SSH 连接状态消费侧（`ui/src/lib/connection.svelte.ts::change.contextId / change.status` 等）SHALL 与 Tauri runtime 路径（`cdt_ssh::SshStatusChange` struct 已用 `rename_all = "camelCase"` 输出 camelCase 字段）拿到形态一致的 payload，浏览器 `?http=1` 入口下 SSH 状态指示符 SHALL 与桌面 Tauri runtime 行为对齐
+
 #### Scenario: PushEvent::SseLagged 序列化形态与 sentinel 兼容
 
 - **WHEN** `PushEvent::SseLagged { source: "file-change".into(), missed: 7 }` 通过 serde_json 序列化
