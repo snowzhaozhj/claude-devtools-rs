@@ -174,13 +174,11 @@
 
   /**
    * 启动 bottom pin 兜底：处理 smooth scroll 锁定旧 scrollHeight 为目标 + 期间
-   * lazy markdown reveal / content-visibility:auto 真布局让 scrollHeight 增长
-   * 导致的"按钮重显 → 用户再点"循环。
+   * lazy markdown reveal 让 scrollHeight 增长导致的"按钮重显 → 用户再点"循环。
    *
-   * 视觉过渡：用二次 smooth `scrollTo` 顺滑覆盖 reveal 后的剩余距离（典型几百~
-   * 几千 px：每 chunk 真高 - 220 estimate ≈ 100~200 px × 视口扫过的 chunks 数）；
-   * 配合 `skipInitialJump: true` 让 MO 仅监听后续 mutation，避免 startBottomPin
-   * 首行 hard set 取消 smooth animation 形成视觉瞬跳（codex round-2 #4 命中点）。
+   * 视觉过渡：用二次 smooth `scrollTo` 顺滑覆盖 reveal 后的剩余距离；配合
+   * `skipInitialJump: true` 让 MO 仅监听后续 mutation，避免 startBottomPin
+   * 首行 hard set 取消 smooth animation 形成视觉瞬跳。
    * 二次 scroll 期间用 `isProgrammaticScroll=true` 抑制按钮重显，但**不**再设
    * `pendingBottomPinAfterJump` 防止 onScrollEnd 递归启动新一轮 pin。
    *
@@ -268,10 +266,10 @@
     };
     const onScrollEnd = () => {
       stopProgrammaticScroll();
-      // smooth 自然完成 → 启动 pin 兜底处理 lazy markdown reveal +
-      // content-visibility:auto 在 animation 期间让 scrollHeight 增长导致落点偏离
-      // 实际新 bottom 的"点多次"bug。pendingBottomPinAfterJump 独立于 isProgrammaticScroll，
-      // bottom guard (updateIsFar :≤16) 提前清 isProgrammaticScroll 不影响这里
+      // smooth 自然完成 → 启动 pin 兜底处理 lazy markdown reveal 期间让
+      // scrollHeight 增长导致落点偏离实际新 bottom 的"点多次"bug。
+      // pendingBottomPinAfterJump 独立于 isProgrammaticScroll，bottom guard
+      // (updateIsFar :≤16) 提前清 isProgrammaticScroll 不影响这里
       triggerBottomPinAfterJump();
     };
     const onUserInput = () => {
@@ -934,7 +932,7 @@
         {@const taskNotifications = parseTaskNotifications(chunk.content)}
         {#if text || images.length > 0 || taskNotifications.length > 0}
           <div
-            class="msg-row msg-row-user msg-row-contained"
+            class="msg-row msg-row-user"
             class:msg-row-anchor-hit={highlightedChunkId === chunk.chunkId}
             data-chunk-id={chunk.chunkId}
             use:contextMenu={() => buildUserMessageItems(chunk, buildMenuCtx())}
@@ -1212,17 +1210,8 @@
               </div>
             {/if}
 
-            <!-- Last output (always visible).
-                 ongoing=true 时 `.ai-body` 退出 `.msg-row-contained`——后者
-                 用 `content-visibility: auto` 把离屏子树 layout/paint 跳过；
-                 OngoingBanner 的 dot ping CSS animation 离屏被 throttle
-                 后会"半天才转一下"（#121 spinner 同源问题），即使 banner
-                 滚回视口仍要等下一次 IO commit 才补帧。同 #108 给 mermaid-block
-                 加的 :has 例外同源——animation/异步高度变化场景 SHALL 退出 contain。 -->
-            <div
-              class="ai-body"
-              class:msg-row-contained={!(i === lastAiIndex && detail.isOngoing)}
-            >
+            <!-- Last output (always visible). -->
+            <div class="ai-body">
               {#if i === lastAiIndex && detail.isOngoing}
                 <!-- 对齐原版 LastOutputDisplay：最后 AI 组在 ongoing 时
                      banner 占 lastOutput 位置，结束后换回真正的内容 -->
@@ -1250,7 +1239,7 @@
         {@const sysText = cleanDisplayText(chunk.contentText)}
         {#if sysText}
           <div
-            class="msg-row msg-row-system-left msg-row-contained"
+            class="msg-row msg-row-system-left"
             class:msg-row-anchor-hit={highlightedChunkId === chunk.chunkId}
             data-chunk-id={chunk.chunkId}
           >
@@ -1273,7 +1262,7 @@
         {@const isCompactExpanded = expandedCompacts.has(chunk.chunkId)}
         {@const td = chunk.tokenDelta}
         <div
-          class="msg-row msg-row-compact msg-row-contained"
+          class="msg-row msg-row-compact"
           class:msg-row-anchor-hit={highlightedChunkId === chunk.chunkId}
           data-chunk-id={chunk.chunkId}
         >
@@ -1637,17 +1626,6 @@
   .msg-row {
     display: flex;
     min-width: 0;
-  }
-
-  .msg-row-contained {
-    content-visibility: auto;
-    contain: layout style;
-    contain-intrinsic-size: auto 220px;
-  }
-
-  :global(.msg-row-contained:has(.mermaid-block)) {
-    content-visibility: visible;
-    contain: none;
   }
 
   :global(.lazy-md[data-rendered="1"]) {

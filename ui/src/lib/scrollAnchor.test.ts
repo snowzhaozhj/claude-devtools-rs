@@ -158,7 +158,7 @@ describe('restoreScrollAnchor', () => {
     cleanup?.()  // 清理 MO + timer
   })
 
-  test('anchor 命中 → scrollIntoView 被调 + scrollTop 减去 offset；返回 null', () => {
+  test('anchor 命中 + first apply 对齐 → scrollIntoView 被调 + scrollTop 减去 offset；返回 null', () => {
     const el = makeContainer({
       scrollTop: 0,
       scrollHeight: 10000,
@@ -168,10 +168,12 @@ describe('restoreScrollAnchor', () => {
     })
     const target = el.querySelector('[data-chunk-id="chunk-mid"]') as HTMLElement
     const intoViewSpy = vi.spyOn(target, 'scrollIntoView')
-    // 模拟 scrollIntoView 把 anchor 顶贴齐视口顶（实际 jsdom 不动 scrollTop）
+    // 模拟 scrollIntoView 把 anchor 顶贴齐视口顶 + 同步更新 chunk rect 反映 apply 后位置
     intoViewSpy.mockImplementation(function (this: HTMLElement) {
-      // 把 container.scrollTop 设为某个值模拟"贴齐"，方便看 -= offset 的算术
       ;(el as HTMLElement).scrollTop = 1000
+      // apply 后 chunk rect.top 贴齐到 anchorOffsetPx=30 处（视口顶下 30 px）
+      this.getBoundingClientRect = () =>
+        ({ top: 30, bottom: 230, left: 0, right: 0, width: 0, height: 200, x: 0, y: 30, toJSON: () => ({}) } as DOMRect)
     })
     const state: ScrollAnchorState = {
       atBottom: false,
@@ -182,6 +184,35 @@ describe('restoreScrollAnchor', () => {
     expect(cleanup).toBeNull()
     expect(intoViewSpy).toHaveBeenCalledWith({ block: 'start' })
     expect(el.scrollTop).toBe(1000 - 30)  // -= offset 还原原始视口偏移
+  })
+
+  test('anchor 命中 + first apply 因 scrollHeight 不足被 clamp（未对齐）→ 返回 MO 状态机 cleanup', () => {
+    // 模拟 spec `tab-management::滚动位置恢复 - 切回时 lazy chunks 尚未 hydrate`：
+    // conversation scrollHeight 短，scrollIntoView 后 anchor 实际位置仍偏离 saved offset
+    // → 应启动 MutationObserver 等子树后续 mutation 后 re-apply，cleanup 非 null
+    const el = makeContainer({
+      scrollTop: 0,
+      scrollHeight: 1500,  // 远小于 anchor 期望 scrollTop
+      clientHeight: 800,
+      rectTop: 0,
+      chunks: [{ id: 'chunk-far', rectTop: 700, rectBottom: 900 }],
+    })
+    const target = el.querySelector('[data-chunk-id="chunk-far"]') as HTMLElement
+    vi.spyOn(target, 'scrollIntoView').mockImplementation(function (this: HTMLElement) {
+      // 模拟 clamp：scrollTop 被设为 max（700 = 1500 - 800），anchor rect 没贴齐 saved offset
+      ;(el as HTMLElement).scrollTop = 700
+      // chunk rect 保持 mock 初值（未对齐 saved offset=30）
+    })
+    const state: ScrollAnchorState = {
+      atBottom: false,
+      anchorChunkId: 'chunk-far',
+      anchorOffsetPx: 30,
+    }
+    const cleanup = restoreScrollAnchor(el, state)
+    expect(cleanup).toBeInstanceOf(Function)
+    // first apply 仍执行：scrollTop 写入 700 - 30 = 670
+    expect(el.scrollTop).toBe(700 - 30)
+    cleanup?.()  // 清理 MO + timer
   })
 
   test('anchor 失效（DOM 找不到） → console.warn + scrollTop 不变 + 返回 null', () => {

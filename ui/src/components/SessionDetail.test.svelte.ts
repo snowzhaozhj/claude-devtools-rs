@@ -112,10 +112,16 @@ describe('SessionDetail smoke', () => {
     expect(container.querySelector('.conversation')).not.toBeNull()
   })
 
-  test('IPC 返回的 chunks 渲染 containment 边界且不包住 AI header', async () => {
+  // 防回归：archive change `2026-05-16-session-detail-scroll-cpu-opt` 的 D1
+  // 用 `content-visibility: auto` + `contain-intrinsic-size` 做估算占位，
+  // 引起长会话滚动时 scrollHeight 反复跳变（spec 反模式）。本 test 锁定：
+  // (a) DOM 中不存在 `.msg-row-contained` 类，(b) chunk 容器 computed
+  // `content-visibility` 不是 `auto`，(c) chunk 容器 computed `contain` 不含
+  // `layout`/`paint`/`style` 等等价裁剪边界。任一新 PR 重新引入即 fail。
+  test('对话流容器不应用 content-visibility 估算占位（防回归 PR #108 D1）', async () => {
     const { container } = render(SessionDetail, {
       props: {
-        tabId: 'tab-smoke-2',
+        tabId: 'tab-no-content-visibility',
         projectId: PROJECT_ID,
         sessionId: SESSION_ID,
       },
@@ -123,40 +129,21 @@ describe('SessionDetail smoke', () => {
     await waitFor(() => {
       const rows = container.querySelectorAll('.msg-row')
       expect(rows.length).toBeGreaterThan(0)
-      expect(container.querySelector('.msg-row-user.msg-row-contained')).not.toBeNull()
-      expect(container.querySelector('.msg-row-ai.msg-row-contained')).toBeNull()
-      expect(container.querySelector('.msg-row-ai .ai-body.msg-row-contained')).not.toBeNull()
     })
-  })
-
-
-  test('恢复展开状态时工具列表容器不使用 containment', async () => {
-    const tabId = 'tab-smoke-expanded-tools'
-    saveTabUIState(tabId, {
-      expandedChunks: new Set(['ai:a1:0']),
-      expandedItems: new Set(['ai:a1:0-tool-tu1']),
-      searchVisible: false,
-      contextPanelVisible: false,
-      atBottom: false,
-      anchorChunkId: null,
-      anchorOffsetPx: 0,
-      pendingScrollChunkId: null,
-    })
-
-    const { container } = render(SessionDetail, {
-      props: {
-        tabId,
-        projectId: PROJECT_ID,
-        sessionId: SESSION_ID,
-      },
-    })
-
-    await waitFor(() => {
-      const toolsSection = container.querySelector('.ai-tools-section')
-      expect(toolsSection).not.toBeNull()
-      expect(toolsSection?.classList.contains('msg-row-contained')).toBe(false)
-      expect(toolsSection?.querySelector('.base-item-content')).not.toBeNull()
-    })
+    // (a) class 名应已被彻底删除
+    expect(container.querySelector('.msg-row-contained')).toBeNull()
+    // (b) 每个已知 chunk 容器的 computed content-visibility 不应为 auto
+    // (c) 每个已知 chunk 容器的 computed contain 不应含 layout/paint/style 等隔离
+    // 覆盖：顶层 .msg-row（User/AI/System/Compact）+ AI 内部 .ai-body +
+    // AI 工具区 .ai-tools-section——防 future 在子容器上重新引入同类机制
+    const containers = container.querySelectorAll('.msg-row, .ai-body, .ai-tools-section')
+    for (const el of Array.from(containers)) {
+      const cs = getComputedStyle(el as HTMLElement)
+      expect(cs.contentVisibility).not.toBe('auto')
+      // contain 字符串可能是 'none' / '' / 'layout' / 'layout style' 等
+      // 任意包含布局级 containment 都视为反模式回归
+      expect(cs.contain).not.toMatch(/\b(layout|paint|style|strict|content)\b/)
+    }
   })
 
   test('compact 后重复 AI response uuid 不会让 keyed each 崩溃', async () => {
@@ -178,25 +165,6 @@ describe('SessionDetail smoke', () => {
     await waitFor(() => {
       expect(container.querySelectorAll('.msg-row').length).toBe(3)
     })
-  })
-
-  test('含 mermaid 的 contained 区域通过 CSS 关闭 content-visibility', async () => {
-    const { container } = render(SessionDetail, {
-      props: {
-        tabId: 'tab-smoke-3',
-        projectId: PROJECT_ID,
-        sessionId: SESSION_ID,
-      },
-    })
-    await waitFor(() => {
-      expect(container.querySelector('.msg-row-contained')).not.toBeNull()
-    })
-
-    const contained = container.querySelector('.msg-row-contained') as HTMLElement
-    contained.innerHTML = '<div class="mermaid-block"></div>'
-    const computed = getComputedStyle(contained)
-    expect(computed.contentVisibility).toBe('visible')
-    expect(computed.contain).toBe('none')
   })
 
   test('未知 sessionId 不崩，进入 error 分支或保留骨架', async () => {

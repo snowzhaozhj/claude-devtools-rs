@@ -89,6 +89,9 @@ claude-devtools-rs 是**桌面辅助工具**，不是用户主线（IDE / 浏览
 - IPC 整页 base64 inline — 走 `asset://` URL 或 lazy IPC
 - `broadcast::channel(N)` capacity 过大 — 默认 128 起步，新加 subscriber 时 grep 退订路径防泄漏
 
+**前端渲染类**：
+- 用 `content-visibility: auto` + `contain-intrinsic-size` 数值估算（如 `auto 220px`）作"离屏占位高度替代真实高度"的滚动 CPU 优化 — 估算与真实高度差异在滚动经过时反复改变 `scrollHeight`，触发用户可感知抖动；行为契约由 `openspec/specs/session-display/spec.md::按 Chunk 类型渲染对话流::长会话滚动高度保持稳定` Scenario 兜底。新滚动优化优先走可测量高度缓存或分帧渲染路径，避开估算占位
+
 **runtime / 调度 / 监控类**：
 - `tokio::runtime::Runtime::new()` 默认配置 + Tauri 自带 multi-thread runtime 同进程并存 — 用 `Builder::new_multi_thread().worker_threads(N).max_blocking_threads(M).thread_keep_alive(60s)` + `tauri::async_runtime::set(rt.handle().clone())` 单 runtime
 - `tracing_subscriber` layer 未 `.with_filter(LevelFilter::WARN)` 包裹 — 每个 INFO/DEBUG event 调 `on_event` 即使早 return 仍有函数调用开销；layer-level filter 让分发层 bypass
