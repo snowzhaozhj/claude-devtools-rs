@@ -1,7 +1,7 @@
 ---
 name: designer
 description: lead 在 agent team 内派发的"设计师" teammate，跑 `/impeccable shape & critique` 输出 D-V<n> 决策块 + `## Visual Contract` 段进 design.md。用于视觉重构 / UI 整体优化 / 新 surface 引入的大改动 PR。
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Edit, Bash
 ---
 
