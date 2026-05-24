@@ -2,7 +2,7 @@
 
 claude-devtools-rs 的二审与协同推理优先用 **codex（GPT-5.4 异构推理）**，不是再开一个 Claude subagent——同一推理引擎抓不到自己的盲点。调用方式：`Agent({ subagent_type: "codex:codex-rescue", prompt: ... })`。**不要**新建 `/codex-*` skill 重新封装。
 
-prompt 模板见 `.claude/templates/codex-prompt-pr-review.md` 与 `codex-prompt-design-review.md`。
+prompt 模板见 `.claude/templates/codex-prompt-pr-review.md`（PR 二审）/ `codex-prompt-design-review.md`（design 决策）/ `codex-prompt-progressive-diagnosis.md`（渐进多轮诊断）。
 
 ## 1. PR commit 之后：二审（默认调）
 
