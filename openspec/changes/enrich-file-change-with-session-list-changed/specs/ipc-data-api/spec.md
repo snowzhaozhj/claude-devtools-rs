@@ -74,6 +74,8 @@ emit MUST 在 step 4 完成（即 sync invalidate 之后，async parsed invalida
 - **`PushEvent::SseLagged` variant**（`crates/cdt-api/src/ipc/events.rs`）：携带 `source: String` + `missed: u64`，序列化为 `{"type":"sse_lagged","source":"...","missed":...}`（variant tag 由 enum 既有 `rename_all = "snake_case"` 自动转换；字段 `source` / `missed` 单词无下划线，snake_case 形态即字面，不需要额外 rename attribute），与 `crates/cdt-api/src/http/sse.rs:23` 既有的 `SSE_LAGGED_SENTINEL = r#"{"type":"sse_lagged"}"#` 形态向后兼容（消费者解析 `type === "sse_lagged"` 走同一 handler；旧 sentinel 缺 source/missed 字段 → 前端读 undefined 不报错）
 - 前端 `Sidebar` 收到 `sse-lagged` SHALL 按 `sidebar-navigation` spec `Sidebar SHALL 订阅 sse-recovered / sse-lagged 触发 silent refresh` Requirement 走保守 silent refresh，覆盖 lag 期间错过的 structural 信号
 
+**`session_metadata_update` SSE 透传 group_id 契约**：HTTP/SSE wire `session_metadata_update` payload SHALL 含 `group_id: String` 字段（与既有 `project_id` / `session_id` 同 snake_case 风格），由 Rust struct `SessionMetadataUpdate.group_id` 经 serde 序列化输出。前端 `transport.ts::normalizePushPayload` 在 `case "session_metadata_update"` 分支 SHALL 把 `payload.group_id` 映射到归一化后的 `groupId`，与 IPC Tauri runtime 路径（serde camelCase 直接得 `groupId`）形态对齐。Sidebar `metadataUnlisten` handler 用 `eventGroupId = payload.groupId ?? payload.projectId` 过滤 stale event：缺失 `groupId` 字段会让 fallback 落到 worktree-level `projectId`，多 worktree group（如 `claude-devtools-rs` 27 个 worktree）下 `projectId != groupId`（`.git` 后缀路径），整页 metadata patch 被全量丢弃，sidebar 永久卡 `metadata-pending` skeleton。
+
 #### Scenario: New notification while renderer is subscribed
 
 - **WHEN** renderer 已订阅通知事件，期间产出一条新通知
@@ -124,6 +126,20 @@ emit MUST 在 step 4 完成（即 sync invalidate 之后，async parsed invalida
 - **AND** SHALL NOT 静默吞掉该 lag 信号
 - **AND** SSE 客户端 SHALL 通过 `convert_broadcast_result` 把该 PushEvent 序列化为 `{"type":"sse_lagged","source":"file-change","missed":n}` 与既有 `SSE_LAGGED_SENTINEL` 形态对齐
 - **AND** 前端浏览器 transport 解析 `type === "sse_lagged"` 走 `sse-lagged` handler
+
+#### Scenario: HTTP normalize session_metadata_update group_id 字段
+
+- **WHEN** 用户通过 `?http=1` 浏览器调试入口连接到 cdt-cli HTTP server
+- **AND** 后端 `LocalDataApi::list_group_sessions` 后台扫描完成，通过 SSE broadcast `SessionMetadataUpdate { group_id: "/Users/u/proj/.git", project_id: "-Users-u-proj", session_id: "s1", title: "Hello", message_count: 1, is_ongoing: false, git_branch: "main" }`
+- **THEN** HTTP/SSE wire 序列化后 SHALL 含 `"group_id": "/Users/u/proj/.git"` 字段
+- **AND** 前端 `transport.ts::normalizePushPayload` 在 `case "session_metadata_update"` 分支 SHALL 映射 `payload.group_id` 到 `groupId` 字段，输出 `{ groupId: "/Users/u/proj/.git", projectId: "-Users-u-proj", sessionId: "s1", title: "Hello", messageCount: 1, isOngoing: false, gitBranch: "main" }`
+- **AND** Sidebar `metadataUnlisten` handler `eventGroupId = payload.groupId ?? payload.projectId` 拿到真 `groupId` 而非 worktree-level `projectId` fallback，多 worktree group（如 `claude-devtools-rs` 27 个 worktree、`group.id = "/Users/.../.git"`）下与 `selectedGroupId` 匹配，metadata patch 不会被 stale-guard 丢弃
+
+#### Scenario: HTTP normalize session_metadata_update 缺 group_id 向后兼容
+
+- **WHEN** 旧后端（未升级）发出的 `session_metadata_update` SSE payload 缺 `group_id` 字段
+- **THEN** 前端 `transport.ts::normalizePushPayload` 输出 `groupId: undefined`
+- **AND** Sidebar handler `eventGroupId = payload.groupId ?? payload.projectId` 退化到 fallback `projectId` 路径——单 worktree group 下 `projectId == groupId` 仍能匹配；多 worktree group 下保持 main 既有行为不报错
 
 #### Scenario: PushEvent::SseLagged 序列化形态与 sentinel 兼容
 

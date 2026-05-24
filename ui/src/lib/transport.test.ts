@@ -201,12 +201,14 @@ describe('BrowserTransport', () => {
       message_count: 12,
       is_ongoing: true,
       git_branch: 'main',
+      group_id: '/Users/me/proj/.git',
     })
 
     expect(handler).toHaveBeenCalledWith({
       event: 'session-metadata-update',
       id: 0,
       payload: {
+        groupId: '/Users/me/proj/.git',
         projectId: 'p1',
         sessionId: 's1',
         title: 'Hello',
@@ -215,6 +217,40 @@ describe('BrowserTransport', () => {
         gitBranch: 'main',
       },
     })
+    unsubscribe()
+  })
+
+  test('SSE session_metadata_update 缺 group_id 时 groupId=undefined（向后兼容旧后端 / 单 worktree fallback）', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('session-metadata-update', handler)
+    instances[0].emit({
+      type: 'session_metadata_update',
+      project_id: 'p1',
+      session_id: 's1',
+      title: 'Hello',
+      message_count: 1,
+      is_ongoing: false,
+      git_branch: null,
+    })
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'session-metadata-update',
+        payload: expect.objectContaining({
+          groupId: undefined,
+          projectId: 'p1',
+          sessionId: 's1',
+        }),
+      }),
+    )
     unsubscribe()
   })
 

@@ -477,7 +477,16 @@ function normalizePushPayload(type: string | undefined, payload: Record<string, 
     case "new_notification":
       return payload.notification;
     case "session_metadata_update":
+      // `group_id` 是 sidebar handler 按 `selectedGroupId` 过滤 stale event 的
+      // 主匹配键（`Sidebar.svelte::onMount metadataUnlisten` 内 `eventGroupId =
+      // payload.groupId ?? payload.projectId`）。Tauri runtime 走 serde camelCase
+      // 直接拿 `groupId`，HTTP/SSE wire 是 snake_case 必须在此 map——否则多
+      // worktree group 下 `payload.projectId` 是 worktree-level id，永不等于
+      // `.git` 后缀的 group.id，所有 metadata patch 被全量丢弃，sidebar 永久
+      // 卡 skeleton（本 change 把 file_change 三档收缩后暴露的既有 bug：原先
+      // file_change 风暴会顺带触发 sessions refetch 间接掩盖此失配）。
       return {
+        groupId: payload.group_id,
         projectId: payload.project_id,
         sessionId: payload.session_id,
         title: payload.title,
