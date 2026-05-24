@@ -35,7 +35,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
+- [x] N.1 push 分支 + 开 PR
+- [x] N.2 wait-ci 全绿
+- [x] N.3 codex 二审通过（PR 阶段二审 11 findings，9 仅记录、2 建议但不阻塞；F1 扩大防回归 test 覆盖到 `.ai-body` / `.ai-tools-section` 已采纳；F9 perf.md archive 后引用自动生效跳过）
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）

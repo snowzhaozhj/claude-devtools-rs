@@ -132,10 +132,12 @@ describe('SessionDetail smoke', () => {
     })
     // (a) class 名应已被彻底删除
     expect(container.querySelector('.msg-row-contained')).toBeNull()
-    // (b) 每个 .msg-row 容器的 computed content-visibility 不应为 auto
-    // (c) 每个 .msg-row 容器的 computed contain 不应含 layout/paint/style 等隔离
-    const rows = container.querySelectorAll('.msg-row')
-    for (const el of Array.from(rows)) {
+    // (b) 每个已知 chunk 容器的 computed content-visibility 不应为 auto
+    // (c) 每个已知 chunk 容器的 computed contain 不应含 layout/paint/style 等隔离
+    // 覆盖：顶层 .msg-row（User/AI/System/Compact）+ AI 内部 .ai-body +
+    // AI 工具区 .ai-tools-section——防 future 在子容器上重新引入同类机制
+    const containers = container.querySelectorAll('.msg-row, .ai-body, .ai-tools-section')
+    for (const el of Array.from(containers)) {
       const cs = getComputedStyle(el as HTMLElement)
       expect(cs.contentVisibility).not.toBe('auto')
       // contain 字符串可能是 'none' / '' / 'layout' / 'layout style' 等
