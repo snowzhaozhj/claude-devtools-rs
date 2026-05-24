@@ -6,12 +6,12 @@
 
 | category | 一句话定义 | 典型修法 |
 |---|---|---|
-| **god-function** | 函数 > 50 行做 ≥ 3 件事，命名很难概括 | extract method，按职责拆子函数 |
-| **god-class / god-module** | 类 / 模块 > 500 行 / > 10 公开方法 / 多个职责混杂 | 按职责 split 模块，trait / impl 分组 |
+| **god-function** | 函数 > 80 行做 ≥ 3 件事，命名很难概括 | extract method，按职责拆子函数 |
+| **god-class / god-module** | 类 / 模块 > 800 行 / > 10 公开方法 / 多个职责混杂 | 按职责 split 模块，trait / impl 分组 |
 | **duplicated-code** | 同样逻辑 ≥ 2 处（不仅文本，语义相同也算） | extract 共享函数 / trait method / 配置数据 |
-| **long-param-list** | 函数参数 > 4 个，调用方记不住顺序 | introduce param object / builder |
+| **long-param-list** | 函数参数 > 5 个，调用方记不住顺序 | introduce param object / builder |
 | **magic-number / magic-string** | 数值 / 字符串字面量未命名，意图不显 | 提常量 + 注释（写"为什么是这个值"，不是"这是 X"） |
-| **nested-conditionals** | if 嵌套 ≥ 4 层 / arrow code | guard clauses 早返回 / Result 链式 / `let-else` |
+| **nested-conditionals** | if 嵌套 ≥ 5 层 / arrow code | guard clauses 早返回 / Result 链式 / `let-else` |
 | **dead-code** | 未引用的函数 / 字段 / import / 注释代码 / `#[allow(dead_code)]` 长期挂着 | 删（git 有历史，需要时找回来） |
 | **feature-envy** | 方法读另一个对象的字段 > 自己的字段 | 把方法移到数据所在的类型 |
 | **primitive-obsession** | 用 `String` / `u64` / `Vec<...>` 表达领域概念，校验逻辑散落 | newtype / enum / domain struct |
