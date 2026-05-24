@@ -74,7 +74,7 @@
 ## 10. 流水线（一把梭）
 
 - [x] 10.1 跑 `just preflight`（fmt + lint + test + spec-validate）一次过
-- [ ] 10.2 git commit 业务改动 + spec delta（**不**含 archive；archive 留 N.4）；commit message 引用 change slug
+- [x] 10.2 git commit 业务改动 + spec delta（**不**含 archive；archive 留 N.4）；commit message 引用 change slug
 
 ## A. Audit 结果
 
@@ -91,8 +91,8 @@
 
 ## N. 发布
 
-- [ ] N.1 `git push -u origin feat/typed-ipc-payload` + `gh pr create` 描述含 `Perf impact`（typed 化 wire 形状不变，预期 0 影响；列基准跑分作 evidence）+ 链回 `openspec/changes/typed-ipc-payload/proposal.md`
-- [ ] N.2 `/wait-ci <pr>` 全绿（与 N.3 并行启动）
-- [ ] N.3 调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑 PR 二审，prompt 重点查：序列化形状漂移（`Chunk.kind` / `ContextInjection.category` enum tag / camelCase / `injections_by_phase` key 类型 / `xxxOmitted` 标记）/ 前端 typed match 漏改 / `ipc_contract.rs` 覆盖（`metrics` / `metadata` 新 struct 字段命名 + `Chunk` enum tag + injectionsByPhase key 类型）/ 13 个暂留 method 的 TODO 注释是否都加 / `D5` 字段命名是否与历史 wire 形状一致（含 1.1 audit 结论）—— 报 bug 修 → push → 回 N.2 重跑（可循环）
-- [ ] N.4 N.2 + N.3 都通过后跑 `openspec archive typed-ipc-payload -y`（原子完成 mv + sync）→ `git add -A` + `git commit -m "chore(opsx): archive typed-ipc-payload"` + push → 再走一次 wait-ci 全绿；不 merge；最终发文本总结
+- [x] N.1 `git push -u origin feat/typed-ipc-payload` + `gh pr create` 描述含 `Perf impact`（typed 化 wire 形状不变，预期 0 影响；列基准跑分作 evidence）+ 链回 `openspec/changes/typed-ipc-payload/proposal.md`
+- [x] N.2 `/wait-ci <pr>` 全绿（与 N.3 并行启动）
+- [x] N.3 调 `Agent({ subagent_type: "codex:codex-rescue", ... })` 跑 PR 二审，prompt 重点查：序列化形状漂移（`Chunk.kind` / `ContextInjection.category` enum tag / camelCase / `injections_by_phase` key 类型 / `xxxOmitted` 标记）/ 前端 typed match 漏改 / `ipc_contract.rs` 覆盖（`metrics` / `metadata` 新 struct 字段命名 + `Chunk` enum tag + injectionsByPhase key 类型）/ 13 个暂留 method 的 TODO 注释是否都加 / `D5` 字段命名是否与历史 wire 形状一致（含 1.1 audit 结论）—— 报 bug 修 → push → 回 N.2 重跑（可循环）。本轮 codex 二审 8 NO ISSUE + 1 文档计数 bug（design.md::D2 14→13 + 文件路径"3 个"→4 个）已修
+- [x] N.4 N.2 + N.3 都通过后跑 `openspec archive typed-ipc-payload -y`（原子完成 mv + sync）→ `git add -A` + `git commit -m "chore(opsx): archive typed-ipc-payload"` + push → 再走一次 wait-ci 全绿；不 merge；最终发文本总结
 - [ ] N.5 archive 后开 followup GitHub issue：标题 "metrics / metadata IPC wire 字段名修正为 camelCase（修复 IPC 契约违规）"，body 引用 `design.md::D7` + 列出修法（改 `#[serde(rename_all = "camelCase")]` + grep 全仓 snake_case key 消费者 + ipc_contract 加 camelCase 断言 + 标 BREAKING + minor version bump），label `bug` + `tech-debt`

@@ -49,10 +49,10 @@
 **Alternatives considered**:
 
 - **A. 把 `DataApi` trait 整体拆 sub-trait**（`SessionApi` / `ConfigApi` / `SshApi` ...）：见 `D3`，否决
-- **B. 全部 18 个 Value method 一次性改 typed**：见 `D2`，scope 太大且 14 个低频方法 typed 收益边际递减
+- **B. 全部 18 个 Value method 一次性改 typed**（5 typed + 13 暂留）：见 `D2`，scope 太大且 13 个低频方法 typed 收益边际递减
 - **C. 用 `#[serde(flatten)]` 把 `SessionDetail` 结构展平**：会破坏 `xxxOmitted` 同级字段的语义，否决
 
-### D2：14 个 Value method 暂留的判定准则
+### D2：13 个 Value method 暂留的判定准则
 
 **决策**：本次只改 5 个高频 method 为 typed；其余 13 个暂留 `Result<Value>`，每个加 `// TODO(typed-ipc-payload): typed 化 issue=<num>` 注释链向后续工作。
 
@@ -76,13 +76,13 @@
 | `get_subagent_trace` | SubagentCard 展开 | `Vec<cdt_core::Chunk>` 存在 | IPC + HTTP |
 | `get_notifications` | 启动 + 通知面板 | `Vec<NotificationRecord>` 已在 `cdt-config` | IPC + HTTP |
 
-13 个暂留的方法（按 5 个分组）：
+13 个暂留的方法（按 3 组分组）：
 
 - **SSH 子集 7 个**（`ssh_connect` / `ssh_test_connection` / `ssh_get_state` / `ssh_get_config_hosts` / `resolve_ssh_host` / `ssh_save_last_connection` / `ssh_get_last_connection`）：SSH 配置流是低频用户交互；payload 形状与 `cdt-ssh` crate 内部状态强耦合，typed 化需要先稳定 `cdt-ssh` 公共类型边界；本次跳过。
-- **文件 / 路径子集 3 个**（`validate_path` / `read_claude_md_files` / `read_mentioned_file` / `read_agent_configs`）：4 个，全是 ad-hoc JSON 反馈结构（成功 + 错误信息组合），消费侧仅按 `if (resp.ok)` 判读；改 typed 收益小且需新建 4 个 struct。
+- **文件 / 路径子集 4 个**（`validate_path` / `read_claude_md_files` / `read_mentioned_file` / `read_agent_configs`）：全是 ad-hoc JSON 反馈结构（成功 + 错误信息组合），消费侧仅按 `if (resp.ok)` 判读；改 typed 收益小且需新建 4 个 struct。
 - **Trigger CRUD 2 个**（`add_trigger` / `remove_trigger`）：返回 `{ "ok": bool, "trigger_id"?: ... }` 简单形状，调用频次极低（仅 Settings UI），typed 化 ROI 低。
 
-（注：上文 SSH 7 + 路径 4 + Trigger 2 = 13，与开头"13 个"一致）
+（注：SSH 7 + 路径 4 + Trigger 2 = 13，与本节标题/段首"13 个"一致；总 18 个 Value method = 5 typed 化 + 13 暂留）
 
 后续 issue 跟踪：本 change archive 后 SHALL 在 `openspec/README.md::路线图` 加一条 "Phase 2: 13 个低频 IPC method typed 化"，按本表准则在新 capability 改动触发时机会捎带改。
 
