@@ -7,7 +7,7 @@ spec/configuration-management 10
 spec/context-tracking 1
 spec/file-watching 20
 spec/frontend-context-menu 6
-spec/frontend-test-pyramid 48
+spec/frontend-test-pyramid 1
 spec/fs-abstraction 15
 spec/http-data-api 6
 spec/ipc-data-api 174
@@ -29,4 +29,3 @@ spec/team-coordination-metadata 0
 spec/tool-execution-linking 6
 spec/ui-search 2
 spec/wsl-distro-discovery 1
-change/spec-cleanup-frontend-test-pyramid/frontend-test-pyramid 1
