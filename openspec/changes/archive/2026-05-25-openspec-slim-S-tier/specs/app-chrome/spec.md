@@ -1,8 +1,5 @@
-# app-chrome Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change unified-title-bar. Update Purpose after archive.
-## Requirements
 ### Requirement: UnifiedTitleBar 单条 chrome
 
 系统 SHALL 在应用窗口最顶部（macOS 上为窗口最顶；Windows / Linux 上为 OS 原生 title bar 下方）渲染应用层窗口 chrome 行（`UnifiedTitleBar.svelte`）。chrome 自身高度 MUST 恒为 44 px，三平台一致。chrome MUST 在所有应用状态下持续渲染（包括空项目、加载中、错误态），SHALL NOT 被任何瞬态横幅 / 模态 / 错误条推挤或替换。
@@ -52,40 +49,6 @@ TBD - created by archiving change unified-title-bar. Update Purpose after archiv
 - **THEN** Tauri SHALL 调用窗口拖动（基于 `data-tauri-drag-region` 属性）
 - **AND** 在按钮 / 下拉 / pill 上按下 SHALL NOT 触发拖窗（由 `data-tauri-drag-region="false"` 子树覆盖）
 
-### Requirement: chrome 右侧 status zone 容纳契约
-
-`zone-status` SHALL 按从左到右顺序容纳：`RosettaStatusIcon`（条件渲染）→ `UpdateStatusPill`（条件渲染）→ 通知按钮（含未读 badge）→ 设置按钮。任一 status 子组件 MUST 通过 `aria-label` 描述当前状态；可见时高度 SHALL ≤ 28 px 以保证 chrome 总高 44 px 不溢出。
-
-#### Scenario: 各 status 子组件按状态独立显隐
-
-- **WHEN** Rosetta 未检测命中且 update 状态为 `idle`
-- **THEN** `zone-status` 内 SHALL 仅渲染通知按钮 + 设置按钮
-- **AND** Rosetta icon 与 update pill SHALL NOT 渲染（不占布局空间）
-
-#### Scenario: 多 status 同时可见时按顺序排列
-
-- **WHEN** Rosetta 命中 AND update 状态为 `available`
-- **THEN** `zone-status` 内从左到右顺序 SHALL 为：Rosetta icon、update pill、通知按钮、设置按钮
-- **AND** 各组件间距 SHALL 为 8 px
-
-### Requirement: 项目导航控件锚定 chrome 左中
-
-`zone-left-center` SHALL 持续渲染项目选择下拉与 sidebar 折叠 / 展开按钮，按从左到右顺序为：项目下拉、折叠按钮。两者位置 MUST NOT 跟随 sidebar 宽度变化或折叠状态变化；sidebar 完全折叠时这两个控件 SHALL 仍可见且可点击。
-
-#### Scenario: sidebar 折叠不影响 chrome 控件
-
-- **WHEN** 用户点击折叠按钮把 sidebar 收起
-- **THEN** 项目下拉 + 折叠按钮 SHALL 保持原位
-- **AND** sidebar 宽度 SHALL 收缩到 0
-- **AND** 折叠按钮 icon SHALL 切换为"展开 sidebar" 形态
-
-#### Scenario: sidebar 展开不影响 chrome 控件
-
-- **WHEN** 用户在折叠态点击展开按钮
-- **THEN** sidebar SHALL 恢复到上次宽度
-- **AND** 项目下拉 + 折叠按钮 SHALL 保持原位
-- **AND** 折叠按钮 icon SHALL 切换为"折叠 sidebar" 形态
-
 ### Requirement: chrome 与下方区域的分隔线只一条 1 px
 
 chrome 底部 SHALL 渲染**仅一条** 1 px 横向分隔线作为 chrome 与下方 sidebar / pane 区域的视觉边界（颜色取自 `--color-border` token）。Pane 内 TabBar 的 active tab indicator MUST NOT 使用 `border-bottom` 实现（避免与 TabBar 行底 border 重叠成加粗视觉），SHALL 改用 tab 内部叠加的视觉手段（如内阴影 / 顶部 / 底部 inset 实现的 accent 线）。Pane 内 content 区（session detail / settings / notifications）的最顶部章节 SHALL NOT 渲染与上方 TabBar 行底 border 紧贴的另一条 border。
@@ -115,21 +78,3 @@ chrome 底部 SHALL 渲染**仅一条** 1 px 横向分隔线作为 chrome 与下
 - **WHEN** 实施期 audit Settings / Notifications / Dashboard 等其它 pane content view 顶部 border
 - **THEN** 若该 border 用于 view 内部章节分隔，SHALL 保留不动
 - **AND** 仅当某 view 顶部存在与 TabBar 行底紧贴 1 px 重叠加粗时，才 SHALL 移除该 view 顶部对应 border
-
-### Requirement: chrome 与 pane 内 TabBar 职责分离
-
-每个 pane 内 SHALL 保留独立的 `TabBar.svelte` 渲染该 pane 的 tab 列表（session / settings / notifications）。Pane 内 TabBar SHALL NOT 包含通知按钮、设置按钮、macOS traffic-light padding；这三者全部归属 `UnifiedTitleBar`。Pane 内 TabBar 仍保留 tab 列表 + 折叠态下的"展开 sidebar" 快捷按钮 + 自身的 drag region。
-
-#### Scenario: TabBar 不再渲染通知 / 设置按钮
-
-- **WHEN** 任一 pane 渲染 TabBar
-- **THEN** TabBar 内 SHALL NOT 包含通知 button 或设置 button
-- **AND** TabBar 高度 SHALL 由其内容（tab 列表 + 折叠展开按钮）决定，保持现有 40 px
-
-#### Scenario: 多 pane chrome 仍为一份
-
-- **WHEN** 用户在 sidebar 右键 "Open in New Pane" 触发 split
-- **THEN** chrome SHALL 仍为单条 44 px 横向覆盖整个窗口宽度
-- **AND** 每个 pane 内 SHALL 各自有独立 TabBar
-- **AND** chrome 内 status zone（update / rosetta / 通知 / 设置）SHALL 全局一份，不 per-pane 复制
-
