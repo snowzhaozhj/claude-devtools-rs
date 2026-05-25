@@ -92,8 +92,8 @@
 
 #### Scenario: Library consumer calls the API from a sync context
 
-- **WHEN** 非 async 线程调用 `process_session_context_with_phases(chunks, params)`，传入借用的 chunk slice 与已填好 token 字典的 `ProcessSessionParams`
-- **THEN** 该函数 SHALL 在不 spawn task、不 await future、不访问文件系统的前提下返回 `SessionContextResult`
+- **WHEN** 非 async 线程调用 context tracking 主入口，传入借用的 chunk slice 与已填好 token 字典的处理参数
+- **THEN** 该入口 SHALL 在不 spawn task、不 await future、不访问文件系统的前提下返回 `SessionContextResult`
 
 #### Scenario: Missing token data falls back to zero without error
 
