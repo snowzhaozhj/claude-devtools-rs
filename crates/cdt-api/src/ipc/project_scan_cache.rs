@@ -390,7 +390,9 @@ pub fn spawn_project_scan_cache_invalidator(
         loop {
             match rx.recv().await {
                 Ok(event) => {
-                    apply_file_event_to_project_scan_cache(&cache, &local_ctx, &event);
+                    // test-utils fallback 路径只用 invalidated 判定，不 emit
+                    let _decision =
+                        apply_file_event_to_project_scan_cache(&cache, &local_ctx, &event);
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     apply_lag_to_project_scan_cache(&cache);
@@ -401,23 +403,37 @@ pub fn spawn_project_scan_cache_invalidator(
     })
 }
 
+/// cache 层拆分后的 emit/invalidate 决策结果（change `enrich-via-watcher` D4）。
+///
+/// - `invalidated`：是否调用了 `invalidate_local()`（三档判定任一命中）
+/// - `emit_session_list_changed_hint`：cache snapshot 视角下本 event 是否命中
+///   规则 2 "`unknown_session`" 判定条件——给 `spawn_unified_cache_invalidator`
+///   emit 路径 OR 公式用：`event.session_list_changed || hint`
+pub(crate) struct EnrichDecision {
+    /// 三档判定命中时为 true。当前 unified invalidator 不直接消费此字段
+    /// （invalidate 已在函数内部完成），保留给测试断言 + 未来扩展。
+    #[allow(dead_code)]
+    pub invalidated: bool,
+    pub emit_session_list_changed_hint: bool,
+}
+
 /// 单条 `FileChangeEvent` 应用到 `ProjectScanCache` 的逻辑：三档判定 +
 /// counter 记录。**无 fs op**（纯 cache snapshot 反查），适合做合并 invalidator
 /// 的 sync 快路径（issue #261，scan-first 顺序，避免被 parsed-cache 的
 /// `fs.stat().await` 拖慢结构判定）。
 ///
-/// 返回 `true` 时表示该事件被判定为 structural（命中三档之一），调用方可
-/// 据此 enrich `FileChangeEvent.session_list_changed` 后再 emit 给下游
-/// 消费者（change `enrich-file-change-with-session-list-changed`，D4 emit
-/// 时机契约：sync 判定 → emit → async parsed invalidate）。
+/// 返回 [`EnrichDecision`]：`invalidated` 表示是否命中三档之一并调了
+/// `invalidate_local()`；`emit_session_list_changed_hint` 给 emit 路径
+/// OR 公式用（watcher 已填字段 + cache hint 取并集）。
 ///
-/// 行为契约：spec `ipc-data-api/spec.md` §"`ProjectScanCache` 按事件语义分级失效"。
+/// 行为契约：spec `ipc-data-api/spec.md` §"`ProjectScanCache` 按事件语义分级失效"
+/// + §"Unified invalidator 作为 `LocalDataApi.file_tx` 唯一生产者"。
 pub(crate) fn apply_file_event_to_project_scan_cache(
     cache: &Arc<std::sync::Mutex<ProjectScanCache>>,
     local_ctx: &ContextId,
     event: &cdt_core::FileChangeEvent,
-) -> bool {
-    let structural = {
+) -> EnrichDecision {
+    let (invalidated, emit_session_list_changed_hint) = {
         // sync mutex（poison 走 into_inner 兜底，参照 cdt-api 既有模式）。
         // counter inc 在 drop guard 之后避免持锁期间走 atomic 路径加大临界区。
         let mut cache = match cache.lock() {
@@ -440,14 +456,17 @@ pub(crate) fn apply_file_event_to_project_scan_cache(
         if structural {
             cache.invalidate_local();
         }
-        structural
+        (structural, unknown_session)
     };
-    if structural {
+    if invalidated {
         cdt_telemetry::counter!("project_scan_cache.invalidate.structural").inc();
     } else {
         cdt_telemetry::counter!("project_scan_cache.invalidate.content_append_skipped").inc();
     }
-    structural
+    EnrichDecision {
+        invalidated,
+        emit_session_list_changed_hint,
+    }
 }
 
 /// `broadcast::Receiver::recv` 返回 `Err(Lagged)` 时的保守清空逻辑——

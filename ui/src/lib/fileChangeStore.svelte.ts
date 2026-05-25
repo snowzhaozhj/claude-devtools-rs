@@ -196,3 +196,16 @@ export function _resetScheduleRefreshForTest(): void {
   scheduleDirty.clear();
   lastRunAt.clear();
 }
+
+/** 仅供测试：直接向所有已注册 handler 派发 payload，绕过 emit → listen 事件链。
+ * 避免 vitest 中 mockIPC 第二轮覆盖 transformCallback 时序 race（见
+ * Sidebar.test.svelte.ts 注释）。production 代码 SHALL NOT 调用。 */
+export function _dispatchForTest(payload: FileChangePayload): void {
+  for (const handler of handlers.values()) {
+    try {
+      handler(payload);
+    } catch (e) {
+      console.warn("[_dispatchForTest] handler threw:", e);
+    }
+  }
+}

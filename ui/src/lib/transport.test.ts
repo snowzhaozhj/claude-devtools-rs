@@ -801,6 +801,132 @@ describe('BrowserTransport', () => {
     })
     unsubscribe()
   })
+
+  // -------------------------------------------------------------------------
+  // Task 4.3: synthetic event 经浏览器 transport 路径的传播契约
+  // -------------------------------------------------------------------------
+  // 后端 lag 路径 emit synthetic FileChangeEvent { project_id: "",
+  // session_id: "", deleted: false, project_list_changed: true,
+  // session_list_changed: true }。浏览器 BrowserTransport SSE 路径 SHALL：
+  // - normalize 为 camelCase payload（projectId/sessionId/deleted/...）
+  // - 保持空字符串字段不丢失（projectId: "", sessionId: ""）
+  // - fan-out 到所有已注册 handler
+  // -------------------------------------------------------------------------
+
+  test('SSE synthetic file_change（空 id）normalize 保持字段完整', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('file-change', handler)
+    // 模拟后端 lag 路径 emit 的 synthetic PushEvent::FileChange
+    instances[0].emit({
+      type: 'file_change',
+      project_id: '',
+      session_id: '',
+      deleted: false,
+      project_list_changed: true,
+      session_list_changed: true,
+    })
+
+    expect(handler).toHaveBeenCalledWith({
+      event: 'file-change',
+      id: 0,
+      payload: {
+        projectId: '',
+        sessionId: '',
+        deleted: false,
+        projectListChanged: true,
+        sessionListChanged: true,
+      },
+    })
+    unsubscribe()
+  })
+
+  test('SSE synthetic file_change fan-out 到所有已注册 handler', async () => {
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler1 = vi.fn()
+    const handler2 = vi.fn()
+    const handler3 = vi.fn()
+
+    const u1 = await subscribeEvent('file-change', handler1)
+    const u2 = await subscribeEvent('file-change', handler2)
+    const u3 = await subscribeEvent('file-change', handler3)
+
+    instances[0].emit({
+      type: 'file_change',
+      project_id: '',
+      session_id: '',
+      deleted: false,
+      project_list_changed: true,
+      session_list_changed: true,
+    })
+
+    // 所有 handler 都应收到相同 payload
+    const expectedPayload = {
+      projectId: '',
+      sessionId: '',
+      deleted: false,
+      projectListChanged: true,
+      sessionListChanged: true,
+    }
+    expect(handler1).toHaveBeenCalledWith(expect.objectContaining({ payload: expectedPayload }))
+    expect(handler2).toHaveBeenCalledWith(expect.objectContaining({ payload: expectedPayload }))
+    expect(handler3).toHaveBeenCalledWith(expect.objectContaining({ payload: expectedPayload }))
+
+    u1(); u2(); u3()
+  })
+
+  test('SSE synthetic file_change 与 Tauri webview 路径行为一致（normalize 结果相同）', async () => {
+    // 验证：浏览器 transport 的 normalizePushPayload 输出与 Tauri runtime
+    // serde camelCase 自动反序列化的结果字段名 / 值完全一致。
+    const instances: FakeEventSource[] = []
+    vi.stubGlobal('EventSource', class extends FakeEventSource {
+      constructor(url: string) {
+        super(url)
+        instances.push(this)
+      }
+    })
+    const handler = vi.fn()
+
+    const unsubscribe = await subscribeEvent('file-change', handler)
+    instances[0].emit({
+      type: 'file_change',
+      project_id: '',
+      session_id: '',
+      deleted: false,
+      project_list_changed: true,
+      session_list_changed: true,
+    })
+
+    const { payload } = handler.mock.calls[0][0]
+    // Tauri webview serde camelCase 反序列化会产出：
+    // { projectId: "", sessionId: "", deleted: false, projectListChanged: true, sessionListChanged: true }
+    // 浏览器 transport normalize 后 SHALL 产出相同字段名 + 值
+    expect(payload).toHaveProperty('projectId', '')
+    expect(payload).toHaveProperty('sessionId', '')
+    expect(payload).toHaveProperty('deleted', false)
+    expect(payload).toHaveProperty('projectListChanged', true)
+    expect(payload).toHaveProperty('sessionListChanged', true)
+    // 不应有残留的 snake_case 字段
+    expect(payload).not.toHaveProperty('project_id')
+    expect(payload).not.toHaveProperty('session_id')
+    expect(payload).not.toHaveProperty('project_list_changed')
+    expect(payload).not.toHaveProperty('session_list_changed')
+
+    unsubscribe()
+  })
 })
 
 class FakeEventSource {

@@ -146,6 +146,9 @@ pub struct RemoteWatcherHandle {
     cancel_token: CancelToken,
     join_handle: JoinHandle<()>,
     dead_signal: Arc<Notify>,
+    /// 共享 baseline 快照——polling loop 每轮更新，调用方可在 disconnect/reconnect
+    /// 时读取最后一轮 baseline 用于重连 diff（design.md D5 断连重连）。
+    shared_baseline: Arc<std::sync::Mutex<BTreeMap<PathBuf, FileFingerprint>>>,
 }
 
 impl RemoteWatcherHandle {
@@ -166,6 +169,14 @@ impl RemoteWatcherHandle {
     #[must_use]
     pub fn dead_signal(&self) -> Arc<Notify> {
         Arc::clone(&self.dead_signal)
+    }
+
+    /// 返回当前 baseline 快照——调用方可在断连前调用保存，重连时作为
+    /// `RemotePollingWatcher::spawn` 的 `prev_baseline` 参数传回，让重连首轮
+    /// 做 diff 而非静默建 baseline（design.md D5 断连重连 baseline diff）。
+    #[must_use]
+    pub fn baseline_snapshot(&self) -> BTreeMap<PathBuf, FileFingerprint> {
+        self.shared_baseline.lock().unwrap().clone()
     }
 
     /// 取消 + 等待 task 退出（最长 [`CANCEL_DEADLINE`]）。超时调 abort 兜底。
@@ -199,6 +210,10 @@ impl RemotePollingWatcher {
     /// 跑一次兜底全量 scan + diff。返回的 [`RemoteWatcherHandle`] 由调用方
     /// 持有，disconnect 时 `cancel()`。
     ///
+    /// `prev_baseline`：断连重连时由 caller 传入上次 baseline 快照（design.md
+    /// D5）。传 `Some` 时首轮 poll 做完 readdir 后与旧 baseline diff，断连期间
+    /// 新增/删除/变化的 path 产 emit；传 `None` 时退化为静默建 baseline。
+    ///
     /// 连续 [`PERMANENT_FAILURE_THRESHOLD`] 轮永久性 SFTP 错误后
     /// watcher 自身退出 + 触发 `handle.dead_signal()` 通知调用方（典型：
     /// cdt-api 的 monitor task → `ssh_mgr.disconnect`），避免在已死 SFTP
@@ -208,21 +223,27 @@ impl RemotePollingWatcher {
         projects_root: PathBuf,
         sender: broadcast::Sender<FileChangeEvent>,
         cancel_token: CancelToken,
+        prev_baseline: Option<BTreeMap<PathBuf, FileFingerprint>>,
     ) -> RemoteWatcherHandle {
         let cancel_for_handle = cancel_token.clone();
         let dead_signal = Arc::new(Notify::new());
         let dead_signal_for_loop = Arc::clone(&dead_signal);
+        let shared_baseline = Arc::new(std::sync::Mutex::new(BTreeMap::new()));
+        let shared_baseline_for_loop = Arc::clone(&shared_baseline);
         let join_handle = tokio::spawn(run_polling_loop(
             client,
             projects_root,
             sender,
             cancel_token,
             dead_signal_for_loop,
+            prev_baseline,
+            shared_baseline_for_loop,
         ));
         RemoteWatcherHandle {
             cancel_token: cancel_for_handle,
             join_handle,
             dead_signal,
+            shared_baseline,
         }
     }
 }
@@ -302,6 +323,8 @@ async fn run_polling_loop(
     sender: broadcast::Sender<FileChangeEvent>,
     cancel_token: CancelToken,
     dead_signal: Arc<Notify>,
+    prev_baseline: Option<BTreeMap<PathBuf, FileFingerprint>>,
+    shared_baseline: Arc<std::sync::Mutex<BTreeMap<PathBuf, FileFingerprint>>>,
 ) {
     let mut warned_missing_mtime: BTreeSet<PathBuf> = BTreeSet::new();
     let mut consecutive_permanent: u32 = 0;
@@ -312,8 +335,15 @@ async fn run_polling_loop(
     // 也不让 watcher 死掉；下一轮 catch-up 会再尝试）。baseline 失败也按
     // classify_failure 三态 bump 对应 counter—— baseline 一次跑不可能达阈值，
     // 但让"connect 后立刻 timeout"序列首轮就计入提前推进 dead 检测。
-    let mut baseline = match scan_once(&client, &projects_root, &mut warned_missing_mtime).await {
-        Ok(b) => b,
+    let scan_result = scan_once(&client, &projects_root, &mut warned_missing_mtime).await;
+    let mut baseline = match scan_result {
+        Ok(current_scan) => {
+            // 断连重连时传入旧 baseline：做 diff emit 断连期间变化
+            if let Some(ref old_baseline) = prev_baseline {
+                emit_reconnect_diff(&projects_root, old_baseline, &current_scan, &sender);
+            }
+            current_scan
+        }
         Err(e) => {
             match classify_failure(&e) {
                 PollFailureKind::Permanent => {
@@ -333,9 +363,14 @@ async fn run_polling_loop(
                 error = %e,
                 "initial baseline scan failed; starting with empty baseline",
             );
-            BTreeMap::new()
+            // 若有旧 baseline 且首次 scan 失败，退化为旧 baseline 作为当前 baseline
+            // 让后续 poll 仍能 diff（不丢已有信息）
+            prev_baseline.unwrap_or_default()
         }
     };
+
+    // 更新共享 baseline 供外部读取
+    *shared_baseline.lock().unwrap() = baseline.clone();
 
     let now = Instant::now();
     let mut poll_interval = interval_at(now + POLL_INTERVAL, POLL_INTERVAL);
@@ -349,6 +384,9 @@ async fn run_polling_loop(
             () = cancel_token.cancelled() => break,
             _ = poll_interval.tick() => {
                 let outcome = run_one_pass(&client, &projects_root, &sender, &mut baseline, &mut warned_missing_mtime, &cancel_token).await;
+                if matches!(outcome, PollOutcome::Ok) {
+                    *shared_baseline.lock().unwrap() = baseline.clone();
+                }
                 if update_counters(outcome, &mut consecutive_permanent, &mut consecutive_timeout) {
                     tracing::warn!(
                         target: "cdt_watch::ssh_polling",
@@ -367,6 +405,9 @@ async fn run_polling_loop(
                 // 30s catch-up 与 3s poll 算法相同——兜底 SFTP 偶发漏事件
                 // （spec D5：catch-up 同样按 size + mtime 双维度比对）。
                 let outcome = run_one_pass(&client, &projects_root, &sender, &mut baseline, &mut warned_missing_mtime, &cancel_token).await;
+                if matches!(outcome, PollOutcome::Ok) {
+                    *shared_baseline.lock().unwrap() = baseline.clone();
+                }
                 if update_counters(outcome, &mut consecutive_permanent, &mut consecutive_timeout) {
                     tracing::warn!(
                         target: "cdt_watch::ssh_polling",
@@ -446,14 +487,20 @@ async fn run_one_pass(
     };
 
     for (path, cur_fp) in &current {
-        let changed = match baseline.get(path) {
-            None => true,
-            Some(old_fp) => old_fp.size != cur_fp.size || old_fp.mtime != cur_fp.mtime,
-        };
-        if changed {
-            if let Some(event) = build_change_event(projects_root, path, false) {
-                let _ = sender.send(event);
+        match baseline.get(path) {
+            None => {
+                // 新增 path → session_list_changed=true
+                if let Some(event) = build_change_event(projects_root, path, false, true) {
+                    let _ = sender.send(event);
+                }
             }
+            Some(old_fp) if old_fp.size != cur_fp.size || old_fp.mtime != cur_fp.mtime => {
+                // size/mtime 变化（追加）→ session_list_changed=false
+                if let Some(event) = build_change_event(projects_root, path, false, false) {
+                    let _ = sender.send(event);
+                }
+            }
+            _ => {}
         }
     }
     let removed: Vec<PathBuf> = baseline
@@ -462,13 +509,53 @@ async fn run_one_pass(
         .cloned()
         .collect();
     for path in removed {
-        if let Some(event) = build_change_event(projects_root, &path, true) {
+        // 删除 path → session_list_changed=true
+        if let Some(event) = build_change_event(projects_root, &path, true, true) {
             let _ = sender.send(event);
         }
     }
 
     *baseline = current;
     PollOutcome::Ok
+}
+
+/// 断连重连首轮 diff：把新 scan 结果与旧 baseline 做完整比对，emit 断连期间变化。
+///
+/// - 当前含但旧 baseline 不含 → emit `session_list_changed=true, deleted=false`
+/// - 旧 baseline 含但当前不含 → emit `session_list_changed=true, deleted=true`
+/// - 两侧都含但 size/mtime 变化 → emit `session_list_changed=false, deleted=false`
+fn emit_reconnect_diff(
+    projects_root: &Path,
+    old_baseline: &BTreeMap<PathBuf, FileFingerprint>,
+    current: &BTreeMap<PathBuf, FileFingerprint>,
+    sender: &broadcast::Sender<FileChangeEvent>,
+) {
+    // 新增 + 变化
+    for (path, cur_fp) in current {
+        match old_baseline.get(path) {
+            None => {
+                // 断连期间新增
+                if let Some(event) = build_change_event(projects_root, path, false, true) {
+                    let _ = sender.send(event);
+                }
+            }
+            Some(old_fp) if old_fp.size != cur_fp.size || old_fp.mtime != cur_fp.mtime => {
+                // 断连期间 size/mtime 变化
+                if let Some(event) = build_change_event(projects_root, path, false, false) {
+                    let _ = sender.send(event);
+                }
+            }
+            _ => {}
+        }
+    }
+    // 断连期间删除
+    for path in old_baseline.keys() {
+        if !current.contains_key(path) {
+            if let Some(event) = build_change_event(projects_root, path, true, true) {
+                let _ = sender.send(event);
+            }
+        }
+    }
 }
 
 /// 从 `<projects_root>` 跑一轮全量 scan：
@@ -576,7 +663,12 @@ fn fingerprint_from_meta(
     }
 }
 
-fn build_change_event(projects_root: &Path, path: &Path, deleted: bool) -> Option<FileChangeEvent> {
+fn build_change_event(
+    projects_root: &Path,
+    path: &Path,
+    deleted: bool,
+    session_list_changed: bool,
+) -> Option<FileChangeEvent> {
     let rel = path.strip_prefix(projects_root).ok()?;
     let mut comps = rel.components();
     let project_comp = comps.next()?;
@@ -595,7 +687,7 @@ fn build_change_event(projects_root: &Path, path: &Path, deleted: bool) -> Optio
         session_id,
         deleted,
         project_list_changed: false,
-        session_list_changed: false,
+        session_list_changed,
     })
 }
 
@@ -790,7 +882,7 @@ mod tests {
         let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap)]);
         let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
 
         // 让 spawned task 跑到 eager baseline scan 完成 + 进入 select! 等 tick。
         tokio::task::yield_now().await;
@@ -822,7 +914,7 @@ mod tests {
         let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
         let handle =
-            RemotePollingWatcher::spawn(client, projects_root(), tx.clone(), cancel.clone());
+            RemotePollingWatcher::spawn(client, projects_root(), tx.clone(), cancel.clone(), None);
 
         // 让 baseline 建好
         tokio::task::yield_now().await;
@@ -854,7 +946,7 @@ mod tests {
         let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap1), Ok(snap2)]);
         let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
 
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
@@ -879,7 +971,7 @@ mod tests {
         let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap1), Ok(snap2)]);
         let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
 
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
@@ -904,7 +996,7 @@ mod tests {
         let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap1), Ok(snap2)]);
         let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
 
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
@@ -934,7 +1026,7 @@ mod tests {
         let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap1), Ok(snap2)]);
         let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
 
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
@@ -962,7 +1054,7 @@ mod tests {
         );
         let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
 
         // baseline 跑完
         tokio::task::yield_now().await;
@@ -1008,7 +1100,7 @@ mod tests {
         );
         let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
 
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
@@ -1048,7 +1140,7 @@ mod tests {
         let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap)]);
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
 
         // 让 watcher 跑完 eager baseline scan + 进入 select! 等 poll_interval.tick()
         tokio::task::yield_now().await;
@@ -1073,7 +1165,7 @@ mod tests {
         let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap)]);
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
 
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
@@ -1109,7 +1201,7 @@ mod tests {
         );
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
         let dead = handle.dead_signal();
 
         // eager baseline scan = 1 次永久错误
@@ -1153,7 +1245,7 @@ mod tests {
         );
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
         let dead = handle.dead_signal();
 
         tokio::task::yield_now().await;
@@ -1199,7 +1291,7 @@ mod tests {
         );
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
         let dead = handle.dead_signal();
 
         // baseline scan
@@ -1248,7 +1340,7 @@ mod tests {
         );
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
         let dead = handle.dead_signal();
 
         // baseline scan = 1 个 timeout (counter=1)
@@ -1295,7 +1387,7 @@ mod tests {
         let client = FakeSftpClient::arc(projects_root_str(), scripted);
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
         let dead = handle.dead_signal();
 
         // baseline
@@ -1341,7 +1433,7 @@ mod tests {
         let client = FakeSftpClient::arc(projects_root_str(), scripted);
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
         let dead = handle.dead_signal();
 
         // baseline + 6 poll ticks 共 7 round
@@ -1376,7 +1468,7 @@ mod tests {
         let client = FakeSftpClient::arc(projects_root_str(), scripted);
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
         let dead = handle.dead_signal();
 
         tokio::task::yield_now().await;
@@ -1460,7 +1552,7 @@ mod tests {
         let counter_handle = Arc::clone(&fake);
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(fake, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(fake, projects_root(), tx, cancel.clone(), None);
         let dead = handle.dead_signal();
 
         // baseline scan = 1 次 sub-project permanent 错误（escalate 到 outer scan_once
@@ -1506,7 +1598,7 @@ mod tests {
         );
         let (tx, _rx) = broadcast::channel::<FileChangeEvent>(16);
         let cancel = CancelToken::new();
-        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone());
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
         let dead = handle.dead_signal();
 
         tokio::task::yield_now().await;
@@ -1605,25 +1697,269 @@ mod tests {
     fn build_change_event_extracts_ids() {
         let root = projects_root();
         let path = root.join("proj-A").join("sess-1.jsonl");
-        let event = build_change_event(&root, &path, false).expect("should parse");
+        let event = build_change_event(&root, &path, false, false).expect("should parse");
         assert_eq!(event.project_id, "proj-A");
         assert_eq!(event.session_id, "sess-1");
         assert!(!event.deleted);
         assert!(!event.project_list_changed);
+        assert!(!event.session_list_changed);
     }
 
     #[test]
     fn build_change_event_rejects_nested() {
         let root = projects_root();
         let path = root.join("proj-A").join("subagents").join("agent-x.jsonl");
-        assert!(build_change_event(&root, &path, false).is_none());
+        assert!(build_change_event(&root, &path, false, false).is_none());
     }
 
     #[test]
     fn build_change_event_preserves_deleted_flag() {
         let root = projects_root();
         let path = root.join("proj-A").join("s.jsonl");
-        let event = build_change_event(&root, &path, true).expect("should parse");
+        let event = build_change_event(&root, &path, true, true).expect("should parse");
         assert!(event.deleted);
+        assert!(event.session_list_changed);
+    }
+
+    #[test]
+    fn build_change_event_preserves_session_list_changed() {
+        let root = projects_root();
+        let path = root.join("proj-A").join("s.jsonl");
+        let event_true = build_change_event(&root, &path, false, true).expect("should parse");
+        assert!(event_true.session_list_changed);
+        let event_false = build_change_event(&root, &path, false, false).expect("should parse");
+        assert!(!event_false.session_list_changed);
+    }
+
+    // --- Task 2.5: session_list_changed + 断连重连 baseline diff 测试 ---
+
+    /// (a) first poll（caller 传 None）静默建 baseline，baseline 包含所有已存在 path
+    #[tokio::test(start_paused = true)]
+    async fn first_poll_none_baseline_establishes_baseline_silently() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let snap = snap_one_project(
+            "proj-A",
+            vec![("a.jsonl", meta(100, now)), ("b.jsonl", meta(200, now))],
+        );
+        let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap)]);
+        let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        // 不 emit 任何事件
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "first poll with None baseline must not emit events"
+        );
+        // baseline 包含两个 path
+        let baseline = handle.baseline_snapshot();
+        assert_eq!(baseline.len(), 2);
+        assert!(baseline.contains_key(&projects_root().join("proj-A").join("a.jsonl")));
+        assert!(baseline.contains_key(&projects_root().join("proj-A").join("b.jsonl")));
+
+        cancel.cancel();
+        handle.join().await;
+    }
+
+    /// (b) second poll 新增 path emit `session_list_changed=true`
+    #[tokio::test(start_paused = true)]
+    async fn second_poll_new_path_emits_session_list_changed_true() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let snap1 = snap_one_project("proj-A", vec![("a.jsonl", meta(100, now))]);
+        let snap2 = snap_one_project(
+            "proj-A",
+            vec![("a.jsonl", meta(100, now)), ("new.jsonl", meta(50, now))],
+        );
+        let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap1), Ok(snap2)]);
+        let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let event = rx.try_recv().expect("new path should emit");
+        assert_eq!(event.session_id, "new");
+        assert!(!event.deleted);
+        assert!(
+            event.session_list_changed,
+            "新增 path SHALL emit session_list_changed=true"
+        );
+        // a.jsonl 没变，不应有第二个事件
+        assert!(rx.try_recv().is_err());
+
+        cancel.cancel();
+        handle.join().await;
+    }
+
+    /// (c) second poll 删除 path emit `session_list_changed=true`
+    #[tokio::test(start_paused = true)]
+    async fn second_poll_deleted_path_emits_session_list_changed_true() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let snap1 = snap_one_project("proj-A", vec![("old.jsonl", meta(100, now))]);
+        let snap2 = snap_one_project("proj-A", vec![]);
+        let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap1), Ok(snap2)]);
+        let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let event = rx.try_recv().expect("deleted path should emit");
+        assert_eq!(event.session_id, "old");
+        assert!(event.deleted);
+        assert!(
+            event.session_list_changed,
+            "删除 path SHALL emit session_list_changed=true"
+        );
+
+        cancel.cancel();
+        handle.join().await;
+    }
+
+    /// (d) second poll size/mtime 变化 emit `session_list_changed=false`
+    #[tokio::test(start_paused = true)]
+    async fn second_poll_size_change_emits_session_list_changed_false() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let snap1 = snap_one_project("proj-A", vec![("a.jsonl", meta(100, now))]);
+        let snap2 = snap_one_project("proj-A", vec![("a.jsonl", meta(200, now))]);
+        let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap1), Ok(snap2)]);
+        let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let event = rx.try_recv().expect("size change should emit");
+        assert_eq!(event.session_id, "a");
+        assert!(!event.deleted);
+        assert!(
+            !event.session_list_changed,
+            "size/mtime 变化（已在 baseline）SHALL emit session_list_changed=false"
+        );
+
+        cancel.cancel();
+        handle.join().await;
+    }
+
+    /// (e) 断连重连传入旧 baseline 后首轮做 diff（含新增/删除/size 变化三种）
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_with_prev_baseline_diffs_on_first_poll() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        // 旧 baseline：a.jsonl(100) + removed.jsonl(50)
+        let mut old_baseline: BTreeMap<PathBuf, FileFingerprint> = BTreeMap::new();
+        old_baseline.insert(
+            projects_root().join("proj-A").join("a.jsonl"),
+            FileFingerprint {
+                size: 100,
+                mtime: Some(now),
+            },
+        );
+        old_baseline.insert(
+            projects_root().join("proj-A").join("removed.jsonl"),
+            FileFingerprint {
+                size: 50,
+                mtime: Some(now),
+            },
+        );
+        // 当前远端状态：a.jsonl(200, 变化) + new.jsonl(300, 新增)；removed.jsonl 已删
+        let current_snap = snap_one_project(
+            "proj-A",
+            vec![("a.jsonl", meta(200, now)), ("new.jsonl", meta(300, now))],
+        );
+        let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(current_snap)]);
+        let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(
+            client,
+            projects_root(),
+            tx,
+            cancel.clone(),
+            Some(old_baseline),
+        );
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        // 收集所有 emit 的事件
+        let mut events = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            events.push(e);
+        }
+        assert_eq!(events.len(), 3, "应 emit 3 个事件（新增+变化+删除）");
+
+        // 按 session_id 排序方便断言
+        events.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+
+        // a.jsonl: size 变化 → session_list_changed=false
+        let ev_a = events.iter().find(|e| e.session_id == "a").unwrap();
+        assert!(!ev_a.deleted);
+        assert!(
+            !ev_a.session_list_changed,
+            "size 变化 SHALL session_list_changed=false"
+        );
+
+        // new.jsonl: 新增 → session_list_changed=true
+        let ev_new = events.iter().find(|e| e.session_id == "new").unwrap();
+        assert!(!ev_new.deleted);
+        assert!(
+            ev_new.session_list_changed,
+            "断连期间新增 SHALL session_list_changed=true"
+        );
+
+        // removed.jsonl: 删除 → session_list_changed=true, deleted=true
+        let ev_removed = events.iter().find(|e| e.session_id == "removed").unwrap();
+        assert!(ev_removed.deleted);
+        assert!(
+            ev_removed.session_list_changed,
+            "断连期间删除 SHALL session_list_changed=true"
+        );
+
+        cancel.cancel();
+        handle.join().await;
+    }
+
+    /// (f) 重连未传 baseline 时退化为静默建 baseline（与 first poll 行为一致）
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_without_baseline_degrades_to_silent_baseline() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let snap = snap_one_project(
+            "proj-A",
+            vec![("a.jsonl", meta(100, now)), ("b.jsonl", meta(200, now))],
+        );
+        let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap)]);
+        let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        // 显式传 None（模拟 caller 无旧 baseline）
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        // 不 emit 任何事件——与首次连接行为一致
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "reconnect without baseline SHALL degrade to silent baseline build"
+        );
+
+        cancel.cancel();
+        handle.join().await;
     }
 }

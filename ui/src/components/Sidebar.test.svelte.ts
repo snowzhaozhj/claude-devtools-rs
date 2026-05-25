@@ -637,3 +637,178 @@ describe('Sidebar smoke', () => {
 
 // 导入额外依赖（位置在 describe 块之后避免污染既有 import 排序）
 import { emit } from '@tauri-apps/api/event'
+
+// ---------------------------------------------------------------------------
+// Task 4.1: synthetic event 守护测试
+// ---------------------------------------------------------------------------
+// 后端 broadcast lag 路径 emit synthetic FileChangeEvent { projectId: "",
+// sessionId: "", deleted: false, projectListChanged: true,
+// sessionListChanged: true }。前端 Sidebar handler SHALL：
+// - 触发 loadProjects(true)（通过 list_repository_groups 调用计数）
+// - SHALL NOT 触发 loadSessions("")（per-session 守护 `!payload.sessionId` 命中 early return）
+//
+// 绕过 emit → listen 事件链（避免 transformCallback 时序 race），直接通过
+// fileChangeStore._dispatchForTest 触发已注册 handler。
+// ---------------------------------------------------------------------------
+
+import { _dispatchForTest, _resetScheduleRefreshForTest } from '../lib/fileChangeStore.svelte'
+
+describe('Sidebar synthetic event 守护（task 4.1）', () => {
+  // 注意：projectDataStore 模块级 $state 跨 test 不 reset（vitest 重用模块实例）。
+  // 首次 mount 时 loadProjects(false) 可能命中 cache 不走 IPC；synthetic event
+  // 调 loadProjects(true) 必走 IPC（refresh=true bypass cache）。因此只能断言
+  // "dispatch 后 IPC 调用增量"，不能断言"首次 mount 至少调了一次 IPC"。
+
+  test('synthetic payload SHALL 触发 list_repository_groups（loadProjects）', async () => {
+    _resetScheduleRefreshForTest()
+    let listRepoGroupsCalls = 0
+
+    mockWindows('main')
+    mockIPC((cmd: string, _args?: InvokeArgs): unknown => {
+      switch (cmd) {
+        case 'list_repository_groups':
+          listRepoGroupsCalls += 1
+          return [{
+            id: 'g-A',
+            identity: { id: 'g-A', name: 'A' },
+            name: 'A',
+            mostRecentSession: 0,
+            totalSessions: 2,
+            worktrees: [{
+              id: 'g-A', path: '/a', name: 'A', gitBranch: null,
+              isMainWorktree: true, isRepoRoot: true, sessions: ['sess-1', 'sess-2'],
+              createdAt: null, mostRecentSession: 0,
+            }],
+          }]
+        case 'list_projects':
+          return [{ id: 'g-A', path: '/a', displayName: 'A', sessionCount: 2 }]
+        case 'list_group_sessions':
+          return { sessions: [
+            { sessionId: 'sess-1', projectId: 'g-A', worktreeId: 'g-A', title: 'S1', messageCount: 1, isOngoing: false, lastTimestamp: 100, gitBranch: null },
+            { sessionId: 'sess-2', projectId: 'g-A', worktreeId: 'g-A', title: 'S2', messageCount: 2, isOngoing: false, lastTimestamp: 200, gitBranch: null },
+          ], nextCursor: null }
+        case 'get_project_memory':
+          return { has_memory: false, layers: [], count: 0 }
+        case 'get_project_session_prefs':
+          return { pinned: [], hidden: [] }
+        case 'get_session_summaries_by_ids':
+          return []
+        default:
+          return null
+      }
+    }, { shouldMockEvents: true })
+
+    const { container } = render(Sidebar, {
+      props: {
+        selectedGroupId: 'g-A',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+
+    // 等组件 mount 完成（session-list 渲染即组件已就位）
+    await waitFor(() => {
+      expect(container.querySelector('.session-list')).not.toBeNull()
+    })
+    await tick()
+    // 记录 mount 完成后的 baseline（可能 0 因 projectDataStore cache）
+    const baseRepoGroupsCalls = listRepoGroupsCalls
+
+    // 派发 synthetic event（projectId="", sessionId=""）
+    // handler 中 projectListChanged=true → scheduleRefresh → loadProjects(true)
+    // loadProjects(true) → loadProjectData({ refresh: true }) → 必走 IPC
+    _dispatchForTest({
+      projectId: '',
+      sessionId: '',
+      deleted: false,
+      projectListChanged: true,
+      sessionListChanged: true,
+    })
+
+    // scheduleRefresh leading 立即触发 → list_repository_groups 应被调用
+    await waitFor(() => expect(listRepoGroupsCalls).toBeGreaterThan(baseRepoGroupsCalls), {
+      timeout: 2000,
+    })
+  })
+
+  test('synthetic payload SHALL NOT 触发 loadSessions("")（per-session 守护）', async () => {
+    _resetScheduleRefreshForTest()
+    let listGroupSessionsCalls = 0
+    const listGroupSessionsArgs: string[] = []
+
+    mockWindows('main')
+    mockIPC((cmd: string, args?: InvokeArgs): unknown => {
+      switch (cmd) {
+        case 'list_repository_groups':
+          return [{
+            id: 'g-A',
+            identity: { id: 'g-A', name: 'A' },
+            name: 'A',
+            mostRecentSession: 0,
+            totalSessions: 2,
+            worktrees: [{
+              id: 'g-A', path: '/a', name: 'A', gitBranch: null,
+              isMainWorktree: true, isRepoRoot: true, sessions: ['sess-1', 'sess-2'],
+              createdAt: null, mostRecentSession: 0,
+            }],
+          }]
+        case 'list_projects':
+          return [{ id: 'g-A', path: '/a', displayName: 'A', sessionCount: 2 }]
+        case 'list_group_sessions': {
+          const groupId = (args as Record<string, unknown> | undefined)?.groupId ?? ''
+          listGroupSessionsCalls += 1
+          listGroupSessionsArgs.push(String(groupId))
+          return { sessions: [
+            { sessionId: 'sess-1', projectId: 'g-A', worktreeId: 'g-A', title: 'S1', messageCount: 1, isOngoing: false, lastTimestamp: 100, gitBranch: null },
+            { sessionId: 'sess-2', projectId: 'g-A', worktreeId: 'g-A', title: 'S2', messageCount: 2, isOngoing: false, lastTimestamp: 200, gitBranch: null },
+          ], nextCursor: null }
+        }
+        case 'get_project_memory':
+          return { has_memory: false, layers: [], count: 0 }
+        case 'get_project_session_prefs':
+          return { pinned: [], hidden: [] }
+        case 'get_session_summaries_by_ids':
+          return []
+        default:
+          return null
+      }
+    }, { shouldMockEvents: true })
+
+    const { container } = render(Sidebar, {
+      props: {
+        selectedGroupId: 'g-A',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+
+    // 等组件 mount 完成
+    await waitFor(() => {
+      expect(container.querySelector('.session-list')).not.toBeNull()
+    })
+    await tick()
+    // 记录 baseline（mount 期间可能有 list_group_sessions 调用）
+    const baseSessionsCalls = listGroupSessionsCalls
+
+    // 派发 synthetic event
+    _dispatchForTest({
+      projectId: '',
+      sessionId: '',
+      deleted: false,
+      projectListChanged: true,
+      sessionListChanged: true,
+    })
+
+    // 等 scheduleRefresh leading + trailing 窗口过去
+    await new Promise((r) => setTimeout(r, 400))
+    await tick()
+
+    // list_group_sessions 不应被再次调用（sessionId="" → early return）
+    expect(listGroupSessionsCalls).toBe(baseSessionsCalls)
+    // 进一步断言：没有以空字符串作为 groupId 的调用
+    const callsWithEmptyGroup = listGroupSessionsArgs.filter((g) => g === '')
+    expect(callsWithEmptyGroup).toHaveLength(0)
+  })
+})
