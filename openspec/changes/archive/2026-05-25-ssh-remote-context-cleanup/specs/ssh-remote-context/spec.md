@@ -550,7 +550,7 @@ polling 主 loop SHALL 在取消信号触发时立即跳出（不等满 poll int
 - **THEN** 当前 read_dir 完成后，下一次 select 入口 SHALL 命中 cancel 分支并跳出循环
 - **AND** 本 Requirement **不**强制中断 in-flight SFTP request（保留 SFTP 协议层的礼貌断开）
 
-### Requirement: SSH session manager 暴露 host signature 派生的 ContextId 查询
+### Requirement: `SshSessionManager` 暴露 `HostSignature` 派生的 `ContextId` 查询
 
 系统 SHALL 在 SSH 连接的 host alias resolve 阶段完成后，通过 SSH config digest input + host signature 推导接口计算并缓存当前 SSH context 的 host signature，存放在 SSH session 资源的 host_signature 字段；host signature MUST NOT 在每次 IPC 调用时重新通过 `ssh -G` 子进程 resolve（避免子进程 spawn overhead）。
 
@@ -602,7 +602,7 @@ SSH session manager SHALL 暴露原子查询方法在单次内部状态 lock 内
 - **AND** 任何用 digest A 做 key 写入的 cache entry SHALL NOT 被 digest B 的 lookup 命中——这是 **by-design safe miss**（degraded 路径对 host 的连接拓扑认知降级，与 `ssh -G` 路径不等价；落到不同 cache namespace 防止"基于错误连接假设拿到陈旧远端数据"）
 - **AND** 用户体感为 reconnect 后 session 列表冷扫一次，UX 多几秒，但绝不串扰数据
 
-### Requirement: SSH open_read 大文件走 K-worker prefetch streaming reader
+### Requirement: SSH `open_read` 大文件走 K-worker prefetch streaming reader
 
 SSH 文件系统 provider 的 `open_read` 实现对**生产路径**（实例由真实 SFTP session 构造）且**大文件**（size 达到流水线阈值）SHALL 返回一个**流式 K-worker prefetch reader**——内部由 K 个并发 task 飞独立 SFTP READ，把读到的 chunk 经有界 channel 推给消费侧，使得 reader 的 peak RSS 与 K 成正比而非与 file_size 成正比。
 
@@ -765,7 +765,7 @@ SFTP client trait SHALL 新增 `write` / `mkdir` / `remove` / `rename` 四个方
 - **AND** 清理失败 SHALL 不向上传播 error（rename 失败已是 primary error）
 - **AND** 向调用方抛 `FsError::TransientExhausted { attempts, last_reason }` 或对应 SFTP error
 
-### Requirement: Keep SSH transport alive via transport-layer keepalive
+### Requirement: Keep SSH transport alive via russh keepalive
 
 系统 SHALL 在每次 `ssh_connect` 建立 SSH client 时启用 transport 层 keepalive，配置为每 `SSH_KEEPALIVE_INTERVAL = 15s` 距离上次 server 数据后发一次 keepalive 请求（要求 reply），由 SSH 库内部 keepalive loop 在累计 `SSH_KEEPALIVE_MAX = 3` 之上的连续未应答 tick 后（实际触发窗口约 `(SSH_KEEPALIVE_MAX + 2) × SSH_KEEPALIVE_INTERVAL = 75s`，因当前 SSH 库实现的 off-by-one 语义比较先做后自增再发送）主动关闭 transport。
 
