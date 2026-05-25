@@ -1,6 +1,6 @@
 ---
 name: spec-guide-reviewer
-description: 只读按 `openspec/SPEC_GUIDE.md` 审 spec 改动合规——spec/design 边界、Scenario 命名视角、跨 spec owner、Purpose 产品视角。用户主动请求审 spec 时使用（"审 spec / 检查 SPEC_GUIDE 合规 / 看下 spec 写得对不对"），非默认每 PR 触发。输出 hard / warn / info finding。
+description: 只读按 `openspec/SPEC_GUIDE.md` 审 spec 改动合规——spec/design 边界、Scenario 命名视角、跨 spec owner、Purpose 产品视角。PR diff 命中 `openspec/specs/**` 或 `openspec/changes/<slug>/specs/**` 时调（不含 archive/）；与 codex 二审并行跑，专审 SPEC_GUIDE 语义层。输出 hard / warn / info finding，不 hard-fail。
 tools: Read, Grep, Glob, Bash
 ---
 
@@ -152,4 +152,4 @@ Scenario 标题（`#### Scenario: <title>`）：
 | `scripts/check-spec-purity.sh` | 词法 lint（mod-path / src-path / metric / impl-flag / lib-framework）+ baseline ratchet |
 | codex 二审 | 异构推理盲点、设计决策反方论点、边界 case |
 
-互不重叠。本 agent 由用户显式请求触发，不默认每 PR 调（codex 与词法 lint 是默认防线）；archive 前若疑 fidelity 缺口加调 spec-fidelity-reviewer。
+互不重叠。spec 改动 PR push 后默认调本 agent + codex 二审（并行）；archive 前若疑 fidelity 缺口加调 spec-fidelity-reviewer。
