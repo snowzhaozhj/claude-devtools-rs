@@ -234,7 +234,7 @@ mtime 缺失策略：极少数 SFTP server 的 `stat` 不返回 mtime（`mtime =
 
 #### Scenario: 后续 poll 检测 mtime 变化但 size 不变
 
-- **WHEN** 已有文件 `sess-B.jsonl` size 不变（仍是 1024）但 mtime 从 `T0` 变成 `T0 + 1s`
+- **WHEN** 已有文件 `sess-B.jsonl` size 不变（仍是 1024）但 mtime 从 `T0` 变成 `T0 + Δ`
 - **THEN** watcher SHALL emit `FileChangeEvent { project_id, session_id: "sess-B", deleted: false }`
 - **AND** 该路径覆盖"截断后写回原长度"等单看 size 漏检的场景
 
@@ -272,6 +272,6 @@ mtime 缺失策略：极少数 SFTP server 的 `stat` 不返回 mtime（`mtime =
 
 ### Requirement: Debounce rapid file events
 
-**Reason**: 100ms debounce 是纯数字契约（NFR），按 `openspec/SPEC_GUIDE.md::4 层骨架::第 3 条`「FR 与 NFR 分开」原则迁出 FR 段，统一归入新增 NFR Requirement「事件投递时延、远端 polling 频率与停止时延」。行为契约（"同一文件连发的多次写入只投递一次事件"）保留在 NFR Requirement 的 Scenario「同一文件在 debounce 窗口内连发多次写入仅出一次事件」。
+**Reason**: 原 debounce 窗口数字是纯数字契约（NFR），按 `openspec/SPEC_GUIDE.md::4 层骨架::第 3 条`「FR 与 NFR 分开」原则迁出 FR 段，统一归入新增 NFR Requirement「事件投递时延、远端 polling 频率与停止时延」。行为契约（"同一文件连发的多次写入只投递一次事件"）保留在 NFR Requirement 的 Scenario「同一文件在 debounce 窗口内连发多次写入仅出一次事件」。
 
-**Migration**: 行为不变；订阅方 SHALL 继续在 debounce 窗口内只收到一次合并后的事件。新 NFR Requirement 提供数字契约的唯一归宿；其它 Requirement Body 引用 debounce 时只描述"在 debounce 窗口内"而不重复写出 `100ms` 数字。
+**Migration**: 行为不变；订阅方 SHALL 继续在 debounce 窗口内只收到一次合并后的事件。新 NFR Requirement 提供该数字契约的唯一归宿；其它 Requirement Body 引用 debounce 时只描述"在 debounce 窗口内"而不重复写出具体数字。

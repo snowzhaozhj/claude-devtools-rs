@@ -1,4 +1,4 @@
-change/spec-overhaul-file-watching-pilot/file-watching 12
+change/spec-overhaul-file-watching-pilot/file-watching 10
 spec/agent-configs 0
 spec/app-auto-update 5
 spec/app-chrome 2
