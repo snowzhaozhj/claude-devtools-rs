@@ -79,13 +79,13 @@ IPC mock 模块 SHALL 注入**全部**已注册的 Tauri command 与前端实际
 
 ### Requirement: Playwright 必须覆盖最小 user story 集
 
-E2E 测试套件 SHALL 至少包含以下 5 个 user story 用例，每个独立文件：
+E2E 测试套件 SHALL 至少包含以下 5 个 user story 用例，每个独立 spec 文件：
 
-- 启动与 Dashboard 展示：启动 → 看到 Sidebar + Dashboard 项目卡片
-- 选择项目与 session：点项目展开 sessions → 点 session 打开 SessionDetail tab
-- 命令面板：快捷键调出 CommandPalette → 输入文字 → 导航 → 选中
-- 主题切换：切换 light/dark/system 主题 → 验证 theme attribute + 背景色变化
-- 设置与通知：打开 Settings tab → 看到 Trigger CRUD/通知/外观三分区；打开 Notifications tab → 看到 unread badge
+- `startup-and-dashboard`：启动 → 看到 Sidebar + Dashboard 项目卡片
+- `select-project-and-session`：点项目展开 sessions → 点 session 打开 SessionDetail tab
+- `command-palette`：快捷键调出 CommandPalette → 输入文字 → 导航 → 选中
+- `theme-switch`：切换 light/dark/system 主题 → 验证 theme attribute + 背景色变化
+- `settings-and-notifications`：打开 Settings tab → 看到 Trigger CRUD/通知/外观三分区；打开 Notifications tab → 看到 unread badge
 
 每个用例 MUST 在 30 秒内完成；总跑时 MUST 不超过 3 分钟。
 
@@ -176,19 +176,19 @@ IPC 契约测试模块 SHALL 为每个与 Tauri command 对应的公开接口方
 
 ### Requirement: CI 集成与本地一键跑
 
-CI workflow SHALL 新增独立前端测试 job，并行于 Rust workspace 测试。本地 SHALL 提供一键跑前端测试栈的入口。
+CI workflow SHALL 新增独立 `frontend-test` job，并行于现有 `rust-test` job。本地 SHALL 提供 `just test-ui` / `just test-e2e` 一键跑前端测试栈。
 
 #### Scenario: CI job 独立运行
 
 - **WHEN** PR 触发 CI
-- **THEN** 前端测试 job SHALL 与 Rust 测试 job 并行启动
+- **THEN** `frontend-test` job SHALL 与 `rust-test` job 并行启动
 - **AND** 任一 job 失败 MUST 阻止 PR merge（branch protection 配置）
 
 #### Scenario: 本地一键测试
 
-- **WHEN** 维护者在仓库根目录执行前端单元测试入口
+- **WHEN** 维护者在仓库根目录跑 `just test-ui`
 - **THEN** SHALL 顺序执行单元测试 + 类型检查
-- **AND** 执行 E2E 测试入口 SHALL 跑 E2E 集成测试套件
+- **AND** 跑 `just test-e2e` SHALL 执行 E2E 集成测试套件
 
 #### Scenario: CI 时间预算
 
