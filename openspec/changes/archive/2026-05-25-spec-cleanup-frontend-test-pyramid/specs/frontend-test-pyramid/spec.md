@@ -1,9 +1,11 @@
-# frontend-test-pyramid Specification
+# frontend-test-pyramid Specification Changes
 
-## Purpose
+## MODIFIED Purpose
 
-定义前端测试基础设施的四层金字塔：Rust IPC contract test 守护字段形状、Vitest 单测覆盖纯函数与 store、Playwright 跑 user story 级浏览器集成测试、`mockIPC + Vite dev server` 提供 dev/test 环境的假后端。各层职责互斥不重叠，配合 production bundle 的 mockIPC DCE 校验，让 UI 改动可以在不开 Tauri 窗口的浏览器环境下完成大部分回归。
-## Requirements
+定义前端测试基础设施的四层金字塔（当前实现：IPC 契约测试 / Vitest 单元测试 / Playwright E2E / mockIPC mock 层），保障 UI 改动可在不启动桌面窗口的浏览器环境下完成大部分回归。各层职责互斥不重叠。
+
+## MODIFIED Requirements
+
 ### Requirement: 测试金字塔分四层且职责互斥
 
 系统 SHALL 通过四层测试基础设施守护前端质量，每层职责互斥不重叠：（1）IPC mock 层提供 dev/test 环境的假后端；（2）E2E 集成测试层跑 user story 级浏览器集成测试；（3）单元测试层跑纯函数和 store 单元测试；（4）IPC 契约测试层守护 IPC 字段形状契约。任何一层都 MUST 不被其他层替代。
@@ -193,4 +195,3 @@ CI workflow SHALL 新增独立 `frontend-test` job，并行于现有 `rust-test`
 - **WHEN** 前端测试 job 完成
 - **THEN** 总耗时 SHALL 不超过 5 分钟（缓存命中场景）
 - **AND** 缓存未命中场景下 SHALL 不超过 8 分钟
-
