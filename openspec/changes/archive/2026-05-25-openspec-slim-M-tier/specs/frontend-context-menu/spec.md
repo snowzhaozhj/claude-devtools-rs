@@ -1,8 +1,5 @@
-# frontend-context-menu Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change frontend-context-menu. Update Purpose after archive.
-## Requirements
 ### Requirement: 全局右键事件兜底策略
 
 应用 SHALL 在启动时注册 window-level contextmenu 事件监听器，对未被任何元素自定义菜单处理过的右键事件统一调用 preventDefault 阻止 WKWebView 默认菜单与 macOS 系统菜单弹出。监听器 SHALL 在事件 bubble 阶段执行，并仅在 `event.defaultPrevented === false` 时调用 preventDefault，以确保元素自身的 contextmenu 处理优先生效。
@@ -492,4 +489,3 @@ TBD - created by archiving change frontend-context-menu. Update Purpose after ar
 - **WHEN** 前端调 list_available_terminals
 - **THEN** 后端 SHALL 按当前平台返回合法集合（macOS / Windows / Linux 各自子集）
 - **AND** 返回值 SHALL 仅含当前平台的合法终端枚举值
-

@@ -1,8 +1,5 @@
-# keyboard-shortcuts Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-keyboard-shortcut-system. Update Purpose after archive.
-## Requirements
 ### Requirement: 集中式快捷键注册中心
 
 UI 全局键盘快捷键 SHALL 通过统一注册中心管理。每个全局快捷键 SHALL 在应用启动阶段（或其 owning controller 的 mount 阶段）调用注册接口注册一次；运行期 SHALL NOT 在组件级别监听全局 mod-key 组合。注册中心 SHALL 在内部维护 `NormalizedKey → ShortcutSpec` 的映射并以单一全局 keydown listener 在 document 上 dispatch。
@@ -371,4 +368,3 @@ warning 子态视觉 SHALL 复用 `DESIGN.md::The Conflict Is Warning Not Error 
 - **WHEN** 命令面板打开，用户按方向键
 - **THEN** 命令面板 SHALL 由自身 listener 切换选中项
 - **AND** dispatcher SHALL 不命中任何已注册 spec
-
