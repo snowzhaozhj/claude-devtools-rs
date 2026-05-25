@@ -95,33 +95,15 @@ read_agent_configs(pairs)` 公开签名不变。
 
 ### 反例 4：清理工艺把用户感知阈值误当实测数据清掉
 
-清理 PR（如 ssh-remote-context-cleanup）批量重写 SHALL 句移除"实现细节"时，容易把承载用户可感知契约的数字一并抽象掉。
+清理 PR 批量重写 SHALL 句时易把承载用户可感知契约的数字一并抽象掉。
 
-❌ 误清后（丢失可测断言下限）：
-```
-连接 SHALL 完成五个阶段，每阶段与外层各有独立硬超时
-退出断开 SHALL 受配置上限约束
-polling watcher SHALL 在永久失败计数达阈值后触发自愈
-keepalive SHALL 以约定间隔发心跳
-```
+判断口诀——这个数字变了：
+- **用户能感知**（应用卡多久 / 等多久 / 恢复多久）→ spec NFR，**保留数值与 const 名**（如 `TCP 5s` / `SFTP 8s` / 总 `25s` / `PERMANENT_FAILURE_THRESHOLD = 3`）
+- **只有工程师在 perf bench 里发现**（内部 buffer / 调度参数）→ design
 
-✅ 正确（保留具体数值 + const 名）：
-```
-TCP probe（5s 超时）→ SFTP open（8s 超时）→ 总外层硬超时 SHALL 为 25s
-SHALL 最长等待 3s
-PERMANENT_FAILURE_THRESHOLD = 3（约 9s 持续 transport 错误）
-SSH_KEEPALIVE_INTERVAL = 15s（硬故障 ~75s 内被发现）
-```
+`wall time SHALL ≈ 18s` 是可测契约，"远低于主观放弃阈值"不可测——把可测断言抽象掉 = NFR 失去守护能力。
 
-**判断口诀**——这个数字变了：
-- **用户能感知**？（应用卡多久 / 等多久 / 恢复多久）→ spec NFR / 行为契约
-- **只有工程师在 perf bench 里发现**？（buffer 容量 / 调度参数）→ design
-
-承载用户感知阈值的 const 名（`PERMANENT_FAILURE_THRESHOLD` / `SSH_KEEPALIVE_INTERVAL` 等）保留在 spec 里——它是"可测契约"的命名锚点，配合数值一起读。
-
-理由：spec NFR 的可观察性要求"能被回归测试断言下限"——`wall time SHALL ≈ 18s` 是可测契约，"远低于主观放弃阈值"则不可测。把可测断言抽象掉等于让 NFR 失去守护能力。
-
-更多反例见 PR #300 design.md `D1-D6` / PR #312 design.md `D-1b`（用户感知数字误清）。
+更多反例见 PR #300 design.md `D1-D6` / PR #312 design.md `D-1b`。
 
 ## 写新 spec 的下笔顺序
 
