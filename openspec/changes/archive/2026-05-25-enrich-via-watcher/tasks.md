@@ -51,7 +51,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
+- [x] N.1 push 分支 + 开 PR（PR #305 https://github.com/snowzhaozhj/claude-devtools-rs/pull/305）
+- [x] N.2 wait-ci 全绿（round 1 commit 12477c1 / round 2 commit 82e4a3b / round 3 commit 0081214 三轮全绿）
+- [x] N.3 codex 二审通过（round 1 BLOCK 3 bug → 修 commit 82e4a3b；round 2 BLOCK 3 bug → 修 commit 0081214；round 3 PASS 非阻塞 + spec 文本对齐 nit 同 archive commit 修复）
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）

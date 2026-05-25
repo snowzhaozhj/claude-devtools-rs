@@ -215,14 +215,14 @@ emit MUST 在 step 4 完成（即 sync invalidate 之后，async parsed invalida
 #### Scenario: SSH event 跳过 local cache hint OR
 
 - **WHEN** Local cache 持有 entry（含 project `pa` 与 sessions `{sa1, sa2}`），SSH context 当前 active；远端 SSH polling watcher emit `FileChangeEvent { project_id: "pa-ssh", session_id: "sx", deleted: false, project_list_changed: false, session_list_changed: false }`（SSH 已知 session size/mtime 变化，watcher 字段填 `false`）
-- **AND** unified invalidator 调 `FileWatcher::is_local_project("pa-ssh")` 返 `false`（SSH 远端 project_id 不在 local watcher `known_projects` 内）
+- **AND** unified invalidator 调 `FileWatcher::is_local_project("pa-ssh")` 返 `false`（SSH 远端 project_id 不在 local watcher `local_projects_seen` 集合内——SSH 事件由远端 polling 直接构造，不经过 `parse_project_event`，不会被 `mark_local_origin` 写入）
 - **THEN** unified invalidator SHALL 跳过 `apply_file_event_to_project_scan_cache` 调用 / 跳过 cache hint 查询，强制 `decision.emit_session_list_changed_hint=false` + `decision.invalidated=false`
 - **AND** enriched event 的 `session_list_changed` 字段 SHALL 等于 `event.session_list_changed` 即 `false`
 - **AND** 该 SSH append 事件 SHALL NOT 触发前端三档守护 revalidate，保留 PR #291 append 降噪收益
 
 #### Scenario: Local event 仍应用 cache hint OR
 
-- **WHEN** Local cache 持有 entry（含 project `pa` 但不含 `sa_new`），watcher `known_projects` 含 `pa`；用户新建 `<projects_root>/pa/sa_new.jsonl`，watcher emit `FileChangeEvent { project_id: "pa", session_id: "sa_new", session_list_changed: true }`
+- **WHEN** Local cache 持有 entry（含 project `pa` 但不含 `sa_new`），watcher `local_projects_seen` 集合含 `pa`（`parse_project_event` 已在前一次该 project 下事件 emit 前通过 `mark_local_origin` 写入）；用户新建 `<projects_root>/pa/sa_new.jsonl`，watcher emit `FileChangeEvent { project_id: "pa", session_id: "sa_new", session_list_changed: true }`
 - **AND** unified invalidator 调 `FileWatcher::is_local_project("pa")` 返 `true`
 - **THEN** unified invalidator SHALL 调 `apply_file_event_to_project_scan_cache` 拿 `EnrichDecision { invalidated: true, emit_session_list_changed_hint: true }`
 - **AND** enriched event 的 `session_list_changed` 字段 SHALL 是 `true || true == true`
