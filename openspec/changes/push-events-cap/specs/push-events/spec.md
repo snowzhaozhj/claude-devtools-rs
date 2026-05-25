@@ -88,11 +88,11 @@ Tauri IPC 形态：webview event name 为 `"session-metadata-update"`，payload 
 
 ### Requirement: detected-error payload 形态
 
-`detected-error` push event 通知前端检测到新的错误。系统 SHALL 通过 broadcast 广播 `DetectedError` 结构。Tauri host emit 到 webview event name `"notification-added"`；HTTP/SSE wire 形态 type 为 `"detected_error"`。
+`detected-error` push event 通知前端检测到新的错误。系统 SHALL 将检测到的错误推送到所有已连接的 transport 端点。Tauri host emit 到 webview event name `"notification-added"`；HTTP/SSE wire 形态 type 为 `"detected_error"`。
 
 payload 字段 SHALL 含确定性 id（用于去重）、错误分类、来源 project / session 标识。具体字段集由 `[[notification-triggers]]` 的 error detection pipeline 产出结构决定；本 capability 仅定义 transport 序列化形态（type tag + snake_case wire / camelCase IPC 双形态）。
 
-#### Scenario: detected-error 双桥 transport
+#### Scenario: 错误通知同时推送到 Tauri 端和 SSE 客户端
 
 - **WHEN** notification pipeline 产出一条新 DetectedError
 - **THEN** Tauri host bridge SHALL emit webview event `"notification-added"` 携带该 error payload
@@ -114,7 +114,7 @@ Tauri IPC 路径：webview event name 为 `"sse-lagged"`，payload `{ source: ".
 - **WHEN** 某条 broadcast bridge 检测到 Lagged(n) 错误
 - **THEN** 系统 SHALL 推送 sse-lagged event，payload 含 `source`（标识来源 broadcast）和 `missed`（丢失事件数）
 
-#### Scenario: sse-lagged 旧 sentinel 向后兼容
+#### Scenario: sse-lagged 缺失 source/missed 字段时前端不报错
 
 - **WHEN** 前端收到 sse-lagged payload 缺 `source` / `missed` 字段（旧版 sentinel）
 - **THEN** 前端 SHALL 仍走 sse-lagged handler（按 `type === "sse_lagged"` 判定），读 `source` / `missed` 为 undefined 不报错
