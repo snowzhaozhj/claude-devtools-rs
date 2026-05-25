@@ -8,7 +8,7 @@
 
 ## 2. 8 个 cap 的 spec delta（每个一个 commit）
 
-- [ ] 2.1 configuration-management：合并三个 enum 字段 per-value scenario；剔除 `serde(default)` 之类 attribute 描述
+- [x] 2.1 configuration-management：合并三个 enum 字段 per-value scenario；剔除 `serde(default)` 之类 attribute 描述
 - [ ] 2.2 fs-abstraction：H1-H6 enforce 路径 / 测试文件名 / 12 方法内部细节移 design
 - [ ] 2.3 tool-execution-linking：工具块右键菜单两 Requirement 收敛为引用 frontend-context-menu
 - [ ] 2.4 chunk-building：teammate 5 步实现移 design；删 EMBED_TEAMMATES 回滚 Scenario
