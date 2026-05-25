@@ -207,8 +207,8 @@ impl FileWatcher {
         // 持有 watcher 防止被 drop
         let _watcher = watcher;
 
-        run_debounce_loop(rx, DEBOUNCE, |path, deleted| {
-            self.route_event(&path, deleted);
+        run_debounce_loop(rx, DEBOUNCE, |path, deleted, mtime_ms| {
+            self.route_event(&path, deleted, mtime_ms);
         })
         .await;
 
@@ -221,9 +221,9 @@ impl FileWatcher {
     /// 后的 `projects_dir` / `todos_dir` 不一致——走 `path_starts_with` 跨平台
     /// helper 做大小写不敏感前缀匹配。Spec：`file-watching::Route watch events
     /// case-insensitively on Windows`。
-    fn route_event(&self, path: &Path, deleted: bool) {
+    fn route_event(&self, path: &Path, deleted: bool, mtime_ms: Option<i64>) {
         if path_starts_with(path, &self.projects_dir) {
-            if let Some(file_event) = self.parse_project_event(path, deleted) {
+            if let Some(file_event) = self.parse_project_event(path, deleted, mtime_ms) {
                 let _ = self.file_tx.send(file_event);
             }
         } else if path_starts_with(path, &self.todos_dir) {
@@ -242,7 +242,12 @@ impl FileWatcher {
     ///   `<projects_dir>/<project_id>/<session_id>/subagents/agent-<sub_id>.jsonl`
     ///   （4 层 + .jsonl，且第 3 段为 `subagents`、文件名 `agent-` 前缀但非
     ///   `agent-acompact*`），路由到父 `(project_id, session_id)` 的事件。
-    fn parse_project_event(&self, path: &Path, deleted: bool) -> Option<FileChangeEvent> {
+    fn parse_project_event(
+        &self,
+        path: &Path,
+        deleted: bool,
+        mtime_ms: Option<i64>,
+    ) -> Option<FileChangeEvent> {
         // 跨平台 strip_prefix——Windows 上容忍大小写漂移；返回的相对路径保留
         // `path` 原始大小写以保证后续 components / file_stem 提取的 project_id /
         // session_id 与磁盘真实命名一致。
@@ -262,6 +267,9 @@ impl FileWatcher {
             // `file-watching::Watch project directory additions` 的
             // "dir-create followed by first jsonl" Scenario。
             self.mark_local_origin(&project_id);
+            // dir-create 事件本身无 jsonl mtime（dir mtime 与 session 活跃度
+            // 无关），即便 metadata() 拿到了 mtime 也保持 None——overlay 路径
+            // 的契约是"反映 jsonl mtime"。
             return Some(FileChangeEvent {
                 project_id,
                 session_id: String::new(),
@@ -287,13 +295,15 @@ impl FileWatcher {
                 let project_id = components[0].as_os_str().to_string_lossy().into_owned();
                 let session_id = components[1].as_os_str().to_string_lossy().into_owned();
                 self.mark_local_origin(&project_id);
+                // 嵌套 subagent jsonl 写事件——透传 deleted 路径取到的 mtime；
+                // deleted=true 时 mtime_ms 入参恒为 None。
                 return Some(FileChangeEvent {
                     project_id,
                     session_id,
                     deleted,
                     project_list_changed: false,
                     session_list_changed: false,
-                    mtime_ms: None,
+                    mtime_ms,
                 });
             }
             return None;
@@ -325,13 +335,16 @@ impl FileWatcher {
             self.mark_session_seen(&project_id, &session_id)
         };
 
+        // 主 session jsonl 写事件——透传 deleted 路径取到的 mtime；
+        // deleted=true 时 mtime_ms 入参恒为 None（spec `file-watching::
+        // 删除事件不携带 mtime`）。
         Some(FileChangeEvent {
             project_id,
             session_id,
             deleted,
             project_list_changed,
             session_list_changed,
-            mtime_ms: None,
+            mtime_ms,
         })
     }
 
@@ -409,9 +422,14 @@ enum RawEvent {
 /// 独立 debounce 循环 —— 纯 tokio mpsc + `tokio::time`，不依赖 `notify`。
 ///
 /// 输入：`raw_rx` 原始事件流、`debounce` 窗口、`sink` 路由回调。
-/// 每条 path 最后一次事件之后静默 `debounce` 毫秒就调用 `sink(path, deleted)`，
-/// 其中 `deleted = !path.exists()`（macOS `FSEvents` 对 remove 不保证发
-/// `EventKind::Remove`，debounce 窗口结束时检查最可靠）。
+/// 每条 path 最后一次事件之后静默 `debounce` 毫秒就调用 `sink(path, deleted, mtime_ms)`，
+/// 其中 `(deleted, mtime_ms)` 通过**单次** `tokio::fs::metadata()` 同时产出（替换
+/// 历史的 `path.exists()`，`metadata()` 与 `exists()` 都属于一次 stat 系统调用，
+/// 一换一不引入新增 fs op；spec `file-watching::Watch Claude projects directory
+/// for session changes::填 mtime 不增加 fs op` 兜底）。`metadata()` 返
+/// `NotFound` 视作 `deleted=true, mtime_ms=None`；其它 IO 错误（典型瞬时权限）
+/// 走 graceful skip——保留 `deleted=false, mtime_ms=None` 让上层按既有 spec
+/// `Survive transient filesystem errors` 路径继续。
 ///
 /// 循环直到 `raw_rx` 关闭（sender 全 drop）后退出。测试可注入 mock rx + sink
 /// 捕获产出，配合 `#[tokio::test(start_paused = true)]` + `tokio::time::advance`
@@ -421,7 +439,7 @@ async fn run_debounce_loop<F>(
     debounce: Duration,
     mut sink: F,
 ) where
-    F: FnMut(PathBuf, bool),
+    F: FnMut(PathBuf, bool, Option<i64>),
 {
     let mut pending: HashMap<PathBuf, Instant> = HashMap::new();
 
@@ -454,11 +472,38 @@ async fn run_debounce_loop<F>(
                     .collect();
                 for path in ready {
                     pending.remove(&path);
-                    let deleted = !path.exists();
-                    sink(path, deleted);
+                    let (deleted, mtime_ms) = stat_for_event(&path).await;
+                    sink(path, deleted, mtime_ms);
                 }
             }
         }
+    }
+}
+
+/// 单次 `tokio::fs::metadata()` 同时产出 `deleted` 与 `mtime_ms`。
+///
+/// 替换历史 `path.exists()` 路径——二者都是单次 stat 系统调用，**一换一**不引入
+/// 新增 fs op（spec `file-watching` Requirement `Watch Claude projects directory
+/// for session changes::填 mtime 不增加 fs op`）。
+///
+/// 返回值：
+/// - 文件存在：`(false, Some(<jsonl mtime ms since UNIX epoch>))`，mtime 以 i64 ms
+///   表达；mtime 早于 UNIX epoch（极端时钟回拨）或转换溢出 i64 时降级为 `None`
+/// - `NotFound`：`(true, None)`，对齐删除路径的契约（spec `删除事件不携带 mtime`）
+/// - 其它 IO 错误：`(false, None)`——按既有 spec `Survive transient filesystem
+///   errors` 路径 graceful skip，保留 deleted=false 让 debounce 下一轮重试
+async fn stat_for_event(path: &Path) -> (bool, Option<i64>) {
+    match tokio::fs::metadata(path).await {
+        Ok(meta) => {
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .and_then(|d| i64::try_from(d.as_millis()).ok());
+            (false, mtime)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => (true, None),
+        Err(_) => (false, None),
     }
 }
 
@@ -486,16 +531,18 @@ mod tests {
         RawEvent::Notify(Event::new(notify::EventKind::Any).add_path(path.to_path_buf()))
     }
 
+    type SinkRecord = (PathBuf, bool, Option<i64>);
+
     #[derive(Default, Clone)]
-    struct Sink(Arc<Mutex<Vec<(PathBuf, bool)>>>);
+    struct Sink(Arc<Mutex<Vec<SinkRecord>>>);
 
     impl Sink {
-        fn callback(&self) -> impl FnMut(PathBuf, bool) + use<> {
+        fn callback(&self) -> impl FnMut(PathBuf, bool, Option<i64>) + use<> {
             let inner = self.0.clone();
-            move |p, d| inner.lock().unwrap().push((p, d))
+            move |p, d, m| inner.lock().unwrap().push((p, d, m))
         }
 
-        fn drain(&self) -> Vec<(PathBuf, bool)> {
+        fn drain(&self) -> Vec<SinkRecord> {
             std::mem::take(&mut *self.0.lock().unwrap())
         }
     }
@@ -599,7 +646,7 @@ mod tests {
         handle.await.unwrap();
 
         let mut events = sink.drain();
-        events.sort_by_key(|(p, _)| p.clone());
+        events.sort_by_key(|(p, _, _)| p.clone());
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].0, p1);
         assert_eq!(events[1].0, p2);
@@ -658,6 +705,159 @@ mod tests {
         assert!(sink.drain().is_empty());
     }
 
+    // --- mtime_ms 字段填写 unit test（spec `file-watching::Watch Claude
+    // projects directory for session changes` 5 个新增 Scenario） ---
+
+    /// spec scenario `已存在文件追加事件携带 mtime hint`：文件存在时 sink 收到
+    /// 的 `mtime_ms` SHALL == 文件 mtime 毫秒值。
+    #[tokio::test(start_paused = true)]
+    async fn flush_after_window_emits_mtime_when_path_exists() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("alive.jsonl");
+        std::fs::write(&path, b"hi").unwrap();
+        let expected_mtime = std::fs::metadata(&path)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let sink = Sink::default();
+        let handle = tokio::spawn(run_debounce_loop(
+            rx,
+            Duration::from_millis(100),
+            sink.callback(),
+        ));
+
+        tx.send(notify_event_for(&path)).unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(150)).await;
+        tokio::task::yield_now().await;
+
+        drop(tx);
+        handle.await.unwrap();
+
+        let events = sink.drain();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, path);
+        assert!(!events[0].1, "alive file: deleted=false");
+        let got_mtime = events[0].2.expect("alive file SHALL emit mtime_ms");
+        assert_eq!(
+            i128::from(got_mtime),
+            i128::try_from(expected_mtime).unwrap(),
+            "mtime_ms SHALL 等于文件实际 mtime 毫秒值"
+        );
+    }
+
+    /// spec scenario `删除事件不携带 mtime`：文件不存在时 sink 收到
+    /// `deleted=true, mtime_ms=None`。
+    #[tokio::test(start_paused = true)]
+    async fn flush_after_window_skips_mtime_for_deleted_path() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("ghost.jsonl");
+        // 故意不创建
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let sink = Sink::default();
+        let handle = tokio::spawn(run_debounce_loop(
+            rx,
+            Duration::from_millis(100),
+            sink.callback(),
+        ));
+
+        tx.send(notify_event_for(&path)).unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(150)).await;
+        tokio::task::yield_now().await;
+
+        drop(tx);
+        handle.await.unwrap();
+
+        let events = sink.drain();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1, "missing file SHALL be flagged deleted");
+        assert!(
+            events[0].2.is_none(),
+            "deleted event SHALL NOT carry mtime_ms"
+        );
+    }
+
+    /// spec scenario `已存在文件追加事件携带 mtime hint::字段值 SHALL 单调推进`：
+    /// 同一文件两次顺序追加，后一次 mtime ≥ 前一次。
+    #[tokio::test(start_paused = true)]
+    async fn sequential_appends_emit_monotonic_mtime() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("seq.jsonl");
+        std::fs::write(&path, b"first").unwrap();
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let sink = Sink::default();
+        let handle = tokio::spawn(run_debounce_loop(
+            rx,
+            Duration::from_millis(100),
+            sink.callback(),
+        ));
+
+        // 第一次 flush
+        tx.send(notify_event_for(&path)).unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(150)).await;
+        tokio::task::yield_now().await;
+
+        // 推进 wall clock 至少 5ms 让 mtime 真有变化（macOS HFS+ 1s 分辨率，
+        // APFS / ext4 高分辨率；写一段时间后 modified() 拿到的 mtime 推进）。
+        // tokio::time::pause 不影响 std::time / fs mtime——后者由 OS 真时钟。
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&path, b"second--longer").unwrap();
+
+        // 第二次 flush
+        tx.send(notify_event_for(&path)).unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(150)).await;
+        tokio::task::yield_now().await;
+
+        drop(tx);
+        handle.await.unwrap();
+
+        let events = sink.drain();
+        assert_eq!(events.len(), 2);
+        let m1 = events[0].2.expect("first emit SHALL have mtime");
+        let m2 = events[1].2.expect("second emit SHALL have mtime");
+        assert!(
+            m2 >= m1,
+            "monotonic: second mtime ({m2}) SHALL >= first ({m1})"
+        );
+    }
+
+    /// spec scenario `填 mtime 不增加 fs op`：`stat_for_event` 单次 metadata
+    /// 调用同时产出 `(deleted, mtime_ms)`——由于实现路径上 `metadata()` 是
+    /// 唯一 syscall（替代历史 `path.exists()`，**一换一**），本测验证返回值
+    /// 形态正确，间接锁住"不引入额外 stat"——若实现回退到 exists+metadata
+    /// 两步，这个测试本身仍 pass 但 grep `path.exists()` 会发现回退。
+    #[tokio::test]
+    async fn stat_for_event_single_metadata_call_produces_full_signal() {
+        let tmp = TempDir::new().unwrap();
+        let alive = tmp.path().join("alive.jsonl");
+        let ghost = tmp.path().join("ghost.jsonl");
+        std::fs::write(&alive, b"x").unwrap();
+
+        let (alive_deleted, alive_mtime) = stat_for_event(&alive).await;
+        assert!(!alive_deleted);
+        assert!(alive_mtime.is_some());
+
+        let (ghost_deleted, ghost_mtime) = stat_for_event(&ghost).await;
+        assert!(ghost_deleted);
+        assert!(ghost_mtime.is_none());
+
+        // grep 防回归断言（注释级）：本文件 SHALL NOT 同时含 `path.exists()`
+        // 与 `tokio::fs::metadata(&path)` 两条调用——只能保留 metadata 一处
+        // 否则违反 spec `填 mtime 不增加 fs op`。grep 由 cargo test 之外的
+        // CI hook 覆盖（手工跑：`grep -c '\.exists()' src/watcher.rs` SHALL == 0
+        // 在 fs flush 路径里）。
+    }
+
     // --- parse_project_event / parse_todo_event / route_event 路由单元测 ---
     //
     // 这些原本依赖端到端 file_watching.rs 测试间接覆盖；现在直接喂 `Path` 单测，
@@ -685,7 +885,7 @@ mod tests {
         let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
         let jsonl_path = projects.join("proj1").join("sess-abc.jsonl");
         let event = watcher
-            .parse_project_event(&jsonl_path, false)
+            .parse_project_event(&jsonl_path, false, None)
             .expect("should parse");
         assert_eq!(event.project_id, "proj1");
         assert_eq!(event.session_id, "sess-abc");
@@ -706,7 +906,7 @@ mod tests {
             FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
 
         let event = watcher
-            .parse_project_event(&projects.join("proj1").join("sess-abc.jsonl"), false)
+            .parse_project_event(&projects.join("proj1").join("sess-abc.jsonl"), false, None)
             .expect("should parse");
         assert!(!event.project_list_changed);
     }
@@ -718,7 +918,7 @@ mod tests {
         std::fs::create_dir_all(&project_dir).unwrap();
 
         let event = watcher
-            .parse_project_event(&project_dir, false)
+            .parse_project_event(&project_dir, false, None)
             .expect("should parse");
         assert_eq!(event.project_id, "proj-new");
         assert_eq!(event.session_id, "");
@@ -755,7 +955,7 @@ mod tests {
         std::fs::create_dir_all(&project_dir).unwrap();
 
         let dir_event = watcher
-            .parse_project_event(&project_dir, false)
+            .parse_project_event(&project_dir, false, None)
             .expect("dir-create should emit");
         assert_eq!(dir_event.project_id, "proj-fresh");
         assert_eq!(dir_event.session_id, "");
@@ -766,7 +966,7 @@ mod tests {
 
         let jsonl_path = project_dir.join("sess-first.jsonl");
         let jsonl_event = watcher
-            .parse_project_event(&jsonl_path, false)
+            .parse_project_event(&jsonl_path, false, None)
             .expect("first jsonl should emit");
         assert_eq!(jsonl_event.project_id, "proj-fresh");
         assert_eq!(jsonl_event.session_id, "sess-first");
@@ -798,7 +998,7 @@ mod tests {
         std::fs::create_dir_all(&project_dir).unwrap();
 
         let event = watcher
-            .parse_project_event(&project_dir, false)
+            .parse_project_event(&project_dir, false, None)
             .expect("dir-create should emit");
         assert!(event.project_list_changed);
 
@@ -814,38 +1014,46 @@ mod tests {
     fn parse_project_event_rejects_non_jsonl_extension() {
         let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
         let non_jsonl = projects.join("proj1").join("notes.txt");
-        assert!(watcher.parse_project_event(&non_jsonl, false).is_none());
+        assert!(
+            watcher
+                .parse_project_event(&non_jsonl, false, None)
+                .is_none()
+        );
     }
 
     #[test]
     fn parse_project_event_rejects_path_outside_projects_dir() {
         let (tmp, _projects, _todos, watcher) = setup_watcher_dirs();
         let outside = tmp.path().join("elsewhere").join("s.jsonl");
-        assert!(watcher.parse_project_event(&outside, false).is_none());
+        assert!(watcher.parse_project_event(&outside, false, None).is_none());
     }
 
     #[test]
     fn parse_project_event_requires_exactly_project_and_session() {
         let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
         let bare = projects.join("bare.jsonl");
-        assert!(watcher.parse_project_event(&bare, false).is_none());
+        assert!(watcher.parse_project_event(&bare, false, None).is_none());
 
         let nested = projects.join("proj1").join("subagents").join("agent.jsonl");
-        assert!(watcher.parse_project_event(&nested, false).is_none());
+        assert!(watcher.parse_project_event(&nested, false, None).is_none());
     }
 
     #[test]
     fn parse_project_event_rejects_deleted_top_level_project_directory() {
         let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
         let project_dir = projects.join("proj-deleted");
-        assert!(watcher.parse_project_event(&project_dir, true).is_none());
+        assert!(
+            watcher
+                .parse_project_event(&project_dir, true, None)
+                .is_none()
+        );
     }
 
     #[test]
     fn parse_project_event_preserves_deleted_flag() {
         let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
         let path = projects.join("proj").join("sess.jsonl");
-        let event = watcher.parse_project_event(&path, true).unwrap();
+        let event = watcher.parse_project_event(&path, true, None).unwrap();
         assert!(event.deleted);
     }
 
@@ -870,10 +1078,10 @@ mod tests {
         let mut todo_rx = watcher.subscribe_todos();
 
         let session_path = projects.join("proj1").join("sess-x.jsonl");
-        watcher.route_event(&session_path, false);
+        watcher.route_event(&session_path, false, None);
 
         let todo_path = todos.join("sess-todo.json");
-        watcher.route_event(&todo_path, false);
+        watcher.route_event(&todo_path, false, None);
 
         let file_event = file_rx.try_recv().expect("should have file event");
         assert_eq!(file_event.project_id, "proj1");
@@ -891,7 +1099,7 @@ mod tests {
         let mut todo_rx = watcher.subscribe_todos();
 
         let orphan = tmp.path().join("other").join("x.jsonl");
-        watcher.route_event(&orphan, false);
+        watcher.route_event(&orphan, false, None);
 
         assert!(file_rx.try_recv().is_err());
         assert!(todo_rx.try_recv().is_err());
@@ -1031,7 +1239,7 @@ mod tests {
             .join("subagents")
             .join("agent-sub-1.jsonl");
         let event = watcher
-            .parse_project_event(&nested, false)
+            .parse_project_event(&nested, false, None)
             .expect("should route nested subagent jsonl to parent session");
         assert_eq!(event.project_id, "proj-A");
         assert_eq!(event.session_id, "sess-A");
@@ -1051,7 +1259,11 @@ mod tests {
             .join("sess-A")
             .join("subagents")
             .join("agent-acompact-x.jsonl");
-        assert!(watcher.parse_project_event(&acompact, false).is_none());
+        assert!(
+            watcher
+                .parse_project_event(&acompact, false, None)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1062,7 +1274,7 @@ mod tests {
             .join("sess-A")
             .join("subagents")
             .join("notes.txt");
-        assert!(watcher.parse_project_event(&notes, false).is_none());
+        assert!(watcher.parse_project_event(&notes, false, None).is_none());
     }
 
     #[test]
@@ -1073,7 +1285,7 @@ mod tests {
             .join("sess-A")
             .join("subagents")
             .join("random.jsonl");
-        assert!(watcher.parse_project_event(&random, false).is_none());
+        assert!(watcher.parse_project_event(&random, false, None).is_none());
     }
 
     #[test]
@@ -1084,7 +1296,7 @@ mod tests {
         let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
         let legacy = projects.join("proj-A").join("agent-legacy.jsonl");
         let event = watcher
-            .parse_project_event(&legacy, false)
+            .parse_project_event(&legacy, false, None)
             .expect("legacy 2-level path should still parse");
         assert_eq!(event.project_id, "proj-A");
         assert_eq!(event.session_id, "agent-legacy");
@@ -1099,7 +1311,7 @@ mod tests {
             .join("subagents")
             .join("agent-sub-1.jsonl");
         let event = watcher
-            .parse_project_event(&nested, true)
+            .parse_project_event(&nested, true, None)
             .expect("delete should still route nested subagent jsonl");
         assert!(event.deleted);
         assert!(!event.project_list_changed);
@@ -1127,7 +1339,7 @@ mod tests {
         //   (a) emit 的 project_list_changed === false
         //   (b) known_projects 仍未包含 "proj-unseen"
         let event = watcher
-            .parse_project_event(&nested, false)
+            .parse_project_event(&nested, false, None)
             .expect("nested branch should emit");
         assert!(!event.project_list_changed);
         let known = watcher.known_projects.lock().unwrap();
@@ -1164,7 +1376,7 @@ mod tests {
 
         let path = projects.join("pa").join("sa_new.jsonl");
         let event = watcher
-            .parse_project_event(&path, false)
+            .parse_project_event(&path, false, None)
             .expect("should parse");
         assert_eq!(event.project_id, "pa");
         assert_eq!(event.session_id, "sa_new");
@@ -1194,10 +1406,10 @@ mod tests {
 
         let path = projects.join("pa").join("sa.jsonl");
         // 第一次——first-seen
-        let first = watcher.parse_project_event(&path, false).unwrap();
+        let first = watcher.parse_project_event(&path, false, None).unwrap();
         assert!(first.session_list_changed);
         // 第二次——后续 append
-        let second = watcher.parse_project_event(&path, false).unwrap();
+        let second = watcher.parse_project_event(&path, false, None).unwrap();
         assert!(
             !second.session_list_changed,
             "subsequent append SHALL fill session_list_changed=false"
@@ -1219,9 +1431,9 @@ mod tests {
 
         let path = projects.join("pa").join("sa.jsonl");
         // 先 mark
-        watcher.parse_project_event(&path, false).unwrap();
+        watcher.parse_project_event(&path, false, None).unwrap();
         // 删除
-        let del_event = watcher.parse_project_event(&path, true).unwrap();
+        let del_event = watcher.parse_project_event(&path, true, None).unwrap();
         assert!(del_event.deleted);
         assert!(
             del_event.session_list_changed,
@@ -1248,7 +1460,7 @@ mod tests {
 
         // 从未对 sa_old 做过任何写事件
         let path = projects.join("pa").join("sa_old.jsonl");
-        let del_event = watcher.parse_project_event(&path, true).unwrap();
+        let del_event = watcher.parse_project_event(&path, true, None).unwrap();
         assert!(del_event.deleted);
         assert!(
             del_event.session_list_changed,
@@ -1268,7 +1480,7 @@ mod tests {
             .join("subagents")
             .join("agent-sub-1.jsonl");
         let event = watcher
-            .parse_project_event(&nested, false)
+            .parse_project_event(&nested, false, None)
             .expect("should route");
         assert!(!event.session_list_changed);
         // 跟踪集合应为空——subagent 不进集合
@@ -1293,13 +1505,13 @@ mod tests {
 
         // watcher 启动后 known_sessions 为空——模拟旧 session 的首次写
         let path = projects.join("pa").join("sa_existing.jsonl");
-        let event = watcher.parse_project_event(&path, false).unwrap();
+        let event = watcher.parse_project_event(&path, false, None).unwrap();
         assert!(
             event.session_list_changed,
             "old session first write after startup SHALL fill true (lazy false-positive)"
         );
         // 同一 session 后续 append 填 false
-        let second = watcher.parse_project_event(&path, false).unwrap();
+        let second = watcher.parse_project_event(&path, false, None).unwrap();
         assert!(
             !second.session_list_changed,
             "subsequent append SHALL fill false"
