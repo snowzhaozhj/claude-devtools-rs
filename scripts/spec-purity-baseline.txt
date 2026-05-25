@@ -29,3 +29,4 @@ spec/team-coordination-metadata 0
 spec/tool-execution-linking 6
 spec/ui-search 2
 spec/wsl-distro-discovery 1
+change/spec-cleanup-frontend-test-pyramid/frontend-test-pyramid 1
