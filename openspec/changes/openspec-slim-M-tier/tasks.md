@@ -12,7 +12,7 @@
 - [x] 2.2 fs-abstraction：H1-H6 enforce 路径 / 测试文件名 / 12 方法内部细节移 design
 - [x] 2.3 tool-execution-linking：工具块右键菜单两 Requirement 收敛为引用 frontend-context-menu
 - [x] 2.4 chunk-building：teammate 5 步实现移 design；删 EMBED_TEAMMATES 回滚 Scenario
-- [ ] 2.5 project-discovery：合并 Windows 路径 4 Scenario；剔除源码引用
+- [x] 2.5 project-discovery：合并 Windows 路径 4 Scenario；剔除源码引用
 - [ ] 2.6 http-data-api：三组路由表合并；完整路由表移 design
 - [ ] 2.7 keyboard-shortcuts：normalizeBindingToMod 11 步算法 fold 4 条契约
 - [ ] 2.8 frontend-context-menu：8 factory + 3 层 handler 收敛
