@@ -15,7 +15,7 @@
 - [x] 2.5 project-discovery：合并 Windows 路径 4 Scenario；剔除源码引用
 - [x] 2.6 http-data-api：三组路由表合并；完整路由表移 design
 - [x] 2.7 keyboard-shortcuts：normalizeBindingToMod 11 步算法 fold 4 条契约
-- [ ] 2.8 frontend-context-menu：8 factory + 3 层 handler 收敛
+- [x] 2.8 frontend-context-menu：8 factory + 3 层 handler 收敛
 
 ## 3. 验证
 
