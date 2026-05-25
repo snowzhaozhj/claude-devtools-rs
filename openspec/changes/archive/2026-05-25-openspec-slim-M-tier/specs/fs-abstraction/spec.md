@@ -23,7 +23,7 @@ fs 抽象 crate SHALL **不**依赖任何业务 crate；允许的运行时依赖
 - **THEN** SHALL NOT 含任何业务 crate（discover / api / config / ssh / cli / watch / analyze / parse / core）
 - **AND** 允许的依赖仅限运行时 / 错误 / 日志基础设施
 
-### Requirement: fs provider trait 暴露目录与文件读写最小集
+### Requirement: `FileSystemProvider` trait 暴露 7 个核心方法
 
 fs provider trait SHALL 暴露以下行为类别（编译时强制实现，default 实现可被 override）：
 
@@ -118,7 +118,7 @@ trait SHALL 保持 dyn-safe（`&dyn` 可用），不引入关联类型。
 - **THEN** SHALL 自动化检验 trait 方法参数 type 不含 `Cursor` / `Offset` / `Limit` / `SortBy` / `Order`
 - **AND** 测试 fail 时 CI 拒，错误信息含 method name + violating arg type + 指向本 spec H5 + design.md
 
-### Requirement: H1 强制扫描业务路径不直调底层 fs API
+### Requirement: `xtask check-fs-direct-calls` 自动化 H1
 
 系统 SHALL 提供 H1 自动化扫描入口（xtask 命令或等价脚本），扫描业务 crate 内底层 fs API 直调反模式。脚本行为契约：
 

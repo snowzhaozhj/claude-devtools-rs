@@ -8,129 +8,112 @@
 
 系统 SHALL 扫描当前 Claude root 下的 `projects` 根目录，把每个一级子目录视为一个 project。当前 Claude root SHALL 来自 `general.claudeRootPath`；当该字段为 `null` 时，默认 Unix root 为 `~/.claude`、Windows root 为 `%USERPROFILE%\.claude\`，projects 根目录分别为 `~/.claude/projects/` 与 `%USERPROFILE%\.claude\projects\`。
 
-系统 SHALL 按 `HOME` → `USERPROFILE` → `HOMEDRIVE` + `HOMEPATH` → 平台默认（`dirs::home_dir()`）的优先级解析用户 home 目录。这与 TS 原版 `pathDecoder.ts::getHomeDir` 的 fallback 链一致：让 WSL / Git Bash / Cygwin 用户可经 `HOME` 覆写，同时仍能在 Windows 原生 shell 里定位到 `%USERPROFILE%\.claude\`。
+系统 SHALL 按 `HOME` → `USERPROFILE` → `HOMEDRIVE + HOMEPATH` → 平台默认 home 目录的 fallback 链解析用户 home 目录，让 WSL / Git Bash / Cygwin 用户可经 `HOME` 覆写、同时仍能在 Windows 原生 shell 里定位到默认目录。
 
-**SSH 模式下单 project 扫描错误处理**：当 `fs.kind() == FsKind::Ssh` 时，scanner 对每个 sub-project 调 `scan_project_dir` 的错误 SHALL 按 `FsError::is_likely_channel_dead()` 元方法分流：
+**SSH 模式下单 project 扫描错误处理**：当 backend 是 SSH 时，scanner 对每个 sub-project 扫描的错误 SHALL 按 `FsError::is_likely_channel_dead()` 元方法分流：
 
-- `is_likely_channel_dead() == true`（含 `Disconnected` 任意 / `TransientExhausted { last_reason }` 含 transport-dead 关键字 / `Io { source.kind() }` 是 `BrokenPipe / ConnectionReset / ConnectionAborted`）：scanner SHALL **立即** `return Err(DiscoverError::Fs(err))` abort 整轮 scan，让上层 `list_repository_groups` 拿到 hard error 触发自愈路径，**不**得 silent skip 凑半成品列表
-- `is_likely_channel_dead() == false`（普通单文件 IO / NotFound / 单 project 临时不可读）：保留现有 `tracing::warn!(dir, error, "skip unreadable project dir")` + 跳过该 project 行为
+- channel-dead 类错误（连接断开 / transport 死 / broken pipe / connection reset）：scanner SHALL **立即** abort 整轮 scan 返 hard error，让上层触发自愈路径，**不**得 silent skip 凑半成品列表
+- 其它类错误（普通单文件 IO / NotFound / 单 project 临时不可读 / 纯 timeout exhausted）：保留现有 warn 级日志 + 跳过该 project 行为
 
-理由：SSH channel-dead 时 silent skip 让用户 sidebar 看到不完整列表 + UI 表现"还在加载"，自愈路径瘫痪；而普通单 project 失败（典型权限 / 单文件损坏）silent skip 让其它 project 仍可见是合理的。
+理由：SSH channel-dead 时 silent skip 让用户看到不完整列表 + UI 表现"还在加载"，自愈路径瘫痪；而普通单 project 失败（典型权限 / 单文件损坏）silent skip 让其它 project 仍可见是合理的。
 
-#### Scenario: Empty root directory
+#### Scenario: Empty / missing root directory
 
-- **WHEN** projects 根目录存在但无任何子目录
-- **THEN** 系统 SHALL 返回空 project 列表，不抛错
-
-#### Scenario: Root directory missing
-
-- **WHEN** projects 根目录不存在
-- **THEN** 系统 SHALL 返回空 project 列表并记录 warning，不抛错
+- **WHEN** projects 根目录不存在或存在但无任何子目录
+- **THEN** 系统 SHALL 返回空 project 列表，不抛错；不存在场景 SHALL 记录 warning
 
 #### Scenario: Multiple project directories present
 
 - **WHEN** projects 根目录含 N 个子目录
 - **THEN** 系统 SHALL 返回 N 条 project 条目，每条暴露 decode 后的文件系统路径、显示名、session 数
 
-#### Scenario: Home directory resolution on Windows native
+#### Scenario: Home directory resolution fallback chain
 
-- **WHEN** 在 Windows 上运行，`HOME` 未设而 `USERPROFILE` 设为 `C:\Users\alice`
-- **THEN** 系统 SHALL 解析 projects 根目录为 `C:\Users\alice\.claude\projects\`
-
-#### Scenario: Home directory resolution via HOMEDRIVE/HOMEPATH fallback
-
-- **WHEN** 在 Windows 上运行，`HOME` 与 `USERPROFILE` 均未设，但 `HOMEDRIVE=C:` 与 `HOMEPATH=\Users\alice` 已设
-- **THEN** 系统 SHALL 解析 home 目录为 `C:\Users\alice`、projects 根目录为 `C:\Users\alice\.claude\projects\`
-
-#### Scenario: HOME env variable takes priority over USERPROFILE
-
-- **WHEN** `HOME=/home/user` 与 `USERPROFILE=C:\Users\alice` 同时设置（典型 WSL / Git Bash on Windows 场景）
-- **THEN** 系统 SHALL 优先用 `HOME`，解析 projects 根目录为 `/home/user/.claude/projects/`
+- **WHEN** 应用启动需要解析 home 目录
+- **THEN** 系统 SHALL 按 `HOME` → `USERPROFILE` → `HOMEDRIVE + HOMEPATH` → 平台默认的优先级查找
+- **AND** 同时设置 `HOME` 与 `USERPROFILE`（典型 WSL / Git Bash on Windows）SHALL 优先用 `HOME`
+- **AND** 仅设置 `HOMEDRIVE + HOMEPATH`（Windows 经典 fallback）SHALL 拼接两者得到 home 路径
 
 #### Scenario: Custom Claude root projects directory
 
-- **WHEN** 当前 Claude root 配置为 `/data/claude-alt`
-- **THEN** scanner SHALL 扫描 `/data/claude-alt/projects/`
-- **AND** scanner SHALL NOT 扫描默认 `~/.claude/projects/`
+- **WHEN** 当前 Claude root 配置为非默认绝对路径
+- **THEN** scanner SHALL 扫描配置路径下的 `projects/`
+- **AND** SHALL NOT 扫描默认 home 下的 `.claude/projects/`
 
 #### Scenario: Clearing custom Claude root restores default projects directory
 
-- **WHEN** 当前 Claude root 从 `/data/claude-alt` 清空为 `null`
+- **WHEN** 当前 Claude root 从自定义路径清空为 `null`
 - **THEN** scanner SHALL 重新使用默认 home 下 `.claude/projects/`
 
 #### Scenario: SSH channel-dead error aborts full scan instead of silent skip
 
-- **WHEN** active context 是 `Ssh<host>`，scanner 调 `scan_project_dir(dir_name_a)` 返 `DiscoverError::Fs(FsError::Disconnected { ... })`
-- **AND** 仍有未扫描的 sub-project `dir_name_b` / `dir_name_c` 在迭代队列中
-- **THEN** scanner SHALL **立即** return `Err(DiscoverError::Fs(err))` 跳出整轮 scan
-- **AND** SHALL NOT 继续尝试 `scan_project_dir(dir_name_b)` / `scan_project_dir(dir_name_c)`
-- **AND** SHALL `tracing::error!(dir, error, "ssh channel appears dead; aborting full scan")` 记录决策
-- **AND** 上层 `list_repository_groups` SHALL 把该错误传播到 IPC caller（与 issue #231 触发自愈路径预期一致，避免半成品列表误导用户）
+- **WHEN** active backend 是 SSH，scanner 单 project 扫描返 channel-dead 类错误（典型连接断开）
+- **AND** 仍有未扫描的 sub-project 在迭代队列中
+- **THEN** scanner SHALL **立即** return Err 跳出整轮 scan
+- **AND** SHALL NOT 继续扫描后续 sub-project
+- **AND** SHALL error 级日志记录决策
+- **AND** 上层 SHALL 把该错误传播到 IPC caller（避免半成品列表误导用户）
 
-#### Scenario: SSH TransientExhausted with transport-dead keyword aborts scan
+#### Scenario: SSH transport-dead exhausted aborts scan
 
-- **WHEN** active context 是 `Ssh<host>`，scanner 调 `scan_project_dir(dir_name)` 返 `DiscoverError::Fs(FsError::TransientExhausted { last_reason: "session closed", attempts: 3, ... })`
-- **THEN** scanner SHALL 识别 `last_reason` 含 transport-dead 关键字 → `is_likely_channel_dead() == true`
-- **AND** SHALL 立即 abort 整轮 scan return `Err(...)`
+- **WHEN** active backend 是 SSH，scanner 单 project 扫描返 transport-dead 关键字（典型 session closed / eof / broken pipe / connection reset）的暂态耗尽错误
+- **THEN** scanner SHALL 识别为 channel-dead → 立即 abort 整轮 scan
 
 #### Scenario: SSH per-project NotFound 仍 silent skip 不 abort
 
-- **WHEN** active context 是 `Ssh<host>`，scanner 调 `scan_project_dir(dir_name_a)` 返 `DiscoverError::Fs(FsError::NotFound(_))`（典型场景：扫描期间该 project 被远端进程删除）
-- **THEN** scanner SHALL `tracing::warn!` + continue，继续扫描后续 sub-project
-- **AND** 最终 `scan` 返 `Ok(Vec<Project>)` 包含其它扫描成功的 project（缺失 dir_name_a）
+- **WHEN** active backend 是 SSH，scanner 单 project 扫描返 NotFound（典型扫描期间被远端进程删除）
+- **THEN** scanner SHALL warn + continue 后续 sub-project
+- **AND** 最终返 Ok 含其它扫描成功的 project（缺失被删 project）
 
-#### Scenario: SSH per-project pure timeout TransientExhausted 仍 silent skip 不 abort
+#### Scenario: SSH per-project pure timeout exhausted 仍 silent skip 不 abort
 
-- **WHEN** active context 是 `Ssh<host>`，scanner 调 `scan_project_dir(dir_name_a)` 返 `DiscoverError::Fs(FsError::TransientExhausted { last_reason: "timeout", attempts: 3, ... })`
-- **THEN** scanner SHALL 识别 `last_reason` 不含 transport-dead 关键字 → `is_likely_channel_dead() == false`
-- **AND** SHALL `tracing::warn!` + continue 保持现有容错行为（避免误把远端 readdir 慢盘当 channel 死）
+- **WHEN** active backend 是 SSH，scanner 单 project 扫描返不含 transport-dead 关键字的暂态耗尽（纯 timeout / eagain）
+- **THEN** scanner SHALL 识别为非 channel-dead → warn + continue 保持容错（避免误把远端读盘慢当 channel 死）
 
 ### Requirement: Decode encoded project paths
 
 系统 SHALL 把 Claude Code encoded 目录名转回原始文件系统路径。decoder SHALL 按以下顺序识别三种格式：
 
-1. **Legacy Windows format** `^([A-Za-z])--(.+)$`（例如 `C--Users-alice-app`）SHALL 解码为 `<drive_upper>:/<rest_with_slashes>`（例如 `C:/Users/alice/app`）。
-2. **New Windows format**（去 legacy 后 `-C:-Users-alice-app`）：剥离首个 `-`、把剩余 `-` 替换为 `/`，若结果命中 `^[A-Za-z]:/` 则**原样返回**（例如 `C:/Users/alice/app`），不再添加 POSIX 前导 `/`。
-3. **POSIX format**（`-Users-alice-app`）：decoder SHALL 剥离首个 `-`、把剩余 `-` 替换为 `/`，并补一个前导 `/` 形成绝对路径（例如 `/Users/alice/app`）。
+1. **Legacy Windows format**（驱动器字母 + 双连字符开头，如 `C--Users-alice-app`）SHALL 解码为带冒号的驱动器路径形式（如 `C:/Users/alice/app`）
+2. **New Windows format**（去 legacy 后形如 `-C:-Users-alice-app`）SHALL 剥离首个 `-`、把剩余 `-` 替换为 `/`；若结果命中驱动器字母 + 冒号 + 斜杠开头则**原样返回**（不再加 POSIX 前导 `/`）
+3. **POSIX format**（如 `-Users-alice-app`）SHALL 剥离首个 `-`、把剩余 `-` 替换为 `/`，并补一个前导 `/` 形成绝对路径
 
-当目标平台为 Windows 时，decoder SHALL 额外做 WSL 挂载点翻译：任何 decode 后命中 `^/mnt/([A-Za-z])(/.*)?$` 的路径 SHALL 被改写为 `<drive_upper>:<rest>`（例如 `/mnt/c/code` → `C:/code`）。
+当目标平台为 Windows 时，decoder SHALL 额外做 WSL 挂载点翻译：任何 decode 后命中 `/mnt/<drive_letter>/...` 的路径 SHALL 被改写为驱动器字母 + 冒号 + 路径形式。非 Windows 平台 SHALL 把 WSL 挂载路径原样返回，不改写。
 
-非 Windows 平台 SHALL 把 WSL 挂载路径原样返回，不改写（与已有 scenario "WSL-style path" 一致）。
+#### Scenario: Standard POSIX encoded name
 
-#### Scenario: Standard encoded name
-
-- **WHEN** project 目录名为 `-Users-alice-code-app`
-- **THEN** decode 结果 SHALL 为 `/Users/alice/code/app`
+- **WHEN** project 目录名为标准 POSIX encoded（多段连字符，无驱动器字母）
+- **THEN** decode 结果 SHALL 为绝对路径形式（前导 `/` + 段间 `/`）
 
 #### Scenario: Path containing legitimate hyphens
 
-- **WHEN** project 目录名为 `-Users-alice-my-app`（在 `/Users/alice/my-app` 与 `/Users/alice/my/app` 间存在歧义）
-- **THEN** decoder SHALL 返回 best-effort 替换（每个前导 `-` 都换成 `/`），权威 cwd SHALL 在该 project 目录下的 session 记录 `cwd` 字段可用时由其恢复
+- **WHEN** project 目录名含原本就含连字符的路径段（在多种拆分间存在歧义）
+- **THEN** decoder SHALL 返回 best-effort 替换；权威 cwd SHALL 在该 project 目录下的 session 记录 cwd 字段可用时由其恢复
 
 #### Scenario: WSL-style path on non-Windows platforms
 
-- **WHEN** decode 后的路径指向 WSL 挂载（例如 `/mnt/c/...`）且当前平台非 Windows
+- **WHEN** decode 后的路径指向 WSL 挂载（典型 `/mnt/c/...`）且当前平台非 Windows
 - **THEN** 系统 SHALL 原样返回该路径，不做平台改写
 
-#### Scenario: New Windows format decodes to drive-letter path
+#### Scenario: Windows new format decodes to drive-letter path
 
-- **WHEN** project 目录名为 `-C:-Users-alice-app`
-- **THEN** decode 结果 SHALL 为 `C:/Users/alice/app`（不带 POSIX 前导 `/`）
+- **WHEN** project 目录名是新 Windows format（首段为 `-<drive>:`）
+- **THEN** decode 结果 SHALL 为驱动器字母 + 冒号 + 斜杠 + 余下路径（不带 POSIX 前导 `/`）
 
-#### Scenario: Legacy Windows format decodes to drive-letter path
+#### Scenario: Windows legacy format decodes to drive-letter path
 
-- **WHEN** project 目录名为 `C--Users-alice-app`（无前导 `-`，冒号编码为 `--`）
-- **THEN** decode 结果 SHALL 为 `C:/Users/alice/app`；驱动器字母 SHALL 强制大写（即使源名为小写）
+- **WHEN** project 目录名是 legacy Windows format（首段为 `<drive>--`）
+- **THEN** decode 结果 SHALL 为驱动器字母 + 冒号 + 斜杠 + 余下路径；驱动器字母 SHALL 强制大写（即使源名为小写）
 
 #### Scenario: WSL mount translation on Windows
 
-- **WHEN** 在 Windows 上运行，decode 结果为 `/mnt/c/code`
-- **THEN** 系统 SHALL 改写为 `C:/code`
+- **WHEN** 在 Windows 上运行，decode 结果命中 `/mnt/<drive>/...`
+- **THEN** 系统 SHALL 改写为驱动器字母 + 冒号 + 路径形式
 
-#### Scenario: is_valid_encoded_path accepts legacy Windows format
+#### Scenario: encoded-path 检测接受 legacy Windows format
 
-- **WHEN** 测试 `is_valid_encoded_path("C--Users-alice-app")`
-- **THEN** 结果 SHALL 为 `true`；任意命中 `^[A-Za-z]--[A-Za-z0-9_.\s-]+$` 的输入同样如此
+- **WHEN** 测试 encoded-path 检测器对 legacy Windows format 输入
+- **THEN** 结果 SHALL 为 true；命中"驱动器字母 + `--` + 路径段"模式的输入同样如此
 
 ### Requirement: List sessions per project
 
@@ -146,43 +129,49 @@
 
 ### Requirement: Group projects by git worktree
 
-系统 SHALL 把同一 git 仓库的多个 worktree 对应的 project 目录归为一个逻辑仓库条目，同时把每个 worktree 保留为该条目的独立成员；MUST 区分"主 working tree 根"与"主 working tree 子目录"两种 walk-up 都能到达同一 `.git` 的情况，避免子目录 cwd 被误标为独立的 main worktree。
+系统 SHALL 把同一 git 仓库的多个 worktree 对应的 project 目录归为一个逻辑仓库条目，同时把每个 worktree 保留为该条目的独立成员；MUST 区分"主 working tree 根"与"主 working tree 子目录"两种 walk-up 都能到达同一 git 元数据的情况，避免子目录 cwd 被误标为独立的 main worktree。
 
-仓库分组通过 `LocalGitIdentityResolver` 的**纯 fs 路径**（`crates/cdt-discover/src/worktree_grouper.rs::LocalGitIdentityResolver`，0 个 git 子进程）：向上 walk 找到 `.git` 条目，目录 → main worktree `(common_dir = git_dir = <repo>/.git)`；文件（gitlink）→ 解析 `gitdir:` 行后看 `<gitdir>/commondir` 文件区分 linked worktree（用 commondir）vs submodule（common = gitdir）。`identity = canonical(common_dir)` 字符串、`name = canonical.parent().file_name()`、`git_branch` 解析 `<git_dir>/HEAD`。**整个解析路径 MUST 不 spawn 任何 git 子进程**（替换 git 子进程为 syscall 是历史性能改造的成果，详 `worktree_grouper.rs::78-117`，27 project 累计 ~50ms 量级）。
+仓库分组 SHALL 通过纯 fs 路径解析（**0 个 git 子进程**）：向上 walk 找到 `.git` 条目，目录 → main worktree（`common_dir = git_dir`）；文件（gitlink）→ 解析 `gitdir:` 行后看 `commondir` 文件区分 linked worktree（用 commondir）vs submodule（common = gitdir）。`identity` 取 canonical common_dir 字符串、name 取其父目录文件名、git_branch 解析 `HEAD` 文件。整个解析路径 MUST 不 spawn 任何 git 子进程（性能改造的成果）。
 
-聚合结果 `RepositoryGroup` MUST 含 `id`（稳定的 repo id，通常是 git-common-dir 的绝对路径）/ `identity`（`Option<RepositoryIdentity>`，无 git 时为 `None`）/ `name`（展示名）/ `worktrees`（`Vec<Worktree>`）/ `most_recent_session`（`Option<i64>`，所有 worktree 的 max）/ `total_sessions`（所有 worktree 的 sessions 总和）字段。
+聚合结果（仓库分组）MUST 含 `id`（稳定的 repo id，通常是 git common-dir 的绝对路径）/ `identity`（无 git 时为 `None`）/ `name`（展示名）/ `worktrees` / `most_recent_session` / `total_sessions` 字段。
 
-每个 `Worktree` MUST 含 `id`（对齐底层 `Project.id`）/ `path` / `name` / `git_branch`（`Option<String>`）/ `is_main_worktree`（`bool`，语义：common-dir 是主 `.git` 而非 linked worktree gitdir，用于排序与 main worktree 子目录分组）/ `is_repo_root`（`bool`，语义：`path` 自身就是主 working tree 的根目录，**仅当** `start == <repo>` 且 `<repo>/.git` 是目录时为 `true`；子目录 cwd 即便 walk-up 到主 `.git` 也 SHALL 为 `false`）/ `cwd_relative_to_repo_root`（`Option<String>`，repo 根本身为 `None`，子目录为相对路径如 `crates`、`.claude/worktrees/feat-x`，无法计算 repo 根时为 `None`；计算 SHALL 是纯字符串 `path.strip_prefix(repo_root)`，**0 额外 syscall**）/ `sessions`（`Vec<String>`）/ `created_at`（`Option<i64>`）/ `most_recent_session`（`Option<i64>`）字段。
+每个 worktree MUST 含 `id` / `path` / `name` / `git_branch` / `is_main_worktree`（语义：common-dir 是主 git 元数据而非 linked worktree gitdir）/ `is_repo_root`（语义：path 自身就是主 working tree 的根目录，**仅当** start path 等于 repo 根且 repo 根存在 `.git` 目录时为 `true`；子目录 cwd 即便 walk-up 到主 git 元数据也 SHALL 为 `false`）/ `cwd_relative_to_repo_root`（repo 根本身为 `None`，子目录为相对路径，无法计算 repo 根时为 `None`；计算 SHALL 是纯字符串前缀剥离，**0 额外 syscall**）/ `sessions` / `created_at` / `most_recent_session` 字段。
 
-Worktree 排序 SHALL 按 `is_repo_root` 优先（repo 根排前）、再按 `is_main_worktree` 优先（main common-dir 排前）、再按 `most_recent_session` 倒序（活跃 worktree 排前）。Group 排序 SHALL 按 `most_recent_session` 倒序。
+worktree 排序 SHALL 按 `is_repo_root` 优先（repo 根排前）、再按 `is_main_worktree` 优先（主 common-dir 排前）、再按 `most_recent_session` 倒序（活跃 worktree 排前）。group 排序 SHALL 按 `most_recent_session` 倒序。
 
 #### Scenario: Two worktrees of one repo
-- **WHEN** 两个 project 路径分别落在同一仓库的两个 worktree（共享同一 `git common dir`）
+
+- **WHEN** 两个 project 路径分别落在同一仓库的两个 worktree（共享同一 git common dir）
 - **THEN** 系统 SHALL 输出一个仓库分组，含两个 worktree 成员
 
 #### Scenario: Standalone project not in a worktree
+
 - **WHEN** 一个 project 路径无 git 元数据
-- **THEN** 系统 SHALL 把它输出为只含自己的单成员分组，`identity` 字段 SHALL 为 `None`
+- **THEN** 系统 SHALL 把它输出为只含自己的单成员分组，identity 字段 SHALL 为 `None`
 
 #### Scenario: Main worktree 排在附加 worktree 之前
+
 - **WHEN** 一个 group 内含主 worktree 与附加 worktree，附加 worktree 的 `most_recent_session` 更新
-- **THEN** group.worktrees[0].is_main_worktree SHALL 为 true，附加 worktree 排在后面（main 优先级压过时间）
+- **THEN** group 第一项 SHALL 为主 worktree（`is_main_worktree=true`），附加 worktree 排在后面（main 优先级压过时间）
 
 #### Scenario: Group 排序按最近活动倒序
-- **WHEN** 两个独立 repo group A、B，A 的最近 session 比 B 早
-- **THEN** `group_by_repository` 返回数组 SHALL 含 B 在前、A 在后
+
+- **WHEN** 两个独立 repo group 的最近 session 时间不同
+- **THEN** 返回数组 SHALL 含活动更晚者在前
 
 #### Scenario: 主仓子目录 cwd 不被误标为 repo root
-- **WHEN** 主 repo `/repo` 含 `.git` 目录；另存在 project 路径 `/repo/crates`（用户在主仓子目录 cwd 跑 claude 产生的独立 encoded 目录）
-- **THEN** grouper SHALL 把 `/repo` 与 `/repo/crates` 归到同一 group
-- **AND** `/repo` 对应的 Worktree `is_repo_root` SHALL 为 `true`，`is_main_worktree` SHALL 为 `true`，`cwd_relative_to_repo_root` SHALL 为 `None`
-- **AND** `/repo/crates` 对应的 Worktree `is_repo_root` SHALL 为 `false`，`cwd_relative_to_repo_root` SHALL 为 `Some("crates")`
-- **AND** 排序后 `/repo` SHALL 排在 `/repo/crates` 之前
+
+- **WHEN** 主 repo 含 `.git` 目录；另存在 project 路径是其子目录（用户在主仓子目录 cwd 跑 claude 产生的独立 encoded 目录）
+- **THEN** grouper SHALL 把两者归到同一 group
+- **AND** repo 根对应 worktree 的 `is_repo_root = true`、`is_main_worktree = true`、`cwd_relative_to_repo_root = None`
+- **AND** 子目录对应 worktree 的 `is_repo_root = false`、`cwd_relative_to_repo_root = Some(<相对路径>)`
+- **AND** 排序后 repo 根 SHALL 排在子目录之前
 
 #### Scenario: linked worktree cwd 含 cwd_relative_to_repo_root
-- **WHEN** 主 repo `/repo` 在 `/repo/.claude/worktrees/feat-x` 创建 linked worktree（已 prune 或仍在），有对应 encoded project
-- **THEN** 对应 Worktree `is_repo_root` SHALL 为 `false`，`is_main_worktree` SHALL 为 `false`
-- **AND** `cwd_relative_to_repo_root` SHALL 为 `Some(".claude/worktrees/feat-x")`
+
+- **WHEN** 主 repo 在某子目录创建 linked worktree（已 prune 或仍在），有对应 encoded project
+- **THEN** 对应 worktree 的 `is_repo_root = false`、`is_main_worktree = false`
+- **AND** `cwd_relative_to_repo_root` SHALL 为相对路径形式（非 None）
 
 ### Requirement: Resolve subprojects and pinned sessions
 
@@ -242,48 +231,35 @@ trait SHALL 至少暴露这些操作：
 
 ### Requirement: Encode absolute paths into directory names
 
-系统 SHALL 在 `cdt-discover::path_decoder` 中暴露唯一的规范函数 `encode_path(absolute_path: &str) -> String`，把任意绝对路径转为 `~/.claude/projects/` 下的目录名。编码规则 SHALL：
+系统 SHALL 暴露唯一的规范函数把任意绝对路径转为 `~/.claude/projects/` 下的目录名。编码规则 SHALL：
 
-1. 把**所有** `/` **与** `\` 一次替换为 `-`（一遍处理两种分隔符，以兼容 Windows 路径混用情况）。
-2. 保留 drive-letter 冒号（例如 `C:`）原样在中间——不转义、不重复——使 Windows 路径与"Decode encoded project paths"中描述的新格式 decoder 形成完整 round-trip。
-3. 确保结果以单个 `-` 起首；若原始输入以 `/` 或 `\` 起首（替换后已为 `-...`），则不再前缀；否则 SHALL 前缀一个 `-`。
+1. 把**所有** `/` **与** `\` 一次替换为 `-`（一遍处理两种分隔符，以兼容 Windows 路径混用情况）
+2. 保留驱动器字母冒号原样在中间（不转义、不重复）——使 Windows 路径与 decode 形成完整 round-trip
+3. 确保结果以单个 `-` 起首：原始输入以分隔符起首时不再前缀；否则 SHALL 前缀一个 `-`
 
-该函数 SHALL 是整个 workspace 中路径编码的唯一实现。任何其它需要编码路径的 crate（例如 `cdt-config::claude_md` 算 auto-memory 路径）SHALL `use cdt_discover::path_decoder::encode_path`，**不得**自行复制一份私有版本。这样能让 encode / decode 处于同一模块、同一测试套件下，避免出现像 Windows auto-memory 查找失败那样的分叉。
+该函数 SHALL 是整个 workspace 中路径编码的唯一实现。任何其它需要编码路径的 crate（典型 auto-memory 路径计算）SHALL import 该函数，**不得**自行复制一份私有版本。
 
 #### Scenario: POSIX absolute path encoding
 
-- **WHEN** 调用 `encode_path("/Users/alice/code/app")`
-- **THEN** 结果 SHALL 为 `-Users-alice-code-app`
+- **WHEN** 编码 POSIX 绝对路径
+- **THEN** 结果 SHALL 是首段 `-` + 段间 `-` 的目录名形态
 
-#### Scenario: Windows absolute path with backslashes
+#### Scenario: Windows absolute path encoding
 
-- **WHEN** 调用 `encode_path("C:\\Users\\alice\\app")`
-- **THEN** 结果 SHALL 为 `-C:-Users-alice-app`
+- **WHEN** 编码 Windows 绝对路径（含驱动器字母 + 反斜杠 / 正斜杠 / 混合分隔符）
+- **THEN** 反斜杠 / 正斜杠 SHALL 被一次替换为 `-`
+- **AND** 驱动器字母后冒号 SHALL 原样保留
+- **AND** 不同分隔符形态的等价路径 SHALL 编码为相同结果
 
-#### Scenario: Windows absolute path with forward slashes
+#### Scenario: Round-trip with decode
 
-- **WHEN** 调用 `encode_path("C:/Users/alice/app")`
-- **THEN** 结果 SHALL 同样为 `-C:-Users-alice-app`（与反斜杠形式一致）
-
-#### Scenario: Mixed separators encoding
-
-- **WHEN** 调用 `encode_path("C:\\a/b\\c")`
-- **THEN** 结果 SHALL 为 `-C:-a-b-c`
-
-#### Scenario: Round-trip with decode_path for Windows paths
-
-- **WHEN** Windows 路径 `C:/Users/alice/app` 先 encode 再 decode
-- **THEN** `decode_path(encode_path("C:/Users/alice/app"))` SHALL 等于 `C:/Users/alice/app`
-
-#### Scenario: Round-trip with decode_path for POSIX paths
-
-- **WHEN** POSIX 路径 `/Users/alice/app` 先 encode 再 decode
-- **THEN** `decode_path(encode_path("/Users/alice/app"))` SHALL 等于 `/Users/alice/app`
+- **WHEN** 任意绝对路径先 encode 再 decode
+- **THEN** SHALL 等于原路径
 
 #### Scenario: Empty input produces empty string
 
-- **WHEN** 调用 `encode_path("")`
-- **THEN** 结果 SHALL 为 `""`
+- **WHEN** 编码空字符串
+- **THEN** 结果 SHALL 为空字符串
 
 ### Requirement: Resolve historical Claude worktree directories
 
@@ -410,30 +386,26 @@ Project session enumeration SHALL preserve sorted, paginated results while avoid
 
 ### Requirement: `extract_session_cwd` 仅读首行的不变量
 
-`cdt_discover::project_scanner::extract_session_cwd(jsonl_path)` 在解析 session JSONL 抽取 `cwd` 字段时，SHALL 在 JSONL 首行（第 1 行）即命中 `cwd` 字段并返回；MUST NOT 走 `read_to_string` 整文件兜底分支。
+session JSONL `cwd` 抽取算法 SHALL 在 JSONL 首行（第 1 行）即命中 `cwd` 字段并返回；MUST NOT 走"读整文件兜底"分支当首行已含 cwd。
 
-**为何此不变量重要**：`change project-scan-cache-semantic-invalidation` 的 `ProjectScanCache` 失效语义依赖此前提——已知 session 的 JSONL 追加（第 21+ 行写入）SHALL NOT 改变 `extract_session_cwd` 抽取结果。若 claude-code 未来引入"先建空 jsonl 再补 cwd"或"cwd 在中后段"的格式，本不变量会被破坏，需要先在此 capability 重新评估抽取语义并对应调整 `ipc-data-api::ProjectScanCache 按事件语义分级失效` 的失效粒度。
+**为何此不变量重要**：依赖此前提的失效语义包括 project scan cache（已知 session 的 JSONL 追加 SHALL NOT 改变 `cwd` 抽取结果）。若未来 claude-code 引入"先建空 jsonl 再补 cwd"或"cwd 在中后段"的格式，本不变量会被破坏，需要先在此 capability 重新评估抽取语义并对应调整下游 cache 失效粒度。
 
-**实现现状**：当前 `extract_session_cwd` 实现为「读首 20 行，逐行尝试解析为 user message 取 `cwd` 字段；20 行内未命中且为本地路径时 fallback `read_to_string` 整文件再扫」（参见 `crates/cdt-discover/src/project_scanner.rs:328-405`）。本 Requirement 不改实现行为；只把"首行命中"从隐含行为升级为**契约**，由测试守护。
+**测试断言机制**：测试 SHALL 用 fs op counter 包裹 `cwd` 抽取调用并对其返回的 op 计数 snapshot 做断言；不能仅靠返回值（cwd）断言（cwd 正确不代表未走兜底，可能首行 + 兜底都命中得到同一 cwd）。测试构造 fs handle 时 MUST 包 instrumentation wrapper，否则 counter 不计数。
 
-**测试断言机制**：测试 SHALL 用 `cdt_fs::with_fs_counter` 包裹 `extract_session_cwd` 调用并使用其返回值（`FsOpCounts` snapshot）做断言；不能仅靠返回值（cwd）断言（cwd 正确不代表未走兜底，可能首行 + 兜底都命中得到同一 cwd）。`FsOpCounter::snapshot()` 是 crate 私有方法，禁止直接调用——`with_fs_counter` 内部计算并把 `FsOpCounts` 作为返回 tuple 第二项暴露给调用方（`crates/cdt-fs/src/instrumentation.rs:122-145`）。
+#### Scenario: 首行含 cwd 时 SHALL 不触发整文件 fallback
 
-**测试构造 fs 的硬要求**：scanner 内部调用的 `FileSystemProvider` 必须用 `cdt_fs::InstrumentedFs::new(...)` 包装才能让 `FsOpCounter` 实际计数。未包 wrapper 的 provider 调 trait 方法不递增 counter（向后兼容设计，详 `instrumentation.rs:153-160`）。`ProjectScanner::new(projects_dir, fs)` / `new_with_semaphore(projects_dir, fs, semaphore)` 都接受 `Arc<dyn FileSystemProvider>`，测试 SHALL 传入 `Arc::new(cdt_fs::InstrumentedFs::new(cdt_fs::local_handle()))`。
-
-#### Scenario: 首行含 cwd 时 SHALL 不触发 `read_to_string` 兜底
-
-- **WHEN** 测试用 `tempfile::tempdir` + `tokio::fs::write` 构造一个 1000 行的 session JSONL：第 1 行为含 `"cwd": "/path/to/proj"` 字段的合法 user message JSON；其余 999 行为不含 `cwd` 的 assistant message JSON
-- **AND** 测试构造 `let fs = Arc::new(cdt_fs::InstrumentedFs::new(cdt_fs::local_handle()));` 并据此构造 `ProjectScanner`
-- **AND** 测试调用 `let (cwd, counts) = cdt_fs::with_fs_counter(|| async { scanner.extract_session_cwd(&jsonl_path).await }).await;`
-- **THEN** `cwd` MUST 等于 `Some("/path/to/proj".to_string())`（与首行字面量一致）
-- **AND** `counts.read_to_string` MUST == 0（兜底分支未触发）
+- **WHEN** 测试构造一个多行 session JSONL：第 1 行为含合法 `cwd` 的 user message JSON；其余行为不含 `cwd` 的 assistant message
+- **AND** 测试构造 fs handle 包 instrumentation wrapper 并据此构造 scanner
+- **AND** 测试用 fs op counter 入口包住 `cwd` 抽取调用
+- **THEN** 抽取结果 cwd MUST 等于首行字面量
+- **AND** counter snapshot 的 read_to_string 计数 MUST == 0（兜底分支未触发）
 
 #### Scenario: 已有首行 cwd 时 JSONL 后续追加 SHALL NOT 改变抽取结果
 
-- **WHEN** 测试构造 JSONL 仅含 1 行 user message + cwd，scanner fs 同上 wrapper
-- **AND** 调 `with_fs_counter(|| async { scanner.extract_session_cwd(...).await }).await` 拿到 `(R1, counts1)`
-- **AND** 用 `tokio::fs::OpenOptions::append` 在该 JSONL 末尾追加 100 行不含 cwd 的 assistant message
-- **AND** 再次调用 `with_fs_counter(|| async { scanner.extract_session_cwd(...).await }).await` 拿到 `(R2, counts2)`
+- **WHEN** 测试构造仅含 1 行 user message + cwd 的 JSONL，scanner fs 同上 wrapper
+- **AND** 调 cwd 抽取拿到 R1 + counts1
+- **AND** 在该 JSONL 末尾追加若干不含 cwd 的 assistant message
+- **AND** 再次调用 cwd 抽取拿到 R2 + counts2
 - **THEN** R1 MUST == R2
-- **AND** `counts1.read_to_string` 和 `counts2.read_to_string` MUST 都 == 0
+- **AND** counts1 与 counts2 的 read_to_string 计数 MUST 都 == 0
 
