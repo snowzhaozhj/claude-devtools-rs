@@ -289,13 +289,13 @@
 
 ### Requirement: menu-items 函数库
 
-应用 SHALL 按 surface 拆分提供右键菜单 items factory 函数（用户消息 / 助手消息 / Bash 工具 / 文件类工具 / worktree chip / project card / 选区 等），每个返回 items 数组。所有 factory 接受统一上下文（含 sessionId / projectId / settings / 5 个 IPC 调用闭包：copyToClipboard / openInEditor / openInTerminal / revealInDir / openUrl + selectionText 当前选区文本快照），让 item.action 自包含——factory 内**不**直接 import IPC 模块、**不**直接读 DOM（含 `getSelection` / `activeElement`），所有 IPC 走 ctx.dispatch 间接调用以便 vitest mock，所有运行时浏览器状态 SHALL 通过 ctx 字段传入。Factory SHALL 是纯函数：给定输入 → 确定输出，不持有外部状态、不读 DOM。
+应用 SHALL 按 surface 拆分提供右键菜单 items factory 函数（用户消息 / 助手消息 / Bash 工具 / 文件类工具 / worktree chip / project card / 选区 等），每个返回 items 数组。所有 factory 接受统一上下文（含 sessionId / projectId / settings / 5 个 IPC 调用闭包：copyToClipboard / openInEditor / openInTerminal / revealInDir / openUrl + selectionText 当前选区文本快照），让 item.action 自包含——factory 内**不**直接 import IPC 模块、**不**直接读 DOM（含 `getSelection` / `activeElement`），所有 IPC 走 ctx.dispatch 间接调用以便单测 mock，所有运行时浏览器状态 SHALL 通过 ctx 字段传入。Factory SHALL 是纯函数：给定输入 → 确定输出，不持有外部状态、不读 DOM。
 
 调用方 SHALL 在 oncontextmenu 触发瞬间预先读选区文本后通过 ctx.selectionText 传入 factory，统一 selection 快照源避免 factory 内部读 DOM 的 jsdom / SSR / 测试稳定性问题。
 
 #### Scenario: factory 返回纯数据
 
-- **WHEN** vitest 测试调用某 factory 传入 mock ctx 含 mock dispatch
+- **WHEN** 单测调用某 factory 传入 mock ctx 含 mock dispatch
 - **THEN** 返回值 SHALL 是 items 数组
 - **AND** items 内的 action 闭包仅引用 ctx.dispatch 与传入的数据，不调真 IPC
 - **AND** mock dispatch 后调用 action SHALL 只触发 mock 函数，不发真 IPC

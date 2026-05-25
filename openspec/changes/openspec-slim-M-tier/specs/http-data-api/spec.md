@@ -36,7 +36,7 @@
 
 - **WHEN** 客户端发起列会话路由请求
 - **AND** 项目下某些 session 的 lookup-fast-path 命中（metadata cache 等价），其余 cache miss
-- **THEN** axum handler SHALL 调与 IPC 等价的列会话方法（**不**走同步 fallback 镜像）
+- **THEN** 路由 handler SHALL 调与 IPC 等价的列会话方法（**不**走同步 fallback 镜像）
 - **AND** 响应 body SHALL 是分页骨架：cache 命中条 inline 携带真实 title / messageCount / isOngoing / gitBranch；cache miss 条为占位值
 - **AND** cache miss 条 SHALL 在后续后台扫描完成后通过 SSE `session_metadata_update` 事件推送真实值
 

@@ -1,3 +1,11 @@
+change/openspec-slim-M-tier/chunk-building 0
+change/openspec-slim-M-tier/configuration-management 0
+change/openspec-slim-M-tier/frontend-context-menu 6
+change/openspec-slim-M-tier/fs-abstraction 0
+change/openspec-slim-M-tier/http-data-api 6
+change/openspec-slim-M-tier/keyboard-shortcuts 0
+change/openspec-slim-M-tier/project-discovery 0
+change/openspec-slim-M-tier/tool-execution-linking 0
 spec/agent-configs 1
 spec/app-auto-update 29
 spec/app-chrome 7

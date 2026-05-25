@@ -122,7 +122,7 @@ bubble phase 监听 SHALL 让组件级局部 listener（CommandPalette / Modal /
 - **non-mac 平台禁止把 metaKey 识别为 mod**：非 mac 时 metaKey 为 true SHALL 不被加入 modifier 列表（防 Win 键 / 神秘键盘的误触发）；mac 平台 metaKey SHALL 被识别为 meta
 - **Numpad 数字键 / 功能键归一化**：Numpad 数字键 SHALL 归一为顶部数字行同义；NumpadEnter / NumpadAdd / NumpadSubtract / NumpadMultiply / NumpadDivide / NumpadDecimal SHALL 归一为对应主行键同义；录键 widget 录入 Numpad 系列时 SHALL 同步使用归一化结果
 
-dispatcher 命中路径（步骤 3-5）SHALL 在常态下足够轻（vitest microbench 守门，毫秒级）。
+dispatcher 命中路径（步骤 3-5）SHALL 在常态下足够轻（前端单测 microbench 守门，毫秒级）。
 
 #### Scenario: IME composition 期间不 dispatch
 
