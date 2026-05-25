@@ -43,6 +43,7 @@
 - **WHEN** 后端 SSH 连接状态从 `connecting` 切到 `connected`
 - **AND** Tauri host 在 setup 已 spawn 桥任务订阅 SSH 状态 broadcast
 - **THEN** webview SHALL 通过 `listen("ssh_status", ...)` 收到 payload，字段形态与 `[[push-events::ssh-status-change]]` 一致
+- **AND** 成功路径下 payload `error` 与 `authChain` 字段 SHALL 为 null 或省略
 
 #### Scenario: ssh_status event carries error detail on failure
 

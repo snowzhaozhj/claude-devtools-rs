@@ -7,7 +7,7 @@
 系统 SHALL 暴露一个 Server-Sent Events endpoint（`GET /api/events`），传递与 IPC push channel 相同的事件流。启动 HTTP server 的进程 SHALL 同时启动事件 producer，覆盖以下信号源：
 
 1. **file-change**：订阅文件 watcher broadcast，每条事件转换为 SSE PushEvent 推送（删除事件 SHALL 同样推送，让客户端能感知删除）。PushEvent payload 形态见 `[[push-events::file-change]]`。
-2. **todo-change**：订阅 todo watcher broadcast，每条事件按统一 schema 推送（todo 文件名仅含 session_id；project_id 字段 SHALL 填空字符串占位以保留 schema 一致）
+2. **todo-change**：订阅 todo watcher broadcast，每条事件按统一 schema 推送。PushEvent payload 形态见 `[[push-events::todo-change]]`。
 3. **new-notification**：订阅 detected-error broadcast，每条事件序列化后推送。PushEvent payload 形态见 `[[push-events::detected-error]]`。
 4. **session-metadata-update**：订阅 session metadata broadcast，每条事件按统一 schema 推送，让浏览器 runtime 可复用 IPC 路径的骨架列表 + metadata patch 语义。PushEvent payload 形态见 `[[push-events::session-metadata-update]]`。
 5. **ssh-status / updater 事件**：当前未提供 broadcast 源；PushEvent 仍保留对应 variant，未来 producer 接通后 SSE 客户端 SHALL 按本 Requirement 描述的同一桥接模式收到。PushEvent payload 形态见 `[[push-events::ssh-status-change]]`。
@@ -39,3 +39,10 @@ UI 层 browser transport 收到 sse_lagged event SHALL 映射到 sse-lagged even
 - **WHEN** 浏览器 client 收到 sse_lagged event
 - **THEN** browser transport SHALL 把它映射到 sse-lagged event name 派发给所有 handler
 - **AND** 订阅方 SHALL 对当前选中 project 触发 silent refresh 兜底重拉
+
+#### Scenario: HTTP file-change producer Lagged 时推送 PushEvent sse-lagged
+
+- **WHEN** HTTP server 内 file-change producer 的 broadcast receiver 返回 Lagged(n)
+- **THEN** producer SHALL 向 SSE 事件流发送 sse-lagged event（payload 形态见 `[[push-events::sse-lagged]]`）
+- **AND** SHALL NOT 静默吞掉该 lag 信号
+- **AND** producer SHALL 继续从最新 PushEvent 接收后续事件

@@ -2,7 +2,7 @@ change/push-events-cap/frontend-test-pyramid 6
 change/push-events-cap/http-data-api 0
 change/push-events-cap/ipc-data-api 0
 change/push-events-cap/notification-triggers 0
-change/push-events-cap/push-events 1
+change/push-events-cap/push-events 0
 change/push-events-cap/session-display 1
 change/push-events-cap/sidebar-navigation 0
 spec/agent-configs 0

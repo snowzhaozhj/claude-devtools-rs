@@ -6,9 +6,11 @@
 
 系统 SHALL 定义跨进程 push event payload 为有限 variant 枚举（`PushEvent`），每个 variant 对应一类后端状态变化事件。所有 variant 通过统一 tagged union 形态序列化：JSON 顶层 SHALL 含 `type` 字段标识 variant 名（snake_case，如 `"file_change"` / `"session_metadata_update"` / `"detected_error"` / `"sse_lagged"` / `"ssh_status_change"`）；variant 内部字段保留 snake_case（HTTP/SSE wire 形态）。
 
-Tauri IPC 路径 SHALL 使用各 variant 对应的 camelCase struct（独立 struct 带 `#[serde(rename_all = "camelCase")]`）直接 emit 到 webview event bus，字段名为 camelCase（如 `projectId` / `sessionId` / `sessionListChanged`）。前端浏览器 transport 收到 SSE wire（snake_case）SHALL 通过归一化层（`normalizePushPayload`）映射为与 Tauri 路径同形的 camelCase payload，让消费方代码不区分 transport 来源。
+Tauri IPC 路径 SHALL 对每个 variant 使用独立的 camelCase 形态直接 emit 到 webview event bus，字段名为 camelCase（如 `projectId` / `sessionId` / `sessionListChanged`）。前端浏览器 transport 收到 SSE wire（snake_case）SHALL 通过归一化层映射为与 Tauri 路径同形的 camelCase payload，让消费方代码不区分 transport 来源。
 
 variant 清单 SHALL 随后续 Requirement 逐项定义。新增 variant 时 SHALL 同步更新本 capability spec。
+
+**Scope 说明**：`context_changed` 事件（payload `{ activeContextId, kind }`）与 `updater` 事件不属 PushEvent enum（独立协议 / 未实现），不在本 capability 范围内。
 
 #### Scenario: PushEvent 所有 variant 共享 type 字段
 
@@ -129,3 +131,24 @@ Tauri IPC 路径：webview event name 为 `"ssh_status"`，payload camelCase 字
 
 - **WHEN** 后端 SSH 连接状态变化通过 PushEvent::SshStatusChange 序列化到 SSE
 - **THEN** 输出 SHALL 含 `"type":"ssh_status_change"` + 字段 `context_id` / `state`（snake_case）
+
+#### Scenario: ssh-status-change 成功路径 error/authChain 省略
+
+- **WHEN** SSH 连接成功（state = `"connected"`）
+- **THEN** payload 的 `error` 与 `authChain` 字段 SHALL 为 null 或省略
+
+### Requirement: todo-change payload 形态
+
+`todo-change` push event 通知前端 todo 文件发生变更。Payload 字段 SHALL 含：
+
+- `sessionId` / `session_id`：标识 session（todo 文件名仅含 session_id）
+- `projectId` / `project_id`：SHALL 填空字符串占位以保留 schema 一致（todo 文件不归属单一 project）
+
+HTTP/SSE wire 形态：`{"type":"todo_change","project_id":"","session_id":"..."}`。
+
+Tauri IPC 路径：webview event name 为 `"todo-change"`，payload camelCase 字段（`projectId: ""` / `sessionId`）。
+
+#### Scenario: todo-change payload project_id 为空字符串占位
+
+- **WHEN** todo watcher 检测到 todo 文件变更并推送 todo-change event
+- **THEN** payload `projectId`（IPC）/ `project_id`（SSE）字段 SHALL 为空字符串
