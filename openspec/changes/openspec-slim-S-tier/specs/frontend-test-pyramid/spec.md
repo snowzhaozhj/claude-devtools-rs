@@ -11,6 +11,7 @@
 - **WHEN** vitest 跑 `ui/src/lib/tauriMock.test.ts`
 - **THEN** 用例 SHALL 把 mockIPC 已知 command 列表与 `invoke_handler!` 列表逐项对齐断言
 - **AND** 用例 SHALL 把 mockIPC listen event 名单与 `notification-update` / `notification-added` / `file-change` / `session-metadata-update` 四条核心事件逐项对齐断言
+- **AND** 用例 SHALL 对每个已知 command 实际 invoke 一次，断言其返回非 `undefined` 的值或抛出明确错误（任一 command 静默 resolve `undefined` 都 SHALL 让测试 fail）
 - **AND** 任一缺失（mockIPC 漏注入 / `invoke_handler!` 漏注册 / listen event 漏覆盖）SHALL 导致测试 fail
 
 #### Scenario: 未实现 command 的明确报错
