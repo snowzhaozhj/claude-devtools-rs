@@ -52,15 +52,15 @@ find <scope> -name "*.rs" -o -name "*.svelte" -o -name "*.ts" 2>/dev/null | wc -
 | **L1 silent failures** | 吞异常 / 不可信路径 unwrap / fallback 掩盖 error / catch+log 不抛 | grep `unwrap()` / `expect(` / `let _ =` / `.ok()` 弃 Result / `catch.*continue` / `Err(_) =>` 后 default value |
 | **L2 边界 + 状态机** | off-by-one / 空集合 / N=1 / 整数溢出 / 状态转移漏路径 / TOCTOU | grep `as usize` / `as u32` 强转 / `len() - 1` / `[0]` 不查空 / match 漏 arm 用 `_ =>` 兜 |
 | **L3 并发 + 资源** | race / unbounded channel / unbounded cache / 未取消 task / 未退订 subscriber / blocking 调 in async | grep `Arc<Mutex` 加锁顺序 / `broadcast::channel(` capacity / `tokio::spawn` 无 cancel / `std::fs::` in async fn / `.lock().await` 长时间持有 |
-| **L4 跨域契约** | IPC 字段名/类型 / serde 命名 / 跨 crate 公共 API breaking / 跨平台 | grep `#[tauri::command]` 字段对齐 ui/ 消费 / `#[serde(rename_all` 是否漏 / `cfg(target_os` 漏分支 / `Path::is_absolute` (Windows 陷阱) |
+| **L4 跨域契约** | IPC 字段名/类型 / serde 命名 / 跨 crate 公共 API breaking / 跨平台 / **外部 API 误用 / 协议违反 / doc-vs-impl drift** | grep `#[tauri::command]` 字段对齐 ui/ 消费 / `#[serde(rename_all` 是否漏 / `cfg(target_os` 漏分支 / `Path::is_absolute` (Windows 陷阱) / 比对 `///` 文档承诺 vs 函数实际行为 / 第三方库 API 调用看 [crates.io/ docs.rs](https://docs.rs) 看是否符合契约（如 `notify::Watcher::watch` 必须先 `watch` 再 drop） |
 | **L5 安全** | 路径遍历 / 命令注入 / 不可信输入直接 `format!` 进 path/sql/cmd | grep `Command::new` 拼接用户输入 / `format!.*{}` 进 path / `..` 路径未规范 / 反序列化外部数据没 size 限制 |
 | **L6 测试伪覆盖** | mock 替代真实路径 / 只测 happy / scenario 名对得上但行为没真覆盖 | 看 `#[cfg(test)]` 用了 `MockX` 不真起后端 / `assert!(true)` 占位 / scenario 名对应 test 函数但 assert 不验关键字段 |
 
 每个 lens 产出 candidate 列表：`{反模式类型, 文件:行, 一行猜测}`。**这是粗筛——还没被认证**。
 
-### Step 3: 真实性闸门（每个 candidate 必过 4 道才能进报告）
+### Step 3: 真实性闸门（4 道必查 + 通过率决定置信度）
 
-LLM 找 bug 最大风险是幻觉。**每条 candidate 进最终报告前 SHALL 4 项交叉验证**，任一不过 → 降级为"低置信" / 丢弃 / 转 followup 问号。
+LLM 找 bug 最大风险是幻觉。**每条 candidate SHALL 走完 4 道交叉验证**——闸门**必查**，但**不必全过**：通过道数与最终能否进默认 Findings 直接挂钩（详 Step 4 双轴分级）。**任一闸门跳过没查 = 视同没过**。
 
 #### Gate 1: Code evidence（必须能 quote）
 - **要求**：能贴出 ≤ 10 行原代码 + 高亮指出反模式具体在哪一行
@@ -72,11 +72,18 @@ LLM 找 bug 最大风险是幻觉。**每条 candidate 进最终报告前 SHALL 
 - **特例**：security bug 不需要真触发，只需"存在攻击路径"
 
 #### Gate 3: Test gap check（grep 测试是否覆盖）
-- **要求**：`grep -r <function_name>\|<scenario>` tests/ → 看是否有测试覆盖该路径
+- **要求**：同时查 **standalone tests + inline tests**——Rust 常见 `#[cfg(test)] mod tests` 写在源文件里，光查 `tests/` 目录会漏一半。推荐 recipe：
+  ```bash
+  # 同时扫 tests/ 目录 + scope 内 inline #[cfg(test)] 块
+  rg '<function_name>|<scenario>' <scope> tests/ 2>/dev/null
+  # 进一步过滤到 inline test 块
+  rg -B 50 '<function_name>' <scope> 2>/dev/null | rg '#\[cfg\(test\)\]|fn test_'
+  ```
 - **解释规则**：
-  - 有测试 + 测试 pass → 大概率不是 bug，是约定行为（**降级或丢**）
+  - 有测试 + **真 assert 关键字段** + 测试 pass → 大概率不是 bug，是约定行为（**降级或丢**）
   - 有测试 + 测试只跑 happy path 没覆盖 trigger 场景 → 升级置信度（**真 bug**）
-  - 无测试 → 中性信号，看其他 gate
+  - 有测试 + assert 占位 / 不验关键字段 → L6 伪覆盖范畴，本身就是 bug
+  - 无测试（含 inline + standalone 双查后都无） → 中性信号，看其他 gate
 - **特例**：mock 测试不算覆盖（mock != 真后端，本仓踩过坑见 `e2e-http-verify` skill 引言）
 
 #### Gate 4: Caller verify（跨文件查调用点）
@@ -90,11 +97,11 @@ LLM 找 bug 最大风险是幻觉。**每条 candidate 进最终报告前 SHALL 
 
 每条过完 4 道闸门的 finding 打两个标签：
 
-**置信度**（基于证据强度）：
-- `confirmed`（100% 确认）：4 道闸门全过 + 触发链 1-2 步可复现
-- `high`（≥ 80%）：4 道闸门全过 + 触发链需特定时序/输入
-- `medium`（≥ 50%）：≥ 3 道闸门过，1 道有疑问
-- `low`（< 50%）：≥ 2 道闸门过 → **默认不报**，转 followup 问号
+**置信度**（基于 Step 3 闸门通过道数）：
+- `confirmed`（100% 确认）：4 道闸门**全过** + 触发链 1-2 步可复现
+- `high`（≥ 80%）：4 道闸门**全过** + 触发链需特定时序/输入
+- `medium`（≥ 50%）：3 道过，1 道有疑问 / 不能 100% 确认
+- `low`（< 50%）：≤ 2 道过 / 含臆测成分
 
 **严重度**（基于用户影响）：
 - `critical`：数据丢失 / silent corruption / 安全漏洞 / panic 在用户主路径
@@ -102,10 +109,20 @@ LLM 找 bug 最大风险是幻觉。**每条 candidate 进最终报告前 SHALL 
 - `minor`：edge case 错 / 错误信息不准 / 资源未释放（短期可恢复）
 - `nit`：风格 / 可读性 → **从来不报**
 
-**报告过滤规则**：
-- 默认报：`(confidence in [confirmed, high, medium]) AND (severity in [critical, major, minor])`
-- 不报：`low` 置信度 → 转"开放问号"段落（让用户决定要不要深查）
-- 不报：`nit` 严重度 → 完全丢
+**报告过滤规则**（与 Step 3 "必查不必全过" 对齐——只有 4 道全过的才能进默认 Findings）：
+
+| 置信度 \ 严重度 | critical | major | minor | nit |
+|---|---|---|---|---|
+| `confirmed` | ✅ Findings | ✅ Findings | ✅ Findings | 丢 |
+| `high` | ✅ Findings | ✅ Findings | ✅ Findings | 丢 |
+| `medium` | 🔵 开放问号 | 🔵 开放问号 | 🔵 开放问号 | 丢 |
+| `low` | 🔵 开放问号 | 🔵 开放问号 | 丢 | 丢 |
+
+- ✅ **Findings**：进默认报告主体
+- 🔵 **开放问号**：进报告的"开放问号"段，标"< 4 道闸门 / 低置信"让用户决定是否深 dig，**不**算确认 bug
+- **丢**：完全不写进报告
+
+**关键不变量**：默认 Findings 段里不会出现 `medium` / `low` 置信度——它们一律落到"开放问号"，避免 medium/minor 噪音淹没真 bug。
 
 ### Step 5: 出报告（固定模板）
 
@@ -117,12 +134,13 @@ LLM 找 bug 最大风险是幻觉。**每条 candidate 进最终报告前 SHALL 
 ## 概览
 - 扫描 scope: <具体>
 - 跑了哪些 lens: L1 / L2 / L3 / L4 / L5 / L6
-- 候选总数: N → 过闸门后报: M（critical: a / major: b / minor: c）
+- 候选总数: N → 4 道闸门全过的: M（critical: a / major: b / minor: c）→ 进 Findings: M
+- 转开放问号（≤ 3 道闸门过）: K
 - 跳过的 lens（含理由）: ...
 
-## Findings
+## Findings（仅 confirmed / high 置信）
 
-### Bug 1 — [critical/major/minor] · [confirmed/high/medium] · [Lx]
+### Bug 1 — [critical/major/minor] · [confirmed/high] · [Lx]
 
 **位置**: `file:line`
 **反模式**: <一行点名>
@@ -149,8 +167,8 @@ let foo = bar.unwrap();  // 反模式行
 
 ### Bug 2 ...
 
-## 开放问号（低置信，不直接报但留痕）
-- 怀疑点 A（< 50% 置信）：...
+## 开放问号（≤ 3 道闸门过 / medium / low 置信）
+- 怀疑点 A（≤ 3 道过：缺 Gate X）：[file:line + 一行猜测 + 缺哪道闸门没过]
 - 怀疑点 B：...
 
 ## 跳过 / 未覆盖说明

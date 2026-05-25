@@ -3,6 +3,18 @@
 > 各 lens 的具体反模式清单。SKILL.md::Step 2 引用本文。
 > 体例：每条反模式给 **抓手 grep / 特征**、**典型例子**、**常见误报**（哪些看着像但其实不是）。
 
+## ⚠️ Scope 硬约束（执行所有 recipe 前先读）
+
+下面所有 `rg` / `grep` 命令都用 `<scope>` 作为路径占位符——**实际跑时 SHALL 替换为 SKILL.md::Step 1 已收到的 scope 路径**（如 `crates/cdt-watch/`、`src-tauri/src/ipc/`、`crates/cdt-api/src/handlers.rs`），**绝不**省掉路径让 `rg` 退化成全仓扫描。
+
+例外：scope 本身就是 `repo-level` 时（用户显式说"扫整个仓"——非默认场景，需用户明确确认），才允许省略路径。
+
+每个 recipe 跑出结果后，**第一步**是过滤掉测试代码 / 示例 / bench（除非 lens 本身在审测试，如 L6）：
+```bash
+# 在 recipe 输出后串一道 filter 排除典型非生产路径
+| rg -v 'tests/|/test_|/examples/|/benches/|#\[cfg\(test\)\]'
+```
+
 ## 目录
 
 - [L1 silent failures](#l1-silent-failures-吞错--默默 fallback)
@@ -40,7 +52,7 @@ rg '\.unwrap\(\)|\.expect\(' --type rust -n <scope>
 
 **抓手**：
 ```bash
-rg 'let _ = .*\?\s*$|let _ = .*\.send\(|let _ = .*\.write\(|let _ = .*fs::' --type rust -n
+rg 'let _ = .*\?\s*$|let _ = .*\.send\(|let _ = .*\.write\(|let _ = .*fs::' --type rust -n <scope>
 ```
 
 **真 bug 信号**：弃掉的 Result 含 I/O 失败 / 写入失败 / channel send 失败 — 错误被吞，用户感知不到操作没成功。
@@ -53,7 +65,7 @@ rg 'let _ = .*\?\s*$|let _ = .*\.send\(|let _ = .*\.write\(|let _ = .*fs::' --ty
 
 **抓手**：
 ```bash
-rg '\.ok\(\)' --type rust -n
+rg '\.ok\(\)' --type rust -n <scope>
 ```
 
 **真 bug 信号**：链式 `something.parse().ok().unwrap_or_default()` —— parse 失败默默回零值，用户以为成功。
@@ -64,7 +76,7 @@ rg '\.ok\(\)' --type rust -n
 
 **抓手**：
 ```bash
-rg 'Err\(.*\) =>.*log|Err\(.*\) =>.*tracing|Err\(_\) =>' --type rust -n
+rg 'Err\(.*\) =>.*log|Err\(.*\) =>.*tracing|Err\(_\) =>' --type rust -n <scope>
 ```
 
 **真 bug 信号**：错误只 log 不传播，循环里继续跑，最终用户看到的是"成功"但部分数据丢失。
@@ -73,7 +85,7 @@ rg 'Err\(.*\) =>.*log|Err\(.*\) =>.*tracing|Err\(_\) =>' --type rust -n
 
 **抓手**：
 ```bash
-rg '\.unwrap_or\(|\.unwrap_or_default\(|\.unwrap_or_else\(' --type rust -n
+rg '\.unwrap_or\(|\.unwrap_or_default\(|\.unwrap_or_else\(' --type rust -n <scope>
 ```
 
 **真 bug 信号**：fallback 值是 `0` / 空集合 / 空字符串，且 caller 无法区分"成功且为 0"和"失败 fallback 为 0"。
@@ -88,7 +100,7 @@ rg '\.unwrap_or\(|\.unwrap_or_default\(|\.unwrap_or_else\(' --type rust -n
 
 **抓手**：
 ```bash
-rg ' as u(8|16|32) | as i(8|16|32) | as usize\s*[+\-]' --type rust -n
+rg ' as u(8|16|32) | as i(8|16|32) | as usize\s*[+\-]' --type rust -n <scope>
 ```
 
 **真 bug 信号**：源类型范围 > 目标类型，且源值可能由用户输入控制（如 文件 size / 数组长度 / time delta）。
@@ -99,7 +111,7 @@ rg ' as u(8|16|32) | as i(8|16|32) | as usize\s*[+\-]' --type rust -n
 
 **抓手**：
 ```bash
-rg '\.len\(\)\s*-\s*1' --type rust -n
+rg '\.len\(\)\s*-\s*1' --type rust -n <scope>
 ```
 
 **真 bug 信号**：`vec.len() - 1` 在 `vec` 可能为空时 → underflow panic（`usize` 减法）。
@@ -110,7 +122,7 @@ rg '\.len\(\)\s*-\s*1' --type rust -n
 
 **抓手**：
 ```bash
-rg '\[0\]|\[\d+\]' --type rust -n
+rg '\[0\]|\[\d+\]' --type rust -n <scope>
 ```
 
 **真 bug 信号**：操作可能空集合 + 索引来自用户输入或循环不变量未保证。
@@ -121,7 +133,7 @@ rg '\[0\]|\[\d+\]' --type rust -n
 
 **抓手**：
 ```bash
-rg '_ => ' --type rust -n -A 2
+rg '_ => ' --type rust -n -A 2 <scope>
 ```
 
 **真 bug 信号**：被 match 的 enum 是 `#[non_exhaustive]` 或近期加过新 variant，`_` arm 静默吞掉。
@@ -139,7 +151,7 @@ rg '_ => ' --type rust -n -A 2
 **抓手**：
 ```bash
 # 先 exists 后 open / 先查 metadata 后操作
-rg '\.exists\(\)' --type rust -n -A 5 | rg '(File::open|fs::read|fs::write|metadata)'
+rg '\.exists\(\)' --type rust -n <scope> -A 5 | rg '(File::open|fs::read|fs::write|metadata)'
 ```
 
 **真 bug 信号**：`if path.exists() { File::open(path) }` —— 中间 path 可能被删，Open 失败。直接 `File::open` 看错误处理即可。
@@ -152,7 +164,7 @@ rg '\.exists\(\)' --type rust -n -A 5 | rg '(File::open|fs::read|fs::write|metad
 
 **抓手**：找同一 struct 持有 ≥ 2 个 `Mutex` / `RwLock`，看不同函数的锁取用顺序。
 ```bash
-rg 'Arc<Mutex<|Arc<RwLock<' --type rust -n
+rg 'Arc<Mutex<|Arc<RwLock<' --type rust -n <scope>
 ```
 
 **真 bug 信号**：函数 A 先锁 X 再锁 Y，函数 B 先锁 Y 再锁 X → 死锁。
@@ -161,7 +173,7 @@ rg 'Arc<Mutex<|Arc<RwLock<' --type rust -n
 
 **抓手**：
 ```bash
-rg '\.lock\(\)\.await' --type rust -n -A 10
+rg '\.lock\(\)\.await' --type rust -n -A 10 <scope>
 ```
 
 **真 bug 信号**：拿了 tokio Mutex 后中间 `.await` 别的 future（特别是 I/O / channel send）→ 长时间持锁阻塞其他 task。
@@ -172,7 +184,7 @@ rg '\.lock\(\)\.await' --type rust -n -A 10
 
 **抓手**：
 ```bash
-rg 'broadcast::channel\(' --type rust -n
+rg 'broadcast::channel\(' --type rust -n <scope>
 ```
 
 **真 bug 信号**：capacity < 32 + 慢 subscriber + lagging 触发 `RecvError::Lagged` 丢消息（用户感知不到）。
@@ -183,7 +195,7 @@ rg 'broadcast::channel\(' --type rust -n
 
 **抓手**：
 ```bash
-rg 'tokio::spawn' --type rust -n
+rg 'tokio::spawn' --type rust -n <scope>
 ```
 
 **真 bug 信号**：spawn 出去的 task 持有大对象 / channel sender / file handle，task 永不退出 → 资源泄漏 / shutdown 时挂起。
@@ -194,7 +206,7 @@ rg 'tokio::spawn' --type rust -n
 
 **抓手**：
 ```bash
-rg 'async fn ' --type rust -A 30 | rg '(std::fs::|Command::new.*output\(\))'
+rg 'async fn ' --type rust -A 30 <scope> | rg '(std::fs::|Command::new.*output\(\))'
 ```
 
 **真 bug 信号**：阻塞 tokio worker thread → 整个 runtime 卡。
@@ -205,7 +217,7 @@ rg 'async fn ' --type rust -A 30 | rg '(std::fs::|Command::new.*output\(\))'
 
 **抓手**：
 ```bash
-rg 'HashMap<|BTreeMap<|Vec<' --type rust -n -A 5 | rg '(insert|push)'
+rg 'HashMap<|BTreeMap<|Vec<' --type rust -n <scope> -A 5 | rg '(insert|push)'
 ```
 
 **真 bug 信号**：长生命周期的 Map / Vec 只 insert 不 evict，N 增长无上限 → OOM。
@@ -227,7 +239,7 @@ rg 'HashMap<|BTreeMap<|Vec<' --type rust -n -A 5 | rg '(insert|push)'
 **抓手**：
 ```bash
 # 找 #[tauri::command] 函数
-rg '#\[tauri::command\]' --type rust -n -A 3
+rg '#\[tauri::command\]' --type rust -n -A 3 <scope>
 # 比对 ui/src 的 invoke 调用
 rg 'invoke\(' ui/src/ -n
 ```
@@ -238,7 +250,7 @@ rg 'invoke\(' ui/src/ -n
 
 **抓手**：
 ```bash
-rg '#\[serde\(' --type rust -n
+rg '#\[serde\(' --type rust -n <scope>
 ```
 
 **真 bug 信号**：导出给 ui 的 struct 缺 `#[serde(rename_all = "camelCase")]`，前端访问 `obj.fooBar` 拿到 undefined。
@@ -247,7 +259,7 @@ rg '#\[serde\(' --type rust -n
 
 **抓手**：
 ```bash
-rg 'pub fn |pub struct |pub enum ' --type rust -n
+rg 'pub fn |pub struct |pub enum ' --type rust -n <scope>
 ```
 
 **真 bug 信号**：改了 `cdt-core` 的公共 fn 签名，但 `cdt-api` / `cdt-cli` 没同步改 → 编译过但行为变。
@@ -256,7 +268,7 @@ rg 'pub fn |pub struct |pub enum ' --type rust -n
 
 **抓手**：
 ```bash
-rg 'Path::is_absolute|dirs::home_dir|/[a-z]' --type rust -n
+rg 'Path::is_absolute|dirs::home_dir|/[a-z]' --type rust -n <scope>
 ```
 
 **真 bug 信号**（本仓踩过的坑，详 `windows-compat-reviewer` agent）：
@@ -269,7 +281,7 @@ rg 'Path::is_absolute|dirs::home_dir|/[a-z]' --type rust -n
 
 **抓手**：
 ```bash
-rg '#\[cfg\(target_os' --type rust -n
+rg '#\[cfg\(target_os' --type rust -n <scope>
 ```
 
 **真 bug 信号**：`#[cfg(target_os = "macos")]` + `#[cfg(target_os = "linux")]` 没有 `#[cfg(target_os = "windows")]` → Windows 构建编译错或缺功能。
@@ -282,7 +294,7 @@ rg '#\[cfg\(target_os' --type rust -n
 
 **抓手**：
 ```bash
-rg 'Command::new\(' --type rust -n -A 5 | rg 'arg\(.*format!|arg\(&format!|arg\(.*\+'
+rg 'Command::new\(' --type rust -n <scope> -A 5 | rg 'arg\(.*format!|arg\(&format!|arg\(.*\+'
 ```
 
 **真 bug 信号**：用户输入直接拼进 shell 命令 → 命令注入。本仓有 SSH 路径需特别关注。
@@ -293,7 +305,7 @@ rg 'Command::new\(' --type rust -n -A 5 | rg 'arg\(.*format!|arg\(&format!|arg\(
 
 **抓手**：
 ```bash
-rg 'PathBuf::from|Path::new' --type rust -n -A 3 | rg '(format!|push)' 
+rg 'PathBuf::from|Path::new' --type rust -n <scope> -A 3 | rg '(format!|push)' 
 ```
 
 **真 bug 信号**：拼路径前没 `canonicalize` / 没拒 `..` segments → 用户可逃出 sandbox。
@@ -302,7 +314,7 @@ rg 'PathBuf::from|Path::new' --type rust -n -A 3 | rg '(format!|push)'
 
 **抓手**：
 ```bash
-rg 'serde_json::from_str|serde_json::from_slice|bincode::deserialize' --type rust -n
+rg 'serde_json::from_str|serde_json::from_slice|bincode::deserialize' --type rust -n <scope>
 ```
 
 **真 bug 信号**：从 SSH / HTTP / IPC 收到的数据无 size cap → DoS。
@@ -311,7 +323,7 @@ rg 'serde_json::from_str|serde_json::from_slice|bincode::deserialize' --type rus
 
 **抓手**：
 ```bash
-rg 'format!\(.*\{.*\}.*\)' --type rust -n | rg '(query|exec|path|cmd|url)'
+rg 'format!\(.*\{.*\}.*\)' --type rust -n <scope> | rg '(query|exec|path|cmd|url)'
 ```
 
 **真 bug 信号**：用户输入经 `format!` 拼到敏感字符串 → 注入。
@@ -324,7 +336,7 @@ rg 'format!\(.*\{.*\}.*\)' --type rust -n | rg '(query|exec|path|cmd|url)'
 
 **抓手**：
 ```bash
-rg 'MockX|mockall|#\[mockable\]|fn mock_' --type rust -n
+rg 'MockX|mockall|#\[mockable\]|fn mock_' --type rust -n <scope>
 ```
 
 **真 bug 信号**：测试用 mock 替代了**正是要测的那个组件**（如 IPC handler 测试 mock 掉了 IPC layer）→ 测试 pass 但真路径没跑。本仓已有 `e2e-http-verify` skill 专治这坑。
@@ -347,7 +359,7 @@ rg 'assert' <test_file>
 
 **抓手**：
 ```bash
-rg 'assert!\(true\)|fn test_.*\{\s*\}' --type rust -n
+rg 'assert!\(true\)|fn test_.*\{\s*\}' --type rust -n <scope>
 ```
 
 **真 bug 信号**：占位 test 凑数，CI 计入 pass 但实际没测什么。
@@ -362,7 +374,7 @@ rg 'assert!\(true\)|fn test_.*\{\s*\}' --type rust -n
 
 **抓手**：
 ```bash
-rg '#\[ignore\]' --type rust -n
+rg '#\[ignore\]' --type rust -n <scope>
 ```
 
 **真 bug 信号**：`#[ignore]` 注释里写"TODO 暂时挂"半年没动 → 该路径已无任何测试保护。
