@@ -11,6 +11,7 @@
 | Tauri 后端 / IPC | `src-tauri/CLAUDE.md` | Tauri 配置链、IPC payload 瘦身模式、tauri-plugin-updater、通知/托盘、devtools feature |
 | Rust workspace | `crates/CLAUDE.md` | Rust 命名/error/async/log/clippy、serde camelCase、Windows 兼容、后台任务 per-key cancel、IPC vs HTTP 分叉、chunk-building 语义契约 |
 | openspec | `openspec/CLAUDE.md` | spec 变更约定 7 条、spec delta 写法、archive 顺序坑、引用约定 |
+| openspec spec 写法 | `openspec/SPEC_GUIDE.md` | spec 写什么 / 不写什么、反例对照表、下笔顺序、reviewer checklist |
 
 **跨域规则**（`.claude/rules/*.md`）：
 

@@ -12,22 +12,22 @@ context: |
   / 主 spec Purpose 段）一律用简体中文撰写；RFC2119 关键词
   （SHALL / MUST / SHOULD / MAY / WHEN / THEN / AND / OR / NOT）保留英文。
 
-  spec.md 是 behavior contract——backtick 引用仅允许外部协议层标识符
-  （IPC payload 字段名 / HTTP path / Tauri command 名 / 错误码 /
-  push event 名）；具体 spec 反模式与拦截规则见下方 `rules.specs`。
-  design.md / tasks.md 才是放实现细节的地方。
+  spec.md 是 behavior contract——具体写什么 / 不写什么 / 反例对照见
+  `openspec/SPEC_GUIDE.md`，下方 `rules.specs` 是核心约定速查。
 
 rules:
   proposal:
     - 一个 change 聚焦单一 capability（或紧耦合的少量 capability 组）
     - design.md 不是可选项——任何 change 都需 D1 / D2 / ... 决策记录，让 reviewer 能从设计层评估
   specs:
-    - "spec.md 是 behavior contract（行为契约），不是 implementation plan。Quick test：如果实现可以改而外部行为不变，则该内容不属于 spec，应迁到 design.md"
-    - "Requirement / Scenario 描述使用简体中文；SHALL / MUST / SHOULD / MAY / WHEN / THEN / AND / OR / NOT 等 RFC2119 关键词保留英文"
-    - "MUST exclude（六类反模式，由 CI scripts/check-spec-purity.sh 拦截）：(1) 内部模块/类/函数名（`crate::module::fn`、`struct InnerCache` 等）；(2) 源文件路径（.rs / .ts / .svelte / crates/ / src-tauri/src/ / ui/src/）；(3) commit hash / PR# / issue#（这些属诊断溯源，写 design.md 论证段）；(4) 实测诊断数据（具体 KB / MB / ms 数字、「实测 X 案例」、baseline 数字）；(5) 回滚开关 const 名（`OMIT_*` / `CROSS_*` / `STALE_*` 等具名）；(6) 库与框架选型（tokio / serde / axum / tauri-plugin-X / vitest / playwright 等）"
-    - "backtick 引用仅允许：外部协议层标识符（IPC payload 字段名 camelCase 如 `messagesOmitted`、HTTP path 如 `/api/projects`、Tauri command 名 snake_case 如 `ssh_connect`、push event 名）+ 错误码 + RFC2119 关键词"
-    - "膨胀软阈值：单个 spec.md 超过 500 行 SHOULD 评估是否拆 capability 或把内部论证 / 实现路径迁到 design.md。新增 Requirement body MUST 在 ~200 字内说清外部行为，超出说明在写实现细节"
-    - "事件契约（payload 字段、错误码、ordering 约定、debounce / throttle 阈值数值）属于 spec；具体调度 / 缓存 / 重试机制实现属 design.md"
+    - "一句话原则：如果实现可换而外部行为 / 协议不变，则该内容属 design.md 不属 spec。spec 描述『用户能感知什么 + 系统对外承诺什么』；design.md 描述『内部怎么实现』"
+    - "下笔顺序：Purpose（用户价值，删了用户失去什么）→ FR（用户能做什么的外部可观察契约）→ NFR（性能 / 容量 / 延迟独立 Requirement，不与 FR 混）→ Cross-references（`[[other-cap]]` 引用，不复制协议字段）"
+    - "MUST exclude（语义层，判断主权在 reviewer 与 codex 二审）：库选型 / 内部 fn-type-mod 名 / Rust 类型签名（`Vec<T>` 等）/ log target 字符串 / 实现选择类 SHALL（『通过 X 记录』『用 Y 缓存』）/ 测试 fixture 常量名 / 测试文件路径 / 配置文件字段路径（`tauri.conf.json::xxx`）/ Cargo-npm 依赖名+版本 / commit-PR-issue 号 / 实测数字与 baseline"
+    - "词法 lint 信号：`scripts/check-spec-purity.sh` 抓 6 类反模式（mod-path / src-path / commit-hash / metric / impl-flag / lib-framework）走 baseline ratchet 防恶化。词法命中仅作 reviewer 自检雷达——命中 ≈ 极可能违反语义规则但反过来不成立，最终判断主权在 reviewer 与 codex 二审"
+    - "backtick 用法：优先用于外部协议层标识符（IPC payload 字段名 camelCase 如 `messagesOmitted` / Tauri command snake_case 如 `ssh_connect` / HTTP path 如 `/api/projects` / 错误码 / push event 名）与 RFC2119 关键词；不得用 backtick 包装内部 fn / type / mod 名、源码路径、测试 fixture 常量、Cargo / npm 依赖等实现细节。Requirement / Scenario 描述使用简体中文，RFC2119 关键词保留英文"
+    - "跨 spec 协议唯一 owner：同一 IPC payload / SSE event / 错误码不在多个 spec 重复 SHALL；用 `[[capability]]` 引用。测试 fixture 同步契约由 `frontend-test-pyramid::Rust IPC contract test 守护字段形状` 一处兜底；配置文件字段 / Cargo 依赖归 release-runbook 不进 spec"
+    - "Scenario 标题视角：描述用户 / 系统可观察行为，禁用 const 名 / 回滚开关名 / 实现术语命名（如 `OMIT_*` / `Rollback flag` 不出现在 Scenario 标题）"
+    - "完整指引与反例对照见 `openspec/SPEC_GUIDE.md`；已实践『删除尺子』见 change `openspec-slim-S-tier` / `openspec-slim-M-tier` 的 design.md；capability 边界重构远期计划见 GitHub Issue #296"
   tasks:
     - tasks 按 capability 对应的 owning crate 分组（capability → crate 映射见 CLAUDE.md）
 # archive 相关约束见 openspec/CLAUDE.md 硬约束 #2/#3/#4（archive 非 spec-driven schema 的 artifact ID）

@@ -8,6 +8,10 @@
 - `openspec/changes/<slug>/` —— 进行中的 change（proposal + design + tasks + specs delta）
 - `openspec/changes/archive/<日期>-<slug>/` —— 历史快照，**冻结**
 
+## 写 spec 前必读
+
+`openspec/SPEC_GUIDE.md` —— spec 该写什么 / 不该写什么 / 反例对照 / 下笔顺序 / reviewer checklist。本文件只列工作流硬约束；写 spec 内容的判断标准全在 SPEC_GUIDE。
+
 ## 硬约束
 
 ### 1. 不能直接 Edit 主 spec
