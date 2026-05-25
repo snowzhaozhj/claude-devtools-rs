@@ -1803,12 +1803,22 @@ impl LocalDataApi {
         // `session_list_changed` enrich（change
         // `enrich-file-change-with-session-list-changed::D2`）。原 `bridge_task`
         // 已删除，`file_tx` 唯一生产者是 unified invalidator。
+        // 断连重连时保存旧 watcher 的 baseline 快照，传给新 watcher 让首轮
+        // poll 做 diff 而非静默建 baseline（design.md D5 断连重连 baseline diff）。
+        let prev_baseline = {
+            let watchers = self.remote_watchers.lock().await;
+            watchers
+                .get(context_id)
+                .map(cdt_ssh::RemoteWatcherHandle::baseline_snapshot)
+                .filter(|b| !b.is_empty())
+        };
         let cancel_token = cdt_ssh::CancelToken::new();
         let cancel_for_monitor = cancel_token.clone();
         let watcher = file_watcher.attach_remote(
             provider.sftp_client(),
             provider.remote_home().to_path_buf(),
             cancel_token,
+            prev_baseline,
         );
         // dead-signal monitor：watcher 内连续 PERMANENT_FAILURE_THRESHOLD 轮
         // 永久 SFTP 错误时 notify dead_signal；本 task 触发 ssh_mgr.disconnect
@@ -2377,27 +2387,28 @@ fn spawn_watcher_runtime(
 /// （change `enrich-file-change-with-session-list-changed::D1`，原 `bridge_task`
 /// 已合并进本 task）。
 ///
-/// 顺序契约（change D4 emit 时机契约）：
+/// 顺序契约（change D4 emit 时机契约 + change `enrich-via-watcher` D4 OR 公式）：
 /// 1. `apply_file_event_to_project_scan_cache` —— sync 快路径（无 fs op），
-///    返回 `bool` 表示是否命中三档判定（`structural=true`）；不能被 parsed 的
-///    `fs.stat().await` 拖延结构可见性判定（codex 二审 issue #261）。
-/// 2. 构造 enriched `FileChangeEvent { session_list_changed: structural, ..raw }`
-///    立即 `file_tx.send` —— 锁已在 step 1 函数返回时释放，emit 不持锁。
-///    前端拿 enriched event 决定是否 revalidate `list_repository_groups`，
-///    与 `parsed_cache` 的磁盘 stat I/O 是独立路径，不能让前端等磁盘 stat。
+///    返回 [`EnrichDecision`]：`invalidated` + `emit_session_list_changed_hint`；
+///    不能被 parsed 的 `fs.stat().await` 拖延结构可见性判定（codex 二审 issue #261）。
+/// 2. 构造 enriched `FileChangeEvent { session_list_changed: event.session_list_changed
+///    || decision.emit_session_list_changed_hint, ..raw }`（OR 公式：watcher 已填 +
+///    cache hint 取并集）立即 `file_tx.send` —— 锁已在 step 1 函数返回时释放，
+///    emit 不持锁。前端拿 enriched event 决定是否 revalidate `list_repository_groups`。
 /// 3. `apply_file_event_to_parsed_cache` —— async stat 比对 `FileSignature`，
 ///    仅在 mismatch 时从 cache remove；spurious 事件（典型 CI inotify 启动期
 ///    "无内容变化"事件）由签名比对兜底不错杀有效 cache。**不阻塞 emit**。
 ///
-/// Lag 行为差异（与原独立 task 完全一致）：
+/// Lag 行为差异：
 /// - `ProjectScanCache` 走保守 `invalidate_local()` + counter `lag_conservative`
 ///   （无 path-level 被动校验机制可兜底）
 /// - `ParsedMessageCache` 静默继续（下次 lookup 由被动 `FileSignature`
 ///   mismatch 兜底）
-/// - `file_tx` lag 路径**不**emit synthetic enriched event（合成 event 的
-///   `project_id` / `session_id` 字段语义不明）；下游消费者通过 HTTP/SSE
-///   `PushEvent::SseLagged` 或 Tauri host `app.emit("sse-lagged")` 兜底信号
-///   （change D6）触发 silent refresh。
+/// - `file_tx` lag 路径 emit synthetic structural event：
+///   `FileChangeEvent { project_id: "", session_id: "", deleted: false,
+///   project_list_changed: true, session_list_changed: true }`，让下游
+///   （src-tauri host / HTTP SSE bridge）转发到前端三档守护触发兜底全量
+///   revalidate（change `enrich-via-watcher` D6）。
 ///
 /// Panic 隔离：两侧 helper 内部 `cache.lock()` 都走 `into_inner` 兜底
 /// （codex 二审 issue #261 hardening），单 task panic 不会一刀切两个 cache 都
@@ -2429,14 +2440,15 @@ fn spawn_unified_cache_invalidator(
         loop {
             match rx.recv().await {
                 Ok(event) => {
-                    let structural =
+                    let decision =
                         apply_file_event_to_project_scan_cache(&scan_cache, &local_ctx, &event);
                     // emit 在 sync invalidate 之后、async parsed invalidate 之前
-                    // （change D4）。enrich `session_list_changed` 字段后让下游
-                    // 拿到结构性信号决定是否触发 `list_repository_groups` 等
-                    // revalidate。锁已在上一行函数返回时释放，emit 不持锁。
+                    // （change D4 emit 时机契约）。OR 公式：watcher 已填字段 +
+                    // cache hint 取并集（change `enrich-via-watcher` D4）——watcher
+                    // 视角 first-seen + cache 视角 unknown_session 双源兜底。
                     let enriched = cdt_core::FileChangeEvent {
-                        session_list_changed: structural,
+                        session_list_changed: event.session_list_changed
+                            || decision.emit_session_list_changed_hint,
                         ..event.clone()
                     };
                     let _ = file_tx.send(enriched);
@@ -2449,10 +2461,25 @@ fn spawn_unified_cache_invalidator(
                     )
                     .await;
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
+                Err(broadcast::error::RecvError::Lagged(n)) => {
                     apply_lag_to_project_scan_cache(&scan_cache);
-                    // parsed 侧 lag 静默：下次 lookup 由被动 `FileSignature` 兜底；
-                    // file_tx lag 不 emit synthetic event，前端走 SseLagged 兜底
+                    // parsed 侧 lag 静默：下次 lookup 由被动 `FileSignature` 兜底。
+                    // file_tx emit synthetic structural event：让下游
+                    // （src-tauri host / HTTP SSE bridge）转发到前端三档守护，
+                    // 触发兜底全量 revalidate（change `enrich-via-watcher` D6）。
+                    let synthetic = cdt_core::FileChangeEvent {
+                        project_id: String::new(),
+                        session_id: String::new(),
+                        deleted: false,
+                        project_list_changed: true,
+                        session_list_changed: true,
+                    };
+                    let _ = file_tx.send(synthetic);
+                    tracing::warn!(
+                        missed = n,
+                        source = "watcher_subscribe_files",
+                        "broadcast lagged, emitted synthetic structural event"
+                    );
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             }
@@ -6557,50 +6584,48 @@ mod tests {
         );
     }
 
-    /// change D4 + D3：deleted event SHALL emit enriched event with
-    /// `session_list_changed=true`（删除 session 改变 group 内集合）。
+    /// change `enrich-via-watcher` D3 + D4 OR 公式：deleted event 从 watcher 层
+    /// 已无条件填 `session_list_changed=true`（D3），OR 公式保留此信号透传到
+    /// enriched event。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unified_invalidator_emits_session_list_changed_true_for_deleted() {
         let (raw_tx, mut file_rx, _scan_cache, _projects_dir, project_id) =
             unified_invalidator_scenario_fixture();
 
+        // D3：watcher 对 deleted 事件无条件填 session_list_changed=true
         raw_tx
             .send(cdt_core::FileChangeEvent {
                 project_id: project_id.into(),
                 session_id: "sess-known".into(),
                 deleted: true,
                 project_list_changed: false,
-                session_list_changed: false,
+                session_list_changed: true, // watcher D3 已填
             })
             .unwrap();
 
         let enriched = recv_enriched_with_timeout(&mut file_rx).await;
         assert!(
             enriched.session_list_changed,
-            "deleted SHALL enrich session_list_changed=true (D3 三档判定 deleted 分支)"
+            "deleted + watcher D3 填 true → OR 公式保留 session_list_changed=true"
         );
         assert!(enriched.deleted, "deleted 字段透传不变");
     }
 
-    /// change D6：raw broadcast 命中 `RecvError::Lagged` 分支时 invalidator
-    /// SHALL NOT emit synthetic enriched event（合成 event 的 project_id /
-    /// session_id 字段语义不明；前端走 HTTP/Tauri 的 `sse-lagged` 兜底）。
+    /// change `enrich-via-watcher` D6：raw broadcast 命中 `RecvError::Lagged` 分支时
+    /// invalidator SHALL emit synthetic structural event 到 `file_tx`，让下游
+    /// （src-tauri host / HTTP SSE bridge）转发到前端三档守护触发兜底 revalidate。
     ///
-    /// **测试设计**（codex round 2 WARN-2 修订——避免全局 telemetry counter
-    /// 跨 test 并发污染）：
+    /// **测试设计**：
     /// 1. 预填本测**私有** scan_cache 1 个 entry，`project=p / session=s`
     /// 2. burst raw event 全用**已知** `session_id=s`：raw 路径走
     ///    `content_append_skipped`，**不**调 `invalidate_local`，cache entry 保留
     /// 3. capacity=2 + 16 burst → invalidator 必然命中 `RecvError::Lagged` →
-    ///    lag 路径 `apply_lag_to_project_scan_cache` 走 `invalidate_local` →
-    ///    cache entry 被清空
-    /// 4. **强断言 1**：sleep 后 `scan_cache.has_entry == false` 证明 lag 分支
-    ///    真执行（本断言只能由 lag 路径触发；raw 路径走 skipped 不动 cache）。
-    ///    用私有 cache 避免与同 binary 其他 lag-counter test 并发污染
-    /// 5. **强断言 2**：`file_rx` emit count 必须 < 16（lag 路径若 emit
-    ///    synthetic event 会破坏）
+    ///    lag 路径 `apply_lag_to_project_scan_cache` → cache 清空 + emit synthetic
+    /// 4. **强断言 1**：`scan_cache.has_entry == false` 证明 lag 分支真执行
+    /// 5. **强断言 2**：file_rx 至少收到一条 synthetic event（plc=true, slc=true,
+    ///    project_id="", session_id=""）
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn unified_invalidator_skips_emit_on_lag() {
+    async fn unified_invalidator_emits_synthetic_on_lag() {
         use crate::ipc::parsed_message_cache::ParsedMessageCache;
         use crate::ipc::project_scan_cache::ProjectScanCache;
         use cdt_core::Project;
@@ -6661,25 +6686,32 @@ mod tests {
             projects_dir,
         );
 
-        // 给 invalidator 时间消费 + 命中 Lagged（必然至少一次）+ 清空 cache
+        // 给 invalidator 时间消费 + 命中 Lagged（必然至少一次）+ emit synthetic
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // 强断言 1：本测私有 scan_cache entry 被清空 == lag 分支真执行过。
-        // raw 路径走 skipped 不动 cache，所以**只有** lag 路径能让 has_entry → false。
         assert!(
             !scan_cache.lock().unwrap().has_entry(&local_ctx),
             "lag 分支 SHALL 调 invalidate_local 清空 cache；如果 has_entry 仍 true 说明 lag 路径没触发 \
              （test 时序失效，需重设 capacity / burst 数）"
         );
 
-        // 强断言 2：file_rx emit count 必须 < 16（lag 路径若 emit synthetic 会破坏）
-        let mut emit_count = 0;
-        while let Ok(_event) = file_rx.try_recv() {
-            emit_count += 1;
+        // 强断言 2：file_rx 至少收到一条 synthetic event（D6 行为）
+        let mut saw_synthetic = false;
+        while let Ok(event) = file_rx.try_recv() {
+            if event.project_id.is_empty()
+                && event.session_id.is_empty()
+                && event.project_list_changed
+                && event.session_list_changed
+                && !event.deleted
+            {
+                saw_synthetic = true;
+            }
         }
         assert!(
-            emit_count < 16,
-            "lag 路径 SHALL NOT emit synthetic enriched event；emit_count={emit_count} 应 < 16（raw 突发数）"
+            saw_synthetic,
+            "lag 路径 SHALL emit synthetic FileChangeEvent {{ project_id: \"\", session_id: \"\", \
+             plc: true, slc: true, deleted: false }}（change enrich-via-watcher D6）"
         );
     }
 
@@ -7109,5 +7141,319 @@ mod tests {
             !scan_cache.lock().unwrap().has_entry(&local_ctx),
             "emit 时 scan_cache SHALL 已 invalidate（D4 emit 在 sync scan 之后）"
         );
+    }
+
+    // ===== change `enrich-via-watcher` task 3.4 集成测试 =====
+
+    /// task 3.4(a)：cold cache（空 `ProjectScanCache`）+ 注入 raw event with
+    /// `session_list_changed=true`（watcher 已填），断言 OR 公式不抑制 watcher
+    /// 字段——enriched event 仍为 `session_list_changed=true`。
+    ///
+    /// 覆盖 design D4 Risks 场景：cache 空时 `emit_session_list_changed_hint`
+    /// 可能为 false（`track_unknown = has_entry || has_in_flight_scan` 均 false
+    /// → `unknown_session=false`），但 OR 公式让 watcher 填的 true 穿透不被覆盖。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_invalidator_cold_cache_preserves_session_list_changed_from_watcher() {
+        use crate::ipc::parsed_message_cache::ParsedMessageCache;
+        use crate::ipc::project_scan_cache::ProjectScanCache;
+
+        let projects_dir = std::path::PathBuf::from("/tmp/cold-cache-preserve-fixture");
+        let parsed_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
+        // 空 cache —— 无 entry 无 in_flight_scan
+        let scan_cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+
+        let (raw_tx, raw_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(16);
+        let (file_tx, mut file_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(16);
+
+        let _h = spawn_unified_cache_invalidator(
+            parsed_cache,
+            scan_cache,
+            raw_rx,
+            file_tx,
+            projects_dir,
+        );
+
+        // watcher 已填 session_list_changed=true（first-seen 判定）
+        raw_tx
+            .send(cdt_core::FileChangeEvent {
+                project_id: "proj-a".into(),
+                session_id: "sess-new".into(),
+                deleted: false,
+                project_list_changed: false,
+                session_list_changed: true,
+            })
+            .unwrap();
+
+        let enriched = recv_enriched_with_timeout(&mut file_rx).await;
+        assert!(
+            enriched.session_list_changed,
+            "cold cache: watcher 填 session_list_changed=true SHALL NOT 被 OR 公式覆盖为 false"
+        );
+        assert_eq!(enriched.project_id, "proj-a");
+        assert_eq!(enriched.session_id, "sess-new");
+    }
+
+    /// task 3.4(b)：lag synthetic event 测试（由 `unified_invalidator_emits_synthetic_on_lag`
+    /// 覆盖，此处为命名对齐 + 跨引用 alias）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_invalidator_lag_emits_synthetic_structural_event() {
+        use crate::ipc::parsed_message_cache::ParsedMessageCache;
+        use crate::ipc::project_scan_cache::ProjectScanCache;
+        use cdt_core::Project;
+        use cdt_fs::{ContextId, FsKind};
+
+        let projects_dir = std::path::PathBuf::from("/tmp/lag-synthetic-3-4-b");
+        let local_ctx = ContextId::local(projects_dir.clone());
+
+        let parsed_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
+        let scan_cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+
+        // 预填 entry 让 lag 清空有可观测效果
+        {
+            let mut sc = scan_cache.lock().unwrap();
+            let scan_gen = sc.begin_scan();
+            sc.insert(
+                local_ctx.clone(),
+                Arc::new(vec![Project {
+                    id: "p".into(),
+                    name: "p".into(),
+                    path: std::path::PathBuf::new(),
+                    sessions: vec!["s".into()],
+                    most_recent_session: None,
+                    created_at: None,
+                    distinct_cwds: vec![],
+                }]),
+                scan_gen,
+                scan_gen,
+                FsKind::Local,
+            );
+        }
+
+        // capacity=2 → burst > 2 条强制 lag
+        let (raw_tx, raw_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(2);
+        let (file_tx, mut file_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(64);
+
+        for _ in 0..16 {
+            let _ = raw_tx.send(cdt_core::FileChangeEvent {
+                project_id: "p".into(),
+                session_id: "s".into(),
+                deleted: false,
+                project_list_changed: false,
+                session_list_changed: false,
+            });
+        }
+
+        let _h = spawn_unified_cache_invalidator(
+            parsed_cache,
+            scan_cache.clone(),
+            raw_rx,
+            file_tx,
+            projects_dir,
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // 断言 lag 触发
+        assert!(
+            !scan_cache.lock().unwrap().has_entry(&local_ctx),
+            "lag 路径 SHALL invalidate cache"
+        );
+
+        // 断言 synthetic event 出现在 file_rx
+        let mut saw_synthetic = false;
+        while let Ok(event) = file_rx.try_recv() {
+            if event.project_id.is_empty()
+                && event.session_id.is_empty()
+                && !event.deleted
+                && event.project_list_changed
+                && event.session_list_changed
+            {
+                saw_synthetic = true;
+            }
+        }
+        assert!(
+            saw_synthetic,
+            "lag 路径 SHALL emit synthetic FileChangeEvent {{ project_id: \"\", \
+             session_id: \"\", plc: true, slc: true, deleted: false }}"
+        );
+    }
+
+    /// task 3.4(c)：OR 公式——watcher 填 `session_list_changed=false` 但 cache
+    /// hint 为 true（cache 有 entry 但不含此 session）→ emit 字段为 `true`。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_invalidator_or_formula_watcher_false_cache_hint_true() {
+        let (raw_tx, mut file_rx, _scan_cache, _projects_dir, project_id) =
+            unified_invalidator_scenario_fixture();
+
+        // watcher 填 false（假设 watcher 重启后丢了 known_sessions，未判定首见）
+        // 但 cache 有 entry 且不含此 session → hint=true
+        raw_tx
+            .send(cdt_core::FileChangeEvent {
+                project_id: project_id.into(),
+                session_id: "sess-cache-unknown".into(),
+                deleted: false,
+                project_list_changed: false,
+                session_list_changed: false, // watcher 视角未判定
+            })
+            .unwrap();
+
+        let enriched = recv_enriched_with_timeout(&mut file_rx).await;
+        assert!(
+            enriched.session_list_changed,
+            "OR 公式：watcher=false + cache hint=true → emit SHALL be true"
+        );
+    }
+
+    /// task 3.4(d)：OR 公式——watcher 填 `session_list_changed=true` 但 cache
+    /// hint 为 false（session 在 cache 里是 known）→ emit 字段仍为 `true`（OR 取并集）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_invalidator_or_formula_watcher_true_cache_hint_false() {
+        let (raw_tx, mut file_rx, _scan_cache, _projects_dir, project_id) =
+            unified_invalidator_scenario_fixture();
+
+        // watcher 填 true（first-seen），但 cache 含此 session（hint=false）
+        // fixture 预填的 session_id 是 "sess-known"
+        raw_tx
+            .send(cdt_core::FileChangeEvent {
+                project_id: project_id.into(),
+                session_id: "sess-known".into(),
+                deleted: false,
+                project_list_changed: false,
+                session_list_changed: true, // watcher 视角首见
+            })
+            .unwrap();
+
+        let enriched = recv_enriched_with_timeout(&mut file_rx).await;
+        assert!(
+            enriched.session_list_changed,
+            "OR 公式：watcher=true + cache hint=false → emit SHALL be true（OR 取并集）"
+        );
+    }
+
+    /// task 3.4(e)：local 与 SSH 两路径 first-seen 语义对称契约测试。
+    ///
+    /// 表驱动覆盖：相同 `(project_list_changed, deleted, watcher_session_list_changed)`
+    /// 输入经 unified invalidator OR 公式后 SHALL 产生相同 enriched
+    /// `session_list_changed` 字段——无论事件来源是 local watcher 还是 SSH polling
+    /// watcher（两路径都通过同一 `FileWatcher.file_tx` → unified invalidator 管道）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_invalidator_local_ssh_first_seen_symmetric_contract() {
+        // 两路径共用同一 unified invalidator 管道（SSH 通过
+        // `FileWatcher::attach_remote` 注入同一 file_tx），因此只需构造不同
+        // 输入形态经同一 invalidator 即可验证对称性。
+        //
+        // 场景覆盖矩阵（4 个 case 对应不同 watcher 层输出组合）：
+        #[allow(clippy::struct_excessive_bools)]
+        struct Case {
+            label: &'static str,
+            plc: bool,
+            deleted: bool,
+            watcher_slc: bool,
+            // 若 true 则用 unknown session（hint=true），否则用 known session（hint=false）
+            use_unknown_session: bool,
+            expected_slc: bool,
+        }
+        let cases = [
+            Case {
+                label: "append known session, watcher=false, hint=false → false",
+                plc: false,
+                deleted: false,
+                watcher_slc: false,
+                use_unknown_session: false,
+                expected_slc: false,
+            },
+            Case {
+                label: "first-seen new session, watcher=true, hint=true → true",
+                plc: false,
+                deleted: false,
+                watcher_slc: true,
+                use_unknown_session: true,
+                expected_slc: true,
+            },
+            Case {
+                label: "delete known session, watcher=true (D3), hint=false → true",
+                plc: false,
+                deleted: true,
+                watcher_slc: true,
+                use_unknown_session: false,
+                expected_slc: true,
+            },
+            Case {
+                label: "watcher lost state (restart), watcher=false but hint=true → true",
+                plc: false,
+                deleted: false,
+                watcher_slc: false,
+                use_unknown_session: true,
+                expected_slc: true,
+            },
+            Case {
+                label: "plc=true dir create, watcher=false, hint=false → false (plc 自身让前端 revalidate)",
+                plc: true,
+                deleted: false,
+                watcher_slc: false,
+                use_unknown_session: false,
+                expected_slc: false,
+            },
+            Case {
+                label: "watcher=true + hint=false (OR 并集) → true",
+                plc: false,
+                deleted: false,
+                watcher_slc: true,
+                use_unknown_session: false,
+                expected_slc: true,
+            },
+        ];
+
+        for case in &cases {
+            let (raw_tx, mut file_rx, _scan_cache, _projects_dir, project_id) =
+                unified_invalidator_scenario_fixture();
+
+            let session_id = if case.use_unknown_session {
+                "sess-never-seen"
+            } else {
+                "sess-known" // fixture 预填的 known session
+            };
+
+            raw_tx
+                .send(cdt_core::FileChangeEvent {
+                    project_id: project_id.into(),
+                    session_id: session_id.into(),
+                    deleted: case.deleted,
+                    project_list_changed: case.plc,
+                    session_list_changed: case.watcher_slc,
+                })
+                .unwrap();
+
+            let enriched = recv_enriched_with_timeout(&mut file_rx).await;
+            assert_eq!(
+                enriched.session_list_changed,
+                case.expected_slc,
+                "对称契约 case 失败: {}\n  input: plc={}, deleted={}, watcher_slc={}, unknown={}\n  expected_slc={}, got={}",
+                case.label,
+                case.plc,
+                case.deleted,
+                case.watcher_slc,
+                case.use_unknown_session,
+                case.expected_slc,
+                enriched.session_list_changed
+            );
+        }
+    }
+
+    /// task 3.6：文档化接受边角——`reconfigure_claude_root` + `invalidate_all` +
+    /// 无 `in_flight_scan` 三件事同时发生的极端 race 漏 emit 一次。
+    /// 见 design.md D4 Risks 段详细分析。
+    #[ignore = "documented as accepted edge case (design.md::D4 Risks - reconfigure_claude_root + invalidate_all + no in_flight_scan triple race)"]
+    #[tokio::test]
+    async fn accepted_edge_case_reconfigure_race_drops_first_seen_emit() {
+        // 此 race 仅在 reconfigure_claude_root 阻塞 sync 操作完成瞬间 + watcher
+        // known_sessions 重置 + cache invalidate_all 清空 + 无 in_flight_scan
+        // 四件事同时发生时出现。D4 Risks 段已论证：下次任意 file event 会自动
+        // 触发兜底 revalidate（watcher 重启后首见任何 session 都 emit true）。
+        //
+        // 有意不修补此 race——修补需要跨 reconfigure_claude_root 锁链路的额外同步，
+        // 代价远大于"用户切 Claude root 后漏一次刷新且下一次事件自动兜底"的影响。
+        //
+        // TODO: this race is intentionally not handled; see design.md::D4
     }
 }

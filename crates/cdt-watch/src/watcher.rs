@@ -48,6 +48,10 @@ pub struct FileWatcher {
     projects_dir: PathBuf,
     todos_dir: PathBuf,
     known_projects: Mutex<HashSet<PathBuf>>,
+    /// 跟踪已观察到的 `(normalized_project_path, session_id)` 组合，用于填写
+    /// `FileChangeEvent.session_list_changed` 字段。启动时为空（lazy），
+    /// 接受 false-positive trade-off（design D2）。
+    known_sessions: Mutex<HashSet<(PathBuf, String)>>,
 }
 
 impl Default for FileWatcher {
@@ -83,6 +87,7 @@ impl FileWatcher {
             projects_dir,
             todos_dir: dunce::canonicalize(&todos_dir).unwrap_or(todos_dir),
             known_projects: Mutex::new(known_projects),
+            known_sessions: Mutex::new(HashSet::new()),
         }
     }
 
@@ -118,13 +123,25 @@ impl FileWatcher {
     /// `cancel` 由调用方注入：`cdt-api::LocalDataApi::attach_remote_watcher`
     /// 持有 token clone 用于 dead-signal monitor 路径，外部 disconnect 时仍
     /// 能 cancel SSH polling（detail: change `enrich-file-change-with-session-list-changed::D2`）。
+    ///
+    /// `prev_baseline`：断连重连时传入上次 baseline 快照（design.md D5），
+    /// 让重连首轮做 diff；首次连接传 `None`。
     pub fn attach_remote(
         &self,
         client: Arc<dyn SftpClient>,
         remote_projects_root: PathBuf,
         cancel: CancelToken,
+        prev_baseline: Option<
+            std::collections::BTreeMap<std::path::PathBuf, cdt_ssh::FileFingerprint>,
+        >,
     ) -> RemoteWatcherHandle {
-        RemotePollingWatcher::spawn(client, remote_projects_root, self.file_tx.clone(), cancel)
+        RemotePollingWatcher::spawn(
+            client,
+            remote_projects_root,
+            self.file_tx.clone(),
+            cancel,
+            prev_baseline,
+        )
     }
 
     /// 启动监听，阻塞直到出错或被取消。
@@ -258,12 +275,22 @@ impl FileWatcher {
 
         let project_list_changed = !deleted && self.mark_project_seen(&project_id);
 
+        // session_list_changed 填写规则（spec `跟踪 session 首见性以填写 revalidation hint`）：
+        // - 写事件（!deleted）：mark_session_seen 返 true 表示首次见 → true
+        // - 删除事件（deleted）：无条件 true + unmark（design D3）
+        let session_list_changed = if deleted {
+            self.unmark_session(&project_id, &session_id);
+            true
+        } else {
+            self.mark_session_seen(&project_id, &session_id)
+        };
+
         Some(FileChangeEvent {
             project_id,
             session_id,
             deleted,
             project_list_changed,
-            session_list_changed: false,
+            session_list_changed,
         })
     }
 
@@ -277,6 +304,31 @@ impl FileWatcher {
             .lock()
             .expect("known_projects mutex poisoned")
             .insert(key)
+    }
+
+    /// 标记 `(project_id, session_id)` 组合为已见。返回 `true` 表示首次插入
+    /// （即"first-seen"），`false` 表示已在集合内。
+    ///
+    /// key 规范化策略与 `mark_project_seen` 一致（Windows 大小写去重）。
+    fn mark_session_seen(&self, project_id: &str, session_id: &str) -> bool {
+        let normalized =
+            normalize_path_for_compare(&self.projects_dir.join(project_id)).into_owned();
+        let key = (normalized, session_id.to_owned());
+        self.known_sessions
+            .lock()
+            .expect("known_sessions mutex poisoned")
+            .insert(key)
+    }
+
+    /// 从跟踪集合移除 `(project_id, session_id)`。幂等——移除不存在的 key 不报错。
+    fn unmark_session(&self, project_id: &str, session_id: &str) {
+        let normalized =
+            normalize_path_for_compare(&self.projects_dir.join(project_id)).into_owned();
+        let key = (normalized, session_id.to_owned());
+        self.known_sessions
+            .lock()
+            .expect("known_sessions mutex poisoned")
+            .remove(&key);
     }
 
     /// 从 todos 目录下的路径解析 `TodoChangeEvent`。
@@ -878,7 +930,8 @@ mod tests {
             ],
         );
         let mut rx = watcher.subscribe_files();
-        let handle = watcher.attach_remote(fake, PathBuf::from(projects_root), CancelToken::new());
+        let handle =
+            watcher.attach_remote(fake, PathBuf::from(projects_root), CancelToken::new(), None);
 
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
@@ -896,7 +949,7 @@ mod tests {
         assert!(!event.project_list_changed);
         assert!(
             !event.session_list_changed,
-            "watcher 层恒为 false，由 cdt-api invalidator enrich"
+            "size/mtime 变化（已在 baseline 中）→ session_list_changed=false"
         );
 
         handle.cancel_and_join().await;
@@ -1009,6 +1062,167 @@ mod tests {
         assert!(
             !known.contains(&projects.join("proj-unseen")),
             "nested branch must NOT call mark_project_seen"
+        );
+    }
+
+    // --- session first-seen 跟踪单元测 ---
+    //
+    // Spec：`file-watching::跟踪 session 首见性以填写 revalidation hint` 全 6 Scenario。
+
+    /// (a) 已知 project 下首次见 session 填 `session_list_changed=true`。
+    #[test]
+    fn session_first_seen_fills_true() {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        let existing_project = projects_raw.join("pa");
+        std::fs::create_dir_all(&existing_project).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
+
+        let path = projects.join("pa").join("sa_new.jsonl");
+        let event = watcher
+            .parse_project_event(&path, false)
+            .expect("should parse");
+        assert_eq!(event.project_id, "pa");
+        assert_eq!(event.session_id, "sa_new");
+        assert!(!event.deleted);
+        assert!(
+            event.session_list_changed,
+            "first-seen session SHALL fill session_list_changed=true"
+        );
+        // 验证跟踪集合包含该组合
+        let sessions = watcher.known_sessions.lock().unwrap();
+        let normalized_key = normalize_path_for_compare(&projects.join("pa")).into_owned();
+        assert!(sessions.contains(&(normalized_key, "sa_new".to_owned())));
+    }
+
+    /// (b) 后续 append 填 `session_list_changed=false`。
+    #[test]
+    fn session_subsequent_append_fills_false() {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        let existing_project = projects_raw.join("pa");
+        std::fs::create_dir_all(&existing_project).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
+
+        let path = projects.join("pa").join("sa.jsonl");
+        // 第一次——first-seen
+        let first = watcher.parse_project_event(&path, false).unwrap();
+        assert!(first.session_list_changed);
+        // 第二次——后续 append
+        let second = watcher.parse_project_event(&path, false).unwrap();
+        assert!(
+            !second.session_list_changed,
+            "subsequent append SHALL fill session_list_changed=false"
+        );
+    }
+
+    /// (c) 删除已知 session 填 `session_list_changed=true` 并清理跟踪集合。
+    #[test]
+    fn session_delete_known_fills_true_and_unmarks() {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        let existing_project = projects_raw.join("pa");
+        std::fs::create_dir_all(&existing_project).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
+
+        let path = projects.join("pa").join("sa.jsonl");
+        // 先 mark
+        watcher.parse_project_event(&path, false).unwrap();
+        // 删除
+        let del_event = watcher.parse_project_event(&path, true).unwrap();
+        assert!(del_event.deleted);
+        assert!(
+            del_event.session_list_changed,
+            "delete known session SHALL fill session_list_changed=true"
+        );
+        // 验证已从跟踪集合移除
+        let sessions = watcher.known_sessions.lock().unwrap();
+        let normalized_key = normalize_path_for_compare(&projects.join("pa")).into_owned();
+        assert!(!sessions.contains(&(normalized_key, "sa".to_owned())));
+    }
+
+    /// (d) 删除从未见过的 session 仍填 `session_list_changed=true`（幂等 unmark）。
+    #[test]
+    fn session_delete_never_seen_fills_true() {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        let existing_project = projects_raw.join("pa");
+        std::fs::create_dir_all(&existing_project).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
+
+        // 从未对 sa_old 做过任何写事件
+        let path = projects.join("pa").join("sa_old.jsonl");
+        let del_event = watcher.parse_project_event(&path, true).unwrap();
+        assert!(del_event.deleted);
+        assert!(
+            del_event.session_list_changed,
+            "delete never-seen session SHALL still fill session_list_changed=true"
+        );
+        // unmark 幂等不 panic
+        assert!(watcher.known_sessions.lock().unwrap().is_empty());
+    }
+
+    /// (e) subagent jsonl 不进入跟踪集合，`session_list_changed` 固定 `false`。
+    #[test]
+    fn subagent_jsonl_does_not_enter_known_sessions() {
+        let (_tmp, projects, _todos, watcher) = setup_watcher_dirs();
+        let nested = projects
+            .join("pa")
+            .join("sa")
+            .join("subagents")
+            .join("agent-sub-1.jsonl");
+        let event = watcher
+            .parse_project_event(&nested, false)
+            .expect("should route");
+        assert!(!event.session_list_changed);
+        // 跟踪集合应为空——subagent 不进集合
+        assert!(
+            watcher.known_sessions.lock().unwrap().is_empty(),
+            "subagent jsonl SHALL NOT enter known_sessions"
+        );
+    }
+
+    /// (f) 启动后旧 session 第一次写填 `true`（lazy false-positive trade-off）。
+    #[test]
+    fn old_session_first_write_after_startup_fills_true() {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        let existing_project = projects_raw.join("pa");
+        std::fs::create_dir_all(&existing_project).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
+
+        // watcher 启动后 known_sessions 为空——模拟旧 session 的首次写
+        let path = projects.join("pa").join("sa_existing.jsonl");
+        let event = watcher.parse_project_event(&path, false).unwrap();
+        assert!(
+            event.session_list_changed,
+            "old session first write after startup SHALL fill true (lazy false-positive)"
+        );
+        // 同一 session 后续 append 填 false
+        let second = watcher.parse_project_event(&path, false).unwrap();
+        assert!(
+            !second.session_list_changed,
+            "subsequent append SHALL fill false"
         );
     }
 }
