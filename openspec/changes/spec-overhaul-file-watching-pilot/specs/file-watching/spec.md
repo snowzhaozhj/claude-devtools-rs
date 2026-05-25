@@ -79,7 +79,7 @@
 
 ### Requirement: Broadcast events to multiple subscribers
 
-系统 SHALL 把每条已发出的事件无差别地分发给所有当前活跃的订阅者（前端 webview、HTTP 客户端、in-process 后台服务如通知管线），不重复也不遗漏；任一订阅者的滞后 SHALL NOT 阻塞另一订阅者的投递。
+系统 SHALL 把每条已发出的事件无差别地分发给所有当前活跃的订阅者（前端、HTTP 客户端及系统内消费方如通知管线），不重复也不遗漏；任一订阅者的滞后 SHALL NOT 阻塞另一订阅者的投递。
 
 #### Scenario: 两个订阅者并存
 
@@ -93,7 +93,7 @@
 
 ### Requirement: Route nested subagent JSONL changes to parent session
 
-系统 SHALL 把形如 `<projects_dir>/<project_id>/<session_id>/subagents/agent-<sub_session_id>.jsonl` 的嵌套 subagent JSONL 写入路由为父 `(project_id, session_id)` 的 `FileChangeEvent`，复用与父 session JSONL 相同的 broadcast channel 与 payload schema。`agent-acompact*.jsonl` 与非 `agent-*.jsonl` 命名的文件 SHALL NOT 触发 `FileChangeEvent`。旧结构 `<projects_dir>/<project_id>/agent-*.jsonl`（无父 session 目录嵌套）不在本 Requirement 范围。
+系统 SHALL 把形如 `<projects_dir>/<project_id>/<session_id>/subagents/agent-<sub_session_id>.jsonl` 的嵌套 subagent JSONL 写入路由为父 `(project_id, session_id)` 的 `FileChangeEvent`，复用与父 session JSONL 相同的 `FileChangeEvent` payload 与投递契约。`agent-acompact*.jsonl` 与非 `agent-*.jsonl` 命名的文件 SHALL NOT 触发 `FileChangeEvent`。旧结构 `<projects_dir>/<project_id>/agent-*.jsonl`（无父 session 目录嵌套）不在本 Requirement 范围。
 
 嵌套分支 emit 的 `FileChangeEvent.project_list_changed` MUST 固定为 `false`，**不**走既有 2 层路径的 `!deleted && mark_project_seen(project_id)` 派生逻辑。理由：嵌套 subagent 写入只是"父 session 内部增量"信号，不应当让前端 `DashboardView` / `Sidebar` 误以为新项目出现而刷新整个项目列表（极端 race 下若父 session JSONL 尚未触发过事件而子 session 已写入，`mark_project_seen` 会返回 `true`，必须显式短路）。
 
@@ -102,7 +102,7 @@
 - **WHEN** `<projects_dir>/p1/sess-A/subagents/agent-sub-1.jsonl` 被追加内容
 - **THEN** 订阅者 SHALL 在 debounce 窗口结束后收到一条 `FileChangeEvent { project_id: "p1", session_id: "sess-A", deleted: false, project_list_changed: false }`
 
-#### Scenario: 嵌套分支强制 project_list_changed=false
+#### Scenario: 嵌套 subagent 写入不触发项目列表刷新
 
 - **WHEN** `<projects_dir>/p2/sess-B/subagents/agent-sub-9.jsonl` 是 watcher 第一次看到 `p2` 项目（父 session JSONL 此前未触发过任何事件）
 - **THEN** 即使内部 `mark_project_seen("p2")` 第一次会返回 `true`，emit 的 `FileChangeEvent.project_list_changed` SHALL 为 `false`（嵌套分支硬编码 `false`，不从 `mark_project_seen` 派生），避免前端误以为有新项目出现并刷新整个项目列表
@@ -199,7 +199,7 @@
 - **THEN** watcher SHALL 不把该事件视为 `projects_dir` 子项（前缀不匹配）
 - **AND** 不发出 `FileChangeEvent`
 
-#### Scenario: known_projects 在 Windows 上对大小写漂移去重
+#### Scenario: Windows 大小写漂移下首次见到的 project 仅 mark 一次
 
 - **WHEN** 在 Windows 平台运行，`mark_project_seen` 先以 `C:\projects\foo` 的形式插入，后以 `c:\projects\FOO` 查询
 - **THEN** 第二次查询 SHALL 报告 "已见过"，`mark_project_seen` SHALL 返回 `false`，`known_projects` 内部 SHALL 仅含一个条目

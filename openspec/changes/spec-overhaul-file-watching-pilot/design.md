@@ -18,6 +18,14 @@ PR #302 把 `openspec/SPEC_GUIDE.md` 落进 main，定义了 spec 该写什么 /
 - 落地 spec-guide-reviewer subagent：只读、分级 finding、参考既有 reviewer 框架（windows-compat-reviewer / rust-conventions-reviewer）
 - 论证 push-events cap 范围 / 引用替换策略 / archive 顺序坑预防三条决策
 
+**Pilot scope 折中**（明确不做的清理）：
+
+本 PR 是 SPEC_GUIDE 重写工艺试点，scope 锁定在 **Scenario 中文化 + Purpose 改写 + NFR 抽出 + reviewer subagent 落地** 四件，**不**顺手清现有 Requirement Body 内残留的 16 处内部符号引用（`mark_project_seen` / `known_projects` / `cdt-watch::FileWatcher` 等）。理由：
+
+1. 这 16 处分散在 8 个 MODIFIED Requirement Body 内，多数描述"实现 race / 内部状态机"行为契约的派生原因，去掉需要重写 Body 段落，风险显著高于本 PR 的 4 件主线工作
+2. SPEC_GUIDE 第 132 行明确「遇到一个修一个，PR 改动到含历史污染的 Requirement 时顺手按反例对照表清理；这次没改的 Requirement 不强制清」——本 PR scope 不包括清这些。pilot 的目标是**跑通工艺**，不是把 file-watching 变成 SPEC_GUIDE 满分样板
+3. 后续 PR 2-9 各自负责自己改的 spec 时仍可按"遇到一个修一个"清；如这 16 处仍保留至 9-PR 序列结束，issue #303 完成后开 follow-up cleanup PR 单独处理（lint baseline 仍由 ratchet 守门防恶化）
+
 **Non-Goals**：
 - 不新建 push-events 主 spec（PR 2 落地）
 - 不动 ipc-data-api / sidebar-navigation / session-display / http-data-api / frontend-test-pyramid / notification-triggers 主 spec（PR 2-9 各自负责）

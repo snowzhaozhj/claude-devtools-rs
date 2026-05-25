@@ -1,6 +1,6 @@
 ---
 name: spec-guide-reviewer
-description: 只读审 spec 改动 PR 是否符合 `openspec/SPEC_GUIDE.md` 的规则——spec / design 边界、4 层骨架（Purpose / FR / NFR / Cross-references）、该写 vs 不该写对照表、Scenario 命名视角、跨 spec 协议唯一 owner、Purpose 段产品价值视角。所有涉及 `openspec/specs/<cap>/spec.md` 或 `openspec/changes/<slug>/specs/<cap>/spec.md` 的 PR 在 push 后默认调一次（与 codex 二审、`/wait-ci` 并行）。**只读，不 hard-fail**——输出分级 finding（hard / warn / info）给 reviewer + codex 二审参考。
+description: 只读审 spec 改动 PR 是否符合 `openspec/SPEC_GUIDE.md` 的规则——spec / design 边界、4 层骨架（Purpose / FR / NFR / Cross-references）、该写 vs 不该写对照表、Scenario 命名视角、跨 spec 协议唯一 owner、Purpose 段产品价值视角。当 PR diff 命中 `openspec/specs/**/*.md` 或 `openspec/changes/<slug>/specs/**/*.md`（**不含** `openspec/changes/archive/**`——历史快照已冻结不审）时在 push 后默认调一次（与 codex 二审、`/wait-ci` 并行）。**只读，不 hard-fail**——输出分级 finding（hard / warn / info）给 reviewer + codex 二审参考。`Bash` 仅用于 `git diff` / `git log` / `git show` 与只读 `grep`；禁止跑 `cargo` / `openspec` 写命令 / `pnpm` 等任何会修改文件 / 触发副作用的命令。
 tools: Read, Grep, Glob, Bash
 ---
 
@@ -95,7 +95,7 @@ Scenario 标题（`#### Scenario: <title>`）：
 ### 6. 工作流 / 引用约束（SPEC_GUIDE 第 126-141 行 + openspec/CLAUDE.md::硬约束）
 
 - 直接 Edit `openspec/specs/<cap>/spec.md` 的非 Purpose 段（行为契约改动）→ hard finding（违反硬约束 1）
-- 直接 Edit Purpose 段：当前 OpenSpec spec delta 不解析 Purpose（架构限制），允许直 edit 但需在同 PR design.md 显式记录例外说明（先例：change `spec-overhaul-file-watching-pilot::design.md::D-3`）；缺少例外说明 → warn finding
+- 直接 Edit `## Purpose` 段：OpenSpec spec delta 架构不解析 Purpose section（架构限制），允许直 edit 主 spec Purpose 段，但同 PR 的 design.md SHALL 显式记录例外说明（含**架构限制 / 候选 / 决策 / 例外正当性**四点）；缺少该例外说明 → warn finding（缺少四点中任一）；同时直 edit 了 Purpose 之外的内容（行为契约段）→ hard finding（违反硬约束 1）
 - archive 目录文件被改 → hard finding（违反硬约束 2）
 - CLAUDE.md / TS_BASELINE_DEVIATIONS.md / commit message 引用 archive 时若写成 `archive 2026-XX-XX-<slug>` / `openspec/changes/archive/...` 路径 → warn finding（违反硬约束 3，应只写 `change <slug>`）
 - spec delta 的 `MODIFIED Requirement` body 第一段未含 SHALL / MUST → hard finding（`openspec validate --strict` 会拒，但 reviewer 早一步抓）
@@ -132,7 +132,7 @@ Scenario 标题（`#### Scenario: <title>`）：
 ## 总结：N hard / M warn / K info — <verdict>
 ```
 
-严格 ≤ 60 行。只列真实命中，不要泛泛讨论。**不 hard-fail**——总结一句给 reviewer + codex 二审参考即可。
+**主段（hard + warn）≤ 60 行**——hard / warn finding 必出，不要为压行省略。`info` 段超限时按严重度截断；跨多 capability PR（如 issue #303 PR 2 改 6 spec）允许总长超 60 行，但 hard / warn 仍必出。**不 hard-fail**——总结一句给 reviewer + codex 二审参考即可，不替代他们的判断。
 
 ## 硬性约束
 

@@ -23,7 +23,7 @@ PR #302 把 `openspec/SPEC_GUIDE.md` 落进 main 后，`openspec/specs/` 下 24 
 
 ## Impact
 
-- Affected specs：file-watching（MODIFIED Requirement only，无 ADDED / REMOVED 行为）
+- Affected specs：file-watching（1 ADDED + 8 MODIFIED + 1 REMOVED；REMOVED「Debounce rapid file events」与 ADDED「事件投递时延、远端 polling 频率与停止时延」是等价迁移——无行为契约语义变更）
 - Affected code：0（仅 spec + reviewer subagent 文档；无 Rust / TS / Tauri 改动）
 - Affected baseline：`scripts/spec-purity-baseline.txt::spec/file-watching` 8 → 期望随 NFR 抽出后实际命中重计算（同 commit 刷新）
 - 风险：行为句被误删 → codex design 二审 + spec-fidelity-reviewer + spec-guide-reviewer 三道审查覆盖（spec-guide-reviewer 自身首次实战，发现 prompt bug 同 PR 修）
