@@ -268,6 +268,7 @@ impl FileWatcher {
                 deleted: false,
                 project_list_changed: true,
                 session_list_changed: false,
+                mtime_ms: None,
             });
         }
 
@@ -292,6 +293,7 @@ impl FileWatcher {
                     deleted,
                     project_list_changed: false,
                     session_list_changed: false,
+                    mtime_ms: None,
                 });
             }
             return None;
@@ -329,6 +331,7 @@ impl FileWatcher {
             deleted,
             project_list_changed,
             session_list_changed,
+            mtime_ms: None,
         })
     }
 

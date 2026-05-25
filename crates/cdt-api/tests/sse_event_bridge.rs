@@ -72,6 +72,7 @@ async fn file_change_forwarded_as_push_event() {
             deleted: false,
             project_list_changed: false,
             session_list_changed: false,
+            mtime_ms: None,
         })
         .unwrap();
 
@@ -113,6 +114,7 @@ async fn project_list_changed_forwarded_to_sse() {
             deleted: false,
             project_list_changed: true,
             session_list_changed: true,
+            mtime_ms: None,
         })
         .unwrap();
 
@@ -380,6 +382,7 @@ async fn multiple_subscribers_each_receive_event_exactly_once() {
             deleted: false,
             project_list_changed: false,
             session_list_changed: false,
+            mtime_ms: None,
         })
         .unwrap();
 
@@ -412,6 +415,7 @@ async fn producer_continues_after_lagged_recv() {
             deleted: false,
             project_list_changed: false,
             session_list_changed: false,
+            mtime_ms: None,
         });
     }
 
@@ -426,6 +430,7 @@ async fn producer_continues_after_lagged_recv() {
             deleted: false,
             project_list_changed: false,
             session_list_changed: false,
+            mtime_ms: None,
         })
         .unwrap();
 
@@ -476,6 +481,7 @@ async fn spawn_file_bridge_emits_sse_lagged_on_file_rx_lag() {
             deleted: false,
             project_list_changed: false,
             session_list_changed: false,
+            mtime_ms: None,
         });
     }
 

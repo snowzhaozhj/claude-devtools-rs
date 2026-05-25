@@ -3660,6 +3660,7 @@ fn file_change_event_session_list_changed_round_trip() {
         deleted: false,
         project_list_changed: false,
         session_list_changed: true,
+        mtime_ms: None,
     };
     let json = serde_json::to_string(&enriched).expect("serialize enriched");
     assert!(
@@ -3678,6 +3679,7 @@ fn file_change_event_session_list_changed_round_trip() {
         deleted: false,
         project_list_changed: false,
         session_list_changed: false,
+        mtime_ms: None,
     };
     let json_raw = serde_json::to_string(&raw).expect("serialize raw");
     assert!(

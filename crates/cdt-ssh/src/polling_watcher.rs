@@ -688,6 +688,7 @@ fn build_change_event(
         deleted,
         project_list_changed: false,
         session_list_changed,
+        mtime_ms: None,
     })
 }
 

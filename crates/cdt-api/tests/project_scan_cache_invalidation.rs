@@ -80,6 +80,7 @@ fn ev(pid: &str, sid: &str, deleted: bool, plc: bool) -> FileChangeEvent {
         deleted,
         project_list_changed: plc,
         session_list_changed: false,
+        mtime_ms: None,
     }
 }
 

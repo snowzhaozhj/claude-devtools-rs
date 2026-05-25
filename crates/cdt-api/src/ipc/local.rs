@@ -2502,6 +2502,7 @@ fn spawn_unified_cache_invalidator(
                         deleted: false,
                         project_list_changed: true,
                         session_list_changed: true,
+                        mtime_ms: None,
                     };
                     let _ = file_tx.send(synthetic);
                     tracing::warn!(
@@ -6414,6 +6415,7 @@ mod tests {
             deleted: false,
             project_list_changed: true,
             session_list_changed: false,
+            mtime_ms: None,
         })
         .unwrap();
 
@@ -6590,6 +6592,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false, // raw 形态恒 false
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -6619,6 +6622,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -6645,6 +6649,7 @@ mod tests {
                 deleted: true,
                 project_list_changed: false,
                 session_list_changed: true, // watcher D3 已填
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -6720,6 +6725,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             });
         }
 
@@ -6839,6 +6845,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .expect("at least one subscriber (unified invalidator)");
 
@@ -7177,6 +7184,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -7228,6 +7236,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: true,
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -7287,6 +7296,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             });
         }
 
@@ -7342,6 +7352,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false, // watcher 视角未判定
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -7368,6 +7379,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: true, // watcher 视角首见
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -7469,6 +7481,7 @@ mod tests {
                     deleted: case.deleted,
                     project_list_changed: case.plc,
                     session_list_changed: case.watcher_slc,
+                    mtime_ms: None,
                 })
                 .unwrap();
 
@@ -7758,6 +7771,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -7837,6 +7851,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -8113,6 +8128,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: true,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .unwrap();
 
