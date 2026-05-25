@@ -95,7 +95,7 @@
 - **AND** `document.activeElement` 不是 `<input>` / `<textarea>` / `[contenteditable="true"]`
 - **THEN** registry dispatcher SHALL 命中该 spec
 - **AND** 系统 SHALL 执行对应 pane / tab 操作（focus 切换 / tab 切换 / tab 关闭 / split 创建），副作用与等效鼠标操作一致
-- **AND** 当操作前提不成立（如 `tab.switch.5` 但当前 pane 仅 3 个 tab）时 SHALL 静默忽略
+- **AND** 当操作前提不成立时 SHALL 静默忽略，包括但不限于：`pane.focus.next` / `pane.focus.prev` 在 `panes.length < 2` 时；`tab.next` / `tab.prev` 在 focused pane 仅 1 个 tab 时；`tab.switch.<n>` 在 n 超出当前 pane tab 数时；`tab.close` 在 focused pane 无 active tab 时；`pane.split` 在 `panes.length === 4` 时
 
 #### Scenario: 用户改自定义 binding 后生效
 
