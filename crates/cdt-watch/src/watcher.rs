@@ -101,6 +101,20 @@ impl FileWatcher {
         self.todo_tx.subscribe()
     }
 
+    /// 判断 `project_id` 是否属于本地 projects 目录已知项目。
+    ///
+    /// SSH polling watcher 的事件不走 `parse_project_event`，不调 `mark_project_seen`，
+    /// 因此 SSH 远端的 `project_id` 不会出现在 `known_projects` 集合中。unified
+    /// invalidator 借此区分事件来源，避免用 Local cache hint 污染 SSH 事件
+    /// （codex PR #305 二审 BUG #2 修复）。
+    pub fn is_local_project(&self, project_id: &str) -> bool {
+        let key = normalize_path_for_compare(&self.projects_dir.join(project_id)).into_owned();
+        self.known_projects
+            .lock()
+            .expect("known_projects mutex poisoned")
+            .contains(&key)
+    }
+
     /// 测试专用：暴露 `file_tx` Sender clone 让测试直接 inject raw `FileChangeEvent`
     /// 进 broadcast channel，无需走 inotify / `FSEvents` / SSH polling 真路径。
     ///
@@ -973,6 +987,10 @@ mod tests {
         assert_eq!(event.session_id, "sess-A");
         assert!(!event.deleted);
         assert!(!event.project_list_changed);
+        assert!(
+            !event.session_list_changed,
+            "subagent modify event SHALL fill session_list_changed=false（嵌套分支固定值）"
+        );
     }
 
     #[test]
@@ -1035,6 +1053,10 @@ mod tests {
             .expect("delete should still route nested subagent jsonl");
         assert!(event.deleted);
         assert!(!event.project_list_changed);
+        assert!(
+            !event.session_list_changed,
+            "subagent delete event SHALL fill session_list_changed=false（靠 deleted=true 触发刷新）"
+        );
         assert_eq!(event.project_id, "proj-A");
         assert_eq!(event.session_id, "sess-A");
     }

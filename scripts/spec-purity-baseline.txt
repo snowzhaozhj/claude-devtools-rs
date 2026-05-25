@@ -1,5 +1,5 @@
 change/enrich-via-watcher/file-watching 16
-change/enrich-via-watcher/ipc-data-api 7
+change/enrich-via-watcher/ipc-data-api 10
 spec/agent-configs 0
 spec/app-auto-update 5
 spec/app-chrome 2

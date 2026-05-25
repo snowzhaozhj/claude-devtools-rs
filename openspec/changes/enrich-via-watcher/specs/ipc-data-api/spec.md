@@ -45,7 +45,7 @@
 
 **`ProjectScanCache::begin_scan` / `finish_scan_with_insert` / `abort_scan` API 契约**：业务路径 `scan_projects_cached_with` SHALL 用 `begin_scan` 替代裸 `invalidation_generation()` 拿 recorded_generation 同时 `in_flight_scans += 1`；scan 成功时 SHALL 用 `finish_scan_with_insert` 替代 `try_insert`（内部 `in_flight_scans -= 1` + race 校验）；scan 失败时 SHALL 调 `abort_scan` 配对 `begin_scan` 不漏减。这三 API 联合保护 in-flight scan 与 invalidator 之间的 race 协议。
 
-**SSH context entry 不受 file-change 影响**：watcher 是 Tauri 本地 fs 的硬不变量。invalidator 推算 `ContextId::local(projects_dir)` 决定失效作用域；`ProjectScanCache::invalidate_local()` 实现仅对 `FsKind::Local` entry 生效，SSH entry 仍按既有 TTL 自然过期。SSH `polling_watcher` 通过 `FileWatcher::attach_remote` 喂入同一 watcher broadcast 的事件，进入 unified invalidator 后 invalidate 决策同样由本规则三档判定（cache 为空 / 不含 SSH session 场景下规则 2 自然不命中，退化为仅看 `project_list_changed || deleted`，与 Local 行为一致）；`session_list_changed` 字段已由 SSH polling watcher 在远端事件上填好，与 Local watcher 行为对称（详 `file-watching` Requirement `Watch SSH remote project directory via SFTP polling`）。
+**SSH context entry 不受 file-change 影响 + SSH event 跳过 local cache hint**：watcher 是 Tauri 本地 fs 的硬不变量。invalidator 推算 `ContextId::local(projects_dir)` 决定失效作用域；`ProjectScanCache::invalidate_local()` 实现仅对 `FsKind::Local` entry 生效，SSH entry 仍按既有 TTL 自然过期。SSH `polling_watcher` 通过 `FileWatcher::attach_remote` 喂入同一 watcher broadcast 的事件，进入 unified invalidator 后 SHALL 通过 watcher 来源判定守护——unified invalidator SHALL 调 `FileWatcher::is_local_project(&event.project_id)` 检查 event 的 project_id 是否在本地 `known_projects` 集合内（local 事件 mark 走 `parse_project_event`，SSH 事件由远端 polling 直接构造不进 mark），若返回 `false`（即 SSH 事件）则 SHALL 跳过本规则的三档判定，直接走"不 invalidate + emit_session_list_changed_hint=false"——`session_list_changed` 字段已由 SSH polling watcher 在远端事件上对称填好，**不**需要 local cache hint OR 兜底，否则 SSH 普通 size/mtime append（watcher 已填 `false`）会因 `contains_session_id(local_ctx, ssh_pid, ssh_sid)` 永远返 false 让 `emit_session_list_changed_hint=true`，破坏 SSH/Local 字段对称语义并侵蚀 PR #291 append 降噪收益。详 `file-watching` Requirement `Watch SSH remote project directory via SFTP polling`。
 
 **`new()` 构造路径不启动该订阅**：`LocalDataApi::new()`（无 watcher 参数）SHALL NOT spawn 此 task；该场景仅依赖被动 generation 校验路径兜底，与 `MetadataCache` / `ParsedMessageCache` 在 `new()` 路径的行为对齐。
 
@@ -122,7 +122,7 @@
 
 - **WHEN** `ProjectScanCache` 已存某 ctx entry，含 project `pa` / 父 session `s_parent`
 - **AND** subagent 文件 `<projects_root>/pa/s_parent/subagents/agent-xyz.jsonl` 被删除
-- **AND** watcher 折叠到父 session 后广播 `FileChangeEvent { project_id: "pa", session_id: "s_parent", deleted: true, project_list_changed: false, session_list_changed: true }`
+- **AND** watcher 折叠到父 session 后广播 `FileChangeEvent { project_id: "pa", session_id: "s_parent", deleted: true, project_list_changed: false, session_list_changed: false }`（subagent 删除路径靠 `deleted=true` 触发刷新，`session_list_changed` 由 watcher 嵌套分支固定填 `false`）
 - **THEN** 后台 invalidator MUST 基于 `event.deleted == true` 走规则 1，调 `ProjectScanCache::invalidate_local()`
 - **AND** 这是已知的 **false-positive 行为**：事件字段无 path，无法区分主 session 删除 vs subagent 删除；本 spec 显式接受此 false-positive，触发一次 ProjectScanner 重扫的成本可接受
 - **AND** counter `project_scan_cache.invalidate.structural` MUST inc 1
@@ -151,6 +151,8 @@ SSH 路径 SHALL 通过 `cdt-watch::FileWatcher::attach_remote(sftp, projects_di
 emit MUST 在 step 4 完成（即 sync invalidate 之后，async parsed invalidate 之前）。这保证：(a) 前端拿到 file-change 时 `ProjectScanCache` 状态已是事件后的最新；(b) 前端无需等磁盘 stat I/O 完成；(c) `parsed_cache` 失效路径仍走 async 不阻塞 emit。
 
 **emit 字段 OR 公式语义**：watcher 层填的 `event.session_list_changed` 是判定**主源**（基于 watcher 跟踪集合首见性，详 `file-watching` Requirement `跟踪 session 首见性以填写 revalidation hint`）；`decision.emit_session_list_changed_hint` 是 cache 视角的辅助 hint（值 = "本 event 命中 `ProjectScanCache 按事件语义分级失效` Requirement 规则 2 的 unknown_session 判定条件"）。两源并集 OR 兜底 watcher 重启 / `reconfigure_claude_root` 等让 watcher 跟踪集合重置但 cache 仍有有效 snapshot 的窗口。
+
+**仅 Local event 参与 OR 兜底**：cache hint OR 仅对 Local event 应用——unified invalidator SHALL 调 `FileWatcher::is_local_project(&event.project_id)` 守护，**仅** `is_local_project=true` 的 event 才查 `apply_file_event_to_project_scan_cache` 取 hint 并参与 OR；SSH event（`is_local_project=false`）SHALL 跳过 cache 查询，`emit_session_list_changed_hint=false` 强制 emit 等于 `event.session_list_changed`。理由：local cache 的 `contains_session_id(local_ctx, ssh_pid, ssh_sid)` 对 SSH event 永远返 false，若不守护会让 SSH 普通 append 被错误升 `session_list_changed=true`，破坏对称 + 噪声回归。SSH 路径 watcher 字段已由 SSH polling baseline 视角对称填写（详 `file-watching` Requirement `Watch SSH remote project directory via SFTP polling`），无需 OR 兜底。
 
 **反压**：`broadcast::Sender::send` 满时丢旧元素不阻塞，invalidator 自身永远不会被慢 subscriber 阻塞；slow subscriber 引发的 lag 走下游 bridge 的 `Lagged` 兜底（见 `Emit push events for file changes and notifications` Requirement 的 lag 兜底契约）。
 
@@ -209,6 +211,21 @@ emit MUST 在 step 4 完成（即 sync invalidate 之后，async parsed invalida
 - **AND** watcher 视为 first-seen 填 `session_list_changed=true`（lazy false-positive）
 - **THEN** enriched event 的 `session_list_changed` 字段 SHALL 是 `true || (cache contains_session_id 返 true → hint=false) == true`
 - **AND** 前端 revalidate 一次（false-positive，cache 视角下其实是已知 session 追加，但 watcher 视角是 first-seen，OR 取并集偏向 emit）
+
+#### Scenario: SSH event 跳过 local cache hint OR
+
+- **WHEN** Local cache 持有 entry（含 project `pa` 与 sessions `{sa1, sa2}`），SSH context 当前 active；远端 SSH polling watcher emit `FileChangeEvent { project_id: "pa-ssh", session_id: "sx", deleted: false, project_list_changed: false, session_list_changed: false }`（SSH 已知 session size/mtime 变化，watcher 字段填 `false`）
+- **AND** unified invalidator 调 `FileWatcher::is_local_project("pa-ssh")` 返 `false`（SSH 远端 project_id 不在 local watcher `known_projects` 内）
+- **THEN** unified invalidator SHALL 跳过 `apply_file_event_to_project_scan_cache` 调用 / 跳过 cache hint 查询，强制 `decision.emit_session_list_changed_hint=false` + `decision.invalidated=false`
+- **AND** enriched event 的 `session_list_changed` 字段 SHALL 等于 `event.session_list_changed` 即 `false`
+- **AND** 该 SSH append 事件 SHALL NOT 触发前端三档守护 revalidate，保留 PR #291 append 降噪收益
+
+#### Scenario: Local event 仍应用 cache hint OR
+
+- **WHEN** Local cache 持有 entry（含 project `pa` 但不含 `sa_new`），watcher `known_projects` 含 `pa`；用户新建 `<projects_root>/pa/sa_new.jsonl`，watcher emit `FileChangeEvent { project_id: "pa", session_id: "sa_new", session_list_changed: true }`
+- **AND** unified invalidator 调 `FileWatcher::is_local_project("pa")` 返 `true`
+- **THEN** unified invalidator SHALL 调 `apply_file_event_to_project_scan_cache` 拿 `EnrichDecision { invalidated: true, emit_session_list_changed_hint: true }`
+- **AND** enriched event 的 `session_list_changed` 字段 SHALL 是 `true || true == true`
 
 #### Scenario: lag 路径 SHALL emit synthetic structural event
 
