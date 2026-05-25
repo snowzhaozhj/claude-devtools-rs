@@ -5,7 +5,7 @@ spec/application-telemetry 15
 spec/chunk-building 4
 spec/configuration-management 10
 spec/context-tracking 1
-spec/file-watching 18
+spec/file-watching 20
 spec/frontend-context-menu 6
 spec/frontend-test-pyramid 48
 spec/fs-abstraction 15
