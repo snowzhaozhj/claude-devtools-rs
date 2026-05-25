@@ -112,7 +112,7 @@
 #### Scenario: SFTP 瞬时错误自动重试
 
 - **WHEN** SFTP 调用返回瞬时错误码（覆盖 SFTP `code=4` / `EAGAIN` / `ECONNRESET` / `ETIMEDOUT` / `EPIPE`，与 polling watcher 的 `OtherTransient` 集合保持对称）
-- **THEN** 系统 SHALL 重试最多 3 次，每次间隔指数退避（75ms × attempt）
+- **THEN** 系统 SHALL 重试最多 3 次，每次间隔指数退避
 - **AND** 仍失败时 SHALL 把错误向上抛给调用方，封装为 `FsError::TransientExhausted { attempts: 3, last_reason }`
 
 #### Scenario: 切回已访问 SSH host 列表立刻显示无可感知卡顿
@@ -325,14 +325,14 @@
 
 watcher SHALL 把每轮 poll 失败按错误特征分到三类（在 polling 层 重试机制完成后做语义升级，**不**改 SFTP client trait 错误分类）：
 
-- `Permanent`：错误消息含 `session closed` / `eof` / `broken pipe` / `epipe` / `connection reset` / `econnreset` 任一关键字（不区分错误来源——既有 transient 分类把 `broken pipe` / `connection reset` / `epipe` 归 Transient，`with_retry` 多次后仍是 transport-dead 即视同 channel 真死）
+- `Permanent`：错误消息含 `session closed` / `eof` / `broken pipe` / `epipe` / `connection reset` / `econnreset` 任一关键字（不区分错误来源——既有 transient 分类把 `broken pipe` / `connection reset` / `epipe` 归 Transient，重试机制多次后仍是 transport-dead 即视同 channel 真死）
 - `Timeout`：错误消息含 `timeout` / `etimedout` / `timed out` / `eagain` / `would block` 任一关键字（含 `would block` 即标准库的 `WouldBlock`，与 EAGAIN 同源——不纳入 timeout 类会让"反复 WouldBlock"序列只能落 OtherTransient 重置计数，与 timeout 漏检对称）
 - `OtherTransient`：其它 Transient / Other / NoSuchFile / PermissionDenied 等不带 transport-dead / timeout 关键字的失败
 
 watcher SHALL 维护两个独立 counter：
 
 - `consecutive_permanent`，阈值 `PERMANENT_FAILURE_THRESHOLD = 3`（约 9s 持续 transport 错误）
-- `consecutive_timeout`，阈值 `TIMEOUT_FAILURE_THRESHOLD = 6`（约 18s 持续 timeout，远高于网络瞬时抖动 1-3s 窗口，远低于用户主观放弃阈值约 60s）
+- `consecutive_timeout`，阈值 `TIMEOUT_FAILURE_THRESHOLD = 6`（约 18s 持续 timeout，远高于网络瞬时抖动 1-3s 窗口，远低于用户主观放弃 sidebar 僵死的 60s 阈值）
 
 counter 演化规则（避免攻击序列推迟 dead_signal）：
 
@@ -709,7 +709,7 @@ SSH 文件系统 provider SHALL 在文件系统 provider trait 上实现 `write_
   - 不支持时降级为两步：先删除目标再重命名 tmp 文件——降级路径有极短窗口 reader 可能见 `target missing`，单次写场景 acceptable
   - rename 失败 SHALL best-effort 调 `remove_file(<tmp>)` 清理（清理失败不向上传播）
   - 服务端探测结果 SHALL 在 SSH provider 内 cache 一次（per session），后续 `write_atomic` 直接读 cache 决策，不每次 connect 重探测
-- `create_dir_all` SHALL 通过 SFTP 递归创建目录，对每段父目录先调 `try_exists` 探测，已存在跳过；缺失调 mkdir 创建。任何 SFTP rpc 失败 SHALL 走既有 retry 策略（瞬时错误码 `code=4` / `EAGAIN` / `ECONNRESET` / `ETIMEDOUT` / `EPIPE` 重试最多 3 次，每次间隔指数退避 75ms × attempt）
+- `create_dir_all` SHALL 通过 SFTP 递归创建目录，对每段父目录先调 `try_exists` 探测，已存在跳过；缺失调 mkdir 创建。任何 SFTP rpc 失败 SHALL 走 Scenario "SFTP 瞬时错误自动重试" 定义的 retry 策略
 - `remove_file` SHALL 通过 SFTP 删文件 RPC；不存在 SHALL 返 `FsError::NotFound(path)`；路径是目录 SHALL 返 `FsError::Io { path, source: <非空目录 I/O 错误> }`，**不**递归删
 
 SFTP client trait SHALL 新增 `write` / `mkdir` / `remove` / `rename` 四个方法，由生产实现 delegate 到底层 SFTP session 的相应方法。所有写操作 SHALL 与既有 read 操作复用同一 SFTP session（**不**额外加 Mutex 包装——SFTP session 公共 API 是 `&self` 方法，message-id 由库内部 channel 维护）。SFTP message-id pipeline 并发支持留独立后续 change；本契约下写路径与既有 read 路径同处一队列。

@@ -53,13 +53,15 @@ frontend-test-pyramid 同批姊妹（PR #309）已 archive 在 `change spec-clea
 - keepalive `SSH_KEEPALIVE_INTERVAL = 15s` / `SSH_KEEPALIVE_MAX = 3` / ~75s off-by-one 窗口被抽象为"约定常量"——丢失硬故障检测时长契约
 - `create_dir_all` retry 关键字 + 3 次 + 75ms 被抽象为"既有 retry 策略"——丢失瞬时错误码白盒分类（与 polling watcher 三分类对称）
 
-**反转**：D-1 原"性能数字一律相对描述"过粗，**反转为按数字性质二分**：
+**反转**：D-1 原"性能数字一律相对描述"过粗，**反转为按数字性质三分**：
 
 | 数字性质 | 处理 | 例子 |
 |---|---|---|
-| **用户可感知阈值**（用户等多久 / 卡多久 / 恢复多久 / 应用退出阻塞多久 / 协议级 SFTP packet size） | spec **保留具体数值**（含 const 名）作为可测契约 | TCP 5s / SFTP 8s / 总 25s / 退出 3s / 自愈 9s/18s / keepalive 15s/75s / SFTP packet 32 KiB / poll 1s 取消上限 |
-| **实现层调优**（无可观察用户后果，工程师调优旋钮） | 移到 design.md 参考实现指引段，spec 抽象为定性描述 | BufReader 内部填充策略 / scanner buffer 容量数字（虽对齐协议层但具体数 32 KiB 是协议常量，移到 design） |
+| **用户可感知阈值** | spec **保留具体数值**（含 const 名）作为可测契约 | 连接 TCP 5s / SFTP 8s / 总 25s / 退出 3s / 自愈 9s 与 18s / keepalive 15s 与 75s / poll 1s 取消上限 |
+| **协议层硬约束** | spec 用**定性描述**引用协议（"与底层 SFTP READ 单消息上限对齐"），**具体数值留 design** | SFTP packet 上限 32 KiB |
+| **实现层调优**（无可观察用户后果，工程师调优旋钮） | 移到 design.md 参考实现指引段，spec 抽象为定性描述 | BufReader 容量数值 / 重试退避基数 75ms / channel capacity / 调度参数 |
 | **SFTP 瞬时错误码白盒列表** | spec **保留**作为分类契约（与 polling watcher Permanent/Timeout/OtherTransient 对称） | `code=4` / `EAGAIN` / `ECONNRESET` / `ETIMEDOUT` / `EPIPE` |
+| **实证 metric**（"95ms 实测" / bench JSON baseline 数字 / 性能报告快照） | `tests/perf-baseline.json` / design 历史段 | 不放 spec |
 
 **结果**：spec delta 反模式从 0 涨到约 30（数字 + const 名）；同 PR 同 commit 把 baseline `spec/ssh-remote-context` + `change/ssh-remote-context-cleanup` 两条都更新到清理后真实数。可接受——这些数字是行为契约本身，不是反例。
 

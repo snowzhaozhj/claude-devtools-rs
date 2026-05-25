@@ -131,6 +131,7 @@ read_agent_configs(pairs)` 公开签名不变。
 - [ ] FR 与 NFR 是否分开，没混在同一个 Requirement Body 里？
 - [ ] 测试 fixture 常量 / 测试文件路径 / Cargo 依赖 / 配置文件字段是否被错放进 SHALL？
 - [ ] **清理 PR 反向自检**：被清理掉的数字 / const 名是否承载"用户能感知 / 回归测试能断言下限"的契约？是 → 留 spec；否 → OK 移 design。（详反例 4）
+- [ ] **清理 PR 命名扫描自检**：Requirement title 是否与 body 同步抽象（避免 title 残留内部类型名 / 库名）？跨 cap trait 名（白名单）vs 内部 trait 是否清晰区分？
 
 发现问题时建议表述："这条 SHALL 实际承诺的是 *用户感知层* 的什么？换种实现还成立吗？" —— 让作者自检比直接挑刺好。
 
