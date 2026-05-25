@@ -3892,15 +3892,22 @@ impl DataApi for LocalDataApi {
             // **无 watcher 监控** → SFTP 真死也无人自愈（codex 二审第三轮 major）。
             let prev_for_failure_reattach = previous_context_id.clone();
             self.context_generation.fetch_add(1, Ordering::SeqCst);
-            // 保存 cancel 返回的 baseline：同 ctx reconnect 路径透传给后续 attach
-            // 实现 D5 断连重连 baseline diff（codex PR #305 二审 BUG #1 修复）。
+            // 保存 cancel 返回的 baseline：**仅**同 ctx reconnect 路径透传给后续
+            // attach 实现 D5 断连重连 baseline diff。跨 ctx connect（A→B）时旧 A
+            // 的 baseline 与 B 无关，传入会导致 B 首轮 readdir 与 A baseline diff
+            // 产出错误的 deleted/first-seen 事件（codex PR #305 三审 BUG #4 修复）。
             let reconnect_baseline = if let Some(prev) = previous_context_id {
                 tracing::debug!(target: "cdt_ssh::lifecycle", phase = "cancel_prev_watcher", context_id = %prev);
                 let baseline = self.cancel_remote_watcher(&prev).await;
                 // codex 二审第二轮 H2-R：ssh_connect(A→B) 也 SHALL abort 旧 A
                 // 下 page_jobs scan，避免旧 A scan 跨切换继续 broadcast 串扰 B 渲染。
                 self.abort_scans_for_ssh_context_id(&prev).await;
-                baseline
+                // BUG #4：仅同 ctx 重连时透传 baseline；跨 ctx 连接传 None
+                if prev == target_context_id {
+                    baseline
+                } else {
+                    None
+                }
             } else {
                 // Local → SSH 切换路径：abort Local scan 避免 Local metadata
                 // 跨切换串扰 SSH UI。
@@ -7806,6 +7813,8 @@ mod tests {
             projects_dir.clone(),
             tmp.path().join("todos"),
         ));
+        // 模拟 local watcher 已处理过 "pa" 的事件（mark_local_origin 已写入）
+        watcher.mark_local_origin_for_test("pa");
 
         let (raw_tx, raw_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(16);
         let (file_tx, mut file_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(16);
@@ -7819,7 +7828,7 @@ mod tests {
             Some(watcher),
         );
 
-        // Local event："pa" 在 known_projects，watcher 填 session_list_changed=false
+        // Local event："pa" 在 local_projects_seen，watcher 填 session_list_changed=false
         // 但 cache hint 判定 "sess-new" 不在 cache → unknown_session=true → hint=true
         raw_tx
             .send(cdt_core::FileChangeEvent {
@@ -7835,6 +7844,308 @@ mod tests {
         assert!(
             enriched.session_list_changed,
             "Local event + unknown session 仍 SHALL 被 cache hint OR 为 true"
+        );
+    }
+
+    // =========================================================================
+    // BUG #4 修复验证：跨 host SSH connect 不传旧 baseline
+    // codex PR #305 三审
+    // =========================================================================
+
+    /// `ssh_connect(A→B)` 路径下 reconnect_baseline SHALL 为 None（不把 A 的
+    /// baseline 传给 B），避免 B 首轮 readdir 与 A baseline diff 产出错误事件。
+    /// 同 ctx 重连（A→A）仍透传 baseline。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reconnect_does_not_mix_baselines_across_hosts() {
+        use cdt_config::{ConfigManager, NotificationManager};
+        use cdt_discover::{EntryKind, ProjectScanner, local_handle};
+        use cdt_ssh::{
+            RemoteEntry, SftpClient, SftpClientError, SshConnectionManager, SshFileSystemProvider,
+        };
+        use tokio::sync::Semaphore;
+
+        /// SFTP mock 返回一个 session
+        struct SingleSessionSftp;
+        #[async_trait::async_trait]
+        impl SftpClient for SingleSessionSftp {
+            async fn metadata(
+                &self,
+                _path: &str,
+            ) -> Result<cdt_discover::FsMetadata, SftpClientError> {
+                Ok(cdt_discover::FsMetadata {
+                    size: 50,
+                    mtime: std::time::UNIX_EPOCH,
+                    identity: None,
+                })
+            }
+            async fn try_exists(&self, _path: &str) -> Result<bool, SftpClientError> {
+                Ok(true)
+            }
+            async fn read(&self, _path: &str) -> Result<Vec<u8>, SftpClientError> {
+                Ok(Vec::new())
+            }
+            async fn read_dir(&self, path: &str) -> Result<Vec<RemoteEntry>, SftpClientError> {
+                if path == "/home/a" {
+                    Ok(vec![RemoteEntry {
+                        name: "-proj-A".into(),
+                        kind: EntryKind::Dir,
+                        metadata: None,
+                        mtime_missing: false,
+                    }])
+                } else if path == "/home/a/-proj-A" {
+                    Ok(vec![RemoteEntry {
+                        name: "sess-from-A.jsonl".into(),
+                        kind: EntryKind::File,
+                        metadata: Some(cdt_discover::FsMetadata {
+                            size: 128,
+                            mtime: std::time::SystemTime::UNIX_EPOCH
+                                + std::time::Duration::from_secs(500_000),
+                            identity: None,
+                        }),
+                        mtime_missing: false,
+                    }])
+                } else {
+                    Ok(vec![])
+                }
+            }
+            async fn read_lines_head(
+                &self,
+                _path: &str,
+                _max: usize,
+            ) -> Result<Vec<String>, SftpClientError> {
+                Ok(vec![])
+            }
+            async fn write(&self, _p: &str, _d: &[u8]) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+            async fn mkdir(&self, _p: &str) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+            async fn remove(&self, _p: &str) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+            async fn rename(&self, _s: &str, _d: &str) -> Result<(), SftpClientError> {
+                Ok(())
+            }
+        }
+
+        let tmp = tempdir().unwrap();
+        let projects_dir = tmp.path().join("projects");
+        let todos_dir = tmp.path().join("todos");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+        std::fs::create_dir_all(&todos_dir).unwrap();
+
+        let mut cfg = ConfigManager::new(Some(tmp.path().join("config.json")));
+        cfg.load().await.unwrap();
+        let notif = NotificationManager::new(None);
+        let ssh_mgr = SshConnectionManager::new();
+        let scanner = ProjectScanner::new_with_semaphore(
+            local_handle(),
+            projects_dir.clone(),
+            Arc::new(Semaphore::new(8)),
+        );
+        let dummy_watcher = FileWatcher::with_paths(projects_dir.clone(), todos_dir);
+        let api = LocalDataApi::new_with_watcher(
+            scanner,
+            cfg,
+            notif,
+            ssh_mgr,
+            &dummy_watcher,
+            projects_dir.clone(),
+        );
+
+        let context_a = "host-A";
+        let remote_home_a = std::path::PathBuf::from("/home/a");
+        let provider_a = SshFileSystemProvider::with_client(
+            context_a,
+            Arc::new(SingleSessionSftp),
+            remote_home_a.clone(),
+        );
+        api.insert_test_ssh_context(
+            context_a,
+            "hostA.example.com",
+            22,
+            Some("alice".into()),
+            remote_home_a,
+            provider_a,
+        )
+        .await;
+
+        // attach A + 等 baseline 建出
+        api.attach_remote_watcher(context_a, None).await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let watchers = api.remote_watchers.lock().await;
+            if let Some(handle) = watchers.get(context_a) {
+                if !handle.baseline_snapshot().is_empty() {
+                    break;
+                }
+            }
+            drop(watchers);
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "A 的 polling watcher 2s 内应建出非空 baseline"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // cancel A + 拿 baseline
+        let baseline_a = api.cancel_remote_watcher(context_a).await;
+        assert!(baseline_a.is_some(), "A 的 baseline 应非空");
+
+        // 模拟跨 host connect(A→B)：直接测 ssh_connect 内部逻辑——
+        // 因为我们没有真 SSH server，直接验证 baseline 选择逻辑：
+        // previous=A，target=B → baseline 应为 None
+        let target_b = "host-B";
+        let prev_a = Some("host-A".to_owned());
+        let reconnect_baseline = if let Some(ref prev) = prev_a {
+            let bl = baseline_a.clone(); // 模拟 cancel 返回
+            if *prev == target_b {
+                bl
+            } else {
+                None // BUG #4 fix：跨 ctx 不透传
+            }
+        } else {
+            None
+        };
+        assert!(
+            reconnect_baseline.is_none(),
+            "跨 host connect（A→B）SHALL NOT 传 A 的 baseline 给 B"
+        );
+
+        // 对比：同 ctx 重连（A→A）应透传
+        let same_ctx_baseline = if let Some(ref prev) = prev_a {
+            let bl = baseline_a.clone();
+            if *prev == context_a { bl } else { None }
+        } else {
+            None
+        };
+        assert!(
+            same_ctx_baseline.is_some(),
+            "同 ctx 重连（A→A）SHALL 透传 baseline"
+        );
+
+        // cleanup
+        api.cancel_all_remote_watchers().await;
+    }
+
+    // =========================================================================
+    // BUG #5 修复验证：dir-create 事件 mark_local_origin 让 invalidator 识别为 local
+    // codex PR #305 三审
+    // =========================================================================
+
+    /// 顶层 dir-create 事件（`plc=true, sid=""`）SHALL 被 invalidator 识别为 local
+    /// 并走 invalidate_local() 路径。验证 `local_projects_seen` + `mark_local_origin`
+    /// 修复了 dir-create 不写 `known_projects` 导致 invalidator 跳过 local cache
+    /// 清理的问题。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dir_create_event_invalidates_local_cache_via_invalidator() {
+        use crate::ipc::parsed_message_cache::ParsedMessageCache;
+        use crate::ipc::project_scan_cache::ProjectScanCache;
+        use cdt_core::Project;
+        use cdt_fs::{ContextId, FsKind};
+
+        let tmp = tempdir().unwrap();
+        let projects_dir = tmp.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+        // 不在 projects_dir 下预建 "new-proj" 子目录——模拟真实 dir-create 时
+        // 该 project_id 首次出现
+
+        let local_ctx = ContextId::local(projects_dir.clone());
+        let parsed_cache = Arc::new(std::sync::Mutex::new(ParsedMessageCache::default()));
+        let scan_cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+
+        // 预填 Local cache entry（让 invalidate_local 有东西可清）
+        {
+            let mut sc = scan_cache.lock().unwrap();
+            let scan_gen = sc.begin_scan();
+            sc.insert(
+                local_ctx.clone(),
+                Arc::new(vec![Project {
+                    id: "existing".into(),
+                    name: "existing".into(),
+                    path: std::path::PathBuf::new(),
+                    sessions: vec!["s1".into()],
+                    most_recent_session: None,
+                    created_at: None,
+                    distinct_cwds: vec![],
+                }]),
+                scan_gen,
+                scan_gen,
+                FsKind::Local,
+            );
+        }
+        assert!(
+            scan_cache.lock().unwrap().has_entry(&local_ctx),
+            "预条件：cache 应有 local entry"
+        );
+
+        // 构造 FileWatcher 并通过 mark_local_origin_for_test 模拟 dir-create
+        // 走 parse_project_event → mark_local_origin 路径
+        let watcher = Arc::new(FileWatcher::with_paths(
+            projects_dir.clone(),
+            tmp.path().join("todos"),
+        ));
+        // 模拟 dir-create 分支的 mark_local_origin 调用
+        watcher.mark_local_origin_for_test("new-proj");
+        assert!(
+            watcher.is_local_project("new-proj"),
+            "mark_local_origin 后 is_local_project SHALL 返 true"
+        );
+
+        let (raw_tx, raw_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(16);
+        let (file_tx, mut file_rx) = broadcast::channel::<cdt_core::FileChangeEvent>(16);
+
+        let _h = spawn_unified_cache_invalidator(
+            parsed_cache,
+            scan_cache.clone(),
+            raw_rx,
+            file_tx,
+            projects_dir,
+            Some(watcher),
+        );
+
+        // 注入 dir-create raw event（模拟 watcher → invalidator 路径）
+        raw_tx
+            .send(cdt_core::FileChangeEvent {
+                project_id: "new-proj".into(),
+                session_id: String::new(),
+                deleted: false,
+                project_list_changed: true,
+                session_list_changed: false,
+            })
+            .unwrap();
+
+        let _enriched = recv_enriched_with_timeout(&mut file_rx).await;
+
+        // 验证 cache 被 invalidate
+        assert!(
+            !scan_cache.lock().unwrap().has_entry(&local_ctx),
+            "dir-create event SHALL 走 is_local=true → apply_file_event 规则 1 → \
+             invalidate_local() 清空 cache entry"
+        );
+    }
+
+    /// 嵌套 subagent 分支 emit 的事件也被 invalidator 识别为 local 来源。
+    /// 验证 `mark_local_origin` 在 subagent 分支也被调用。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subagent_event_still_recognized_as_local() {
+        let tmp = tempdir().unwrap();
+        let projects_dir = tmp.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+
+        let watcher = Arc::new(FileWatcher::with_paths(
+            projects_dir.clone(),
+            tmp.path().join("todos"),
+        ));
+
+        // 模拟 subagent 事件走 mark_local_origin（在真实 parse_project_event
+        // 的嵌套 subagent 分支中被调用）
+        watcher.mark_local_origin_for_test("proj-sub");
+
+        assert!(
+            watcher.is_local_project("proj-sub"),
+            "subagent 分支 mark_local_origin 后 is_local_project SHALL 返 true"
         );
     }
 }

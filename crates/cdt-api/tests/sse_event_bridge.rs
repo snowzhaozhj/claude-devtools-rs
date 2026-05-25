@@ -505,3 +505,58 @@ async fn spawn_file_bridge_emits_sse_lagged_on_file_rx_lag() {
          (source=\"file-change\")。原实现静默吞掉 -> sidebar totalSessions 滞后 5min"
     );
 }
+
+/// BUG #6 documented limitation（codex PR #305 三审）：SSH 远端与 local 同名
+/// `project_id` 共存时 `is_local_project` 仅按字符串判定，可能误判 local。
+/// 根治需 watcher 注入 `ContextId` 做来源排除。本 test 标记 `#[ignore]` 留为
+/// followup 追踪标记。
+#[tokio::test]
+#[ignore = "documented limitation; root cause requires watcher source ContextId injection"]
+async fn accepted_edge_case_ssh_event_with_collision_local_project_name() {
+    // 场景：本地 projects 目录含 "proj-shared"，SSH 远端也有同名 "proj-shared"。
+    // SSH polling emit FileChangeEvent { project_id: "proj-shared", ... } 时
+    // is_local_project("proj-shared") 因字符串匹配会错返 true。
+    //
+    // 当前行为：SSH 事件被当作 local event 走 cache hint OR 路径。
+    // 正确行为：SSH 事件应跳过 local cache hint。
+    //
+    // 根治方案：watcher attach_remote 时记录 SSH project_id 集合，
+    // is_local_project 改为 "在 local_projects_seen 且不在 ssh_projects_seen"。
+    //
+    // 本 test 使用 mark_local_origin_for_test 模拟 local watcher 写入
+    // local_projects_seen，验证同名 SSH project_id 会被误判 local。
+    use cdt_watch::FileWatcher;
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let projects_dir = tmp_dir.path().join("projects");
+    let todos_dir = tmp_dir.path().join("todos");
+    std::fs::create_dir_all(&projects_dir).unwrap();
+    std::fs::create_dir_all(&todos_dir).unwrap();
+
+    // 本地 projects 含 "proj-shared" 目录——初始 watcher 构造时会通过
+    // initial_projects 扫入 known_projects，但 local_projects_seen 初始为空。
+    std::fs::create_dir_all(projects_dir.join("proj-shared")).unwrap();
+
+    let watcher = FileWatcher::with_paths(projects_dir.clone(), todos_dir);
+
+    // 构造时 local_projects_seen 为空，is_local_project 返 false
+    assert!(
+        !watcher.is_local_project("proj-shared"),
+        "构造后未走 parse_project_event 前 is_local_project 应返 false"
+    );
+
+    // 模拟 local watcher 正常运行后处理了这个 project 的 jsonl 事件
+    // （mark_local_origin 被调用）
+    watcher.mark_local_origin_for_test("proj-shared");
+
+    // 此时 local_projects_seen 已有 "proj-shared"
+    // SSH 远端同名 "proj-shared" → is_local_project 返 true（误判）
+    assert!(
+        watcher.is_local_project("proj-shared"),
+        "edge case: SSH event with colliding local project_id IS misidentified as local \
+         (documented limitation)"
+    );
+    // 本 test 断言的是当前 known behavior（误判），不是正确行为。
+    // 根治后本 test 应改为 assert!(!watcher.is_local_project("proj-shared"))
+    // 并去掉 #[ignore]。
+}

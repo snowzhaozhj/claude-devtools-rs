@@ -52,6 +52,13 @@ pub struct FileWatcher {
     /// `FileChangeEvent.session_list_changed` 字段。启动时为空（lazy），
     /// 接受 false-positive trade-off（design D2）。
     known_sessions: Mutex<HashSet<(PathBuf, String)>>,
+    /// 跟踪所有由本地 `parse_project_event` 路径 emit 过事件的 `project_id`（规范化后）。
+    /// 与 `known_projects` 解耦：`known_projects` 服务于 first-seen 语义（dir-create
+    /// 不写入），`local_projects_seen` 仅用于来源判定——让 unified invalidator 区分
+    /// 事件来源（local vs SSH）。所有 `parse_project_event` 分支（dir-create / 嵌套
+    /// subagent / 主 jsonl 写 / 主 jsonl 删）在 emit 前均调 `mark_local_origin` 写入。
+    /// codex PR #305 三审 BUG #5 修复。
+    local_projects_seen: Mutex<HashSet<PathBuf>>,
 }
 
 impl Default for FileWatcher {
@@ -88,6 +95,7 @@ impl FileWatcher {
             todos_dir: dunce::canonicalize(&todos_dir).unwrap_or(todos_dir),
             known_projects: Mutex::new(known_projects),
             known_sessions: Mutex::new(HashSet::new()),
+            local_projects_seen: Mutex::new(HashSet::new()),
         }
     }
 
@@ -101,17 +109,22 @@ impl FileWatcher {
         self.todo_tx.subscribe()
     }
 
-    /// 判断 `project_id` 是否属于本地 projects 目录已知项目。
+    /// 判断 `project_id` 是否属于本地 `parse_project_event` 路径 emit 过事件的项目。
     ///
-    /// SSH polling watcher 的事件不走 `parse_project_event`，不调 `mark_project_seen`，
-    /// 因此 SSH 远端的 `project_id` 不会出现在 `known_projects` 集合中。unified
-    /// invalidator 借此区分事件来源，避免用 Local cache hint 污染 SSH 事件
-    /// （codex PR #305 二审 BUG #2 修复）。
+    /// 基于 `local_projects_seen` 而非 `known_projects` 判定——`known_projects` 的
+    /// first-seen 语义令顶层 dir-create 分支不写入（spec 行为），但 dir-create 事件
+    /// 仍应被 invalidator 识别为 local 来源并走 invalidate 路径。`local_projects_seen`
+    /// 在所有 `parse_project_event` 分支 emit 前由 `mark_local_origin` 写入，与
+    /// first-seen 语义完全解耦。
+    ///
+    /// **已知限制**：仅按 `project_id` 字符串判定，SSH 远端与 local 同名 project 共存
+    /// 时可能误判 local；本 spec 接受此 edge case，根治需 watcher 注入 `ContextId`
+    /// 做来源排除（codex PR #305 三审 BUG #6 documented limitation）。
     pub fn is_local_project(&self, project_id: &str) -> bool {
         let key = normalize_path_for_compare(&self.projects_dir.join(project_id)).into_owned();
-        self.known_projects
+        self.local_projects_seen
             .lock()
-            .expect("known_projects mutex poisoned")
+            .expect("local_projects_seen mutex poisoned")
             .contains(&key)
     }
 
@@ -129,6 +142,14 @@ impl FileWatcher {
     #[cfg(any(test, feature = "test-utils"))]
     pub fn file_tx_for_test(&self) -> broadcast::Sender<FileChangeEvent> {
         self.file_tx.clone()
+    }
+
+    /// 测试专用：显式调用 `mark_local_origin` 让指定 `project_id` 进入
+    /// `local_projects_seen` 集合。外部 crate 集成测试用于模拟 local watcher
+    /// 已处理过某 project 事件的场景。
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn mark_local_origin_for_test(&self, project_id: &str) {
+        self.mark_local_origin(project_id);
     }
 
     /// 接入远端 SSH polling watcher，把远端 `FileChangeEvent` 注入同一
@@ -240,6 +261,7 @@ impl FileWatcher {
             // 后续 jsonl 又降级为 `false`，前端永不重扫。详见 spec
             // `file-watching::Watch project directory additions` 的
             // "dir-create followed by first jsonl" Scenario。
+            self.mark_local_origin(&project_id);
             return Some(FileChangeEvent {
                 project_id,
                 session_id: String::new(),
@@ -263,6 +285,7 @@ impl FileWatcher {
             if file_name.starts_with("agent-") && !file_name.starts_with("agent-acompact") {
                 let project_id = components[0].as_os_str().to_string_lossy().into_owned();
                 let session_id = components[1].as_os_str().to_string_lossy().into_owned();
+                self.mark_local_origin(&project_id);
                 return Some(FileChangeEvent {
                     project_id,
                     session_id,
@@ -287,6 +310,7 @@ impl FileWatcher {
             .into_owned();
         let session_id = path.file_stem()?.to_string_lossy().into_owned();
 
+        self.mark_local_origin(&project_id);
         let project_list_changed = !deleted && self.mark_project_seen(&project_id);
 
         // session_list_changed 填写规则（spec `跟踪 session 首见性以填写 revalidation hint`）：
@@ -318,6 +342,21 @@ impl FileWatcher {
             .lock()
             .expect("known_projects mutex poisoned")
             .insert(key)
+    }
+
+    /// 标记 `project_id` 为本地来源——所有 `parse_project_event` 分支（dir-create /
+    /// 嵌套 subagent / 主 jsonl 写 / 主 jsonl 删）在 emit 前调用。
+    ///
+    /// 与 `mark_project_seen` 的 first-seen 语义完全解耦：`mark_project_seen` 不在
+    /// dir-create 分支调用（spec 约束），但来源跟踪必须覆盖 dir-create（invalidator
+    /// 需要走 `invalidate_local` 路径）。删除事件也 mark——保留来源标记给后续可能的
+    /// 同 path 事件。规范化策略与 `mark_project_seen` 对称（Windows 大小写兼容）。
+    fn mark_local_origin(&self, project_id: &str) {
+        let key = normalize_path_for_compare(&self.projects_dir.join(project_id)).into_owned();
+        self.local_projects_seen
+            .lock()
+            .expect("local_projects_seen mutex poisoned")
+            .insert(key);
     }
 
     /// 标记 `(project_id, session_id)` 组合为已见。返回 `true` 表示首次插入
@@ -689,6 +728,14 @@ mod tests {
         assert!(
             !known.contains(&project_dir),
             "dir-create MUST NOT call mark_project_seen"
+        );
+        drop(known);
+
+        // 但 local_projects_seen 必须包含该 project（来源跟踪独立于 first-seen）
+        let seen = watcher.local_projects_seen.lock().unwrap();
+        assert!(
+            seen.contains(&normalize_path_for_compare(&project_dir).into_owned()),
+            "dir-create SHALL mark_local_origin for invalidator source detection"
         );
     }
 
@@ -1084,6 +1131,14 @@ mod tests {
         assert!(
             !known.contains(&projects.join("proj-unseen")),
             "nested branch must NOT call mark_project_seen"
+        );
+        drop(known);
+
+        // 但 local_projects_seen 必须包含——来源跟踪覆盖所有 emit 分支
+        let seen = watcher.local_projects_seen.lock().unwrap();
+        assert!(
+            seen.contains(&normalize_path_for_compare(&projects.join("proj-unseen")).into_owned()),
+            "nested branch SHALL mark_local_origin for invalidator source detection"
         );
     }
 
