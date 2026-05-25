@@ -17,9 +17,15 @@
 # 模式：
 #   --baseline    打印每 spec 的当前违规计数到 stdout（用于刷新 baseline 文件）
 #   --report      详细报告每 spec 各类反模式分布 + 命中行示例
-#   （默认）       与 scripts/spec-purity-baseline.txt 对比；ratchet：超 baseline
-#                 拒、低于 baseline 也拒（防 silent degradation，要求同 PR 刷新
-#                 baseline）；env SPEC_PURITY_ALLOW_DECREASE=1 本地诊断时绕过
+#   （默认）       与 scripts/spec-purity-baseline.txt 对比；**单向 ratchet**：
+#                 超 baseline 拒（防恶化）；低于 baseline 仅信息提示，不拒。
+#                 env SPEC_PURITY_STRICT=1 切回**双向 ratchet**（低于 baseline
+#                 也拒，强制开发者同 PR 刷新——防 silent degradation）。
+#
+# 历史：原默认是双向 ratchet。spec-overhaul-file-watching-pilot 试点期发现
+# 双向的"强制同 PR 刷新"对每个 spec 改动都强加 baseline 同步思维负担，且
+# silent degradation 在实践中罕见——switch 到单向 ratchet 减负，仍保住核心
+# 防恶化能力。需要双向 strict gate 时通过 env 显式 opt-in。
 set -euo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
@@ -128,10 +134,15 @@ for i in "${!KEYS[@]}"; do
   echo "${KEYS[$i]} $total" >> "$tmp_current"
 done
 
-# ALLOW_DECREASE=1 时下降仅警告（本地诊断用）；默认（CI）下降也 fail 强制刷 baseline
-allow_decrease="${SPEC_PURITY_ALLOW_DECREASE:-0}"
+# 单向 ratchet（默认）：超 baseline 拒，低于 baseline 仅信息提示。
+# 双向 ratchet（opt-in）：env SPEC_PURITY_STRICT=1 时强制下降同 commit 刷 baseline。
+# 兼容老 env：SPEC_PURITY_ALLOW_DECREASE=0 等价 STRICT=1（向后兼容已有 CI 配置）。
+strict_mode="${SPEC_PURITY_STRICT:-0}"
+if [[ "${SPEC_PURITY_ALLOW_DECREASE:-1}" == "0" ]]; then
+  strict_mode="1"
+fi
 
-awk -v baseline_file="$BASELINE_FILE" -v allow_decrease="$allow_decrease" '
+awk -v baseline_file="$BASELINE_FILE" -v strict_mode="$strict_mode" '
   BEGIN {
     while ((getline line < baseline_file) > 0) {
       if (line == "" || line ~ /^#/) continue
@@ -156,8 +167,8 @@ awk -v baseline_file="$BASELINE_FILE" -v allow_decrease="$allow_decrease" '
   END {
     for (k in base) if (!(k in seen)) rem_arr[++n_rem] = k
 
-    decrease_fail = (n_imp > 0 && allow_decrease != "1") ? 1 : 0
-    removed_fail = (n_rem > 0 && allow_decrease != "1") ? 1 : 0
+    decrease_fail = (n_imp > 0 && strict_mode == "1") ? 1 : 0
+    removed_fail = (n_rem > 0 && strict_mode == "1") ? 1 : 0
 
     if (failed) {
       print "" > "/dev/stderr"
@@ -183,7 +194,7 @@ awk -v baseline_file="$BASELINE_FILE" -v allow_decrease="$allow_decrease" '
 
     if (decrease_fail || removed_fail) {
       print "" > "/dev/stderr"
-      print "✗ spec 污染下降但 baseline 未同步刷新（防 silent degradation）" > "/dev/stderr"
+      print "✗ STRICT 模式：spec 污染下降但 baseline 未同步刷新（强制防 silent degradation）" > "/dev/stderr"
       print "" > "/dev/stderr"
       if (n_imp > 0) {
         print "spec 污染下降:" > "/dev/stderr"
@@ -197,16 +208,16 @@ awk -v baseline_file="$BASELINE_FILE" -v allow_decrease="$allow_decrease" '
       print "修法（与本次改动同 commit）:" > "/dev/stderr"
       print "  bash scripts/check-spec-purity.sh --baseline > scripts/spec-purity-baseline.txt" > "/dev/stderr"
       print "" > "/dev/stderr"
-      print "本地诊断绕过: SPEC_PURITY_ALLOW_DECREASE=1 bash scripts/check-spec-purity.sh" > "/dev/stderr"
+      print "或退出 STRICT 模式：unset SPEC_PURITY_STRICT 与 SPEC_PURITY_ALLOW_DECREASE" > "/dev/stderr"
       exit 1
     }
 
     if (n_imp > 0) {
-      print "✓ spec 污染下降（ALLOW_DECREASE=1 模式）:"
+      print "ℹ spec 污染下降（baseline 比当前态宽松，未拒——可手动 --baseline 刷新收紧 ratchet）:"
       for (i = 1; i <= n_imp; i++) print "  - " imp_arr[i]
     }
     if (n_rem > 0) {
-      print "ℹ baseline 残留 key（ALLOW_DECREASE=1 模式）:"
+      print "ℹ baseline 残留 key（spec 已删 / 改名；可手动 --baseline 清理）:"
       for (i = 1; i <= n_rem; i++) print "  - " rem_arr[i]
     }
     print "✓ spec purity check 通过"
