@@ -18,9 +18,11 @@
 按下列顺序下笔，**不要**反向（先想实现再倒推 spec）。
 
 1. **Purpose**（一段，用户价值）—— 删了这个 capability 用户会失去什么、为谁存在。**禁止**写"基于 X 库实现"、"由 Y 模块承载"等 how。
-2. **Functional Requirements**（FR）—— 用户能干什么 / 系统对外暴露什么行为。每个 Requirement 写简短 SHALL/MUST 体 + 必要的 `WHEN/THEN` Scenario。
+2. **Functional Requirements**（FR）—— 用户能干什么 / 系统对外暴露什么行为。
 3. **Non-Functional Requirements**（NFR）—— 性能预算 / 容量上限 / 延迟阈值等数字契约。**与 FR 分开**写成独立 Requirement，不与功能行为混。
 4. **Cross-references**（可选）—— 用 `[[other-capability]]` 引用，不复制；**外部协议（IPC payload / HTTP path / push event）单一 owner**，跨 spec 不重复定义同一协议字段。
+
+> Requirement / Scenario 的格式要求（SHALL/MUST、`#### Scenario:` WHEN/THEN、4-hashtag 必填、每个 Requirement 至少 1 个 Scenario 等）由 OpenSpec 官方 schema instruction 兜底，本文不重复——本文只补**项目特定的内容判断与边界**。
 
 ## 该写什么 vs 不该写什么（对照表）
 
@@ -98,7 +100,7 @@ read_agent_configs(pairs)` 公开签名不变。
 
 1. 先回答 **"为什么存在这个能力 / 为谁服务"**——写 Purpose 一段（用户视角，不是实现概要）。
 2. 用**用户视角的能力地图**列 Requirement——按用户能看到 / 操作 / 感知的维度组织，不按"启动期 / 后台扫描期 / 渲染期"等技术分层组织，更不按 PR 时间追加到末尾。
-3. 每个 FR Requirement：简短 SHALL/MUST 体说清楚契约，再列 `#### Scenario:` 段含 `WHEN/THEN` 描述触发条件 + 可观察结果。Scenario 标题用**用户/系统视角**短语，禁止用 const 名 / 回滚开关名 / 实现术语。
+3. 每个 FR Requirement 体说清楚一个外部可观察契约（格式见上方"4 层骨架"段引用的官方 instruction）。Scenario 标题用**用户/系统视角**短语，禁止用 const 名 / 回滚开关名 / 实现术语。
 4. NFR 单独写成 Requirement（"性能预算"、"容量上限" 等），不掺进 FR Body。
 5. 跨 capability 引用用 `[[other-cap]]`；外部协议字段（IPC / SSE / HTTP）保留单一 owner spec，其它 spec 引用不复制。
 6. **写完检查**：把 Purpose 给一个不懂代码的产品同事看，他能否说出"这个能力对用户做什么"；把 Requirement 给后端 / 前端各看一遍，他们能否各自实现却不撞协议。

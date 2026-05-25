@@ -21,7 +21,7 @@ rules:
     - design.md 不是可选项——任何 change 都需 D1 / D2 / ... 决策记录，让 reviewer 能从设计层评估
   specs:
     - "一句话原则：如果实现可换而外部行为 / 协议不变，则该内容属 design.md 不属 spec。spec 描述『用户能感知什么 + 系统对外承诺什么』；design.md 描述『内部怎么实现』"
-    - "下笔顺序：Purpose（用户价值，删了用户失去什么）→ FR（用户能做什么，每个 Requirement 写简短 SHALL/MUST 体 + 必要的 WHEN/THEN Scenario）→ NFR（性能 / 容量 / 延迟独立 Requirement，不与 FR 混）→ Cross-references（`[[other-cap]]` 引用，不复制协议字段）"
+    - "下笔顺序：Purpose（用户价值，删了用户失去什么）→ FR（用户能做什么的外部可观察契约）→ NFR（性能 / 容量 / 延迟独立 Requirement，不与 FR 混）→ Cross-references（`[[other-cap]]` 引用，不复制协议字段）。Requirement / Scenario 的格式要求（SHALL/MUST、`#### Scenario:` WHEN/THEN、4-hashtag、每 Req 至少 1 Scenario）由 OpenSpec 官方 schema instruction 兜底，本文不重复"
     - "MUST exclude（语义层，判断主权在 reviewer 与 codex 二审）：库选型 / 内部 fn-type-mod 名 / Rust 类型签名（`Vec<T>` 等）/ log target 字符串 / 实现选择类 SHALL（『通过 X 记录』『用 Y 缓存』）/ 测试 fixture 常量名 / 测试文件路径 / 配置文件字段路径（`tauri.conf.json::xxx`）/ Cargo-npm 依赖名+版本 / commit-PR-issue 号 / 实测数字与 baseline"
     - "词法 lint 信号：既有 `scripts/check-spec-purity.sh` baseline ratchet 抓 6 类反模式（mod-path / src-path / commit-hash / metric / impl-flag / lib-framework）防恶化（仓内既有机制，本约定不新增 hard-fail）。词法命中 ≈ 极可能违反语义规则，反过来不成立——命中仅作 reviewer 自检的雷达提示，最终判断主权仍在 reviewer 与 codex 二审"
     - "backtick 用法：优先用于外部协议层标识符（IPC payload 字段名 camelCase 如 `messagesOmitted` / Tauri command snake_case 如 `ssh_connect` / HTTP path 如 `/api/projects` / 错误码 / push event 名）与 RFC2119 关键词；不得用 backtick 包装内部 fn / type / mod 名、源码路径、测试 fixture 常量、Cargo / npm 依赖等实现细节。Requirement / Scenario 描述使用简体中文，RFC2119 关键词保留英文"
