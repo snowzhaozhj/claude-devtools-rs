@@ -186,117 +186,49 @@ Tauri command 命名 SHALL 使用 snake_case，payload 字段 SHALL 使用 camel
 
 系统 SHALL 从 main 进程向 renderer 推送以下事件：session 文件变更、todo 文件变更、新通知、SSH 状态变化、context 切换、updater 进度。
 
-桌面（Tauri）host SHALL 在 `setup` 阶段订阅 `LocalDataApi::subscribe_file_changes()` 广播（**enriched event 流**——见 `Unified invalidator 作为 LocalDataApi.file_tx 唯一生产者` Requirement），并向前端 webview `emit("file-change", payload)`。Payload SHALL 是 `FileChangeEvent` 的 camelCase 序列化结果，字段 SHALL 含 `projectId`、`sessionId`、`deleted`、`projectListChanged`、`sessionListChanged`，与其它 IPC payload 命名约定一致。
+桌面（Tauri）host SHALL 在 `setup` 阶段订阅内部 file-change broadcast（enriched event 流——见 `Unified invalidator 作为 LocalDataApi.file_tx 唯一生产者` Requirement），并向前端 webview `emit("file-change", payload)`。Payload 形态契约见 `[[push-events::file-change]]`。
 
-`sessionListChanged: bool` 字段语义：标记该 file-change 事件是否会改变某 group 内 session 集合（"已知 project 下首次见 session" / 删除 / 重命名等场景）。该字段值由 unified invalidator 的"三档判定"结果填充——`project_list_changed=true || deleted=true || (规则 2 命中)` → `sessionListChanged=true`；普通 JSONL append + watcher 折叠的 subagent 修改 → `sessionListChanged=false`。`#[serde(default, skip_serializing_if = "std::ops::Not::not")]` 让旧反序列化路径在缺字段时拿到 `false`，行为退化为"不触发 loadProjects 刷新"。
+桌面 host SHALL 在 `setup` 阶段订阅 SSH 状态 broadcast，并向前端 webview `emit("ssh_status", payload)`。Payload 形态契约见 `[[push-events::ssh-status-change]]`。同样订阅 context-changed broadcast emit `context_changed` 事件 payload `{ activeContextId, kind }`。
 
-桌面 host SHALL 在 `setup` 阶段订阅 `LocalDataApi::subscribe_ssh_status()`，并向前端 webview `emit("ssh_status", payload)`。Payload SHALL 是 `SshStatusChange` 的 camelCase 序列化结果（字段 `contextId`、`status`、`error?`、`authChain?`）。同样订阅 `subscribe_context_changed()` emit `context_changed` 事件 payload `{ activeContextId, kind }`。
+**lag 兜底契约（transport 层行为）**：
 
-**HTTP/SSE 路径字段同步契约**：`crates/cdt-api/src/ipc/events.rs::PushEvent::FileChange` 变体 SHALL 含 `session_list_changed: bool` 字段（`#[serde(default)]`）。该 enum 既有 attribute 是 `#[serde(tag = "type", rename_all = "snake_case")]`——variant tag 转 `snake_case`（`FileChange` → `file_change`），但 struct variant 内部字段保留 Rust 字段名 `snake_case`（与既有 `project_id` / `project_list_changed` 风格一致）。SHALL NOT 在 enum 上加 `rename_all_fields = "camelCase"`——会破坏既有 SSE payload 与 `transport.ts::normalizePushPayload` 当前 snake_case 字段读取路径（`transport.ts:456-462`）。`crates/cdt-api/src/http/bridge.rs::spawn_file_bridge` SHALL 把 enriched `FileChangeEvent.session_list_changed` 透传到 `PushEvent::FileChange.session_list_changed`；前端 `transport.ts::normalizePushPayload` 在 `case "file_change"` 分支 SHALL 把 `payload.session_list_changed` 映射到归一化后的 `sessionListChanged`，与 IPC `FileChangeEvent`（`#[serde(rename_all = "camelCase")]`，原生输出 `sessionListChanged`）形态对齐。
-
-**lag 兜底契约（三处来源同形态）**：
-
-- **Tauri host file-change bridge** 在 `RecvError::Lagged(n)` 路径 SHALL 通过 `app.emit("sse-lagged", { source: "file-change", missed: n })` 通知前端 webview；`RecvError::Closed` 时退出 loop
-- **HTTP `spawn_file_bridge`** 在 `file_rx.recv()` 返回 `RecvError::Lagged(n)` 路径 SHALL 调 `events_tx.send(PushEvent::SseLagged { source: "file-change", missed: n })`；MUST NOT 静默吞掉（codex round 2 阻塞 3：当前 `bridge.rs:56` `Err(Lagged) => {}` 是错误的兜底）
-- **`PushEvent::SseLagged` variant**（`crates/cdt-api/src/ipc/events.rs`）：携带 `source: String` + `missed: u64`，序列化为 `{"type":"sse_lagged","source":"...","missed":...}`（variant tag 由 enum 既有 `rename_all = "snake_case"` 自动转换；字段 `source` / `missed` 单词无下划线，snake_case 形态即字面，不需要额外 rename attribute），与 `crates/cdt-api/src/http/sse.rs:23` 既有的 `SSE_LAGGED_SENTINEL = r#"{"type":"sse_lagged"}"#` 形态向后兼容（消费者解析 `type === "sse_lagged"` 走同一 handler；旧 sentinel 缺 source/missed 字段 → 前端读 undefined 不报错）
-- 前端 `Sidebar` 收到 `sse-lagged` SHALL 按 `sidebar-navigation` spec `Sidebar SHALL 订阅 sse-recovered / sse-lagged 触发 silent refresh` Requirement 走保守 silent refresh，覆盖 lag 期间错过的 structural 信号
-
-**`session_metadata_update` SSE 透传 group_id 契约**：HTTP/SSE wire `session_metadata_update` payload SHALL 含 `group_id: String` 字段（与既有 `project_id` / `session_id` 同 snake_case 风格），由 Rust struct `SessionMetadataUpdate.group_id` 经 serde 序列化输出。前端 `transport.ts::normalizePushPayload` 在 `case "session_metadata_update"` 分支 SHALL 把 `payload.group_id` 映射到归一化后的 `groupId`，与 IPC Tauri runtime 路径（serde camelCase 直接得 `groupId`）形态对齐。Sidebar `metadataUnlisten` handler 用 `eventGroupId = payload.groupId ?? payload.projectId` 过滤 stale event：缺失 `groupId` 字段会让 fallback 落到 worktree-level `projectId`，多 worktree group（如 `claude-devtools-rs` 27 个 worktree）下 `projectId != groupId`（`.git` 后缀路径），整页 metadata patch 被全量丢弃，sidebar 永久卡 `metadata-pending` skeleton。
+- **Tauri host file-change bridge** 在 broadcast receiver `Lagged(n)` 路径 SHALL 通过 `app.emit("sse-lagged", payload)` 通知前端 webview（payload 形态见 `[[push-events::sse-lagged]]`）；`Closed` 时退出 loop
+- **Tauri host 其它 bridge**（如 metadata / error）在同类 `Lagged` 路径 SHALL 走同形 sse-lagged 通知
+- 前端 Sidebar 收到 `sse-lagged` SHALL 按 `[[sidebar-navigation]]` 已有 Requirement 走保守 silent refresh，覆盖 lag 期间错过的 structural 信号
 
 #### Scenario: New notification while renderer is subscribed
 
 - **WHEN** renderer 已订阅通知事件，期间产出一条新通知
 - **THEN** renderer SHALL 在 debounce 窗口内收到一条 push 事件，携带通知 payload
 
-#### Scenario: Tauri 转发 file-change 事件（含 sessionListChanged 字段）
+#### Scenario: Tauri 转发 file-change 事件
 
-- **WHEN** `cdt-watch::FileWatcher` 在 100 ms debounce 后产出 `FileChangeEvent { project_id: "p", session_id: "s", deleted: false, project_list_changed: false, session_list_changed: false }`
-- **AND** Tauri host 在 `setup` 已 spawn 桥任务订阅 `LocalDataApi::subscribe_file_changes()`
-- **AND** unified invalidator 已完成判定（普通 append → `session_list_changed: false`）
-- **THEN** webview SHALL 通过 `listen("file-change", ...)` 收到 payload `{ projectId: "p", sessionId: "s", deleted: false, projectListChanged: false, sessionListChanged: false }`
-
-#### Scenario: file-change payload 是 camelCase
-
-- **WHEN** Tauri 桥任务 emit 一条 `file-change` 事件
-- **THEN** 序列化后的 JSON SHALL 使用 camelCase 字段名（`projectId` / `sessionId` / `deleted` / `projectListChanged` / `sessionListChanged`），与既有 IPC 类型约定一致
-
-#### Scenario: 已知 project 下新 session 首次出现 sessionListChanged 为 true
-
-- **WHEN** unified invalidator 收到 `FileChangeEvent { project_id: "pa", session_id: "sa_new", deleted: false, project_list_changed: false }` 且 `ProjectScanCache::contains_session_id` 返回 `false`（cache 已有 entry 但不含 sa_new）
-- **THEN** invalidator SHALL 在 enrich 阶段把 `session_list_changed` 置为 `true`
-- **AND** webview 通过 `listen("file-change", ...)` 收到的 payload SHALL 含 `sessionListChanged: true`
-
-#### Scenario: 普通 JSONL append sessionListChanged 为 false
-
-- **WHEN** unified invalidator 收到 `FileChangeEvent { project_id: "pa", session_id: "sa", deleted: false, project_list_changed: false }` 且 `ProjectScanCache::contains_session_id` 返回 `true`（cache 含 sa）
-- **THEN** invalidator SHALL 在 enrich 阶段保持 `session_list_changed: false`
-- **AND** webview 收到的 payload SHALL 含 `sessionListChanged: false`
-
-#### Scenario: HTTP/SSE PushEvent::FileChange 携带 session_list_changed 字段
-
-- **WHEN** 用户通过 `?http=1` 浏览器调试入口连接到 cdt-cli HTTP server
-- **AND** 后端 unified invalidator 检测到"已知 project 下新 session"，enriched event `session_list_changed: true`
-- **THEN** `PushEvent::FileChange` SHALL 序列化为含 `"session_list_changed": true` 的 SSE payload（snake_case，与既有 `project_id` / `project_list_changed` 字段风格一致；该 enum 既有 `#[serde(tag = "type", rename_all = "snake_case")]` attribute 不变）
-- **AND** 前端 `transport.ts::normalizePushPayload` 在 `case "file_change"` 分支 SHALL 把 `payload.session_list_changed` 映射到 `sessionListChanged`（与既有 `projectListChanged` 映射一致），让 Sidebar handler 拿到与 Tauri 路径同形的 camelCase payload
+- **WHEN** 后端 file-change broadcast 产出一条事件
+- **AND** Tauri host 在 `setup` 已 spawn 桥任务订阅该 broadcast
+- **THEN** webview SHALL 通过 `listen("file-change", ...)` 收到 payload，字段形态与 `[[push-events::file-change]]` 一致
 
 #### Scenario: file_tx 满时 Tauri bridge 通知前端 sse-lagged
 
-- **WHEN** Tauri host file-change bridge 的 `recv()` 返回 `Err(RecvError::Lagged(n))`（broadcast capacity 满 + slow subscriber）
-- **THEN** bridge SHALL 调 `app.emit("sse-lagged", { source: "file-change", missed: n })` 通知前端
+- **WHEN** Tauri host file-change bridge 的 broadcast receiver 返回 Lagged(n)（broadcast capacity 满 + slow subscriber）
+- **THEN** bridge SHALL emit `sse-lagged` 通知前端（payload 形态见 `[[push-events::sse-lagged]]`）
 - **AND** bridge SHALL NOT 退出 loop，继续处理后续 event
-- **AND** 前端 Sidebar 收到 `sse-lagged` 时按 `sidebar-navigation` spec 已有 Requirement 走 silent refresh 兜底
-
-#### Scenario: HTTP spawn_file_bridge file_rx Lagged 走 PushEvent::SseLagged
-
-- **WHEN** HTTP `spawn_file_bridge` 内 `file_rx.recv()` 返回 `Err(RecvError::Lagged(n))`（`LocalDataApi.file_tx → events_tx` 一跳的 lag）
-- **THEN** bridge SHALL 调 `events_tx.send(PushEvent::SseLagged { source: "file-change", missed: n })`
-- **AND** SHALL NOT 静默吞掉该 lag 信号
-- **AND** SSE 客户端 SHALL 通过 `convert_broadcast_result` 把该 PushEvent 序列化为 `{"type":"sse_lagged","source":"file-change","missed":n}` 与既有 `SSE_LAGGED_SENTINEL` 形态对齐
-- **AND** 前端浏览器 transport 解析 `type === "sse_lagged"` 走 `sse-lagged` handler
-
-#### Scenario: HTTP normalize session_metadata_update group_id 字段
-
-- **WHEN** 用户通过 `?http=1` 浏览器调试入口连接到 cdt-cli HTTP server
-- **AND** 后端 `LocalDataApi::list_group_sessions` 后台扫描完成，通过 SSE broadcast `SessionMetadataUpdate { group_id: "/Users/u/proj/.git", project_id: "-Users-u-proj", session_id: "s1", title: "Hello", message_count: 1, is_ongoing: false, git_branch: "main" }`
-- **THEN** HTTP/SSE wire 序列化后 SHALL 含 `"group_id": "/Users/u/proj/.git"` 字段
-- **AND** 前端 `transport.ts::normalizePushPayload` 在 `case "session_metadata_update"` 分支 SHALL 映射 `payload.group_id` 到 `groupId` 字段，输出 `{ groupId: "/Users/u/proj/.git", projectId: "-Users-u-proj", sessionId: "s1", title: "Hello", messageCount: 1, isOngoing: false, gitBranch: "main" }`
-- **AND** Sidebar `metadataUnlisten` handler `eventGroupId = payload.groupId ?? payload.projectId` 拿到真 `groupId` 而非 worktree-level `projectId` fallback，多 worktree group（如 `claude-devtools-rs` 27 个 worktree、`group.id = "/Users/.../.git"`）下与 `selectedGroupId` 匹配，metadata patch 不会被 stale-guard 丢弃
-
-#### Scenario: HTTP normalize session_metadata_update 缺 group_id 向后兼容
-
-- **WHEN** 旧后端（未升级）发出的 `session_metadata_update` SSE payload 缺 `group_id` 字段
-- **THEN** 前端 `transport.ts::normalizePushPayload` 输出 `groupId: undefined`
-- **AND** Sidebar handler `eventGroupId = payload.groupId ?? payload.projectId` 退化到 fallback `projectId` 路径——单 worktree group 下 `projectId == groupId` 仍能匹配；多 worktree group 下保持 main 既有行为不报错
-
-#### Scenario: HTTP normalize ssh_status_change 字段名 snake_case → camelCase
-
-- **WHEN** 后端 `PushEvent::SshStatusChange { context_id: "ssh-host-a", state: "connected" }` 通过 SSE 序列化
-- **THEN** HTTP/SSE wire SHALL 是 `{"type":"ssh_status_change","context_id":"ssh-host-a","state":"connected"}`（`PushEvent` enum 默认 `rename_all = "snake_case"`，字段保留 snake_case）
-- **AND** 前端 `transport.ts::normalizePushPayload` 在 `case "ssh_status_change"` 分支 SHALL 映射 `payload.context_id` → `contextId`、`payload.state` → `status`，输出 `{ contextId: "ssh-host-a", status: "connected" }`
-- **AND** 前端 SSH 连接状态消费侧（`ui/src/lib/connection.svelte.ts::change.contextId / change.status` 等）SHALL 与 Tauri runtime 路径（`cdt_ssh::SshStatusChange` struct 已用 `rename_all = "camelCase"` 输出 camelCase 字段）拿到形态一致的 payload，浏览器 `?http=1` 入口下 SSH 状态指示符 SHALL 与桌面 Tauri runtime 行为对齐
-
-#### Scenario: PushEvent::SseLagged 序列化形态与 sentinel 兼容
-
-- **WHEN** `PushEvent::SseLagged { source: "file-change".into(), missed: 7 }` 通过 serde_json 序列化
-- **THEN** 输出 SHALL 是 `{"type":"sse_lagged","source":"file-change","missed":7}`（variant tag 由 enum `rename_all = "snake_case"` 自动转 `sse_lagged`；字段 `source` / `missed` 单词无下划线无需 rename）
-- **AND** 该形态 SHALL 与 `crates/cdt-api/src/http/sse.rs::SSE_LAGGED_SENTINEL = r#"{"type":"sse_lagged"}"#` 向后兼容——前端解析 `type === "sse_lagged"` 走同一 handler；旧 sentinel 缺 source / missed 字段时前端读 undefined 不报错
 
 #### Scenario: file-change 桥与通知管线并存
 
-- **WHEN** Tauri host 同时持有 `LocalDataApi::subscribe_file_changes()`（emit `file-change`）与 `subscribe_detected_errors()`（emit `notification-added`）两个订阅
+- **WHEN** Tauri host 同时持有 file-change bridge 与 detected-error bridge 两个订阅
 - **THEN** 两个桥 SHALL 独立运行，文件变更不会因通知 pipeline 的 lag 被丢弃，反之亦然
 
 #### Scenario: ssh_status event broadcast on connect
 
 - **WHEN** 后端 SSH 连接状态从 `connecting` 切到 `connected`
-- **AND** Tauri host 在 setup 已 spawn 桥任务订阅 `subscribe_ssh_status()`
-- **THEN** webview SHALL 通过 `listen("ssh_status", ...)` 收到 payload `{ contextId: "ssh-host-A", status: "connected" }`
-- **AND** payload `error` 与 `authChain` 字段在 success 路径 SHALL 为 `null` 或省略
+- **AND** Tauri host 在 setup 已 spawn 桥任务订阅 SSH 状态 broadcast
+- **THEN** webview SHALL 通过 `listen("ssh_status", ...)` 收到 payload，字段形态与 `[[push-events::ssh-status-change]]` 一致
+- **AND** 成功路径下 payload `error` 与 `authChain` 字段 SHALL 为 null 或省略
 
 #### Scenario: ssh_status event carries error detail on failure
 
 - **WHEN** SSH 连接失败导致状态切到 `error`
-- **THEN** webview 收到的 `ssh_status` payload SHALL 含 `error: { code: "ssh_auth_exhausted", attempts: [...] }`
+- **THEN** webview 收到的 `ssh_status` payload SHALL 含 `error` 字段（错误详情）
 
 ### Requirement: Validate inputs and return structured errors
 
