@@ -188,7 +188,13 @@ let foo = bar.unwrap();  // 反模式行
 
 ## 复用本仓已有 reviewer agents（按域调）
 
-scope 命中下面情况时 SHALL 用 `Agent` tool 派发对应 reviewer 做并行二审，**作为 candidate 来源加权**（reviewer 命中即升 confidence 一级）：
+scope 命中下面情况时 SHALL 用 `Agent` tool 派发对应 reviewer 做并行二审。**reviewer 的命中是 Gate 1（code evidence）的第三方背书**——可让 Gate 1 在原本"我自己看着像但不太确定"时升级为通过，**但不替代 Gate 2 / 3 / 4**：
+
+- ✓ reviewer 命中 + 4 道 gate 自查全过 → 进 Findings（confirmed / high）
+- ✓ reviewer 命中 + 仅 3 道 gate 过 → **仍然落开放问号**（reviewer 不绕过 4 gate 全过的硬约束）
+- ❌ reviewer 命中 + ≤ 2 道 gate 过 → 丢
+
+**关键不变量**：reviewer 升级**只动严重度的优先排序**（critical 在前 / 同 severity reviewer 命中的排前），**不动置信度**——置信度只由 4 gate 通过道数决定。这条铁律消除了 medium 候选靠 reviewer 钩子升 high 进 Findings 的后门。
 
 | scope 涉及 | 调哪个 agent | 何时调 |
 |---|---|---|

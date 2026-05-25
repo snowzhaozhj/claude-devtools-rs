@@ -236,11 +236,12 @@ rg 'HashMap<|BTreeMap<|Vec<' --type rust -n <scope> -A 5 | rg '(insert|push)'
 
 ### L4.1 IPC 字段名/类型 ui ↔ src-tauri 不对齐
 
-**抓手**：
+**抓手**（IPC 是双向契约——backend rust 与 frontend ts 同时查，**才能**比对字段名是否对齐）：
 ```bash
-# 找 #[tauri::command] 函数
+# 找 backend #[tauri::command] 函数（限定在 scope 内）
 rg '#\[tauri::command\]' --type rust -n -A 3 <scope>
-# 比对 ui/src 的 invoke 调用
+# 比对前端 invoke 调用（**硬编码 ui/src/ 是有意的**：scope 是 backend 路径时 SHALL 同时扫前端
+# ui/src/ 才能跨域比对；反向若 scope 在 ui/src/ 内则 SHALL 反向扫 src-tauri/ + crates/cdt-api/）
 rg 'invoke\(' ui/src/ -n
 ```
 
@@ -345,12 +346,12 @@ rg 'MockX|mockall|#\[mockable\]|fn mock_' --type rust -n <scope>
 
 ### L6.2 scenario 名对得上但 assert 不验关键字段
 
-**抓手**：openspec scenario 的关键 SHALL 句逐句对应 test 函数的 assert。
+**抓手**：openspec scenario 的关键 SHALL 句逐句对应 test 函数的 assert。**这条 recipe 仅在 scope 类型 = `capability` 时适用**（SKILL.md::Step 1 的 4 类 scope 之一），`<cap-name>` 与 `<crate-path>` 都来自 scope 而非文首 `<scope>` 通用占位符：
 ```bash
-# 找 spec scenario
-rg 'SHALL' openspec/specs/<cap>/spec.md
-# 看 test 是否真验那个字段
-rg 'assert' <test_file>
+# scope 类型为 capability 时，先列 spec 的 SHALL 句（<cap-name> 即 scope 给定的 capability，如 file-watching）
+rg 'SHALL' openspec/specs/<cap-name>/spec.md
+# 再到对应 crate 找 test 是否真 assert 关键字段（<crate-path> 即该 capability 对应 cdt-* crate 的 tests/ + src/ 内 inline test）
+rg 'assert' <crate-path>/tests/ <crate-path>/src/
 ```
 
 **真 bug 信号**：spec 说"SHALL 把 X 字段返回为 Y"，test 名叫 `test_x_returns_y` 但只 assert 了"调用没 panic"。
