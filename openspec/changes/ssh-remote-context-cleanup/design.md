@@ -44,6 +44,27 @@ frontend-test-pyramid 同批姊妹（PR #309）已 archive 在 `change spec-clea
 
 **理由**：SPEC_GUIDE 明确 "spec = 用户感知 + 系统外部承诺"。性能数字若是用户感知阈值（< 500ms 首屏）保留为契约性表述（"显著低于首屏预算"），具体毫秒数留 design；若是实现层调优（75ms × attempt 重试退避）整段抽象为"指数退避"。
 
+### D-1b：apply 阶段反转——用户感知数值阈值一律保留具体数值（codex 二审）
+
+**触发**：codex 二审（PR #312）找到 4 blocking + 1 major：
+- 连接握手 TCP 5s / SFTP 8s / 总外层 25s 硬超时被抽象为"独立硬超时"——丢失用户可感知"等连接最长多久"
+- 退出断开 3s 阻塞上限被抽象为"受配置上限约束"——丢失用户可感知"关闭应用时最长卡多久"
+- polling watcher `PERMANENT_FAILURE_THRESHOLD = 3` / `TIMEOUT_FAILURE_THRESHOLD = 6` 与 9s / 18s 自愈窗口被抽象为"两 counter + 远低于主观放弃阈值"——丢失"transport 死多久后自愈"的可测断言
+- keepalive `SSH_KEEPALIVE_INTERVAL = 15s` / `SSH_KEEPALIVE_MAX = 3` / ~75s off-by-one 窗口被抽象为"约定常量"——丢失硬故障检测时长契约
+- `create_dir_all` retry 关键字 + 3 次 + 75ms 被抽象为"既有 retry 策略"——丢失瞬时错误码白盒分类（与 polling watcher 三分类对称）
+
+**反转**：D-1 原"性能数字一律相对描述"过粗，**反转为按数字性质二分**：
+
+| 数字性质 | 处理 | 例子 |
+|---|---|---|
+| **用户可感知阈值**（用户等多久 / 卡多久 / 恢复多久 / 应用退出阻塞多久 / 协议级 SFTP packet size） | spec **保留具体数值**（含 const 名）作为可测契约 | TCP 5s / SFTP 8s / 总 25s / 退出 3s / 自愈 9s/18s / keepalive 15s/75s / SFTP packet 32 KiB / poll 1s 取消上限 |
+| **实现层调优**（无可观察用户后果，工程师调优旋钮） | 移到 design.md 参考实现指引段，spec 抽象为定性描述 | BufReader 内部填充策略 / scanner buffer 容量数字（虽对齐协议层但具体数 32 KiB 是协议常量，移到 design） |
+| **SFTP 瞬时错误码白盒列表** | spec **保留**作为分类契约（与 polling watcher Permanent/Timeout/OtherTransient 对称） | `code=4` / `EAGAIN` / `ECONNRESET` / `ETIMEDOUT` / `EPIPE` |
+
+**结果**：spec delta 反模式从 0 涨到约 30（数字 + const 名）；同 PR 同 commit 把 baseline `spec/ssh-remote-context` + `change/ssh-remote-context-cleanup` 两条都更新到清理后真实数。可接受——这些数字是行为契约本身，不是反例。
+
+**与原 D-1 关系**：D-1 大方向（"行为契约 100% 不变"）保留；D-1b 把"数字怎么处理"细化。删除 D-1 / 保留 D-1b 是覆盖式反转，但 design.md 历史段保留 D-1 完整文本（按 openspec/CLAUDE.md 第 7 条规约）。
+
 ### D-2：反例分类处理策略
 
 按 78 hits 各类分别给出处理规则，apply 阶段照表批改：

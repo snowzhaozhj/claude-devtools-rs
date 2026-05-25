@@ -29,7 +29,8 @@
 | 用户能看到 / 操作 / 感知什么 | spec | 行为契约 |
 | IPC payload 字段名（camelCase）/ Tauri command 名 / SSE event 名 | spec | 外部协议 |
 | 错误码 / 错误 variant 名 | spec | 外部契约 |
-| 性能预算（具体数字）/ 容量上限 / 延迟阈值 | spec NFR | 外部可观察 |
+| **用户感知阈值数字**（用户等多久 / 卡多久 / 恢复多久 / 退出阻塞 / 协议层硬约束 size 等可被用户主观感知或 perf 回归测试断言的数）| spec NFR / 行为契约 | 外部可观察可测断言 |
+| **实现层调优数字**（重试退避基数 / 内部 buffer 容量 / channel capacity / 调度旋钮等无可观察用户后果，纯工程师 perf bench 调优）| design 参考实现指引 | 不影响契约 |
 | `xxxOmitted` 类 omit 字段语义 | spec | 协议契约 |
 | 内部 fn / type / mod / struct field 名 | design | 实现 |
 | 源码路径（`crates/...` / `src-tauri/...` / `ui/src/...`）| design | 位置 |
@@ -41,7 +42,7 @@
 | 配置文件字段路径（`tauri.conf.json::xxx`）| `release-runbook` skill / runbook | 部署 |
 | Cargo / npm 依赖名 + 版本 | release notes / runbook | 依赖管理 |
 | commit / PR / issue 号 / 原版 TS 文件路径 | git 历史 / design 论证段 | 诊断溯源 |
-| 实测数据（"95ms"、"60-74ms"、baseline 数字）| `tests/perf-baseline.json` / design | 实证非契约 |
+| **实证 metric 数据**（"95ms 实测"、"60-74ms 现场观测"、bench JSON baseline 数字、性能报告快照）| `tests/perf-baseline.json` / design 历史段 | 实证非契约——是某次 run 的观测值，不是承诺 |
 | 回滚开关 const 名（`OMIT_*` / `CROSS_*` / `STALE_*`）| design + runbook | 实施细节 |
 
 ## 反例 → 修法（3 段真实对照）
@@ -92,7 +93,35 @@ read_agent_configs(pairs)` 公开签名不变。
 
 理由：Rust 类型 / module path / 公开签名都是实现选择；外部 Tauri command 名是协议、保留。
 
-更多反例见 PR #300 design.md `D1-D6`。
+### 反例 4：清理工艺把用户感知阈值误当实测数据清掉
+
+清理 PR（如 ssh-remote-context-cleanup）批量重写 SHALL 句移除"实现细节"时，容易把承载用户可感知契约的数字一并抽象掉。
+
+❌ 误清后（丢失可测断言下限）：
+```
+连接 SHALL 完成五个阶段，每阶段与外层各有独立硬超时
+退出断开 SHALL 受配置上限约束
+polling watcher SHALL 在永久失败计数达阈值后触发自愈
+keepalive SHALL 以约定间隔发心跳
+```
+
+✅ 正确（保留具体数值 + const 名）：
+```
+TCP probe（5s 超时）→ SFTP open（8s 超时）→ 总外层硬超时 SHALL 为 25s
+SHALL 最长等待 3s
+PERMANENT_FAILURE_THRESHOLD = 3（约 9s 持续 transport 错误）
+SSH_KEEPALIVE_INTERVAL = 15s（硬故障 ~75s 内被发现）
+```
+
+**判断口诀**——这个数字变了：
+- **用户能感知**？（应用卡多久 / 等多久 / 恢复多久）→ spec NFR / 行为契约
+- **只有工程师在 perf bench 里发现**？（buffer 容量 / 调度参数）→ design
+
+承载用户感知阈值的 const 名（`PERMANENT_FAILURE_THRESHOLD` / `SSH_KEEPALIVE_INTERVAL` 等）保留在 spec 里——它是"可测契约"的命名锚点，配合数值一起读。
+
+理由：spec NFR 的可观察性要求"能被回归测试断言下限"——`wall time SHALL ≈ 18s` 是可测契约，"远低于主观放弃阈值"则不可测。把可测断言抽象掉等于让 NFR 失去守护能力。
+
+更多反例见 PR #300 design.md `D1-D6` / PR #312 design.md `D-1b`（用户感知数字误清）。
 
 ## 写新 spec 的下笔顺序
 
@@ -119,6 +148,7 @@ read_agent_configs(pairs)` 公开签名不变。
 - [ ] 跨 spec 同一外部协议字段是否被重复定义（grep 一下字段名是否在多个 spec 出现 SHALL）？
 - [ ] FR 与 NFR 是否分开，没混在同一个 Requirement Body 里？
 - [ ] 测试 fixture 常量 / 测试文件路径 / Cargo 依赖 / 配置文件字段是否被错放进 SHALL？
+- [ ] **清理 PR 反向自检**：被清理掉的数字 / const 名是否承载"用户能感知 / 回归测试能断言下限"的契约？是 → 留 spec；否 → OK 移 design。（详反例 4）
 
 发现问题时建议表述："这条 SHALL 实际承诺的是 *用户感知层* 的什么？换种实现还成立吗？" —— 让作者自检比直接挑刺好。
 
