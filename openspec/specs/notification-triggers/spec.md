@@ -113,11 +113,11 @@
 
 - `mtime`：文件最后修改时间
 - `size`：文件字节数
-- `identity`：文件身份 —— Unix 上是 `(dev, ino)` 元组；Windows 与其它平台允许退化为空（详 design D1f：Windows 上 `std::os::windows::fs::MetadataExt::file_index()` 是 unstable feature `windows_by_handle`，stable Rust 不可用，故退化为仅依赖 mtime+size 的 best-effort 等价）
+- `identity`：文件身份 —— Unix 上是 `(dev, ino)` 元组；Windows 与其它平台允许退化为空（best-effort）
 
 **等价性是 best-effort**：在常规 append-only 写入路径下，`FileSignature` 字段 byte-equal 即视为文件未变。inode reuse + mtime/size 三维同时撞车（极罕见）等极端场景可能假命中，由后续任何文件变化的 file-change 自然恢复（Claude Code 持续 append 让 size 单调增加 → 必然 cache miss → 重 parse）。
 
-处理 `FileChangeEvent` 时 SHALL 在 `parse_file` 之前先 stat 目标文件，若 stat 拿到的 `FileSignature` 字段 byte-equal 等于缓存中该 key 的记录 THEN MUST 跳过 `parse_file` 与 `detect_errors` 整段流程；否则正常 parse + detect 并 把新的 `FileSignature` 写回缓存。
+处理 `FileChangeEvent` 时 SHALL 在 `parse_file` 之前先 stat 目标文件，若 stat 拿到的 `FileSignature` 字段 byte-equal 等于缓存中该 key 的记录 THEN MUST 跳过 `parse_file` 与 `detect_errors` 整段流程；否则正常 parse + detect 并把新的 `FileSignature` 写回缓存。
 
 缓存 SHALL 在以下任一条件下走 cache miss（即正常 parse 路径）：
 
@@ -146,12 +146,12 @@
 
 - **WHEN** `process_file_change` 收到 `FileChangeEvent` 且目标 JSONL 的 `identity`（Unix `(dev, ino)`）与缓存记录不同 —— 即便 mtime 与 size 巧合相同
 - **THEN** notifier MUST 走 cache miss 分支重新 parse，并以新 `FileSignature` 覆盖缓存
-- Windows 与其它平台 identity 退化为 `None`，此 Scenario 由 mtime/size 维度兜底（best-effort，详 design D1f）
+- Windows 与其它平台 identity 退化为 `None`，此 Scenario 由 mtime/size 维度兜底
 
 #### Scenario: stat 失败时走 cache miss
 
-- **WHEN** `process_file_change` 收到 `FileChangeEvent` 但目标 JSONL 的 `tokio::fs::metadata` 调用失败（例如文件已被删除、权限错误）
-- **THEN** notifier MUST 不依赖缓存，进入正常 parse 路径（由 parse_file 自身决定如何报错），并 SHALL NOT 把失败结果写入缓存
+- **WHEN** `process_file_change` 收到 `FileChangeEvent` 但目标 JSONL 的 stat 调用失败（例如文件已被删除、权限错误）
+- **THEN** notifier MUST 不依赖缓存，进入正常 parse 路径，并 SHALL NOT 把失败结果写入缓存
 
 #### Scenario: 缓存超过容量时按 LRU 淘汰
 

@@ -5,11 +5,9 @@ TBD - created by archiving change add-server-mode. Update Purpose after archive.
 ## Requirements
 ### Requirement: Tauri 桌面应用 SHALL 暴露 server lifecycle IPC 控制
 
-Tauri 桌面应用 SHALL 暴露 3 个 IPC commands 供前端控制本机 HTTP server 的启停与状态查询：`http_server_start(port: u16)` / `http_server_stop()` / `http_server_status() -> { running: bool, port: u16, lastError: string | null }`。`http_server_start` SHALL 先调 `cdt_config::validate_http_port` 校验入参，失败时返回 `Err("port must be in 1024..=65535")`；校验通过 SHALL bind `127.0.0.1:{port}` 启动 server；bind 失败（端口冲突 / 权限不足 / 其它 IO 错误）SHALL 返回 specific `Err` 文案让 UI 提示用户。`http_server_stop` SHALL 优雅关闭已运行的 server 并 join 任务结束；server 未运行时 SHALL 返回 `Ok(())`（幂等）。`http_server_status` SHALL 返回当前 server 状态快照——`lastError` 字段 SHALL 在最近一次启动失败时（含自动恢复失败）携带错误文案、成功启动后 SHALL 重置为 `null`，让 Settings UI 即使错过自动恢复阶段的 emit event 也能在挂载时主动查询到错误原因。
+Tauri 桌面应用 SHALL 暴露 3 个 IPC commands 供前端控制本机 HTTP server 的启停与状态查询：`http_server_start(port: u16)` / `http_server_stop()` / `http_server_status() -> { running: bool, port: u16, lastError: string | null }`。`http_server_start` SHALL 先校验入参端口落在 `1024..=65535`，失败时返回 `Err("port must be in 1024..=65535")`；校验通过 SHALL bind `127.0.0.1:{port}` 启动 server；bind 失败（端口冲突 / 权限不足 / 其它 IO 错误）SHALL 返回 specific `Err` 文案让 UI 提示用户。`http_server_stop` SHALL 优雅关闭已运行的 server 并 join 任务结束；server 未运行时 SHALL 返回 `Ok(())`（幂等）。`http_server_status` SHALL 返回当前 server 状态快照——`lastError` 字段 SHALL 在最近一次启动失败时（含自动恢复失败）携带错误文案、成功启动后 SHALL 重置为 `null`，让 Settings UI 即使错过自动恢复阶段的 emit event 也能在挂载时主动查询到错误原因。
 
-后端 SHALL 用 `tokio::sync::Mutex<Option<ServerHandle>>` 串行化 start/stop 操作，避免用户连点 toggle 时产生 race。每次 `http_server_start` SHALL 在新建 task 前先尝试 abort 现有 handle（若有），再 bind。
-
-3 个 command 名 SHALL 加入 `crates/cdt-api/tests/ipc_contract.rs::EXPECTED_TAURI_COMMANDS` 与 `ui/src/lib/tauriMock.ts::KNOWN_TAURI_COMMANDS`，与 `src-tauri/src/lib.rs::invoke_handler!` 三处保持同步。
+后端 SHALL 串行化 start/stop 操作，避免用户连点 toggle 时产生 race。每次 `http_server_start` SHALL 在新建 task 前先尝试 abort 现有 server handle（若有），再 bind。
 
 #### Scenario: 启动 server 成功并写持久化
 
@@ -82,9 +80,9 @@ Tauri `tauri::Builder` 的 `setup` 阶段 SHALL 读取 `HttpServerConfig`，若 
 
 ### Requirement: 前端 SHALL 在浏览器 runtime 切换到 HTTP/SSE transport
 
-前端 `ui/src/lib/api.ts` SHALL 通过检测 `window.__TAURI_INTERNALS__` 是否存在判断当前 runtime：存在 → Tauri runtime（保留现有 `invoke` 调用）；不存在 → 浏览器 runtime SHALL 切换到 HTTP transport——所有 IPC command 通过 `fetch('/api/...')` 调用对应 HTTP endpoint，所有事件订阅通过 `EventSource('/api/events')` 订阅 SSE 流。
+前端 SHALL 通过检测 `window.__TAURI_INTERNALS__` 是否存在判断当前 runtime：存在 → Tauri runtime（保留 `invoke` 调用）；不存在 → 浏览器 runtime SHALL 切换到 HTTP transport——所有 IPC command 通过 `fetch('/api/...')` 调用对应 HTTP endpoint，所有事件订阅通过 `EventSource('/api/events')` 订阅 SSE 流。
 
-transport 抽象层 SHALL 集中在一个 wrapper（如 `ui/src/lib/transport.ts`），让现有调用方代码（store / component / 路由）无需感知 transport 切换。
+transport 抽象层 SHALL 集中在统一 wrapper，让现有调用方代码（store / component / 路由）无需感知 transport 切换。
 
 桌面专属 IPC 在浏览器 runtime 下 SHALL 显式抛出 `BrowserUnsupportedError`——清单仅含以下能力（**不**包含通知列表 / 标已读 / CRUD 等数据 API，那些走 HTTP）：
 
