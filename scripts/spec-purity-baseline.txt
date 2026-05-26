@@ -5,6 +5,7 @@ spec/application-telemetry 15
 spec/chunk-building 4
 spec/configuration-management 0
 spec/context-tracking 1
+spec/edit-diff-view 1
 spec/file-watching 20
 spec/frontend-context-menu 3
 spec/frontend-test-pyramid 1
@@ -12,13 +13,14 @@ spec/fs-abstraction 15
 spec/http-data-api 6
 spec/ipc-data-api 174
 spec/keyboard-shortcuts 0
+spec/markdown 1
 spec/memory-viewer 0
 spec/notification-triggers 0
 spec/notification-ui 0
 spec/project-discovery 6
 spec/push-events 2
 spec/server-mode 7
-spec/session-display 23
+spec/session-display 16
 spec/session-parsing 1
 spec/session-search 0
 spec/settings-ui 1
@@ -27,8 +29,6 @@ spec/ssh-remote-context 0
 spec/tab-management 1
 spec/team-coordination-metadata 0
 spec/tool-execution-linking 6
+spec/tool-viewer-routing 5
 spec/ui-search 2
 spec/wsl-distro-discovery 1
-change/split-session-display/edit-diff-view 1
-change/split-session-display/markdown 1
-change/split-session-display/tool-viewer-routing 5
