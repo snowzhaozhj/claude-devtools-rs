@@ -60,10 +60,10 @@ jobs:
           rm -rf target/perf-base
           mkdir -p target/perf-base
           git archive "${{ github.event.pull_request.base.sha }}" | tar -x -C target/perf-base
+          # 只覆盖 runner 脚本和 fixture 生成器（不依赖被测 API 签名）。
+          # bench test 文件用 base 自己的版本编译，避免 PR 改 API 签名后 base 编译失败。
           cp scripts/run-perf-bench.sh target/perf-base/scripts/run-perf-bench.sh
           cp crates/cdt-api/tests/perf_fixture.rs target/perf-base/crates/cdt-api/tests/perf_fixture.rs
-          cp crates/cdt-api/tests/perf_cold_scan.rs target/perf-base/crates/cdt-api/tests/perf_cold_scan.rs
-          cp crates/cdt-api/tests/perf_get_session_detail.rs target/perf-base/crates/cdt-api/tests/perf_get_session_detail.rs
           (cd target/perf-base && CDT_PERF_USE_FIXTURE=1 bash scripts/run-perf-bench.sh --runs 5 --out ../perf-report-base.json)
       - name: 跑 PR perf bench
         id: bench
