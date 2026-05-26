@@ -147,11 +147,15 @@ fn ai_first_response_total_tokens(ai: &cdt_core::AIChunk) -> Option<u64> {
         .find_map(|r| r.usage.as_ref().and_then(token_usage_total))
 }
 
-/// 从 locate stat 的 `mtime_ms` + size 生成 fingerprint 字符串。
-/// 格式 `"v1:<mtime_ms>:<size>"`——`mtime_ms` 为 `None` 时用 `0`（SSH 无 mtime fallback），
-/// 此时 fingerprint 每次不同（`known` 不会是 `"v1:0:..."` 因为上次 full 路径也
-/// 无 mtime → fingerprint 一样 → 下次比中；退化为每次 full 也无害）。
-fn make_session_fingerprint(mtime_ms: Option<i64>, size: Option<u64>) -> String {
+/// IPC fingerprint：前端 round-trip 用的 opaque wire token。
+///
+/// 与 `FileSignature`（进程内 cache key）职责分离：
+/// - `FileSignature`：`SystemTime` + `size` + `identity`，可自由演进（加 hash/inode）
+/// - IPC fingerprint：稳定 wire 格式，前端不解析只回传，变更需 bump 版本前缀
+///
+/// 格式 `"v1:<mtime_ms>:<size>"`；`None` 时用 `0`。metadata 不完整时调用方
+/// SHALL 跳过短路比较（见 `metadata_complete` guard）。
+fn make_session_ipc_fingerprint(mtime_ms: Option<i64>, size: Option<u64>) -> String {
     format!("v1:{}:{}", mtime_ms.unwrap_or(0), size.unwrap_or(0))
 }
 
@@ -3288,7 +3292,7 @@ impl DataApi for LocalDataApi {
         // 与 known_fingerprint 一致 → 文件未变，跳过 parse/build/serialize 全流程。
         // 安全守护：metadata 不完整（stat 失败 → mtime/size 均 None）时跳过短路，
         // 避免退化 fingerprint "v1:0:0" 永久匹配导致永不刷新（codex review）。
-        let fingerprint = make_session_fingerprint(last_modified, size);
+        let fingerprint = make_session_ipc_fingerprint(last_modified, size);
         let metadata_complete = last_modified.is_some() && size.is_some();
         if metadata_complete {
             if let Some(known) = known_fingerprint {
