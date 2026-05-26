@@ -22,6 +22,15 @@ pub enum PushEvent {
         /// 拿 `false`，行为退化为不触发 loadProjects。
         #[serde(default)]
         session_list_changed: bool,
+        /// 事件涉及文件的 mtime（毫秒 since UNIX epoch）。watcher 在能取到 mtime
+        /// 时填入；取不到（典型：SFTP server 不返 mtime / 删除事件 / IO 失败）
+        /// 缺省字段。change `dashboard-mtime-overlay` 引入：让前端 / 后端
+        /// `ProjectScanCache` mtime overlay 路径在不触发结构性 invalidate 的
+        /// 普通 append 场景下也能拿到新鲜 mtime；缺字段时消费方退化到既有
+        /// 行为（spec `push-events::file-change payload 形态` /
+        /// `ipc-data-api::ProjectScanCache 维护 per-project mtime overlay`）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mtime_ms: Option<i64>,
     },
     /// Todo 文件变更。
     TodoChange {

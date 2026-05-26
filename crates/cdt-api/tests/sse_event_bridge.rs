@@ -87,6 +87,7 @@ async fn file_change_forwarded_as_push_event() {
             deleted,
             project_list_changed,
             session_list_changed,
+            ..
         } => {
             assert_eq!(project_id, "p1");
             assert_eq!(session_id, "s1");
@@ -129,6 +130,7 @@ async fn project_list_changed_forwarded_to_sse() {
             deleted,
             project_list_changed,
             session_list_changed,
+            ..
         } => {
             assert_eq!(project_id, "p-new");
             assert_eq!(session_id, "");

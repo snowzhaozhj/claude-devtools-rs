@@ -3757,6 +3757,7 @@ fn push_event_file_change_session_list_changed_field_present() {
         deleted: false,
         project_list_changed: false,
         session_list_changed: true,
+        mtime_ms: None,
     };
     let json = serde_json::to_string(&event).expect("serialize");
     assert!(
@@ -3774,6 +3775,101 @@ fn push_event_file_change_session_list_changed_field_present() {
         } => assert!(
             !session_list_changed,
             "legacy SHALL 默认 false（前端不感知 → 退化为不触发 loadProjects）"
+        ),
+        other => panic!("expected FileChange, got {other:?}"),
+    }
+}
+
+/// spec `push-events::file-change payload 形态` + Scenario `file-change payload
+/// camelCase（Tauri IPC 路径）`：`FileChangeEvent.mtime_ms` 字段 wire 形态为
+/// `mtimeMs`（camelCase），`Some(t)` 时显式 emit，`None` 时被 `skip_serializing_if`
+/// 省略整字段。
+#[test]
+fn file_change_event_mtime_ms_round_trip() {
+    use cdt_core::FileChangeEvent;
+
+    // Some(t) → 显式 emit camelCase 字段
+    let with_mtime = FileChangeEvent {
+        project_id: "pa".into(),
+        session_id: "sa".into(),
+        deleted: false,
+        project_list_changed: false,
+        session_list_changed: false,
+        mtime_ms: Some(1_700_000_000_000),
+    };
+    let json = serde_json::to_string(&with_mtime).expect("serialize with mtime");
+    assert!(
+        json.contains("\"mtimeMs\":1700000000000"),
+        "Some(t) SHALL 显式 emit camelCase mtimeMs，got: {json}"
+    );
+    let decoded: FileChangeEvent = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.mtime_ms, Some(1_700_000_000_000));
+
+    // None → skip_serializing_if 让字段消失（payload 瘦身 + 向后兼容）
+    let no_mtime = FileChangeEvent {
+        project_id: "pa".into(),
+        session_id: "sa".into(),
+        deleted: true,
+        project_list_changed: false,
+        session_list_changed: true,
+        mtime_ms: None,
+    };
+    let json = serde_json::to_string(&no_mtime).expect("serialize no mtime");
+    assert!(
+        !json.contains("mtimeMs"),
+        "None SHALL 被 skip_serializing_if 省略，got: {json}"
+    );
+
+    // 旧 fixture / 旧客户端缺字段 SHALL 反序列化为 None
+    let legacy_json = r#"{"projectId":"pa","sessionId":"sa","deleted":false,"projectListChanged":false}"#;
+    let legacy: FileChangeEvent = serde_json::from_str(legacy_json).expect("deserialize legacy");
+    assert!(legacy.mtime_ms.is_none());
+}
+
+/// spec `push-events::file-change payload 形态` + Scenario `file-change payload
+/// snake_case（HTTP/SSE wire）`：`PushEvent::FileChange.mtime_ms` 在 SSE wire
+/// 形态为 `mtime_ms`（`snake_case`），`Some` 时显式 emit、`None` 时省略；缺字段
+/// 反序列化为 `None`。
+#[test]
+fn push_event_file_change_mtime_ms_field_present() {
+    use cdt_api::PushEvent;
+
+    let event = PushEvent::FileChange {
+        project_id: "pa".into(),
+        session_id: "sa".into(),
+        deleted: false,
+        project_list_changed: false,
+        session_list_changed: false,
+        mtime_ms: Some(1_700_000_500_500),
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    assert!(
+        json.contains("\"mtime_ms\":1700000500500"),
+        "SHALL emit mtime_ms snake_case field, got: {json}"
+    );
+
+    // None → skip_serializing_if 让字段消失
+    let no_mtime = PushEvent::FileChange {
+        project_id: "pa".into(),
+        session_id: "sa".into(),
+        deleted: true,
+        project_list_changed: false,
+        session_list_changed: true,
+        mtime_ms: None,
+    };
+    let json_no = serde_json::to_string(&no_mtime).expect("serialize no mtime");
+    assert!(
+        !json_no.contains("mtime_ms"),
+        "None SHALL 被 skip_serializing_if 省略，got: {json_no}"
+    );
+
+    // 旧 SSE wire 缺字段 SHALL 默认 None（`#[serde(default)]` 兜底）
+    let legacy = r#"{"type":"file_change","project_id":"pa","session_id":"sa","deleted":false,"project_list_changed":false,"session_list_changed":false}"#;
+    let decoded: PushEvent = serde_json::from_str(legacy).expect("deserialize legacy");
+    match decoded {
+        PushEvent::FileChange { mtime_ms, .. } => assert!(
+            mtime_ms.is_none(),
+            "legacy SHALL 默认 None（不带 hint 退化）"
         ),
         other => panic!("expected FileChange, got {other:?}"),
     }
