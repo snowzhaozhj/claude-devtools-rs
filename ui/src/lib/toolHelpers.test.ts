@@ -342,15 +342,14 @@ describe('stripAnsi', () => {
 })
 
 /**
- * toolOutputText \u884C\u4E3A\uFF1Araw \u8F6C\u6362\u4E0D\u8C03 stripAnsi\u3002
+ * toolOutputText \u884C\u4E3A\uFF1Araw\uFF08\u4E0D\u8C03 stripAnsi\uFF09\u3002
  *
- * \u8BBE\u8BA1\u539F\u5219\uFF08codex CR PR #328\uFF09\uFF1AtoolOutputText \u81EA\u8EAB**\u4E0D**\u5265 ANSI\u2014\u2014\u51B3\u7B56\u6743\u5728
- * viewer \u5C42\u3002BashToolViewer / DefaultToolViewer / EditToolViewer \u663E\u5F0F stripAnsi
- * \u5305\u4E00\u5C42\uFF08stdout-style \u5951\u7EA6\uFF09\uFF1BReadToolViewer \u4E0D\u5305\uFF08\u6587\u4EF6\u5185\u5BB9 raw \u5951\u7EA6\uFF0C\u907F\u514D
- * \u9759\u9ED8\u5265\u6389\u7528\u6237\u8BFB ANSI fixture / \u7EC8\u7AEF\u5F55\u50CF log \u65F6\u7684\u771F\u5B9E \x1b \u5B57\u8282\uFF09\u3002
+ * \u8BBE\u8BA1\u539F\u5219\uFF1AtoolOutputText \u81EA\u8EAB**\u4E0D**\u5265 ANSI\u2014\u2014\u53EA BashToolViewer \u5728\u6D3E\u751F outputStr \u65F6
+ * \u663E\u5F0F `stripAnsi(toolOutputText(...))`\u3002\u5176\u4ED6 viewer\uFF08Default / Edit / Read\uFF09\u8D70 main
+ * \u539F\u884C\u4E3A\u2014\u2014\u4FDD\u6301\u6700\u5C0F\u5316\u5F71\u54CD\u9762\uFF08PR #328\uFF1A`\u53EA\u6539 BashToolViewer`\uFF09\u3002
  */
-describe('toolOutputText\uFF08raw\uFF0CstripAnsi \u51B3\u7B56\u6743\u5728 viewer \u5C42\uFF09', () => {
-  test('text kind \u542B ANSI \u5B57\u8282\u4E5F\u539F\u6837\u8FD4\u56DE\uFF08ReadToolViewer \u6587\u4EF6 raw \u5951\u7EA6\uFF09', () => {
+describe('toolOutputText\uFF08raw\uFF0C\u4EC5 BashToolViewer \u8C03 stripAnsi \u5305\u88C5\uFF09', () => {
+  test('text kind \u542B ANSI \u5B57\u8282\u4E5F\u539F\u6837\u8FD4\u56DE\uFF08main \u539F\u884C\u4E3A\uFF09', () => {
     const ansi = '\x1b[32;1m       PASS\x1b[0m [   0.011s]'
     expect(toolOutputText({ kind: 'text', text: ansi })).toBe(ansi)
   })

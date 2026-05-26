@@ -266,7 +266,7 @@ export function shouldPrefetchOnChunkExpand(exec: ToolExecution): boolean {
 
 /**
  * 移除 ANSI 控制序列，让 cargo / nextest / git / curl progress 等终端输出在
- * stdout-style viewer 里显示成纯文本。
+ * BashToolViewer 里显示成纯文本（截图里 `[32;1m PASS [0m` 字面字节问题）。
  *
  * 第一段（ANSI escape regex，参考 ansi-regex / chalk 同款写法）覆盖：
  *   - Fe 单字节 ESC：`ESC D/M/E/7/8` 等 (`[@-Z\\^_]` 即 0x40-0x5A + 0x5C/0x5E/0x5F，
@@ -279,9 +279,15 @@ export function shouldPrefetchOnChunkExpand(exec: ToolExecution): boolean {
  * 第二段单独处理 `\r` 行覆盖（cargo build / curl progress 风格）——每行只
  * 保留最后一个 `\r` 之后的内容；CRLF (`\r\n`) 因 `(?!\n)` 守卫保留为完整行尾。
  *
- * **不剥**字面文本里的 `[0m` `[200m` 等无 ESC 前缀的 SGR 字符串——历史兜底
- * regex 已删除（codex CR PR #328 第一轮）；ReadToolViewer 走文件 raw 契约
- * **不**调本函数（codex CR PR #328 第二轮）。决策权在 viewer 层。
+ * **不剥**字面文本里的 `[0m` `[200m` 等无 ESC 前缀的 SGR 字符串——单向无损契约。
+ *
+ * 当前调用点（PR #328 范围最小化）：
+ *   - `BashToolViewer.svelte`：bash stdout 100% terminal-style，必须 strip
+ *   - `cleanDisplayText` (toolHelpers.ts:115)：消息文本路径已有用法
+ * 其他 viewer（Default / Edit / Read）走 main 原行为不剥——这些不是 terminal-style
+ * 的主路径（Read 是文件 raw / Edit 走 toolErrorText 错误路径 / Default 接 MCP /
+ * Grep / Glob 等结构化输出），引入 strip 反而增加误剥风险。如未来真有 BashOutput
+ * 等终端工具走 DefaultToolViewer 残留 ANSI 报告，再开独立 PR 加。
  */
 export function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
@@ -476,14 +482,10 @@ function findStringField(value: unknown, names: string[]): string | undefined {
   return undefined;
 }
 
-/**
- * 将 ToolOutput 转为文本（raw，**不**调 stripAnsi）。
- *
- * stripAnsi 决策权下放到 viewer 层——BashToolViewer / DefaultToolViewer /
- * EditToolViewer 这种 stdout-style 路径在派生 outputStr 时显式调 stripAnsi 包一层；
- * ReadToolViewer 走文件内容 raw 契约**不**调 stripAnsi，否则用户读 ANSI fixture /
- * 终端录像 log 等真实含 \x1b 字节的文件时这些字节会被静默剥掉（codex CR：PR #328）。
- */
+/** 将 ToolOutput 转为文本（raw，**不**调 stripAnsi）。
+ *  ANSI 清洗在 BashToolViewer 派生 outputStr 时通过 `stripAnsi(toolOutputText(...))`
+ *  显式包一层——其他 viewer（Default / Edit / Read）走 main 原行为不剥，避免
+ *  Read 文件内容 / Edit 错误路径里真实 \x1b 字节或字面 [0m 文本被误改写。 */
 export function toolOutputText(output: ToolOutput): string {
   if (output.kind === "text") return output.text;
   if (output.kind === "structured")

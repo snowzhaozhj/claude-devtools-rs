@@ -31,10 +31,6 @@
   const filePath = $derived(String(input?.file_path ?? input?.filePath ?? ""));
   const fileName = $derived(getFileName(filePath));
   const language = $derived(getLanguageFromPath(filePath));
-  // Read 文件内容走 raw 契约——**不**调 stripAnsi。用户读 ANSI fixture / 终端录像
-  // log 等真实含 \x1b 字节的文件时，这些字节 SHALL 完整保留（codex CR PR #328：
-  // toolOutputText 已退回 raw，BashToolViewer / DefaultToolViewer / EditToolViewer 这种
-  // stdout-style viewer 各自显式 stripAnsi 包一层；ReadToolViewer 不包是契约差异）。
   const outputText = $derived(toolOutputText(exec.output));
   const parsedLines = $derived(parseReadLines(outputText));
   const isMarkdown = $derived(language === "markdown");
