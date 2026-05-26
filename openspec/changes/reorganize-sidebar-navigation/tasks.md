@@ -23,7 +23,7 @@
 - [x] 4.1 运行 `openspec validate reorganize-sidebar-navigation --strict`
 - [x] 4.2 运行 `bash scripts/check-spec-purity.sh`，必要时同步 baseline
 - [x] 4.3 运行 `just preflight`
-- [ ] 4.4 提交业务改动 commit
+- [x] 4.4 提交业务改动 commit
 
 ## N. 发布
 
