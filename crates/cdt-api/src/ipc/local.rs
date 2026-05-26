@@ -37,6 +37,7 @@ use super::parsed_message_cache::{
 use super::project_scan_cache::{
     EnrichDecision, ProjectScanCache, apply_file_event_to_project_scan_cache,
     apply_lag_to_project_scan_cache, apply_mtime_advance_to_project_scan_cache,
+    synthesize_projects_with_overlay,
 };
 use super::session_metadata::{
     MetadataCache, SessionMetadata, extract_session_metadata_cached,
@@ -1449,7 +1450,12 @@ impl LocalDataApi {
                     context = ?ctx.backend_kind,
                     "project_scan_cache hit"
                 );
-                return Ok(hit);
+                // 合成路径（spec `ipc-data-api/spec.md::ProjectScanCache 维护
+                // per-project mtime overlay::cache hit 路径合成 hint`）：仅在
+                // 至少一个 project 有大于 snapshot 的 overlay 时 clone Vec
+                // 注入新值；无 hint 时直接返原 Arc 零分配。
+                let synthesized = synthesize_projects_with_overlay(&cache, ctx, &hit);
+                return Ok(synthesized);
             }
             cache.begin_scan()
         };
@@ -1503,7 +1509,17 @@ impl LocalDataApi {
                 "project_scan_cache snapshot dropped — invalidated during scan"
             );
         }
-        Ok(snapshot)
+        // miss 路径同样走合成：scan 完成到本函数 return 之间若有 watcher event
+        // 已经写入 overlay（race），SHALL 让 scan 客户端立刻看到合成值。无 hint
+        // 时返原 Arc 不 clone。
+        let synthesized = {
+            let cache = self
+                .project_scan_cache
+                .lock()
+                .expect("project scan cache mutex poisoned");
+            synthesize_projects_with_overlay(&cache, ctx, &snapshot)
+        };
+        Ok(synthesized)
     }
 
     /// 测试 / perf bench 用：返回累计命中 / lookup 数。

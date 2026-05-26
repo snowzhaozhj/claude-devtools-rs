@@ -606,6 +606,43 @@ pub(crate) fn apply_lag_to_project_scan_cache(cache: &Arc<std::sync::Mutex<Proje
     cdt_telemetry::counter!("project_scan_cache.invalidate.lag_conservative").inc();
 }
 
+/// `list_repository_groups` / `list_projects` 在 cache hit 与 miss 路径
+/// 返回前 SHALL 经此 helper 把 overlay 的 mtime hint 合成进对外 snapshot
+/// 的 `Project.most_recent_session`。
+///
+/// 行为：
+/// - 至少一个 project 有 `overlay > snapshot.most_recent_session` → clone 一份
+///   `Vec<Project>`，注入合成值后包成新 Arc 返回；
+/// - 无 hint 或所有 hint 都 ≤ snapshot 值 → 直接返原 Arc 零分配。
+///
+/// 合成只改返回数据，**不**改 cache 内部 snapshot 主体——overlay 仍由
+/// `merge_overlay_with_fresh_snapshot` 在重扫时合并。Spec：
+/// `ipc-data-api/spec.md::ProjectScanCache 维护 per-project mtime overlay::
+/// cache hit 路径合成 hint 让用户看到最新 mtime`。
+#[must_use]
+pub(crate) fn synthesize_projects_with_overlay(
+    cache: &ProjectScanCache,
+    ctx: &ContextId,
+    snapshot: &Arc<Vec<Project>>,
+) -> Arc<Vec<Project>> {
+    let needs_synth = snapshot.iter().any(|p| {
+        cache.lookup_mtime_overlay(ctx, &p.id).is_some_and(|hint| {
+            hint > p.most_recent_session.unwrap_or(i64::MIN)
+        })
+    });
+    if !needs_synth {
+        return snapshot.clone();
+    }
+    let mut new_vec = (**snapshot).clone();
+    for p in &mut new_vec {
+        if let Some(hint) = cache.lookup_mtime_overlay(ctx, &p.id) {
+            let merged = std::cmp::max(p.most_recent_session.unwrap_or(i64::MIN), hint);
+            p.most_recent_session = Some(merged);
+        }
+    }
+    Arc::new(new_vec)
+}
+
 /// 给外部读 / 调试 cache 内部状态的 atomic 句柄包装。让 `LocalDataApi`
 /// 字段 doc 显式记录 `Arc<AtomicU64>` 的来源，并避免 `local.rs` 内部
 /// `std::sync::atomic::Ordering` 重复 import 散落。
@@ -1124,6 +1161,62 @@ mod tests {
             c.lookup_mtime_overlay(&ctx, "pa"),
             Some(123),
             "cache 空时 SHALL 仍把 hint 写入 overlay"
+        );
+    }
+
+    /// `synthesize_projects_with_overlay` 无 hint 时 SHALL 直接返原 Arc 零分配。
+    #[test]
+    fn synthesize_returns_same_arc_when_no_overlay() {
+        let c = ProjectScanCache::new();
+        let snap = snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(100))]);
+        let out = synthesize_projects_with_overlay(&c, &local_ctx(), &snap);
+        assert!(
+            Arc::ptr_eq(&out, &snap),
+            "无 hint SHALL 复用原 Arc 不分配新 Vec"
+        );
+    }
+
+    /// `synthesize_projects_with_overlay` overlay > snapshot 时 SHALL clone Vec
+    /// 并把合成 max 注入返回值；原 Arc 不被改写。
+    #[test]
+    fn synthesize_injects_overlay_when_greater() {
+        let mut c = ProjectScanCache::new();
+        let ctx = local_ctx();
+        let snap = snapshot_with(vec![
+            proj_with_mtime("pa", &["sa"], Some(100)),
+            proj_with_mtime("pb", &["sb"], Some(500)),
+        ]);
+        c.advance_mtime(&ctx, "pa", 999); // pa: snapshot=100, overlay=999 → 应合成 999
+        c.advance_mtime(&ctx, "pb", 200); // pb: snapshot=500, overlay=200 → 仍 500
+        let out = synthesize_projects_with_overlay(&c, &ctx, &snap);
+        assert!(
+            !Arc::ptr_eq(&out, &snap),
+            "至少一个 hint > snapshot SHALL clone 新 Vec"
+        );
+        assert_eq!(out[0].id, "pa");
+        assert_eq!(out[0].most_recent_session, Some(999));
+        assert_eq!(out[1].id, "pb");
+        assert_eq!(
+            out[1].most_recent_session,
+            Some(500),
+            "overlay < snapshot 时取 snapshot"
+        );
+        // 原 Arc 主体不被改写
+        assert_eq!(snap[0].most_recent_session, Some(100));
+    }
+
+    /// `synthesize_projects_with_overlay` 所有 hint 都 ≤ snapshot 时 SHALL
+    /// 仍返原 Arc 零分配（即使 overlay 有条目）。
+    #[test]
+    fn synthesize_returns_same_arc_when_all_hints_le_snapshot() {
+        let mut c = ProjectScanCache::new();
+        let ctx = local_ctx();
+        c.advance_mtime(&ctx, "pa", 50);
+        let snap = snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(100))]);
+        let out = synthesize_projects_with_overlay(&c, &ctx, &snap);
+        assert!(
+            Arc::ptr_eq(&out, &snap),
+            "overlay 50 ≤ snapshot 100 → SHALL 不分配新 Vec"
         );
     }
 
