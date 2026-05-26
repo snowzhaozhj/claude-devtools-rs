@@ -56,7 +56,7 @@
 
 ### Requirement: 持久化「启动时自动检查更新」开关
 
-应用配置 SHALL 包含 `auto_update_check_enabled` 字段（IPC camelCase 序列化为 `autoUpdateCheckEnabled`），类型为 bool，缺省值为 `true`，在配置文件缺失该字段时 SHALL 反序列化为默认值 `true`。该字段 SHALL 控制应用启动后台自动检查更新行为（详 [[app-auto-update]]），但 MUST NOT 影响手动「检查更新」按钮的可用性。
+应用配置 SHALL 包含 `autoUpdateCheckEnabled` 字段，类型为 bool，缺省值为 `true`，在配置文件缺失该字段时 SHALL 反序列化为默认值 `true`。该字段 SHALL 控制应用启动后台自动检查更新行为（详 [[app-auto-update]]），但 MUST NOT 影响手动「检查更新」按钮的可用性。
 
 #### Scenario: 默认值为启用
 
@@ -83,7 +83,7 @@
 
 ### Requirement: 持久化跳过的更新版本号
 
-应用配置 SHALL 包含 `skipped_update_version` 字段（IPC camelCase 序列化为 `skippedUpdateVersion`），类型为可空字符串（`null` 或版本号字符串）。缺省值为 `null`；配置文件缺该字段时 SHALL 反序列化为 `null`；持久化时若值为 `null` SHALL 在写盘 JSON 中省略该键以保持文件简洁。该字段用于记录用户主动「跳过此版本」的目标版本号。
+应用配置 SHALL 包含 `skippedUpdateVersion` 字段，类型为可空字符串（`null` 或版本号字符串）。缺省值为 `null`；配置文件缺该字段时 SHALL 反序列化为 `null`；持久化时若值为 `null` SHALL 在写盘 JSON 中省略该键以保持文件简洁。该字段用于记录用户主动「跳过此版本」的目标版本号。
 
 #### Scenario: 默认值为空
 
@@ -110,26 +110,26 @@
 
 ### Requirement: Migrate composite project IDs in pinned sessions on load
 
-配置加载 SHALL 在反序列化配置后、暴露给消费方之前，扫描 `pinned_sessions` 字段（key 为 project_id），把含 `"::"` 分隔的 composite id（形如 `{baseDir}::{hash8}`）fold 为 base_dir（即 `"::"` 之前的部分）。fold 时若多个 composite key 共享同一 base_dir，SHALL 把它们的 pinned 数组合并并按 `(sessionId, pinnedAt)` 去重，**保留 `pinnedAt` 最早**的条目（即用户最早 pin 的时间戳）。
+配置加载 SHALL 在反序列化配置后、暴露给消费方之前，扫描 `pinnedSessions` 字段（key 为 project_id），把含 `"::"` 分隔的 composite id（形如 `{baseDir}::{hash8}`）fold 为 base_dir（即 `"::"` 之前的部分）。fold 时若多个 composite key 共享同一 base_dir，SHALL 把它们的 pinned 数组合并并按 `(sessionId, pinnedAt)` 去重，**保留 `pinnedAt` 最早**的条目（即用户最早 pin 的时间戳）。
 
 迁移触发（即检测到至少一个 composite key）SHALL 在写回配置文件前把当前文件备份到 `<config-path>.pre-merge-composite.bak`（覆盖已存在的同名备份），再原子写入新内容。备份命名与现有「损坏配置自动备份到 `.bak.<unix_timestamp_ms>`」机制独立，便于人工识别本次迁移的回滚点。
 
 迁移 SHALL 是幂等的——纯粹基于 input 重写，不依赖任何「已迁移」标志位。写盘失败时 SHALL 在日志中以 warn 级别记录失败原因，**不**阻塞启动；下次启动加载时命中同样的 composite key 时再次尝试 fold + 写盘。
 
-`hidden_sessions` 等其它以 project_id 为 key 的同形态配置字段 SHALL 同样应用本迁移规则。`NotificationTrigger.repository_ids` 存的是 repository group 标识（git-common-dir 绝对路径，详见 [[project-discovery]] `Group projects by git repository identity` Requirement），与 composite project id 形态完全不同，SHALL NOT 被本迁移触及。
+`hiddenSessions` 等其它以 project_id 为 key 的同形态配置字段 SHALL 同样应用本迁移规则。`NotificationTrigger.repositoryIds` 存的是 repository group 标识（git-common-dir 绝对路径，详见 [[project-discovery]] `Group projects by git worktree` Requirement），与 composite project id 形态完全不同，SHALL NOT 被本迁移触及。
 
-#### Scenario: pinned_sessions 含 composite key 被 fold 为 base_dir
+#### Scenario: pinnedSessions 含 composite key 被 fold 为 base_dir
 
-- **WHEN** 配置文件 `pinned_sessions` 含 `"-Users-foo-repo::abcd1234": [{ sessionId: "s1", pinnedAt: 1000 }]` 与 `"-Users-foo-repo::ef567890": [{ sessionId: "s2", pinnedAt: 2000 }]`
+- **WHEN** 配置文件 `pinnedSessions` 含 `"-Users-foo-repo::abcd1234": [{ sessionId: "s1", pinnedAt: 1000 }]` 与 `"-Users-foo-repo::ef567890": [{ sessionId: "s2", pinnedAt: 2000 }]`
 - **AND** 配置加载被触发
-- **THEN** 加载完成后内存中的 `pinned_sessions` SHALL 含 `"-Users-foo-repo": [{ sessionId: "s1", pinnedAt: 1000 }, { sessionId: "s2", pinnedAt: 2000 }]`（顺序不要求，按 `sessionId` 字典序或 mtime 倒序均可）
+- **THEN** 加载完成后内存中的 `pinnedSessions` SHALL 含 `"-Users-foo-repo": [{ sessionId: "s1", pinnedAt: 1000 }, { sessionId: "s2", pinnedAt: 2000 }]`（顺序不要求，按 `sessionId` 字典序或 mtime 倒序均可）
 - **AND** SHALL NOT 残留 `"-Users-foo-repo::abcd1234"` 或 `"-Users-foo-repo::ef567890"` key
 
 #### Scenario: 同 sessionId 重复条目去重保留 pinnedAt 最早
 
 - **WHEN** 配置文件含 `"D::h1": [{ sessionId: "s", pinnedAt: 200 }]` 与 `"D::h2": [{ sessionId: "s", pinnedAt: 100 }]`
 - **AND** 配置加载被触发
-- **THEN** 加载完成后 `pinned_sessions["D"]` SHALL 含**且仅含**一条 `{ sessionId: "s", pinnedAt: 100 }`
+- **THEN** 加载完成后 `pinnedSessions["D"]` SHALL 含**且仅含**一条 `{ sessionId: "s", pinnedAt: 100 }`
 
 #### Scenario: 触发迁移时备份原文件
 
@@ -140,7 +140,7 @@
 
 #### Scenario: 未含 composite key 不写盘
 
-- **WHEN** 配置文件 `pinned_sessions` 所有 key 均不含 `"::"`
+- **WHEN** 配置文件 `pinnedSessions` 所有 key 均不含 `"::"`
 - **AND** 配置加载被触发
 - **THEN** 系统 SHALL NOT 写回主配置文件、SHALL NOT 创建 `.pre-merge-composite.bak`
 
@@ -156,14 +156,14 @@
 
 - **WHEN** 已 fold 的配置文件（不含 composite key）再次被加载
 - **THEN** 系统 SHALL NOT 触发任何写盘
-- **AND** 内存中的 `pinned_sessions` SHALL 与配置文件内容字节一致
+- **AND** 内存中的 `pinnedSessions` SHALL 与配置文件内容字节一致
 
-#### Scenario: NotificationTrigger repository_ids 不受迁移影响
+#### Scenario: NotificationTrigger repositoryIds 不受迁移影响
 
-- **WHEN** 配置文件含一条 trigger，其 `repository_ids` 字段为 `["/Users/foo/repo/.git"]`
-- **AND** `pinned_sessions` 同时含 composite key
+- **WHEN** 配置文件含一条 trigger，其 `repositoryIds` 字段为 `["/Users/foo/repo/.git"]`
+- **AND** `pinnedSessions` 同时含 composite key
 - **AND** 配置加载被触发
-- **THEN** 加载完成后该 trigger 的 `repository_ids` SHALL 保持 `["/Users/foo/repo/.git"]` 字节不变（无论是否含 `"::"`）
+- **THEN** 加载完成后该 trigger 的 `repositoryIds` SHALL 保持 `["/Users/foo/repo/.git"]` 字节不变（无论是否含 `"::"`）
 
 ### Requirement: HTTP server enabled / port SHALL be persisted in lockstep with lifecycle
 

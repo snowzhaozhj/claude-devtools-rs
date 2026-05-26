@@ -26,7 +26,7 @@ issue #303 9-PR 计划批次 B 合并清理两个 cap：
 - 不改 Requirement / Scenario 数量级（允许等价改写但不允许丢语义）
 - 不改其它 capability spec
 - 不改 Purpose 段（已经简洁，无反模式）
-- 不动 `pinned_sessions` / `hidden_sessions` / `httpServer.port` 等配置文件 JSON 字段名（数据契约 + 跨版本迁移可观察）
+- 不动 `pinnedSessions` / `hiddenSessions` / `httpServer.port` 等配置文件 JSON 字段名（数据契约 + 跨版本迁移可观察）
 
 ## Decisions
 
@@ -40,7 +40,7 @@ issue #303 9-PR 计划批次 B 合并清理两个 cap：
 - 具名内部 fn 路径（`ConfigManager::update_notifications` / `ConfigManager::load` / `TriggerManager::set_triggers` / `validate_trigger` / `save()`）→ 行为描述（"更新 notifications 段" / "配置加载" / "同步给运行时 trigger 调度器" / "trigger 校验" / "持久化到磁盘"）
 - `tracing::warn!(target: ..., key = %k, ...)` → "在日志中以 warn 级别附带键名记录"——保留**可观察事件**（warn 级别 + 含哪些字段），具体 log crate / target 字符串属诊断手段
 - `#[serde(default = "<fn>")]` / `#[serde(default, skip_serializing_if = "Option::is_none")]` → "缺省值为 X，配置文件缺该字段时反序列化为默认值；持久化时 null 值省略键以保持文件简洁"——保留**用户可观察的 schema 演进契约**（缺字段不报错 / null 不写入）
-- 协议常量 / 数据契约（IPC camelCase 字段名 `autoUpdateCheckEnabled` / `skippedUpdateVersion` / `keyboardShortcuts` / `httpServer.port` / `pinned_sessions` 等配置文件键名）→ **保留**，外部协议契约
+- 协议常量 / 数据契约（IPC camelCase 字段名 `autoUpdateCheckEnabled` / `skippedUpdateVersion` / `keyboardShortcuts` / `httpServer.port` / `pinnedSessions` 等配置文件键名）→ **保留**，外部协议契约
 - RFC2119 关键词（SHALL / MUST / SHOULD / MAY）保留英文
 
 **理由**：SPEC_GUIDE 反例对照表明确「内部 fn / type / mod / struct field 名 → design」+「IPC payload 字段名（camelCase）/ 错误码 / 错误 variant 名 → spec」。本 change 严格按表分流。
@@ -84,12 +84,12 @@ spec body 改为 "应用启动后台自动检查更新行为（详 [[app-auto-up
 
 ### D-4：configuration JSON 字段名保留例外
 
-**问题**：D-2 表说 "Rust 类型签名抽象掉"，但 `pinned_sessions` / `hidden_sessions` / `httpServer.port` 等是配置文件 JSON 字段名（snake_case 或 camelCase），属用户可观察的数据契约——升级版本时跨版本迁移行为依赖这些字段名稳定。
+**问题**：D-2 表说 "Rust 类型签名抽象掉"，但 `pinnedSessions` / `hiddenSessions` / `httpServer.port` 等是配置文件 JSON 字段名（实际磁盘形态：`#[serde(rename_all = "camelCase")]` 序列化），属用户可观察的数据契约——升级版本时跨版本迁移行为依赖这些字段名稳定。
 
 **决策**：保留以下名称作为**协议常量**，spec 直接引用：
-- 配置文件根字段：`general.claudeRootPath` / `ssh.profiles[]` / `ssh.last_connection` / `ssh.auto_reconnect` / `httpServer.enabled` / `httpServer.port` / `keyboardShortcuts` / `pinned_sessions` / `hidden_sessions` / `notifications.triggers`
+- 配置文件根字段（实际磁盘 camelCase 形态）：`general.claudeRootPath` / `ssh.profiles[]` / `ssh.lastConnection` / `ssh.autoReconnect` / `httpServer.enabled` / `httpServer.port` / `keyboardShortcuts` / `pinnedSessions` / `hiddenSessions` / `notifications.triggers`
 - IPC payload camelCase：`autoUpdateCheckEnabled` / `skippedUpdateVersion` / `fontSans` / `fontMono` / `timeFormat` / `externalEditor` / `searchEngine` / `terminalApp`
-- composite key 分隔符 `"::"` 与 fold 后 base_dir 形态——pinned_sessions 跨版本迁移行为依赖具体格式
+- composite key 分隔符 `"::"` 与 fold 后 base_dir 形态——`pinnedSessions` 跨版本迁移行为依赖具体格式
 - 备份文件后缀 `.bak.<unix_timestamp_ms>` / `.pre-merge-composite.bak`——人工 / 测试 / 调试时可见
 - 错误 variant：`ApiError::ValidationError`（外部协议契约）
 
