@@ -1,50 +1,6 @@
 # server-mode Specification
 
-## Purpose
-TBD - created by archiving change add-server-mode. Update Purpose after archive.
-## Requirements
-### Requirement: Tauri 桌面应用 SHALL 暴露 server lifecycle IPC 控制
-
-Tauri 桌面应用 SHALL 暴露 3 个 IPC commands 供前端控制本机 HTTP server 的启停与状态查询：`http_server_start(port: u16)` / `http_server_stop()` / `http_server_status() -> { running: bool, port: u16, lastError: string | null }`。`http_server_start` SHALL 先校验入参端口落在 `1024..=65535`，失败时返回 `Err("port must be in 1024..=65535")`；校验通过 SHALL bind `127.0.0.1:{port}` 启动 server；bind 失败（端口冲突 / 权限不足 / 其它 IO 错误）SHALL 返回 specific `Err` 文案让 UI 提示用户。`http_server_stop` SHALL 优雅关闭已运行的 server 并 join 任务结束；server 未运行时 SHALL 返回 `Ok(())`（幂等）。`http_server_status` SHALL 返回当前 server 状态快照——`lastError` 字段 SHALL 在最近一次启动失败时（含自动恢复失败）携带错误文案、成功启动后 SHALL 重置为 `null`，让 Settings UI 即使错过自动恢复阶段的 emit event 也能在挂载时主动查询到错误原因。
-
-后端 SHALL 串行化 start/stop 操作，避免用户连点 toggle 时产生 race。每次 `http_server_start` SHALL 在新建 task 前先尝试 abort 现有 server handle（若有），再 bind。
-
-#### Scenario: 启动 server 成功并写持久化
-
-- **WHEN** 前端调 `invoke('http_server_start', { port: 3456 })`，端口空闲
-- **THEN** 后端 SHALL bind `127.0.0.1:3456`、启动 server task、把 `HttpServerConfig.enabled = true` + `port = 3456` 持久化
-- **AND** 该 IPC SHALL 返回 `Ok(())`
-- **AND** 后续 `http_server_status` SHALL 返回 `{ running: true, port: 3456 }`
-
-#### Scenario: 启动 server 端口冲突返回 specific 错误
-
-- **WHEN** 前端调 `invoke('http_server_start', { port: 3456 })`，但 `127.0.0.1:3456` 已被其它进程占用
-- **THEN** 后端 SHALL 返回 `Err` 含端口号且文案明确为冲突类（如 `"port 3456 is in use"`）
-- **AND** `HttpServerConfig.enabled` SHALL 保持 `false`（启动失败不写持久化）
-- **AND** 后续 `http_server_status` SHALL 返回 `{ running: false, port: <previous>, lastError: "port 3456 is in use" }`
-
-#### Scenario: 成功启动后 lastError 重置
-
-- **WHEN** 前一次 `http_server_start` 因端口冲突失败（`lastError` 已被设置），用户改 port 再次调 `http_server_start({ port: 3500 })` 成功
-- **THEN** `http_server_status` SHALL 返回 `{ running: true, port: 3500, lastError: null }`
-
-#### Scenario: 停止 server 幂等
-
-- **WHEN** 前端调 `invoke('http_server_stop')`，server 当前未运行
-- **THEN** 后端 SHALL 返回 `Ok(())`
-- **AND** `HttpServerConfig.enabled` SHALL 被写为 `false`（确保持久化与运行状态一致）
-
-#### Scenario: 端口校验失败拒绝启动
-
-- **WHEN** 前端调 `invoke('http_server_start', { port: 80 })`（< 1024）或 `port: 70000`（> 65535）
-- **THEN** 后端 SHALL 返回 `Err` 含端口范围说明，**不**得 bind
-- **AND** `HttpServerConfig.enabled` 与 `port` SHALL 保持原值
-
-#### Scenario: 串行化避免 race
-
-- **WHEN** 前端在 100ms 内连续调用 `http_server_start` × 2
-- **THEN** 后端 SHALL 串行处理：第 2 次 SHALL 先 abort 第 1 次的 handle 再 bind，**不**得在同一时刻持有两个 server handle
-- **AND** 最终状态 SHALL 唯一（`running: true` 单一 server）
+## MODIFIED Requirements
 
 ### Requirement: Tauri 桌面应用启动时 SHALL 按持久化配置自动恢复 server
 
@@ -136,7 +92,7 @@ transport 抽象层 SHALL 集中在统一 wrapper，让现有调用方代码（s
 1. 桌面应用入口的 IPC handler 注册
 2. IPC contract test 的已知 command 列表
 3. IPC contract test 内对应 contract test（断言入参 / 返回字段 camelCase）
-4. 前端单测 mock 的已知 command 列表
+4. 前端 vitest mock 的已知 command 列表
 5. 前端 API wrapper 函数声明
 
 #### Scenario: http_server_start 字段契约
@@ -154,7 +110,7 @@ transport 抽象层 SHALL 集中在统一 wrapper，让现有调用方代码（s
 
 - **WHEN** ipc_contract test 跑已知 command 列表断言
 - **THEN** `http_server_start` / `http_server_stop` / `http_server_status` 三条 SHALL 在断言列表内
-- **AND** 前端单测 mock 已知 command 列表 SHALL 同步含此三条
+- **AND** 前端 vitest mock 已知 command 列表 SHALL 同步含此三条
 - **AND** 桌面应用入口 IPC handler 注册 SHALL 同步注册此三条
 
 #### Scenario: http_server_status 在 server 未运行时仍可调用
@@ -162,4 +118,3 @@ transport 抽象层 SHALL 集中在统一 wrapper，让现有调用方代码（s
 - **WHEN** 前端在 server 未运行时调 `http_server_status`
 - **THEN** 响应 SHALL 为 `{ running: false, port: <持久化值或默认 3456> }`
 - **AND** **不**得返回错误
-
