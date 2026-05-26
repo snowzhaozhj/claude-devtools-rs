@@ -311,6 +311,7 @@ mod tests {
                 deleted: true,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .await;
         // 仅断言不 panic 且不 I/O
@@ -328,6 +329,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .await;
 
@@ -363,6 +365,7 @@ mod tests {
             deleted: false,
             project_list_changed: false,
             session_list_changed: false,
+            mtime_ms: None,
         }
     }
 

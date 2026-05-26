@@ -36,7 +36,8 @@ use super::parsed_message_cache::{
 };
 use super::project_scan_cache::{
     EnrichDecision, ProjectScanCache, apply_file_event_to_project_scan_cache,
-    apply_lag_to_project_scan_cache,
+    apply_lag_to_project_scan_cache, apply_mtime_advance_to_project_scan_cache,
+    synthesize_projects_with_overlay,
 };
 use super::session_metadata::{
     MetadataCache, SessionMetadata, extract_session_metadata_cached,
@@ -1449,7 +1450,12 @@ impl LocalDataApi {
                     context = ?ctx.backend_kind,
                     "project_scan_cache hit"
                 );
-                return Ok(hit);
+                // 合成路径（spec `ipc-data-api/spec.md::ProjectScanCache 维护
+                // per-project mtime overlay::cache hit 路径合成 hint`）：仅在
+                // 至少一个 project 有大于 snapshot 的 overlay 时 clone Vec
+                // 注入新值；无 hint 时直接返原 Arc 零分配。
+                let synthesized = synthesize_projects_with_overlay(&cache, ctx, &hit);
+                return Ok(synthesized);
             }
             cache.begin_scan()
         };
@@ -1503,7 +1509,17 @@ impl LocalDataApi {
                 "project_scan_cache snapshot dropped — invalidated during scan"
             );
         }
-        Ok(snapshot)
+        // miss 路径同样走合成：scan 完成到本函数 return 之间若有 watcher event
+        // 已经写入 overlay（race），SHALL 让 scan 客户端立刻看到合成值。无 hint
+        // 时返原 Arc 不 clone。
+        let synthesized = {
+            let cache = self
+                .project_scan_cache
+                .lock()
+                .expect("project scan cache mutex poisoned");
+            synthesize_projects_with_overlay(&cache, ctx, &snapshot)
+        };
+        Ok(synthesized)
     }
 
     /// 测试 / perf bench 用：返回累计命中 / lookup 数。
@@ -1635,6 +1651,11 @@ impl LocalDataApi {
             projects_dir.clone(),
             todos_dir_from_projects_dir(&projects_dir),
         ));
+        // ssh_mgr 提前构造，让 spawn_watcher_runtime 内部 invalidator 拿到 cheap
+        // clone（`SshSessionManager: Clone` Arc 内部）；下方 Self {} 构造时也复用
+        // 同一 instance，确保 invalidator 与 LocalDataApi 视角的 active SSH context
+        // 一致。
+        let ssh_mgr = SshSessionManager::new();
         let watcher_tasks = Mutex::new(spawn_watcher_runtime(
             internal_watcher.clone(),
             config_mgr.clone(),
@@ -1647,6 +1668,7 @@ impl LocalDataApi {
             parsed_msg_cache.clone(),
             project_scan_cache.clone(),
             projects_dir.clone(),
+            Some(ssh_mgr.clone()),
         ));
 
         Self {
@@ -1654,7 +1676,7 @@ impl LocalDataApi {
             search_cache,
             config_mgr,
             notif_mgr,
-            ssh_mgr: SshSessionManager::new(),
+            ssh_mgr,
             error_tx: Some(error_tx),
             file_tx: Some(file_tx),
             todo_tx: Some(todo_tx),
@@ -2070,6 +2092,7 @@ impl LocalDataApi {
                 self.parsed_msg_cache.clone(),
                 self.project_scan_cache.clone(),
                 projects_dir,
+                Some(self.ssh_mgr.clone()),
             );
             // 释放 watcher_tasks lock 后再 reattach SSH——`attach_remote_watcher`
             // 内部锁顺序与 watcher_tasks 不冲突，但显式 drop 让 lock window 最小
@@ -2321,7 +2344,11 @@ struct WatcherRuntimeChannels {
 // subscribe_files / subscribe_todos 各 receiver；调用方持有外部 clone（注入
 // 到 `LocalDataApi.watcher`）。换 `&Arc<FileWatcher>` 反而要在内部多 .clone()
 // 写法繁琐，按值传更符合所有权 + 移交 task 的语义。
-#[allow(clippy::needless_pass_by_value)]
+//
+// `clippy::too_many_arguments` 已抑制——参数都是后台 task 必须注入的依赖
+// （watcher / mgr 们 / channel 们 / cache 们 / projects_dir / ssh_mgr）；
+// 任何抽象（builder / struct）都把分发关系藏进新类型反而看不清。
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 fn spawn_watcher_runtime(
     watcher: Arc<FileWatcher>,
     config_mgr: Arc<Mutex<ConfigManager>>,
@@ -2330,6 +2357,7 @@ fn spawn_watcher_runtime(
     parsed_msg_cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
     project_scan_cache: Arc<std::sync::Mutex<ProjectScanCache>>,
     projects_dir: PathBuf,
+    ssh_mgr: Option<cdt_ssh::SshSessionManager>,
 ) -> Vec<JoinHandle<()>> {
     let watcher_for_start = watcher.clone();
     let start_task = tokio::spawn(async move {
@@ -2383,6 +2411,7 @@ fn spawn_watcher_runtime(
         channels.files,
         projects_dir,
         Some(watcher),
+        ssh_mgr,
     );
 
     vec![
@@ -2447,6 +2476,7 @@ fn spawn_unified_cache_invalidator(
     file_tx: broadcast::Sender<cdt_core::FileChangeEvent>,
     projects_dir: std::path::PathBuf,
     watcher: Option<Arc<FileWatcher>>,
+    ssh_mgr: Option<cdt_ssh::SshSessionManager>,
 ) -> JoinHandle<()> {
     let local_ctx = cdt_fs::ContextId::local(projects_dir.clone());
     let fs = local_handle();
@@ -2470,6 +2500,23 @@ fn spawn_unified_cache_invalidator(
                             emit_session_list_changed_hint: false,
                         }
                     };
+                    // mtime overlay 推进（spec `ipc-data-api/spec.md::
+                    // ProjectScanCache 维护 per-project mtime overlay`）：
+                    // - Local event → 写 Local context overlay
+                    // - SSH event → 解析 active SSH context_id 后写对应 ctx overlay
+                    // 删除事件 / 缺 mtime 事件由 helper 内部守护早 return。
+                    if is_local {
+                        apply_mtime_advance_to_project_scan_cache(&scan_cache, &local_ctx, &event);
+                    } else if !event.deleted
+                        && event.mtime_ms.is_some()
+                        && !event.project_id.is_empty()
+                        && let Some(mgr) = ssh_mgr.as_ref()
+                        && let Some(active_id) = mgr.active_context_id().await
+                        && let Some((_provider, ssh_ctx)) =
+                            mgr.provider_and_context_id(&active_id).await
+                    {
+                        apply_mtime_advance_to_project_scan_cache(&scan_cache, &ssh_ctx, &event);
+                    }
                     // emit 在 sync invalidate 之后、async parsed invalidate 之前
                     // （change D4 emit 时机契约）。OR 公式：watcher 已填字段 +
                     // cache hint 取并集（change `enrich-via-watcher` D4）——watcher
@@ -2502,6 +2549,7 @@ fn spawn_unified_cache_invalidator(
                         deleted: false,
                         project_list_changed: true,
                         session_list_changed: true,
+                        mtime_ms: None,
                     };
                     let _ = file_tx.send(synthetic);
                     tracing::warn!(
@@ -6403,6 +6451,7 @@ mod tests {
             file_tx,
             projects_dir.clone(),
             None,
+            None,
         );
 
         // 喂一个 plc=true + session 已知 的 event：
@@ -6414,6 +6463,7 @@ mod tests {
             deleted: false,
             project_list_changed: true,
             session_list_changed: false,
+            mtime_ms: None,
         })
         .unwrap();
 
@@ -6559,6 +6609,7 @@ mod tests {
             file_tx,
             projects_dir.clone(),
             None,
+            None,
         );
 
         (raw_tx, file_rx, scan_cache, projects_dir, project_id)
@@ -6590,6 +6641,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false, // raw 形态恒 false
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -6619,6 +6671,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -6645,6 +6698,7 @@ mod tests {
                 deleted: true,
                 project_list_changed: false,
                 session_list_changed: true, // watcher D3 已填
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -6720,6 +6774,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             });
         }
 
@@ -6729,6 +6784,7 @@ mod tests {
             raw_rx,
             file_tx,
             projects_dir,
+            None,
             None,
         );
 
@@ -6812,6 +6868,7 @@ mod tests {
             parsed,
             scan,
             projects_dir,
+            None,
         );
 
         // 结构断言：task 数 = 4（start / todo_bridge / notifier / unified_invalidator）
@@ -6839,6 +6896,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .expect("at least one subscriber (unified invalidator)");
 
@@ -7177,6 +7235,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -7218,6 +7277,7 @@ mod tests {
             file_tx,
             projects_dir,
             None,
+            None,
         );
 
         // watcher 已填 session_list_changed=true（first-seen 判定）
@@ -7228,6 +7288,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: true,
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -7287,6 +7348,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             });
         }
 
@@ -7296,6 +7358,7 @@ mod tests {
             raw_rx,
             file_tx,
             projects_dir,
+            None,
             None,
         );
 
@@ -7342,6 +7405,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false, // watcher 视角未判定
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -7368,6 +7432,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: true, // watcher 视角首见
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -7469,6 +7534,7 @@ mod tests {
                     deleted: case.deleted,
                     project_list_changed: case.plc,
                     session_list_changed: case.watcher_slc,
+                    mtime_ms: None,
                 })
                 .unwrap();
 
@@ -7747,6 +7813,7 @@ mod tests {
             file_tx,
             projects_dir,
             Some(watcher),
+            None,
         );
 
         // SSH event：project_id 是 SSH 远端的 "pa-ssh"（不在 known_projects），
@@ -7758,6 +7825,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -7826,6 +7894,7 @@ mod tests {
             file_tx,
             projects_dir,
             Some(watcher),
+            None,
         );
 
         // Local event："pa" 在 local_projects_seen，watcher 填 session_list_changed=false
@@ -7837,6 +7906,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: false,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .unwrap();
 
@@ -8103,6 +8173,7 @@ mod tests {
             file_tx,
             projects_dir,
             Some(watcher),
+            None,
         );
 
         // 注入 dir-create raw event（模拟 watcher → invalidator 路径）
@@ -8113,6 +8184,7 @@ mod tests {
                 deleted: false,
                 project_list_changed: true,
                 session_list_changed: false,
+                mtime_ms: None,
             })
             .unwrap();
 

@@ -19,6 +19,15 @@ export interface FileChangePayload {
    * 仅 `unknown_session` 这类后端 enrich 出的细分被旧前端漏掉）。
    */
   sessionListChanged?: boolean;
+  /**
+   * 事件涉及文件的 mtime（毫秒 since UNIX epoch）。后端 watcher 在能取到 mtime
+   * 时填入，取不到（典型：SFTP server 不返 mtime / 删除事件 / IO 失败）省略字段。
+   * 当前前端不直接消费——后端 `ProjectScanCache` mtime overlay 在 cache hit
+   * 路径已合成 `RepositoryGroup.mostRecentSession`，前端读 group mtime 自动
+   * 拿到新鲜值（change `dashboard-mtime-overlay`）。字段保留供未来前端 hint
+   * 派生 / 调试观测使用。
+   */
+  mtimeMs?: number;
 }
 
 type Handler = (payload: FileChangePayload) => void;

@@ -60,6 +60,17 @@ pub const LOCAL_CACHE_TTL: Duration = Duration::from_secs(300);
 /// 同时避免远端 fs 状态长时间过期。
 pub const SSH_CACHE_TTL: Duration = Duration::from_secs(10);
 
+/// mtime overlay 大小硬上限（防御性闸门）。三档 invalidate 不清 overlay、
+/// TTL 过期不清 overlay，仅 `merge_overlay_with_fresh_snapshot` 在重扫时
+/// 清"snapshot 不再含某 project"的 hint。极端场景（大量临时 project 反复
+/// 创建删除 + 该 ctx 长期不重扫）下 overlay 可能无界增长。
+///
+/// 本闸门保证 overlay 永远 ≤ 4096 条 (`ContextId`, `project_id`) → `i64` entry，
+/// 超出后新 project 的 hint 写入被静默丢弃（既有 entry 仍可推进）。30 project
+/// 典型 corpus 远小于该上限，触发即视为异常，counter
+/// `project_scan_cache.overlay.full_skip` 暴露给 telemetry。
+pub const MTIME_OVERLAY_SOFT_CAP: usize = 4096;
+
 /// 单次 scan 结果在内存中的缓存条目。
 #[derive(Clone)]
 struct CacheEntry {
@@ -88,6 +99,23 @@ pub struct ProjectScanCache {
     /// BLOCK 修复：原 `has_entry` 单条件守护漏掉"启动后第一次扫描"期间
     /// 新 session 事件 → snapshot 落地后等 TTL 5min 才能看到的问题）。
     in_flight_scans: u32,
+    /// per-(`ContextId`, `project_id`) 单调推进的 mtime hint。带 mtime 的非删除
+    /// file-change event SHALL 用 `advance_mtime` fetch-max 进入；
+    /// `list_repository_groups` / `list_projects` 在合成路径取
+    /// `max(snapshot.most_recent_session, overlay)` 让 dashboard 在 cache hit
+    /// 命中路径也能反映新鲜 mtime。
+    ///
+    /// 解耦规则（spec `ipc-data-api/spec.md::ProjectScanCache 维护 per-project
+    /// mtime overlay`）：
+    /// - 三档 invalidate（[`Self::invalidate_local`]）SHALL **不**清 overlay——
+    ///   overlay 是 watcher 单调观测的中间结果，丢失无法重建；snapshot 是
+    ///   fs 真相的快照，可重新 scan
+    /// - 显式 context 切换（[`Self::invalidate_all`] / [`Self::invalidate`]）
+    ///   SHALL 清 overlay——上下文已切换，旧 hint 不再适用
+    ///
+    /// `i64` 而非 `AtomicI64`：外层已 `Mutex<ProjectScanCache>` 包裹，写路径
+    /// 临界区单线程，不需要再叠 atomic。
+    mtime_overlay: HashMap<(ContextId, String), i64>,
     /// 累计命中次数 / 累计 lookup 次数，调试 / perf bench 用。
     hits: u64,
     lookups: u64,
@@ -227,6 +255,14 @@ impl ProjectScanCache {
     /// `recorded_generation` 是 [`Self::begin_scan`] 时拿的 snapshot；若期间
     /// `invalidation_generation` 被 invalidator bump → mismatch → 丢弃 snapshot
     /// 返 `false`，下次 lookup 走真实 miss 重 scan。
+    ///
+    /// 写入 entry 后 SHALL 调 [`Self::merge_overlay_with_fresh_snapshot`] 完成
+    /// hint 合并（详 spec `ipc-data-api::ProjectScanCache 维护 per-project mtime
+    /// overlay`）：
+    /// - fresh snapshot 已反映或超过 hint → 移除 hint
+    /// - hint 仍大于 snapshot → 保留 hint（不被回退）
+    /// - fresh snapshot 不再含某 project → 移除该 project 的 hint（避免已删除
+    ///   project 的 hint 永久驻留）
     pub fn finish_scan_with_insert(
         &mut self,
         ctx: ContextId,
@@ -240,6 +276,7 @@ impl ProjectScanCache {
         if recorded_generation != self.invalidation_generation {
             return false;
         }
+        self.merge_overlay_with_fresh_snapshot(&ctx, &snapshot);
         self.entries.insert(
             ctx,
             CacheEntry {
@@ -251,6 +288,70 @@ impl ProjectScanCache {
             },
         );
         true
+    }
+
+    /// fetch-max 单调推进 `(ctx, project_id)` 对应的 mtime hint。带 mtime 的
+    /// 非删除 file-change event SHALL 经此入口；删除事件 / 缺 mtime 的事件
+    /// **不**调本方法（`apply_mtime_advance_to_project_scan_cache` 在 wrapper
+    /// 处守护）。
+    ///
+    /// 单调性：仅当传入值大于已记录值时更新；写入只追加 / 提升，不会回退。
+    ///
+    /// 防御性闸门：overlay 大小超过 [`MTIME_OVERLAY_SOFT_CAP`] 后**新** key
+    /// 的写入被静默丢弃（既有 key 仍可推进）。典型 30 project corpus 远小于
+    /// cap，触发视为异常——`project_scan_cache.overlay.full_skip` counter 暴露
+    /// 异常给 telemetry（codex PR 二审 Low 建议：防"大量临时 project 反复创建
+    /// 删除 + 该 ctx 长期不重扫"场景下 overlay 无界增长）。
+    ///
+    /// Spec：`ipc-data-api/spec.md::ProjectScanCache 维护 per-project mtime
+    /// overlay::已知 session 普通 append 推进 hint`。
+    pub fn advance_mtime(&mut self, ctx: &ContextId, project_id: &str, mtime_ms: i64) {
+        let key = (ctx.clone(), project_id.to_owned());
+        match self.mtime_overlay.get_mut(&key) {
+            Some(slot) if *slot < mtime_ms => *slot = mtime_ms,
+            None => {
+                if self.mtime_overlay.len() >= MTIME_OVERLAY_SOFT_CAP {
+                    cdt_telemetry::counter!("project_scan_cache.overlay.full_skip").inc();
+                    return;
+                }
+                self.mtime_overlay.insert(key, mtime_ms);
+            }
+            _ => {}
+        }
+    }
+
+    /// 查 `(ctx, project_id)` 的 hint。`None` 表示无记录；调用方在合成路径取
+    /// `max(snapshot.most_recent_session_ms, overlay)` 即可——空缺时合成结果
+    /// 落到 snapshot 原值。
+    #[must_use]
+    pub fn lookup_mtime_overlay(&self, ctx: &ContextId, project_id: &str) -> Option<i64> {
+        let key = (ctx.clone(), project_id.to_owned());
+        self.mtime_overlay.get(&key).copied()
+    }
+
+    /// 重扫合并：fresh snapshot 落库前调一次。规则按 spec：
+    ///
+    /// - snapshot 已反映或超过 hint → 移除 hint（snapshot 已是新真相）
+    /// - hint 仍大于 snapshot → 保留 hint（scan 期间 append 不被回退）
+    /// - fresh snapshot 不再含某 project → 移除该 project 的 hint（已删除
+    ///   project 的 hint 永久驻留无意义）
+    ///
+    /// 仅作用于本次 scan 涉及的 `ctx`；其他 context 下 hint 不动。
+    fn merge_overlay_with_fresh_snapshot(&mut self, ctx: &ContextId, snapshot: &[Project]) {
+        let live_projects: HashMap<&str, Option<i64>> = snapshot
+            .iter()
+            .map(|p| (p.id.as_str(), p.most_recent_session))
+            .collect();
+        self.mtime_overlay.retain(|(ckey, pid), hint| {
+            if ckey != ctx {
+                return true;
+            }
+            match live_projects.get(pid.as_str()) {
+                Some(Some(snap)) if *snap >= *hint => false,
+                Some(Some(_) | None) => true,
+                None => false,
+            }
+        });
     }
 
     /// 条件写入：仅在 `recorded_generation == 当前 invalidation_generation`
@@ -292,27 +393,40 @@ impl ProjectScanCache {
     /// 由 TTL 自然过期，本接口不动 SSH entry（避免 Local 文件变化误清远端）。
     /// 同步 bump `invalidation_generation` —— 让 in-flight scan 完成回写时
     /// 通过 `try_insert` 自检并丢弃旧 snapshot。
+    ///
+    /// **不**清 mtime overlay：overlay 是 watcher 单调观测的中间结果，丢失
+    /// 无法重建；snapshot 是 fs 真相的快照，可重新 scan（spec
+    /// `ipc-data-api/spec.md::ProjectScanCache 维护 per-project mtime overlay::
+    /// 三档 invalidate 不清 hint`）。
     pub fn invalidate_local(&mut self) {
         self.entries
             .retain(|_, entry| !matches!(entry.fs_kind, FsKind::Local));
         self.invalidation_generation = self.invalidation_generation.wrapping_add(1);
     }
 
-    /// 清除所有 entry（Local + SSH）。`reconfigure_claude_root` / SSH
-    /// context 切换等显式 hook 用；同步 bump `invalidation_generation`。
-    /// 测试也可用本入口让 SSH 路径测试用例之间不串扰。
+    /// 清除所有 entry（Local + SSH）+ 所有 mtime overlay。
+    /// `reconfigure_claude_root` / SSH context 切换等显式 hook 用；同步 bump
+    /// `invalidation_generation`。测试也可用本入口让 SSH 路径测试用例之间
+    /// 不串扰。
+    ///
+    /// 同时清 overlay 因为上下文已切换，旧 hint 不再适用（spec
+    /// `ipc-data-api/spec.md::ProjectScanCache 维护 per-project mtime overlay::
+    /// 显式 invalidate 总清同时清 hint`）。
     pub fn invalidate_all(&mut self) {
         self.entries.clear();
+        self.mtime_overlay.clear();
         self.invalidation_generation = self.invalidation_generation.wrapping_add(1);
     }
 
     /// 单 entry 删除（test / `reconfigure_claude_root` 等显式 hook 用）。
-    /// 同步 bump `invalidation_generation`。
+    /// 同步 bump `invalidation_generation`，且清空该 ctx 下所有 project 的
+    /// mtime overlay（context 切换语义）。
     #[allow(dead_code)]
     pub fn invalidate(&mut self, ctx: &ContextId) {
         if self.entries.remove(ctx).is_some() {
             self.invalidation_generation = self.invalidation_generation.wrapping_add(1);
         }
+        self.mtime_overlay.retain(|(ckey, _), _| ckey != ctx);
     }
 
     /// 当前缓存条目数。perf bench / 调试用。
@@ -469,6 +583,33 @@ pub(crate) fn apply_file_event_to_project_scan_cache(
     }
 }
 
+/// 单条 `FileChangeEvent` 把 `mtime_ms` 推进到指定 ctx 下对应 project 的
+/// overlay。带 mtime 的非删除事件 SHALL 调本入口；删除事件 / 缺 mtime 事件 /
+/// `project_id` 空（lag synthetic 事件）SHALL 早 return 不写。
+///
+/// `ctx` 由 invalidator 决定——Local event 写 Local context，SSH event 写
+/// SSH active context。跨 context 隔离不变量：本入口仅作用于传入的 ctx；
+/// 不同 ctx 下同名 project 互不影响（spec `ipc-data-api/spec.md::
+/// ProjectScanCache 维护 per-project mtime overlay::SSH event 推进对应 SSH
+/// context hint 但不影响 Local invalidate`）。
+pub(crate) fn apply_mtime_advance_to_project_scan_cache(
+    cache: &Arc<std::sync::Mutex<ProjectScanCache>>,
+    ctx: &ContextId,
+    event: &cdt_core::FileChangeEvent,
+) {
+    if event.deleted || event.project_id.is_empty() {
+        return;
+    }
+    let Some(mtime_ms) = event.mtime_ms else {
+        return;
+    };
+    let mut cache = match cache.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    cache.advance_mtime(ctx, &event.project_id, mtime_ms);
+}
+
 /// `broadcast::Receiver::recv` 返回 `Err(Lagged)` 时的保守清空逻辑——
 /// `ProjectScanCache` 无 path-level 被动校验机制，lag 期间错过的结构性事件
 /// 没有兜底兑现，必须保守 `invalidate_local()` + `lag_conservative` counter。
@@ -485,6 +626,43 @@ pub(crate) fn apply_lag_to_project_scan_cache(cache: &Arc<std::sync::Mutex<Proje
         cache.invalidate_local();
     }
     cdt_telemetry::counter!("project_scan_cache.invalidate.lag_conservative").inc();
+}
+
+/// `list_repository_groups` / `list_projects` 在 cache hit 与 miss 路径
+/// 返回前 SHALL 经此 helper 把 overlay 的 mtime hint 合成进对外 snapshot
+/// 的 `Project.most_recent_session`。
+///
+/// 行为：
+/// - 至少一个 project 有 `overlay > snapshot.most_recent_session` → clone 一份
+///   `Vec<Project>`，注入合成值后包成新 Arc 返回；
+/// - 无 hint 或所有 hint 都 ≤ snapshot 值 → 直接返原 Arc 零分配。
+///
+/// 合成只改返回数据，**不**改 cache 内部 snapshot 主体——overlay 仍由
+/// `merge_overlay_with_fresh_snapshot` 在重扫时合并。Spec：
+/// `ipc-data-api/spec.md::ProjectScanCache 维护 per-project mtime overlay::
+/// cache hit 路径合成 hint 让用户看到最新 mtime`。
+#[must_use]
+pub(crate) fn synthesize_projects_with_overlay(
+    cache: &ProjectScanCache,
+    ctx: &ContextId,
+    snapshot: &Arc<Vec<Project>>,
+) -> Arc<Vec<Project>> {
+    let needs_synth = snapshot.iter().any(|p| {
+        cache
+            .lookup_mtime_overlay(ctx, &p.id)
+            .is_some_and(|hint| hint > p.most_recent_session.unwrap_or(i64::MIN))
+    });
+    if !needs_synth {
+        return snapshot.clone();
+    }
+    let mut new_vec = (**snapshot).clone();
+    for p in &mut new_vec {
+        if let Some(hint) = cache.lookup_mtime_overlay(ctx, &p.id) {
+            let merged = std::cmp::max(p.most_recent_session.unwrap_or(i64::MIN), hint);
+            p.most_recent_session = Some(merged);
+        }
+    }
+    Arc::new(new_vec)
 }
 
 /// 给外部读 / 调试 cache 内部状态的 atomic 句柄包装。让 `LocalDataApi`
@@ -715,5 +893,399 @@ mod tests {
         // SSH ctx 命中 sb 不会让 Local ctx 见到 sb
         assert!(c.contains_session_id(&ssh_ctx(), "pb", "sb"));
         assert!(!c.contains_session_id(&local_ctx(), "pb", "sb"));
+    }
+
+    // -- mtime overlay scenarios (spec ipc-data-api/spec.md::ProjectScanCache 维护
+    // per-project mtime overlay) --
+
+    fn proj_with_mtime(id: &str, sessions: &[&str], most_recent_session: Option<i64>) -> Project {
+        Project {
+            id: id.into(),
+            name: id.into(),
+            path: PathBuf::new(),
+            sessions: sessions.iter().map(|s| (*s).to_string()).collect(),
+            most_recent_session,
+            created_at: None,
+            distinct_cwds: Vec::new(),
+        }
+    }
+
+    fn fc(
+        project_id: &str,
+        session_id: &str,
+        deleted: bool,
+        plc: bool,
+        slc: bool,
+        mtime_ms: Option<i64>,
+    ) -> cdt_core::FileChangeEvent {
+        cdt_core::FileChangeEvent {
+            project_id: project_id.into(),
+            session_id: session_id.into(),
+            deleted,
+            project_list_changed: plc,
+            session_list_changed: slc,
+            mtime_ms,
+        }
+    }
+
+    /// Scenario `已知 session 普通 append 推进 hint 但不 invalidate`：
+    /// 已知 session 的 append（plc=false / deleted=false / slc=false）
+    /// SHALL 推进 hint，且 SHALL NOT 触发三档 invalidate。
+    #[test]
+    fn known_session_append_advances_hint_without_invalidate() {
+        let cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+        let ctx = local_ctx();
+        // 预填 entry：含 (pa, sa)，hint 当前为 t0=100
+        {
+            let mut c = cache.lock().unwrap();
+            c.insert(
+                ctx.clone(),
+                snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(100))]),
+                1,
+                2,
+                FsKind::Local,
+            );
+            c.advance_mtime(&ctx, "pa", 100);
+        }
+        let event = fc("pa", "sa", false, false, false, Some(500));
+        let decision = apply_file_event_to_project_scan_cache(&cache, &ctx, &event);
+        apply_mtime_advance_to_project_scan_cache(&cache, &ctx, &event);
+        assert!(
+            !decision.invalidated,
+            "已知 session append SHALL NOT 触发三档 invalidate"
+        );
+        let c = cache.lock().unwrap();
+        assert_eq!(
+            c.lookup_mtime_overlay(&ctx, "pa"),
+            Some(500),
+            "hint SHALL 单调推进到 t1"
+        );
+        // entry 仍在
+        assert!(c.entries.contains_key(&ctx));
+    }
+
+    /// Scenario `删除事件不推进 hint`：deleted=true 的 event SHALL NOT
+    /// 写 hint，但仍按既有规则触发 invalidate。
+    #[test]
+    fn deletion_event_does_not_advance_hint_but_still_invalidates() {
+        let cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+        let ctx = local_ctx();
+        {
+            let mut c = cache.lock().unwrap();
+            c.insert(
+                ctx.clone(),
+                snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(100))]),
+                1,
+                2,
+                FsKind::Local,
+            );
+            c.advance_mtime(&ctx, "pa", 100);
+        }
+        let event = fc("pa", "sa", true, false, true, None);
+        let decision = apply_file_event_to_project_scan_cache(&cache, &ctx, &event);
+        apply_mtime_advance_to_project_scan_cache(&cache, &ctx, &event);
+        assert!(
+            decision.invalidated,
+            "deleted=true SHALL 命中三档第一档 invalidate"
+        );
+        let c = cache.lock().unwrap();
+        assert_eq!(
+            c.lookup_mtime_overlay(&ctx, "pa"),
+            Some(100),
+            "删除事件 SHALL NOT 改写 hint"
+        );
+    }
+
+    /// Scenario `cache hit 路径合成 hint 让用户看到最新 mtime`：
+    /// 多次 append 推进 hint 后，外部读取 hint SHALL 返回最大值；hint 不修改
+    /// snapshot 主体（lookup 仍返回原 Arc，调用方在合成路径取 max）。
+    #[test]
+    fn cache_hit_path_synthesizes_via_overlay() {
+        let mut c = ProjectScanCache::new();
+        let ctx = local_ctx();
+        let snap = snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(100))]);
+        c.insert(ctx.clone(), snap.clone(), 1, 2, FsKind::Local);
+        c.advance_mtime(&ctx, "pa", 250);
+        c.advance_mtime(&ctx, "pa", 800);
+        c.advance_mtime(&ctx, "pa", 300);
+        assert_eq!(c.lookup_mtime_overlay(&ctx, "pa"), Some(800));
+        let hit = c.lookup(&ctx, 1, 2).expect("entry 仍命中");
+        assert_eq!(
+            hit[0].most_recent_session,
+            Some(100),
+            "snapshot 主体 SHALL NOT 被改写——合成发生在合成路径，不是 cache 内"
+        );
+    }
+
+    /// Scenario `cache 重扫合并保留较大 hint`：snapshot < hint 时 SHALL 保留
+    /// hint，让 scan 期间 append 不被回退。
+    #[test]
+    fn rescan_keeps_larger_overlay() {
+        let mut c = ProjectScanCache::new();
+        let ctx = local_ctx();
+        c.advance_mtime(&ctx, "pa", 999);
+        let recorded = c.begin_scan();
+        let new_snap = snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(500))]);
+        let inserted =
+            c.finish_scan_with_insert(ctx.clone(), new_snap, 1, 2, FsKind::Local, recorded);
+        assert!(inserted);
+        assert_eq!(
+            c.lookup_mtime_overlay(&ctx, "pa"),
+            Some(999),
+            "snapshot=500 < hint=999 → 保留 hint"
+        );
+    }
+
+    /// Scenario `cache 重扫清除已被覆盖的旧 hint`：snapshot ≥ hint 时
+    /// SHALL 移除该 hint，避免冗余读取。
+    #[test]
+    fn rescan_drops_overlay_when_snapshot_caught_up() {
+        let mut c = ProjectScanCache::new();
+        let ctx = local_ctx();
+        c.advance_mtime(&ctx, "pa", 500);
+        let recorded = c.begin_scan();
+        let new_snap = snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(800))]);
+        let inserted =
+            c.finish_scan_with_insert(ctx.clone(), new_snap, 1, 2, FsKind::Local, recorded);
+        assert!(inserted);
+        assert_eq!(
+            c.lookup_mtime_overlay(&ctx, "pa"),
+            None,
+            "snapshot=800 ≥ hint=500 → 清掉 hint"
+        );
+    }
+
+    /// Scenario `三档 invalidate 不清 hint`：watcher 触发的三档 invalidate
+    /// SHALL 清 entries 但 SHALL NOT 清 overlay。
+    #[test]
+    fn invalidate_local_keeps_overlay() {
+        let mut c = ProjectScanCache::new();
+        let ctx = local_ctx();
+        c.insert(
+            ctx.clone(),
+            snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(100))]),
+            1,
+            2,
+            FsKind::Local,
+        );
+        c.advance_mtime(&ctx, "pa", 999);
+        c.invalidate_local();
+        assert!(
+            c.lookup(&ctx, 1, 2).is_none(),
+            "三档 invalidate SHALL 清 Local entry"
+        );
+        assert_eq!(
+            c.lookup_mtime_overlay(&ctx, "pa"),
+            Some(999),
+            "三档 invalidate SHALL NOT 清 hint"
+        );
+    }
+
+    /// Scenario `显式 invalidate 总清同时清 hint`：`invalidate_all()` 公开入口
+    /// SHALL 同时清空 entries + overlay（覆盖所有 backend kind 与所有 context）。
+    #[test]
+    fn invalidate_all_clears_overlay_too() {
+        let mut c = ProjectScanCache::new();
+        c.insert(
+            local_ctx(),
+            snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(100))]),
+            1,
+            2,
+            FsKind::Local,
+        );
+        c.insert(
+            ssh_ctx(),
+            snapshot_with(vec![proj_with_mtime("pb", &["sb"], Some(200))]),
+            1,
+            2,
+            FsKind::Ssh,
+        );
+        c.advance_mtime(&local_ctx(), "pa", 500);
+        c.advance_mtime(&ssh_ctx(), "pb", 600);
+        c.invalidate_all();
+        assert!(c.is_empty());
+        assert_eq!(c.lookup_mtime_overlay(&local_ctx(), "pa"), None);
+        assert_eq!(c.lookup_mtime_overlay(&ssh_ctx(), "pb"), None);
+    }
+
+    /// Scenario `SSH event 推进对应 SSH context hint 但不影响 Local invalidate`：
+    /// SSH event 写 SSH context overlay，SHALL NOT 推进 Local context overlay，
+    /// SHALL NOT 触发 Local cache 三档 invalidate（invalidator 上层守护）。
+    #[test]
+    fn ssh_event_advances_ssh_overlay_only() {
+        let cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+        // Local entry 存在用来证明 SSH event 不动 Local hint
+        {
+            let mut c = cache.lock().unwrap();
+            c.insert(
+                local_ctx(),
+                snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(100))]),
+                1,
+                2,
+                FsKind::Local,
+            );
+            c.advance_mtime(&local_ctx(), "pa", 100);
+        }
+        let event = fc("pa", "sa", false, false, false, Some(700));
+        // 模拟 invalidator 路径：SSH event 走 SSH ctx，跳过 Local 三档判定
+        apply_mtime_advance_to_project_scan_cache(&cache, &ssh_ctx(), &event);
+        let c = cache.lock().unwrap();
+        assert_eq!(
+            c.lookup_mtime_overlay(&ssh_ctx(), "pa"),
+            Some(700),
+            "SSH context 下 hint SHALL 被推进"
+        );
+        assert_eq!(
+            c.lookup_mtime_overlay(&local_ctx(), "pa"),
+            Some(100),
+            "Local context 下 hint SHALL NOT 被 SSH event 推进"
+        );
+    }
+
+    /// Scenario `缺 mtimeMs 字段的 file-change event 不推进 hint`：`mtime_ms=None`
+    /// 事件 SHALL NOT 写 hint，但仍按其他字段走三档判定。
+    #[test]
+    fn event_without_mtime_does_not_advance_hint() {
+        let cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+        let ctx = local_ctx();
+        {
+            let mut c = cache.lock().unwrap();
+            c.insert(
+                ctx.clone(),
+                snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(100))]),
+                1,
+                2,
+                FsKind::Local,
+            );
+        }
+        let event = fc("pa", "sa", false, false, false, None);
+        let decision = apply_file_event_to_project_scan_cache(&cache, &ctx, &event);
+        apply_mtime_advance_to_project_scan_cache(&cache, &ctx, &event);
+        assert!(!decision.invalidated, "已知 session append 仍走 no-op 档");
+        let c = cache.lock().unwrap();
+        assert_eq!(
+            c.lookup_mtime_overlay(&ctx, "pa"),
+            None,
+            "缺 mtime_ms 的 event SHALL NOT 写 hint"
+        );
+    }
+
+    /// Scenario `cache 空时收到 mtime hint 仍写 hint`：冷启动 cache 空也允许
+    /// 提前写入 hint，让后续 scan 完成 populate 时合并阶段保留可用值。
+    #[test]
+    fn cold_start_event_writes_hint_even_without_entry() {
+        let cache = Arc::new(std::sync::Mutex::new(ProjectScanCache::new()));
+        let ctx = local_ctx();
+        let event = fc("pa", "sa", false, false, true, Some(123));
+        apply_mtime_advance_to_project_scan_cache(&cache, &ctx, &event);
+        let c = cache.lock().unwrap();
+        assert_eq!(
+            c.lookup_mtime_overlay(&ctx, "pa"),
+            Some(123),
+            "cache 空时 SHALL 仍把 hint 写入 overlay"
+        );
+    }
+
+    /// `MTIME_OVERLAY_SOFT_CAP` 防御性闸门：超出 cap 后新 key 静默丢弃，既有
+    /// key 仍可推进（codex PR 二审 Low：防 overlay 无界增长）。
+    #[test]
+    fn advance_mtime_drops_new_keys_when_overlay_cap_reached() {
+        let mut c = ProjectScanCache::new();
+        let ctx = local_ctx();
+        // 填满 cap
+        for i in 0..MTIME_OVERLAY_SOFT_CAP {
+            c.advance_mtime(&ctx, &format!("p{i}"), 100);
+        }
+        assert_eq!(c.mtime_overlay.len(), MTIME_OVERLAY_SOFT_CAP);
+        // 新 key 应静默丢弃
+        c.advance_mtime(&ctx, "p_overflow", 999);
+        assert_eq!(c.mtime_overlay.len(), MTIME_OVERLAY_SOFT_CAP);
+        assert_eq!(c.lookup_mtime_overlay(&ctx, "p_overflow"), None);
+        // 既有 key 仍可推进
+        c.advance_mtime(&ctx, "p0", 500);
+        assert_eq!(c.lookup_mtime_overlay(&ctx, "p0"), Some(500));
+    }
+
+    /// `synthesize_projects_with_overlay` 无 hint 时 SHALL 直接返原 Arc 零分配。
+    #[test]
+    fn synthesize_returns_same_arc_when_no_overlay() {
+        let c = ProjectScanCache::new();
+        let snap = snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(100))]);
+        let out = synthesize_projects_with_overlay(&c, &local_ctx(), &snap);
+        assert!(
+            Arc::ptr_eq(&out, &snap),
+            "无 hint SHALL 复用原 Arc 不分配新 Vec"
+        );
+    }
+
+    /// `synthesize_projects_with_overlay` overlay > snapshot 时 SHALL clone Vec
+    /// 并把合成 max 注入返回值；原 Arc 不被改写。
+    #[test]
+    fn synthesize_injects_overlay_when_greater() {
+        let mut c = ProjectScanCache::new();
+        let ctx = local_ctx();
+        let snap = snapshot_with(vec![
+            proj_with_mtime("pa", &["sa"], Some(100)),
+            proj_with_mtime("pb", &["sb"], Some(500)),
+        ]);
+        c.advance_mtime(&ctx, "pa", 999); // pa: snapshot=100, overlay=999 → 应合成 999
+        c.advance_mtime(&ctx, "pb", 200); // pb: snapshot=500, overlay=200 → 仍 500
+        let out = synthesize_projects_with_overlay(&c, &ctx, &snap);
+        assert!(
+            !Arc::ptr_eq(&out, &snap),
+            "至少一个 hint > snapshot SHALL clone 新 Vec"
+        );
+        assert_eq!(out[0].id, "pa");
+        assert_eq!(out[0].most_recent_session, Some(999));
+        assert_eq!(out[1].id, "pb");
+        assert_eq!(
+            out[1].most_recent_session,
+            Some(500),
+            "overlay < snapshot 时取 snapshot"
+        );
+        // 原 Arc 主体不被改写
+        assert_eq!(snap[0].most_recent_session, Some(100));
+    }
+
+    /// `synthesize_projects_with_overlay` 所有 hint 都 ≤ snapshot 时 SHALL
+    /// 仍返原 Arc 零分配（即使 overlay 有条目）。
+    #[test]
+    fn synthesize_returns_same_arc_when_all_hints_le_snapshot() {
+        let mut c = ProjectScanCache::new();
+        let ctx = local_ctx();
+        c.advance_mtime(&ctx, "pa", 50);
+        let snap = snapshot_with(vec![proj_with_mtime("pa", &["sa"], Some(100))]);
+        let out = synthesize_projects_with_overlay(&c, &ctx, &snap);
+        assert!(
+            Arc::ptr_eq(&out, &snap),
+            "overlay 50 ≤ snapshot 100 → SHALL 不分配新 Vec"
+        );
+    }
+
+    /// Scenario `cache 重扫不再含某 project 时清掉对应 hint`：fresh snapshot
+    /// 不再含某 project（用户已删 encoded 目录）SHALL 移除该 project 的 hint，
+    /// 同 ctx 下其他 project 的 hint 按合并规则处理。
+    #[test]
+    fn rescan_drops_hint_for_project_no_longer_in_snapshot() {
+        let mut c = ProjectScanCache::new();
+        let ctx = local_ctx();
+        c.advance_mtime(&ctx, "pa", 500);
+        c.advance_mtime(&ctx, "pb", 700);
+        let recorded = c.begin_scan();
+        // fresh snapshot 不含 pa（已被删），含 pb 但 mtime 还小于 hint
+        let new_snap = snapshot_with(vec![proj_with_mtime("pb", &["sb"], Some(300))]);
+        let inserted =
+            c.finish_scan_with_insert(ctx.clone(), new_snap, 1, 2, FsKind::Local, recorded);
+        assert!(inserted);
+        assert_eq!(
+            c.lookup_mtime_overlay(&ctx, "pa"),
+            None,
+            "fresh snapshot 不含 pa → SHALL 清 pa 的 hint"
+        );
+        assert_eq!(
+            c.lookup_mtime_overlay(&ctx, "pb"),
+            Some(700),
+            "pb 仍存在且 snapshot < hint → 保留 hint"
+        );
     }
 }

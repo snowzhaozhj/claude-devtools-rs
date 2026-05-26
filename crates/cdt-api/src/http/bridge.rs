@@ -52,6 +52,7 @@ fn spawn_file_bridge(
                         deleted: event.deleted,
                         project_list_changed: event.project_list_changed,
                         session_list_changed: event.session_list_changed,
+                        mtime_ms: event.mtime_ms,
                     });
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
