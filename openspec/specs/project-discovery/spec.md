@@ -213,12 +213,12 @@ trait SHALL 至少暴露这些操作：
 - **WHEN** 当前 provider 上报 `kind() == FsKind::Ssh` 且 resolver 需要从 session 文件抽 `cwd`
 - **THEN** resolver SHALL 调 `read_lines_head(path, N)` 取足以覆盖首条 user / summary 记录的有限 N 行，SHALL NOT 下载整个文件
 
-#### Scenario: Trait is the sole seam for alternative backends
+#### Scenario: fs 抽象 trait 是替换 backend 的唯一接口
 
 - **WHEN** 后续某个 port 引入新后端（例如 SSH / WSL / fake test provider）
 - **THEN** 引入仅 SHALL 要求实现 `cdt_fs::FileSystemProvider`，SHALL NOT 要求改 `ProjectScanner` / `ProjectPathResolver` / `WorktreeGrouper`
 
-#### Scenario: cdt-discover 继续兼容老 import
+#### Scenario: discover capability 暴露兼容 alias 给老调用方
 
 - **WHEN** 老代码写 `use cdt_discover::FileSystemProvider`
 - **THEN** 编译 SHALL 成功，行为与 `use cdt_fs::FileSystemProvider` 等价
@@ -343,7 +343,7 @@ Project session enumeration SHALL preserve sorted, paginated results while avoid
 - **WHEN** 在 Linux 或 macOS 平台运行，两条 session 的 `cwd` 字段分别为 `/Users/alice/App` 与 `/users/alice/app`
 - **THEN** `ProjectPathResolver` SHALL 把两条 session 视为不同 project
 
-#### Scenario: 跨大小写命中同一 ProjectPathResolver 缓存
+#### Scenario: 跨大小写命中同一项目路径解析缓存
 
 - **WHEN** 在 Windows 平台运行，调用方先用 encoded `project_id = "-C:-Users-Alice-app"` 触发解析并写 cache，再用 `"-C:-users-alice-app"`（同一目录、不同大小写）查询
 - **THEN** `ProjectPathResolver::resolve` SHALL 命中第一次的 cache 条目，返回相同 `PathBuf`，不重新走文件系统扫描
@@ -379,7 +379,7 @@ Project session enumeration SHALL preserve sorted, paginated results while avoid
 - **THEN** 系统 SHALL 仅通过 head-read（`FileSystemProvider::read_lines_head`）拿到 cwd
 - **AND** SHALL NOT 触发对该文件的 `read_to_string`
 
-#### Scenario: cdt-core::Session 不含 cwd_relative_to_repo_root 字段
+#### Scenario: Session payload 不含 cwd_relative_to_repo_root 字段
 
 - **WHEN** grep `cdt-core/src/project.rs::Session` 的字段定义
 - **THEN** SHALL 不出现 `cwd_relative_to_repo_root` 字段（该字段仅在 `cdt-core::Worktree` 与 IPC 层 `SessionSummary` 上存在）

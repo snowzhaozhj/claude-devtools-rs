@@ -62,13 +62,13 @@ trait SHALL 保持 dyn-safe（`&dyn` 可用），不引入关联类型。
 - **THEN** 实现 SHALL 并发对所有 path 走 stat
 - **AND** 返回结果顺序与 input paths 严格对应
 
-#### Scenario: read_dir_with_metadata default impl 是 N+1 RTT 兜底
+#### Scenario: read_dir_with_metadata 未优化路径走 N+1 RTT
 
 - **WHEN** 某后端未 override read_dir_with_metadata
 - **THEN** SHALL 走 trait default：先 read_dir 拿 entries，再对每条 file entry 补 stat
 - **AND** 总 op 数 SHALL 为 1 + N（N = file entry 数）
 
-#### Scenario: SSH override read_dir_with_metadata 复用 read_dir 不退化
+#### Scenario: SSH 路径 read_dir_with_metadata 复用 read_dir 不退化
 
 - **WHEN** 在 SSH context 下调 read_dir_with_metadata
 - **THEN** SSH provider SHALL override default impl，复用单次 SFTP READDIR reply 自带的 entry attrs
@@ -262,7 +262,7 @@ pub struct HostSignature {
 - **WHEN** 检查 `LocalDataApi` 字段
 - **THEN** `metadata_cache` SHALL 是单一 `Arc<Mutex<MetadataCache>>` 字段，**不得**是 `HashMap<ContextId, Arc<Mutex<MetadataCache>>>` 类型
 
-#### Scenario: key 类型含 ContextId
+#### Scenario: cache key 含上下文身份
 
 - **WHEN** 检查 `MetadataCache` / `ParsedMessageCache` 内部 `HashMap` 类型
 - **THEN** key 类型 SHALL 是 `(ContextId, PathBuf)` 或等价 newtype，**不得**仅 `PathBuf`
@@ -315,7 +315,7 @@ pub struct HostSignature {
 - **WHEN** 扫描时遇到 fs 抽象 crate 内部 provider 实现的底层 fs API 调用
 - **THEN** SHALL NOT 报警（被 allowlist）
 
-#### Scenario: 默认 fail-on-match（CI enforce）
+#### Scenario: 默认禁直接调用并由 CI 拦截
 
 - **WHEN** CI 跑 H1 扫描（不带本地诊断 flag），业务路径出现一处非 allowlist 的底层 fs API 直调
 - **THEN** 进程 SHALL 以非零状态退出，CI step fail
@@ -371,7 +371,7 @@ fs 抽象 crate SHALL 定义 backend 行为策略 struct + 三个独立 enum 字
 - **THEN** SHALL 编译通过且 `==` 自身（两字段独立可组合）
 - **AND** `InitialLoadPolicy` 内 SHALL NOT 出现 `PrefetchNext` variant
 
-#### Scenario: BackendPolicy 是 Copy + Eq 类型
+#### Scenario: BackendPolicy 可按值复制并相等比较
 
 - **WHEN** 编译 fs 抽象 crate
 - **THEN** `BackendPolicy` SHALL derive Copy + Clone + PartialEq + Eq + Debug
@@ -383,7 +383,7 @@ fs 抽象 crate SHALL 定义 backend 行为策略 struct + 三个独立 enum 字
 - **THEN** handler SHALL 读 `BackendPolicy` 字段，**不得**新增 `if fs.kind() == Ssh` / `let is_remote = ...` / `matches!(fs.kind(), ...)` 等等价直接派生
 - **AND** `fs.kind()` 比对仅允许出现在策略**派生**点（顶层 helper / backend resolver 内部 / fs 抽象 crate 自身实现）
 
-#### Scenario: StaleCheckStrategy enum 至少包含 LocalClock5min 与 SkipUntilClockSync
+#### Scenario: StaleCheckStrategy 至少含本机时钟与跨时钟域两种策略
 
 - **WHEN** 编译 fs 抽象 crate
 - **THEN** `StaleCheckStrategy` SHALL 至少含 `LocalClock5min` 与 `SkipUntilClockSync` 两个 variant
@@ -423,13 +423,13 @@ counter 入口 SHALL 满足：
 3. wrapper 在 trait 调用边界自动 record，无需 provider 实现配合
 4. 与日志 facade 集成——counter Drop 时自动 emit 一条结构化 event，含每种操作的次数
 
-#### Scenario: wrapper 在 trait 边界自动计数
+#### Scenario: fs op 在 trait 边界自动计数
 
 - **WHEN** 调用方包 wrapper 后用 counter 入口跑一段含若干 fs op 的代码
 - **THEN** 返回的 counter snapshot SHALL 含每种 op 的实际计数
 - **AND** provider 实现 SHALL NOT 含任何 counter 调用（计数发生在 wrapper 层）
 
-#### Scenario: 未包 wrapper 不计数
+#### Scenario: 调用方未启用 instrumentation 时不计数
 
 - **WHEN** 调用方直接用 provider（未包 wrapper）+ 调 counter 入口
 - **THEN** counter snapshot SHALL 全 0
@@ -440,7 +440,7 @@ counter 入口 SHALL 满足：
 - **WHEN** 两个并发 task 各自调 counter 入口 + 各自的 wrapper
 - **THEN** 两 task 的计数 SHALL 互不影响（依赖 task-local 隔离）
 
-#### Scenario: tracing emit on Drop
+#### Scenario: fs op counter 入口结束时输出诊断
 
 - **WHEN** counter 入口闭包正常结束
 - **THEN** SHALL emit 一条结构化日志 event 含全部计数字段
@@ -463,7 +463,7 @@ counter 入口 SHALL 满足：
 - **THEN** median SHALL ≤ 主线 baseline × 1.05
 - **AND** stddev SHALL ≤ 8ms
 
-#### Scenario: open_read dyn 路径 micro bench 不超 1.3x
+#### Scenario: open_read 动态分发路径开销不超单态化的 1.3x
 
 - **WHEN** 跑 `cargo bench -p cdt-fs --bench open_read_overhead` 10 次
 - **THEN** `fs.open_read` dyn 路径的 median 耗时 SHALL ≤ `tokio::fs::File::open` 直读路径 × 1.3

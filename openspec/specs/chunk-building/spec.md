@@ -74,7 +74,7 @@
 
 `AIChunk` SHALL 在默认 `build_chunks` 路径中暴露已填充的 `tool_executions: Vec<ToolExecution>` 字段：每个 `tool_use` 块都对应一条 `ToolExecution` 记录（由 `tool-execution-linking` capability 产出），未配对的 `tool_use` 以 orphan 形式保留（`output = Missing`、`end_ts = None`）。
 
-#### Scenario: Tool executions populated by build_chunks
+#### Scenario: Tool executions populated during chunk build
 - **WHEN** `build_chunks` 跑完一段含 assistant `tool_use` 块的 session
 - **THEN** 每个所属 `AIChunk.tool_executions` SHALL 为每个 `tool_use` 各含一条 `ToolExecution`，按起源 assistant 消息 `uuid` 分发
 
@@ -98,7 +98,7 @@
 - **WHEN** 一条 `Task` `tool_use` 解析为 `Resolution::Orphan`
 - **THEN** 它 SHALL 保留在 `AIChunk.tool_executions` 列表中
 
-#### Scenario: Default build_chunks does not filter Tasks in this port
+#### Scenario: Default chunk build does not filter Tasks
 - **WHEN** `build_chunks` 调用时未传任何 subagent candidate 池
 - **THEN** Task tool execution SHALL 保留在 `AIChunk.tool_executions`；下游消费者 MAY 仍显式调用 `filter_resolved_tasks`；端到端默认路径过滤推迟到 `team-coordination-metadata`
 

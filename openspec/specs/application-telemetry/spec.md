@@ -59,7 +59,7 @@ TBD - created by archiving change add-telemetry-signal-bus. Update Purpose after
 - **THEN** wall time 增量 SHALL < 0.2%（按 baseline `try_lookup_cached_metadata` ~10-50 μs / list_sessions(50) ~95 ms 计）
 - **AND** max RSS 增量 SHALL < 1 MB
 
-#### Scenario: hot path 误用 event 宏被 CI 拦截
+#### Scenario: 在 hot path 调用低频 event API 被拦截
 
 - **WHEN** PR 在 hot-path 文件（如 `cdt-api` IPC 入口）内加一行 `event!("perf.skeleton.start", ...)` 并 push
 - **THEN** CI hot-path event 检查 SHALL fail
@@ -99,14 +99,14 @@ TBD - created by archiving change add-telemetry-signal-bus. Update Purpose after
 
 panic event 字段 MUST 包含：`thread_name` / `panic_message`（截断到 1 KB）/ `location`（file:line）；MUST NOT 包含完整 backtrace（避免 PII / 体积）。
 
-#### Scenario: panic 触发 always-keep 通道写入
+#### Scenario: panic 触发关键事件入队
 
 - **WHEN** 任意线程触发 panic
 - **THEN** `counter!("panic.recovered")` SHALL 增 1
 - **AND** panic 通道 SHALL 新增一条 event
 - **AND** event 字段 SHALL 含 thread_name / panic_message / location，SHALL NOT 含完整 backtrace
 
-#### Scenario: panic 通道满时半压缩保留
+#### Scenario: panic 队列满时丢弃最老 50% 保留新事件
 
 - **WHEN** panic 通道已满（1000 条）且第 1001 次 panic 触发
 - **THEN** 通道 SHALL 移除最老的 500 条
