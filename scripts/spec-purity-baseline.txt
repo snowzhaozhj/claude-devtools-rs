@@ -1,5 +1,3 @@
-change/cleanup-config-and-context-menu/configuration-management 0
-change/cleanup-config-and-context-menu/frontend-context-menu 3
 spec/agent-configs 0
 spec/app-auto-update 5
 spec/app-chrome 2

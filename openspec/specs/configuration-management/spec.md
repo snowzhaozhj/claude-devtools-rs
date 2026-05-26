@@ -114,22 +114,27 @@
 系统 SHALL 把 `@path` mention 解析为相对于当前 session cwd 的路径并读取文件内容，拒绝逃逸到允许根之外的路径。
 
 #### Scenario: Valid in-project mention
+
 - **WHEN** mention `@docs/note.md` 解析后位于 session 的 project root 内
 - **THEN** 文件 SHALL 被读取并返回，附带绝对路径、字符数、估算 token 数
 
 #### Scenario: Path traversal attempt
+
 - **WHEN** mention 解析到允许根之外（例如 `@../../etc/passwd`）
 - **THEN** 读取 SHALL 被拒绝并返回 validation error
 
 #### Scenario: Sensitive file blocked
+
 - **WHEN** mention 解析后命中敏感文件模式（`.ssh/`、`.env`、`.aws/`、私钥等）
 - **THEN** 读取 SHALL 被拒绝，即使路径在允许目录内
 
 #### Scenario: Symlink escape
+
 - **WHEN** mention 解析路径在 project root 内但符号链接目标在外部
 - **THEN** 系统 SHALL canonicalize 路径，若真实路径在允许根外则拒绝
 
 #### Scenario: Token limit exceeded
+
 - **WHEN** 被引用文件估算 token 数超过调用方指定的最大值
 - **THEN** 读取 SHALL 返回 `null` / `None`
 
