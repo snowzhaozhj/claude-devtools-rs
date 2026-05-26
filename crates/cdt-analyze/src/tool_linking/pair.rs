@@ -186,81 +186,7 @@ fn extract_teammate_spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cdt_core::{MessageType, ToolCall};
-    use chrono::Duration;
-
-    fn ts(n: i64) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-04-11T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
-            + Duration::seconds(n)
-    }
-
-    fn blank(uuid: &str, n: i64) -> ParsedMessage {
-        ParsedMessage {
-            uuid: uuid.into(),
-            parent_uuid: None,
-            message_type: MessageType::User,
-            category: MessageCategory::User,
-            timestamp: ts(n),
-            role: None,
-            content: MessageContent::Text(String::new()),
-            usage: None,
-            model: None,
-            cwd: None,
-            git_branch: None,
-            agent_id: None,
-            is_sidechain: false,
-            is_meta: false,
-            user_type: None,
-            tool_calls: Vec::new(),
-            tool_results: Vec::new(),
-            source_tool_use_id: None,
-            source_tool_assistant_uuid: None,
-            is_compact_summary: false,
-            request_id: None,
-            tool_use_result: None,
-        }
-    }
-
-    fn assistant_with_tool(uuid: &str, n: i64, id: &str, name: &str) -> ParsedMessage {
-        let input = serde_json::json!({});
-        ParsedMessage {
-            message_type: MessageType::Assistant,
-            category: MessageCategory::Assistant,
-            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
-                id: id.into(),
-                name: name.into(),
-                input: input.clone(),
-            }]),
-            tool_calls: vec![ToolCall {
-                id: id.into(),
-                name: name.into(),
-                input,
-                is_task: name == "Task",
-                task_description: None,
-                task_subagent_type: None,
-            }],
-            ..blank(uuid, n)
-        }
-    }
-
-    fn user_with_result(
-        uuid: &str,
-        n: i64,
-        id: &str,
-        content: serde_json::Value,
-        is_error: bool,
-    ) -> ParsedMessage {
-        ParsedMessage {
-            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
-                tool_use_id: id.into(),
-                content,
-                is_error,
-            }]),
-            ..blank(uuid, n)
-        }
-    }
+    use crate::test_support::{assistant_with_tool, blank_message, ts, user_with_result};
 
     #[test]
     fn immediate_result_links() {
@@ -281,7 +207,7 @@ mod tests {
     fn delayed_result_links() {
         let msgs = vec![
             assistant_with_tool("a1", 1, "t1", "Bash"),
-            blank("u1", 2),
+            blank_message("u1", 2),
             assistant_with_tool("a2", 3, "t2", "Read"),
             user_with_result("u2", 4, "t1", serde_json::json!("late"), false),
         ];
@@ -402,7 +328,7 @@ mod tests {
                 is_error,
             }]),
             tool_use_result: Some(tool_use_result),
-            ..blank(uuid, n)
+            ..blank_message(uuid, n)
         }
     }
 
