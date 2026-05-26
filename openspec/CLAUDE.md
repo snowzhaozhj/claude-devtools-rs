@@ -77,6 +77,8 @@ spec 改了但 proposal/tasks 仍写旧策略 = codex / 人审会发现脱节。
 
 `ADDED/MODIFIED Requirement` 体的**第一段**必须含 `SHALL` 或 `MUST`，否则 `openspec validate --strict` 报 `must contain SHALL or MUST`；中文背景描述要放在规约句之后。
 
+`MODIFIED Requirement` 的 title 必须与主 spec 现有 title **字符精确匹配**（whitespace-insensitive，但 backtick / 标点 / 大小写都要一致）——`openspec archive` 用 title 做匹配键去主 spec 找对应段替换，title 不匹配会 `MODIFIED failed for header "..." - not found` 拒 archive。改名场景**必须走 `RENAMED Requirement`**（`FROM:` / `TO:` 形式），不要在 `MODIFIED` 里偷偷改 title。清理 PR 想"顺手把 title 也抽象掉"是高频踩坑（PR #312 案例：title 改名后 archive 拒 3 次，最终恢复原 title 留 follow-up）——title 改名 SHALL 单独走 RENAMED 段，否则保持原 title 不动留 follow-up。
+
 ## 推进节拍（速查）
 
 详见 `.claude/rules/opsx-apply-cadence.md`。核心：
