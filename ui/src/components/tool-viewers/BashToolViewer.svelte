@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ToolExecution } from "../../lib/api";
-  import { toolErrorText, toolOutputText } from "../../lib/toolHelpers";
+  import { stripAnsi, toolErrorText, toolOutputText } from "../../lib/toolHelpers";
   import OutputBlock from "../OutputBlock.svelte";
   import { contextMenu } from "../../lib/contextMenu.svelte";
   import { buildBashToolItems, type MenuItemContext } from "../../lib/contextMenu/menu-items";
@@ -19,7 +19,9 @@
 
   const input = $derived(exec.input as Record<string, unknown>);
   const command = $derived(String(input?.command ?? ""));
-  const outputStr = $derived(exec.isError ? toolErrorText(exec) : toolOutputText(exec.output));
+  // Bash stdout 是 terminal-style 输出——nextest / cargo / git 等彩色字节走 stripAnsi
+  // 渲染成纯文本（codex CR PR #328：toolOutputText 自身不剥，决策权在 viewer 层）。
+  const outputStr = $derived(exec.isError ? toolErrorText(exec) : stripAnsi(toolOutputText(exec.output)));
 
   function buildCtx(): MenuItemContext {
     return {

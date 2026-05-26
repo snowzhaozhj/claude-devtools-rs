@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ToolExecution } from "../../lib/api";
-  import { toolErrorText, toolOutputText } from "../../lib/toolHelpers";
+  import { stripAnsi, toolErrorText, toolOutputText } from "../../lib/toolHelpers";
   import DiffViewer from "../DiffViewer.svelte";
   import OutputBlock from "../OutputBlock.svelte";
   import { contextMenu } from "../../lib/contextMenu.svelte";
@@ -22,8 +22,9 @@
   const newString = $derived(String(input?.new_string ?? input?.newString ?? ""));
   // 对齐原版 EditToolViewer.tsx L42-70：diff 下方显示工具回执。失败时展示
   // 错误详情（红色），成功时展示后端 toolUseResult.content（如有）。否则该区段
-  // 直接折叠不渲染。
-  const resultText = $derived(exec.isError ? toolErrorText(exec) : toolOutputText(exec.output));
+  // 直接折叠不渲染。Edit 失败回执是 stderr-style，与 Bash / Default 一致走 stripAnsi
+  // （codex CR PR #328：决策权在 viewer 层，toolOutputText 自身不剥）。
+  const resultText = $derived(exec.isError ? toolErrorText(exec) : stripAnsi(toolOutputText(exec.output)));
 
   function buildCtx(): MenuItemContext {
     return {

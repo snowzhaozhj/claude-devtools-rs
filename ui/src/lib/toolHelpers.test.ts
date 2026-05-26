@@ -299,33 +299,30 @@ describe('stripAnsi', () => {
 })
 
 /**
- * toolOutputText \u96C6\u6210\u6D4B\u8BD5\u2014\u2014\u4FDD\u8BC1 stripAnsi \u771F\u88AB\u4E32\u5230\u6240\u6709 tool viewer \u6E32\u67D3\u8DEF\u5F84\u3002
+ * toolOutputText \u884C\u4E3A\uFF1Araw \u8F6C\u6362\u4E0D\u8C03 stripAnsi\u3002
  *
- * \u8C03\u7528\u77E9\u9635\uFF1ABashToolViewer / DefaultToolViewer / EditToolViewer / ReadToolViewer
- * \u90FD\u901A\u8FC7 `toolOutputText(exec.output)` \u6D3E\u751F\u663E\u793A\u6587\u672C\uFF0C\u6240\u4EE5\u8FD9\u91CC\u53EA\u9700\u6D4B toolOutputText
- * \u672C\u8EAB\u7684\u4E09 kind \u5206\u652F\u5373\u53EF\u8986\u76D6\u56DB viewer \u7684\u6210\u529F\u8F93\u51FA\u6E32\u67D3\u3002
+ * \u8BBE\u8BA1\u539F\u5219\uFF08codex CR PR #328\uFF09\uFF1AtoolOutputText \u81EA\u8EAB**\u4E0D**\u5265 ANSI\u2014\u2014\u51B3\u7B56\u6743\u5728
+ * viewer \u5C42\u3002BashToolViewer / DefaultToolViewer / EditToolViewer \u663E\u5F0F stripAnsi
+ * \u5305\u4E00\u5C42\uFF08stdout-style \u5951\u7EA6\uFF09\uFF1BReadToolViewer \u4E0D\u5305\uFF08\u6587\u4EF6\u5185\u5BB9 raw \u5951\u7EA6\uFF0C\u907F\u514D
+ * \u9759\u9ED8\u5265\u6389\u7528\u6237\u8BFB ANSI fixture / \u7EC8\u7AEF\u5F55\u50CF log \u65F6\u7684\u771F\u5B9E \x1b \u5B57\u8282\uFF09\u3002
  */
-describe('toolOutputText \u4E32\u63A5 stripAnsi', () => {
-  test('text kind \u8D70 stripAnsi \u6E05\u6D17\uFF08\u622A\u56FE nextest \u771F\u5B9E\u6837\u672C\uFF09', () => {
-    const ansi = '\x1b[32;1m       PASS\x1b[0m [   0.011s] \x1b[35;1mcdt-watch\x1b[0m'
-    expect(toolOutputText({ kind: 'text', text: ansi })).toBe('       PASS [   0.011s] cdt-watch')
+describe('toolOutputText\uFF08raw\uFF0CstripAnsi \u51B3\u7B56\u6743\u5728 viewer \u5C42\uFF09', () => {
+  test('text kind \u542B ANSI \u5B57\u8282\u4E5F\u539F\u6837\u8FD4\u56DE\uFF08ReadToolViewer \u6587\u4EF6 raw \u5951\u7EA6\uFF09', () => {
+    const ansi = '\x1b[32;1m       PASS\x1b[0m [   0.011s]'
+    expect(toolOutputText({ kind: 'text', text: ansi })).toBe(ansi)
   })
 
-  test('text kind \u65E0 ANSI \u65F6\u539F\u6837\u8FD4\u56DE\uFF08\u786E\u8BA4 stripAnsi \u662F\u65E0\u526F\u4F5C\u7528\u901A\u8DEF\uFF09', () => {
+  test('text kind \u65E0 ANSI \u65F6\u539F\u6837\u8FD4\u56DE', () => {
     expect(toolOutputText({ kind: 'text', text: 'plain output' })).toBe('plain output')
     expect(toolOutputText({ kind: 'text', text: '\u4E2D\u6587\u8F93\u51FA\n\u7B2C\u4E8C\u884C' })).toBe('\u4E2D\u6587\u8F93\u51FA\n\u7B2C\u4E8C\u884C')
   })
 
-  test('text kind \u542B\u5B57\u9762 `[200m` `[0m` \u7B49 SGR \u5B57\u7B26\u4E32 SHALL \u539F\u6837\u8FD4\u56DE\uFF08codex CR PR #328\uFF09', () => {
-    // ReadToolViewer \u8DEF\u5F84\u5173\u952E\u5B88\u536B\uFF1A\u7528\u6237\u8BFB\u6E90\u7801 / \u6587\u6863\u91CC\u5199\u7684 ANSI escape \u5B57\u9762
-    // \u4E0D\u80FD\u88AB\u9759\u9ED8\u6539\u5199\u2014\u2014\u5355\u5411\u65E0\u635F\u5951\u7EA6\u3002
+  test('text kind \u542B\u5B57\u9762 `[200m` `[0m` \u7B49 SGR \u5B57\u7B26\u4E32\u539F\u6837\u8FD4\u56DE\uFF08\u65E0\u9759\u9ED8\u6539\u5199\uFF09', () => {
     expect(toolOutputText({ kind: 'text', text: 'literal [200m and [0m here' }))
       .toBe('literal [200m and [0m here')
-    expect(toolOutputText({ kind: 'text', text: 'const ansiRed = "\\x1b[31m" // \u800C\u975E [31m' }))
-      .toBe('const ansiRed = "\\x1b[31m" // \u800C\u975E [31m')
   })
 
-  test('structured kind \u8D70 JSON.stringify \u4E0D\u88AB stripAnsi \u89E6\u78B0', () => {
+  test('structured kind \u8D70 JSON.stringify', () => {
     expect(toolOutputText({ kind: 'structured', value: { ok: true, count: 3 } }))
       .toBe('{\n  "ok": true,\n  "count": 3\n}')
   })

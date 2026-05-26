@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ToolExecution } from "../../lib/api";
-  import { toolErrorText, toolOutputText } from "../../lib/toolHelpers";
+  import { stripAnsi, toolErrorText, toolOutputText } from "../../lib/toolHelpers";
   import OutputBlock from "../OutputBlock.svelte";
 
   interface Props {
@@ -10,7 +10,10 @@
   let { exec }: Props = $props();
 
   const inputStr = $derived(JSON.stringify(exec.input, null, 2));
-  const outputStr = $derived(exec.isError ? toolErrorText(exec) : toolOutputText(exec.output));
+  // 默认 viewer 接 Grep / Glob / WebFetch / MCP 等 stdout-style fallback——走 stripAnsi
+  // 与 BashToolViewer 一致（codex CR PR #328：决策权在 viewer 层；ReadToolViewer
+  // 走文件 raw 契约不剥真实 ESC 字节）。
+  const outputStr = $derived(exec.isError ? toolErrorText(exec) : stripAnsi(toolOutputText(exec.output)));
 
   // codex PR 二审 MEDIUM #3：阻止右键事件冒泡到 AI 消息层 surface 菜单。
   // DefaultToolViewer 用于尚未实现专化菜单的工具类型——保留浏览器原生 contextmenu

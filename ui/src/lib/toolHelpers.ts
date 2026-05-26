@@ -466,17 +466,15 @@ function findStringField(value: unknown, names: string[]): string | undefined {
 }
 
 /**
- * 将 ToolOutput 转为文本。
+ * 将 ToolOutput 转为文本（raw，**不**调 stripAnsi）。
  *
- * 对 `kind === "text"` 分支统一 `stripAnsi`——让 nextest / cargo / git 等彩色
- * stdout 在所有 tool viewer（Bash / Default / Edit / Read）里都显示成纯文本，
- * 而非渲染 `[32;1m PASS [0m` 字面字节。
- *
- * 单向无损：源 jsonl 字节完整保留，仅渲染层清洗；token 估算
- * (`getToolOutputTokens`) 仍读 `output.text.length` 不受影响。
+ * stripAnsi 决策权下放到 viewer 层——BashToolViewer / DefaultToolViewer /
+ * EditToolViewer 这种 stdout-style 路径在派生 outputStr 时显式调 stripAnsi 包一层；
+ * ReadToolViewer 走文件内容 raw 契约**不**调 stripAnsi，否则用户读 ANSI fixture /
+ * 终端录像 log 等真实含 \x1b 字节的文件时这些字节会被静默剥掉（codex CR：PR #328）。
  */
 export function toolOutputText(output: ToolOutput): string {
-  if (output.kind === "text") return stripAnsi(output.text);
+  if (output.kind === "text") return output.text;
   if (output.kind === "structured")
     return JSON.stringify(output.value, null, 2);
   return "";
