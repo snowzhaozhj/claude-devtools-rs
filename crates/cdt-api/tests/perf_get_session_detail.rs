@@ -231,12 +231,12 @@ async fn bench_get_session_detail_large_sessions() {
         // 经过 LocalDataApi::get_session_detail 的真实 IPC 路径——含
         // OMIT_SUBAGENT_MESSAGES 裁剪。对比 raw payload 看减肥效果。
         let t_ipc = Instant::now();
-        let detail = api
-            .get_session_detail(project_id, sid)
+        let resp = api
+            .get_session_detail(project_id, sid, None)
             .await
             .expect("get_session_detail");
         let ipc_ms = t_ipc.elapsed().as_millis();
-        let ipc_payload = serde_json::to_vec(&detail).map_or(0, |v| v.len());
+        let ipc_payload = serde_json::to_vec(&resp).map_or(0, |v| v.len());
         eprintln!(
             "  ★ get_session_detail (with OMIT): payload={} KB, ipc {} ms",
             ipc_payload / 1024,

@@ -167,9 +167,15 @@ async fn get_session_detail_after_find_session_project_succeeds() {
         .unwrap()
         .expect("命中后 SHALL 返 Some");
     let detail = api
-        .get_session_detail(&pid, "sid-A")
+        .get_session_detail(&pid, "sid-A", None)
         .await
         .expect("反查 + detail 复合路径 SHALL 成功");
+    let detail = match detail {
+        cdt_api::SessionDetailResponse::Full { detail, .. } => *detail,
+        cdt_api::SessionDetailResponse::Unchanged { .. } => {
+            panic!("expected Full on first call")
+        }
+    };
     assert_eq!(detail.session_id, "sid-A");
     assert_eq!(detail.project_id, "-proj-A");
 

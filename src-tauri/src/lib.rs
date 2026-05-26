@@ -67,13 +67,18 @@ async fn get_session_detail(
     data: State<'_, AppData>,
     project_id: String,
     session_id: String,
+    known_fingerprint: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let detail = data
+    let resp = data
         .api
-        .get_session_detail(&project_id, &session_id)
+        .get_session_detail(
+            &project_id,
+            &session_id,
+            known_fingerprint.as_deref(),
+        )
         .await
         .map_err(|e| e.to_string())?;
-    serde_json::to_value(&detail).map_err(|e| e.to_string())
+    serde_json::to_value(&resp).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

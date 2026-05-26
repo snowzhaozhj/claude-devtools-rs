@@ -48,7 +48,7 @@ use super::types::{
     ConfigUpdateRequest, ContextInfo, GroupCursor, GroupSessionPage, MemoryFileContent,
     MemoryLayer, MemoryLayerKind, PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory,
     ProjectSessionPrefs, SearchRequest, SessionDetail, SessionDetailMetadata, SessionDetailMetrics,
-    SessionSummary, SshConnectRequest, WorktreeOffset,
+    SessionDetailResponse, SessionSummary, SshConnectRequest, WorktreeOffset,
 };
 use crate::notifier::NotificationPipeline;
 
@@ -145,6 +145,14 @@ fn ai_first_response_total_tokens(ai: &cdt_core::AIChunk) -> Option<u64> {
     ai.responses
         .iter()
         .find_map(|r| r.usage.as_ref().and_then(token_usage_total))
+}
+
+/// 从 locate stat 的 `mtime_ms` + size 生成 fingerprint 字符串。
+/// 格式 `"v1:<mtime_ms>:<size>"`——`mtime_ms` 为 `None` 时用 `0`（SSH 无 mtime fallback），
+/// 此时 fingerprint 每次不同（`known` 不会是 `"v1:0:..."` 因为上次 full 路径也
+/// 无 mtime → fingerprint 一样 → 下次比中；退化为每次 full 也无害）。
+fn make_session_fingerprint(mtime_ms: Option<i64>, size: Option<u64>) -> String {
+    format!("v1:{}:{}", mtime_ms.unwrap_or(0), size.unwrap_or(0))
 }
 
 fn find_last_ai_before(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core::AIChunk> {
@@ -3237,7 +3245,8 @@ impl DataApi for LocalDataApi {
         &self,
         project_id: &str,
         session_id: &str,
-    ) -> Result<SessionDetail, ApiError> {
+        known_fingerprint: Option<&str>,
+    ) -> Result<SessionDetailResponse, ApiError> {
         let _telemetry_timer =
             cdt_telemetry::histogram!("ipc.get_session_detail.duration_ns").start_timer();
         // 性能探针：拆 5 段计时——locate / parse / scan_subagents / build_chunks /
@@ -3274,6 +3283,22 @@ impl DataApi for LocalDataApi {
             (path, modified, size)
         };
         let locate_ms = t_locate.elapsed().as_millis();
+
+        // fingerprint 短路：复用 locate stat 的 mtime+size 生成字符串签名。
+        // 与 known_fingerprint 一致 → 文件未变，跳过 parse/build/serialize 全流程。
+        let fingerprint = make_session_fingerprint(last_modified, size);
+        if let Some(known) = known_fingerprint {
+            if known == fingerprint {
+                cdt_telemetry::counter!("ipc.get_session_detail.unchanged").inc();
+                tracing::info!(
+                    target: "cdt_api::perf",
+                    session_id = %session_id,
+                    locate_ms,
+                    "get_session_detail short-circuit: unchanged"
+                );
+                return Ok(SessionDetailResponse::Unchanged { fingerprint });
+            }
+        }
 
         let t_parse = std::time::Instant::now();
         // Local + SSH 共用 cache wrapper：cache hit byte-equal 直接返；miss 经 parse_file_via_fs
@@ -3458,7 +3483,10 @@ impl DataApi for LocalDataApi {
             "get_session_detail timings"
         );
 
-        Ok(detail)
+        Ok(SessionDetailResponse::Full {
+            fingerprint,
+            detail: Box::new(detail),
+        })
     }
 
     async fn find_session_project(&self, session_id: &str) -> Result<Option<String>, ApiError> {
@@ -3682,8 +3710,23 @@ impl DataApi for LocalDataApi {
                 });
                 continue;
             };
-            match self.get_session_detail(&project_id, sid).await {
-                Ok(detail) => results.push(detail),
+            match self.get_session_detail(&project_id, sid, None).await {
+                Ok(SessionDetailResponse::Full { detail, .. }) => results.push(*detail),
+                Ok(SessionDetailResponse::Unchanged { .. }) => {
+                    // Should not happen with None fingerprint, but handle gracefully
+                    results.push(SessionDetail {
+                        session_id: sid.clone(),
+                        project_id,
+                        chunks: Vec::new(),
+                        metrics: SessionDetailMetrics::default(),
+                        metadata: SessionDetailMetadata::default(),
+                        context_injections: Vec::new(),
+                        injections_by_phase: BTreeMap::new(),
+                        phase_info: cdt_core::ContextPhaseInfo::default(),
+                        is_ongoing: false,
+                        title: None,
+                    });
+                }
                 Err(_) => results.push(SessionDetail {
                     session_id: sid.clone(),
                     project_id,

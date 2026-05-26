@@ -68,7 +68,7 @@ async fn main() {
     }
 
     eprintln!("\nCalling get_session_detail...");
-    match api.get_session_detail(project_id, session_id).await {
+    match api.get_session_detail(project_id, session_id, None).await {
         Ok(detail) => {
             let detail_json: serde_json::Value = serde_json::to_value(&detail).unwrap();
             let chunks = detail_json["chunks"].as_array().unwrap();

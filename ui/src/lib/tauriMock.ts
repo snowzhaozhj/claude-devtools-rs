@@ -391,7 +391,8 @@ function buildHandler(fx: Fixture) {
             new Error(`[mockIPC] no SessionDetail fixture for ${projectId}:${sessionId}`),
           )
         }
-        return detail
+        const fingerprint = `v1:${Date.now()}:${JSON.stringify(detail).length}`
+        return { status: 'full', fingerprint, detail }
       }
 
       case 'get_project_memory': {

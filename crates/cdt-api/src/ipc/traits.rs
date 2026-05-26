@@ -10,7 +10,7 @@ use super::error::ApiError;
 use super::types::{
     ConfigUpdateRequest, ContextInfo, GroupSessionPage, MemoryFileContent, PaginatedRequest,
     PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs, SearchRequest,
-    SessionDetail, SessionSummary, SshConnectRequest,
+    SessionDetail, SessionDetailResponse, SessionSummary, SshConnectRequest,
 };
 
 /// 数据 API 操作集。
@@ -53,11 +53,15 @@ pub trait DataApi: Send + Sync {
     }
 
     /// 获取会话详情（chunks + metrics + metadata）。
+    ///
+    /// `known_fingerprint`：调用方持有的上次 fingerprint。后端 stat 文件后生成
+    /// 新 fingerprint，若与 `known_fingerprint` 一致返 `Unchanged`（p95 < 5 ms）。
     async fn get_session_detail(
         &self,
         project_id: &str,
         session_id: &str,
-    ) -> Result<SessionDetail, ApiError>;
+        known_fingerprint: Option<&str>,
+    ) -> Result<SessionDetailResponse, ApiError>;
 
     /// 按 id 批量获取某项目下的轻量会话摘要。
     async fn get_session_summaries_by_ids(
