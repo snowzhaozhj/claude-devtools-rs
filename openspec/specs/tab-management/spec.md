@@ -41,6 +41,15 @@ Tab 容器 SHALL 在 `<button>` / `<span>` 等可 hover 的根元素上设置 HT
 - **WHEN** 在前端代码中搜索 `label.slice(0, ` / `label.substring(0, ` / `tab.label.slice` 等模式
 - **THEN** SHALL NOT 出现任何作用于 `tab.label` 的不可逆字符截断（含 "…" 拼接）
 
+#### Scenario: 点击会话打开标签页
+- **WHEN** 用户点击一个会话项
+- **THEN** 系统 SHALL 在当前聚焦窗格打开或激活该会话对应的标签页
+
+#### Scenario: 会话详情按所属工作树加载
+- **WHEN** 用户点击 sidebar 某 session 行（所属 worktree id 为 "wt-X1"、session id 为 "sid"）
+- **THEN** 会话标签页身份 SHALL 关联该会话所属 worktree、session 与 group，用于详情加载与 Sidebar 高亮
+- **AND** session 详情视图 SHALL 使用 worktree id "wt-X1" 与 session id "sid" 请求详情数据，而不是使用 group id
+
 ### Requirement: 关闭 tab
 
 用户点击 tab 的关闭按钮时，系统 SHALL 从该 tab 所在 pane 移除该 tab 并清理其关联的 UI 状态和 session 缓存。若关闭后 pane 变空且不是唯一 pane，该 pane SHALL 被自动关闭。
@@ -183,6 +192,10 @@ Sidebar 的会话高亮 SHALL 跟随 focused pane 的 activeTabId 对应的 sess
 #### Scenario: 无 active tab 时 Sidebar 无高亮
 - **WHEN** focused pane 的 activeTabId 为 null
 - **THEN** Sidebar 中 SHALL 无 session 项被高亮
+
+#### Scenario: 高亮跟随当前窗格的活跃标签页
+- **WHEN** focused pane 的 activeTabId 变化（无论通过 Sidebar 点击、TabBar 点击、跨 pane focus 切换还是快捷键）
+- **THEN** Sidebar 中对应 sessionId 的会话项 SHALL 高亮，之前的高亮 SHALL 移除
 
 ### Requirement: Pane 生命周期
 
