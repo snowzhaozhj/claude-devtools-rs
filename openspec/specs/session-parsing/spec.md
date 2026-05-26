@@ -363,8 +363,34 @@ stat 路径 MUST 走文件系统抽象层的 stat 操作（而非直接调用平
 
 #### Scenario: `FileSignature` 不一致走 cache miss
 
-- **WHEN** stat 拿到的 `FileSignature` 与缓存记录任一字段不一致
-- **THEN** MUST 走 cache miss 分支，重新解析全文件
+- **WHEN** stat 拿到的 `FileSignature` 与缓存记录任一字段（mtime / size / identity）不一致
+- **THEN** MUST 走 cache miss 分支，重新解析全文件，并以新 `FileSignature` + 新结果覆盖缓存
+
+#### Scenario: parse 失败时 SHALL NOT 写入缓存
+
+- **WHEN** 调用 `get_tool_output` / `get_image_asset` 时 cache miss，但 parse 返回错误
+- **THEN** MUST 走 caller 的原有错误兜底路径（`get_image_asset` 返回 `empty_data_uri()`、`get_tool_output` 返回 `ToolOutput::Missing`），且 SHALL NOT 把空条目写入缓存
+
+#### Scenario: stat 失败时走 cache miss 且不写入
+
+- **WHEN** 调用 `get_tool_output` / `get_image_asset` 时 stat 操作失败
+- **THEN** MUST 走原 caller 错误兜底路径，SHALL NOT 把任何条目写入缓存
+
+#### Scenario: 缓存超过容量按 LRU 淘汰
+
+- **WHEN** 缓存已达 50 entries 时再调 `get_tool_output` / `get_image_asset` 触发一个新 `(context_id, path)` key 写入
+- **THEN** MUST 淘汰当前最久未访问的条目后再写入新条目，缓存大小始终 ≤ 50
+
+#### Scenario: 缓存命中时把 key bump 到队首
+
+- **WHEN** lookup 在缓存中命中 `(context_id, path)` key
+- **THEN** MUST 把该 key 的 LRU 位置移到队首（最新访问），后续淘汰循环中该 key 不会被冷热顺序错误淘汰
+
+#### Scenario: cache key 在 `(ContextId, PathBuf)` tuple 下 Local 与 SSH 同字面 path 不串扰
+
+- **WHEN** 对同一个 parsed-message cache 实例先用 Local ctx + path P 写入 entry A，再用 SSH ctx + 同字面 path P 写入 entry B
+- **THEN** cache MUST 同时持有两个独立 entry，SHALL NOT 串扰命中
+- **AND** 用 Local ctx 查询 MUST 只命中 Local entry，用 SSH ctx 查询 MUST 只命中 SSH entry
 
 ### Requirement: parsed-message 缓存按 file-change 广播主动失效
 

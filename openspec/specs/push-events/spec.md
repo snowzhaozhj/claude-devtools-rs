@@ -286,6 +286,11 @@ batched helper 内部的 mismatch sub-task SHALL 通过 JoinSet 持有，顶层 
 - **WHEN** page 1 正在扫描，调用方调 page 2
 - **THEN** page 1 扫描 SHALL 继续运行；page 2 启动独立扫描
 
+#### Scenario: 切 project 不主动 abort 旧 project 扫描
+
+- **WHEN** `list_sessions("projectA", ...)` 后台扫描进行中，调用方紧接着调用 `list_sessions("projectB", ...)`
+- **THEN** projectA 的扫描 SHALL **继续运行**至完成，旧 project 的 `SessionMetadataUpdate` 仍会被广播；前端 listener 已按 `payload.projectId !== selectedProjectId` 过滤，UI 不受影响
+
 #### Scenario: 后台扫描并发度限制
 
 - **WHEN** 扫描任务在并发处理某页 50 个 cache-miss session 文件
@@ -306,6 +311,7 @@ batched helper 内部的 mismatch sub-task SHALL 通过 JoinSet 持有，顶层 
 
 - **WHEN** Local context 下所有 session 都 cache 命中
 - **THEN** SHALL NOT spawn 后台扫描，SHALL NOT 改动 active_scans
+- **AND** receiver SHALL 不收到任何对应该次调用的 `SessionMetadataUpdate`
 
 #### Scenario: SSH backend cache 全命中仍 spawn batched 校验
 
