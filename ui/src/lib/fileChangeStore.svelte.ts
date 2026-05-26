@@ -114,13 +114,14 @@ export function dedupeRefresh(
 //      把 trailing 吃掉（codex review 找到的 bug）。
 // ---------------------------------------------------------------------------
 
-const TRAILING_DEBOUNCE_MS = 250;
+const DEFAULT_DEBOUNCE_MS = 250;
 
 const trailingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const trailingPending = new Map<string, () => Promise<void>>();
 const lastRunAt = new Map<string, number>();
 const scheduleInFlight = new Map<string, Promise<void>>();
 const scheduleDirty = new Map<string, () => Promise<void>>();
+const keyDebounceMs = new Map<string, number>();
 
 /**
  * 内部执行入口：保证同 key 上一轮 fn 必定 settle 后才跑下一轮，且 settle 后
@@ -152,14 +153,21 @@ function runScheduled(key: string, fn: () => Promise<void>): void {
 }
 
 /**
- * 节流刷新：高频 file-change 下，同 key 在 250ms 窗口内合并为一次"末尾刷新"。
+ * 节流刷新：高频 file-change 下，同 key 在 debounce 窗口内合并为一次"末尾刷新"。
  * 窗口外的首次调用立即触发，保留首屏即时感。
+ *
+ * `debounceMs`：可选自定义窗口（默认 250ms）。`detail:*` key 按 session 大小
+ * 传入自适应值（150/300/500/1000ms），`sidebar:*` 保持 250ms。
  */
-export function scheduleRefresh(key: string, fn: () => Promise<void>): void {
+export function scheduleRefresh(key: string, fn: () => Promise<void>, debounceMs?: number): void {
+  const windowMs = debounceMs ?? keyDebounceMs.get(key) ?? DEFAULT_DEBOUNCE_MS;
+  if (debounceMs !== undefined) {
+    keyDebounceMs.set(key, debounceMs);
+  }
   const now = Date.now();
   const last = lastRunAt.get(key) ?? 0;
 
-  if (now - last >= TRAILING_DEBOUNCE_MS) {
+  if (now - last >= windowMs) {
     lastRunAt.set(key, now);
     runScheduled(key, fn);
     return;
@@ -168,7 +176,7 @@ export function scheduleRefresh(key: string, fn: () => Promise<void>): void {
   trailingPending.set(key, fn);
   if (trailingTimers.has(key)) return;
 
-  const delay = TRAILING_DEBOUNCE_MS - (now - last);
+  const delay = windowMs - (now - last);
   const timer = setTimeout(() => {
     trailingTimers.delete(key);
     const pending = trailingPending.get(key);
