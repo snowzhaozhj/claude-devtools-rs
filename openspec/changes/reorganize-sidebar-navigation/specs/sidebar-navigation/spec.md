@@ -10,20 +10,19 @@
 
 ### Requirement: selectedGroupId 与 worktree id 分层维护
 
-Sidebar 当前选中的项目入口 SHALL 用 `selectedGroupId` 字段持 `RepositoryGroup.id`，用于顶层导航 / 列表分页 / push event 过滤 / 用户配置持久化。**但** session 详情链路（`get_session_detail` / `get_tool_output` / `get_image_asset` / `get_subagent_trace`）入参的 project id MUST 继续持 worktree id（即底层 `Project.id`，encoded project dir 名），避免 detail API 无法定位具体 session 文件（codex post-propose 二审 #3 驳回一刀切方案）。
+Sidebar 当前选中的项目入口 SHALL 用 `selectedGroupId` 字段持 `RepositoryGroup.id`，用于顶层导航 / 列表分页 / push event 过滤 / 用户配置持久化。Session tab identity 与详情 API 入参归 `[[tab-management]]` owner；Sidebar 仅消费会话列表项携带的 worktree / group / session 三元信息来发起打开行为，不在本 Requirement 重复定义 tab 字段。
 
-两套 id 通过 `SessionSummary.worktreeId` + `SessionSummary.groupId` + `SessionSummary.sessionId` 三元组桥接：UI 列表点击 session 时拿 `session.worktreeId` 注入 tab，tab 内 detail 路径用 worktree id 走老 IPC，sidebar 顶层 `selectedGroupId` 不变。
+Sidebar 通过 `SessionSummary.worktreeId` + `SessionSummary.groupId` + `SessionSummary.sessionId` 三元组把 group 级列表项与具体 worktree session 关联：sidebar 顶层 `selectedGroupId` 保持 group id；涉及 tab 创建、tab 高亮归属与详情加载 identity 的行为由 `[[tab-management]]` 对应 Requirement 守护。
 
 收敛点行为契约：
 
 - 顶层导航状态 SHALL 持 group id（不再是 worktree id）
 - session 列表分页 SHALL 调 `listGroupSessions(groupId, pageSize, cursor)` 拉合并 sessions
 - session 列表缓存 cache key SHALL 用 `(groupId, filterWorktreeId | null)` 复合 key 区分 filter 维度，否则切 filter 串台
-- push event payload `session-metadata-update` SHALL **新增** `groupId` 字段；前端 filter 按 `payload.groupId === selectedGroupId` 匹配；保留 `projectId` 字段供 detail 路径用
+- push event `session-metadata-update` SHALL 按 `[[push-events]]` 定义的 group id 语义过滤：前端 filter 按 event 所属 group 等于 `selectedGroupId` 匹配；worktree id 字段仅供 `[[tab-management]]` / detail 路径消费
 - 后台任务 `active_scans` per-key cancel 分两类 key：detail 拉取 = `(project_id /*worktree id*/, session_id)`（不变）；group 分页拉取 = `(group_id, page_cursor_hash)`（新加）
-- tab 状态 SHALL **保留** worktree id（`tab.projectId`，detail API 仍按 worktree id 定位）；新增 `tab.groupId: string` 字段供 sidebar 高亮"该 tab 属于哪个 group"
-- detail API 调用 SHALL 仍传 worktree id（不变）
-- Command Palette 全局搜索 SHALL 改调 `listGroupSessions(selectedGroupId, pageSize, null)` 拿合并候选；候选项 onclick 时按 `candidate.worktreeId` 创建 tab
+- session 打开后的 tab identity 与详情 API 入参 SHALL 由 `[[tab-management]]` 守护；Sidebar 不重复定义 tab 字段
+- Command Palette 全局搜索 SHALL 改调 `listGroupSessions(selectedGroupId, pageSize, null)` 拿合并候选；候选项 onclick 时 SHALL 按 `candidate.worktreeId` 交给 `[[tab-management]]` 创建 tab
 - 用户配置 `selected_project_id` 改 `selected_group_id`；启动时若读到老 worktree id，按 grouper 反查 group id 后改写一次（迁移）
 - 项目 memory / prefs（如有 per-project state）SHALL **不变**（维持 per-worktree，与 detail API 一致）
 
