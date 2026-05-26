@@ -32,3 +32,11 @@ spec/tool-execution-linking 6
 spec/tool-viewer-routing 5
 spec/ui-search 2
 spec/wsl-distro-discovery 1
+change/split-ipc-data-api/application-telemetry 5
+change/split-ipc-data-api/chunk-building 4
+change/split-ipc-data-api/project-discovery 14
+change/split-ipc-data-api/push-events 31
+change/split-ipc-data-api/server-mode 12
+change/split-ipc-data-api/session-parsing 45
+change/split-ipc-data-api/ssh-remote-context 2
+change/split-ipc-data-api/team-coordination-metadata 4
