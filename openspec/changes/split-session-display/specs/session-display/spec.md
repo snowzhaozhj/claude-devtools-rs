@@ -44,7 +44,7 @@
 
 ### Requirement: 大文本工具详情交互优先渲染
 
-**Reason**：本 Requirement 拆出到新建的 `tool-viewer-routing` capability（按 D-3 边界灰区裁定，归 viewer 路由 owner）。
+**Reason**：本 Requirement 拆出到新建的 `tool-viewer-routing` capability（归 viewer 路由 owner，因 viewer 路由本身决定展开节奏与 IPC 拉取时机）。
 
 **Migration**：行为契约 100% 不变；大文本展开节奏与 viewer 路由判定由 `tool-viewer-routing` capability 内 `大文本工具详情交互优先渲染` Requirement 守护。原 11 个 Scenario（Read 大文本不阻塞 / Read 小中等保留高亮 / Write 大文本不阻塞 / Write 小中等保留高亮 / Edit diff 不重型高亮 / HTML 注入安全 / omitted output ready 后展开 / 嵌套 ExecutionTrace omitted output ready 后展开 / 不依赖 output 立即展开 / AIChunk 展开不主动 prefetch / 工具详情展开状态局部更新）全部字符级迁移到新 cap。
 
@@ -62,13 +62,13 @@
 
 ### Requirement: Tool result expansion avoids eager heavy rendering
 
-**Reason**：本 Requirement 拆出到新建的 `tool-viewer-routing` capability（按 D-3 边界灰区裁定，归 viewer 路由 owner）。
+**Reason**：本 Requirement 拆出到新建的 `tool-viewer-routing` capability（归 viewer 路由 owner，因折叠态不渲染重内容是 viewer 行为）。
 
 **Migration**：行为契约 100% 不变；折叠态不渲染重内容 / 首次展开按需 / 重展开复用缓存的策略由 `tool-viewer-routing` capability 内 `Tool result expansion avoids eager heavy rendering` Requirement 守护。原 3 个 Scenario（Collapsed tool 不渲染 heavy output / First expansion 按需渲染 / Re-expansion 复用 cached render）全部字符级迁移到新 cap。
 
 ### Requirement: 无语言代码块高亮自动检测限制
 
-**Reason**：本 Requirement 拆出到新建的 `markdown` capability（按 D-3 边界灰区裁定，归 markdown 渲染管线 owner）。
+**Reason**：本 Requirement 拆出到新建的 `markdown` capability（归 markdown 渲染管线 owner，因未声明语言策略覆盖所有 markdown 调用点，不限工具 viewer 场景）。
 
 **Migration**：行为契约 100% 不变；未声明语言代码块的安全渲染策略由 `markdown` capability 内 `无语言代码块高亮自动检测限制` Requirement 守护。原 3 个 Scenario（声明语言代码块保持高亮 / 未声明语言按 plaintext 渲染 / 大块代码不自动检测）全部字符级迁移到新 cap。
 

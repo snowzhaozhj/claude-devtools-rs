@@ -132,6 +132,8 @@ Scenario body / WHEN / THEN / AND 子句全部字符级保持（包括 body 内 
 
 **为什么不顺手清剩下 4 处 Scenario 标题命名问题**：扫描 session-display 留下的 33 个 Requirement，发现还有 ~5-7 处疑似 SPEC_GUIDE 反例 1 命中（含 `expandedChunks` / `tabId` / `displayItemBuilder` / `[[push-events::file-change]]` 等内部 fn / 类型 / spec 索引引用作为 Scenario 标题或子句）。本 PR 严格 scope 在"跟 REMOVED 同 commit 顺手清"原则下不扩散 —— 留后续单 cap cleanup PR 处理（与 PR #319 / #322 / #325 工艺一致）。
 
+**SubagentCard MODIFIED Requirement 内同样保留剩余 3 处实现术语 Scenario 标题不动**：spec-guide-reviewer warn 指出，本 Requirement body 整体已 MODIFIED 重写后，Scenario 标题 "首次展开期间版本跳变由 effect 接管" / "同 sessionId 同版本并发触发 inflight 复用" / "同 sessionId 跨版本不复用旧 Promise" 内的 `effect` / `inflight` / `Promise` 仍是 Svelte rune / TS runtime 实现术语。激进读 SPEC_GUIDE "遇到一个修一个"应顺手清；本 PR 不清的理由：(a) D-5 scope 显式约束"PR 6 follow-up 仅清 codex 审批后缀这一具体类目"，避免 scope creep；(b) 这 3 处属"内部实现术语 + 跨语言异步语义"灰区，按 PR #322 / #325 工艺一致性也是留待对应 cap 重组 PR（这里指 session-display 自身后续 cleanup PR）一起改。本决定记录在案，避免 reviewer 再 raise。
+
 ### D-6：新 cap Purpose 段的迁移路径
 
 **问题**：openspec change delta schema 仅接受 `## ADDED / MODIFIED / REMOVED / RENAMED Requirements` 顶级段，**不**支持 `# X Specification` / `## Purpose` / `## Requirements` 这种主 spec 完整结构。`openspec validate split-session-display --strict` 会拒绝在 delta 内放 `## Purpose` —— 报 `No delta sections found. Add headers such as "## ADDED Requirements" or move non-delta notes outside specs/.`。
@@ -145,19 +147,19 @@ Scenario body / WHEN / THEN / AND 子句全部字符级保持（包括 body 内 
 
 **为什么这是可接受的**：openspec/CLAUDE.md::硬约束 1 "禁止直接 Edit 主 spec" 的核心是"行为契约（SHALL/MUST 句）改动必须走 delta 让 reviewer 审"。Purpose 段是 cap 入口元描述，**不**含行为契约——属"非 delta 注解"，validator 也明确给了"move non-delta notes outside specs/"提示。文档命名 / 入口元描述用直接编辑添加，与 commit `175fd7e` 处理 14 个 cap Purpose 的工艺完全对齐，是仓内既有先例。
 
-**3 个新 cap 的 Purpose 草稿**（archive 步骤后将插入到主 spec）：
+**3 个新 cap 的 Purpose 草稿**（archive 步骤后将插入到主 spec —— 用产品 / 用户价值视角下笔，**不**用"管线 / 链路 / IntersectionObserver / flushAll" 等机制术语，遵循 SPEC_GUIDE 反例 1 与 reviewer 自检 L99-104）：
 
 #### markdown::Purpose
 
-定义会话视图内 markdown 文本的统一渲染管线：所有用户消息正文 / AI 输出 / Thinking 与 Output 展开体 / Slash 命令 instructions / System 预格式化文本，经过同一套 Markdown → 语法高亮 → XSS 清洗 → 视口触发的懒渲染链路。本 spec 涵盖：fenced code block 高亮规则（声明语言 / 未声明语言 / 大块代码自动检测限制）、Mermaid 图表内嵌渲染、IntersectionObserver 驱动的视口触发与 `flushAll` 全文操作 fallback、紧急回滚开关。本 spec 仅约束 markdown 渲染管线本身的行为契约；具体由谁触发渲染（user 气泡 / AI 卡片 / Tool viewer / TeammateMessageItem 等）由各自所在 capability 守护。
+让会话视图中所有可读文本（用户消息正文、助手回复、思考与命令展开内容）以一致样式呈现给用户：代码块带语法高亮、技术图表能看图、危险内容被拦截、长会话首屏只渲染用户实际看到的部分。删了这个 capability，用户在看会话时会得到原始未着色文本、看不到代码颜色与图表、首屏卡顿、且潜在 XSS 内容会被注入页面。
 
 #### tool-viewer-routing::Purpose
 
-定义会话视图内工具调用的展开渲染契约：按 `toolName` 路由到专化 viewer（Read / Edit / Write / Bash / Default 等）的规则、tool row 头部的 token 估算与 duration 显示、折叠态不渲染重内容 / 展开按需 / 重展开复用缓存的性能契约、`outputOmitted=true` 路径下展开时机与 IPC 拉取节奏（按 viewer 是否消费 `exec.output` 分流）、大文本展开降级到轻量高亮、工具明细的 timing / waiting / failure 元信息显示。本 spec 既约束主会话工具列表，也约束 SubagentCard ExecutionTrace 内嵌的工具项。具体专化 viewer 内部的 DOM 结构与样式规约由消费方组件（`ReadToolViewer` / `EditToolViewer` / `WriteToolViewer` / `BashToolViewer` / `DefaultToolViewer`）承接；本 spec 守护工具调用 → viewer 路由 → 展开节奏的横向规则。
+让用户展开任意工具调用时立即看到该工具最相关的信息：Read 调用一眼能看到读了哪个文件 / 哪几行 / 内容；Edit 调用看到改了哪几行；Bash 调用看到命令与输出；其它工具回退到通用展示。配套显示工具耗时、等待状态、失败原因；输出量大时不阻塞 UI 交互。删了这个 capability，用户展开工具时会看到一团原始 JSON、不知工具是否完成 / 失败、且大输出会卡住整个会话页面。本 capability 同时覆盖主会话工具列表与 SubagentCard 内嵌套的子调用 trace。
 
 #### edit-diff-view::Purpose
 
-定义 Edit 工具调用的 diff 视图渲染规则：以统一 diff 格式（context / added / removed 三类行 + old/new 双列行号 + Header 文件名/语言/统计）展示 `old_string` 与 `new_string` 的行级差异；按 `file_path` 推断语言后对 diff 行内容进行 highlight.js 语法高亮，无法推断或高亮失败时降级为纯文本 diff。本 spec 仅守护 EditToolViewer 的 diff 视图行为契约；专化 viewer 的路由规则（"toolName 为 Edit 时使用 EditToolViewer"）由 `tool-viewer-routing` capability 守护，diff 行不做重型语法高亮的展开节奏由 `tool-viewer-routing::大文本工具详情交互优先渲染` Requirement 守护。
+让用户在 Edit 工具调用展开时一眼看到改了哪几行、删了什么、加了什么——按文件类型用颜色区分代码语法，方便扫读。删了这个 capability，用户看 Edit 工具调用时只能看到原始的 `old_string` / `new_string` 两段文本，需要自己脑补哪行被改、看不出语言结构。
 
 ## Risks / Trade-offs
 
