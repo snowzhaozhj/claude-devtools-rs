@@ -47,6 +47,7 @@
 
   let detail: SessionDetail | null = $state(null);
   let knownFingerprint: string | null = $state(null);
+  let lastChunksFingerprint: string | null = $state(null);
   let loading = $state(true);
   let error: string | null = $state(null);
   let conversationEl: HTMLElement | undefined = $state();
@@ -325,17 +326,35 @@
 
   const jumpTooltip = $derived(isMac() ? "跳到最新消息 (⌘↓)" : "跳到最新消息 (Ctrl+End)");
 
+  function getAdaptiveDebounceMs(): number {
+    const chunks = detail?.chunks.length ?? 0;
+    if (chunks < 50) return 150;
+    if (chunks < 200) return 300;
+    if (chunks < 500) return 500;
+    return 1000;
+  }
+
   const fileChangeKey = `session-detail-${untrack(() => tabId)}`;
 
   async function refreshDetail() {
     const wasAtBottom = !!conversationEl && isAtBottom(conversationEl);
     try {
-      const resp: SessionDetailResponse = await getSessionDetail(projectId, sessionId, knownFingerprint);
+      // ongoing session 不传 fingerprint——stale 阈值（5min）到了需重新评估
+      // is_ongoing，file mtime/size 不变但状态应从 ongoing → complete。
+      const fpToSend = detail?.isOngoing ? null : knownFingerprint;
+      const resp: SessionDetailResponse = await getSessionDetail(projectId, sessionId, fpToSend);
       knownFingerprint = resp.fingerprint;
       if (resp.status === "unchanged") {
         return;
       }
       const d = resp.detail!;
+      // Step 2: chunks fingerprint 二次短路——后端 fingerprint 不匹配（文件 stat 变了）
+      // 但 chunks 内容实质未变时（如仅 mtime touch 无追加），跳过 store 更新 + Svelte reconcile。
+      const cfp = computeChunksFingerprint(d);
+      if (cfp === lastChunksFingerprint) {
+        return;
+      }
+      lastChunksFingerprint = cfp;
       detail = d;
       setCachedSession(tabId, d);
       searchContentVersion++;
@@ -348,6 +367,15 @@
     } catch (e) {
       console.warn("auto refresh getSessionDetail failed:", e);
     }
+  }
+
+  function computeChunksFingerprint(d: SessionDetail): string {
+    const chunks = d.chunks;
+    const lastChunk = chunks.length > 0 ? chunks[chunks.length - 1] : null;
+    const lastMsgCount = lastChunk?.kind === "ai"
+      ? (lastChunk as AIChunk).responses.length
+      : 0;
+    return `${chunks.length}:${lastMsgCount}:${d.isOngoing}:${d.metrics.message_count}:${d.title ?? ""}`;
   }
 
   onMount(async () => {
@@ -371,6 +399,7 @@
     const cached = getCachedSession(tabId);
     if (cached) {
       detail = cached;
+      lastChunksFingerprint = computeChunksFingerprint(cached);
       loading = false;
       console.info(`[perf] SessionDetail ${sessionId.slice(0, 8)} cached hit`);
       // 切走再切回时 file-change handler 已 unmount，期间发生的文件追加事件
@@ -398,6 +427,7 @@
         const chunks_len = d.chunks.length;
         const payload_kb = JSON.stringify(d).length / 1024;
         detail = d;
+        lastChunksFingerprint = computeChunksFingerprint(d);
         setCachedSession(tabId, d);
         console.info(
           `[perf] SessionDetail ${sessionId.slice(0, 8)} IPC ${ipc_ms.toFixed(0)}ms (chunks=${chunks_len}, payload=${payload_kb.toFixed(0)}KB)`
@@ -430,7 +460,7 @@
     // 注册 file-change handler：命中当前 (projectId, sessionId) 时合并刷新
     registerHandler(fileChangeKey, (payload) => {
       if (payload.projectId !== projectId || payload.sessionId !== sessionId) return;
-      scheduleRefresh(`detail:${projectId}|${sessionId}`, refreshDetail);
+      scheduleRefresh(`detail:${projectId}|${sessionId}`, refreshDetail, getAdaptiveDebounceMs());
     });
 
     // 消费 deeplink 触发的 pendingScrollChunkId（spec session-display
