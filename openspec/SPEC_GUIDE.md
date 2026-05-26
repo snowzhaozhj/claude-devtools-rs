@@ -103,7 +103,16 @@ read_agent_configs(pairs)` 公开签名不变。
 
 `wall time SHALL ≈ 18s` 是可测契约，"远低于主观放弃阈值"不可测——把可测断言抽象掉 = NFR 失去守护能力。
 
-更多反例见 PR #300 design.md `D1-D6` / PR #312 design.md `D-1b`。
+### 反例 5：主 spec 引用 design.md / PR # / archived change
+
+主 spec 是行为契约真相源，应自含可读。`design.md::D-N` / "本 change" / 历史 change slug 都是 change-scoped 锚点：archive 后 design.md mv 到 `changes/archive/<日期>-<slug>/`，跨 change D 编号互不通用——reader 拿不到稳定 pointer。
+
+修法二选一：
+
+- **直接删**：括号注释 / "见 design.md::D-N" 删掉，前面 SHALL 句已自含行为契约
+- **简短内联**：决策结论或量级一句进 spec body，**显式标注 "为实现 tuning，不在 spec 层固定"** 标明认知锚点而非可测契约（如 "约 100 ms 量级，为实现 tuning，不在 spec 层固定"——`<数字>ms` 触发 spec-purity ratchet 时同 commit 刷 baseline 即可）
+
+历史案例：PR #322 / issue #323。
 
 ## 写新 spec 的下笔顺序
 
