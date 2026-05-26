@@ -153,7 +153,5 @@ jobs:
         # `--profile ci`：fail-fast 关闭收完整失败清单 + cdt-watch retries=2
         # cdt-watch override 在 `.config/nextest.toml`：进程隔离 + retry 抹平 FSEvents flaky
         run: cargo nextest run --workspace --features cdt-api/test-utils --locked --profile ci
-      # nextest 不跑 doctest——单独 `cargo test --doc` 兜底
-      # 当前仓内 ` ``` ` 标记多为 sh/ts/ignore，可执行 Rust doctest 极少，开销忽略
-      - name: cargo test --doc (nextest 不覆盖)
-        run: cargo test --workspace --features cdt-api/test-utils --locked --doc
+      # 不跑 doctest：当前仓 ` ``` ` 标记全为 sh/ts/ignore（无 runnable rust doctest）。
+      # 未来加 runnable doctest 时再评估是否恢复 `cargo test --doc` 兜底。

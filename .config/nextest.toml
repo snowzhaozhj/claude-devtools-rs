@@ -5,8 +5,9 @@
 # - 跨 binary 并行 —— 42 个 integration test binary 不再顺序跑
 # - 默认 fail-fast = true（首失败终止）；CI profile 关掉收完整失败清单
 #
-# `cargo test --doc` 不被 nextest 执行 —— justfile + ci.yml 保留单独入口（即使
-# 当前仓里 doctest 标记都是 sh/ts/ignore，没有可执行 Rust doctest，仍保兜底）
+# `cargo test --doc` 不被 nextest 执行 —— 当前仓 ` ``` ` 标记全为 sh/ts/ignore
+# （无 runnable Rust doctest），justfile + ci.yml 不再保留 doctest 入口；
+# 未来加 runnable doctest 时再决策是否恢复 `cargo test --doc`。
 
 [profile.default]
 # 慢测试警告——超 60s 标 SLOW；超 180s 视为 hang 并 SIGKILL
