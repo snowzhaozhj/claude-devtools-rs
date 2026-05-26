@@ -1,6 +1,6 @@
 # 实施任务
 
-## 1. spec delta 重写 9 cap / 16 Requirement Scenario 标题
+## 1. spec delta 重写 9 cap / 19 Requirement Scenario 标题
 
 - [x] 1.1 落 spec delta（每 cap 一份 MODIFIED 段，重写含改名 Scenario 的 Requirement body 全文，仅替换 Scenario 标题）
 - [x] 1.2 跑 `openspec validate cleanup-scenario-naming --strict` 通过

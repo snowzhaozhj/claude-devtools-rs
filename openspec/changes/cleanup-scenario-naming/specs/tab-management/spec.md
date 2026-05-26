@@ -52,3 +52,4 @@
 
 - **WHEN** 用户在 `Settings → Keyboard Shortcuts` 把任一 spec id 的 binding 改为新组合
 - **THEN** 后续按下新组合 SHALL 触发该 spec id 对应操作
+- **AND** 按下原默认组合 SHALL NOT 触发该 spec id（除非另一 spec id 已占用该默认组合）

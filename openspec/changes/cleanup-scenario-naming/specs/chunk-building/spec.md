@@ -30,6 +30,6 @@
 - **WHEN** 一条 `Task` `tool_use` 解析为 `Resolution::Orphan`
 - **THEN** 它 SHALL 保留在 `AIChunk.tool_executions` 列表中
 
-#### Scenario: Default chunk build does not filter Tasks in this port
+#### Scenario: Default chunk build does not filter Tasks
 - **WHEN** `build_chunks` 调用时未传任何 subagent candidate 池
 - **THEN** Task tool execution SHALL 保留在 `AIChunk.tool_executions`；下游消费者 MAY 仍显式调用 `filter_resolved_tasks`；端到端默认路径过滤推迟到 `team-coordination-metadata`

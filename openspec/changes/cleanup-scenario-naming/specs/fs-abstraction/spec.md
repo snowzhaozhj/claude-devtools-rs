@@ -2,6 +2,33 @@
 
 ## MODIFIED Requirements
 
+### Requirement: fs-related cache 必须采用"单实例 + ContextId key 前缀"拓扑
+
+任何持有 `FsMetadata` / `FsSignature` / 解析后的 jsonl 消息 / `ProjectScanner::scan` 结果等 fs-derived 数据的 cache SHALL 采用以下拓扑：
+
+1. **单实例**：`LocalDataApi` 持有该 cache 的**一个** `Arc<Mutex<...>>` / `Arc<RwLock<...>>` 实例，**不得**为每个 `ContextId` 创建独立 cache 实例
+2. **key 含 ContextId 前缀**：cache 的 key 类型 SHALL 是 `(ContextId, ...)` 形式 tuple（或等价 struct），其中 `ContextId` 是第一成员
+3. **LRU 容量按全局计算**：容量上限对所有 `ContextId` 总和适用，不按 context 拆分配额
+4. **switch_context 时不必清 cache**：不同 `ContextId` 的 entry 自然不命中（依赖 Hash/Eq 隔离），TTL + signature 校验照常工作
+
+本 change **不**改 `MetadataCache` / `ParsedMessageCache` 现状（PR-B/C 才动），但本 Requirement 是 PR-B/C 必须遵循的 SHALL 句——若 PR-B/C 选了"每 ContextId 一个实例"拓扑，违反本 Requirement，spec validate 应拒。
+
+#### Scenario: cache 实例只有一个
+
+- **WHEN** 检查 `LocalDataApi` 字段
+- **THEN** `metadata_cache` SHALL 是单一 `Arc<Mutex<MetadataCache>>` 字段，**不得**是 `HashMap<ContextId, Arc<Mutex<MetadataCache>>>` 类型
+
+#### Scenario: cache key 含上下文身份
+
+- **WHEN** 检查 `MetadataCache` / `ParsedMessageCache` 内部 `HashMap` 类型
+- **THEN** key 类型 SHALL 是 `(ContextId, PathBuf)` 或等价 newtype，**不得**仅 `PathBuf`
+
+#### Scenario: 跨 context 复用同一 cache 实例
+
+- **WHEN** 用户在 Local context 与 SSH context A 之间频繁切换
+- **THEN** 同一 `MetadataCache` 实例 SHALL 同时持有两个 context 的 entry
+- **AND** SSH context A 的 entry SHALL NOT 因切回 Local 被自动清除（依赖 LRU + TTL 自然淘汰）
+
 ### Requirement: `BackendPolicy` enum 雏形定义
 
 fs 抽象 crate SHALL 定义 backend 行为策略 struct + 三个独立 enum 字段，作为业务路径**选择后端相关行为**的真相源：
@@ -50,9 +77,9 @@ fs 抽象 crate SHALL 定义 backend 行为策略 struct + 三个独立 enum 字
 
 - **WHEN** 业务 IPC handler 需要根据后端类型选择行为
 - **THEN** handler SHALL 读 `BackendPolicy` 字段，**不得**新增 `if fs.kind() == Ssh` / `let is_remote = ...` / `matches!(fs.kind(), ...)` 等等价直接派生
-- **AND** `fs.kind()` 比对仅允许出现在策略**派生**点(顶层 helper / backend resolver 内部 / fs 抽象 crate 自身实现)
+- **AND** `fs.kind()` 比对仅允许出现在策略**派生**点（顶层 helper / backend resolver 内部 / fs 抽象 crate 自身实现）
 
-#### Scenario: StaleCheckStrategy enum 至少包含 LocalClock5min 与 SkipUntilClockSync
+#### Scenario: StaleCheckStrategy 至少含本机时钟与跨时钟域两种策略
 
 - **WHEN** 编译 fs 抽象 crate
 - **THEN** `StaleCheckStrategy` SHALL 至少含 `LocalClock5min` 与 `SkipUntilClockSync` 两个 variant
@@ -93,7 +120,7 @@ counter 入口 SHALL 满足：
 - **WHEN** 两个并发 task 各自调 counter 入口 + 各自的 wrapper
 - **THEN** 两 task 的计数 SHALL 互不影响（依赖 task-local 隔离）
 
-#### Scenario: wrapper 释放时输出诊断
+#### Scenario: fs op counter 入口结束时输出诊断
 
 - **WHEN** counter 入口闭包正常结束
 - **THEN** SHALL emit 一条结构化日志 event 含全部计数字段

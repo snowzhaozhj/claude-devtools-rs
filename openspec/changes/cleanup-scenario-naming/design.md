@@ -8,13 +8,13 @@ issue #303 9-PR plan 阶段 3 第一个 PR。前序 PR 5（change cleanup-sideba
 - change `cleanup-config-and-context-menu`（PR #319）—— 双 cap 合并 1 PR
 - change `ssh-remote-context-cleanup`（PR #312）—— 14 Requirement 重写
 
-相比 PR #312 / #319 / #322 改动量更小（20 Scenario 跨 9 cap / 16 Requirement，每 Requirement 仅 1-3 Scenario 标题改名），但跨度更广（首次 cross-cap Scenario naming 扫描）。
+相比 PR #312 / #319 / #322 改动量更小（24 Scenario 跨 9 cap / 19 Requirement，每 Requirement 仅 1-3 Scenario 标题改名），但跨度更广（首次 cross-cap Scenario naming 扫描）。
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- 20 个明显"内部 symbol 视角"Scenario 标题改用户 / 系统可观察行为视角，符合 `SPEC_GUIDE.md::反例 1` + reviewer checklist 末两条
+- 24 个明显"内部 symbol 视角"Scenario 标题改用户 / 系统可观察行为视角，符合 `SPEC_GUIDE.md::反例 1` + reviewer checklist 末两条
 - 每个 Requirement body + 每条 SHALL / MUST / WHEN / THEN / AND 句 100% 不变（语义对等）
 - Requirement 数量不变；各 cap Scenario 数量不变
 
@@ -55,7 +55,7 @@ issue #303 9-PR plan 阶段 3 第一个 PR。前序 PR 5（change cleanup-sideba
 - cap 自身核心概念（如 `application-telemetry` 内的 `hot path counter` / `low-frequency event push`、`fs-abstraction` 内的 `open_read` / `stat_many` / `BackendPolicy`、`session-parsing` 内的 `interrupt marker`）—— 这些是 cap 对外承诺的 API 与术语
 - 微妙边界（如 `frontend-context-menu` 内 `factory 返回纯数据` / `trigger 元素 destroy 时菜单兜底卸载`）—— 改名收益相对模棱、留给后续 cap 内重构 PR
 
-### D-3：改名决策表（19 case 跨 8 cap / 15 Requirement）
+### D-3：改名决策表（24 case 跨 9 cap / 19 Requirement）
 
 按 cap 分组，每行一项：
 
@@ -65,10 +65,10 @@ issue #303 9-PR plan 阶段 3 第一个 PR。前序 PR 5（change cleanup-sideba
 | 2 | application-telemetry | panic critical event always-keep 通道 | `panic 触发 always-keep 通道写入` | `panic 触发关键事件入队` | 内部 channel 名 `panic_critical_event_channel` |
 | 3 | application-telemetry | panic critical event always-keep 通道 | `panic 通道满时半压缩保留` | `panic 队列满时丢弃最老 50% 保留新事件` | 内部算法术语 "半压缩" |
 | 4 | chunk-building | Link tool uses to tool results | `Tool executions populated by build_chunks` | `Tool executions populated during chunk build` | 内部 fn 名 `build_chunks` |
-| 5 | chunk-building | Filter Task tool uses when subagent data is available | `Default build_chunks does not filter Tasks in this port` | `Default chunk build does not filter Tasks in this port` | 同上 |
+| 5 | chunk-building | Filter Task tool uses when subagent data is available | `Default build_chunks does not filter Tasks in this port` | `Default chunk build does not filter Tasks` | 内部 fn 名 + 迁移上下文 `in this port`（codex round 1 push back） |
 | 6 | context-tracking | Expose a pure synchronous API driven by chunk output | `Library consumer calls the API from a sync context` | `Caller invokes context stats from a sync context` | 内部接口术语 `Library consumer` / `API` |
 | 7 | fs-abstraction | `BackendPolicy` enum 雏形定义 | `BackendPolicy 是 Copy + Eq 类型` | `BackendPolicy 可按值复制并相等比较` | Rust trait bound `Copy + Eq` |
-| 8 | fs-abstraction | Provider instrumentation 入口可观测 fs op 次数 | `tracing emit on Drop` | `wrapper 释放时输出诊断` | 库名 `tracing` + Rust Drop |
+| 8 | fs-abstraction | Provider instrumentation 入口可观测 fs op 次数 | `tracing emit on Drop` | `fs op counter 入口结束时输出诊断` | 库名 `tracing` + Rust Drop（codex round 1 push back：去 wrapper） |
 | 9 | fs-abstraction | 本 change 零业务变化下性能基线不退化 | `open_read dyn 路径 micro bench 不超 1.3x` | `open_read 动态分发路径开销不超单态化的 1.3x` | Rust 内部术语 `dyn 路径 micro bench` |
 | 10 | project-discovery | Abstract filesystem access through a provider trait | `Trait is the sole seam for alternative backends` | `fs 抽象 trait 是替换 backend 的唯一接口` | Rust 内部术语 `Trait` / `seam` |
 | 11 | project-discovery | Abstract filesystem access through a provider trait | `cdt-discover 继续兼容老 import` | `discover capability 暴露兼容 alias 给老调用方` | crate 名 `cdt-discover` + Rust `import` |
@@ -81,6 +81,10 @@ issue #303 9-PR plan 阶段 3 第一个 PR。前序 PR 5（change cleanup-sideba
 | 18 | session-parsing | Classify hard noise messages | `Synthetic assistant placeholder` | `Missing assistant generates placeholder` | 内部术语 `Synthetic` |
 | 19 | tool-execution-linking | Enrich subagent processes with team metadata | `is_ongoing 判定走 check_messages_ongoing 算法` | `is_ongoing 判定按消息状态推算` | 内部 fn 名 `check_messages_ongoing` |
 | 20 | tab-management | Pane 生命周期 | `Split 达到 MAX_PANES 上限` | `Split 达到最大 pane 数上限` | 内部 const 名 `MAX_PANES`（spec-guide-reviewer W1 补加） |
+| 21 | app-chrome | chrome 与下方区域的分隔线只一条 1 px | `其它 view 顶部 border audit-only` | `其它 view 顶部 border 不强制规定` | 清理/审计过程术语 `audit-only`（codex round 1 补加） |
+| 22 | application-telemetry | hot path 性能契约 | `hot path 误用 event 宏被 CI 拦截` | `在 hot path 调用低频 event API 被拦截` | 实现术语 `宏` + 测试机制 `CI`（codex round 1 补加） |
+| 23 | fs-abstraction | fs-related cache 必须采用"单实例 + ContextId key 前缀"拓扑 | `key 类型含 ContextId` | `cache key 含上下文身份` | 内部 key/type 名 `ContextId`（codex round 1 补加） |
+| 24 | fs-abstraction | `BackendPolicy` enum 雏形定义 | `StaleCheckStrategy enum 至少包含 LocalClock5min 与 SkipUntilClockSync` | `StaleCheckStrategy 至少含本机时钟与跨时钟域两种策略` | Rust enum/variant 名直接进 Scenario 标题（codex round 1 补加） |
 
 ### D-4：保留的微妙边界（不改名理由）
 
