@@ -8,7 +8,7 @@
 - 将用户行为分组作为设计审计索引记录；archive 后不手工重排 `sidebar-navigation` 主 spec Requirement。
 - 保持现有 Scenario 行为契约 100% 不变：迁入 `tab-management` 的 Scenario 允许把实现术语改写为用户可观察行为，但不改变 WHEN / THEN / AND 的语义。
 - 从 `sidebar-navigation` 处理 4 个 Tab owner 候选 Scenario：3 个迁入 `tab-management`，1 个不新增而由 `tab-management` 既有 `无 active tab 时 Sidebar 无高亮` Scenario 覆盖。
-- 本 PR 不在 active delta 中批量清理 Scenario 标题；若 archive 同 commit 调整标题，仅限不改 Scenario 子句的用户视角命名。
+- Scenario 标题调整必须通过 active delta 表达；archive 同 commit 的主 spec 直改仅限 Purpose 元描述。
 - 不引入新 UI、代码、IPC 字段、Tauri command 或后端行为。
 
 ## Capabilities
