@@ -29,7 +29,7 @@ spec/team-coordination-metadata 0
 spec/tool-execution-linking 6
 spec/ui-search 2
 spec/wsl-distro-discovery 1
-change/cleanup-scenario-naming/application-telemetry 3
+change/cleanup-scenario-naming/application-telemetry 6
 change/cleanup-scenario-naming/chunk-building 2
 change/cleanup-scenario-naming/context-tracking 1
 change/cleanup-scenario-naming/fs-abstraction 11
