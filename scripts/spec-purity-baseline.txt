@@ -18,10 +18,10 @@ spec/memory-viewer 0
 spec/notification-triggers 0
 spec/notification-ui 0
 spec/project-discovery 20
-spec/push-events 33
+spec/push-events 3
 spec/server-mode 19
 spec/session-display 16
-spec/session-parsing 46
+spec/session-parsing 1
 spec/session-search 0
 spec/settings-ui 1
 spec/sidebar-navigation 8
