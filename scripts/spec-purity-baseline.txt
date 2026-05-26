@@ -29,3 +29,6 @@ spec/team-coordination-metadata 0
 spec/tool-execution-linking 6
 spec/ui-search 2
 spec/wsl-distro-discovery 1
+change/split-session-display/edit-diff-view 1
+change/split-session-display/markdown 1
+change/split-session-display/tool-viewer-routing 5
