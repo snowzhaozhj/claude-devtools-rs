@@ -61,6 +61,7 @@ design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 
    - **改动包含 `openspec/changes/<slug>/tasks.md`**：勾 tasks.md 业务 checkbox（**不勾**发布尾段 N.1-N.4）
    - **改动不涉及任何 openspec change 的 tasks.md**：用 `TaskUpdate` 把 `TaskCreate` 入队任务标 completed
    - **禁止**在常规 PR 里偷偷改 openspec change 文件而不走 openspec 路径——hybrid 场景 SHALL 升级到 openspec 路径
+8. `openspec-verify-change <slug>`（**条件触发**：change 含状态机 / 缓存淘汰 / 并发控制 / 新增 ≥ 3 个 SHALL 句 / 跨 ≥ 2 capability 时 SHALL 跑；单点 bug fix / 纯样式 / ≤ 50 行可跳过）。CRITICAL → 修后 re-verify；WARNING → 判断修或记录 rationale；0 CRITICAL 才进 N.1。与 codex PR 二审互补：verify 查 spec 覆盖完整性，codex 查 diff 逻辑盲点
 
 ### 发布尾段
 
