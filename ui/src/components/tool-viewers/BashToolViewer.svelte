@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ToolExecution } from "../../lib/api";
-  import { toolErrorText, toolOutputText } from "../../lib/toolHelpers";
+  import { stripAnsi, toolErrorText, toolOutputText } from "../../lib/toolHelpers";
   import OutputBlock from "../OutputBlock.svelte";
   import { contextMenu } from "../../lib/contextMenu.svelte";
   import { buildBashToolItems, type MenuItemContext } from "../../lib/contextMenu/menu-items";
@@ -19,7 +19,12 @@
 
   const input = $derived(exec.input as Record<string, unknown>);
   const command = $derived(String(input?.command ?? ""));
-  const outputStr = $derived(exec.isError ? toolErrorText(exec) : toolOutputText(exec.output));
+  // Bash 输出是 terminal-style——成功 stdout 与失败 stderr/errorMessage 都可能含
+  // ANSI 字节（cargo test / nextest / git 失败常带颜色），统一走 stripAnsi 渲染
+  // 成纯文本。`toolErrorText` 内部对 `output.text` 路径走 cleanDisplayText 已有
+  // ANSI 清洗，但 `exec.errorMessage` 顶层字段路径漏；外包 stripAnsi 兜底（幂等）
+  // 同时覆盖两条分支（codex CR PR #328 第五轮）。
+  const outputStr = $derived(stripAnsi(exec.isError ? toolErrorText(exec) : toolOutputText(exec.output)));
 
   function buildCtx(): MenuItemContext {
     return {
