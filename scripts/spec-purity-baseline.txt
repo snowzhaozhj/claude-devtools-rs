@@ -1,12 +1,14 @@
+change/cleanup-config-and-context-menu/configuration-management 0
+change/cleanup-config-and-context-menu/frontend-context-menu 3
 spec/agent-configs 0
 spec/app-auto-update 5
 spec/app-chrome 2
 spec/application-telemetry 15
 spec/chunk-building 4
-spec/configuration-management 10
+spec/configuration-management 0
 spec/context-tracking 1
 spec/file-watching 20
-spec/frontend-context-menu 6
+spec/frontend-context-menu 3
 spec/frontend-test-pyramid 1
 spec/fs-abstraction 15
 spec/http-data-api 6

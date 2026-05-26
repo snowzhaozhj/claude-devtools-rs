@@ -237,7 +237,7 @@ TBD - created by archiving change frontend-context-menu. Update Purpose after ar
 
 ### Requirement: SessionContextMenu / TabContextMenu 重构兼容
 
-侧栏会话项与 tab 项的右键菜单 SHALL 改用通用菜单组件实现，但外部 API（props / 调用面 / 触发位置）SHALL 保持兼容。侧栏 / tab bar 内现有 oncontextmenu 直挂调用 SHALL 在重构后**改用**右键 action 形式（让动态 items 计算更内聚），但用户可见行为（菜单项内容、文案、顺序、动作语义、触发位置、复制反馈"已复制!"600ms 关闭）一一对齐。
+侧栏会话项与 tab 项的右键菜单 SHALL 改用通用菜单组件实现，但外部 API（props / 调用面 / 触发位置）SHALL 保持兼容。侧栏 / tab bar 内现有 oncontextmenu 直挂调用 SHALL 在重构后**改用**右键 action 形式（让动态 items 计算更内聚），但用户可见行为（菜单项内容、文案、顺序、动作语义、触发位置、复制 item 反馈短显示后关闭）一一对齐。
 
 #### Scenario: Sidebar 会话项右键菜单回归
 
@@ -354,9 +354,9 @@ TBD - created by archiving change frontend-context-menu. Update Purpose after ar
 
 ### Requirement: AppContextMenu submenu 渲染
 
-通用菜单 SHALL 扩展支持 submenu 渲染：检测 item.submenu 非空时挂 chevron + 进入 hover 状态后 200ms 弹出二级菜单（同样通过 mount 到 document.body）；ArrowRight SHALL 即时打开 submenu + focus 进 submenu 首项；ArrowLeft SHALL 关闭 submenu + focus 还回 parent；Esc SHALL 关闭整棵菜单树；submenu 视觉规格与父菜单完全相同（同 bg / border / radius / shadow），不做层级递进。submenu 渲染深度 SHALL 限制为 ≤ 2。
+通用菜单 SHALL 扩展支持 submenu 渲染：检测 item.submenu 非空时挂 chevron + 进入 hover 状态后短延迟弹出二级菜单（具体阈值见 Scenario，同样通过 mount 到 document.body）；ArrowRight SHALL 即时打开 submenu + focus 进 submenu 首项；ArrowLeft SHALL 关闭 submenu + focus 还回 parent；Esc SHALL 关闭整棵菜单树；submenu 视觉规格与父菜单完全相同（同 bg / border / radius / shadow），不做层级递进。submenu 渲染深度 SHALL 限制为 ≤ 2。
 
-#### Scenario: hover 200ms 打开 submenu
+#### Scenario: hover 短延迟打开 submenu
 
 - **WHEN** 用户鼠标 hover 含 submenu 的 item 持续 200ms
 - **THEN** SHALL 在 parent item 右侧弹出 submenu 浮层
