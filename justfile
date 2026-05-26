@@ -33,20 +33,15 @@ bootstrap:
 # 全量测试（Rust + 前端类型检查）
 test: test-rust check-ui
 
-# Rust workspace + cdt-watch 单线程补跑（FSEvents 并发 flaky，--test-threads=1 稳定）
+# Rust workspace via cargo-nextest（进程隔离 + 跨 binary 并行 + cdt-watch retry）
+# 配置在 `.config/nextest.toml`：cdt-watch 重试 1 次抹平 FSEvents flaky；不再需要
+# `--test-threads=1`。本地需一次性 `cargo install cargo-nextest --locked`。
 # `cdt-api/test-utils` feature 启用集成测试访问 cache 内部状态的 helper（详
 # change `parsed-message-lru-cache`）；release/默认构建不含。
+# nextest 设计上不跑 doctest——本仓 ` ``` ` 标记全为 sh/ts/ignore，没有 runnable
+# rust doctest 需要兜底；未来若加再评估是否恢复 `cargo test --doc` 入口。
 test-rust:
-    cargo test --workspace --exclude cdt-watch --features cdt-api/test-utils
-    cargo test -p cdt-watch -- --test-threads=1
-
-# Rust workspace via cargo-nextest（进程隔离 + 跨 binary 并行 + cdt-watch retry）
-# 配置在 `.config/nextest.toml`；CI 已切到此路径。本地需 `cargo install cargo-nextest --locked`
-# 一次性安装。doctest 用 `cargo test --doc` 单独跑（nextest 不支持 doctest）。
-# 与 `test-rust` 并存——开发者本地未装 nextest 时仍可用旧路径跑测。
-test-rust-nextest:
     cargo nextest run --workspace --features cdt-api/test-utils
-    cargo test --workspace --features cdt-api/test-utils --doc
 
 # 单 crate 测试，例：`just test-crate cdt-analyze`
 test-crate CRATE:
