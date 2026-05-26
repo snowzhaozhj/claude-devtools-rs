@@ -56,7 +56,7 @@ issue #303 9-PR plan 最后一步（PR 9），前序 PR 1-8 已全部 merge。`i
 | 14 | Tauri commands for repository groups and worktree sessions | `project-discovery` | 仓库/worktree Tauri 注册 |
 | 15 | `extract_session_metadata` 按 `FileSignature` 缓存 | `session-parsing` | metadata 缓存策略属解析层 |
 | 16 | metadata 缓存 ownership 由 `LocalDataApi` 持有 | `session-parsing` | 缓存所有权属解析层 |
-| 17 | Expose memory read operations | `session-parsing` | memory 读取属会话解析上下文 |
+| 17 | Expose memory read operations | `memory-viewer` | memory CRUD 属 memory-viewer domain（已有同域 Requirement） |
 | 18 | `extract_session_metadata` 流式判定 isOngoing | `session-parsing` | 流式解析策略 |
 | 19 | `get_tool_output` 与 `get_image_asset` 走 parsed-message LRU 缓存 | `session-parsing` | 解析层 LRU 缓存 |
 | 20 | parsed-message 缓存按 file-change 广播主动失效 | `session-parsing` | 缓存失效策略属解析层 |
@@ -104,7 +104,7 @@ issue #303 9-PR plan 最后一步（PR 9），前序 PR 1-8 已全部 merge。`i
 
 ### D-6：执行顺序 — 先大后小
 
-按 Requirement 数量降序写 delta：session-parsing(9) → project-discovery(8) → team-coordination-metadata(4) → push-events(3) → chunk-building(2) → application-telemetry(2) → ssh-remote-context(1) → server-mode(1)。大 cap 先写能尽早暴露边界问题。
+按 Requirement 数量降序写 delta：session-parsing(9) → project-discovery(8) → team-coordination-metadata(4) → push-events(3) → chunk-building(2) → application-telemetry(2) → ssh-remote-context(1) → server-mode(1) → memory-viewer(1)。大 cap 先写能尽早暴露边界问题。
 
 ## Risks / Trade-offs
 

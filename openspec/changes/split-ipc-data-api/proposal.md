@@ -17,7 +17,7 @@
 
 ### Modified Capabilities
 
-- `ipc-data-api`: REMOVED ~30 个越界 Requirement（SSH / teammate / chunk / project-discovery / push-events / cache / telemetry / server-mode 领域）
+- `ipc-data-api`: REMOVED ~31 个越界 Requirement（SSH / teammate / chunk / project-discovery / push-events / cache / telemetry / server-mode / memory 领域）
 - `ssh-remote-context`: ADDED 1 Requirement（Expose SSH and context operations）
 - `team-coordination-metadata`: ADDED 4 Requirement（teammate messages / spawn metadata / tags strip / subagent count）
 - `chunk-building`: ADDED 2 Requirement（CompactChunk derived metadata / Stable chunk identifiers）
@@ -26,6 +26,7 @@
 - `session-parsing`: ADDED 9 Requirement（metadata cache × 3 / parsed-message cache × 3 / title × 3）
 - `push-events`: ADDED 3 Requirement（file-change + notifications push / stream detected errors / session metadata updates）
 - `application-telemetry`: ADDED 2 Requirement（telemetry snapshot / correctness event batch）
+- `memory-viewer`: ADDED 1 Requirement（Expose memory read operations）
 
 ## Impact
 

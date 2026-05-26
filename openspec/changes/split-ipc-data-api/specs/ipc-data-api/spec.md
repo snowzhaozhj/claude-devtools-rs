@@ -100,9 +100,9 @@
 
 ### Requirement: Expose memory read operations
 
-**Reason**：本 Requirement 拆出到 `session-parsing` capability。
+**Reason**：本 Requirement 拆出到 `memory-viewer` capability。
 
-**Migration**：行为契约 100% 不变；由 `session-parsing` capability 内同名 Requirement 守护。所有 Scenario 字符级迁移到新 cap。
+**Migration**：行为契约 100% 不变；由 `memory-viewer` capability 内同名 Requirement 守护。所有 Scenario 字符级迁移到新 cap。
 
 ### Requirement: `extract_session_metadata` 流式判定 isOngoing 不收集全量消息向量
 
