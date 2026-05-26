@@ -27,8 +27,14 @@ describe('toolHelpers', () => {
     expect(isToolPending(exec({}))).toBe(false)
   })
 
-  test('toolErrorText 优先展示后端 errorMessage', () => {
+  test('toolErrorText 优先展示后端 errorMessage（main 行为：原样返回不剥 ANSI）', () => {
+    // toolErrorText 自身**不**清洗 errorMessage 顶层字段——含 ANSI 时由调用层
+    // 外包 stripAnsi 兜底（如 BashToolViewer，codex CR PR #328 第五轮）。
     expect(toolErrorText(exec({ isError: true, errorMessage: 'top-level failure', output: { kind: 'text', text: 'raw' } }))).toBe('top-level failure')
+    // 守卫：errorMessage 含 ANSI 时 toolErrorText 自身保留原字节（让 BashToolViewer
+    // 外包 stripAnsi 时统一处理失败/成功路径）。
+    expect(toolErrorText(exec({ isError: true, errorMessage: '\x1b[31mFAIL\x1b[0m boom', output: { kind: 'missing' } })))
+      .toBe('\x1b[31mFAIL\x1b[0m boom')
   })
 
   test('toolErrorText 展示文本错误并清洗噪声', () => {
@@ -337,6 +343,15 @@ describe('stripAnsi', () => {
     test('\u6570\u5B57\u5B57\u9762\u91CF\u7ED3\u5C3E\u5E26 m \u7684\u5408\u6CD5\u6587\u672C\uFF08\u5982 `200m` \u8DDD\u79BB\uFF09\u4E0D\u88AB\u8BEF\u5265', () => {
       expect(stripAnsi('\u8DDD\u79BB 200m \u5904')).toBe('\u8DDD\u79BB 200m \u5904')
       expect(stripAnsi('time: 30s; freq: 60Hz')).toBe('time: 30s; freq: 60Hz')
+    })
+
+    test('\u5E42\u7B49\uFF1A\u53CC\u91CD stripAnsi \u7B49\u4EF7\u5355\u6B21\uFF08BashToolViewer \u9519\u8BEF\u8DEF\u5F84\u5916\u5305\u4E0D\u4F1A\u7834\u574F cleanDisplayText \u5DF2\u5265\u7684 output\uFF09', () => {
+      // BashToolViewer \u9519\u8BEF\u8DEF\u5F84\u5199\u6CD5 `stripAnsi(toolErrorText(exec))`\u2014\u2014\u5F53
+      // toolErrorText \u5185\u90E8\u8D70 cleanDisplayText \u5DF2 strip \u65F6\uFF0C\u5916\u5305 stripAnsi \u662F\u53CC\u91CD\u5265\uFF1B
+      // \u5F53\u8D70 errorMessage \u9876\u5C42\u8DEF\u5F84\u672A strip \u65F6\uFF0C\u5916\u5305\u662F\u9996\u6B21\u5265\u3002\u4E24\u6761\u5206\u652F\u7EDF\u4E00\u903B\u8F91\u3002
+      const ansi = '\x1b[31mFAIL\x1b[0m boom'
+      expect(stripAnsi(stripAnsi(ansi))).toBe(stripAnsi(ansi))
+      expect(stripAnsi(stripAnsi('plain'))).toBe('plain')
     })
   })
 })
