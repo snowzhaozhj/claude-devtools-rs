@@ -339,7 +339,10 @@
   async function refreshDetail() {
     const wasAtBottom = !!conversationEl && isAtBottom(conversationEl);
     try {
-      const resp: SessionDetailResponse = await getSessionDetail(projectId, sessionId, knownFingerprint);
+      // ongoing session 不传 fingerprint——stale 阈值（5min）到了需重新评估
+      // is_ongoing，file mtime/size 不变但状态应从 ongoing → complete。
+      const fpToSend = detail?.isOngoing ? null : knownFingerprint;
+      const resp: SessionDetailResponse = await getSessionDetail(projectId, sessionId, fpToSend);
       knownFingerprint = resp.fingerprint;
       if (resp.status === "unchanged") {
         return;
@@ -372,7 +375,7 @@
     const lastMsgCount = lastChunk?.kind === "ai"
       ? (lastChunk as AIChunk).responses.length
       : 0;
-    return `${chunks.length}:${lastMsgCount}:${d.isOngoing}:${d.metrics.message_count}`;
+    return `${chunks.length}:${lastMsgCount}:${d.isOngoing}:${d.metrics.message_count}:${d.title ?? ""}`;
   }
 
   onMount(async () => {
