@@ -1234,7 +1234,9 @@
         </div>
         {/if}
 
-      <!-- System (对齐原版 SystemChatGroup.tsx：左对齐 + max-w 85% + rounded-2xl rounded-bl-sm 气泡) -->
+      <!-- System：与 AI 共享同一条 thread rail（3px solid border-emphasis）；
+           左外侧 timeline marker 用方形 outline 与 AI 圆形 node 形态对立做语义
+           区分；header chip / bubble 起点对齐 conversation 27px 内容基线。 -->
       {:else if chunk.kind === "system"}
         {@const sysText = cleanDisplayText(chunk.contentText)}
         {#if sysText}
@@ -2180,30 +2182,59 @@
   }
 
   /* ── System ──
-     System block 不属于 AI thread，但视觉上是"系统标记"。
-     加 mono SYS badge 强化"机器消息"语义。
+     与 AI 共享同一条左侧 thread rail（3px solid border-emphasis），形成贯穿整页
+     的执行轨迹；turn 类型差异通过左外侧 timeline marker 形态承载——AI 圆 / SYSTEM
+     方（伪元素），不通过新增独立 rail 表达。header chip / bubble 起点都对齐到
+     conversation 27px 内容基线（与 AI avatar / 内容左缘同列），消除原 dotted +
+     双重 padding-left 造成的横向错位。
   */
   .msg-row-system-left {
-    padding: 4px 0;
+    padding: 4px 0 4px 8px;
     justify-content: flex-start;
   }
 
   .system-block {
-    max-width: 85%;
+    position: relative;
+    width: 100%;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding-left: 8px;
-    border-left: 3px dotted var(--color-border-emphasis);
-    padding-top: 4px;
-    padding-bottom: 4px;
+    gap: 4px;
+    border-left: 3px solid var(--color-border-emphasis);
+    padding-left: 16px;
+  }
+
+  /* 顶端 cap：与 AI .msg-ai-container::before 同源，给 thread head 一个 anchor */
+  .system-block::before {
+    content: "";
+    position: absolute;
+    left: -3px;
+    top: 0;
+    width: 3px;
+    height: 16px;
+    background: linear-gradient(180deg, transparent 0%, var(--color-border-emphasis) 100%);
+  }
+
+  /* 左外侧 timeline marker：方形 outline（与 AI 圆形 .ai-thread-node 形态对立）
+     box-shadow 0 0 0 2px surface 形成隔离环，避免与主 rail 实线粘连。 */
+  .system-block::after {
+    content: "";
+    position: absolute;
+    left: -7px;
+    top: 14px;
+    width: 11px;
+    height: 11px;
+    border-radius: 2px;
+    background: var(--color-surface);
+    border: 2.5px solid var(--color-border-emphasis);
+    box-shadow: 0 0 0 2px var(--color-surface);
   }
 
   .system-header {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding-left: 6px;
+    gap: 8px;
+    padding: 10px 0 4px;
   }
 
   .system-meta-sep {
@@ -2246,7 +2277,7 @@
     border: 1px solid var(--color-border);
     border-radius: 10px;
     padding: 12px 16px;
-    margin: 0 0 0 6px;
+    margin: 0;
     white-space: pre-wrap;
     overflow-x: auto;
     max-height: 384px;
