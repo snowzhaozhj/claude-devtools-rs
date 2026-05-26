@@ -360,35 +360,43 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
         // + `is_main_worktree` 为单次 `resolve_all`，再用 `join_all` 同时跑所有
         // project。本仓首屏 27 project 实测：串行 5×27=135 spawn → 并发 27 spawn
         // 大幅压低冷启动 grouper 阶段耗时（详见 `cdt-api/tests/perf_cold_scan.rs`）。
-        let lookups = join_all(projects.iter().map(|project| {
+        //
+        // 同闭包内顺序追加 `compute_cwd_relative_to_repo_root` 的 async 计算（其内部
+        // `dunce::canonicalize` 走 `spawn_blocking` 不阻塞 tokio worker），借现有 `join_all`
+        // 并发批次复用，零额外 await。issue #313。
+        let resolved = join_all(projects.iter().map(|project| {
             let project_path = project.path.clone();
             async move {
                 let primary = self.git.resolve_all(&project_path).await;
-                if primary.identity.is_some() {
-                    return primary;
-                }
-                // path 自身已经不存在 / 不是 git 仓库时，尝试推断 parent repo——
-                // 例：被 prune 掉的 `.claude/worktrees/<name>` 仍能挂到 parent
-                // repo 的 group。borrow parent 的 identity，但 `branch` 与
-                // `is_main_worktree` 对原 path 不再适用（保持与老逻辑等价：
-                // identity 来自 fallback 时 is_main = false、branch = None、
-                // is_repo_root = false）。
-                let Some(parent) = infer_parent_repo_from_worktree_path(&project_path) else {
-                    return primary;
+                let lookup = if primary.identity.is_some() {
+                    primary
+                } else if let Some(parent) = infer_parent_repo_from_worktree_path(&project_path) {
+                    // path 自身已经不存在 / 不是 git 仓库时，尝试推断 parent repo——
+                    // 例：被 prune 掉的 `.claude/worktrees/<name>` 仍能挂到 parent
+                    // repo 的 group。borrow parent 的 identity，但 `branch` 与
+                    // `is_main_worktree` 对原 path 不再适用（保持与老逻辑等价：
+                    // identity 来自 fallback 时 is_main = false、branch = None、
+                    // is_repo_root = false）。
+                    let parent_lookup = self.git.resolve_all(&parent).await;
+                    RepoLookup {
+                        identity: parent_lookup.identity,
+                        branch: None,
+                        is_main_worktree: false,
+                        is_repo_root: false,
+                    }
+                } else {
+                    primary
                 };
-                let parent_lookup = self.git.resolve_all(&parent).await;
-                RepoLookup {
-                    identity: parent_lookup.identity,
-                    branch: None,
-                    is_main_worktree: false,
-                    is_repo_root: false,
-                }
+                let cwd_relative =
+                    compute_cwd_relative_to_repo_root(lookup.identity.as_ref(), &project_path)
+                        .await;
+                (lookup, cwd_relative)
             }
         }))
         .await;
 
         let mut buckets: BTreeMap<String, Bucket> = BTreeMap::new();
-        for (project, lookup) in projects.into_iter().zip(lookups) {
+        for (project, (lookup, cwd_relative_to_repo_root)) in projects.into_iter().zip(resolved) {
             let RepoLookup {
                 identity,
                 branch,
@@ -398,13 +406,6 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
             let group_id = identity
                 .as_ref()
                 .map_or_else(|| project.id.clone(), |i| i.id.clone());
-
-            // cwd_relative_to_repo_root 纯字符串运算 0 syscall：
-            // identity.id 已经是 canonical `<repo>/.git`，strip `/.git` suffix
-            // 得 repo 根；project.path 减去前缀就是相对路径。
-            // change `simplify-repository-as-project::D2`。
-            let cwd_relative_to_repo_root =
-                compute_cwd_relative_to_repo_root(identity.as_ref(), project.path.as_path());
 
             let bucket = buckets.entry(group_id.clone()).or_insert_with(|| Bucket {
                 id: group_id.clone(),
@@ -497,14 +498,20 @@ fn infer_parent_repo_from_worktree_path(path: &Path) -> Option<PathBuf> {
     None
 }
 
-/// 纯字符串运算（0 syscall / 0 spawn）：从 identity.id（canonical
-/// `<repo>/.git`）反推 repo 根，再让 `project_path` strip 前缀。repo 根
-/// 自身或 `strip_prefix` 失败 → `None`。
+/// 从 identity.id（canonical `<repo>/.git`）反推 repo 根，再让 `project_path`
+/// strip 前缀。repo 根自身或 `strip_prefix` 失败 → `None`。
 /// change `simplify-repository-as-project::D2`。
+///
+/// async 化原因（issue #313）：`dunce::canonicalize` 是 sync `realpath(3)` 链
+/// 数个 stat syscall，本路径在 `list_repository_groups` perf 热路径上对每个
+/// project 调用一次，原 sync 写法阻塞 tokio worker；NFS / 网络盘 / 高 stat
+/// 延迟环境累积放大。改 `spawn_blocking` 把 fs 调用移到 blocking pool，对齐
+/// 同模块 `resolve_all_fs::canonical_common` 的写法。caller `join_all` 复用
+/// 现有并发批次，零额外 await。
 ///
 /// Windows 兼容：strip `.git` 后缀走 `Path::parent`（跨平台分隔符），
 /// `strip_prefix` 走 `Path::strip_prefix`，避免硬编码 `/`。
-fn compute_cwd_relative_to_repo_root(
+async fn compute_cwd_relative_to_repo_root(
     identity: Option<&RepositoryIdentity>,
     project_path: &Path,
 ) -> Option<String> {
@@ -513,17 +520,19 @@ fn compute_cwd_relative_to_repo_root(
     // canonical 后的 `<repo>/.git` 的 parent 就是 repo 根；submodule 的
     // `<parent>/.git/modules/<name>` 的 parent 是 `<parent>/.git/modules`
     // 不构成 working tree 根——此时 strip_prefix 失败 → None，符合预期。
-    let repo_root = common_dir.parent()?;
+    let repo_root = common_dir.parent()?.to_path_buf();
     // Windows 兼容 + macOS `/var` vs `/private/var` symlink：identity.id 已经
     // 经 dunce 剥 UNC，但 project_path 可能仍带 `\\?\` 前缀（Windows
     // std::fs::canonicalize）或 symlink 表达不一致——本侧再 dunce 一次让
     // 比较的两端命名空间对齐。失败时回退到原 project_path 走字符串 strip，
     // 兼容 project_path 不存在（被 git rm 但 ~/.claude/projects 仍有记录）。
-    let normalized_project: std::borrow::Cow<'_, Path> = match dunce::canonicalize(project_path) {
-        Ok(canon) => std::borrow::Cow::Owned(canon),
-        Err(_) => std::borrow::Cow::Borrowed(project_path),
-    };
-    let relative = normalized_project.strip_prefix(repo_root).ok()?;
+    let project_path_owned = project_path.to_path_buf();
+    let normalized = tokio::task::spawn_blocking(move || {
+        dunce::canonicalize(&project_path_owned).unwrap_or(project_path_owned)
+    })
+    .await
+    .ok()?;
+    let relative = normalized.strip_prefix(&repo_root).ok()?;
     // Windows 兼容：`relative.to_string_lossy()` 在 Windows 输出 `crates\subdir`
     // 反斜杠形态，跨平台 IPC payload 会分叉。归一为 `/` 与前端期望对齐。
     let s = relative.to_string_lossy().replace('\\', "/");
@@ -1146,6 +1155,38 @@ mod tests {
             linked.cwd_relative_to_repo_root.as_deref(),
             Some(".claude/worktrees/feat-x"),
             "linked worktree 路径 SHALL strip 出 .claude/worktrees/feat-x"
+        );
+    }
+
+    /// issue #313：`compute_cwd_relative_to_repo_root` 改 async + `spawn_blocking`
+    /// 后，`identity = None` 仍 SHALL 立即返 `None`（不调度 blocking task）。
+    #[tokio::test]
+    async fn cwd_relative_returns_none_when_identity_missing() {
+        let result = compute_cwd_relative_to_repo_root(None, Path::new("/repo/main")).await;
+        assert_eq!(result, None);
+    }
+
+    /// issue #313：`project_path` 不存在（被 `git rm` 但 `~/.claude/projects/`
+    /// 仍有记录）时，`dunce::canonicalize` Err，SHALL fallback 到 `unwrap_or` 返
+    /// 原 path 字符串 strip。验证 async 重写不破此 fallback 路径。
+    #[tokio::test]
+    async fn cwd_relative_falls_back_when_project_path_missing() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let repo = base.join("repo");
+        let git = repo.join(".git");
+        tokio::fs::create_dir_all(&git).await.unwrap();
+        let identity = RepositoryIdentity {
+            id: git.to_string_lossy().into_owned(),
+            name: "repo".into(),
+        };
+        // missing 子目录：不在磁盘上 → canonicalize 失败 → fallback 字符串 strip
+        let missing = repo.join("crates").join("missing");
+        let result = compute_cwd_relative_to_repo_root(Some(&identity), &missing).await;
+        assert_eq!(
+            result.as_deref(),
+            Some("crates/missing"),
+            "canonicalize 失败时 SHALL 回退到原 path 字符串 strip"
         );
     }
 
