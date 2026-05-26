@@ -265,18 +265,29 @@ export function shouldPrefetchOnChunkExpand(exec: ToolExecution): boolean {
 }
 
 /**
- * 移除 ANSI 转义序列，让 cargo / nextest / git 等彩色 stdout 在 UI 里显示成纯文本。
+ * 移除 ANSI 控制序列，让 cargo / nextest / git / curl progress 等终端输出在
+ * stdout-style viewer 里显示成纯文本。
  *
- * 仅严格剥 `\x1b[...m`（CSI SGR with ESC prefix）——不剥裸 `[0m` 字面文本，
- * 否则用户用 Read 工具看的源码 / 文档 / 测试 fixture 里写的 `[0m` `[200m`
- * 字符串字面会被静默改写（codex CR：PR #328）。
+ * 第一段（ANSI escape regex，参考 ansi-regex / chalk 同款写法）覆盖：
+ *   - Fe 单字节 ESC：`ESC D/M/E/7/8` 等 (`[@-Z\\^_]` 即 0x40-0x5A + 0x5C/0x5E/0x5F，
+ *     **明确排除** `[` 0x5B / `]` 0x5D 让 CSI / OSC alternative 能匹配)
+ *   - CSI：`ESC [` + 参数(0x30-0x3F: `0-9 : ; < = > ?`) + 中间(0x20-0x2F) + 终止(@-~)
+ *     涵盖 SGR `[0m` `[38:2:R:G:Bm` 24-bit color / cursor `[A` `[K` /
+ *     erase line `[2K` / DEC private mode `[?25l` `[?25h`
+ *   - OSC：`ESC ]` + payload + (BEL `\x07` | ST `ESC \\`) 终止——终端标题等
  *
- * 单向无损：源 jsonl 字节完整保留，仅渲染层清洗。export 是为 toolOutputText
- * 同文件内调用 + 单测直接覆盖。
+ * 第二段单独处理 `\r` 行覆盖（cargo build / curl progress 风格）——每行只
+ * 保留最后一个 `\r` 之后的内容；CRLF (`\r\n`) 因 `(?!\n)` 守卫保留为完整行尾。
+ *
+ * **不剥**字面文本里的 `[0m` `[200m` 等无 ESC 前缀的 SGR 字符串——历史兜底
+ * regex 已删除（codex CR PR #328 第一轮）；ReadToolViewer 走文件 raw 契约
+ * **不**调本函数（codex CR PR #328 第二轮）。决策权在 viewer 层。
  */
 export function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*m/g, "");
+  let out = s.replace(/\x1b(?:[@-Z\\^_]|\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))/g, "");
+  out = out.replace(/^.*\r(?!\n)/gm, "");
+  return out;
 }
 
 /**

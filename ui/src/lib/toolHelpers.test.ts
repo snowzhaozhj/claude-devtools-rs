@@ -224,36 +224,81 @@ describe('stripAnsi', () => {
       const input = '\x1b[33mcommit 60b381c\x1b[m\n\x1b[1;31mAuthor:\x1b[m \x1b[36mfoo\x1b[m'
       expect(stripAnsi(input)).toBe('commit 60b381c\nAuthor: foo')
     })
+
+    test('24-bit color SGR `\\x1b[38:2:R:G:Bm`\uFF08\u542B `:` \u53C2\u6570\u5206\u9694\uFF09\u4E5F\u88AB\u5265', () => {
+      // ECMA-48 CSI \u53C2\u6570\u5B57\u8282\u8303\u56F4 0x30-0x3F \u542B `:`\u2014\u201424-bit color \u7528 `:` \u5206\u9694 RGB\u3002
+      const input = '\x1b[38:2:255:0:0mred\x1b[0m'
+      expect(stripAnsi(input)).toBe('red')
+    })
   })
 
-  describe('BASELINE-LEAK\uFF08\u5F53\u524D regex \u6F0F\u7684 ECMA-48 \u5B50\u96C6\uFF09', () => {
-    test('cargo build erase line `\\x1b[2K` \u5F53\u524D\u4E0D\u5265\uFF08K \u7EC8\u6B62\u5B57\u7B26\u4E0D\u88AB SGR regex \u5339\u914D\uFF09', () => {
+  describe('CSI \u975E SGR \u63A7\u5236\u5E8F\u5217', () => {
+    test('cargo build erase line `\\x1b[2K` \u88AB\u5265\uFF08K \u7EC8\u6B62\u5B57\u7B26 / 0x40-0x7E\uFF09', () => {
       const input = '\x1b[2K\r   Compiling cdt-core v0.4.10\n'
-      expect(stripAnsi(input)).toBe('\x1b[2K\r   Compiling cdt-core v0.4.10\n')
+      // \u5148 ANSI strip \u6389 `\x1b[2K` \u5269 `\r   Compiling...`\uFF1B\u518D \r \u884C\u8986\u76D6\u5220 `\r`
+      // \u4E4B\u524D\u5185\u5BB9\uFF08\u7A7A\u5B57\u7B26\u4E32\uFF09\u2192 `   Compiling cdt-core v0.4.10\n`\u3002
+      expect(stripAnsi(input)).toBe('   Compiling cdt-core v0.4.10\n')
     })
 
-    test('DEC private mode `\\x1b[?25l`\uFF08\u9690\u5149\u6807\uFF09\u5F53\u524D\u4E0D\u5265', () => {
+    test('DEC private mode `\\x1b[?25l` `\\x1b[?25h`\uFF08\u542B `?` \u53C2\u6570\u524D\u7F00\uFF09\u88AB\u5265', () => {
       const input = '\x1b[?25l progress \x1b[?25h done'
-      expect(stripAnsi(input)).toBe('\x1b[?25l progress \x1b[?25h done')
+      expect(stripAnsi(input)).toBe(' progress  done')
     })
 
-    test('OSC \u7EC8\u7AEF\u6807\u9898 `\\x1b]0;...\\x07` \u5F53\u524D\u4E0D\u5265', () => {
-      const input = '\x1b]0;cargo build\x07Compiling foo'
-      expect(stripAnsi(input)).toBe('\x1b]0;cargo build\x07Compiling foo')
-    })
-
-    test('\u88F8 `\\r` \u884C\u8986\u76D6\uFF08curl progress \u98CE\u683C\uFF09\u5F53\u524D\u4E0D\u5265', () => {
-      const input = '50%\r99%\r100%\n'
-      expect(stripAnsi(input)).toBe('50%\r99%\r100%\n')
-    })
-
-    test('\u88F8 `\\x1bD`\uFF08\u5411\u4E0B\u79FB\u52A8\u5355\u5B57\u8282 ESC\uFF09\u5F53\u524D\u4E0D\u5265', () => {
-      const input = 'before\x1bDafter'
-      expect(stripAnsi(input)).toBe('before\x1bDafter')
+    test('cursor move `\\x1b[A` `\\x1b[2J` \u7B49\u88AB\u5265', () => {
+      expect(stripAnsi('\x1b[Amove up\x1b[2Jclear')).toBe('move upclear')
     })
   })
 
-  describe('STRUCTURE\uFF08\u4EFB\u4F55 regex \u5347\u7EA7\u90FD SHALL \u4FDD\u6301\u7684\u4E0D\u53D8\u91CF\uFF09', () => {
+  describe('OSC \u5E8F\u5217', () => {
+    test('OSC \u7EC8\u7AEF\u6807\u9898\uFF08BEL \u7EC8\u6B62 `\\x07`\uFF09\u88AB\u5265', () => {
+      const input = '\x1b]0;cargo build\x07Compiling foo'
+      expect(stripAnsi(input)).toBe('Compiling foo')
+    })
+
+    test('OSC \u7EC8\u7AEF\u6807\u9898\uFF08ST \u7EC8\u6B62 `\\x1b\\\\`\uFF09\u88AB\u5265', () => {
+      // xterm \u6807\u51C6 ST \u7EC8\u6B62\u2014\u2014\u73B0\u4EE3 Linux \u7EC8\u7AEF\u5E38\u7528\u3002
+      const input = '\x1b]0;title\x1b\\after'
+      expect(stripAnsi(input)).toBe('after')
+    })
+  })
+
+  describe('Fe \u5355\u5B57\u8282 ESC \u5E8F\u5217', () => {
+    test('\u88F8 `\\x1bD` `\\x1bM` `\\x1bE`\uFF08IND / RI / NEL\uFF0C\u5927\u5199 final byte\uFF09\u88AB\u5265', () => {
+      // ECMA-48 Fe \u5355\u5B57\u8282 ESC \u5E8F\u5217\uFF1A\u7EC8\u6B62\u5B57\u8282 0x40-0x5A + 0x5C + 0x5E + 0x5F
+      // (`[@-Z\\^_]`)\uFF0C**\u660E\u786E\u6392\u9664** `[` 0x5B / `]` 0x5D \u8BA9 CSI / OSC alternative \u547D\u4E2D\u3002
+      // \u5DF2\u77E5\u4EE3\u4EF7\uFF1A\u7528\u6237 hexdump \u542B\u88F8 \x1b \u540E\u63A5\u5927\u5199\u5B57\u6BCD\u65F6\uFF0C1 \u5B57\u8282\u4F1A\u88AB\u5403\u2014\u2014
+      // \u8FD9\u662F ANSI \u63A7\u5236\u5E8F\u5217\u5265\u79BB\u7684\u56FA\u6709 tradeoff\uFF08codex CR PR #328 \u7B2C\u4E09\u8F6E\u63A5\u53D7\uFF09\u3002
+      expect(stripAnsi('before\x1bDafter')).toBe('beforeafter')
+      expect(stripAnsi('\x1bM\x1bEreset')).toBe('reset')
+    })
+
+    test('\u5C0F\u5199 final byte\uFF08\u5982 `\\x1bc` RIS\uFF09SHALL \u4E0D\u88AB\u5265\uFF08\u6309 ansi-regex \u6807\u51C6 Fe \u8303\u56F4\uFF09', () => {
+      // ESC c (RIS) / ESC 7 (DECSC) / ESC 8 (DECRC) / ESC = / ESC > \u4E0D\u5728 [@-Z\\^_]
+      // \u8303\u56F4\u5185\u2014\u2014ansi-regex / chalk \u6807\u51C6\u4E5F\u4E0D\u5265\u8FD9\u4E9B\u3002\u5982\u672A\u6765\u771F\u51FA\u73B0 cargo / git
+      // \u8F93\u51FA\u542B\u6B64\u7C7B Fe \u5E8F\u5217\u6B8B\u7559\uFF0C\u518D\u5F00\u72EC\u7ACB PR \u5347\u7EA7\u3002
+      expect(stripAnsi('\x1bc text')).toBe('\x1bc text')
+    })
+  })
+
+  describe('`\\r` \u884C\u8986\u76D6\uFF08curl / cargo progress \u98CE\u683C\uFF09', () => {
+    test('\u88F8 `\\r` \u53EA\u4FDD\u7559\u6700\u540E\u7247\u6BB5', () => {
+      const input = '50%\r99%\r100%\n'
+      expect(stripAnsi(input)).toBe('100%\n')
+    })
+
+    test('\u6DF7\u5408 CRLF \u4E0E\u88F8 `\\r`\uFF1ACRLF \u5B8C\u6574\u4FDD\u7559\uFF0C\u88F8 `\\r` \u89E6\u53D1\u8986\u76D6', () => {
+      // \u5173\u952E\u5B88\u536B\uFF1ACRLF (`\r\n`) SHALL \u4FDD\u7559\u4E3A\u5B8C\u6574\u884C\u5C3E\uFF0C\u4E0D\u80FD\u88AB `\r` \u884C\u8986\u76D6\u8BED\u4E49\u5403\u6389
+      // (`(?!\n)` \u5B88\u536B)\u3002
+      const input = 'aaa\rbbb\r\nccc\rddd'
+      // \u7B2C\u4E00\u904D `^aaa\r` \u547D\u4E2D\uFF08\r \u540E\u662F b \u975E \n\uFF09\u2192 \u5220\uFF0C\u5269 `bbb\r\nccc\rddd`\uFF1B
+      // multiline `^` \u5728 `\r\n` \u540E\u89C6\u4F5C\u65B0\u884C\u8D77\u70B9 \u2192 `^ccc\r` \u547D\u4E2D\uFF08\r \u540E\u662F d \u975E \n\uFF09
+      // \u2192 \u5220\uFF0C\u5269 `bbb\r\nddd`\u3002
+      expect(stripAnsi(input)).toBe('bbb\r\nddd')
+    })
+  })
+
+  describe('STRUCTURE\uFF08\u4E0D\u53D8\u91CF\uFF1A\u5347\u7EA7 regex \u4E0D\u80FD\u7834\u574F\u7684\u8FB9\u754C\uFF09', () => {
     test('\u7A7A\u5B57\u7B26\u4E32\u539F\u6837\u8FD4\u56DE', () => {
       expect(stripAnsi('')).toBe('')
     })
@@ -268,21 +313,19 @@ describe('stripAnsi', () => {
       expect(stripAnsi('\n\n')).toBe('\n\n')
     })
 
-    test('Windows CRLF \u4E0D\u88AB\u8BEF\u5224\u4E3A\u88F8 \\r \u884C\u8986\u76D6', () => {
-      // \u5173\u952E\uFF1A\u5347\u7EA7 regex \u5F15\u5165 `\r` \u5904\u7406\u65F6\uFF0CCRLF (`\r\n`) SHALL \u4FDD\u7559\u4E3A\u5B8C\u6574\u884C\u5C3E\uFF0C
-      // \u4E0D\u80FD\u628A `xx\r\nyy` \u5F53\u6210"\r \u4E4B\u524D\u7684\u5185\u5BB9\u88AB\u8986\u76D6"\u3002
+    test('Windows CRLF SHALL \u4FDD\u7559\u4E3A\u5B8C\u6574\u884C\u5C3E\uFF0C\u4E0D\u88AB\u88F8 `\\r` \u884C\u8986\u76D6\u8BED\u4E49\u5403\u6389', () => {
       const input = 'line1\r\nline2\r\nline3'
       expect(stripAnsi(input)).toBe('line1\r\nline2\r\nline3')
     })
 
     test('\u5E26\u65B9\u62EC\u53F7\u4F46\u975E SGR \u7684\u5B57\u9762\u6587\u672C\u4E0D\u88AB\u8BEF\u5265', () => {
-      // stripAnsi \u4E25\u683C\u53EA\u5339\u914D `\x1b[...m`\u2014\u2014\u666E\u901A\u65B9\u62EC\u53F7\u6587\u672C SHALL \u4E0D\u52A8\u3002
+      // stripAnsi \u4E25\u683C\u53EA\u5339\u914D ESC \u524D\u7F00\u2014\u2014\u666E\u901A\u65B9\u62EC\u53F7\u6587\u672C SHALL \u4E0D\u52A8\u3002
       expect(stripAnsi('[link](url)')).toBe('[link](url)')
       expect(stripAnsi('[ -f /etc/hosts ]')).toBe('[ -f /etc/hosts ]')
       expect(stripAnsi('array[0]')).toBe('array[0]')
     })
 
-    test('\u5B57\u9762 `[0m` `[200m` `[31m` \u7B49\u65E0 ESC SGR \u6B8B\u7559 SHALL \u4E0D\u88AB\u5265\uFF08codex CR PR #328\uFF09', () => {
+    test('\u5B57\u9762 `[0m` `[200m` `[31m` \u7B49\u65E0 ESC SGR \u6B8B\u7559 SHALL \u4E0D\u88AB\u5265\uFF08codex CR PR #328 \u7B2C\u4E00\u8F6E\uFF09', () => {
       // \u7528\u6237\u7528 Read \u5DE5\u5177\u770B\u7684\u6E90\u7801 / \u6587\u6863 / \u6D4B\u8BD5 fixture \u91CC\u5199\u7684 `[0m` `[31m`
       // \u5B57\u7B26\u4E32\u5B57\u9762\uFF08\u4E0D\u662F ANSI escape\uFF09SHALL \u4FDD\u7559\u2014\u2014\u5386\u53F2\u515C\u5E95 regex
       // `/\[(\d+;)*\d*m/g` \u5DF2\u5220\uFF0C\u8FD9\u6761\u6D4B\u8BD5\u5B88\u62A4"\u515C\u5E95\u4E0D\u80FD\u518D\u52A0\u56DE\u6765"\u3002
