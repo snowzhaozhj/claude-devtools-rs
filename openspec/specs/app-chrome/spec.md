@@ -46,7 +46,7 @@ TBD - created by archiving change unified-title-bar. Update Purpose after archiv
 - **THEN** `zone-platform-padding` SHALL NOT 渲染
 - **AND** `zone-left-center` 的第一个控件左边缘 SHALL 距窗口左边缘 ≤ 8 px（仅保留 chrome 内边距）
 
-#### Scenario: zone-drag-flex 拖窗
+#### Scenario: 拖动 chrome 非按钮区域移窗
 
 - **WHEN** 用户在 chrome 的非按钮区域按住鼠标左键拖动
 - **THEN** Tauri SHALL 调用窗口拖动（基于 `data-tauri-drag-region` 属性）
@@ -110,7 +110,7 @@ chrome 底部 SHALL 渲染**仅一条** 1 px 横向分隔线作为 chrome 与下
 - **AND** SessionDetail 最顶部章节与 TabBar 之间用户视觉上 SHALL 仅看到一条来自 TabBar 行底的 1 px 分隔线
 - **AND** 本 Scenario SHALL NOT 禁止 top-bar 自身**下方**（top-bar 与下方 conversation/content 区域之间）渲染 1 px 分隔线用于区分头部章节与下方内容——该 border 与 TabBar 行底之间隔了整个 top-bar 高度，物理上不构成紧贴叠线
 
-#### Scenario: 其它 view 顶部 border audit-only
+#### Scenario: 其它 view 顶部 border 不强制规定
 
 - **WHEN** 实施期 audit Settings / Notifications / Dashboard 等其它 pane content view 顶部 border
 - **THEN** 若该 border 用于 view 内部章节分隔，SHALL 保留不动

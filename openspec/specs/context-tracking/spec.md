@@ -90,7 +90,7 @@
 
 系统 SHALL 以纯同步 API 形式提供 context tracking：消费内存中的 chunk 序列以及外部注入的 per-file token 字典；SHALL NOT 在 context 计算过程中执行文件 I/O、网络调用或其它副作用。该 API SHALL 可在非 async 代码路径调用，SHALL NOT 依赖 `tokio` 等 runtime。
 
-#### Scenario: Library consumer calls the API from a sync context
+#### Scenario: Caller invokes context stats from a sync context
 
 - **WHEN** 非 async 线程调用 context tracking 主入口，传入借用的 chunk slice 与已填好 token 字典的处理参数
 - **THEN** 该入口 SHALL 在不 spawn task、不 await future、不访问文件系统的前提下返回 `SessionContextResult`

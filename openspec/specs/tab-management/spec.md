@@ -207,7 +207,7 @@ Sidebar 的会话高亮 SHALL 跟随 focused pane 的 activeTabId 对应的 sess
 - **AND** `paneLayout.panes.length < 4`
 - **THEN** 系统 SHALL 创建一个新 pane 插入到当前 pane 右侧，把触发 split 的 tab 移动到新 pane，新 pane SHALL 成为 focused
 
-#### Scenario: Split 达到 MAX_PANES 上限
+#### Scenario: Split 达到最大 pane 数上限
 
 - **WHEN** 用户尝试 split 但 `paneLayout.panes.length === 4`
 - **THEN** 系统 SHALL NOT 创建新 pane，操作 SHALL 静默忽略或展示禁用视觉

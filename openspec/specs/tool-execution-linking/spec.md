@@ -131,7 +131,7 @@
 - **WHEN** subagent session 同时有 spawn_ts 与 end_ts
 - **THEN** `Process.duration_ms` SHALL 等于 `(end_ts - spawn_ts).num_milliseconds() as u64`
 
-#### Scenario: is_ongoing 判定走 check_messages_ongoing 算法
+#### Scenario: is_ongoing 判定按消息状态推算
 - **WHEN** subagent session 的 `Vec<ParsedMessage>` 经 `cdt_analyze::check_messages_ongoing` 判定仍在进行（末尾活动栈中最后一个 ending 信号之后仍有 AI 活动，或从未出现 ending 但有 AI 活动）
 - **THEN** `SubagentCandidate.is_ongoing` MUST 为 `true`，对应 `Process.is_ongoing` 经 resolver OR 兜底后 MUST 为 `true`
 
