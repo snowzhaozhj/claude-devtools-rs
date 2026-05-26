@@ -264,8 +264,13 @@ export function shouldPrefetchOnChunkExpand(exec: ToolExecution): boolean {
   return exec.toolName === "Read" && !exec.isError && !!exec.outputOmitted;
 }
 
-/** 移除 ANSI 转义序列 */
-function stripAnsi(s: string): string {
+/**
+ * 移除 ANSI 转义序列，让 cargo / nextest / git 等彩色 stdout 在 UI 里显示成纯文本。
+ *
+ * 仅 strip 控制字节，不动正常字符与换行结构——单向无损（源 jsonl 字节完整保留）。
+ * export 是为了让 `toolOutputText` 同文件内调用 + 单测 `toolHelpers.test.ts` 直接覆盖。
+ */
+export function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
   s = s.replace(/\x1b\[[0-9;]*m/g, "");
   s = s.replace(/\[(\d+;)*\d*m/g, "");
@@ -458,9 +463,18 @@ function findStringField(value: unknown, names: string[]): string | undefined {
   return undefined;
 }
 
-/** 将 ToolOutput 转为文本 */
+/**
+ * 将 ToolOutput 转为文本。
+ *
+ * 对 `kind === "text"` 分支统一 `stripAnsi`——让 nextest / cargo / git 等彩色
+ * stdout 在所有 tool viewer（Bash / Default / Edit / Read）里都显示成纯文本，
+ * 而非渲染 `[32;1m PASS [0m` 字面字节。
+ *
+ * 单向无损：源 jsonl 字节完整保留，仅渲染层清洗；token 估算
+ * (`getToolOutputTokens`) 仍读 `output.text.length` 不受影响。
+ */
 export function toolOutputText(output: ToolOutput): string {
-  if (output.kind === "text") return output.text;
+  if (output.kind === "text") return stripAnsi(output.text);
   if (output.kind === "structured")
     return JSON.stringify(output.value, null, 2);
   return "";
