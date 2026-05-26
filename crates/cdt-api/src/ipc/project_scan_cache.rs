@@ -60,6 +60,17 @@ pub const LOCAL_CACHE_TTL: Duration = Duration::from_secs(300);
 /// 同时避免远端 fs 状态长时间过期。
 pub const SSH_CACHE_TTL: Duration = Duration::from_secs(10);
 
+/// mtime overlay 大小硬上限（防御性闸门）。三档 invalidate 不清 overlay、
+/// TTL 过期不清 overlay，仅 `merge_overlay_with_fresh_snapshot` 在重扫时
+/// 清"snapshot 不再含某 project"的 hint。极端场景（大量临时 project 反复
+/// 创建删除 + 该 ctx 长期不重扫）下 overlay 可能无界增长。
+///
+/// 本闸门保证 overlay 永远 ≤ 4096 条 (`ContextId`, `project_id`) → `i64` entry，
+/// 超出后新 project 的 hint 写入被静默丢弃（既有 entry 仍可推进）。30 project
+/// 典型 corpus 远小于该上限，触发即视为异常，counter
+/// `project_scan_cache.overlay.full_skip` 暴露给 telemetry。
+pub const MTIME_OVERLAY_SOFT_CAP: usize = 4096;
+
 /// 单次 scan 结果在内存中的缓存条目。
 #[derive(Clone)]
 struct CacheEntry {
@@ -285,6 +296,13 @@ impl ProjectScanCache {
     /// 处守护）。
     ///
     /// 单调性：仅当传入值大于已记录值时更新；写入只追加 / 提升，不会回退。
+    ///
+    /// 防御性闸门：overlay 大小超过 [`MTIME_OVERLAY_SOFT_CAP`] 后**新** key
+    /// 的写入被静默丢弃（既有 key 仍可推进）。典型 30 project corpus 远小于
+    /// cap，触发视为异常——`project_scan_cache.overlay.full_skip` counter 暴露
+    /// 异常给 telemetry（codex PR 二审 Low 建议：防"大量临时 project 反复创建
+    /// 删除 + 该 ctx 长期不重扫"场景下 overlay 无界增长）。
+    ///
     /// Spec：`ipc-data-api/spec.md::ProjectScanCache 维护 per-project mtime
     /// overlay::已知 session 普通 append 推进 hint`。
     pub fn advance_mtime(&mut self, ctx: &ContextId, project_id: &str, mtime_ms: i64) {
@@ -292,6 +310,10 @@ impl ProjectScanCache {
         match self.mtime_overlay.get_mut(&key) {
             Some(slot) if *slot < mtime_ms => *slot = mtime_ms,
             None => {
+                if self.mtime_overlay.len() >= MTIME_OVERLAY_SOFT_CAP {
+                    cdt_telemetry::counter!("project_scan_cache.overlay.full_skip").inc();
+                    return;
+                }
                 self.mtime_overlay.insert(key, mtime_ms);
             }
             _ => {}
@@ -1162,6 +1184,26 @@ mod tests {
             Some(123),
             "cache 空时 SHALL 仍把 hint 写入 overlay"
         );
+    }
+
+    /// `MTIME_OVERLAY_SOFT_CAP` 防御性闸门：超出 cap 后新 key 静默丢弃，既有
+    /// key 仍可推进（codex PR 二审 Low：防 overlay 无界增长）。
+    #[test]
+    fn advance_mtime_drops_new_keys_when_overlay_cap_reached() {
+        let mut c = ProjectScanCache::new();
+        let ctx = local_ctx();
+        // 填满 cap
+        for i in 0..MTIME_OVERLAY_SOFT_CAP {
+            c.advance_mtime(&ctx, &format!("p{i}"), 100);
+        }
+        assert_eq!(c.mtime_overlay.len(), MTIME_OVERLAY_SOFT_CAP);
+        // 新 key 应静默丢弃
+        c.advance_mtime(&ctx, "p_overflow", 999);
+        assert_eq!(c.mtime_overlay.len(), MTIME_OVERLAY_SOFT_CAP);
+        assert_eq!(c.lookup_mtime_overlay(&ctx, "p_overflow"), None);
+        // 既有 key 仍可推进
+        c.advance_mtime(&ctx, "p0", 500);
+        assert_eq!(c.lookup_mtime_overlay(&ctx, "p0"), Some(500));
     }
 
     /// `synthesize_projects_with_overlay` 无 hint 时 SHALL 直接返原 Arc 零分配。
