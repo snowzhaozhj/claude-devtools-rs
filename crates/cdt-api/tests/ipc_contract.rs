@@ -1116,10 +1116,16 @@ async fn active_ssh_context_reads_remote_projects_and_sessions() {
     assert_remote_fs_touched(before, fake.snapshot_counters(), "list_sessions_sync");
 
     let before = fake.snapshot_counters();
-    let detail = api
-        .get_session_detail(project_id, session_id)
+    let resp = api
+        .get_session_detail(project_id, session_id, None)
         .await
         .unwrap();
+    let detail = match resp {
+        cdt_api::SessionDetailResponse::Full { detail, .. } => *detail,
+        cdt_api::SessionDetailResponse::Unchanged { .. } => {
+            panic!("expected Full response on first call (no known fingerprint)")
+        }
+    };
     assert_eq!(detail.session_id, session_id);
     // typed 化后 metrics 是 SessionDetailMetrics struct（wire 仍为
     // snake_case `message_count`），用 typed field 访问；序列化形状
@@ -1654,11 +1660,111 @@ async fn list_sessions_sync_long_title_truncated_at_500_chars() {
 #[tokio::test]
 async fn get_session_detail_missing_session_returns_error() {
     let (api, _tmp) = setup_api().await;
-    let result = api.get_session_detail("ghost-project", "ghost-sess").await;
+    let result = api
+        .get_session_detail("ghost-project", "ghost-sess", None)
+        .await;
     assert!(
         result.is_err(),
         "找不到 session 时 SHALL 返回 ApiError 而非 panic"
     );
+}
+
+#[tokio::test]
+async fn get_session_detail_fingerprint_unchanged_short_circuit() {
+    let (api, tmp) = setup_api().await;
+    let project_dir = tmp.path().join("projects").join("-test-proj");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    write_user_session(&project_dir, "fp-sess", "/tmp", "hello").await;
+
+    // 首次调用无 known_fingerprint → 返 Full + fingerprint
+    let resp = api
+        .get_session_detail("-test-proj", "fp-sess", None)
+        .await
+        .unwrap();
+    let fp = match &resp {
+        cdt_api::SessionDetailResponse::Full {
+            fingerprint,
+            detail,
+        } => {
+            assert_eq!(detail.session_id, "fp-sess");
+            assert!(!fingerprint.is_empty());
+            fingerprint.clone()
+        }
+        cdt_api::SessionDetailResponse::Unchanged { .. } => {
+            panic!("首次调用（无 known_fingerprint）SHALL 返 Full")
+        }
+    };
+
+    // 第二次传相同 fingerprint → 文件未变 → 返 Unchanged
+    let resp2 = api
+        .get_session_detail("-test-proj", "fp-sess", Some(&fp))
+        .await
+        .unwrap();
+    match &resp2 {
+        cdt_api::SessionDetailResponse::Unchanged { fingerprint } => {
+            assert_eq!(fingerprint, &fp);
+        }
+        cdt_api::SessionDetailResponse::Full { .. } => {
+            panic!("文件未变 + 传入相同 fingerprint SHALL 返 Unchanged")
+        }
+    }
+
+    // 修改文件 → 传旧 fingerprint → 返 Full（fingerprint 不同）
+    tokio::fs::write(
+        project_dir.join("fp-sess.jsonl"),
+        r#"{"type":"user","uuid":"fp-sess","parentUuid":null,"timestamp":"2026-04-11T10:00:00Z","isSidechain":false,"userType":"external","cwd":"/tmp","sessionId":"fp-sess","version":"1","message":{"role":"user","content":"hello"}}
+{"type":"user","uuid":"fp-sess-2","parentUuid":null,"timestamp":"2026-04-11T10:01:00Z","isSidechain":false,"userType":"external","cwd":"/tmp","sessionId":"fp-sess","version":"1","message":{"role":"user","content":"world"}}
+"#,
+    )
+    .await
+    .unwrap();
+
+    let resp3 = api
+        .get_session_detail("-test-proj", "fp-sess", Some(&fp))
+        .await
+        .unwrap();
+    match &resp3 {
+        cdt_api::SessionDetailResponse::Full {
+            fingerprint: fp3,
+            detail,
+        } => {
+            assert_ne!(fp3, &fp, "文件变了 fingerprint SHALL 不同");
+            assert_eq!(detail.metrics.message_count, 2);
+        }
+        cdt_api::SessionDetailResponse::Unchanged { .. } => {
+            panic!("文件变了 + 传旧 fingerprint SHALL 返 Full")
+        }
+    }
+}
+
+#[tokio::test]
+async fn get_session_detail_response_wire_format() {
+    let (api, tmp) = setup_api().await;
+    let project_dir = tmp.path().join("projects").join("-wire-proj");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    write_user_session(&project_dir, "wire-sess", "/tmp", "test").await;
+
+    // Full response wire format
+    let resp = api
+        .get_session_detail("-wire-proj", "wire-sess", None)
+        .await
+        .unwrap();
+    let json = serde_json::to_value(&resp).unwrap();
+    assert_eq!(json["status"], "full");
+    assert!(json["fingerprint"].is_string());
+    assert!(json["detail"].is_object());
+    assert_eq!(json["detail"]["sessionId"], "wire-sess");
+
+    // Unchanged response wire format
+    let fp = json["fingerprint"].as_str().unwrap();
+    let resp2 = api
+        .get_session_detail("-wire-proj", "wire-sess", Some(fp))
+        .await
+        .unwrap();
+    let json2 = serde_json::to_value(&resp2).unwrap();
+    assert_eq!(json2["status"], "unchanged");
+    assert_eq!(json2["fingerprint"], fp);
+    assert!(json2.get("detail").is_none());
 }
 
 #[tokio::test]

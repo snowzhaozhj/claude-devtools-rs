@@ -612,11 +612,22 @@ export async function searchSessions(
   return await invoke("search_sessions", { projectId, query });
 }
 
+export interface SessionDetailResponse {
+  status: "full" | "unchanged";
+  fingerprint: string;
+  detail?: SessionDetail;
+}
+
 export async function getSessionDetail(
   projectId: string,
-  sessionId: string
-): Promise<SessionDetail> {
-  return await invoke("get_session_detail", { projectId, sessionId });
+  sessionId: string,
+  knownFingerprint?: string | null
+): Promise<SessionDetailResponse> {
+  return await invoke("get_session_detail", {
+    projectId,
+    sessionId,
+    knownFingerprint: knownFingerprint ?? null,
+  });
 }
 
 export async function getProjectMemory(projectId: string): Promise<ProjectMemory> {

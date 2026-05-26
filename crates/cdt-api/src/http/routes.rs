@@ -460,16 +460,18 @@ async fn get_session_summaries_by_ids(
 async fn get_session_detail(
     State(s): State<AppState>,
     Path(session_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // spec：`GET /api/sessions/:id` 不携带 project_id；先反查所属 project
-    // 再走 `DataApi::get_session_detail(project_id, session_id)` 标准路径。
-    // 反查未命中按 spec `Return safe defaults on lookup failures` 返 404。
     let project_id = s
         .api
         .find_session_project(&session_id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("session {session_id}")))?;
-    let result = s.api.get_session_detail(&project_id, &session_id).await?;
+    let known_fp = params.get("fingerprint").map(String::as_str);
+    let result = s
+        .api
+        .get_session_detail(&project_id, &session_id, known_fp)
+        .await?;
     Ok(Json(result))
 }
 

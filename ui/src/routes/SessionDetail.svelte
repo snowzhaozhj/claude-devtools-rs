@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
-  import { getSessionDetail, getToolOutput, type SessionDetail, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
+  import { getSessionDetail, getToolOutput, type SessionDetail, type SessionDetailResponse, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
   import { getToolSummary, getToolStatus, getToolDurationMs, isToolPending, cleanDisplayText, parseTaskNotifications, getToolContextTokens, estimateTokens, viewerUsesOutput, shouldPrefetchOnChunkExpand } from "../lib/toolHelpers";
   import { buildDisplayItemsCached, buildSummary } from "../lib/displayItemBuilder";
   import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, LAYERS, CLOCK_SVG, USER_SVG, ALERT_TRIANGLE_SVG, CHEVRONS_DOWN_SVG } from "../lib/icons";
@@ -46,6 +46,7 @@
   let { tabId, projectId, sessionId }: Props = $props();
 
   let detail: SessionDetail | null = $state(null);
+  let knownFingerprint: string | null = $state(null);
   let loading = $state(true);
   let error: string | null = $state(null);
   let conversationEl: HTMLElement | undefined = $state();
@@ -329,10 +330,14 @@
   async function refreshDetail() {
     const wasAtBottom = !!conversationEl && isAtBottom(conversationEl);
     try {
-      const d = await getSessionDetail(projectId, sessionId);
+      const resp: SessionDetailResponse = await getSessionDetail(projectId, sessionId, knownFingerprint);
+      knownFingerprint = resp.fingerprint;
+      if (resp.status === "unchanged") {
+        return;
+      }
+      const d = resp.detail!;
       detail = d;
       setCachedSession(tabId, d);
-      // 通知 SearchBar 内容已变（新增 chunk / 重新 hydrate），触发自动重搜
       searchContentVersion++;
       if (wasAtBottom) {
         await tick();
@@ -386,8 +391,10 @@
     } else {
       try {
         const t_ipc = performance.now();
-        const d = await getSessionDetail(projectId, sessionId);
+        const resp = await getSessionDetail(projectId, sessionId, null);
         const ipc_ms = performance.now() - t_ipc;
+        knownFingerprint = resp.fingerprint;
+        const d = resp.detail!;
         const chunks_len = d.chunks.length;
         const payload_kb = JSON.stringify(d).length / 1024;
         detail = d;

@@ -212,6 +212,26 @@ pub struct SessionDetail {
     pub title: Option<String>,
 }
 
+/// `get_session_detail` IPC 返回值 —— tagged union。
+///
+/// - `Full`：文件有变化（或首次调用无 `known_fingerprint`），携带完整 payload + 新 fingerprint。
+/// - `Unchanged`：文件签名与调用方持有的 `known_fingerprint` 一致，跳过 parse/build/serialize。
+///   前端收到 `Unchanged` 应保留现有 `SessionDetail`，不动 store。
+///
+/// Wire 形态：`{ "status": "full"|"unchanged", "fingerprint": "...", "detail"?: {...} }`。
+/// `detail` 仅 `full` 时存在。前端按 `status` 判分支。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum SessionDetailResponse {
+    Full {
+        fingerprint: String,
+        detail: Box<SessionDetail>,
+    },
+    Unchanged {
+        fingerprint: String,
+    },
+}
+
 // =============================================================================
 // 搜索
 // =============================================================================
