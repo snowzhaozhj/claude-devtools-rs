@@ -41,7 +41,7 @@ fi
 CUR=$(grep -E '^version\s*=' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 
 if [[ "$CUR" == "$VERSION" ]]; then
-    echo "⚠️  版本号已是 $VERSION，跳过 sed，直接跑 release-check + commit"
+    echo "⚠️  版本号已是 ${VERSION}，跳过 sed，直接跑 release-check + commit"
 else
     echo "→ bump 三处版本号: $CUR → $VERSION"
     sed -i.bak "s/^version = \"$CUR\"\$/version = \"$VERSION\"/" Cargo.toml src-tauri/Cargo.toml
@@ -64,10 +64,10 @@ else
 fi
 
 echo ""
-echo "✅ 本地 bump + commit 完成（branch: $CURRENT_BRANCH）"
+echo "✅ 本地 bump + commit 完成（branch: ${CURRENT_BRANCH}）"
 echo ""
 echo "下一步："
-echo "    git push -u origin $CURRENT_BRANCH"
+echo "    git push -u origin ${CURRENT_BRANCH}"
 echo "    gh pr create --title 'chore(release): $VERSION' --body ..."
 echo "    等 CI 全绿 → merge → 在 main 上 git tag v$VERSION && git push origin v$VERSION"
 echo ""
