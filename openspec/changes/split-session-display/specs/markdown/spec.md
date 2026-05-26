@@ -50,7 +50,7 @@ SessionDetail SHALL 把所有 markdown 内容（user prose / AI lastOutput / Thi
 
 #### Scenario: 滚动进入视口后渲染
 
-- **WHEN** 用户向下滚动，未渲染的 markdown 占位首次进入视口(含 rootMargin)
+- **WHEN** 用户向下滚动，未渲染的 markdown 占位首次进入视口（含 rootMargin）
 - **THEN** 该占位 SHALL 在同一帧内调用 `renderMarkdown(text)`，把 HTML 注入容器
 - **AND** SHALL 标记 `data-rendered="1"` 防重复，从 IntersectionObserver `unobserve` 该节点
 

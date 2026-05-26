@@ -25,7 +25,7 @@
 
 ## 5. tool-execution-linking 跨 spec 引用更新
 
-- [x] 5.1 写 `specs/tool-execution-linking/spec.md` `## MODIFIED Requirements` 段：`Source tool output text from raw tool_result.content` 完整重写，仅 body 内 "session-display capability 的 ReadToolViewer" 改 "tool-viewer-routing capability 的 ReadToolViewer"；4 个 Scenario 字符级保持
+- [x] 5.1 写 `specs/tool-execution-linking/spec.md` `## MODIFIED Requirements` 段：`Source tool output text from raw tool_result.content` 完整重写，仅 body 内 "session-display capability 的 ReadToolViewer" 改 "tool-viewer-routing capability 的 ReadToolViewer"；2 个 Scenario 字符级保持
 
 ## 6. 校验
 
@@ -42,7 +42,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
+- [x] N.1 push 分支 + 开 PR
 - [ ] N.2 wait-ci 全绿
 - [ ] N.3 codex PR 二审通过 + spec-guide-reviewer 通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 同 commit 内直接编辑 3 个新 cap 主 spec 插 `## Purpose` 段，按 design.md::D-6 草稿；再次 wait-ci 全绿）

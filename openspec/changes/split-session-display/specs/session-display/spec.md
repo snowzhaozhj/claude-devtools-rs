@@ -28,13 +28,13 @@
 
 **Reason**：本 Requirement 拆出到新建的 `markdown` capability。
 
-**Migration**：行为契约 100% 不变；lazy markdown 控制器由 `markdown` capability 内 `Lazy markdown rendering for first paint performance` Requirement 守护。原 8 个 Scenario（视口外不渲染 / 滚动进入视口渲染 / Mermaid 渲染时机 / 视口外不进入 highlight.js / 占位高度估算 / file-change 不打破 lazy / 紧急回滚 / flushAll 强制渲染 / flushAll 在回滚开关关闭时为 no-op）全部字符级迁移到新 cap。session-display 内"对话流容器及其 chunk / message 级稳定块容器 SHALL NOT 采用离屏估算高度占位"约束保留在 session-display `按 Chunk 类型渲染对话流` Requirement 内（已存在），与 markdown lazy 渲染契约互不重叠。
+**Migration**：行为契约 100% 不变；lazy markdown 控制器由 `markdown` capability 内 `Lazy markdown rendering for first paint performance` Requirement 守护。原 9 个 Scenario（视口外不渲染 / 滚动进入视口渲染 / Mermaid 渲染时机 / 视口外不进入 highlight.js / 占位高度估算 / file-change 不打破 lazy / 紧急回滚 / flushAll 强制渲染 / flushAll 在回滚开关关闭时为 no-op）全部字符级迁移到新 cap。session-display 内"对话流容器及其 chunk / message 级稳定块容器 SHALL NOT 采用离屏估算高度占位"约束保留在 session-display `按 Chunk 类型渲染对话流` Requirement 内（已存在），与 markdown lazy 渲染契约互不重叠。
 
 ### Requirement: Lazy load tool output on expand
 
 **Reason**：本 Requirement 拆出到新建的 `tool-viewer-routing` capability。
 
-**Migration**：行为契约 100% 不变；展开时按需 IPC 拉取 tool output 由 `tool-viewer-routing` capability 内 `Lazy load tool output on expand` Requirement 守护。原 5 个 Scenario（折叠不触发 IPC / 展开按需拉 / 重复展开复用缓存 / 老后端 fallback / 嵌套 subagent 用 subagent sessionId / IPC 失败不阻塞）全部字符级迁移到新 cap。
+**Migration**：行为契约 100% 不变；展开时按需 IPC 拉取 tool output 由 `tool-viewer-routing` capability 内 `Lazy load tool output on expand` Requirement 守护。原 6 个 Scenario（折叠不触发 IPC / 展开按需拉 / 重复展开复用缓存 / 老后端 fallback / 嵌套 subagent 用 subagent sessionId / IPC 失败不阻塞）全部字符级迁移到新 cap。
 
 ### Requirement: Tool row displays approximate token count
 
