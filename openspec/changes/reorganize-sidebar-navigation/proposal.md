@@ -4,11 +4,11 @@
 
 ## What Changes
 
-- 重写 `sidebar-navigation` Purpose，使其从用户价值视角描述 Sidebar 负责的导航、列表、操作、形态和性能边界，不引入新的 SHALL/MUST 行为约束。
-- 将 `sidebar-navigation` 的 36 个 Requirement 按用户行为重新分组和重命名：项目导航、会话列表、会话操作、列表性能、Worktree 多 group 切换、Sidebar 形态。
+- archive 同 commit 内重写 `sidebar-navigation` Purpose，使其从用户价值视角描述 Sidebar 负责的导航、列表、操作、形态和性能边界，不引入新的 SHALL/MUST 行为约束。
+- archive 同 commit 内将 `sidebar-navigation` 的保留 Requirement 按用户行为重新分组排序：项目导航、会话列表、会话操作、列表性能、Worktree 多 group 切换、Sidebar 形态。OpenSpec active delta 仅表达可验证的跨 cap owner 迁移。
 - 保持现有 Scenario 行为契约 100% 不变：每个保留或迁移的 Scenario 的 WHEN / THEN / AND / OR / NOT 子句字符级保持。
 - 从 `sidebar-navigation` 迁出 4 个 Tab owner Scenario 到 `tab-management`，分别并入打开 session tab / Sidebar 与 Tab 联动 / session tab identity 相关 Requirement。
-- 同 PR 清理被 MODIFIED Requirement 覆盖到的 Scenario 标题中明显内部实现视角命名，但不改 Scenario 子句。
+- 本 PR 不在 active delta 中批量清理 Scenario 标题；若 archive 同 commit 调整标题，仅限不改 Scenario 子句的用户视角命名。
 - 不引入新 UI、代码、IPC 字段、Tauri command 或后端行为。
 
 ## Capabilities
@@ -19,7 +19,7 @@
 
 ### Modified Capabilities
 
-- `sidebar-navigation`: Purpose 与 Requirement 组织方式改为用户行为视角；移除归属 Tab 生命周期 / Tab identity 的 Scenario；保留 Sidebar owner 行为契约。
+- `sidebar-navigation`: active delta 移除归属 Tab 生命周期 / Tab identity 的 Scenario；archive 同 commit 将主 spec Purpose 与 Requirement 顺序改为用户行为视角，保留 Sidebar owner 行为契约。
 - `tab-management`: 接收 Sidebar 点击打开 tab、高亮跟随 focused pane activeTab、无 active tab 时无高亮、session tab 使用 worktree id 打开 detail 的 Scenario，成为这些 Tab 状态行为的唯一 owner。
 
 ## Impact
