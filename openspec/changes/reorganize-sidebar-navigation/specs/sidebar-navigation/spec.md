@@ -2,9 +2,9 @@
 
 ### Requirement: 会话选择与 Tab 联动
 
-**Reason**：该 Requirement 的全部 3 个 Scenario 归属 Tab 生命周期 / Sidebar 与 Tab 联动 owner，迁入 `tab-management`，避免 Sidebar 与 Tab 双 owner。
+**Reason**：该 Requirement 的行为归属 Tab 生命周期 / Sidebar 与 Tab 联动 owner，迁入或归并到 `tab-management`，避免 Sidebar 与 Tab 双 owner。
 
-**Migration**：行为契约 100% 不变；3 个 Scenario 的 WHEN / THEN 子句字符级迁移到 `tab-management` 的 `打开 session tab` 与 `Sidebar 与 Tab 联动` Requirement。
+**Migration**：行为契约 100% 不变；其中 2 个 Scenario 迁入 `tab-management` 的 `打开 session tab` 与 `Sidebar 与 Tab 联动` Requirement；`无 active tab 时无高亮` 由 `tab-management` 既有 `无 active tab 时 Sidebar 无高亮` Scenario 覆盖。同一 change 的另 1 个迁入 Scenario 来自 `selectedGroupId 与 worktree id 分层维护`。
 
 ## MODIFIED Requirements
 

@@ -2,7 +2,7 @@
 
 - [x] 1.1 读取 issue #333 与现有 `sidebar-navigation` / `tab-management` 主 spec，确认 36 个 Requirement 与迁移候选
 - [x] 1.2 创建 proposal.md，声明纯 spec 重组 scope、capability 修改范围与无运行时代码影响
-- [x] 1.3 创建 design.md，记录 D-1 字符级保持、D-2 用户视角分组、D-3 跨 cap 迁移映射、D-4 Worktree 灰区裁定
+- [x] 1.3 创建 design.md，记录 D-1 行为契约保持、D-2 用户视角分组审计、D-3 跨 cap 迁移映射、D-4 Worktree 灰区裁定
 - [x] 1.4 创建 `sidebar-navigation` 与 `tab-management` spec delta 初稿
 
 ## 2. Design review
@@ -13,9 +13,9 @@
 
 ## 3. Spec reorganization apply
 
-- [ ] 3.1 archive 同 commit 内完成 `sidebar-navigation` 35 个保留 Requirement 的用户行为分组排序，保持 Scenario 子句字符级不变
+- [x] 3.1 将 `sidebar-navigation` 35 个保留 Requirement 的用户行为分组记录为设计审计索引；archive 后不手工重排主 spec Requirement
 - [x] 3.2 将 4 个 Tab owner 候选 Scenario 裁定为 `tab-management` 唯一 owner：3 个迁入，1 个由既有 Scenario 覆盖
-- [ ] 3.3 清理本次 MODIFIED / 迁移覆盖范围内明显内部实现视角的 Scenario 标题，不改 WHEN / THEN / AND 子句
+- [x] 3.3 清理本次 MODIFIED / 迁移覆盖范围内明显内部实现视角的 Scenario 标题与 SHALL 表述，不改变可观察行为
 - [x] 3.4 校验 D-3 候选覆盖：3 个 Scenario 在 tab-management delta 新增，1 个由 tab-management 既有 Scenario 覆盖
 
 ## 4. Local validation

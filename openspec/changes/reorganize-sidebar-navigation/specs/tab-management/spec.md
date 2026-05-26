@@ -37,14 +37,14 @@ Tab 容器 SHALL 在 `<button>` / `<span>` 等可 hover 的根元素上设置 HT
 - **WHEN** 在前端代码中搜索 `label.slice(0, ` / `label.substring(0, ` / `tab.label.slice` 等模式
 - **THEN** SHALL NOT 出现任何作用于 `tab.label` 的不可逆字符截断（含 "…" 拼接）
 
-#### Scenario: 点击会话打开 tab
+#### Scenario: 点击会话打开标签页
 - **WHEN** 用户点击一个会话项
-- **THEN** 系统 SHALL 调用 Tab 系统的 openTab，该 openTab 的作用域 SHALL 为 `focusedPaneId` 对应 pane（具体 tab 生命周期行为由 tab-management spec 定义）
+- **THEN** 系统 SHALL 在当前聚焦窗格打开或激活该会话对应的标签页
 
-#### Scenario: 打开 session detail 用 worktree id
-- **WHEN** 用户点击 sidebar 某 session 行（`session.worktreeId = "wt-X1"`、`session.sessionId = "sid"`）
-- **THEN** 前端 SHALL 创建 / 切换 tab，写入 `tab.projectId = "wt-X1"` + `tab.sessionId = "sid"` + `tab.groupId = "group-X"`
-- **AND** session 详情视图 SHALL 调 `getSessionDetail("wt-X1", "sid")` 走老 detail IPC 路径
+#### Scenario: 会话详情按所属工作树加载
+- **WHEN** 用户点击 sidebar 某 session 行（所属 worktree id 为 "wt-X1"、session id 为 "sid"）
+- **THEN** 会话标签页身份 SHALL 关联该会话所属 worktree、session 与 group，用于详情加载与 Sidebar 高亮
+- **AND** session 详情视图 SHALL 使用 worktree id "wt-X1" 与 session id "sid" 请求详情数据，而不是使用 group id
 
 ### Requirement: Sidebar 与 Tab 联动
 
@@ -62,6 +62,6 @@ Sidebar 的会话高亮 SHALL 跟随 focused pane 的 activeTabId 对应的 sess
 - **WHEN** focused pane 的 activeTabId 为 null
 - **THEN** Sidebar 中 SHALL 无 session 项被高亮
 
-#### Scenario: 高亮跟随 focused pane 的 activeTab
+#### Scenario: 高亮跟随当前窗格的活跃标签页
 - **WHEN** focused pane 的 activeTabId 变化（无论通过 Sidebar 点击、TabBar 点击、跨 pane focus 切换还是快捷键）
 - **THEN** Sidebar 中对应 sessionId 的会话项 SHALL 高亮，之前的高亮 SHALL 移除
