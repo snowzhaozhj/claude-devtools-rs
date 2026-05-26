@@ -213,7 +213,7 @@ describe('cleanDisplayText 空内容防空气泡', () => {
  *    \u5347\u7EA7\u90FD\u4E0D\u80FD\u7834\u574F\u3002
  */
 describe('stripAnsi', () => {
-  describe('EXPECTED-PASS\uFF08\u5F53\u524D\u7B80\u964B regex \u5DF2\u80FD\u5904\u7406 SGR \u7740\u8272\uFF09', () => {
+  describe('SGR \u7740\u8272\u6E05\u6D17', () => {
     test('nextest PASS \u884C\uFF08\u622A\u56FE\u771F\u5B9E\u6837\u672C\uFF09\u5265\u6210\u7EAF\u6587\u672C', () => {
       // \u539F\u59CB\u5B57\u8282\u76F4\u63A5\u6765\u81EA\u622A\u56FE\uFF1A32;1m=\u7C97\u7EFF\u300135;1m=\u7C97\u7D2B\u300136m=\u9752\u30010m=\u91CD\u7F6E\u3002
       const input = '\x1b[32;1m       PASS\x1b[0m [   0.011s] (1285/1322) \x1b[35;1mcdt-watch\x1b[0m \x1b[36mwatcher::tests\x1b[0m \x1b[34;1mparse_event_keeps_legacy_two_level_behavior\x1b[0m'
@@ -224,18 +224,11 @@ describe('stripAnsi', () => {
       const input = '\x1b[33mcommit 60b381c\x1b[m\n\x1b[1;31mAuthor:\x1b[m \x1b[36mfoo\x1b[m'
       expect(stripAnsi(input)).toBe('commit 60b381c\nAuthor: foo')
     })
-
-    test('\u65E0 ESC \u7684 SGR \u6B8B\u7559\uFF08session \u5B58\u50A8\u8DEF\u5F84\u622A\u65AD ESC \u5B57\u8282\uFF09\u515C\u5E95\u5265\u5E72\u51C0', () => {
-      // \u539F\u4EE3\u7801\u6CE8\u91CA\u63D0\u5230\u8E29\u8FC7\u8FD9\u79CD\u60C5\u51B5\u2014\u2014\u67D0\u4E9B session \u5B58\u50A8\u94FE\u8DEF\u4FDD\u7559 `[0m` \u5B57\u9762\u4F46\u622A\u6389 \x1b\u3002
-      const input = '[32;1mPASS[0m done'
-      expect(stripAnsi(input)).toBe('PASS done')
-    })
   })
 
   describe('BASELINE-LEAK\uFF08\u5F53\u524D regex \u6F0F\u7684 ECMA-48 \u5B50\u96C6\uFF09', () => {
     test('cargo build erase line `\\x1b[2K` \u5F53\u524D\u4E0D\u5265\uFF08K \u7EC8\u6B62\u5B57\u7B26\u4E0D\u88AB SGR regex \u5339\u914D\uFF09', () => {
       const input = '\x1b[2K\r   Compiling cdt-core v0.4.10\n'
-      // \u5F53\u524D\u884C\u4E3A\uFF1A\u4FDD\u7559 \x1b[2K \u4E0E \r\uFF0C\u4EC5 SGR \u4E0D\u5728\u573A\u6240\u4EE5 regex \u4E0D\u52A8\uFF1B\u8F93\u51FA\u539F\u6837\u3002
       expect(stripAnsi(input)).toBe('\x1b[2K\r   Compiling cdt-core v0.4.10\n')
     })
 
@@ -251,8 +244,6 @@ describe('stripAnsi', () => {
 
     test('\u88F8 `\\r` \u884C\u8986\u76D6\uFF08curl progress \u98CE\u683C\uFF09\u5F53\u524D\u4E0D\u5265', () => {
       const input = '50%\r99%\r100%\n'
-      // \u5F53\u524D regex \u4E0D\u52A8 \r\uFF0Chljs \u6E32\u67D3\u65F6\u6309\u884C\u7B97\u4F1A\u51FA\u73B0"50%99%100%"\u6324\u4E00\u884C
-      // \u6216\u66F4\u7CDF\u7684\u6E32\u67D3\uFF08\u53D6\u51B3\u4E8E\u6D4F\u89C8\u5668\u5BF9 \r \u7684\u5904\u7406\uFF09\u3002\u5347\u7EA7 regex \u540E\u5E94\u53EA\u4FDD\u7559 100%\u3002
       expect(stripAnsi(input)).toBe('50%\r99%\r100%\n')
     })
 
@@ -285,17 +276,22 @@ describe('stripAnsi', () => {
     })
 
     test('\u5E26\u65B9\u62EC\u53F7\u4F46\u975E SGR \u7684\u5B57\u9762\u6587\u672C\u4E0D\u88AB\u8BEF\u5265', () => {
-      // \u515C\u5E95 regex `/\[(\d+;)*\d*m/g` \u4EC5\u5339\u914D `[\u7EAF\u6570\u5B57;\u6570\u5B57m` \u5F62\u5F0F\uFF0C
-      // \u666E\u901A\u65B9\u62EC\u53F7\u6587\u672C\uFF08\u5982 markdown link `[link](url)`\u3001shell `[ -f x ]`\uFF09SHALL \u4E0D\u52A8\u3002
+      // stripAnsi \u4E25\u683C\u53EA\u5339\u914D `\x1b[...m`\u2014\u2014\u666E\u901A\u65B9\u62EC\u53F7\u6587\u672C SHALL \u4E0D\u52A8\u3002
       expect(stripAnsi('[link](url)')).toBe('[link](url)')
       expect(stripAnsi('[ -f /etc/hosts ]')).toBe('[ -f /etc/hosts ]')
       expect(stripAnsi('array[0]')).toBe('array[0]')
     })
 
+    test('\u5B57\u9762 `[0m` `[200m` `[31m` \u7B49\u65E0 ESC SGR \u6B8B\u7559 SHALL \u4E0D\u88AB\u5265\uFF08codex CR PR #328\uFF09', () => {
+      // \u7528\u6237\u7528 Read \u5DE5\u5177\u770B\u7684\u6E90\u7801 / \u6587\u6863 / \u6D4B\u8BD5 fixture \u91CC\u5199\u7684 `[0m` `[31m`
+      // \u5B57\u7B26\u4E32\u5B57\u9762\uFF08\u4E0D\u662F ANSI escape\uFF09SHALL \u4FDD\u7559\u2014\u2014\u5386\u53F2\u515C\u5E95 regex
+      // `/\[(\d+;)*\d*m/g` \u5DF2\u5220\uFF0C\u8FD9\u6761\u6D4B\u8BD5\u5B88\u62A4"\u515C\u5E95\u4E0D\u80FD\u518D\u52A0\u56DE\u6765"\u3002
+      expect(stripAnsi('[0m text')).toBe('[0m text')
+      expect(stripAnsi('\u8DDD\u79BB [200m] \u5904')).toBe('\u8DDD\u79BB [200m] \u5904')
+      expect(stripAnsi('ANSI escape \u5199\u6CD5\uFF1A`[31m red [0m`')).toBe('ANSI escape \u5199\u6CD5\uFF1A`[31m red [0m`')
+    })
+
     test('\u6570\u5B57\u5B57\u9762\u91CF\u7ED3\u5C3E\u5E26 m \u7684\u5408\u6CD5\u6587\u672C\uFF08\u5982 `200m` \u8DDD\u79BB\uFF09\u4E0D\u88AB\u8BEF\u5265', () => {
-      // \u515C\u5E95 regex \u98CE\u9669\u70B9\uFF1A`[200m` \u5B57\u9762\u53EF\u80FD\u88AB\u8BEF\u5224\u4E3A SGR \u6B8B\u7559\u3002\u4F46\u56E0\u4E3A\u524D\u5BFC\u5FC5\u987B\u662F
-      // `[` \u5F00\u5934\uFF0C"200m"\uFF08\u6CA1 [\uFF09\u4E0D\u4F1A\u88AB\u5403\u6389\uFF1B"[200m" \u5B57\u9762\u4F1A\u88AB\u5403\u2014\u2014\u8FD9\u662F\u5DF2\u77E5 tradeoff\uFF0C
-      // \u515C\u5E95 regex \u547D\u4E2D\u771F\u5B9E session \u6570\u636E\u7684\u6982\u7387\u8FDC\u9AD8\u4E8E\u547D\u4E2D"\u7528\u6237\u5199 [200m \u5F53\u5B57\u9762\u91CF"\u7684\u6982\u7387\u3002
       expect(stripAnsi('\u8DDD\u79BB 200m \u5904')).toBe('\u8DDD\u79BB 200m \u5904')
       expect(stripAnsi('time: 30s; freq: 60Hz')).toBe('time: 30s; freq: 60Hz')
     })
@@ -318,6 +314,15 @@ describe('toolOutputText \u4E32\u63A5 stripAnsi', () => {
   test('text kind \u65E0 ANSI \u65F6\u539F\u6837\u8FD4\u56DE\uFF08\u786E\u8BA4 stripAnsi \u662F\u65E0\u526F\u4F5C\u7528\u901A\u8DEF\uFF09', () => {
     expect(toolOutputText({ kind: 'text', text: 'plain output' })).toBe('plain output')
     expect(toolOutputText({ kind: 'text', text: '\u4E2D\u6587\u8F93\u51FA\n\u7B2C\u4E8C\u884C' })).toBe('\u4E2D\u6587\u8F93\u51FA\n\u7B2C\u4E8C\u884C')
+  })
+
+  test('text kind \u542B\u5B57\u9762 `[200m` `[0m` \u7B49 SGR \u5B57\u7B26\u4E32 SHALL \u539F\u6837\u8FD4\u56DE\uFF08codex CR PR #328\uFF09', () => {
+    // ReadToolViewer \u8DEF\u5F84\u5173\u952E\u5B88\u536B\uFF1A\u7528\u6237\u8BFB\u6E90\u7801 / \u6587\u6863\u91CC\u5199\u7684 ANSI escape \u5B57\u9762
+    // \u4E0D\u80FD\u88AB\u9759\u9ED8\u6539\u5199\u2014\u2014\u5355\u5411\u65E0\u635F\u5951\u7EA6\u3002
+    expect(toolOutputText({ kind: 'text', text: 'literal [200m and [0m here' }))
+      .toBe('literal [200m and [0m here')
+    expect(toolOutputText({ kind: 'text', text: 'const ansiRed = "\\x1b[31m" // \u800C\u975E [31m' }))
+      .toBe('const ansiRed = "\\x1b[31m" // \u800C\u975E [31m')
   })
 
   test('structured kind \u8D70 JSON.stringify \u4E0D\u88AB stripAnsi \u89E6\u78B0', () => {

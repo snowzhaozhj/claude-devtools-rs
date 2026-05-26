@@ -267,14 +267,16 @@ export function shouldPrefetchOnChunkExpand(exec: ToolExecution): boolean {
 /**
  * 移除 ANSI 转义序列，让 cargo / nextest / git 等彩色 stdout 在 UI 里显示成纯文本。
  *
- * 仅 strip 控制字节，不动正常字符与换行结构——单向无损（源 jsonl 字节完整保留）。
- * export 是为了让 `toolOutputText` 同文件内调用 + 单测 `toolHelpers.test.ts` 直接覆盖。
+ * 仅严格剥 `\x1b[...m`（CSI SGR with ESC prefix）——不剥裸 `[0m` 字面文本，
+ * 否则用户用 Read 工具看的源码 / 文档 / 测试 fixture 里写的 `[0m` `[200m`
+ * 字符串字面会被静默改写（codex CR：PR #328）。
+ *
+ * 单向无损：源 jsonl 字节完整保留，仅渲染层清洗。export 是为 toolOutputText
+ * 同文件内调用 + 单测直接覆盖。
  */
 export function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
-  s = s.replace(/\x1b\[[0-9;]*m/g, "");
-  s = s.replace(/\[(\d+;)*\d*m/g, "");
-  return s;
+  return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
 /**
