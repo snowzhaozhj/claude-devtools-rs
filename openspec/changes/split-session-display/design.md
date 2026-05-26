@@ -106,7 +106,7 @@ issue #303 / #330 body 给的 `31+4+6+2 = 43` 是误记（应为 `33+4+6+2 = 45`
 
 > UI 渲染层（`tool-viewer-routing` capability 的 `ReadToolViewer`）按需 strip 前缀
 
-**实施方式**：在 `specs/tool-execution-linking/spec.md` delta 内用 `## MODIFIED Requirements` 段重写整个 `Source tool output text from raw tool_result.content` Requirement body，仅替换该一处引用文字。Scenario 全 4 项字符级保持。
+**实施方式**：在 `specs/tool-execution-linking/spec.md` delta 内用 `## MODIFIED Requirements` 段重写整个 `Source tool output text from raw tool_result.content` Requirement body，仅替换该一处引用文字。Scenario 全 2 项（`Read tool output preserves cat -n line prefixes` / `Enriched toolUseResult fields are not used for output`）字符级保持。
 
 **保留不动**：
 
