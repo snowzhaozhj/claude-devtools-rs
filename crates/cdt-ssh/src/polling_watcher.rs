@@ -489,14 +489,18 @@ async fn run_one_pass(
     for (path, cur_fp) in &current {
         match baseline.get(path) {
             None => {
-                // 新增 path → session_list_changed=true
-                if let Some(event) = build_change_event(projects_root, path, false, true) {
+                // 新增 path → session_list_changed=true，透传当前 fp.mtime
+                if let Some(event) =
+                    build_change_event(projects_root, path, false, true, cur_fp.mtime)
+                {
                     let _ = sender.send(event);
                 }
             }
             Some(old_fp) if old_fp.size != cur_fp.size || old_fp.mtime != cur_fp.mtime => {
-                // size/mtime 变化（追加）→ session_list_changed=false
-                if let Some(event) = build_change_event(projects_root, path, false, false) {
+                // size/mtime 变化（追加）→ session_list_changed=false，透传 fp.mtime
+                if let Some(event) =
+                    build_change_event(projects_root, path, false, false, cur_fp.mtime)
+                {
                     let _ = sender.send(event);
                 }
             }
@@ -509,8 +513,8 @@ async fn run_one_pass(
         .cloned()
         .collect();
     for path in removed {
-        // 删除 path → session_list_changed=true
-        if let Some(event) = build_change_event(projects_root, &path, true, true) {
+        // 删除 path → session_list_changed=true；删除事件 mtime_ms 恒 None
+        if let Some(event) = build_change_event(projects_root, &path, true, true, None) {
             let _ = sender.send(event);
         }
     }
@@ -534,24 +538,28 @@ fn emit_reconnect_diff(
     for (path, cur_fp) in current {
         match old_baseline.get(path) {
             None => {
-                // 断连期间新增
-                if let Some(event) = build_change_event(projects_root, path, false, true) {
+                // 断连期间新增——透传当前 fp.mtime
+                if let Some(event) =
+                    build_change_event(projects_root, path, false, true, cur_fp.mtime)
+                {
                     let _ = sender.send(event);
                 }
             }
             Some(old_fp) if old_fp.size != cur_fp.size || old_fp.mtime != cur_fp.mtime => {
-                // 断连期间 size/mtime 变化
-                if let Some(event) = build_change_event(projects_root, path, false, false) {
+                // 断连期间 size/mtime 变化——透传当前 fp.mtime
+                if let Some(event) =
+                    build_change_event(projects_root, path, false, false, cur_fp.mtime)
+                {
                     let _ = sender.send(event);
                 }
             }
             _ => {}
         }
     }
-    // 断连期间删除
+    // 断连期间删除——mtime_ms 恒 None
     for path in old_baseline.keys() {
         if !current.contains_key(path) {
-            if let Some(event) = build_change_event(projects_root, path, true, true) {
+            if let Some(event) = build_change_event(projects_root, path, true, true, None) {
                 let _ = sender.send(event);
             }
         }
@@ -668,6 +676,7 @@ fn build_change_event(
     path: &Path,
     deleted: bool,
     session_list_changed: bool,
+    mtime: Option<std::time::SystemTime>,
 ) -> Option<FileChangeEvent> {
     let rel = path.strip_prefix(projects_root).ok()?;
     let mut comps = rel.components();
@@ -682,13 +691,20 @@ fn build_change_event(
         .file_stem()?
         .to_string_lossy()
         .into_owned();
+    // 透传既有 fingerprint 持有的远端 mtime——零额外 SFTP stat。
+    // 删除事件 / mtime 缺失 / 转换溢出走 None；spec `file-watching::Watch SSH
+    // remote project directory via SFTP polling::SSH 透传 mtime 不增加 SFTP stat`
+    // 与 `mtime 缺失退化为 size-only fingerprint`。
+    let mtime_ms = mtime
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|d| i64::try_from(d.as_millis()).ok());
     Some(FileChangeEvent {
         project_id,
         session_id,
         deleted,
         project_list_changed: false,
         session_list_changed,
-        mtime_ms: None,
+        mtime_ms,
     })
 }
 
@@ -1008,6 +1024,116 @@ mod tests {
         let event = rx.try_recv().expect("removal should emit deleted=true");
         assert_eq!(event.session_id, "gone");
         assert!(event.deleted);
+
+        cancel.cancel();
+        handle.join().await;
+    }
+
+    /// spec scenario `后续 poll 检测新增 session jsonl::mtime_ms` —— SSH polling
+    /// 新增 path 事件 SHALL 携带远端 fingerprint mtime（毫秒 since UNIX epoch）。
+    #[tokio::test(start_paused = true)]
+    async fn second_poll_emits_mtime_ms_for_new_file() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let later = now + Duration::from_secs(5);
+        let snap1 = snap_one_project("proj-A", vec![("a.jsonl", meta(100, now))]);
+        let snap2 = snap_one_project(
+            "proj-A",
+            vec![("a.jsonl", meta(100, now)), ("b.jsonl", meta(50, later))],
+        );
+        let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap1), Ok(snap2)]);
+        let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let event = rx.try_recv().expect("new file should emit");
+        assert_eq!(event.session_id, "b");
+        let expected_ms = i64::try_from(
+            later
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap();
+        assert_eq!(
+            event.mtime_ms,
+            Some(expected_ms),
+            "mtime_ms SHALL == 远端 fingerprint mtime 毫秒"
+        );
+
+        cancel.cancel();
+        handle.join().await;
+    }
+
+    /// spec scenario `后续 poll 检测删除::mtime_ms 省略` —— 删除事件 `mtime_ms` 恒 None。
+    #[tokio::test(start_paused = true)]
+    async fn second_poll_deletion_omits_mtime_ms() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let snap1 = snap_one_project("proj-A", vec![("gone.jsonl", meta(50, now))]);
+        let snap2 = snap_one_project("proj-A", vec![]);
+        let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap1), Ok(snap2)]);
+        let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let event = rx.try_recv().expect("deletion should emit");
+        assert!(event.deleted);
+        assert!(
+            event.mtime_ms.is_none(),
+            "deletion event SHALL NOT carry mtime_ms"
+        );
+
+        cancel.cancel();
+        handle.join().await;
+    }
+
+    /// spec scenario `mtime 缺失退化为 size-only fingerprint::mtime_ms 省略`：
+    /// `RemoteEntry.mtime_missing=true` 时 fingerprint.mtime=None →
+    /// `FileChangeEvent.mtime_ms=None`，但 size 变化仍触发 emit。
+    #[tokio::test(start_paused = true)]
+    async fn mtime_missing_emits_event_without_mtime_ms() {
+        // 用 mtime_missing=true 标记构造 RemoteEntry。本测的 FakeSftpClient
+        // 实现依赖 `meta.mtime` 字段，但通过 `RemoteEntry.mtime_missing=true`
+        // 路径让 fingerprint_from_meta 走 size-only 分支，等价模拟 SFTP server
+        // 不返 mtime 的场景。
+        let snap1 = snap_one_project(
+            "proj-A",
+            vec![("a.jsonl", meta(100, SystemTime::UNIX_EPOCH))],
+        );
+        let snap2 = snap_one_project(
+            "proj-A",
+            vec![("a.jsonl", meta(200, SystemTime::UNIX_EPOCH))],
+        );
+        let client = FakeSftpClient::arc(projects_root_str(), vec![Ok(snap1), Ok(snap2)]);
+        let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(16);
+        let cancel = CancelToken::new();
+        let handle = RemotePollingWatcher::spawn(client, projects_root(), tx, cancel.clone(), None);
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(POLL_INTERVAL + Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let event = rx
+            .try_recv()
+            .expect("size change with mtime missing should emit");
+        assert_eq!(event.session_id, "a");
+        assert!(
+            event.mtime_ms.is_none(),
+            "fingerprint mtime=None SHALL → mtime_ms=None"
+        );
 
         cancel.cancel();
         handle.join().await;
@@ -1698,7 +1824,7 @@ mod tests {
     fn build_change_event_extracts_ids() {
         let root = projects_root();
         let path = root.join("proj-A").join("sess-1.jsonl");
-        let event = build_change_event(&root, &path, false, false).expect("should parse");
+        let event = build_change_event(&root, &path, false, false, None).expect("should parse");
         assert_eq!(event.project_id, "proj-A");
         assert_eq!(event.session_id, "sess-1");
         assert!(!event.deleted);
@@ -1710,14 +1836,14 @@ mod tests {
     fn build_change_event_rejects_nested() {
         let root = projects_root();
         let path = root.join("proj-A").join("subagents").join("agent-x.jsonl");
-        assert!(build_change_event(&root, &path, false, false).is_none());
+        assert!(build_change_event(&root, &path, false, false, None).is_none());
     }
 
     #[test]
     fn build_change_event_preserves_deleted_flag() {
         let root = projects_root();
         let path = root.join("proj-A").join("s.jsonl");
-        let event = build_change_event(&root, &path, true, true).expect("should parse");
+        let event = build_change_event(&root, &path, true, true, None).expect("should parse");
         assert!(event.deleted);
         assert!(event.session_list_changed);
     }
@@ -1726,9 +1852,10 @@ mod tests {
     fn build_change_event_preserves_session_list_changed() {
         let root = projects_root();
         let path = root.join("proj-A").join("s.jsonl");
-        let event_true = build_change_event(&root, &path, false, true).expect("should parse");
+        let event_true = build_change_event(&root, &path, false, true, None).expect("should parse");
         assert!(event_true.session_list_changed);
-        let event_false = build_change_event(&root, &path, false, false).expect("should parse");
+        let event_false =
+            build_change_event(&root, &path, false, false, None).expect("should parse");
         assert!(!event_false.session_list_changed);
     }
 
