@@ -1,9 +1,7 @@
-# ssh-remote-context Specification
+# ssh-remote-context Specification Changes
 
-## Purpose
+## MODIFIED Requirements
 
-定义"上下文"抽象（本地 / SSH 远程）以及 SSH 连接的建立、状态查询与拆除规则，使下游 capability（`project-discovery`、`session-parsing`、`session-search`）能够以统一接口同时消费本地和远端的 Claude 会话数据。
-## Requirements
 ### Requirement: Manage local and SSH contexts
 
 系统 SHALL 暴露"上下文"概念，表示会话数据的来源，分两类：`local`（宿主机文件系统）与 `ssh`（远程主机）。系统 SHALL 提供列出上下文、切换当前上下文、查询当前激活上下文的能力。同一时刻 SHALL 仅有一个上下文处于 `active` 状态；连接新 SSH host 时 SHALL 先断开当前 active SSH context（若存在）再切换到新 host。`Local` 上下文 SHALL 始终在 registry 中存在且不可销毁；`Ssh<host>` 上下文 SHALL 在断开后从 registry 移除。
