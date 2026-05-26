@@ -3821,7 +3821,8 @@ fn file_change_event_mtime_ms_round_trip() {
     );
 
     // 旧 fixture / 旧客户端缺字段 SHALL 反序列化为 None
-    let legacy_json = r#"{"projectId":"pa","sessionId":"sa","deleted":false,"projectListChanged":false}"#;
+    let legacy_json =
+        r#"{"projectId":"pa","sessionId":"sa","deleted":false,"projectListChanged":false}"#;
     let legacy: FileChangeEvent = serde_json::from_str(legacy_json).expect("deserialize legacy");
     assert!(legacy.mtime_ms.is_none());
 }

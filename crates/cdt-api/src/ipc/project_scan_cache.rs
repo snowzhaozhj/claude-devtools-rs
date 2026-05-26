@@ -626,9 +626,9 @@ pub(crate) fn synthesize_projects_with_overlay(
     snapshot: &Arc<Vec<Project>>,
 ) -> Arc<Vec<Project>> {
     let needs_synth = snapshot.iter().any(|p| {
-        cache.lookup_mtime_overlay(ctx, &p.id).is_some_and(|hint| {
-            hint > p.most_recent_session.unwrap_or(i64::MIN)
-        })
+        cache
+            .lookup_mtime_overlay(ctx, &p.id)
+            .is_some_and(|hint| hint > p.most_recent_session.unwrap_or(i64::MIN))
     });
     if !needs_synth {
         return snapshot.clone();

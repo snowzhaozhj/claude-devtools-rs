@@ -2506,11 +2506,7 @@ fn spawn_unified_cache_invalidator(
                     // - SSH event → 解析 active SSH context_id 后写对应 ctx overlay
                     // 删除事件 / 缺 mtime 事件由 helper 内部守护早 return。
                     if is_local {
-                        apply_mtime_advance_to_project_scan_cache(
-                            &scan_cache,
-                            &local_ctx,
-                            &event,
-                        );
+                        apply_mtime_advance_to_project_scan_cache(&scan_cache, &local_ctx, &event);
                     } else if !event.deleted
                         && event.mtime_ms.is_some()
                         && !event.project_id.is_empty()
@@ -2519,11 +2515,7 @@ fn spawn_unified_cache_invalidator(
                         && let Some((_provider, ssh_ctx)) =
                             mgr.provider_and_context_id(&active_id).await
                     {
-                        apply_mtime_advance_to_project_scan_cache(
-                            &scan_cache,
-                            &ssh_ctx,
-                            &event,
-                        );
+                        apply_mtime_advance_to_project_scan_cache(&scan_cache, &ssh_ctx, &event);
                     }
                     // emit 在 sync invalidate 之后、async parsed invalidate 之前
                     // （change D4 emit 时机契约）。OR 公式：watcher 已填字段 +
