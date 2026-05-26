@@ -22,8 +22,8 @@ spec/session-display 23
 spec/session-parsing 1
 spec/session-search 0
 spec/settings-ui 1
-change/cleanup-sidebar-navigation/sidebar-navigation 10
-spec/sidebar-navigation 11
+change/cleanup-sidebar-navigation/sidebar-navigation 7
+spec/sidebar-navigation 7
 spec/ssh-remote-context 0
 spec/tab-management 1
 spec/team-coordination-metadata 0
