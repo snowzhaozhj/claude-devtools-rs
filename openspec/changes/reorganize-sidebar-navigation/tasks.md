@@ -14,9 +14,9 @@
 ## 3. Spec reorganization apply
 
 - [ ] 3.1 archive 同 commit 内完成 `sidebar-navigation` 35 个保留 Requirement 的用户行为分组排序，保持 Scenario 子句字符级不变
-- [x] 3.2 将 4 个 Tab owner Scenario 迁入 `tab-management` 唯一 owner Requirement
+- [x] 3.2 将 4 个 Tab owner 候选 Scenario 裁定为 `tab-management` 唯一 owner：3 个迁入，1 个由既有 Scenario 覆盖
 - [ ] 3.3 清理本次 MODIFIED / 迁移覆盖范围内明显内部实现视角的 Scenario 标题，不改 WHEN / THEN / AND 子句
-- [x] 3.4 校验迁移前后 Scenario 数守恒：sidebar 减少数 + tab-management 增加数 = 原 sidebar Scenario 数
+- [x] 3.4 校验 D-3 候选覆盖：3 个 Scenario 在 tab-management delta 新增，1 个由 tab-management 既有 Scenario 覆盖
 
 ## 4. Local validation
 

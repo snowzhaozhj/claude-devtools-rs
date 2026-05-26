@@ -65,7 +65,3 @@ Sidebar 的会话高亮 SHALL 跟随 focused pane 的 activeTabId 对应的 sess
 #### Scenario: 高亮跟随 focused pane 的 activeTab
 - **WHEN** focused pane 的 activeTabId 变化（无论通过 Sidebar 点击、TabBar 点击、跨 pane focus 切换还是快捷键）
 - **THEN** Sidebar 中对应 sessionId 的会话项 SHALL 高亮，之前的高亮 SHALL 移除
-
-#### Scenario: 无 active tab 时无高亮
-- **WHEN** focused pane 的 activeTabId 为 null
-- **THEN** Sidebar 中 SHALL 无会话项高亮
