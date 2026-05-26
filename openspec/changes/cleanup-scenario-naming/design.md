@@ -8,13 +8,13 @@ issue #303 9-PR plan 阶段 3 第一个 PR。前序 PR 5（change cleanup-sideba
 - change `cleanup-config-and-context-menu`（PR #319）—— 双 cap 合并 1 PR
 - change `ssh-remote-context-cleanup`（PR #312）—— 14 Requirement 重写
 
-相比 PR #312 / #319 / #322 改动量更小（19 Scenario 跨 8 cap / 15 Requirement，每 Requirement 仅 1-3 Scenario 标题改名），但跨度更广（首次 cross-cap Scenario naming 扫描）。
+相比 PR #312 / #319 / #322 改动量更小（20 Scenario 跨 9 cap / 16 Requirement，每 Requirement 仅 1-3 Scenario 标题改名），但跨度更广（首次 cross-cap Scenario naming 扫描）。
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- 19 个明显"内部 symbol 视角"Scenario 标题改用户 / 系统可观察行为视角，符合 `SPEC_GUIDE.md::反例 1` + reviewer checklist 末两条
+- 20 个明显"内部 symbol 视角"Scenario 标题改用户 / 系统可观察行为视角，符合 `SPEC_GUIDE.md::反例 1` + reviewer checklist 末两条
 - 每个 Requirement body + 每条 SHALL / MUST / WHEN / THEN / AND 句 100% 不变（语义对等）
 - Requirement 数量不变；各 cap Scenario 数量不变
 
@@ -26,6 +26,7 @@ issue #303 9-PR plan 阶段 3 第一个 PR。前序 PR 5（change cleanup-sideba
 - 不批量重写所有 Scenario 标题——只改"明显内部 jargon"（标题里有内部 fn 名 / mod 路径 / Rust 类型签名 / 内部 const / lib 名 / 内部 channel 名）；微妙边界（cap 内部协议术语、文档级风格用语）保留
 - 不动 Purpose 段
 - 不动 Requirement 标题（标题级 RENAMED 工艺成本相对收益不划算，留作后续 spec 重组 PR 一起处理）
+- **不顺手清理被 MODIFIED 的 Requirement body 历史污染**——本 PR scope 严格限定为"仅替换 `#### Scenario:` 这一行"。`SPEC_GUIDE.md::改既有 spec 的判断顺序` 默认期望"遇到一个修一个"，但本 PR 一次性 MODIFIED 16 个 Requirement，若同步清 body 反模式（如 `fs-abstraction::本 change 零业务变化下性能基线不退化` body 内的 `Box<dyn AsyncRead>` / `crates/cdt-fs/benches/...` / `cargo test --release -p cdt-api ...` 等历史污染），单 PR 体量过大、reviewer 字符级对照成本陡升、出错风险变高。这些 body 清理留给后续**单 cap 重组 PR**或**专门的 body cleanup PR**逐个处理。本 PR 通过 spec-purity baseline 注册 `change/cleanup-scenario-naming/<cap>` 行登记 active change 内已知 body 反模式数（继承自主 spec），不增、不减、不刷新主 spec baseline；archive 后这些 entry 随 active change mv 走自然清理。
 
 ## Decisions
 
@@ -79,6 +80,7 @@ issue #303 9-PR plan 阶段 3 第一个 PR。前序 PR 5（change cleanup-sideba
 | 17 | session-parsing | Expose both a per-line and a per-file parsing API | `Per-file entry point agrees with per-line entry point` | `Per-file parse path agrees with per-line parse path` | 同上 |
 | 18 | session-parsing | Classify hard noise messages | `Synthetic assistant placeholder` | `Missing assistant generates placeholder` | 内部术语 `Synthetic` |
 | 19 | tool-execution-linking | Enrich subagent processes with team metadata | `is_ongoing 判定走 check_messages_ongoing 算法` | `is_ongoing 判定按消息状态推算` | 内部 fn 名 `check_messages_ongoing` |
+| 20 | tab-management | Pane 生命周期 | `Split 达到 MAX_PANES 上限` | `Split 达到最大 pane 数上限` | 内部 const 名 `MAX_PANES`（spec-guide-reviewer W1 补加） |
 
 ### D-4：保留的微妙边界（不改名理由）
 
