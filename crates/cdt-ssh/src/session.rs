@@ -899,8 +899,9 @@ async fn authenticate_with_agent(
         return AuthOutcome::Skipped("agent has no identities".into());
     }
     for id in identities {
+        let public_key = id.public_key().into_owned();
         match handle
-            .authenticate_publickey_with(username, id, None, &mut agent)
+            .authenticate_publickey_with(username, public_key, None, &mut agent)
             .await
         {
             Ok(success) if success.success() => return AuthOutcome::Success,
