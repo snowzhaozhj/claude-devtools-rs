@@ -8,13 +8,13 @@ issue #303 9-PR plan 阶段 3 第一个 PR。前序 PR 5（change cleanup-sideba
 - change `cleanup-config-and-context-menu`（PR #319）—— 双 cap 合并 1 PR
 - change `ssh-remote-context-cleanup`（PR #312）—— 14 Requirement 重写
 
-相比 PR #312 / #319 / #322 改动量更小（24 Scenario 跨 9 cap / 19 Requirement，每 Requirement 仅 1-3 Scenario 标题改名），但跨度更广（首次 cross-cap Scenario naming 扫描）。
+相比 PR #312 / #319 / #322 改动量更小（29 Scenario 跨 9 cap / 21 Requirement，每 Requirement 仅 1-3 Scenario 标题改名），但跨度更广（首次 cross-cap Scenario naming 扫描）。
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- 24 个明显"内部 symbol 视角"Scenario 标题改用户 / 系统可观察行为视角，符合 `SPEC_GUIDE.md::反例 1` + reviewer checklist 末两条
+- 29 个明显"内部 symbol 视角"Scenario 标题改用户 / 系统可观察行为视角，符合 `SPEC_GUIDE.md::反例 1` + reviewer checklist 末两条
 - 每个 Requirement body + 每条 SHALL / MUST / WHEN / THEN / AND 句 100% 不变（语义对等）
 - Requirement 数量不变；各 cap Scenario 数量不变
 
@@ -55,7 +55,7 @@ issue #303 9-PR plan 阶段 3 第一个 PR。前序 PR 5（change cleanup-sideba
 - cap 自身核心概念（如 `application-telemetry` 内的 `hot path counter` / `low-frequency event push`、`fs-abstraction` 内的 `open_read` / `stat_many` / `BackendPolicy`、`session-parsing` 内的 `interrupt marker`）—— 这些是 cap 对外承诺的 API 与术语
 - 微妙边界（如 `frontend-context-menu` 内 `factory 返回纯数据` / `trigger 元素 destroy 时菜单兜底卸载`）—— 改名收益相对模棱、留给后续 cap 内重构 PR
 
-### D-3：改名决策表（24 case 跨 9 cap / 19 Requirement）
+### D-3：改名决策表（29 case 跨 9 cap / 21 Requirement）
 
 按 cap 分组，每行一项：
 
@@ -85,6 +85,11 @@ issue #303 9-PR plan 阶段 3 第一个 PR。前序 PR 5（change cleanup-sideba
 | 22 | application-telemetry | hot path 性能契约 | `hot path 误用 event 宏被 CI 拦截` | `在 hot path 调用低频 event API 被拦截` | 实现术语 `宏` + 测试机制 `CI`（codex round 1 补加） |
 | 23 | fs-abstraction | fs-related cache 必须采用"单实例 + ContextId key 前缀"拓扑 | `key 类型含 ContextId` | `cache key 含上下文身份` | 内部 key/type 名 `ContextId`（codex round 1 补加） |
 | 24 | fs-abstraction | `BackendPolicy` enum 雏形定义 | `StaleCheckStrategy enum 至少包含 LocalClock5min 与 SkipUntilClockSync` | `StaleCheckStrategy 至少含本机时钟与跨时钟域两种策略` | Rust enum/variant 名直接进 Scenario 标题（codex round 1 补加） |
+| 25 | fs-abstraction | `FileSystemProvider` trait 暴露 7 个核心方法 | `read_dir_with_metadata default impl 是 N+1 RTT 兜底` | `read_dir_with_metadata 未优化路径走 N+1 RTT` | Rust trait 术语 `default impl`（codex round 2 补加） |
+| 26 | fs-abstraction | `FileSystemProvider` trait 暴露 7 个核心方法 | `SSH override read_dir_with_metadata 复用 read_dir 不退化` | `SSH 路径 read_dir_with_metadata 复用 read_dir 不退化` | Rust trait 术语 `override`（codex round 2 补加） |
+| 27 | fs-abstraction | `xtask check-fs-direct-calls` 自动化 H1 | `默认 fail-on-match（CI enforce）` | `默认禁直接调用并由 CI 拦截` | 测试机制 `fail-on-match` / `CI enforce`（codex round 2 补加） |
+| 28 | fs-abstraction | Provider instrumentation 入口可观测 fs op 次数 | `wrapper 在 trait 边界自动计数` | `fs op 在 trait 边界自动计数` | 内部实现术语 `wrapper`（codex round 2 补加） |
+| 29 | fs-abstraction | Provider instrumentation 入口可观测 fs op 次数 | `未包 wrapper 不计数` | `调用方未启用 instrumentation 时不计数` | 内部实现术语 `wrapper`（codex round 2 补加） |
 
 ### D-4：保留的微妙边界（不改名理由）
 

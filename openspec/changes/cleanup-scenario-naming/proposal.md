@@ -6,13 +6,13 @@
 
 ## What Changes
 
-- 重命名 24 个 Scenario 标题，跨 9 个 capability / 19 个 Requirement
+- 重命名 29 个 Scenario 标题，跨 9 个 capability / 21 个 Requirement
 - 每条改名都属"标题里有内部 fn 名 / mod 路径 / Rust 类型签名 / 内部 const / lib 名 / 内部 channel 名"中至少一项的明显 case；微妙边界（cap 内部协议术语、文档级风格用语）按 case-by-case 保留
 - 行为契约 100% 不变：所有 SHALL / MUST / WHEN / THEN / AND 句保持原样，仅替换 Scenario 标题用语；Requirement / Scenario 数量不增不减
 - 用 `MODIFIED Requirement` 全文重写每个含改名 Scenario 的 Requirement（即把 Requirement body 与所有 Scenario 一起拷过来，仅替换需改的 Scenario 标题），便于 reviewer 对照
 
 ## Impact
 
-- Affected specs: `app-chrome` (MODIFIED 2) + `application-telemetry` (MODIFIED 2) + `chunk-building` (MODIFIED 2) + `context-tracking` (MODIFIED 1) + `fs-abstraction` (MODIFIED 4) + `project-discovery` (MODIFIED 3) + `session-parsing` (MODIFIED 3) + `tab-management` (MODIFIED 1) + `tool-execution-linking` (MODIFIED 1) = 19 Requirement 跨 9 cap
+- Affected specs: `app-chrome` (MODIFIED 2) + `application-telemetry` (MODIFIED 2) + `chunk-building` (MODIFIED 2) + `context-tracking` (MODIFIED 1) + `fs-abstraction` (MODIFIED 6) + `project-discovery` (MODIFIED 3) + `session-parsing` (MODIFIED 3) + `tab-management` (MODIFIED 1) + `tool-execution-linking` (MODIFIED 1) = 21 Requirement 跨 9 cap
 - Affected code: 无（纯 spec 文档清理）
 - Risk: 极低 —— 行为契约 0 变更；只改标题用词；姊妹清理工艺已落地（PR #309 / #312 / #319 / #322），反例分类规则收敛
