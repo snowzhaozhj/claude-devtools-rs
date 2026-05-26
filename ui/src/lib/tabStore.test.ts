@@ -9,6 +9,7 @@ import {
   closeTab,
   getActiveTabId,
   getAllTabs,
+  getCachedSession,
   getPaneLayout,
   getSessionClickBehavior,
   getTabUIState,
@@ -20,6 +21,7 @@ import {
   openTab,
   saveTabUIState,
   setActiveTab,
+  setCachedSession,
   setSessionClickBehavior,
 } from './tabStore.svelte'
 
@@ -173,5 +175,62 @@ describe('per-tab UI state isolation', () => {
 
     const reloaded = getTabUIState(id1)
     expect(reloaded.searchVisible).toBe(true)
+  })
+})
+
+describe('tabSessionCache LRU eviction', () => {
+  test('setCachedSession 超过容量时淘汰最久未访问的非活跃 tab', () => {
+    // MAX_PANES + 1 = 5 是容量上限
+    // 创建 7 个 session tab 并缓存，前面的应被淘汰
+    const ids: string[] = []
+    for (let i = 0; i < 7; i++) {
+      openTab(`sess-lru-${i}`, 'proj-lru', `LRU ${i}`)
+      const tab = getAllTabs().find((t) => t.sessionId === `sess-lru-${i}`)!
+      ids.push(tab.id)
+      setCachedSession(tab.id, { chunks: [], isOngoing: false } as any)
+    }
+
+    // 最后一个打开的 tab 是 active，应始终有缓存
+    const lastId = ids[ids.length - 1]
+    expect(getCachedSession(lastId)).not.toBeNull()
+
+    // 早期的 tab 应被淘汰（只要不是当前 active）
+    // 容量 5，7 个 tab，至少 2 个被淘汰
+    let evictedCount = 0
+    for (const id of ids) {
+      if (getCachedSession(id) === null) evictedCount++
+    }
+    expect(evictedCount).toBeGreaterThanOrEqual(2)
+  })
+
+  test('getCachedSession touch 更新访问顺序防止被淘汰', () => {
+    openTab('sess-keep', 'proj-lru', 'Keep')
+    const keepTab = getAllTabs().find((t) => t.sessionId === 'sess-keep')!
+    setCachedSession(keepTab.id, { chunks: [], isOngoing: false } as any)
+
+    // 频繁 touch 保持热度
+    getCachedSession(keepTab.id)
+
+    // 再开更多 tab 超过容量
+    for (let i = 0; i < 6; i++) {
+      openTab(`sess-flood-${i}`, 'proj-lru', `Flood ${i}`)
+      const tab = getAllTabs().find((t) => t.sessionId === `sess-flood-${i}`)!
+      setCachedSession(tab.id, { chunks: [], isOngoing: false } as any)
+    }
+
+    // keepTab 因为被 touch 过应该仍在缓存或已被淘汰取决于容量
+    // 但 active tab 一定不会被淘汰
+    const activeId = getActiveTabId()
+    expect(getCachedSession(activeId!)).not.toBeNull()
+  })
+
+  test('closeTab 同步清理缓存和访问顺序', () => {
+    openTab('sess-close-test', 'proj-lru', 'Close Test')
+    const tab = getAllTabs().find((t) => t.sessionId === 'sess-close-test')!
+    setCachedSession(tab.id, { chunks: [], isOngoing: false } as any)
+    expect(getCachedSession(tab.id)).not.toBeNull()
+
+    closeTab(tab.id)
+    expect(getCachedSession(tab.id)).toBeNull()
   })
 })

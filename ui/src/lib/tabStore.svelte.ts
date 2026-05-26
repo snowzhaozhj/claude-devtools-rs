@@ -110,6 +110,37 @@ let sessionClickBehavior: SessionClickBehavior = $state("replace");
 // per-tab UI 状态 / session 缓存按 tabId 索引，跨 pane 迁移不丢
 const tabUIStates = new Map<string, TabUIState>();
 const tabSessionCache = new Map<string, SessionDetail>();
+const tabSessionCacheOrder: string[] = [];
+const TAB_SESSION_CACHE_CAPACITY = MAX_PANES + 1;
+
+function getActiveTabIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const pane of paneLayout.panes) {
+    if (pane.activeTabId) ids.add(pane.activeTabId);
+  }
+  return ids;
+}
+
+function touchCacheOrder(tabId: string): void {
+  const idx = tabSessionCacheOrder.indexOf(tabId);
+  if (idx !== -1) tabSessionCacheOrder.splice(idx, 1);
+  tabSessionCacheOrder.push(tabId);
+}
+
+function removeCacheOrder(tabId: string): void {
+  const idx = tabSessionCacheOrder.indexOf(tabId);
+  if (idx !== -1) tabSessionCacheOrder.splice(idx, 1);
+}
+
+function evictStaleCacheEntries(): void {
+  const activeIds = getActiveTabIds();
+  while (tabSessionCacheOrder.length > TAB_SESSION_CACHE_CAPACITY) {
+    const candidate = tabSessionCacheOrder.find((id) => !activeIds.has(id));
+    if (!candidate) break;
+    tabSessionCacheOrder.splice(tabSessionCacheOrder.indexOf(candidate), 1);
+    tabSessionCache.delete(candidate);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 内部工具
@@ -284,6 +315,7 @@ export function closePane(paneId: string): void {
   for (const t of pane.tabs) {
     tabUIStates.delete(t.id);
     tabSessionCache.delete(t.id);
+    removeCacheOrder(t.id);
   }
   paneLayout = removePane(paneLayout, paneId);
 }
@@ -369,6 +401,7 @@ export function openOrReplaceTab(
   if (activeTab && activeTab.type === "session") {
     tabUIStates.delete(activeTab.id);
     tabSessionCache.delete(activeTab.id);
+    removeCacheOrder(activeTab.id);
     const replaced: Tab = {
       ...activeTab,
       sessionId,
@@ -495,6 +528,7 @@ export function closeTab(tabId: string): void {
 
   tabUIStates.delete(tabId);
   tabSessionCache.delete(tabId);
+  removeCacheOrder(tabId);
 
   const newTabs = pane.tabs.filter((t) => t.id !== tabId);
   let newActive: string | null = pane.activeTabId;
@@ -706,11 +740,15 @@ export function getTabSessionId(tabId: string): string | null {
 // ---------------------------------------------------------------------------
 
 export function getCachedSession(tabId: string): SessionDetail | null {
-  return tabSessionCache.get(tabId) ?? null;
+  const detail = tabSessionCache.get(tabId) ?? null;
+  if (detail) touchCacheOrder(tabId);
+  return detail;
 }
 
 export function setCachedSession(tabId: string, detail: SessionDetail): void {
+  touchCacheOrder(tabId);
   tabSessionCache.set(tabId, detail);
+  evictStaleCacheEntries();
 }
 
 // ---------------------------------------------------------------------------

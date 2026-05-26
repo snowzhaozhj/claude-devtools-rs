@@ -343,6 +343,8 @@
       // is_ongoing，file mtime/size 不变但状态应从 ongoing → complete。
       const fpToSend = detail?.isOngoing ? null : knownFingerprint;
       const resp: SessionDetailResponse = await getSessionDetail(projectId, sessionId, fpToSend);
+      const currentSid = getTabSessionId(tabId);
+      if (currentSid !== null && currentSid !== sessionId) return;
       knownFingerprint = resp.fingerprint;
       if (resp.status === "unchanged") {
         return;
@@ -421,6 +423,8 @@
       try {
         const t_ipc = performance.now();
         const resp = await getSessionDetail(projectId, sessionId, null);
+        const currentSid = getTabSessionId(tabId);
+        if (currentSid !== null && currentSid !== sessionId) return;
         const ipc_ms = performance.now() - t_ipc;
         knownFingerprint = resp.fingerprint;
         const d = resp.detail!;
