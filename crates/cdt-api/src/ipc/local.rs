@@ -3286,17 +3286,22 @@ impl DataApi for LocalDataApi {
 
         // fingerprint 短路：复用 locate stat 的 mtime+size 生成字符串签名。
         // 与 known_fingerprint 一致 → 文件未变，跳过 parse/build/serialize 全流程。
+        // 安全守护：metadata 不完整（stat 失败 → mtime/size 均 None）时跳过短路，
+        // 避免退化 fingerprint "v1:0:0" 永久匹配导致永不刷新（codex review）。
         let fingerprint = make_session_fingerprint(last_modified, size);
-        if let Some(known) = known_fingerprint {
-            if known == fingerprint {
-                cdt_telemetry::counter!("ipc.get_session_detail.unchanged").inc();
-                tracing::info!(
-                    target: "cdt_api::perf",
-                    session_id = %session_id,
-                    locate_ms,
-                    "get_session_detail short-circuit: unchanged"
-                );
-                return Ok(SessionDetailResponse::Unchanged { fingerprint });
+        let metadata_complete = last_modified.is_some() && size.is_some();
+        if metadata_complete {
+            if let Some(known) = known_fingerprint {
+                if known == fingerprint {
+                    cdt_telemetry::counter!("ipc.get_session_detail.unchanged").inc();
+                    tracing::info!(
+                        target: "cdt_api::perf",
+                        session_id = %session_id,
+                        locate_ms,
+                        "get_session_detail short-circuit: unchanged"
+                    );
+                    return Ok(SessionDetailResponse::Unchanged { fingerprint });
+                }
             }
         }
 
