@@ -54,7 +54,7 @@ axum = "0.8"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 percent-encoding = "2"
 syn = { version = "2", features = ["full", "parsing"] }
-criterion = { version = "0.8", features = ["async_tokio"] }
+divan = "0.1"
 crossbeam-queue = "0.3"
 parking_lot = "0.12"
 
