@@ -294,6 +294,17 @@ impl ConfigManager {
 
         // typed Partial deserialize：失败 → ConfigError::Validation。serde 默认
         // ignore unknown fields，保 update_notifications_warn_on_unknown_key 兼容。
+        warn_unknown_keys(
+            "notifications",
+            &updates,
+            &[
+                "enabled",
+                "soundEnabled",
+                "includeSubagentErrors",
+                "snoozeMinutes",
+                "triggers",
+            ],
+        );
         let partial: PartialNotificationConfig = deserialize_partial("notifications", updates)?;
 
         let mut next = self.config.clone();
@@ -410,6 +421,18 @@ impl ConfigManager {
         let expected_version = extract_version(&mut updates)?;
         self.check_version(expected_version)?;
 
+        warn_unknown_keys(
+            "display",
+            &updates,
+            &[
+                "showTimestamps",
+                "compactMode",
+                "syntaxHighlighting",
+                "fontSans",
+                "fontMono",
+                "timeFormat",
+            ],
+        );
         let partial: PartialDisplayConfig = deserialize_partial("display", updates)?;
 
         let mut next = self.config.clone();
@@ -450,6 +473,11 @@ impl ConfigManager {
         let expected_version = extract_version(&mut updates)?;
         self.check_version(expected_version)?;
 
+        warn_unknown_keys(
+            "updater",
+            &updates,
+            &["autoUpdateCheckEnabled", "skippedUpdateVersion"],
+        );
         let partial: PartialUpdaterConfig = deserialize_partial("updater", updates)?;
 
         let mut next = self.config.clone();
@@ -497,6 +525,7 @@ impl ConfigManager {
         let expected_version = extract_version(&mut updates)?;
         self.check_version(expected_version)?;
 
+        warn_unknown_keys("httpServer", &updates, &["enabled", "port"]);
         let partial: PartialHttpServerConfig = deserialize_partial("httpServer", updates)?;
 
         let mut next = self.config.clone();
@@ -552,6 +581,11 @@ impl ConfigManager {
         let expected_version = extract_version(&mut updates)?;
         self.check_version(expected_version)?;
 
+        warn_unknown_keys(
+            "ssh",
+            &updates,
+            &["profiles", "lastConnection", "autoReconnect"],
+        );
         let partial: PartialSshConfig = deserialize_partial("ssh", updates)?;
 
         let mut candidate = self.config.ssh.clone();
@@ -896,6 +930,24 @@ fn extract_version(updates: &mut serde_json::Value) -> Result<Option<u64>, Confi
     v.as_u64()
         .map(Some)
         .ok_or_else(|| ConfigError::validation("_version must be a non-negative integer or null"))
+}
+
+/// 对于不走 `deny_unknown_fields` 的 lenient partial struct，在 deserialize 前
+/// 扫描 input object keys，未在 `known_keys` 内的发 `tracing::warn!` 诊断信号。
+/// 恢复 PR #285 之前的行为（issue #290）。
+fn warn_unknown_keys(section: &str, updates: &serde_json::Value, known_keys: &[&str]) {
+    let Some(obj) = updates.as_object() else {
+        return;
+    };
+    for key in obj.keys() {
+        if !known_keys.contains(&key.as_str()) {
+            tracing::warn!(
+                section = section,
+                key = key.as_str(),
+                "Unknown config key in partial update (ignored)"
+            );
+        }
+    }
 }
 
 /// 用 `serde_path_to_error` 反序列化 typed Partial：错误信息携带字段路径
