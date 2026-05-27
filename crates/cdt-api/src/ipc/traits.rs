@@ -202,6 +202,11 @@ pub trait DataApi: Send + Sync {
     /// `cdt_config::AppConfig`（wire 形状不变；前端已 `Promise<AppConfig>` typed）。
     async fn get_config(&self) -> Result<cdt_config::AppConfig, ApiError>;
 
+    /// 获取当前配置的 optimistic concurrency version。
+    async fn config_version(&self) -> Result<u64, ApiError> {
+        Ok(0)
+    }
+
     /// 更新配置。
     ///
     /// change `typed-ipc-payload`：返回类型从 `serde_json::Value` typed 化为

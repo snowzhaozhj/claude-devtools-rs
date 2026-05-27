@@ -38,6 +38,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { updateStore } from "../lib/updateStore.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { toastStore } from "../lib/toastStore.svelte";
   import {
     SLIDERS_HORIZONTAL_SVG,
     MONITOR_SVG,
@@ -57,6 +58,7 @@
   type SectionId = "general" | "display" | "notifications" | "connection" | "keyboard" | "diagnostics" | "about";
 
   let config: AppConfig | null = $state(null);
+  let configVersion: number | undefined = $state(undefined);
   let loading = $state(true);
   let error: string | null = $state(null);
   let saveError: string | null = $state(null);
@@ -192,6 +194,7 @@
   onMount(async () => {
     try {
       config = await getConfig();
+      configVersion = config._version;
       fontSansInput = config.display?.fontSans ?? "";
       fontMonoInput = config.display?.fontMono ?? "";
       claudeRootInput = config!.general.claudeRootPath ?? "";
@@ -233,6 +236,27 @@
     }
   });
 
+  function syncVersion(cfg: AppConfig) {
+    configVersion = cfg._version;
+  }
+
+  function isVersionMismatch(e: unknown): boolean {
+    return typeof e === "string"
+      ? e.includes("mismatch")
+      : e instanceof Error && e.message.includes("mismatch");
+  }
+
+  async function refreshAfterMismatch() {
+    toastStore.push("配置已被其他窗口修改，已重新加载", "error");
+    try {
+      config = await getConfig();
+      syncVersion(config);
+      fontSansInput = config.display?.fontSans ?? "";
+      fontMonoInput = config.display?.fontMono ?? "";
+      applyFonts(config);
+    } catch { /* ignore */ }
+  }
+
   function parseHttpServerPort(): number {
     const port = Number.parseInt(portInput, 10);
     if (!Number.isFinite(port) || port < 1024 || port > 65535) {
@@ -246,12 +270,17 @@
     if (!config || serverPending || serverStatus?.running) return;
     try {
       const port = parseHttpServerPort();
-      config = await updateConfig("httpServer", { port });
+      config = await updateConfig("httpServer", { port }, configVersion);
+      syncVersion(config);
       serverError = null;
       if (serverStatus && !serverStatus.running) {
         serverStatus = { ...serverStatus, port };
       }
     } catch (e) {
+      if (isVersionMismatch(e)) {
+        await refreshAfterMismatch();
+        return;
+      }
       serverError = String(e instanceof Error ? e.message : e);
       portInput = String(config.httpServer?.port ?? serverStatus?.port ?? 3456);
     }
@@ -272,7 +301,7 @@
       serverStatus = await getHttpServerStatus();
       if (serverStatus) portInput = String(serverStatus.port);
       config = await getConfig();
-      // 失败启动 toggle 自动回到 off 状态由 IPC 抛错路径处理
+      syncVersion(config);
     } catch (e) {
       serverError = String(e instanceof Error ? e.message : e);
       // 失败后重读状态，保证 toggle 与 server 真实状态一致
@@ -318,11 +347,17 @@
     config = { ...config, display: { ...prevDisplay, [key]: value } };
     applyFonts(config);
     try {
-      await updateConfig("display", { [key]: value });
+      const result = await updateConfig("display", { [key]: value }, configVersion);
+      syncVersion(result);
     } catch (e) {
+      if (isVersionMismatch(e)) {
+        await refreshAfterMismatch();
+        return;
+      }
       saveError = `保存失败: ${e}`;
       try {
         config = await getConfig();
+        syncVersion(config);
         fontSansInput = config.display?.fontSans ?? "";
         fontMonoInput = config.display?.fontMono ?? "";
         applyFonts(config);
@@ -341,11 +376,17 @@
     fontMonoInput = "";
     applyFonts(config);
     try {
-      await updateConfig("display", { fontSans: null, fontMono: null });
+      const result = await updateConfig("display", { fontSans: null, fontMono: null }, configVersion);
+      syncVersion(result);
     } catch (e) {
+      if (isVersionMismatch(e)) {
+        await refreshAfterMismatch();
+        return;
+      }
       saveError = `重置失败: ${e}`;
       try {
         config = await getConfig();
+        syncVersion(config);
         fontSansInput = config.display?.fontSans ?? "";
         fontMonoInput = config.display?.fontMono ?? "";
         applyFonts(config);
@@ -361,11 +402,17 @@
     const prev = config.updater ?? { autoUpdateCheckEnabled: true };
     config = { ...config, updater: { ...prev, [key]: value } };
     try {
-      await updateConfig("updater", { [key]: value });
+      const result = await updateConfig("updater", { [key]: value }, configVersion);
+      syncVersion(result);
     } catch (e) {
+      if (isVersionMismatch(e)) {
+        await refreshAfterMismatch();
+        return;
+      }
       saveError = `保存失败: ${e}`;
       try {
         config = await getConfig();
+        syncVersion(config);
       } catch {
         /* ignore */
       }
@@ -407,11 +454,17 @@
     config = { ...config, display: { ...prevDisplay, timeFormat: value } };
     setTimeFormat(value);
     try {
-      await updateConfig("display", { timeFormat: value });
+      const result = await updateConfig("display", { timeFormat: value }, configVersion);
+      syncVersion(result);
     } catch (e) {
+      if (isVersionMismatch(e)) {
+        await refreshAfterMismatch();
+        return;
+      }
       saveError = `保存失败: ${e}`;
       try {
         config = await getConfig();
+        syncVersion(config);
         const fallback = config.display?.timeFormat ?? "24h";
         setTimeFormat(fallback);
       } catch {
@@ -429,22 +482,25 @@
       setSessionClickBehavior(value as SessionClickBehavior);
     }
     try {
-      await updateConfig("general", { [key]: value });
+      const result = await updateConfig("general", { [key]: value }, configVersion);
+      syncVersion(result);
       if (key === "claudeRootPath") {
         window.dispatchEvent(new CustomEvent("cdt-refresh-projects"));
       }
-      // 三外部应用字段改动后同步 context menu settings 快照（spec
-      // configuration-management Phase 2 三字段 / Task 10.5）
       if (key === "externalEditor" || key === "searchEngine" || key === "terminalApp") {
         setMenuSettings(config.general);
       }
     } catch (e) {
+      if (isVersionMismatch(e)) {
+        await refreshAfterMismatch();
+        return;
+      }
       saveError = `保存失败: ${e}`;
       try {
         config = await getConfig();
+        syncVersion(config);
         claudeRootInput = config!.general.claudeRootPath ?? "";
         applyTheme(config!.general.theme);
-        // rollback 后也同步快照（避免菜单读到本地乐观更新后但后端未实际持久化的脏值）
         setMenuSettings(config.general);
       } catch {
         /* ignore */
@@ -562,11 +618,17 @@
     saveError = null;
     config = { ...config, notifications: { ...config.notifications, [key]: value } };
     try {
-      await updateConfig("notifications", { [key]: value });
+      const result = await updateConfig("notifications", { [key]: value }, configVersion);
+      syncVersion(result);
     } catch (e) {
+      if (isVersionMismatch(e)) {
+        await refreshAfterMismatch();
+        return;
+      }
       saveError = `保存失败: ${e}`;
       try {
         config = await getConfig();
+        syncVersion(config);
       } catch {
         /* ignore */
       }
@@ -588,6 +650,7 @@
     };
     try {
       config = await addTrigger(trigger);
+      syncVersion(config);
       showAddForm = false;
       newName = "";
       newMode = "error_status";
@@ -603,6 +666,7 @@
     saveError = null;
     try {
       config = await removeTrigger(trigger.id);
+      syncVersion(config);
     } catch (e) {
       saveError = `删除失败: ${e}`;
     }
@@ -621,13 +685,19 @@
       },
     };
     try {
-      await updateConfig("notifications", {
+      const result = await updateConfig("notifications", {
         triggers: config!.notifications.triggers,
-      });
+      }, configVersion);
+      syncVersion(result);
     } catch (e) {
+      if (isVersionMismatch(e)) {
+        await refreshAfterMismatch();
+        return;
+      }
       saveError = `更新失败: ${e}`;
       try {
         config = await getConfig();
+        syncVersion(config);
       } catch {
         /* ignore */
       }

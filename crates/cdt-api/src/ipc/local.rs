@@ -3881,6 +3881,11 @@ impl DataApi for LocalDataApi {
         Ok(mgr.get_config())
     }
 
+    async fn config_version(&self) -> Result<u64, ApiError> {
+        let mgr = self.config_mgr.lock().await;
+        Ok(mgr.version())
+    }
+
     async fn update_config(
         &self,
         request: &ConfigUpdateRequest,
@@ -4427,7 +4432,15 @@ impl DataApi for LocalDataApi {
             .add_trigger(trigger)
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;
-        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
+        let mut value =
+            serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "_version".to_string(),
+                serde_json::Value::from(mgr.version()),
+            );
+        }
+        Ok(value)
     }
 
     async fn remove_trigger(&self, trigger_id: &str) -> Result<serde_json::Value, ApiError> {
@@ -4436,7 +4449,15 @@ impl DataApi for LocalDataApi {
             .remove_trigger(trigger_id)
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;
-        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
+        let mut value =
+            serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "_version".to_string(),
+                serde_json::Value::from(mgr.version()),
+            );
+        }
+        Ok(value)
     }
 
     async fn pin_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {

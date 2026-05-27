@@ -736,12 +736,12 @@ export interface NotificationConfig {
 export interface GeneralConfig {
   launchAtLogin: boolean;
   showDockIcon: boolean;
-  theme: string;
-  defaultTab: string;
+  theme: "light" | "dark" | "system";
+  defaultTab: "sessions" | "dashboard";
   claudeRootPath: string | null;
   autoExpandAiGroups: boolean;
   /** "replace" | "new-tab"，默认 "replace" */
-  sessionClickBehavior?: string;
+  sessionClickBehavior?: "replace" | "new-tab";
   /**
    * 外部编辑器（spec frontend-context-menu::Phase 2 / configuration-management）。
    * 与后端 `cdt-config::ExternalEditor` enum snake_case 序列化对齐。
@@ -838,6 +838,8 @@ export interface AppConfig {
    * 稳定 shape；详 openspec/specs/configuration-management/spec.md::keyboardShortcuts。
    */
   keyboardShortcuts: Record<string, string>;
+  /** Optimistic concurrency version（后端注入，每次 update 后递增）。 */
+  _version?: number;
 }
 
 // =============================================================================
@@ -871,9 +873,12 @@ export async function getConfig(): Promise<AppConfig> {
 
 export async function updateConfig(
   section: string,
-  configData: Record<string, unknown>
+  configData: Record<string, unknown>,
+  version?: number
 ): Promise<AppConfig> {
-  return await invoke("update_config", { section, configData });
+  const payload: Record<string, unknown> =
+    version != null ? { _version: version, ...configData } : configData;
+  return await invoke("update_config", { section, configData: payload });
 }
 
 // ---------------------------------------------------------------------------
