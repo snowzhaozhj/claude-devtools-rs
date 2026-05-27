@@ -7,6 +7,7 @@
   import { buildFileToolItems, type MenuItemContext } from "../../lib/contextMenu/menu-items";
   import { getMenuSettings } from "../../lib/contextMenu/settings.svelte";
   import { getMenuItemDispatch } from "../../lib/contextMenu/dispatch";
+  import CopyButton from "../../lib/components/CopyButton.svelte";
 
   interface Props {
     exec: ToolExecution;
@@ -15,7 +16,6 @@
   }
 
   let { exec, sessionId = "", projectId = "" }: Props = $props();
-  let copied = $state(false);
 
   function buildCtx(): MenuItemContext {
     return {
@@ -72,15 +72,6 @@
   );
   const useLightHighlight = $derived(parsedLines.length > 250 || cleanText.length > 40_000);
   const highlightLine = $derived(useLightHighlight ? lightHighlightLine : highlightCode);
-
-  /** 复制按钮：用 strip 后的纯文本。 */
-  async function copyContent() {
-    try {
-      await navigator.clipboard.writeText(cleanText);
-      copied = true;
-      setTimeout(() => copied = false, 2000);
-    } catch { /* ignore */ }
-  }
 </script>
 
 <div class="read-viewer" use:contextMenu={() => buildFileToolItems(exec, buildCtx())}>
@@ -98,9 +89,7 @@
         {viewMode === "preview" ? "源码" : "预览"}
       </button>
     {/if}
-    <button class="copy-btn" onclick={copyContent}>
-      {copied ? "✓ 已复制" : "复制"}
-    </button>
+    <CopyButton text={cleanText} />
   </div>
 
   {#if isMarkdown && viewMode === "preview"}
@@ -162,7 +151,6 @@
     flex: 0 0 auto;
   }
 
-  .copy-btn,
   .view-toggle {
     flex-shrink: 0;
     font-size: 11px;
@@ -176,7 +164,6 @@
     transition: color 0.15s, border-color 0.15s;
   }
 
-  .copy-btn:hover,
   .view-toggle:hover {
     color: var(--color-text);
     border-color: var(--color-text-muted);

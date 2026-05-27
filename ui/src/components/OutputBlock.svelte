@@ -10,9 +10,10 @@
     lang?: string;
     isError?: boolean;
     maxHeight?: number;
+    label?: string;
   }
 
-  let { code, lang = "json", isError = false, maxHeight = 384 }: Props = $props();
+  let { code, lang = "json", isError = false, maxHeight = 384, label }: Props = $props();
 
   function cachedHighlight(value: string, language: string): string {
     const key = `${language}\0${value.length}\0${value}`;
@@ -34,15 +35,47 @@
   const highlighted = $derived(cachedHighlight(code, lang));
 </script>
 
-<div class="output-block copy-host" class:output-block-err={isError}>
-  <CopyButton text={code} mode="overlay" />
+<div class="output-block" class:output-block-err={isError}>
+  {#if label}
+    <div class="output-header">
+      <span class="output-label">{label}</span>
+      <CopyButton text={code} />
+    </div>
+  {:else}
+    <div class="output-header output-header-minimal">
+      <CopyButton text={code} />
+    </div>
+  {/if}
   <pre class="output-pre" style:max-height="{maxHeight}px"><code>{@html highlighted}</code></pre>
 </div>
 
 <style>
   .output-block {
     min-width: 0;
-    position: relative;
+  }
+
+  .output-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 12px 0;
+    background: var(--code-bg);
+    border: 1px solid var(--code-border);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+  }
+
+  .output-header-minimal {
+    justify-content: flex-end;
+    padding: 4px 8px 0;
+  }
+
+  .output-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
   }
 
   .output-pre {
@@ -52,8 +85,9 @@
     color: var(--color-text-secondary);
     background: var(--code-bg);
     border: 1px solid var(--code-border);
-    border-radius: 6px;
-    padding: 10px 32px 10px 12px;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    padding: 10px 12px;
     margin: 0;
     white-space: pre;
     overflow-x: auto;
@@ -70,6 +104,10 @@
     border-radius: 0;
   }
 
+  .output-block-err .output-label {
+    color: var(--tool-result-error-text);
+  }
+
   .output-block-err .output-pre {
     color: var(--tool-result-error-text);
     background: var(--tool-result-error-bg);
@@ -77,5 +115,9 @@
     border-color: color-mix(in oklch, var(--color-danger-bright) 20%, transparent);
   }
 
-  /* 语法高亮 token 颜色统一在 app.css 的 .hljs-* 全局规则里 */
+  .output-block-err .output-header {
+    background: var(--tool-result-error-bg);
+    border-color: rgba(239, 68, 68, 0.2);
+    border-color: color-mix(in oklch, var(--color-danger-bright) 20%, transparent);
+  }
 </style>
