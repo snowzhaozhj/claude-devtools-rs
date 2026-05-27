@@ -8,10 +8,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use cdt_api::ipc::LocalDataApi;
 use cdt_api::DataApi;
+use cdt_api::ipc::LocalDataApi;
 use cdt_config::{ConfigManager, NotificationManager};
-use cdt_discover::{LocalFileSystemProvider, ProjectScanner, WorktreeGrouper, LocalGitIdentityResolver};
+use cdt_discover::{
+    LocalFileSystemProvider, LocalGitIdentityResolver, ProjectScanner, WorktreeGrouper,
+};
 use cdt_ssh::SshConnectionManager;
 use tempfile::TempDir;
 
@@ -195,7 +197,11 @@ fn write_session(
             .to_string(),
         );
         let subagent_id = subagent_ids.get(i % subagent_ids.len().max(1));
-        let tool_name = if subagent_id.is_some() { "Task" } else { "Bash" };
+        let tool_name = if subagent_id.is_some() {
+            "Task"
+        } else {
+            "Bash"
+        };
         let tool_input = if subagent_id.is_some() {
             serde_json::json!({"description": format!("分析样本 {i}"), "subagent_type": "general-purpose", "prompt": "分析性能样本"})
         } else {
