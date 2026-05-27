@@ -53,7 +53,7 @@
     background: var(--code-bg);
     border: 1px solid var(--code-border);
     border-radius: 6px;
-    padding: 10px 12px;
+    padding: 10px 32px 10px 12px;
     margin: 0;
     white-space: pre;
     overflow-x: auto;

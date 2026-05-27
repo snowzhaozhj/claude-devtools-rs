@@ -43,7 +43,7 @@
   <div class="bash-command">
     <span class="bash-prompt">$</span>
     <code class="bash-cmd">{command}</code>
-    <CopyButton text={outputStr || command} mode="inline" />
+    <CopyButton text={command} mode="inline" />
   </div>
 
   <!-- Output -->

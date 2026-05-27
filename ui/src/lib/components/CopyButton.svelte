@@ -1,5 +1,6 @@
 <script lang="ts">
   import { COPY_SVG, CHECK } from "../icons";
+  import { onDestroy } from "svelte";
 
   interface Props {
     text: string;
@@ -8,14 +9,22 @@
 
   let { text, mode = "inline" }: Props = $props();
   let copied = $state(false);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  onDestroy(() => {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  });
 
   async function copy() {
+    const copyText = text ?? "";
+    if (!copyText) return;
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(copyText);
       copied = true;
-      setTimeout(() => (copied = false), 2000);
-    } catch {
-      /* silent */
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => (copied = false), 2000);
+    } catch (e) {
+      console.warn("[CopyButton] clipboard write failed:", e);
     }
   }
 </script>
@@ -78,6 +87,10 @@
     right: 6px;
     opacity: 0;
     pointer-events: none;
+    background: var(--code-bg, #1e1e1e);
+    border: 1px solid var(--code-border, rgba(127, 127, 127, 0.2));
+    z-index: 1;
+    transition: opacity 0.15s ease-out;
   }
 
   :global(.copy-host:hover) .copy-btn-overlay,
