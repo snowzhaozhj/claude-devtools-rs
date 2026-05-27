@@ -57,6 +57,7 @@ syn = { version = "2", features = ["full", "parsing"] }
 divan = "0.1"
 crossbeam-queue = "0.3"
 parking_lot = "0.12"
+clap = { version = "4", features = ["derive"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
