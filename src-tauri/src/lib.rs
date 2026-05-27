@@ -203,8 +203,12 @@ async fn search_sessions(
 
 #[tauri::command]
 async fn get_config(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
-    let config = data.api.get_config().await.map_err(|e| e.to_string())?;
-    serde_json::to_value(&config).map_err(|e| e.to_string())
+    let (config, version) = data.api.get_config_versioned().await.map_err(|e| e.to_string())?;
+    let mut value = serde_json::to_value(&config).map_err(|e| e.to_string())?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("_version".to_string(), serde_json::Value::from(version));
+    }
+    Ok(value)
 }
 
 #[tauri::command]
@@ -217,12 +221,16 @@ async fn update_config(
         section,
         data: config_data,
     };
-    let config = data
+    let (config, version) = data
         .api
-        .update_config(&request)
+        .update_config_versioned(&request)
         .await
         .map_err(|e| e.to_string())?;
-    serde_json::to_value(&config).map_err(|e| e.to_string())
+    let mut value = serde_json::to_value(&config).map_err(|e| e.to_string())?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("_version".to_string(), serde_json::Value::from(version));
+    }
+    Ok(value)
 }
 
 #[tauri::command]

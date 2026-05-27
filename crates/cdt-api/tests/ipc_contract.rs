@@ -1920,6 +1920,82 @@ async fn get_config_returns_camelcase_top_level_sections() {
 }
 
 #[tokio::test]
+async fn config_version_starts_at_zero_and_increments_on_update() {
+    let (api, _tmp) = setup_api().await;
+    let v0 = api.config_version().await.unwrap();
+    assert_eq!(v0, 0, "_version SHALL 初始为 0");
+
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "theme": "dark" }),
+    })
+    .await
+    .unwrap();
+
+    let v1 = api.config_version().await.unwrap();
+    assert_eq!(v1, 1, "_version SHALL 在 update 后递增为 1");
+
+    api.update_config(&ConfigUpdateRequest {
+        section: "display".into(),
+        data: json!({ "autoExpandAiGroups": false }),
+    })
+    .await
+    .unwrap();
+
+    let v2 = api.config_version().await.unwrap();
+    assert_eq!(v2, 2, "_version SHALL 再次递增为 2");
+}
+
+#[tokio::test]
+async fn config_version_mismatch_rejects_stale_update() {
+    let (api, _tmp) = setup_api().await;
+
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "theme": "dark" }),
+    })
+    .await
+    .unwrap();
+
+    let result = api
+        .update_config(&ConfigUpdateRequest {
+            section: "general".into(),
+            data: json!({ "_version": 0, "theme": "light" }),
+        })
+        .await;
+
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("mismatch"),
+        "stale version SHALL 被拒：{err}"
+    );
+}
+
+#[tokio::test]
+async fn config_version_absent_skips_check() {
+    let (api, _tmp) = setup_api().await;
+
+    api.update_config(&ConfigUpdateRequest {
+        section: "general".into(),
+        data: json!({ "theme": "dark" }),
+    })
+    .await
+    .unwrap();
+
+    let result = api
+        .update_config(&ConfigUpdateRequest {
+            section: "general".into(),
+            data: json!({ "theme": "light" }),
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "不传 _version 时 SHALL 跳过检查保持向后兼容"
+    );
+}
+
+#[tokio::test]
 async fn get_config_display_section_exposes_font_fields_camelcase() {
     let (api, _tmp) = setup_api().await;
     let config = serde_json::to_value(api.get_config().await.unwrap()).unwrap();

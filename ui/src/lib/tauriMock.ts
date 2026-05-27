@@ -481,11 +481,18 @@ function buildHandler(fx: Fixture) {
         return { kind: 'missing' }
 
       case 'get_config':
-        return fx.config
+        return { ...fx.config, _version: fx.configVersion ?? 0 }
 
       case 'update_config': {
         const section = getArg<string>(payload, 'section')
         const data = getArg<Record<string, unknown>>(payload, 'configData')
+        if (data && '_version' in data) {
+          const clientVersion = data._version as number
+          if (clientVersion !== (fx.configVersion ?? 0)) {
+            throw new Error(`Config version mismatch: client expected ${clientVersion}, server is at ${fx.configVersion ?? 0}. Re-fetch and retry.`)
+          }
+          delete data._version
+        }
         if (section === 'notifications' && data) {
           fx.config.notifications = { ...fx.config.notifications, ...(data as object) }
         } else if (section === 'general' && data) {
@@ -498,10 +505,10 @@ function buildHandler(fx: Fixture) {
         } else if (section === 'httpServer' && data) {
           fx.config.httpServer = { ...(fx.config.httpServer ?? { enabled: false, port: 3456 }), ...(data as object) }
         } else if (section === 'keyboardShortcuts' && data) {
-          // 整体替换语义（同 notifications.triggers），data 直接是 Record<string, string>
           fx.config.keyboardShortcuts = data as Record<string, string>
         }
-        return fx.config
+        fx.configVersion = (fx.configVersion ?? 0) + 1
+        return { ...fx.config, _version: fx.configVersion }
       }
 
       // ---------------------------------------------------------------------

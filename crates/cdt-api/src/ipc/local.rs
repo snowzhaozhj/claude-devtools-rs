@@ -3881,6 +3881,16 @@ impl DataApi for LocalDataApi {
         Ok(mgr.get_config())
     }
 
+    async fn config_version(&self) -> Result<u64, ApiError> {
+        let mgr = self.config_mgr.lock().await;
+        Ok(mgr.version())
+    }
+
+    async fn get_config_versioned(&self) -> Result<(cdt_config::AppConfig, u64), ApiError> {
+        let mgr = self.config_mgr.lock().await;
+        Ok((mgr.get_config(), mgr.version()))
+    }
+
     async fn update_config(
         &self,
         request: &ConfigUpdateRequest,
@@ -3907,6 +3917,37 @@ impl DataApi for LocalDataApi {
                 .await;
         }
         Ok(config)
+    }
+
+    async fn update_config_versioned(
+        &self,
+        request: &ConfigUpdateRequest,
+    ) -> Result<(cdt_config::AppConfig, u64), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        let result = match request.section.as_str() {
+            "general" => mgr.update_general(request.data.clone()).await,
+            "display" => mgr.update_display(request.data.clone()).await,
+            "notifications" => mgr.update_notifications(request.data.clone()).await,
+            "ssh" => mgr.update_ssh(request.data.clone()).await,
+            "httpServer" => mgr.update_http_server(request.data.clone()).await,
+            "updater" => mgr.update_updater(request.data.clone()).await,
+            "keyboardShortcuts" => mgr.update_keyboard_shortcuts(request.data.clone()).await,
+            _ => {
+                return Err(ApiError::validation(format!(
+                    "unknown section: {}",
+                    request.section
+                )));
+            }
+        };
+        let config = result.map_err(|e| ApiError::internal(format!("{e}")))?;
+        let version = mgr.version();
+        // Drop lock before async reconfigure
+        drop(mgr);
+        if request.section == "general" && request.data.get("claudeRootPath").is_some() {
+            self.reconfigure_claude_root(config.general.claude_root_path.as_deref())
+                .await;
+        }
+        Ok((config, version))
     }
 
     async fn get_notifications(
@@ -4427,7 +4468,15 @@ impl DataApi for LocalDataApi {
             .add_trigger(trigger)
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;
-        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
+        let mut value =
+            serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "_version".to_string(),
+                serde_json::Value::from(mgr.version()),
+            );
+        }
+        Ok(value)
     }
 
     async fn remove_trigger(&self, trigger_id: &str) -> Result<serde_json::Value, ApiError> {
@@ -4436,7 +4485,15 @@ impl DataApi for LocalDataApi {
             .remove_trigger(trigger_id)
             .await
             .map_err(|e| ApiError::internal(format!("{e}")))?;
-        serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))
+        let mut value =
+            serde_json::to_value(&config).map_err(|e| ApiError::internal(format!("{e}")))?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "_version".to_string(),
+                serde_json::Value::from(mgr.version()),
+            );
+        }
+        Ok(value)
     }
 
     async fn pin_session(&self, project_id: &str, session_id: &str) -> Result<(), ApiError> {

@@ -38,6 +38,8 @@ export interface Fixture {
   memoryFiles?: Record<string, string>
   /** AppConfig。get_config / update_config 返回。 */
   config: AppConfig
+  /** Config optimistic concurrency version（mock 内部 state）。 */
+  configVersion?: number
   /** 通知列表。get_notifications 返回。 */
   notifications: GetNotificationsResult
   /** Agent configs。read_agent_configs 返回。 */
