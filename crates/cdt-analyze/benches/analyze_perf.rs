@@ -80,6 +80,11 @@ fn parse_synthetic_session(turns: usize) -> Vec<ParsedMessage> {
             messages.push(msg);
         }
     }
+    assert!(
+        messages.len() >= turns * 2,
+        "fixture parse yielded only {} messages for {turns} turns — schema mismatch?",
+        messages.len()
+    );
     messages
 }
 

@@ -30,7 +30,11 @@ fn fixtures() -> &'static Fixtures {
             r"C:\Users\charlie\Documents\Work\Company\frontend-monorepo",
             r"\\server\share\builds\release-v2",
         ];
-        let encoded: Vec<String> = unix.iter().map(|p| encode_path(p)).collect();
+        let encoded: Vec<String> = unix
+            .iter()
+            .chain(windows.iter())
+            .map(|p| encode_path(p))
+            .collect();
         Fixtures {
             unix,
             windows,
