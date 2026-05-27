@@ -35,7 +35,12 @@
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let navigating = $state(false);
 
-  function doSearch() {
+  $effect(() => {
+    const vm = virtualMatches;
+    totalMatches = domMatches + vm.length;
+  });
+
+  function doSearch(preserveIndex?: number) {
     if (!containerEl) return;
     clearHighlights(containerEl);
     if (!query) {
@@ -47,15 +52,19 @@
     onBeforeSearch?.(query);
     domMatches = highlightMatches(containerEl, query);
     totalMatches = domMatches + virtualMatches.length;
-    currentIndex = totalMatches > 0 ? 0 : -1;
-    if (totalMatches > 0 && domMatches > 0) {
-      scrollToMatch(containerEl, 0);
+    if (preserveIndex != null && preserveIndex < totalMatches) {
+      currentIndex = preserveIndex;
+    } else {
+      currentIndex = totalMatches > 0 ? 0 : -1;
+    }
+    if (currentIndex >= 0 && currentIndex < domMatches) {
+      scrollToMatch(containerEl, currentIndex);
     }
   }
 
   function onInput() {
     clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(doSearch, 300);
+    debounceTimer = setTimeout(() => doSearch(), 300);
   }
 
   async function nextMatch() {
@@ -104,13 +113,14 @@
       clearTimeout(debounceTimer);
       if (!totalMatches) {
         doSearch();
+        return;
       }
       if (e.shiftKey) prevMatch(); else nextMatch();
     }
   }
 
-  export function triggerResearch() {
-    doSearch();
+  export function triggerResearch(preserveIndex?: number) {
+    doSearch(preserveIndex);
   }
 
   $effect(() => {

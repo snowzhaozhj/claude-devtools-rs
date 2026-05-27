@@ -81,7 +81,7 @@
 - **AND** 搜索栏显示的总数 SHALL 为 DOM 匹配数 + 虚拟匹配数
 
 #### Scenario: 折叠工具 summary 参与搜索
-- **WHEN** 搜索文本为 "config.ts" 且某个未展开 AI chunk 的 toolExecution 的 getToolSummary 结果包含 "config.ts"
+- **WHEN** 搜索文本为 "utils" 且某个未展开 AI chunk 的工具摘要文本包含 "utils"
 - **THEN** 搜索计数 SHALL 包含该虚拟匹配项
 
 #### Scenario: 导航到虚拟匹配时按需展开

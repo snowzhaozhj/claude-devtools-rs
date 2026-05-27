@@ -147,7 +147,7 @@
   // 在 visible+query 状态下自动重搜，避免 file-change 后 mark 索引过期。
   let searchContentVersion = $state(0);
   let searchFocusRequest = $state(0);
-  let searchBarRef: { triggerResearch: () => void } | undefined = $state();
+  let searchBarRef: { triggerResearch: (preserveIndex?: number) => void } | undefined = $state();
   let searchQuery = $state("");
 
   let virtualMatches = $derived.by(() => {
@@ -174,18 +174,30 @@
     }
     await tick();
     await tick();
+    searchBarRef?.triggerResearch();
+    await tick();
     const chunkEl = conversationEl?.querySelector<HTMLElement>(
       `[data-chunk-id="${cssEscape(match.chunkId)}"]`,
     );
     const toolEl = chunkEl?.querySelector<HTMLElement>(
       `[data-tool-use-id="${cssEscape(match.toolUseId)}"]`,
     );
+    const markIdx = findMarkIndexNear(toolEl ?? chunkEl);
+    if (markIdx != null) {
+      searchBarRef?.triggerResearch(markIdx);
+    }
     const target = toolEl ?? chunkEl;
     if (target) {
       target.scrollIntoView({ block: "center", behavior: "smooth" });
     }
-    await tick();
-    searchBarRef?.triggerResearch();
+  }
+
+  function findMarkIndexNear(el: HTMLElement | null | undefined): number | undefined {
+    if (!el) return undefined;
+    const mark = el.querySelector<HTMLElement>("mark[data-search-match]");
+    if (!mark) return undefined;
+    const idx = mark.getAttribute("data-search-match");
+    return idx != null ? Number(idx) : undefined;
   }
 
   async function toggleChunk(chunk: AIChunk) {
