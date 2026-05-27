@@ -7,6 +7,7 @@
   import { buildFileToolItems, type MenuItemContext } from "../../lib/contextMenu/menu-items";
   import { getMenuSettings } from "../../lib/contextMenu/settings.svelte";
   import { getMenuItemDispatch } from "../../lib/contextMenu/dispatch";
+  import CopyButton from "../../lib/components/CopyButton.svelte";
 
   interface Props {
     exec: ToolExecution;
@@ -53,6 +54,7 @@
         {viewMode === "preview" ? "源码" : "预览"}
       </button>
     {/if}
+    <CopyButton text={content} mode="inline" />
   </div>
 
   {#if content}
