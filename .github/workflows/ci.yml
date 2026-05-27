@@ -26,7 +26,7 @@ jobs:
         run: openspec validate --all --strict
       - name: Check completed changes are archived
         run: bash scripts/check-openspec-archives.sh
-      - name: Check spec purity (ratchet vs baseline)
+      - name: Check spec purity (threshold gate)
         run: bash scripts/check-spec-purity.sh
 
   ipc-sync:

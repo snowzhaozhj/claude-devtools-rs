@@ -87,6 +87,10 @@ spec-archive-check:
 spec-check CHANGE:
     openspec validate {{CHANGE}} --strict
 
+# spec 反模式检查（硬阈值 gate，无 baseline）
+spec-purity *ARGS:
+    bash scripts/check-spec-purity.sh {{ARGS}}
+
 # 校验三处 Tauri command 清单 1:1 同步
 ipc-sync-check:
     bash scripts/check-ipc-command-sync.sh

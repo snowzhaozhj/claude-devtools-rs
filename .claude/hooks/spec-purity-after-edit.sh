@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# PostToolUse hook: 编辑 spec.md 后跑 spec purity ratchet check
-# 让六类反模式 + ratchet 拦截在编辑当场暴露，避免 push 后才被 CI 红
+# PostToolUse hook: 编辑 spec.md 后跑 spec purity threshold check
+# 让反模式在编辑当场暴露，避免 push 后才被 CI 红
 #
 # 仅触发：openspec/specs/<cap>/spec.md  与  openspec/changes/<slug>/specs/<cap>/spec.md
 # 跳过：openspec/changes/archive/**（历史快照冻结）
 #
 # 性能预算：99% 命中（非 spec.md 编辑）case 预判 exit 0，~5ms
-# 触发 spec.md 编辑：跑 check-spec-purity.sh ~150ms（30 个 spec grep 扫描）
+# 触发 spec.md 编辑：跑 check-spec-purity.sh ~150ms（35 个 spec grep 扫描）
 #
-# 不 block 编辑：检测到违规仅 stderr 警告 + 提示 --report 看命中，让作者继续
-# Edit 但下一步 commit 前知道有问题。CI 才是硬拦截。
+# 不 block 编辑：检测到违规仅 stderr 警告，让作者继续 Edit；CI 才是硬拦截。
 set -euo pipefail
 
 input=$(</dev/stdin)
@@ -44,12 +43,10 @@ if [[ ! -x scripts/check-spec-purity.sh ]]; then
   exit 0
 fi
 
-# stderr 警告但不 block 编辑；本地诊断绕过 baseline 下降 fail
-# 注意：set -e 下直接调用非零 cmd 会立即退出，必须用 `if ! cmd` 包住
 tmp="${TMPDIR:-/tmp}/spec-purity-after-edit.$$"
 trap 'rm -f "$tmp"' EXIT
 
-if ! SPEC_PURITY_ALLOW_DECREASE=1 bash scripts/check-spec-purity.sh >/dev/null 2>"$tmp"; then
+if ! bash scripts/check-spec-purity.sh >/dev/null 2>"$tmp"; then
   {
     echo ""
     echo "⚠ spec purity 警告（编辑 $rel 后）"
