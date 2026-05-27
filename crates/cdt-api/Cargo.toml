@@ -56,3 +56,8 @@ cdt-api = { path = ".", features = ["test-utils"] }
 # 仅 cargo test 时启用，prod binary 不依赖 dev-deps → file_tx_for_test 不被
 # release build 暴露。
 cdt-watch = { workspace = true, features = ["test-utils"] }
+divan = { workspace = true }
+
+[[bench]]
+name = "api_perf"
+harness = false
