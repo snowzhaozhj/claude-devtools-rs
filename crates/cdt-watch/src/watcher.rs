@@ -24,7 +24,7 @@ use cdt_ssh::{CancelToken, RemotePollingWatcher, RemoteWatcherHandle, SftpClient
 
 use crate::error::WatchError;
 
-const CHANNEL_CAPACITY: usize = 256;
+const CHANNEL_CAPACITY: usize = 64;
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
 fn initial_projects(projects_dir: &Path) -> HashSet<PathBuf> {

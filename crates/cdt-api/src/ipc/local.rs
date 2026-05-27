@@ -334,7 +334,7 @@ fn apply_tool_output_omit(chunks: &mut [cdt_core::Chunk]) {
 
 /// 元数据 broadcast channel capacity。50 个 session 的项目最多产出 50
 /// 条 update，一些缓冲足以容纳订阅者短暂卡顿。
-const METADATA_BROADCAST_CAPACITY: usize = 256;
+const METADATA_BROADCAST_CAPACITY: usize = 64;
 
 /// 单条 active scan 注册项：generation 作为版本号让 cleanup 时只在
 /// 自己仍是当前注册的 scan 时才 remove，避免旧 task 误删新 handle
@@ -1632,9 +1632,9 @@ impl LocalDataApi {
 
         let config_mgr = Arc::new(Mutex::new(config_mgr));
         let notif_mgr = Arc::new(Mutex::new(notif_mgr));
-        let (error_tx, _) = broadcast::channel::<DetectedError>(256);
-        let (file_tx, _) = broadcast::channel::<cdt_core::FileChangeEvent>(256);
-        let (todo_tx, _) = broadcast::channel::<cdt_core::TodoChangeEvent>(256);
+        let (error_tx, _) = broadcast::channel::<DetectedError>(64);
+        let (file_tx, _) = broadcast::channel::<cdt_core::FileChangeEvent>(64);
+        let (todo_tx, _) = broadcast::channel::<cdt_core::TodoChangeEvent>(64);
 
         let (session_metadata_tx, _) =
             broadcast::channel::<SessionMetadataUpdate>(METADATA_BROADCAST_CAPACITY);
