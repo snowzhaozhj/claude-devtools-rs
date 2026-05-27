@@ -86,12 +86,7 @@ fn decode_path_throughput(bencher: divan::Bencher<'_, '_>, n: usize) {
 #[divan::bench(args = [100, 1000])]
 fn encode_decode_roundtrip(bencher: divan::Bencher<'_, '_>, n: usize) {
     let fx = fixtures();
-    let all_paths: Vec<&str> = fx
-        .unix
-        .iter()
-        .chain(fx.windows.iter())
-        .copied()
-        .collect();
+    let all_paths: Vec<&str> = fx.unix.iter().chain(fx.windows.iter()).copied().collect();
 
     bencher.bench(|| {
         let mut count = 0usize;

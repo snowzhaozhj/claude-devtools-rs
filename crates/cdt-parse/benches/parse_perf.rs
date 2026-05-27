@@ -111,9 +111,7 @@ fn dedupe_by_request_id(bencher: divan::Bencher<'_, '_>, n: usize) {
 
     bencher
         .with_inputs(|| messages.clone())
-        .bench_values(|msgs| {
-            divan::black_box(cdt_parse::dedupe_by_request_id(msgs))
-        });
+        .bench_values(|msgs| divan::black_box(cdt_parse::dedupe_by_request_id(msgs)));
 }
 
 // --- Fixture generation ---
