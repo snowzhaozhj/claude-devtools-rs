@@ -24,5 +24,10 @@ chrono = { workspace = true }
 regex = { workspace = true }
 
 [dev-dependencies]
+divan = { workspace = true }
 insta = { workspace = true }
 tokio = { workspace = true }
+
+[[bench]]
+name = "analyze_perf"
+harness = false
