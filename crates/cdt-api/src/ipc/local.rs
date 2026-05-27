@@ -660,6 +660,7 @@ fn encode_group_cursor(cursor: &GroupCursor) -> String {
 }
 
 /// `locate_session_file` 的返回类型。
+/// `Found` 用 `Box` 避免 `clippy::large_enum_variant`（`LocatedSession` ~240 bytes）。
 enum LocateResult {
     Unchanged { fingerprint: String },
     Found(Box<LocatedSession>),
