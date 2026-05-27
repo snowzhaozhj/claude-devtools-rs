@@ -59,6 +59,7 @@
   }
 
   .output-pre :global(code) {
+    display: block;
     background: none;
     padding: 0;
     color: inherit;
