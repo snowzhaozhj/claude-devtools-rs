@@ -264,3 +264,12 @@ export const MORE_HORIZONTAL_SVG = `
 <circle cx="19" cy="12" r="1"/>
 <circle cx="5" cy="12" r="1"/>
 `;
+
+/** Lucide copy — 复制按钮 */
+export const COPY_SVG = `
+<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
+<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+`;
+
+/** Lucide check — 复制成功反馈（单 path） */
+export const CHECK = "M20 6 9 17l-5-5";

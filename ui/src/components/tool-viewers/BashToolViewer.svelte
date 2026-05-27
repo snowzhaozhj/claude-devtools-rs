@@ -6,6 +6,7 @@
   import { buildBashToolItems, type MenuItemContext } from "../../lib/contextMenu/menu-items";
   import { getMenuSettings } from "../../lib/contextMenu/settings.svelte";
   import { getMenuItemDispatch } from "../../lib/contextMenu/dispatch";
+  import CopyButton from "../../lib/components/CopyButton.svelte";
 
   interface Props {
     exec: ToolExecution;
@@ -42,6 +43,7 @@
   <div class="bash-command">
     <span class="bash-prompt">$</span>
     <code class="bash-cmd">{command}</code>
+    <CopyButton text={outputStr || command} mode="inline" />
   </div>
 
   <!-- Output -->

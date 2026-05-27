@@ -1,5 +1,6 @@
 <script lang="ts">
   import { highlightCode } from "../lib/render";
+  import CopyButton from "../lib/components/CopyButton.svelte";
 
   const highlightCache = new Map<string, string>();
   const HIGHLIGHT_CACHE_CAP = 128;
@@ -33,13 +34,15 @@
   const highlighted = $derived(cachedHighlight(code, lang));
 </script>
 
-<div class="output-block" class:output-block-err={isError}>
+<div class="output-block copy-host" class:output-block-err={isError}>
+  <CopyButton text={code} mode="overlay" />
   <pre class="output-pre" style:max-height="{maxHeight}px"><code>{@html highlighted}</code></pre>
 </div>
 
 <style>
   .output-block {
     min-width: 0;
+    position: relative;
   }
 
   .output-pre {
