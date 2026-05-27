@@ -266,11 +266,7 @@ async fn cmd_sessions_list(format: &OutputFormat, project_filter: Option<&str>) 
             );
             println!("{}", "-".repeat(80));
             for s in &resp.items {
-                let short_id = if s.session_id.len() > 10 {
-                    &s.session_id[..10]
-                } else {
-                    &s.session_id
-                };
+                let short_id: String = s.session_id.chars().take(10).collect();
                 let title = s.title.as_deref().unwrap_or("(untitled)");
                 let status = if s.is_ongoing { "active" } else { "done" };
                 let duration = format_duration(s.timestamp);
@@ -315,10 +311,11 @@ async fn resolve_project_id(api: &LocalDataApi, name: &str) -> Result<String> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max - 1])
+        let truncated: String = s.chars().take(max - 1).collect();
+        format!("{truncated}…")
     }
 }
 
@@ -357,6 +354,7 @@ fn format_duration(session_ts: i64) -> String {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
@@ -373,16 +371,13 @@ async fn main() -> Result<()> {
             SessionsAction::List => cmd_sessions_list(&cli.format, cli.project.as_deref()).await,
         },
         Command::Search => {
-            eprintln!("search: not yet implemented");
-            Ok(())
+            anyhow::bail!("search: not yet implemented");
         }
         Command::Stats => {
-            eprintln!("stats: not yet implemented");
-            Ok(())
+            anyhow::bail!("stats: not yet implemented");
         }
         Command::Mcp => {
-            eprintln!("mcp: not yet implemented");
-            Ok(())
+            anyhow::bail!("mcp: not yet implemented");
         }
     }
 }

@@ -3,7 +3,9 @@
 use std::process::Command;
 
 fn cdt_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_cdt"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_cdt"));
+    cmd.env("RUST_LOG", "off");
+    cmd
 }
 
 #[test]
