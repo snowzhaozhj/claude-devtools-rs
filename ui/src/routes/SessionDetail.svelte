@@ -8,7 +8,7 @@
   import { resolveUserGroupNavTarget } from "../lib/contextNavigation";
   import { getTimeFormat } from "../lib/displayPrefs.svelte";
   import { tick } from "svelte";
-  import { clearHighlights } from "../lib/searchHighlight";
+  import { clearHighlights, collectVirtualMatches } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
   import { createLazyMarkdownObserver, estimatePlaceholderHeight, isScrollCompensating } from "../lib/lazyMarkdown.svelte";
   import { isAtBottom, captureScrollAnchor, restoreScrollAnchor, startBottomPin, type ScrollAnchorState } from "../lib/scrollAnchor";
@@ -146,10 +146,47 @@
   // SearchBar 内容版本号：refreshDetail 替换 detail 后递增，让 SearchBar
   // 在 visible+query 状态下自动重搜，避免 file-change 后 mark 索引过期。
   let searchContentVersion = $state(0);
-  // SearchBar 聚焦请求版本号：每次 openSearch 递增，强制 SearchBar 重新
-  // focus+select——SearchBar 已可见但失焦（点击别处）后再按 Cmd+F 时，
-  // 仅置 searchVisible=true 是 no-op（已是 true），无法触发 focus effect。
   let searchFocusRequest = $state(0);
+  let searchBarRef: { triggerResearch: () => void } | undefined = $state();
+  let searchQuery = $state("");
+
+  let virtualMatches = $derived.by(() => {
+    if (!searchQuery || !detail) return [];
+    return collectVirtualMatches(
+      searchQuery,
+      detail.chunks
+        .filter((c): c is AIChunk => c.kind === "ai")
+        .map((c) => ({
+          chunkId: c.chunkId,
+          toolExecutions: c.toolExecutions.map((e) => ({
+            toolUseId: e.toolUseId,
+            toolName: e.toolName,
+            summary: getToolSummary(e.toolName, e.input),
+          })),
+        })),
+      expandedChunks,
+    );
+  });
+
+  async function handleNavigateVirtual(match: { chunkId: string; toolUseId: string; text: string }) {
+    if (!expandedChunks.has(match.chunkId)) {
+      expandedChunks = new Set([...expandedChunks, match.chunkId]);
+    }
+    await tick();
+    await tick();
+    const chunkEl = conversationEl?.querySelector<HTMLElement>(
+      `[data-chunk-id="${cssEscape(match.chunkId)}"]`,
+    );
+    const toolEl = chunkEl?.querySelector<HTMLElement>(
+      `[data-tool-use-id="${cssEscape(match.toolUseId)}"]`,
+    );
+    const target = toolEl ?? chunkEl;
+    if (target) {
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+    await tick();
+    searchBarRef?.triggerResearch();
+  }
 
   async function toggleChunk(chunk: AIChunk) {
     const n = new Set(expandedChunks);
@@ -969,12 +1006,15 @@
 
   <!-- Search bar -->
   <SearchBar
+    bind:this={searchBarRef}
     visible={searchVisible}
     containerEl={conversationEl ?? null}
-    onClose={() => searchVisible = false}
-    onBeforeSearch={() => lazyObserver?.flushAll()}
+    onClose={() => { searchVisible = false; searchQuery = ""; }}
+    onBeforeSearch={(q) => { lazyObserver?.flushAll(); searchQuery = q; }}
     contentVersion={searchContentVersion}
     focusRequestVersion={searchFocusRequest}
+    {virtualMatches}
+    onNavigateVirtual={handleNavigateVirtual}
   />
 
   <!-- Content area (conversation + optional context panel) -->
