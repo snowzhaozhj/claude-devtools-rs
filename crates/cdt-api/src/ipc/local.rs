@@ -192,6 +192,31 @@ fn find_first_ai_after(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core
 ///   `post - pre`；任一缺值 → `None`
 ///
 /// 两趟扫描避免可变借用冲突：Pass 1 不可变借用算 (delta, phase)，Pass 2 可变借用写入。
+/// 统一的 IPC payload 瘦身流水线：compact derived → image → response content
+/// → tool output → subagent messages。提取自 `get_session_detail` 的序列化阶段。
+fn apply_all_payload_omissions(chunks: &mut Vec<cdt_core::Chunk>) {
+    apply_compact_derived(chunks, COMPACT_DERIVED_ENABLED);
+    if OMIT_IMAGE_DATA {
+        apply_image_omit(chunks);
+    }
+    if OMIT_RESPONSE_CONTENT {
+        apply_response_content_omit(chunks);
+    }
+    if OMIT_TOOL_OUTPUT {
+        apply_tool_output_omit(chunks);
+    }
+    if OMIT_SUBAGENT_MESSAGES {
+        for c in chunks {
+            if let cdt_core::Chunk::Ai(ai) = c {
+                for sub in &mut ai.subagents {
+                    sub.messages = Vec::new();
+                    sub.messages_omitted = true;
+                }
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn parse_jsonl_content(content: &str) -> Result<Vec<cdt_core::ParsedMessage>, ParseError> {
     let mut out = Vec::new();
@@ -634,6 +659,45 @@ fn encode_group_cursor(cursor: &GroupCursor) -> String {
     base64::engine::general_purpose::STANDARD.encode(json)
 }
 
+/// `locate_session_file` 的返回类型。
+enum LocateResult {
+    Unchanged { fingerprint: String },
+    Found(Box<LocatedSession>),
+}
+
+/// `locate_session_file` 成功定位后的中间数据。
+struct LocatedSession {
+    fs: Arc<dyn FileSystemProvider>,
+    projects_dir: PathBuf,
+    ctx: cdt_fs::ContextId,
+    policy: cdt_fs::BackendPolicy,
+    project_dir: PathBuf,
+    jsonl_path: PathBuf,
+    last_modified: Option<i64>,
+    size: Option<u64>,
+    fingerprint: String,
+}
+
+/// `inject_context_annotations` 的返回类型。
+struct ContextAnnotations {
+    context_injections: Vec<cdt_core::ContextInjection>,
+    injections_by_phase: BTreeMap<String, Vec<cdt_core::ContextInjection>>,
+    phase_info: cdt_core::ContextPhaseInfo,
+}
+
+/// `list_sessions_skeleton` 的命名返回类型，替代原 10-tuple 提升可读性。
+pub(crate) struct SkeletonResult {
+    pub page: Vec<SessionSummary>,
+    pub next_cursor: Option<String>,
+    pub total: usize,
+    pub page_jobs: Vec<(String, std::path::PathBuf)>,
+    pub dir: std::path::PathBuf,
+    pub root_generation: u64,
+    pub inline_updates: Vec<SessionMetadataUpdate>,
+    pub fs: Arc<dyn FileSystemProvider>,
+    pub ctx: cdt_fs::ContextId,
+    pub expected_context_generation: u64,
+}
 impl LocalDataApi {
     /// 重建 `worktree_meta_cache`，把 group 内所有 worktree 的 `name` /
     /// `group_id` / `cwd_relative_to_repo_root` 索引到 `worktree.id`
@@ -699,6 +763,107 @@ impl LocalDataApi {
             summary.worktree_name = Some(meta.worktree_name.clone());
             summary.group_id = Some(meta.group_id.clone());
             summary.cwd_relative_to_repo_root = meta.cwd_relative_to_repo_root.clone();
+        }
+    }
+
+    // =========================================================================
+    // get_session_detail helpers (issue #280)
+    // =========================================================================
+
+    /// Step 1: 定位 session 文件路径 + stat 元数据 + fingerprint 短路判定。
+    async fn locate_session_file(
+        &self,
+        project_id: &str,
+        session_id: &str,
+        known_fingerprint: Option<&str>,
+    ) -> Result<LocateResult, ApiError> {
+        let (fs, projects_dir, ctx, policy, _resolvers) = self.active_fs_and_policy().await?;
+        let project_dir =
+            projects_dir.join(cdt_discover::path_decoder::extract_base_dir(project_id));
+        let primary_jsonl = project_dir.join(format!("{session_id}.jsonl"));
+
+        let (jsonl_path, last_modified, size) = if let Ok(meta) = fs.stat(&primary_jsonl).await {
+            (primary_jsonl, Some(meta.mtime_ms()), Some(meta.size))
+        } else {
+            let Some(path) = find_subagent_jsonl(&*fs, &project_dir, session_id).await else {
+                return Err(ApiError::not_found(format!("session {session_id}")));
+            };
+            let meta = fs.stat(&path).await.ok();
+            let modified = meta.as_ref().map(cdt_discover::FsMetadata::mtime_ms);
+            let size = meta.as_ref().map(|m| m.size);
+            (path, modified, size)
+        };
+
+        let fingerprint = make_session_ipc_fingerprint(last_modified, size);
+        let metadata_complete = last_modified.is_some() && size.is_some();
+        if metadata_complete {
+            if let Some(known) = known_fingerprint {
+                if known == fingerprint {
+                    return Ok(LocateResult::Unchanged { fingerprint });
+                }
+            }
+        }
+
+        Ok(LocateResult::Found(Box::new(LocatedSession {
+            fs,
+            projects_dir,
+            ctx,
+            policy,
+            project_dir,
+            jsonl_path,
+            last_modified,
+            size,
+            fingerprint,
+        })))
+    }
+
+    /// Step 5: 构建上下文注入（`claude.md` + phase info）。
+    async fn inject_context_annotations(
+        &self,
+        chunks: &[cdt_core::Chunk],
+        messages: &[cdt_core::ParsedMessage],
+    ) -> ContextAnnotations {
+        let project_root = messages.iter().find_map(|m| m.cwd.as_deref()).unwrap_or("");
+        let claude_base = self.claude_base_path().await;
+        let initial_claude_md = build_claude_md_from_filesystem(project_root, &claude_base).await;
+        let empty_cmd = std::collections::HashMap::new();
+        let empty_mf = std::collections::HashMap::new();
+        let token_dicts = cdt_analyze::context::TokenDictionaries::new(
+            Path::new(""),
+            &empty_cmd,
+            &empty_cmd,
+            &empty_mf,
+        );
+        let ctx_result = cdt_analyze::context::process_session_context_with_phases(
+            chunks,
+            &cdt_analyze::context::ProcessSessionParams {
+                project_root: Path::new(""),
+                token_dictionaries: token_dicts,
+                initial_claude_md_injections: &initial_claude_md,
+            },
+        );
+        let mut injections_by_phase: BTreeMap<String, Vec<cdt_core::ContextInjection>> =
+            BTreeMap::new();
+        for phase in &ctx_result.phase_info.phases {
+            let phase_injections = ctx_result
+                .stats_map
+                .get(&phase.last_ai_group_id)
+                .map(|stats| stats.accumulated_injections.clone())
+                .unwrap_or_default();
+            injections_by_phase.insert(phase.phase_number.to_string(), phase_injections);
+        }
+        let context_injections: Vec<cdt_core::ContextInjection> = ctx_result
+            .phase_info
+            .phases
+            .last()
+            .and_then(|phase| ctx_result.stats_map.get(&phase.last_ai_group_id))
+            .map(|stats| stats.accumulated_injections.clone())
+            .unwrap_or_default();
+        let phase_info = ctx_result.phase_info.clone();
+        ContextAnnotations {
+            context_injections,
+            injections_by_phase,
+            phase_info,
         }
     }
 
@@ -810,96 +975,11 @@ impl LocalDataApi {
             }
         }
 
-        // 跨 worktree 去重：同一 sessionId 出现在多个 worktree 时（典型场景：
-        // 同一个 `.claude/projects/<encoded>/<sid>.jsonl` 因为 main repo + linked
-        // worktree 两份 encoded path 被两次 enumerate）保留 `last_modified` 最大
-        // 的 wt 版本，其他 wt 中删掉该 sessionId 条目。否则 k-way merge 会让
-        // page 内同一 sessionId 出现两次，前端 `{#each ... (sessionId)}` 报
-        // `each_key_duplicate` 整段列表崩。tie-break 按 wt_id 字典序保证确定性。
-        //
-        // **关键**：dedup 仅在 cursor "active"（非 Exhausted）的 worktree 间执行。
-        // worktree filter 模式下 cursor 让 16/17 个 wt = Exhausted，只剩 1 个
-        // active wt；若 dedup 把 active wt 的某 sessionId 让给 Exhausted wt，
-        // 该 wt 的 heap 不参与合并 → page 内永远拿不到这条 → 用户感知"切到
-        // worktree filter 后列表少几条 / 整组空"（codex 第三轮二审 Bug 2，
-        // 2026-05-21）。
-        let active_wts: std::collections::BTreeSet<&String> = group
-            .worktrees
-            .iter()
-            .filter(|wt| {
-                !matches!(
-                    cursor_state
-                        .per_worktree
-                        .get(&wt.id)
-                        .cloned()
-                        .unwrap_or(WorktreeOffset::NotStarted),
-                    WorktreeOffset::Exhausted
-                )
-            })
-            .map(|wt| &wt.id)
-            .collect();
-        let mut best_wt_for_sid: std::collections::HashMap<String, (String, i64)> =
-            std::collections::HashMap::new();
-        for (wt_id, sessions) in &wt_sessions {
-            if !active_wts.contains(wt_id) {
-                continue;
-            }
-            for s in sessions {
-                best_wt_for_sid
-                    .entry(s.id.clone())
-                    .and_modify(|(cur_wt, cur_mtime)| {
-                        if s.last_modified > *cur_mtime
-                            || (s.last_modified == *cur_mtime && wt_id < cur_wt)
-                        {
-                            cur_wt.clone_from(wt_id);
-                            *cur_mtime = s.last_modified;
-                        }
-                    })
-                    .or_insert((wt_id.clone(), s.last_modified));
-            }
-        }
-        for (wt_id, sessions) in &mut wt_sessions {
-            if !active_wts.contains(wt_id) {
-                continue;
-            }
-            sessions.retain(|s| {
-                best_wt_for_sid
-                    .get(&s.id)
-                    .is_some_and(|(best, _)| best == wt_id)
-            });
-        }
+        // 跨 worktree 去重（仅 active worktree 间执行）。
+        dedup_sessions_across_worktrees(&mut wt_sessions, &cursor_state, &group.worktrees);
 
         // 二分定位每个 worktree 的指针起点（含 Exhausted 跳过）。
-        let mut indices: std::collections::BTreeMap<String, (usize, bool)> =
-            std::collections::BTreeMap::new();
-        for wt in &group.worktrees {
-            let offset = cursor_state
-                .per_worktree
-                .get(&wt.id)
-                .cloned()
-                .unwrap_or(WorktreeOffset::NotStarted);
-            match offset {
-                WorktreeOffset::NotStarted => {
-                    indices.insert(wt.id.clone(), (0, false));
-                }
-                WorktreeOffset::Exhausted => {
-                    indices.insert(wt.id.clone(), (0, true));
-                }
-                WorktreeOffset::AfterMtime { mtime_ms, sid } => {
-                    let sessions = wt_sessions.get(&wt.id).map_or(&[][..], Vec::as_slice);
-                    // 找第一条**严格**在 (mtime_ms, sid) 之后的：
-                    // (s.mtime < mtime_ms) || (s.mtime == mtime_ms && s.sid > sid)。
-                    let idx = sessions
-                        .iter()
-                        .position(|s| {
-                            s.last_modified < mtime_ms
-                                || (s.last_modified == mtime_ms && s.id > sid)
-                        })
-                        .unwrap_or(sessions.len());
-                    indices.insert(wt.id.clone(), (idx, false));
-                }
-            }
-        }
+        let indices = resolve_cursor_indices(&group.worktrees, &cursor_state, &wt_sessions);
 
         // k-way merge：BinaryHeap 全序 (mtime desc, sid asc)。
         let mut heap: std::collections::BinaryHeap<HeapEntry> = std::collections::BinaryHeap::new();
@@ -1137,62 +1217,15 @@ impl LocalDataApi {
             }
         }
 
-        // 编码 next_cursor：每个 worktree 的新状态。
-        let mut new_cursor = GroupCursor {
-            per_worktree: std::collections::BTreeMap::new(),
-        };
-        let mut all_exhausted = true;
-        for wt in &group.worktrees {
-            let (init_idx, exhausted) = indices[&wt.id];
-            if exhausted {
-                new_cursor
-                    .per_worktree
-                    .insert(wt.id.clone(), WorktreeOffset::Exhausted);
-                continue;
-            }
-            // scan 失败的 worktree SHALL 保留 cursor_state 原 offset（不进 Exhausted
-            // 分支）—— 否则下次请求该 wt 永久丢失。`all_exhausted` 也强制 false
-            // 让前端有机会续页重试。
-            if failed_wt_ids.contains(&wt.id) {
-                let preserved = cursor_state
-                    .per_worktree
-                    .get(&wt.id)
-                    .cloned()
-                    .unwrap_or(WorktreeOffset::NotStarted);
-                new_cursor.per_worktree.insert(wt.id.clone(), preserved);
-                all_exhausted = false;
-                continue;
-            }
-            let wt_len = wt_sessions.get(&wt.id).map_or(0, Vec::len);
-            let offset = if let Some((mtime, sid, next_idx)) = last_consumed.get(&wt.id) {
-                if *next_idx >= wt_len {
-                    WorktreeOffset::Exhausted
-                } else {
-                    all_exhausted = false;
-                    WorktreeOffset::AfterMtime {
-                        mtime_ms: *mtime,
-                        sid: sid.clone(),
-                    }
-                }
-            } else if init_idx >= wt_len {
-                WorktreeOffset::Exhausted
-            } else {
-                // 未消费但还有数据 → 保留原 cursor（如 NotStarted 或 AfterMtime）
-                all_exhausted = false;
-                cursor_state
-                    .per_worktree
-                    .get(&wt.id)
-                    .cloned()
-                    .unwrap_or(WorktreeOffset::NotStarted)
-            };
-            new_cursor.per_worktree.insert(wt.id.clone(), offset);
-        }
-
-        let next_cursor = if all_exhausted {
-            None
-        } else {
-            Some(encode_group_cursor(&new_cursor))
-        };
+        // 编码 next_cursor。
+        let next_cursor = encode_next_group_cursor(
+            &group.worktrees,
+            &cursor_state,
+            &indices,
+            &last_consumed,
+            &wt_sessions,
+            &failed_wt_ids,
+        );
 
         // 防御性 drop（明确生命周期）。
         let _ = wt_sessions;
@@ -2152,23 +2185,7 @@ impl LocalDataApi {
         &self,
         project_id: &str,
         pagination: &PaginatedRequest,
-    ) -> Result<
-        (
-            Vec<SessionSummary>,
-            Option<String>,
-            usize,
-            Vec<(String, std::path::PathBuf)>,
-            std::path::PathBuf,
-            u64,
-            Vec<SessionMetadataUpdate>,
-            Arc<dyn FileSystemProvider>,
-            cdt_fs::ContextId,
-            // expected_context_generation —— 与 fs/ctx 同 snapshot 早 load，
-            // 防 codex 第五轮 Blocker 报的 generation late-capture race。
-            u64,
-        ),
-        ApiError,
-    > {
+    ) -> Result<SkeletonResult, ApiError> {
         if pagination.page_size == 0 {
             return Err(ApiError::validation("pageSize must be > 0"));
         }
@@ -2306,7 +2323,7 @@ impl LocalDataApi {
             None
         };
 
-        Ok((
+        Ok(SkeletonResult {
             page,
             next_cursor,
             total,
@@ -2317,7 +2334,7 @@ impl LocalDataApi {
             fs,
             ctx,
             expected_context_generation,
-        ))
+        })
     }
 }
 
@@ -2335,6 +2352,197 @@ impl LocalDataApi {
 /// `ipc-data-api/spec.md::Emit session metadata updates` Scenario "同 projectId
 /// 不同 cursor 的扫描并存互不 abort"）。`|` 字符为 reserved 分隔符，当前 cursor
 /// 由 `(offset).to_string()` 生成（纯 ASCII 数字），不会与分隔符冲突。
+/// Step 3 helper: 根据 policy 分派子代理扫描策略。
+async fn scan_subagent_candidates_for_detail(
+    fs: &dyn FileSystemProvider,
+    projects_dir: &Path,
+    project_dir: &Path,
+    session_id: &str,
+    policy: &cdt_fs::BackendPolicy,
+) -> Vec<cdt_core::SubagentCandidate> {
+    if !policy.supports_subagent_scan {
+        Vec::new()
+    } else if CROSS_PROJECT_SUBAGENT_SCAN {
+        scan_subagent_candidates_cross_project(fs, projects_dir, project_dir, session_id).await
+    } else {
+        scan_subagent_candidates(fs, project_dir, session_id).await
+    }
+}
+
+/// Step 4 helper: 构建 chunks + 判定 `is_ongoing`（含 stale check）。
+async fn build_session_chunks_with_ongoing(
+    messages: &[cdt_core::ParsedMessage],
+    candidates: &[cdt_core::SubagentCandidate],
+    policy: &cdt_fs::BackendPolicy,
+    fs: &dyn FileSystemProvider,
+    jsonl_path: &Path,
+) -> (Vec<cdt_core::Chunk>, bool) {
+    let messages_ongoing = cdt_analyze::check_messages_ongoing(messages);
+    let is_ongoing = if messages_ongoing {
+        match policy.stale_check_strategy {
+            cdt_fs::StaleCheckStrategy::LocalClock5min => {
+                !crate::ipc::session_metadata::is_file_stale(fs, jsonl_path).await
+            }
+            cdt_fs::StaleCheckStrategy::SkipUntilClockSync => messages_ongoing,
+        }
+    } else {
+        false
+    };
+    let chunks = build_chunks_with_subagents(messages, candidates);
+    (chunks, is_ongoing)
+}
+
+/// 跨 worktree 去重：同一 `sessionId` 保留 `last_modified` 最大的 wt 版本。
+///
+/// 仅在 cursor "active"（非 Exhausted）的 worktree 间执行去重。
+fn dedup_sessions_across_worktrees(
+    wt_sessions: &mut std::collections::BTreeMap<String, Vec<cdt_core::Session>>,
+    cursor_state: &GroupCursor,
+    worktrees: &[cdt_core::Worktree],
+) {
+    let active_wts: std::collections::BTreeSet<&String> = worktrees
+        .iter()
+        .filter(|wt| {
+            !matches!(
+                cursor_state
+                    .per_worktree
+                    .get(&wt.id)
+                    .cloned()
+                    .unwrap_or(WorktreeOffset::NotStarted),
+                WorktreeOffset::Exhausted
+            )
+        })
+        .map(|wt| &wt.id)
+        .collect();
+    let mut best_wt_for_sid: std::collections::HashMap<String, (String, i64)> =
+        std::collections::HashMap::new();
+    for (wt_id, sessions) in wt_sessions.iter() {
+        if !active_wts.contains(wt_id) {
+            continue;
+        }
+        for s in sessions {
+            best_wt_for_sid
+                .entry(s.id.clone())
+                .and_modify(|(cur_wt, cur_mtime)| {
+                    if s.last_modified > *cur_mtime
+                        || (s.last_modified == *cur_mtime && wt_id < cur_wt)
+                    {
+                        cur_wt.clone_from(wt_id);
+                        *cur_mtime = s.last_modified;
+                    }
+                })
+                .or_insert((wt_id.clone(), s.last_modified));
+        }
+    }
+    for (wt_id, sessions) in wt_sessions.iter_mut() {
+        if !active_wts.contains(wt_id) {
+            continue;
+        }
+        sessions.retain(|s| {
+            best_wt_for_sid
+                .get(&s.id)
+                .is_some_and(|(best, _)| best == wt_id)
+        });
+    }
+}
+
+/// 二分定位每个 worktree 在已排序 sessions 中的 cursor 起点。
+fn resolve_cursor_indices(
+    worktrees: &[cdt_core::Worktree],
+    cursor_state: &GroupCursor,
+    wt_sessions: &std::collections::BTreeMap<String, Vec<cdt_core::Session>>,
+) -> std::collections::BTreeMap<String, (usize, bool)> {
+    let mut indices: std::collections::BTreeMap<String, (usize, bool)> =
+        std::collections::BTreeMap::new();
+    for wt in worktrees {
+        let offset = cursor_state
+            .per_worktree
+            .get(&wt.id)
+            .cloned()
+            .unwrap_or(WorktreeOffset::NotStarted);
+        match offset {
+            WorktreeOffset::NotStarted => {
+                indices.insert(wt.id.clone(), (0, false));
+            }
+            WorktreeOffset::Exhausted => {
+                indices.insert(wt.id.clone(), (0, true));
+            }
+            WorktreeOffset::AfterMtime { mtime_ms, sid } => {
+                let sessions = wt_sessions.get(&wt.id).map_or(&[][..], Vec::as_slice);
+                let idx = sessions
+                    .iter()
+                    .position(|s| {
+                        s.last_modified < mtime_ms || (s.last_modified == mtime_ms && s.id > sid)
+                    })
+                    .unwrap_or(sessions.len());
+                indices.insert(wt.id.clone(), (idx, false));
+            }
+        }
+    }
+    indices
+}
+
+/// 编码下一页 group cursor 状态。
+fn encode_next_group_cursor(
+    worktrees: &[cdt_core::Worktree],
+    cursor_state: &GroupCursor,
+    indices: &std::collections::BTreeMap<String, (usize, bool)>,
+    last_consumed: &std::collections::BTreeMap<String, (i64, String, usize)>,
+    wt_sessions: &std::collections::BTreeMap<String, Vec<cdt_core::Session>>,
+    failed_wt_ids: &std::collections::BTreeSet<String>,
+) -> Option<String> {
+    let mut new_cursor = GroupCursor {
+        per_worktree: std::collections::BTreeMap::new(),
+    };
+    let mut all_exhausted = true;
+    for wt in worktrees {
+        let (init_idx, exhausted) = indices[&wt.id];
+        if exhausted {
+            new_cursor
+                .per_worktree
+                .insert(wt.id.clone(), WorktreeOffset::Exhausted);
+            continue;
+        }
+        if failed_wt_ids.contains(&wt.id) {
+            let preserved = cursor_state
+                .per_worktree
+                .get(&wt.id)
+                .cloned()
+                .unwrap_or(WorktreeOffset::NotStarted);
+            new_cursor.per_worktree.insert(wt.id.clone(), preserved);
+            all_exhausted = false;
+            continue;
+        }
+        let wt_len = wt_sessions.get(&wt.id).map_or(0, Vec::len);
+        let offset = if let Some((mtime, sid, next_idx)) = last_consumed.get(&wt.id) {
+            if *next_idx >= wt_len {
+                WorktreeOffset::Exhausted
+            } else {
+                all_exhausted = false;
+                WorktreeOffset::AfterMtime {
+                    mtime_ms: *mtime,
+                    sid: sid.clone(),
+                }
+            }
+        } else if init_idx >= wt_len {
+            WorktreeOffset::Exhausted
+        } else {
+            all_exhausted = false;
+            cursor_state
+                .per_worktree
+                .get(&wt.id)
+                .cloned()
+                .unwrap_or(WorktreeOffset::NotStarted)
+        };
+        new_cursor.per_worktree.insert(wt.id.clone(), offset);
+    }
+    if all_exhausted {
+        None
+    } else {
+        Some(encode_group_cursor(&new_cursor))
+    }
+}
+
 fn metadata_scan_key(project_id: &str, cursor: Option<&str>) -> String {
     format!("{project_id}|{}", cursor.unwrap_or(""))
 }
@@ -2980,18 +3188,13 @@ impl DataApi for LocalDataApi {
         project_id: &str,
         pagination: &PaginatedRequest,
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
-        let (
-            mut page,
-            next_cursor,
-            total,
-            page_jobs,
-            _dir,
-            _root_generation,
-            _inline_updates,
-            fs,
-            ctx,
-            _expected_context_generation,
-        ) = self.list_sessions_skeleton(project_id, pagination).await?;
+        let skeleton = self.list_sessions_skeleton(project_id, pagination).await?;
+        let mut page = skeleton.page;
+        let next_cursor = skeleton.next_cursor;
+        let total = skeleton.total;
+        let page_jobs = skeleton.page_jobs;
+        let fs = skeleton.fs;
+        let ctx = skeleton.ctx;
 
         // 并发提取每条 session 的 metadata：复用 `self.metadata_scan_semaphore`
         // 与 async `list_sessions` 共享同一把 8 容量信号量，保证 spec
@@ -3035,18 +3238,17 @@ impl DataApi for LocalDataApi {
     ) -> Result<PaginatedResponse<SessionSummary>, ApiError> {
         let _telemetry_timer =
             cdt_telemetry::histogram!("ipc.list_sessions.duration_ns").start_timer();
-        let (
-            page,
-            next_cursor,
-            total,
-            page_jobs,
-            dir,
-            root_generation,
-            inline_updates,
-            fs,
-            ctx,
-            expected_context_generation,
-        ) = self.list_sessions_skeleton(project_id, pagination).await?;
+        let skeleton = self.list_sessions_skeleton(project_id, pagination).await?;
+        let page = skeleton.page;
+        let next_cursor = skeleton.next_cursor;
+        let total = skeleton.total;
+        let page_jobs = skeleton.page_jobs;
+        let dir = skeleton.dir;
+        let root_generation = skeleton.root_generation;
+        let inline_updates = skeleton.inline_updates;
+        let fs = skeleton.fs;
+        let ctx = skeleton.ctx;
+        let expected_context_generation = skeleton.expected_context_generation;
 
         for update in inline_updates {
             let _ = self.session_metadata_tx.send(update);
@@ -3253,223 +3455,97 @@ impl DataApi for LocalDataApi {
     ) -> Result<SessionDetailResponse, ApiError> {
         let _telemetry_timer =
             cdt_telemetry::histogram!("ipc.get_session_detail.duration_ns").start_timer();
-        // 性能探针：拆 5 段计时——locate / parse / scan_subagents / build_chunks /
-        // context+claude_md / serialize。`tracing::info!` 由订阅者过滤，开销极低。
-        // 不要把这些段塞进一个汇总 log——分开打才能据此判断瓶颈走向。
         let t_total = std::time::Instant::now();
 
-        // 路径解析直接走 `fs.stat(jsonl_path)`：一次系统调用拿 mtime / size，**不**
-        // 触发跨 project 全量扫描。Spec：`ipc-data-api::get_session_detail 本地路径
-        // 以单文件 stat 取元数据`。change `merge-composite-projects` 移除了原本为
-        // 反解 composite id 而调用 `scanner.scan()` 的全扫开销（~14K reads / IPC）。
+        // Step 1: locate session file + fingerprint short-circuit
         let t_locate = std::time::Instant::now();
-        // change `unify-fs-direct-calls` design D2 (line 2102): 用 strict 快照让 fs / ctx /
-        // projects_dir 来自同一次 provider 调用，避免 SSH disconnect 中间态降级。
-        // change `backend-policy-struct` D5：用 active_fs_and_policy() 一次拿全五元组，
-        // 后续 subagent scan / stale check 走 policy 字段而非 fs.kind() 比对。
-        let (fs, projects_dir, ctx, policy, _resolvers) = self.active_fs_and_policy().await?;
-        let project_dir =
-            projects_dir.join(cdt_discover::path_decoder::extract_base_dir(project_id));
-        let primary_jsonl = project_dir.join(format!("{session_id}.jsonl"));
-
-        let (jsonl_path, last_modified, size) = if let Ok(meta) = fs.stat(&primary_jsonl).await {
-            (primary_jsonl, Some(meta.mtime_ms()), Some(meta.size))
-        } else {
-            // Local + SSH 共用入口：find_subagent_jsonl 已 fs-aware + 保留 flat/nested
-            // 双结构，与 find_session_project 一致避免 "find_session_project 命中但
-            // get_session_detail 又取不到" 的不一致（codex PR 二审反馈）。
-            let Some(path) = find_subagent_jsonl(&*fs, &project_dir, session_id).await else {
-                return Err(ApiError::not_found(format!("session {session_id}")));
-            };
-            let meta = fs.stat(&path).await.ok();
-            let modified = meta.as_ref().map(cdt_discover::FsMetadata::mtime_ms);
-            let size = meta.as_ref().map(|m| m.size);
-            (path, modified, size)
+        let located = match self
+            .locate_session_file(project_id, session_id, known_fingerprint)
+            .await?
+        {
+            LocateResult::Unchanged { fingerprint } => {
+                let locate_ms = t_locate.elapsed().as_millis();
+                cdt_telemetry::counter!("ipc.get_session_detail.unchanged").inc();
+                tracing::info!(
+                    target: "cdt_api::perf",
+                    session_id = %session_id,
+                    locate_ms,
+                    "get_session_detail short-circuit: unchanged"
+                );
+                return Ok(SessionDetailResponse::Unchanged { fingerprint });
+            }
+            LocateResult::Found(l) => l,
         };
         let locate_ms = t_locate.elapsed().as_millis();
 
-        // fingerprint 短路：复用 locate stat 的 mtime+size 生成字符串签名。
-        // 与 known_fingerprint 一致 → 文件未变，跳过 parse/build/serialize 全流程。
-        // 安全守护：metadata 不完整（stat 失败 → mtime/size 均 None）时跳过短路，
-        // 避免退化 fingerprint "v1:0:0" 永久匹配导致永不刷新（codex review）。
-        let fingerprint = make_session_ipc_fingerprint(last_modified, size);
-        let metadata_complete = last_modified.is_some() && size.is_some();
-        if metadata_complete {
-            if let Some(known) = known_fingerprint {
-                if known == fingerprint {
-                    cdt_telemetry::counter!("ipc.get_session_detail.unchanged").inc();
-                    tracing::info!(
-                        target: "cdt_api::perf",
-                        session_id = %session_id,
-                        locate_ms,
-                        "get_session_detail short-circuit: unchanged"
-                    );
-                    return Ok(SessionDetailResponse::Unchanged { fingerprint });
-                }
-            }
-        }
-
+        // Step 2: parse session messages
         let t_parse = std::time::Instant::now();
-        // Local + SSH 共用 cache wrapper：cache hit byte-equal 直接返；miss 经 parse_file_via_fs
-        // 走 fs.open_read 流式解析后写回 cache（design D2 line 2141）。
-        let messages =
-            extract_parsed_messages_cached(&self.parsed_msg_cache, &*fs, &ctx, &jsonl_path)
-                .await
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "parse error: stat or parse failed for {}",
-                        jsonl_path.display()
-                    ))
-                })?;
+        let messages = extract_parsed_messages_cached(
+            &self.parsed_msg_cache,
+            &*located.fs,
+            &located.ctx,
+            &located.jsonl_path,
+        )
+        .await
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "parse error: stat or parse failed for {}",
+                located.jsonl_path.display()
+            ))
+        })?;
         let parse_ms = t_parse.elapsed().as_millis();
         let message_count = messages.len();
 
+        // Step 3: scan subagents
         let t_scan = std::time::Instant::now();
-        let candidates = if !policy.supports_subagent_scan {
-            Vec::new()
-        } else if CROSS_PROJECT_SUBAGENT_SCAN {
-            scan_subagent_candidates_cross_project(&*fs, &projects_dir, &project_dir, session_id)
-                .await
-        } else {
-            scan_subagent_candidates(&*fs, &project_dir, session_id).await
-        };
+        let candidates = scan_subagent_candidates_for_detail(
+            &*located.fs,
+            &located.projects_dir,
+            &located.project_dir,
+            session_id,
+            &located.policy,
+        )
+        .await;
         let scan_ms = t_scan.elapsed().as_millis();
         let candidate_count = candidates.len();
 
+        // Step 4: build chunks + determine is_ongoing
         let t_build = std::time::Instant::now();
-        let messages_ongoing = cdt_analyze::check_messages_ongoing(&messages);
-        // stale check 与 list_sessions 路径对齐（issue #94）：mtime > 5min 的
-        // ongoing 视为 crashed/killed。SSH 用 SkipUntilClockSync 跳过 stale check：
-        // 远端 mtime 与本机 clock 跨 domain，5min 阈值不可比对。clock skew
-        // compensation 留 follow-up（design Open Question 2）。
-        let is_ongoing = if messages_ongoing {
-            match policy.stale_check_strategy {
-                cdt_fs::StaleCheckStrategy::LocalClock5min => {
-                    !crate::ipc::session_metadata::is_file_stale(&*fs, &jsonl_path).await
-                }
-                cdt_fs::StaleCheckStrategy::SkipUntilClockSync => messages_ongoing,
-            }
-        } else {
-            false
-        };
-        let chunks = build_chunks_with_subagents(&messages, &candidates);
+        let (chunks, is_ongoing) = build_session_chunks_with_ongoing(
+            &messages,
+            &candidates,
+            &located.policy,
+            &*located.fs,
+            &located.jsonl_path,
+        )
+        .await;
         let build_ms = t_build.elapsed().as_millis();
         let chunk_count = chunks.len();
 
+        // Step 5: inject context annotations
         let t_ctx = std::time::Instant::now();
-        let project_root = messages.iter().find_map(|m| m.cwd.as_deref()).unwrap_or("");
-        let claude_base = self.claude_base_path().await;
-        let initial_claude_md = build_claude_md_from_filesystem(project_root, &claude_base).await;
-        let empty_cmd = std::collections::HashMap::new();
-        let empty_mf = std::collections::HashMap::new();
-        let token_dicts = cdt_analyze::context::TokenDictionaries::new(
-            Path::new(""),
-            &empty_cmd,
-            &empty_cmd,
-            &empty_mf,
-        );
-        let ctx_result = cdt_analyze::context::process_session_context_with_phases(
-            &chunks,
-            &cdt_analyze::context::ProcessSessionParams {
-                project_root: Path::new(""),
-                token_dictionaries: token_dicts,
-                initial_claude_md_injections: &initial_claude_md,
-            },
-        );
-        // 按 phase 切分 accumulated injections。每 phase 末尾的 AI group 在
-        // stats_map 中持有该 phase 完整 accumulated（session.rs backfill 保证），
-        // 中间 group 的 accumulated_injections 是 std::mem::take 后的空 Vec。
-        let mut injections_by_phase: BTreeMap<String, Vec<cdt_core::ContextInjection>> =
-            BTreeMap::new();
-        for phase in &ctx_result.phase_info.phases {
-            let phase_injections = ctx_result
-                .stats_map
-                .get(&phase.last_ai_group_id)
-                .map(|stats| stats.accumulated_injections.clone())
-                .unwrap_or_default();
-            injections_by_phase.insert(phase.phase_number.to_string(), phase_injections);
-        }
-        // contextInjections 字段语义：latest phase 的 accumulated injections
-        // （向后兼容旧前端，等价于 injectionsByPhase[最大 phaseNumber]）。
-        let context_injections: Vec<cdt_core::ContextInjection> = ctx_result
-            .phase_info
-            .phases
-            .last()
-            .and_then(|phase| ctx_result.stats_map.get(&phase.last_ai_group_id))
-            .map(|stats| stats.accumulated_injections.clone())
-            .unwrap_or_default();
-        let phase_info_value = ctx_result.phase_info.clone();
+        let annotations = self.inject_context_annotations(&chunks, &messages).await;
         let ctx_ms = t_ctx.elapsed().as_millis();
 
+        // Step 6: apply payload omissions + assemble response
         let t_serde = std::time::Instant::now();
-        // IPC payload 瘦身：subagent.messages 默认裁剪为空，前端 SubagentCard
-        // 展开时通过 `get_subagent_trace` 懒拉取。把 messages 抠空 + 设
-        // `messages_omitted=true`；header_model / last_isolated_tokens /
-        // is_shutdown_only 已由 resolver 阶段填充，可独立渲染 header。
-        // ctx_result 已只持有 owned 数据（不借 chunks），此后 chunks 在本函数内
-        // 不再被读取，可直接 move 进 OMIT pipeline 原地修改，省 1 次 Vec<Chunk>
-        // 深拷贝（实测 1221 msg 会话 ~5-15ms + 数 MB 瞬态堆）。
-        let chunks_for_payload = {
-            let mut chunks = chunks;
-            // CompactChunk 派生 token_delta / phase_number 必须在 OMIT 之前跑——
-            // OMIT 不改 chunk 顺序也不改 responses[i].usage，前后顺序对算法本身
-            // 无影响；但放在 OMIT 之前更接近"chunks 落定 → 派生 metadata → 应用
-            // OMIT 瘦身"的清晰流水线。详见 change `compact-chunk-rendering-alignment`
-            // 的 design.md D1c+D1d。
-            apply_compact_derived(&mut chunks, COMPACT_DERIVED_ENABLED);
-            // phase 3：image base64 OMIT 必须在 subagent OMIT 之前跑，否则
-            // OMIT_SUBAGENT_MESSAGES=false 回滚路径下嵌套 messages 内的 image
-            // 不会被裁。
-            if OMIT_IMAGE_DATA {
-                apply_image_omit(&mut chunks);
-            }
-            // phase 4：response.content OMIT 同样在 subagent OMIT 之前跑，
-            // 覆盖 OMIT_SUBAGENT_MESSAGES=false 回滚路径下嵌套 messages 内的
-            // AIChunk.responses[].content。
-            if OMIT_RESPONSE_CONTENT {
-                apply_response_content_omit(&mut chunks);
-            }
-            // phase 5：tool_exec.output OMIT 同上，覆盖嵌套 messages 内的
-            // tool_executions[].output。
-            if OMIT_TOOL_OUTPUT {
-                apply_tool_output_omit(&mut chunks);
-            }
-            if OMIT_SUBAGENT_MESSAGES {
-                for c in &mut chunks {
-                    if let cdt_core::Chunk::Ai(ai) = c {
-                        for sub in &mut ai.subagents {
-                            sub.messages = Vec::new();
-                            sub.messages_omitted = true;
-                        }
-                    }
-                }
-            }
-            chunks
-        };
-        // metadata 暴露 session 级 cwd（首条带 cwd 字段消息的值），让前端
-        // SessionDetail 头部直接展示完整 cwd。Spec：
-        // `ipc-data-api::Session 列表序列化暴露 cwd 字段::get_session_detail 元数据带 cwd`。
+        let mut chunks = chunks;
+        apply_all_payload_omissions(&mut chunks);
         let session_cwd: Option<&str> = messages.iter().find_map(|m| m.cwd.as_deref());
-        // 与同 sessionId 的 `SessionSummary.title` 共用单一派生源
-        // `extract_session_metadata_from_parsed`，让前端 SessionDetail 顶部
-        // `<h1>` 与 sidebar 列表项标题字节级一致。`is_stale` 仅参与 metadata.is_ongoing
-        // 派生不影响 title；这里传 `!is_ongoing` 让返回值的 is_ongoing 与本函数已算出的
-        // `is_ongoing` 等价（避免日后误读"detail 端 stale 语义不一致"）。
-        // Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
         let title_metadata = extract_session_metadata_from_parsed(&messages, !is_ongoing);
         let detail = SessionDetail {
             session_id: session_id.to_owned(),
             project_id: project_id.to_owned(),
-            chunks: chunks_for_payload,
+            chunks,
             metrics: SessionDetailMetrics { message_count },
             metadata: SessionDetailMetadata {
-                last_modified,
-                size,
+                last_modified: located.last_modified,
+                size: located.size,
                 cwd: session_cwd.map(String::from),
             },
-            context_injections,
-            injections_by_phase,
-            phase_info: phase_info_value,
+            context_injections: annotations.context_injections,
+            injections_by_phase: annotations.injections_by_phase,
+            phase_info: annotations.phase_info,
             is_ongoing,
             title: title_metadata.title,
         };
@@ -3493,7 +3569,7 @@ impl DataApi for LocalDataApi {
         );
 
         Ok(SessionDetailResponse::Full {
-            fingerprint,
+            fingerprint: located.fingerprint,
             detail: Box::new(detail),
         })
     }
