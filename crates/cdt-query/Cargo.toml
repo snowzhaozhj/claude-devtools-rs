@@ -1,0 +1,30 @@
+[package]
+name = "cdt-query"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Query orchestration layer for CLI / MCP consumers of cdt-api."
+
+[lints]
+workspace = true
+
+[dependencies]
+cdt-api = { workspace = true }
+cdt-core = { workspace = true }
+cdt-discover = { path = "../cdt-discover" }
+cdt-config = { workspace = true }
+cdt-ssh = { workspace = true }
+cdt-fs = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+insta = { workspace = true }

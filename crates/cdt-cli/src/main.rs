@@ -1,7 +1,7 @@
 //! claude-devtools-rs CLI entrypoint.
 //!
 //! Clap 子命令结构：projects / sessions / search / stats / serve / mcp。
-//! `serve` 启动 HTTP server；其余子命令 in-process 调用 `LocalDataApi`。
+//! `serve` 启动 HTTP server；其余子命令 in-process 调用 `QueryEngine`。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,9 +11,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use tokio::sync::Semaphore;
 
 use cdt_api::http::spawn_event_bridge;
-use cdt_api::{AppState, DataApi, LocalDataApi, PaginatedRequest, StaticServe, start_server};
+use cdt_api::{AppState, DataApi, LocalDataApi, StaticServe, start_server};
 use cdt_config::{ConfigManager, NotificationManager};
 use cdt_discover::{ProjectScanner, local_handle, path_decoder};
+use cdt_query::{ChunkKindFilter, QueryEngine, QueryFilter, SessionQueryOptions};
 use cdt_ssh::SshConnectionManager;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,6 +39,7 @@ struct Cli {
 #[derive(Clone, ValueEnum)]
 enum OutputFormat {
     Json,
+    Jsonl,
     Table,
 }
 
@@ -53,8 +55,19 @@ enum Command {
         #[command(subcommand)]
         action: SessionsAction,
     },
-    /// 全文搜索（未实现）
-    Search,
+    /// 全文搜索
+    Search {
+        /// 搜索关键词
+        query: String,
+
+        /// 最多返回 N 条结果
+        #[arg(long, default_value = "50")]
+        limit: usize,
+
+        /// 偏移（分页）
+        #[arg(long, default_value = "0")]
+        offset: usize,
+    },
     /// 统计信息（未实现）
     Stats,
     /// 启动 HTTP API server
@@ -88,6 +101,53 @@ enum SessionsAction {
         /// 仅显示指定时间范围内的会话（如 7d、24h、30m）
         #[arg(long)]
         since: Option<String>,
+
+        /// 标题关键词过滤（大小写不敏感）
+        #[arg(long)]
+        grep: Option<String>,
+
+        /// 仅显示含错误的会话
+        #[arg(long)]
+        errors_only: bool,
+
+        /// 仅显示含工具调用的会话
+        #[arg(long)]
+        tools_only: bool,
+
+        /// 仅显示消息数 >= N 的会话
+        #[arg(long)]
+        min_messages: Option<usize>,
+    },
+    /// 显示会话元数据（不含 chunks）
+    Show {
+        /// 会话 ID
+        id: String,
+    },
+    /// 显示会话详情（chunk 流）
+    Detail {
+        /// 会话 ID
+        id: String,
+
+        /// 指定 chunk 区间（如 10:30）
+        #[arg(long)]
+        range: Option<String>,
+
+        /// 仅显示最后 N 条 chunks
+        #[arg(long)]
+        tail: Option<usize>,
+
+        /// 过滤条件：`errors_only` 或 `tool_calls`
+        #[arg(long)]
+        filter: Option<String>,
+
+        /// 输出完整 chunks（不截断）
+        #[arg(long)]
+        full: bool,
+    },
+    /// 聚合会话中的所有错误
+    Errors {
+        /// 会话 ID
+        id: String,
     },
 }
 
@@ -239,6 +299,11 @@ async fn cmd_projects_list(format: &OutputFormat) -> Result<()> {
             let json = serde_json::to_string_pretty(&groups)?;
             println!("{json}");
         }
+        OutputFormat::Jsonl => {
+            for group in &groups {
+                println!("{}", serde_json::to_string(group)?);
+            }
+        }
         OutputFormat::Table => {
             println!(
                 "{:<40} {:<50} {:>8} {:>20}",
@@ -271,16 +336,25 @@ async fn cmd_projects_list(format: &OutputFormat) -> Result<()> {
 // sessions list
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_sessions_list(
     format: &OutputFormat,
     project_filter: Option<&str>,
     limit: usize,
     since: Option<&str>,
+    grep: Option<&str>,
+    errors_only: bool,
+    tools_only: bool,
+    min_messages: Option<usize>,
 ) -> Result<()> {
     let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(api);
 
     let project_id = match project_filter {
-        Some(name) => resolve_project_id(&api, name).await?,
+        Some(name) => engine
+            .resolve_project(name)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
         None => {
             anyhow::bail!(
                 "--project is required for `sessions list`. Use `projects list` to see available projects."
@@ -288,28 +362,25 @@ async fn cmd_sessions_list(
         }
     };
 
-    let pagination = PaginatedRequest {
-        page_size: limit,
-        cursor: None,
+    let since_ms = since.map(parse_duration_to_ms).transpose()?;
+    let filter = QueryFilter {
+        since: since_ms,
+        grep: grep.map(ToOwned::to_owned),
+        errors_only,
+        tools_only,
+        min_messages,
+        limit: Some(limit),
+        ..Default::default()
     };
-    let resp = api
-        .list_sessions_sync(&project_id, &pagination)
+
+    let items = engine
+        .list_sessions(&project_id, &filter)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let since_ms = since.map(parse_duration_to_ms).transpose()?;
-    let items: Vec<_> = if let Some(cutoff) = since_ms {
-        resp.items
-            .into_iter()
-            .filter(|s| s.timestamp >= cutoff)
-            .collect()
-    } else {
-        resp.items
-    };
-
     if items.is_empty() {
         match format {
-            OutputFormat::Json => println!("[]"),
+            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
             OutputFormat::Table => eprintln!("No sessions found."),
         }
         std::process::exit(2);
@@ -319,6 +390,11 @@ async fn cmd_sessions_list(
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(&items)?;
             println!("{json}");
+        }
+        OutputFormat::Jsonl => {
+            for item in &items {
+                println!("{}", serde_json::to_string(item)?);
+            }
         }
         OutputFormat::Table => {
             println!(
@@ -345,26 +421,246 @@ async fn cmd_sessions_list(
     Ok(())
 }
 
-/// 按名称或 ID 解析 `project_id`。
-async fn resolve_project_id(api: &LocalDataApi, name: &str) -> Result<String> {
-    let groups = api
-        .list_repository_groups()
+// ─────────────────────────────────────────────────────────────────────────────
+// sessions show
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn cmd_sessions_show(format: &OutputFormat, session_id: &str) -> Result<()> {
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(api);
+
+    let project_id = engine
+        .find_session_project(session_id)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    for group in &groups {
-        if group.name.eq_ignore_ascii_case(name) || group.id == name {
-            if let Some(wt) = group.worktrees.first() {
-                return Ok(wt.id.clone());
-            }
-            return Ok(group.id.clone());
+
+    let detail = engine
+        .get_session_show(&project_id, session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    match format {
+        OutputFormat::Json | OutputFormat::Jsonl => {
+            let json = serde_json::to_string_pretty(&detail)?;
+            println!("{json}");
         }
-        for wt in &group.worktrees {
-            if wt.name.eq_ignore_ascii_case(name) || wt.id == name {
-                return Ok(wt.id.clone());
+        OutputFormat::Table => {
+            println!("Session:   {}", detail.session_id);
+            println!("Project:   {}", detail.project_id);
+            println!(
+                "Title:     {}",
+                detail.title.as_deref().unwrap_or("(untitled)")
+            );
+            println!("Messages:  {}", detail.metrics.message_count);
+            println!(
+                "Status:    {}",
+                if detail.is_ongoing { "active" } else { "done" }
+            );
+            if let Some(cwd) = &detail.metadata.cwd {
+                println!("CWD:       {cwd}");
+            }
+            if let Some(modified) = detail.metadata.last_modified {
+                println!("Modified:  {}", format_timestamp(modified));
             }
         }
     }
-    anyhow::bail!("project not found: {name}");
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sessions detail
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn cmd_sessions_detail(
+    format: &OutputFormat,
+    session_id: &str,
+    range: Option<&str>,
+    tail: Option<usize>,
+    filter: Option<&str>,
+    full: bool,
+) -> Result<()> {
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(api);
+
+    let project_id = engine
+        .find_session_project(session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let options = if full {
+        SessionQueryOptions::full()
+    } else {
+        let parsed_range = range.map(parse_range).transpose()?;
+        let kind_filter = filter.map(parse_kind_filter).transpose()?;
+        SessionQueryOptions {
+            range: parsed_range,
+            tail: tail.or(if parsed_range.is_some() {
+                None
+            } else {
+                Some(20)
+            }),
+            kind_filter,
+            errors_only: false,
+            max_bytes: None,
+        }
+    };
+
+    let detail = engine
+        .get_session_detail(&project_id, session_id, &options)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    match format {
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&detail)?;
+            println!("{json}");
+        }
+        OutputFormat::Jsonl => {
+            for chunk in &detail.chunks {
+                println!("{}", serde_json::to_string(chunk)?);
+            }
+        }
+        OutputFormat::Table => {
+            println!(
+                "Session: {} ({} chunks)",
+                detail.session_id,
+                detail.chunks.len()
+            );
+            println!("{}", "-".repeat(60));
+            for (i, chunk) in detail.chunks.iter().enumerate() {
+                print_chunk_summary(i, chunk);
+            }
+        }
+    }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sessions errors
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn cmd_sessions_errors(format: &OutputFormat, session_id: &str) -> Result<()> {
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(api);
+
+    let project_id = engine
+        .find_session_project(session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let errors = engine
+        .get_session_errors(&project_id, session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if errors.is_empty() {
+        match format {
+            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
+            OutputFormat::Table => eprintln!("No errors found."),
+        }
+        std::process::exit(2);
+    }
+
+    match format {
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&errors)?;
+            println!("{json}");
+        }
+        OutputFormat::Jsonl => {
+            for e in &errors {
+                println!("{}", serde_json::to_string(e)?);
+            }
+        }
+        OutputFormat::Table => {
+            println!("{:>6} {:<20} {:<50}", "CHUNK", "TOOL", "ERROR");
+            println!("{}", "-".repeat(78));
+            for e in &errors {
+                let msg = e.error_message.as_deref().unwrap_or("(no message)");
+                println!(
+                    "{:>6} {:<20} {:<50}",
+                    e.chunk_index,
+                    truncate(&e.tool_name, 19),
+                    truncate(msg, 49),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// search
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn cmd_search(
+    format: &OutputFormat,
+    project_filter: Option<&str>,
+    query: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<()> {
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(api);
+
+    let project_id = match project_filter {
+        Some(name) => Some(
+            engine
+                .resolve_project(name)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
+        ),
+        None => None,
+    };
+
+    let result = engine
+        .search(query, project_id.as_deref(), Some(limit))
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let results: Vec<_> = if offset > 0 {
+        result.results.into_iter().skip(offset).collect()
+    } else {
+        result.results
+    };
+
+    if results.is_empty() {
+        match format {
+            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
+            OutputFormat::Table => eprintln!("No results found."),
+        }
+        std::process::exit(2);
+    }
+
+    match format {
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&results)?;
+            println!("{json}");
+        }
+        OutputFormat::Jsonl => {
+            for r in &results {
+                println!("{}", serde_json::to_string(r)?);
+            }
+        }
+        OutputFormat::Table => {
+            println!(
+                "{:<12} {:<30} {:>8} {:<40}",
+                "SESSION", "TITLE", "MATCHES", "PREVIEW"
+            );
+            println!("{}", "-".repeat(92));
+            for r in &results {
+                let short_id: String = r.session_id.chars().take(10).collect();
+                let preview = r.hits.first().map_or("", |h| h.preview.as_str());
+                println!(
+                    "{:<12} {:<30} {:>8} {:<40}",
+                    short_id,
+                    truncate(&r.session_title, 29),
+                    r.total_matches,
+                    truncate(preview, 39),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -426,6 +722,68 @@ fn parse_duration_to_ms(s: &str) -> Result<i64> {
     Ok(now_ms - seconds * 1000)
 }
 
+/// 解析 `10:30` 格式的 range 为 `(start, end)`。
+fn parse_range(s: &str) -> Result<(usize, usize)> {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("invalid range format: {s} (expected start:end, e.g. 10:30)");
+    }
+    let start: usize = parts[0]
+        .parse()
+        .with_context(|| format!("invalid range start: {}", parts[0]))?;
+    let end: usize = parts[1]
+        .parse()
+        .with_context(|| format!("invalid range end: {}", parts[1]))?;
+    if start > end {
+        anyhow::bail!("invalid range: start ({start}) > end ({end})");
+    }
+    Ok((start, end))
+}
+
+fn parse_kind_filter(s: &str) -> Result<ChunkKindFilter> {
+    match s {
+        "errors_only" | "errors" => Ok(ChunkKindFilter::ErrorsOnly),
+        "tool_calls" | "tools" => Ok(ChunkKindFilter::ToolCalls),
+        _ => anyhow::bail!("unknown filter: {s} (expected: errors_only, tool_calls)"),
+    }
+}
+
+fn print_chunk_summary(index: usize, chunk: &cdt_core::Chunk) {
+    match chunk {
+        cdt_core::Chunk::User(u) => {
+            let text = match &u.content {
+                cdt_core::MessageContent::Text(t) => truncate(t, 60),
+                cdt_core::MessageContent::Blocks(_) => "(non-text)".to_string(),
+            };
+            println!("[{index:>4}] USER: {text}");
+        }
+        cdt_core::Chunk::Ai(ai) => {
+            let tools: Vec<&str> = ai
+                .tool_executions
+                .iter()
+                .map(|t| t.tool_name.as_str())
+                .collect();
+            let errors = ai.tool_executions.iter().filter(|t| t.is_error).count();
+            if tools.is_empty() {
+                println!("[{index:>4}] AI: ({} steps)", ai.semantic_steps.len());
+            } else if errors > 0 {
+                println!(
+                    "[{index:>4}] AI: tools=[{}] ({errors} errors)",
+                    tools.join(", ")
+                );
+            } else {
+                println!("[{index:>4}] AI: tools=[{}]", tools.join(", "));
+            }
+        }
+        cdt_core::Chunk::System(s) => {
+            println!("[{index:>4}] SYSTEM: {}", truncate(&s.content_text, 60));
+        }
+        cdt_core::Chunk::Compact(c) => {
+            println!("[{index:>4}] COMPACT: {}", truncate(&c.summary_text, 60));
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // setup
 // ─────────────────────────────────────────────────────────────────────────────
@@ -480,14 +838,51 @@ async fn main() -> Result<()> {
             ProjectsAction::List => cmd_projects_list(&cli.format).await,
         },
         Command::Sessions { action } => match action {
-            SessionsAction::List { limit, since } => {
-                cmd_sessions_list(&cli.format, cli.project.as_deref(), limit, since.as_deref())
-                    .await
+            SessionsAction::List {
+                limit,
+                since,
+                grep,
+                errors_only,
+                tools_only,
+                min_messages,
+            } => {
+                cmd_sessions_list(
+                    &cli.format,
+                    cli.project.as_deref(),
+                    limit,
+                    since.as_deref(),
+                    grep.as_deref(),
+                    errors_only,
+                    tools_only,
+                    min_messages,
+                )
+                .await
             }
+            SessionsAction::Show { id } => cmd_sessions_show(&cli.format, &id).await,
+            SessionsAction::Detail {
+                id,
+                range,
+                tail,
+                filter,
+                full,
+            } => {
+                cmd_sessions_detail(
+                    &cli.format,
+                    &id,
+                    range.as_deref(),
+                    tail,
+                    filter.as_deref(),
+                    full,
+                )
+                .await
+            }
+            SessionsAction::Errors { id } => cmd_sessions_errors(&cli.format, &id).await,
         },
-        Command::Search => {
-            anyhow::bail!("search: not yet implemented");
-        }
+        Command::Search {
+            query,
+            limit,
+            offset,
+        } => cmd_search(&cli.format, cli.project.as_deref(), &query, limit, offset).await,
         Command::Stats => {
             anyhow::bail!("stats: not yet implemented");
         }

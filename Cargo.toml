@@ -22,6 +22,7 @@ cdt-watch = { path = "crates/cdt-watch" }
 cdt-config = { path = "crates/cdt-config" }
 cdt-ssh = { path = "crates/cdt-ssh" }
 cdt-api = { path = "crates/cdt-api" }
+cdt-query = { path = "crates/cdt-query" }
 cdt-telemetry = { path = "crates/cdt-telemetry" }
 
 # Runtime / infrastructure — only leaf crates add these as direct deps.
