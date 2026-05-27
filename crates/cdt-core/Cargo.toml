@@ -10,6 +10,9 @@ description = "Shared types and traits for claude-devtools-rs (no runtime deps).
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

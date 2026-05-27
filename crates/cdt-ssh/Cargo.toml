@@ -10,6 +10,9 @@ description = "SSH remote context support (owns ssh-remote-context). Implements 
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 cdt-fs = { workspace = true }
 cdt-core = { workspace = true }
