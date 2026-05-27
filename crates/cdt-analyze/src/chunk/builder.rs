@@ -868,76 +868,8 @@ fn append_tool_results(target: &mut AssistantResponse, incoming: &MessageContent
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cdt_core::{
-        HardNoiseReason, MessageContent, MessageType, SemanticStep, TokenUsage, ToolCall,
-        ToolResult,
-    };
-    use chrono::{DateTime, Duration, Utc};
-
-    fn ts(n: i64) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-04-11T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
-            + Duration::seconds(n)
-    }
-
-    fn blank_message(uuid: &str, n: i64) -> ParsedMessage {
-        ParsedMessage {
-            uuid: uuid.into(),
-            parent_uuid: None,
-            message_type: MessageType::User,
-            category: MessageCategory::User,
-            timestamp: ts(n),
-            role: None,
-            content: MessageContent::Text(String::new()),
-            usage: None,
-            model: None,
-            cwd: None,
-            git_branch: None,
-            agent_id: None,
-            is_sidechain: false,
-            is_meta: false,
-            user_type: None,
-            tool_calls: Vec::new(),
-            tool_results: Vec::new(),
-            source_tool_use_id: None,
-            source_tool_assistant_uuid: None,
-            is_compact_summary: false,
-            request_id: None,
-            tool_use_result: None,
-        }
-    }
-
-    fn user(uuid: &str, n: i64, text: &str) -> ParsedMessage {
-        ParsedMessage {
-            content: MessageContent::Text(text.into()),
-            ..blank_message(uuid, n)
-        }
-    }
-
-    fn assistant(uuid: &str, n: i64, blocks: &[ContentBlock]) -> ParsedMessage {
-        ParsedMessage {
-            message_type: MessageType::Assistant,
-            category: MessageCategory::Assistant,
-            content: MessageContent::Blocks(blocks.to_vec()),
-            tool_calls: blocks
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::ToolUse { id, name, input } => Some(ToolCall {
-                        id: id.clone(),
-                        name: name.clone(),
-                        input: input.clone(),
-                        is_task: name == "Task",
-                        task_description: None,
-                        task_subagent_type: None,
-                    }),
-                    _ => None,
-                })
-                .collect(),
-            tool_results: Vec::new(),
-            ..blank_message(uuid, n)
-        }
-    }
+    use crate::test_support::{assistant, blank_message, ts, user};
+    use cdt_core::{HardNoiseReason, MessageContent, SemanticStep, TokenUsage, ToolResult};
 
     #[test]
     fn user_question_then_ai_response_emits_two_chunks() {

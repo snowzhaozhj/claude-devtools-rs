@@ -139,35 +139,8 @@ pub fn parse_all_teammate_attrs(msg: &ParsedMessage) -> Vec<TeammateAttrs> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::make_user_msg;
     use cdt_core::*;
-    use chrono::Utc;
-
-    fn make_user_msg(content: MessageContent) -> ParsedMessage {
-        ParsedMessage {
-            uuid: "m1".into(),
-            parent_uuid: None,
-            message_type: MessageType::User,
-            category: MessageCategory::User,
-            timestamp: Utc::now(),
-            role: None,
-            content,
-            usage: None,
-            model: None,
-            cwd: None,
-            git_branch: None,
-            agent_id: None,
-            is_sidechain: false,
-            is_meta: false,
-            user_type: None,
-            tool_calls: vec![],
-            tool_results: vec![],
-            source_tool_use_id: None,
-            source_tool_assistant_uuid: None,
-            is_compact_summary: false,
-            request_id: None,
-            tool_use_result: None,
-        }
-    }
 
     #[test]
     fn detect_teammate_string_content() {

@@ -163,54 +163,13 @@ pub fn check_messages_ongoing(messages: &[ParsedMessage]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{blank_typed, user_blocks};
     use cdt_core::{ContentBlock, MessageCategory, MessageContent, MessageType};
-    use chrono::{DateTime, Duration, Utc};
-
-    fn ts(n: i64) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-04-11T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
-            + Duration::seconds(n)
-    }
-
-    fn blank(uuid: &str, n: i64, ty: MessageType, cat: MessageCategory) -> ParsedMessage {
-        ParsedMessage {
-            uuid: uuid.into(),
-            parent_uuid: None,
-            message_type: ty,
-            category: cat,
-            timestamp: ts(n),
-            role: None,
-            content: MessageContent::Blocks(Vec::new()),
-            usage: None,
-            model: None,
-            cwd: None,
-            git_branch: None,
-            agent_id: None,
-            is_sidechain: false,
-            is_meta: false,
-            user_type: None,
-            tool_calls: Vec::new(),
-            tool_results: Vec::new(),
-            source_tool_use_id: None,
-            source_tool_assistant_uuid: None,
-            is_compact_summary: false,
-            request_id: None,
-            tool_use_result: None,
-        }
-    }
 
     fn assistant_blocks(uuid: &str, n: i64, blocks: Vec<ContentBlock>) -> ParsedMessage {
         ParsedMessage {
             content: MessageContent::Blocks(blocks),
-            ..blank(uuid, n, MessageType::Assistant, MessageCategory::Assistant)
-        }
-    }
-
-    fn user_blocks(uuid: &str, n: i64, blocks: Vec<ContentBlock>) -> ParsedMessage {
-        ParsedMessage {
-            content: MessageContent::Blocks(blocks),
-            ..blank(uuid, n, MessageType::User, MessageCategory::User)
+            ..blank_typed(uuid, n, MessageType::Assistant, MessageCategory::Assistant)
         }
     }
 
@@ -269,7 +228,7 @@ mod tests {
             ParsedMessage {
                 category: MessageCategory::Interruption,
                 content: MessageContent::Text("[Request interrupted by user for tool use]".into()),
-                ..blank("u1", 2, MessageType::User, MessageCategory::Interruption)
+                ..blank_typed("u1", 2, MessageType::User, MessageCategory::Interruption)
             },
         ];
         assert!(!check_messages_ongoing(&msgs));
@@ -370,7 +329,7 @@ mod tests {
             ParsedMessage {
                 category: MessageCategory::Interruption,
                 content: MessageContent::Text("[Request interrupted by user]".into()),
-                ..blank("u1", 2, MessageType::User, MessageCategory::Interruption)
+                ..blank_typed("u1", 2, MessageType::User, MessageCategory::Interruption)
             },
             assistant_blocks(
                 "a2",
@@ -449,7 +408,7 @@ mod tests {
             ParsedMessage {
                 category: MessageCategory::Interruption,
                 content: MessageContent::Text("[Request interrupted by user]".into()),
-                ..blank("u1", 2, MessageType::User, MessageCategory::Interruption)
+                ..blank_typed("u1", 2, MessageType::User, MessageCategory::Interruption)
             },
         ]
     }
@@ -521,7 +480,7 @@ mod tests {
             ParsedMessage {
                 category: MessageCategory::Interruption,
                 content: MessageContent::Text("[Request interrupted by user]".into()),
-                ..blank("u1", 2, MessageType::User, MessageCategory::Interruption)
+                ..blank_typed("u1", 2, MessageType::User, MessageCategory::Interruption)
             },
             assistant_blocks(
                 "a2",
@@ -771,7 +730,7 @@ mod tests {
                         name: "Bash".into(),
                         input: serde_json::json!({}),
                     }]),
-                    ..blank("a1", 1, MessageType::Assistant, MessageCategory::Assistant)
+                    ..blank_typed("a1", 1, MessageType::Assistant, MessageCategory::Assistant)
                 }],
                 // sidechain 标记不影响 ongoing 判定（与 build_activity_stack 行为一致——
                 // 它不检查 is_sidechain）

@@ -41,3 +41,6 @@ pub use tool_linking::{
 
 pub mod team;
 pub use team::contains_teammate_message;
+
+#[cfg(test)]
+pub(crate) mod test_support;
