@@ -28,6 +28,8 @@ jobs:
         run: bash scripts/check-openspec-archives.sh
       - name: Check spec purity (threshold gate)
         run: bash scripts/check-spec-purity.sh
+      - name: Spec purity rule self-test
+        run: bash scripts/check-spec-purity.sh --test
 
   ipc-sync:
     name: ipc command sync

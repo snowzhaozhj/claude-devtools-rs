@@ -60,7 +60,7 @@ print_examples_for() {
     local label="${entry%%=*}"
     local re="${entry#*=}"
     local hits
-    hits=$(grep -vE "$suppress_re" "$file" | grep -nE "$re" 2>/dev/null | head -3 || true)
+    hits=$(grep -nE "$re" "$file" 2>/dev/null | grep -vF "$suppress_re" | head -3 || true)
     if [[ -n "$hits" ]]; then
       if [[ "$emitted" -eq 0 ]]; then
         echo ""
@@ -74,7 +74,7 @@ print_examples_for() {
 
   # p4 单独处理（双重过滤）
   local p4_hits
-  p4_hits=$(grep -vE "$suppress_re" "$file" | grep -inE '实测|bench\s*(结果|result|数据)|measured' | grep -ivE 'SHALL|MUST|SLA|预算|budget|Scenario' | head -3 || true)
+  p4_hits=$(grep -nE '实测|bench\s*(结果|result|数据)|measured' "$file" 2>/dev/null | grep -vF "$suppress_re" | grep -ivE 'SHALL|MUST|SLA|预算|budget|Scenario' | head -3 || true)
   if [[ -n "$p4_hits" ]]; then
     if [[ "$emitted" -eq 0 ]]; then
       echo ""
@@ -93,18 +93,18 @@ if [[ "${1:-}" == "--test" ]]; then
   if [[ -f "$SAMPLES_DIR/should-pass.md" ]]; then
     read -r total _ <<< "$(scan_one "$SAMPLES_DIR/should-pass.md")"
     if [[ "$total" -eq 0 ]]; then
-      echo "✓ should-pass.md: 0 violations"; ((pass++))
+      echo "✓ should-pass.md: 0 violations"; pass=$((pass + 1))
     else
-      echo "✗ should-pass.md: expected 0, got $total"; ((fail++))
+      echo "✗ should-pass.md: expected 0, got $total"; fail=$((fail + 1))
     fi
   fi
 
   if [[ -f "$SAMPLES_DIR/should-fail.md" ]]; then
     read -r total _ <<< "$(scan_one "$SAMPLES_DIR/should-fail.md")"
     if [[ "$total" -gt 0 ]]; then
-      echo "✓ should-fail.md: $total violations (expected >0)"; ((pass++))
+      echo "✓ should-fail.md: $total violations (expected >0)"; pass=$((pass + 1))
     else
-      echo "✗ should-fail.md: expected >0, got 0"; ((fail++))
+      echo "✗ should-fail.md: expected >0, got 0"; fail=$((fail + 1))
     fi
   fi
 
