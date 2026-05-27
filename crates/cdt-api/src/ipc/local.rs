@@ -3943,7 +3943,7 @@ impl DataApi for LocalDataApi {
         self.ssh_mgr
             .switch_context(target.clone())
             .await
-            .map_err(|e| ApiError::internal(format!("{e}")))?;
+            .map_err(|e| ApiError::ssh(format!("{e}")))?;
         if previous_context_id != target {
             if let Some(next) = target.as_deref() {
                 tracing::debug!(target: "cdt_ssh::lifecycle", phase = "attach_new_watcher", context_id = %next);
@@ -4041,7 +4041,7 @@ impl DataApi for LocalDataApi {
                             self.attach_remote_watcher(prev, reconnect_baseline).await;
                         }
                     }
-                    return Err(ApiError::internal(format!("{e}")));
+                    return Err(ApiError::ssh(format!("{e}")));
                 }
             };
             if self.ssh_shutdown_generation.load(Ordering::SeqCst) == shutdown_generation {
@@ -4052,7 +4052,7 @@ impl DataApi for LocalDataApi {
             } else {
                 tracing::debug!(target: "cdt_ssh::lifecycle", phase = "shutdown_in_progress_aborting", context_id = %context_id);
                 let _ = self.ssh_mgr.disconnect(&context_id).await;
-                return Err(ApiError::internal("SSH shutdown in progress"));
+                return Err(ApiError::ssh("SSH shutdown in progress"));
             }
         };
         tracing::debug!(target: "cdt_ssh::lifecycle", phase = "ssh_connect_end", context_id = %context_id);
@@ -4100,7 +4100,7 @@ impl DataApi for LocalDataApi {
             .ssh_mgr
             .test_connection(request.clone().into())
             .await
-            .map_err(|e| ApiError::internal(format!("{e}")))?;
+            .map_err(|e| ApiError::ssh(format!("{e}")))?;
         let result = super::types::SshConnectionResult {
             context_id: request
                 .context_id

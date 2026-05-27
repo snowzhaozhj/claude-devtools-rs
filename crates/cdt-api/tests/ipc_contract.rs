@@ -217,6 +217,20 @@ fn ssh_auth_and_error_payloads_match_ipc_contract() {
 }
 
 #[test]
+fn ssh_failure_paths_return_ssh_error_code_not_internal() {
+    use cdt_api::ipc::ApiError;
+
+    let err = ApiError::ssh("connection refused");
+    let json = serde_json::to_value(&err).unwrap();
+    assert_eq!(json["code"], json!("ssh_error"));
+    assert_eq!(json["message"], json!("connection refused"));
+
+    let err2 = ApiError::ssh("SSH shutdown in progress");
+    let json2 = serde_json::to_value(&err2).unwrap();
+    assert_eq!(json2["code"], json!("ssh_error"));
+}
+
+#[test]
 fn project_info_serializes_camelcase() {
     let p = ProjectInfo {
         id: "test".into(),
