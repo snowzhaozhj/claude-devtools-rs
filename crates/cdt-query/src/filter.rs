@@ -10,18 +10,13 @@ pub struct QueryFilter {
     pub until: Option<i64>,
 
     /// Only sessions whose title matches this substring (case-insensitive).
+    /// Empty string is treated as no-op.
     pub grep: Option<String>,
-
-    /// Only sessions that contain errors.
-    pub errors_only: bool,
-
-    /// Only sessions that contain tool calls.
-    pub tools_only: bool,
 
     /// Only sessions with at least this many messages.
     pub min_messages: Option<usize>,
 
-    /// Maximum results to return.
+    /// Maximum results to return (applied last, after all other filters).
     pub limit: Option<usize>,
 }
 
@@ -38,12 +33,14 @@ impl QueryFilter {
         }
 
         if let Some(ref pattern) = self.grep {
-            let lower = pattern.to_lowercase();
-            result.retain(|s| {
-                s.title
-                    .as_deref()
-                    .is_some_and(|t| t.to_lowercase().contains(&lower))
-            });
+            if !pattern.is_empty() {
+                let lower = pattern.to_lowercase();
+                result.retain(|s| {
+                    s.title
+                        .as_deref()
+                        .is_some_and(|t| t.to_lowercase().contains(&lower))
+                });
+            }
         }
 
         if let Some(min) = self.min_messages {

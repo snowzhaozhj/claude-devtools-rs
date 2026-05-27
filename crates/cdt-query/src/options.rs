@@ -15,9 +15,6 @@ pub struct SessionQueryOptions {
 
     /// Only return chunks containing errors.
     pub errors_only: bool,
-
-    /// Truncate total response to `max_bytes` (approximate).
-    pub max_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

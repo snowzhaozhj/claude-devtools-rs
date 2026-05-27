@@ -106,14 +106,6 @@ enum SessionsAction {
         #[arg(long)]
         grep: Option<String>,
 
-        /// 仅显示含错误的会话
-        #[arg(long)]
-        errors_only: bool,
-
-        /// 仅显示含工具调用的会话
-        #[arg(long)]
-        tools_only: bool,
-
         /// 仅显示消息数 >= N 的会话
         #[arg(long)]
         min_messages: Option<usize>,
@@ -336,15 +328,12 @@ async fn cmd_projects_list(format: &OutputFormat) -> Result<()> {
 // sessions list
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
 async fn cmd_sessions_list(
     format: &OutputFormat,
     project_filter: Option<&str>,
     limit: usize,
     since: Option<&str>,
     grep: Option<&str>,
-    errors_only: bool,
-    tools_only: bool,
     min_messages: Option<usize>,
 ) -> Result<()> {
     let api = build_local_data_api().await?;
@@ -366,8 +355,6 @@ async fn cmd_sessions_list(
     let filter = QueryFilter {
         since: since_ms,
         grep: grep.map(ToOwned::to_owned),
-        errors_only,
-        tools_only,
         min_messages,
         limit: Some(limit),
         ..Default::default()
@@ -380,7 +367,8 @@ async fn cmd_sessions_list(
 
     if items.is_empty() {
         match format {
-            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
+            OutputFormat::Json => println!("[]"),
+            OutputFormat::Jsonl => {}
             OutputFormat::Table => eprintln!("No sessions found."),
         }
         std::process::exit(2);
@@ -440,9 +428,12 @@ async fn cmd_sessions_show(format: &OutputFormat, session_id: &str) -> Result<()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     match format {
-        OutputFormat::Json | OutputFormat::Jsonl => {
+        OutputFormat::Json => {
             let json = serde_json::to_string_pretty(&detail)?;
             println!("{json}");
+        }
+        OutputFormat::Jsonl => {
+            println!("{}", serde_json::to_string(&detail)?);
         }
         OutputFormat::Table => {
             println!("Session:   {}", detail.session_id);
@@ -501,7 +492,6 @@ async fn cmd_sessions_detail(
             }),
             kind_filter,
             errors_only: false,
-            max_bytes: None,
         }
     };
 
@@ -555,7 +545,8 @@ async fn cmd_sessions_errors(format: &OutputFormat, session_id: &str) -> Result<
 
     if errors.is_empty() {
         match format {
-            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
+            OutputFormat::Json => println!("[]"),
+            OutputFormat::Jsonl => {}
             OutputFormat::Table => eprintln!("No errors found."),
         }
         std::process::exit(2);
@@ -613,19 +604,14 @@ async fn cmd_search(
     };
 
     let result = engine
-        .search(query, project_id.as_deref(), Some(limit))
+        .search(query, project_id.as_deref(), offset, limit)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let results: Vec<_> = if offset > 0 {
-        result.results.into_iter().skip(offset).collect()
-    } else {
-        result.results
-    };
-
-    if results.is_empty() {
+    if result.results.is_empty() {
         match format {
-            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
+            OutputFormat::Json => println!("[]"),
+            OutputFormat::Jsonl => {}
             OutputFormat::Table => eprintln!("No results found."),
         }
         std::process::exit(2);
@@ -633,11 +619,11 @@ async fn cmd_search(
 
     match format {
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&results)?;
+            let json = serde_json::to_string_pretty(&result.results)?;
             println!("{json}");
         }
         OutputFormat::Jsonl => {
-            for r in &results {
+            for r in &result.results {
                 println!("{}", serde_json::to_string(r)?);
             }
         }
@@ -647,7 +633,7 @@ async fn cmd_search(
                 "SESSION", "TITLE", "MATCHES", "PREVIEW"
             );
             println!("{}", "-".repeat(92));
-            for r in &results {
+            for r in &result.results {
                 let short_id: String = r.session_id.chars().take(10).collect();
                 let preview = r.hits.first().map_or("", |h| h.preview.as_str());
                 println!(
@@ -842,8 +828,6 @@ async fn main() -> Result<()> {
                 limit,
                 since,
                 grep,
-                errors_only,
-                tools_only,
                 min_messages,
             } => {
                 cmd_sessions_list(
@@ -852,8 +836,6 @@ async fn main() -> Result<()> {
                     limit,
                     since.as_deref(),
                     grep.as_deref(),
-                    errors_only,
-                    tools_only,
                     min_messages,
                 )
                 .await

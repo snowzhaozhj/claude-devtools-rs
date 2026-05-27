@@ -179,7 +179,6 @@ fn sessions_list_with_filter_flags_accepted() {
             "list",
             "--grep",
             "test",
-            "--errors-only",
             "--min-messages",
             "5",
             "--since",
