@@ -54,7 +54,7 @@
         {viewMode === "preview" ? "源码" : "预览"}
       </button>
     {/if}
-    <CopyButton text={content} mode="inline" />
+    <CopyButton text={content} />
   </div>
 
   {#if content}

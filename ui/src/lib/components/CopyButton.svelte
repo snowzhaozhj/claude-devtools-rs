@@ -4,10 +4,9 @@
 
   interface Props {
     text: string;
-    mode?: "inline" | "overlay";
   }
 
-  let { text, mode = "inline" }: Props = $props();
+  let { text }: Props = $props();
   let copied = $state(false);
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -31,8 +30,6 @@
 
 <button
   class="copy-btn"
-  class:copy-btn-overlay={mode === "overlay"}
-  class:copy-btn-inline={mode === "inline"}
   class:copied
   onclick={copy}
   aria-label={copied ? "已复制" : "复制"}
@@ -66,9 +63,9 @@
     padding: 4px;
     color: var(--color-text-muted);
     background: transparent;
+    flex-shrink: 0;
     transition:
       color 0.15s,
-      opacity 0.15s,
       background 0.15s;
   }
 
@@ -79,23 +76,5 @@
 
   .copy-btn.copied {
     color: var(--color-success, #22c55e);
-  }
-
-  .copy-btn-overlay {
-    position: absolute;
-    top: 6px;
-    right: 6px;
-    opacity: 0;
-    pointer-events: none;
-    background: var(--code-bg, #1e1e1e);
-    border: 1px solid var(--code-border, rgba(127, 127, 127, 0.2));
-    z-index: 1;
-    transition: opacity 0.15s ease-out;
-  }
-
-  :global(.copy-host:hover) .copy-btn-overlay,
-  .copy-btn-overlay:focus-visible {
-    opacity: 1;
-    pointer-events: auto;
   }
 </style>
