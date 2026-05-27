@@ -59,8 +59,16 @@ enum Command {
     Stats,
     /// 启动 HTTP API server
     Serve,
-    /// MCP server 模式（未实现）
-    Mcp,
+    /// MCP server 模式
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+    /// 配置激活（MCP 注册、Skills 安装等）
+    Setup {
+        #[command(subcommand)]
+        action: SetupAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -72,7 +80,37 @@ enum ProjectsAction {
 #[derive(Subcommand)]
 enum SessionsAction {
     /// 列出会话
-    List,
+    List {
+        /// 最多返回 N 条
+        #[arg(long, default_value = "100")]
+        limit: usize,
+
+        /// 仅显示指定时间范围内的会话（如 7d、24h、30m）
+        #[arg(long)]
+        since: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// 启动 MCP stdio server（未实现）
+    Serve,
+}
+
+#[derive(Subcommand)]
+enum SetupAction {
+    /// 注册 MCP server 到 Claude Code
+    Mcp {
+        /// 自动执行注册（否则仅打印命令）
+        #[arg(long)]
+        apply: bool,
+    },
+    /// 安装示例 Skills
+    Skills {
+        /// 强制覆盖已修改的文件
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -233,7 +271,12 @@ async fn cmd_projects_list(format: &OutputFormat) -> Result<()> {
 // sessions list
 // ─────────────────────────────────────────────────────────────────────────────
 
-async fn cmd_sessions_list(format: &OutputFormat, project_filter: Option<&str>) -> Result<()> {
+async fn cmd_sessions_list(
+    format: &OutputFormat,
+    project_filter: Option<&str>,
+    limit: usize,
+    since: Option<&str>,
+) -> Result<()> {
     let api = build_local_data_api().await?;
 
     let project_id = match project_filter {
@@ -246,7 +289,7 @@ async fn cmd_sessions_list(format: &OutputFormat, project_filter: Option<&str>) 
     };
 
     let pagination = PaginatedRequest {
-        page_size: 100,
+        page_size: limit,
         cursor: None,
     };
     let resp = api
@@ -254,9 +297,27 @@ async fn cmd_sessions_list(format: &OutputFormat, project_filter: Option<&str>) 
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    let since_ms = since.map(parse_duration_to_ms).transpose()?;
+    let items: Vec<_> = if let Some(cutoff) = since_ms {
+        resp.items
+            .into_iter()
+            .filter(|s| s.timestamp >= cutoff)
+            .collect()
+    } else {
+        resp.items
+    };
+
+    if items.is_empty() {
+        match format {
+            OutputFormat::Json => println!("[]"),
+            OutputFormat::Table => eprintln!("No sessions found."),
+        }
+        std::process::exit(2);
+    }
+
     match format {
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&resp.items)?;
+            let json = serde_json::to_string_pretty(&items)?;
             println!("{json}");
         }
         OutputFormat::Table => {
@@ -265,7 +326,7 @@ async fn cmd_sessions_list(format: &OutputFormat, project_filter: Option<&str>) 
                 "ID", "TITLE", "DURATION", "STATUS", "MESSAGES"
             );
             println!("{}", "-".repeat(80));
-            for s in &resp.items {
+            for s in &items {
                 let short_id: String = s.session_id.chars().take(10).collect();
                 let title = s.title.as_deref().unwrap_or("(untitled)");
                 let status = if s.is_ongoing { "active" } else { "done" };
@@ -347,6 +408,57 @@ fn format_duration(session_ts: i64) -> String {
     }
 }
 
+/// 解析 `7d` / `24h` / `30m` 格式的 duration 为截止时间戳（毫秒）。
+fn parse_duration_to_ms(s: &str) -> Result<i64> {
+    let s = s.trim();
+    let (num_str, unit) = s.split_at(s.len().saturating_sub(1));
+    let num: i64 = num_str
+        .parse()
+        .with_context(|| format!("invalid duration: {s}"))?;
+    let seconds = match unit {
+        "m" => num * 60,
+        "h" => num * 3600,
+        "d" => num * 86400,
+        "w" => num * 604_800,
+        _ => anyhow::bail!("unsupported duration unit: {s} (use m/h/d/w)"),
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    Ok(now_ms - seconds * 1000)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// setup
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn cmd_setup_mcp(apply: bool) {
+    let cmd = "claude mcp add cdt-devtools -- cdt mcp serve";
+    if apply {
+        eprintln!("Running: {cmd}");
+        let status = std::process::Command::new("claude")
+            .args(["mcp", "add", "cdt-devtools", "--", "cdt", "mcp", "serve"])
+            .status();
+        match status {
+            Ok(s) if s.success() => {
+                eprintln!("Registered MCP server \"cdt-devtools\" via `claude mcp add`");
+            }
+            Ok(s) => {
+                eprintln!("claude mcp add exited with {s}");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Failed to run `claude`: {e}");
+                eprintln!("Make sure Claude Code CLI is installed and in PATH.");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        println!("To register the MCP server, run:\n");
+        println!("  {cmd}\n");
+        println!("Or use --apply to do it automatically:\n");
+        println!("  cdt setup mcp --apply");
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // main
 // ─────────────────────────────────────────────────────────────────────────────
@@ -368,7 +480,10 @@ async fn main() -> Result<()> {
             ProjectsAction::List => cmd_projects_list(&cli.format).await,
         },
         Command::Sessions { action } => match action {
-            SessionsAction::List => cmd_sessions_list(&cli.format, cli.project.as_deref()).await,
+            SessionsAction::List { limit, since } => {
+                cmd_sessions_list(&cli.format, cli.project.as_deref(), limit, since.as_deref())
+                    .await
+            }
         },
         Command::Search => {
             anyhow::bail!("search: not yet implemented");
@@ -376,8 +491,19 @@ async fn main() -> Result<()> {
         Command::Stats => {
             anyhow::bail!("stats: not yet implemented");
         }
-        Command::Mcp => {
-            anyhow::bail!("mcp: not yet implemented");
-        }
+        Command::Mcp { action } => match action {
+            McpAction::Serve => {
+                anyhow::bail!("mcp serve: not yet implemented (see #366)");
+            }
+        },
+        Command::Setup { action } => match action {
+            SetupAction::Mcp { apply } => {
+                cmd_setup_mcp(apply);
+                Ok(())
+            }
+            SetupAction::Skills { .. } => {
+                anyhow::bail!("setup skills: not yet implemented (see #367)");
+            }
+        },
     }
 }
