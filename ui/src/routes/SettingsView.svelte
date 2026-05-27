@@ -253,7 +253,15 @@
       syncVersion(config);
       fontSansInput = config.display?.fontSans ?? "";
       fontMonoInput = config.display?.fontMono ?? "";
+      claudeRootInput = config.general.claudeRootPath ?? "";
+      portInput = String(config.httpServer?.port ?? 3456);
       applyFonts(config);
+      applyTheme(config.general.theme);
+      setTimeFormat(config.display?.timeFormat ?? "24h");
+      if (config.general.sessionClickBehavior === "replace" || config.general.sessionClickBehavior === "new-tab") {
+        setSessionClickBehavior(config.general.sessionClickBehavior);
+      }
+      setMenuSettings(config.general);
     } catch { /* ignore */ }
   }
 

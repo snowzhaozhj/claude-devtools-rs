@@ -207,6 +207,13 @@ pub trait DataApi: Send + Sync {
         Ok(0)
     }
 
+    /// 原子读取 config + version（单次 lock）。
+    async fn get_config_versioned(&self) -> Result<(cdt_config::AppConfig, u64), ApiError> {
+        let config = self.get_config().await?;
+        let version = self.config_version().await?;
+        Ok((config, version))
+    }
+
     /// 更新配置。
     ///
     /// change `typed-ipc-payload`：返回类型从 `serde_json::Value` typed 化为
@@ -215,6 +222,16 @@ pub trait DataApi: Send + Sync {
         &self,
         request: &ConfigUpdateRequest,
     ) -> Result<cdt_config::AppConfig, ApiError>;
+
+    /// 原子更新 config 并返回 `(config, version)` 元组（单次 lock）。
+    async fn update_config_versioned(
+        &self,
+        request: &ConfigUpdateRequest,
+    ) -> Result<(cdt_config::AppConfig, u64), ApiError> {
+        let config = self.update_config(request).await?;
+        let version = self.config_version().await?;
+        Ok((config, version))
+    }
 
     /// 获取通知列表（分页）。
     ///

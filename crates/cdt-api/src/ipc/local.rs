@@ -3886,6 +3886,11 @@ impl DataApi for LocalDataApi {
         Ok(mgr.version())
     }
 
+    async fn get_config_versioned(&self) -> Result<(cdt_config::AppConfig, u64), ApiError> {
+        let mgr = self.config_mgr.lock().await;
+        Ok((mgr.get_config(), mgr.version()))
+    }
+
     async fn update_config(
         &self,
         request: &ConfigUpdateRequest,
@@ -3912,6 +3917,37 @@ impl DataApi for LocalDataApi {
                 .await;
         }
         Ok(config)
+    }
+
+    async fn update_config_versioned(
+        &self,
+        request: &ConfigUpdateRequest,
+    ) -> Result<(cdt_config::AppConfig, u64), ApiError> {
+        let mut mgr = self.config_mgr.lock().await;
+        let result = match request.section.as_str() {
+            "general" => mgr.update_general(request.data.clone()).await,
+            "display" => mgr.update_display(request.data.clone()).await,
+            "notifications" => mgr.update_notifications(request.data.clone()).await,
+            "ssh" => mgr.update_ssh(request.data.clone()).await,
+            "httpServer" => mgr.update_http_server(request.data.clone()).await,
+            "updater" => mgr.update_updater(request.data.clone()).await,
+            "keyboardShortcuts" => mgr.update_keyboard_shortcuts(request.data.clone()).await,
+            _ => {
+                return Err(ApiError::validation(format!(
+                    "unknown section: {}",
+                    request.section
+                )));
+            }
+        };
+        let config = result.map_err(|e| ApiError::internal(format!("{e}")))?;
+        let version = mgr.version();
+        // Drop lock before async reconfigure
+        drop(mgr);
+        if request.section == "general" && request.data.get("claudeRootPath").is_some() {
+            self.reconfigure_claude_root(config.general.claude_root_path.as_deref())
+                .await;
+        }
+        Ok((config, version))
     }
 
     async fn get_notifications(

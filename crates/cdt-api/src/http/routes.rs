@@ -492,8 +492,7 @@ async fn search(
 }
 
 async fn get_config(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
-    let config = s.api.get_config().await?;
-    let version = s.api.config_version().await?;
+    let (config, version) = s.api.get_config_versioned().await?;
     let mut value = serde_json::to_value(&config)
         .map_err(|e| ApiError::internal(format!("serialize config: {e}")))?;
     if let Some(obj) = value.as_object_mut() {
@@ -506,8 +505,7 @@ async fn update_config(
     State(s): State<AppState>,
     Json(request): Json<ConfigUpdateRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let config = s.api.update_config(&request).await?;
-    let version = s.api.config_version().await?;
+    let (config, version) = s.api.update_config_versioned(&request).await?;
     let mut value = serde_json::to_value(&config)
         .map_err(|e| ApiError::internal(format!("serialize config: {e}")))?;
     if let Some(obj) = value.as_object_mut() {
