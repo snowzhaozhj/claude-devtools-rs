@@ -10,6 +10,9 @@ description = "Debounced file system watching for Claude Code session files (own
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [features]
 # 仅供集成测试启用的 helpers（如 `file_tx_for_test` 让外部 crate test
 # 直接 inject raw `FileChangeEvent` 不走 inotify / SSH polling 真路径）。

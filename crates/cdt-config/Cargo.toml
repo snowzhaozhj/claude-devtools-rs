@@ -10,6 +10,9 @@ description = "Configuration, CLAUDE.md, triggers, error detection (owns configu
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 cdt-core = { workspace = true }
 cdt-fs = { workspace = true }

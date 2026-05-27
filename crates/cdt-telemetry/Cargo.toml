@@ -10,6 +10,9 @@ description = "Application health Signal Bus: Counter / Histogram / Event regist
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 crossbeam-queue = { workspace = true }
 parking_lot = { workspace = true }

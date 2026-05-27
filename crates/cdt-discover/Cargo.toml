@@ -10,6 +10,9 @@ description = "Project and session discovery, search (owns project-discovery and
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [features]
 default = []
 # 本地真跑 `git init` / `git worktree add` 的端到端测试；CI 默认 off。
