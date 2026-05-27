@@ -107,7 +107,10 @@ async fn scan_dir(dir: &Path, scope: &AgentConfigScope) -> Vec<AgentConfig> {
             }
         };
         let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "md") {
+        if path
+            .extension()
+            .is_none_or(|ext| !ext.eq_ignore_ascii_case("md"))
+        {
             continue;
         }
         let Ok(content) = tokio::fs::read_to_string(&path).await else {
@@ -275,6 +278,16 @@ mod tests {
         assert_eq!(out[0].color.as_deref(), Some("purple"));
         assert_eq!(out[1].name, "no-frontmatter");
         assert!(out[1].color.is_none());
+    }
+
+    #[tokio::test]
+    async fn uppercase_md_extension_is_accepted() {
+        let tmp = TempDir::new().unwrap();
+        let agents_dir = tmp.path().join(".claude").join("agents");
+        write_md(&agents_dir, "UPPER.MD", "---\nname: upper\n---\n");
+        let out = scan_project("proj-upper", tmp.path()).await;
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "upper");
     }
 
     #[tokio::test]
