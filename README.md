@@ -158,7 +158,7 @@ claude mcp add cdt-devtools -- cdt mcp serve
 
 ### Skills（推荐）
 
-安装预置的 session 分析 skills 到当前项目：
+安装预置的 session 分析 skill 到当前项目：
 
 ```bash
 # 安装到 .claude/skills/（已存在则跳过）
@@ -168,16 +168,7 @@ cdt setup skills
 cdt setup skills --force
 ```
 
-包含的 skills：
-
-| Skill | 用途 |
-|---|---|
-| `analyze-failures` | 分析近期失败/报错的 session，识别模式 |
-| `token-usage` | 统计 token 消耗和预估费用 |
-| `search-errors` | 全文搜索 session 中的错误和关键词 |
-| `session-diagnosis` | 生成单个 session 的诊断报告 |
-
-安装后在 Claude Code 中用 `/analyze-failures`、`/token-usage` 等触发。Skills 直接调用 `cdt` CLI 命令，无需 MCP 配置。
+安装 `session-insights` skill，涵盖：错误分析、token 消耗统计、全文搜索、单 session 诊断。在 Claude Code 中用 `/session-insights` 触发，或直接描述需求（如"看看最近 session 有什么错误"）自动匹配。Skill 直接调用 `cdt` CLI 命令，无需 MCP 配置。
 
 ## 开发者文档
 

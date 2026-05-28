@@ -837,31 +837,18 @@ struct SkillTemplate {
     content: &'static str,
 }
 
-const SKILL_TEMPLATES: &[SkillTemplate] = &[
-    SkillTemplate {
-        name: "analyze-failures",
-        content: include_str!("../assets/skills/analyze-failures/SKILL.md"),
-    },
-    SkillTemplate {
-        name: "token-usage",
-        content: include_str!("../assets/skills/token-usage/SKILL.md"),
-    },
-    SkillTemplate {
-        name: "search-errors",
-        content: include_str!("../assets/skills/search-errors/SKILL.md"),
-    },
-    SkillTemplate {
-        name: "session-diagnosis",
-        content: include_str!("../assets/skills/session-diagnosis/SKILL.md"),
-    },
-];
+const SKILL_TEMPLATES: &[SkillTemplate] = &[SkillTemplate {
+    name: "session-insights",
+    content: include_str!("../assets/skills/session-insights/SKILL.md"),
+}];
 
 fn cmd_setup_skills(force: bool) -> Result<()> {
     let target_dir = std::path::PathBuf::from(".claude/skills");
+    let count = SKILL_TEMPLATES.len();
+    let noun = if count == 1 { "skill" } else { "skills" };
 
     println!(
-        "Installing {} session-aware skills to {}/\n",
-        SKILL_TEMPLATES.len(),
+        "Installing {count} session-aware {noun} to {}/\n",
         target_dir.display()
     );
 
