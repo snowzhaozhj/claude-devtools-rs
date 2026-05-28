@@ -121,14 +121,14 @@
       });
     };
 
-    const ro = new ResizeObserver(scheduleUpdate);
-    ro.observe(el);
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(scheduleUpdate) : null;
+    ro?.observe(el);
     el.addEventListener("scroll", scheduleUpdate, { passive: true });
 
     scheduleUpdate();
 
     return () => {
-      ro.disconnect();
+      ro?.disconnect();
       el.removeEventListener("scroll", scheduleUpdate);
       if (rafId != null) cancelAnimationFrame(rafId);
     };
