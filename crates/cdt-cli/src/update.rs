@@ -253,13 +253,15 @@ fn extract_zip(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn resolve_install_path() -> Result<PathBuf> {
-    env::current_exe().context(
+    let exe = env::current_exe().context(
         "cannot determine current executable path. Use --install-path to specify explicitly.",
-    )
+    )?;
+    exe.canonicalize().or_else(|_| Ok(exe))
 }
 
 fn check_install_path(path: &Path) -> Result<()> {
-    let path_str = path.to_string_lossy();
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let path_str = canonical.to_string_lossy();
 
     let managed_indicators = [
         "/Cellar/",
@@ -301,17 +303,48 @@ fn check_install_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn replace_binary(target: &Path, new_bytes: &[u8]) -> Result<()> {
-    let parent = target.parent().context("no parent directory")?;
-    let backup = parent.join(format!(
-        "{}.old",
-        target.file_name().unwrap_or_default().to_string_lossy()
-    ));
+fn validate_binary_magic(data: &[u8]) -> Result<()> {
+    if data.len() < 4 {
+        bail!("binary too small to validate");
+    }
 
-    let temp_path = parent.join(format!(
-        ".{}.tmp",
-        target.file_name().unwrap_or_default().to_string_lossy()
-    ));
+    let valid = match &data[..4] {
+        // ELF
+        [0x7f, b'E', b'L', b'F']
+        // Mach-O (32/64, big/little endian)
+        | [0xfe, 0xed, 0xfa, 0xce | 0xcf]
+        | [0xce | 0xcf, 0xfa, 0xed, 0xfe]
+        // Mach-O fat binary
+        | [0xca, 0xfe, 0xba, 0xbe]
+        // PE (Windows)
+        | [b'M', b'Z', ..] => true,
+        _ => false,
+    };
+
+    if !valid {
+        bail!(
+            "downloaded file does not appear to be a valid executable (unexpected magic bytes: {:02x} {:02x} {:02x} {:02x})",
+            data[0],
+            data[1],
+            data[2],
+            data[3]
+        );
+    }
+    Ok(())
+}
+
+fn replace_binary(target: &Path, new_bytes: &[u8]) -> Result<()> {
+    validate_binary_magic(new_bytes)?;
+
+    let parent = target.parent().context("no parent directory")?;
+    let stem = target.file_name().unwrap_or_default().to_string_lossy();
+    let pid = std::process::id();
+    let backup = parent.join(format!("{stem}.old"));
+    let temp_path = parent.join(format!(".{stem}.{pid}.tmp"));
+
+    if temp_path.exists() {
+        fs::remove_file(&temp_path).ok();
+    }
 
     fs::write(&temp_path, new_bytes)
         .with_context(|| format!("failed to write temp file: {}", temp_path.display()))?;
@@ -333,9 +366,19 @@ fn replace_binary(target: &Path, new_bytes: &[u8]) -> Result<()> {
     }
 
     if let Err(e) = fs::rename(&temp_path, target) {
-        let _ = fs::rename(&backup, target);
+        if let Err(rb_err) = fs::rename(&backup, target) {
+            let _ = fs::remove_file(&temp_path);
+            bail!(
+                "CRITICAL: failed to install new binary ({e}) AND failed to restore backup ({rb_err}).\n\
+                 Your original binary is at: {}\n\
+                 Manually restore it with: mv {} {}",
+                backup.display(),
+                backup.display(),
+                target.display(),
+            );
+        }
         let _ = fs::remove_file(&temp_path);
-        return Err(e).context("failed to install new binary");
+        return Err(e).context("failed to install new binary (rolled back successfully)");
     }
 
     let _ = fs::remove_file(&backup);
