@@ -87,8 +87,7 @@
 
   // Ranked 视图
   const ranked = $derived([...injections].sort((a, b) => b.estimatedTokens - a.estimatedTokens));
-  const rankedGrouped = $derived(() => {
-    // 按 category 分块，块内按 token 降序
+  const rankedGrouped = $derived.by(() => {
     const buckets = new Map<ContextInjection["category"], ContextInjection[]>();
     for (const inj of ranked) {
       const list = buckets.get(inj.category) ?? [];
@@ -266,7 +265,7 @@
         </div>
       {:else}
         <!-- Grouped：按 category 分块，块内按 token 降序 -->
-        {#each rankedGrouped() as [cat, items] (cat)}
+        {#each rankedGrouped as [cat, items] (cat)}
           {@const color = CATEGORY_COLORS[cat]}
           <div class="cp-ranked-bucket">
             <div class="cp-ranked-bucket-header" style:color={color.text}>
