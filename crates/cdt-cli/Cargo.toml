@@ -11,6 +11,10 @@ description = "claude-devtools-rs CLI entrypoint. Wires services and runs the AP
 name = "cdt"
 path = "src/main.rs"
 
+[lib]
+name = "cdt_cli"
+path = "src/lib.rs"
+
 [lints]
 workspace = true
 
@@ -31,6 +35,11 @@ chrono = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+rmcp = { workspace = true }
+schemars = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+rmcp = { workspace = true, features = ["client"] }
+tokio = { workspace = true, features = ["test-util"] }
