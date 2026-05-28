@@ -1,0 +1,111 @@
+name: bench-trend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: bench-trend-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  deployments: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CDT_PERF_USE_FIXTURE: "1"
+
+jobs:
+  bench-trend:
+    name: divan bench trend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev jq
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          cache-bin: "false"
+          prefix-key: v3-rust
+          shared-key: bench-trend-${{ runner.os }}
+
+      - name: Run divan benchmarks
+        run: |
+          mkdir -p target
+          scripts/run-divan-bench.sh > target/divan-results.json
+          echo "::group::Benchmark results"
+          jq . target/divan-results.json
+          echo "::endgroup::"
+          echo "bench_count=$(jq length target/divan-results.json)" >> "$GITHUB_OUTPUT"
+        id: bench
+
+      - name: Upload benchmark results artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: divan-bench-${{ github.run_id }}
+          path: target/divan-results.json
+          retention-days: 90
+
+      - name: Store benchmark result (push to main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1
+        with:
+          name: "Divan Benchmarks"
+          tool: "customSmallerIsBetter"
+          output-file-path: target/divan-results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          alert-threshold: "130%"
+          comment-on-alert: true
+          fail-on-alert: false
+          alert-comment-cc-users: "@snowzhaozhj"
+
+      - name: Check if gh-pages exists
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        id: gh_pages_check
+        run: |
+          if git ls-remote --exit-code origin gh-pages >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::gh-pages branch does not exist yet. Skipping comparison. It will be created on first push to main."
+          fi
+
+      - name: Compare benchmark result (PR)
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          steps.gh_pages_check.outputs.exists == 'true'
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1
+        with:
+          name: "Divan Benchmarks"
+          tool: "customSmallerIsBetter"
+          output-file-path: target/divan-results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          alert-threshold: "130%"
+          comment-on-alert: true
+          fail-on-alert: false
+          save-data-file: false
+          comment-always: true
