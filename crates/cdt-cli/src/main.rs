@@ -17,6 +17,10 @@ use cdt_discover::{ProjectScanner, local_handle, path_decoder};
 use cdt_query::{ChunkKindFilter, QueryEngine, QueryFilter, SessionQueryOptions};
 use cdt_ssh::SshConnectionManager;
 
+mod cost;
+mod stats;
+mod summary;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI 定义
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,8 +72,16 @@ enum Command {
         #[arg(long, default_value = "0")]
         offset: usize,
     },
-    /// 统计信息（未实现）
-    Stats,
+    /// 聚合统计
+    Stats {
+        /// 时间范围（today / week / 7d / 24h / 30d）
+        #[arg(default_value = "7d")]
+        period: String,
+
+        /// 限定项目
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// 启动 HTTP API server
     Serve,
     /// MCP server 模式
@@ -138,6 +150,16 @@ enum SessionsAction {
     },
     /// 聚合会话中的所有错误
     Errors {
+        /// 会话 ID
+        id: String,
+    },
+    /// 会话结构化诊断摘要
+    Summary {
+        /// 会话 ID
+        id: String,
+    },
+    /// 会话 token 费用估算
+    Cost {
         /// 会话 ID
         id: String,
     },
@@ -804,6 +826,340 @@ fn cmd_setup_mcp(apply: bool) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// sessions summary
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn cmd_sessions_summary(format: &OutputFormat, session_id: &str) -> Result<()> {
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(api);
+
+    let project_id = engine
+        .find_session_project(session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let detail = engine
+        .api()
+        .get_session_detail(&project_id, session_id, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let detail = match detail {
+        cdt_api::SessionDetailResponse::Full { detail, .. } => *detail,
+        cdt_api::SessionDetailResponse::Unchanged { .. } => {
+            anyhow::bail!("unexpected unchanged response");
+        }
+    };
+
+    let output = summary::build_summary(&detail);
+
+    match format {
+        OutputFormat::Json | OutputFormat::Jsonl => {
+            let json = serde_json::to_string_pretty(&output)?;
+            println!("{json}");
+        }
+        OutputFormat::Table => {
+            print_summary_table(&output);
+        }
+    }
+    Ok(())
+}
+
+fn print_summary_table(s: &summary::SessionSummaryOutput) {
+    println!("Session: {}", s.session_id);
+    println!(
+        "Duration: {}  Messages: {}  Errors: {}  Compactions: {}",
+        format_ms(s.total_duration_ms),
+        s.message_count,
+        s.error_count,
+        s.compaction_count,
+    );
+    println!(
+        "Cost: ${:.4} ({} tokens)",
+        s.cost.total_cost, s.cost.total_tokens
+    );
+    println!();
+
+    if !s.phases.is_empty() {
+        println!("Phases ({}):", s.phases.len());
+        for p in &s.phases {
+            println!(
+                "  #{}: {} | {} chunks, {} tools, {} errors | {}",
+                p.index,
+                format_ms(p.duration_ms),
+                p.chunk_count,
+                p.tool_count,
+                p.error_count,
+                p.top_tools.join(", "),
+            );
+        }
+        println!();
+    }
+
+    if !s.tool_usage.is_empty() {
+        println!("Tool Usage:");
+        for t in s.tool_usage.iter().take(10) {
+            println!(
+                "  {:<20} {:>5}x  ({:.0}% success)",
+                t.name,
+                t.count,
+                t.success_rate * 100.0,
+            );
+        }
+        println!();
+    }
+
+    if !s.top_files.is_empty() {
+        println!("Top Files:");
+        for f in s.top_files.iter().take(5) {
+            println!("  {:<60} {:>3}x", truncate(&f.path, 59), f.count);
+        }
+        println!();
+    }
+
+    if !s.idle_gaps.is_empty() {
+        println!("Idle Gaps (>2min):");
+        for g in s.idle_gaps.iter().take(5) {
+            println!(
+                "  {} idle at {}",
+                format_ms(g.gap_ms),
+                g.after_ts.format("%H:%M")
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sessions cost
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn cmd_sessions_cost(format: &OutputFormat, session_id: &str) -> Result<()> {
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(api);
+
+    let project_id = engine
+        .find_session_project(session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let detail = engine
+        .api()
+        .get_session_detail(&project_id, session_id, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let detail = match detail {
+        cdt_api::SessionDetailResponse::Full { detail, .. } => *detail,
+        cdt_api::SessionDetailResponse::Unchanged { .. } => {
+            anyhow::bail!("unexpected unchanged response");
+        }
+    };
+
+    let output = cost::compute_session_cost(&detail);
+
+    match format {
+        OutputFormat::Json | OutputFormat::Jsonl => {
+            let json = serde_json::to_string_pretty(&output)?;
+            println!("{json}");
+        }
+        OutputFormat::Table => {
+            println!(
+                "Model: {} (pricing: {})",
+                output.model, output.model_pricing_used
+            );
+            println!();
+            println!("{:<22} {:>12} {:>12}", "CATEGORY", "TOKENS", "COST");
+            println!("{}", "-".repeat(48));
+            println!(
+                "{:<22} {:>12} {:>12}",
+                "Input",
+                output.input_tokens,
+                format!("${:.4}", output.input_cost)
+            );
+            println!(
+                "{:<22} {:>12} {:>12}",
+                "Output",
+                output.output_tokens,
+                format!("${:.4}", output.output_cost)
+            );
+            println!(
+                "{:<22} {:>12} {:>12}",
+                "Cache Read",
+                output.cache_read_tokens,
+                format!("${:.4}", output.cache_read_cost)
+            );
+            println!(
+                "{:<22} {:>12} {:>12}",
+                "Cache Creation",
+                output.cache_creation_tokens,
+                format!("${:.4}", output.cache_creation_cost)
+            );
+            println!("{}", "-".repeat(48));
+            println!(
+                "{:<22} {:>12} {:>12}",
+                "TOTAL",
+                output.total_tokens,
+                format!("${:.4}", output.total_cost)
+            );
+        }
+    }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// stats
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn cmd_stats(
+    format: &OutputFormat,
+    period: &str,
+    project_filter: Option<&str>,
+) -> Result<()> {
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(Arc::clone(&api));
+
+    let since_str = match period {
+        "today" => "24h",
+        "week" => "7d",
+        other => other,
+    };
+    let since_ms = parse_duration_to_ms(since_str)?;
+    let since_dt = chrono::DateTime::from_timestamp_millis(since_ms).unwrap_or_default();
+
+    let project_ids = if let Some(name) = project_filter {
+        vec![
+            engine
+                .resolve_project(name)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
+        ]
+    } else {
+        let groups = api
+            .list_repository_groups()
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        groups
+            .iter()
+            .flat_map(|g| g.worktrees.iter().map(|w| w.id.clone()))
+            .collect()
+    };
+
+    let mut session_data_list: Vec<stats::SessionData> = Vec::new();
+    let pagination = cdt_api::PaginatedRequest {
+        page_size: 500,
+        cursor: None,
+    };
+
+    for pid in &project_ids {
+        let resp = api
+            .list_sessions_sync(pid, &pagination)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        for session in &resp.items {
+            if session.timestamp < since_ms {
+                continue;
+            }
+            let detail = api
+                .get_session_detail(pid, &session.session_id, None)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+            if let cdt_api::SessionDetailResponse::Full { detail, .. } = detail {
+                session_data_list.push(stats::build_session_data(&detail));
+            }
+        }
+    }
+
+    if session_data_list.is_empty() {
+        match format {
+            OutputFormat::Json | OutputFormat::Jsonl => {
+                println!("{{\"sessionCount\": 0}}");
+            }
+            OutputFormat::Table => eprintln!("No sessions found in the given period."),
+        }
+        std::process::exit(2);
+    }
+
+    let result = stats::aggregate(&session_data_list, since_dt);
+
+    match format {
+        OutputFormat::Json | OutputFormat::Jsonl => {
+            let json = serde_json::to_string_pretty(&result)?;
+            println!("{json}");
+        }
+        OutputFormat::Table => {
+            print_stats_table(&result);
+        }
+    }
+    Ok(())
+}
+
+fn print_stats_table(s: &stats::AggregatedStats) {
+    println!(
+        "Period: {} to {}",
+        s.period_start.format("%Y-%m-%d %H:%M"),
+        s.period_end.format("%Y-%m-%d %H:%M"),
+    );
+    println!();
+    println!(
+        "Sessions: {}  Messages: {}",
+        s.session_count, s.total_messages
+    );
+    println!(
+        "Tokens: {} (input: {}, output: {}, cache_read: {}, cache_write: {})",
+        s.total_tokens,
+        s.input_tokens,
+        s.output_tokens,
+        s.cache_read_tokens,
+        s.cache_creation_tokens,
+    );
+    println!("Total Cost: ${:.4}", s.total_cost);
+    println!("Error Rate: {:.1}%", s.error_rate * 100.0);
+    println!();
+
+    if !s.model_usage.is_empty() {
+        println!("Model Usage:");
+        for m in &s.model_usage {
+            println!(
+                "  {:<30} {:>3} sessions  ${:.4}",
+                m.model, m.session_count, m.total_cost,
+            );
+        }
+        println!();
+    }
+
+    if !s.tool_frequency.is_empty() {
+        println!("Top Tools:");
+        for t in s.tool_frequency.iter().take(10) {
+            println!("  {:<25} {:>5}x", t.name, t.count);
+        }
+        println!();
+    }
+
+    if !s.active_hours.is_empty() {
+        println!("Active Hours (UTC):");
+        for h in &s.active_hours {
+            println!(
+                "  {:02}:00  {:>3} sessions, {:>5} messages",
+                h.hour, h.session_count, h.message_count,
+            );
+        }
+    }
+}
+
+fn format_ms(ms: i64) -> String {
+    let secs = ms / 1000;
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m{}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // main
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -859,14 +1215,17 @@ async fn main() -> Result<()> {
                 .await
             }
             SessionsAction::Errors { id } => cmd_sessions_errors(&cli.format, &id).await,
+            SessionsAction::Summary { id } => cmd_sessions_summary(&cli.format, &id).await,
+            SessionsAction::Cost { id } => cmd_sessions_cost(&cli.format, &id).await,
         },
         Command::Search {
             query,
             limit,
             offset,
         } => cmd_search(&cli.format, cli.project.as_deref(), &query, limit, offset).await,
-        Command::Stats => {
-            anyhow::bail!("stats: not yet implemented");
+        Command::Stats { period, project } => {
+            let proj = project.as_deref().or(cli.project.as_deref());
+            cmd_stats(&cli.format, &period, proj).await
         }
         Command::Mcp { action } => match action {
             McpAction::Serve => {
