@@ -19,6 +19,7 @@ use cdt_query::{cost, stats, summary};
 use cdt_ssh::SshConnectionManager;
 
 mod mcp;
+mod update;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI 定义
@@ -92,6 +93,21 @@ enum Command {
     Setup {
         #[command(subcommand)]
         action: SetupAction,
+    },
+    /// 自更新到最新版本
+    #[command(name = "self-update")]
+    SelfUpdate {
+        /// 仅检查是否有新版本，不执行更新
+        #[arg(long)]
+        check: bool,
+
+        /// 指定目标版本（如 v0.5.14）
+        #[arg(long)]
+        version: Option<String>,
+
+        /// 指定安装路径（默认替换当前可执行文件）
+        #[arg(long)]
+        install_path: Option<PathBuf>,
     },
 }
 
@@ -1313,5 +1329,17 @@ async fn main() -> Result<()> {
             }
             SetupAction::Skills { force } => cmd_setup_skills(force),
         },
+        Command::SelfUpdate {
+            check,
+            version,
+            install_path,
+        } => {
+            update::run(update::UpdateOptions {
+                check_only: check,
+                target_version: version,
+                install_path,
+            })
+            .await
+        }
     }
 }

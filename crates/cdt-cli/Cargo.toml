@@ -29,8 +29,13 @@ cdt-ssh = { workspace = true }
 cdt-watch = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+flate2 = { workspace = true }
+reqwest = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
