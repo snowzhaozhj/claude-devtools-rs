@@ -7,11 +7,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cost;
 mod engine;
 mod error;
 mod filter;
 mod options;
-pub mod cost;
 pub mod stats;
 pub mod summary;
 pub mod token;

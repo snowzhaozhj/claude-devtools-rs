@@ -7,16 +7,16 @@ use std::sync::Arc;
 
 use rmcp::{
     ErrorData as McpError, ServerHandler,
+    handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router,
-    handler::server::wrapper::Parameters,
 };
 use serde::Serialize;
 
 use cdt_api::DataApi;
 use cdt_query::{
-    CharRatioEstimator, QueryEngine, QueryFilter, SessionQueryOptions, TokenEstimator,
-    ChunkKindFilter,
+    CharRatioEstimator, ChunkKindFilter, QueryEngine, QueryFilter, SessionQueryOptions,
+    TokenEstimator,
 };
 
 use redact::Redactor;
@@ -99,11 +99,16 @@ impl CdtMcpServer {
         }
     }
 
-    async fn resolve_project_id(&self, project: Option<&str>, session: Option<&str>) -> Result<String, McpError> {
+    async fn resolve_project_id(
+        &self,
+        project: Option<&str>,
+        session: Option<&str>,
+    ) -> Result<String, McpError> {
         if let Some(p) = project {
-            self.engine.resolve_project(p).await.map_err(|e| {
-                McpError::invalid_params(e.to_string(), None)
-            })
+            self.engine
+                .resolve_project(p)
+                .await
+                .map_err(|e| McpError::invalid_params(e.to_string(), None))
         } else if let Some(sid) = session {
             self.engine.find_session_project(sid).await.map_err(|e| {
                 McpError::invalid_params(
@@ -148,10 +153,19 @@ impl CdtMcpServer {
     #[tool(
         name = "list_projects",
         description = "List all Claude Code projects (repository groups) with session counts and last active time. Call this first to discover available projects.",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn list_projects(&self) -> Result<CallToolResult, McpError> {
-        let groups = self.engine.api().list_repository_groups().await
+        let groups = self
+            .engine
+            .api()
+            .list_repository_groups()
+            .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         self.redact_json(&groups)
     }
@@ -159,13 +173,20 @@ impl CdtMcpServer {
     #[tool(
         name = "list_sessions",
         description = "List sessions for a project. Supports filtering by time range (since), title keyword (grep), and limit. Returns session ID, title, duration, status, and message count.",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn list_sessions(
         &self,
         Parameters(params): Parameters<ListSessionsParams>,
     ) -> Result<CallToolResult, McpError> {
-        let project_id = self.resolve_project_id(params.project.as_deref(), None).await?;
+        let project_id = self
+            .resolve_project_id(params.project.as_deref(), None)
+            .await?;
 
         let since_ms = params.since.as_deref().and_then(parse_duration_to_epoch_ms);
 
@@ -175,7 +196,10 @@ impl CdtMcpServer {
             limit: params.limit,
             ..Default::default()
         };
-        let sessions = self.engine.list_sessions(&project_id, &filter).await
+        let sessions = self
+            .engine
+            .list_sessions(&project_id, &filter)
+            .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         self.redact_json(&sessions)
     }
@@ -183,15 +207,25 @@ impl CdtMcpServer {
     #[tool(
         name = "get_session_summary",
         description = "Get a structured diagnostic summary of a session. Returns: time phases, tool usage stats, error density, idle gaps, top files touched, and estimated cost. ALWAYS call this FIRST before get_session_detail — it's compact (~2K tokens) and tells you whether you need to drill deeper.",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_session_summary(
         &self,
         Parameters(params): Parameters<SessionIdParams>,
     ) -> Result<CallToolResult, McpError> {
-        let project_id = self.resolve_project_id(params.project.as_deref(), Some(&params.session)).await?;
+        let project_id = self
+            .resolve_project_id(params.project.as_deref(), Some(&params.session))
+            .await?;
         let options = SessionQueryOptions::default();
-        let detail = self.engine.get_session_detail(&project_id, &params.session, &options).await
+        let detail = self
+            .engine
+            .get_session_detail(&project_id, &params.session, &options)
+            .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let summary_output = cdt_query::summary::build_summary(&detail);
         self.redact_json(&summary_output)
@@ -200,13 +234,20 @@ impl CdtMcpServer {
     #[tool(
         name = "get_session_detail",
         description = "Get detailed chunk data from a session. Supports range ('10:30'), tail (last N chunks), filter ('errors_only' or 'tool_calls'), and max_tokens (truncates by chunk boundary to fit context budget). Use get_session_summary first to understand the session before requesting full detail.",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_session_detail(
         &self,
         Parameters(params): Parameters<SessionDetailParams>,
     ) -> Result<CallToolResult, McpError> {
-        let project_id = self.resolve_project_id(params.project.as_deref(), Some(&params.session)).await?;
+        let project_id = self
+            .resolve_project_id(params.project.as_deref(), Some(&params.session))
+            .await?;
 
         let kind_filter = params.filter.as_deref().and_then(|f| match f {
             "errors_only" => Some(ChunkKindFilter::ErrorsOnly),
@@ -223,11 +264,15 @@ impl CdtMcpServer {
             errors_only: false,
         };
 
-        let detail = self.engine.get_session_detail(&project_id, &params.session, &options).await
+        let detail = self
+            .engine
+            .get_session_detail(&project_id, &params.session, &options)
+            .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         if let Some(budget) = params.max_tokens {
-            let truncated = truncate_chunks_to_budget(&detail.chunks, self.estimator.as_ref(), budget);
+            let truncated =
+                truncate_chunks_to_budget(&detail.chunks, self.estimator.as_ref(), budget);
             let (text, redacted_count) = self.redactor.redact(
                 &serde_json::to_string_pretty(&truncated)
                     .map_err(|e| McpError::internal_error(e.to_string(), None))?,
@@ -252,14 +297,24 @@ impl CdtMcpServer {
     #[tool(
         name = "get_session_errors",
         description = "Get all errors from a session. Returns chunk index, tool name, tool_use_id, and error message for each failed tool execution.",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_session_errors(
         &self,
         Parameters(params): Parameters<SessionIdParams>,
     ) -> Result<CallToolResult, McpError> {
-        let project_id = self.resolve_project_id(params.project.as_deref(), Some(&params.session)).await?;
-        let errors = self.engine.get_session_errors(&project_id, &params.session).await
+        let project_id = self
+            .resolve_project_id(params.project.as_deref(), Some(&params.session))
+            .await?;
+        let errors = self
+            .engine
+            .get_session_errors(&project_id, &params.session)
+            .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         self.redact_json(&errors)
     }
@@ -267,14 +322,22 @@ impl CdtMcpServer {
     #[tool(
         name = "search_sessions",
         description = "Full-text search across all sessions. Returns matching session IDs, titles, and match context. Useful for finding sessions that discussed a specific topic or encountered a specific error.",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn search_sessions(
         &self,
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, McpError> {
         let limit = params.limit.unwrap_or(50);
-        let results = self.engine.search(&params.query, params.project.as_deref(), 0, limit).await
+        let results = self
+            .engine
+            .search(&params.query, params.project.as_deref(), 0, limit)
+            .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         self.redact_json(&results)
     }
@@ -282,15 +345,25 @@ impl CdtMcpServer {
     #[tool(
         name = "get_session_cost",
         description = "Get token usage and estimated cost for a session. Breaks down by input/output/cache tokens with per-model pricing (Opus $5/$25, Sonnet $3/$15, Haiku $1/$5 per million tokens).",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_session_cost(
         &self,
         Parameters(params): Parameters<SessionIdParams>,
     ) -> Result<CallToolResult, McpError> {
-        let project_id = self.resolve_project_id(params.project.as_deref(), Some(&params.session)).await?;
+        let project_id = self
+            .resolve_project_id(params.project.as_deref(), Some(&params.session))
+            .await?;
         let options = SessionQueryOptions::default();
-        let detail = self.engine.get_session_detail(&project_id, &params.session, &options).await
+        let detail = self
+            .engine
+            .get_session_detail(&project_id, &params.session, &options)
+            .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let cost = cdt_query::cost::compute_session_cost(&detail);
         self.redact_json(&cost)
@@ -299,7 +372,12 @@ impl CdtMcpServer {
     #[tool(
         name = "get_stats",
         description = "Get aggregated statistics across sessions for a time period. Includes: session count, total tokens, cost, tool frequency, error rate, model usage breakdown, and active hours heatmap.",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_stats(
         &self,
@@ -345,9 +423,7 @@ fn parse_duration_to_epoch_ms(s: &str) -> Option<i64> {
     let now = chrono::Utc::now().timestamp_millis();
     let s = s.trim();
     if s == "today" {
-        let start_of_day = chrono::Utc::now()
-            .date_naive()
-            .and_hms_opt(0, 0, 0)?;
+        let start_of_day = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0)?;
         return Some(start_of_day.and_utc().timestamp_millis());
     }
     if s == "week" {
@@ -387,13 +463,15 @@ pub async fn run_mcp_server(engine: Arc<QueryEngine>, allow_sensitive: bool) -> 
     use rmcp::{ServiceExt, transport::stdio};
 
     let server = CdtMcpServer::new(engine, allow_sensitive);
-    let service = server.serve(stdio()).await.map_err(|e| {
-        anyhow::anyhow!("MCP server initialization failed: {e}")
-    })?;
+    let service = server
+        .serve(stdio())
+        .await
+        .map_err(|e| anyhow::anyhow!("MCP server initialization failed: {e}"))?;
 
-    service.waiting().await.map_err(|e| {
-        anyhow::anyhow!("MCP server error: {e}")
-    })?;
+    service
+        .waiting()
+        .await
+        .map_err(|e| anyhow::anyhow!("MCP server error: {e}"))?;
 
     Ok(())
 }

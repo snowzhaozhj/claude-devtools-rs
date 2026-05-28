@@ -95,7 +95,10 @@ async fn mcp_list_projects_returns_json() {
     };
 
     assert!(!call_result.content.is_empty());
-    let text_content = call_result.content[0].raw.as_text().expect("expected text content");
+    let text_content = call_result.content[0]
+        .raw
+        .as_text()
+        .expect("expected text content");
     let text = &text_content.text;
     // Should be valid JSON (array)
     let parsed: serde_json::Value = serde_json::from_str(text).unwrap();

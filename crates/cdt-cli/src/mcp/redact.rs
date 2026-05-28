@@ -66,8 +66,7 @@ mod tests {
     #[test]
     fn redacts_github_pat() {
         let r = Redactor::new(true);
-        let (out, count) =
-            r.redact("token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijkl");
+        let (out, count) = r.redact("token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijkl");
         assert!(out.contains("[REDACTED]"));
         assert_eq!(count, 1);
     }
@@ -75,7 +74,8 @@ mod tests {
     #[test]
     fn redacts_bearer_token() {
         let r = Redactor::new(true);
-        let (out, count) = r.redact("Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.long");
+        let (out, count) =
+            r.redact("Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.long");
         assert!(out.contains("[REDACTED]"));
         assert!(count >= 1);
     }

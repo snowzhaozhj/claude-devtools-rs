@@ -71,7 +71,9 @@ mod tests {
 
     #[test]
     fn budget_triggers_truncation() {
-        let chunks: Vec<String> = (0..100).map(|i| format!("chunk data number {i} with some content")).collect();
+        let chunks: Vec<String> = (0..100)
+            .map(|i| format!("chunk data number {i} with some content"))
+            .collect();
         let est = CharRatioEstimator::default();
         let result = truncate_chunks_to_budget(&chunks, &est, 50);
         assert!(result.truncated);
