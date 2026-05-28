@@ -1237,10 +1237,16 @@ fn format_ms(ms: i64) -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let default_filter = if cfg!(debug_assertions) {
+        "info"
+    } else {
+        "info,cdt_api::perf=warn"
+    };
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| default_filter.into()),
         )
         .init();
 
