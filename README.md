@@ -50,7 +50,6 @@ curl -fsSL https://raw.githubusercontent.com/snowzhaozhj/claude-devtools-rs/main
 
 | 方式 | 命令 |
 |---|---|
-| cargo-binstall（推荐 Rust 用户） | `cargo binstall cdt-cli` |
 | 手动下载 | 从 [Releases](https://github.com/snowzhaozhj/claude-devtools-rs/releases) 下载 `cdt-{platform}.tar.gz` |
 | 从源码编译 | `cargo install --git https://github.com/snowzhaozhj/claude-devtools-rs cdt-cli` |
 

@@ -7,7 +7,6 @@ INSTALL_DIR="${CDT_INSTALL_DIR:-$HOME/.local/bin}"
 
 main() {
     need_cmd curl
-    need_cmd tar
 
     local os arch asset version
 
@@ -20,6 +19,12 @@ main() {
         MINGW*|MSYS*|CYGWIN*) os="windows" ;;
         *) err "Unsupported OS: $os" ;;
     esac
+
+    if [ "$os" = "windows" ]; then
+        need_cmd unzip
+    else
+        need_cmd tar
+    fi
 
     case "$arch" in
         x86_64|amd64) arch="x64" ;;
@@ -40,9 +45,9 @@ main() {
     if [ -n "${CDT_VERSION:-}" ]; then
         version="$CDT_VERSION"
     else
-        version="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed 's/.*"tag_name": *"//;s/".*//')"
+        version="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed 's/.*"tag_name": *"//;s/".*//')" || true
         if [ -z "$version" ]; then
-            err "Failed to determine latest version. Set CDT_VERSION=vX.Y.Z to install a specific version."
+            err "Failed to determine latest version (GitHub API may be rate-limited). Set CDT_VERSION=vX.Y.Z to install a specific version, or set GH_TOKEN to avoid rate limits."
         fi
     fi
 
@@ -62,13 +67,12 @@ main() {
         ensure unzip -oq "$tmp/cdt.zip" -d "$tmp"
         ensure mv "$tmp/cdt.exe" "$INSTALL_DIR/cdt.exe"
         rm -rf "$tmp"
+        echo "Installed cdt.exe to $INSTALL_DIR/cdt.exe"
     else
         curl -fsSL "$url" | tar xz -C "$INSTALL_DIR"
+        ensure chmod +x "$INSTALL_DIR/$BINARY"
+        echo "Installed $BINARY to $INSTALL_DIR/$BINARY"
     fi
-
-    ensure chmod +x "$INSTALL_DIR/$BINARY"
-
-    echo "Installed $BINARY to $INSTALL_DIR/$BINARY"
     echo ""
 
     if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
