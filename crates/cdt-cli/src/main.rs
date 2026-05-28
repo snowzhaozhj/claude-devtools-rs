@@ -15,11 +15,10 @@ use cdt_api::{AppState, DataApi, LocalDataApi, StaticServe, start_server};
 use cdt_config::{ConfigManager, NotificationManager};
 use cdt_discover::{ProjectScanner, local_handle, path_decoder};
 use cdt_query::{ChunkKindFilter, QueryEngine, QueryFilter, SessionQueryOptions};
+use cdt_query::{cost, stats, summary};
 use cdt_ssh::SshConnectionManager;
 
-mod cost;
-mod stats;
-mod summary;
+mod mcp;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI 定义
@@ -167,8 +166,12 @@ enum SessionsAction {
 
 #[derive(Subcommand)]
 enum McpAction {
-    /// 启动 MCP stdio server（未实现）
-    Serve,
+    /// 启动 MCP stdio server
+    Serve {
+        /// 跳过 secret redaction（默认启用脱敏）
+        #[arg(long)]
+        allow_sensitive: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1228,8 +1231,10 @@ async fn main() -> Result<()> {
             cmd_stats(&cli.format, &period, proj).await
         }
         Command::Mcp { action } => match action {
-            McpAction::Serve => {
-                anyhow::bail!("mcp serve: not yet implemented (see #366)");
+            McpAction::Serve { allow_sensitive } => {
+                let api = build_local_data_api().await?;
+                let engine = Arc::new(QueryEngine::new(api));
+                mcp::run_mcp_server(engine, allow_sensitive).await
             }
         },
         Command::Setup { action } => match action {

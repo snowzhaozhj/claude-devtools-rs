@@ -59,6 +59,8 @@ divan = "0.1"
 crossbeam-queue = "0.3"
 parking_lot = "0.12"
 clap = { version = "4", features = ["derive"] }
+rmcp = { version = "1.7", features = ["server", "macros", "transport-io"] }
+schemars = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

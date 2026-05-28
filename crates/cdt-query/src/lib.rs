@@ -11,8 +11,13 @@ mod engine;
 mod error;
 mod filter;
 mod options;
+pub mod cost;
+pub mod stats;
+pub mod summary;
+pub mod token;
 
 pub use engine::QueryEngine;
 pub use error::QueryError;
 pub use filter::QueryFilter;
 pub use options::{ChunkKindFilter, SessionQueryOptions};
+pub use token::{CharRatioEstimator, TokenEstimator};
