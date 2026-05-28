@@ -1299,7 +1299,7 @@
        sidebar 撑出去——flex 子项默认 min-width:auto 不收缩。 */
     min-width: 0;
   }
-  .worktree-filter-bar :global(.worktree-chip-cluster) {
+  .worktree-filter-bar :global(.chip-scroll-container) {
     flex: 1;
     min-width: 0;
   }
