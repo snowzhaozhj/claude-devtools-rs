@@ -15,16 +15,22 @@ Full-text search across session content to locate specific errors or patterns.
 cdt search "<query>" --limit 20
 ```
 
-2. For each relevant hit, get context:
+2. To narrow by project:
 
 ```bash
-cdt sessions detail <session-id> --filter errors_only
+cdt search "<query>" --project <project-name> --limit 20
 ```
 
-3. If the user wants tool-specific failures:
+3. For each relevant hit, get error context:
 
 ```bash
-cdt sessions detail <session-id> --filter tool_calls | grep -i "error\|fail\|denied"
+cdt sessions errors <session-id>
+```
+
+4. For detailed tool-call level inspection:
+
+```bash
+cdt sessions detail <session-id> --filter tool_calls
 ```
 
 ## Usage Examples
@@ -33,6 +39,7 @@ cdt sessions detail <session-id> --filter tool_calls | grep -i "error\|fail\|den
 - `cdt search "rate limit"` — find rate limiting events
 - `cdt search "ENOENT"` — find missing file errors
 - `cdt search "hook failed"` — find hook failures
+- `cdt search "panic" --project my-project` — find panics in a specific project
 
 ## Output Format
 
@@ -40,3 +47,9 @@ Present matches grouped by session, with:
 - Session ID, project, timestamp
 - Matched text snippet with surrounding context
 - Suggestion for resolution if pattern is recognizable
+
+## Notes
+
+- Use `cdt projects list` to find available project names
+- Search covers all message content within sessions
+- Combine with `cdt sessions detail <id> --filter errors_only` for error-focused view

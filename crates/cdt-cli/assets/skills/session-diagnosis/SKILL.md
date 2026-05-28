@@ -15,7 +15,7 @@ Produces a comprehensive diagnostic report for a single session.
 cdt sessions show <session-id> --format json
 ```
 
-2. Get session summary (AI-generated overview):
+2. Get session summary (structured diagnostic overview):
 
 ```bash
 cdt sessions summary <session-id>
@@ -45,21 +45,21 @@ Present a structured report:
 
 ### Session Overview
 - **ID**: (short form)
-- **Project**: name
+- **Title**: session title
 - **Duration**: start → end (elapsed)
-- **Status**: completed / ongoing / abandoned
-- **Messages**: N user, M assistant
+- **Status**: completed / ongoing
+- **Messages**: total message count
 
 ### Resource Usage
 - Input tokens / Output tokens / Total
 - Estimated cost
 
 ### Tool Activity
-- Tools used (list with call counts)
+- Tools used (from detail --filter tool_calls)
 - Failed tool calls (if any)
 
 ### Errors
-- Error count and types
+- Error count and types (from sessions errors)
 - Critical errors highlighted
 
 ### Outcome
@@ -68,5 +68,6 @@ Present a structured report:
 
 ## Notes
 
-- If no session ID is provided, prompt the user to pick from recent sessions
-- Use `cdt sessions list --since 1d` to help user find the session
+- If no session ID is provided, use `cdt sessions list --project <name> --since 1d` to help find recent sessions
+- Use `cdt projects list` to discover available projects
+- The session ID can be found in the output of `sessions list` (sessionId field in JSON format)
