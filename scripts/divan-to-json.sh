@@ -15,18 +15,39 @@ set -euo pipefail
 PREFIX="${1:-}"
 
 awk -v prefix="$PREFIX" '
+function json_escape(s) {
+  gsub(/\\/, "\\\\", s)
+  gsub(/"/, "\\\"", s)
+  gsub(/\t/, "\\t", s)
+  gsub(/\r/, "\\r", s)
+  gsub(/\n/, "\\n", s)
+  return s
+}
+
+function get_indent_level(s,    clean, pos) {
+  clean = s
+  gsub(/\033\[[0-9;]*m/, "", clean)
+  # 找到第一个字母或数字的位置（byte offset）
+  # 跳过 UTF-8 树形字符(│├╰─) 和空格
+  pos = 0
+  while (match(clean, /^[^a-zA-Z0-9]/)) {
+    pos += RLENGTH
+    clean = substr(clean, RLENGTH + 1)
+  }
+  return pos
+}
+
 BEGIN {
   print "["
   first = 1
-  # 单位到微秒的换算因子
   unit_factor["ns"] = 0.001
   unit_factor["µs"] = 1
   unit_factor["us"] = 1
   unit_factor["ms"] = 1000
   unit_factor["s"]  = 1000000
+  group_count = 0
 }
 
-# 跳过空行和表头行
 /^[[:space:]]*$/ { next }
 /fastest.*slowest.*median.*mean/ { next }
 /samples.*iters/ { next }
@@ -34,43 +55,28 @@ BEGIN {
 
 {
   line = $0
-  # 去掉 ANSI 转义码
   gsub(/\033\[[0-9;]*m/, "", line)
 }
 
-# 检测 bench binary 名（顶层行：无树形前缀的非空行）
-# 格式: "bench_name        fastest │ ..." 或纯 "bench_name"
+# bench binary 名（顶层行）
 /^[a-zA-Z_][a-zA-Z0-9_]*/ && !/[├╰│─]/ {
-  # 提取第一个 word 作为 binary name
   match(line, /^[a-zA-Z_][a-zA-Z0-9_]*/)
   if (RSTART > 0) {
     current_binary = substr(line, RSTART, RLENGTH)
-    # 如果没指定 prefix，用 binary 名
     if (prefix == "") {
       active_prefix = current_binary
     } else {
       active_prefix = prefix
     }
   }
-  # 清空层级栈
-  delete path_stack
-  depth = 0
+  group_count = 0
   next
 }
 
-# 解析带数据的行（含 │ 分隔的数值列）
-# 典型格式:
-#   │  ├─ 100                           66.7 µs       │ 122.6 µs      │ 85.22 µs      │ 84.24 µs
-#   ├─ cold_project_scan                1.234 ms      │ 2.345 ms      │ 1.567 ms      │ 1.678 ms
 /[├╰│]/ {
-  # 计算缩进深度（通过统计 │ 和缩进字符）
-  indent_line = line
-  # 去掉数据部分（第一组数字开始之后的内容）
-  # 找 bench 名称部分
   name_part = ""
   data_part = ""
 
-  # 分割：找第一个数字+单位模式之前的内容为 name_part
   if (match(line, /[0-9]+(\.[0-9]+)? *(ns|µs|us|ms|s) *│/)) {
     name_part = substr(line, 1, RSTART - 1)
     data_part = substr(line, RSTART)
@@ -78,68 +84,66 @@ BEGIN {
     name_part = substr(line, 1, RSTART - 1)
     data_part = substr(line, RSTART)
   } else {
-    # 纯分组行（没有数据），记录层级名
-    # 去掉树形字符提取名字
+    # 纯分组行：记录分组名和缩进层级
+    indent = get_indent_level($0)
     gsub(/[│├╰─ ]+/, " ", line)
     gsub(/^ +| +$/, "", line)
     if (line != "") {
-      # 算深度：原始行中 "│" 的数量
-      d = 0
-      tmp = $0
-      gsub(/\033\[[0-9;]*m/, "", tmp)
-      while (match(tmp, /│/)) {
-        d++
-        tmp = substr(tmp, RSTART + 3)  # UTF-8 │ = 3 bytes
+      # 清除同级或更深的旧分组
+      new_count = 0
+      for (i = 0; i < group_count; i++) {
+        if (group_indent[i] < indent) {
+          new_count++
+        } else {
+          break
+        }
       }
-      depth = d
-      path_stack[depth] = line
-      # 清除更深层级
-      for (k in path_stack) { if (k > depth) delete path_stack[k] }
+      group_count = new_count
+      group_names[group_count] = line
+      group_indent[group_count] = indent
+      group_count++
     }
     next
   }
 
-  # 从 name_part 提取 bench 名称
+  # 数据行
+  data_indent = get_indent_level($0)
+
   gsub(/[│├╰─ ]+/, " ", name_part)
   gsub(/^ +| +$/, "", name_part)
   bench_name = name_part
 
-  # 从 data_part 提取 median（第三个值）
-  # 格式: "66.7 µs       │ 122.6 µs      │ 85.22 µs      │ 84.24 µs"
-  # 按 │ 分割
   n_fields = split(data_part, fields, "│")
   if (n_fields >= 3) {
     median_field = fields[3]
     gsub(/^ +| +$/, "", median_field)
-    # 提取数值和单位
     if (match(median_field, /([0-9]+(\.[0-9]+)?)/)) {
       median_val = substr(median_field, RSTART, RLENGTH) + 0
-      # 提取单位
       unit_str = substr(median_field, RSTART + RLENGTH)
       gsub(/^ +| +$/, "", unit_str)
       if (unit_str == "") unit_str = "µs"
 
-      # 转为微秒统一单位
       if (unit_str in unit_factor) {
         value_us = median_val * unit_factor[unit_str]
       } else {
         value_us = median_val
       }
 
-      # 构建完整 name
+      # 构建完整 name：prefix + 比当前浅的所有分组 + bench_name
       full_name = active_prefix
-      for (i = 0; i <= depth; i++) {
-        if (i in path_stack) {
-          full_name = full_name "/" path_stack[i]
+      for (i = 0; i < group_count; i++) {
+        if (group_indent[i] < data_indent) {
+          full_name = full_name "/" group_names[i]
+        } else {
+          break
         }
       }
       if (bench_name != "") {
         full_name = full_name "/" bench_name
       }
 
-      # 输出 JSON
       if (!first) printf ",\n"
-      printf "  {\"name\": \"%s\", \"unit\": \"µs\", \"value\": %.3f}", full_name, value_us
+      printf "  {\"name\": \"%s\", \"unit\": \"µs\", \"value\": %.3f}", json_escape(full_name), value_us
       first = 0
     }
   }
