@@ -916,8 +916,13 @@ fn install_tracing_subscriber() {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
+    let default_filter = if cfg!(debug_assertions) {
+        "info"
+    } else {
+        "info,cdt_api::perf=warn"
+    };
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter));
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
         .with_filter(env_filter);
