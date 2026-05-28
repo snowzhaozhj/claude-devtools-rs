@@ -34,7 +34,8 @@ fi
 command=$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null \
   || printf '%s' "$input" | sed -nE 's/.*"command"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1)
 
-project_dir="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+# 用 git toplevel 定位当前工作树根（worktree 或主仓均正确）
+project_dir="$(git rev-parse --show-toplevel 2>/dev/null || echo "${CLAUDE_PROJECT_DIR:-$(pwd)}")"
 cd "$project_dir"
 
 # ---------------------------------------------------------------------------

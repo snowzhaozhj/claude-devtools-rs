@@ -1,77 +1,61 @@
-# codex 在研发流程中的角色
+# codex（异构推理）
 
-claude-devtools-rs 的二审与协同推理优先用 **codex（GPT-5.4 异构推理）**，不是再开一个 Claude subagent——同一推理引擎抓不到自己的盲点。调用方式：`Agent({ subagent_type: "codex:codex-rescue", prompt: ... })`。**不要**新建 `/codex-*` skill 重新封装。
+同一推理引擎抓不到自己的盲点。调用：`Agent({ subagent_type: "codex:codex-rescue", prompt: ... })`。prompt 模板：`.claude/templates/codex-prompt-*.md`。
 
-prompt 模板见 `.claude/templates/codex-prompt-pr-review.md`（PR 二审）/ `codex-prompt-design-review.md`（design 决策）/ `codex-prompt-progressive-diagnosis.md`（渐进多轮诊断）。
+## 核心原则
 
-## 1. PR commit 之后：二审（默认调）
+- **默认调用 + trivial 豁免**：PR push / design / explore 分叉默认调 codex，只有满足豁免条件才跳过。跳过时必须写 `Codex skipped: <reason>`
+- **角色：评估者/攻击者**，不是生成者。挑战方案、构造反例、找逻辑盲点
+- **最小上下文 prompt**：改动意图（1 句）+ 精简 diff + 关键不变量 + 输出格式约束
+- **每个 finding 要求**：具体行号 + 复现路径 + 为什么现有测试没抓到
+- **接续不重起**：多轮用 `SendMessage` 接续同一 subagent
 
-push 第一个 commit 并创建 PR 后**默认立刻调** codex 二审，且与 `/wait-ci` 后台 watch 并行跑，不等 CI 结束才开始。理由：codex 与 CI 互不依赖，串行会把 wall time 叠加；纯样式 PR 也踩过坑（`bat/cmd→powershell` 误映射、`Dockerfile.dev` 不走 special name 等纯字典扩展也藏 bug）；codex 边际成本远低于"漏 bug 进 main 后回滚 / hotfix"。
+## 触发点
 
-**显式豁免**（跳过时 PR 描述写"未跑 codex（理由：xxx）"留痕）：
-- bump version / `Cargo.lock` / `pnpm-lock.yaml` 纯版本号改动
-- docs / README / CLAUDE.md / 规则文件纯文本改
-- 单点 typo / i18n 文案 1-2 行字符串替换
-- CI / GitHub Actions 配置微调（仅触发条件 / cache key）
+| # | 时机 | 可观察信号 | 动作 |
+|---|---|---|---|
+| 1 | **PR push** | 默认调；高风险命中则禁止豁免 | 逻辑二审 |
+| 2 | **rescue** | 同一问题 3 次尝试未解决 / 30min 失败数未减少 | 诊断 |
+| 3 | **design 完成** | 默认调；高风险命中则禁止豁免 | 决策审 + 魔鬼代言人 |
+| 4 | **对抗验证** | diff 涉及并发/状态机/缓存/错误恢复/配置组合/async 生命周期 | 构造非法状态序列 |
+| 5 | **spec/scenario** | 任一 scenario 无对应 test 名映射 | 攻击式找漏 |
+| 6 | **重构** | 文件 rename/move/split 影响 >1 个生产文件 | 语义假设断裂 |
+| 7 | **perf 回归** | bench wall +20% / user/real 跃迁 / 改动命中 perf 路径但未跑 bench | 根因定位 |
+| 8 | **error 变更** | 新增/删除 error variant / 改 `?` 传播 / 改 error→IPC 映射 | 边界完备性 |
+| 9 | **explore 分叉** | 出现 ≥2 可行方案且选择影响下列任一：数据模型/模块边界/IPC/持久化/async/性能/用户可见行为 | 对 leading option 做对抗质询 |
 
-### 二审找到 bug 后
+## 高风险触发器（#1 #3 共用，命中禁止豁免）
 
-1. **全部修完再 push**（不留尾巴，单测同步覆盖每个修复）；若 CI 同时失败，把 CI 和 codex 问题合并成一个修复 commit，避免多轮空跑
-2. **第二轮 codex 验证与本地验证并行**——用同一 subagent + `SendMessage` 接续，prompt 列出第一轮 bug + 修法 + "修法是否真解决"；同时跑本地 clippy/test/perf，二者都过再 push
-3. push 修复后同时启动新一轮 CI watch 与（如有需要）codex 复核；archive commit SHALL 是 codex 验证通过后才打的 PR 最后一个 commit
-4. 非阻塞建议（注释、文案、微小整洁）默认不单独 push；除非会影响 reviewer 理解，否则留到下一次实质修复或 archive 前一起处理
+IPC 字段/命令/payload 变化 / 跨 ≥2 cap 或 crate / perf 关键路径 / 状态机-并发-缓存-调度 / UI 重构（≥3 新组件或改导航/持久化状态）/ BREAKING / async lifecycle（spawn↔drop↔cancel）/ serde 持久化格式变更。
 
-历史案例：PR #38 active_scans race 第一次修复漏了 spawn/insert 之间的锁释放 window，靠多轮 codex 才抓到。
+## trivial 豁免（全部满足才可跳过）
 
-## 2. 实现卡住：rescue（主动调）
+- 改动 <50 行且仅涉及注释/文案/格式/测试快照/单文件局部修复
+- 不改 public API / IPC / serde / error 边界 / async / 性能路径 / 状态机 / 缓存 / UI 结构
+- 不跨 crate/cap 边界，不移动/拆分生产文件
+- 相关测试已跑通（无法跑测试 → 不得豁免）
 
-`codex:codex-rescue` subagent 描述就写了"proactively use when stuck"。**不要等用户喊**——感觉卡住主动调。
+## 魔鬼代言人（#3 追加）
 
-触发：
-- 同一文件 / 同一错误调试 30+ 分钟没进展
-- 反复 grep 找不到符号 / 反复改测试还失败
-- 对架构选择拿不准（A vs B 权衡不清）
+design review prompt 末尾固定追加：这个设计最先会在哪断？扩展瓶颈在哪？
 
-## 3. design 阶段：决策风险二审（任一命中即调）
+## explore 分叉（#9 补充）
 
-`/opsx:propose` 写完 design.md 后、进 `/opsx:apply` **之前**默认强制调。理由：propose 阶段定下的 D1/D2 决策在 apply 阶段会扩散成几十处代码改动，事后发现 design 漏洞代价远高于 propose 阶段拦下。
+不用"是否明显/复杂/值得"做判断。只要 explore 中讨论或隐含排除了 ≥2 方案，且选择影响上表列出的 7 项任一，就 SHALL 调 codex。prompt 须列出：leading option / rejected option(s) / 选择理由 / 最担心的假设。
 
-**默认调（任一命中）**：
-- IPC 字段语义改 / 新增 / 删除
-- 跨 ≥ 2 个 capability spec delta
-- 性能关键路径（启动 / IPC 大 payload / O(N²) / 列表渲染）
-- 状态机 / 节流 / 并发 / 缓存淘汰策略
-- UI 重大重构（拆 ≥ 3 个新组件 / 改 ≥ 2 个核心组件）
-- 含 BREAKING change 标注
+## 对抗式验证（#4 详述）
 
-**可跳过（同时满足）**：单 capability + 单 Requirement / 纯文案纯样式单点 bug / ≤ 50 行预期 + 无新 IPC 字段 / design.md 仅 D1 一个决策。
+- **并发**：Mutex/Semaphore/broadcast/CancellationToken → deadlock/race 序列
+- **状态机**：enum 转移 → 非法态输入序列
+- **缓存**：invalidation → stale 数据时序
+- **错误恢复**：retry/fallback → "恢复再失败"嵌套
+- **配置组合**：feature flag 交互 → 未测试组合
+- **async 生命周期**：spawn 后 drop handle / 取消时资源泄漏 / channel close 后发送
 
-## 4. test 阶段：edge case（按需调）
+## 二审找到 bug 后
 
-claude 写完单测后让 codex 看 spec scenarios 给 edge case：`"spec scenario X 我用 [...] 测了，还有什么边界场景没覆盖？"`
+全部修完合一个 commit 再 push → SendMessage 接续验证 → 二者都过才 push。
 
-不强制，但**含状态机 / 节流 / 并发 / 缓存淘汰**类改动 SHALL 至少跑一次。
+## 调用记录
 
-## 5. archive 之前：spec delta 二审（条件跳过）
-
-`/opsx:archive` 之前 codex 审：
-- spec delta 是否漏 SHALL/MUST 句
-- 每个 Scenario 是否有对应测试（`spec-fidelity-reviewer` 能查命名，codex 能查"测试名对得上但行为没真覆盖"的伪覆盖）
-
-**自检三件事全过即可跳过**：
-1. 全部 Scenario 都有 test 函数名能 grep 到
-2. 主 spec 的 SHALL 句没漏（人工过一遍）
-3. tasks.md 全勾完
-
-任意一项不全就跑 codex。
-
-## 6. 与 `/code-review` 的关系
-
-- `/code-review`（Anthropic 官方）：纯 Claude 多 agent 审 + gh PR comment，强项是 PR 评论历史可视化
-- codex：异构推理 + 深逻辑边界，强项是"自己写的代码"盲点 + 跨语言/跨框架边界
-
-**默认 codex，`/code-review` 仅按需手动调**——常规 PR 跑 codex 就够。
-
-## 7. 调用记录
-
-每次调 codex 在最终回复说一句 "已让 codex 二审，找到 N 个 bug / 0 个问题"，留下审计痕迹。
+每次调完说一句 "已让 codex 二审，找到 N 个 bug / 0 个问题"。
