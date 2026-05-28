@@ -47,6 +47,7 @@ jobs:
 
       - name: Run divan benchmarks
         run: |
+          mkdir -p target
           scripts/run-divan-bench.sh > target/divan-results.json
           echo "::group::Benchmark results"
           cat target/divan-results.json | jq .
