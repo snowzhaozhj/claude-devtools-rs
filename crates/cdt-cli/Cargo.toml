@@ -25,6 +25,7 @@ cdt-ssh = { workspace = true }
 cdt-watch = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }

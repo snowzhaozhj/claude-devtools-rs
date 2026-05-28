@@ -432,6 +432,7 @@ dependencies = [
  "cdt-watch",
  "chrono",
  "clap",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

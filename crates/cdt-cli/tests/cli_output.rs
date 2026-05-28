@@ -229,3 +229,33 @@ fn sessions_detail_with_filter_flag_accepted() {
         "flags not recognized: {stderr}"
     );
 }
+
+#[test]
+fn sessions_help_shows_summary_and_cost() {
+    let output = cdt_bin().args(["sessions", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("summary"));
+    assert!(stdout.contains("cost"));
+    assert!(stdout.contains("list"));
+}
+
+#[test]
+fn stats_help_works() {
+    let output = cdt_bin().args(["stats", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("PERIOD"));
+}
+
+#[test]
+fn sessions_summary_without_session_id_fails() {
+    let output = cdt_bin().args(["sessions", "summary"]).output().unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn sessions_cost_without_session_id_fails() {
+    let output = cdt_bin().args(["sessions", "cost"]).output().unwrap();
+    assert!(!output.status.success());
+}
