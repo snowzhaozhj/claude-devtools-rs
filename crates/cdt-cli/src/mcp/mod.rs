@@ -73,6 +73,7 @@ pub struct SearchParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[allow(dead_code)]
 pub struct StatsParams {
     #[schemars(description = "Time period: 'today', 'week', '7d', '24h', '30d' (default '7d')")]
     pub period: Option<String>,
@@ -249,13 +250,29 @@ impl CdtMcpServer {
             .resolve_project_id(params.project.as_deref(), Some(&params.session))
             .await?;
 
-        let kind_filter = params.filter.as_deref().and_then(|f| match f {
-            "errors_only" => Some(ChunkKindFilter::ErrorsOnly),
-            "tool_calls" => Some(ChunkKindFilter::ToolCalls),
-            _ => None,
-        });
+        let kind_filter = match params.filter.as_deref() {
+            None => None,
+            Some("errors_only") => Some(ChunkKindFilter::ErrorsOnly),
+            Some("tool_calls") => Some(ChunkKindFilter::ToolCalls),
+            Some(other) => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "Invalid filter '{other}'. Supported values: 'errors_only', 'tool_calls'"
+                    ),
+                    None,
+                ));
+            }
+        };
 
-        let range = params.range.as_deref().and_then(parse_range);
+        let range = match params.range.as_deref() {
+            None => None,
+            Some(s) => Some(parse_range(s).ok_or_else(|| {
+                McpError::invalid_params(
+                    format!("Invalid range '{s}'. Expected format: 'start:end' (e.g. '10:30')"),
+                    None,
+                )
+            })?),
+        };
 
         let options = SessionQueryOptions {
             range,
@@ -334,9 +351,18 @@ impl CdtMcpServer {
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, McpError> {
         let limit = params.limit.unwrap_or(50);
+        let project_id = match params.project.as_deref() {
+            Some(p) => Some(
+                self.engine
+                    .resolve_project(p)
+                    .await
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?,
+            ),
+            None => None,
+        };
         let results = self
             .engine
-            .search(&params.query, params.project.as_deref(), 0, limit)
+            .search(&params.query, project_id.as_deref(), 0, limit)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         self.redact_json(&results)
@@ -371,7 +397,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_stats",
-        description = "Get aggregated statistics across sessions for a time period. Includes: session count, total tokens, cost, tool frequency, error rate, model usage breakdown, and active hours heatmap.",
+        description = "Get aggregated statistics across sessions for a time period. Note: this requires loading all sessions in the period and may be slow for large datasets. Consider using get_session_cost for individual sessions instead.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -381,17 +407,13 @@ impl CdtMcpServer {
     )]
     async fn get_stats(
         &self,
-        Parameters(params): Parameters<StatsParams>,
+        Parameters(_params): Parameters<StatsParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _period = params.period.as_deref().unwrap_or("7d");
-        let _project = params.project.as_deref();
-
-        // Stats requires iterating all sessions — for now return a helpful message
-        // pointing to the CLI command. Full implementation would need the same
-        // logic as cmd_stats in main.rs (iterate projects, load each session detail).
-        Ok(CallToolResult::success(vec![Content::text(
-            "Stats aggregation requires loading multiple sessions. Use `cdt stats` CLI command directly for now. MCP stats support coming in a follow-up.",
-        )]))
+        Err(McpError::internal_error(
+            "get_stats is not yet implemented in MCP mode. Use `cdt stats` CLI command directly. \
+             This tool will be fully implemented in a follow-up PR.",
+            None,
+        ))
     }
 }
 

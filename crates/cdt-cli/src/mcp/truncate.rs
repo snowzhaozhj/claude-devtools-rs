@@ -34,7 +34,22 @@ pub fn truncate_chunks_to_budget<T: Serialize + Clone>(
         let serialized = serde_json::to_string(chunk).unwrap_or_default();
         let chunk_tokens = estimator.estimate(&serialized);
 
-        if used_tokens + chunk_tokens > budget && !included.is_empty() {
+        if used_tokens + chunk_tokens > budget {
+            if included.is_empty() {
+                // First chunk already exceeds budget — include it but mark truncated
+                included.push(chunk.clone());
+                let next = if chunks.len() > 1 {
+                    Some("1:".to_string())
+                } else {
+                    None
+                };
+                return TruncatedResult {
+                    data: included,
+                    truncated: true,
+                    total_chunks: Some(chunks.len()),
+                    next_range: next,
+                };
+            }
             return TruncatedResult {
                 data: included,
                 truncated: true,
