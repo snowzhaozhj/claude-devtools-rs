@@ -829,6 +829,81 @@ fn cmd_setup_mcp(apply: bool) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// setup skills
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct SkillTemplate {
+    name: &'static str,
+    content: &'static str,
+}
+
+const SKILL_TEMPLATES: &[SkillTemplate] = &[
+    SkillTemplate {
+        name: "analyze-failures",
+        content: include_str!("../assets/skills/analyze-failures/SKILL.md"),
+    },
+    SkillTemplate {
+        name: "token-usage",
+        content: include_str!("../assets/skills/token-usage/SKILL.md"),
+    },
+    SkillTemplate {
+        name: "search-errors",
+        content: include_str!("../assets/skills/search-errors/SKILL.md"),
+    },
+    SkillTemplate {
+        name: "session-diagnosis",
+        content: include_str!("../assets/skills/session-diagnosis/SKILL.md"),
+    },
+];
+
+fn cmd_setup_skills(force: bool) {
+    let target_dir = std::path::PathBuf::from(".claude/skills");
+
+    println!(
+        "Installing {} session-aware skills to {}/\n",
+        SKILL_TEMPLATES.len(),
+        target_dir.display()
+    );
+
+    let mut installed = 0;
+    let mut skipped = 0;
+
+    for skill in SKILL_TEMPLATES {
+        let skill_dir = target_dir.join(skill.name);
+        let skill_file = skill_dir.join("SKILL.md");
+        let exists = skill_file.exists();
+
+        if exists && !force {
+            println!(
+                "  SKIP  {}/SKILL.md (already exists, use --force to overwrite)",
+                skill.name
+            );
+            skipped += 1;
+            continue;
+        }
+
+        if let Err(e) = std::fs::create_dir_all(&skill_dir) {
+            eprintln!("  ERROR creating {}: {e}", skill_dir.display());
+            continue;
+        }
+
+        if let Err(e) = std::fs::write(&skill_file, skill.content) {
+            eprintln!("  ERROR writing {}: {e}", skill_file.display());
+            continue;
+        }
+
+        let verb = if exists { "FORCE" } else { "WRITE" };
+        println!("  {verb}  {}/SKILL.md", skill.name);
+        installed += 1;
+    }
+
+    println!("\nDone: {installed} installed, {skipped} skipped.");
+    if skipped > 0 {
+        println!("Hint: use `cdt setup skills --force` to overwrite existing files.");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // sessions summary
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1242,8 +1317,9 @@ async fn main() -> Result<()> {
                 cmd_setup_mcp(apply);
                 Ok(())
             }
-            SetupAction::Skills { .. } => {
-                anyhow::bail!("setup skills: not yet implemented (see #367)");
+            SetupAction::Skills { force } => {
+                cmd_setup_skills(force);
+                Ok(())
             }
         },
     }
