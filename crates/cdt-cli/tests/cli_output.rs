@@ -16,6 +16,7 @@ fn help_exits_zero() {
     assert!(stdout.contains("projects"));
     assert!(stdout.contains("sessions"));
     assert!(stdout.contains("serve"));
+    assert!(stdout.contains("search"));
 }
 
 #[test]
@@ -83,4 +84,148 @@ fn projects_list_table_has_header() {
     assert!(stdout.contains("PATH"));
     assert!(stdout.contains("SESSIONS"));
     assert!(stdout.contains("LAST ACTIVE"));
+}
+
+#[test]
+fn projects_list_jsonl_outputs_ndjson() {
+    let output = cdt_bin()
+        .args(["--format", "jsonl", "projects", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let _: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("invalid NDJSON line: {e}\nline: {line}"));
+    }
+}
+
+#[test]
+fn sessions_show_without_valid_id_fails() {
+    let output = cdt_bin()
+        .args([
+            "--format",
+            "json",
+            "sessions",
+            "show",
+            "nonexistent-session-id-xyz",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn sessions_detail_without_valid_id_fails() {
+    let output = cdt_bin()
+        .args([
+            "--format",
+            "json",
+            "sessions",
+            "detail",
+            "nonexistent-session-id-xyz",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn sessions_errors_without_valid_id_fails() {
+    let output = cdt_bin()
+        .args([
+            "--format",
+            "json",
+            "sessions",
+            "errors",
+            "nonexistent-session-id-xyz",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn search_without_results_exits_2() {
+    let output = cdt_bin()
+        .args([
+            "--format",
+            "json",
+            "--project",
+            "nonexistent-project-xyz",
+            "search",
+            "zzz_no_match_zzz",
+        ])
+        .output()
+        .unwrap();
+    // Either error (project not found) or exit 2 (no results)
+    assert!(!output.status.success());
+}
+
+#[test]
+fn sessions_list_with_filter_flags_accepted() {
+    // Verify the new flags are accepted by the parser (even if no results)
+    let output = cdt_bin()
+        .args([
+            "--format",
+            "json",
+            "--project",
+            "nonexistent-project-xyz",
+            "sessions",
+            "list",
+            "--grep",
+            "test",
+            "--min-messages",
+            "5",
+            "--since",
+            "7d",
+        ])
+        .output()
+        .unwrap();
+    // Project not found → error, but flags parsed OK (no clap error)
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "flags not recognized: {stderr}"
+    );
+}
+
+#[test]
+fn sessions_detail_with_range_flag_accepted() {
+    let output = cdt_bin()
+        .args([
+            "--format", "json", "sessions", "detail", "fake-id", "--range", "0:10", "--tail", "5",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "flags not recognized: {stderr}"
+    );
+}
+
+#[test]
+fn sessions_detail_with_filter_flag_accepted() {
+    let output = cdt_bin()
+        .args([
+            "--format",
+            "json",
+            "sessions",
+            "detail",
+            "fake-id",
+            "--filter",
+            "errors_only",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "flags not recognized: {stderr}"
+    );
 }
