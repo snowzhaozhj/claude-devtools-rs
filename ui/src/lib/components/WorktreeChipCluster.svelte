@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { contextMenu } from "../contextMenu.svelte";
   import { buildWorktreeChipItems, type MenuItemContext } from "../contextMenu/menu-items";
   import { getMenuSettings } from "../contextMenu/settings.svelte";
@@ -97,9 +97,13 @@
 
   function onWheel(e: WheelEvent) {
     if (!clusterEl) return;
-    const { scrollWidth, clientWidth } = clusterEl;
+    const { scrollLeft, scrollWidth, clientWidth } = clusterEl;
     if (scrollWidth <= clientWidth) return;
     if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && e.deltaX === 0) {
+      const maxScroll = scrollWidth - clientWidth;
+      const canScroll = (e.deltaY > 0 && scrollLeft < maxScroll) ||
+                        (e.deltaY < 0 && scrollLeft > 0);
+      if (!canScroll) return;
       e.preventDefault();
       clusterEl.scrollLeft += e.deltaY;
     }
@@ -130,12 +134,21 @@
     };
   }
 
-  // active chip 变更时 scrollIntoView
+  // active chip 变更时 scrollIntoView（仅 value 真正变化时触发）
+  let prevValue: string = untrack(() => value);
   $effect(() => {
+    if (value === prevValue) return;
+    prevValue = value;
     const activeIdx = options.findIndex((o) => o.value === value);
     if (activeIdx >= 0 && chipEls[activeIdx]) {
       chipEls[activeIdx].scrollIntoView({ inline: "nearest", behavior: "smooth", block: "nearest" });
     }
+  });
+
+  // options 变化时刷新 overflow 状态（如新增/删除 worktree）
+  $effect(() => {
+    void options.length;
+    void tick().then(updateOverflow);
   });
 </script>
 
