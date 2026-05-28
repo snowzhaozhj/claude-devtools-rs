@@ -18,6 +18,8 @@
 
 ## 安装
 
+### 桌面应用
+
 从 [Releases](https://github.com/snowzhaozhj/claude-devtools-rs/releases) 下载对应平台安装包：
 
 - macOS：`.dmg`（Apple Silicon / Intel）
@@ -33,6 +35,34 @@
 > ```
 >
 > **Windows**：SmartScreen 会拦 → "更多信息" → "仍要运行"。
+
+### CLI (`cdt`)
+
+CLI 工具用于终端查询 session 数据、搭配 Claude Code MCP/Skills 使用。
+
+**一键安装**（macOS / Linux）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/snowzhaozhj/claude-devtools-rs/main/install.sh | sh
+```
+
+**其它方式**：
+
+| 方式 | 命令 |
+|---|---|
+| 手动下载 | 从 [Releases](https://github.com/snowzhaozhj/claude-devtools-rs/releases) 下载 `cdt-{platform}.tar.gz` |
+| 从源码编译 | `cargo install --git https://github.com/snowzhaozhj/claude-devtools-rs cdt-cli` |
+
+安装后运行 `cdt setup mcp --apply` 注册 MCP server，或 `cdt setup skills` 安装 session 分析 skill。
+
+**更新**：重新运行安装脚本或 `cargo binstall cdt-cli` 即可覆盖升级到最新版。
+
+**环境变量**：
+
+| 变量 | 作用 | 默认值 |
+|---|---|---|
+| `CDT_INSTALL_DIR` | 自定义安装目录 | `~/.local/bin` |
+| `CDT_VERSION` | 指定版本（如 `v0.5.12`） | 自动检测最新 |
 
 ## 从源码构建
 
