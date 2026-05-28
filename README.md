@@ -138,6 +138,38 @@ git push origin v0.2.0
 
 CI 使用 [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action) 构建。应用集成 `tauri-plugin-updater` 实现应用内自动升级（macOS / Windows / Linux AppImage；`.deb` 不支持）。签名密钥治理与 GitHub Secrets 配置流程见 [Tauri 官方文档](https://tauri.app/plugin/updater/)，本仓不复述。
 
+## Claude Code 集成
+
+`cdt` CLI 提供两种方式与 Claude Code 协作：**MCP Server** 和 **Skills**。
+
+### MCP Server
+
+将 `cdt` 注册为 Claude Code 的 MCP server，让 Claude 直接调用 session 查询工具：
+
+```bash
+# 自动注册
+cdt setup mcp --apply
+
+# 或手动执行
+claude mcp add cdt-devtools -- cdt mcp serve
+```
+
+注册后 Claude Code 可使用 `list_projects`、`list_sessions`、`search_sessions`、`get_session_detail`、`get_session_stats` 等工具。
+
+### Skills（推荐）
+
+安装预置的 session 分析 skill 到当前项目：
+
+```bash
+# 安装到 .claude/skills/（已存在则跳过）
+cdt setup skills
+
+# 强制覆盖已有文件
+cdt setup skills --force
+```
+
+安装 `session-insights` skill，涵盖：错误分析、token 消耗统计、全文搜索、单 session 诊断。在 Claude Code 中用 `/session-insights` 触发，或直接描述需求（如"看看最近 session 有什么错误"）自动匹配。Skill 直接调用 `cdt` CLI 命令，无需 MCP 配置。
+
 ## 开发者文档
 
 - **项目约定 / 架构要点**：[`CLAUDE.md`](./CLAUDE.md)

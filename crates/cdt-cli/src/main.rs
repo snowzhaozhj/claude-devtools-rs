@@ -829,6 +829,75 @@ fn cmd_setup_mcp(apply: bool) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// setup skills
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct SkillTemplate {
+    name: &'static str,
+    content: &'static str,
+}
+
+const SKILL_TEMPLATES: &[SkillTemplate] = &[SkillTemplate {
+    name: "session-insights",
+    content: include_str!("../assets/skills/session-insights/SKILL.md"),
+}];
+
+fn cmd_setup_skills(force: bool) -> Result<()> {
+    let target_dir = std::path::PathBuf::from(".claude/skills");
+    let count = SKILL_TEMPLATES.len();
+    let noun = if count == 1 { "skill" } else { "skills" };
+
+    println!(
+        "Installing {count} session-aware {noun} to {}/\n",
+        target_dir.display()
+    );
+
+    let mut installed = 0;
+    let mut skipped = 0;
+    let mut errors = 0;
+
+    for skill in SKILL_TEMPLATES {
+        let skill_dir = target_dir.join(skill.name);
+        let skill_file = skill_dir.join("SKILL.md");
+        let exists = skill_file.exists();
+
+        if exists && !force {
+            println!(
+                "  SKIP  {}/SKILL.md (already exists, use --force to overwrite)",
+                skill.name
+            );
+            skipped += 1;
+            continue;
+        }
+
+        if let Err(e) = std::fs::create_dir_all(&skill_dir) {
+            eprintln!("  ERROR creating {}: {e}", skill_dir.display());
+            errors += 1;
+            continue;
+        }
+
+        if let Err(e) = std::fs::write(&skill_file, skill.content) {
+            eprintln!("  ERROR writing {}: {e}", skill_file.display());
+            errors += 1;
+            continue;
+        }
+
+        let verb = if exists { "FORCE" } else { "WRITE" };
+        println!("  {verb}  {}/SKILL.md", skill.name);
+        installed += 1;
+    }
+
+    println!("\nDone: {installed} installed, {skipped} skipped.");
+    if skipped > 0 {
+        println!("Hint: use `cdt setup skills --force` to overwrite existing files.");
+    }
+    if errors > 0 {
+        anyhow::bail!("{errors} skill(s) failed to install");
+    }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // sessions summary
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1242,9 +1311,7 @@ async fn main() -> Result<()> {
                 cmd_setup_mcp(apply);
                 Ok(())
             }
-            SetupAction::Skills { .. } => {
-                anyhow::bail!("setup skills: not yet implemented (see #367)");
-            }
+            SetupAction::Skills { force } => cmd_setup_skills(force),
         },
     }
 }
