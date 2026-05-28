@@ -430,7 +430,7 @@ async fn cmd_sessions_list(
                 "{:<38} {:<40} {:>10} {:>8} {:>8}",
                 "ID", "TITLE", "DURATION", "STATUS", "MESSAGES"
             );
-            println!("{}", "-".repeat(106));
+            println!("{}", "-".repeat(108));
             for s in &items {
                 let title = s.title.as_deref().unwrap_or("(untitled)");
                 let status = if s.is_ongoing { "active" } else { "done" };
@@ -672,7 +672,7 @@ async fn cmd_search(
                 "{:<38} {:<30} {:>8} {:<40}",
                 "SESSION", "TITLE", "MATCHES", "PREVIEW"
             );
-            println!("{}", "-".repeat(118));
+            println!("{}", "-".repeat(119));
             for r in &result.results {
                 let preview = r.hits.first().map_or("", |h| h.preview.as_str());
                 println!(
