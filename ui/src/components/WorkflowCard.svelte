@@ -70,7 +70,9 @@
     <span class="wf-summary">{phaseSummary}</span>
 
     <span class="wf-status" class:wf-status-done={workflow.status === "completed"} class:wf-status-failed={workflow.status === "partial_failure"} class:wf-status-running={workflow.status === "running"}>
-      {#if workflow.status === "running"}
+      {#if workflow.status === "completed"}
+        <svg class="wf-status-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      {:else if workflow.status === "running"}
         <span class="wf-spinner"></span>
       {/if}
       {statusLabel}
@@ -139,8 +141,8 @@
   .wf-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
+    gap: var(--bubble-header-gap);
+    padding: var(--bubble-header-padding-l1);
     cursor: pointer;
     transition: background-color 0.12s ease;
   }
@@ -184,8 +186,10 @@
   }
 
   .wf-status {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     padding: 1px 6px;
     border-radius: var(--radius-xs);
     white-space: nowrap;
@@ -200,14 +204,20 @@
   .wf-status-failed {
     color: var(--color-error);
     background: color-mix(in oklch, var(--color-error) 10%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-error) 20%, transparent);
   }
   .wf-status-running {
     color: var(--color-accent-blue);
   }
+  .wf-status-check {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
 
   .wf-spinner {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     border: 1.5px solid color-mix(in oklch, var(--color-accent-blue) 18%, transparent);
     border-top-color: var(--color-accent-blue);
@@ -282,6 +292,7 @@
     background: var(--card-header-bg);
     border: 1px solid var(--card-border);
     font-size: 12px;
+    transition: border-color 0.12s ease;
   }
   .wf-chip-failed {
     border-color: color-mix(in oklch, var(--color-error) 30%, transparent);
