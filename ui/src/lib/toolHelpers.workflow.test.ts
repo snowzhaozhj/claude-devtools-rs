@@ -29,7 +29,7 @@ describe("getToolSummary — Workflow", () => {
     expect(result).toBe("Workflow");
   });
 
-  test("returns 'Workflow' when input is null", () => {
+  test("returns empty string when input is null", () => {
     const result = getToolSummary("Workflow", null);
     expect(result).toBe("");
   });
