@@ -11,6 +11,7 @@ use cdt_core::workflow::{
     WorkflowAgent, WorkflowAgentState, WorkflowItem, WorkflowPhase, WorkflowStatus,
 };
 use cdt_discover::FileSystemProvider;
+use cdt_fs::FsError;
 
 use super::workflow_script::{ScriptMeta, parse_script_meta};
 use crate::cache_signature::FileSignature;
@@ -37,6 +38,11 @@ pub struct WorkflowManifestCache {
     /// 运行态 journal 派生的合成 agents 缓存（manifest 缺失降级路径）。
     /// journal append-only → 每次 append 签名变化 → 自动失效重读；
     /// 仅在 journal 未变化（如非 journal 触发的 refresh）时复用。
+    ///
+    /// **不返回 stale 计数的依据是 `FileSignature` 的 size 维度**：journal 严格
+    /// append-only，每次 append 后 `size` 单调增、永不回退，故即使 mtime 秒级精度
+    /// 撞同秒，size 变化仍让签名 miss 重读。若未来 journal 改为 rotate/rewrite
+    /// （size 可能回退到旧值）则此不变量失效，须改用内容哈希或 offset 续读。
     journal_entries: HashMap<PathBuf, JournalCacheEntry>,
     /// 运行态 script meta 解析缓存（Tier 1）。script immutable → 一辈子只解析一次。
     script_entries: HashMap<PathBuf, ScriptCacheEntry>,
@@ -333,14 +339,28 @@ async fn resolve_single(
     fs: &dyn FileSystemProvider,
     cache: &std::sync::Mutex<WorkflowManifestCache>,
 ) -> WorkflowItem {
-    // manifest 缺失 → 进运行态降级路径（journal + scriptPath 合成）。
-    let Ok(fs_meta) = fs.stat(manifest_path).await else {
-        tracing::debug!(
-            run_id,
-            path = %manifest_path.display(),
-            "workflow manifest not found, degrading to running-state synthesis"
-        );
-        return resolve_running_state(run_id, journal_path, script_path, fs, cache).await;
+    // manifest **缺失**（NotFound）→ 进运行态降级路径（journal + scriptPath 合成）。
+    // 非 NotFound（权限 / IO / SSH 连接抖动）：manifest 文件可能真实存在只是读不到，
+    // **不能**误判成「运行中」合成虚假 Running 卡片——降级为 pending placeholder + warn。
+    let fs_meta = match fs.stat(manifest_path).await {
+        Ok(meta) => meta,
+        Err(FsError::NotFound(_)) => {
+            tracing::debug!(
+                run_id,
+                path = %manifest_path.display(),
+                "workflow manifest absent, degrading to running-state synthesis"
+            );
+            return resolve_running_state(run_id, journal_path, script_path, fs, cache).await;
+        }
+        Err(e) => {
+            tracing::warn!(
+                run_id,
+                path = %manifest_path.display(),
+                error = %e,
+                "workflow manifest stat failed (not NotFound), using pending placeholder"
+            );
+            return WorkflowItem::pending(run_id.to_owned());
+        }
     };
 
     let sig = FileSignature::from_fs_metadata(&fs_meta);
@@ -449,9 +469,18 @@ async fn read_script_meta(
         }
     }
 
+    // read 失败（异常）与 json5 解析失败（预期 graceful，如 backtick 值）都降回 Tier 0，
+    // 但两者性质不同：read 失败留 `debug!` 信号，便于排查「运行中 workflow 缺编排器名/phases」。
     let parsed = match fs.read_to_string(script_path).await {
         Ok(content) => parse_script_meta(&content),
-        Err(_) => None,
+        Err(e) => {
+            tracing::debug!(
+                path = %script_path.display(),
+                error = %e,
+                "workflow script read failed, falling back to Tier 0 (basename-derived name)"
+            );
+            None
+        }
     };
 
     if let Ok(mut guard) = cache.lock() {
@@ -460,15 +489,26 @@ async fn read_script_meta(
     parsed
 }
 
-/// 读 journal.jsonl 合成匿名 agents，按 `FileSignature` 缓存。journal 缺失/读失败
-/// 返回空 Vec（调用方据此判 `Pending`）。
+/// 读 journal.jsonl 合成匿名 agents，按 `FileSignature` 缓存。journal **缺失**（`NotFound`）
+/// → 空 Vec（刚启动 journal 尚未 append，调用方据此判 `Pending`）。stat/read 非 `NotFound`
+/// 失败（权限 / IO / 连接抖动）：文件可能存在却读不到，仍返回空 Vec 但 `warn!` 留信号——
+/// 否则「运行中」会被静默误降级为 `Pending`，且异常无任何痕迹可排查。
 async fn read_journal_agents(
     journal_path: &Path,
     fs: &dyn FileSystemProvider,
     cache: &std::sync::Mutex<WorkflowManifestCache>,
 ) -> Vec<WorkflowAgent> {
-    let Ok(fs_meta) = fs.stat(journal_path).await else {
-        return Vec::new();
+    let fs_meta = match fs.stat(journal_path).await {
+        Ok(meta) => meta,
+        Err(FsError::NotFound(_)) => return Vec::new(),
+        Err(e) => {
+            tracing::warn!(
+                path = %journal_path.display(),
+                error = %e,
+                "workflow journal stat failed (not NotFound), treating as no agents"
+            );
+            return Vec::new();
+        }
     };
     let sig = FileSignature::from_fs_metadata(&fs_meta);
 
@@ -478,8 +518,17 @@ async fn read_journal_agents(
         }
     }
 
-    let Ok(content) = fs.read_to_string(journal_path).await else {
-        return Vec::new();
+    // stat 已成功 → 文件存在；read 失败是强异常信号（权限 / 截断 / 损坏），必须留痕。
+    let content = match fs.read_to_string(journal_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                path = %journal_path.display(),
+                error = %e,
+                "workflow journal read failed, treating as no agents"
+            );
+            return Vec::new();
+        }
     };
     let agents = parse_journal(&content);
 
@@ -885,6 +934,16 @@ mod tests {
     }
 
     #[test]
+    fn extract_journal_agent_id_picks_top_level_over_nested_object_key() {
+        // 实证 journal result 行格式：顶层 agentId 始终在 result 字段**之前**
+        //（design.md §journal 实证）。即便 result 是 JSON **对象**且内含未转义的
+        // "agentId" key，`find` 先命中顶层值。正面锁定 review 对「嵌套对象 key
+        // 误提取」的担忧——只要实证的「agentId 先于 result」不变量成立即安全。
+        let line = r#"{"type":"result","key":"v2:k1","agentId":"top1","result":{"agentId":"nested","output":"x"}}"#;
+        assert_eq!(extract_journal_agent_id(line), Some("top1"));
+    }
+
+    #[test]
     fn parse_journal_empty_returns_empty() {
         assert!(parse_journal("").is_empty());
         assert!(parse_journal("\n\n").is_empty());
@@ -1049,5 +1108,130 @@ mod tests {
         assert_eq!(item.status, WorkflowStatus::Running);
         assert_eq!(item.name.as_deref(), Some("fallback-flow"));
         assert!(item.phases.is_empty());
+    }
+
+    // ---- 降级路径错误分流：非 NotFound 不能误判成运行态（codex 替代二审 SFH #1/#2）----
+
+    /// 注错 fs：可让指定 path 的 `stat` 返回非 `NotFound` 的 Io error，或让 `stat`
+    /// 成功但 `read_to_string` 失败——`LocalFileSystemProvider` + `TempDir` 无法
+    /// 可靠制造「文件存在却读不到」，故需此 mock。
+    struct FaultyFs {
+        /// `stat` 返回非 `NotFound` 的 Io error（模拟权限 / IO / 连接抖动）。
+        stat_io_err: Vec<PathBuf>,
+        /// `stat` 成功（伪 metadata）但 `read_to_string` 返回 Io error。
+        read_io_err: Vec<PathBuf>,
+        /// 正常文件：`stat` ok + `read_to_string` 返回内容。
+        files: Vec<(PathBuf, String)>,
+    }
+
+    impl FaultyFs {
+        fn io_err(path: &Path) -> FsError {
+            FsError::Io {
+                path: path.to_path_buf(),
+                source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected fault"),
+            }
+        }
+        fn fake_meta(size: u64) -> cdt_fs::FsMetadata {
+            cdt_fs::FsMetadata {
+                size,
+                mtime: std::time::SystemTime::UNIX_EPOCH,
+                identity: None,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl FileSystemProvider for FaultyFs {
+        fn kind(&self) -> cdt_fs::FsKind {
+            cdt_fs::FsKind::Local
+        }
+        async fn exists(&self, path: &Path) -> bool {
+            self.files.iter().any(|(p, _)| p == path) || self.read_io_err.iter().any(|p| p == path)
+        }
+        async fn read_dir(&self, path: &Path) -> Result<Vec<cdt_fs::DirEntry>, FsError> {
+            Err(Self::io_err(path))
+        }
+        async fn read_to_string(&self, path: &Path) -> Result<String, FsError> {
+            if self.read_io_err.iter().any(|p| p == path) {
+                return Err(Self::io_err(path));
+            }
+            self.files
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, c)| c.clone())
+                .ok_or_else(|| FsError::NotFound(path.to_path_buf()))
+        }
+        async fn stat(&self, path: &Path) -> Result<cdt_fs::FsMetadata, FsError> {
+            if self.stat_io_err.iter().any(|p| p == path) {
+                return Err(Self::io_err(path));
+            }
+            if self.read_io_err.iter().any(|p| p == path) {
+                return Ok(Self::fake_meta(1));
+            }
+            self.files
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, c)| Self::fake_meta(c.len() as u64))
+                .ok_or_else(|| FsError::NotFound(path.to_path_buf()))
+        }
+        async fn read_lines_head(&self, path: &Path, _max: usize) -> Result<Vec<String>, FsError> {
+            Err(Self::io_err(path))
+        }
+        async fn open_read(
+            &self,
+            path: &Path,
+        ) -> Result<Box<dyn tokio::io::AsyncRead + Send + Unpin>, FsError> {
+            Err(Self::io_err(path))
+        }
+        async fn write_atomic(&self, _path: &Path, _content: &[u8]) -> Result<(), FsError> {
+            unimplemented!("FaultyFs 不走写路径")
+        }
+        async fn create_dir_all(&self, _path: &Path) -> Result<(), FsError> {
+            unimplemented!("FaultyFs 不走写路径")
+        }
+        async fn remove_file(&self, _path: &Path) -> Result<(), FsError> {
+            unimplemented!("FaultyFs 不走写路径")
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_single_non_notfound_manifest_stat_error_does_not_synthesize_running() {
+        // manifest stat 失败为**非 NotFound**（权限 / IO）→ manifest 可能真实存在只是
+        // 读不到，即便 journal 有 started 也**不能**误判成 Running，须降级 pending placeholder。
+        let run_id = "wf_faulty";
+        let manifest_path = PathBuf::from("/wf/workflows/wf_faulty.json");
+        let journal_path = PathBuf::from("/wf/subagents/workflows/wf_faulty/journal.jsonl");
+        let fs = FaultyFs {
+            stat_io_err: vec![manifest_path.clone()],
+            read_io_err: vec![],
+            files: vec![(
+                journal_path.clone(),
+                r#"{"type":"started","key":"v2:k1","agentId":"a1"}"#.to_owned(),
+            )],
+        };
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+        let item = resolve_single(run_id, &manifest_path, &journal_path, None, &fs, &cache).await;
+        // 修复前：进 resolve_running_state + journal 有 started → 虚假 Running。
+        // 修复后：非 NotFound → pending placeholder。
+        assert_eq!(item.status, WorkflowStatus::Pending);
+        assert!(item.agents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resolve_single_journal_read_error_treated_as_no_agents_not_running() {
+        // manifest 真缺失（NotFound）→ 正常降级；但 journal stat 成功、read 失败（截断 /
+        // 权限）→ read_journal_agents 返回空（留 warn），status 落 Pending 而非误判 Running。
+        let run_id = "wf_jread";
+        let manifest_path = PathBuf::from("/wf/workflows/wf_jread.json"); // 不在 files → NotFound
+        let journal_path = PathBuf::from("/wf/subagents/workflows/wf_jread/journal.jsonl");
+        let fs = FaultyFs {
+            stat_io_err: vec![],
+            read_io_err: vec![journal_path.clone()],
+            files: vec![],
+        };
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+        let item = resolve_single(run_id, &manifest_path, &journal_path, None, &fs, &cache).await;
+        assert_eq!(item.status, WorkflowStatus::Pending);
+        assert!(item.agents.is_empty());
     }
 }
