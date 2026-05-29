@@ -63,6 +63,7 @@
     }
     return map;
   });
+  const workflowRunIds = $derived(new Set(workflowMap.keys()));
   let knownFingerprint: string | null = $state(null);
   let lastChunksFingerprint: string | null = $state(null);
   let loading = $state(true);
@@ -1089,7 +1090,7 @@
       <!-- AI -->
       {:else if chunk.kind === "ai"}
         {@const di = buildDisplayItemsCached(chunk)}
-        {@const summaryText = buildSummary(di.items)}
+        {@const summaryText = buildSummary(di.items, workflowRunIds)}
         {@const toolsVisible = isChunkToolsVisible(chunk)}
         {@const interruptions = chunk.semanticSteps.filter((s) => s.kind === "interruption")}
         {@const isLastAi = i === lastAiIndex}

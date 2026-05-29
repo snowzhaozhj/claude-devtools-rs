@@ -80,11 +80,21 @@ describe("buildDisplayItems — workflow tool execution", () => {
 });
 
 describe("buildSummary — workflow tool counted as tool call", () => {
-  test("Workflow tool counted in tool calls summary", () => {
+  test("Workflow tool counted in tool calls summary when no workflowRunIds provided", () => {
     const chunk = makeChunkWithWorkflowTool();
     const { items } = buildDisplayItems(chunk);
     const summary = buildSummary(items);
 
     expect(summary).toContain("1 tool call");
+  });
+
+  test("Workflow tool counted as workflow when workflowRunIds provided", () => {
+    const chunk = makeChunkWithWorkflowTool();
+    const { items } = buildDisplayItems(chunk);
+    const workflowRunIds = new Set(["wf-run-001"]);
+    const summary = buildSummary(items, workflowRunIds);
+
+    expect(summary).toContain("1 workflow");
+    expect(summary).not.toContain("tool call");
   });
 });

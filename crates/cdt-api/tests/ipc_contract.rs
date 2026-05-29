@@ -4323,19 +4323,21 @@ fn workflow_item_serializes_camelcase() {
 }
 
 #[test]
-fn workflow_item_empty_vec_omits_phases_and_agents() {
+fn workflow_item_empty_vec_serializes_as_empty_array() {
     use cdt_core::workflow::WorkflowItem;
 
     let item = WorkflowItem::pending("wf_test".into());
     let json = serde_json::to_value(&item).unwrap();
 
-    assert!(
-        json.get("phases").is_none(),
-        "Empty phases SHALL be omitted"
+    assert_eq!(
+        json.get("phases").unwrap(),
+        &serde_json::json!([]),
+        "Empty phases SHALL serialize as []"
     );
-    assert!(
-        json.get("agents").is_none(),
-        "Empty agents SHALL be omitted"
+    assert_eq!(
+        json.get("agents").unwrap(),
+        &serde_json::json!([]),
+        "Empty agents SHALL serialize as []"
     );
     assert!(json.get("name").is_none(), "None name SHALL be omitted");
     assert!(json.get("error").is_none(), "None error SHALL be omitted");

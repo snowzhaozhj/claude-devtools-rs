@@ -355,7 +355,7 @@ export function buildDisplayItemsFromChunks(chunks: Chunk[]): DisplayItem[] {
  * - `teammate_message` 单独计为 "N teammate messages"
  * - 拼接顺序：thinking → tool calls → messages → teammates → subagents → slashes → teammate messages
  */
-export function buildSummary(items: DisplayItem[]): string {
+export function buildSummary(items: DisplayItem[], workflowRunIds?: Set<string>): string {
   let tools = 0;
   let slashes = 0;
   let messages = 0;
@@ -368,7 +368,11 @@ export function buildSummary(items: DisplayItem[]): string {
   for (const item of items) {
     switch (item.type) {
       case "tool":
-        tools++;
+        if (workflowRunIds && item.execution.workflowRunId && workflowRunIds.has(item.execution.workflowRunId)) {
+          workflows++;
+        } else {
+          tools++;
+        }
         break;
       case "slash":
         slashes++;
