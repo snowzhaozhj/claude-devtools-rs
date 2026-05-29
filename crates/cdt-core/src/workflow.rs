@@ -60,9 +60,9 @@ pub struct WorkflowItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub status: WorkflowStatus,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub phases: Vec<WorkflowPhase>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<WorkflowAgent>,
     #[serde(default)]
     pub total_tokens: u64,
@@ -98,8 +98,8 @@ mod tests {
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("\"runId\":\"wf_abc123\""));
         assert!(json.contains("\"status\":\"pending\""));
-        assert!(json.contains("\"phases\":[]"));
-        assert!(json.contains("\"agents\":[]"));
+        assert!(!json.contains("\"phases\""));
+        assert!(!json.contains("\"agents\""));
         let deser: WorkflowItem = serde_json::from_str(&json).unwrap();
         assert_eq!(deser, item);
     }
