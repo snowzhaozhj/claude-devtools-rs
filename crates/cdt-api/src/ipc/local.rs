@@ -565,6 +565,7 @@ pub struct LocalDataApi {
     /// design D2/D3；行为契约见 spec `ipc-data-api/spec.md`
     /// §"`get_tool_output` 与 `get_image_asset` 走 parsed-message LRU 缓存"。
     parsed_msg_cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
+    workflow_manifest_cache: Arc<std::sync::Mutex<super::workflow_manifest::WorkflowManifestCache>>,
     /// 当前 projects root；随 `general.claudeRootPath` 运行时重配。
     projects_dir: Mutex<PathBuf>,
     /// `ProjectScanner` 共享的 head-read `Semaphore`（容量 64）。所有动态
@@ -1676,6 +1677,9 @@ impl LocalDataApi {
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
             parsed_msg_cache: Arc::new(std::sync::Mutex::new(ParsedMessageCache::default())),
+            workflow_manifest_cache: Arc::new(std::sync::Mutex::new(
+                super::workflow_manifest::WorkflowManifestCache::new(),
+            )),
             projects_dir: Mutex::new(projects_dir),
             // 共享 head-read semaphore 容量与 `cdt_discover::ProjectScanner`
             // 默认 `FILE_READ_CONCURRENCY=64` 等价（design D4）。硬编码 64 避免
@@ -1793,6 +1797,9 @@ impl LocalDataApi {
             image_cache_dir: None,
             metadata_cache: Arc::new(std::sync::Mutex::new(MetadataCache::default())),
             parsed_msg_cache,
+            workflow_manifest_cache: Arc::new(std::sync::Mutex::new(
+                super::workflow_manifest::WorkflowManifestCache::new(),
+            )),
             projects_dir: Mutex::new(projects_dir),
             // 共享 head-read semaphore 容量与 `cdt_discover::ProjectScanner`
             // 默认 `FILE_READ_CONCURRENCY=64` 等价（design D4）。硬编码 64 避免
@@ -3581,6 +3588,16 @@ impl DataApi for LocalDataApi {
         let annotations = self.inject_context_annotations(&chunks, &messages).await;
         let ctx_ms = t_ctx.elapsed().as_millis();
 
+        // Step 5.5: resolve workflow manifests (conditional on Workflow tool_use presence)
+        let session_dir = located.jsonl_path.parent().unwrap_or(Path::new(""));
+        let workflow_items = super::workflow_manifest::resolve_workflow_items(
+            &chunks,
+            session_dir,
+            &*located.fs,
+            &self.workflow_manifest_cache,
+        )
+        .await;
+
         // Step 6: apply payload omissions + assemble response
         let t_serde = std::time::Instant::now();
         let mut chunks = chunks;
@@ -3603,6 +3620,7 @@ impl DataApi for LocalDataApi {
             turn_context_stats: annotations.turn_context_stats,
             is_ongoing,
             title: title_metadata.title,
+            workflow_items,
         };
         let serde_ms = t_serde.elapsed().as_millis();
         let total_ms = t_total.elapsed().as_millis();
@@ -3848,6 +3866,7 @@ impl DataApi for LocalDataApi {
                     turn_context_stats: HashMap::default(),
                     is_ongoing: false,
                     title: None,
+                    workflow_items: Vec::new(),
                 });
                 continue;
             };
@@ -3867,6 +3886,7 @@ impl DataApi for LocalDataApi {
                         turn_context_stats: HashMap::default(),
                         is_ongoing: false,
                         title: None,
+                        workflow_items: Vec::new(),
                     });
                 }
                 Err(_) => results.push(SessionDetail {
@@ -3881,6 +3901,7 @@ impl DataApi for LocalDataApi {
                     turn_context_stats: HashMap::default(),
                     is_ongoing: false,
                     title: None,
+                    workflow_items: Vec::new(),
                 }),
             }
         }
