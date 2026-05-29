@@ -41,6 +41,41 @@ find <scope> -name "*.rs" -o -name "*.svelte" -o -name "*.ts" 2>/dev/null | wc -
 # 大于 50 文件的 scope 提醒用户拆分
 ```
 
+### Step 1.5: 路由决策（Workflow vs 直接扫）
+
+根据 scope 体量选路径：
+
+| scope 体量 | 路径 | 理由 |
+|---|---|---|
+| < 10 文件 | **直接扫**（现有 Step 2-5 流程） | 小 scope 不值得 workflow 的 agent spawn 开销 |
+| 10-50 文件 | **调 Workflow**（`.claude/workflows/bug-hunt.js`） | 吃满 fan-out + schema + 上下文隔离收益 |
+| > 50 文件 | 先提醒用户拆分（Step 1 已规定） | — |
+
+**调 Workflow 的方式**：
+
+```
+Workflow({
+  name: 'bug-hunt',
+  args: {
+    scope: '<收到的 scope 路径>',
+    scopeType: '<crate|files|commit-range|capability>',
+    riskLevel: '<low|medium|high>',   // 默认 high
+    skipLenses: [<用户显式跳过的 lens id>]
+  }
+})
+```
+
+- `riskLevel` 决定跑多少 lens：`low` = 仅 L1+L2；`medium` = L1-L5（跳 L6）；`high` = 全部
+- 默认 `riskLevel: 'high'`（用户没指定风险偏好时全跑）
+- Workflow 返回结构化 `{ findings, openQuestions, discarded, metadata }`
+- **lead 拿到返回后做 Step 5 报告输出**——Workflow 只产证据，综合判断由 lead 在完整上下文里做
+
+**Workflow 失败降级**：若 Workflow 工具调用失败（返回 error / 用户拒绝 / runtime 不支持），**降级到直接扫流程**（Step 2-5），并告知用户"Workflow 不可用，降级为直接扫描"。
+
+**实测指标记录**：每次 Workflow 跑完，在报告末尾附加：
+- agent 总数 / input token / output token（从 workflow result 的 metadata 提取）
+- finding 被采纳数（由后续用户交互确定，首次填 TBD）
+
 ### Step 2: 6 个 lens 分层扫（每个 lens 独立产出 candidate）
 
 每个 lens 关注不同类型反模式。**默认全跑**；用户可显式跳过某 lens（如 "skip L5 安全" 因为是内部工具）。
