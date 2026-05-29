@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780024153552,
+  "lastUpdate": 1780028899542,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -2507,6 +2507,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12420,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ea585945530d74dc038c3ba3599aa09c9f3f72be",
+          "message": "feat(context): per-turn context badge + visible context (#388)\n\n* feat(context): add TurnContextStats to SessionDetail IPC\n\nBackend implementation for per-turn context badge feature:\n- Add TurnContextStats struct to cdt-core (new_count, new_tokens,\n  new/cumulative tokens_by_category)\n- Add turn_context_stats field to SessionDetail (sparse map, only\n  turns with new_count > 0)\n- Project stats_map data that was previously computed and discarded\n  in inject_context_annotations\n- IPC contract tests for serialization shape + backward compat\n- OpenSpec change artifacts (proposal, design, spec delta, tasks)\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n\n* feat(ui): add ContextBadge + token popover click + visible context\n\nFrontend implementation for per-turn context badge:\n- New ContextBadge.svelte: click pill \"Context +N\" with popover\n  showing category breakdown sorted by tokens desc\n- Token popover converted from hover to click trigger\n- Added \"Visible Context ≈N%\" section in token popover\n- Mutual exclusion: only one popover open at a time (per chunk)\n- Outside click / Esc dismiss for all popovers\n- contextExtractor.ts: TurnContextStats type, shouldShowBadge(),\n  buildInjectionsByTurnMap(), getCategoryBreakdown()\n- api.ts: SessionDetail.turnContextStats field\n- Fixed circular dependency: contextExtractor no longer imports\n  from api.ts\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): tick business tasks for per-turn-context-badge\n\nAll implementation tasks complete. N.1-N.4 release steps pending.\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n\n* fix(ui): visible context fallback for turns without turnContextStats\n\nCodex CR #2: turnContextStats is sparse (only turns with new\ninjections), but Visible Context percentage should show for all\nturns. Fallback to session-level contextInjections token sum when\nper-turn cumulative data is unavailable.\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n\n* fix(ui): include turnContextStats in hasAiContent gate\n\nCodex CR #1: AI chunks with usage=None but non-zero context\ninjections (e.g. initial CLAUDE.md injection on first turn) were\nhidden by hasAiContent check. Add chunkTurnStats.newCount > 0 as\nan additional condition to ensure the header (and badge) renders.\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive per-turn-context-badge\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n\n* fix(ui): widen context badge popover to prevent line wrapping\n\nSet min-width: 300px + width: max-content + white-space: nowrap on\ncategory labels and token values to prevent ugly line breaks in the\npopover content.\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n\n* style(ui): impeccable polish for ContextBadge popover\n\nVisual critique fixes (impeccable critique + designer review):\n- Natural-language labels (badge \"Context\", category names, footer)\n  use sans; only numeric values (+N, token counts) stay mono. Fixes\n  \"reads like a log\" feel — category names are prose, not machine data.\n- focus-visible ring uses --color-accent-blue token (was hardcoded\n  rgba) + bumped alpha to 35% for keyboard a11y visibility.\n- Removed dead box-shadow accent-blue 0% ring (rendered nothing).\n\nAutomated detector: 0 findings. Designer review: 0 P0.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-05-29T12:25:05+08:00",
+          "tree_id": "41a81b8a7371bb6a3d6e2867d95aacfad502580f",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/ea585945530d74dc038c3ba3599aa09c9f3f72be"
+        },
+        "date": 1780028899089,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 116.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1124,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4807,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.872,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 10.03,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 41.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.45,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 296.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1246,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3322,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3333,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 39130,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 67.64,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 61.41,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 623,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6129,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 192.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1938,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 55.65,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 563.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5621,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 117.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1185,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.501,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 64.76,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9214,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 995.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9554,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 994.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 46.64,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 491.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 92.21,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 933.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9391,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 197.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1381,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12870,
             "unit": "µs"
           }
         ]
