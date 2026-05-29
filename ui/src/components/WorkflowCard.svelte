@@ -16,7 +16,7 @@
     switch (workflow.status) {
       case "completed": return "Done";
       case "partial_failure": {
-        const failedCount = workflow.agents.filter(a => a.status === "failed").length;
+        const failedCount = workflow.agents.filter(a => a.state === "failed").length;
         return `${failedCount} failed`;
       }
       case "running": return "Running";
@@ -100,8 +100,8 @@
             <div class="wf-phase-title">{phase.title}</div>
             <div class="wf-chips">
               {#each agentsByPhase.get(phase.index) ?? [] as agent, idx (`${phase.index}-${idx}`)}
-                <div class="wf-chip" class:wf-chip-failed={agent.status === "failed"}>
-                  <span class="wf-chip-dot" class:wf-dot-done={agent.status === "done"} class:wf-dot-failed={agent.status === "failed"} class:wf-dot-running={agent.status === "running"} class:wf-dot-queued={agent.status === "queued" || agent.status === "cached"}></span>
+                <div class="wf-chip" class:wf-chip-failed={agent.state === "failed"}>
+                  <span class="wf-chip-dot" class:wf-dot-done={agent.state === "completed"} class:wf-dot-failed={agent.state === "failed"} class:wf-dot-running={agent.state === "running"} class:wf-dot-queued={agent.state === "pending"}></span>
                   <span class="wf-chip-label">{agent.label}</span>
                   {#if agent.tokens}
                     <span class="wf-chip-meta">{agent.tokens.toLocaleString()} tk</span>

@@ -241,6 +241,8 @@ export interface ToolExecution {
    *  抽出的队友派生元数据。前端检测到非空 → 渲染极简单行（圆点 + member-X
    *  badge + Teammate spawned）替代 DefaultToolViewer，对齐原版 LinkedToolItem.tsx。 */
   teammateSpawn?: TeammateSpawnInfo | null;
+  /** 后端提取的 workflow run ID；非空时表示该 tool execution 关联一个 WorkflowItem。 */
+  workflowRunId?: string;
 }
 
 export interface UserChunk {
@@ -302,7 +304,7 @@ export interface WorkflowPhase {
 export interface WorkflowAgent {
   label: string;
   phaseIndex: number;
-  status: "done" | "failed" | "running" | "queued" | "cached";
+  state: "pending" | "running" | "completed" | "failed";
   tokens?: number;
   toolCalls?: number;
   durationMs?: number;
@@ -312,7 +314,7 @@ export interface WorkflowAgent {
 export interface WorkflowItem {
   runId: string;
   name?: string;
-  status: "completed" | "partial_failure" | "running" | "pending";
+  status: "completed" | "partial_failure" | "running" | "pending" | "failed";
   phases: WorkflowPhase[];
   agents: WorkflowAgent[];
   totalTokens?: number;
@@ -369,11 +371,6 @@ export interface AIChunk {
    * 控制：无 teammate 时字段在 IPC payload 中省略，前端按 `?? []` 兼容。
    */
   teammateMessages?: TeammateMessage[];
-  /**
-   * 该 turn 关联的 workflow 运行。后端 `skip_serializing_if = Vec::is_empty`
-   * 控制：无 workflow 时省略，前端按 `?? []` 兼容。
-   */
-  workflows?: WorkflowItem[];
 }
 
 export interface SystemChunk {
@@ -482,6 +479,8 @@ export interface SessionDetail {
    * Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
    */
   title?: string | null;
+  /** 顶层 workflow items；前端按 toolExecution.workflowRunId 匹配渲染 WorkflowCard。 */
+  workflowItems?: WorkflowItem[];
 }
 
 // ---------------------------------------------------------------------------

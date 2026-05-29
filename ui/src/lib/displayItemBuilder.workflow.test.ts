@@ -1,23 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { buildDisplayItems, buildSummary } from "./displayItemBuilder";
-import type { AIChunk, WorkflowItem } from "./api";
+import type { AIChunk } from "./api";
 
-function makeWorkflow(overrides: Partial<WorkflowItem> = {}): WorkflowItem {
-  return {
-    runId: "wf-test-001",
-    name: "test-pipeline",
-    status: "completed",
-    phases: [{ index: 0, title: "Build" }],
-    agents: [
-      { label: "agent-1", phaseIndex: 0, status: "done", tokens: 1000 },
-    ],
-    totalTokens: 1000,
-    durationMs: 5000,
-    ...overrides,
-  };
-}
-
-function makeChunkWithWorkflows(workflows: WorkflowItem[]): AIChunk {
+function makeChunkWithWorkflowTool(): AIChunk {
   return {
     kind: "ai",
     chunkId: "wf-chunk-1:0",
@@ -38,96 +23,68 @@ function makeChunkWithWorkflows(workflows: WorkflowItem[]): AIChunk {
       outputTokens: 50,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      toolCount: 0,
+      toolCount: 1,
       costUsd: null,
     },
     semanticSteps: [
       {
-        kind: "text",
-        text: "Running workflow...",
+        kind: "tool_execution",
+        toolUseId: "wf-tool-1",
+        toolName: "Workflow",
         timestamp: "2024-01-01T00:00:00.000Z",
       },
+      {
+        kind: "text",
+        text: "Running workflow...",
+        timestamp: "2024-01-01T00:00:01.000Z",
+      },
     ],
-    toolExecutions: [],
+    toolExecutions: [
+      {
+        toolUseId: "wf-tool-1",
+        toolName: "Workflow",
+        input: { name: "deploy-pipeline", run_id: "wf-run-001" },
+        output: { kind: "text", text: "completed" },
+        isError: false,
+        startTs: "2024-01-01T00:00:00.000Z",
+        endTs: "2024-01-01T00:00:02.000Z",
+        sourceAssistantUuid: "wf-resp-1",
+        workflowRunId: "wf-run-001",
+      },
+    ],
     subagents: [],
     slashCommands: [],
-    workflows,
   };
 }
 
-describe("buildDisplayItems — workflow", () => {
-  test("includes WorkflowDisplayItem for each workflow in chunk", () => {
-    const wf1 = makeWorkflow({ runId: "wf-1", name: "pipeline-a" });
-    const wf2 = makeWorkflow({ runId: "wf-2", name: "pipeline-b" });
-    const chunk = makeChunkWithWorkflows([wf1, wf2]);
-
+describe("buildDisplayItems — workflow tool execution", () => {
+  test("Workflow tool execution appears as tool DisplayItem (rendering matches at component level)", () => {
+    const chunk = makeChunkWithWorkflowTool();
     const { items } = buildDisplayItems(chunk);
-    const wfItems = items.filter((i) => i.type === "workflow");
 
-    expect(wfItems).toHaveLength(2);
-    expect(wfItems[0].type === "workflow" && wfItems[0].workflow.runId).toBe(
-      "wf-1",
-    );
-    expect(wfItems[1].type === "workflow" && wfItems[1].workflow.runId).toBe(
-      "wf-2",
-    );
+    const toolItems = items.filter((i) => i.type === "tool");
+    expect(toolItems).toHaveLength(1);
+    expect(toolItems[0].type === "tool" && toolItems[0].execution.workflowRunId).toBe("wf-run-001");
   });
 
-  test("workflow items carry chunk timestamp", () => {
-    const chunk = makeChunkWithWorkflows([makeWorkflow()]);
+  test("tool item with workflowRunId preserves toolName as Workflow", () => {
+    const chunk = makeChunkWithWorkflowTool();
     const { items } = buildDisplayItems(chunk);
-    const wfItem = items.find((i) => i.type === "workflow");
 
-    expect(wfItem).toBeDefined();
-    if (wfItem && wfItem.type === "workflow") {
-      expect(wfItem.timestamp).toBe("2024-01-01T00:00:00.000Z");
+    const toolItem = items.find((i) => i.type === "tool");
+    expect(toolItem).toBeDefined();
+    if (toolItem && toolItem.type === "tool") {
+      expect(toolItem.execution.toolName).toBe("Workflow");
     }
-  });
-
-  test("chunk without workflows produces no workflow items", () => {
-    const chunk = makeChunkWithWorkflows([]);
-    const { items } = buildDisplayItems(chunk);
-    const wfItems = items.filter((i) => i.type === "workflow");
-
-    expect(wfItems).toHaveLength(0);
-  });
-
-  test("chunk with undefined workflows (old backend) produces no workflow items", () => {
-    const chunk = makeChunkWithWorkflows([]);
-    delete (chunk as unknown as Record<string, unknown>).workflows;
-    const { items } = buildDisplayItems(chunk);
-    const wfItems = items.filter((i) => i.type === "workflow");
-
-    expect(wfItems).toHaveLength(0);
   });
 });
 
-describe("buildSummary — workflow", () => {
-  test("counts workflows in summary string", () => {
-    const chunk = makeChunkWithWorkflows([
-      makeWorkflow({ runId: "wf-1" }),
-      makeWorkflow({ runId: "wf-2" }),
-    ]);
+describe("buildSummary — workflow tool counted as tool call", () => {
+  test("Workflow tool counted in tool calls summary", () => {
+    const chunk = makeChunkWithWorkflowTool();
     const { items } = buildDisplayItems(chunk);
     const summary = buildSummary(items);
 
-    expect(summary).toContain("2 workflows");
-  });
-
-  test("singular workflow in summary", () => {
-    const chunk = makeChunkWithWorkflows([makeWorkflow()]);
-    const { items } = buildDisplayItems(chunk);
-    const summary = buildSummary(items);
-
-    expect(summary).toContain("1 workflow");
-    expect(summary).not.toContain("workflows");
-  });
-
-  test("no workflow mention when none present", () => {
-    const chunk = makeChunkWithWorkflows([]);
-    const { items } = buildDisplayItems(chunk);
-    const summary = buildSummary(items);
-
-    expect(summary).not.toContain("workflow");
+    expect(summary).toContain("1 tool call");
   });
 });
