@@ -68,12 +68,18 @@ const workflowPartialFailure: WorkflowItem = {
   durationMs: 286000,
 }
 
+// 运行态（manifest 缺失，Tier 0 降级）：后端从 journal 合成匿名 agents（空 label），
+// 前端补 "Agent N"；name 从 scriptPath 剥得；无 phases（journal 无 phase 标记）。
 const workflowRunning: WorkflowItem = {
   runId: 'wf-run-003',
   name: 'analysis-pipeline',
   status: 'running',
   phases: [],
-  agents: [],
+  agents: [
+    { label: '', phaseIndex: 0, state: 'completed' },
+    { label: '', phaseIndex: 0, state: 'running' },
+    { label: '', phaseIndex: 0, state: 'running' },
+  ],
 }
 
 const workflowEmpty: WorkflowItem = {

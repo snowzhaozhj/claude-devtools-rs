@@ -30,6 +30,7 @@ cdt-ssh = { workspace = true }
 cdt-telemetry = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+json5 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }

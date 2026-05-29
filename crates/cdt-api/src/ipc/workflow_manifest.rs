@@ -12,6 +12,7 @@ use cdt_core::workflow::{
 };
 use cdt_discover::FileSystemProvider;
 
+use super::workflow_script::{ScriptMeta, parse_script_meta};
 use crate::cache_signature::FileSignature;
 
 struct CacheEntry {
@@ -19,9 +20,26 @@ struct CacheEntry {
     item: WorkflowItem,
 }
 
+struct JournalCacheEntry {
+    sig: FileSignature,
+    agents: Vec<WorkflowAgent>,
+}
+
+struct ScriptCacheEntry {
+    sig: FileSignature,
+    /// `None` 表示「解析过但失败」——同样缓存以免每次 poll 重复解析坏 script。
+    meta: Option<ScriptMeta>,
+}
+
 #[derive(Default)]
 pub struct WorkflowManifestCache {
     entries: HashMap<PathBuf, CacheEntry>,
+    /// 运行态 journal 派生的合成 agents 缓存（manifest 缺失降级路径）。
+    /// journal append-only → 每次 append 签名变化 → 自动失效重读；
+    /// 仅在 journal 未变化（如非 journal 触发的 refresh）时复用。
+    journal_entries: HashMap<PathBuf, JournalCacheEntry>,
+    /// 运行态 script meta 解析缓存（Tier 1）。script immutable → 一辈子只解析一次。
+    script_entries: HashMap<PathBuf, ScriptCacheEntry>,
 }
 
 impl WorkflowManifestCache {
@@ -38,6 +56,32 @@ impl WorkflowManifestCache {
 
     fn insert(&mut self, path: PathBuf, sig: FileSignature, item: WorkflowItem) {
         self.entries.insert(path, CacheEntry { sig, item });
+    }
+
+    fn get_journal(&self, path: &Path, sig: &FileSignature) -> Option<Vec<WorkflowAgent>> {
+        self.journal_entries
+            .get(path)
+            .filter(|e| &e.sig == sig)
+            .map(|e| e.agents.clone())
+    }
+
+    fn insert_journal(&mut self, path: PathBuf, sig: FileSignature, agents: Vec<WorkflowAgent>) {
+        self.journal_entries
+            .insert(path, JournalCacheEntry { sig, agents });
+    }
+
+    /// 外层 `Option` = 缓存命中/未命中；内层 `Option<ScriptMeta>` = 解析结果（含失败）。
+    #[allow(clippy::option_option)]
+    fn get_script(&self, path: &Path, sig: &FileSignature) -> Option<Option<ScriptMeta>> {
+        self.script_entries
+            .get(path)
+            .filter(|e| &e.sig == sig)
+            .map(|e| e.meta.clone())
+    }
+
+    fn insert_script(&mut self, path: PathBuf, sig: FileSignature, meta: Option<ScriptMeta>) {
+        self.script_entries
+            .insert(path, ScriptCacheEntry { sig, meta });
     }
 }
 
@@ -219,21 +263,30 @@ fn extract_index_from_log(log: &str) -> Option<usize> {
     None
 }
 
-pub fn collect_workflow_run_ids(chunks: &[cdt_core::Chunk]) -> Vec<String> {
+/// 收集 `(run_id, script_path)` 候选——按 `run_id` 去重，`script_path` 取第一个非空值。
+///
+/// 携带 `workflow_script_path`，供运行态降级（manifest 缺失）时剥取 workflow name。
+fn collect_workflow_candidates(chunks: &[cdt_core::Chunk]) -> Vec<(String, Option<String>)> {
     let mut seen = std::collections::HashSet::new();
-    let mut ids = Vec::new();
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
     for chunk in chunks {
         if let cdt_core::Chunk::Ai(ai) = chunk {
             for exec in &ai.tool_executions {
-                if let Some(ref run_id) = exec.workflow_run_id {
-                    if seen.insert(run_id.clone()) {
-                        ids.push(run_id.clone());
+                let Some(run_id) = exec.workflow_run_id.as_ref() else {
+                    continue;
+                };
+                if seen.insert(run_id.clone()) {
+                    out.push((run_id.clone(), exec.workflow_script_path.clone()));
+                } else if let Some(slot) = out.iter_mut().find(|(id, _)| id == run_id) {
+                    // 同 run_id 已存在但 script_path 缺失时，补上后续 exec 的非空值
+                    if slot.1.is_none() {
+                        slot.1.clone_from(&exec.workflow_script_path);
                     }
                 }
             }
         }
     }
-    ids
+    out
 }
 
 pub async fn resolve_workflow_items(
@@ -242,17 +295,30 @@ pub async fn resolve_workflow_items(
     fs: &dyn FileSystemProvider,
     cache: &std::sync::Mutex<WorkflowManifestCache>,
 ) -> Vec<WorkflowItem> {
-    let run_ids = collect_workflow_run_ids(chunks);
-    if run_ids.is_empty() {
+    let candidates = collect_workflow_candidates(chunks);
+    if candidates.is_empty() {
         return Vec::new();
     }
 
     let workflows_dir = session_dir.join("workflows");
-    let mut items = Vec::with_capacity(run_ids.len());
+    let mut items = Vec::with_capacity(candidates.len());
 
-    for run_id in &run_ids {
+    for (run_id, script_path) in &candidates {
         let manifest_path = workflows_dir.join(format!("{run_id}.json"));
-        let item = resolve_single(run_id, &manifest_path, fs, cache).await;
+        let journal_path = session_dir
+            .join("subagents")
+            .join("workflows")
+            .join(run_id)
+            .join("journal.jsonl");
+        let item = resolve_single(
+            run_id,
+            &manifest_path,
+            &journal_path,
+            script_path.as_deref(),
+            fs,
+            cache,
+        )
+        .await;
         items.push(item);
     }
 
@@ -262,16 +328,19 @@ pub async fn resolve_workflow_items(
 async fn resolve_single(
     run_id: &str,
     manifest_path: &Path,
+    journal_path: &Path,
+    script_path: Option<&str>,
     fs: &dyn FileSystemProvider,
     cache: &std::sync::Mutex<WorkflowManifestCache>,
 ) -> WorkflowItem {
+    // manifest 缺失 → 进运行态降级路径（journal + scriptPath 合成）。
     let Ok(fs_meta) = fs.stat(manifest_path).await else {
         tracing::debug!(
             run_id,
             path = %manifest_path.display(),
-            "workflow manifest not found, using pending placeholder"
+            "workflow manifest not found, degrading to running-state synthesis"
         );
-        return WorkflowItem::pending(run_id.to_owned());
+        return resolve_running_state(run_id, journal_path, script_path, fs, cache).await;
     };
 
     let sig = FileSignature::from_fs_metadata(&fs_meta);
@@ -316,6 +385,181 @@ async fn resolve_single(
     }
 
     item
+}
+
+/// manifest 缺失时的运行态降级解析（Tier 0）。
+///
+/// 状态判定**只看 journal**，独立于 manifest 完成态的失败启发式：
+/// - journal 缺失 → `Pending`（agent 刚启动 journal 尚未 append）
+/// - journal 含 ≥1 `started` → `Running`，合成匿名 agents
+///
+/// 合成 agent 的 `Completed` 语义是「已结束」而非「已成功」——journal `result`
+/// 对失败 agent 也 append，运行态不区分成败（成败裁定是 manifest 职责）。
+async fn resolve_running_state(
+    run_id: &str,
+    journal_path: &Path,
+    script_path: Option<&str>,
+    fs: &dyn FileSystemProvider,
+    cache: &std::sync::Mutex<WorkflowManifestCache>,
+) -> WorkflowItem {
+    let agents = read_journal_agents(journal_path, fs, cache).await;
+    let status = if agents.is_empty() {
+        WorkflowStatus::Pending
+    } else {
+        WorkflowStatus::Running
+    };
+
+    // Tier 1：解析 script meta 取 name + phases（失败静默降回 Tier 0）。
+    let meta = match script_path {
+        Some(p) => read_script_meta(Path::new(p), fs, cache).await,
+        None => None,
+    };
+    // name 优先 meta.name（Tier 1 权威），否则从 scriptPath basename 剥取（Tier 0）。
+    let name = meta
+        .as_ref()
+        .and_then(|m| m.name.clone())
+        .or_else(|| script_path.and_then(|p| workflow_name_from_script_path(p, run_id)));
+    let phases = meta.map(|m| m.phases).unwrap_or_default();
+
+    WorkflowItem {
+        run_id: run_id.to_owned(),
+        name,
+        status,
+        phases,
+        agents,
+        total_tokens: 0,
+        duration_ms: 0,
+        error: None,
+    }
+}
+
+/// 读 + 解析 script meta（Tier 1），按 script `FileSignature` 缓存（含解析失败结果）。
+/// script immutable → 一辈子只解析一次。文件不存在/读失败/解析失败均返回 `None`。
+async fn read_script_meta(
+    script_path: &Path,
+    fs: &dyn FileSystemProvider,
+    cache: &std::sync::Mutex<WorkflowManifestCache>,
+) -> Option<ScriptMeta> {
+    let fs_meta = fs.stat(script_path).await.ok()?;
+    let sig = FileSignature::from_fs_metadata(&fs_meta);
+
+    if let Ok(guard) = cache.lock() {
+        if let Some(cached) = guard.get_script(script_path, &sig) {
+            return cached;
+        }
+    }
+
+    let parsed = match fs.read_to_string(script_path).await {
+        Ok(content) => parse_script_meta(&content),
+        Err(_) => None,
+    };
+
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert_script(script_path.to_owned(), sig, parsed.clone());
+    }
+    parsed
+}
+
+/// 读 journal.jsonl 合成匿名 agents，按 `FileSignature` 缓存。journal 缺失/读失败
+/// 返回空 Vec（调用方据此判 `Pending`）。
+async fn read_journal_agents(
+    journal_path: &Path,
+    fs: &dyn FileSystemProvider,
+    cache: &std::sync::Mutex<WorkflowManifestCache>,
+) -> Vec<WorkflowAgent> {
+    let Ok(fs_meta) = fs.stat(journal_path).await else {
+        return Vec::new();
+    };
+    let sig = FileSignature::from_fs_metadata(&fs_meta);
+
+    if let Ok(guard) = cache.lock() {
+        if let Some(cached) = guard.get_journal(journal_path, &sig) {
+            return cached;
+        }
+    }
+
+    let Ok(content) = fs.read_to_string(journal_path).await else {
+        return Vec::new();
+    };
+    let agents = parse_journal(&content);
+
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert_journal(journal_path.to_owned(), sig, agents.clone());
+    }
+    agents
+}
+
+/// 轻量解析 journal.jsonl——**不做 JSON 全解析**（`result` 行内嵌完整 agent
+/// 输出可能很大）。仅按行首 `{"type":"started"` / `{"type":"result"` 判类型 +
+/// 子串提取顶层 `agentId`。按 agentId 首见顺序去重；任一 `result` → `Completed`，
+/// 仅 `started` → `Running`。半截行 / 无 agentId 行静默跳过（graceful）。
+fn parse_journal(content: &str) -> Vec<WorkflowAgent> {
+    let mut order: Vec<String> = Vec::new();
+    let mut completed: HashMap<String, bool> = HashMap::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        let is_result = line.starts_with(r#"{"type":"result""#);
+        let is_started = line.starts_with(r#"{"type":"started""#);
+        if !is_result && !is_started {
+            continue;
+        }
+        let Some(agent_id) = extract_journal_agent_id(line) else {
+            continue;
+        };
+        if !completed.contains_key(agent_id) {
+            order.push(agent_id.to_owned());
+            completed.insert(agent_id.to_owned(), false);
+        }
+        if is_result {
+            completed.insert(agent_id.to_owned(), true);
+        }
+    }
+
+    order
+        .into_iter()
+        .map(|id| WorkflowAgent {
+            label: String::new(),
+            phase_index: 0,
+            state: if completed.get(&id).copied().unwrap_or(false) {
+                WorkflowAgentState::Completed
+            } else {
+                WorkflowAgentState::Running
+            },
+            tokens: 0,
+            tool_calls: 0,
+            duration_ms: 0,
+            result_preview: None,
+            queued_at: None,
+            failed: false,
+        })
+        .collect()
+}
+
+/// 从 journal 行子串提取顶层 `"agentId":"<id>"`。result 行里嵌套的 agent 输出中
+/// 若含 `agentId` 也会被 JSON 转义（`\"agentId\":`），未转义的顶层 key 先于嵌套
+/// 出现，`find` 命中的即顶层值。
+fn extract_journal_agent_id(line: &str) -> Option<&str> {
+    const KEY: &str = r#""agentId":""#;
+    let start = line.find(KEY)? + KEY.len();
+    let rest = &line[start..];
+    let end = rest.find('"')?;
+    let id = &rest[..end];
+    if id.is_empty() { None } else { Some(id) }
+}
+
+/// 从 scriptPath basename 精确剥取 workflow name：先 `strip_suffix(".js")`，
+/// 再 `strip_suffix("-<run_id>")`。任一不匹配（runId 与文件名后缀不一致 /
+/// resume 场景）→ `None`，绝不模糊匹配剥出半截垃圾。
+fn workflow_name_from_script_path(script_path: &str, run_id: &str) -> Option<String> {
+    let file_name = Path::new(script_path).file_name()?.to_str()?;
+    let stem = file_name.strip_suffix(".js")?;
+    let name = stem.strip_suffix(&format!("-{run_id}"))?;
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_owned())
+    }
 }
 
 #[cfg(test)]
@@ -430,13 +674,13 @@ mod tests {
     }
 
     #[test]
-    fn collect_workflow_run_ids_deduplicates() {
+    fn collect_workflow_candidates_dedupes_and_picks_first_script_path() {
         use cdt_core::chunk::{AIChunk, Chunk, ChunkMetrics};
         use cdt_core::tool_execution::{ToolExecution, ToolOutput};
         use chrono::{TimeZone, Utc};
 
         let ts = Utc.with_ymd_and_hms(2026, 5, 29, 0, 0, 0).unwrap();
-        let exec = |run_id: &str| ToolExecution {
+        let exec = |run_id: &str, script: Option<&str>| ToolExecution {
             tool_use_id: format!("tu_{run_id}"),
             tool_name: "Workflow".into(),
             input: serde_json::json!({}),
@@ -451,6 +695,7 @@ mod tests {
             output_bytes: None,
             teammate_spawn: None,
             workflow_run_id: Some(run_id.to_owned()),
+            workflow_script_path: script.map(str::to_owned),
         };
 
         let chunks = vec![Chunk::Ai(AIChunk {
@@ -460,20 +705,31 @@ mod tests {
             responses: vec![],
             metrics: ChunkMetrics::default(),
             semantic_steps: vec![],
-            tool_executions: vec![exec("wf_a"), exec("wf_b"), exec("wf_a")],
+            // wf_a 首见 script 缺失，后续 exec 补上；wf_b 自带 script
+            tool_executions: vec![
+                exec("wf_a", None),
+                exec("wf_b", Some("/x/b-wf_b.js")),
+                exec("wf_a", Some("/x/a-wf_a.js")),
+            ],
             subagents: vec![],
             slash_commands: vec![],
             teammate_messages: vec![],
         })];
 
-        let ids = collect_workflow_run_ids(&chunks);
-        assert_eq!(ids, vec!["wf_a", "wf_b"]);
+        let cands = collect_workflow_candidates(&chunks);
+        assert_eq!(
+            cands,
+            vec![
+                ("wf_a".to_owned(), Some("/x/a-wf_a.js".to_owned())),
+                ("wf_b".to_owned(), Some("/x/b-wf_b.js".to_owned())),
+            ]
+        );
     }
 
     #[test]
     fn empty_chunks_returns_empty() {
-        let ids = collect_workflow_run_ids(&[]);
-        assert!(ids.is_empty());
+        let cands = collect_workflow_candidates(&[]);
+        assert!(cands.is_empty());
     }
 
     #[test]
@@ -514,5 +770,284 @@ mod tests {
 
         assert_eq!(item.status, WorkflowStatus::Completed);
         assert_eq!(item.agents.len(), 0);
+    }
+
+    // ---- Tier 0 运行态降级：name 剥取 ----
+
+    #[test]
+    fn name_from_script_path_strips_runid_suffix() {
+        let name = workflow_name_from_script_path(
+            "/x/workflows/scripts/explore-workflow-rendering-wf_a3fbf671-153.js",
+            "wf_a3fbf671-153",
+        );
+        assert_eq!(name.as_deref(), Some("explore-workflow-rendering"));
+    }
+
+    #[test]
+    fn name_from_script_path_runid_mismatch_returns_none() {
+        // resume 场景：当前 runId 与文件名后缀不一致 → strip_suffix 失败 → None
+        let name =
+            workflow_name_from_script_path("/x/scripts/foo-wf_aaaaaaaa-111.js", "wf_bbbbbbbb-222");
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn name_from_script_path_no_js_or_empty_returns_none() {
+        assert_eq!(
+            workflow_name_from_script_path("/x/foo-wf_a.txt", "wf_a"),
+            None
+        );
+        // basename == "-wf_a.js" → 剥后空 name → None
+        assert_eq!(workflow_name_from_script_path("/x/-wf_a.js", "wf_a"), None);
+    }
+
+    // ---- Tier 0 运行态降级：journal 解析 ----
+
+    #[test]
+    fn parse_journal_started_and_result_mixed() {
+        let journal = concat!(
+            r#"{"type":"started","key":"v2:k1","agentId":"a1"}"#,
+            "\n",
+            r#"{"type":"started","key":"v2:k2","agentId":"a2"}"#,
+            "\n",
+            r#"{"type":"started","key":"v2:k3","agentId":"a3"}"#,
+            "\n",
+            r#"{"type":"result","key":"v2:k1","agentId":"a1","result":{"ok":true}}"#,
+            "\n",
+        );
+        let agents = parse_journal(journal);
+        assert_eq!(agents.len(), 3);
+        // 首见顺序 a1/a2/a3；a1 有 result → Completed，a2/a3 仅 started → Running
+        assert_eq!(agents[0].state, WorkflowAgentState::Completed);
+        assert_eq!(agents[1].state, WorkflowAgentState::Running);
+        assert_eq!(agents[2].state, WorkflowAgentState::Running);
+        assert!(agents.iter().all(|a| !a.failed && a.label.is_empty()));
+    }
+
+    #[test]
+    fn parse_journal_all_result_all_completed() {
+        let journal = concat!(
+            r#"{"type":"started","key":"v2:k1","agentId":"a1"}"#,
+            "\n",
+            r#"{"type":"result","key":"v2:k1","agentId":"a1","result":{}}"#,
+            "\n",
+            r#"{"type":"result","key":"v2:k2","agentId":"a2","result":{}}"#,
+            "\n",
+        );
+        let agents = parse_journal(journal);
+        assert_eq!(agents.len(), 2);
+        assert!(
+            agents
+                .iter()
+                .all(|a| a.state == WorkflowAgentState::Completed)
+        );
+    }
+
+    #[test]
+    fn parse_journal_skips_garbage_and_truncated_lines() {
+        let journal = concat!(
+            r#"{"type":"started","key":"v2:k1","agentId":"a1"}"#,
+            "\n",
+            "not json at all\n",
+            r#"{"type":"started","key":"v2:k2","#, // 截断的半行（无 agentId 闭合）
+            "\n",
+            r#"{"type":"started","agentId":"a2"}"#,
+            "\n",
+        );
+        let agents = parse_journal(journal);
+        // a1 + a2 提取成功，垃圾行与截断行跳过
+        assert_eq!(agents.len(), 2);
+    }
+
+    #[test]
+    fn parse_journal_dedup_multiple_started_same_agent() {
+        let journal = concat!(
+            r#"{"type":"started","key":"v2:k1","agentId":"a1"}"#,
+            "\n",
+            r#"{"type":"started","key":"v2:k1b","agentId":"a1"}"#,
+            "\n",
+        );
+        let agents = parse_journal(journal);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].state, WorkflowAgentState::Running);
+    }
+
+    #[test]
+    fn parse_journal_does_not_count_nested_escaped_agent_id() {
+        // result 行内嵌的 agent 输出含被转义的 "agentId"——不应被当顶层 agentId 误计。
+        // 顶层 agentId 在 nested result 之前，find 命中顶层值。
+        let journal = concat!(
+            r#"{"type":"result","key":"v2:k1","agentId":"top1","result":{"text":"see \"agentId\":\"nested\" inside"}}"#,
+            "\n",
+        );
+        let agents = parse_journal(journal);
+        assert_eq!(agents.len(), 1);
+    }
+
+    #[test]
+    fn parse_journal_empty_returns_empty() {
+        assert!(parse_journal("").is_empty());
+        assert!(parse_journal("\n\n").is_empty());
+    }
+
+    // ---- Tier 0 运行态降级：resolve（fs + TempDir）----
+
+    fn write_journal(dir: &std::path::Path, run_id: &str, lines: &[&str]) -> PathBuf {
+        let jdir = dir.join("subagents").join("workflows").join(run_id);
+        std::fs::create_dir_all(&jdir).unwrap();
+        let jpath = jdir.join("journal.jsonl");
+        std::fs::write(&jpath, lines.join("\n")).unwrap();
+        jpath
+    }
+
+    #[tokio::test]
+    async fn resolve_running_state_with_journal_is_running() {
+        use cdt_discover::LocalFileSystemProvider;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let run_id = "wf_a04767d2-4f1";
+        let jpath = write_journal(
+            tmp.path(),
+            run_id,
+            &[
+                r#"{"type":"started","key":"v2:k1","agentId":"a1"}"#,
+                r#"{"type":"started","key":"v2:k2","agentId":"a2"}"#,
+                r#"{"type":"result","key":"v2:k1","agentId":"a1","result":{}}"#,
+            ],
+        );
+        let script = format!("/x/workflows/scripts/assess-migration-{run_id}.js");
+        let fs = LocalFileSystemProvider::new();
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+
+        let item = resolve_running_state(run_id, &jpath, Some(&script), &fs, &cache).await;
+        assert_eq!(item.status, WorkflowStatus::Running);
+        assert_eq!(item.name.as_deref(), Some("assess-migration"));
+        assert_eq!(item.agents.len(), 2);
+        assert_eq!(item.agents[0].state, WorkflowAgentState::Completed);
+        assert_eq!(item.agents[1].state, WorkflowAgentState::Running);
+        assert!(item.phases.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resolve_running_state_no_journal_is_pending() {
+        use cdt_discover::LocalFileSystemProvider;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let run_id = "wf_none";
+        let jpath = tmp
+            .path()
+            .join("subagents/workflows")
+            .join(run_id)
+            .join("journal.jsonl"); // 不创建该文件
+        let fs = LocalFileSystemProvider::new();
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+
+        let item = resolve_running_state(run_id, &jpath, None, &fs, &cache).await;
+        assert_eq!(item.status, WorkflowStatus::Pending);
+        assert!(item.agents.is_empty());
+        assert_eq!(item.name, None);
+    }
+
+    #[tokio::test]
+    async fn resolve_running_state_race_all_done_still_running() {
+        use cdt_discover::LocalFileSystemProvider;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let run_id = "wf_race";
+        let jpath = write_journal(
+            tmp.path(),
+            run_id,
+            &[
+                r#"{"type":"started","key":"v2:k1","agentId":"a1"}"#,
+                r#"{"type":"result","key":"v2:k1","agentId":"a1","result":{}}"#,
+            ],
+        );
+        let fs = LocalFileSystemProvider::new();
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+
+        let item = resolve_running_state(run_id, &jpath, None, &fs, &cache).await;
+        // manifest 未写 → 仍 Running，即使 journal 全 result
+        assert_eq!(item.status, WorkflowStatus::Running);
+        assert_eq!(item.agents.len(), 1);
+        assert_eq!(item.agents[0].state, WorkflowAgentState::Completed);
+    }
+
+    #[tokio::test]
+    async fn resolve_single_prefers_manifest_when_present() {
+        use cdt_discover::LocalFileSystemProvider;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let run_id = "wf_done";
+        // 同时存在 journal（全 running）与 manifest（completed）——manifest 优先
+        let jpath = write_journal(
+            tmp.path(),
+            run_id,
+            &[r#"{"type":"started","key":"v2:k1","agentId":"a1"}"#],
+        );
+        let wf_dir = tmp.path().join("workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        let manifest_path = wf_dir.join(format!("{run_id}.json"));
+        std::fs::write(
+            &manifest_path,
+            r#"{"workflowProgress":[{"type":"workflow_agent","label":"real","phaseIndex":0,"state":"done","tokens":100,"toolCalls":2,"resultPreview":"ok"}],"status":"completed","logs":[],"totalTokens":100,"durationMs":5,"workflowName":"done-wf"}"#,
+        )
+        .unwrap();
+        let fs = LocalFileSystemProvider::new();
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+
+        let item = resolve_single(run_id, &manifest_path, &jpath, None, &fs, &cache).await;
+        // 走 manifest 完成态路径：status Completed，agent label 来自 manifest 不是匿名
+        assert_eq!(item.status, WorkflowStatus::Completed);
+        assert_eq!(item.agents.len(), 1);
+        assert_eq!(item.agents[0].label, "real");
+    }
+
+    #[tokio::test]
+    async fn resolve_running_state_tier1_parses_script_phases() {
+        use cdt_discover::LocalFileSystemProvider;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let run_id = "wf_t1run";
+        let jpath = write_journal(
+            tmp.path(),
+            run_id,
+            &[r#"{"type":"started","key":"v2:k1","agentId":"a1"}"#],
+        );
+        // 真写一个 script 文件含 meta（phases + name）
+        let sdir = tmp.path().join("workflows").join("scripts");
+        std::fs::create_dir_all(&sdir).unwrap();
+        let spath = sdir.join(format!("my-flow-{run_id}.js"));
+        std::fs::write(
+            &spath,
+            "export const meta = {\n  name: 'meta-name',\n  phases: [\n    { title: 'Assess', detail: 'x' },\n    { title: 'Synthesize' },\n  ],\n}\nphase('Assess')\n",
+        )
+        .unwrap();
+        let fs = LocalFileSystemProvider::new();
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+
+        let item =
+            resolve_running_state(run_id, &jpath, Some(spath.to_str().unwrap()), &fs, &cache).await;
+        assert_eq!(item.status, WorkflowStatus::Running);
+        // Tier 1 成功：name 优先 meta.name，phases 取静态列表
+        assert_eq!(item.name.as_deref(), Some("meta-name"));
+        assert_eq!(item.phases.len(), 2);
+        assert_eq!(item.phases[0].title, "Assess");
+        assert_eq!(item.phases[1].title, "Synthesize");
+    }
+
+    #[tokio::test]
+    async fn resolve_running_state_tier1_missing_script_falls_back_to_tier0_name() {
+        use cdt_discover::LocalFileSystemProvider;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let run_id = "wf_t0run";
+        let jpath = write_journal(
+            tmp.path(),
+            run_id,
+            &[r#"{"type":"started","key":"v2:k1","agentId":"a1"}"#],
+        );
+        // script 路径指向不存在的文件 → Tier 1 失败 → 降回 Tier 0（剥文件名得 name，phases 空）
+        let script = format!("/nonexistent/scripts/fallback-flow-{run_id}.js");
+        let fs = LocalFileSystemProvider::new();
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+
+        let item = resolve_running_state(run_id, &jpath, Some(&script), &fs, &cache).await;
+        assert_eq!(item.status, WorkflowStatus::Running);
+        assert_eq!(item.name.as_deref(), Some("fallback-flow"));
+        assert!(item.phases.is_empty());
     }
 }

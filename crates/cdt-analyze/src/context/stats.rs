@@ -218,6 +218,7 @@ mod tests {
             output_bytes: None,
             teammate_spawn: None,
             workflow_run_id: None,
+            workflow_script_path: None,
         });
         let user = UserChunk {
             chunk_id: "u1".into(),
