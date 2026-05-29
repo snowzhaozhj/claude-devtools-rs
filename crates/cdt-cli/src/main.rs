@@ -427,18 +427,17 @@ async fn cmd_sessions_list(
         }
         OutputFormat::Table => {
             println!(
-                "{:<12} {:<40} {:>10} {:>8} {:>8}",
+                "{:<38} {:<40} {:>10} {:>8} {:>8}",
                 "ID", "TITLE", "DURATION", "STATUS", "MESSAGES"
             );
-            println!("{}", "-".repeat(80));
+            println!("{}", "-".repeat(108));
             for s in &items {
-                let short_id: String = s.session_id.chars().take(10).collect();
                 let title = s.title.as_deref().unwrap_or("(untitled)");
                 let status = if s.is_ongoing { "active" } else { "done" };
                 let duration = format_duration(s.timestamp);
                 println!(
-                    "{:<12} {:<40} {:>10} {:>8} {:>8}",
-                    short_id,
+                    "{:<38} {:<40} {:>10} {:>8} {:>8}",
+                    &s.session_id,
                     truncate(title, 39),
                     duration,
                     status,
@@ -670,16 +669,15 @@ async fn cmd_search(
         }
         OutputFormat::Table => {
             println!(
-                "{:<12} {:<30} {:>8} {:<40}",
+                "{:<38} {:<30} {:>8} {:<40}",
                 "SESSION", "TITLE", "MATCHES", "PREVIEW"
             );
-            println!("{}", "-".repeat(92));
+            println!("{}", "-".repeat(119));
             for r in &result.results {
-                let short_id: String = r.session_id.chars().take(10).collect();
                 let preview = r.hits.first().map_or("", |h| h.preview.as_str());
                 println!(
-                    "{:<12} {:<30} {:>8} {:<40}",
-                    short_id,
+                    "{:<38} {:<30} {:>8} {:<40}",
+                    &r.session_id,
                     truncate(&r.session_title, 29),
                     r.total_matches,
                     truncate(preview, 39),
