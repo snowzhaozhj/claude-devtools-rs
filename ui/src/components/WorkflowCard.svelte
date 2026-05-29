@@ -38,10 +38,6 @@
     return `${phases.length} phase${phases.length !== 1 ? "s" : ""} · ${agents.length} agent${agents.length !== 1 ? "s" : ""}`;
   });
 
-  // 空 label（运行态合成 agent）→ "Agent N"（1-based，按全局 agents 顺序）。
-  function agentLabel(agent: WorkflowAgent): string {
-    return agent.label || `Agent ${agents.indexOf(agent) + 1}`;
-  }
 
   const durationText = $derived(formatDuration(workflow.durationMs ?? null));
 
@@ -102,10 +98,12 @@
     {/if}
   </div>
 
-  {#snippet agentChip(agent: WorkflowAgent)}
+  <!-- index 由调用点传入（运行态 = 全局 agents 顺序；完成态 = phase 内序号，label 恒
+       非空不触发 fallback）。避免在 each 内 agents.indexOf() 造成 O(n²) 渲染。 -->
+  {#snippet agentChip(agent: WorkflowAgent, index: number)}
     <div class="wf-chip" class:wf-chip-failed={agent.state === "failed"}>
       <span class="wf-chip-dot" class:wf-dot-done={agent.state === "completed"} class:wf-dot-failed={agent.state === "failed"} class:wf-dot-running={agent.state === "running"} class:wf-dot-queued={agent.state === "pending"}></span>
-      <span class="wf-chip-label">{agentLabel(agent)}</span>
+      <span class="wf-chip-label">{agent.label || `Agent ${index + 1}`}</span>
       {#if agent.tokens}
         <span class="wf-chip-meta">{agent.tokens.toLocaleString()} tk</span>
       {/if}
@@ -135,7 +133,7 @@
         {/if}
         <div class="wf-chips">
           {#each agents as agent, idx (idx)}
-            {@render agentChip(agent)}
+            {@render agentChip(agent, idx)}
           {/each}
         </div>
       {:else}
@@ -145,7 +143,7 @@
             <div class="wf-phase-title">{phase.title}</div>
             <div class="wf-chips">
               {#each agentsByPhase.get(phase.index) ?? [] as agent, idx (`${phase.index}-${idx}`)}
-                {@render agentChip(agent)}
+                {@render agentChip(agent, idx)}
               {/each}
             </div>
           </div>
