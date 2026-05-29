@@ -72,7 +72,7 @@
     align-items: center;
     gap: 4px;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-weight: 500;
     color: var(--color-text-muted);
     background: var(--color-surface-raised);
@@ -98,7 +98,7 @@
 
   .context-badge:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent-blue) 35%, transparent);
   }
 
   .context-badge-label {
@@ -106,6 +106,7 @@
   }
 
   .context-badge-count {
+    font-family: var(--font-mono);
     font-weight: 600;
     color: var(--color-text-secondary);
   }
@@ -115,20 +116,18 @@
     top: calc(100% + 8px);
     right: 0;
     z-index: 20;
-    min-width: 300px;
-    width: max-content;
+    min-width: 260px;
+    max-width: 320px;
     padding: 10px 12px;
     border-radius: 10px;
     background: var(--color-surface);
     border: 1px solid var(--color-border-emphasis);
-    box-shadow:
-      0 12px 32px rgba(0, 0, 0, 0.14),
-      0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14);
     display: flex;
     flex-direction: column;
     gap: 6px;
     font-size: 11.5px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     text-align: left;
     cursor: default;
   }
@@ -161,6 +160,7 @@
 
   .cbp-tokens {
     color: var(--color-text-secondary);
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -181,6 +181,7 @@
 
   .cbp-footer-value {
     color: var(--color-text-secondary);
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
