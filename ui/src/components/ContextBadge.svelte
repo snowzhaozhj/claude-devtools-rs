@@ -115,7 +115,8 @@
     top: calc(100% + 8px);
     right: 0;
     z-index: 20;
-    min-width: 240px;
+    min-width: 300px;
+    width: max-content;
     padding: 10px 12px;
     border-radius: 10px;
     background: var(--color-surface);
@@ -155,6 +156,7 @@
 
   .cbp-cat {
     color: var(--color-text-muted);
+    white-space: nowrap;
   }
 
   .cbp-tokens {
@@ -174,10 +176,12 @@
 
   .cbp-footer-label {
     color: var(--color-text-muted);
+    white-space: nowrap;
   }
 
   .cbp-footer-value {
     color: var(--color-text-secondary);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 </style>
