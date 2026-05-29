@@ -393,6 +393,14 @@ export function getToolSummary(toolName: string, input: unknown): string {
       return subagentType ?? "Task";
     }
 
+    case "Workflow": {
+      const name = readString(i.name);
+      const runId = readString(i.run_id ?? i.runId);
+      if (name) return truncatePlain(name, 50);
+      if (runId) return `run ${truncatePlain(runId, 20)}`;
+      return "Workflow";
+    }
+
     case "WebFetch": {
       const url = readString(i.url);
       if (!url) return "WebFetch";

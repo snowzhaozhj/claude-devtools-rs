@@ -13,6 +13,7 @@ import type {
   SubagentProcess,
   SlashCommand,
   TeammateMessage,
+  WorkflowItem,
 } from "./api";
 
 // ---------------------------------------------------------------------------
@@ -63,6 +64,12 @@ export interface TeammateSpawnDisplayItem {
   toolName: string;
 }
 
+export interface WorkflowDisplayItem {
+  type: "workflow";
+  workflow: WorkflowItem;
+  timestamp: string;
+}
+
 export type DisplayItem =
   | ThinkingItem
   | ToolItem
@@ -70,7 +77,8 @@ export type DisplayItem =
   | SubagentItem
   | SlashItem
   | TeammateMessageDisplayItem
-  | TeammateSpawnDisplayItem;
+  | TeammateSpawnDisplayItem
+  | WorkflowDisplayItem;
 
 // ---------------------------------------------------------------------------
 // buildDisplayItems
@@ -223,6 +231,15 @@ export function buildDisplayItems(chunk: AIChunk): {
     });
   }
 
+  // workflow items 按 chunk timestamp 加入待排序池
+  for (const wf of chunk.workflows ?? []) {
+    pool.push({
+      ts: chunk.timestamp,
+      order: order++,
+      item: { type: "workflow", workflow: wf, timestamp: chunk.timestamp },
+    });
+  }
+
   // 稳定排序：先 timestamp 升序，同 ts 保留 push 顺序
   pool.sort((a, b) => {
     if (a.ts < b.ts) return -1;
@@ -290,7 +307,12 @@ function chunkDigest(chunk: AIChunk): string {
     subsState += `${s.sessionId}:${s.isOngoing ? "1" : "0"}:${s.endTs ?? "_"}:${s.messages?.length ?? 0};`;
   }
 
-  return `${firstUuid}|${stepsLen}|${lastStepTs}|${teamLen}|${slashLen}|${toolsState}|${subsState}`;
+  let wfState = "";
+  for (const w of chunk.workflows ?? []) {
+    wfState += `${w.runId}:${w.status}:${w.agents.length};`;
+  }
+
+  return `${firstUuid}|${stepsLen}|${lastStepTs}|${teamLen}|${slashLen}|${toolsState}|${subsState}|${wfState}`;
 }
 
 export function buildDisplayItemsCached(chunk: AIChunk): {
@@ -352,6 +374,7 @@ export function buildSummary(items: DisplayItem[]): string {
   let subagents = 0;
   let thinkings = 0;
   let teammateMessages = 0;
+  let workflows = 0;
   const teammateNames = new Set<string>();
 
   for (const item of items) {
@@ -384,6 +407,9 @@ export function buildSummary(items: DisplayItem[]): string {
         // 含 team 字段的统计同语义）。
         teammateNames.add(item.name);
         break;
+      case "workflow":
+        workflows++;
+        break;
     }
   }
 
@@ -395,6 +421,7 @@ export function buildSummary(items: DisplayItem[]): string {
     parts.push(`${teammateNames.size} teammate${teammateNames.size > 1 ? "s" : ""}`);
   }
   if (subagents > 0) parts.push(`${subagents} subagent${subagents > 1 ? "s" : ""}`);
+  if (workflows > 0) parts.push(`${workflows} workflow${workflows > 1 ? "s" : ""}`);
   if (slashes > 0) parts.push(`${slashes} slash${slashes > 1 ? "es" : ""}`);
   if (teammateMessages > 0) {
     parts.push(`${teammateMessages} teammate message${teammateMessages > 1 ? "s" : ""}`);
