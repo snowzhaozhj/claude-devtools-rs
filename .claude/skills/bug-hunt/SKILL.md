@@ -1,7 +1,7 @@
 ---
 name: bug-hunt
 description: 用户**显式**触发的 bug 主动猎查 skill——按 scope 扫一组文件 / crate / commit range，输出**带证据 + 置信度 + 严重度**的 bug 报告，不动业务代码。**只有**用户说 `/bug-hunt` 或显式说"扫一遍 X 找 bug / 帮我 audit X / X 这个 crate 有没有潜在 bug / 主动找 bug / bug hunt / 静态过一遍 X" 时才用。**不要**在用户问"为什么 X 不工作"时自动触发——那是 `debug-first` 的领地。**不要**在 PR review 时触发——那是 `code-review`。本 skill 专管"对一段没人喊救的代码主动 audit"。
-allowed-tools: Bash, Read, Grep, Glob, Agent
+allowed-tools: Bash, Read, Grep, Glob, Agent, Workflow
 disable-model-invocation: true
 ---
 
