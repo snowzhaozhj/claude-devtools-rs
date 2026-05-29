@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import {
     listProjects,
-    listSessions,
+    listGroupSessions,
     searchSessions,
     type ProjectInfo,
     type SessionSearchResult,
@@ -36,8 +36,8 @@
     try {
       projects = await listProjects();
       if (selectedProjectId) {
-        const r = await listSessions(selectedProjectId, 20);
-        sessions = r.items;
+        const r = await listGroupSessions(selectedProjectId, 20);
+        sessions = r.sessions;
       }
     } catch (e) {
       console.error("CommandPalette: failed to load data", e);

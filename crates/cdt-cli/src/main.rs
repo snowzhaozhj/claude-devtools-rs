@@ -732,7 +732,8 @@ fn format_duration(session_ts: i64) -> String {
 /// 解析 `7d` / `24h` / `30m` 格式的 duration 为截止时间戳（毫秒）。
 fn parse_duration_to_ms(s: &str) -> Result<i64> {
     let s = s.trim();
-    let (num_str, unit) = s.split_at(s.len().saturating_sub(1));
+    let split_pos = s.char_indices().next_back().map_or(0, |(i, _)| i);
+    let (num_str, unit) = s.split_at(split_pos);
     let num: i64 = num_str
         .parse()
         .with_context(|| format!("invalid duration: {s}"))?;

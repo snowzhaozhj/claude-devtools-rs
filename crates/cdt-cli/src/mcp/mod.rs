@@ -452,7 +452,8 @@ fn parse_duration_to_epoch_ms(s: &str) -> Option<i64> {
         return Some(now - 7 * 24 * 3600 * 1000);
     }
 
-    let (num_str, unit) = s.split_at(s.len().saturating_sub(1));
+    let split_pos = s.char_indices().next_back().map_or(0, |(i, _)| i);
+    let (num_str, unit) = s.split_at(split_pos);
     let num: i64 = num_str.parse().ok()?;
     let ms = match unit {
         "m" => num * 60 * 1000,
