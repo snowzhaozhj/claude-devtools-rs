@@ -1,6 +1,6 @@
 # ipc-data-api — delta (perf-subagent-scan-parallel)
 
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: get_session_detail subagent 扫描性能
 
