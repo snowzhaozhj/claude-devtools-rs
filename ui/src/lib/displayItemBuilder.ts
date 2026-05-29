@@ -16,6 +16,8 @@ import type {
   WorkflowItem,
 } from "./api";
 
+export type { WorkflowItem };
+
 // ---------------------------------------------------------------------------
 // DisplayItem 类型
 // ---------------------------------------------------------------------------
@@ -231,15 +233,6 @@ export function buildDisplayItems(chunk: AIChunk): {
     });
   }
 
-  // workflow items 按 chunk timestamp 加入待排序池
-  for (const wf of chunk.workflows ?? []) {
-    pool.push({
-      ts: chunk.timestamp,
-      order: order++,
-      item: { type: "workflow", workflow: wf, timestamp: chunk.timestamp },
-    });
-  }
-
   // 稳定排序：先 timestamp 升序，同 ts 保留 push 顺序
   pool.sort((a, b) => {
     if (a.ts < b.ts) return -1;
@@ -307,12 +300,7 @@ function chunkDigest(chunk: AIChunk): string {
     subsState += `${s.sessionId}:${s.isOngoing ? "1" : "0"}:${s.endTs ?? "_"}:${s.messages?.length ?? 0};`;
   }
 
-  let wfState = "";
-  for (const w of chunk.workflows ?? []) {
-    wfState += `${w.runId}:${w.status}:${w.agents.length};`;
-  }
-
-  return `${firstUuid}|${stepsLen}|${lastStepTs}|${teamLen}|${slashLen}|${toolsState}|${subsState}|${wfState}`;
+  return `${firstUuid}|${stepsLen}|${lastStepTs}|${teamLen}|${slashLen}|${toolsState}|${subsState}`;
 }
 
 export function buildDisplayItemsCached(chunk: AIChunk): {

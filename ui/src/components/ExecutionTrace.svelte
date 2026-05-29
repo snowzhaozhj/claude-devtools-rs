@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { DisplayItem } from "../lib/displayItemBuilder";
-  import { getToolOutput, type ToolExecution, type ToolOutput } from "../lib/api";
+  import { getToolOutput, type ToolExecution, type ToolOutput, type WorkflowItem } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
   import { getToolSummary, getToolStatus, getToolDurationMs, isToolPending, cleanDisplayText, getToolContextTokens, estimateTokens, viewerUsesOutput } from "../lib/toolHelpers";
   import { WRENCH, BRAIN, SLASH, MESSAGE_SQUARE } from "../lib/icons";
@@ -21,9 +21,19 @@
      *  用于 getToolOutput 懒拉。fallback 到 rootSessionId 兼容老调用点。 */
     sessionId?: string;
     depth?: number;
+    /** 顶层 workflow items，按 toolExecution.workflowRunId 匹配渲染 WorkflowCard。 */
+    workflowItems?: WorkflowItem[];
   }
 
-  let { items, rootSessionId, sessionId, depth = 0 }: Props = $props();
+  let { items, rootSessionId, sessionId, depth = 0, workflowItems = [] }: Props = $props();
+
+  const workflowMap = $derived.by(() => {
+    const map = new Map<string, WorkflowItem>();
+    for (const wf of workflowItems ?? []) {
+      map.set(wf.runId, wf);
+    }
+    return map;
+  });
   const traceSessionId = $derived(sessionId ?? rootSessionId);
 
   const MAX_DEPTH = 8;
@@ -116,33 +126,38 @@
       />
     {:else if item.type === "tool"}
       {@const exec = item.execution}
-      {@const key = `tool-${exec.toolUseId}`}
-      {@const eff = effectiveExec(exec)}
-      <BaseItem
-        svgIcon={WRENCH}
-        label={exec.toolName}
-        summary={getToolSummary(exec.toolName, exec.input)}
-        tokenCount={getToolContextTokens(exec)}
-        status={getToolStatus(exec)}
-        durationMs={getToolDurationMs(exec)}
-        pendingLabel={isToolPending(exec) ? "pending" : undefined}
-        isExpanded={expandedKeys.has(key)}
-        onclick={() => toggle(key, exec)}
-      >
-        {#snippet children()}
-          {#if isReadTool(exec)}
-            <ReadToolViewer exec={eff} />
-          {:else if isEditTool(exec)}
-            <EditToolViewer exec={eff} />
-          {:else if isWriteTool(exec)}
-            <WriteToolViewer exec={eff} />
-          {:else if isBashTool(exec)}
-            <BashToolViewer exec={eff} />
-          {:else}
-            <DefaultToolViewer exec={eff} />
-          {/if}
-        {/snippet}
-      </BaseItem>
+      {@const matchedWorkflow = exec.workflowRunId ? workflowMap.get(exec.workflowRunId) : undefined}
+      {#if matchedWorkflow}
+        <WorkflowCard workflow={matchedWorkflow} />
+      {:else}
+        {@const key = `tool-${exec.toolUseId}`}
+        {@const eff = effectiveExec(exec)}
+        <BaseItem
+          svgIcon={WRENCH}
+          label={exec.toolName}
+          summary={getToolSummary(exec.toolName, exec.input)}
+          tokenCount={getToolContextTokens(exec)}
+          status={getToolStatus(exec)}
+          durationMs={getToolDurationMs(exec)}
+          pendingLabel={isToolPending(exec) ? "pending" : undefined}
+          isExpanded={expandedKeys.has(key)}
+          onclick={() => toggle(key, exec)}
+        >
+          {#snippet children()}
+            {#if isReadTool(exec)}
+              <ReadToolViewer exec={eff} />
+            {:else if isEditTool(exec)}
+              <EditToolViewer exec={eff} />
+            {:else if isWriteTool(exec)}
+              <WriteToolViewer exec={eff} />
+            {:else if isBashTool(exec)}
+              <BashToolViewer exec={eff} />
+            {:else}
+              <DefaultToolViewer exec={eff} />
+            {/if}
+          {/snippet}
+        </BaseItem>
+      {/if}
     {:else if item.type === "thinking"}
       {@const key = `thinking-${i}`}
       <BaseItem
@@ -181,8 +196,6 @@
           <span class="depth-limit-name">{item.process.subagentType ?? "Task"}</span>
         </div>
       {/if}
-    {:else if item.type === "workflow"}
-      <WorkflowCard workflow={item.workflow} />
     {/if}
   {/each}
 </div>

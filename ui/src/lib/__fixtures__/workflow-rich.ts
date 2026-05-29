@@ -36,10 +36,10 @@ const workflowCompleted: WorkflowItem = {
     { index: 1, title: 'Test' },
   ],
   agents: [
-    { label: 'builder-1', phaseIndex: 0, status: 'done', tokens: 12400, toolCalls: 8, durationMs: 45000 },
-    { label: 'builder-2', phaseIndex: 0, status: 'done', tokens: 9800, toolCalls: 5, durationMs: 38000 },
-    { label: 'tester-1', phaseIndex: 1, status: 'done', tokens: 6200, toolCalls: 12, durationMs: 62000 },
-    { label: 'tester-2', phaseIndex: 1, status: 'done', tokens: 7100, toolCalls: 9, durationMs: 55000 },
+    { label: 'builder-1', phaseIndex: 0, state: 'completed', tokens: 12400, toolCalls: 8, durationMs: 45000 },
+    { label: 'builder-2', phaseIndex: 0, state: 'completed', tokens: 9800, toolCalls: 5, durationMs: 38000 },
+    { label: 'tester-1', phaseIndex: 1, state: 'completed', tokens: 6200, toolCalls: 12, durationMs: 62000 },
+    { label: 'tester-2', phaseIndex: 1, state: 'completed', tokens: 7100, toolCalls: 9, durationMs: 55000 },
   ],
   totalTokens: 35500,
   durationMs: 162000,
@@ -57,12 +57,12 @@ const workflowPartialFailure: WorkflowItem = {
     { index: 3, title: 'Report' },
   ],
   agents: [
-    { label: 'prep-agent', phaseIndex: 0, status: 'done', tokens: 3200, toolCalls: 4, durationMs: 12000 },
-    { label: 'integration-1', phaseIndex: 1, status: 'done', tokens: 18000, toolCalls: 22, durationMs: 95000 },
-    { label: 'integration-2', phaseIndex: 1, status: 'failed', tokens: 14500, toolCalls: 18, durationMs: 78000, resultPreview: 'AssertionError: expected 200 got 503' },
-    { label: 'integration-3', phaseIndex: 1, status: 'done', tokens: 16200, toolCalls: 20, durationMs: 88000 },
-    { label: 'cleanup-agent', phaseIndex: 2, status: 'done', tokens: 2100, toolCalls: 3, durationMs: 8000 },
-    { label: 'report-agent', phaseIndex: 3, status: 'failed', tokens: 1800, toolCalls: 2, durationMs: 5000, resultPreview: 'Timeout: report generation exceeded 5s' },
+    { label: 'prep-agent', phaseIndex: 0, state: 'completed', tokens: 3200, toolCalls: 4, durationMs: 12000 },
+    { label: 'integration-1', phaseIndex: 1, state: 'completed', tokens: 18000, toolCalls: 22, durationMs: 95000 },
+    { label: 'integration-2', phaseIndex: 1, state: 'failed', tokens: 14500, toolCalls: 18, durationMs: 78000, resultPreview: 'AssertionError: expected 200 got 503' },
+    { label: 'integration-3', phaseIndex: 1, state: 'completed', tokens: 16200, toolCalls: 20, durationMs: 88000 },
+    { label: 'cleanup-agent', phaseIndex: 2, state: 'completed', tokens: 2100, toolCalls: 3, durationMs: 8000 },
+    { label: 'report-agent', phaseIndex: 3, state: 'failed', tokens: 1800, toolCalls: 2, durationMs: 5000, resultPreview: 'Timeout: report generation exceeded 5s' },
   ],
   totalTokens: 55800,
   durationMs: 286000,
@@ -129,12 +129,36 @@ const aiChunkWithWorkflows: AIChunk = {
     costUsd: null,
   },
   semanticSteps: [
-    { kind: 'text', text: 'Starting workflow execution with deploy-pipeline and integration-suite.', timestamp: ts(1) },
+    { kind: 'tool_execution', toolUseId: 'wf-tool-1', toolName: 'Workflow', timestamp: ts(1) },
+    { kind: 'tool_execution', toolUseId: 'wf-tool-2', toolName: 'Workflow', timestamp: ts(1.5) },
+    { kind: 'text', text: 'Starting workflow execution with deploy-pipeline and integration-suite.', timestamp: ts(2) },
   ],
-  toolExecutions: [],
+  toolExecutions: [
+    {
+      toolUseId: 'wf-tool-1',
+      toolName: 'Workflow',
+      input: { name: 'deploy-pipeline', run_id: 'wf-run-001' },
+      output: { kind: 'text', text: 'Workflow completed successfully' },
+      isError: false,
+      startTs: ts(1),
+      endTs: ts(2.7),
+      sourceAssistantUuid: 'wf-a1-r1',
+      workflowRunId: 'wf-run-001',
+    },
+    {
+      toolUseId: 'wf-tool-2',
+      toolName: 'Workflow',
+      input: { name: 'integration-suite', run_id: 'wf-run-002' },
+      output: { kind: 'text', text: '2 agents failed' },
+      isError: false,
+      startTs: ts(1.5),
+      endTs: ts(4.8),
+      sourceAssistantUuid: 'wf-a1-r1',
+      workflowRunId: 'wf-run-002',
+    },
+  ],
   subagents: [],
   slashCommands: [],
-  workflows: [workflowCompleted, workflowPartialFailure],
 }
 
 const userChunk2: UserChunk = {
@@ -164,12 +188,24 @@ const aiChunkRunning: AIChunk = {
   ],
   metrics: emptyMetrics(),
   semanticSteps: [
-    { kind: 'text', text: 'Launching analysis pipeline...', timestamp: ts(6) },
+    { kind: 'tool_execution', toolUseId: 'wf-tool-3', toolName: 'Workflow', timestamp: ts(6) },
+    { kind: 'text', text: 'Launching analysis pipeline...', timestamp: ts(6.5) },
   ],
-  toolExecutions: [],
+  toolExecutions: [
+    {
+      toolUseId: 'wf-tool-3',
+      toolName: 'Workflow',
+      input: { name: 'analysis-pipeline', run_id: 'wf-run-003' },
+      output: { kind: 'missing' as const },
+      isError: false,
+      startTs: ts(6),
+      endTs: null,
+      sourceAssistantUuid: 'wf-a2-r1',
+      workflowRunId: 'wf-run-003',
+    },
+  ],
   subagents: [],
   slashCommands: [],
-  workflows: [workflowRunning],
 }
 
 const userChunk3: UserChunk = {
@@ -211,12 +247,24 @@ const aiChunkEmpty: AIChunk = {
     costUsd: null,
   },
   semanticSteps: [
-    { kind: 'text', text: 'Empty workflow completed (no agents spawned).', timestamp: ts(11) },
+    { kind: 'tool_execution', toolUseId: 'wf-tool-4', toolName: 'Workflow', timestamp: ts(11) },
+    { kind: 'text', text: 'Empty workflow completed (no agents spawned).', timestamp: ts(11.1) },
   ],
-  toolExecutions: [],
+  toolExecutions: [
+    {
+      toolUseId: 'wf-tool-4',
+      toolName: 'Workflow',
+      input: { name: 'empty-workflow', run_id: 'wf-run-004' },
+      output: { kind: 'text', text: 'No agents spawned' },
+      isError: false,
+      startTs: ts(11),
+      endTs: ts(11.01),
+      sourceAssistantUuid: 'wf-a3-r1',
+      workflowRunId: 'wf-run-004',
+    },
+  ],
   subagents: [],
   slashCommands: [],
-  workflows: [workflowEmpty],
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +363,7 @@ export const workflowRichFixture: Fixture = {
       contextInjections: [],
       isOngoing: true,
       title: 'Workflow rendering test',
+      workflowItems: [workflowCompleted, workflowPartialFailure, workflowRunning, workflowEmpty],
     },
   },
   prefs: {
