@@ -92,6 +92,7 @@ fn bash_tool(id: &str, cmd: &str, output: &str) -> ToolExecution {
         output_omitted: false,
         output_bytes: None,
         teammate_spawn: None,
+        workflow_run_id: None,
     }
 }
 

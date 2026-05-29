@@ -90,6 +90,14 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         None
                     };
                     let teammate_spawn = extract_teammate_spawn(tool_use_result);
+                    let workflow_run_id = if pu.tool_name == "Workflow" {
+                        tool_use_result
+                            .and_then(|v| v.get("runId"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned)
+                    } else {
+                        None
+                    };
                     executions.push(ToolExecution {
                         tool_use_id: tool_use_id.clone(),
                         tool_name: pu.tool_name.clone(),
@@ -104,6 +112,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         output_omitted: false,
                         output_bytes: None,
                         teammate_spawn,
+                        workflow_run_id,
                     });
                 }
             }
@@ -129,6 +138,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                     output_omitted: false,
                     output_bytes: None,
                     teammate_spawn: None,
+                    workflow_run_id: None,
                 });
             }
         }

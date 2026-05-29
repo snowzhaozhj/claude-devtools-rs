@@ -740,6 +740,7 @@ fn tool_execution_output_omitted_field_name() {
         teammate_spawn: None,
         output_omitted: true,
         output_bytes: Some(1024),
+        workflow_run_id: None,
     };
     let json = serde_json::to_value(&exec).unwrap();
     assert_eq!(json["outputOmitted"], json!(true));
@@ -749,6 +750,57 @@ fn tool_execution_output_omitted_field_name() {
     assert!(
         json.get("toolOutputOmitted").is_none(),
         "MUST 不出现命名变体"
+    );
+}
+
+#[test]
+fn workflow_run_id_field_present_when_set() {
+    let exec = ToolExecution {
+        tool_use_id: "tu-wf".into(),
+        tool_name: "Workflow".into(),
+        input: json!({"script": "export const meta = {}"}),
+        output: ToolOutput::Text {
+            text: "Workflow launched".into(),
+        },
+        is_error: false,
+        start_ts: ts(),
+        end_ts: Some(ts()),
+        source_assistant_uuid: "a1".into(),
+        result_agent_id: None,
+        error_message: None,
+        output_omitted: false,
+        output_bytes: None,
+        teammate_spawn: None,
+        workflow_run_id: Some("wf_797e9bdf-994".into()),
+    };
+    let json = serde_json::to_value(&exec).unwrap();
+    assert_eq!(json["workflowRunId"], json!("wf_797e9bdf-994"));
+}
+
+#[test]
+fn workflow_run_id_field_omitted_when_none() {
+    let exec = ToolExecution {
+        tool_use_id: "tu-bash".into(),
+        tool_name: "Bash".into(),
+        input: json!({"command": "ls"}),
+        output: ToolOutput::Text {
+            text: "file.txt".into(),
+        },
+        is_error: false,
+        start_ts: ts(),
+        end_ts: Some(ts()),
+        source_assistant_uuid: "a1".into(),
+        result_agent_id: None,
+        error_message: None,
+        output_omitted: false,
+        output_bytes: None,
+        teammate_spawn: None,
+        workflow_run_id: None,
+    };
+    let json = serde_json::to_value(&exec).unwrap();
+    assert!(
+        json.get("workflowRunId").is_none(),
+        "None workflow_run_id SHALL be omitted from JSON"
     );
 }
 

@@ -83,6 +83,11 @@ pub struct ToolExecution {
     /// `None` 表示这条 execution 不是 teammate spawn。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teammate_spawn: Option<TeammateSpawnInfo>,
+    /// Workflow 工具的 `toolUseResult.runId`（`wf_` 前缀），是关联
+    /// `workflows/wf_<runId>.json` manifest 的唯一 key。
+    /// 在 pair 阶段从 `toolUseResult.get("runId")` 抽取，output trim 前完成。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run_id: Option<String>,
 }
 
 impl ToolOutput {
@@ -151,6 +156,7 @@ mod tests {
             output_omitted: false,
             output_bytes: None,
             teammate_spawn: None,
+            workflow_run_id: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert_eq!(serde_json::from_str::<ToolExecution>(&json).unwrap(), value);
@@ -177,6 +183,7 @@ mod tests {
                 name: "member-1".into(),
                 color: Some("blue".into()),
             }),
+            workflow_run_id: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert!(json.contains("\"teammateSpawn\":{\"name\":\"member-1\",\"color\":\"blue\"}"));
@@ -206,6 +213,7 @@ mod tests {
             output_omitted: false,
             output_bytes: None,
             teammate_spawn: None,
+            workflow_run_id: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert!(
@@ -242,6 +250,7 @@ mod tests {
             output_omitted: true,
             output_bytes: Some(42),
             teammate_spawn: None,
+            workflow_run_id: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert_eq!(serde_json::from_str::<ToolExecution>(&json).unwrap(), value);
