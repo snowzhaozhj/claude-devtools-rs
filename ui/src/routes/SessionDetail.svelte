@@ -1099,6 +1099,7 @@
         {@const headerCacheRead = lastUsage?.cache_read_input_tokens ?? 0}
         {@const headerCacheCreation = lastUsage?.cache_creation_input_tokens ?? 0}
         {@const aiTotalTokens = headerInputTokens + headerOutputTokens + headerCacheRead + headerCacheCreation}
+        {@const chunkTurnStats = getPerTurnStats(detail?.turnContextStats, chunk.chunkId)}
         <!-- hasAiContent 兜底：token-only chunk（context snapshot 有价值）也要保 header，
              不能让"无 items + 无 lastOutput + 无 interruption"的 chunk 把 token 数据丢掉。
              修 codex CR Bug 2（PR #126 r1）。 -->
@@ -1107,7 +1108,8 @@
           lastOutputText !== "" ||
           interruptions.length > 0 ||
           isLiveTail ||
-          aiTotalTokens > 0}
+          aiTotalTokens > 0 ||
+          (chunkTurnStats != null && chunkTurnStats.newCount > 0)}
         {#if hasAiContent}
         <div
           class="msg-row msg-row-ai"
