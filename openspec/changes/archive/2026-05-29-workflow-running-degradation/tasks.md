@@ -55,7 +55,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR（贴 Perf impact：门控说明 + 运行态降级路径）
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex 二审通过（命中状态机+跨 capability，禁豁免；发现 bug：修→push→回 N.2 重跑，可循环）
-- [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
+- [x] N.1 push 分支 + 开 PR（PR #412，贴 Perf impact：门控说明 + 运行态降级路径）
+- [x] N.2 wait-ci 全绿（15 项 SUCCESS）
+- [x] N.3 codex 二审通过（**codex 额度耗尽至 5/31**，改用本仓 silent-failure-hunter + feature-dev:code-reviewer 异构替代二审；核实后修复 4 处本 PR 新增缺陷——manifest/journal stat 失败误判运行态 + read 失败静默吞 + Tier1 read 失败无日志 + 前端 agentLabel O(n²)——加固 1 测试；pre-existing `failed_by_heuristic` 误判记 Issue #413。用户批准接受替代二审）
+- [x] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
