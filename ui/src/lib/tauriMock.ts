@@ -36,6 +36,7 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'get_image_asset',
   'get_tool_output',
   'search_sessions',
+  'search_group_sessions',
   'get_config',
   'update_config',
   'get_notifications',
@@ -378,6 +379,29 @@ function buildHandler(fx: Fixture) {
           totalMatches: results.reduce((sum, r) => sum + r.totalMatches, 0),
           sessionsSearched: 0,
           query,
+          isPartial: false,
+        }
+      }
+
+      case 'search_group_sessions': {
+        const query2 = (getArg<string>(payload, 'query') ?? '').toLowerCase()
+        const results2 = fx.searchResults
+          .map((r) => {
+            const summary = (fx.sessions[r.projectId] ?? []).find((s) => s.sessionId === r.sessionId)
+            return {
+              sessionId: r.sessionId,
+              projectId: r.projectId,
+              sessionTitle: summary?.title ?? r.sessionId,
+              hits: [],
+              totalMatches: r.matches,
+            }
+          })
+          .filter((r) => r.sessionTitle.toLowerCase().includes(query2) || r.sessionId.toLowerCase().includes(query2))
+        return {
+          results: results2,
+          totalMatches: results2.reduce((sum, r) => sum + r.totalMatches, 0),
+          sessionsSearched: 0,
+          query: query2,
           isPartial: false,
         }
       }

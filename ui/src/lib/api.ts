@@ -651,6 +651,13 @@ export async function searchSessions(
   return await invoke("search_sessions", { projectId, query });
 }
 
+export async function searchGroupSessions(
+  groupId: string,
+  query: string,
+): Promise<SearchSessionsResult> {
+  return await invoke("search_group_sessions", { groupId, query });
+}
+
 export interface SessionDetailResponse {
   status: "full" | "unchanged";
   fingerprint: string;

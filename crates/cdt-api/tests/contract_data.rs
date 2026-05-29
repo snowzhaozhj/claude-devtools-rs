@@ -22,6 +22,7 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "get_image_asset",
     "get_tool_output",
     "search_sessions",
+    "search_group_sessions",
     "get_config",
     "update_config",
     "get_notifications",

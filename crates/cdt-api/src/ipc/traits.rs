@@ -192,6 +192,13 @@ pub trait DataApi: Send + Sync {
         request: &SearchRequest,
     ) -> Result<cdt_core::SearchSessionsResult, ApiError>;
 
+    /// 搜索 repository group 内所有 worktree 的 sessions。
+    async fn search_group_sessions(
+        &self,
+        group_id: &str,
+        query: &str,
+    ) -> Result<cdt_core::SearchSessionsResult, ApiError>;
+
     // =========================================================================
     // 配置 + 通知
     // =========================================================================

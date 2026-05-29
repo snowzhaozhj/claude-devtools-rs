@@ -185,6 +185,108 @@ impl<F: FileSystemProvider + ?Sized> SessionSearcher<F> {
         })
     }
 
+    /// 搜索多个 project (worktree) 下的所有 session，全局按 mtime 降序。
+    pub async fn search_across_projects(
+        &self,
+        project_ids: &[&str],
+        query: &str,
+        max_results: usize,
+        config: &SearchConfig,
+    ) -> Result<SearchSessionsResult, DiscoverError> {
+        if query.is_empty() {
+            return Ok(SearchSessionsResult {
+                results: Vec::new(),
+                total_matches: 0,
+                sessions_searched: 0,
+                query: String::new(),
+                is_partial: false,
+            });
+        }
+
+        let mut all_files: Vec<(PathBuf, i64, String, String)> = Vec::new();
+        for &pid in project_ids {
+            let project_dir = self.projects_dir.join(pid);
+            match self.list_session_files(&project_dir).await {
+                Ok(files) => {
+                    for (path, mtime, session_id) in files {
+                        all_files.push((path, mtime, session_id, pid.to_owned()));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        project_id = %pid,
+                        error = %e,
+                        "skipping worktree project dir during group search"
+                    );
+                }
+            }
+        }
+
+        all_files.sort_by_key(|f| std::cmp::Reverse(f.1));
+
+        let mut results = Vec::new();
+        let mut total_matches = 0usize;
+        let mut sessions_searched = 0usize;
+        let mut is_partial = false;
+
+        let start = Instant::now();
+        let file_count = all_files.len();
+        let mut processed = 0usize;
+
+        for (path, _mtime, session_id, project_id) in &all_files {
+            if config.is_ssh {
+                let elapsed = start.elapsed();
+                if elapsed >= config.time_budget && !results.is_empty() {
+                    is_partial = true;
+                    break;
+                }
+                if should_stop_at_stage(
+                    processed,
+                    &config.stage_limits,
+                    results.len(),
+                    config.min_results,
+                ) {
+                    is_partial = true;
+                    break;
+                }
+            }
+
+            sessions_searched += 1;
+            processed += 1;
+
+            let result = self
+                .search_session_file(project_id, session_id, path, query, max_results)
+                .await;
+
+            match result {
+                Ok(r) if !r.hits.is_empty() => {
+                    total_matches += r.total_matches;
+                    results.push(r);
+                }
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "skipping session file");
+                }
+                _ => {}
+            }
+
+            if results.len() >= max_results && !config.is_ssh {
+                break;
+            }
+        }
+
+        if !config.is_ssh && processed < file_count && !results.is_empty() {
+            is_partial = true;
+        }
+
+        Ok(SearchSessionsResult {
+            results,
+            total_matches,
+            sessions_searched,
+            query: query.to_owned(),
+            is_partial,
+        })
+    }
+
     /// 从缓存获取或解析提取可搜索文本。
     async fn get_or_extract(
         &self,

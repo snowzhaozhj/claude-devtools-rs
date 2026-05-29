@@ -202,6 +202,20 @@ async fn search_sessions(
 }
 
 #[tauri::command]
+async fn search_group_sessions(
+    data: State<'_, AppData>,
+    group_id: String,
+    query: String,
+) -> Result<serde_json::Value, String> {
+    let result = data
+        .api
+        .search_group_sessions(&group_id, &query)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&result).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_config(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
     let (config, version) = data.api.get_config_versioned().await.map_err(|e| e.to_string())?;
     let mut value = serde_json::to_value(&config).map_err(|e| e.to_string())?;
@@ -1330,6 +1344,7 @@ pub fn run() {
             get_image_asset,
             get_tool_output,
             search_sessions,
+            search_group_sessions,
             get_config,
             update_config,
             get_notifications,
