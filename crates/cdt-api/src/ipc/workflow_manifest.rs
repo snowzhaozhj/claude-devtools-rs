@@ -160,6 +160,9 @@ pub fn parse_manifest(run_id: &str, content: &str) -> Result<WorkflowItem, Strin
                 WorkflowAgentState::Completed | WorkflowAgentState::Failed
             )
         });
+    let any_running = agents
+        .iter()
+        .any(|a| a.state == WorkflowAgentState::Running);
     let top_level_completed = raw.status.as_deref() == Some("completed");
 
     let status = if agents.is_empty() {
@@ -170,7 +173,7 @@ pub fn parse_manifest(run_id: &str, content: &str) -> Result<WorkflowItem, Strin
         }
     } else if any_failed && all_done {
         WorkflowStatus::PartialFailure
-    } else if all_done || top_level_completed {
+    } else if all_done || (top_level_completed && !any_running) {
         WorkflowStatus::Completed
     } else {
         WorkflowStatus::Running
