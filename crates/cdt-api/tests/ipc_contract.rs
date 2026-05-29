@@ -2771,6 +2771,7 @@ fn session_detail_single_phase_injections_by_phase_equals_context_injections() {
         turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: None,
+        workflow_items: Vec::new(),
     };
     let json_val = serde_json::to_value(&detail).unwrap();
     assert_eq!(json_val["injectionsByPhase"]["1"], json!([inj]));
@@ -2838,6 +2839,7 @@ fn session_detail_multi_phase_preserves_phase1_injections() {
         turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: None,
+        workflow_items: Vec::new(),
     };
     let json_val = serde_json::to_value(&detail).unwrap();
     // Round-trip 反序列化保持字节级相等
@@ -2872,6 +2874,7 @@ fn session_detail_title_field_round_trip() {
         turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: Some("修复登录页样式".into()),
+        workflow_items: Vec::new(),
     };
     let json_val = serde_json::to_value(&detail).unwrap();
     assert_eq!(
@@ -2895,6 +2898,7 @@ fn session_detail_title_field_round_trip() {
         turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: None,
+        workflow_items: Vec::new(),
     };
     let json_none = serde_json::to_value(&detail_none).unwrap();
     assert!(json_none.as_object().unwrap().contains_key("title"));
@@ -2936,6 +2940,7 @@ fn session_detail_typed_metrics_metadata_round_trip() {
         turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: Some("typed test".into()),
+        workflow_items: Vec::new(),
     };
 
     let json_val = serde_json::to_value(&detail).unwrap();
@@ -3053,6 +3058,7 @@ fn injections_by_phase_btreemap_key_is_string() {
         turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: None,
+        workflow_items: Vec::new(),
     };
     let json_val = serde_json::to_value(&detail).unwrap();
     let by_phase_val = json_val["injectionsByPhase"].as_object().unwrap();
@@ -4151,6 +4157,7 @@ fn session_detail_turn_context_stats_camel_case_and_sparse() {
         turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: None,
+        workflow_items: Vec::new(),
     };
     let json_val = serde_json::to_value(&detail).unwrap();
     assert!(
@@ -4199,6 +4206,7 @@ fn session_detail_turn_context_stats_camel_case_and_sparse() {
         turn_context_stats: stats_map,
         is_ongoing: false,
         title: None,
+        workflow_items: Vec::new(),
     };
     let json_val = serde_json::to_value(&detail_with_stats).unwrap();
     let tcs = &json_val["turnContextStats"];
@@ -4240,6 +4248,7 @@ fn session_detail_turn_context_stats_missing_defaults_to_empty() {
         turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: None,
+        workflow_items: Vec::new(),
     };
     let mut json_val = serde_json::to_value(&detail).unwrap();
     // Verify field is not present (skip_serializing_if = empty)
@@ -4257,4 +4266,132 @@ fn session_detail_turn_context_stats_missing_defaults_to_empty() {
         back.turn_context_stats.is_empty(),
         "Missing turnContextStats SHALL default to empty HashMap"
     );
+}
+
+// =============================================================================
+// WorkflowItem contract tests
+// =============================================================================
+
+#[test]
+fn workflow_item_serializes_camelcase() {
+    use cdt_core::workflow::{
+        WorkflowAgent, WorkflowAgentState, WorkflowItem, WorkflowPhase, WorkflowStatus,
+    };
+
+    let item = WorkflowItem {
+        run_id: "wf_797e9bdf-994".into(),
+        name: Some("Code Review".into()),
+        status: WorkflowStatus::Completed,
+        phases: vec![WorkflowPhase {
+            index: 1,
+            title: "Analysis".into(),
+        }],
+        agents: vec![WorkflowAgent {
+            label: "reviewer-1".into(),
+            phase_index: 1,
+            state: WorkflowAgentState::Completed,
+            tokens: 5000,
+            tool_calls: 12,
+            duration_ms: 30000,
+            result_preview: Some("LGTM".into()),
+            queued_at: Some("2026-05-29T10:00:00Z".into()),
+            failed: false,
+        }],
+        total_tokens: 5000,
+        duration_ms: 30000,
+        error: None,
+    };
+    let json = serde_json::to_value(&item).unwrap();
+
+    assert_eq!(json["runId"], json!("wf_797e9bdf-994"));
+    assert_eq!(json["totalTokens"], json!(5000));
+    assert_eq!(json["durationMs"], json!(30000));
+    assert_eq!(json["status"], json!("completed"));
+    assert_eq!(json["phases"][0]["index"], json!(1));
+    assert_eq!(json["agents"][0]["phaseIndex"], json!(1));
+    assert_eq!(json["agents"][0]["toolCalls"], json!(12));
+    assert_eq!(json["agents"][0]["resultPreview"], json!("LGTM"));
+    assert_eq!(json["agents"][0]["queuedAt"], json!("2026-05-29T10:00:00Z"));
+    assert!(
+        json.get("run_id").is_none(),
+        "snake_case `run_id` MUST not appear"
+    );
+    assert!(
+        json.get("total_tokens").is_none(),
+        "snake_case `total_tokens` MUST not appear"
+    );
+}
+
+#[test]
+fn workflow_item_empty_vec_omits_phases_and_agents() {
+    use cdt_core::workflow::WorkflowItem;
+
+    let item = WorkflowItem::pending("wf_test".into());
+    let json = serde_json::to_value(&item).unwrap();
+
+    assert!(
+        json.get("phases").is_none(),
+        "Empty phases SHALL be omitted"
+    );
+    assert!(
+        json.get("agents").is_none(),
+        "Empty agents SHALL be omitted"
+    );
+    assert!(json.get("name").is_none(), "None name SHALL be omitted");
+    assert!(json.get("error").is_none(), "None error SHALL be omitted");
+}
+
+#[test]
+fn session_detail_workflow_items_omitted_when_empty() {
+    use cdt_api::SessionDetail;
+    use std::collections::BTreeMap;
+
+    let detail = SessionDetail {
+        session_id: "s1".into(),
+        project_id: "p1".into(),
+        chunks: Vec::new(),
+        metrics: cdt_api::SessionDetailMetrics::default(),
+        metadata: cdt_api::SessionDetailMetadata::default(),
+        context_injections: Vec::new(),
+        injections_by_phase: BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: std::collections::HashMap::default(),
+        is_ongoing: false,
+        title: None,
+        workflow_items: Vec::new(),
+    };
+    let json = serde_json::to_value(&detail).unwrap();
+    assert!(
+        json.get("workflowItems").is_none(),
+        "Empty workflow_items SHALL be omitted from payload (zero-cost for non-workflow sessions)"
+    );
+}
+
+#[test]
+fn session_detail_workflow_items_present_when_populated() {
+    use cdt_api::SessionDetail;
+    use cdt_core::workflow::{WorkflowItem, WorkflowStatus};
+    use std::collections::BTreeMap;
+
+    let detail = SessionDetail {
+        session_id: "s1".into(),
+        project_id: "p1".into(),
+        chunks: Vec::new(),
+        metrics: cdt_api::SessionDetailMetrics::default(),
+        metadata: cdt_api::SessionDetailMetadata::default(),
+        context_injections: Vec::new(),
+        injections_by_phase: BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: std::collections::HashMap::default(),
+        is_ongoing: false,
+        title: None,
+        workflow_items: vec![WorkflowItem::pending("wf_abc".into())],
+    };
+    let json = serde_json::to_value(&detail).unwrap();
+    assert_eq!(json["workflowItems"][0]["runId"], json!("wf_abc"));
+    assert_eq!(json["workflowItems"][0]["status"], json!("pending"));
+
+    let back: SessionDetail = serde_json::from_value(json).unwrap();
+    assert_eq!(back.workflow_items.len(), 1);
+    assert_eq!(back.workflow_items[0].status, WorkflowStatus::Pending);
 }

@@ -215,6 +215,8 @@ pub struct SessionDetail {
     /// `ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
     #[serde(default)]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflow_items: Vec<cdt_core::WorkflowItem>,
 }
 
 /// `get_session_detail` IPC 返回值 —— tagged union。

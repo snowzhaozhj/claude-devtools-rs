@@ -24,6 +24,7 @@
   import { getMenuItemDispatch } from "../lib/contextMenu/dispatch";
   import BaseItem from "../components/BaseItem.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
+  import WorkflowCard from "../components/WorkflowCard.svelte";
   import TeammateMessageItem from "../components/TeammateMessageItem.svelte";
   import { getTeamColorSet } from "../lib/teamColors";
   import SearchBar from "../components/SearchBar.svelte";
@@ -55,6 +56,13 @@
   let { tabId, projectId, sessionId }: Props = $props();
 
   let detail: SessionDetail | null = $state(null);
+  const workflowMap = $derived.by(() => {
+    const map = new Map<string, import("../lib/api").WorkflowItem>();
+    for (const wf of detail?.workflowItems ?? []) {
+      map.set(wf.runId, wf);
+    }
+    return map;
+  });
   let knownFingerprint: string | null = $state(null);
   let lastChunksFingerprint: string | null = $state(null);
   let loading = $state(true);
@@ -1232,38 +1240,43 @@
                     </BaseItem>
                   {:else if item.type === "tool"}
                     {@const exec = item.execution}
-                    {@const key = `${chunk.chunkId}-tool-${exec.toolUseId}`}
-                    {@const eff = effectiveExec(exec)}
-                    <div
-                      class:tool-anchor-hit={highlightedToolUseId === exec.toolUseId}
-                      data-tool-use-id={exec.toolUseId}
-                    >
-                      <BaseItem
-                        svgIcon={WRENCH}
-                        label={exec.toolName}
-                        summary={getToolSummary(exec.toolName, exec.input)}
-                        tokenCount={getToolContextTokens(exec)}
-                        status={getToolStatus(exec)}
-                        durationMs={getToolDurationMs(exec)}
-                        pendingLabel={isToolPending(exec) ? "pending" : undefined}
-                        isExpanded={expandedItems.has(key)}
-                        onclick={() => toggle(key, exec)}
+                    {@const matchedWf = exec.workflowRunId ? workflowMap.get(exec.workflowRunId) : undefined}
+                    {#if matchedWf}
+                      <WorkflowCard workflow={matchedWf} />
+                    {:else}
+                      {@const key = `${chunk.chunkId}-tool-${exec.toolUseId}`}
+                      {@const eff = effectiveExec(exec)}
+                      <div
+                        class:tool-anchor-hit={highlightedToolUseId === exec.toolUseId}
+                        data-tool-use-id={exec.toolUseId}
                       >
-                        {#snippet children()}
-                          {#if isReadTool(exec)}
-                            <ReadToolViewer exec={eff} {sessionId} {projectId} />
-                          {:else if isEditTool(exec)}
-                            <EditToolViewer exec={eff} {sessionId} {projectId} />
-                          {:else if isWriteTool(exec)}
-                            <WriteToolViewer exec={eff} {sessionId} {projectId} />
-                          {:else if isBashTool(exec)}
-                            <BashToolViewer exec={eff} {sessionId} {projectId} />
-                          {:else}
-                            <DefaultToolViewer exec={eff} />
-                          {/if}
-                        {/snippet}
-                      </BaseItem>
-                    </div>
+                        <BaseItem
+                          svgIcon={WRENCH}
+                          label={exec.toolName}
+                          summary={getToolSummary(exec.toolName, exec.input)}
+                          tokenCount={getToolContextTokens(exec)}
+                          status={getToolStatus(exec)}
+                          durationMs={getToolDurationMs(exec)}
+                          pendingLabel={isToolPending(exec) ? "pending" : undefined}
+                          isExpanded={expandedItems.has(key)}
+                          onclick={() => toggle(key, exec)}
+                        >
+                          {#snippet children()}
+                            {#if isReadTool(exec)}
+                              <ReadToolViewer exec={eff} {sessionId} {projectId} />
+                            {:else if isEditTool(exec)}
+                              <EditToolViewer exec={eff} {sessionId} {projectId} />
+                            {:else if isWriteTool(exec)}
+                              <WriteToolViewer exec={eff} {sessionId} {projectId} />
+                            {:else if isBashTool(exec)}
+                              <BashToolViewer exec={eff} {sessionId} {projectId} />
+                            {:else}
+                              <DefaultToolViewer exec={eff} />
+                            {/if}
+                          {/snippet}
+                        </BaseItem>
+                      </div>
+                    {/if}
                   {:else if item.type === "thinking"}
                     {@const key = `${chunk.chunkId}-think-${di_idx}`}
                     <BaseItem

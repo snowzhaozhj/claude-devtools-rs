@@ -241,6 +241,8 @@ export interface ToolExecution {
    *  抽出的队友派生元数据。前端检测到非空 → 渲染极简单行（圆点 + member-X
    *  badge + Teammate spawned）替代 DefaultToolViewer，对齐原版 LinkedToolItem.tsx。 */
   teammateSpawn?: TeammateSpawnInfo | null;
+  /** 后端提取的 workflow run ID；非空时表示该 tool execution 关联一个 WorkflowItem。 */
+  workflowRunId?: string;
 }
 
 export interface UserChunk {
@@ -288,6 +290,37 @@ export interface SubagentProcess {
    * 退化（版本指纹常量，不主动重拉，仅按既有 lazy 路径展开拉一次）。
    */
   messagesTotalCount?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Workflow 类型（与后端 WorkflowItem 对齐）
+// ---------------------------------------------------------------------------
+
+export interface WorkflowPhase {
+  index: number;
+  title: string;
+}
+
+export interface WorkflowAgent {
+  label: string;
+  phaseIndex: number;
+  state: "pending" | "running" | "completed" | "failed";
+  tokens?: number;
+  toolCalls?: number;
+  durationMs?: number;
+  resultPreview?: string;
+}
+
+export interface WorkflowItem {
+  runId: string;
+  name?: string;
+  status: "completed" | "partial_failure" | "running" | "pending" | "failed";
+  phases: WorkflowPhase[];
+  agents: WorkflowAgent[];
+  totalTokens?: number;
+  durationMs?: number;
+  error?: string;
+  scriptPreview?: string;
 }
 
 export interface SlashCommand {
@@ -446,6 +479,8 @@ export interface SessionDetail {
    * Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
    */
   title?: string | null;
+  /** 顶层 workflow items；前端按 toolExecution.workflowRunId 匹配渲染 WorkflowCard。 */
+  workflowItems?: WorkflowItem[];
 }
 
 // ---------------------------------------------------------------------------

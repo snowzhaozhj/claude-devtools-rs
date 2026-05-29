@@ -20,6 +20,7 @@ pub mod search;
 pub mod tokens;
 pub mod tool_execution;
 pub mod watch_event;
+pub mod workflow;
 
 pub use chunk::{
     AIChunk, AssistantResponse, Chunk, ChunkMetrics, CompactChunk, SemanticStep, SlashCommand,
@@ -45,6 +46,9 @@ pub use search::{SearchHit, SearchSessionsResult, SessionSearchResult};
 pub use tokens::{estimate_content_tokens, estimate_tokens};
 pub use tool_execution::{TeammateSpawnInfo, ToolExecution, ToolOutput};
 pub use watch_event::{FileChangeEvent, TodoChangeEvent};
+pub use workflow::{
+    WorkflowAgent, WorkflowAgentState, WorkflowItem, WorkflowPhase, WorkflowStatus,
+};
 
 pub mod prelude {
     //! 给消费方用的再导出集合。

@@ -13,7 +13,10 @@ import type {
   SubagentProcess,
   SlashCommand,
   TeammateMessage,
+  WorkflowItem,
 } from "./api";
+
+export type { WorkflowItem };
 
 // ---------------------------------------------------------------------------
 // DisplayItem 类型
@@ -63,6 +66,12 @@ export interface TeammateSpawnDisplayItem {
   toolName: string;
 }
 
+export interface WorkflowDisplayItem {
+  type: "workflow";
+  workflow: WorkflowItem;
+  timestamp: string;
+}
+
 export type DisplayItem =
   | ThinkingItem
   | ToolItem
@@ -70,7 +79,8 @@ export type DisplayItem =
   | SubagentItem
   | SlashItem
   | TeammateMessageDisplayItem
-  | TeammateSpawnDisplayItem;
+  | TeammateSpawnDisplayItem
+  | WorkflowDisplayItem;
 
 // ---------------------------------------------------------------------------
 // buildDisplayItems
@@ -352,6 +362,7 @@ export function buildSummary(items: DisplayItem[]): string {
   let subagents = 0;
   let thinkings = 0;
   let teammateMessages = 0;
+  let workflows = 0;
   const teammateNames = new Set<string>();
 
   for (const item of items) {
@@ -384,6 +395,9 @@ export function buildSummary(items: DisplayItem[]): string {
         // 含 team 字段的统计同语义）。
         teammateNames.add(item.name);
         break;
+      case "workflow":
+        workflows++;
+        break;
     }
   }
 
@@ -395,6 +409,7 @@ export function buildSummary(items: DisplayItem[]): string {
     parts.push(`${teammateNames.size} teammate${teammateNames.size > 1 ? "s" : ""}`);
   }
   if (subagents > 0) parts.push(`${subagents} subagent${subagents > 1 ? "s" : ""}`);
+  if (workflows > 0) parts.push(`${workflows} workflow${workflows > 1 ? "s" : ""}`);
   if (slashes > 0) parts.push(`${slashes} slash${slashes > 1 ? "es" : ""}`);
   if (teammateMessages > 0) {
     parts.push(`${teammateMessages} teammate message${teammateMessages > 1 ? "s" : ""}`);
