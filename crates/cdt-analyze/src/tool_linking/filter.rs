@@ -43,6 +43,7 @@ mod tests {
             output_omitted: false,
             output_bytes: None,
             teammate_spawn: None,
+            workflow_run_id: None,
         }
     }
 

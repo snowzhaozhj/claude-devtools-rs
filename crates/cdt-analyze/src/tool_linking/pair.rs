@@ -90,6 +90,14 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         None
                     };
                     let teammate_spawn = extract_teammate_spawn(tool_use_result);
+                    let workflow_run_id = if pu.tool_name == "Workflow" {
+                        tool_use_result
+                            .and_then(|v| v.get("runId"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned)
+                    } else {
+                        None
+                    };
                     executions.push(ToolExecution {
                         tool_use_id: tool_use_id.clone(),
                         tool_name: pu.tool_name.clone(),
@@ -104,6 +112,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         output_omitted: false,
                         output_bytes: None,
                         teammate_spawn,
+                        workflow_run_id,
                     });
                 }
             }
@@ -129,6 +138,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                     output_omitted: false,
                     output_bytes: None,
                     teammate_spawn: None,
+                    workflow_run_id: None,
                 });
             }
         }
@@ -441,5 +451,57 @@ mod tests {
         ];
         let r = pair_tool_executions(&msgs);
         assert!(r.executions[0].teammate_spawn.is_none());
+    }
+
+    #[test]
+    fn workflow_run_id_extracted_from_tool_use_result() {
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "t1", "Workflow"),
+            user_with_result_and_top(
+                "u1",
+                2,
+                "t1",
+                serde_json::json!("Workflow launched in background."),
+                serde_json::json!({"status": "async_launched", "runId": "wf_797e9bdf-994", "taskId": "abc"}),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert_eq!(r.executions.len(), 1);
+        assert_eq!(
+            r.executions[0].workflow_run_id.as_deref(),
+            Some("wf_797e9bdf-994")
+        );
+    }
+
+    #[test]
+    fn workflow_run_id_none_when_run_id_missing() {
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "t1", "Workflow"),
+            user_with_result_and_top(
+                "u1",
+                2,
+                "t1",
+                serde_json::json!("error"),
+                serde_json::json!({"status": "error"}),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert_eq!(r.executions[0].workflow_run_id, None);
+    }
+
+    #[test]
+    fn workflow_run_id_none_for_non_workflow_tool() {
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "t1", "Bash"),
+            user_with_result_and_top(
+                "u1",
+                2,
+                "t1",
+                serde_json::json!("done"),
+                serde_json::json!({"runId": "wf_should_be_ignored"}),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert_eq!(r.executions[0].workflow_run_id, None);
     }
 }
