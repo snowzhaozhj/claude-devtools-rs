@@ -419,7 +419,7 @@ export interface SessionDetailMetadata {
  * 含完整 typed variant 字段）。本 typed 化避免在 api.ts 重复定义。
  */
 export type { ContextInjection } from "./contextExtractor";
-import type { ContextInjection } from "./contextExtractor";
+import type { ContextInjection, TurnContextStats } from "./contextExtractor";
 
 export interface SessionDetail {
   sessionId: string;
@@ -437,6 +437,8 @@ export interface SessionDetail {
   injectionsByPhase?: Record<string, ContextInjection[]>;
   /** session 级 phase 元数据；前端按 `phases.length > 1` 决定 Phase Selector 显隐。 */
   phaseInfo?: ContextPhaseInfo;
+  /** Per-turn context stats (sparse map: only turns with newCount > 0). Key = AIChunk.chunkId. */
+  turnContextStats?: Record<string, TurnContextStats>;
   isOngoing: boolean;
   /**
    * 会话标题（清洗后），与 `SessionSummary.title` 共用单一派生源。

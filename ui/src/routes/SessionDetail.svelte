@@ -41,6 +41,15 @@
   import EditToolViewer from "../components/tool-viewers/EditToolViewer.svelte";
   import WriteToolViewer from "../components/tool-viewers/WriteToolViewer.svelte";
   import BashToolViewer from "../components/tool-viewers/BashToolViewer.svelte";
+  import ContextBadge from "../components/ContextBadge.svelte";
+  import {
+    getPerTurnStats,
+    buildInjectionsByTurnMap,
+    type TurnContextStats,
+    formatTokens as fmtTokens,
+    formatCategoryName,
+    type ContextInjection as CtxInj,
+  } from "../lib/contextExtractor";
 
   interface Props { tabId: string; projectId: string; sessionId: string; }
   let { tabId, projectId, sessionId }: Props = $props();
@@ -51,6 +60,35 @@
   let loading = $state(true);
   let error: string | null = $state(null);
   let conversationEl: HTMLElement | undefined = $state();
+
+  let openPopoverId: string | null = $state(null);
+  function togglePopover(id: string) {
+    openPopoverId = openPopoverId === id ? null : id;
+  }
+
+  $effect(() => {
+    if (!openPopoverId) return;
+    function handleOutsideClick(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (target.closest(".context-badge") || target.closest(".ai-tokens")) return;
+      openPopoverId = null;
+    }
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") openPopoverId = null;
+    }
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  });
+
+  let injectionsByTurn = $derived.by(() => {
+    const injs = detail?.contextInjections;
+    if (!injs) return new Map<string, CtxInj[]>();
+    return buildInjectionsByTurnMap(injs);
+  });
 
   // Lazy markdown observer：root 必须是 conversation 容器；mount 时创建，
   // unmount 时 disconnect。observer 创建于 conversationEl 首次绑定后
@@ -1114,23 +1152,48 @@
                 </button>
               {/if}
               <span class="ai-header-spacer"></span>
+              <ContextBadge
+                stats={getPerTurnStats(detail?.turnContextStats, chunk.chunkId)}
+                injections={injectionsByTurn.get(chunk.chunkId) ?? []}
+                popoverId={`${chunk.chunkId}:context`}
+                {openPopoverId}
+                onToggle={togglePopover}
+              />
               {#if aiTotalTokens > 0}
-                <span class="ai-tokens">
-                  <!-- lucide Info：对齐原版 TokenUsageDisplay.tsx 的 Info icon 前缀 -->
+                <button
+                  type="button"
+                  class="ai-tokens"
+                  class:ai-tokens-active={openPopoverId === `${chunk.chunkId}:tokens`}
+                  onclick={(e) => { e.stopPropagation(); togglePopover(`${chunk.chunkId}:tokens`); }}
+                  aria-expanded={openPopoverId === `${chunk.chunkId}:tokens`}
+                  aria-label="Token usage: {fk(aiTotalTokens)}"
+                >
+                  <!-- lucide Info -->
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ai-tokens-info" aria-hidden="true">
                     <circle cx="12" cy="12" r="10" />
                     <path d="M12 16v-4" />
                     <path d="M12 8h.01" />
                   </svg>
                   <span>{fk(aiTotalTokens)}</span>
-                  <span class="ai-tokens-popover" role="tooltip">
-                    <span class="tok-row tok-row-total"><span>Total</span><span>{aiTotalTokens.toLocaleString()}</span></span>
-                    <span class="tok-row"><span>Input</span><span>{headerInputTokens.toLocaleString()}</span></span>
-                    <span class="tok-row"><span>Output</span><span>{headerOutputTokens.toLocaleString()}</span></span>
-                    <span class="tok-row"><span>Cache create</span><span>{headerCacheCreation.toLocaleString()}</span></span>
-                    <span class="tok-row"><span>Cache read</span><span>{headerCacheRead.toLocaleString()}</span></span>
-                  </span>
-                </span>
+                  {#if openPopoverId === `${chunk.chunkId}:tokens`}
+                    {@const turnStats = getPerTurnStats(detail?.turnContextStats, chunk.chunkId)}
+                    {@const visPct = turnStats && turnStats.cumulativeEstimatedTokens > 0 && aiTotalTokens > 0 ? Math.round((turnStats.cumulativeEstimatedTokens / aiTotalTokens) * 100) : 0}
+                    <span class="ai-tokens-popover" role="dialog" aria-label="Token breakdown">
+                      <span class="tok-row tok-row-total"><span>Total</span><span>{aiTotalTokens.toLocaleString()}</span></span>
+                      <span class="tok-row"><span>Input</span><span>{headerInputTokens.toLocaleString()}</span></span>
+                      <span class="tok-row"><span>Output</span><span>{headerOutputTokens.toLocaleString()}</span></span>
+                      <span class="tok-row"><span>Cache create</span><span>{headerCacheCreation.toLocaleString()}</span></span>
+                      <span class="tok-row"><span>Cache read</span><span>{headerCacheRead.toLocaleString()}</span></span>
+                      {#if visPct > 0}
+                        <span class="tok-divider"></span>
+                        <span class="tok-row tok-row-visible">
+                          <span>Visible Context</span>
+                          <span>≈{visPct}%</span>
+                        </span>
+                      {/if}
+                    </span>
+                  {/if}
+                </button>
               {/if}
               {#if chunk.durationMs != null && chunk.durationMs > 0}
                 <span class="ai-duration" title="耗时">
@@ -2132,7 +2195,25 @@
     color: var(--color-text-muted);
     font-family: var(--font-mono);
     flex-shrink: 0;
-    cursor: default;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: background 120ms ease;
+  }
+
+  .ai-tokens:hover {
+    background: var(--color-surface-raised);
+  }
+
+  .ai-tokens-active {
+    background: var(--color-surface-overlay);
+  }
+
+  .ai-tokens:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
   }
 
   .ai-tokens-info {
@@ -2155,15 +2236,13 @@
     box-shadow:
       0 12px 32px rgba(0, 0, 0, 0.14),
       0 0 0 1px color-mix(in oklch, var(--color-accent-blue) 0%, transparent);
-    display: none;
+    display: flex;
     flex-direction: column;
     gap: 5px;
     font-size: 11.5px;
     font-family: var(--font-mono);
-  }
-
-  .ai-tokens:hover .ai-tokens-popover {
-    display: flex;
+    text-align: left;
+    cursor: default;
   }
 
   .tok-row {
@@ -2190,6 +2269,17 @@
 
   .tok-row-total > :last-child {
     color: var(--color-text);
+  }
+
+  .tok-divider {
+    height: 1px;
+    background: var(--color-border);
+    margin: 3px 0;
+  }
+
+  .tok-row-visible {
+    font-weight: 500;
+    color: var(--color-text-secondary);
   }
 
   .ai-duration {
