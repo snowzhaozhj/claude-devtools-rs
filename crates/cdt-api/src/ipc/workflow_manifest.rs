@@ -54,6 +54,8 @@ struct RawManifest {
     duration_ms: u64,
     #[serde(default)]
     workflow_name: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
 }
 
 pub fn parse_manifest(run_id: &str, content: &str) -> Result<WorkflowItem, String> {
@@ -128,7 +130,7 @@ pub fn parse_manifest(run_id: &str, content: &str) -> Result<WorkflowItem, Strin
                     WorkflowAgentState::Failed
                 } else {
                     match state_str {
-                        "completed" => WorkflowAgentState::Completed,
+                        "completed" | "done" => WorkflowAgentState::Completed,
                         "running" => WorkflowAgentState::Running,
                         _ => WorkflowAgentState::Pending,
                     }
@@ -158,12 +160,20 @@ pub fn parse_manifest(run_id: &str, content: &str) -> Result<WorkflowItem, Strin
                 WorkflowAgentState::Completed | WorkflowAgentState::Failed
             )
         });
+    let any_running = agents
+        .iter()
+        .any(|a| a.state == WorkflowAgentState::Running);
+    let top_level_completed = raw.status.as_deref() == Some("completed");
 
     let status = if agents.is_empty() {
-        WorkflowStatus::Pending
+        match raw.status.as_deref() {
+            Some("completed") => WorkflowStatus::Completed,
+            Some("failed") => WorkflowStatus::Failed,
+            _ => WorkflowStatus::Pending,
+        }
     } else if any_failed && all_done {
         WorkflowStatus::PartialFailure
-    } else if all_done {
+    } else if all_done || (top_level_completed && !any_running) {
         WorkflowStatus::Completed
     } else {
         WorkflowStatus::Running
@@ -464,5 +474,45 @@ mod tests {
     fn empty_chunks_returns_empty() {
         let ids = collect_workflow_run_ids(&[]);
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn parse_manifest_agent_state_done_recognized_as_completed() {
+        let json = r#"{
+            "workflowProgress": [
+                {"type": "workflow_phase", "index": 1, "title": "Assess"},
+                {"type": "workflow_agent", "label": "assess:bugs", "phaseIndex": 1, "state": "done", "tokens": 80000, "toolCalls": 5, "durationMs": 90000, "resultPreview": "Found 3 bugs"},
+                {"type": "workflow_agent", "label": "assess:perf", "phaseIndex": 1, "state": "done", "tokens": 75000, "toolCalls": 3, "durationMs": 85000, "resultPreview": "No issues"}
+            ],
+            "status": "completed",
+            "logs": [],
+            "totalTokens": 155000,
+            "durationMs": 95000,
+            "workflowName": "bug-hunt"
+        }"#;
+        let item = parse_manifest("wf_done_test", json).unwrap();
+
+        assert_eq!(item.status, WorkflowStatus::Completed);
+        assert_eq!(item.agents.len(), 2);
+        assert_eq!(item.agents[0].state, WorkflowAgentState::Completed);
+        assert_eq!(item.agents[1].state, WorkflowAgentState::Completed);
+        assert!(!item.agents[0].failed);
+        assert!(!item.agents[1].failed);
+    }
+
+    #[test]
+    fn parse_manifest_top_level_status_fallback() {
+        let json = r#"{
+            "workflowProgress": [],
+            "status": "completed",
+            "logs": [],
+            "totalTokens": 50000,
+            "durationMs": 10000,
+            "workflowName": "empty-progress"
+        }"#;
+        let item = parse_manifest("wf_status_fb", json).unwrap();
+
+        assert_eq!(item.status, WorkflowStatus::Completed);
+        assert_eq!(item.agents.len(), 0);
     }
 }
