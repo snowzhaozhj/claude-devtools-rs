@@ -1177,7 +1177,9 @@
                   <span>{fk(aiTotalTokens)}</span>
                   {#if openPopoverId === `${chunk.chunkId}:tokens`}
                     {@const turnStats = getPerTurnStats(detail?.turnContextStats, chunk.chunkId)}
-                    {@const visPct = turnStats && turnStats.cumulativeEstimatedTokens > 0 && aiTotalTokens > 0 ? Math.round((turnStats.cumulativeEstimatedTokens / aiTotalTokens) * 100) : 0}
+                    {@const sessionContextTokens = detail?.contextInjections ? detail.contextInjections.reduce((s, inj) => s + (inj.estimatedTokens ?? 0), 0) : 0}
+                    {@const cumulativeTokens = turnStats?.cumulativeEstimatedTokens ?? sessionContextTokens}
+                    {@const visPct = cumulativeTokens > 0 && aiTotalTokens > 0 ? Math.round((cumulativeTokens / aiTotalTokens) * 100) : 0}
                     <span class="ai-tokens-popover" role="dialog" aria-label="Token breakdown">
                       <span class="tok-row tok-row-total"><span>Total</span><span>{aiTotalTokens.toLocaleString()}</span></span>
                       <span class="tok-row"><span>Input</span><span>{headerInputTokens.toLocaleString()}</span></span>
