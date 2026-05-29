@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780040766029,
+  "lastUpdate": 1780045273065,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -3343,6 +3343,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12390,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e6e03a12665237cf1154dde2e290113db0a0d8af",
+          "message": "feat(workflow): WorkflowCard rendering — backend manifest + frontend 6-state (#397) (#406)\n\n* feat(ui): WorkflowCard 6-state rendering with mock fixture (#400)\n\n- Add WorkflowPhase / WorkflowAgent / WorkflowItem types to api.ts\n- Add AIChunk.workflows? optional field for backend compatibility\n- Extend displayItemBuilder with WorkflowDisplayItem union + pool sorting\n- Add \"Workflow\" case to getToolSummary in toolHelpers\n- Create WorkflowCard.svelte with 6-state rendering:\n  - done: phase tree + green agent chips\n  - partial_failure: \"N failed\" header + red chips\n  - running: spinner + \"details available after completion\"\n  - launch error: via BaseItem error path (no empty card)\n  - empty: \"No subagents\" text\n  - hover: header/chip bg transition\n- Create workflow-rich fixture (4 variants + launch error)\n- Add vitest tests for displayItemBuilder + toolHelpers workflow logic\n- Add openspec delta for session-display + tool-viewer-routing specs\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(ui): align WorkflowCard CSS with Visual Contract\n\n- Header padding/gap: use --bubble-header-padding-l1 / --bubble-header-gap tokens\n- Done status: add 14x14 checkmark SVG icon\n- Failure tag: 10px/500/uppercase + red border (per Visual Contract)\n- Spinner: 10x10 (was 8x8)\n- Chip: add border-color 0.12s transition\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(ui): address codex review findings for WorkflowCard\n\n- Add default branch to statusLabel switch (BUG 1)\n- Fix agent chip each-key: use phase-index composite to avoid collision (ISSUE 2)\n- Fix test name to match assertion: \"returns empty string when input is null\" (ISSUE 3)\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* feat(workflow): manifest parsing + WorkflowItem + cache (#399)\n\nAdd backend infrastructure for Workflow tool specialized rendering:\n\n- cdt-core: WorkflowItem/WorkflowPhase/WorkflowAgent/WorkflowStatus types\n  with serde camelCase + skip_serializing_if for zero-payload guarantee\n- cdt-api: WorkflowManifestCache (FileSignature-based, stat-only after\n  first read) + parse_manifest + resolve_workflow_items (async, SSH-compat)\n- Integration: get_session_detail Step 5.5 conditionally resolves workflow\n  items only when Workflow tool_use chunks exist (zero-cost when absent)\n- Failure detection: combination of logs \"failed\" + tokens=0 + toolCalls=0\n  (manifest state field is unreliable — always \"done\")\n- Graceful degradation: missing/corrupt manifest → WorkflowItem::pending()\n- IPC contract tests: 4 new tests locking camelCase field names and\n  skip_serializing_if behavior\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(ui): align WorkflowCard with backend data contract\n\nCRITICAL fixes from codex review:\n\n1. Data flow: workflows now read from SessionDetail.workflowItems (top-level)\n   and matched via toolExecution.workflowRunId, not from AIChunk.workflows\n2. Field rename: WorkflowAgent.status → WorkflowAgent.state\n3. Enum alignment: agent state uses \"pending\"/\"running\"/\"completed\"/\"failed\"\n   (matching backend), not \"done\"/\"queued\"/\"cached\"\n4. WorkflowItem.status union: added \"failed\" variant\n\nStructural changes:\n- api.ts: add SessionDetail.workflowItems?, ToolExecution.workflowRunId?,\n  remove AIChunk.workflows?\n- displayItemBuilder.ts: remove workflow-from-chunk pool logic\n- ExecutionTrace.svelte: accept workflowItems prop, match tool→WorkflowCard\n- SessionDetail.svelte: derive workflowMap, match tool→WorkflowCard inline\n- WorkflowCard.svelte: agent.status → agent.state, enum value updates\n- workflow-rich fixture: restructured to match real backend shape\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive workflow-card-frontend\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-05-29T16:57:45+08:00",
+          "tree_id": "2feeb479de47140c9f14290bf4ed1cc886dc15dd",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/e6e03a12665237cf1154dde2e290113db0a0d8af"
+        },
+        "date": 1780045272308,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 130,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1147,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 5249,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.467,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.091,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 46.62,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.57,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 302.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1258,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3009,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3254,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 42500,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 59.49,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 63,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 636.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6375,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 217.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2193,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 66.12,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 661,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 6633,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 127.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1288,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.34,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 73.18,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8635,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 886.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8874,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 943.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 49.58,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 523.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 93.87,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 928,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9305,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 189.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1329,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12660,
             "unit": "µs"
           }
         ]
