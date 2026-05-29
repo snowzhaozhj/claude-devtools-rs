@@ -21,6 +21,7 @@
       }
       case "running": return "Running";
       case "pending": return "Pending";
+      default: return workflow.status;
     }
   });
 
@@ -98,7 +99,7 @@
           <div class="wf-phase">
             <div class="wf-phase-title">{phase.title}</div>
             <div class="wf-chips">
-              {#each agentsByPhase.get(phase.index) ?? [] as agent (agent.label)}
+              {#each agentsByPhase.get(phase.index) ?? [] as agent, idx (`${phase.index}-${idx}`)}
                 <div class="wf-chip" class:wf-chip-failed={agent.status === "failed"}>
                   <span class="wf-chip-dot" class:wf-dot-done={agent.status === "done"} class:wf-dot-failed={agent.status === "failed"} class:wf-dot-running={agent.status === "running"} class:wf-dot-queued={agent.status === "queued" || agent.status === "cached"}></span>
                   <span class="wf-chip-label">{agent.label}</span>
