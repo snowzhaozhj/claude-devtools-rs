@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780052128351,
+  "lastUpdate": 1780072961101,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -4179,6 +4179,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 13100,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bedec62db6d23337c54ae11f83eb46421251aeb3",
+          "message": "feat(workflow): 运行态降级渲染（manifest 缺失用 journal + scriptPath 合成 Running 态） (#412)\n\n* feat(workflow): 运行态降级渲染（manifest 缺失时用 journal + scriptPath 合成 Running 态）\n\nissue #397 PR 6。Workflow manifest 完成后才写，运行中不存在——此前 UI 空白。\n本 PR 在 manifest 缺失时诚实降级出 Running 态。\n\nTier 0（零依赖）：\n- ToolExecution 加 workflow_script_path（toolUseResult.scriptPath，回退 input.scriptPath）\n- resolve_running_state：读 journal.jsonl 按 agentId 数 started/result 合成匿名 agents\n  （有 result→Completed 仅 started→Running），独立于 manifest 失败启发式\n- name 从 scriptPath basename 精确 strip_suffix 剥 runId 后缀；journal 按 FileSignature 缓存\n- 前端 WorkflowCard 运行态：N agents (M done) 计数 + \"Agent N\" 匿名 chip；修复空 body gap\n\nTier 1（引 json5）：\n- workflow_script::parse_script_meta 隔离 lexer 切 meta 块 → json5 取 name+phases\n  失败静默降回 Tier 0；按 script FileSignature 缓存\n- 前端 Tier 1 phases 作静态 pill 列表（合成 agent 无真实 phaseIndex，不分组）\n\n走 openspec change workflow-running-degradation（tool-execution-linking + ipc-data-api\n+ session-display 三 capability spec delta）。perf 实测无回归。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* fix(workflow): 降级路径区分 NotFound 与读取错误（替代二审修复）\n\ncodex 额度耗尽，改用本仓 reviewer subagent 做异构替代二审，修复 3 个本 PR\n新增降级路径的健壮性缺陷 + 加固 1 处实证假设：\n\n- resolve_single：manifest stat 失败原先 `let Ok else` 把所有错误当「manifest\n  缺失」进运行态合成——非 NotFound（权限/IO/SSH 抖动）时 manifest 可能真实存在\n  却读不到，会合成虚假 Running 卡片。改按 FsError::NotFound 分流：仅 NotFound\n  降级运行态，其余 warn + pending。对齐 design「manifest 缺失」语义。\n- read_journal_agents：journal stat/read 失败同样区分 NotFound；非 NotFound 的\n  read 失败原先静默吞掉（无日志）导致 Running 被误降 Pending，现加 warn 留痕。\n- read_script_meta：Tier1 script read 失败原先 `Err(_) => None` 丢弃 error，加\n  debug 日志区分 read 异常 vs json5 解析降级（预期 graceful）。\n- 缓存 stale 注释护栏：注明不返 stale 计数依赖 journal append-only size 单调增。\n- 加固 extract_journal_agent_id 顶层优先测试（result 为 JSON 对象内嵌未转义 key）。\n\n新增 3 测试（含 FaultyFs 注错 mock 覆盖非 NotFound 降级分流）；cdt-api 全量\n300+ 测试通过，clippy 0 warning。\n\npre-existing 未在本 PR 修：parse_manifest 的 failed_by_heuristic 对 state=running\n的 agent 也套用失败启发式（main 已存在，触发罕见——manifest 完成才写），另记\nIssue 跟踪。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* perf(workflow): WorkflowCard agentLabel 消除 O(n²) indexOf（自查二审）\n\nagentLabel 原先在 {#each agents} 内对每个 chip 调 agents.indexOf(agent)——\nN agents → O(n²) 渲染。design 明确运行态可能「极端 fan-out 上千 agent」，违反\nperf.md「O(N²) N>100」反模式。改为 index 由调用点传入（运行态全局序号 / 完成态\nphase 内序号，label 恒非空不触发 fallback）。\n\nsvelte-check 0 error；WorkflowCard vitest 8 例不回归。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive workflow-running-degradation\n\n3 capability spec delta（ipc-data-api / session-display / tool-execution-linking）\n已 sync 回主 spec。tasks 4.5 视觉验收 deferred（sandbox classifier outage 挡 e2e\n截图，已用 8 个 DOM 级 vitest 断言兜底），随 change 冻结。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-05-30T00:39:16+08:00",
+          "tree_id": "88eb67010bc0f7a30a3057be9afc010674aa4374",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/bedec62db6d23337c54ae11f83eb46421251aeb3"
+        },
+        "date": 1780072960726,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 114.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1132,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4865,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.552,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.341,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 46.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 34.03,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 296.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1231,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3241,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3163,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 39600,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 62.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 63.69,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 645,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6463,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 221.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2199,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 67.15,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 661,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 6619,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 128.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1295,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.34,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 73.18,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8579,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 912.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8974,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 902,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 48.61,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 510.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 92.75,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 944.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9493,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 183.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1284,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12440,
             "unit": "µs"
           }
         ]
