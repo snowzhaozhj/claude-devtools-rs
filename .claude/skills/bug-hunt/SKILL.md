@@ -1,7 +1,7 @@
 ---
 name: bug-hunt
 description: 用户**显式**触发的 bug 主动猎查 skill——按 scope 扫一组文件 / crate / commit range，输出**带证据 + 置信度 + 严重度**的 bug 报告，不动业务代码。**只有**用户说 `/bug-hunt` 或显式说"扫一遍 X 找 bug / 帮我 audit X / X 这个 crate 有没有潜在 bug / 主动找 bug / bug hunt / 静态过一遍 X" 时才用。**不要**在用户问"为什么 X 不工作"时自动触发——那是 `debug-first` 的领地。**不要**在 PR review 时触发——那是 `code-review`。本 skill 专管"对一段没人喊救的代码主动 audit"。
-allowed-tools: Bash, Read, Grep, Glob, Agent
+allowed-tools: Bash, Read, Grep, Glob, Agent, Workflow
 disable-model-invocation: true
 ---
 
@@ -40,6 +40,41 @@ scope 收到后做一次 sanity check：
 find <scope> -name "*.rs" -o -name "*.svelte" -o -name "*.ts" 2>/dev/null | wc -l
 # 大于 50 文件的 scope 提醒用户拆分
 ```
+
+### Step 1.5: 路由决策（Workflow vs 直接扫）
+
+根据 scope 体量选路径：
+
+| scope 体量 | 路径 | 理由 |
+|---|---|---|
+| < 10 文件 | **直接扫**（现有 Step 2-5 流程） | 小 scope 不值得 workflow 的 agent spawn 开销 |
+| 10-50 文件 | **调 Workflow**（`.claude/workflows/bug-hunt.js`） | 吃满 fan-out + schema + 上下文隔离收益 |
+| > 50 文件 | 先提醒用户拆分（Step 1 已规定） | — |
+
+**调 Workflow 的方式**：
+
+```
+Workflow({
+  name: 'bug-hunt',
+  args: {
+    scope: '<收到的 scope 路径>',
+    scopeType: '<crate|files|commit-range|capability>',
+    riskLevel: '<low|medium|high>',   // 默认 high
+    skipLenses: [<用户显式跳过的 lens id>]
+  }
+})
+```
+
+- `riskLevel` 决定跑多少 lens：`low` = 仅 L1+L2；`medium` = L1-L5（跳 L6）；`high` = 全部
+- 默认 `riskLevel: 'high'`（用户没指定风险偏好时全跑）
+- Workflow 返回结构化 `{ findings, openQuestions, discarded, metadata }`
+- **lead 拿到返回后做 Step 5 报告输出**——Workflow 只产证据，综合判断由 lead 在完整上下文里做
+
+**Workflow 失败降级**：若 Workflow 工具调用失败（返回 error / 用户拒绝 / runtime 不支持），**降级到直接扫流程**（Step 2-5），并告知用户"Workflow 不可用，降级为直接扫描"。
+
+**实测指标记录**：每次 Workflow 跑完，在报告末尾附加：
+- agent 总数 / input token / output token（从 workflow result 的 metadata 提取）
+- finding 被采纳数（由后续用户交互确定，首次填 TBD）
 
 ### Step 2: 6 个 lens 分层扫（每个 lens 独立产出 candidate）
 
