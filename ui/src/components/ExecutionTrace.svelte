@@ -6,6 +6,7 @@
   import { WRENCH, BRAIN, SLASH, MESSAGE_SQUARE } from "../lib/icons";
   import BaseItem from "./BaseItem.svelte";
   import SubagentCard from "./SubagentCard.svelte";
+  import WorkflowCard from "./WorkflowCard.svelte";
   import DefaultToolViewer from "./tool-viewers/DefaultToolViewer.svelte";
   import ReadToolViewer from "./tool-viewers/ReadToolViewer.svelte";
   import EditToolViewer from "./tool-viewers/EditToolViewer.svelte";
@@ -180,6 +181,8 @@
           <span class="depth-limit-name">{item.process.subagentType ?? "Task"}</span>
         </div>
       {/if}
+    {:else if item.type === "workflow"}
+      <WorkflowCard workflow={item.workflow} />
     {/if}
   {/each}
 </div>

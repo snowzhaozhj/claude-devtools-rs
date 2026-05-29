@@ -24,6 +24,7 @@
   import { getMenuItemDispatch } from "../lib/contextMenu/dispatch";
   import BaseItem from "../components/BaseItem.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
+  import WorkflowCard from "../components/WorkflowCard.svelte";
   import TeammateMessageItem from "../components/TeammateMessageItem.svelte";
   import { getTeamColorSet } from "../lib/teamColors";
   import SearchBar from "../components/SearchBar.svelte";
@@ -1293,6 +1294,8 @@
                     </BaseItem>
                   {:else if item.type === "subagent"}
                     <SubagentCard process={item.process} rootSessionId={sessionId} />
+                  {:else if item.type === "workflow"}
+                    <WorkflowCard workflow={item.workflow} />
                   {:else if item.type === "teammate_message"}
                     <TeammateMessageItem
                       teammateMessage={item.teammateMessage}

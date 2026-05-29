@@ -290,6 +290,37 @@ export interface SubagentProcess {
   messagesTotalCount?: number;
 }
 
+// ---------------------------------------------------------------------------
+// Workflow 类型（与后端 WorkflowItem 对齐）
+// ---------------------------------------------------------------------------
+
+export interface WorkflowPhase {
+  index: number;
+  title: string;
+}
+
+export interface WorkflowAgent {
+  label: string;
+  phaseIndex: number;
+  status: "done" | "failed" | "running" | "queued" | "cached";
+  tokens?: number;
+  toolCalls?: number;
+  durationMs?: number;
+  resultPreview?: string;
+}
+
+export interface WorkflowItem {
+  runId: string;
+  name?: string;
+  status: "completed" | "partial_failure" | "running" | "pending";
+  phases: WorkflowPhase[];
+  agents: WorkflowAgent[];
+  totalTokens?: number;
+  durationMs?: number;
+  error?: string;
+  scriptPreview?: string;
+}
+
 export interface SlashCommand {
   name: string;
   message: string | null;
@@ -338,6 +369,11 @@ export interface AIChunk {
    * 控制：无 teammate 时字段在 IPC payload 中省略，前端按 `?? []` 兼容。
    */
   teammateMessages?: TeammateMessage[];
+  /**
+   * 该 turn 关联的 workflow 运行。后端 `skip_serializing_if = Vec::is_empty`
+   * 控制：无 workflow 时省略，前端按 `?? []` 兼容。
+   */
+  workflows?: WorkflowItem[];
 }
 
 export interface SystemChunk {
