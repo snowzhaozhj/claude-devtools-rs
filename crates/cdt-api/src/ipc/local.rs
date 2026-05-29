@@ -56,6 +56,10 @@ use crate::notifier::NotificationPipeline;
 /// 顺序读且不抢 tokio runtime（详见 design.md decision 2）。
 pub const METADATA_SCAN_CONCURRENCY: usize = 8;
 
+/// 同一 project 内 subagent parse 的最大并发数。限到 4 以保证
+/// `user/real` ≤ 0.66（避免辅助工具短时打满 CPU）。
+const SUBAGENT_PARSE_CONCURRENCY: usize = 4;
+
 /// IPC payload 优化：`get_session_detail` 默认把每个 `Process.messages`
 /// 裁剪为空 `Vec`、设 `messages_omitted=true`，砍掉 ~60% payload。前端
 /// `SubagentCard` 展开时调 `get_subagent_trace` 懒拉取。
@@ -5095,32 +5099,39 @@ async fn scan_subagent_candidates_cross_project(
     // 第二遍：每个 project 并发探测 `<dir>/<root_session_id>/subagents/agent-*.jsonl`，
     // 用 Semaphore 限流 `METADATA_SCAN_CONCURRENCY=8` 路（与 metadata 扫描同口径，
     // 避免低核数机器上短脉冲 CPU 峰值过高，也压住打开 fd 数量）。
-    // 单 task 内部仍顺序遍历 sub_entries，保证某 project 内候选顺序稳定。
-    // 整体 task 顺序由 `join_all` 保证（与 project_dirs 同序），最终落到 candidates
-    // 的顺序与原串行版本一致。
+    // 同一 project 内 subagent 文件用内层 `SUBAGENT_PARSE_CONCURRENCY=4` 并行 parse，
+    // 避免 31 个 subagent 串行累积 ~930ms。
     let semaphore = Arc::new(Semaphore::new(METADATA_SCAN_CONCURRENCY));
+    let inner_sem = Arc::new(Semaphore::new(SUBAGENT_PARSE_CONCURRENCY));
     let scan_tasks = project_dirs.into_iter().map(|project_path| {
         let sem = semaphore.clone();
+        let inner = inner_sem.clone();
         let root_session_id = root_session_id.to_owned();
         async move {
             let _permit = sem.acquire_owned().await.ok()?;
             let new_dir = project_path.join(&root_session_id).join("subagents");
             let sub_entries = fs.read_dir(&new_dir).await.ok()?;
-            let mut local: Vec<(cdt_core::SubagentCandidate, u128)> = Vec::new();
-            for sub_entry in sub_entries {
-                let name_str = sub_entry.name.as_str();
-                if !(name_str.starts_with("agent-")
-                    && name_str.ends_with(".jsonl")
-                    && !name_str.starts_with("agent-acompact"))
-                {
-                    continue;
-                }
-                let candidate_path = new_dir.join(&sub_entry.name);
-                let t = std::time::Instant::now();
-                if let Some(c) = parse_subagent_candidate(fs, &candidate_path).await {
-                    local.push((c, t.elapsed().as_millis()));
-                }
-            }
+            let parse_tasks: Vec<_> = sub_entries
+                .iter()
+                .filter(|e| {
+                    let name = e.name.as_str();
+                    name.starts_with("agent-")
+                        && name.ends_with(".jsonl")
+                        && !name.starts_with("agent-acompact")
+                })
+                .map(|e| {
+                    let path = new_dir.join(&e.name);
+                    let permit = inner.clone();
+                    async move {
+                        let _p = permit.acquire().await.ok()?;
+                        let t = std::time::Instant::now();
+                        let c = parse_subagent_candidate(fs, &path).await?;
+                        Some((c, t.elapsed().as_millis()))
+                    }
+                })
+                .collect();
+            let results = futures::future::join_all(parse_tasks).await;
+            let local: Vec<_> = results.into_iter().flatten().collect();
             Some(local)
         }
     });
@@ -5300,106 +5311,57 @@ async fn parse_subagent_candidate(
     fs: &dyn FileSystemProvider,
     path: &Path,
 ) -> Option<cdt_core::SubagentCandidate> {
-    use tokio::io::{AsyncBufReadExt, BufReader};
-
-    let reader = fs.open_read(path).await.ok()?;
-    let reader = BufReader::with_capacity(32 * 1024, reader);
-    let mut lines = reader.lines();
-
     let mut session_id = path
         .file_stem()
         .and_then(|s| s.to_str())
         .map(|s| s.strip_prefix("agent-").unwrap_or(s).to_owned())
         .unwrap_or_default();
-    let mut spawn_ts = None;
-    let mut end_ts: Option<chrono::DateTime<chrono::Utc>> = None;
-    let mut parent_session_id = None;
-    let mut description_hint = None;
-    let mut is_warmup = false;
 
-    // 前 10 行提取元数据；之后继续扫描以记录最后一条 timestamp 作为 end_ts
-    let mut line_count = 0;
-    while let Ok(Some(line)) = lines.next_line().await {
-        line_count += 1;
-        let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-
-        if let Some(ts_str) = val.get("timestamp").and_then(|v| v.as_str()) {
-            let parsed = chrono::DateTime::parse_from_rfc3339(ts_str)
-                .ok()
-                .map(|dt| dt.with_timezone(&chrono::Utc));
-            if let Some(ts) = parsed {
-                if spawn_ts.is_none() {
-                    spawn_ts = Some(ts);
-                }
-                end_ts = Some(ts);
-            }
-        }
-
-        if line_count <= 10 {
-            if parent_session_id.is_none() {
-                if let Some(pid) = val.get("parentUuid").and_then(|v| v.as_str()) {
-                    parent_session_id = Some(pid.to_owned());
-                }
-            }
-
-            if let Some(aid) = val.get("agentId").and_then(|v| v.as_str()) {
-                aid.clone_into(&mut session_id);
-            }
-
-            if val.get("type").and_then(|v| v.as_str()) == Some("user") {
-                let content_val = val
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .unwrap_or(&val["content"]);
-                if let Some(content) = content_val.as_str() {
-                    if content == "Warmup" {
-                        is_warmup = true;
-                        break;
-                    }
-                    if description_hint.is_none() && !content.is_empty() {
-                        description_hint = Some(content.chars().take(200).collect());
-                    }
-                }
-            }
-        }
-    }
-
-    if is_warmup {
+    let mut msgs = cdt_parse::parse_file_via_fs(fs, path).await.ok()?;
+    if msgs.is_empty() {
         return None;
     }
 
-    // 只有当最后一行时间戳晚于首行时才算已结束；否则视为仍在运行。
-    // 注意：本字段仅用于 `compute_duration_ms` 与 resolver 内 OR 兜底；
-    // `is_ongoing` 的真实判定走下方 `check_messages_ongoing` 五信号算法，
-    // 与主 session（`get_session_detail` / `extract_session_metadata`）一致。
-    let end_ts = match (spawn_ts, end_ts) {
+    // 从前 10 条消息中提取 metadata（等价于原版"前 10 行"逻辑）
+    let mut parent_session_id = None;
+    let mut description_hint = None;
+    for msg in msgs.iter().take(10) {
+        if parent_session_id.is_none() {
+            if let Some(pid) = msg.parent_uuid.as_deref() {
+                parent_session_id = Some(pid.to_owned());
+            }
+        }
+        if let Some(aid) = msg.agent_id.as_deref() {
+            aid.clone_into(&mut session_id);
+        }
+        if msg.message_type == cdt_core::MessageType::User {
+            let text = extract_content_text(&msg.content);
+            if let Some(t) = text {
+                if t == "Warmup" {
+                    return None;
+                }
+                if description_hint.is_none() && !t.is_empty() {
+                    description_hint = Some(t.chars().take(200).collect());
+                }
+            }
+        }
+    }
+
+    let spawn_ts = msgs.first().map(|m| m.timestamp);
+    let last_ts = msgs.last().map(|m| m.timestamp);
+    let end_ts = match (spawn_ts, last_ts) {
         (Some(start), Some(end)) if end > start => Some(end),
         _ => None,
     };
 
-    // 完整解析 subagent session，构建 Chunk 流供 UI 展示 ExecutionTrace。
-    //
-    // 注：subagent session 的所有消息对**父** session 而言是 sidechain，但对
-    // subagent 自己来说不是——而 `build_chunks` 会跳过 `is_sidechain=true`。
-    // 这里 clone 一份消息并清除 sidechain 标记，以便 Chunk 正常产出。
-    // 对齐原版 `aiGroupHelpers.ts::computeSubagentPhaseBreakdown` 的处理。
-    //
-    // ongoing 判定：在清 sidechain 与 build_chunks 之前先用原始 `ParsedMessage`
-    // 流跑 `check_messages_ongoing`——避免 followups.md "Subagent 状态判定"
-    // 段记录的 impl-bug：仅看 `end_ts > spawn_ts` 会把"中断后无 assistant 收尾"
-    // 的 subagent 误判为已完成，导致 `SubagentCard` 右上角误显示 ✓。
-    let (is_ongoing, messages) = match cdt_parse::parse_file_via_fs(fs, path).await {
-        Ok(mut msgs) => {
-            let ongoing = cdt_analyze::check_messages_ongoing(&msgs);
-            for m in &mut msgs {
-                m.is_sidechain = false;
-            }
-            (ongoing, cdt_analyze::build_chunks(&msgs))
-        }
-        Err(_) => (end_ts.is_none(), Vec::new()),
-    };
+    // ongoing 判定：在清 sidechain 与 build_chunks 之前先用原始流跑
+    // `check_messages_ongoing`——避免仅看 timestamp 会把"中断后无 assistant
+    // 收尾"的 subagent 误判为已完成。
+    let is_ongoing = cdt_analyze::check_messages_ongoing(&msgs);
+    for m in &mut msgs {
+        m.is_sidechain = false;
+    }
+    let messages = cdt_analyze::build_chunks(&msgs);
 
     Some(cdt_core::SubagentCandidate {
         session_id,
@@ -5411,6 +5373,20 @@ async fn parse_subagent_candidate(
         messages,
         is_ongoing,
     })
+}
+
+fn extract_content_text(content: &cdt_core::MessageContent) -> Option<&str> {
+    match content {
+        cdt_core::MessageContent::Text(s) => Some(s.as_str()),
+        cdt_core::MessageContent::Blocks(blocks) => {
+            for block in blocks {
+                if let cdt_core::ContentBlock::Text { text } = block {
+                    return Some(text.as_str());
+                }
+            }
+            None
+        }
+    }
 }
 
 // =============================================================================
