@@ -8,7 +8,13 @@
  * Panel Requirements。
  */
 
-import type { SessionDetail } from "./api";
+// No import from ./api to avoid circular dependency (api.ts re-exports from here).
+// Functions that need SessionDetail fields use duck-typed params instead.
+
+interface SessionDetailLike {
+  contextInjections: ContextInjection[];
+  injectionsByPhase?: Record<string, unknown[]>;
+}
 
 // ---------------------------------------------------------------------------
 // 6 类 ContextInjection 类型定义（与后端 cdt-core::context.rs 对齐）
@@ -172,7 +178,7 @@ export function parseInjections(raw: unknown[] | undefined | null): ContextInjec
  * 不显示，UI 上不会触发非 null 路径）。
  */
 export function selectActivePhaseInjections(
-  detail: SessionDetail,
+  detail: SessionDetailLike,
   selectedPhase: number | null,
 ): ContextInjection[] {
   const byPhase = detail.injectionsByPhase;
@@ -228,4 +234,138 @@ export function formatTokens(n: number): string {
   if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
   return String(n);
+}
+
+// ---------------------------------------------------------------------------
+// Per-turn context stats (badge + visible context)
+// ---------------------------------------------------------------------------
+
+export interface TokensByCategory {
+  claudeMd: number;
+  mentionedFile: number;
+  toolOutput: number;
+  thinkingText: number;
+  taskCoordination: number;
+  userMessages: number;
+}
+
+export interface CountsByCategory {
+  claudeMd: number;
+  mentionedFile: number;
+  toolOutput: number;
+  thinkingText: number;
+  taskCoordination: number;
+  userMessages: number;
+}
+
+export interface TurnContextStats {
+  newCount: number;
+  newTokens: number;
+  newTokensByCategory: TokensByCategory;
+  countsByCategory: CountsByCategory;
+  cumulativeEstimatedTokens: number;
+  cumulativeTokensByCategory: TokensByCategory;
+}
+
+export function getPerTurnStats(
+  turnContextStats: Record<string, TurnContextStats> | undefined,
+  chunkId: string,
+): TurnContextStats | null {
+  if (!turnContextStats) return null;
+  return turnContextStats[chunkId] ?? null;
+}
+
+const BADGE_THINKING_ONLY_THRESHOLD = 1000;
+
+export function shouldShowBadge(stats: TurnContextStats | null): boolean {
+  if (!stats || stats.newCount === 0) return false;
+  if (
+    stats.newCount === 1 &&
+    stats.countsByCategory.thinkingText > 0 &&
+    stats.countsByCategory.claudeMd === 0 &&
+    stats.countsByCategory.mentionedFile === 0 &&
+    stats.countsByCategory.toolOutput === 0 &&
+    stats.countsByCategory.taskCoordination === 0 &&
+    stats.countsByCategory.userMessages === 0 &&
+    stats.newTokens < BADGE_THINKING_ONLY_THRESHOLD
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function buildInjectionsByTurnMap(
+  injections: ContextInjection[],
+): Map<string, ContextInjection[]> {
+  const map = new Map<string, ContextInjection[]>();
+  for (const inj of injections) {
+    const groupId = "aiGroupId" in inj ? (inj as { aiGroupId: string }).aiGroupId : null;
+    if (!groupId) continue;
+    const existing = map.get(groupId);
+    if (existing) {
+      existing.push(inj);
+    } else {
+      map.set(groupId, [inj]);
+    }
+  }
+  return map;
+}
+
+export type CategoryKey = ContextInjection["category"];
+
+const CATEGORY_DISPLAY_NAMES: Record<CategoryKey, string> = {
+  "claude-md": "CLAUDE.md Files",
+  "mentioned-file": "Mentioned Files",
+  "tool-output": "Tool Outputs",
+  "thinking-text": "Thinking + Text",
+  "task-coordination": "Task Coordination",
+  "user-message": "User Messages",
+};
+
+export function formatCategoryName(category: CategoryKey): string {
+  return CATEGORY_DISPLAY_NAMES[category] ?? category;
+}
+
+export interface CategoryBreakdownItem {
+  category: CategoryKey;
+  label: string;
+  count: number;
+  tokens: number;
+}
+
+export function getCategoryBreakdown(stats: TurnContextStats): CategoryBreakdownItem[] {
+  const items: CategoryBreakdownItem[] = [];
+  const cats: CategoryKey[] = [
+    "claude-md",
+    "mentioned-file",
+    "tool-output",
+    "thinking-text",
+    "task-coordination",
+    "user-message",
+  ];
+  const countKeys: (keyof CountsByCategory)[] = [
+    "claudeMd",
+    "mentionedFile",
+    "toolOutput",
+    "thinkingText",
+    "taskCoordination",
+    "userMessages",
+  ];
+  const tokenKeys: (keyof TokensByCategory)[] = [
+    "claudeMd",
+    "mentionedFile",
+    "toolOutput",
+    "thinkingText",
+    "taskCoordination",
+    "userMessages",
+  ];
+  for (let i = 0; i < cats.length; i++) {
+    const count = stats.countsByCategory[countKeys[i]];
+    const tokens = stats.newTokensByCategory[tokenKeys[i]];
+    if (count > 0) {
+      items.push({ category: cats[i], label: CATEGORY_DISPLAY_NAMES[cats[i]], count, tokens });
+    }
+  }
+  items.sort((a, b) => b.tokens - a.tokens);
+  return items;
 }
