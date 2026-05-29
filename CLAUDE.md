@@ -107,13 +107,13 @@ worktree 编译产物每个 ~6 G，merge PR 后忘清会快速吃光磁盘。半
 
 ## 测试金字塔
 
-四层职责互斥，命中改动类型用对应层（详见 `openspec/specs/frontend-test-pyramid/spec.md`）：
+新增代码无对应测试 = 未完成。改动类型决定用哪层（详见 `openspec/specs/frontend-test-pyramid/spec.md`）：
 
 | 层 | 跑命令 | 覆盖 | 何时改 |
 |---|---|---|---|
 | Rust IPC contract test | `cargo test -p cdt-api --test ipc_contract` | Tauri command 序列化字段名 / `xxxOmitted` 命名 / enum tag 值 | 改 `LocalDataApi` 公开方法返回字段时 SHALL 同步 |
-| Vitest 单测 + mockIPC | `just test-ui-unit` | 纯函数 / store 状态机 / mockIPC 完整性 | 加纯函数 / 改 store 时 |
-| Playwright user story | `just test-e2e` | 浏览器真渲染 + 键鼠事件 + 跨组件状态联动 | 改 UI 行为 / 跨组件交互时 |
+| Vitest 单测 + mockIPC | `just test-ui-unit` | 纯函数 / store 状态机 / mockIPC 完整性 | 新增组件 / 加纯函数 / 改 store 时 |
+| Playwright user story | `just test-e2e` | 浏览器真渲染 + 键鼠事件 + 跨组件状态联动 | 新增 route / 改 UI 行为 / 跨组件交互时 |
 | 手动 `just dev` | `cargo tauri dev` 桌面窗口 | 真 Tauri IPC + 平台 API（通知 / 托盘 / setBadgeCount） | 发版前 smoke + 涉及 Tauri-only API 时 |
 
 IPC 字段改动 checklist（硬约束）+ 浏览器调试入口 + 测试基础设施陷阱 详见 `src-tauri/CLAUDE.md::IPC 字段改动 checklist` 与 `ui/CLAUDE.md::浏览器调试入口` / `测试基础设施陷阱`。

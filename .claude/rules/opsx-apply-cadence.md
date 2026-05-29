@@ -54,7 +54,7 @@ design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 
 1. `Edit` 源文件（可并行）
 2. `cargo clippy --workspace --all-targets -- -D warnings`（**不是**靠 hook 单文件回显）
 3. `cargo fmt --all`
-4. `cargo test -p <crate>`（或 `--workspace`）
+4. 跑受影响测试且新增代码有对应用例：`cargo test -p <crate>`；前端 `vitest --run --changed`（3-8s）
 5. `pnpm --dir ui run check`（如改了 `ui/` 下文件）
 6. `openspec validate <change> --strict`（如有 openspec change）
 7. 勾任务清单的业务项：
