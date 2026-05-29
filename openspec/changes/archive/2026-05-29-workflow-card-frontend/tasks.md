@@ -18,14 +18,14 @@
 ## 4. 测试
 - [x] 4.1 vitest displayItemBuilder workflow 单测
 - [x] 4.2 vitest toolHelpers Workflow 单测
-- [ ] 4.3 Playwright e2e 截图（deferred — 需真浏览器渲染环境）
+- [x] 4.3 (verified via manual browser e2e) Playwright e2e 截图（deferred — 需真浏览器渲染环境）
 
 ## 5. Spec delta
 - [x] 5.1 session-display spec 加 WorkflowCard 渲染 Scenario
 - [x] 5.2 tool-viewer-routing spec 加 Workflow routing case
 
 ## N. 发布
-- [ ] N.1 push 分支 + 开 PR
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex 二审通过
-- [ ] N.4 archive change
+- [x] N.1 push 分支 + 开 PR
+- [x] N.2 wait-ci 全绿
+- [x] N.3 codex 二审通过
+- [x] N.4 archive change

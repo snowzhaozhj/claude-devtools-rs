@@ -189,3 +189,13 @@ SessionDetail SHALL 在所有工具明细展示路径中显示可用的时间统
 - **WHEN** 用户展开工具项、折叠后再次展开同一工具项
 - **THEN** UI SHALL 复用已缓存的渲染结果或派生数据，避免重复执行昂贵转换
 
+### Requirement: Workflow tool summary 生成
+
+getToolSummary SHALL 为 Workflow 工具生成人类可读的 header 摘要文本。
+
+#### Scenario: Workflow tool summary
+- **WHEN** toolName 为 "Workflow"
+- **THEN** SHALL 优先显示 input.name（截断到 50 字符）
+- **AND** 若 name 缺失但 run_id/runId 存在 SHALL 显示 "run {runId}"（截断到 20 字符）
+- **AND** 若两者都缺失 SHALL 显示 "Workflow"
+

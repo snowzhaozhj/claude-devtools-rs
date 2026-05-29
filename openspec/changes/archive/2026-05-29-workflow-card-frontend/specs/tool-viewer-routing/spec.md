@@ -1,10 +1,10 @@
 # tool-viewer-routing Specification (delta)
 
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: Tool summary 生成
+### Requirement: Workflow tool summary 生成
 
-getToolSummary SHALL 为每种已知工具名生成人类可读的 header 摘要文本。
+getToolSummary SHALL 为 Workflow 工具生成人类可读的 header 摘要文本。
 
 #### Scenario: Workflow tool summary
 - **WHEN** toolName 为 "Workflow"
