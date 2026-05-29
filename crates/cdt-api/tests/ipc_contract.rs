@@ -2716,6 +2716,7 @@ fn session_detail_single_phase_injections_by_phase_equals_context_injections() {
         context_injections: vec![inj_typed.clone()],
         injections_by_phase: by_phase,
         phase_info,
+        turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: None,
     };
@@ -2782,6 +2783,7 @@ fn session_detail_multi_phase_preserves_phase1_injections() {
         context_injections: vec![phase2_inj_typed.clone()], // = latest phase
         injections_by_phase: by_phase,
         phase_info,
+        turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: None,
     };
@@ -2815,6 +2817,7 @@ fn session_detail_title_field_round_trip() {
         context_injections: Vec::new(),
         injections_by_phase: BTreeMap::new(),
         phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: Some("修复登录页样式".into()),
     };
@@ -2837,6 +2840,7 @@ fn session_detail_title_field_round_trip() {
         context_injections: Vec::new(),
         injections_by_phase: BTreeMap::new(),
         phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: None,
     };
@@ -2877,6 +2881,7 @@ fn session_detail_typed_metrics_metadata_round_trip() {
         context_injections: Vec::new(),
         injections_by_phase: BTreeMap::new(),
         phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: Some("typed test".into()),
     };
@@ -2993,6 +2998,7 @@ fn injections_by_phase_btreemap_key_is_string() {
         context_injections: Vec::new(),
         injections_by_phase: by_phase,
         phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: std::collections::HashMap::default(),
         is_ongoing: false,
         title: None,
     };
@@ -4070,4 +4076,133 @@ fn push_event_file_change_mtime_ms_field_present() {
         ),
         other => panic!("expected FileChange, got {other:?}"),
     }
+}
+
+// =============================================================================
+// turn_context_stats contract tests
+// =============================================================================
+
+/// `SessionDetail.turnContextStats` 序列化为 camelCase，空时省略。
+#[test]
+fn session_detail_turn_context_stats_camel_case_and_sparse() {
+    use cdt_api::SessionDetail;
+    use std::collections::HashMap;
+    let detail = SessionDetail {
+        session_id: "s1".into(),
+        project_id: "p1".into(),
+        chunks: Vec::new(),
+        metrics: cdt_api::SessionDetailMetrics::default(),
+        metadata: cdt_api::SessionDetailMetadata::default(),
+        context_injections: Vec::new(),
+        injections_by_phase: std::collections::BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: std::collections::HashMap::default(),
+        is_ongoing: false,
+        title: None,
+    };
+    let json_val = serde_json::to_value(&detail).unwrap();
+    assert!(
+        !json_val
+            .as_object()
+            .unwrap()
+            .contains_key("turnContextStats"),
+        "Empty turnContextStats SHALL be omitted via skip_serializing_if"
+    );
+
+    let mut stats_map = HashMap::new();
+    stats_map.insert(
+        "ai:0".to_string(),
+        cdt_core::TurnContextStats {
+            new_count: 3,
+            new_tokens: 2600,
+            new_tokens_by_category: cdt_core::TokensByCategory {
+                tool_output: 2500,
+                thinking_text: 100,
+                ..Default::default()
+            },
+            counts_by_category: cdt_core::CountsByCategory {
+                tool_output: 2,
+                thinking_text: 1,
+                ..Default::default()
+            },
+            cumulative_estimated_tokens: 45000,
+            cumulative_tokens_by_category: cdt_core::TokensByCategory {
+                claude_md: 20000,
+                tool_output: 15000,
+                thinking_text: 5000,
+                user_messages: 5000,
+                ..Default::default()
+            },
+        },
+    );
+    let detail_with_stats = SessionDetail {
+        session_id: "s2".into(),
+        project_id: "p1".into(),
+        chunks: Vec::new(),
+        metrics: cdt_api::SessionDetailMetrics::default(),
+        metadata: cdt_api::SessionDetailMetadata::default(),
+        context_injections: Vec::new(),
+        injections_by_phase: std::collections::BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: stats_map,
+        is_ongoing: false,
+        title: None,
+    };
+    let json_val = serde_json::to_value(&detail_with_stats).unwrap();
+    let tcs = &json_val["turnContextStats"];
+    assert!(
+        tcs.is_object(),
+        "Non-empty turnContextStats SHALL serialize as object"
+    );
+    let entry = &tcs["ai:0"];
+    assert_eq!(entry["newCount"], 3);
+    assert_eq!(entry["newTokens"], 2600);
+    assert_eq!(entry["newTokensByCategory"]["toolOutput"], 2500);
+    assert_eq!(entry["countsByCategory"]["thinkingText"], 1);
+    assert_eq!(entry["cumulativeEstimatedTokens"], 45000);
+    assert_eq!(entry["cumulativeTokensByCategory"]["claudeMd"], 20000);
+
+    // Round-trip
+    let back: SessionDetail = serde_json::from_value(json_val.clone()).unwrap();
+    let json_back = serde_json::to_value(&back).unwrap();
+    assert_eq!(
+        json_val, json_back,
+        "turnContextStats round-trip MUST be equivalent"
+    );
+}
+
+/// Legacy JSON without `turnContextStats` field deserializes with empty default.
+#[test]
+fn session_detail_turn_context_stats_missing_defaults_to_empty() {
+    use cdt_api::SessionDetail;
+    // Serialize a SessionDetail with empty turn_context_stats
+    let detail = SessionDetail {
+        session_id: "s1".into(),
+        project_id: "p1".into(),
+        chunks: Vec::new(),
+        metrics: cdt_api::SessionDetailMetrics::default(),
+        metadata: cdt_api::SessionDetailMetadata::default(),
+        context_injections: Vec::new(),
+        injections_by_phase: std::collections::BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: std::collections::HashMap::default(),
+        is_ongoing: false,
+        title: None,
+    };
+    let mut json_val = serde_json::to_value(&detail).unwrap();
+    // Verify field is not present (skip_serializing_if = empty)
+    assert!(
+        !json_val
+            .as_object()
+            .unwrap()
+            .contains_key("turnContextStats"),
+        "Empty map SHALL be omitted"
+    );
+    // Manually remove the field to simulate legacy wire format, then deserialize
+    json_val.as_object_mut().unwrap().remove("turnContextStats");
+    let back: SessionDetail = serde_json::from_value(json_val).unwrap();
+    assert!(
+        back.turn_context_stats.is_empty(),
+        "Missing turnContextStats SHALL default to empty HashMap"
+    );
 }

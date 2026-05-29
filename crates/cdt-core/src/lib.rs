@@ -30,7 +30,7 @@ pub use context::{
     ContextInjection, ContextPhase, ContextPhaseInfo, ContextStats, CountsByCategory,
     MentionedFileInfo, MentionedFileInjection, TaskCoordinationBreakdown,
     TaskCoordinationInjection, TaskCoordinationKind, ThinkingTextBreakdown, ThinkingTextInjection,
-    ThinkingTextKind, TokensByCategory, ToolOutputInjection, ToolTokenBreakdown,
+    ThinkingTextKind, TokensByCategory, ToolOutputInjection, ToolTokenBreakdown, TurnContextStats,
     UserMessageInjection,
 };
 pub use message::{

@@ -307,6 +307,27 @@ fn omit_image_in_content(content: &mut cdt_core::MessageContent) {
     }
 }
 
+fn compute_new_tokens_by_category(
+    injections: &[cdt_core::ContextInjection],
+) -> cdt_core::TokensByCategory {
+    let mut t = cdt_core::TokensByCategory::default();
+    for inj in injections {
+        match inj {
+            cdt_core::ContextInjection::ClaudeMd(x) => t.claude_md += x.estimated_tokens,
+            cdt_core::ContextInjection::MentionedFile(x) => {
+                t.mentioned_file += x.estimated_tokens;
+            }
+            cdt_core::ContextInjection::ToolOutput(x) => t.tool_output += x.estimated_tokens,
+            cdt_core::ContextInjection::ThinkingText(x) => t.thinking_text += x.estimated_tokens,
+            cdt_core::ContextInjection::TaskCoordination(x) => {
+                t.task_coordination += x.estimated_tokens;
+            }
+            cdt_core::ContextInjection::UserMessage(x) => t.user_messages += x.estimated_tokens,
+        }
+    }
+    t
+}
+
 /// 遍历 chunks 内所有 `AIChunk.responses[].content`，替换为空
 /// `MessageContent::Text("")` 并设 `content_omitted = true`。覆盖顶层
 /// `AIChunk` 与 `AIChunk.subagents[].messages[]` 嵌套层。`subagent.messages`
@@ -684,6 +705,7 @@ struct ContextAnnotations {
     context_injections: Vec<cdt_core::ContextInjection>,
     injections_by_phase: BTreeMap<String, Vec<cdt_core::ContextInjection>>,
     phase_info: cdt_core::ContextPhaseInfo,
+    turn_context_stats: HashMap<String, cdt_core::TurnContextStats>,
 }
 
 /// `list_sessions_skeleton` 的命名返回类型，替代原 10-tuple 提升可读性。
@@ -861,10 +883,41 @@ impl LocalDataApi {
             .map(|stats| stats.accumulated_injections.clone())
             .unwrap_or_default();
         let phase_info = ctx_result.phase_info.clone();
+
+        let mut turn_context_stats: HashMap<String, cdt_core::TurnContextStats> = HashMap::new();
+        for (ai_group_id, stats) in &ctx_result.stats_map {
+            let total_new: usize = stats.new_counts.claude_md
+                + stats.new_counts.mentioned_file
+                + stats.new_counts.tool_output
+                + stats.new_counts.thinking_text
+                + stats.new_counts.task_coordination
+                + stats.new_counts.user_messages;
+            if total_new == 0 {
+                continue;
+            }
+            let new_tokens = stats
+                .new_injections
+                .iter()
+                .map(cdt_core::ContextInjection::estimated_tokens)
+                .sum::<u64>();
+            turn_context_stats.insert(
+                ai_group_id.clone(),
+                cdt_core::TurnContextStats {
+                    new_count: u32::try_from(total_new).unwrap_or(u32::MAX),
+                    new_tokens,
+                    new_tokens_by_category: compute_new_tokens_by_category(&stats.new_injections),
+                    counts_by_category: stats.new_counts,
+                    cumulative_estimated_tokens: stats.total_estimated_tokens,
+                    cumulative_tokens_by_category: stats.tokens_by_category,
+                },
+            );
+        }
+
         ContextAnnotations {
             context_injections,
             injections_by_phase,
             phase_info,
+            turn_context_stats,
         }
     }
 
@@ -3547,6 +3600,7 @@ impl DataApi for LocalDataApi {
             context_injections: annotations.context_injections,
             injections_by_phase: annotations.injections_by_phase,
             phase_info: annotations.phase_info,
+            turn_context_stats: annotations.turn_context_stats,
             is_ongoing,
             title: title_metadata.title,
         };
@@ -3791,6 +3845,7 @@ impl DataApi for LocalDataApi {
                     context_injections: Vec::new(),
                     injections_by_phase: BTreeMap::new(),
                     phase_info: cdt_core::ContextPhaseInfo::default(),
+                    turn_context_stats: HashMap::default(),
                     is_ongoing: false,
                     title: None,
                 });
@@ -3809,6 +3864,7 @@ impl DataApi for LocalDataApi {
                         context_injections: Vec::new(),
                         injections_by_phase: BTreeMap::new(),
                         phase_info: cdt_core::ContextPhaseInfo::default(),
+                        turn_context_stats: HashMap::default(),
                         is_ongoing: false,
                         title: None,
                     });
@@ -3822,6 +3878,7 @@ impl DataApi for LocalDataApi {
                     context_injections: Vec::new(),
                     injections_by_phase: BTreeMap::new(),
                     phase_info: cdt_core::ContextPhaseInfo::default(),
+                    turn_context_stats: HashMap::default(),
                     is_ongoing: false,
                     title: None,
                 }),

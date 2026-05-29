@@ -265,6 +265,23 @@ pub struct ContextStats {
 }
 
 // =============================================================================
+// Per-turn context stats (lightweight projection for UI badge)
+// =============================================================================
+
+/// Lightweight per-turn stats exposed to the frontend for the "Context +N" badge.
+/// Projected from `ContextStats` in `cdt-api`, only for turns with `new_count > 0`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnContextStats {
+    pub new_count: u32,
+    pub new_tokens: u64,
+    pub new_tokens_by_category: TokensByCategory,
+    pub counts_by_category: CountsByCategory,
+    pub cumulative_estimated_tokens: u64,
+    pub cumulative_tokens_by_category: TokensByCategory,
+}
+
+// =============================================================================
 // Phase info
 // =============================================================================
 

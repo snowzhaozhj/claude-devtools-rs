@@ -1,6 +1,6 @@
 //! API 请求/响应类型。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -199,6 +199,11 @@ pub struct SessionDetail {
     /// 按 `phases.length > 1` 决定显隐。
     #[serde(default)]
     pub phase_info: cdt_core::ContextPhaseInfo,
+    /// Per-turn context stats (sparse map: only turns with `new_count` > 0).
+    /// Key = `AIChunk.chunk_id` (byte-for-byte).
+    /// Used by frontend "Context +N" badge per AI turn header.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub turn_context_stats: HashMap<String, cdt_core::TurnContextStats>,
     /// 会话是否仍在进行。由 `cdt_analyze::check_messages_ongoing`
     /// 计算，值应与同 session 的 `SessionSummary.is_ongoing` 一致。
     #[serde(default)]
