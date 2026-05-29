@@ -243,6 +243,8 @@ export interface ToolExecution {
   teammateSpawn?: TeammateSpawnInfo | null;
   /** 后端提取的 workflow run ID；非空时表示该 tool execution 关联一个 WorkflowItem。 */
   workflowRunId?: string;
+  /** 后端提取的 workflow script 绝对路径；仅供后端运行态降级剥取 name，前端通常不消费。 */
+  workflowScriptPath?: string;
 }
 
 export interface UserChunk {

@@ -88,6 +88,13 @@ pub struct ToolExecution {
     /// 在 pair 阶段从 `toolUseResult.get("runId")` 抽取，output trim 前完成。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_run_id: Option<String>,
+    /// Workflow 工具的 script 绝对路径（`workflows/scripts/<name>-wf_<id>.js`）。
+    /// 在 pair 阶段优先从 `toolUseResult.scriptPath` 抽取，缺失时回退
+    /// `tool_use.input.scriptPath`，output trim 前完成。运行态降级（manifest
+    /// 缺失）时用其 basename 剥 runId 后缀得 workflow name。inline `{script}`
+    /// 调用形态无此字段（`None`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_script_path: Option<String>,
 }
 
 impl ToolOutput {
@@ -157,6 +164,7 @@ mod tests {
             output_bytes: None,
             teammate_spawn: None,
             workflow_run_id: None,
+            workflow_script_path: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert_eq!(serde_json::from_str::<ToolExecution>(&json).unwrap(), value);
@@ -184,6 +192,7 @@ mod tests {
                 color: Some("blue".into()),
             }),
             workflow_run_id: None,
+            workflow_script_path: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert!(json.contains("\"teammateSpawn\":{\"name\":\"member-1\",\"color\":\"blue\"}"));
@@ -214,6 +223,7 @@ mod tests {
             output_bytes: None,
             teammate_spawn: None,
             workflow_run_id: None,
+            workflow_script_path: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert!(
@@ -251,6 +261,7 @@ mod tests {
             output_bytes: Some(42),
             teammate_spawn: None,
             workflow_run_id: None,
+            workflow_script_path: None,
         };
         let json = serde_json::to_string(&value).unwrap();
         assert_eq!(serde_json::from_str::<ToolExecution>(&json).unwrap(), value);

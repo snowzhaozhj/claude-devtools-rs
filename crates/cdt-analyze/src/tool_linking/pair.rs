@@ -98,6 +98,21 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                     } else {
                         None
                     };
+                    // scriptPath：优先 toolUseResult，缺失回退 tool_use.input
+                    // （inline `{script}` 调用形态两处皆无 → None）。
+                    let workflow_script_path = if pu.tool_name == "Workflow" {
+                        tool_use_result
+                            .and_then(|v| v.get("scriptPath"))
+                            .and_then(serde_json::Value::as_str)
+                            .or_else(|| {
+                                pu.input
+                                    .get("scriptPath")
+                                    .and_then(serde_json::Value::as_str)
+                            })
+                            .map(str::to_owned)
+                    } else {
+                        None
+                    };
                     executions.push(ToolExecution {
                         tool_use_id: tool_use_id.clone(),
                         tool_name: pu.tool_name.clone(),
@@ -113,6 +128,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         output_bytes: None,
                         teammate_spawn,
                         workflow_run_id,
+                        workflow_script_path,
                     });
                 }
             }
@@ -139,6 +155,7 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                     output_bytes: None,
                     teammate_spawn: None,
                     workflow_run_id: None,
+                    workflow_script_path: None,
                 });
             }
         }
@@ -503,5 +520,106 @@ mod tests {
         ];
         let r = pair_tool_executions(&msgs);
         assert_eq!(r.executions[0].workflow_run_id, None);
+    }
+
+    fn assistant_with_tool_input(
+        uuid: &str,
+        n: i64,
+        id: &str,
+        name: &str,
+        input: serde_json::Value,
+    ) -> ParsedMessage {
+        crate::test_support::assistant(
+            uuid,
+            n,
+            &[ContentBlock::ToolUse {
+                id: id.into(),
+                name: name.into(),
+                input,
+            }],
+        )
+    }
+
+    #[test]
+    fn workflow_script_path_extracted_from_tool_use_result() {
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "t1", "Workflow"),
+            user_with_result_and_top(
+                "u1",
+                2,
+                "t1",
+                serde_json::json!("Workflow launched."),
+                serde_json::json!({"status": "async_launched", "runId": "wf_abc", "scriptPath": "/x/foo-wf_abc.js"}),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert_eq!(
+            r.executions[0].workflow_script_path.as_deref(),
+            Some("/x/foo-wf_abc.js")
+        );
+    }
+
+    #[test]
+    fn workflow_script_path_falls_back_to_tool_use_input() {
+        // toolUseResult 无 scriptPath，但 tool_use.input 有 → 回退抽取
+        let msgs = vec![
+            assistant_with_tool_input(
+                "a1",
+                1,
+                "t1",
+                "Workflow",
+                serde_json::json!({"scriptPath": "/x/in-wf_abc.js"}),
+            ),
+            user_with_result_and_top(
+                "u1",
+                2,
+                "t1",
+                serde_json::json!("ok"),
+                serde_json::json!({"status": "async_launched", "runId": "wf_abc"}),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert_eq!(
+            r.executions[0].workflow_script_path.as_deref(),
+            Some("/x/in-wf_abc.js")
+        );
+    }
+
+    #[test]
+    fn workflow_script_path_none_when_absent_both() {
+        let msgs = vec![
+            assistant_with_tool("a1", 1, "t1", "Workflow"), // input {}
+            user_with_result_and_top(
+                "u1",
+                2,
+                "t1",
+                serde_json::json!("ok"),
+                serde_json::json!({"runId": "wf_abc"}),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert_eq!(r.executions[0].workflow_script_path, None);
+    }
+
+    #[test]
+    fn workflow_script_path_none_for_non_workflow_tool() {
+        let msgs = vec![
+            assistant_with_tool_input(
+                "a1",
+                1,
+                "t1",
+                "Bash",
+                serde_json::json!({"scriptPath": "/ignored.js"}),
+            ),
+            user_with_result_and_top(
+                "u1",
+                2,
+                "t1",
+                serde_json::json!("done"),
+                serde_json::json!({"scriptPath": "/also-ignored.js"}),
+            ),
+        ];
+        let r = pair_tool_executions(&msgs);
+        assert_eq!(r.executions[0].workflow_script_path, None);
     }
 }

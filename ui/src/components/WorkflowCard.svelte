@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { WorkflowItem } from "../lib/api";
+  import type { WorkflowItem, WorkflowAgent } from "../lib/api";
   import { formatDuration } from "../lib/formatters";
   import { CHEVRON_RIGHT } from "../lib/icons";
 
@@ -28,9 +28,16 @@
     }
   });
 
-  const phaseSummary = $derived(
-    `${phases.length} phase${phases.length !== 1 ? "s" : ""} · ${agents.length} agent${agents.length !== 1 ? "s" : ""}`,
-  );
+  const doneCount = $derived(agents.filter(a => a.state === "completed").length);
+
+  // 运行态（manifest 缺失降级）header 显示 agent 计数 + 已完成数；其它态显示 phase·agent。
+  const phaseSummary = $derived.by(() => {
+    if (workflow.status === "running") {
+      return `${agents.length} agent${agents.length !== 1 ? "s" : ""} (${doneCount} done)`;
+    }
+    return `${phases.length} phase${phases.length !== 1 ? "s" : ""} · ${agents.length} agent${agents.length !== 1 ? "s" : ""}`;
+  });
+
 
   const durationText = $derived(formatDuration(workflow.durationMs ?? null));
 
@@ -91,28 +98,52 @@
     {/if}
   </div>
 
+  <!-- index 由调用点传入（运行态 = 全局 agents 顺序；完成态 = phase 内序号，label 恒
+       非空不触发 fallback）。避免在 each 内 agents.indexOf() 造成 O(n²) 渲染。 -->
+  {#snippet agentChip(agent: WorkflowAgent, index: number)}
+    <div class="wf-chip" class:wf-chip-failed={agent.state === "failed"}>
+      <span class="wf-chip-dot" class:wf-dot-done={agent.state === "completed"} class:wf-dot-failed={agent.state === "failed"} class:wf-dot-running={agent.state === "running"} class:wf-dot-queued={agent.state === "pending"}></span>
+      <span class="wf-chip-label">{agent.label || `Agent ${index + 1}`}</span>
+      {#if agent.tokens}
+        <span class="wf-chip-meta">{agent.tokens.toLocaleString()} tk</span>
+      {/if}
+      {#if agent.durationMs}
+        <span class="wf-chip-meta">{formatDuration(agent.durationMs)}</span>
+      {/if}
+    </div>
+  {/snippet}
+
   {#if isExpanded}
     <div class="wf-body">
-      {#if workflow.status === "running" && phases.length === 0}
-        <div class="wf-running-minimal">Details available after completion</div>
-      {:else if agents.length === 0}
-        <div class="wf-empty">No subagents</div>
+      {#if agents.length === 0}
+        {#if workflow.status === "running"}
+          <div class="wf-running-minimal">Running…</div>
+        {:else}
+          <div class="wf-empty">No subagents</div>
+        {/if}
+      {:else if workflow.status === "running"}
+        <!-- 运行态：合成 agent 无法归属 phase（journal 无 phase 标记）。
+             Tier 1 解出 phases 时仅作静态列表展示在 chips 之上；agent 扁平排列。 -->
+        {#if phases.length > 0}
+          <div class="wf-phase-list">
+            {#each phases as phase (phase.index)}
+              <span class="wf-phase-pill">{phase.title}</span>
+            {/each}
+          </div>
+        {/if}
+        <div class="wf-chips">
+          {#each agents as agent, idx (idx)}
+            {@render agentChip(agent, idx)}
+          {/each}
+        </div>
       {:else}
+        <!-- 完成态 / 部分失败态：agent 有真实 phaseIndex，按 phase 分组 -->
         {#each phases as phase (phase.index)}
           <div class="wf-phase">
             <div class="wf-phase-title">{phase.title}</div>
             <div class="wf-chips">
               {#each agentsByPhase.get(phase.index) ?? [] as agent, idx (`${phase.index}-${idx}`)}
-                <div class="wf-chip" class:wf-chip-failed={agent.state === "failed"}>
-                  <span class="wf-chip-dot" class:wf-dot-done={agent.state === "completed"} class:wf-dot-failed={agent.state === "failed"} class:wf-dot-running={agent.state === "running"} class:wf-dot-queued={agent.state === "pending"}></span>
-                  <span class="wf-chip-label">{agent.label}</span>
-                  {#if agent.tokens}
-                    <span class="wf-chip-meta">{agent.tokens.toLocaleString()} tk</span>
-                  {/if}
-                  {#if agent.durationMs}
-                    <span class="wf-chip-meta">{formatDuration(agent.durationMs)}</span>
-                  {/if}
-                </div>
+                {@render agentChip(agent, idx)}
               {/each}
             </div>
           </div>
@@ -278,6 +309,24 @@
     letter-spacing: 0.04em;
     color: var(--card-icon-muted);
     margin-bottom: 6px;
+  }
+
+  /* 运行态 Tier 1：静态 phase 列表（仅标题，无当前 phase 高亮） */
+  .wf-phase-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .wf-phase-pill {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--card-icon-muted);
+    background: var(--card-header-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-xs);
+    padding: 2px 8px;
   }
 
   .wf-chips {
