@@ -41,12 +41,15 @@
       <span class="output-label">{label}</span>
       <CopyButton text={code} />
     </div>
+    <pre class="output-pre" style:max-height="{maxHeight}px"><code>{@html highlighted}</code></pre>
   {:else}
-    <div class="output-header output-header-minimal">
-      <CopyButton text={code} />
+    <div class="output-block-inline">
+      <pre class="output-pre output-pre-standalone" style:max-height="{maxHeight}px"><code>{@html highlighted}</code></pre>
+      <div class="copy-float">
+        <CopyButton text={code} />
+      </div>
     </div>
   {/if}
-  <pre class="output-pre" style:max-height="{maxHeight}px"><code>{@html highlighted}</code></pre>
 </div>
 
 <style>
@@ -65,9 +68,25 @@
     border-radius: 6px 6px 0 0;
   }
 
-  .output-header-minimal {
-    justify-content: flex-end;
-    padding: 4px 8px 0;
+  .output-block-inline {
+    position: relative;
+  }
+
+  .output-pre-standalone {
+    border-top: 1px solid var(--code-border);
+    border-radius: 6px;
+  }
+
+  .copy-float {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .output-block-inline:hover .copy-float {
+    opacity: 1;
   }
 
   .output-label {
@@ -117,6 +136,11 @@
 
   .output-block-err .output-header {
     background: var(--tool-result-error-bg);
+    border-color: rgba(239, 68, 68, 0.2);
+    border-color: color-mix(in oklch, var(--color-danger-bright) 20%, transparent);
+  }
+
+  .output-block-err .output-pre-standalone {
     border-color: rgba(239, 68, 68, 0.2);
     border-color: color-mix(in oklch, var(--color-danger-bright) 20%, transparent);
   }
