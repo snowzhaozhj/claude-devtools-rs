@@ -3589,10 +3589,10 @@ impl DataApi for LocalDataApi {
         let ctx_ms = t_ctx.elapsed().as_millis();
 
         // Step 5.5: resolve workflow manifests (conditional on Workflow tool_use presence)
-        let session_dir = located.jsonl_path.parent().unwrap_or(Path::new(""));
+        let session_dir = located.project_dir.join(session_id);
         let workflow_items = super::workflow_manifest::resolve_workflow_items(
             &chunks,
-            session_dir,
+            &session_dir,
             &*located.fs,
             &self.workflow_manifest_cache,
         )
