@@ -19,6 +19,7 @@ pub mod project_scan_cache;
 pub mod session_metadata;
 pub mod traits;
 pub mod types;
+pub(crate) mod workflow_manifest;
 
 pub use cdt_discover::{WslDistroCandidate, WslDistroScanReport};
 pub use error::{ApiError, ApiErrorCode};
