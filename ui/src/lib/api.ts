@@ -315,8 +315,8 @@ export interface WorkflowItem {
   runId: string;
   name?: string;
   status: "completed" | "partial_failure" | "running" | "pending" | "failed";
-  phases: WorkflowPhase[];
-  agents: WorkflowAgent[];
+  phases?: WorkflowPhase[];
+  agents?: WorkflowAgent[];
   totalTokens?: number;
   durationMs?: number;
   error?: string;

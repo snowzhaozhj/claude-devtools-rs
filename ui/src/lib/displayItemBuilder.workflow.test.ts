@@ -79,12 +79,80 @@ describe("buildDisplayItems — workflow tool execution", () => {
   });
 });
 
-describe("buildSummary — workflow tool counted as tool call", () => {
-  test("Workflow tool counted in tool calls summary", () => {
+describe("buildSummary — workflow tool counting", () => {
+  test("Workflow tool counted in tool calls summary when no workflowRunIds provided", () => {
     const chunk = makeChunkWithWorkflowTool();
     const { items } = buildDisplayItems(chunk);
     const summary = buildSummary(items);
 
     expect(summary).toContain("1 tool call");
+  });
+
+  test("Workflow tool counted as workflow when workflowRunIds provided", () => {
+    const chunk = makeChunkWithWorkflowTool();
+    const { items } = buildDisplayItems(chunk);
+    const workflowRunIds = new Set(["wf-run-001"]);
+    const summary = buildSummary(items, workflowRunIds);
+
+    expect(summary).toContain("1 workflow");
+    expect(summary).not.toContain("tool call");
+  });
+
+  test("Multiple tool calls sharing same workflowRunId count as 1 workflow", () => {
+    const chunk = makeChunkWithWorkflowTool();
+    // Add a second tool execution with same workflowRunId
+    chunk.toolExecutions.push({
+      toolUseId: "wf-tool-2",
+      toolName: "Workflow",
+      input: { name: "deploy-pipeline" },
+      output: { kind: "text", text: "phase 2 done" },
+      isError: false,
+      startTs: "2024-01-01T00:00:03.000Z",
+      endTs: "2024-01-01T00:00:04.000Z",
+      sourceAssistantUuid: "wf-resp-1",
+      workflowRunId: "wf-run-001",
+    });
+    chunk.semanticSteps.splice(1, 0, {
+      kind: "tool_execution",
+      toolUseId: "wf-tool-2",
+      toolName: "Workflow",
+      timestamp: "2024-01-01T00:00:03.000Z",
+    });
+
+    const { items } = buildDisplayItems(chunk);
+    const workflowRunIds = new Set(["wf-run-001"]);
+    const summary = buildSummary(items, workflowRunIds);
+
+    expect(summary).toContain("1 workflow");
+    expect(summary).not.toContain("2 workflow");
+    expect(summary).not.toContain("tool call");
+  });
+
+  test("Two distinct workflows counted separately", () => {
+    const chunk = makeChunkWithWorkflowTool();
+    chunk.toolExecutions.push({
+      toolUseId: "wf-tool-3",
+      toolName: "Workflow",
+      input: { name: "review-pipeline" },
+      output: { kind: "text", text: "done" },
+      isError: false,
+      startTs: "2024-01-01T00:00:05.000Z",
+      endTs: "2024-01-01T00:00:06.000Z",
+      sourceAssistantUuid: "wf-resp-1",
+      workflowRunId: "wf-run-002",
+    });
+    chunk.semanticSteps.splice(1, 0, {
+      kind: "tool_execution",
+      toolUseId: "wf-tool-3",
+      toolName: "Workflow",
+      timestamp: "2024-01-01T00:00:05.000Z",
+    });
+
+    const { items } = buildDisplayItems(chunk);
+    const workflowRunIds = new Set(["wf-run-001", "wf-run-002"]);
+    const summary = buildSummary(items, workflowRunIds);
+
+    expect(summary).toContain("2 workflows");
+    expect(summary).not.toContain("tool call");
   });
 });

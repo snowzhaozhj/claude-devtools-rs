@@ -12,11 +12,14 @@
   let isExpanded = $state(false);
   let isScriptExpanded = $state(false);
 
+  const phases = $derived(workflow.phases ?? []);
+  const agents = $derived(workflow.agents ?? []);
+
   const statusLabel = $derived.by(() => {
     switch (workflow.status) {
       case "completed": return "Done";
       case "partial_failure": {
-        const failedCount = workflow.agents.filter(a => a.state === "failed").length;
+        const failedCount = agents.filter(a => a.state === "failed").length;
         return `${failedCount} failed`;
       }
       case "running": return "Running";
@@ -26,7 +29,7 @@
   });
 
   const phaseSummary = $derived(
-    `${workflow.phases.length} phase${workflow.phases.length !== 1 ? "s" : ""} · ${workflow.agents.length} agent${workflow.agents.length !== 1 ? "s" : ""}`,
+    `${phases.length} phase${phases.length !== 1 ? "s" : ""} · ${agents.length} agent${agents.length !== 1 ? "s" : ""}`,
   );
 
   const durationText = $derived(formatDuration(workflow.durationMs ?? null));
@@ -36,8 +39,8 @@
   );
 
   const agentsByPhase = $derived.by(() => {
-    const map = new Map<number, typeof workflow.agents>();
-    for (const agent of workflow.agents) {
+    const map = new Map<number, typeof agents>();
+    for (const agent of agents) {
       const list = map.get(agent.phaseIndex) ?? [];
       list.push(agent);
       map.set(agent.phaseIndex, list);
@@ -90,12 +93,12 @@
 
   {#if isExpanded}
     <div class="wf-body">
-      {#if workflow.status === "running" && workflow.phases.length === 0}
+      {#if workflow.status === "running" && phases.length === 0}
         <div class="wf-running-minimal">Details available after completion</div>
-      {:else if workflow.agents.length === 0}
+      {:else if agents.length === 0}
         <div class="wf-empty">No subagents</div>
       {:else}
-        {#each workflow.phases as phase (phase.index)}
+        {#each phases as phase (phase.index)}
           <div class="wf-phase">
             <div class="wf-phase-title">{phase.title}</div>
             <div class="wf-chips">
