@@ -362,14 +362,14 @@ export function buildSummary(items: DisplayItem[], workflowRunIds?: Set<string>)
   let subagents = 0;
   let thinkings = 0;
   let teammateMessages = 0;
-  let workflows = 0;
   const teammateNames = new Set<string>();
+  const seenWorkflowIds = new Set<string>();
 
   for (const item of items) {
     switch (item.type) {
       case "tool":
         if (workflowRunIds && item.execution.workflowRunId && workflowRunIds.has(item.execution.workflowRunId)) {
-          workflows++;
+          seenWorkflowIds.add(item.execution.workflowRunId);
         } else {
           tools++;
         }
@@ -400,11 +400,12 @@ export function buildSummary(items: DisplayItem[], workflowRunIds?: Set<string>)
         teammateNames.add(item.name);
         break;
       case "workflow":
-        workflows++;
+        seenWorkflowIds.add(item.workflow.runId);
         break;
     }
   }
 
+  const workflows = seenWorkflowIds.size;
   const parts: string[] = [];
   if (thinkings > 0) parts.push(`${thinkings} thinking`);
   if (tools > 0) parts.push(`${tools} tool call${tools > 1 ? "s" : ""}`);
