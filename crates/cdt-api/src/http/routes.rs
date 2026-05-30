@@ -61,7 +61,6 @@ impl IntoResponse for ApiError {
 pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
     let api_router = Router::new()
         // 项目 + 会话
-        .route("/api/jobs", get(list_jobs))
         .route("/api/projects", get(list_projects))
         .route("/api/projects/{project_id}/sessions", get(list_sessions))
         .route(
@@ -437,11 +436,6 @@ fn guess_mime(path: &std::path::Path) -> &'static str {
 // =============================================================================
 // Handlers — 每个委托给 DataApi trait
 // =============================================================================
-
-async fn list_jobs(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
-    let result = s.api.list_jobs().await?;
-    Ok(Json(result))
-}
 
 async fn list_projects(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     let projects = s.api.list_projects().await?;
