@@ -72,6 +72,12 @@ export interface WorkflowDisplayItem {
   timestamp: string;
 }
 
+export interface UserMessageItem {
+  type: "user_message";
+  text: string;
+  timestamp: string;
+}
+
 export type DisplayItem =
   | ThinkingItem
   | ToolItem
@@ -80,7 +86,8 @@ export type DisplayItem =
   | SlashItem
   | TeammateMessageDisplayItem
   | TeammateSpawnDisplayItem
-  | WorkflowDisplayItem;
+  | WorkflowDisplayItem
+  | UserMessageItem;
 
 // ---------------------------------------------------------------------------
 // buildDisplayItems
@@ -221,6 +228,14 @@ export function buildDisplayItems(chunk: AIChunk): {
         }
         break;
       }
+
+      case "user_message":
+        pool.push({
+          ts: step.timestamp,
+          order: order++,
+          item: { type: "user_message", text: step.text, timestamp: step.timestamp },
+        });
+        break;
     }
   }
 

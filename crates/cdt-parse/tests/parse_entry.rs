@@ -103,3 +103,37 @@ fn unknown_type_returns_none() {
     let line = r#"{"type":"some-future-kind","uuid":"x"}"#;
     assert!(parse_entry(line).unwrap().is_none());
 }
+
+#[test]
+fn attachment_queued_command_parsed_as_user_with_queued_flag() {
+    let line = r#"{"type":"attachment","uuid":"att1","parentUuid":"p1","timestamp":"2026-05-30T15:18:46Z","attachment":{"type":"queued_command","prompt":"hello from user","commandMode":"prompt"}}"#;
+    let msg = parse_entry(line).unwrap().expect("should parse");
+    assert_eq!(msg.uuid, "att1");
+    assert_eq!(msg.parent_uuid.as_deref(), Some("p1"));
+    assert_eq!(msg.message_type, MessageType::User);
+    assert_eq!(msg.category, MessageCategory::User);
+    assert!(msg.is_queued_input);
+    assert!(!msg.is_meta);
+    let MessageContent::Text(text) = &msg.content else {
+        panic!("expected Text content");
+    };
+    assert_eq!(text, "hello from user");
+}
+
+#[test]
+fn attachment_non_queued_command_skipped() {
+    let line = r#"{"type":"attachment","uuid":"att2","timestamp":"2026-05-30T15:00:00Z","attachment":{"type":"skill_listing","content":"..."}}"#;
+    assert!(parse_entry(line).unwrap().is_none());
+}
+
+#[test]
+fn attachment_queued_command_empty_prompt_skipped() {
+    let line = r#"{"type":"attachment","uuid":"att3","timestamp":"2026-05-30T15:00:00Z","attachment":{"type":"queued_command","prompt":""}}"#;
+    assert!(parse_entry(line).unwrap().is_none());
+}
+
+#[test]
+fn attachment_queued_command_missing_prompt_skipped() {
+    let line = r#"{"type":"attachment","uuid":"att4","timestamp":"2026-05-30T15:00:00Z","attachment":{"type":"queued_command"}}"#;
+    assert!(parse_entry(line).unwrap().is_none());
+}

@@ -1305,6 +1305,19 @@
                         <div class="prose lazy-md" {@attach attachMarkdown(item.text, "output")}></div>
                       {/snippet}
                     </BaseItem>
+                  {:else if item.type === "user_message"}
+                    {@const key = `${chunk.chunkId}-usermsg-${di_idx}`}
+                    <BaseItem
+                      svgIcon={MESSAGE_SQUARE}
+                      label="User"
+                      summary={item.text.length > 60 ? item.text.slice(0, 60) + "…" : item.text}
+                      isExpanded={expandedItems.has(key)}
+                      onclick={() => toggle(key)}
+                    >
+                      {#snippet children()}
+                        <div class="prose lazy-md" {@attach attachMarkdown(item.text, "output")}></div>
+                      {/snippet}
+                    </BaseItem>
                   {:else if item.type === "subagent"}
                     <SubagentCard process={item.process} rootSessionId={sessionId} />
                   {:else if item.type === "teammate_message"}

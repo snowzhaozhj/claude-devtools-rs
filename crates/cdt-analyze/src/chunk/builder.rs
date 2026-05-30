@@ -111,10 +111,17 @@ struct ChunkBuildState<'a> {
     buffer: Vec<AssistantResponse>,
     pending_slashes: Vec<SlashCommand>,
     pending_teammates: Vec<TeammateMessage>,
+    pending_user_messages: Vec<PendingUserMessage>,
     used_send_message_ids: HashSet<String>,
     used_chunk_ids: HashSet<String>,
     executions_by_assistant: HashMap<String, Vec<ToolExecution>>,
     follow_ups: &'a HashMap<String, String>,
+}
+
+struct PendingUserMessage {
+    uuid: String,
+    text: String,
+    timestamp: chrono::DateTime<chrono::Utc>,
 }
 
 impl<'a> ChunkBuildState<'a> {
@@ -127,6 +134,7 @@ impl<'a> ChunkBuildState<'a> {
             buffer: Vec::new(),
             pending_slashes: Vec::new(),
             pending_teammates: Vec::new(),
+            pending_user_messages: Vec::new(),
             used_send_message_ids: HashSet::new(),
             used_chunk_ids: HashSet::new(),
             executions_by_assistant,
@@ -204,6 +212,7 @@ impl ChunkBuildState<'_> {
         if !self.buffer.is_empty() {
             self.flush();
         }
+        self.drain_trailing_user_messages();
         self.drain_trailing_teammates();
     }
 
@@ -244,6 +253,14 @@ impl ChunkBuildState<'_> {
                 // 一条 TeammateMessage（多 block 修复，对齐原版）。
                 self.pending_teammates.extend(build_pending_teammates(msg));
             }
+            return;
+        }
+        if msg.is_queued_input {
+            self.pending_user_messages.push(PendingUserMessage {
+                uuid: msg.uuid.clone(),
+                text: extract_plain_text(&msg.content),
+                timestamp: msg.timestamp,
+            });
             return;
         }
         // `is_meta` 消息是 skill prompt / system-reminder 注入，
@@ -452,6 +469,62 @@ fn append_interruption_to_last_ai(out: &mut [Chunk], msg: &ParsedMessage) {
     }
 }
 
+/// 把 pending user messages 按 timestamp 插入 `semantic_steps` 的精确时序位。
+fn inject_pending_user_messages(
+    steps: &mut Vec<SemanticStep>,
+    pending: &mut Vec<PendingUserMessage>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let drained = std::mem::take(pending);
+    for pum in drained {
+        let step = SemanticStep::UserMessage {
+            uuid: pum.uuid,
+            text: pum.text,
+            timestamp: pum.timestamp,
+        };
+        let pos = steps
+            .iter()
+            .position(|s| step_timestamp(s) > pum.timestamp)
+            .unwrap_or(steps.len());
+        steps.insert(pos, step);
+    }
+}
+
+fn step_timestamp(step: &SemanticStep) -> chrono::DateTime<chrono::Utc> {
+    match step {
+        SemanticStep::Thinking { timestamp, .. }
+        | SemanticStep::Text { timestamp, .. }
+        | SemanticStep::ToolExecution { timestamp, .. }
+        | SemanticStep::SubagentSpawn { timestamp, .. }
+        | SemanticStep::Interruption { timestamp, .. }
+        | SemanticStep::UserMessage { timestamp, .. } => *timestamp,
+    }
+}
+
+impl ChunkBuildState<'_> {
+    fn drain_trailing_user_messages(&mut self) {
+        if self.pending_user_messages.is_empty() {
+            return;
+        }
+        let Some(idx) = self.out.iter().rposition(|c| matches!(c, Chunk::Ai(_))) else {
+            self.pending_user_messages.clear();
+            return;
+        };
+        let drained = std::mem::take(&mut self.pending_user_messages);
+        if let Chunk::Ai(ai) = &mut self.out[idx] {
+            for pum in drained {
+                ai.semantic_steps.push(SemanticStep::UserMessage {
+                    uuid: pum.uuid,
+                    text: pum.text,
+                    timestamp: pum.timestamp,
+                });
+            }
+        }
+    }
+}
+
 /// 带 subagent 候选的 chunk 构建。
 ///
 /// 在 `build_chunks` 基础上额外：
@@ -652,7 +725,8 @@ impl ChunkBuildState<'_> {
             .map_or_else(|| "empty".to_owned(), |response| response.uuid.clone());
         let chunk_id = next_chunk_id(&base, &mut self.used_chunk_ids);
         let metrics = aggregate_metrics(&responses);
-        let semantic_steps = extract_semantic_steps(&responses);
+        let mut semantic_steps = extract_semantic_steps(&responses);
+        inject_pending_user_messages(&mut semantic_steps, &mut self.pending_user_messages);
         let timestamp = responses.first().map(|r| r.timestamp).unwrap_or_default();
         let duration_ms = match (responses.first(), responses.last()) {
             (Some(a), Some(b)) if responses.len() > 1 => {
@@ -1316,6 +1390,7 @@ mod tests {
                 SemanticStep::Thinking { .. } => "Thinking",
                 SemanticStep::Text { .. } => "Text",
                 SemanticStep::Interruption { .. } => "Interruption",
+                SemanticStep::UserMessage { .. } => "UserMessage",
             })
             .collect();
         // Task 步骤仍在（前端层做去重），SubagentSpawn 紧随其后
@@ -2199,5 +2274,133 @@ mod tests {
             total_teammate_count, 1,
             "teammate should be emitted exactly once"
         );
+    }
+
+    // ---- queued user message (is_queued_input) ----
+
+    fn queued_user(uuid: &str, n: i64, text: &str) -> ParsedMessage {
+        ParsedMessage {
+            content: MessageContent::Text(text.into()),
+            is_queued_input: true,
+            ..blank_message(uuid, n)
+        }
+    }
+
+    #[test]
+    fn queued_input_does_not_produce_user_chunk_or_flush() {
+        let msgs = vec![
+            assistant("a1", 1, &[ContentBlock::Text { text: "hi".into() }]),
+            queued_user("q1", 2, "user interjection"),
+            assistant("a2", 3, &[ContentBlock::Text { text: "ok".into() }]),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 1, "should be single AIChunk, no UserChunk");
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        assert_eq!(ai.responses.len(), 2, "both assistants in same chunk");
+    }
+
+    #[test]
+    fn queued_input_appears_at_correct_timeline_position() {
+        let msgs = vec![
+            assistant(
+                "a1",
+                1,
+                &[ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "Bash".into(),
+                    input: serde_json::json!({}),
+                }],
+            ),
+            queued_user("q1", 2, "mid-turn input"),
+            assistant(
+                "a2",
+                3,
+                &[ContentBlock::ToolUse {
+                    id: "t2".into(),
+                    name: "Read".into(),
+                    input: serde_json::json!({}),
+                }],
+            ),
+        ];
+        let chunks = build_chunks(&msgs);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        let kinds: Vec<&str> = ai
+            .semantic_steps
+            .iter()
+            .map(|s| match s {
+                SemanticStep::ToolExecution { tool_name, .. } => tool_name.as_str(),
+                SemanticStep::UserMessage { .. } => "UserMessage",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, vec!["Bash", "UserMessage", "Read"]);
+    }
+
+    #[test]
+    fn multiple_queued_inputs_produce_multiple_steps() {
+        let msgs = vec![
+            assistant(
+                "a1",
+                1,
+                &[ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "Bash".into(),
+                    input: serde_json::json!({}),
+                }],
+            ),
+            queued_user("q1", 2, "first"),
+            queued_user("q2", 4, "second"),
+            assistant(
+                "a2",
+                5,
+                &[ContentBlock::ToolUse {
+                    id: "t2".into(),
+                    name: "Read".into(),
+                    input: serde_json::json!({}),
+                }],
+            ),
+        ];
+        let chunks = build_chunks(&msgs);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        let user_msgs: Vec<&str> = ai
+            .semantic_steps
+            .iter()
+            .filter_map(|s| match s {
+                SemanticStep::UserMessage { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_msgs, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn trailing_queued_input_attaches_to_last_ai_chunk() {
+        let msgs = vec![
+            assistant("a1", 1, &[ContentBlock::Text { text: "hi".into() }]),
+            queued_user("q1", 2, "trailing"),
+        ];
+        let chunks = build_chunks(&msgs);
+        assert_eq!(chunks.len(), 1);
+        let Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        assert!(
+            ai.semantic_steps
+                .iter()
+                .any(|s| matches!(s, SemanticStep::UserMessage { text, .. } if text == "trailing"))
+        );
+    }
+
+    #[test]
+    fn orphan_queued_input_without_ai_chunk_is_dropped() {
+        let msgs = vec![queued_user("q1", 0, "lonely")];
+        let chunks = build_chunks(&msgs);
+        assert!(chunks.is_empty());
     }
 }

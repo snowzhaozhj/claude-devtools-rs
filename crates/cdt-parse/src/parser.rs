@@ -46,6 +46,16 @@ struct RawEntry {
     source_tool_assistant_uuid: Option<String>,
     #[serde(default)]
     message: Option<RawMessage>,
+    #[serde(default)]
+    attachment: Option<RawAttachment>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawAttachment {
+    #[serde(rename = "type", default)]
+    attachment_type: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,7 +93,7 @@ pub fn parse_entry_at(line: &str, line_number: usize) -> Result<Option<ParsedMes
     };
 
     let Some(message_type) = parse_message_type(raw.entry_type.as_deref()) else {
-        return Ok(None);
+        return try_parse_queued_command(&raw, &uuid);
     };
 
     let timestamp = parse_timestamp(raw.timestamp.as_deref());
@@ -124,6 +134,7 @@ pub fn parse_entry_at(line: &str, line_number: usize) -> Result<Option<ParsedMes
         is_compact_summary,
         request_id: raw.request_id,
         tool_use_result: raw.tool_use_result,
+        is_queued_input: false,
     }))
 }
 
@@ -232,4 +243,50 @@ fn extract_tool_results(content: &MessageContent) -> Vec<ToolResult> {
         }
     }
     out
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn try_parse_queued_command(
+    raw: &RawEntry,
+    uuid: &str,
+) -> Result<Option<ParsedMessage>, ParseError> {
+    let is_attachment = raw.entry_type.as_deref() == Some("attachment");
+    if !is_attachment {
+        return Ok(None);
+    }
+    let Some(att) = raw.attachment.as_ref() else {
+        return Ok(None);
+    };
+    if att.attachment_type.as_deref() != Some("queued_command") {
+        return Ok(None);
+    }
+    let Some(prompt) = att.prompt.as_ref().filter(|p| !p.is_empty()) else {
+        return Ok(None);
+    };
+    let timestamp = parse_timestamp(raw.timestamp.as_deref());
+    Ok(Some(ParsedMessage {
+        uuid: uuid.to_owned(),
+        parent_uuid: raw.parent_uuid.clone(),
+        message_type: MessageType::User,
+        category: MessageCategory::User,
+        timestamp,
+        role: Some("user".to_owned()),
+        content: MessageContent::Text(prompt.clone()),
+        usage: None,
+        model: None,
+        cwd: raw.cwd.clone(),
+        git_branch: raw.git_branch.clone(),
+        agent_id: raw.agent_id.clone(),
+        is_sidechain: raw.is_sidechain.unwrap_or(false),
+        is_meta: false,
+        user_type: raw.user_type.clone(),
+        tool_calls: Vec::new(),
+        tool_results: Vec::new(),
+        source_tool_use_id: raw.source_tool_use_id.clone(),
+        source_tool_assistant_uuid: raw.source_tool_assistant_uuid.clone(),
+        is_compact_summary: false,
+        request_id: raw.request_id.clone(),
+        tool_use_result: None,
+        is_queued_input: true,
+    }))
 }

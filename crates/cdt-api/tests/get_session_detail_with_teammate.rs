@@ -49,6 +49,7 @@ fn blank(uuid: &str, n: i64) -> ParsedMessage {
         is_compact_summary: false,
         request_id: None,
         tool_use_result: None,
+        is_queued_input: false,
     }
 }
 

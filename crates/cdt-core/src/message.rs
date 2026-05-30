@@ -167,6 +167,7 @@ pub struct ToolResult {
 
 /// 一条 JSONL 行经解析 + 分类后的结果。
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ParsedMessage {
     pub uuid: String,
     pub parent_uuid: Option<String>,
@@ -192,6 +193,9 @@ pub struct ParsedMessage {
     /// JSONL 顶层 `toolUseResult` 字段，由 Claude Code 独立于 `message.content` 写入。
     /// Subagent 匹配需要读其中的 `agentId`（见 `openspec/followups.md` Phase 1 bug）。
     pub tool_use_result: Option<serde_json::Value>,
+    /// `true` 仅当消息来自 `type:"attachment" + attachment.type:"queued_command"`。
+    /// chunk-building 据此区分"正常 user 消息"（产 `UserChunk`）和"排队插话"（inline embed）。
+    pub is_queued_input: bool,
 }
 
 #[cfg(test)]

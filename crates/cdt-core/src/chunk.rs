@@ -157,6 +157,14 @@ pub enum SemanticStep {
         text: String,
         timestamp: DateTime<Utc>,
     },
+    /// 用户在 AI turn 进行中排队输入的消息（Claude Code `queued_command`）。
+    ///
+    /// inline 嵌入当前 `AIChunk.semantic_steps` 的精确时序位，不打断 turn。
+    UserMessage {
+        uuid: String,
+        text: String,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -517,5 +525,20 @@ mod tests {
         assert_eq!(v["tokenDelta"]["delta"], -25_000);
         assert_eq!(v["phaseNumber"], 2);
         roundtrip(&Chunk::Compact(c));
+    }
+
+    #[test]
+    fn semantic_step_user_message_serde() {
+        let step = SemanticStep::UserMessage {
+            uuid: "q1".into(),
+            text: "hello".into(),
+            timestamp: ts(),
+        };
+        let json = serde_json::to_value(&step).unwrap();
+        assert_eq!(json["kind"], "user_message");
+        assert_eq!(json["uuid"], "q1");
+        assert_eq!(json["text"], "hello");
+        assert!(json["timestamp"].is_string());
+        roundtrip(&step);
     }
 }
