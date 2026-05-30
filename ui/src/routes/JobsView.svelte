@@ -14,7 +14,6 @@
   const loading = $derived(getJobsLoading());
   const error = $derived(getJobsError());
   const grouped = $derived(groupJobs(jobs));
-  const showGroupHeaders = $derived(grouped.length > 1);
 </script>
 
 <div class="jobs-view">
@@ -49,12 +48,10 @@
     <div class="jobs-list">
       {#each grouped as groupData (groupData.group)}
         <div class="job-group">
-          {#if showGroupHeaders}
-            <div class="group-header">
-              <span class="group-label">{groupData.label}</span>
-              <span class="group-count">{groupData.jobs.length}</span>
-            </div>
-          {/if}
+          <div class="group-header">
+            <span class="group-label">{groupData.label}</span>
+            <span class="group-count">{groupData.jobs.length}</span>
+          </div>
           {#each groupData.jobs as job (job.id)}
             <JobRow {job} />
           {/each}

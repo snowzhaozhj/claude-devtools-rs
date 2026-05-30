@@ -21,7 +21,8 @@
   const prChild = $derived(job.children.find((c) => c.kind === "pr"));
   const prNumber = $derived(prChild?.href?.match(/\/pull\/(\d+)/)?.[1] ?? null);
 
-  function handleOpenSession() {
+  function handleOpenSession(e: Event) {
+    e.preventDefault();
     if (!job.sessionId) return;
     const projectId = extractProjectId(job) ?? "";
     openSessionTab(job.sessionId, projectId, job.name);
@@ -29,27 +30,28 @@
 
   function handleOpenPR(e: Event) {
     e.preventDefault();
+    e.stopPropagation();
     if (!prChild?.href) return;
     window.open(prChild.href, "_blank");
   }
 
   let stopping = $state(false);
-  let stopError: string | null = $state(null);
 
-  async function handleStop() {
+  async function handleStop(e: Event) {
+    e.preventDefault();
+    e.stopPropagation();
     stopping = true;
-    stopError = null;
     try {
       await stopJob(job.id);
-    } catch (err) {
-      stopError = err instanceof Error ? err.message : String(err);
+    } catch {
+      // 静默——job 列表会自动刷新反映结果
     } finally {
       stopping = false;
     }
   }
 </script>
 
-<div class="job-row" class:terminal={isTerminal}>
+<div class="job-row">
   <div class="row-line-1">
     <div class="indicator" style:--indicator-color={color}>
       {#if isWorking}
@@ -59,7 +61,10 @@
       {/if}
     </div>
 
-    <span class="job-name">{job.name || job.id.slice(0, 8)}</span>
+    <!-- svelte-ignore a11y_invalid_attribute -->
+    <a class="job-name" class:muted={isTerminal} href="#" onclick={handleOpenSession}>
+      {job.name || job.id.slice(0, 8)}
+    </a>
 
     {#if prNumber}
       <a
@@ -72,25 +77,14 @@
     {/if}
 
     <span class="job-age">{age}</span>
+
+    {#if isWorking}
+      <button class="stop-btn" onclick={handleStop} disabled={stopping}>stop</button>
+    {/if}
   </div>
 
   {#if job.detail}
     <div class="row-line-2">{job.detail}</div>
-  {/if}
-
-  <div class="row-actions">
-    {#if job.sessionId}
-      <button class="action-link" onclick={handleOpenSession}>打开 session →</button>
-    {/if}
-    {#if isWorking}
-      <button class="action-link danger" onclick={handleStop} disabled={stopping}>
-        {stopping ? "Stopping..." : "Stop"}
-      </button>
-    {/if}
-  </div>
-
-  {#if stopError}
-    <div class="row-error">{stopError}</div>
   {/if}
 </div>
 
@@ -101,15 +95,15 @@
     padding: 10px 12px;
     border-radius: 6px;
     gap: 3px;
+    transition: background 150ms ease-out;
   }
 
   .job-row:hover {
     background: var(--color-surface-raised);
   }
 
-  .job-row.terminal .job-name {
-    color: var(--color-text-muted);
-    font-weight: 400;
+  .job-row:hover .stop-btn {
+    opacity: 1;
   }
 
   .row-line-1 {
@@ -135,10 +129,6 @@
     background: var(--indicator-color);
   }
 
-  .terminal .dot {
-    opacity: 0.5;
-  }
-
   .spinner {
     width: 10px;
     height: 10px;
@@ -162,6 +152,16 @@
     text-overflow: ellipsis;
     flex: 1;
     min-width: 0;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .job-name:hover {
+    text-decoration: underline;
+  }
+
+  .job-name.muted {
+    color: var(--color-text-muted);
   }
 
   .pr-chip {
@@ -175,12 +175,11 @@
     color: var(--color-success, var(--color-success-bright));
     text-decoration: none;
     white-space: nowrap;
-    transition: background 0.12s ease-out;
+    transition: background 150ms ease-out;
   }
 
   .pr-chip:hover {
     background: color-mix(in srgb, var(--color-success-bright) 22%, transparent);
-    text-decoration: underline;
   }
 
   .job-age {
@@ -191,6 +190,29 @@
     white-space: nowrap;
   }
 
+  .stop-btn {
+    flex-shrink: 0;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 150ms ease-out;
+  }
+
+  .stop-btn:hover {
+    color: var(--color-text);
+    background: var(--color-surface-overlay, var(--color-surface-raised));
+  }
+
+  .stop-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
   .row-line-2 {
     padding-left: 22px;
     font-size: 12px;
@@ -199,49 +221,5 @@
     overflow: hidden;
     text-overflow: ellipsis;
     line-height: 1.4;
-  }
-
-  .row-actions {
-    padding-left: 22px;
-    display: flex;
-    gap: 12px;
-    margin-top: 4px;
-  }
-
-  .action-link {
-    font-size: 11px;
-    color: var(--color-accent-blue);
-    background: none;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    text-decoration: none;
-    transition: color 150ms ease-out, text-decoration-color 150ms ease-out;
-  }
-
-  .action-link:hover {
-    color: var(--color-accent-blue);
-    text-decoration: underline;
-  }
-
-  .action-link.danger {
-    color: var(--color-danger);
-  }
-
-  .action-link.danger:hover {
-    color: var(--color-danger);
-    text-decoration: underline;
-  }
-
-  .action-link:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .row-error {
-    padding-left: 22px;
-    font-size: 11px;
-    color: var(--color-danger);
-    margin-top: 2px;
   }
 </style>
