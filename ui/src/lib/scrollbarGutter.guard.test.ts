@@ -58,8 +58,10 @@ function leafRules(css: string): { selector: string; body: string }[] {
 }
 
 // 竖向滚动：overflow-y: auto|scroll 或 overflow: auto|scroll（简写含竖向）。
+// 含双值简写 `overflow: hidden auto`（第二个值是 Y 轴）。
 // 明确排除纯 overflow-x。
-const VERTICAL_SCROLL = /overflow(?:-y)?\s*:\s*(?:auto|scroll)\b/
+const VERTICAL_SCROLL =
+  /overflow-y\s*:\s*(?:auto|scroll)\b|overflow\s*:\s*(?:auto|scroll)\b|overflow\s*:\s*\S+\s+(?:auto|scroll)\b/
 const HAS_GUTTER = /scrollbar-gutter\s*:\s*stable\b/
 const HAS_EXEMPT = /scrollbar-gutter-exempt/
 
