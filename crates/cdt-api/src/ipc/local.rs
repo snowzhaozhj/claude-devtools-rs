@@ -133,7 +133,7 @@ const CROSS_PROJECT_SUBAGENT_SCAN: bool = true;
 /// Find a group by ID with fallback: if exact match fails, try matching
 /// `group_id` against worktree IDs (handles git-init causing group ID change).
 fn find_group_with_fallback(
-    groups: Vec<RepositoryGroup>,
+    mut groups: Vec<RepositoryGroup>,
     group_id: &str,
 ) -> Result<RepositoryGroup, ApiError> {
     let pos = groups
@@ -145,7 +145,7 @@ fn find_group_with_fallback(
                 .position(|g| g.worktrees.iter().any(|w| w.id == group_id))
         })
         .ok_or_else(|| ApiError::not_found(format!("repository group {group_id}")))?;
-    Ok(groups.into_iter().nth(pos).unwrap())
+    Ok(groups.swap_remove(pos))
 }
 
 fn is_safe_path_component(s: &str) -> bool {
