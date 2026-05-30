@@ -2654,6 +2654,7 @@ fn todos_dir_from_projects_dir(projects_dir: &Path) -> PathBuf {
     )
 }
 
+
 /// 扫描 `jobs_dir` 下所有 `<job_id>/state.json`，解析 + 分组 + badge 计算。
 ///
 /// jobs 目录不存在时返回空响应（降级）。
@@ -2696,7 +2697,7 @@ async fn list_jobs_from_dir(jobs_dir: &Path) -> Result<cdt_core::JobsResponse, A
         let Ok(content) = tokio::fs::read(&state_path).await else {
             continue;
         };
-        let bg_job = match serde_json::from_slice::<BackgroundJob>(&content) {
+        let mut bg_job = match serde_json::from_slice::<BackgroundJob>(&content) {
             Ok(j) => j,
             Err(e) => {
                 tracing::warn!(path = %state_path.display(), error = %e, "skipping job with unparseable state.json");
@@ -2705,6 +2706,20 @@ async fn list_jobs_from_dir(jobs_dir: &Path) -> Result<cdt_core::JobsResponse, A
         };
 
         let job_id = entry.file_name().to_string_lossy().into_owned();
+
+        // tempo 是 daemon 实时活跃度信号，优先级高于 state：
+        // - tempo=active → 无条件 Working（对齐 CLI: status=busy → Working）
+        // - tempo=blocked → Blocked（仅当 tempo 不是 active 时才生效）
+        // - tempo=idle + 终态 → 不覆盖（Completed）
+        match bg_job.tempo.as_str() {
+            "active" => {
+                bg_job.state = cdt_core::JobState::Working;
+            }
+            "blocked" => {
+                bg_job.state = cdt_core::JobState::Blocked;
+            }
+            _ => {}
+        }
 
         let project_id = extract_project_id_from_link_scan_path(&bg_job.link_scan_path)
             .unwrap_or_else(|| {
@@ -2728,8 +2743,8 @@ async fn list_jobs_from_dir(jobs_dir: &Path) -> Result<cdt_core::JobsResponse, A
             session_id: bg_job.session_id,
             project_id,
             tempo: bg_job.tempo,
+            needs: bg_job.needs,
             in_flight: bg_job.in_flight,
-
             created_at: bg_job.created_at,
             updated_at: bg_job.updated_at,
         });

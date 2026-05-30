@@ -55,6 +55,8 @@ pub struct BackgroundJob {
     pub link_scan_path: String,
     pub cwd: String,
     pub tempo: String,
+    /// blocked 时的用户动作提示（如 "reply `go` to merge"）。
+    pub needs: String,
     pub in_flight: Option<JobInFlight>,
     pub created_at: String,
     pub updated_at: String,
@@ -104,6 +106,8 @@ pub struct JobSummary {
     pub project_id: String,
     /// 活跃度。
     pub tempo: String,
+    /// blocked 时的用户动作提示。
+    pub needs: String,
     pub in_flight: Option<JobInFlight>,
     /// 创建时间。
     pub created_at: String,
@@ -184,7 +188,10 @@ pub fn classify_job_group(job: &BackgroundJob) -> JobGroup {
     match job.state {
         JobState::Done | JobState::Failed | JobState::Stopped => JobGroup::Completed,
         JobState::Blocked => JobGroup::NeedsInput,
-        JobState::Working | JobState::Idle => {
+        // Working = busy（正在执行），无条件归 Working 组
+        JobState::Working => JobGroup::Working,
+        // Idle = 进程活着但没在干活，有 PR 说明任务做完等审查
+        JobState::Idle => {
             let has_pr = job
                 .children
                 .as_deref()
@@ -268,9 +275,22 @@ mod tests {
     }
 
     #[test]
-    fn classify_job_with_pr_is_ready_for_review() {
+    fn classify_working_with_pr_is_still_working() {
         let job = BackgroundJob {
             state: JobState::Working,
+            children: Some(vec![JobChild {
+                href: "https://github.com/foo/bar/pull/1".into(),
+                kind: "pr".into(),
+            }]),
+            ..Default::default()
+        };
+        assert_eq!(classify_job_group(&job), JobGroup::Working);
+    }
+
+    #[test]
+    fn classify_idle_with_pr_is_ready_for_review() {
+        let job = BackgroundJob {
+            state: JobState::Idle,
             children: Some(vec![JobChild {
                 href: "https://github.com/foo/bar/pull/1".into(),
                 kind: "pr".into(),
@@ -370,6 +390,7 @@ mod tests {
             session_id: String::new(),
             project_id: String::new(),
             tempo: String::new(),
+            needs: String::new(),
             in_flight: None,
             created_at: String::new(),
             updated_at: String::new(),

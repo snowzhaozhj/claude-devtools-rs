@@ -4511,6 +4511,7 @@ async fn list_jobs_returns_camelcase_response() {
             session_id: "sess-123".into(),
             project_id: "-Users-alice-code".into(),
             tempo: "active".into(),
+            needs: String::new(),
             in_flight: Some(cdt_core::job::JobInFlight {
                 tasks: 1,
                 queued: 0,

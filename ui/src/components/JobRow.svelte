@@ -83,7 +83,9 @@
     {/if}
   </div>
 
-  {#if job.detail}
+  {#if job.needs}
+    <div class="row-line-2 needs">{job.needs}</div>
+  {:else if job.detail}
     <div class="row-line-2">{job.detail}</div>
   {/if}
 </div>
@@ -221,5 +223,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     line-height: 1.4;
+  }
+
+  .row-line-2.needs {
+    color: var(--color-warning);
   }
 </style>

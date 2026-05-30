@@ -43,13 +43,17 @@ let error: string | null = $state(null);
  */
 export function classifyJob(job: JobSummary): JobGroup {
   if (job.group) return job.group;
-  // 终态优先进 Completed——即使有 PR（对齐 claude agents CLI）
   if (job.state === "done" || job.state === "failed" || job.state === "stopped") {
     return "completed";
   }
   if (job.state === "blocked") {
     return "needs-input";
   }
+  // working = busy，无条件归 Working（正在执行中不管有没有 PR）
+  if (job.state === "working") {
+    return "working";
+  }
+  // idle + 有 PR = 做完了等审查
   if (job.children.some((c) => c.kind === "pr")) {
     return "ready-for-review";
   }

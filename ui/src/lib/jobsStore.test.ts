@@ -21,6 +21,7 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     sessionId: "",
     projectId: "",
     tempo: "",
+    needs: "",
     inFlight: null,
     createdAt: new Date(Date.now() - 60_000).toISOString(),
     updatedAt: new Date().toISOString(),
@@ -146,9 +147,9 @@ describe("computeBadge", () => {
     expect(computeBadge(jobs)).toBe("amber");
   });
 
-  test("有 PR 无 failed 无 blocked → green", () => {
+  test("有 PR 无 failed 无 blocked → none（不骚扰用户）", () => {
     const jobs = [makeJob({ children: [{ kind: "pr", href: "https://x" }] })];
-    expect(computeBadge(jobs)).toBe("green");
+    expect(computeBadge(jobs)).toBe("none");
   });
 
   test("working 只有 → none", () => {
@@ -171,7 +172,7 @@ describe("stateToColor", () => {
     ["working", "var(--color-accent-blue)"],
     ["blocked", "var(--color-warning)"],
     ["idle", "var(--color-text-muted)"],
-    ["done", "var(--color-success-bright)"],
+    ["done", "var(--color-text-muted)"],
     ["failed", "var(--color-danger)"],
     ["stopped", "var(--color-text-muted)"],
   ];
