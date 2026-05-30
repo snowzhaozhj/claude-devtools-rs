@@ -374,4 +374,29 @@ describe('buildDisplayItems — empty-responses AIChunk with teammate', () => {
     expect(items.length).toBe(0)
     expect(lastOutput).toBeNull()
   })
+
+  test('user_message semantic step produces UserMessageItem', () => {
+    const chunk: AIChunk = {
+      kind: 'ai',
+      chunkId: 'ai:a1:0',
+      timestamp: '2026-05-30T15:18:00Z',
+      durationMs: null,
+      responses: [{ uuid: 'a1', timestamp: '2026-05-30T15:18:00Z', content: 'hi', toolCalls: [], usage: null, model: null }],
+      metrics: { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, toolCount: 0, costUsd: null },
+      semanticSteps: [
+        { kind: 'text', text: 'working...', timestamp: '2026-05-30T15:18:01Z' },
+        { kind: 'user_message', uuid: 'q1', text: 'user interjection', timestamp: '2026-05-30T15:18:02Z' },
+      ],
+      toolExecutions: [],
+      subagents: [],
+      slashCommands: [],
+    }
+    const { items } = buildDisplayItems(chunk)
+    const userMsgItems = items.filter((i) => i.type === 'user_message')
+    expect(userMsgItems.length).toBe(1)
+    if (userMsgItems[0].type === 'user_message') {
+      expect(userMsgItems[0].text).toBe('user interjection')
+      expect(userMsgItems[0].timestamp).toBe('2026-05-30T15:18:02Z')
+    }
+  })
 })
