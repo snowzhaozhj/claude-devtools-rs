@@ -281,7 +281,33 @@ impl FileWatcher {
         }
 
         let ext = path.extension()?;
-        if !ext.eq_ignore_ascii_case("jsonl") {
+        let is_jsonl = ext.eq_ignore_ascii_case("jsonl");
+        let is_json = ext.eq_ignore_ascii_case("json");
+        if !is_jsonl && !is_json {
+            return None;
+        }
+
+        // Workflow manifest: 4 层 `<project>/<session>/workflows/wf_*.json`
+        // manifest 落盘 = workflow 完成，路由到父 session 触发 detail 刷新。
+        if is_json && components.len() == 4 {
+            let seg2 = components[2].as_os_str().to_string_lossy();
+            let file_name = components[3].as_os_str().to_string_lossy();
+            if seg2.eq_ignore_ascii_case("workflows") && file_name.starts_with("wf_") {
+                let project_id = components[0].as_os_str().to_string_lossy().into_owned();
+                let session_id = components[1].as_os_str().to_string_lossy().into_owned();
+                self.mark_local_origin(&project_id);
+                return Some(FileChangeEvent {
+                    project_id,
+                    session_id,
+                    deleted,
+                    project_list_changed: false,
+                    session_list_changed: false,
+                    mtime_ms: None,
+                });
+            }
+        }
+
+        if !is_jsonl {
             return None;
         }
 
@@ -295,8 +321,6 @@ impl FileWatcher {
                 let project_id = components[0].as_os_str().to_string_lossy().into_owned();
                 let session_id = components[1].as_os_str().to_string_lossy().into_owned();
                 self.mark_local_origin(&project_id);
-                // 嵌套 subagent jsonl 写事件——透传 deleted 路径取到的 mtime；
-                // deleted=true 时 mtime_ms 入参恒为 None。
                 return Some(FileChangeEvent {
                     project_id,
                     session_id,
@@ -307,6 +331,24 @@ impl FileWatcher {
                 });
             }
             return None;
+        }
+
+        // Workflow journal/agent: 6 层 `<project>/<session>/subagents/workflows/<run_id>/*.jsonl`
+        if components.len() == 6
+            && components[2].as_os_str().eq_ignore_ascii_case("subagents")
+            && components[3].as_os_str().eq_ignore_ascii_case("workflows")
+        {
+            let project_id = components[0].as_os_str().to_string_lossy().into_owned();
+            let session_id = components[1].as_os_str().to_string_lossy().into_owned();
+            self.mark_local_origin(&project_id);
+            return Some(FileChangeEvent {
+                project_id,
+                session_id,
+                deleted,
+                project_list_changed: false,
+                session_list_changed: false,
+                mtime_ms,
+            });
         }
 
         if components.len() != 2 {
@@ -1516,5 +1558,117 @@ mod tests {
             !second.session_list_changed,
             "subsequent append SHALL fill false"
         );
+    }
+
+    #[test]
+    fn workflow_manifest_json_routes_to_parent_session() {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        std::fs::create_dir_all(&projects_raw).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
+
+        let path = projects
+            .join("proj-a")
+            .join("sess-123")
+            .join("workflows")
+            .join("wf_abc123.json");
+        let event = watcher.parse_project_event(&path, false, None).unwrap();
+        assert_eq!(event.project_id, "proj-a");
+        assert_eq!(event.session_id, "sess-123");
+        assert!(!event.project_list_changed);
+        assert!(!event.session_list_changed);
+    }
+
+    #[test]
+    fn workflow_journal_jsonl_routes_to_parent_session() {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        std::fs::create_dir_all(&projects_raw).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
+
+        let path = projects
+            .join("proj-a")
+            .join("sess-123")
+            .join("subagents")
+            .join("workflows")
+            .join("wf_run1")
+            .join("journal.jsonl");
+        let event = watcher.parse_project_event(&path, false, None).unwrap();
+        assert_eq!(event.project_id, "proj-a");
+        assert_eq!(event.session_id, "sess-123");
+        assert!(!event.project_list_changed);
+    }
+
+    #[test]
+    fn workflow_agent_jsonl_routes_to_parent_session() {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        std::fs::create_dir_all(&projects_raw).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
+
+        let path = projects
+            .join("proj-a")
+            .join("sess-123")
+            .join("subagents")
+            .join("workflows")
+            .join("wf_run1")
+            .join("agent-a1234.jsonl");
+        let event = watcher.parse_project_event(&path, false, None).unwrap();
+        assert_eq!(event.project_id, "proj-a");
+        assert_eq!(event.session_id, "sess-123");
+    }
+
+    #[test]
+    fn workflow_script_json_not_matched_as_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        std::fs::create_dir_all(&projects_raw).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
+
+        // scripts 目录下的 .js 文件不应匹配（扩展名不是 json/jsonl）
+        let path = projects
+            .join("proj-a")
+            .join("sess-123")
+            .join("workflows")
+            .join("scripts")
+            .join("foo-wf_abc.js");
+        let event = watcher.parse_project_event(&path, false, None);
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn non_wf_prefix_json_in_workflows_dir_not_matched() {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        std::fs::create_dir_all(&projects_raw).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths(projects.clone(), dunce::canonicalize(&todos_raw).unwrap());
+
+        let path = projects
+            .join("proj-a")
+            .join("sess-123")
+            .join("workflows")
+            .join("some-other.json");
+        let event = watcher.parse_project_event(&path, false, None);
+        assert!(event.is_none());
     }
 }
