@@ -192,25 +192,16 @@ pub fn extract_project_id_from_link_scan_path(link_scan_path: &str) -> Option<St
 }
 
 /// 判定 job 的分组。
+/// 对齐 `claude agents` CLI 无 GitHub API 时的 fallback 行为。
 ///
-/// 对齐 `claude agents` CLI 的 `stateBucket` 优先级：
-/// 1. Working/Idle 无 PR → Working
-/// 2. Failed/Stopped/Done 无 PR → Completed
-/// 3. Blocked → `NeedsInput`
-/// 4. Done/Idle + 有 PR → `ReadyForReview`
+/// `ReadyForReview` 暂不触发（需 GitHub API 判断 PR checks/review 状态）。
 pub fn classify_job_group(job: &BackgroundJob) -> JobGroup {
-    let has_pr = job
-        .children
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .any(|c| c.kind == "pr");
-
     match job.state {
+        JobState::Working => JobGroup::Working,
         JobState::Blocked => JobGroup::NeedsInput,
-        JobState::Done | JobState::Idle if has_pr => JobGroup::ReadyForReview,
-        JobState::Done | JobState::Failed | JobState::Stopped => JobGroup::Completed,
-        JobState::Working | JobState::Idle => JobGroup::Working,
+        JobState::Done | JobState::Failed | JobState::Stopped | JobState::Idle => {
+            JobGroup::Completed
+        }
     }
 }
 
@@ -295,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_idle_with_pr_is_ready_for_review() {
+    fn classify_idle_with_pr_is_completed() {
         let job = BackgroundJob {
             state: JobState::Idle,
             children: Some(vec![JobChild {
@@ -304,7 +295,7 @@ mod tests {
             }]),
             ..Default::default()
         };
-        assert_eq!(classify_job_group(&job), JobGroup::ReadyForReview);
+        assert_eq!(classify_job_group(&job), JobGroup::Completed);
     }
 
     #[test]
@@ -326,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_done_with_pr_is_ready_for_review() {
+    fn classify_done_with_pr_is_completed() {
         let job = BackgroundJob {
             state: JobState::Done,
             children: Some(vec![JobChild {
@@ -335,7 +326,7 @@ mod tests {
             }]),
             ..Default::default()
         };
-        assert_eq!(classify_job_group(&job), JobGroup::ReadyForReview);
+        assert_eq!(classify_job_group(&job), JobGroup::Completed);
     }
 
     #[test]
