@@ -351,7 +351,7 @@ async fn group_search_skips_missing_worktree_directory() {
     assert!(!result.is_partial);
 }
 
-/// Scenario: All worktrees fail → is_partial = true
+/// Scenario: All worktrees fail → `is_partial` = true
 #[tokio::test]
 async fn group_search_all_worktrees_missing_returns_partial() {
     let tmp = TempDir::new().unwrap();
