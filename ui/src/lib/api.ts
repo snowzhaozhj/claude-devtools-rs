@@ -311,6 +311,7 @@ export interface WorkflowAgent {
   toolCalls?: number;
   durationMs?: number;
   resultPreview?: string;
+  sessionId?: string;
 }
 
 export interface WorkflowItem {
@@ -724,6 +725,14 @@ export async function getSubagentTrace(
   subagentSessionId: string,
 ): Promise<Chunk[]> {
   return await invoke("get_subagent_trace", { rootSessionId, subagentSessionId });
+}
+
+export async function getWorkflowAgentTrace(
+  sessionId: string,
+  runId: string,
+  agentId: string,
+): Promise<Chunk[]> {
+  return await invoke("get_workflow_agent_trace", { sessionId, runId, agentId });
 }
 
 /**

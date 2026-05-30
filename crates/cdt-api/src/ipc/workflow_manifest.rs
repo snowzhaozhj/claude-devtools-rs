@@ -169,6 +169,10 @@ pub fn parse_manifest(run_id: &str, content: &str) -> Result<WorkflowItem, Strin
                     .get("queuedAt")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned);
+                let session_id = entry_val
+                    .get("agentId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
 
                 let agent_index = agents.len();
                 let failed_by_log = failed_indices.contains(&(agent_index + 1));
@@ -196,6 +200,7 @@ pub fn parse_manifest(run_id: &str, content: &str) -> Result<WorkflowItem, Strin
                     result_preview,
                     queued_at,
                     failed,
+                    session_id,
                 });
             }
             _ => {}
@@ -581,6 +586,7 @@ fn parse_journal(content: &str) -> Vec<WorkflowAgent> {
             result_preview: None,
             queued_at: None,
             failed: false,
+            session_id: Some(id),
         })
         .collect()
 }
@@ -1233,5 +1239,50 @@ mod tests {
         let item = resolve_single(run_id, &manifest_path, &journal_path, None, &fs, &cache).await;
         assert_eq!(item.status, WorkflowStatus::Pending);
         assert!(item.agents.is_empty());
+    }
+
+    #[test]
+    fn parse_manifest_extracts_agent_id_as_session_id() {
+        let json = r#"{
+            "workflowProgress": [
+                {"type": "workflow_agent", "label": "reviewer", "phaseIndex": 1, "state": "done", "tokens": 100, "toolCalls": 2, "durationMs": 5000, "agentId": "ad34cb14a1ae5b192"}
+            ],
+            "status": "completed",
+            "logs": [],
+            "totalTokens": 100,
+            "durationMs": 5000
+        }"#;
+        let item = parse_manifest("wf_test", json).unwrap();
+        assert_eq!(
+            item.agents[0].session_id.as_deref(),
+            Some("ad34cb14a1ae5b192")
+        );
+    }
+
+    #[test]
+    fn parse_manifest_missing_agent_id_yields_none() {
+        let json = r#"{
+            "workflowProgress": [
+                {"type": "workflow_agent", "label": "old-agent", "phaseIndex": 1, "state": "done", "tokens": 100, "toolCalls": 2, "durationMs": 5000}
+            ],
+            "status": "completed",
+            "logs": [],
+            "totalTokens": 100,
+            "durationMs": 5000
+        }"#;
+        let item = parse_manifest("wf_test", json).unwrap();
+        assert_eq!(item.agents[0].session_id, None);
+    }
+
+    #[test]
+    fn parse_journal_populates_session_id() {
+        let content = r#"{"type":"started","agentId":"abc123","key":"k1"}
+{"type":"started","agentId":"def456","key":"k2"}
+{"type":"result","agentId":"abc123","key":"k1","result":"ok"}
+"#;
+        let agents = parse_journal(content);
+        assert_eq!(agents.len(), 2);
+        assert_eq!(agents[0].session_id.as_deref(), Some("abc123"));
+        assert_eq!(agents[1].session_id.as_deref(), Some("def456"));
     }
 }

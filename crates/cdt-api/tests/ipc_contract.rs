@@ -96,18 +96,19 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_53() {
+fn expected_tauri_commands_count_is_54() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        53,
+        54,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 53 个 Tauri command（含 SSH + server-mode + \
+         以及本文件常量；当前 src-tauri 注册 54 个 Tauri command（含 SSH + server-mode + \
          simplify-repository-as-project change 加的 list_group_sessions + change \
          command-palette-group-aware 加的 search_group_sessions + change \
          ssh-project-memory-remote-rw 加的 add_memory / delete_memory + change \
          add-telemetry-signal-bus 加的 get_telemetry_snapshot / record_correctness_events + \
          change frontend-context-menu-phase-2 加的 open_in_terminal / open_in_editor / \
-         list_available_terminals）"
+         list_available_terminals + change workflow-subagent-pool-scan 加的 \
+         get_workflow_agent_trace）"
     );
 }
 
@@ -4357,6 +4358,7 @@ fn workflow_item_serializes_camelcase() {
             result_preview: Some("LGTM".into()),
             queued_at: Some("2026-05-29T10:00:00Z".into()),
             failed: false,
+            session_id: Some("ad34cb14a1ae5b192".into()),
         }],
         total_tokens: 5000,
         duration_ms: 30000,
@@ -4380,6 +4382,34 @@ fn workflow_item_serializes_camelcase() {
     assert!(
         json.get("total_tokens").is_none(),
         "snake_case `total_tokens` MUST not appear"
+    );
+    assert_eq!(
+        json["agents"][0]["sessionId"],
+        json!("ad34cb14a1ae5b192"),
+        "WorkflowAgent.sessionId SHALL serialize as camelCase"
+    );
+}
+
+#[test]
+fn workflow_agent_session_id_none_omitted() {
+    use cdt_core::workflow::{WorkflowAgent, WorkflowAgentState};
+
+    let agent = WorkflowAgent {
+        label: "test".into(),
+        phase_index: 0,
+        state: WorkflowAgentState::Completed,
+        tokens: 0,
+        tool_calls: 0,
+        duration_ms: 0,
+        result_preview: None,
+        queued_at: None,
+        failed: false,
+        session_id: None,
+    };
+    let json = serde_json::to_value(&agent).unwrap();
+    assert!(
+        json.get("sessionId").is_none(),
+        "None session_id SHALL be omitted from JSON"
     );
 }
 

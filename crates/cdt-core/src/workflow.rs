@@ -40,6 +40,8 @@ pub struct WorkflowAgent {
     pub queued_at: Option<String>,
     #[serde(default)]
     pub failed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -124,6 +126,7 @@ mod tests {
                 result_preview: Some("LGTM".into()),
                 queued_at: Some("2026-05-29T10:00:00Z".into()),
                 failed: false,
+                session_id: Some("a1b2c3d4e5".into()),
             }],
             total_tokens: 5000,
             duration_ms: 30000,

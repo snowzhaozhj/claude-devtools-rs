@@ -143,6 +143,15 @@ pub trait DataApi: Send + Sync {
         Ok(Vec::new())
     }
 
+    async fn get_workflow_agent_trace(
+        &self,
+        _parent_session_id: &str,
+        _run_id: &str,
+        _agent_id: &str,
+    ) -> Result<Vec<cdt_core::Chunk>, ApiError> {
+        Ok(Vec::new())
+    }
+
     /// 按需把内联 image base64 落盘到 cache 目录并返回 `asset://` URL。
     ///
     /// `get_session_detail` 默认把 `ContentBlock::Image.source.data` 裁剪为空
