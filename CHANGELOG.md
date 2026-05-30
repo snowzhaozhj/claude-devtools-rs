@@ -9,6 +9,28 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-30
+
+### Added
+- **Workflow drilldown**: click an agent chip to view its full conversation trace.
+- **Workflow running state**: degraded rendering when manifest is missing (synthesizes Running state from journal + scriptPath).
+- **Workflow backend**: `WorkflowAgent` session_id + `get_workflow_agent_trace` IPC command.
+- **WorkflowCard**: 6-state rendering with backend manifest parsing.
+- **Tool linking**: extract Workflow `runId` to `ToolExecution`.
+- **Context tracking**: per-turn context badge with visible context indicator.
+- **UI**: scroll arrows on worktree chip cluster.
+- **Perf**: parallelize subagent scan + merge double file reads.
+
+### Fixed
+- **Perf**: coalesce file events + cache subagent scan (idle CPU 32% → <3%).
+- Command palette search and project list are now group-aware.
+- File-watcher correctly identifies workflow paths and hides 0ms running state.
+- WorkflowCard no longer renders blank on expand or crashes on expand.
+- Workflow summary correctly counts workflows.
+- Removed empty whitespace row above tool input/output blocks.
+- Resolved 3 bugs found by bug-hunt audit.
+- CLI displays full session ID in table output.
+
 ## [0.5.14] — 2026-05-28
 
 ### Added
