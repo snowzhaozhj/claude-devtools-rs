@@ -2654,7 +2654,6 @@ fn todos_dir_from_projects_dir(projects_dir: &Path) -> PathBuf {
     )
 }
 
-
 /// 扫描 `jobs_dir` 下所有 `<job_id>/state.json`，解析 + 分组 + badge 计算。
 ///
 /// jobs 目录不存在时返回空响应（降级）。
@@ -2715,10 +2714,14 @@ async fn list_jobs_from_dir(jobs_dir: &Path) -> Result<cdt_core::JobsResponse, A
             "active" => {
                 bg_job.state = cdt_core::JobState::Working;
             }
-            "blocked" if !matches!(
-                bg_job.state,
-                cdt_core::JobState::Done | cdt_core::JobState::Failed | cdt_core::JobState::Stopped
-            ) => {
+            "blocked"
+                if !matches!(
+                    bg_job.state,
+                    cdt_core::JobState::Done
+                        | cdt_core::JobState::Failed
+                        | cdt_core::JobState::Stopped
+                ) =>
+            {
                 bg_job.state = cdt_core::JobState::Blocked;
             }
             _ => {}

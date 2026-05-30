@@ -11,8 +11,8 @@
 use std::time::Duration;
 
 use cdt_api::{PushEvent, SessionMetadataUpdate, spawn_event_bridge};
-use cdt_core::JobChangeEvent;
 use cdt_config::{DetectedError, DetectedErrorContext};
+use cdt_core::JobChangeEvent;
 use cdt_core::{FileChangeEvent, TodoChangeEvent};
 use cdt_ssh::ContextChanged;
 use tokio::sync::broadcast;
