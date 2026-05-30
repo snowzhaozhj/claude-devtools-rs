@@ -11,7 +11,7 @@
   import { openTab, openJobsTab } from "../lib/tabStore.svelte";
   import { getJobsDirExists } from "../lib/jobsStore.svelte";
   import { shortenPath } from "../lib/toolHelpers";
-  import { FOLDER_GIT2_SVG, MESSAGE_SQUARE, CPU_SVG } from "../lib/icons";
+  import { FOLDER_GIT2_SVG, MESSAGE_SQUARE, JOBS_SVG } from "../lib/icons";
 
   interface Props {
     selectedProjectId: string;
@@ -83,7 +83,7 @@
           id: "open-jobs",
           label: "Open Background Jobs",
           detail: "查看后台任务状态",
-          icon: CPU_SVG,
+          icon: JOBS_SVG,
           handler: () => { openJobsTab(); onClose(); },
         });
       }

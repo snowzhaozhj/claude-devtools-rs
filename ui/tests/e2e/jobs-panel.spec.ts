@@ -7,7 +7,7 @@ import { expect, test } from '@playwright/test'
 
 async function gotoWithMockReady(page: import('@playwright/test').Page, params = '') {
   await page.goto(`/?mock=1&fixture=multi-project-rich${params}`)
-  await page.waitForFunction(() => '__cdtTest' in window, { timeout: 5_000 })
+  await page.waitForFunction(() => (window as unknown as Record<string, unknown>).__cdtReady === true, { timeout: 10_000 })
 }
 
 test.describe('Background Jobs Panel', () => {

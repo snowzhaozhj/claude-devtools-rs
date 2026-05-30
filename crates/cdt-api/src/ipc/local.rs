@@ -1881,27 +1881,12 @@ impl LocalDataApi {
     }
 
     /// 列出所有 background jobs（全量扫描 `~/.claude/jobs/*/state.json`）。
-    ///
-    /// jobs 数量通常 < 30，冷扫 < 5ms。返回按分组排序的 job 列表 + badge 计算结果。
-    pub async fn list_jobs(&self) -> Result<cdt_core::JobsResponse, ApiError> {
-        let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let jobs_dir = home.join(".claude").join("jobs");
-        list_jobs_from_dir(&jobs_dir).await
-    }
-
-    /// 停止指定 background job（调用 `claude stop <short_id>`）。
-    pub async fn stop_job(&self, job_id: &str) -> Result<(), ApiError> {
-        let short = &job_id[..job_id.len().min(8)];
-        let output = tokio::process::Command::new("claude")
-            .args(["stop", short])
-            .output()
-            .await
-            .map_err(|e| ApiError::internal(format!("failed to stop job: {e}")))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ApiError::internal(format!("stop failed: {stderr}")));
-        }
-        Ok(())
+    /// 测试辅助——直接调 `list_jobs_from_dir` 指定目录。
+    #[cfg(test)]
+    pub async fn list_jobs_from_dir_test(
+        jobs_dir: &Path,
+    ) -> Result<cdt_core::JobsResponse, ApiError> {
+        list_jobs_from_dir(jobs_dir).await
     }
 
     pub async fn insert_test_ssh_context(
@@ -2731,11 +2716,12 @@ async fn list_jobs_from_dir(jobs_dir: &Path) -> Result<cdt_core::JobsResponse, A
             intent: bg_job.intent,
             state: bg_job.state,
             group,
-            children: bg_job.children,
+            children: bg_job.children.unwrap_or_default(),
             session_id: bg_job.session_id,
             project_id,
             tempo: bg_job.tempo,
             in_flight: bg_job.in_flight,
+
             created_at: bg_job.created_at,
             updated_at: bg_job.updated_at,
         });
@@ -4906,6 +4892,30 @@ impl DataApi for LocalDataApi {
     }
 
     // list_available_terminals 走 trait default impl（无状态依赖）
+
+    // =========================================================================
+    // Background Jobs
+    // =========================================================================
+
+    async fn list_jobs(&self) -> Result<cdt_core::JobsResponse, ApiError> {
+        let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let jobs_dir = home.join(".claude").join("jobs");
+        list_jobs_from_dir(&jobs_dir).await
+    }
+
+    async fn stop_job(&self, job_id: &str) -> Result<(), ApiError> {
+        let short = &job_id[..job_id.len().min(8)];
+        let output = tokio::process::Command::new("claude")
+            .args(["stop", short])
+            .output()
+            .await
+            .map_err(|e| ApiError::internal(format!("failed to stop job: {e}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(ApiError::internal(format!("stop failed: {stderr}")));
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================

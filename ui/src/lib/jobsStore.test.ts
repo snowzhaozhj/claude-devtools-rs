@@ -21,7 +21,7 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     sessionId: "",
     projectId: "",
     tempo: "",
-    inFlight: "",
+    inFlight: null,
     createdAt: new Date(Date.now() - 60_000).toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,

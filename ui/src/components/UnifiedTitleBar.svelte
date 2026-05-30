@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProjectInfo, RepositoryGroup } from "../lib/api";
-  import { BELL, SETTINGS, PANEL_LEFT_SVG, CPU_SVG } from "../lib/icons";
+  import { BELL, SETTINGS, PANEL_LEFT_SVG, JOBS_SVG } from "../lib/icons";
   import {
     getSidebarCollapsed,
     toggleSidebarCollapsed,
@@ -98,7 +98,7 @@
         aria-label="后台任务"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          {@html CPU_SVG}
+          {@html JOBS_SVG}
         </svg>
         {#if jobsBadge === "red"}
           <span class="badge badge-red" aria-label="有失败的后台任务"></span>

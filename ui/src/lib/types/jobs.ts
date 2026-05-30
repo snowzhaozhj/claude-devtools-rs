@@ -27,7 +27,7 @@ export interface JobSummary {
   linkScanPath?: string;
   cwd?: string;
   tempo: string;
-  inFlight: string;
+  inFlight: { tasks: number; queued: number; kinds: string[] } | null;
   createdAt: string;
   updatedAt: string;
 }

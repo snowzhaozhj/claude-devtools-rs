@@ -274,16 +274,9 @@ export const COPY_SVG = `
 /** Lucide check — 复制成功反馈（单 path） */
 export const CHECK = "M20 6 9 17l-5-5";
 
-/** Lucide cpu — Background Jobs icon（多段，使用 {@html}） */
-export const CPU_SVG = `
-<rect width="16" height="16" x="4" y="4" rx="2"/>
-<rect width="6" height="6" x="9" y="9" rx="1"/>
-<path d="M15 2v2"/>
-<path d="M15 20v2"/>
-<path d="M2 15h2"/>
-<path d="M2 9h2"/>
-<path d="M20 15h2"/>
-<path d="M20 9h2"/>
-<path d="M9 2v2"/>
-<path d="M9 20v2"/>
+/** Lucide square-terminal — Background Jobs icon（多段，使用 {@html}） */
+export const JOBS_SVG = `
+<path d="m7 11 2-2-2-2"/>
+<path d="M11 13h4"/>
+<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
 `;

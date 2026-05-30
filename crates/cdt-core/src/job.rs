@@ -30,34 +30,33 @@ pub struct JobChild {
     pub kind: String,
 }
 
+/// `inFlight` 字段的真实结构。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct JobInFlight {
+    pub tasks: u32,
+    pub queued: u32,
+    pub kinds: Vec<String>,
+}
+
 /// 从 `~/.claude/jobs/<job_id>/state.json` 读取的原始数据。
+///
+/// 字段对齐 Claude Code daemon 写入的真实格式（camelCase + nullable）。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BackgroundJob {
-    /// job 状态。
     #[serde(deserialize_with = "deserialize_job_state")]
     pub state: JobState,
-    /// 任务名称。
     pub name: String,
-    /// 当前步骤描述。
     pub detail: String,
-    /// 用户意图。
     pub intent: String,
-    /// 产出链接（PR / issue 等）。
-    pub children: Vec<JobChild>,
-    /// 关联的 session ID。
+    pub children: Option<Vec<JobChild>>,
     pub session_id: String,
-    /// 用于提取 `project_id` 的路径。
     pub link_scan_path: String,
-    /// 工作目录。
     pub cwd: String,
-    /// 活跃度信号。
     pub tempo: String,
-    /// 当前正在执行的操作描述。
-    pub in_flight: String,
-    /// 创建时间（ISO 8601）。
+    pub in_flight: Option<JobInFlight>,
     pub created_at: String,
-    /// 最近更新时间（ISO 8601）。
     pub updated_at: String,
 }
 
@@ -105,8 +104,7 @@ pub struct JobSummary {
     pub project_id: String,
     /// 活跃度。
     pub tempo: String,
-    /// 当前操作描述。
-    pub in_flight: String,
+    pub in_flight: Option<JobInFlight>,
     /// 创建时间。
     pub created_at: String,
     /// 最近更新时间。
@@ -179,7 +177,12 @@ pub fn extract_project_id_from_link_scan_path(link_scan_path: &str) -> Option<St
 
 /// 判定 job 的分组。
 pub fn classify_job_group(job: &BackgroundJob) -> JobGroup {
-    let has_pr = job.children.iter().any(|c| c.kind == "pr");
+    let has_pr = job
+        .children
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .any(|c| c.kind == "pr");
     if has_pr {
         return JobGroup::ReadyForReview;
     }
@@ -240,7 +243,7 @@ mod tests {
         let job: BackgroundJob = serde_json::from_str(json).unwrap();
         assert_eq!(job.state, JobState::Idle);
         assert!(job.name.is_empty());
-        assert!(job.children.is_empty());
+        assert!(job.children.is_none());
     }
 
     #[test]
@@ -269,10 +272,10 @@ mod tests {
     fn classify_job_with_pr_is_ready_for_review() {
         let job = BackgroundJob {
             state: JobState::Working,
-            children: vec![JobChild {
+            children: Some(vec![JobChild {
                 href: "https://github.com/foo/bar/pull/1".into(),
                 kind: "pr".into(),
-            }],
+            }]),
             ..Default::default()
         };
         assert_eq!(classify_job_group(&job), JobGroup::ReadyForReview);
@@ -355,7 +358,7 @@ mod tests {
             session_id: String::new(),
             project_id: String::new(),
             tempo: String::new(),
-            in_flight: String::new(),
+            in_flight: None,
             created_at: String::new(),
             updated_at: String::new(),
         }

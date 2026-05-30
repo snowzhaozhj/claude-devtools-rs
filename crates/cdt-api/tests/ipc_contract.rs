@@ -4511,7 +4511,11 @@ async fn list_jobs_returns_camelcase_response() {
             session_id: "sess-123".into(),
             project_id: "-Users-alice-code".into(),
             tempo: "active".into(),
-            in_flight: "cargo test".into(),
+            in_flight: Some(cdt_core::job::JobInFlight {
+                tasks: 1,
+                queued: 0,
+                kinds: vec!["local_bash".into()],
+            }),
             created_at: "2026-05-30T10:00:00Z".into(),
             updated_at: "2026-05-30T10:05:00Z".into(),
         }],
@@ -4545,7 +4549,9 @@ async fn list_jobs_returns_camelcase_response() {
     assert_eq!(job["sessionId"], "sess-123");
     assert_eq!(job["projectId"], "-Users-alice-code");
     assert_eq!(job["tempo"], "active");
-    assert_eq!(job["inFlight"], "cargo test");
+    assert_eq!(job["inFlight"]["tasks"], 1);
+    assert_eq!(job["inFlight"]["queued"], 0);
+    assert_eq!(job["inFlight"]["kinds"][0], "local_bash");
     assert_eq!(job["createdAt"], "2026-05-30T10:00:00Z");
     assert_eq!(job["updatedAt"], "2026-05-30T10:05:00Z");
 

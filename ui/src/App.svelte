@@ -231,6 +231,13 @@
     // loadProjectData 经 projectDataStore 内 cache 自动同步（同一模块级 data
     // 引用），App 这边 $effect 监听 getProjectData() 同步本地副本
     await refreshChromeProjects();
+
+    // dev/test 信号：所有异步初始化完毕（含 initializeJobs → jobsDirExists 就绪）。
+    // Playwright 等 __cdtReady 而非 __cdtTest——后者在 mount 前就注入，此时 TitleBar
+    // 的条件渲染（如 jobs icon）可能还没数据。
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__cdtReady = true;
+    }
   });
 
   // Sidebar 也调 loadProjectData，模块级 cache 更新后这边通过 effect 同步

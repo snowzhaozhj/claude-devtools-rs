@@ -79,8 +79,8 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
-    padding: 16px;
-    gap: 12px;
+    padding: 24px 20px;
+    gap: 16px;
   }
 
   .jobs-header {
@@ -101,24 +101,24 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     padding: 0;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    transition: background 0.12s ease, color 0.12s ease;
+    transition: background 0.15s ease-out, color 0.15s ease-out;
   }
 
   .refresh-btn:hover {
-    background: var(--tool-item-hover-bg);
+    background: var(--color-surface-raised);
     color: var(--color-text);
   }
 
   .refresh-btn:disabled {
-    opacity: 0.5;
+    opacity: 0.4;
     cursor: not-allowed;
   }
 
@@ -128,7 +128,7 @@
   }
 
   .refresh-btn svg.spinning {
-    animation: spin 1s linear infinite;
+    animation: spin 0.8s linear infinite;
   }
 
   @keyframes spin {
@@ -143,6 +143,7 @@
     align-items: center;
     justify-content: center;
     gap: 8px;
+    padding: 48px 0;
   }
 
   .empty-text {
@@ -153,22 +154,22 @@
   .empty-hint {
     font-size: 12px;
     color: var(--color-text-muted);
-    opacity: 0.7;
+    opacity: 0.6;
   }
 
   .empty-hint code {
     font-family: var(--font-mono);
     font-size: 11px;
     background: var(--color-surface-raised);
-    padding: 1px 4px;
-    border-radius: 3px;
+    padding: 2px 6px;
+    border-radius: 4px;
   }
 
   .jobs-error {
-    padding: 12px;
+    padding: 12px 14px;
     border-radius: 6px;
-    background: color-mix(in srgb, var(--color-danger) 10%, transparent);
-    border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
+    background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 20%, transparent);
   }
 
   .error-text {
@@ -179,10 +180,7 @@
   .jobs-list {
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    border: 1px solid var(--color-border-default);
-    border-radius: 8px;
-    padding: 8px 0;
+    gap: 0;
   }
 
   .job-group {
@@ -190,25 +188,29 @@
     flex-direction: column;
   }
 
+  .job-group + .job-group {
+    margin-top: 20px;
+  }
+
   .group-header {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 12px 6px;
+    padding: 0 4px 8px;
   }
 
   .group-label {
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.04em;
     color: var(--color-text-muted);
   }
 
   .group-count {
     font-size: 10px;
     color: var(--color-text-muted);
-    opacity: 0.7;
+    opacity: 0.5;
     font-family: var(--font-mono);
   }
 </style>

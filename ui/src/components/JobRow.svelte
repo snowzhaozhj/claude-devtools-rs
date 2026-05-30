@@ -170,35 +170,38 @@
     position: relative;
     display: flex;
     flex-direction: column;
-    padding: 6px 12px;
+    padding: 8px 10px;
     cursor: pointer;
-    transition: background 0.1s ease;
-    border-radius: 4px;
-    margin: 0 4px;
+    transition: background 0.15s ease-out;
+    border-radius: 6px;
   }
 
   .job-row:hover {
-    background: var(--tool-item-hover-bg);
+    background: var(--color-surface-raised);
   }
 
   .job-row.selected {
     background: var(--color-surface-raised);
   }
 
+  .job-row.expanded {
+    background: var(--color-surface-raised);
+  }
+
   .selection-indicator {
     position: absolute;
     left: 0;
-    top: 4px;
-    bottom: 4px;
+    top: 6px;
+    bottom: 6px;
     width: 2px;
     border-radius: 1px;
-    background: var(--color-border-emphasis);
+    background: var(--color-accent-blue);
   }
 
   .row-main {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     min-width: 0;
   }
 
@@ -212,20 +215,20 @@
   }
 
   .dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: var(--indicator-color);
   }
 
   .dot.stopped {
-    opacity: 0.6;
+    opacity: 0.5;
   }
 
   .spinner {
     width: 10px;
     height: 10px;
-    border: 1.5px solid color-mix(in srgb, var(--indicator-color) 25%, transparent);
+    border: 1.5px solid color-mix(in srgb, var(--indicator-color) 20%, transparent);
     border-top-color: var(--indicator-color);
     border-radius: 50%;
     animation: job-spin 1.2s linear infinite;
@@ -243,17 +246,18 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    flex-shrink: 1;
+    flex: 1;
     min-width: 0;
   }
 
   .job-detail {
     font-size: 12px;
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary, var(--color-text-muted));
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    flex-shrink: 2;
+    flex: 0 1 auto;
+    max-width: 240px;
     min-width: 0;
   }
 
@@ -261,16 +265,18 @@
     flex-shrink: 0;
     font-size: 10px;
     font-family: var(--font-mono);
-    padding: 1px 5px;
-    border-radius: 3px;
-    background: color-mix(in srgb, var(--color-success-bright) 15%, transparent);
-    color: var(--color-success-bright);
+    font-weight: 500;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--color-success-bright) 12%, transparent);
+    color: var(--color-success, var(--color-success-bright));
     cursor: pointer;
     white-space: nowrap;
+    transition: background 0.15s ease-out;
   }
 
   .pr-chip:hover {
-    background: color-mix(in srgb, var(--color-success-bright) 25%, transparent);
+    background: color-mix(in srgb, var(--color-success-bright) 22%, transparent);
   }
 
   .job-age {
@@ -279,6 +285,7 @@
     font-family: var(--font-mono);
     color: var(--color-text-muted);
     white-space: nowrap;
+    opacity: 0.7;
   }
 
   .chevron {
@@ -286,11 +293,18 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
     color: var(--color-text-muted);
-    transition: transform 0.15s ease;
+    transition: transform 0.15s ease-out, background 0.15s ease-out;
     cursor: pointer;
+    opacity: 0.6;
+  }
+
+  .chevron:hover {
+    background: var(--color-surface-overlay, var(--color-surface-raised));
+    opacity: 1;
   }
 
   .chevron svg {
@@ -300,24 +314,25 @@
 
   .chevron-expanded {
     transform: rotate(90deg);
+    opacity: 1;
   }
 
-  /* 展开区 */
   .expand-area {
     margin-top: 8px;
-    margin-left: 24px;
-    padding: 8px 12px;
+    margin-left: 26px;
+    padding: 10px 14px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    background: var(--color-surface-raised);
-    border-radius: 4px;
+    gap: 10px;
+    border: 1px solid var(--color-border-default);
+    border-radius: 6px;
+    background: var(--color-surface);
   }
 
   .intent-line {
     display: flex;
     align-items: flex-start;
-    gap: 8px;
+    gap: 10px;
   }
 
   .intent-bar {
@@ -332,69 +347,70 @@
   .intent-text {
     font-size: 12px;
     font-style: italic;
-    color: var(--color-text-muted);
-    line-height: 1.4;
+    color: var(--color-text-secondary, var(--color-text-muted));
+    line-height: 1.5;
   }
 
   .expand-detail {
     font-size: 12px;
     color: var(--color-text-muted);
-    line-height: 1.4;
+    line-height: 1.5;
   }
 
   .metadata-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 6px;
   }
 
   .meta-chip {
     font-size: 10px;
     font-family: var(--font-mono);
-    padding: 1px 5px;
-    border-radius: 3px;
-    background: var(--color-surface);
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--color-surface-raised);
     color: var(--color-text-muted);
-    border: 1px solid var(--color-border-default);
   }
 
   .actions-row {
     display: flex;
     gap: 8px;
-    margin-top: 4px;
+    margin-top: 2px;
   }
 
   .action-btn {
-    font-size: 11px;
-    padding: 3px 8px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 10px;
     border-radius: 4px;
     border: 1px solid var(--color-border-default);
     background: var(--color-surface);
     color: var(--color-text);
     cursor: pointer;
-    transition: background 0.1s ease;
+    transition: background 0.15s ease-out, border-color 0.15s ease-out;
   }
 
   .action-btn:hover {
-    background: var(--tool-item-hover-bg);
+    background: var(--color-surface-raised);
+    border-color: var(--color-border-emphasis);
   }
 
   .action-btn.primary {
-    background: color-mix(in srgb, var(--color-accent-blue) 10%, transparent);
-    border-color: color-mix(in srgb, var(--color-accent-blue) 30%, transparent);
+    background: color-mix(in srgb, var(--color-accent-blue) 8%, var(--color-surface));
+    border-color: color-mix(in srgb, var(--color-accent-blue) 25%, transparent);
     color: var(--color-accent-blue);
   }
 
   .action-btn.primary:hover {
-    background: color-mix(in srgb, var(--color-accent-blue) 20%, transparent);
+    background: color-mix(in srgb, var(--color-accent-blue) 15%, var(--color-surface));
   }
 
   .action-btn.btn-stop {
-    border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
+    border-color: color-mix(in srgb, var(--color-danger) 25%, transparent);
     color: var(--color-danger);
   }
 
   .action-btn.btn-stop:hover {
-    background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+    background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
   }
 </style>
