@@ -56,6 +56,8 @@ pub struct BackgroundJob {
     pub cwd: String,
     pub tempo: String,
     /// blocked 时的用户动作提示（如 "reply `go` to merge"）。
+    /// daemon 对非 blocked job 写 `null`，用 `deserialize_with` 容忍。
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub needs: String,
     pub in_flight: Option<JobInFlight>,
     pub created_at: String,
@@ -156,6 +158,16 @@ where
         "stopped" => JobState::Stopped,
         _ => JobState::Idle,
     })
+}
+
+/// 容忍 JSON `null` 的 String 反序列化（null → ""）。
+#[allow(clippy::unnecessary_wraps)]
+fn deserialize_nullable_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 // =========================================================================

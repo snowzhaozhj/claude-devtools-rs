@@ -2709,13 +2709,16 @@ async fn list_jobs_from_dir(jobs_dir: &Path) -> Result<cdt_core::JobsResponse, A
 
         // tempo 是 daemon 实时活跃度信号，优先级高于 state：
         // - tempo=active → 无条件 Working（对齐 CLI: status=busy → Working）
-        // - tempo=blocked → Blocked（仅当 tempo 不是 active 时才生效）
-        // - tempo=idle + 终态 → 不覆盖（Completed）
+        // - tempo=blocked + 非终态 → Blocked
+        // - tempo=idle / 其他 → 不覆盖，尊重 state 字段
         match bg_job.tempo.as_str() {
             "active" => {
                 bg_job.state = cdt_core::JobState::Working;
             }
-            "blocked" => {
+            "blocked" if !matches!(
+                bg_job.state,
+                cdt_core::JobState::Done | cdt_core::JobState::Failed | cdt_core::JobState::Stopped
+            ) => {
                 bg_job.state = cdt_core::JobState::Blocked;
             }
             _ => {}
