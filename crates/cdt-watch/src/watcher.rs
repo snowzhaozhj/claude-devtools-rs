@@ -186,9 +186,11 @@ impl FileWatcher {
     pub async fn start(&self) -> Result<(), WatchError> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<RawEvent>();
 
+        let projects_dir_for_coalesce = self.projects_dir.clone();
         let mut watcher: RecommendedWatcher = notify::recommended_watcher(
             move |result: Result<Event, notify::Error>| match result {
-                Ok(event) => {
+                Ok(mut event) => {
+                    coalesce_workflow_paths(&mut event.paths, &projects_dir_for_coalesce);
                     let _ = tx.send(RawEvent::Notify(event));
                 }
                 Err(err) => {
@@ -547,6 +549,39 @@ async fn stat_for_event(path: &Path) -> (bool, Option<i64>) {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => (true, None),
         Err(_) => (false, None),
     }
+}
+
+/// Workflow 子路径合并：同一 `<run_id>/` 下的所有文件（agent jsonl + meta.json +
+/// journal）映射为 `journal.jsonl` 单一 debounce key。这样 102 个 agent 文件并发
+/// 写入只在 debounce map 中占 1 个 slot，flush 后只产出 1 个 event。
+///
+/// 匹配模式：`<projects_dir>/<project>/<session>/subagents/workflows/<run_id>/<file>`
+/// → 替换 `<file>` 为 `journal.jsonl`。
+fn coalesce_workflow_paths(paths: &mut [PathBuf], projects_dir: &Path) {
+    for path in paths.iter_mut() {
+        if let Some(coalesced) = try_coalesce_workflow_path(path, projects_dir) {
+            *path = coalesced;
+        }
+    }
+}
+
+fn try_coalesce_workflow_path(path: &Path, projects_dir: &Path) -> Option<PathBuf> {
+    let rel = path_strip_prefix(path, projects_dir)?;
+    let components: Vec<_> = rel.components().collect();
+    // 6-level: <project>/<session>/subagents/workflows/<run_id>/<file>
+    if components.len() == 6
+        && components[2].as_os_str().eq_ignore_ascii_case("subagents")
+        && components[3].as_os_str().eq_ignore_ascii_case("workflows")
+    {
+        if components[5]
+            .as_os_str()
+            .eq_ignore_ascii_case("journal.jsonl")
+        {
+            return None; // already the canonical key
+        }
+        return Some(path.parent()?.join("journal.jsonl"));
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1670,5 +1705,48 @@ mod tests {
             .join("some-other.json");
         let event = watcher.parse_project_event(&path, false, None);
         assert!(event.is_none());
+    }
+
+    #[test]
+    fn coalesce_workflow_paths_merges_agents_to_journal() {
+        let projects = PathBuf::from("/projects");
+        let run_dir = projects
+            .join("proj-a")
+            .join("sess-1")
+            .join("subagents")
+            .join("workflows")
+            .join("wf_abc-123");
+
+        let mut paths = vec![
+            run_dir.join("agent-aaa.jsonl"),
+            run_dir.join("agent-bbb.jsonl"),
+            run_dir.join("agent-ccc.meta.json"),
+            run_dir.join("journal.jsonl"),
+        ];
+        coalesce_workflow_paths(&mut paths, &projects);
+
+        let expected_coalesced = run_dir.join("journal.jsonl");
+        assert_eq!(paths[0], expected_coalesced);
+        assert_eq!(paths[1], expected_coalesced);
+        assert_eq!(paths[2], expected_coalesced);
+        // journal.jsonl itself is not coalesced (already canonical)
+        assert_eq!(paths[3], expected_coalesced);
+    }
+
+    #[test]
+    fn coalesce_leaves_non_workflow_paths_unchanged() {
+        let projects = PathBuf::from("/projects");
+        let main_jsonl = projects.join("proj-a").join("sess-1.jsonl");
+        let subagent = projects
+            .join("proj-a")
+            .join("sess-1")
+            .join("subagents")
+            .join("agent-xxx.jsonl");
+
+        let mut paths = vec![main_jsonl.clone(), subagent.clone()];
+        coalesce_workflow_paths(&mut paths, &projects);
+
+        assert_eq!(paths[0], main_jsonl);
+        assert_eq!(paths[1], subagent);
     }
 }
