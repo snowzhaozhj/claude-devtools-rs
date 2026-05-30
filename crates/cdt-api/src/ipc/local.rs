@@ -41,7 +41,7 @@ use super::project_scan_cache::{
     synthesize_projects_with_overlay,
 };
 use super::session_metadata::{
-    MetadataCache, SessionMetadata, extract_session_metadata_cached,
+    MetadataCache, STALE_SESSION_THRESHOLD, SessionMetadata, extract_session_metadata_cached,
     extract_session_metadata_from_parsed, try_lookup_cached_metadata,
 };
 use super::traits::DataApi;
@@ -872,7 +872,9 @@ impl LocalDataApi {
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-            now_ms - ms >= 300_000
+            let threshold_ms =
+                i64::try_from(STALE_SESSION_THRESHOLD.as_millis()).unwrap_or(i64::MAX);
+            now_ms.saturating_sub(ms) >= threshold_ms
         });
         let fingerprint = make_session_ipc_fingerprint(last_modified, size, is_stale);
         let metadata_complete = last_modified.is_some() && size.is_some();
@@ -8667,5 +8669,24 @@ mod tests {
         let groups = vec![make_group("/Users/foo/.git", &["-Users-foo-proj"])];
         let err = find_group_with_fallback(groups, "-Users-nonexistent").unwrap_err();
         assert!(format!("{err:?}").contains("NotFound"));
+    }
+
+    #[test]
+    fn fingerprint_stale_bit_produces_different_output() {
+        let fp_fresh =
+            super::make_session_ipc_fingerprint(Some(1_700_000_000_000), Some(4096), false);
+        let fp_stale =
+            super::make_session_ipc_fingerprint(Some(1_700_000_000_000), Some(4096), true);
+        assert_ne!(fp_fresh, fp_stale, "stale bit flip SHALL change fingerprint");
+        assert!(fp_fresh.starts_with("v2:"), "format SHALL be v2");
+        assert!(fp_stale.ends_with(":1"), "stale=true SHALL encode as :1");
+        assert!(fp_fresh.ends_with(":0"), "stale=false SHALL encode as :0");
+    }
+
+    #[test]
+    fn fingerprint_stale_threshold_aligns_with_constant() {
+        use super::STALE_SESSION_THRESHOLD;
+        let threshold_ms = i64::try_from(STALE_SESSION_THRESHOLD.as_millis()).unwrap();
+        assert_eq!(threshold_ms, 300_000, "threshold SHALL be 5 minutes");
     }
 }

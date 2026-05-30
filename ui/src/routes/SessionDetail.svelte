@@ -386,8 +386,9 @@
   async function refreshDetail() {
     const wasAtBottom = !!conversationEl && isAtBottom(conversationEl);
     try {
-      // 后端 fingerprint 已编入 is_stale（mtime 距今 ≥5min），stale 翻转由
-      // fingerprint 变化自然触发重算，无需前端强制 null 绕过短路。
+      // 后端 fingerprint 已编入 is_stale（mtime 距今 ≥5min）。写入停止后若有
+      // file-change 事件触发本函数，fingerprint 变化会打破短路完成翻转；若无事件
+      // 则依赖用户切走再切回（既有行为，非本次改动引入）。
       const fpToSend = knownFingerprint;
       const resp: SessionDetailResponse = await getSessionDetail(projectId, sessionId, fpToSend);
       const currentSid = getTabSessionId(tabId);
