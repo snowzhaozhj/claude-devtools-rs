@@ -96,13 +96,14 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_52() {
+fn expected_tauri_commands_count_is_53() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        52,
+        53,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 52 个 Tauri command（含 SSH + server-mode + \
+         以及本文件常量；当前 src-tauri 注册 53 个 Tauri command（含 SSH + server-mode + \
          simplify-repository-as-project change 加的 list_group_sessions + change \
+         command-palette-group-aware 加的 search_group_sessions + change \
          ssh-project-memory-remote-rw 加的 add_memory / delete_memory + change \
          add-telemetry-signal-bus 加的 get_telemetry_snapshot / record_correctness_events + \
          change frontend-context-menu-phase-2 加的 open_in_terminal / open_in_editor / \

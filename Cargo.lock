@@ -541,6 +541,7 @@ dependencies = [
  "dirs",
  "divan",
  "dunce",
+ "filetime",
  "futures",
  "lru",
  "serde",

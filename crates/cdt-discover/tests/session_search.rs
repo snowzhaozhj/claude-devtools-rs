@@ -282,3 +282,117 @@ async fn ssh_stage_limit_logic() {
     assert_eq!(processed, 2, "should stop after processing 2 files");
     assert_eq!(results.len(), 2, "should have 2 results before stopping");
 }
+
+// =========================================================================
+// search_across_projects tests
+// =========================================================================
+
+/// Scenario: Group search merges results from multiple worktrees in mtime order
+#[tokio::test]
+async fn group_search_merges_results_from_multiple_worktrees_in_mtime_order() {
+    let tmp = TempDir::new().unwrap();
+    write_session(
+        &tmp,
+        "wt-a",
+        "sess-old",
+        &[make_user_line("u1", "hello keyword")],
+    );
+    write_session(
+        &tmp,
+        "wt-b",
+        "sess-new",
+        &[make_user_line("u1", "keyword world")],
+    );
+
+    // Make wt-b/sess-new.jsonl newer
+    let old_path = tmp.path().join("wt-a/sess-old.jsonl");
+    let new_path = tmp.path().join("wt-b/sess-new.jsonl");
+    filetime::set_file_mtime(&old_path, filetime::FileTime::from_unix_time(100, 0)).unwrap();
+    filetime::set_file_mtime(&new_path, filetime::FileTime::from_unix_time(200, 0)).unwrap();
+
+    let (searcher, _) = make_searcher_with_projects_dir(tmp.path());
+    let config = cdt_discover::session_search::SearchConfig::default();
+    let result = searcher
+        .search_across_projects(&["wt-a", "wt-b"], "keyword", 50, &config)
+        .await
+        .unwrap();
+
+    assert_eq!(result.results.len(), 2);
+    assert_eq!(
+        result.results[0].session_id, "sess-new",
+        "newer session first"
+    );
+    assert_eq!(result.results[1].session_id, "sess-old");
+    assert_eq!(result.results[0].project_id, "wt-b");
+    assert_eq!(result.results[1].project_id, "wt-a");
+}
+
+/// Scenario: Group search skips missing worktree directory
+#[tokio::test]
+async fn group_search_skips_missing_worktree_directory() {
+    let tmp = TempDir::new().unwrap();
+    write_session(
+        &tmp,
+        "wt-exists",
+        "sess1",
+        &[make_user_line("u1", "target_keyword found")],
+    );
+    // wt-missing directory does not exist
+
+    let (searcher, _) = make_searcher_with_projects_dir(tmp.path());
+    let config = cdt_discover::session_search::SearchConfig::default();
+    let result = searcher
+        .search_across_projects(&["wt-exists", "wt-missing"], "target_keyword", 50, &config)
+        .await
+        .unwrap();
+
+    assert_eq!(result.results.len(), 1);
+    assert_eq!(result.results[0].session_id, "sess1");
+    assert!(!result.is_partial);
+}
+
+/// Scenario: All worktrees fail → `is_partial` = true
+#[tokio::test]
+async fn group_search_all_worktrees_missing_returns_partial() {
+    let tmp = TempDir::new().unwrap();
+    // No directories exist
+
+    let (searcher, _) = make_searcher_with_projects_dir(tmp.path());
+    let config = cdt_discover::session_search::SearchConfig::default();
+    let result = searcher
+        .search_across_projects(&["wt-x", "wt-y"], "anything", 50, &config)
+        .await
+        .unwrap();
+
+    assert!(result.results.is_empty());
+    assert!(
+        result.is_partial,
+        "all worktrees failing should set is_partial"
+    );
+}
+
+/// Scenario: Single worktree group degenerates to existing search
+#[tokio::test]
+async fn group_search_single_worktree_degenerates_to_search_sessions() {
+    let tmp = TempDir::new().unwrap();
+    write_session(
+        &tmp,
+        "single-wt",
+        "sess1",
+        &[
+            make_user_line("u1", "the answer is rust"),
+            make_assistant_line("a1", "yes rust is great"),
+        ],
+    );
+
+    let (searcher, _) = make_searcher_with_projects_dir(tmp.path());
+    let config = cdt_discover::session_search::SearchConfig::default();
+    let result = searcher
+        .search_across_projects(&["single-wt"], "rust", 50, &config)
+        .await
+        .unwrap();
+
+    assert_eq!(result.results.len(), 1);
+    assert_eq!(result.results[0].session_id, "sess1");
+    assert_eq!(result.results[0].total_matches, 2);
+}

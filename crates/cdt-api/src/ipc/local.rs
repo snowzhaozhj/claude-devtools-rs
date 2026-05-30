@@ -19,7 +19,8 @@ use cdt_config::{
 };
 use cdt_core::Project;
 use cdt_discover::{
-    FileSystemProvider, ProjectScanner, SearchTextCache, SessionSearcher, local_handle,
+    FileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
+    local_handle,
 };
 use cdt_parse::{ParseError, parse_entry_at};
 use cdt_ssh::{
@@ -3950,6 +3951,40 @@ impl DataApi for LocalDataApi {
             .search_sessions(project_id, &request.query, max_results, &config)
             .await
             .map_err(|e| ApiError::internal(format!("search error: {e}")))?;
+
+        Ok(result)
+    }
+
+    async fn search_group_sessions(
+        &self,
+        group_id: &str,
+        query: &str,
+    ) -> Result<cdt_core::SearchSessionsResult, ApiError> {
+        if query.is_empty() {
+            return Ok(cdt_core::SearchSessionsResult {
+                results: Vec::new(),
+                total_matches: 0,
+                sessions_searched: 0,
+                query: String::new(),
+                is_partial: false,
+            });
+        }
+
+        let (groups, fs, projects_dir, _ctx, _captured_generation) =
+            self.list_repository_groups_inner().await?;
+        let group = groups
+            .into_iter()
+            .find(|g| g.id == group_id)
+            .ok_or_else(|| ApiError::not_found(format!("repository group {group_id}")))?;
+
+        let project_ids: Vec<&str> = group.worktrees.iter().map(|wt| wt.id.as_str()).collect();
+        let config = SearchConfig::from_fs_kind(fs.kind());
+        let searcher = SessionSearcher::new(fs, self.search_cache.clone(), projects_dir);
+        let max_results = 50;
+        let result = searcher
+            .search_across_projects(&project_ids, query, max_results, &config)
+            .await
+            .map_err(|e| ApiError::internal(format!("group search error: {e}")))?;
 
         Ok(result)
     }

@@ -119,6 +119,10 @@ pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
             "/api/repository-groups/{group_id}/sessions",
             get(list_group_sessions),
         )
+        .route(
+            "/api/repository-groups/{group_id}/search",
+            post(search_group_sessions),
+        )
         .route("/api/wsl-distros", get(list_wsl_distros))
         .route(
             "/api/worktrees/{group_id}/sessions",
@@ -488,6 +492,15 @@ async fn search(
     Json(request): Json<SearchRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let result = s.api.search(&request).await?;
+    Ok(Json(result))
+}
+
+async fn search_group_sessions(
+    State(s): State<AppState>,
+    Path(group_id): Path<String>,
+    Json(body): Json<SearchRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let result = s.api.search_group_sessions(&group_id, &body.query).await?;
     Ok(Json(result))
 }
 

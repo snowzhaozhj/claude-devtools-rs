@@ -315,6 +315,8 @@ function httpRequestForCommand(cmd: string, args: InvokeArgs): HttpRequest {
       return { method: "POST", path: `/api/projects/${enc(a.projectId)}/session-summaries/batch`, body: a.sessionIds };
     case "search_sessions":
       return { method: "POST", path: "/api/search", body: { projectId: a.projectId, query: a.query } };
+    case "search_group_sessions":
+      return { method: "POST", path: `/api/repository-groups/${enc(a.groupId)}/search`, body: { query: a.query } };
     case "get_session_detail":
       return { method: "GET", path: `/api/sessions/${enc(a.sessionId)}` };
     case "get_project_memory":

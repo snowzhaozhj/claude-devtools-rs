@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import {
-    listProjects,
     listGroupSessions,
-    searchSessions,
+    searchGroupSessions,
     type ProjectInfo,
     type SessionSearchResult,
     type SessionSummary,
   } from "../lib/api";
+  import { loadProjectData } from "../lib/projectDataStore.svelte";
   import { openTab } from "../lib/tabStore.svelte";
   import { shortenPath } from "../lib/toolHelpers";
   import { FOLDER_GIT2_SVG, MESSAGE_SQUARE } from "../lib/icons";
@@ -34,7 +34,8 @@
   onMount(async () => {
     inputEl?.focus();
     try {
-      projects = await listProjects();
+      const data = await loadProjectData();
+      projects = data.projects;
       if (selectedProjectId) {
         const r = await listGroupSessions(selectedProjectId, 20);
         sessions = r.sessions;
@@ -73,7 +74,7 @@
       searchResults = [];
       return;
     }
-    void searchSessions(projectId, q)
+    void searchGroupSessions(projectId, q)
       .then((result) => {
         if (seq === searchSeq) searchResults = result.results;
       })
