@@ -387,6 +387,7 @@
     height: 100%;
     overflow-y: auto;
     overflow-x: hidden;
+    scrollbar-gutter: stable;
     /* 顶部 padding 28px：原 48px 是为对抗 PaneView 空 TabBar (40px) 留出的呼吸；
        现 sole pane + 无 tab 已不再渲染 TabBar，搜索框直接贴 UnifiedTitleBar 下方
        成为视觉首焦——对齐 VS Code Welcome / Linear 的 "主输入贴顶" 工作台语言。 */

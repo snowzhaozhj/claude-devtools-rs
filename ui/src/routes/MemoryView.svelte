@@ -383,6 +383,7 @@
     width: 324px;
     flex-shrink: 0;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     border-right: 1px solid var(--color-border);
     padding: 18px 12px;
     background: var(--color-surface-sidebar);
@@ -628,6 +629,7 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
+    scrollbar-gutter: stable;
   }
 
   .content-inner {

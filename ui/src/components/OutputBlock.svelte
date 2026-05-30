@@ -111,6 +111,7 @@
     white-space: pre;
     overflow-x: auto;
     overflow-y: auto;
+    /* scrollbar-gutter-exempt: 等宽输出块首帧定型 + 横向滚动为主，竖向滚动条不影响可读性 */
     line-height: 1.5;
   }
 

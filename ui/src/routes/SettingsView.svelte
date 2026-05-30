@@ -1367,6 +1367,7 @@
     border-right: 1px solid var(--color-border);
     background: var(--color-surface-sidebar);
     overflow-y: auto;
+    scrollbar-gutter: stable;
   }
   .nav-title {
     margin: 0 8px 14px;
@@ -1453,6 +1454,7 @@
   .settings-content {
     flex: 1;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     padding: 28px 36px 48px;
     min-width: 0;
   }

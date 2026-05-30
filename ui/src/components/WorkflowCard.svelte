@@ -463,6 +463,8 @@
     margin-bottom: 4px;
     max-height: 400px;
     overflow-y: auto;
+    /* trace 流式增长越过 max-height 时滚动条弹出不得压缩内部 ExecutionTrace 宽度 */
+    scrollbar-gutter: stable;
   }
 
   .wf-trace-loading, .wf-trace-empty {

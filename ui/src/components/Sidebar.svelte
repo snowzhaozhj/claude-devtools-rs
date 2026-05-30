@@ -1458,6 +1458,7 @@
   .session-list {
     flex: 1;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     /* bottom 8 给末项留呼吸感：原依赖 .load-more-end footer（已删）撑出
        与底部 sidebar-status 之间的间距，移除后由 padding 直接接住。 */
     padding: 4px 8px 8px;

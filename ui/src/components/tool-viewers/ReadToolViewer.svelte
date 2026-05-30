@@ -172,6 +172,7 @@
   .code-container {
     max-height: 400px;
     overflow: auto;
+    /* scrollbar-gutter-exempt: 等宽代码块首帧定型 + 横向滚动为主，竖向滚动条不影响可读性 */
     background: var(--code-bg);
   }
 
@@ -214,6 +215,7 @@
     padding: 12px 16px;
     max-height: 500px;
     overflow: auto;
+    /* scrollbar-gutter-exempt: 预览块首帧定型 + 横向滚动为主，竖向滚动条不影响可读性 */
     background: var(--code-bg);
     color: var(--color-text);
     font-size: 13px;
