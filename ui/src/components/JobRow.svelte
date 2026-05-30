@@ -108,11 +108,11 @@
   }
 
   .job-row.terminal {
-    opacity: 0.65;
+    opacity: 0.55;
   }
 
   .job-row.terminal:hover {
-    opacity: 1;
+    opacity: 0.9;
   }
 
   .row-line-1 {
@@ -208,29 +208,32 @@
     padding-left: 22px;
     display: flex;
     gap: 12px;
-    margin-top: 2px;
+    margin-top: 4px;
   }
 
   .action-link {
     font-size: 11px;
-    color: var(--color-text-muted);
+    color: var(--color-accent-blue);
     background: none;
     border: none;
     padding: 0;
     cursor: pointer;
-    transition: color 0.12s ease-out;
+    text-decoration: none;
+    transition: color 150ms ease-out, text-decoration-color 150ms ease-out;
   }
 
   .action-link:hover {
     color: var(--color-accent-blue);
+    text-decoration: underline;
   }
 
   .action-link.danger {
-    color: var(--color-text-muted);
+    color: var(--color-danger);
   }
 
   .action-link.danger:hover {
     color: var(--color-danger);
+    text-decoration: underline;
   }
 
   .action-link:disabled {

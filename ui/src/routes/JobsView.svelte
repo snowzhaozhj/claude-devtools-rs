@@ -177,7 +177,7 @@
   }
 
   .job-group + .job-group {
-    margin-top: 16px;
+    margin-top: 20px;
   }
 
   .group-header {
