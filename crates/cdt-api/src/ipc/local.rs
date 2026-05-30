@@ -19,7 +19,8 @@ use cdt_config::{
 };
 use cdt_core::Project;
 use cdt_discover::{
-    FileSystemProvider, ProjectScanner, SearchTextCache, SessionSearcher, local_handle,
+    FileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
+    local_handle,
 };
 use cdt_parse::{ParseError, parse_entry_at};
 use cdt_ssh::{
@@ -3977,10 +3978,7 @@ impl DataApi for LocalDataApi {
             .ok_or_else(|| ApiError::not_found(format!("repository group {group_id}")))?;
 
         let project_ids: Vec<&str> = group.worktrees.iter().map(|wt| wt.id.as_str()).collect();
-        let config = {
-            let (_fs2, _pd2, _ctx2, _pol2, resolvers) = self.active_fs_and_policy().await?;
-            resolvers.search_config.clone()
-        };
+        let config = SearchConfig::from_fs_kind(fs.kind());
         let searcher = SessionSearcher::new(fs, self.search_cache.clone(), projects_dir);
         let max_results = 50;
         let result = searcher

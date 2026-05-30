@@ -227,7 +227,7 @@ impl<F: FileSystemProvider + ?Sized> SessionSearcher<F> {
         let mut results = Vec::new();
         let mut total_matches = 0usize;
         let mut sessions_searched = 0usize;
-        let mut is_partial = false;
+        let mut is_partial = all_files.is_empty() && !project_ids.is_empty();
 
         let start = Instant::now();
         let file_count = all_files.len();
