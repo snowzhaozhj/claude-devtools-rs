@@ -145,7 +145,7 @@ pub trait DataApi: Send + Sync {
 
     async fn get_workflow_agent_trace(
         &self,
-        _session_id: &str,
+        _parent_session_id: &str,
         _run_id: &str,
         _agent_id: &str,
     ) -> Result<Vec<cdt_core::Chunk>, ApiError> {

@@ -31,8 +31,8 @@
 
 #### Scenario: 拉取存在的 workflow agent trace
 
-- **WHEN** caller 调用 `get_workflow_agent_trace("parent-session", "wf_abc-123", "agent-xyz")`
-- **AND** 对应 JSONL 文件 `<session_dir>/subagents/workflows/wf_abc-123/agent-agent-xyz.jsonl` 存在
+- **WHEN** caller 调用 `get_workflow_agent_trace("parent-session", "wf_abc-123", "ad34cb14a1ae5b192")`
+- **AND** 对应 JSONL 文件 `<session_dir>/subagents/workflows/wf_abc-123/agent-ad34cb14a1ae5b192.jsonl` 存在
 - **THEN** 返回非空 `Vec<Chunk>`，内容为该子代理的完整对话流
 
 #### Scenario: workflow agent JSONL 不存在
