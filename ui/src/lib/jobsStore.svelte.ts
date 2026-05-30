@@ -121,9 +121,9 @@ export function stateToColor(state: JobState): string {
   switch (state) {
     case "working": return "var(--color-accent-blue)";
     case "blocked": return "var(--color-warning)";
-    case "idle": return "var(--color-text-muted)";
-    case "done": return "var(--color-success-bright)";
     case "failed": return "var(--color-danger)";
+    case "idle":
+    case "done":
     case "stopped": return "var(--color-text-muted)";
   }
 }
