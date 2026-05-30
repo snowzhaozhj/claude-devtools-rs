@@ -176,20 +176,27 @@ pub fn extract_project_id_from_link_scan_path(link_scan_path: &str) -> Option<St
 }
 
 /// 判定 job 的分组。
+///
+/// 终态（done/failed/stopped）优先进 Completed——即使有 PR child。
+/// "Ready for review" 仅适用于非终态 + 有 PR 的 job（agent 还在跑但已产出 PR）。
+/// 对齐 `claude agents` CLI 的实际行为。
 pub fn classify_job_group(job: &BackgroundJob) -> JobGroup {
-    let has_pr = job
-        .children
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .any(|c| c.kind == "pr");
-    if has_pr {
-        return JobGroup::ReadyForReview;
-    }
     match job.state {
-        JobState::Blocked => JobGroup::NeedsInput,
-        JobState::Working | JobState::Idle => JobGroup::Working,
         JobState::Done | JobState::Failed | JobState::Stopped => JobGroup::Completed,
+        JobState::Blocked => JobGroup::NeedsInput,
+        JobState::Working | JobState::Idle => {
+            let has_pr = job
+                .children
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .any(|c| c.kind == "pr");
+            if has_pr {
+                JobGroup::ReadyForReview
+            } else {
+                JobGroup::Working
+            }
+        }
     }
 }
 
@@ -303,6 +310,19 @@ mod tests {
     fn classify_done_without_pr_is_completed() {
         let job = BackgroundJob {
             state: JobState::Done,
+            ..Default::default()
+        };
+        assert_eq!(classify_job_group(&job), JobGroup::Completed);
+    }
+
+    #[test]
+    fn classify_done_with_pr_is_still_completed() {
+        let job = BackgroundJob {
+            state: JobState::Done,
+            children: Some(vec![JobChild {
+                href: "https://github.com/foo/bar/pull/1".into(),
+                kind: "pr".into(),
+            }]),
             ..Default::default()
         };
         assert_eq!(classify_job_group(&job), JobGroup::Completed);

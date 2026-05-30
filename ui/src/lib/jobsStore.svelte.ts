@@ -42,17 +42,16 @@ let error: string | null = $state(null);
  * D4：Ready for review → Needs input → Working → Completed
  */
 export function classifyJob(job: JobSummary): JobGroup {
-  // 优先使用后端已计算的 group
   if (job.group) return job.group;
-  // fallback 逻辑
-  if (job.children.some((c) => c.kind === "pr")) {
-    return "ready-for-review";
+  // 终态优先进 Completed——即使有 PR（对齐 claude agents CLI）
+  if (job.state === "done" || job.state === "failed" || job.state === "stopped") {
+    return "completed";
   }
   if (job.state === "blocked") {
     return "needs-input";
   }
-  if (job.state === "done" || job.state === "failed" || job.state === "stopped") {
-    return "completed";
+  if (job.children.some((c) => c.kind === "pr")) {
+    return "ready-for-review";
   }
   return "working";
 }
