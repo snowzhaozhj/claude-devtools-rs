@@ -17,7 +17,7 @@ use cdt_config::{
     read_all_claude_md_files_with_base, read_mentioned_file as config_read_mentioned_file,
     validate_file_path,
 };
-use cdt_core::Project;
+use cdt_core::{Project, RepositoryGroup};
 use cdt_discover::{
     FileSystemProvider, ProjectScanner, SearchConfig, SearchTextCache, SessionSearcher,
     local_handle,
@@ -129,6 +129,24 @@ const COMPACT_DERIVED_ENABLED: bool = true;
 /// `openspec/specs/ipc-data-api/spec.md` "Expose project and session queries"
 /// Requirement 内的"跨 `project_dir` 装载 subagent"段。
 const CROSS_PROJECT_SUBAGENT_SCAN: bool = true;
+
+/// Find a group by ID with fallback: if exact match fails, try matching
+/// `group_id` against worktree IDs (handles git-init causing group ID change).
+fn find_group_with_fallback(
+    groups: Vec<RepositoryGroup>,
+    group_id: &str,
+) -> Result<RepositoryGroup, ApiError> {
+    let pos = groups
+        .iter()
+        .position(|g| g.id == group_id)
+        .or_else(|| {
+            groups
+                .iter()
+                .position(|g| g.worktrees.iter().any(|w| w.id == group_id))
+        })
+        .ok_or_else(|| ApiError::not_found(format!("repository group {group_id}")))?;
+    Ok(groups.into_iter().nth(pos).unwrap())
+}
 
 fn is_safe_path_component(s: &str) -> bool {
     !s.is_empty()
@@ -966,10 +984,7 @@ impl LocalDataApi {
             self.list_repository_groups_inner().await?;
         let expected_root_generation = self.root_generation.load(Ordering::SeqCst);
         let expected_context_generation = captured_context_generation;
-        let group = groups
-            .into_iter()
-            .find(|g| g.id == group_id)
-            .ok_or_else(|| ApiError::not_found(format!("repository group {group_id}")))?;
+        let group = find_group_with_fallback(groups, group_id)?;
 
         let cursor_state = parse_group_cursor(cursor);
         let pinned = std::collections::BTreeSet::<String>::new();
@@ -4045,10 +4060,7 @@ impl DataApi for LocalDataApi {
 
         let (groups, fs, projects_dir, _ctx, _captured_generation) =
             self.list_repository_groups_inner().await?;
-        let group = groups
-            .into_iter()
-            .find(|g| g.id == group_id)
-            .ok_or_else(|| ApiError::not_found(format!("repository group {group_id}")))?;
+        let group = find_group_with_fallback(groups, group_id)?;
 
         let project_ids: Vec<&str> = group.worktrees.iter().map(|wt| wt.id.as_str()).collect();
         let config = SearchConfig::from_fs_kind(fs.kind());
@@ -8569,5 +8581,57 @@ mod tests {
             watcher.is_local_project("proj-sub"),
             "subagent 分支 mark_local_origin 后 is_local_project SHALL 返 true"
         );
+    }
+
+    fn make_group(id: &str, worktree_ids: &[&str]) -> RepositoryGroup {
+        RepositoryGroup {
+            id: id.to_string(),
+            identity: None,
+            name: id.to_string(),
+            worktrees: worktree_ids
+                .iter()
+                .map(|wid| cdt_core::Worktree {
+                    id: wid.to_string(),
+                    path: std::path::PathBuf::from(format!("/tmp/{wid}")),
+                    name: wid.to_string(),
+                    git_branch: None,
+                    is_main_worktree: false,
+                    is_repo_root: false,
+                    cwd_relative_to_repo_root: None,
+                    sessions: Vec::new(),
+                    created_at: None,
+                    most_recent_session: None,
+                })
+                .collect(),
+            most_recent_session: None,
+            total_sessions: 0,
+        }
+    }
+
+    #[test]
+    fn find_group_with_fallback_exact_match() {
+        let groups = vec![
+            make_group("/Users/foo/.git", &["-Users-foo-workspace"]),
+            make_group("-Users-bar-proj", &["-Users-bar-proj"]),
+        ];
+        let result = find_group_with_fallback(groups, "/Users/foo/.git").unwrap();
+        assert_eq!(result.id, "/Users/foo/.git");
+    }
+
+    #[test]
+    fn find_group_with_fallback_stale_project_id_matches_worktree() {
+        let groups = vec![make_group(
+            "/Users/foo/workspace/.git",
+            &["-Users-foo-workspace"],
+        )];
+        let result = find_group_with_fallback(groups, "-Users-foo-workspace").unwrap();
+        assert_eq!(result.id, "/Users/foo/workspace/.git");
+    }
+
+    #[test]
+    fn find_group_with_fallback_returns_not_found_when_nothing_matches() {
+        let groups = vec![make_group("/Users/foo/.git", &["-Users-foo-proj"])];
+        let err = find_group_with_fallback(groups, "-Users-nonexistent").unwrap_err();
+        assert!(format!("{err:?}").contains("NotFound"));
     }
 }
