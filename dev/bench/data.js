@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780138893472,
+  "lastUpdate": 1780152208873,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -5433,6 +5433,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12440,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "26f21a94bc727e784742a500b8f1c445c5bf5196",
+          "message": "chore(release): 0.6.0 (#426)\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-05-30T22:40:10+08:00",
+          "tree_id": "e431184cd8812601b9d52d0106962d667cb5acee",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/26f21a94bc727e784742a500b8f1c445c5bf5196"
+        },
+        "date": 1780152208185,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 115.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1114,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4689,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.872,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 10.06,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 41.26,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.38,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 299.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1197,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3318,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3297,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 37560,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 72.01,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 60.48,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 620.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6163,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 192.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1943,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 55.45,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 561.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5617,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 118.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1196,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.501,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 64.76,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9240,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 998.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9491,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 1139,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 48.13,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 501.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 90.77,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 903.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9166,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 224.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1388,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12520,
             "unit": "µs"
           }
         ]
