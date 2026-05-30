@@ -87,6 +87,8 @@ pub enum PushEvent {
     /// 即字面。**禁止**给 enum 加 `rename_all_fields = camelCase`——会破坏
     /// 既有 `project_id` / `session_id` 等字段的 wire 形态。
     SseLagged { source: String, missed: u64 },
+    /// Background job state.json 变更。前端收到后 re-fetch `list_jobs`。
+    JobsUpdate { job_id: String },
 }
 
 /// 单个 session 元数据增量推送 payload。

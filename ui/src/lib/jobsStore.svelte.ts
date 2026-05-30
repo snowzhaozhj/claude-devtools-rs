@@ -8,8 +8,8 @@
  * Svelte 5 runes（$state / $derived）。
  */
 
-import { getTransport } from "./transport";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getTransport, subscribeEvent } from "./transport";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
   BadgePriority,
   JobGroup,
@@ -203,7 +203,7 @@ async function loadJobs(): Promise<void> {
 async function subscribeJobsUpdate(): Promise<void> {
   if (unlistenJobs) return;
   try {
-    unlistenJobs = await listen("jobs-update", () => {
+    unlistenJobs = await subscribeEvent("jobs_update", () => {
       void loadJobs();
     });
   } catch (e) {

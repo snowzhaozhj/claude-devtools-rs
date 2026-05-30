@@ -106,6 +106,7 @@ async fn build_harness(titles: &[&str]) -> Harness {
     let (_error_tx, error_rx) = broadcast::channel(16);
     let metadata_rx = api.subscribe_session_metadata();
     let context_rx = api.subscribe_context_changed();
+    let jobs_rx = api.subscribe_jobs();
     spawn_event_bridge(
         events_tx.clone(),
         file_rx,
@@ -113,6 +114,7 @@ async fn build_harness(titles: &[&str]) -> Harness {
         error_rx,
         metadata_rx,
         context_rx,
+        jobs_rx,
     );
 
     let state = AppState {

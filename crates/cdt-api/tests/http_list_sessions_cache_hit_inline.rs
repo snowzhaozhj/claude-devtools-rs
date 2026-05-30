@@ -108,6 +108,7 @@ async fn http_get_sessions_cache_hit_inlines_real_values_with_zero_emit() {
     let (_error_tx, error_rx) = broadcast::channel(16);
     let metadata_rx = api.subscribe_session_metadata();
     let context_rx = api.subscribe_context_changed();
+    let jobs_rx = api.subscribe_jobs();
     spawn_event_bridge(
         events_tx.clone(),
         file_rx,
@@ -115,6 +116,7 @@ async fn http_get_sessions_cache_hit_inlines_real_values_with_zero_emit() {
         error_rx,
         metadata_rx,
         context_rx,
+        jobs_rx,
     );
 
     let state = AppState {

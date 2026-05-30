@@ -296,6 +296,7 @@ async fn run_serve() -> Result<()> {
     let error_rx = api.subscribe_detected_errors();
     let metadata_rx = api.subscribe_session_metadata();
     let context_rx = api.subscribe_context_changed();
+    let jobs_rx = api.subscribe_jobs();
 
     let state = AppState::new(api, 1024);
 
@@ -306,6 +307,7 @@ async fn run_serve() -> Result<()> {
         error_rx,
         metadata_rx,
         context_rx,
+        jobs_rx,
     );
 
     tracing::info!("Starting claude-devtools-rs on port {port}");
