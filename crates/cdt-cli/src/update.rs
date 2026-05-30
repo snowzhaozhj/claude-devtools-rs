@@ -77,8 +77,68 @@ pub async fn run(opts: UpdateOptions) -> Result<()> {
 }
 
 async fn fetch_latest_tag() -> Result<String> {
+    // 优先走 `releases/latest` 的 302 重定向探测最新 tag——github.com 网页跳转不消耗
+    // GitHub REST API 的 60 次/小时未认证额度（共享出口 IP 下极易耗尽，是 `cdt self-update`
+    // 不带 --version 必报 rate-limit 的根因）。探测失败再 fallback 到 API（带 token 时 5000/小时）。
+    match fetch_latest_tag_via_redirect().await {
+        Ok(tag) => Ok(tag),
+        Err(err) => {
+            tracing::debug!(
+                "latest-tag redirect probe failed, falling back to GitHub API: {err:#}"
+            );
+            fetch_latest_tag_via_api().await
+        }
+    }
+}
+
+/// 通过 `https://github.com/<repo>/releases/latest` 的 302 重定向拿最新 tag。
+///
+/// 关 redirect-follow，读 `Location` 头——形如 `https://github.com/<repo>/releases/tag/vX.Y.Z`。
+/// 仓库无 release 时该 endpoint 返回 404（非重定向），此处 `bail!` 后由调用方 fallback。
+///
+/// 用 `GET`（不消费 body）而非 `HEAD`：企业透明代理可能把 `HEAD` 改写为 `GET` 并自动跟随
+/// 重定向，丢失 302 + `Location`，让本探测静默降级回 API；`GET` 更不易被代理篡改。
+async fn fetch_latest_tag_via_redirect() -> Result<String> {
+    let url = format!("https://github.com/{REPO}/releases/latest");
+    let client = build_client(reqwest::redirect::Policy::none())?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .context("failed to reach github.com")?;
+
+    let status = resp.status();
+    if !status.is_redirection() {
+        bail!("expected redirect from releases/latest, got HTTP {status}");
+    }
+
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .context("redirect response missing Location header")?;
+
+    parse_tag_from_location(location)
+}
+
+/// 从 `releases/tag/<tag>` 形式的重定向目标里解析出 tag 段。
+fn parse_tag_from_location(location: &str) -> Result<String> {
+    let tag = location
+        .rsplit_once("/releases/tag/")
+        .map(|(_, rest)| {
+            // 剥离可能的 query string / fragment，再去掉 trailing slash。
+            let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+            rest.trim_end_matches('/')
+        })
+        .filter(|tag| !tag.is_empty())
+        .with_context(|| format!("could not parse tag from redirect Location: {location}"))?;
+    Ok(tag.to_string())
+}
+
+async fn fetch_latest_tag_via_api() -> Result<String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let client = build_client()?;
+    let client = build_client(reqwest::redirect::Policy::default())?;
 
     let resp = client
         .get(&url)
@@ -106,7 +166,12 @@ async fn fetch_latest_tag() -> Result<String> {
     Ok(tag.to_string())
 }
 
-fn build_client() -> Result<reqwest::Client> {
+/// 构造带 `User-Agent` + 可选 `Authorization` 的 HTTP client。
+///
+/// `redirect` 显式可控：latest-tag 探测用 [`Policy::none`](reqwest::redirect::Policy::none) 拿 302
+/// `Location`；asset 下载用 [`Policy::default`](reqwest::redirect::Policy::default) 跟随 github.com
+/// 到 `objects.githubusercontent.com` 的跳转。
+fn build_client(redirect: reqwest::redirect::Policy) -> Result<reqwest::Client> {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("User-Agent", "cdt-self-update".parse().unwrap());
 
@@ -117,6 +182,7 @@ fn build_client() -> Result<reqwest::Client> {
 
     reqwest::Client::builder()
         .default_headers(headers)
+        .redirect(redirect)
         .build()
         .context("failed to build HTTP client")
 }
@@ -137,7 +203,7 @@ fn platform_asset_name() -> Result<String> {
 }
 
 async fn download_and_extract(url: &str, asset_name: &str) -> Result<Vec<u8>> {
-    let client = build_client()?;
+    let client = build_client(reqwest::redirect::Policy::default())?;
     let resp = client
         .get(url)
         .send()
@@ -384,4 +450,44 @@ fn replace_binary(target: &Path, new_bytes: &[u8]) -> Result<()> {
     let _ = fs::remove_file(&backup);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_tag_from_location;
+
+    #[test]
+    fn parses_tag_from_releases_latest_redirect() {
+        let tag =
+            parse_tag_from_location("https://github.com/owner/repo/releases/tag/v0.6.0").unwrap();
+        assert_eq!(tag, "v0.6.0");
+    }
+
+    #[test]
+    fn parses_tag_ignoring_trailing_slash() {
+        let tag =
+            parse_tag_from_location("https://github.com/owner/repo/releases/tag/v1.2.3/").unwrap();
+        assert_eq!(tag, "v1.2.3");
+    }
+
+    #[test]
+    fn parses_tag_stripping_query_and_fragment() {
+        let tag = parse_tag_from_location(
+            "https://github.com/owner/repo/releases/tag/v2.0.0?utm_source=redirect",
+        )
+        .unwrap();
+        assert_eq!(tag, "v2.0.0");
+        let tag =
+            parse_tag_from_location("https://github.com/owner/repo/releases/tag/v2.0.0#notes")
+                .unwrap();
+        assert_eq!(tag, "v2.0.0");
+    }
+
+    #[test]
+    fn rejects_location_without_tag_segment() {
+        // 仓库无 release 时 releases/latest 返回 404；即便拿到非 tag 的 Location 也不应误判出 tag。
+        assert!(parse_tag_from_location("https://github.com/owner/repo/releases/").is_err());
+        assert!(parse_tag_from_location("https://github.com/owner/repo/releases/tag/").is_err());
+        assert!(parse_tag_from_location("https://example.com/").is_err());
+    }
 }
