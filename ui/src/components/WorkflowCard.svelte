@@ -39,7 +39,7 @@
   });
 
 
-  const durationText = $derived(formatDuration(workflow.durationMs ?? null));
+  const durationText = $derived(formatDuration(workflow.durationMs || null));
 
   const totalTokensText = $derived(
     workflow.totalTokens ? workflow.totalTokens.toLocaleString() : null,
