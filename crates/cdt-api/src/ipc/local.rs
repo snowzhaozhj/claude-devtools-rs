@@ -193,10 +193,20 @@ fn ai_first_response_total_tokens(ai: &cdt_core::AIChunk) -> Option<u64> {
 /// - `FileSignature`：`SystemTime` + `size` + `identity`，可自由演进（加 hash/inode）
 /// - IPC fingerprint：稳定 wire 格式，前端不解析只回传，变更需 bump 版本前缀
 ///
-/// 格式 `"v1:<mtime_ms>:<size>"`；`None` 时用 `0`。metadata 不完整时调用方
-/// SHALL 跳过短路比较（见 `metadata_complete` guard）。
-fn make_session_ipc_fingerprint(mtime_ms: Option<i64>, size: Option<u64>) -> String {
-    format!("v1:{}:{}", mtime_ms.unwrap_or(0), size.unwrap_or(0))
+/// 格式 `"v2:<mtime_ms>:<size>:<stale>"`；`None` 时用 `0`。`stale` 编码
+/// `is_ongoing` 的 stale 翻转决定因素——写入停止 ≥5min 时翻 `1` 使 fingerprint
+/// 变化，触发一次重算完成 `ongoing→complete` 状态翻转。
+fn make_session_ipc_fingerprint(
+    mtime_ms: Option<i64>,
+    size: Option<u64>,
+    is_stale: bool,
+) -> String {
+    format!(
+        "v2:{}:{}:{}",
+        mtime_ms.unwrap_or(0),
+        size.unwrap_or(0),
+        u8::from(is_stale)
+    )
 }
 
 fn find_last_ai_before(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core::AIChunk> {
@@ -858,7 +868,13 @@ impl LocalDataApi {
             (path, modified, size)
         };
 
-        let fingerprint = make_session_ipc_fingerprint(last_modified, size);
+        let is_stale = last_modified.is_some_and(|ms| {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+            now_ms - ms >= 300_000
+        });
+        let fingerprint = make_session_ipc_fingerprint(last_modified, size, is_stale);
         let metadata_complete = last_modified.is_some() && size.is_some();
         if metadata_complete {
             if let Some(known) = known_fingerprint {

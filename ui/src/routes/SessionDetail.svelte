@@ -386,9 +386,9 @@
   async function refreshDetail() {
     const wasAtBottom = !!conversationEl && isAtBottom(conversationEl);
     try {
-      // ongoing session 不传 fingerprint——stale 阈值（5min）到了需重新评估
-      // is_ongoing，file mtime/size 不变但状态应从 ongoing → complete。
-      const fpToSend = detail?.isOngoing ? null : knownFingerprint;
+      // 后端 fingerprint 已编入 is_stale（mtime 距今 ≥5min），stale 翻转由
+      // fingerprint 变化自然触发重算，无需前端强制 null 绕过短路。
+      const fpToSend = knownFingerprint;
       const resp: SessionDetailResponse = await getSessionDetail(projectId, sessionId, fpToSend);
       const currentSid = getTabSessionId(tabId);
       if (currentSid !== null && currentSid !== sessionId) return;
