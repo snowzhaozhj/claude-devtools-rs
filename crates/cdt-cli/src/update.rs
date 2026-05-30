@@ -95,12 +95,15 @@ async fn fetch_latest_tag() -> Result<String> {
 ///
 /// 关 redirect-follow，读 `Location` 头——形如 `https://github.com/<repo>/releases/tag/vX.Y.Z`。
 /// 仓库无 release 时该 endpoint 返回 404（非重定向），此处 `bail!` 后由调用方 fallback。
+///
+/// 用 `GET`（不消费 body）而非 `HEAD`：企业透明代理可能把 `HEAD` 改写为 `GET` 并自动跟随
+/// 重定向，丢失 302 + `Location`，让本探测静默降级回 API；`GET` 更不易被代理篡改。
 async fn fetch_latest_tag_via_redirect() -> Result<String> {
     let url = format!("https://github.com/{REPO}/releases/latest");
     let client = build_client(reqwest::redirect::Policy::none())?;
 
     let resp = client
-        .head(&url)
+        .get(&url)
         .send()
         .await
         .context("failed to reach github.com")?;
@@ -123,7 +126,11 @@ async fn fetch_latest_tag_via_redirect() -> Result<String> {
 fn parse_tag_from_location(location: &str) -> Result<String> {
     let tag = location
         .rsplit_once("/releases/tag/")
-        .map(|(_, tag)| tag.trim_end_matches('/'))
+        .map(|(_, rest)| {
+            // 剥离可能的 query string / fragment，再去掉 trailing slash。
+            let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+            rest.trim_end_matches('/')
+        })
         .filter(|tag| !tag.is_empty())
         .with_context(|| format!("could not parse tag from redirect Location: {location}"))?;
     Ok(tag.to_string())
@@ -461,6 +468,19 @@ mod tests {
         let tag =
             parse_tag_from_location("https://github.com/owner/repo/releases/tag/v1.2.3/").unwrap();
         assert_eq!(tag, "v1.2.3");
+    }
+
+    #[test]
+    fn parses_tag_stripping_query_and_fragment() {
+        let tag = parse_tag_from_location(
+            "https://github.com/owner/repo/releases/tag/v2.0.0?utm_source=redirect",
+        )
+        .unwrap();
+        assert_eq!(tag, "v2.0.0");
+        let tag =
+            parse_tag_from_location("https://github.com/owner/repo/releases/tag/v2.0.0#notes")
+                .unwrap();
+        assert_eq!(tag, "v2.0.0");
     }
 
     #[test]
