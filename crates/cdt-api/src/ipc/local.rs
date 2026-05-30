@@ -8677,7 +8677,10 @@ mod tests {
             super::make_session_ipc_fingerprint(Some(1_700_000_000_000), Some(4096), false);
         let fp_stale =
             super::make_session_ipc_fingerprint(Some(1_700_000_000_000), Some(4096), true);
-        assert_ne!(fp_fresh, fp_stale, "stale bit flip SHALL change fingerprint");
+        assert_ne!(
+            fp_fresh, fp_stale,
+            "stale bit flip SHALL change fingerprint"
+        );
         assert!(fp_fresh.starts_with("v2:"), "format SHALL be v2");
         assert!(fp_stale.ends_with(":1"), "stale=true SHALL encode as :1");
         assert!(fp_fresh.ends_with(":0"), "stale=false SHALL encode as :0");
