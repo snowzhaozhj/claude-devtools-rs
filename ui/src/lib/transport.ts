@@ -299,6 +299,10 @@ interface HttpRequest {
 function httpRequestForCommand(cmd: string, args: InvokeArgs): HttpRequest {
   const a = args as Record<string, unknown>;
   switch (cmd) {
+    case "list_jobs":
+      return { method: "GET", path: "/api/jobs" };
+    case "stop_job":
+      return { method: "POST", path: `/api/jobs/${enc(a.jobId)}/stop` };
     case "list_projects":
       return { method: "GET", path: "/api/projects" };
     case "list_repository_groups":

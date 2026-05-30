@@ -1,0 +1,19 @@
+{
+  "state": "working",
+  "name": "Feature PR ready",
+  "detail": "Waiting for CI checks",
+  "intent": "Implement new dashboard redesign",
+  "children": [
+    {
+      "kind": "pr",
+      "href": "https://github.com/org/repo/pull/42"
+    }
+  ],
+  "sessionId": "sess-pr-007",
+  "linkScanPath": "/.claude/projects/-Users-alice-my-app/sess-pr-007.jsonl",
+  "cwd": "/Users/alice/my-app",
+  "tempo": "active",
+  "inFlight": "gh pr checks --watch",
+  "createdAt": "2026-05-30T07:00:00.000Z",
+  "updatedAt": "2026-05-30T09:00:00.000Z"
+}

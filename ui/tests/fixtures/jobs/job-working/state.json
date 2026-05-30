@@ -1,0 +1,14 @@
+{
+  "state": "working",
+  "name": "Implement auth",
+  "detail": "Running test suite...",
+  "intent": "Add OAuth2 authentication flow to the API",
+  "children": [],
+  "sessionId": "sess-work-001",
+  "linkScanPath": "/.claude/projects/-Users-alice-my-app/sess-work-001.jsonl",
+  "cwd": "/Users/alice/my-app",
+  "tempo": "active",
+  "inFlight": "cargo test -p cdt-api",
+  "createdAt": "2026-05-30T08:00:00.000Z",
+  "updatedAt": "2026-05-30T09:30:00.000Z"
+}

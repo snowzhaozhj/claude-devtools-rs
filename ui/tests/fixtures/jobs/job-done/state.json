@@ -1,0 +1,14 @@
+{
+  "state": "done",
+  "name": "Completed migration",
+  "detail": "All tasks completed successfully",
+  "intent": "Migrate database schema to v3",
+  "children": [],
+  "sessionId": "sess-done-004",
+  "linkScanPath": "/.claude/projects/-Users-carol-infra/sess-done-004.jsonl",
+  "cwd": "/Users/carol/infra",
+  "tempo": "completed",
+  "inFlight": "",
+  "createdAt": "2026-05-27T09:00:00.000Z",
+  "updatedAt": "2026-05-28T11:30:00.000Z"
+}

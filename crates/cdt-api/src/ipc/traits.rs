@@ -188,6 +188,24 @@ pub trait DataApi: Send + Sync {
     }
 
     // =========================================================================
+    // Background Jobs
+    // =========================================================================
+
+    async fn list_jobs(&self) -> Result<cdt_core::JobsResponse, ApiError> {
+        Ok(cdt_core::JobsResponse {
+            jobs: Vec::new(),
+            badge: cdt_core::BadgeColor::None,
+            badge_count: 0,
+            jobs_dir_exists: false,
+        })
+    }
+
+    /// 停止指定 background job（调用 `claude stop <short_id>`）。
+    async fn stop_job(&self, _job_id: &str) -> Result<(), ApiError> {
+        Err(ApiError::internal("not implemented"))
+    }
+
+    // =========================================================================
     // 搜索
     // =========================================================================
 

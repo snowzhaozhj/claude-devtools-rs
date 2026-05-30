@@ -20,7 +20,7 @@ import {
 // Tab 数据模型
 // ---------------------------------------------------------------------------
 
-export type TabType = "session" | "settings" | "notifications" | "memory";
+export type TabType = "session" | "settings" | "notifications" | "memory" | "jobs";
 
 export interface Tab {
   id: string;
@@ -420,7 +420,7 @@ export function openOrReplaceTab(
   openTab(sessionId, projectId, label, groupId);
 }
 
-function openSingletonTab(type: "settings" | "notifications", label: string): void {
+function openSingletonTab(type: "settings" | "notifications" | "jobs", label: string): void {
   // settings / notifications 单例：任意 pane 已有 → focus
   for (const pane of paneLayout.panes) {
     const existing = pane.tabs.find((t) => t.type === type);
@@ -455,6 +455,10 @@ export function openSettingsTab(): void {
 
 export function openNotificationsTab(): void {
   openSingletonTab("notifications", "Notifications");
+}
+
+export function openJobsTab(): void {
+  openSingletonTab("jobs", "Background Jobs");
 }
 
 export function openMemoryTab(projectId: string, label = "Memory"): void {

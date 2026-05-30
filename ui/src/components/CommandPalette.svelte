@@ -8,9 +8,10 @@
     type SessionSummary,
   } from "../lib/api";
   import { loadProjectData } from "../lib/projectDataStore.svelte";
-  import { openTab } from "../lib/tabStore.svelte";
+  import { openTab, openJobsTab } from "../lib/tabStore.svelte";
+  import { getJobsDirExists } from "../lib/jobsStore.svelte";
   import { shortenPath } from "../lib/toolHelpers";
-  import { FOLDER_GIT2_SVG, MESSAGE_SQUARE } from "../lib/icons";
+  import { FOLDER_GIT2_SVG, MESSAGE_SQUARE, CPU_SVG } from "../lib/icons";
 
   interface Props {
     selectedProjectId: string;
@@ -64,7 +65,33 @@
     return sessions.slice(0, MAX_SESSIONS);
   });
 
-  const totalResults = $derived(filteredProjects.length + filteredSessions.length);
+  interface PaletteAction {
+    id: string;
+    label: string;
+    detail: string;
+    icon: string;
+    handler: () => void;
+  }
+
+  const actions = $derived.by((): PaletteAction[] => {
+    const q = query.toLowerCase();
+    const items: PaletteAction[] = [];
+    if (getJobsDirExists()) {
+      const matches = !q || "background jobs".includes(q) || "open jobs".includes(q) || "bg".includes(q);
+      if (matches) {
+        items.push({
+          id: "open-jobs",
+          label: "Open Background Jobs",
+          detail: "查看后台任务状态",
+          icon: CPU_SVG,
+          handler: () => { openJobsTab(); onClose(); },
+        });
+      }
+    }
+    return items;
+  });
+
+  const totalResults = $derived(filteredProjects.length + filteredSessions.length + actions.length);
 
   $effect(() => {
     const q = query.trim();
@@ -128,9 +155,12 @@
       const p = filteredProjects[idx];
       onSelectProject(p.id, p.displayName);
       onClose();
-    } else {
+    } else if (idx < filteredProjects.length + filteredSessions.length) {
       const si = idx - filteredProjects.length;
       if (si < filteredSessions.length) openSession(filteredSessions[si]);
+    } else {
+      const ai = idx - filteredProjects.length - filteredSessions.length;
+      if (ai < actions.length) actions[ai].handler();
     }
   }
 
@@ -226,6 +256,34 @@
           {#if "timestamp" in session}
             <span class="cp-item-time">{formatTime(session.timestamp)}</span>
           {/if}
+        </button>
+      {/each}
+    {/if}
+
+    {#if actions.length > 0}
+      <div class="cp-section">操作</div>
+      {#each actions as action, i}
+        {@const flatIdx = filteredProjects.length + filteredSessions.length + i}
+        <button
+          class="cp-item"
+          class:cp-item-selected={flatIdx === selectedIndex}
+          onclick={action.handler}
+        >
+          <svg
+            class="cp-item-icon"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            {@html action.icon}
+          </svg>
+          <span class="cp-item-label">{action.label}</span>
+          <span class="cp-item-detail">{action.detail}</span>
         </button>
       {/each}
     {/if}

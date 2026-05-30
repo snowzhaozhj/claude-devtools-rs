@@ -61,6 +61,9 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "http_server_status",
     "get_telemetry_snapshot",
     "record_correctness_events",
+    // Background jobs panel
+    "list_jobs",
+    "stop_job",
     // Phase 2 frontend-context-menu：右键菜单"在终端 / 编辑器打开"+ Settings dropdown
     // 详 openspec/specs/frontend-context-menu/spec.md 三个 Requirement
     "open_in_terminal",

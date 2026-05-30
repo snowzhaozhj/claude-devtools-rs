@@ -61,6 +61,7 @@ impl IntoResponse for ApiError {
 pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
     let api_router = Router::new()
         // 项目 + 会话
+        .route("/api/jobs", get(list_jobs))
         .route("/api/projects", get(list_projects))
         .route("/api/projects/{project_id}/sessions", get(list_sessions))
         .route(
@@ -170,6 +171,9 @@ pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
             "/api/telemetry/correctness-events",
             post(record_correctness_events_route),
         )
+        // Background jobs
+        .route("/api/jobs", get(list_jobs_route))
+        .route("/api/jobs/{job_id}/stop", post(stop_job_route))
         // Phase 2 frontend-context-menu：右键菜单"在终端 / 编辑器打开"+ Settings dropdown
         // 详 openspec/specs/frontend-context-menu/spec.md 三个 Requirement
         .route("/api/external-app/terminal", post(open_in_terminal_route))
@@ -433,6 +437,11 @@ fn guess_mime(path: &std::path::Path) -> &'static str {
 // =============================================================================
 // Handlers — 每个委托给 DataApi trait
 // =============================================================================
+
+async fn list_jobs(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let result = s.api.list_jobs().await?;
+    Ok(Json(result))
+}
 
 async fn list_projects(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     let projects = s.api.list_projects().await?;
@@ -955,6 +964,23 @@ async fn get_project_session_prefs(
 ) -> Result<impl IntoResponse, ApiError> {
     let prefs = s.api.get_project_session_prefs(&project_id).await?;
     Ok(Json(prefs))
+}
+
+// =============================================================================
+// Background Jobs
+// =============================================================================
+
+async fn list_jobs_route(State(s): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let resp = s.api.list_jobs().await?;
+    Ok(Json(resp))
+}
+
+async fn stop_job_route(
+    State(s): State<AppState>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.stop_job(&job_id).await?;
+    Ok(Json(serde_json::json!({"ok": true})))
 }
 
 async fn get_telemetry_snapshot_route(

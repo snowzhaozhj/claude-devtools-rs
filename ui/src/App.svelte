@@ -40,6 +40,7 @@
   import { subscribeEvent } from "./lib/transport";
   import { getSidebarCollapsed, toggleSidebarCollapsed } from "./lib/sidebarStore.svelte";
   import { attachExternalLinkInterceptor } from "./lib/externalLinks";
+  import { initializeJobs, cleanupJobs } from "./lib/jobsStore.svelte";
   import { bootstrapOverrides } from "./lib/keyboard/customization";
   import { registerAppShortcuts } from "./lib/keyboard/register-app-shortcuts";
   import { setMenuSettings } from "./lib/contextMenu/settings.svelte";
@@ -209,6 +210,8 @@
     await loadAgentConfigs();
     // 单例 listen("file-change") —— 路由组件通过 fileChangeStore 注册 handler
     await initFileChangeStore();
+    // 初始化 Background Jobs store（TitleBar 入口依赖 jobsDirExists 判断是否渲染）
+    await initializeJobs();
     // 启动时同步一次 Dock badge（显示持久化的未读数）
     await onNotificationUpdate();
     // 主路径走 push event：`notification-update`（mark-as-read）+ `notification-added`
@@ -246,6 +249,7 @@
     unlistenNotifAdded?.();
     unlistenUpdater?.();
     detachExternalLinks?.();
+    cleanupJobs();
     if (notificationPollTimer) clearInterval(notificationPollTimer);
   });
 
