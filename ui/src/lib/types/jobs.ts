@@ -37,6 +37,7 @@ export interface ListJobsResult {
   jobs: JobSummary[];
   badge: "red" | "amber" | "green" | "none";
   badgeCount: number;
+  jobsDirExists: boolean;
 }
 
 /** 分组类型 */

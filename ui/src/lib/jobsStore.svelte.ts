@@ -185,12 +185,11 @@ async function loadJobs(): Promise<void> {
     jobs = result.jobs;
     badgeColor = result.badge;
     badgeCount = result.badgeCount;
-    // 后端返回 jobs 意味着目录存在
-    jobsDirExists = true;
+    jobsDirExists = result.jobsDirExists;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    // 如果 command 不存在（后端未实现）或目录不存在，静默降级
-    if (msg.includes("not implemented") || msg.includes("unknownCommand") || msg.includes("jobs directory")) {
+    if (msg.includes("not implemented") || msg.includes("unknownCommand")) {
+      console.warn("[jobs] list_jobs not available:", msg);
       jobsDirExists = false;
       jobs = [];
       badgeColor = "none";
@@ -211,8 +210,8 @@ async function subscribeJobsUpdate(): Promise<void> {
     unlistenJobs = await listen("jobs-update", () => {
       void loadJobs();
     });
-  } catch {
-    // 事件不可用时静默
+  } catch (e) {
+    console.warn("[jobs] failed to subscribe to jobs-update events:", e);
   }
 }
 

@@ -47,9 +47,16 @@
     window.open(prChild.href, "_blank");
   }
 
-  function handleStop(e: Event) {
+  let stopError: string | null = $state(null);
+
+  async function handleStop(e: Event) {
     e.stopPropagation();
-    void stopJob(job.id);
+    stopError = null;
+    try {
+      await stopJob(job.id);
+    } catch (err) {
+      stopError = err instanceof Error ? err.message : String(err);
+    }
   }
 </script>
 
@@ -161,6 +168,9 @@
           </button>
         {/if}
       </div>
+      {#if stopError}
+        <span class="stop-error">{stopError}</span>
+      {/if}
     </div>
   {/if}
 </div>
@@ -412,5 +422,11 @@
 
   .action-btn.btn-stop:hover {
     background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
+  }
+
+  .stop-error {
+    font-size: 11px;
+    color: var(--color-danger);
+    margin-top: 4px;
   }
 </style>

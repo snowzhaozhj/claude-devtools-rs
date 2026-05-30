@@ -2674,13 +2674,17 @@ async fn list_jobs_from_dir(jobs_dir: &Path) -> Result<cdt_core::JobsResponse, A
 
     let mut jobs: Vec<JobSummary> = Vec::new();
 
-    let Ok(mut entries) = tokio::fs::read_dir(jobs_dir).await else {
-        return Ok(cdt_core::JobsResponse {
-            jobs: Vec::new(),
-            badge: cdt_core::BadgeColor::None,
-            badge_count: 0,
-            jobs_dir_exists: true,
-        });
+    let mut entries = match tokio::fs::read_dir(jobs_dir).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(path = %jobs_dir.display(), error = %e, "cannot read jobs directory");
+            return Ok(cdt_core::JobsResponse {
+                jobs: Vec::new(),
+                badge: cdt_core::BadgeColor::None,
+                badge_count: 0,
+                jobs_dir_exists: true,
+            });
+        }
     };
 
     while let Ok(Some(entry)) = entries.next_entry().await {
@@ -2692,8 +2696,12 @@ async fn list_jobs_from_dir(jobs_dir: &Path) -> Result<cdt_core::JobsResponse, A
         let Ok(content) = tokio::fs::read(&state_path).await else {
             continue;
         };
-        let Ok(bg_job) = serde_json::from_slice::<BackgroundJob>(&content) else {
-            continue;
+        let bg_job = match serde_json::from_slice::<BackgroundJob>(&content) {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::warn!(path = %state_path.display(), error = %e, "skipping job with unparseable state.json");
+                continue;
+            }
         };
 
         let job_id = entry.file_name().to_string_lossy().into_owned();
@@ -4904,12 +4912,23 @@ impl DataApi for LocalDataApi {
     }
 
     async fn stop_job(&self, job_id: &str) -> Result<(), ApiError> {
-        let short = &job_id[..job_id.len().min(8)];
+        if job_id.is_empty() {
+            return Err(ApiError::validation("job_id must not be empty"));
+        }
+        let short: String = job_id.chars().take(8).collect();
         let output = tokio::process::Command::new("claude")
-            .args(["stop", short])
+            .args(["stop", &short])
             .output()
             .await
-            .map_err(|e| ApiError::internal(format!("failed to stop job: {e}")))?;
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    ApiError::internal(
+                        "claude CLI not found on PATH — install Claude Code CLI to stop background jobs".to_owned(),
+                    )
+                } else {
+                    ApiError::internal(format!("failed to spawn claude stop: {e}"))
+                }
+            })?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(ApiError::internal(format!("stop failed: {stderr}")));

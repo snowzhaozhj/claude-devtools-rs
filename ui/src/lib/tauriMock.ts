@@ -946,11 +946,12 @@ function buildHandler(fx: Fixture) {
           return Promise.reject(new Error('jobs directory does not exist'))
         }
         if (params.get('jobs') === 'empty') {
-          return { jobs: [], badge: 'none', badgeCount: 0 }
+          return { jobs: [], badge: 'none', badgeCount: 0, jobsDirExists: true }
         }
         return {
           badge: 'red',
           badgeCount: 1,
+          jobsDirExists: true,
           jobs: [
             {
               id: 'job-abc123',
