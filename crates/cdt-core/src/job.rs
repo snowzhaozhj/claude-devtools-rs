@@ -193,29 +193,24 @@ pub fn extract_project_id_from_link_scan_path(link_scan_path: &str) -> Option<St
 
 /// 判定 job 的分组。
 ///
-/// 终态（done/failed/stopped）优先进 Completed——即使有 PR child。
-/// "Ready for review" 仅适用于非终态 + 有 PR 的 job（agent 还在跑但已产出 PR）。
-/// 对齐 `claude agents` CLI 的实际行为。
+/// 对齐 `claude agents` CLI 的 `stateBucket` 优先级：
+/// 1. Working/Idle 无 PR → Working
+/// 2. Failed/Stopped/Done 无 PR → Completed
+/// 3. Blocked → `NeedsInput`
+/// 4. Done/Idle + 有 PR → `ReadyForReview`
 pub fn classify_job_group(job: &BackgroundJob) -> JobGroup {
+    let has_pr = job
+        .children
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .any(|c| c.kind == "pr");
+
     match job.state {
-        JobState::Done | JobState::Failed | JobState::Stopped => JobGroup::Completed,
         JobState::Blocked => JobGroup::NeedsInput,
-        // Working = busy（正在执行），无条件归 Working 组
-        JobState::Working => JobGroup::Working,
-        // Idle = 进程活着但没在干活，有 PR 说明任务做完等审查
-        JobState::Idle => {
-            let has_pr = job
-                .children
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .any(|c| c.kind == "pr");
-            if has_pr {
-                JobGroup::ReadyForReview
-            } else {
-                JobGroup::Working
-            }
-        }
+        JobState::Done | JobState::Idle if has_pr => JobGroup::ReadyForReview,
+        JobState::Done | JobState::Failed | JobState::Stopped => JobGroup::Completed,
+        JobState::Working | JobState::Idle => JobGroup::Working,
     }
 }
 
@@ -331,22 +326,22 @@ mod tests {
     }
 
     #[test]
-    fn classify_done_without_pr_is_completed() {
-        let job = BackgroundJob {
-            state: JobState::Done,
-            ..Default::default()
-        };
-        assert_eq!(classify_job_group(&job), JobGroup::Completed);
-    }
-
-    #[test]
-    fn classify_done_with_pr_is_still_completed() {
+    fn classify_done_with_pr_is_ready_for_review() {
         let job = BackgroundJob {
             state: JobState::Done,
             children: Some(vec![JobChild {
                 href: "https://github.com/foo/bar/pull/1".into(),
                 kind: "pr".into(),
             }]),
+            ..Default::default()
+        };
+        assert_eq!(classify_job_group(&job), JobGroup::ReadyForReview);
+    }
+
+    #[test]
+    fn classify_done_without_pr_is_completed() {
+        let job = BackgroundJob {
+            state: JobState::Done,
             ..Default::default()
         };
         assert_eq!(classify_job_group(&job), JobGroup::Completed);
