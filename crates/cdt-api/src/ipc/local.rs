@@ -139,49 +139,6 @@ fn is_safe_path_component(s: &str) -> bool {
         && !s.contains('\0')
 }
 
-/// subagent scan TTL cache 过期时间。workflow 运行期间 `subagents/` 目录结构
-/// 不因 workflow 子文件创建而改变，5s 内复用跳过跨目录全量 scan。
-const SUBAGENT_SCAN_TTL: std::time::Duration = std::time::Duration::from_secs(5);
-const SUBAGENT_SCAN_CACHE_CAP: usize = 32;
-
-struct SubagentScanCache {
-    entries: HashMap<String, (Vec<cdt_core::SubagentCandidate>, std::time::Instant)>,
-}
-
-impl SubagentScanCache {
-    fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-        }
-    }
-
-    fn get(&self, session_id: &str) -> Option<Vec<cdt_core::SubagentCandidate>> {
-        let (cached, inserted_at) = self.entries.get(session_id)?;
-        if inserted_at.elapsed() < SUBAGENT_SCAN_TTL {
-            Some(cached.clone())
-        } else {
-            None
-        }
-    }
-
-    fn insert(&mut self, session_id: String, candidates: Vec<cdt_core::SubagentCandidate>) {
-        let now = std::time::Instant::now();
-        self.entries
-            .retain(|_, (_, ts)| now.duration_since(*ts) < SUBAGENT_SCAN_TTL);
-        if self.entries.len() >= SUBAGENT_SCAN_CACHE_CAP {
-            if let Some(oldest_key) = self
-                .entries
-                .iter()
-                .min_by_key(|(_, (_, ts))| *ts)
-                .map(|(k, _)| k.clone())
-            {
-                self.entries.remove(&oldest_key);
-            }
-        }
-        self.entries.insert(session_id, (candidates, now));
-    }
-}
-
 /// 累加一个 `TokenUsage` 的四类计数，溢出时返回 `None`（防御性，u64 总量
 /// 实际罕见溢出，但坏 JSONL 可能把 usage 字段填到极大值，避免 panic）。
 fn token_usage_total(u: &cdt_core::TokenUsage) -> Option<u64> {
@@ -623,7 +580,6 @@ pub struct LocalDataApi {
     /// §"`get_tool_output` 与 `get_image_asset` 走 parsed-message LRU 缓存"。
     parsed_msg_cache: Arc<std::sync::Mutex<ParsedMessageCache>>,
     workflow_manifest_cache: Arc<std::sync::Mutex<super::workflow_manifest::WorkflowManifestCache>>,
-    subagent_scan_cache: Arc<std::sync::Mutex<SubagentScanCache>>,
     /// 当前 projects root；随 `general.claudeRootPath` 运行时重配。
     projects_dir: Mutex<PathBuf>,
     /// `ProjectScanner` 共享的 head-read `Semaphore`（容量 64）。所有动态
@@ -1738,7 +1694,6 @@ impl LocalDataApi {
             workflow_manifest_cache: Arc::new(std::sync::Mutex::new(
                 super::workflow_manifest::WorkflowManifestCache::new(),
             )),
-            subagent_scan_cache: Arc::new(std::sync::Mutex::new(SubagentScanCache::new())),
             projects_dir: Mutex::new(projects_dir),
             // 共享 head-read semaphore 容量与 `cdt_discover::ProjectScanner`
             // 默认 `FILE_READ_CONCURRENCY=64` 等价（design D4）。硬编码 64 避免
@@ -1859,7 +1814,6 @@ impl LocalDataApi {
             workflow_manifest_cache: Arc::new(std::sync::Mutex::new(
                 super::workflow_manifest::WorkflowManifestCache::new(),
             )),
-            subagent_scan_cache: Arc::new(std::sync::Mutex::new(SubagentScanCache::new())),
             projects_dir: Mutex::new(projects_dir),
             // 共享 head-read semaphore 容量与 `cdt_discover::ProjectScanner`
             // 默认 `FILE_READ_CONCURRENCY=64` 等价（design D4）。硬编码 64 避免
@@ -3617,32 +3571,16 @@ impl DataApi for LocalDataApi {
         let parse_ms = t_parse.elapsed().as_millis();
         let message_count = messages.len();
 
-        // Step 3: scan subagents (TTL cache: workflow 运行期间 subagents/ 目录结构
-        // 不变——新文件在更深层 workflows/<run_id>/，5s 内复用避免 276 次 read_dir)
+        // Step 3: scan subagents
         let t_scan = std::time::Instant::now();
-        let candidates = {
-            let cache_hit = self
-                .subagent_scan_cache
-                .lock()
-                .ok()
-                .and_then(|guard| guard.get(session_id));
-            if let Some(cached) = cache_hit {
-                cached
-            } else {
-                let result = scan_subagent_candidates_for_detail(
-                    &*located.fs,
-                    &located.projects_dir,
-                    &located.project_dir,
-                    session_id,
-                    &located.policy,
-                )
-                .await;
-                if let Ok(mut guard) = self.subagent_scan_cache.lock() {
-                    guard.insert(session_id.to_owned(), result.clone());
-                }
-                result
-            }
-        };
+        let candidates = scan_subagent_candidates_for_detail(
+            &*located.fs,
+            &located.projects_dir,
+            &located.project_dir,
+            session_id,
+            &located.policy,
+        )
+        .await;
         let scan_ms = t_scan.elapsed().as_millis();
         let candidate_count = candidates.len();
 
