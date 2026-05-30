@@ -107,12 +107,9 @@
     background: var(--color-surface-raised);
   }
 
-  .job-row.terminal {
-    opacity: 0.55;
-  }
-
-  .job-row.terminal:hover {
-    opacity: 0.9;
+  .job-row.terminal .job-name {
+    color: var(--color-text-muted);
+    font-weight: 400;
   }
 
   .row-line-1 {
