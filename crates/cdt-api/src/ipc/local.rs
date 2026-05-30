@@ -3750,6 +3750,50 @@ impl DataApi for LocalDataApi {
         Ok(chunks)
     }
 
+    async fn get_workflow_agent_trace(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        agent_id: &str,
+    ) -> Result<Vec<cdt_core::Chunk>, ApiError> {
+        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        let entries = fs
+            .read_dir(&projects_dir)
+            .await
+            .map_err(|e| ApiError::internal(format!("read projects_dir: {e}")))?;
+        let mut target_path: Option<std::path::PathBuf> = None;
+        for entry in entries {
+            if !entry.kind.is_dir() {
+                continue;
+            }
+            let project_dir = projects_dir.join(&entry.name);
+            let session_dir = project_dir.join(session_id);
+            if fs.exists(&session_dir).await {
+                let agent_jsonl = session_dir
+                    .join("subagents")
+                    .join("workflows")
+                    .join(run_id)
+                    .join(format!("agent-{agent_id}.jsonl"));
+                if fs.exists(&agent_jsonl).await {
+                    target_path = Some(agent_jsonl);
+                    break;
+                }
+            }
+        }
+        let Some(path) = target_path else {
+            return Ok(Vec::new());
+        };
+        let messages = cdt_parse::parse_file_via_fs(&*fs, &path)
+            .await
+            .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
+        let mut msgs = messages;
+        for m in &mut msgs {
+            m.is_sidechain = false;
+        }
+        let chunks = cdt_analyze::build_chunks(&msgs);
+        Ok(chunks)
+    }
+
     async fn get_image_asset(
         &self,
         root_session_id: &str,

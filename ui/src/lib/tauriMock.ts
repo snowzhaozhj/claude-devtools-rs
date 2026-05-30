@@ -33,6 +33,7 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'add_memory',
   'delete_memory',
   'get_subagent_trace',
+  'get_workflow_agent_trace',
   'get_image_asset',
   'get_tool_output',
   'search_sessions',
@@ -496,6 +497,9 @@ function buildHandler(fx: Fixture) {
       }
 
       case 'get_subagent_trace':
+        return []
+
+      case 'get_workflow_agent_trace':
         return []
 
       case 'get_image_asset':

@@ -155,6 +155,21 @@ async fn get_subagent_trace(
 }
 
 #[tauri::command]
+async fn get_workflow_agent_trace(
+    data: State<'_, AppData>,
+    session_id: String,
+    run_id: String,
+    agent_id: String,
+) -> Result<serde_json::Value, String> {
+    let chunks = data
+        .api
+        .get_workflow_agent_trace(&session_id, &run_id, &agent_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&chunks).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_image_asset(
     data: State<'_, AppData>,
     root_session_id: String,
@@ -1341,6 +1356,7 @@ pub fn run() {
             add_memory,
             delete_memory,
             get_subagent_trace,
+            get_workflow_agent_trace,
             get_image_asset,
             get_tool_output,
             search_sessions,
