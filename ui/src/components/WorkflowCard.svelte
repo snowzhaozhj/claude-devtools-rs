@@ -18,6 +18,7 @@
   let expandedAgentId = $state<string | null>(null);
   let agentTrace = $state<Chunk[] | null>(null);
   let isLoadingAgentTrace = $state(false);
+  const agentDisplayItems = $derived(agentTrace ? buildDisplayItemsFromChunks(agentTrace) : []);
 
   const phases = $derived(workflow.phases ?? []);
   const agents = $derived(workflow.agents ?? []);
@@ -91,7 +92,9 @@
         agentTrace = null;
       }
     } finally {
-      isLoadingAgentTrace = false;
+      if (expandedAgentId === agent.sessionId) {
+        isLoadingAgentTrace = false;
+      }
     }
   }
 </script>
@@ -151,8 +154,8 @@
       <div class="wf-agent-trace">
         {#if isLoadingAgentTrace}
           <div class="wf-trace-loading">Loading trace…</div>
-        {:else if agentTrace && agentTrace.length > 0}
-          <ExecutionTrace items={buildDisplayItemsFromChunks(agentTrace)} rootSessionId={sessionId} />
+        {:else if agentDisplayItems.length > 0}
+          <ExecutionTrace items={agentDisplayItems} rootSessionId={sessionId} />
         {:else}
           <div class="wf-trace-empty">No trace data</div>
         {/if}
