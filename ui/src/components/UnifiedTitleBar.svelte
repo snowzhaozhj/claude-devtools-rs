@@ -104,8 +104,6 @@
           <span class="badge badge-red" aria-label="有失败的后台任务"></span>
         {:else if jobsBadge === "amber"}
           <span class="badge badge-amber" aria-label="有需要输入的后台任务"></span>
-        {:else if jobsBadge === "green"}
-          <span class="badge badge-green" aria-label="有待审阅的后台任务"></span>
         {/if}
       </button>
     {/if}

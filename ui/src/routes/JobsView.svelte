@@ -14,12 +14,7 @@
   const loading = $derived(getJobsLoading());
   const error = $derived(getJobsError());
   const grouped = $derived(groupJobs(jobs));
-
-  let selectedJobId: string | null = $state(null);
-
-  function handleSelectJob(jobId: string) {
-    selectedJobId = selectedJobId === jobId ? null : jobId;
-  }
+  const showGroupHeaders = $derived(grouped.length > 1);
 </script>
 
 <div class="jobs-view">
@@ -40,9 +35,7 @@
   </div>
 
   {#if error}
-    <div class="jobs-error">
-      <span class="error-text">加载失败: {error}</span>
-    </div>
+    <div class="jobs-error">{error}</div>
   {:else if !jobsDirExists}
     <div class="jobs-empty">
       <span class="empty-text">No background jobs</span>
@@ -56,16 +49,14 @@
     <div class="jobs-list">
       {#each grouped as groupData (groupData.group)}
         <div class="job-group">
-          <div class="group-header">
-            <span class="group-label">{groupData.label}</span>
-            <span class="group-count">{groupData.jobs.length}</span>
-          </div>
+          {#if showGroupHeaders}
+            <div class="group-header">
+              <span class="group-label">{groupData.label}</span>
+              <span class="group-count">{groupData.jobs.length}</span>
+            </div>
+          {/if}
           {#each groupData.jobs as job (job.id)}
-            <JobRow
-              {job}
-              selected={selectedJobId === job.id}
-              onSelect={() => handleSelectJob(job.id)}
-            />
+            <JobRow {job} />
           {/each}
         </div>
       {/each}
@@ -79,7 +70,7 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
-    padding: 24px 20px;
+    padding: 20px 16px;
     gap: 16px;
   }
 
@@ -88,6 +79,7 @@
     align-items: center;
     justify-content: space-between;
     flex-shrink: 0;
+    padding: 0 4px;
   }
 
   .jobs-title {
@@ -109,7 +101,7 @@
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    transition: background 0.15s ease-out, color 0.15s ease-out;
+    transition: background 0.12s ease-out, color 0.12s ease-out;
   }
 
   .refresh-btn:hover {
@@ -142,7 +134,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 6px;
     padding: 48px 0;
   }
 
@@ -166,15 +158,11 @@
   }
 
   .jobs-error {
-    padding: 12px 14px;
+    padding: 10px 12px;
     border-radius: 6px;
-    background: color-mix(in srgb, var(--color-danger) 8%, transparent);
-    border: 1px solid color-mix(in srgb, var(--color-danger) 20%, transparent);
-  }
-
-  .error-text {
     font-size: 12px;
     color: var(--color-danger);
+    background: color-mix(in srgb, var(--color-danger) 6%, transparent);
   }
 
   .jobs-list {
@@ -189,14 +177,14 @@
   }
 
   .job-group + .job-group {
-    margin-top: 20px;
+    margin-top: 16px;
   }
 
   .group-header {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 0 4px 8px;
+    padding: 0 16px 6px;
   }
 
   .group-label {

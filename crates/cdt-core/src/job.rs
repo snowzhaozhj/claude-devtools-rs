@@ -215,14 +215,6 @@ pub fn compute_badge(jobs: &[JobSummary]) -> (BadgeColor, usize) {
         return (BadgeColor::Amber, blocked_count);
     }
 
-    let review_count = jobs
-        .iter()
-        .filter(|j| j.group == JobGroup::ReadyForReview)
-        .count();
-    if review_count > 0 {
-        return (BadgeColor::Green, review_count);
-    }
-
     (BadgeColor::None, 0)
 }
 
@@ -351,11 +343,11 @@ mod tests {
     }
 
     #[test]
-    fn badge_green_when_has_pr_no_failed_no_blocked() {
+    fn badge_none_when_only_working_or_review() {
         let jobs = vec![make_summary(JobState::Working, JobGroup::ReadyForReview)];
         let (color, count) = compute_badge(&jobs);
-        assert_eq!(color, BadgeColor::Green);
-        assert_eq!(count, 1);
+        assert_eq!(color, BadgeColor::None);
+        assert_eq!(count, 0);
     }
 
     #[test]

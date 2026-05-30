@@ -105,17 +105,14 @@ export function groupJobs(jobsList: JobSummary[]): JobGroupData[] {
 export function computeBadge(jobsList: JobSummary[]): BadgePriority {
   let hasFailed = false;
   let hasBlocked = false;
-  let hasReady = false;
 
   for (const job of jobsList) {
     if (job.state === "failed") hasFailed = true;
     if (job.state === "blocked") hasBlocked = true;
-    if (job.children.some((c) => c.kind === "pr")) hasReady = true;
   }
 
   if (hasFailed) return "red";
   if (hasBlocked) return "amber";
-  if (hasReady) return "green";
   return "none";
 }
 
