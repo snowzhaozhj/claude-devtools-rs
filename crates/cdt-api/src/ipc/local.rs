@@ -131,7 +131,12 @@ const COMPACT_DERIVED_ENABLED: bool = true;
 const CROSS_PROJECT_SUBAGENT_SCAN: bool = true;
 
 fn is_safe_path_component(s: &str) -> bool {
-    !s.is_empty() && !s.contains('/') && !s.contains('\\') && !s.contains("..")
+    !s.is_empty()
+        && s != "."
+        && !s.contains('/')
+        && !s.contains('\\')
+        && !s.contains("..")
+        && !s.contains('\0')
 }
 
 /// 累加一个 `TokenUsage` 的四类计数，溢出时返回 `None`（防御性，u64 总量
@@ -3769,10 +3774,14 @@ impl DataApi for LocalDataApi {
             ));
         }
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
-        let entries = fs
-            .read_dir(&projects_dir)
-            .await
-            .map_err(|e| ApiError::internal(format!("read projects_dir: {e}")))?;
+        let entries = fs.read_dir(&projects_dir).await.map_err(|e| {
+            tracing::error!(
+                target: "cdt_api::workflow",
+                error = %e,
+                "failed to read projects_dir"
+            );
+            ApiError::internal("failed to read projects directory")
+        })?;
         let mut target_path: Option<std::path::PathBuf> = None;
         for entry in entries {
             if !entry.kind.is_dir() {
@@ -3781,24 +3790,30 @@ impl DataApi for LocalDataApi {
             let project_dir = projects_dir.join(&entry.name);
             let session_dir = project_dir.join(parent_session_id);
             if fs.exists(&session_dir).await {
-                target_path = Some(
-                    session_dir
-                        .join("subagents")
-                        .join("workflows")
-                        .join(run_id)
-                        .join(format!("agent-{agent_id}.jsonl")),
-                );
+                let candidate = session_dir
+                    .join("subagents")
+                    .join("workflows")
+                    .join(run_id)
+                    .join(format!("agent-{agent_id}.jsonl"));
+                if fs.exists(&candidate).await {
+                    target_path = Some(candidate);
+                }
                 break;
             }
         }
         let Some(path) = target_path else {
+            tracing::debug!(
+                target: "cdt_api::workflow",
+                parent_session_id,
+                run_id,
+                agent_id,
+                "workflow agent trace not found"
+            );
             return Ok(Vec::new());
         };
-        let messages = match cdt_parse::parse_file_via_fs(&*fs, &path).await {
-            Ok(msgs) => msgs,
-            Err(e) if e.to_string().contains("No such file") => return Ok(Vec::new()),
-            Err(e) => return Err(ApiError::internal(format!("parse error: {e}"))),
-        };
+        let messages = cdt_parse::parse_file_via_fs(&*fs, &path)
+            .await
+            .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
         // Workflow agent trace 从查看者视角是主对话，与 get_subagent_trace 一致
         let mut msgs = messages;
         for m in &mut msgs {
