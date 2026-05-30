@@ -1,0 +1,204 @@
+# Changelog
+
+All notable changes to this project are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Each release ships prebuilt binaries (macOS / Linux / Windows) on the
+[Releases](https://github.com/snowzhaozhj/claude-devtools-rs/releases) page.
+
+## [Unreleased]
+
+## [0.5.14] — 2026-05-28
+
+### Added
+- `cdt self-update` command to upgrade the CLI in place.
+
+### Fixed
+- Copy button now pins to the right side of Bash command blocks.
+- Suppressed perf-tracing noise in release builds of the CLI.
+
+## [0.5.13] — 2026-05-28
+
+### Added
+- **CLI (`cdt`)**: standalone binary distribution with a one-line install script.
+- **CLI**: `cdt setup skills` installs session-aware Claude Code skill templates.
+- **MCP**: `cdt mcp serve` exposes a stdio MCP server (built on the `rmcp` SDK)
+  so Claude Code can query its own past sessions.
+- **CLI**: `session summary`, cost estimation, and `stats` commands.
+- **CLI**: `session detail` / `errors` / `search` subcommands.
+- **CLI**: `projects` / `sessions` listing via a clap subcommand structure.
+- CI benchmark trend tracking and divan microbenchmarks for the parse/analyze/discover crates.
+
+## [0.5.12] — 2026-05-27
+
+### Added
+- Copy-to-clipboard buttons on tool viewers and code blocks.
+- Optimistic-concurrency `_version` field exposed to the config frontend loop.
+
+### Fixed
+- Selection highlight no longer bleeds into the `OutputBlock` border.
+- SSH failure paths surface a proper SSH error instead of a generic internal error.
+- `agent_configs` file-extension matching is now case-insensitive.
+
+## [0.5.11] — 2026-05-27
+
+### Added
+- Dashboard activity time stays fresh on cache-hit paths via an mtime overlay.
+
+### Performance
+- Second-level fingerprint short-circuit for chunk building plus adaptive
+  file-change debounce — large, actively-written sessions re-render far less.
+- `get_session_detail` fingerprint short-circuit skips redundant recomputation.
+- `worktree_grouper` runs canonicalization off the tokio worker threads.
+- `tabSessionCache` gained LRU eviction to lower WebView memory.
+
+### Fixed
+- Strip ANSI escapes before rendering tool output (no more raw colour bytes
+  leaking from `nextest` / `cargo` into the desktop app).
+- System messages align to the AI thread rail at a 27px baseline.
+
+## [0.5.10] — 2026-05-25
+
+### Added
+- File-change events carry `session_list_changed` plus an SSE-lagged fallback.
+
+### Performance
+- Typed `SessionDetail` IPC payload and five high-frequency data-API methods.
+
+### Fixed
+- Removed the `content-visibility` size estimate that caused Session Detail
+  scroll jitter.
+- `agent_configs` discovery goes through the shared home-dir decoder and async fs.
+
+## [0.5.9] — 2026-05-24
+
+### Added
+- **Right-click context menu (Phase 2)**: wired into five surfaces with shared
+  infrastructure and an overall UI polish pass.
+- SSH transport keepalive prevents idle channels from being closed.
+
+### Performance
+- Unified the tokio runtime and tuned the blocking-pool budget to cut idle CPU.
+- Merged cache invalidators to reduce the number of broadcast subscribers.
+- Notification unread count moved to a push event; the 30s poll became a 5min
+  safety-net (stops the WebView from being kept awake).
+- `TelemetryLayer` gained a `WARN` level filter and call-site counter caching.
+
+### Fixed
+- Removed the sidebar metadata-pending shimmer.
+- Cross-platform keyboard bindings normalised to literal `mod` with a Windows-key guard.
+- "Jump to latest" smooth-scrolls then re-arms the bottom-pin fallback.
+- SFTP failure detection split into three states; the scanner fails fast on a dead channel.
+
+## [0.5.8] — 2026-05-24
+
+### Added
+- **Centralised keyboard-shortcut registry** with a Settings key-recording
+  widget, persisted through `cdt-config`.
+- **Right-click context menu (Phase 1)**.
+- Session Detail top-bar `[⋯]` meta-action menu replaces the long CWD string.
+
+### Performance
+- `ProjectScanCache` invalidates by event semantics rather than wholesale.
+- CI test runner switched to `cargo-nextest` (~6× wall-time speedup).
+
+### Fixed
+- Session title now derives from a single backend source shared with the sidebar.
+- Preserve scroll position when switching tabs in Session Detail.
+- AI message tool summaries no longer truncate when many tool types are present.
+
+## [0.5.7] — 2026-05-23
+
+### Added
+- **Browser Access / server mode**: opt-in local HTTP server (`127.0.0.1`) that
+  serves the same UI in a browser over HTTP/SSE, with a CORS-restricted
+  contract and static asset serving.
+- **SSH remote browsing**: inspect sessions on a remote machine, including
+  remote project-memory CRUD.
+- **Telemetry Signal Bus (Phase 1)**: counters / histograms / events with an
+  IPC snapshot and a Diagnostics tab.
+- Windows WSL distro one-click scan with a dedicated modal.
+- Sidebar worktree filter chip cluster; "jump to latest message" floating button.
+
+### Performance
+- SFTP message-id pipeline cuts single-file remote reads ~14× (8s → 600ms).
+- SSH `open_read` K-worker prefetch streaming drops peak RSS from ~5MB to ~1MB.
+- `ProjectScanner` memoizes scan results across IPC calls.
+- Unified `FileSystemProvider` abstraction; signature-keyed metadata / parse caches.
+
+### Fixed
+- HTTP server mode no longer reserves space for macOS traffic-light buttons.
+- Startup panic from double logger initialisation removed.
+- Numerous SSH reconnect / deadlock / SSE-emit fixes.
+
+## [0.5.6] — 2026-05-18
+
+### Added
+- Release automation: `just release-bump` plus a workflow that auto-verifies and publishes.
+
+### Fixed
+- Edit tool now shows the error message when an edit fails.
+
+## [0.5.5] — 2026-05-18
+
+### Fixed
+- Removed the blank band at the top of the project workspace.
+
+## [0.5.4] — 2026-05-18
+
+### Added
+- Dashboard reworked into a project workspace (list / grid + sorting + inline metadata).
+
+### Fixed
+- Dashboard sort control no longer overlaps; persistent sidebar selection
+  styling de-blued; search box auto-capitalisation disabled.
+
+## [0.5.3] — 2026-05-17
+
+### Fixed
+- Prevent long markdown from overflowing.
+- Avoid blank expanded tool details after a refresh; restore diff syntax highlighting.
+- Stabilise compact-block layout; reduce session-header live noise.
+- Unified title bar + status pill replace the old banner chrome.
+
+## [0.5.2] — 2026-05-17
+
+### Added
+- Session titles use the first user-visible sentence (slash commands with args
+  become the title; interrupted / task-output noise filtered).
+- Configurable time format, defaulting to 24-hour.
+- Custom `Dropdown` component replaces native `<select>` (the popover no longer
+  hides the current value on macOS WebView).
+- Context panel redesign.
+
+## [0.5.1] — 2026-05-17
+
+### Changed
+- Frontend package manager migrated from npm to pnpm.
+- Added stable chunk IDs and support for a custom Claude root directory.
+
+## [0.5.0] — 2026-05-16
+
+First tagged release in the 0.5 line — the Rust + Tauri port reaches feature
+parity for core session viewing: project discovery, session list with live
+refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
+global search, desktop notifications, and the multi-segment IPC payload
+slimming that keeps thousand-message sessions fast to open.
+
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.14...HEAD
+[0.5.14]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.13...v0.5.14
+[0.5.13]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.12...v0.5.13
+[0.5.12]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.11...v0.5.12
+[0.5.11]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.10...v0.5.11
+[0.5.10]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.9...v0.5.10
+[0.5.9]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.8...v0.5.9
+[0.5.8]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.7...v0.5.8
+[0.5.7]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.6...v0.5.7
+[0.5.6]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.5...v0.5.6
+[0.5.5]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.4...v0.5.5
+[0.5.4]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.3...v0.5.4
+[0.5.3]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/snowzhaozhj/claude-devtools-rs/releases/tag/v0.5.0
