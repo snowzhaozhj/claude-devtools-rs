@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: Render UserMessage semantic step in SessionDetail
+### Requirement: SemanticStep 渲染
 
 前端 SHALL 在 SessionDetail 的 semantic steps 遍历中，对 `kind === "user_message"` 的 step 渲染一个 BaseItem disclosure 行：
 - `svgIcon` = `MESSAGE_SQUARE`（与 Output 行同 icon）
