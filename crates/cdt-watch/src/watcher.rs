@@ -573,7 +573,10 @@ fn try_coalesce_workflow_path(path: &Path, projects_dir: &Path) -> Option<PathBu
         && components[2].as_os_str().eq_ignore_ascii_case("subagents")
         && components[3].as_os_str().eq_ignore_ascii_case("workflows")
     {
-        if components[5].as_os_str().eq_ignore_ascii_case("journal.jsonl") {
+        if components[5]
+            .as_os_str()
+            .eq_ignore_ascii_case("journal.jsonl")
+        {
             return None; // already the canonical key
         }
         return Some(path.parent()?.join("journal.jsonl"));
