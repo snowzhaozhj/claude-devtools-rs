@@ -1,16 +1,24 @@
 <script lang="ts">
-  import type { WorkflowItem, WorkflowAgent } from "../lib/api";
+  import type { WorkflowItem, WorkflowAgent, Chunk } from "../lib/api";
+  import { getWorkflowAgentTrace } from "../lib/api";
+  import { buildDisplayItemsFromChunks } from "../lib/displayItemBuilder";
   import { formatDuration } from "../lib/formatters";
   import { CHEVRON_RIGHT } from "../lib/icons";
+  import ExecutionTrace from "./ExecutionTrace.svelte";
 
   interface Props {
     workflow: WorkflowItem;
+    sessionId: string;
   }
 
-  let { workflow }: Props = $props();
+  let { workflow, sessionId }: Props = $props();
 
   let isExpanded = $state(false);
   let isScriptExpanded = $state(false);
+  let expandedAgentId = $state<string | null>(null);
+  let agentTrace = $state<Chunk[] | null>(null);
+  let isLoadingAgentTrace = $state(false);
+  const agentDisplayItems = $derived(agentTrace ? buildDisplayItemsFromChunks(agentTrace) : []);
 
   const phases = $derived(workflow.phases ?? []);
   const agents = $derived(workflow.agents ?? []);
@@ -63,6 +71,32 @@
     e.stopPropagation();
     isScriptExpanded = !isScriptExpanded;
   }
+
+  async function toggleAgentDrilldown(agent: WorkflowAgent) {
+    if (!agent.sessionId) return;
+    if (expandedAgentId === agent.sessionId) {
+      expandedAgentId = null;
+      agentTrace = null;
+      return;
+    }
+    expandedAgentId = agent.sessionId;
+    agentTrace = null;
+    isLoadingAgentTrace = true;
+    try {
+      const chunks = await getWorkflowAgentTrace(sessionId, workflow.runId, agent.sessionId);
+      if (expandedAgentId === agent.sessionId) {
+        agentTrace = chunks;
+      }
+    } catch {
+      if (expandedAgentId === agent.sessionId) {
+        agentTrace = null;
+      }
+    } finally {
+      if (expandedAgentId === agent.sessionId) {
+        isLoadingAgentTrace = false;
+      }
+    }
+  }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -101,7 +135,9 @@
   <!-- index 由调用点传入（运行态 = 全局 agents 顺序；完成态 = phase 内序号，label 恒
        非空不触发 fallback）。避免在 each 内 agents.indexOf() 造成 O(n²) 渲染。 -->
   {#snippet agentChip(agent: WorkflowAgent, index: number)}
-    <div class="wf-chip" class:wf-chip-failed={agent.state === "failed"}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="wf-chip" class:wf-chip-failed={agent.state === "failed"} class:wf-chip-clickable={!!agent.sessionId} class:wf-chip-active={expandedAgentId === agent.sessionId} onclick={() => toggleAgentDrilldown(agent)}>
       <span class="wf-chip-dot" class:wf-dot-done={agent.state === "completed"} class:wf-dot-failed={agent.state === "failed"} class:wf-dot-running={agent.state === "running"} class:wf-dot-queued={agent.state === "pending"}></span>
       <span class="wf-chip-label">{agent.label || `Agent ${index + 1}`}</span>
       {#if agent.tokens}
@@ -110,7 +146,21 @@
       {#if agent.durationMs}
         <span class="wf-chip-meta">{formatDuration(agent.durationMs)}</span>
       {/if}
+      {#if agent.sessionId}
+        <svg class="wf-chip-expand" class:wf-chip-expand-open={expandedAgentId === agent.sessionId} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
+      {/if}
     </div>
+    {#if expandedAgentId === agent.sessionId}
+      <div class="wf-agent-trace">
+        {#if isLoadingAgentTrace}
+          <div class="wf-trace-loading">Loading trace…</div>
+        {:else if agentDisplayItems.length > 0}
+          <ExecutionTrace items={agentDisplayItems} rootSessionId={sessionId} />
+        {:else}
+          <div class="wf-trace-empty">No trace data</div>
+        {/if}
+      </div>
+    {/if}
   {/snippet}
 
   {#if isExpanded}
@@ -365,6 +415,18 @@
     background: transparent;
   }
 
+  .wf-chip-clickable {
+    cursor: pointer;
+  }
+  .wf-chip-clickable:hover {
+    border-color: var(--color-accent-blue);
+    background: color-mix(in oklch, var(--color-accent-blue) 5%, var(--card-header-bg));
+  }
+  .wf-chip-active {
+    border-color: var(--color-accent-blue);
+    background: color-mix(in oklch, var(--color-accent-blue) 8%, var(--card-header-bg));
+  }
+
   .wf-chip-label {
     color: var(--card-text-light);
     font-family: var(--font-mono);
@@ -377,6 +439,37 @@
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+
+  .wf-chip-expand {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    color: var(--card-icon-muted);
+    margin-left: auto;
+    transition: transform 0.15s ease;
+  }
+  .wf-chip-expand-open {
+    transform: rotate(90deg);
+  }
+
+  .wf-agent-trace {
+    width: 100%;
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm);
+    background: var(--card-bg);
+    padding: 8px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .wf-trace-loading, .wf-trace-empty {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    font-style: italic;
+    padding: 8px 4px;
   }
 
   .wf-script-toggle {

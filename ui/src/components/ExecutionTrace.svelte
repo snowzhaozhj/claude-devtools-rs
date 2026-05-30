@@ -128,7 +128,7 @@
       {@const exec = item.execution}
       {@const matchedWorkflow = exec.workflowRunId ? workflowMap.get(exec.workflowRunId) : undefined}
       {#if matchedWorkflow}
-        <WorkflowCard workflow={matchedWorkflow} />
+        <WorkflowCard workflow={matchedWorkflow} sessionId={sessionId ?? rootSessionId} />
       {:else}
         {@const key = `tool-${exec.toolUseId}`}
         {@const eff = effectiveExec(exec)}
