@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780222983084,
+  "lastUpdate": 1780229272506,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -8568,6 +8568,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12920,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "742159192448e8b6672c856f6e76c99a761f64c8",
+          "message": "perf: workflow lazy-loading — skeleton + on-demand detail (#443)\n\n* perf: workflow lazy-loading — skeleton in session detail, full detail on demand (#440)\n\nReplace resolve_workflow_items in get_session_detail with lightweight skeleton\ngeneration (one stat per workflow for status, zero journal/script reads). Full\nworkflow detail (agents, phases, tokens) is now fetched on demand via the new\nget_workflow_detail IPC when the WorkflowCard is expanded.\n\nBackend:\n- resolve_workflow_skeletons: stat manifest → status (completed/running), extract\n  name from script path, return WorkflowItem with detail_omitted=true\n- New get_workflow_detail Tauri command + HTTP route\n  GET /api/sessions/{session_id}/workflows/{run_id}\n- resolve_single_detail: public wrapper around existing resolve_single\n- WorkflowItem gains detail_omitted: bool field (serde skip_serializing_if false)\n\nFrontend:\n- WorkflowCard: lazy-load full detail on expand, poll every 3s for running\n  workflows, stop on collapse/terminal state/unmount\n- computeChunksFingerprint includes workflow skeleton status\n- getWorkflowDetail API function + transport HTTP mapping + mock handler\n\nPerformance: workflow running period session detail refresh drops from ~5-20ms/wf\n(read+parse journal+script) to ~0.1ms/wf (single stat). CPU during 7-agent\nparallel workflow execution drops from sustained 32%+ to normal idle levels.\n\nCloses #440\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix: completed workflows use full resolve from cache, not skeleton\n\nCompleted workflow manifests are immutable + cached by FileSignature,\nso full resolve is near-zero cost. Only running workflows need skeleton\nto avoid high-frequency journal reads.\n\nThis fixes:\n- Collapsed completed workflows showing \"0 phases · 0 agents\"\n- Phase/agent counts jumping when expanding\n- WorkflowCard showing blank on expand for completed workflows\n\nAlso hides phase/agent summary for skeleton items (detail_omitted=true)\nsince they have no meaningful counts to display.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix: workflow agent trace lookup continues searching across project dirs\n\nWhen a session exists in multiple project directories (e.g., main project\n+ worktree project), the agent JSONL files may only exist in one of them.\n\nPreviously, get_workflow_agent_trace broke out of the search loop after\nfinding ANY project with the session_dir, even if the agent file wasn't\nthere. Similarly, get_workflow_detail stopped at the first project with\na session dir even if workflow files were in a different project.\n\nFix: only break when the target file/directory is actually found.\nThis fixes \"No trace data\" for sessions visible from multiple projects.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix: use projectId for direct path lookup in workflow IPC commands\n\nget_workflow_detail and get_workflow_agent_trace now accept projectId\nand use it to construct the path directly (O(1)) instead of scanning\nall project directories (O(N) exists calls, problematic over SSH).\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* refactor: remove skeleton/lazy-loading, keep poll + projectId fix\n\nThe skeleton approach didn't address the actual hot path (fingerprint\nshort-circuits before workflow resolution runs). Revert to original\nresolve_workflow_items for session detail.\n\nWhat remains (the actual bug fixes):\n- get_workflow_detail IPC + 3s poll for expanded running WorkflowCards\n  (bypasses fingerprint, fixes \"agent status not updating\")\n- projectId direct path lookup (O(1), fixes \"No trace data\")\n\nRemoved:\n- resolve_workflow_skeletons (replaced by restored resolve_workflow_items)\n- detail_omitted field on WorkflowItem\n- computeChunksFingerprint workflow status (unnecessary, chunks change\n  naturally on workflow completion)\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* style: cargo fmt\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-05-31T20:04:15+08:00",
+          "tree_id": "94cbf094b74ace2e82c7334d042f997d59167437",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/742159192448e8b6672c856f6e76c99a761f64c8"
+        },
+        "date": 1780229271792,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 114.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1131,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 5596,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.841,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.422,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 47.39,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 35.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 307,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1298,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3203,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2915,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 39700,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.295,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 62.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 633.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6335,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 195.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1953,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 51.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 524.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5266,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 128.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1300,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.691,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 76.66,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8627,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 986.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8833,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 912.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 49.33,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 524.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 103.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 1041,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 10440,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 188.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1329,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12740,
             "unit": "µs"
           }
         ]
