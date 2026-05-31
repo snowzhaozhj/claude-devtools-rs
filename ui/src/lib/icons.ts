@@ -9,6 +9,9 @@ export const BRAIN =
 export const MESSAGE_SQUARE =
   "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z";
 
+export const USER_ICON =
+  "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z";
+
 export const TERMINAL =
   "M4 17l6-6-6-6M12 19h8";
 

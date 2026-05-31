@@ -225,6 +225,9 @@ const aiChunk: AIChunk = {
   },
   semanticSteps: [
     { kind: 'text', text: '我来帮你检查 LocalDataApi 的字段命名。', timestamp: ts(0.2) },
+    { kind: 'tool_execution', toolUseId: 'tool-pre-user', toolName: 'Read', timestamp: ts(0.21) },
+    { kind: 'user_message', uuid: 'q-demo-1', text: '等一下，先看看 IPC 那边有没有 breaking change', timestamp: ts(0.22) },
+    { kind: 'user_message', uuid: 'q-demo-2', text: '另外顺便帮我跑一下 cargo test 看下有没有回归，这个改动可能影响到 session-parsing 那边的逻辑', timestamp: ts(0.23) },
     {
       kind: 'tool_execution',
       toolUseId: 'tu-active-1',
@@ -262,6 +265,18 @@ const aiChunk: AIChunk = {
     },
   ],
   toolExecutions: [
+    {
+      toolUseId: 'tool-pre-user',
+      toolName: 'Read',
+      input: { file_path: 'crates/cdt-core/src/chunk.rs' },
+      output: { kind: 'text', text: 'pub enum SemanticStep { ... }' },
+      isError: false,
+      startTs: ts(0.21),
+      endTs: ts(0.215),
+      sourceAssistantUuid: 'a-active-1',
+      outputOmitted: false,
+      outputBytes: 30,
+    },
     {
       toolUseId: 'tu-active-1',
       toolName: 'Grep',
