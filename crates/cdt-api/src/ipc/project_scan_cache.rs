@@ -157,10 +157,6 @@ impl ProjectScanCache {
     }
 
     /// 当前 `invalidation_generation` 的 read-only snapshot。
-    /// 仅用于测试断言；生产路径走 [`Self::begin_scan`] /
-    /// [`Self::finish_scan_with_insert`] 自动管理。
-    #[cfg(any(test, feature = "test-utils"))]
-    #[allow(dead_code)]
     pub fn invalidation_generation(&self) -> u64 {
         self.invalidation_generation
     }
