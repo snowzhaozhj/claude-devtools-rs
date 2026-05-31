@@ -452,6 +452,7 @@ dependencies = [
  "filetime",
  "futures",
  "json5",
+ "lru",
  "percent-encoding",
  "regex",
  "serde",

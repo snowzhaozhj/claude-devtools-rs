@@ -15,7 +15,7 @@
 //! 容量上限 50（vs metadata 2000）—— 单 entry 是 `Arc<Vec<ParsedMessage>>`，
 //! 量级千倍以上；详 change `parsed-message-cache-context-prefix` design D3。
 
-use std::collections::{HashMap, VecDeque};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -46,9 +46,7 @@ type ParsedMessageCacheKey = (ContextId, PathBuf);
 /// （change `parsed-message-cache-context-prefix` PR-C）。
 #[derive(Debug)]
 pub struct ParsedMessageCache {
-    map: HashMap<ParsedMessageCacheKey, ParsedMessageEntry>,
-    order: VecDeque<ParsedMessageCacheKey>,
-    capacity: usize,
+    cache: lru::LruCache<ParsedMessageCacheKey, ParsedMessageEntry>,
 }
 
 impl Default for ParsedMessageCache {
@@ -60,31 +58,18 @@ impl Default for ParsedMessageCache {
 impl ParsedMessageCache {
     pub fn new(capacity: usize) -> Self {
         Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-            capacity,
+            cache: lru::LruCache::new(NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN)),
         }
     }
 
     fn lookup(&mut self, ctx: &ContextId, path: &Path) -> Option<ParsedMessageEntry> {
-        // HashMap key 是 owned `(ContextId, PathBuf)` tuple，无法用 `(&ContextId, &Path)`
-        // 直接 get；克隆 key 用于 lookup 是常规模式（ContextId ~300 bytes + PathBuf
-        // ~120 bytes 短暂分配，相对 cache hit 后 Arc::clone 完整 messages 的几 µs
-        // 量级可忽略）。
         let key = (ctx.clone(), path.to_path_buf());
-        let entry = self.map.get(&key)?.clone();
-        if let Some(pos) = self.order.iter().position(|k| k == &key) {
-            let k = self.order.remove(pos).expect("position 已校验");
-            self.order.push_front(k);
-        }
-        Some(entry)
+        self.cache.get(&key).cloned()
     }
 
     /// 用调用方提供的 `FileSignature` 直接查 cache —— 跳过内部 stat。
     ///
-    /// 用于 list 后台 batch 校验路径：调用方先 `fs.read_dir_with_metadata(parent)`
-    /// 一次拿全 dir 内 entry 的 metadata，再批量 lookup，避免 N 次串行 stat
-    /// （详 change `unify-fs-direct-calls` design D3）。
+    /// signature 字段 byte-equal 才命中；mismatch 返 None。命中时 LRU bump 到队首。
     #[allow(dead_code)]
     pub(crate) fn lookup_with_known_signature(
         &mut self,
@@ -93,19 +78,14 @@ impl ParsedMessageCache {
         signature: &FileSignature,
     ) -> Option<Arc<Vec<ParsedMessage>>> {
         let key = (ctx.clone(), path.to_path_buf());
-        let entry = self.map.get(&key)?.clone();
-        if entry.signature != *signature {
+        if self.cache.peek(&key)?.signature != *signature {
             return None;
         }
-        if let Some(pos) = self.order.iter().position(|k| k == &key) {
-            let k = self.order.remove(pos).expect("position 已校验");
-            self.order.push_front(k);
-        }
-        Some(entry.messages)
+        Some(self.cache.get(&key)?.messages.clone())
     }
 
     /// hot path cache hit trust —— 不校验 signature 直接返当前 entry。
-    /// signature 校验由后台 batch task 异步跑（详 change `unify-fs-direct-calls` design D3）。
+    /// signature 校验由后台 batch task 异步跑。
     #[allow(dead_code)]
     pub(crate) fn lookup_trust_cached(
         &mut self,
@@ -113,48 +93,21 @@ impl ParsedMessageCache {
         path: &Path,
     ) -> Option<Arc<Vec<ParsedMessage>>> {
         let key = (ctx.clone(), path.to_path_buf());
-        let entry = self.map.get(&key)?.clone();
-        if let Some(pos) = self.order.iter().position(|k| k == &key) {
-            let k = self.order.remove(pos).expect("position 已校验");
-            self.order.push_front(k);
-        }
-        Some(entry.messages)
+        self.cache.get(&key).map(|e| e.messages.clone())
     }
 
     fn insert(&mut self, key: ParsedMessageCacheKey, entry: ParsedMessageEntry) {
-        if self.map.contains_key(&key) {
-            self.map.insert(key.clone(), entry);
-            if let Some(pos) = self.order.iter().position(|k| k == &key) {
-                let k = self.order.remove(pos).expect("position 已校验");
-                self.order.push_front(k);
-            }
-            return;
-        }
-
-        if self.map.len() >= self.capacity {
-            if let Some(evicted) = self.order.pop_back() {
-                self.map.remove(&evicted);
-            }
-        }
-
-        self.map.insert(key.clone(), entry);
-        self.order.push_front(key);
+        self.cache.put(key, entry);
     }
 
     /// 主动从缓存移除 `(ctx, path)` 条目。不在 cache 中时 no-op。
     pub fn remove(&mut self, ctx: &ContextId, path: &Path) {
         let key = (ctx.clone(), path.to_path_buf());
-        if self.map.remove(&key).is_some() {
-            if let Some(pos) = self.order.iter().position(|k| k == &key) {
-                let _ = self.order.remove(pos);
-            }
-        }
+        self.cache.pop(&key);
     }
 
     /// 仅在 cache 中 `(ctx, path)` 条目的 `FileSignature` 与 `current_sig`
-    /// 不一致时才 remove。用于 file-watcher 广播 invalidate 路径——避免 spurious
-    /// 事件（如 CI 上 inotify 启动期对刚创建的 watch dir 偶发的"无内容变化"事件、
-    /// metadata-only touch 等）错杀有效 cache。返回是否真的发生了 remove。
+    /// 不一致时才 remove。返回是否真的发生了 remove。
     pub fn remove_if_signature_mismatch(
         &mut self,
         ctx: &ContextId,
@@ -162,27 +115,24 @@ impl ParsedMessageCache {
         current_sig: &FileSignature,
     ) -> bool {
         let key = (ctx.clone(), path.to_path_buf());
-        let Some(entry) = self.map.get(&key) else {
+        let Some(entry) = self.cache.peek(&key) else {
             return false;
         };
         if entry.signature == *current_sig {
             return false;
         }
-        self.remove(ctx, path);
+        self.cache.pop(&key);
         true
     }
 
-    /// 当前缓存条目数。`LocalDataApi::parsed_msg_cache_len`（仅
-    /// `test-utils` feature 下编译）会用到；默认构建下没人调，加 `allow`。
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
-        self.map.len()
+        self.cache.len()
     }
 
-    /// `len() == 0`，clippy `len_zero` 要求 `len` 配对暴露。
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.cache.is_empty()
     }
 }
 
