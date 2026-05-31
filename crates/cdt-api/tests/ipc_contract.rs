@@ -688,6 +688,19 @@ fn semantic_step_enum_tags_are_snake_case() {
             tool_name: "Bash".into(),
             timestamp: ts(),
         },
+        SemanticStep::SubagentSpawn {
+            placeholder_id: "sa1".into(),
+            timestamp: ts(),
+        },
+        SemanticStep::Interruption {
+            text: "[Request interrupted by user]".into(),
+            timestamp: ts(),
+        },
+        SemanticStep::UserMessage {
+            uuid: "q1".into(),
+            text: "user input".into(),
+            timestamp: ts(),
+        },
     ];
     let json = serde_json::to_value(&steps).unwrap();
     assert_eq!(json[0]["kind"], json!("thinking"));
@@ -695,6 +708,12 @@ fn semantic_step_enum_tags_are_snake_case() {
     assert_eq!(json[2]["kind"], json!("tool_execution"));
     assert_eq!(json[2]["toolUseId"], json!("tu1"));
     assert_eq!(json[2]["toolName"], json!("Bash"));
+    assert_eq!(json[3]["kind"], json!("subagent_spawn"));
+    assert_eq!(json[3]["placeholderId"], json!("sa1"));
+    assert_eq!(json[4]["kind"], json!("interruption"));
+    assert_eq!(json[5]["kind"], json!("user_message"));
+    assert_eq!(json[5]["uuid"], json!("q1"));
+    assert_eq!(json[5]["text"], json!("user input"));
 }
 
 // =============================================================================

@@ -205,7 +205,8 @@ export type SemanticStep =
   | { kind: "text"; text: string; timestamp: string }
   | { kind: "tool_execution"; toolUseId: string; toolName: string; timestamp: string }
   | { kind: "subagent_spawn"; placeholderId: string; timestamp: string }
-  | { kind: "interruption"; text: string; timestamp: string };
+  | { kind: "interruption"; text: string; timestamp: string }
+  | { kind: "user_message"; uuid: string; text: string; timestamp: string };
 
 export type ToolOutput =
   | { kind: "text"; text: string }

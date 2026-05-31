@@ -3,7 +3,7 @@
   import { getSessionDetail, getToolOutput, type SessionDetail, type SessionDetailResponse, type Chunk, type AIChunk, type ChunkMetrics, type ToolExecution, type ToolOutput } from "../lib/api";
   import { getToolSummary, getToolStatus, getToolDurationMs, isToolPending, cleanDisplayText, parseTaskNotifications, getToolContextTokens, estimateTokens, viewerUsesOutput, shouldPrefetchOnChunkExpand } from "../lib/toolHelpers";
   import { buildDisplayItemsCached, buildSummary } from "../lib/displayItemBuilder";
-  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, LAYERS, CLOCK_SVG, USER_SVG, ALERT_TRIANGLE_SVG, CHEVRONS_DOWN_SVG } from "../lib/icons";
+  import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, LAYERS, CLOCK_SVG, USER_SVG, USER_ICON, ALERT_TRIANGLE_SVG, CHEVRONS_DOWN_SVG } from "../lib/icons";
   import { formatClock, formatTokensCompact } from "../lib/formatters";
   import { getTimeFormat } from "../lib/displayPrefs.svelte";
   import { tick } from "svelte";
@@ -1299,6 +1299,19 @@
                       label="Output"
                       summary={item.text.length > 60 ? item.text.slice(0, 60) + "…" : item.text}
                       tokenCount={estimateTokens(item.text)}
+                      isExpanded={expandedItems.has(key)}
+                      onclick={() => toggle(key)}
+                    >
+                      {#snippet children()}
+                        <div class="prose lazy-md" {@attach attachMarkdown(item.text, "output")}></div>
+                      {/snippet}
+                    </BaseItem>
+                  {:else if item.type === "user_message"}
+                    {@const key = `${chunk.chunkId}-usermsg-${di_idx}`}
+                    <BaseItem
+                      svgIcon={USER_ICON}
+                      label="User"
+                      summary={item.text.length > 60 ? item.text.slice(0, 60) + "…" : item.text}
                       isExpanded={expandedItems.has(key)}
                       onclick={() => toggle(key)}
                     >
