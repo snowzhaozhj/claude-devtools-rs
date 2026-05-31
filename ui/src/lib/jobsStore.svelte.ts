@@ -253,8 +253,11 @@ export async function refreshJobs(): Promise<void> {
 }
 
 export async function stopJob(jobId: string): Promise<void> {
-  await invoke("stop_job", { jobId });
-  await refreshJobs();
+  try {
+    await invoke("stop_job", { jobId });
+  } finally {
+    await refreshJobs();
+  }
 }
 
 export async function deleteJob(jobId: string): Promise<void> {

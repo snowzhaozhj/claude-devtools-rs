@@ -4996,8 +4996,13 @@ impl DataApi for LocalDataApi {
                     | cdt_core::JobState::Stopped
                     | cdt_core::JobState::Idle
             );
-            if is_completed && self.delete_job(&job.id).await.is_ok() {
-                deleted += 1;
+            if is_completed {
+                match self.delete_job(&job.id).await {
+                    Ok(()) => deleted += 1,
+                    Err(e) => {
+                        tracing::warn!(job_id = %job.id, error = %e, "failed to delete job");
+                    }
+                }
             }
         }
         Ok(deleted)

@@ -1,5 +1,6 @@
 <script lang="ts">
   import JobRow from "../components/JobRow.svelte";
+  import { onDestroy } from "svelte";
   import {
     getJobs,
     getJobsDirExists,
@@ -20,6 +21,10 @@
   let clearTimer: ReturnType<typeof setTimeout> | null = $state(null);
   let clearing = $state(false);
 
+  onDestroy(() => {
+    if (clearTimer) clearTimeout(clearTimer);
+  });
+
   function handleClearClick() {
     if (confirmingClear) {
       if (clearTimer) clearTimeout(clearTimer);
@@ -39,8 +44,8 @@
     clearing = true;
     try {
       await deleteCompletedJobs();
-    } catch {
-      // 静默
+    } catch (err) {
+      console.error("[jobs] clear completed failed:", err);
     } finally {
       clearing = false;
     }

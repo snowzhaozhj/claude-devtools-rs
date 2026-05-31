@@ -211,7 +211,7 @@ pub trait DataApi: Send + Sync {
         Err(ApiError::internal("not implemented"))
     }
 
-    /// 批量删除所有已完成且无 PR 的 jobs。返回被删除的 job 数量。
+    /// 批量删除所有 terminal 状态的 jobs（done/failed/stopped/idle）。返回被删除的 job 数量。
     async fn delete_completed_jobs(&self) -> Result<u32, ApiError> {
         Err(ApiError::internal("not implemented"))
     }

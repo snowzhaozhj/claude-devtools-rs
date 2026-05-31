@@ -8,6 +8,7 @@
     deleteJob,
   } from "../lib/jobsStore.svelte";
   import { openSessionTab } from "../lib/tabStore.svelte";
+  import { onDestroy } from "svelte";
 
   interface Props {
     job: JobSummary;
@@ -17,7 +18,7 @@
 
   const isWorking = $derived(job.state === "working");
   const isTerminal = $derived(
-    job.state === "done" || job.state === "failed" || job.state === "stopped",
+    job.state === "done" || job.state === "failed" || job.state === "stopped" || job.state === "idle",
   );
   const hasPr = $derived(job.children.some((c) => c.kind === "pr"));
   const isFaded = $derived(isTerminal && !hasPr && job.state !== "failed");
@@ -45,14 +46,18 @@
   let confirmingDelete = $state(false);
   let confirmTimer: ReturnType<typeof setTimeout> | null = $state(null);
 
+  onDestroy(() => {
+    if (confirmTimer) clearTimeout(confirmTimer);
+  });
+
   async function handleStop(e: Event) {
     e.preventDefault();
     e.stopPropagation();
     stopping = true;
     try {
       await stopJob(job.id);
-    } catch {
-      // 静默
+    } catch (err) {
+      console.error("[jobs] stop failed:", err);
     } finally {
       stopping = false;
     }
@@ -79,8 +84,8 @@
     deleting = true;
     try {
       await deleteJob(job.id);
-    } catch {
-      // 静默
+    } catch (err) {
+      console.error("[jobs] delete failed:", err);
     } finally {
       deleting = false;
     }
