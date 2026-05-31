@@ -10,10 +10,15 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use cdt_core::{Project, RepositoryGroup, RepositoryIdentity, Worktree};
 use futures::future::join_all;
+use tokio::sync::Semaphore;
+
+/// 限制 grouper 内 `spawn_blocking` 并发度，避免冷启动瞬间打满线程池。
+const GROUPER_CONCURRENCY_LIMIT: usize = 8;
 
 /// 单 path 的 git 元数据合并结果。`LocalGitIdentityResolver` 用一次 `git rev-parse`
 /// 同时取回 `--git-common-dir` / `--git-dir` / `--abbrev-ref HEAD`——避免每个 project
@@ -356,17 +361,15 @@ impl<G: GitIdentityResolver> WorktreeGrouper<G> {
             return Vec::new();
         }
 
-        // 并发解析每个 project 的 git 元数据：合并 `resolve_identity` + `get_branch`
-        // + `is_main_worktree` 为单次 `resolve_all`，再用 `join_all` 同时跑所有
-        // project。本仓首屏 27 project 实测：串行 5×27=135 spawn → 并发 27 spawn
-        // 大幅压低冷启动 grouper 阶段耗时（详见 `cdt-api/tests/perf_cold_scan.rs`）。
-        //
-        // 同闭包内顺序追加 `compute_cwd_relative_to_repo_root` 的 async 计算（其内部
-        // `dunce::canonicalize` 走 `spawn_blocking` 不阻塞 tokio worker），借现有 `join_all`
-        // 并发批次复用，零额外 await。issue #313。
+        // 并发解析每个 project 的 git 元数据，用 Semaphore 限流避免瞬间打满
+        // blocking 线程池（issue #439：27 project × 2 spawn_blocking = 54 并发
+        // 可达 max_blocking_threads=64 上限）。
+        let sem = Arc::new(Semaphore::new(GROUPER_CONCURRENCY_LIMIT));
         let resolved = join_all(projects.iter().map(|project| {
             let project_path = project.path.clone();
+            let sem = Arc::clone(&sem);
             async move {
+                let _permit = sem.acquire().await.expect("semaphore closed");
                 let primary = self.git.resolve_all(&project_path).await;
                 let lookup = if primary.identity.is_some() {
                     primary

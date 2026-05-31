@@ -640,6 +640,8 @@ pub struct LocalDataApi {
     /// IPC 调用 cache hit 时跳过 ~14K fs op 的全量 scan。change
     /// `unify-fs-abstraction` FU-4 `ProjectScanner` memoize 部分。
     project_scan_cache: Arc<std::sync::Mutex<ProjectScanCache>>,
+    /// Grouper 结果缓存：generation 三元组 + 10 秒 TTL。
+    groups_cache: Arc<std::sync::Mutex<Option<GroupsCacheEntry>>>,
     /// `cfg(test)` 计数器：`refresh_worktree_meta_cache` 实际被调用次数（spec
     /// `ipc-data-api::SessionSummary 增加 worktree 元信息字段` 的"映射缓存刷新约束"
     /// (ctx + generation) 双重校验测试用）。change `generation-race-audit` Test 1/2。
@@ -656,6 +658,18 @@ pub struct LocalDataApi {
     #[cfg(any(test, feature = "test-utils"))]
     active_fs_and_policy_call_count: Arc<AtomicU64>,
 }
+
+/// Grouper 结果缓存条目。
+#[derive(Debug, Clone)]
+struct GroupsCacheEntry {
+    groups: Vec<cdt_core::RepositoryGroup>,
+    root_gen: u64,
+    ctx_gen: u64,
+    scan_inv_gen: u64,
+    created_at: std::time::Instant,
+}
+
+const GROUPS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// IPC `SessionSummary` 序列化时从 `worktree_meta_cache` 查到的派生字段。
 /// change `simplify-repository-as-project::D2`。
@@ -1528,13 +1542,36 @@ impl LocalDataApi {
         ),
         ApiError,
     > {
-        // pre 抽样保留作 fast-path tracing；wrapper 锁内的 (ctx + generation)
-        // 双重校验是权威，pre/post 不再决定 refresh 与否。
         let pre_root_generation = self.root_generation.load(Ordering::SeqCst);
         let pre_context_generation = self.context_generation.load(Ordering::SeqCst);
+        let scan_inv_gen = self
+            .project_scan_cache
+            .lock()
+            .expect("poisoned")
+            .invalidation_generation();
+
+        // groups cache hit：generation 三元组匹配 + TTL 未过期
+        let cached_groups = {
+            let cache = self.groups_cache.lock().expect("poisoned");
+            cache.as_ref().and_then(|entry| {
+                if entry.root_gen == pre_root_generation
+                    && entry.ctx_gen == pre_context_generation
+                    && entry.scan_inv_gen == scan_inv_gen
+                    && entry.created_at.elapsed() < GROUPS_CACHE_TTL
+                {
+                    Some(entry.groups.clone())
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(groups) = cached_groups {
+            let (fs, projects_dir, ctx, _policy, _resolvers) = self.active_fs_and_policy().await?;
+            let captured_context_generation = self.context_generation.load(Ordering::SeqCst);
+            return Ok((groups, fs, projects_dir, ctx, captured_context_generation));
+        }
+
         let (fs, projects_dir, ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
-        // captured_generation：与 (fs, ctx) 同 snapshot。SHALL 在 active_fs_and_policy
-        // 完成后立即 load；inner 内后续 await 不影响该值。
         let captured_context_generation = self.context_generation.load(Ordering::SeqCst);
         let projects = self
             .scan_projects_cached_with(&fs, &projects_dir, &ctx)
@@ -1542,6 +1579,25 @@ impl LocalDataApi {
         let grouper =
             cdt_discover::WorktreeGrouper::new_dyn(resolvers.git_identity_resolver.clone());
         let groups = grouper.group_by_repository((*projects).clone()).await;
+
+        // 写入 groups cache
+        {
+            let fresh_root_gen = self.root_generation.load(Ordering::SeqCst);
+            let fresh_ctx_gen = self.context_generation.load(Ordering::SeqCst);
+            let fresh_scan_inv_gen = self
+                .project_scan_cache
+                .lock()
+                .expect("poisoned")
+                .invalidation_generation();
+            *self.groups_cache.lock().expect("poisoned") = Some(GroupsCacheEntry {
+                groups: groups.clone(),
+                root_gen: fresh_root_gen,
+                ctx_gen: fresh_ctx_gen,
+                scan_inv_gen: fresh_scan_inv_gen,
+                created_at: std::time::Instant::now(),
+            });
+        }
+
         let post_root_generation = self.root_generation.load(Ordering::SeqCst);
         let post_context_generation = self.context_generation.load(Ordering::SeqCst);
         if pre_root_generation != post_root_generation
@@ -1744,6 +1800,7 @@ impl LocalDataApi {
             shared_read_semaphore: Arc::new(Semaphore::new(64)),
             worktree_meta_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
             project_scan_cache: Arc::new(std::sync::Mutex::new(ProjectScanCache::new())),
+            groups_cache: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(any(test, feature = "test-utils"))]
             refresh_worktree_meta_cache_call_count: Arc::new(AtomicU64::new(0)),
             #[cfg(any(test, feature = "test-utils"))]
@@ -1867,6 +1924,7 @@ impl LocalDataApi {
             shared_read_semaphore: Arc::new(Semaphore::new(64)),
             worktree_meta_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
             project_scan_cache,
+            groups_cache: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(any(test, feature = "test-utils"))]
             refresh_worktree_meta_cache_call_count: Arc::new(AtomicU64::new(0)),
             #[cfg(any(test, feature = "test-utils"))]
