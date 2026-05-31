@@ -850,7 +850,17 @@ fn cmd_setup_mcp(scope: &SetupScope, dry_run: bool) -> Result<()> {
 
     eprintln!("Running: {cmd}");
     let status = std::process::Command::new("claude")
-        .args(["mcp", "add", "-s", scope_flag, "cdt-devtools", "--", &cdt_bin, "mcp", "serve"])
+        .args([
+            "mcp",
+            "add",
+            "-s",
+            scope_flag,
+            "cdt-devtools",
+            "--",
+            &cdt_bin,
+            "mcp",
+            "serve",
+        ])
         .status()
         .context("Failed to run `claude`. Make sure Claude Code CLI is installed and in PATH.")?;
 
@@ -860,7 +870,9 @@ fn cmd_setup_mcp(scope: &SetupScope, dry_run: bool) -> Result<()> {
             SetupScope::Project => ".mcp.json",
             SetupScope::User => "~/.claude/settings.json",
         };
-        eprintln!("MCP server \"cdt-devtools\" registered (scope: {scope_flag}, stored in {location})");
+        eprintln!(
+            "MCP server \"cdt-devtools\" registered (scope: {scope_flag}, stored in {location})"
+        );
         Ok(())
     } else {
         anyhow::bail!("claude mcp add exited with {status}");
