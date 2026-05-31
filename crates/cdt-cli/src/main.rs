@@ -830,51 +830,40 @@ fn print_chunk_summary(index: usize, chunk: &cdt_core::Chunk) {
 // setup
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn cmd_setup_mcp(scope: &SetupScope, dry_run: bool) {
+fn cmd_setup_mcp(scope: &SetupScope, dry_run: bool) -> Result<()> {
     let scope_flag = match scope {
         SetupScope::Local => "local",
         SetupScope::Project => "project",
         SetupScope::User => "user",
     };
-    let cmd = format!("claude mcp add -s {scope_flag} cdt-devtools -- cdt mcp serve");
+
+    let cdt_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .unwrap_or_else(|| "cdt".to_string());
+    let cmd = format!("claude mcp add -s {scope_flag} cdt-devtools -- {cdt_bin} mcp serve");
 
     if dry_run {
         println!("[dry-run] Would run:\n  {cmd}");
-        return;
+        return Ok(());
     }
 
     eprintln!("Running: {cmd}");
     let status = std::process::Command::new("claude")
-        .args([
-            "mcp",
-            "add",
-            "-s",
-            scope_flag,
-            "cdt-devtools",
-            "--",
-            "cdt",
-            "mcp",
-            "serve",
-        ])
-        .status();
-    match status {
-        Ok(s) if s.success() => {
-            let location = match scope {
-                SetupScope::Local => "~/.claude/settings.local.json",
-                SetupScope::Project => ".mcp.json",
-                SetupScope::User => "~/.claude/settings.json",
-            };
-            eprintln!("MCP server \"cdt-devtools\" registered (scope: {scope_flag}, stored in {location})");
-        }
-        Ok(s) => {
-            eprintln!("claude mcp add exited with {s}");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("Failed to run `claude`: {e}");
-            eprintln!("Make sure Claude Code CLI is installed and in PATH.");
-            std::process::exit(1);
-        }
+        .args(["mcp", "add", "-s", scope_flag, "cdt-devtools", "--", &cdt_bin, "mcp", "serve"])
+        .status()
+        .context("Failed to run `claude`. Make sure Claude Code CLI is installed and in PATH.")?;
+
+    if status.success() {
+        let location = match scope {
+            SetupScope::Local => "~/.claude/settings.local.json",
+            SetupScope::Project => ".mcp.json",
+            SetupScope::User => "~/.claude/settings.json",
+        };
+        eprintln!("MCP server \"cdt-devtools\" registered (scope: {scope_flag}, stored in {location})");
+        Ok(())
+    } else {
+        anyhow::bail!("claude mcp add exited with {status}");
     }
 }
 
@@ -892,17 +881,19 @@ const SKILL_TEMPLATES: &[SkillTemplate] = &[SkillTemplate {
     content: include_str!("../assets/skills/session-insights/SKILL.md"),
 }];
 
-fn skills_target_dir(scope: &SetupScope) -> PathBuf {
+fn skills_target_dir(scope: &SetupScope) -> Result<PathBuf> {
     match scope {
-        SetupScope::Local | SetupScope::Project => PathBuf::from(".claude/skills"),
-        SetupScope::User => cdt_discover::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".claude/skills"),
+        SetupScope::Local | SetupScope::Project => Ok(PathBuf::from(".claude/skills")),
+        SetupScope::User => {
+            let home = cdt_discover::home_dir()
+                .context("Cannot determine home directory for user-scope skills installation")?;
+            Ok(home.join(".claude/skills"))
+        }
     }
 }
 
 fn cmd_setup_skills(scope: &SetupScope, dry_run: bool, force: bool) -> Result<()> {
-    let target_dir = skills_target_dir(scope);
+    let target_dir = skills_target_dir(scope)?;
     let count = SKILL_TEMPLATES.len();
     let noun = if count == 1 { "skill" } else { "skills" };
     let scope_label = match scope {
@@ -1396,14 +1387,12 @@ async fn main() -> Result<()> {
             dry_run,
             force,
         } => match action {
-            Some(SetupAction::Mcp) => {
-                cmd_setup_mcp(&scope, dry_run);
-                Ok(())
-            }
+            Some(SetupAction::Mcp) => cmd_setup_mcp(&scope, dry_run),
             Some(SetupAction::Skills) => cmd_setup_skills(&scope, dry_run, force),
             None => {
-                cmd_setup_mcp(&scope, dry_run);
-                cmd_setup_skills(&scope, dry_run, force)
+                let mcp_result = cmd_setup_mcp(&scope, dry_run);
+                let skills_result = cmd_setup_skills(&scope, dry_run, force);
+                mcp_result.and(skills_result)
             }
         },
         Command::SelfUpdate {
