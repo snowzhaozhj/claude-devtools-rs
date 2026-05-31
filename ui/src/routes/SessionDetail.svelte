@@ -425,8 +425,7 @@
     const lastMsgCount = lastChunk?.kind === "ai"
       ? (lastChunk as AIChunk).responses.length
       : 0;
-    const wfFp = (d.workflowItems ?? []).map(wf => `${wf.runId}:${wf.status}`).join("|");
-    return `${chunks.length}:${lastMsgCount}:${d.isOngoing}:${d.metrics.message_count}:${d.title ?? ""}:${wfFp}`;
+    return `${chunks.length}:${lastMsgCount}:${d.isOngoing}:${d.metrics.message_count}:${d.title ?? ""}`;
   }
 
   onMount(async () => {

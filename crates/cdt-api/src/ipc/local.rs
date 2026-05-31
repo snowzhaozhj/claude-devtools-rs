@@ -3863,10 +3863,8 @@ impl DataApi for LocalDataApi {
         let ctx_ms = t_ctx.elapsed().as_millis();
 
         // Step 5.5: resolve workflow items
-        // Completed: full resolve from immutable manifest cache (near-zero cost)
-        // Running: skeleton only (avoids high-frequency journal reads during execution)
         let session_dir = located.project_dir.join(session_id);
-        let workflow_items = super::workflow_manifest::resolve_workflow_skeletons(
+        let workflow_items = super::workflow_manifest::resolve_workflow_items(
             &chunks,
             &session_dir,
             &*located.fs,

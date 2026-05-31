@@ -4384,7 +4384,6 @@ fn workflow_item_serializes_camelcase() {
         total_tokens: 5000,
         duration_ms: 30000,
         error: None,
-        detail_omitted: false,
     };
     let json = serde_json::to_value(&item).unwrap();
 
@@ -4392,7 +4391,6 @@ fn workflow_item_serializes_camelcase() {
     assert_eq!(json["totalTokens"], json!(5000));
     assert_eq!(json["durationMs"], json!(30000));
     assert_eq!(json["status"], json!("completed"));
-    assert!(!json.as_object().unwrap().contains_key("detailOmitted"));
     assert_eq!(json["phases"][0]["index"], json!(1));
     assert_eq!(json["agents"][0]["phaseIndex"], json!(1));
     assert_eq!(json["agents"][0]["toolCalls"], json!(12));
@@ -4510,38 +4508,6 @@ fn session_detail_workflow_items_present_when_populated() {
     assert_eq!(back.workflow_items[0].status, WorkflowStatus::Pending);
 }
 
-#[test]
-fn workflow_item_detail_omitted_true_serializes_as_camelcase_field() {
-    use cdt_core::workflow::{WorkflowItem, WorkflowStatus};
-
-    let item = WorkflowItem {
-        run_id: "wf_skeleton".into(),
-        name: Some("my-flow".into()),
-        status: WorkflowStatus::Running,
-        phases: Vec::new(),
-        agents: Vec::new(),
-        total_tokens: 0,
-        duration_ms: 0,
-        error: None,
-        detail_omitted: true,
-    };
-    let json = serde_json::to_value(&item).unwrap();
-
-    assert_eq!(
-        json["detailOmitted"],
-        serde_json::json!(true),
-        "detail_omitted=true SHALL serialize as camelCase `detailOmitted`"
-    );
-    assert!(
-        json.get("detail_omitted").is_none(),
-        "snake_case `detail_omitted` MUST not appear"
-    );
-
-    // 反序列化回来验证 round-trip
-    let back: WorkflowItem = serde_json::from_value(json).unwrap();
-    assert!(back.detail_omitted);
-    assert_eq!(back.status, WorkflowStatus::Running);
-}
 
 // =============================================================================
 // list_jobs IPC contract

@@ -22,13 +22,12 @@
   let isLoadingAgentTrace = $state(false);
   const agentDisplayItems = $derived(agentTrace ? buildDisplayItemsFromChunks(agentTrace) : []);
 
-  // --- Lazy-loading detail state ---
+  // --- Poll state for running workflows ---
   let fullDetail: WorkflowItem | null = $state(null);
-  let detailLoading = $state(false);
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let pollGeneration = 0;
 
-  // 使用 fullDetail（已加载完整数据）或 fallback 到 props workflow（骨架/完整均可）
+  // fullDetail（来自 poll 的最新数据）优先；否则用 props workflow（来自 session detail）
   const effectiveWorkflow = $derived(fullDetail ?? workflow);
 
   const phases = $derived(effectiveWorkflow.phases ?? []);
@@ -49,17 +48,12 @@
 
   const doneCount = $derived(agents.filter(a => a.state === "completed").length);
 
-  // detail_omitted skeleton 不含 phases/agents 具体数据，不显示计数避免误导
   const phaseSummary = $derived.by(() => {
-    if (effectiveWorkflow.detailOmitted) {
-      return "";
-    }
     if (effectiveWorkflow.status === "running") {
       return `${agents.length} agent${agents.length !== 1 ? "s" : ""} (${doneCount} done)`;
     }
     return `${phases.length} phase${phases.length !== 1 ? "s" : ""} · ${agents.length} agent${agents.length !== 1 ? "s" : ""}`;
   });
-
 
   const durationText = $derived(formatDuration(effectiveWorkflow.durationMs || null));
 
@@ -77,19 +71,7 @@
     return map;
   });
 
-  // --- Lazy-loading detail logic ---
-  async function ensureDetail(): Promise<void> {
-    if (!workflow.detailOmitted || fullDetail) return;
-    detailLoading = true;
-    try {
-      fullDetail = await getWorkflowDetail(projectId, sessionId, workflow.runId);
-    } catch (e) {
-      console.warn("getWorkflowDetail failed:", e);
-    } finally {
-      detailLoading = false;
-    }
-  }
-
+  // --- Poll logic for running/pending workflows ---
   function startPoll(): void {
     if (pollTimer) return;
     const gen = ++pollGeneration;
@@ -99,8 +81,7 @@
         const fresh = await getWorkflowDetail(projectId, sessionId, workflow.runId);
         if (gen !== pollGeneration) return;
         fullDetail = fresh;
-        // 终态停止轮询
-        if (fresh.status !== "running" && fresh.status !== "pending") {
+        if (isTerminal(fresh.status)) {
           stopPoll();
         }
       } catch { /* 忽略瞬态错误 */ }
@@ -118,8 +99,7 @@
   function toggleExpanded() {
     isExpanded = !isExpanded;
     if (isExpanded) {
-      void ensureDetail();
-      // 非终态开始轮询
+      // 展开且非终态时开始轮询以获取最新 workflow 状态
       if (!isTerminal(effectiveWorkflow.status)) {
         startPoll();
       }
@@ -128,7 +108,7 @@
     }
   }
 
-  // 当 props workflow 的 status 从外部更新为终态时停止轮询
+  // 当 workflow status 变为终态时停止轮询
   $effect(() => {
     const status = effectiveWorkflow.status;
     if (isTerminal(status)) {
@@ -238,9 +218,7 @@
 
   {#if isExpanded}
     <div class="wf-body">
-      {#if detailLoading}
-        <div class="wf-running-minimal">Loading detail…</div>
-      {:else if agents.length === 0}
+      {#if agents.length === 0}
         {#if effectiveWorkflow.status === "running"}
           <div class="wf-running-minimal">Running…</div>
         {:else}

@@ -325,7 +325,6 @@ export interface WorkflowItem {
   durationMs?: number;
   error?: string;
   scriptPreview?: string;
-  detailOmitted?: boolean;
 }
 
 export interface SlashCommand {

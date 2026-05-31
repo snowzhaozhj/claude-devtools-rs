@@ -251,7 +251,6 @@ pub fn parse_manifest(run_id: &str, content: &str) -> Result<WorkflowItem, Strin
         total_tokens: raw.total_tokens,
         duration_ms: raw.duration_ms,
         error,
-        detail_omitted: false,
     })
 }
 
@@ -303,12 +302,7 @@ pub fn collect_workflow_candidates(chunks: &[cdt_core::Chunk]) -> Vec<(String, O
     out
 }
 
-/// 轻量骨架解析：只 stat manifest 文件判断 status，不读 journal / script。
-///
-/// `get_session_detail` 主路径调此函数以避免 per-workflow I/O——只做一次 `stat`
-/// syscall。前端按 `detail_omitted: true` 显示骨架，用户展开时调 `get_workflow_detail`
-/// 拉取完整 `WorkflowItem`。
-pub async fn resolve_workflow_skeletons(
+pub async fn resolve_workflow_items(
     chunks: &[cdt_core::Chunk],
     session_dir: &Path,
     fs: &dyn FileSystemProvider,
@@ -324,57 +318,21 @@ pub async fn resolve_workflow_skeletons(
 
     for (run_id, script_path) in &candidates {
         let manifest_path = workflows_dir.join(format!("{run_id}.json"));
-
-        match fs.stat(&manifest_path).await {
-            Ok(_) => {
-                // Completed: manifest immutable + FileSignature 缓存 → full resolve 近零成本
-                let journal_path = session_dir
-                    .join("subagents")
-                    .join("workflows")
-                    .join(run_id)
-                    .join("journal.jsonl");
-                let item = resolve_single(
-                    run_id,
-                    &manifest_path,
-                    &journal_path,
-                    script_path.as_deref(),
-                    fs,
-                    cache,
-                )
-                .await;
-                items.push(item);
-            }
-            Err(FsError::NotFound(_)) => {
-                // Running: skeleton only（不读 journal/script，避免高频 file-change 触发全量解析）
-                let name = script_path
-                    .as_deref()
-                    .and_then(|p| workflow_name_from_script_path(p, run_id));
-                items.push(WorkflowItem {
-                    run_id: run_id.clone(),
-                    name,
-                    status: WorkflowStatus::Running,
-                    phases: Vec::new(),
-                    agents: Vec::new(),
-                    total_tokens: 0,
-                    duration_ms: 0,
-                    error: None,
-                    detail_omitted: true,
-                });
-            }
-            Err(_) => {
-                items.push(WorkflowItem {
-                    run_id: run_id.clone(),
-                    name: None,
-                    status: WorkflowStatus::Pending,
-                    phases: Vec::new(),
-                    agents: Vec::new(),
-                    total_tokens: 0,
-                    duration_ms: 0,
-                    error: None,
-                    detail_omitted: true,
-                });
-            }
-        }
+        let journal_path = session_dir
+            .join("subagents")
+            .join("workflows")
+            .join(run_id)
+            .join("journal.jsonl");
+        let item = resolve_single(
+            run_id,
+            &manifest_path,
+            &journal_path,
+            script_path.as_deref(),
+            fs,
+            cache,
+        )
+        .await;
+        items.push(item);
     }
 
     items
@@ -513,7 +471,6 @@ async fn resolve_running_state(
         total_tokens: 0,
         duration_ms: 0,
         error: None,
-        detail_omitted: false,
     }
 }
 

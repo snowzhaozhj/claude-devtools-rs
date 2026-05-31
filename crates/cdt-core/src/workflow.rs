@@ -72,10 +72,6 @@ pub struct WorkflowItem {
     pub duration_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// `true` 表示 phases/agents/tokens 等详情被省略，前端需调
-    /// `get_workflow_detail` 按需拉取。
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub detail_omitted: bool,
 }
 
 impl WorkflowItem {
@@ -90,7 +86,6 @@ impl WorkflowItem {
             total_tokens: 0,
             duration_ms: 0,
             error: None,
-            detail_omitted: false,
         }
     }
 }
@@ -136,7 +131,6 @@ mod tests {
             total_tokens: 5000,
             duration_ms: 30000,
             error: None,
-            detail_omitted: false,
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("\"totalTokens\":5000"));

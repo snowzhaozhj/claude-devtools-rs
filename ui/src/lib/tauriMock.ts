@@ -508,7 +508,7 @@ function buildHandler(fx: Fixture) {
         return []
 
       case 'get_workflow_detail':
-        return { runId: getArg<string>(payload, 'runId') ?? '', status: 'pending', totalTokens: 0, durationMs: 0, detailOmitted: false }
+        return { runId: getArg<string>(payload, 'runId') ?? '', status: 'pending', totalTokens: 0, durationMs: 0 }
 
       case 'get_image_asset':
         return ''
