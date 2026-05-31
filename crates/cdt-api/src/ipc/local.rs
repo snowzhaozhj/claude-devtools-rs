@@ -4059,8 +4059,8 @@ impl DataApi for LocalDataApi {
                     .join(format!("agent-{agent_id}.jsonl"));
                 if fs.exists(&candidate).await {
                     target_path = Some(candidate);
+                    break;
                 }
-                break;
             }
         }
         let Some(path) = target_path else {
@@ -4105,14 +4105,15 @@ impl DataApi for LocalDataApi {
             ApiError::internal("failed to read projects directory")
         })?;
 
-        // 扫 projects_dir 找到包含该 session 的 project_dir
+        // 扫 projects_dir 找到包含该 workflow 的 session_dir
         let mut session_dir: Option<std::path::PathBuf> = None;
         for entry in entries {
             if !entry.kind.is_dir() {
                 continue;
             }
             let candidate = projects_dir.join(&entry.name).join(session_id);
-            if fs.exists(&candidate).await {
+            let wf_dir = candidate.join("subagents").join("workflows").join(run_id);
+            if fs.exists(&wf_dir).await {
                 session_dir = Some(candidate);
                 break;
             }
