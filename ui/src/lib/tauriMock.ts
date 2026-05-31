@@ -80,6 +80,8 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'list_available_terminals',
   'list_jobs',
   'stop_job',
+  'delete_job',
+  'delete_completed_jobs',
 ] as const
 
 export { KNOWN_TAURI_COMMANDS }
@@ -1053,9 +1055,13 @@ function buildHandler(fx: Fixture) {
         }
       }
 
-      case 'stop_job': {
-        // mock：静默成功
+      case 'stop_job':
+      case 'delete_job': {
         return null
+      }
+
+      case 'delete_completed_jobs': {
+        return 0
       }
 
       default:

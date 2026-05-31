@@ -172,7 +172,9 @@ pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
         )
         // Background jobs
         .route("/api/jobs", get(list_jobs_route))
+        .route("/api/jobs/completed", delete(delete_completed_jobs_route))
         .route("/api/jobs/{job_id}/stop", post(stop_job_route))
+        .route("/api/jobs/{job_id}", delete(delete_job_route))
         // Phase 2 frontend-context-menu：右键菜单"在终端 / 编辑器打开"+ Settings dropdown
         // 详 openspec/specs/frontend-context-menu/spec.md 三个 Requirement
         .route("/api/external-app/terminal", post(open_in_terminal_route))
@@ -975,6 +977,21 @@ async fn stop_job_route(
 ) -> Result<impl IntoResponse, ApiError> {
     s.api.stop_job(&job_id).await?;
     Ok(Json(serde_json::json!({"ok": true})))
+}
+
+async fn delete_job_route(
+    State(s): State<AppState>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    s.api.delete_job(&job_id).await?;
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
+async fn delete_completed_jobs_route(
+    State(s): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    let count = s.api.delete_completed_jobs().await?;
+    Ok(Json(serde_json::json!({"deleted": count})))
 }
 
 async fn get_telemetry_snapshot_route(

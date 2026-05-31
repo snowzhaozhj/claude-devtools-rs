@@ -39,10 +39,27 @@
 - [ ] 5.2 vitest: projectId 提取（linkScanPath / fallback cwd / 均空）
 - [ ] 5.3 Playwright: 打开 tab / 分组显示 / 展开 / 跳转 / 空态 / 降级
 
-## 6. 视觉验收
+## 6. Job 删除功能（D8）
 
-- [ ] 6.1 浅色主题全状态截图 + DESIGN.md Named Rules 检查
-- [ ] 6.2 深色主题全状态截图 + impeccable critique
+- [ ] 6.1 cdt-api trait: `delete_job` + `delete_completed_jobs` 方法定义
+- [ ] 6.2 cdt-api LocalDataApi: 实现（调 `claude rm <short_id>`）
+- [ ] 6.3 src-tauri: 注册 `delete_job` + `delete_completed_jobs` IPC command
+- [ ] 6.4 ipc_contract: EXPECTED_TAURI_COMMANDS 更新
+- [ ] 6.5 前端 jobsStore: `deleteJob()` + `deleteCompletedJobs()` 函数
+- [ ] 6.6 前端 tauriMock: mock handler
+- [ ] 6.7 前端 JobRow: terminal 状态 hover 显示 × dismiss 按钮
+- [ ] 6.8 前端 JobsView: Completed group header 显示 "Clear" 按钮
+
+## 7. 视觉层级优化（D9 + D10）
+
+- [ ] 7.1 JobRow: completed+有PR → 正常 opacity；completed+无PR → opacity 0.55
+- [ ] 7.2 JobRow: 行 padding 10px→7px + detail line-height 1.4→1.3
+- [ ] 7.3 JobRow: focus-within 辅助 × 按钮可达性
+
+## 8. 视觉验收
+
+- [ ] 8.1 浅色主题全状态截图 + DESIGN.md Named Rules 检查
+- [ ] 8.2 深色主题全状态截图 + impeccable critique
 
 ## N. 发布
 

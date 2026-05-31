@@ -551,6 +551,22 @@ async fn stop_job(data: State<'_, AppData>, job_id: String) -> Result<(), String
 }
 
 #[tauri::command]
+async fn delete_job(data: State<'_, AppData>, job_id: String) -> Result<(), String> {
+    data.api
+        .delete_job(&job_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_completed_jobs(data: State<'_, AppData>) -> Result<u32, String> {
+    data.api
+        .delete_completed_jobs()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_telemetry_snapshot(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
     let snap = data
         .api
@@ -1418,6 +1434,8 @@ pub fn run() {
             http_server_status,
             list_jobs,
             stop_job,
+            delete_job,
+            delete_completed_jobs,
             get_telemetry_snapshot,
             record_correctness_events,
             open_in_terminal,

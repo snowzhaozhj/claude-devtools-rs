@@ -4956,6 +4956,52 @@ impl DataApi for LocalDataApi {
         }
         Ok(())
     }
+
+    async fn delete_job(&self, job_id: &str) -> Result<(), ApiError> {
+        if job_id.is_empty() {
+            return Err(ApiError::validation("job_id must not be empty"));
+        }
+        let short: String = job_id.chars().take(8).collect();
+        let output = tokio::process::Command::new("claude")
+            .args(["rm", &short])
+            .output()
+            .await
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    ApiError::internal(
+                        "claude CLI not found on PATH — install Claude Code CLI to delete background jobs".to_owned(),
+                    )
+                } else {
+                    ApiError::internal(format!("failed to spawn claude rm: {e}"))
+                }
+            })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(ApiError::internal(format!("delete failed: {stderr}")));
+        }
+        Ok(())
+    }
+
+    async fn delete_completed_jobs(&self) -> Result<u32, ApiError> {
+        let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let jobs_dir = home.join(".claude").join("jobs");
+        let response = list_jobs_from_dir(&jobs_dir).await?;
+
+        let mut deleted = 0u32;
+        for job in &response.jobs {
+            let is_completed = matches!(
+                job.state,
+                cdt_core::JobState::Done
+                    | cdt_core::JobState::Failed
+                    | cdt_core::JobState::Stopped
+                    | cdt_core::JobState::Idle
+            );
+            if is_completed && self.delete_job(&job.id).await.is_ok() {
+                deleted += 1;
+            }
+        }
+        Ok(deleted)
+    }
 }
 
 // =============================================================================

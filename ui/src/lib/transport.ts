@@ -304,6 +304,10 @@ function httpRequestForCommand(cmd: string, args: InvokeArgs): HttpRequest {
       return { method: "GET", path: "/api/jobs" };
     case "stop_job":
       return { method: "POST", path: `/api/jobs/${enc(a.jobId)}/stop` };
+    case "delete_job":
+      return { method: "DELETE", path: `/api/jobs/${enc(a.jobId)}` };
+    case "delete_completed_jobs":
+      return { method: "DELETE", path: "/api/jobs/completed" };
     case "list_projects":
       return { method: "GET", path: "/api/projects" };
     case "list_repository_groups":

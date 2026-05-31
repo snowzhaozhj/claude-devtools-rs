@@ -7,6 +7,7 @@
     getJobsError,
     refreshJobs,
     groupJobs,
+    deleteCompletedJobs,
   } from "../lib/jobsStore.svelte";
 
   const jobs = $derived(getJobs());
@@ -14,6 +15,36 @@
   const loading = $derived(getJobsLoading());
   const error = $derived(getJobsError());
   const grouped = $derived(groupJobs(jobs));
+
+  let confirmingClear = $state(false);
+  let clearTimer: ReturnType<typeof setTimeout> | null = $state(null);
+  let clearing = $state(false);
+
+  function handleClearClick() {
+    if (confirmingClear) {
+      if (clearTimer) clearTimeout(clearTimer);
+      clearTimer = null;
+      confirmingClear = false;
+      void doClear();
+    } else {
+      confirmingClear = true;
+      clearTimer = setTimeout(() => {
+        confirmingClear = false;
+        clearTimer = null;
+      }, 3000);
+    }
+  }
+
+  async function doClear() {
+    clearing = true;
+    try {
+      await deleteCompletedJobs();
+    } catch {
+      // 静默
+    } finally {
+      clearing = false;
+    }
+  }
 </script>
 
 <div class="jobs-view">
@@ -51,6 +82,20 @@
           <div class="group-header">
             <span class="group-label">{groupData.label}</span>
             <span class="group-count">{groupData.jobs.length}</span>
+            {#if groupData.group === "completed" && groupData.jobs.length > 0}
+              <button
+                class="clear-btn"
+                class:confirming={confirmingClear}
+                onclick={handleClearClick}
+                disabled={clearing}
+              >
+                {#if confirmingClear}
+                  确认清除 {groupData.jobs.length} 项?
+                {:else}
+                  Clear
+                {/if}
+              </button>
+            {/if}
           </div>
           {#each groupData.jobs as job (job.id)}
             <JobRow {job} />
@@ -197,5 +242,36 @@
     color: var(--color-text-muted);
     opacity: 0.5;
     font-family: var(--font-mono);
+  }
+
+  .clear-btn {
+    margin-left: auto;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background 120ms ease-out, color 120ms ease-out;
+  }
+
+  .clear-btn:hover {
+    background: var(--color-surface-overlay);
+    color: var(--color-text);
+  }
+
+  .clear-btn.confirming {
+    color: var(--color-danger);
+    background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+  }
+
+  .clear-btn.confirming:hover {
+    background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+  }
+
+  .clear-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 </style>

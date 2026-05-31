@@ -5,6 +5,7 @@
     extractProjectId,
     formatAge,
     stopJob,
+    deleteJob,
   } from "../lib/jobsStore.svelte";
   import { openSessionTab } from "../lib/tabStore.svelte";
 
@@ -15,7 +16,11 @@
   let { job }: Props = $props();
 
   const isWorking = $derived(job.state === "working");
-  const isTerminal = $derived(job.state === "done" || job.state === "failed" || job.state === "stopped");
+  const isTerminal = $derived(
+    job.state === "done" || job.state === "failed" || job.state === "stopped",
+  );
+  const hasPr = $derived(job.children.some((c) => c.kind === "pr"));
+  const isFaded = $derived(isTerminal && !hasPr && job.state !== "failed");
   const color = $derived(stateToColor(job.state));
   const age = $derived(formatAge(job.updatedAt));
   const prChild = $derived(job.children.find((c) => c.kind === "pr"));
@@ -36,6 +41,9 @@
   }
 
   let stopping = $state(false);
+  let deleting = $state(false);
+  let confirmingDelete = $state(false);
+  let confirmTimer: ReturnType<typeof setTimeout> | null = $state(null);
 
   async function handleStop(e: Event) {
     e.preventDefault();
@@ -44,15 +52,43 @@
     try {
       await stopJob(job.id);
     } catch {
-      // 静默——job 列表会自动刷新反映结果
+      // 静默
     } finally {
       stopping = false;
     }
   }
+
+  function handleDeleteClick(e: Event) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (confirmingDelete) {
+      if (confirmTimer) clearTimeout(confirmTimer);
+      confirmTimer = null;
+      confirmingDelete = false;
+      void doDelete();
+    } else {
+      confirmingDelete = true;
+      confirmTimer = setTimeout(() => {
+        confirmingDelete = false;
+        confirmTimer = null;
+      }, 3000);
+    }
+  }
+
+  async function doDelete() {
+    deleting = true;
+    try {
+      await deleteJob(job.id);
+    } catch {
+      // 静默
+    } finally {
+      deleting = false;
+    }
+  }
 </script>
 
-<div class="job-row">
-  <div class="row-line-1">
+<div class="job-row" class:faded={isFaded}>
+  <div class="row-main">
     <div class="indicator" style:--indicator-color={color}>
       {#if isWorking}
         <div class="spinner"></div>
@@ -62,7 +98,7 @@
     </div>
 
     <!-- svelte-ignore a11y_invalid_attribute -->
-    <a class="job-name" class:muted={isTerminal} href="#" onclick={handleOpenSession}>
+    <a class="job-name" href="#" onclick={handleOpenSession}>
       {job.name || job.id.slice(0, 8)}
     </a>
 
@@ -79,14 +115,30 @@
     <span class="job-age">{age}</span>
 
     {#if isWorking}
-      <button class="stop-btn" onclick={handleStop} disabled={stopping}>stop</button>
+      <button class="action-btn stop" onclick={handleStop} disabled={stopping} title="Stop">
+        <svg viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
+      </button>
+    {:else if isTerminal}
+      <button
+        class="action-btn dismiss"
+        class:confirming={confirmingDelete}
+        onclick={handleDeleteClick}
+        disabled={deleting}
+        title={confirmingDelete ? "再次点击确认删除" : "删除"}
+      >
+        {#if confirmingDelete}
+          <span class="confirm-text">确认?</span>
+        {:else}
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        {/if}
+      </button>
     {/if}
   </div>
 
   {#if job.needs}
-    <div class="row-line-2 needs">{job.needs}</div>
+    <div class="row-detail needs">{job.needs}</div>
   {:else if job.detail}
-    <div class="row-line-2">{job.detail}</div>
+    <div class="row-detail">{job.detail}</div>
   {/if}
 </div>
 
@@ -94,21 +146,25 @@
   .job-row {
     display: flex;
     flex-direction: column;
-    padding: 10px 12px;
+    padding: 7px 12px;
     border-radius: 6px;
-    gap: 3px;
-    transition: background 150ms ease-out;
+    gap: 2px;
+    transition: background 120ms ease-out;
   }
 
   .job-row:hover {
     background: var(--color-surface-raised);
   }
 
-  .job-row:hover .stop-btn {
-    opacity: 1;
+  .job-row.faded {
+    opacity: 0.55;
   }
 
-  .row-line-1 {
+  .job-row.faded:hover {
+    opacity: 0.85;
+  }
+
+  .row-main {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -125,8 +181,8 @@
   }
 
   .dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: var(--indicator-color);
   }
@@ -162,10 +218,6 @@
     text-decoration: underline;
   }
 
-  .job-name.muted {
-    color: var(--color-text-muted);
-  }
-
   .pr-chip {
     flex-shrink: 0;
     font-size: 11px;
@@ -177,7 +229,7 @@
     color: var(--color-success, var(--color-success-bright));
     text-decoration: none;
     white-space: nowrap;
-    transition: background 150ms ease-out;
+    transition: background 120ms ease-out;
   }
 
   .pr-chip:hover {
@@ -192,40 +244,75 @@
     white-space: nowrap;
   }
 
-  .stop-btn {
+  .action-btn {
     flex-shrink: 0;
-    font-size: 11px;
-    padding: 2px 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 4px;
     border-radius: 4px;
     border: none;
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
     opacity: 0;
-    transition: opacity 150ms ease-out;
+    transition: opacity 120ms ease-out, background 120ms ease-out, color 120ms ease-out;
   }
 
-  .stop-btn:hover {
+  .action-btn svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .job-row:hover .action-btn,
+  .job-row:focus-within .action-btn {
+    opacity: 1;
+  }
+
+  .action-btn.confirming {
+    opacity: 1;
+    color: var(--color-danger);
+    background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+  }
+
+  .confirm-text {
+    font-size: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .action-btn:hover {
+    background: var(--color-surface-overlay);
     color: var(--color-text);
-    background: var(--color-surface-overlay, var(--color-surface-raised));
   }
 
-  .stop-btn:disabled {
+  .action-btn.stop:hover {
+    color: var(--color-danger);
+  }
+
+  .action-btn.confirming:hover {
+    background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+    color: var(--color-danger);
+  }
+
+  .action-btn:disabled {
     opacity: 0.3;
     cursor: not-allowed;
   }
 
-  .row-line-2 {
+  .row-detail {
     padding-left: 22px;
     font-size: 12px;
     color: var(--color-text-muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    line-height: 1.4;
+    line-height: 1.3;
   }
 
-  .row-line-2.needs {
+  .row-detail.needs {
     color: var(--color-warning);
   }
 </style>

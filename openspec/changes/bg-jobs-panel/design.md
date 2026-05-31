@@ -129,9 +129,47 @@ Jobs 面板作为 tab 级视图（PaneView 路由），入口在 TitleBar zone-s
 
 archive 前跑 `/impeccable extract` 提进 `DESIGN.md`。
 
+### D8：Job 删除机制——直接调 `claude rm`
+
+**选择**：
+- 单条删除：hover 行显示 × 按钮 → 第一次点击按钮变为红色 "确认?" → 第二次点击执行 `claude rm <short_id>`；3 秒无操作自动回退初始态
+- 批量清理：Completed group header 显示 "Clear" 按钮 → 同样二次确认（"Clear" → "确认清除 N 项?"）→ 遍历 Completed group 逐条调 `claude rm`
+- × 按钮仅对 terminal 状态 job 显示（Working/Blocked 是活跃状态，用 stop 而非 delete）
+- inline 确认模式（不用 modal 弹窗）：点击态变化 + 超时回退，流程不中断
+
+**替代**：
+- (a) 直接 `rm -rf ~/.claude/jobs/<id>/` — 绕过 supervisor roster + worktree 清理，状态不一致
+- (b) modal 确认弹窗 — 打断操作流，对频繁清理不友好
+- (c) 无确认直接删 — 误触风险（用户反馈需要二次确认）
+
+**理由**：`claude rm` 已封装好安全逻辑（清理 worktree 分支、从 supervisor roster 移除）。对 busy session 也能执行（CLI 实测确认）。CLI 输出的 worktree 保留提示可忽略（GUI 不展示 CLI stdout）。
+
+**实测数据**：`claude rm 452c738b` → `removed 452c738b / worktree is on a different branch — kept at ...`。目录 `~/.claude/jobs/452c738b/` 已被删除。
+
+### D9：Completed 组视觉层级——有 PR 的不淡化
+
+**选择**：
+- Completed + 有 PR → 正常文本色（opacity 1.0）+ PR chip 保持绿色高亮 → 用户仍能看到并点击 PR 链接
+- Completed + 无 PR → 整行降低 opacity（0.55）→ 真正"完成且无后续动作"的 job 淡出视觉
+- Failed → 保持红色 indicator 不淡化（需要用户注意）
+
+**替代**：
+- (a) 单独 "Ready for review" 分组 — 需要 GitHub API 验证 PR 状态（Plan B 已否决）
+- (b) 全部 completed 统一灰色 — 用户反馈"不利于 review"
+
+**理由**：用户核心诉求是"completed 不代表不需要操作"。有 PR 的 job 用户仍需去 review/merge，视觉不应暗示"忽略"。Opacity 而非 color 做淡化，让 PR chip 绿色在淡化行上仍可识别。
+
+### D10：信息密度优化——收紧行间距
+
+**选择**：行内 padding 从 10px 降到 7px，行间 gap 保持 0（分组内紧凑）。detail 行 line-height 从 1.4 降到 1.3。
+
+**理由**：对标 CLI 的单行信息密度。GUI 本身有分组 header 带来的视觉分隔，行内不需要额外间距。
+
 ## Risks / Trade-offs
 
 - **[Risk] state.json 格式变化** → Mitigation：serde 加 `#[serde(default)]` 容错 + unknown fields 忽略
 - **[Risk] jobs 目录突然出现** → Mitigation：启动 stat + 切回 Jobs tab 时 re-check；不做定期轮询
 - **[Risk] 大量 jobs（> 100）** → Mitigation：Phase 1 不分页，列表上限 ~50 个 active job 实测性能可接受（state.json 单个 < 5KB）
 - **[Risk] linkScanPath 格式不稳定** → Mitigation：fallback 到 `encode_path(cwd)`，两者都失败则禁用跳转按钮
+- **[Risk] `claude rm` 删除 busy session** → Mitigation：UI 只对 terminal 状态显示 × 按钮；批量清理仅覆盖 Completed 组；CLI 自身允许删 busy 是设计意图不是 bug
+- **[Risk] 批量删除 N 个 job 串行调 CLI** → Mitigation：job 数量通常 < 10，每次 `claude rm` 耗时 < 200ms，串行 < 2s 可接受；未来可改 join_all 并发

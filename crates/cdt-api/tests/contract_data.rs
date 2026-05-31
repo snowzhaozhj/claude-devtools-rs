@@ -64,6 +64,8 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     // Background jobs panel
     "list_jobs",
     "stop_job",
+    "delete_job",
+    "delete_completed_jobs",
     // Phase 2 frontend-context-menu：右键菜单"在终端 / 编辑器打开"+ Settings dropdown
     // 详 openspec/specs/frontend-context-menu/spec.md 三个 Requirement
     "open_in_terminal",

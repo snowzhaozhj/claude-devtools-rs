@@ -257,6 +257,30 @@ export async function stopJob(jobId: string): Promise<void> {
   await refreshJobs();
 }
 
+export async function deleteJob(jobId: string): Promise<void> {
+  jobs = jobs.filter((j) => j.id !== jobId);
+  try {
+    await invoke("delete_job", { jobId });
+  } finally {
+    await refreshJobs();
+  }
+}
+
+export async function deleteCompletedJobs(): Promise<number> {
+  const before = jobs.length;
+  jobs = jobs.filter((j) => {
+    const state = j.state;
+    return state === "working" || state === "blocked";
+  });
+  const removed = before - jobs.length;
+  try {
+    const count = await invoke<number>("delete_completed_jobs");
+    return count;
+  } finally {
+    await refreshJobs();
+  }
+}
+
 export function cleanupJobs(): void {
   if (unlistenJobs) {
     unlistenJobs();
