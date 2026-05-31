@@ -979,11 +979,8 @@ fn parse_cursor_offset(cursor: Option<&str>) -> usize {
 fn truncate_error_message(msg: Option<String>) -> (Option<String>, bool) {
     match msg {
         None => (None, false),
-        Some(s) if s.len() <= ERROR_MESSAGE_MAX_CHARS => (Some(s), false),
-        Some(s) => {
-            let truncated = format!("{}...", &s[..ERROR_MESSAGE_MAX_CHARS]);
-            (Some(truncated), true)
-        }
+        Some(s) if s.chars().count() <= ERROR_MESSAGE_MAX_CHARS => (Some(s), false),
+        Some(s) => (Some(truncate_str(&s, ERROR_MESSAGE_MAX_CHARS)), true),
     }
 }
 
