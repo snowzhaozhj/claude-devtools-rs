@@ -415,9 +415,7 @@ impl Default for MetadataCache {
 impl MetadataCache {
     pub fn new(capacity: usize) -> Self {
         Self {
-            cache: lru::LruCache::new(
-                NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN),
-            ),
+            cache: lru::LruCache::new(NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN)),
         }
     }
 
