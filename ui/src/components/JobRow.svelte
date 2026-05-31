@@ -102,10 +102,9 @@
       {/if}
     </div>
 
-    <!-- svelte-ignore a11y_invalid_attribute -->
-    <a class="job-name" href="#" onclick={handleOpenSession}>
+    <button class="job-name" onclick={handleOpenSession}>
       {job.name || job.id.slice(0, 8)}
-    </a>
+    </button>
 
     {#if prNumber}
       <a
@@ -213,10 +212,14 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    text-align: left;
     flex: 1;
     min-width: 0;
-    text-decoration: none;
+    border: none;
+    background: none;
+    padding: 0;
     cursor: pointer;
+    font-family: inherit;
   }
 
   .job-name:hover {
@@ -302,6 +305,12 @@
     color: var(--color-danger);
   }
 
+  .action-btn:focus-visible {
+    opacity: 1;
+    outline: 2px solid color-mix(in srgb, var(--color-accent-blue) 40%, transparent);
+    outline-offset: 1px;
+  }
+
   .action-btn:disabled {
     opacity: 0.3;
     cursor: not-allowed;
@@ -318,6 +327,6 @@
   }
 
   .row-detail.needs {
-    color: var(--color-warning);
+    color: var(--color-text-secondary, var(--color-text-muted));
   }
 </style>

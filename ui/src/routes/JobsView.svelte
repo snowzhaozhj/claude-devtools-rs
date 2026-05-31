@@ -246,7 +246,7 @@
   .group-count {
     font-size: 10px;
     color: var(--color-text-muted);
-    opacity: 0.5;
+    opacity: 0.7;
     font-family: var(--font-mono);
   }
 
