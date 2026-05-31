@@ -324,7 +324,7 @@ impl CdtMcpServer {
         let limit = params
             .limit
             .unwrap_or(DEFAULT_LIST_LIMIT)
-            .min(MAX_PAGE_SIZE);
+            .clamp(1, MAX_PAGE_SIZE);
         let offset = parse_cursor_offset(params.cursor.as_deref());
 
         let filter = QueryFilter {
@@ -507,23 +507,28 @@ impl CdtMcpServer {
 
         let total_chunks = windowed.len();
 
-        // Pagination: only when no explicit window (range/tail) was specified.
-        // range/tail already define a bounded window — return all of it.
+        // Pagination logic:
+        // - range/tail: explicit window, return all of it (no further pagination)
+        // - content_mode=full without window: return all (documented behavior for export)
+        // - otherwise: paginate with cursor + max_chunks
         let has_explicit_window = range.is_some() || params.tail.is_some();
-        let (page_chunks, offset): (Vec<(usize, &Chunk)>, usize) = if has_explicit_window {
+        let return_all = has_explicit_window
+            || (matches!(content_mode, ContentMode::Full) && params.cursor.is_none());
+
+        let (page_chunks, offset): (Vec<(usize, &Chunk)>, usize) = if return_all {
             (windowed, 0)
         } else {
             let off = parse_cursor_offset(params.cursor.as_deref());
             let page_size = params
                 .max_chunks
                 .unwrap_or(DEFAULT_PAGE_SIZE)
-                .min(MAX_PAGE_SIZE);
+                .clamp(1, MAX_PAGE_SIZE);
             let page: Vec<_> = windowed.into_iter().skip(off).take(page_size).collect();
             (page, off)
         };
 
         let returned_chunks = page_chunks.len();
-        let has_more = !has_explicit_window && (offset + returned_chunks < total_chunks);
+        let has_more = !return_all && (offset + returned_chunks < total_chunks);
 
         let envelopes: Vec<ChunkEnvelope> = page_chunks
             .iter()
@@ -577,7 +582,7 @@ impl CdtMcpServer {
         let limit = params
             .limit
             .unwrap_or(DEFAULT_LIST_LIMIT)
-            .min(MAX_PAGE_SIZE);
+            .clamp(1, MAX_PAGE_SIZE);
         let offset = parse_cursor_offset(params.cursor.as_deref());
         let total = all_errors.len();
 
@@ -632,7 +637,7 @@ impl CdtMcpServer {
         let limit = params
             .limit
             .unwrap_or(DEFAULT_LIST_LIMIT)
-            .min(MAX_PAGE_SIZE);
+            .clamp(1, MAX_PAGE_SIZE);
         let offset = parse_cursor_offset(params.cursor.as_deref());
 
         let project_id = match params.project.as_deref() {
@@ -1004,12 +1009,12 @@ fn parse_duration_to_epoch_ms(s: &str) -> Option<i64> {
     let (num_str, unit) = s.split_at(split_pos);
     let num: i64 = num_str.parse().ok()?;
     let ms = match unit {
-        "m" => num * 60 * 1000,
-        "h" => num * 3600 * 1000,
-        "d" => num * 24 * 3600 * 1000,
+        "m" => num.checked_mul(60 * 1000)?,
+        "h" => num.checked_mul(3600 * 1000)?,
+        "d" => num.checked_mul(24 * 3600 * 1000)?,
         _ => return None,
     };
-    Some(now - ms)
+    now.checked_sub(ms)
 }
 
 fn parse_range(s: &str) -> Option<(usize, usize)> {
