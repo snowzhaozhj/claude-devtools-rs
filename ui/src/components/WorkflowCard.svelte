@@ -49,8 +49,11 @@
 
   const doneCount = $derived(agents.filter(a => a.state === "completed").length);
 
-  // 运行态（manifest 缺失降级）header 显示 agent 计数 + 已完成数；其它态显示 phase·agent。
+  // detail_omitted skeleton 不含 phases/agents 具体数据，不显示计数避免误导
   const phaseSummary = $derived.by(() => {
+    if (effectiveWorkflow.detailOmitted) {
+      return "";
+    }
     if (effectiveWorkflow.status === "running") {
       return `${agents.length} agent${agents.length !== 1 ? "s" : ""} (${doneCount} done)`;
     }
