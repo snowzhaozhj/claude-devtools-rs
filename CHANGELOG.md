@@ -9,6 +9,8 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-05-31
+
 ### Fixed
 - Jobs panel: stop button, stale status display, and empty name fallback.
 
@@ -229,7 +231,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.14...v0.6.0
 [0.5.14]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.13...v0.5.14
