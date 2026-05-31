@@ -89,10 +89,22 @@ enum Command {
         #[command(subcommand)]
         action: McpAction,
     },
-    /// 配置激活（MCP 注册、Skills 安装等）
+    /// 一键配置（MCP 注册 + Skills 安装）
     Setup {
         #[command(subcommand)]
-        action: SetupAction,
+        action: Option<SetupAction>,
+
+        /// 配置范围：local（个人私有）、project（团队共享 .mcp.json）、user（全局）
+        #[arg(long, short, global = true, default_value = "local")]
+        scope: SetupScope,
+
+        /// 仅打印将执行的操作，不实际执行
+        #[arg(long, global = true)]
+        dry_run: bool,
+
+        /// 强制覆盖已有文件（Skills）
+        #[arg(long, global = true)]
+        force: bool,
     },
     /// 自更新到最新版本
     #[command(name = "self-update")]
@@ -190,20 +202,22 @@ enum McpAction {
     },
 }
 
+#[derive(Clone, ValueEnum)]
+enum SetupScope {
+    /// 个人私有（~/.claude/settings.local.json），不入版本控制
+    Local,
+    /// 团队共享（.mcp.json / .claude/skills/），可 git commit
+    Project,
+    /// 全局（~/.claude/settings.json / ~/.claude/skills/），所有项目可用
+    User,
+}
+
 #[derive(Subcommand)]
 enum SetupAction {
     /// 注册 MCP server 到 Claude Code
-    Mcp {
-        /// 自动执行注册（否则仅打印命令）
-        #[arg(long)]
-        apply: bool,
-    },
+    Mcp,
     /// 安装示例 Skills
-    Skills {
-        /// 强制覆盖已修改的文件
-        #[arg(long)]
-        force: bool,
-    },
+    Skills,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -816,32 +830,52 @@ fn print_chunk_summary(index: usize, chunk: &cdt_core::Chunk) {
 // setup
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn cmd_setup_mcp(apply: bool) {
-    let cmd = "claude mcp add cdt-devtools -- cdt mcp serve";
-    if apply {
-        eprintln!("Running: {cmd}");
-        let status = std::process::Command::new("claude")
-            .args(["mcp", "add", "cdt-devtools", "--", "cdt", "mcp", "serve"])
-            .status();
-        match status {
-            Ok(s) if s.success() => {
-                eprintln!("Registered MCP server \"cdt-devtools\" via `claude mcp add`");
-            }
-            Ok(s) => {
-                eprintln!("claude mcp add exited with {s}");
-                std::process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("Failed to run `claude`: {e}");
-                eprintln!("Make sure Claude Code CLI is installed and in PATH.");
-                std::process::exit(1);
-            }
-        }
+fn cmd_setup_mcp(scope: &SetupScope, dry_run: bool) -> Result<()> {
+    let scope_flag = match scope {
+        SetupScope::Local => "local",
+        SetupScope::Project => "project",
+        SetupScope::User => "user",
+    };
+
+    let cdt_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .unwrap_or_else(|| "cdt".to_string());
+    let cmd = format!("claude mcp add -s {scope_flag} cdt-devtools -- {cdt_bin} mcp serve");
+
+    if dry_run {
+        println!("[dry-run] Would run:\n  {cmd}");
+        return Ok(());
+    }
+
+    eprintln!("Running: {cmd}");
+    let status = std::process::Command::new("claude")
+        .args([
+            "mcp",
+            "add",
+            "-s",
+            scope_flag,
+            "cdt-devtools",
+            "--",
+            &cdt_bin,
+            "mcp",
+            "serve",
+        ])
+        .status()
+        .context("Failed to run `claude`. Make sure Claude Code CLI is installed and in PATH.")?;
+
+    if status.success() {
+        let location = match scope {
+            SetupScope::Local => "~/.claude/settings.local.json",
+            SetupScope::Project => ".mcp.json",
+            SetupScope::User => "~/.claude/settings.json",
+        };
+        eprintln!(
+            "MCP server \"cdt-devtools\" registered (scope: {scope_flag}, stored in {location})"
+        );
+        Ok(())
     } else {
-        println!("To register the MCP server, run:\n");
-        println!("  {cmd}\n");
-        println!("Or use --apply to do it automatically:\n");
-        println!("  cdt setup mcp --apply");
+        anyhow::bail!("claude mcp add exited with {status}");
     }
 }
 
@@ -859,15 +893,45 @@ const SKILL_TEMPLATES: &[SkillTemplate] = &[SkillTemplate {
     content: include_str!("../assets/skills/session-insights/SKILL.md"),
 }];
 
-fn cmd_setup_skills(force: bool) -> Result<()> {
-    let target_dir = std::path::PathBuf::from(".claude/skills");
+fn skills_target_dir(scope: &SetupScope) -> Result<PathBuf> {
+    match scope {
+        SetupScope::Local | SetupScope::Project => Ok(PathBuf::from(".claude/skills")),
+        SetupScope::User => {
+            let home = cdt_discover::home_dir()
+                .context("Cannot determine home directory for user-scope skills installation")?;
+            Ok(home.join(".claude/skills"))
+        }
+    }
+}
+
+fn cmd_setup_skills(scope: &SetupScope, dry_run: bool, force: bool) -> Result<()> {
+    let target_dir = skills_target_dir(scope)?;
     let count = SKILL_TEMPLATES.len();
     let noun = if count == 1 { "skill" } else { "skills" };
+    let scope_label = match scope {
+        SetupScope::Local | SetupScope::Project => "project",
+        SetupScope::User => "user (~/.claude/skills/)",
+    };
 
     println!(
-        "Installing {count} session-aware {noun} to {}/\n",
+        "Installing {count} session-aware {noun} to {} (scope: {scope_label})\n",
         target_dir.display()
     );
+
+    if dry_run {
+        for skill in SKILL_TEMPLATES {
+            let skill_file = target_dir.join(skill.name).join("SKILL.md");
+            let exists = skill_file.exists();
+            if exists && !force {
+                println!("  [dry-run] SKIP  {}/SKILL.md (already exists)", skill.name);
+            } else {
+                let verb = if exists { "FORCE" } else { "WRITE" };
+                println!("  [dry-run] {verb}  {}/SKILL.md", skill.name);
+            }
+        }
+        println!("\nUse without --dry-run to apply.");
+        return Ok(());
+    }
 
     let mut installed = 0;
     let mut skipped = 0;
@@ -1329,12 +1393,19 @@ async fn main() -> Result<()> {
                 mcp::run_mcp_server(engine, allow_sensitive).await
             }
         },
-        Command::Setup { action } => match action {
-            SetupAction::Mcp { apply } => {
-                cmd_setup_mcp(apply);
-                Ok(())
+        Command::Setup {
+            action,
+            scope,
+            dry_run,
+            force,
+        } => match action {
+            Some(SetupAction::Mcp) => cmd_setup_mcp(&scope, dry_run),
+            Some(SetupAction::Skills) => cmd_setup_skills(&scope, dry_run, force),
+            None => {
+                let mcp_result = cmd_setup_mcp(&scope, dry_run);
+                let skills_result = cmd_setup_skills(&scope, dry_run, force);
+                mcp_result.and(skills_result)
             }
-            SetupAction::Skills { force } => cmd_setup_skills(force),
         },
         Command::SelfUpdate {
             check,
