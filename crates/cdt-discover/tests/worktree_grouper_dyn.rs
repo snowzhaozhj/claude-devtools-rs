@@ -59,36 +59,36 @@ async fn new_dyn_via_arc_blanket_impl_groups_projects() {
     );
 }
 
+struct ConcurrencyTracker {
+    current: Arc<AtomicUsize>,
+    peak: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl GitIdentityResolver for ConcurrencyTracker {
+    async fn resolve_identity(&self, _path: &Path) -> Option<RepositoryIdentity> {
+        None
+    }
+    async fn get_branch(&self, _path: &Path) -> Option<String> {
+        None
+    }
+    async fn is_main_worktree(&self, _path: &Path) -> bool {
+        true
+    }
+    async fn resolve_all(&self, _path: &Path) -> RepoLookup {
+        let c = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(c, Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        self.current.fetch_sub(1, Ordering::SeqCst);
+        RepoLookup::default()
+    }
+}
+
 /// Spec: `project-discovery::Grouper 并发度不超过上限`
 #[tokio::test]
 async fn grouper_concurrency_stays_within_limit() {
     let peak = Arc::new(AtomicUsize::new(0));
     let current = Arc::new(AtomicUsize::new(0));
-
-    struct ConcurrencyTracker {
-        current: Arc<AtomicUsize>,
-        peak: Arc<AtomicUsize>,
-    }
-
-    #[async_trait]
-    impl GitIdentityResolver for ConcurrencyTracker {
-        async fn resolve_identity(&self, _path: &Path) -> Option<RepositoryIdentity> {
-            None
-        }
-        async fn get_branch(&self, _path: &Path) -> Option<String> {
-            None
-        }
-        async fn is_main_worktree(&self, _path: &Path) -> bool {
-            true
-        }
-        async fn resolve_all(&self, _path: &Path) -> RepoLookup {
-            let c = self.current.fetch_add(1, Ordering::SeqCst) + 1;
-            self.peak.fetch_max(c, Ordering::SeqCst);
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            self.current.fetch_sub(1, Ordering::SeqCst);
-            RepoLookup::default()
-        }
-    }
 
     let resolver: Arc<dyn GitIdentityResolver> = Arc::new(ConcurrencyTracker {
         current: Arc::clone(&current),
