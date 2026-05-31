@@ -59,7 +59,7 @@ impl ParsedMessageCache {
     pub fn new(capacity: usize) -> Self {
         Self {
             cache: lru::LruCache::new(
-                NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(1).unwrap()),
+                NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN),
             ),
         }
     }

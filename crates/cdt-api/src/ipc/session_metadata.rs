@@ -416,7 +416,7 @@ impl MetadataCache {
     pub fn new(capacity: usize) -> Self {
         Self {
             cache: lru::LruCache::new(
-                NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(1).unwrap()),
+                NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN),
             ),
         }
     }
@@ -450,8 +450,7 @@ impl MetadataCache {
         ctx: &ContextId,
         path: &Path,
     ) -> Option<MetadataCacheEntry> {
-        let key = (ctx.clone(), path.to_path_buf());
-        self.cache.get(&key).cloned()
+        self.lookup(ctx, path)
     }
 
     fn insert(&mut self, key: MetadataCacheKey, entry: MetadataCacheEntry) {
