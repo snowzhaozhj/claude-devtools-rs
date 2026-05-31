@@ -243,6 +243,9 @@ export function getJobsError(): string | null {
   return error;
 }
 
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+const POLL_INTERVAL_MS = 30_000;
+
 export async function initializeJobs(): Promise<void> {
   await loadJobs();
   await subscribeJobsUpdate();
@@ -250,6 +253,20 @@ export async function initializeJobs(): Promise<void> {
 
 export async function refreshJobs(): Promise<void> {
   await loadJobs();
+}
+
+export function startJobsPolling(): void {
+  if (pollTimer) return;
+  pollTimer = setInterval(() => {
+    void loadJobs();
+  }, POLL_INTERVAL_MS);
+}
+
+export function stopJobsPolling(): void {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
 }
 
 export async function stopJob(jobId: string): Promise<void> {
@@ -285,6 +302,7 @@ export async function deleteCompletedJobs(): Promise<number> {
 }
 
 export function cleanupJobs(): void {
+  stopJobsPolling();
   if (unlistenJobs) {
     unlistenJobs();
     unlistenJobs = null;
