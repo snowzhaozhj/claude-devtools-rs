@@ -370,6 +370,7 @@
   .notifications-body {
     flex: 1;
     overflow-y: auto;
+    /* scrollbar-gutter-exempt: flex:1 全屏面板，滚动条首帧即确定，无动态跳变 */
     padding: 8px;
   }
 

@@ -151,6 +151,7 @@
   .modal-body {
     flex: 1 1 auto;
     overflow-y: auto;
+    /* scrollbar-gutter-exempt: 模态打开即定尺寸，滚动条首帧即在，无生命周期内宽度跳变 */
     color: var(--color-text-secondary);
     font-size: 13px;
   }

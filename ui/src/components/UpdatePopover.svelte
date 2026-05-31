@@ -136,6 +136,7 @@
     max-width: calc(100vw - 24px);
     max-height: 60vh;
     overflow-y: auto;
+    /* scrollbar-gutter-exempt: 浮层打开即定尺寸，滚动条首帧即在，无生命周期内宽度跳变 */
     padding: 14px 16px;
     background: var(--color-surface);
     border: 1px solid var(--color-border-emphasis);
@@ -186,6 +187,7 @@
     padding: 8px 10px;
     max-height: 220px;
     overflow-y: auto;
+    /* scrollbar-gutter-exempt: 浮层内 release notes 打开即定尺寸，无生命周期内宽度跳变 */
     background: var(--color-surface-overlay);
     border: 1px solid var(--color-border);
     border-radius: 6px;

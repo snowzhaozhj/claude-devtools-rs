@@ -133,6 +133,7 @@
   .diff-body {
     max-height: 400px;
     overflow: auto;
+    /* scrollbar-gutter-exempt: 等宽 diff 块首帧定型 + 横向滚动为主，竖向滚动条不影响可读性 */
     background: var(--code-bg);
   }
 

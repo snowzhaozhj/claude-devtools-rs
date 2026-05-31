@@ -236,6 +236,7 @@
     z-index: 20;
     max-height: 420px;
     overflow-y: auto;
+    /* scrollbar-gutter-exempt: 浮层打开即定尺寸，滚动条首帧即在，无生命周期内宽度跳变 */
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   }
 

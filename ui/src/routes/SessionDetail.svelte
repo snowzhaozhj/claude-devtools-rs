@@ -2431,6 +2431,7 @@
     overflow-x: auto;
     max-height: 384px;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     line-height: 1.6;
   }
 
@@ -2577,6 +2578,7 @@
   .compact-content {
     max-height: 384px;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     padding: 14px 18px;
     font-size: 13px;
   }

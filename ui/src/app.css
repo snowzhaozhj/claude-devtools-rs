@@ -638,6 +638,7 @@ mark[data-search-current] {
   justify-content: center;
   padding: 16px;
   overflow: auto;
+  /* scrollbar-gutter-exempt: mermaid SVG 图块首帧定型，双轴滚动但内容一次加载完 */
   background: var(--code-bg);
 }
 

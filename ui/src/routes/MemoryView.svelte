@@ -383,6 +383,7 @@
     width: 324px;
     flex-shrink: 0;
     overflow-y: auto;
+    /* scrollbar-gutter-exempt: 固定宽面板，滚动条首帧即确定，无动态跳变 */
     border-right: 1px solid var(--color-border);
     padding: 18px 12px;
     background: var(--color-surface-sidebar);
@@ -628,6 +629,7 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
+    /* scrollbar-gutter-exempt: flex:1 全屏面板，滚动条首帧即确定，无动态跳变 */
   }
 
   .content-inner {

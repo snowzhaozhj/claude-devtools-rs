@@ -43,6 +43,7 @@
 
 - **下拉选择 SHALL 用 `lib/components/Dropdown.svelte`，禁止原生 `<select>`**：系统默认弹层会遮盖当前已选值（典型 macOS WKWebView），且跨平台样式不可控（chevron / 高度 / option hover 全是平台行为）。PR #128 当时正是修这个 bug 才引入 `Dropdown`——PR #143 重写 Dashboard 时回退到原生 select 又踩了一次。SettingsView 风格用 `size="md"`（默认），工具栏 / inline 紧凑用 `size="sm" minWidth={...}`。已用位置可 `grep -rn 'from.*Dropdown.svelte' ui/src` 实时查。
 - **搜索类 input SHALL 配齐 7 件套**：`type="search"` + `autocomplete="off"` + `autocorrect="off"` + `autocapitalize="off"` + `spellcheck="false"` + `enterkeyhint="search"` + `aria-label`，并加 CSS `::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }` 隐藏 WebKit 原生 clear 按钮。理由：macOS WKWebView 对小写字母自动弹「A ×」大写建议浮窗、浏览器 autocomplete 历史下拉、`type=search` 自带 clear 按钮会与 / kbd 等装饰冲突。PR #138 统一处理；新加搜索框时**复制 DashboardView `.dash-search` 模板即可**，已合规位置可 `grep -rn 'autocapitalize="off"' ui/src` 查。
+- **竖向滚动容器 SHALL 配 `scrollbar-gutter: stable`**（滚动条弹出压缩内容→横向跳变的 bug 已复发 3+ 次）：内容随生命周期变化的加 `scrollbar-gutter: stable;`；浮层/代码块首帧定型的加 `/* scrollbar-gutter-exempt: <原因> */` 豁免。`src/lib/scrollbarGutter.guard.test.ts` 机械拦截（缺二者即 fail），完整 rationale 见该测试头注释。
 
 ## Settings 与 config 修改
 
