@@ -176,8 +176,10 @@ pub fn parse_manifest(run_id: &str, content: &str) -> Result<WorkflowItem, Strin
 
                 let agent_index = agents.len();
                 let failed_by_log = failed_indices.contains(&(agent_index + 1));
-                let failed_by_heuristic =
-                    tokens == 0 && tool_calls == 0 && result_preview.is_none();
+                let failed_by_heuristic = matches!(state_str, "completed" | "done")
+                    && tokens == 0
+                    && tool_calls == 0
+                    && result_preview.is_none();
                 let failed = failed_by_log || failed_by_heuristic;
 
                 let state = if failed {
@@ -1284,5 +1286,22 @@ mod tests {
         assert_eq!(agents.len(), 2);
         assert_eq!(agents[0].session_id.as_deref(), Some("abc123"));
         assert_eq!(agents[1].session_id.as_deref(), Some("def456"));
+    }
+
+    #[test]
+    fn parse_manifest_running_agent_not_failed_by_heuristic() {
+        let json = r#"{
+            "workflowProgress": [
+                {"type": "workflow_agent", "label": "agent-active", "phaseIndex": 0, "state": "running", "tokens": 0, "toolCalls": 0}
+            ],
+            "status": "running",
+            "logs": [],
+            "totalTokens": 0,
+            "durationMs": 1000
+        }"#;
+        let item = parse_manifest("wf_running", json).unwrap();
+
+        assert!(!item.agents[0].failed);
+        assert_eq!(item.agents[0].state, WorkflowAgentState::Running);
     }
 }
