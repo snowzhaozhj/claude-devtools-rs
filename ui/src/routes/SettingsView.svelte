@@ -1367,7 +1367,7 @@
     border-right: 1px solid var(--color-border);
     background: var(--color-surface-sidebar);
     overflow-y: auto;
-    scrollbar-gutter: stable;
+    /* scrollbar-gutter-exempt: flex:0 固定宽面板，滚动条首帧即确定，无动态跳变 */
   }
   .nav-title {
     margin: 0 8px 14px;
@@ -1454,7 +1454,7 @@
   .settings-content {
     flex: 1;
     overflow-y: auto;
-    scrollbar-gutter: stable;
+    /* scrollbar-gutter-exempt: flex:1 全屏面板，滚动条首帧即确定，无动态跳变 */
     padding: 28px 36px 48px;
     min-width: 0;
   }
