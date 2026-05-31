@@ -174,7 +174,7 @@ struct ToolExecEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     input: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    output: Option<String>,
+    output: Option<serde_json::Value>,
     output_omitted: bool,
     output_chars: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -449,7 +449,7 @@ impl CdtMcpServer {
             }
         };
 
-        // Parse range if provided
+        // Parse range if provided (absolute chunk indices)
         let range = match params.range.as_deref() {
             None => None,
             Some(s) => Some(parse_range(s).ok_or_else(|| {
@@ -460,10 +460,11 @@ impl CdtMcpServer {
             })?),
         };
 
+        // Fetch ALL chunks (no range/tail applied at query layer) so we keep absolute indices
         let options = SessionQueryOptions {
-            range,
-            tail: params.tail,
-            kind_filter,
+            range: None,
+            tail: None,
+            kind_filter: None,
             errors_only: false,
         };
 
@@ -473,32 +474,48 @@ impl CdtMcpServer {
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let total_chunks = detail.chunks.len();
         let is_ongoing = detail.is_ongoing;
 
-        // Determine page window
-        let offset = parse_cursor_offset(params.cursor.as_deref());
-        let page_size = if matches!(content_mode, ContentMode::Full)
-            && range.is_none()
-            && params.tail.is_none()
-            && params.cursor.is_none()
-        {
-            // full mode without explicit window = return all
-            total_chunks
-        } else {
-            params
-                .max_chunks
-                .unwrap_or(DEFAULT_PAGE_SIZE)
-                .min(MAX_PAGE_SIZE)
-        };
-
-        let page_chunks: Vec<(usize, &Chunk)> = detail
+        // Build indexed chunks with absolute indices, then apply filter
+        let indexed_chunks: Vec<(usize, &Chunk)> = detail
             .chunks
             .iter()
             .enumerate()
-            .skip(offset)
-            .take(page_size)
+            .filter(|(_, chunk)| match kind_filter {
+                None => true,
+                Some(ChunkKindFilter::ErrorsOnly) => matches!(chunk, Chunk::Ai(ai) if ai.tool_executions.iter().any(|te| te.is_error)),
+                Some(ChunkKindFilter::ToolCalls) => matches!(chunk, Chunk::Ai(ai) if !ai.tool_executions.is_empty()),
+            })
             .collect();
+
+        // Apply window selection (range/tail) on filtered set, preserving absolute indices
+        let windowed: Vec<(usize, &Chunk)> = if let Some((start, end)) = range {
+            indexed_chunks
+                .into_iter()
+                .filter(|(abs_idx, _)| *abs_idx >= start && *abs_idx < end)
+                .collect()
+        } else if let Some(tail) = params.tail {
+            let len = indexed_chunks.len();
+            if tail < len {
+                indexed_chunks[len - tail..].to_vec()
+            } else {
+                indexed_chunks
+            }
+        } else {
+            indexed_chunks
+        };
+
+        let total_chunks = windowed.len();
+
+        // Apply pagination (cursor + max_chunks)
+        let offset = parse_cursor_offset(params.cursor.as_deref());
+        let page_size = params
+            .max_chunks
+            .unwrap_or(DEFAULT_PAGE_SIZE)
+            .min(MAX_PAGE_SIZE);
+
+        let page_chunks: Vec<(usize, &Chunk)> =
+            windowed.into_iter().skip(offset).take(page_size).collect();
 
         let returned_chunks = page_chunks.len();
         let has_more = offset + returned_chunks < total_chunks;
@@ -851,6 +868,14 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
     }
 }
 
+fn tool_output_to_value(output: &ToolOutput) -> serde_json::Value {
+    match output {
+        ToolOutput::Text { text } => serde_json::Value::String(text.clone()),
+        ToolOutput::Structured { value } => value.clone(),
+        ToolOutput::Missing => serde_json::Value::Null,
+    }
+}
+
 fn build_tool_exec_envelope(te: &cdt_core::ToolExecution, mode: &ContentMode) -> ToolExecEnvelope {
     let output_text = tool_output_text(&te.output);
     let output_chars = output_text.len();
@@ -873,12 +898,20 @@ fn build_tool_exec_envelope(te: &cdt_core::ToolExecution, mode: &ContentMode) ->
             is_error: te.is_error,
             input_summary: None,
             input: Some(te.input.clone()),
-            output: Some(output_text),
+            output: Some(tool_output_to_value(&te.output)),
             output_omitted: false,
             output_chars,
             error_message: te.error_message.clone(),
         },
     }
+}
+
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(max_chars).collect();
+    format!("{truncated}...")
 }
 
 fn summarize_input(input: &serde_json::Value) -> String {
@@ -889,21 +922,8 @@ fn summarize_input(input: &serde_json::Value) -> String {
                 .take(3)
                 .map(|(k, v)| {
                     let val_str = match v {
-                        serde_json::Value::String(s) => {
-                            if s.len() > 60 {
-                                format!("{}...", &s[..57])
-                            } else {
-                                s.clone()
-                            }
-                        }
-                        other => {
-                            let s = other.to_string();
-                            if s.len() > 60 {
-                                format!("{}...", &s[..57])
-                            } else {
-                                s
-                            }
-                        }
+                        serde_json::Value::String(s) => truncate_str(s, 57),
+                        other => truncate_str(&other.to_string(), 57),
                     };
                     format!("{k}: {val_str}")
                 })
@@ -914,14 +934,7 @@ fn summarize_input(input: &serde_json::Value) -> String {
                 parts.join(", ")
             }
         }
-        other => {
-            let s = other.to_string();
-            if s.len() > 120 {
-                format!("{}...", &s[..117])
-            } else {
-                s
-            }
-        }
+        other => truncate_str(&other.to_string(), 117),
     }
 }
 
