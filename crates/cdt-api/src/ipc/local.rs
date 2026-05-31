@@ -140,9 +140,17 @@ fn find_group_with_fallback(
         .iter()
         .position(|g| g.id == group_id)
         .or_else(|| {
-            groups
+            let fallback_pos = groups
                 .iter()
-                .position(|g| g.worktrees.iter().any(|w| w.id == group_id))
+                .position(|g| g.worktrees.iter().any(|w| w.id == group_id));
+            if let Some(p) = fallback_pos {
+                tracing::debug!(
+                    requested_id = %group_id,
+                    matched_group_id = %groups[p].id,
+                    "group lookup used worktree-id fallback (frontend holds stale group ID)"
+                );
+            }
+            fallback_pos
         })
         .ok_or_else(|| ApiError::not_found(format!("repository group {group_id}")))?;
     Ok(groups.swap_remove(pos))
@@ -8626,6 +8634,16 @@ mod tests {
         )];
         let result = find_group_with_fallback(groups, "-Users-foo-workspace").unwrap();
         assert_eq!(result.id, "/Users/foo/workspace/.git");
+    }
+
+    #[test]
+    fn find_group_with_fallback_exact_match_takes_priority_over_worktree_fallback() {
+        let groups = vec![
+            make_group("-Users-foo-workspace", &["-Users-foo-workspace"]),
+            make_group("/Users/bar/.git", &["-Users-foo-workspace"]),
+        ];
+        let result = find_group_with_fallback(groups, "-Users-foo-workspace").unwrap();
+        assert_eq!(result.id, "-Users-foo-workspace");
     }
 
     #[test]
