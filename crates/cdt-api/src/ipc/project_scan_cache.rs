@@ -161,6 +161,14 @@ impl ProjectScanCache {
         self.invalidation_generation
     }
 
+    /// 仅 bump `invalidation_generation`，不清除 entry。用于 `track_unknown=false`
+    /// 但 raw event 携带 watcher 级 `session_list_changed=true` 的场景：
+    /// 让 `groups_cache` 失效（它用 `scan_inv_gen` 作 freshness key），同时
+    /// 保留 entry 供后续 lookup hit（避免引发 scan storm）。
+    pub fn bump_invalidation_generation(&mut self) {
+        self.invalidation_generation = self.invalidation_generation.wrapping_add(1);
+    }
+
     /// 无条件写入 / 覆盖 entry（**不**带 race 校验）。仅用于直接构造
     /// cache 的测试场景；生产路径用 [`Self::try_insert`] 防 in-flight
     /// scan race。
@@ -565,6 +573,11 @@ pub(crate) fn apply_file_event_to_project_scan_cache(
         let structural = event.project_list_changed || event.deleted || unknown_session;
         if structural {
             cache.invalidate_local();
+        } else if event.session_list_changed || event.project_list_changed {
+            // `track_unknown=false` 导致 structural=false，但 watcher 已标记
+            // session/project 级结构变化——仅 bump generation 让 groups_cache
+            // 失效，不清 entry（避免 scan storm）。
+            cache.bump_invalidation_generation();
         }
         (structural, unknown_session)
     };

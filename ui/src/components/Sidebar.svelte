@@ -719,7 +719,15 @@
     const currentFilter = worktreeFilter;
     const currentGroupWorktreeIds = new Set(groupWorktrees.map((w) => w.id));
     registerHandler("sidebar", (payload) => {
-      if (payload.projectListChanged) {
+      // 结构性事件触发项目列表刷新——放在 inGroup guard 之前，确保非当前项目
+      // 的新 session / 删除也能同步 ProjectSwitcher 下拉的 totalSessions。
+      // 三档触发条件（change `enrich-file-change-with-session-list-changed::D3`）：
+      // 普通 JSONL append（三个标志全 false）放行不触发 IPC。
+      if (
+        payload.projectListChanged ||
+        payload.sessionListChanged ||
+        payload.deleted
+      ) {
         scheduleRefresh("sidebar:projects", () =>
           untrack(() => loadProjects(true)),
         );
@@ -736,30 +744,6 @@
       scheduleRefresh(`sidebar:${currentGroupId}`, () =>
         untrack(() => loadSessions(currentGroupId, true)),
       );
-      // 结构性事件 SHALL 同步触发 list_repository_groups SWR revalidate，
-      // 让 `selectedGroup.totalSessions` / `wt.sessions.length`（scopeTotal 唯一
-      // 权威源）与列表 silent refresh 一起跟新——spec sidebar-navigation
-      // §"会话总数显示口径" 要求 silent 刷新时 scopeTotal 同步下降 / 上升。
-      //
-      // 三档触发条件（change `enrich-file-change-with-session-list-changed::D3`）：
-      // - `projectListChanged`（已在 L692 走过，此处避免同 payload 重复入队）
-      // - `sessionListChanged`：后端 unified invalidator enrich 的结构信号
-      //   （unknown_session / deleted 命中三档判定）
-      // - `deleted`：兜底——deleted=true 但 invalidator enrich 路径若失效仍触发
-      //
-      // 普通 JSONL append（三个标志全 false）放行不触发 IPC，让 1437 次 IPC
-      // 降到 ~109 次 structural（telemetry 实测）。旧后端缺
-      // `sessionListChanged` 字段时退化为 `projectListChanged || deleted`，
-      // 与历史行为对齐（不引入新退化）。
-      if (
-        payload.projectListChanged ||
-        payload.sessionListChanged ||
-        payload.deleted
-      ) {
-        scheduleRefresh("sidebar:projects", () =>
-          untrack(() => loadProjects(true)),
-        );
-      }
     });
     return () => {
       unregisterHandler("sidebar");
