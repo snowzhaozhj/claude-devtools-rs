@@ -23,9 +23,11 @@
     depth?: number;
     /** 顶层 workflow items，按 toolExecution.workflowRunId 匹配渲染 WorkflowCard。 */
     workflowItems?: WorkflowItem[];
+    /** projectId 透传给 WorkflowCard lazy-loading。嵌套场景可省略（workflow 已是完整数据）。 */
+    projectId?: string;
   }
 
-  let { items, rootSessionId, sessionId, depth = 0, workflowItems = [] }: Props = $props();
+  let { items, rootSessionId, sessionId, depth = 0, workflowItems = [], projectId = "" }: Props = $props();
 
   const workflowMap = $derived.by(() => {
     const map = new Map<string, WorkflowItem>();
@@ -128,7 +130,7 @@
       {@const exec = item.execution}
       {@const matchedWorkflow = exec.workflowRunId ? workflowMap.get(exec.workflowRunId) : undefined}
       {#if matchedWorkflow}
-        <WorkflowCard workflow={matchedWorkflow} sessionId={sessionId ?? rootSessionId} />
+        <WorkflowCard workflow={matchedWorkflow} sessionId={sessionId ?? rootSessionId} {projectId} />
       {:else}
         {@const key = `tool-${exec.toolUseId}`}
         {@const eff = effectiveExec(exec)}

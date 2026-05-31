@@ -1244,7 +1244,7 @@
                     {@const exec = item.execution}
                     {@const matchedWf = exec.workflowRunId ? workflowMap.get(exec.workflowRunId) : undefined}
                     {#if matchedWf}
-                      <WorkflowCard workflow={matchedWf} {sessionId} />
+                      <WorkflowCard workflow={matchedWf} {sessionId} {projectId} />
                     {:else}
                       {@const key = `${chunk.chunkId}-tool-${exec.toolUseId}`}
                       {@const eff = effectiveExec(exec)}

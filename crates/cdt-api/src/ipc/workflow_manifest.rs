@@ -279,7 +279,7 @@ fn extract_index_from_log(log: &str) -> Option<usize> {
 /// 收集 `(run_id, script_path)` 候选——按 `run_id` 去重，`script_path` 取第一个非空值。
 ///
 /// 携带 `workflow_script_path`，供运行态降级（manifest 缺失）时剥取 workflow name。
-fn collect_workflow_candidates(chunks: &[cdt_core::Chunk]) -> Vec<(String, Option<String>)> {
+pub fn collect_workflow_candidates(chunks: &[cdt_core::Chunk]) -> Vec<(String, Option<String>)> {
     let mut seen = std::collections::HashSet::new();
     let mut out: Vec<(String, Option<String>)> = Vec::new();
     for chunk in chunks {
@@ -336,6 +336,20 @@ pub async fn resolve_workflow_items(
     }
 
     items
+}
+
+/// 完整解析单个 workflow（manifest + journal + script）。
+///
+/// 对外暴露给 `get_workflow_detail` IPC command 使用。
+pub async fn resolve_single_detail(
+    run_id: &str,
+    manifest_path: &Path,
+    journal_path: &Path,
+    script_path: Option<&str>,
+    fs: &dyn FileSystemProvider,
+    cache: &std::sync::Mutex<WorkflowManifestCache>,
+) -> WorkflowItem {
+    resolve_single(run_id, manifest_path, journal_path, script_path, fs, cache).await
 }
 
 async fn resolve_single(
