@@ -29,6 +29,7 @@ cdt-ssh = { workspace = true }
 cdt-watch = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
 flate2 = { workspace = true }
 reqwest = { workspace = true }
 semver = { workspace = true }

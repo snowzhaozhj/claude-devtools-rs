@@ -73,6 +73,12 @@ pub async fn run(opts: UpdateOptions) -> Result<()> {
         "Updated cdt to v{target} ({install_path})",
         install_path = install_path.display()
     );
+
+    // 自动刷新已安装的 shell 补全
+    if let Err(e) = crate::completions::refresh_installed() {
+        eprintln!("Warning: failed to refresh shell completions: {e}");
+    }
+
     Ok(())
 }
 
