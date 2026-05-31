@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- CLI setup command now supports `--scope local|project|user` for flexible configuration placement.
+
 ## [0.6.3] — 2026-05-31
 
 ### Added
