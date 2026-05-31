@@ -49,12 +49,32 @@ else
     rm -f Cargo.toml.bak src-tauri/Cargo.toml.bak src-tauri/tauri.conf.json.bak
 fi
 
+# CHANGELOG 自动化：把 [Unreleased] 转为 [X.Y.Z] — 日期 + 重新加空 [Unreleased] 段 + 更新底部链接
+if [[ -f CHANGELOG.md ]]; then
+    TODAY=$(date +%Y-%m-%d)
+    echo "→ CHANGELOG.md: [Unreleased] → [${VERSION}] — ${TODAY}"
+
+    # 替换 ## [Unreleased] 为新版本头 + 空 [Unreleased] 段
+    sed -i.bak "s/^## \[Unreleased\]$/## [Unreleased]\n\n## [${VERSION}] — ${TODAY}/" CHANGELOG.md
+
+    # 更新底部链接：旧 [Unreleased] 指向 vCUR...HEAD，改为 vVERSION...HEAD
+    # 并插入新版本的 compare 链接
+    if grep -q "^\[Unreleased\]:" CHANGELOG.md; then
+        # 获取当前 Unreleased 链接中的旧 tag
+        OLD_TAG=$(grep "^\[Unreleased\]:" CHANGELOG.md | sed -E 's|.*compare/(v[^.]+\.[^.]+\.[^.]+)\.\.\.HEAD|\1|')
+        sed -i.bak "s|^\[Unreleased\]:.*|[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v${VERSION}...HEAD\n[${VERSION}]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/${OLD_TAG}...v${VERSION}|" CHANGELOG.md
+    fi
+
+    rm -f CHANGELOG.md.bak
+fi
+
 echo "→ just release-check（会同步刷新两份 Cargo.lock + 跑 preflight）"
 just release-check
 
 # 如果本来就是 $VERSION 且 release-check 没动 lock，git add 仍然安全（5 个文件全在）
-echo "→ git add 5 文件 + commit"
+echo "→ git add 版本文件 + commit"
 git add Cargo.toml Cargo.lock src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
+[[ -f CHANGELOG.md ]] && git add CHANGELOG.md
 
 # 检查暂存区是否真有改动；release-check 后 lock 没动 + manifest 也没动 = 空 commit 拦截
 if git diff --cached --quiet; then
