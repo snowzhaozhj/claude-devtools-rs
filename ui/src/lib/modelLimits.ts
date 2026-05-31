@@ -7,6 +7,9 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
 };
 
 export function getModelContextLimit(model: string | null | undefined): number | null {
+  if (!model) return null;
+  const normalized = model.toLowerCase().trim();
+  if (/\b1m\b|\[1m\]|-1m$/.test(normalized)) return 1_000_000;
   const info = parseModelString(model);
   if (!info) return null;
   return MODEL_CONTEXT_LIMITS[info.family] ?? null;

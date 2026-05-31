@@ -8,6 +8,11 @@ describe("getModelContextLimit", () => {
     expect(getModelContextLimit("claude-haiku-4-5-20251001")).toBe(200_000);
   });
 
+  test("returns 1M for extended context models", () => {
+    expect(getModelContextLimit("claude-opus-4-6[1m]")).toBe(1_000_000);
+    expect(getModelContextLimit("claude-opus-4-6-1m")).toBe(1_000_000);
+  });
+
   test("returns null for unrecognized model", () => {
     expect(getModelContextLimit("gpt-4o")).toBeNull();
     expect(getModelContextLimit(null)).toBeNull();
