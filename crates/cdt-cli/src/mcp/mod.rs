@@ -774,6 +774,8 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
                 .map(|r| {
                     let text = message_content_text(&r.content);
                     let content_chars = text.chars().count();
+                    // Upstream IPC layer may have already omitted content
+                    let upstream_omitted = r.content_omitted;
                     match mode {
                         ContentMode::Omit => ResponseEnvelope {
                             model: r.model.clone(),
@@ -783,8 +785,8 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
                         },
                         ContentMode::Full => ResponseEnvelope {
                             model: r.model.clone(),
-                            content: Some(text),
-                            content_omitted: false,
+                            content: if upstream_omitted { None } else { Some(text) },
+                            content_omitted: upstream_omitted,
                             content_chars,
                         },
                     }
@@ -888,7 +890,14 @@ fn tool_output_to_value(output: &ToolOutput) -> serde_json::Value {
 
 fn build_tool_exec_envelope(te: &cdt_core::ToolExecution, mode: &ContentMode) -> ToolExecEnvelope {
     let output_text = tool_output_text(&te.output);
-    let output_chars = output_text.chars().count();
+    // If upstream omitted output, use output_bytes as approximate char count
+    let upstream_omitted = te.output_omitted;
+    let output_chars = if upstream_omitted {
+        te.output_bytes
+            .map_or(0, |b| usize::try_from(b).unwrap_or(usize::MAX))
+    } else {
+        output_text.chars().count()
+    };
 
     match mode {
         ContentMode::Omit => ToolExecEnvelope {
@@ -908,8 +917,12 @@ fn build_tool_exec_envelope(te: &cdt_core::ToolExecution, mode: &ContentMode) ->
             is_error: te.is_error,
             input_summary: None,
             input: Some(te.input.clone()),
-            output: Some(tool_output_to_value(&te.output)),
-            output_omitted: false,
+            output: if upstream_omitted {
+                None
+            } else {
+                Some(tool_output_to_value(&te.output))
+            },
+            output_omitted: upstream_omitted,
             output_chars,
             error_message: te.error_message.clone(),
         },
