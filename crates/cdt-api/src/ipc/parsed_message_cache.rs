@@ -80,11 +80,10 @@ impl ParsedMessageCache {
         signature: &FileSignature,
     ) -> Option<Arc<Vec<ParsedMessage>>> {
         let key = (ctx.clone(), path.to_path_buf());
-        let entry = self.cache.get(&key)?;
-        if entry.signature != *signature {
+        if self.cache.peek(&key)?.signature != *signature {
             return None;
         }
-        Some(entry.messages.clone())
+        Some(self.cache.get(&key)?.messages.clone())
     }
 
     /// hot path cache hit trust —— 不校验 signature 直接返当前 entry。
