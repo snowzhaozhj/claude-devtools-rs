@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780193423242,
+  "lastUpdate": 1780195623305,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -6896,6 +6896,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 14490,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c1e506decc84d5a37f402b160cf2d1f98e375222",
+          "message": "feat(jobs): Background Jobs Panel Phase 1 & 2 (#422)\n\n* feat(jobs): Background Jobs Panel Phase 1 & 2 (#421, #420)\n\n完整实现后台任务面板——对齐 `claude agents` 原生 GUI 等价物。\n\nPhase 1 (#421):\n- cdt-core: BackgroundJob/JobState/JobSummary/JobsResponse 类型 + 分组/badge 逻辑\n- cdt-watch: FileWatcher 扩展 jobs_dir + route_event 严格过滤 state.json\n- cdt-api: list_jobs IPC + HTTP route + broadcast bridge\n- src-tauri: command wrapper + invoke_handler\n- UI: JobsView + JobRow + TitleBar badge + session 跳转\n- 降级: jobs/ 不存在时零 UI 暴露\n\nPhase 2 (#420):\n- 实时推送: jobs-update event → 前端 listen → 自动刷新\n- Badge 实时更新: 后端计算 badge 色 + 数字，前端直接消费\n- Command Palette: \"Open Jobs\" / \"Background Jobs\" 注册\n- Stop 操作: stop_job IPC → `claude stop <daemonShort>`\n\n测试覆盖:\n- vitest 45 pass (badge/分组/state→color/projectId提取/stop)\n- Playwright 7 pass (tab/分组/展开/PR chip/badge/降级/空态)\n- IPC contract 143 pass (含 list_jobs camelCase 验证)\n- HTTP contract 3 pass (含 /api/jobs route)\n\nCloses #421, Closes #420\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(ci): add list_jobs_from_dir to fs-direct-calls allowlist\n\njobs/ 目录永远 Local-only，不参与 SSH context。\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(http): remove duplicate /api/jobs route causing router panic\n\naxum panics on duplicate route registration. Removed the redundant\nroute/handler pair added during merge (kept the backend-engineer's\nversion at the canonical telemetry section position).\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(jobs): trait dispatch + real data parsing + visual redesign\n\n- Move list_jobs/stop_job from `impl LocalDataApi` to `impl DataApi for LocalDataApi`\n  so HTTP route via `dyn DataApi` trait object hits the real implementation\n- Align BackgroundJob struct with real state.json format: children is\n  Option<Vec<JobChild>> (nullable), inFlight is Option<JobInFlight> struct\n- Replace CPU icon with square-terminal (more intuitive for bg tasks)\n- Redesign JobsView/JobRow CSS: proper spacing rhythm, expand area with\n  border instead of raised bg, chevron hover state, label typography aligned\n  to DESIGN.md spec (11px/600/0.04em)\n- Add __cdtReady signal in App.svelte onMount for stable Playwright timing\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(jobs): address review findings — error handling + type safety\n\n- stop_job: safe char-based truncation instead of byte slice (panic risk)\n- stop_job: distinguish NotFound (binary missing) from other IO errors\n- list_jobs_from_dir: log warnings on parse failure and read_dir errors\n- Frontend: read jobsDirExists from backend response, not hardcode true\n- Frontend: add jobsDirExists to ListJobsResult TypeScript type\n- Frontend: stopJob shows inline error on failure instead of fire-and-forget\n- Frontend: subscribe catch logs warning instead of empty swallow\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(jobs): done/failed/stopped jobs go to Completed even with PR children\n\nAlign grouping logic with `claude agents` CLI behavior: terminal states\nalways land in Completed group. \"Ready for review\" only applies when the\njob is still active (working/idle) but has produced a PR.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(jobs): redesign interaction model + remove green badge\n\n- Row no longer clickable (no accidental navigation)\n- Explicit \"打开 session →\" link per row instead of whole-row click\n- PR chip is a real <a> link with hover underline\n- Stop button only on working rows, visible inline\n- Remove green badge (only red=failed, amber=blocked interrupt user)\n- Completed group uses opacity 0.65 to visually recede\n- No italic text, no chevron, no expand — all info visible in 2 lines\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(jobs): done/idle/stopped dot color → muted (not green)\n\nCompleted jobs should visually recede, not draw attention with\ngreen dots. Only working (blue) and blocked (amber) use saturated color.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* feat(jobs): bridge jobs-update event to HTTP SSE for real-time updates\n\nWithout this, the HTTP server mode (browser ?http=1) never receives\njob state changes — users see stale data until manual refresh.\n\n- Add PushEvent::JobsUpdate variant\n- Add spawn_jobs_bridge in bridge.rs\n- Wire jobs_rx into spawn_event_bridge (7th param)\n- Frontend: use subscribeEvent(\"jobs_update\") instead of Tauri-only listen\n- TauriTransport: add \"jobs-update\" listener for desktop parity\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* style(jobs): polish action links + spacing + opacity per DESIGN.md\n\n- Action links: blue color for session link, danger for Stop, hover underline\n- Terminal rows: opacity 0.55 (more faded), hover 0.9\n- Group spacing: 20px between groups\n- Transitions: 150ms ease-out aligned to design system\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(jobs): use --font-sans + remove ghostly opacity on completed rows\n\n- Add font-family: var(--font-sans) to .jobs-view container\n- Replace opacity-based fading with muted text color for completed jobs\n  (opacity made the whole row look disabled/broken)\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(jobs): name is session link, Stop hidden until hover, always show group label\n\n- Job name is the session link (click → open session, hover → underline)\n- Remove dedicated actions row (saves vertical space)\n- Stop: grey text, only visible on row hover (not red, not prominent)\n- Always show group label even with single group (user needs state context)\n- Completed jobs: name uses muted color, no opacity hack\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(jobs): tempo-based classification + needs field + Working/Idle split\n\n- tempo=active → unconditionally Working (aligns with CLI status=busy)\n- tempo=blocked → Blocked/NeedsInput\n- tempo=idle → respects state field (Completed for done/failed/stopped)\n- Working state no longer routes to ReadyForReview (only Idle+PR does)\n- Add `needs` field to BackgroundJob/JobSummary for blocked action prompts\n- Frontend: show needs text in amber when job is blocked\n- Update mock data, tests, contract test for new field\n\nVerified against `claude agents --json` and daemon control.sock protocol.\nResearch confirmed tempo values: active|idle|blocked (daemon real-time signal).\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(jobs): handle null needs field + guard blocked override on terminal states\n\nReview findings:\n- HIGH: daemon writes `\"needs\": null` for non-blocked jobs → serde fails →\n  job silently disappears. Fix: deserialize_nullable_string (null → \"\").\n- IMPORTANT: tempo=blocked could clobber terminal states (done/failed/stopped)\n  during race. Fix: guard with !matches!(terminal states).\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(jobs): done+PR → ReadyForReview instead of Completed\n\nCLI checks PR children BEFORE routing success to Completed.\nA done job with a PR means \"work finished, PR awaits user review\".\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(jobs): align with CLI — done/idle unconditionally Completed (plan B)\n\nWithout GitHub API we cannot determine PR checks/review status,\nso ReadyForReview is unreachable for now. All non-working, non-blocked\njobs go to Completed — matching what `claude agents` shows.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* style: cargo fmt\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* feat(jobs): add delete job + visual hierarchy for completed jobs\n\n- Backend: `delete_job` (calls `claude rm`) + `delete_completed_jobs` (bulk)\n- HTTP routes: DELETE /api/jobs/{id} + DELETE /api/jobs/completed\n- Frontend: optimistic removal + two-step inline confirm (click → \"确认?\" → execute)\n- Visual: completed+PR keeps normal opacity; completed without PR fades (0.55);\n  failed never fades\n- JobsView: \"Clear\" button in Completed group header (bulk delete with confirm)\n- Design decisions D8/D9/D10 documented in openspec change\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(jobs): address PR review findings\n\n- Add \"idle\" to isTerminal check (idle jobs in Completed group now get\n  delete button and faded visual)\n- Replace empty catch blocks with console.error logging\n- Add onDestroy timer cleanup in JobRow + JobsView\n- Add try/finally to stopJob for consistent refresh on error\n- Add tracing::warn! for per-job delete failures in bulk operation\n- Fix trait doc to match implementation (deletes all terminal, not just no-PR)\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* fix(ui): add scrollbar-gutter: stable to JobsView\n\nRequired by scrollbarGutter.guard.test added in #428.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* style(jobs): impeccable critique fixes\n\n- Replace <a href=\"#\"> with <button> for job name (a11y)\n- Remove amber text doubling on needs detail (Status Owns Color Rule)\n- Add focus-visible ring on action buttons\n- Bump group-count opacity 0.5 → 0.7 for readability\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n* chore: remove accidental screenshot\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-05-31T10:43:33+08:00",
+          "tree_id": "504bc05d8a4df2fd91485aa2ef761b2263e67291",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/c1e506decc84d5a37f402b160cf2d1f98e375222"
+        },
+        "date": 1780195622560,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 112.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1110,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4843,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.842,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.231,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 47.62,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.89,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 292.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1221,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3358,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3213,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 40180,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 61.38,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 67.89,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 676.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6773,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 218.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2193,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 65.47,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 660.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 6605,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 128.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1292,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.34,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 73.17,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8651,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 908.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8866,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 980.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 48.62,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 507.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 95.39,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 962.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9640,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 190.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1328,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12880,
             "unit": "µs"
           }
         ]
