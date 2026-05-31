@@ -211,7 +211,12 @@ const aiChunk: AIChunk = {
       timestamp: ts(0.2),
       content: '我来帮你检查 LocalDataApi 的字段命名。',
       toolCalls: [],
-      usage: null,
+      usage: {
+        input_tokens: 125000,
+        output_tokens: 800,
+        cache_read_input_tokens: 45000,
+        cache_creation_input_tokens: 200,
+      },
       model: 'claude-sonnet-4-6',
     },
   ],
