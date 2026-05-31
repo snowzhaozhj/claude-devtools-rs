@@ -161,6 +161,7 @@ impl ServerState {
         let error_rx = self.api.subscribe_detected_errors();
         let metadata_rx = self.api.subscribe_session_metadata();
         let context_rx = self.api.subscribe_context_changed();
+        let jobs_rx = self.api.subscribe_jobs();
         spawn_event_bridge(
             events_tx,
             file_rx,
@@ -168,6 +169,7 @@ impl ServerState {
             error_rx,
             metadata_rx,
             context_rx,
+            jobs_rx,
         );
 
         let static_serve = self.static_serve.clone();
