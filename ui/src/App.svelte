@@ -36,7 +36,7 @@
   import { setTimeFormat } from "./lib/displayPrefs.svelte";
   import { loadAgentConfigs } from "./lib/agentConfigsStore.svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
-  import { initFileChangeStore } from "./lib/fileChangeStore.svelte";
+  import { initFileChangeStore, registerHandler, unregisterHandler } from "./lib/fileChangeStore.svelte";
   import { subscribeEvent } from "./lib/transport";
   import { getSidebarCollapsed, toggleSidebarCollapsed } from "./lib/sidebarStore.svelte";
   import { attachExternalLinkInterceptor } from "./lib/externalLinks";
@@ -210,6 +210,15 @@
     await loadAgentConfigs();
     // 单例 listen("file-change") —— 路由组件通过 fileChangeStore 注册 handler
     await initFileChangeStore();
+    // 全局兜底：结构性 file-change 事件刷新 projectDataStore，确保无论哪个
+    // 页面 mounted（DashboardView / SessionDetail / Settings），ProjectSwitcher
+    // 下拉和项目列表都能及时更新。与 Sidebar/DashboardView handler 共用
+    // projectDataStore inflight dedupe，不会产生额外 IPC。
+    registerHandler("app-global-projects", (payload) => {
+      if (payload.projectListChanged || payload.sessionListChanged || payload.deleted) {
+        void loadProjectData({ refresh: true }).catch(() => {});
+      }
+    });
     // 初始化 Background Jobs store（TitleBar 入口依赖 jobsDirExists 判断是否渲染）
     await initializeJobs();
     // 启动时同步一次 Dock badge（显示持久化的未读数）
@@ -251,6 +260,7 @@
 
   onDestroy(() => {
     unregisterShortcuts?.();
+    unregisterHandler("app-global-projects");
     window.removeEventListener("cdt-open-command-palette", openCommandPalette);
     unlistenNotif?.();
     unlistenNotifAdded?.();
