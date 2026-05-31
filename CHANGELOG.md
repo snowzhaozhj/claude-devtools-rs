@@ -9,6 +9,11 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-05-31
+
+### Added
+- CLI setup command now supports `--scope local|project|user` for flexible configuration placement.
+
 ## [0.6.3] — 2026-05-31
 
 ### Added
@@ -244,7 +249,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.0...v0.6.1
