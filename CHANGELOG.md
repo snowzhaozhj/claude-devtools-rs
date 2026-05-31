@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- Jobs panel: stop button, stale status display, and empty name fallback.
+
 ## [0.6.1] — 2026-05-31
 
 ### Added
