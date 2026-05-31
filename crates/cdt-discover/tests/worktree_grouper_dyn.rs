@@ -6,8 +6,8 @@
 //! 3. Semaphore 限流确保并发度 ≤ `GROUPER_CONCURRENCY_LIMIT`
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use cdt_core::{Project, RepositoryIdentity};

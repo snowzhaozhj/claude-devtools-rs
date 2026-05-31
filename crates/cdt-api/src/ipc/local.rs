@@ -1544,19 +1544,25 @@ impl LocalDataApi {
     > {
         let pre_root_generation = self.root_generation.load(Ordering::SeqCst);
         let pre_context_generation = self.context_generation.load(Ordering::SeqCst);
-        let scan_inv_gen = self
+
+        // 先取 (fs, ctx) 再检查 cache——确保 cache hit 返回的 groups 与
+        // (fs, ctx) 属同一 generation snapshot，避免"旧 groups + 新 context"。
+        let (fs, projects_dir, ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
+        let captured_context_generation = self.context_generation.load(Ordering::SeqCst);
+        let captured_root_generation = self.root_generation.load(Ordering::SeqCst);
+        let captured_scan_inv_gen = self
             .project_scan_cache
             .lock()
             .expect("poisoned")
             .invalidation_generation();
 
-        // groups cache hit：generation 三元组匹配 + TTL 未过期
+        // groups cache hit：用 captured generation（与 fs/ctx 同源）检查
         let cached_groups = {
             let cache = self.groups_cache.lock().expect("poisoned");
             cache.as_ref().and_then(|entry| {
-                if entry.root_gen == pre_root_generation
-                    && entry.ctx_gen == pre_context_generation
-                    && entry.scan_inv_gen == scan_inv_gen
+                if entry.root_gen == captured_root_generation
+                    && entry.ctx_gen == captured_context_generation
+                    && entry.scan_inv_gen == captured_scan_inv_gen
                     && entry.created_at.elapsed() < GROUPS_CACHE_TTL
                 {
                     Some(entry.groups.clone())
@@ -1566,13 +1572,9 @@ impl LocalDataApi {
             })
         };
         if let Some(groups) = cached_groups {
-            let (fs, projects_dir, ctx, _policy, _resolvers) = self.active_fs_and_policy().await?;
-            let captured_context_generation = self.context_generation.load(Ordering::SeqCst);
             return Ok((groups, fs, projects_dir, ctx, captured_context_generation));
         }
 
-        let (fs, projects_dir, ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
-        let captured_context_generation = self.context_generation.load(Ordering::SeqCst);
         let projects = self
             .scan_projects_cached_with(&fs, &projects_dir, &ctx)
             .await?;
@@ -1580,22 +1582,28 @@ impl LocalDataApi {
             cdt_discover::WorktreeGrouper::new_dyn(resolvers.git_identity_resolver.clone());
         let groups = grouper.group_by_repository((*projects).clone()).await;
 
-        // 写入 groups cache
+        // 条件写入 groups cache：只在 generation 仍与计算时一致时写入，
+        // 避免 grouper 执行期间 generation 变化导致 stale 数据被标为 fresh。
         {
-            let fresh_root_gen = self.root_generation.load(Ordering::SeqCst);
-            let fresh_ctx_gen = self.context_generation.load(Ordering::SeqCst);
-            let fresh_scan_inv_gen = self
+            let cur_root_gen = self.root_generation.load(Ordering::SeqCst);
+            let cur_ctx_gen = self.context_generation.load(Ordering::SeqCst);
+            let cur_scan_inv_gen = self
                 .project_scan_cache
                 .lock()
                 .expect("poisoned")
                 .invalidation_generation();
-            *self.groups_cache.lock().expect("poisoned") = Some(GroupsCacheEntry {
-                groups: groups.clone(),
-                root_gen: fresh_root_gen,
-                ctx_gen: fresh_ctx_gen,
-                scan_inv_gen: fresh_scan_inv_gen,
-                created_at: std::time::Instant::now(),
-            });
+            if cur_root_gen == captured_root_generation
+                && cur_ctx_gen == captured_context_generation
+                && cur_scan_inv_gen == captured_scan_inv_gen
+            {
+                *self.groups_cache.lock().expect("poisoned") = Some(GroupsCacheEntry {
+                    groups: groups.clone(),
+                    root_gen: captured_root_generation,
+                    ctx_gen: captured_context_generation,
+                    scan_inv_gen: captured_scan_inv_gen,
+                    created_at: std::time::Instant::now(),
+                });
+            }
         }
 
         let post_root_generation = self.root_generation.load(Ordering::SeqCst);
