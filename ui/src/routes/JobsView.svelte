@@ -1,6 +1,6 @@
 <script lang="ts">
   import JobRow from "../components/JobRow.svelte";
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import {
     getJobs,
     getJobsDirExists,
@@ -9,6 +9,8 @@
     refreshJobs,
     groupJobs,
     deleteCompletedJobs,
+    startJobsPolling,
+    stopJobsPolling,
   } from "../lib/jobsStore.svelte";
 
   const jobs = $derived(getJobs());
@@ -21,7 +23,13 @@
   let clearTimer: ReturnType<typeof setTimeout> | null = $state(null);
   let clearing = $state(false);
 
+  onMount(() => {
+    void refreshJobs();
+    startJobsPolling();
+  });
+
   onDestroy(() => {
+    stopJobsPolling();
     if (clearTimer) clearTimeout(clearTimer);
   });
 

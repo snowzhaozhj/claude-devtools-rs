@@ -2695,6 +2695,55 @@ fn todos_dir_from_projects_dir(projects_dir: &Path) -> PathBuf {
     )
 }
 
+/// 解析 `claude` CLI 二进制路径。
+///
+/// macOS GUI app 不继承 shell PATH，直接 `Command::new("claude")` 会 `NotFound`。
+/// 搜索优先级：`CLAUDE_CLI_PATH` 环境变量 → 当前 PATH → 平台已知目录。
+fn resolve_claude_cli() -> Result<PathBuf, ApiError> {
+    if let Ok(p) = std::env::var("CLAUDE_CLI_PATH") {
+        let path = PathBuf::from(&p);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+
+    if let Ok(output) = std::process::Command::new("which").arg("claude").output() {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if !s.is_empty() {
+                return Ok(PathBuf::from(s));
+            }
+        }
+    }
+
+    let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let npx_dir = home.join(".npm/_npx");
+    let known_paths = [
+        home.join(".local/bin/claude"),
+        PathBuf::from("/opt/homebrew/bin/claude"),
+        PathBuf::from("/usr/local/bin/claude"),
+    ];
+
+    for candidate in &known_paths {
+        if candidate.is_file() {
+            return Ok(candidate.clone());
+        }
+    }
+
+    if let Ok(entries) = std::fs::read_dir(&npx_dir) {
+        for entry in entries.flatten() {
+            let bin = entry.path().join("node_modules/.bin/claude");
+            if bin.is_file() {
+                return Ok(bin);
+            }
+        }
+    }
+
+    Err(ApiError::internal(
+        "claude CLI not found — install Claude Code CLI or set CLAUDE_CLI_PATH".to_owned(),
+    ))
+}
+
 /// 扫描 `jobs_dir` 下所有 `<job_id>/state.json`，解析 + 分组 + badge 计算。
 ///
 /// jobs 目录不存在时返回空响应（降级）。
@@ -2747,25 +2796,22 @@ async fn list_jobs_from_dir(jobs_dir: &Path) -> Result<cdt_core::JobsResponse, A
 
         let job_id = entry.file_name().to_string_lossy().into_owned();
 
-        // tempo 是 daemon 实时活跃度信号，优先级高于 state：
-        // - tempo=active → 无条件 Working（对齐 CLI: status=busy → Working）
-        // - tempo=blocked + 非终态 → Blocked
-        // - tempo=idle / 其他 → 不覆盖，尊重 state 字段
-        match bg_job.tempo.as_str() {
-            "active" => {
-                bg_job.state = cdt_core::JobState::Working;
+        // tempo 是 daemon 实时活跃度信号，但终态 state 优先——进程退出后
+        // daemon 可能未及时清理 tempo 字段。
+        let is_terminal = matches!(
+            bg_job.state,
+            cdt_core::JobState::Done | cdt_core::JobState::Failed | cdt_core::JobState::Stopped
+        );
+        if !is_terminal {
+            match bg_job.tempo.as_str() {
+                "active" => {
+                    bg_job.state = cdt_core::JobState::Working;
+                }
+                "blocked" => {
+                    bg_job.state = cdt_core::JobState::Blocked;
+                }
+                _ => {}
             }
-            "blocked"
-                if !matches!(
-                    bg_job.state,
-                    cdt_core::JobState::Done
-                        | cdt_core::JobState::Failed
-                        | cdt_core::JobState::Stopped
-                ) =>
-            {
-                bg_job.state = cdt_core::JobState::Blocked;
-            }
-            _ => {}
         }
 
         let project_id = extract_project_id_from_link_scan_path(&bg_job.link_scan_path)
@@ -2779,9 +2825,15 @@ async fn list_jobs_from_dir(jobs_dir: &Path) -> Result<cdt_core::JobsResponse, A
 
         let group = classify_job_group(&bg_job);
 
+        let display_name = if bg_job.name.is_empty() {
+            bg_job.intent.clone()
+        } else {
+            bg_job.name
+        };
+
         jobs.push(JobSummary {
             id: job_id,
-            name: bg_job.name,
+            name: display_name,
             detail: bg_job.detail,
             intent: bg_job.intent,
             state: bg_job.state,
@@ -4974,20 +5026,13 @@ impl DataApi for LocalDataApi {
         if job_id.is_empty() {
             return Err(ApiError::validation("job_id must not be empty"));
         }
+        let claude = resolve_claude_cli()?;
         let short: String = job_id.chars().take(8).collect();
-        let output = tokio::process::Command::new("claude")
+        let output = tokio::process::Command::new(&claude)
             .args(["stop", &short])
             .output()
             .await
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    ApiError::internal(
-                        "claude CLI not found on PATH — install Claude Code CLI to stop background jobs".to_owned(),
-                    )
-                } else {
-                    ApiError::internal(format!("failed to spawn claude stop: {e}"))
-                }
-            })?;
+            .map_err(|e| ApiError::internal(format!("failed to spawn claude stop: {e}")))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(ApiError::internal(format!("stop failed: {stderr}")));
@@ -4999,20 +5044,13 @@ impl DataApi for LocalDataApi {
         if job_id.is_empty() {
             return Err(ApiError::validation("job_id must not be empty"));
         }
+        let claude = resolve_claude_cli()?;
         let short: String = job_id.chars().take(8).collect();
-        let output = tokio::process::Command::new("claude")
+        let output = tokio::process::Command::new(&claude)
             .args(["rm", &short])
             .output()
             .await
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    ApiError::internal(
-                        "claude CLI not found on PATH — install Claude Code CLI to delete background jobs".to_owned(),
-                    )
-                } else {
-                    ApiError::internal(format!("failed to spawn claude rm: {e}"))
-                }
-            })?;
+            .map_err(|e| ApiError::internal(format!("failed to spawn claude rm: {e}")))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(ApiError::internal(format!("delete failed: {stderr}")));
@@ -8945,5 +8983,84 @@ mod tests {
         use super::STALE_SESSION_THRESHOLD;
         let threshold_ms = i64::try_from(STALE_SESSION_THRESHOLD.as_millis()).unwrap();
         assert_eq!(threshold_ms, 300_000, "threshold SHALL be 5 minutes");
+    }
+
+    #[tokio::test]
+    async fn list_jobs_terminal_state_not_overridden_by_active_tempo() {
+        let tmp = tempdir().unwrap();
+        let jobs_dir = tmp.path().join("jobs");
+        let job_dir = jobs_dir.join("abcd1234");
+        std::fs::create_dir_all(&job_dir).unwrap();
+
+        let state_json = serde_json::json!({
+            "state": "failed",
+            "tempo": "active",
+            "name": "",
+            "intent": "run tests",
+            "detail": "API Error: 400",
+            "sessionId": "sess-xyz",
+            "cwd": "/tmp/test",
+            "createdAt": "2026-05-31T00:00:00Z",
+            "updatedAt": "2026-05-31T00:01:00Z"
+        });
+        std::fs::write(job_dir.join("state.json"), state_json.to_string()).unwrap();
+
+        let response = list_jobs_from_dir(&jobs_dir).await.unwrap();
+        assert_eq!(response.jobs.len(), 1);
+        let job = &response.jobs[0];
+        assert_eq!(job.state, cdt_core::JobState::Failed);
+        assert_eq!(job.name, "run tests");
+    }
+
+    #[tokio::test]
+    async fn list_jobs_non_terminal_overridden_by_active_tempo() {
+        let tmp = tempdir().unwrap();
+        let jobs_dir = tmp.path().join("jobs");
+        let job_dir = jobs_dir.join("efgh5678");
+        std::fs::create_dir_all(&job_dir).unwrap();
+
+        let state_json = serde_json::json!({
+            "state": "idle",
+            "tempo": "active",
+            "name": "my-task",
+            "intent": "do something",
+            "detail": "running",
+            "sessionId": "sess-abc",
+            "cwd": "/tmp/test",
+            "createdAt": "2026-05-31T00:00:00Z",
+            "updatedAt": "2026-05-31T00:01:00Z"
+        });
+        std::fs::write(job_dir.join("state.json"), state_json.to_string()).unwrap();
+
+        let response = list_jobs_from_dir(&jobs_dir).await.unwrap();
+        assert_eq!(response.jobs.len(), 1);
+        let job = &response.jobs[0];
+        assert_eq!(job.state, cdt_core::JobState::Working);
+        assert_eq!(job.name, "my-task");
+    }
+
+    #[tokio::test]
+    async fn list_jobs_empty_name_falls_back_to_intent() {
+        let tmp = tempdir().unwrap();
+        let jobs_dir = tmp.path().join("jobs");
+        let job_dir = jobs_dir.join("name0000");
+        std::fs::create_dir_all(&job_dir).unwrap();
+
+        let state_json = serde_json::json!({
+            "state": "working",
+            "tempo": "idle",
+            "intent": "fix the bug",
+            "detail": "coding",
+            "sessionId": "sess-def",
+            "cwd": "/tmp/test",
+            "createdAt": "2026-05-31T00:00:00Z",
+            "updatedAt": "2026-05-31T00:01:00Z"
+        });
+        std::fs::write(job_dir.join("state.json"), state_json.to_string()).unwrap();
+
+        let response = list_jobs_from_dir(&jobs_dir).await.unwrap();
+        assert_eq!(response.jobs.len(), 1);
+        let job = &response.jobs[0];
+        assert_eq!(job.name, "fix the bug");
     }
 }

@@ -31,7 +31,8 @@
     e.preventDefault();
     if (!job.sessionId) return;
     const projectId = extractProjectId(job) ?? "";
-    openSessionTab(job.sessionId, projectId, job.name);
+    const label = job.name || job.intent || job.id.slice(0, 8);
+    openSessionTab(job.sessionId, projectId, label);
   }
 
   function handleOpenPR(e: Event) {

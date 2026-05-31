@@ -4650,3 +4650,36 @@ async fn list_jobs_empty_dir_returns_empty_response() {
     assert_eq!(json["jobsDirExists"], json!(false));
     assert_eq!(json["badgeCount"], 0);
 }
+
+/// 终态 job 反序列化后 state 字段保持终态（不被 tempo 覆盖）。
+#[test]
+fn list_jobs_terminal_state_preserved_in_serialized_response() {
+    use cdt_core::job::{JobGroup, JobState, JobSummary, JobsResponse};
+
+    let response = JobsResponse {
+        jobs: vec![JobSummary {
+            id: "abcd1234".into(),
+            name: "run tests".into(),
+            detail: "API Error: 400".into(),
+            intent: "run tests".into(),
+            state: JobState::Failed,
+            group: JobGroup::Completed,
+            children: vec![],
+            session_id: "sess-xyz".into(),
+            project_id: String::new(),
+            tempo: "active".into(),
+            needs: String::new(),
+            in_flight: None,
+            created_at: "2026-05-31T00:00:00Z".into(),
+            updated_at: "2026-05-31T00:01:00Z".into(),
+        }],
+        badge: cdt_core::BadgeColor::Red,
+        badge_count: 1,
+        jobs_dir_exists: true,
+    };
+
+    let json = serde_json::to_value(&response).unwrap();
+    let job = &json["jobs"][0];
+    // state 保持 failed（前端据此分组到 Completed 而非 Working）
+    assert_eq!(job["state"], "failed");
+}
