@@ -11,7 +11,7 @@
 //! - 消息计数：user + 对应 assistant 轮次配对计数，过滤规则对齐原版 `isParsedUserChunkMessage`
 //! - `isOngoing`：`check_messages_ongoing` + 文件 mtime stale check（5 分钟）
 
-use std::collections::{HashMap, VecDeque};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Duration, SystemTime};
@@ -403,9 +403,7 @@ type MetadataCacheKey = (ContextId, PathBuf);
 /// `LocalDataApi` 持有的 metadata LRU 缓存。**不**用全局单例（详 design D3b）。
 #[derive(Debug)]
 pub struct MetadataCache {
-    map: HashMap<MetadataCacheKey, MetadataCacheEntry>,
-    order: VecDeque<MetadataCacheKey>,
-    capacity: usize,
+    cache: lru::LruCache<MetadataCacheKey, MetadataCacheEntry>,
 }
 
 impl Default for MetadataCache {
@@ -417,30 +415,18 @@ impl Default for MetadataCache {
 impl MetadataCache {
     pub fn new(capacity: usize) -> Self {
         Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-            capacity,
+            cache: lru::LruCache::new(
+                NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(1).unwrap()),
+            ),
         }
     }
 
     fn lookup(&mut self, ctx: &ContextId, path: &Path) -> Option<MetadataCacheEntry> {
-        // HashMap key 是 owned `(ContextId, PathBuf)` tuple，无法用 `(&ContextId, &Path)`
-        // 直接 get；克隆 key 用于 lookup 是常规模式（ContextId ~300 bytes + PathBuf ~120
-        // bytes 短暂分配，每次 cache hit 几百 ns 可忽略，相对 fs.stat 微秒级开销）。
         let key = (ctx.clone(), path.to_path_buf());
-        let entry = self.map.get(&key)?.clone();
-        if let Some(pos) = self.order.iter().position(|k| k == &key) {
-            let k = self.order.remove(pos).expect("position 已校验");
-            self.order.push_front(k);
-        }
-        Some(entry)
+        self.cache.get(&key).cloned()
     }
 
     /// 用调用方提供的 `FileSignature` 直接查 cache —— 跳过内部 stat。
-    ///
-    /// 用于 list 后台 batch 校验路径：调用方先 `fs.read_dir_with_metadata(parent)`
-    /// 一次拿全 dir 内 entry 的 metadata，再批量 lookup，避免 N 次串行 stat
-    /// （详 change `unify-fs-direct-calls` design D3）。
     ///
     /// signature 字段 byte-equal 才命中；mismatch 返 None。命中时 LRU bump 到队首。
     #[allow(dead_code)]
@@ -451,21 +437,14 @@ impl MetadataCache {
         signature: &FileSignature,
     ) -> Option<MetadataCacheEntry> {
         let key = (ctx.clone(), path.to_path_buf());
-        let entry = self.map.get(&key)?.clone();
+        let entry = self.cache.get(&key)?;
         if entry.signature != *signature {
             return None;
         }
-        if let Some(pos) = self.order.iter().position(|k| k == &key) {
-            let k = self.order.remove(pos).expect("position 已校验");
-            self.order.push_front(k);
-        }
-        Some(entry)
+        entry.clone().into()
     }
 
     /// hot path cache hit trust —— 不校验 signature 直接返当前 entry。
-    ///
-    /// 调用方语义：信任 cache 内容立即返回 UI 渲染（0 fs op），signature 校验
-    /// 由后台 batch task 异步跑（详 change `unify-fs-direct-calls` design D3）。
     /// 命中时 LRU bump。
     pub(crate) fn lookup_trust_cached(
         &mut self,
@@ -473,37 +452,16 @@ impl MetadataCache {
         path: &Path,
     ) -> Option<MetadataCacheEntry> {
         let key = (ctx.clone(), path.to_path_buf());
-        let entry = self.map.get(&key)?.clone();
-        if let Some(pos) = self.order.iter().position(|k| k == &key) {
-            let k = self.order.remove(pos).expect("position 已校验");
-            self.order.push_front(k);
-        }
-        Some(entry)
+        self.cache.get(&key).cloned()
     }
 
     fn insert(&mut self, key: MetadataCacheKey, entry: MetadataCacheEntry) {
-        if self.map.contains_key(&key) {
-            self.map.insert(key.clone(), entry);
-            if let Some(pos) = self.order.iter().position(|k| k == &key) {
-                let k = self.order.remove(pos).expect("position 已校验");
-                self.order.push_front(k);
-            }
-            return;
-        }
-
-        if self.map.len() >= self.capacity {
-            if let Some(evicted) = self.order.pop_back() {
-                self.map.remove(&evicted);
-            }
-        }
-
-        self.map.insert(key.clone(), entry);
-        self.order.push_front(key);
+        self.cache.put(key, entry);
     }
 
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.map.len()
+        self.cache.len()
     }
 }
 
@@ -1632,7 +1590,7 @@ mod tests {
         {
             let mut guard = cache.lock().unwrap();
             let key = (test_local_ctx(tmp.path()), path.clone());
-            if let Some(entry) = guard.map.get_mut(&key) {
+            if let Some(entry) = guard.cache.peek_mut(&key) {
                 entry.signature.mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
                 entry.messages_ongoing = true;
             }
@@ -1988,7 +1946,7 @@ mod tests {
         {
             let mut guard = cache.lock().unwrap();
             let key = (test_local_ctx(tmp.path()), path.clone());
-            if let Some(entry) = guard.map.get_mut(&key) {
+            if let Some(entry) = guard.cache.peek_mut(&key) {
                 entry.title = Some("legacy title from old algo".to_string());
             }
         }

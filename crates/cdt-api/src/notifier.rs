@@ -9,7 +9,7 @@
 //! 配合 `DetectedError` 的确定性 id + `NotificationManager` 的按 id 去重，
 //! 重复扫描同一文件不会产生重复通知。
 
-use std::collections::{HashMap, VecDeque};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -30,51 +30,24 @@ const NOTIFIER_CACHE_CAPACITY: usize = 200;
 /// identity）不一致走 cache miss。命中也 bump key 到队首避免冷热混淆。
 #[derive(Debug)]
 struct SignatureCache {
-    map: HashMap<(String, String), FileSignature>,
-    order: VecDeque<(String, String)>,
-    capacity: usize,
+    cache: lru::LruCache<(String, String), FileSignature>,
 }
 
 impl SignatureCache {
     fn new(capacity: usize) -> Self {
         Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-            capacity,
+            cache: lru::LruCache::new(
+                NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(1).unwrap()),
+            ),
         }
     }
 
-    /// 命中返回 Some 并 bump key 到队首；miss 返回 None。
     fn lookup(&mut self, key: &(String, String)) -> Option<FileSignature> {
-        let sig = *self.map.get(key)?;
-        // bump key 到队首
-        if let Some(pos) = self.order.iter().position(|k| k == key) {
-            let k = self.order.remove(pos).expect("position 已校验");
-            self.order.push_front(k);
-        }
-        Some(sig)
+        self.cache.get(key).copied()
     }
 
-    /// 写入 / 更新 entry，超容量时 LRU 淘汰。
     fn insert(&mut self, key: (String, String), sig: FileSignature) {
-        if self.map.contains_key(&key) {
-            // 已存在：更新 sig + bump 到队首
-            self.map.insert(key.clone(), sig);
-            if let Some(pos) = self.order.iter().position(|k| k == &key) {
-                let k = self.order.remove(pos).expect("position 已校验");
-                self.order.push_front(k);
-            }
-            return;
-        }
-
-        if self.map.len() >= self.capacity {
-            if let Some(evicted) = self.order.pop_back() {
-                self.map.remove(&evicted);
-            }
-        }
-
-        self.map.insert(key.clone(), sig);
-        self.order.push_front(key);
+        self.cache.put(key, sig);
     }
 }
 
@@ -527,7 +500,7 @@ mod tests {
         {
             let cache = pipeline.cache.lock().expect("mutex");
             assert!(
-                cache.map.is_empty(),
+                cache.cache.is_empty(),
                 "add_notification 失败时不应写入缓存（避免下次命中漏通知）"
             );
         }
@@ -543,7 +516,7 @@ mod tests {
         {
             let cache = pipeline.cache.lock().expect("mutex");
             assert!(
-                cache.map.is_empty(),
+                cache.cache.is_empty(),
                 "save 持续失败时 cache 持续为空，每次都重试"
             );
         }
@@ -561,8 +534,7 @@ mod tests {
 
         // cache 应仍为空（不应写入失败 sentinel）
         let cache = pipeline.cache.lock().expect("mutex");
-        assert!(cache.map.is_empty());
-        assert!(cache.order.is_empty());
+        assert_eq!(cache.cache.len(), 0);
     }
 
     // ========================================================================
@@ -605,7 +577,7 @@ mod tests {
         assert!(cache.lookup(&("p".into(), "s1".into())).is_none());
         assert!(cache.lookup(&("p".into(), "s2".into())).is_some());
         assert!(cache.lookup(&("p".into(), "s3".into())).is_some());
-        assert!(cache.map.len() <= 2);
+        assert!(cache.cache.len() <= 2);
     }
 
     #[test]
