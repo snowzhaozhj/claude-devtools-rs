@@ -19,8 +19,12 @@ main 拉新 → tag vX.Y.Z → push tag → 监控 release.yml
 ```
 
 **自动化点**（v0.5.5 之后）：
-- `just release-bump X.Y.Z` 把"sed 三处 + release-check + git add + commit"做成一步（详 `scripts/release-bump.sh`）
+- `just release-bump X.Y.Z` 把"sed 三处 + CHANGELOG [Unreleased]→版本号 + release-check + git add + commit"做成一步（详 `scripts/release-bump.sh`）
 - `release.yml` 末尾 `publish` job 自动校验 17 个必需 asset + `gh release edit --draft=false`，缺一即 fail 保留 draft 待人工介入
+
+**CHANGELOG 自动处理**（v0.6.1 之后）：
+- `release-bump.sh` 在 bump 版本号同时自动将 CHANGELOG.md 的 `## [Unreleased]` 转为 `## [X.Y.Z] — YYYY-MM-DD` + 重建空 `[Unreleased]` 段 + 更新底部 compare 链接
+- Agent / 用户只需在 bump 前把本次改动写入 `## [Unreleased]` 段（或确认已写好），不再需要手动改版本号/日期/链接
 
 Agent / 人工只在 **CI 红 / workflow build job 失败 / verify-asset 缺件** 三种异常时介入。
 
@@ -111,7 +115,17 @@ Agent / 人工只在 **CI 红 / workflow build job 失败 / verify-asset 缺件*
 
 不满足就先解决。
 
-### Step 1：本地 bump + commit（一行）
+### Step 1：确认 CHANGELOG [Unreleased] 已写好
+
+检查 `CHANGELOG.md` 的 `## [Unreleased]` 段是否包含本次发版的改动条目。正常情况下每个 PR 合并时已随手追加（见 `opsx-apply-cadence.md` 第 8 步），此处只需确认没有遗漏。如果为空或明显缺条目：
+
+```bash
+git log --oneline <上个tag>..HEAD
+```
+
+补写遗漏的用户可感知改动。`release-bump.sh` 只负责自动转格式（Unreleased → 版本号+日期+链接），**不生成内容**。
+
+### Step 2：本地 bump + commit（一行）
 
 ```bash
 just release-bump X.Y.Z
@@ -121,19 +135,20 @@ just release-bump X.Y.Z
 1. 校验版本号格式（X.Y.Z 纯数字，拒 -rc/-beta，详 F2）
 2. 校验当前分支非 main / 工作树干净
 3. sed bump 三处版本号（`Cargo.toml` workspace + `src-tauri/Cargo.toml` + `src-tauri/tauri.conf.json`）
-4. 跑 `just release-check`（同步刷新两份 `Cargo.lock`，避免 F5）
-5. `git add` 固定 5 文件 + `git commit -m "chore(release): X.Y.Z"`
+4. CHANGELOG.md `[Unreleased]` → `[X.Y.Z] — 今日日期` + 重建空 `[Unreleased]` + 更新底部链接
+5. 跑 `just release-check`（同步刷新两份 `Cargo.lock`，避免 F5）
+6. `git add` 版本文件 + CHANGELOG + `git commit -m "chore(release): X.Y.Z"`
 
 不 push、不 open PR——这两步保留 Agent / 人工拍板。
 
-### Step 2：push + 开 PR
+### Step 3：push + 开 PR
 
 ```bash
 git push -u origin chore/release-X.Y.Z
 gh pr create --title "chore(release): X.Y.Z" --body "..."
 ```
 
-### Step 3：等 CI 全绿（调用 `wait-ci` skill）
+### Step 4：等 CI 全绿（调用 `wait-ci` skill）
 
 调用 `wait-ci` skill polling。任一 job 红：先看 F1–F7 是否命中已知 fix；命中则改 workflow 或 manifest 后 push fix commit；不命中则报告用户介入。
 

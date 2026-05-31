@@ -9,6 +9,22 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- **Background Jobs panel**: monitor `claude --bg` sessions with live status, logs, and stop/clean actions.
+- Queued user messages now render inline within the AI turn (no separate bubble).
+
+### Fixed
+- Restored `Unchanged` short-circuit for ongoing sessions (perf regression from 0.6.0).
+- CJK text in config values no longer panics on char-boundary truncation.
+- Fallback group matching when git status changes mid-scan.
+- Workflow `failed_by_heuristic` restricted to completed agents only.
+- Scrollbar-gutter jump eliminated across all vertical scroll containers.
+- CLI `self-update` without explicit version now follows `releases/latest` redirect (bypasses API rate limit).
+
+### Changed
+- Project is now MIT-licensed.
+- Release flow: CHANGELOG entries written per-PR; `release-bump.sh` auto-converts `[Unreleased]` to versioned heading.
+
 ## [0.6.0] — 2026-05-30
 
 ### Added
