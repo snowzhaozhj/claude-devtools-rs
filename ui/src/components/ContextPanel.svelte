@@ -15,6 +15,7 @@
   import TaskCoordinationSection from "./contextPanel/TaskCoordinationSection.svelte";
   import ThinkingTextSection from "./contextPanel/ThinkingTextSection.svelte";
   import PhaseSelector from "./contextPanel/PhaseSelector.svelte";
+  import TokenProgressBar from "./contextPanel/TokenProgressBar.svelte";
 
   interface Props {
     detail: SessionDetail;
@@ -166,6 +167,7 @@
       <span class="cp-token-muted">Visible:</span>
       <span class="cp-token-value">~{formatTokens(totalTokens)}</span>
     </div>
+    <TokenProgressBar chunks={detail.chunks} />
     <div class="cp-mode-row">
       <span class="cp-mode-label">View:</span>
       <button
