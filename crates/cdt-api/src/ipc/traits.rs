@@ -145,6 +145,7 @@ pub trait DataApi: Send + Sync {
 
     async fn get_workflow_agent_trace(
         &self,
+        _project_id: &str,
         _parent_session_id: &str,
         _run_id: &str,
         _agent_id: &str,
@@ -158,6 +159,7 @@ pub trait DataApi: Send + Sync {
     /// workflow 面板时调本方法按需拉取完整数据。
     async fn get_workflow_detail(
         &self,
+        _project_id: &str,
         _session_id: &str,
         _run_id: &str,
     ) -> Result<cdt_core::WorkflowItem, ApiError> {

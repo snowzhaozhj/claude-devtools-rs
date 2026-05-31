@@ -153,11 +153,11 @@ pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
             get(get_subagent_trace),
         )
         .route(
-            "/api/sessions/{session_id}/workflows/{run_id}",
+            "/api/projects/{project_id}/sessions/{session_id}/workflows/{run_id}",
             get(get_workflow_detail),
         )
         .route(
-            "/api/sessions/{session_id}/workflows/{run_id}/agents/{agent_id}/trace",
+            "/api/projects/{project_id}/sessions/{session_id}/workflows/{run_id}/agents/{agent_id}/trace",
             get(get_workflow_agent_trace),
         )
         .route(
@@ -828,20 +828,23 @@ async fn get_subagent_trace(
 
 async fn get_workflow_agent_trace(
     State(s): State<AppState>,
-    Path((session_id, run_id, agent_id)): Path<(String, String, String)>,
+    Path((project_id, session_id, run_id, agent_id)): Path<(String, String, String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
     let trace = s
         .api
-        .get_workflow_agent_trace(&session_id, &run_id, &agent_id)
+        .get_workflow_agent_trace(&project_id, &session_id, &run_id, &agent_id)
         .await?;
     Ok(Json(trace))
 }
 
 async fn get_workflow_detail(
     State(s): State<AppState>,
-    Path((session_id, run_id)): Path<(String, String)>,
+    Path((project_id, session_id, run_id)): Path<(String, String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let item = s.api.get_workflow_detail(&session_id, &run_id).await?;
+    let item = s
+        .api
+        .get_workflow_detail(&project_id, &session_id, &run_id)
+        .await?;
     Ok(Json(item))
 }
 

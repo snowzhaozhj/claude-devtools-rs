@@ -730,11 +730,12 @@ export async function getSubagentTrace(
 }
 
 export async function getWorkflowAgentTrace(
+  projectId: string,
   sessionId: string,
   runId: string,
   agentId: string,
 ): Promise<Chunk[]> {
-  return await invoke("get_workflow_agent_trace", { sessionId, runId, agentId });
+  return await invoke("get_workflow_agent_trace", { projectId, sessionId, runId, agentId });
 }
 
 export async function getWorkflowDetail(

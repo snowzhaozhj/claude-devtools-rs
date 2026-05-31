@@ -153,13 +153,14 @@ async fn get_subagent_trace(
 #[tauri::command]
 async fn get_workflow_agent_trace(
     data: State<'_, AppData>,
+    project_id: String,
     session_id: String,
     run_id: String,
     agent_id: String,
 ) -> Result<serde_json::Value, String> {
     let chunks = data
         .api
-        .get_workflow_agent_trace(&session_id, &run_id, &agent_id)
+        .get_workflow_agent_trace(&project_id, &session_id, &run_id, &agent_id)
         .await
         .map_err(|e| e.to_string())?;
     serde_json::to_value(&chunks).map_err(|e| e.to_string())
@@ -168,12 +169,13 @@ async fn get_workflow_agent_trace(
 #[tauri::command]
 async fn get_workflow_detail(
     data: State<'_, AppData>,
+    project_id: String,
     session_id: String,
     run_id: String,
 ) -> Result<serde_json::Value, String> {
     let item = data
         .api
-        .get_workflow_detail(&session_id, &run_id)
+        .get_workflow_detail(&project_id, &session_id, &run_id)
         .await
         .map_err(|e| e.to_string())?;
     serde_json::to_value(&item).map_err(|e| e.to_string())

@@ -4023,6 +4023,7 @@ impl DataApi for LocalDataApi {
 
     async fn get_workflow_agent_trace(
         &self,
+        project_id: &str,
         parent_session_id: &str,
         run_id: &str,
         agent_id: &str,
@@ -4036,47 +4037,29 @@ impl DataApi for LocalDataApi {
             ));
         }
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
-        let entries = fs.read_dir(&projects_dir).await.map_err(|e| {
-            tracing::error!(
-                target: "cdt_api::workflow",
-                error = %e,
-                "failed to read projects_dir"
-            );
-            ApiError::internal("failed to read projects directory")
-        })?;
-        let mut target_path: Option<std::path::PathBuf> = None;
-        for entry in entries {
-            if !entry.kind.is_dir() {
-                continue;
-            }
-            let project_dir = projects_dir.join(&entry.name);
-            let session_dir = project_dir.join(parent_session_id);
-            if fs.exists(&session_dir).await {
-                let candidate = session_dir
-                    .join("subagents")
-                    .join("workflows")
-                    .join(run_id)
-                    .join(format!("agent-{agent_id}.jsonl"));
-                if fs.exists(&candidate).await {
-                    target_path = Some(candidate);
-                    break;
-                }
-            }
-        }
-        let Some(path) = target_path else {
+        let session_dir = projects_dir
+            .join(cdt_discover::path_decoder::extract_base_dir(project_id))
+            .join(parent_session_id);
+        let path = session_dir
+            .join("subagents")
+            .join("workflows")
+            .join(run_id)
+            .join(format!("agent-{agent_id}.jsonl"));
+
+        if !fs.exists(&path).await {
             tracing::debug!(
                 target: "cdt_api::workflow",
+                project_id,
                 parent_session_id,
                 run_id,
                 agent_id,
                 "workflow agent trace not found"
             );
             return Ok(Vec::new());
-        };
+        }
         let messages = cdt_parse::parse_file_via_fs(&*fs, &path)
             .await
             .map_err(|e| ApiError::internal(format!("parse error: {e}")))?;
-        // Workflow agent trace 从查看者视角是主对话，与 get_subagent_trace 一致
         let mut msgs = messages;
         for m in &mut msgs {
             m.is_sidechain = false;
@@ -4087,6 +4070,7 @@ impl DataApi for LocalDataApi {
 
     async fn get_workflow_detail(
         &self,
+        project_id: &str,
         session_id: &str,
         run_id: &str,
     ) -> Result<cdt_core::WorkflowItem, ApiError> {
@@ -4096,33 +4080,9 @@ impl DataApi for LocalDataApi {
             ));
         }
         let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
-        let entries = fs.read_dir(&projects_dir).await.map_err(|e| {
-            tracing::error!(
-                target: "cdt_api::workflow",
-                error = %e,
-                "failed to read projects_dir for workflow detail"
-            );
-            ApiError::internal("failed to read projects directory")
-        })?;
-
-        // 扫 projects_dir 找到包含该 workflow 的 session_dir
-        let mut session_dir: Option<std::path::PathBuf> = None;
-        for entry in entries {
-            if !entry.kind.is_dir() {
-                continue;
-            }
-            let candidate = projects_dir.join(&entry.name).join(session_id);
-            let wf_dir = candidate.join("subagents").join("workflows").join(run_id);
-            if fs.exists(&wf_dir).await {
-                session_dir = Some(candidate);
-                break;
-            }
-        }
-        let Some(session_dir) = session_dir else {
-            return Err(ApiError::not_found(format!(
-                "session {session_id} not found"
-            )));
-        };
+        let session_dir = projects_dir
+            .join(cdt_discover::path_decoder::extract_base_dir(project_id))
+            .join(session_id);
 
         let manifest_path = session_dir.join("workflows").join(format!("{run_id}.json"));
         let journal_path = session_dir
@@ -4135,7 +4095,7 @@ impl DataApi for LocalDataApi {
             run_id,
             &manifest_path,
             &journal_path,
-            None, // script_path 不可用；骨架已携带 name
+            None,
             &*fs,
             &self.workflow_manifest_cache,
         )

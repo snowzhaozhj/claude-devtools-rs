@@ -156,7 +156,7 @@
     agentTrace = null;
     isLoadingAgentTrace = true;
     try {
-      const chunks = await getWorkflowAgentTrace(sessionId, workflow.runId, agent.sessionId);
+      const chunks = await getWorkflowAgentTrace(projectId, sessionId, workflow.runId, agent.sessionId);
       if (expandedAgentId === agent.sessionId) {
         agentTrace = chunks;
       }
