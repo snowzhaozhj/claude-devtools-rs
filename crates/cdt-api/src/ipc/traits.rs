@@ -152,6 +152,18 @@ pub trait DataApi: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// 按需拉取单个 workflow 的完整 `WorkflowItem`（含 phases / agents / tokens）。
+    ///
+    /// `get_session_detail` 默认只返回骨架（`detail_omitted: true`）；前端展开
+    /// workflow 面板时调本方法按需拉取完整数据。
+    async fn get_workflow_detail(
+        &self,
+        _session_id: &str,
+        _run_id: &str,
+    ) -> Result<cdt_core::WorkflowItem, ApiError> {
+        Ok(cdt_core::WorkflowItem::pending(String::new()))
+    }
+
     /// 按需把内联 image base64 落盘到 cache 目录并返回 `asset://` URL。
     ///
     /// `get_session_detail` 默认把 `ContentBlock::Image.source.data` 裁剪为空

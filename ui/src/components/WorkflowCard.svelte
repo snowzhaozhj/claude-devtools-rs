@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import type { WorkflowItem, WorkflowAgent, Chunk } from "../lib/api";
-  import { getWorkflowAgentTrace } from "../lib/api";
+  import { getWorkflowAgentTrace, getWorkflowDetail } from "../lib/api";
   import { buildDisplayItemsFromChunks } from "../lib/displayItemBuilder";
   import { formatDuration } from "../lib/formatters";
   import { CHEVRON_RIGHT } from "../lib/icons";
@@ -9,9 +10,10 @@
   interface Props {
     workflow: WorkflowItem;
     sessionId: string;
+    projectId: string;
   }
 
-  let { workflow, sessionId }: Props = $props();
+  let { workflow, sessionId, projectId }: Props = $props();
 
   let isExpanded = $state(false);
   let isScriptExpanded = $state(false);
@@ -20,11 +22,20 @@
   let isLoadingAgentTrace = $state(false);
   const agentDisplayItems = $derived(agentTrace ? buildDisplayItemsFromChunks(agentTrace) : []);
 
-  const phases = $derived(workflow.phases ?? []);
-  const agents = $derived(workflow.agents ?? []);
+  // --- Lazy-loading detail state ---
+  let fullDetail: WorkflowItem | null = $state(null);
+  let detailLoading = $state(false);
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pollGeneration = 0;
+
+  // 使用 fullDetail（已加载完整数据）或 fallback 到 props workflow（骨架/完整均可）
+  const effectiveWorkflow = $derived(fullDetail ?? workflow);
+
+  const phases = $derived(effectiveWorkflow.phases ?? []);
+  const agents = $derived(effectiveWorkflow.agents ?? []);
 
   const statusLabel = $derived.by(() => {
-    switch (workflow.status) {
+    switch (effectiveWorkflow.status) {
       case "completed": return "Done";
       case "partial_failure": {
         const failedCount = agents.filter(a => a.state === "failed").length;
@@ -32,7 +43,7 @@
       }
       case "running": return "Running";
       case "pending": return "Pending";
-      default: return workflow.status;
+      default: return effectiveWorkflow.status;
     }
   });
 
@@ -40,17 +51,17 @@
 
   // 运行态（manifest 缺失降级）header 显示 agent 计数 + 已完成数；其它态显示 phase·agent。
   const phaseSummary = $derived.by(() => {
-    if (workflow.status === "running") {
+    if (effectiveWorkflow.status === "running") {
       return `${agents.length} agent${agents.length !== 1 ? "s" : ""} (${doneCount} done)`;
     }
     return `${phases.length} phase${phases.length !== 1 ? "s" : ""} · ${agents.length} agent${agents.length !== 1 ? "s" : ""}`;
   });
 
 
-  const durationText = $derived(formatDuration(workflow.durationMs || null));
+  const durationText = $derived(formatDuration(effectiveWorkflow.durationMs || null));
 
   const totalTokensText = $derived(
-    workflow.totalTokens ? workflow.totalTokens.toLocaleString() : null,
+    effectiveWorkflow.totalTokens ? effectiveWorkflow.totalTokens.toLocaleString() : null,
   );
 
   const agentsByPhase = $derived.by(() => {
@@ -63,9 +74,68 @@
     return map;
   });
 
+  // --- Lazy-loading detail logic ---
+  async function ensureDetail(): Promise<void> {
+    if (!workflow.detailOmitted || fullDetail) return;
+    detailLoading = true;
+    try {
+      fullDetail = await getWorkflowDetail(projectId, sessionId, workflow.runId);
+    } catch (e) {
+      console.warn("getWorkflowDetail failed:", e);
+    } finally {
+      detailLoading = false;
+    }
+  }
+
+  function startPoll(): void {
+    if (pollTimer) return;
+    const gen = ++pollGeneration;
+    pollTimer = setInterval(async () => {
+      if (gen !== pollGeneration) { stopPoll(); return; }
+      try {
+        const fresh = await getWorkflowDetail(projectId, sessionId, workflow.runId);
+        if (gen !== pollGeneration) return;
+        fullDetail = fresh;
+        // 终态停止轮询
+        if (fresh.status !== "running" && fresh.status !== "pending") {
+          stopPoll();
+        }
+      } catch { /* 忽略瞬态错误 */ }
+    }, 3000);
+  }
+
+  function stopPoll(): void {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function isTerminal(status: string): boolean {
+    return status !== "running" && status !== "pending";
+  }
+
   function toggleExpanded() {
     isExpanded = !isExpanded;
+    if (isExpanded) {
+      void ensureDetail();
+      // 非终态开始轮询
+      if (!isTerminal(effectiveWorkflow.status)) {
+        startPoll();
+      }
+    } else {
+      stopPoll();
+    }
   }
+
+  // 当 props workflow 的 status 从外部更新为终态时停止轮询
+  $effect(() => {
+    const status = effectiveWorkflow.status;
+    if (isTerminal(status)) {
+      stopPoll();
+    }
+  });
+
+  onDestroy(() => {
+    stopPoll();
+  });
 
   function toggleScript(e: Event) {
     e.stopPropagation();
@@ -111,13 +181,13 @@
       <path d="M2 12l10 5 10-5" />
     </svg>
 
-    <span class="wf-name">{workflow.name ?? workflow.runId}</span>
+    <span class="wf-name">{effectiveWorkflow.name ?? effectiveWorkflow.runId}</span>
     <span class="wf-summary">{phaseSummary}</span>
 
-    <span class="wf-status" class:wf-status-done={workflow.status === "completed"} class:wf-status-failed={workflow.status === "partial_failure"} class:wf-status-running={workflow.status === "running"}>
-      {#if workflow.status === "completed"}
+    <span class="wf-status" class:wf-status-done={effectiveWorkflow.status === "completed"} class:wf-status-failed={effectiveWorkflow.status === "partial_failure"} class:wf-status-running={effectiveWorkflow.status === "running"}>
+      {#if effectiveWorkflow.status === "completed"}
         <svg class="wf-status-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-      {:else if workflow.status === "running"}
+      {:else if effectiveWorkflow.status === "running"}
         <span class="wf-spinner"></span>
       {/if}
       {statusLabel}
@@ -165,13 +235,15 @@
 
   {#if isExpanded}
     <div class="wf-body">
-      {#if agents.length === 0}
-        {#if workflow.status === "running"}
+      {#if detailLoading}
+        <div class="wf-running-minimal">Loading detail…</div>
+      {:else if agents.length === 0}
+        {#if effectiveWorkflow.status === "running"}
           <div class="wf-running-minimal">Running…</div>
         {:else}
           <div class="wf-empty">No subagents</div>
         {/if}
-      {:else if workflow.status === "running"}
+      {:else if effectiveWorkflow.status === "running"}
         <!-- 运行态：合成 agent 无法归属 phase（journal 无 phase 标记）。
              Tier 1 解出 phases 时仅作静态列表展示在 chips 之上；agent 扁平排列。 -->
         {#if phases.length > 0}
@@ -200,7 +272,7 @@
         {/each}
       {/if}
 
-      {#if workflow.scriptPreview}
+      {#if effectiveWorkflow.scriptPreview}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="wf-script-toggle" onclick={toggleScript}>
@@ -208,7 +280,7 @@
           <span>View script</span>
         </div>
         {#if isScriptExpanded}
-          <pre class="wf-script">{workflow.scriptPreview}</pre>
+          <pre class="wf-script">{effectiveWorkflow.scriptPreview}</pre>
         {/if}
       {/if}
     </div>

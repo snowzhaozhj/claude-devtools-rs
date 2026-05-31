@@ -3862,13 +3862,12 @@ impl DataApi for LocalDataApi {
         let annotations = self.inject_context_annotations(&chunks, &messages).await;
         let ctx_ms = t_ctx.elapsed().as_millis();
 
-        // Step 5.5: resolve workflow manifests (conditional on Workflow tool_use presence)
+        // Step 5.5: resolve workflow skeletons (stat-only, no journal/script I/O)
         let session_dir = located.project_dir.join(session_id);
-        let workflow_items = super::workflow_manifest::resolve_workflow_items(
+        let workflow_items = super::workflow_manifest::resolve_workflow_skeletons(
             &chunks,
             &session_dir,
             &*located.fs,
-            &self.workflow_manifest_cache,
         )
         .await;
 
@@ -4081,6 +4080,63 @@ impl DataApi for LocalDataApi {
         }
         let chunks = cdt_analyze::build_chunks(&msgs);
         Ok(chunks)
+    }
+
+    async fn get_workflow_detail(
+        &self,
+        session_id: &str,
+        run_id: &str,
+    ) -> Result<cdt_core::WorkflowItem, ApiError> {
+        if !is_safe_path_component(session_id) || !is_safe_path_component(run_id) {
+            return Err(ApiError::validation(
+                "session_id and run_id must not contain path separators or '..'",
+            ));
+        }
+        let (fs, projects_dir) = self.active_fs_and_projects_dir().await?;
+        let entries = fs.read_dir(&projects_dir).await.map_err(|e| {
+            tracing::error!(
+                target: "cdt_api::workflow",
+                error = %e,
+                "failed to read projects_dir for workflow detail"
+            );
+            ApiError::internal("failed to read projects directory")
+        })?;
+
+        // 扫 projects_dir 找到包含该 session 的 project_dir
+        let mut session_dir: Option<std::path::PathBuf> = None;
+        for entry in entries {
+            if !entry.kind.is_dir() {
+                continue;
+            }
+            let candidate = projects_dir.join(&entry.name).join(session_id);
+            if fs.exists(&candidate).await {
+                session_dir = Some(candidate);
+                break;
+            }
+        }
+        let Some(session_dir) = session_dir else {
+            return Err(ApiError::not_found(format!(
+                "session {session_id} not found"
+            )));
+        };
+
+        let manifest_path = session_dir.join("workflows").join(format!("{run_id}.json"));
+        let journal_path = session_dir
+            .join("subagents")
+            .join("workflows")
+            .join(run_id)
+            .join("journal.jsonl");
+
+        let item = super::workflow_manifest::resolve_single_detail(
+            run_id,
+            &manifest_path,
+            &journal_path,
+            None, // script_path 不可用；骨架已携带 name
+            &*fs,
+            &self.workflow_manifest_cache,
+        )
+        .await;
+        Ok(item)
     }
 
     async fn get_image_asset(

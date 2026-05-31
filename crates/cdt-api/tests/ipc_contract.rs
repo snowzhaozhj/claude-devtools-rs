@@ -96,12 +96,12 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_58() {
+fn expected_tauri_commands_count_is_59() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        58,
+        59,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 58 个 Tauri command（含 SSH + server-mode + \
+         以及本文件常量；当前 src-tauri 注册 59 个 Tauri command（含 SSH + server-mode + \
          simplify-repository-as-project change 加的 list_group_sessions + change \
          command-palette-group-aware 加的 search_group_sessions + change \
          ssh-project-memory-remote-rw 加的 add_memory / delete_memory + change \
@@ -109,7 +109,8 @@ fn expected_tauri_commands_count_is_58() {
          change frontend-context-menu-phase-2 加的 open_in_terminal / open_in_editor / \
          list_available_terminals + change workflow-subagent-pool-scan 加的 \
          get_workflow_agent_trace + change bg-jobs-panel 加的 list_jobs / stop_job / \
-         delete_job / delete_completed_jobs）"
+         delete_job / delete_completed_jobs + fix-workflow-status-update 加的 \
+         get_workflow_detail）"
     );
 }
 
@@ -4383,6 +4384,7 @@ fn workflow_item_serializes_camelcase() {
         total_tokens: 5000,
         duration_ms: 30000,
         error: None,
+        detail_omitted: false,
     };
     let json = serde_json::to_value(&item).unwrap();
 
@@ -4390,6 +4392,7 @@ fn workflow_item_serializes_camelcase() {
     assert_eq!(json["totalTokens"], json!(5000));
     assert_eq!(json["durationMs"], json!(30000));
     assert_eq!(json["status"], json!("completed"));
+    assert!(!json.as_object().unwrap().contains_key("detailOmitted"));
     assert_eq!(json["phases"][0]["index"], json!(1));
     assert_eq!(json["agents"][0]["phaseIndex"], json!(1));
     assert_eq!(json["agents"][0]["toolCalls"], json!(12));
@@ -4505,6 +4508,39 @@ fn session_detail_workflow_items_present_when_populated() {
     let back: SessionDetail = serde_json::from_value(json).unwrap();
     assert_eq!(back.workflow_items.len(), 1);
     assert_eq!(back.workflow_items[0].status, WorkflowStatus::Pending);
+}
+
+#[test]
+fn workflow_item_detail_omitted_true_serializes_as_camelcase_field() {
+    use cdt_core::workflow::{WorkflowItem, WorkflowStatus};
+
+    let item = WorkflowItem {
+        run_id: "wf_skeleton".into(),
+        name: Some("my-flow".into()),
+        status: WorkflowStatus::Running,
+        phases: Vec::new(),
+        agents: Vec::new(),
+        total_tokens: 0,
+        duration_ms: 0,
+        error: None,
+        detail_omitted: true,
+    };
+    let json = serde_json::to_value(&item).unwrap();
+
+    assert_eq!(
+        json["detailOmitted"],
+        serde_json::json!(true),
+        "detail_omitted=true SHALL serialize as camelCase `detailOmitted`"
+    );
+    assert!(
+        json.get("detail_omitted").is_none(),
+        "snake_case `detail_omitted` MUST not appear"
+    );
+
+    // 反序列化回来验证 round-trip
+    let back: WorkflowItem = serde_json::from_value(json).unwrap();
+    assert!(back.detail_omitted);
+    assert_eq!(back.status, WorkflowStatus::Running);
 }
 
 // =============================================================================

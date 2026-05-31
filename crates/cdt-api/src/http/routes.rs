@@ -153,6 +153,10 @@ pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
             get(get_subagent_trace),
         )
         .route(
+            "/api/sessions/{session_id}/workflows/{run_id}",
+            get(get_workflow_detail),
+        )
+        .route(
             "/api/sessions/{session_id}/workflows/{run_id}/agents/{agent_id}/trace",
             get(get_workflow_agent_trace),
         )
@@ -831,6 +835,14 @@ async fn get_workflow_agent_trace(
         .get_workflow_agent_trace(&session_id, &run_id, &agent_id)
         .await?;
     Ok(Json(trace))
+}
+
+async fn get_workflow_detail(
+    State(s): State<AppState>,
+    Path((session_id, run_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let item = s.api.get_workflow_detail(&session_id, &run_id).await?;
+    Ok(Json(item))
 }
 
 async fn get_image_asset(

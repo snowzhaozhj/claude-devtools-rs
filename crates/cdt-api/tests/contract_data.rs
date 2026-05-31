@@ -20,6 +20,7 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "delete_memory",
     "get_subagent_trace",
     "get_workflow_agent_trace",
+    "get_workflow_detail",
     "get_image_asset",
     "get_tool_output",
     "search_sessions",

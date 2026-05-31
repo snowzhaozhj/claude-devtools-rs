@@ -325,6 +325,7 @@ export interface WorkflowItem {
   durationMs?: number;
   error?: string;
   scriptPreview?: string;
+  detailOmitted?: boolean;
 }
 
 export interface SlashCommand {
@@ -734,6 +735,14 @@ export async function getWorkflowAgentTrace(
   agentId: string,
 ): Promise<Chunk[]> {
   return await invoke("get_workflow_agent_trace", { sessionId, runId, agentId });
+}
+
+export async function getWorkflowDetail(
+  projectId: string,
+  sessionId: string,
+  runId: string,
+): Promise<WorkflowItem> {
+  return await invoke("get_workflow_detail", { projectId, sessionId, runId });
 }
 
 /**

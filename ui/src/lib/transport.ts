@@ -336,6 +336,8 @@ function httpRequestForCommand(cmd: string, args: InvokeArgs): HttpRequest {
       return { method: "GET", path: `/api/sessions/${enc(a.rootSessionId)}/subagents/${enc(a.subagentSessionId)}/trace` };
     case "get_workflow_agent_trace":
       return { method: "GET", path: `/api/sessions/${enc(a.sessionId)}/workflows/${enc(a.runId)}/agents/${enc(a.agentId)}/trace` };
+    case "get_workflow_detail":
+      return { method: "GET", path: `/api/sessions/${enc(a.sessionId)}/workflows/${enc(a.runId)}` };
     case "get_image_asset":
       return { method: "GET", path: `/api/sessions/${enc(a.rootSessionId)}/subagents/${enc(a.sessionId)}/blocks/${enc(a.blockId)}/image` };
     case "get_tool_output":

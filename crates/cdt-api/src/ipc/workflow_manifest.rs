@@ -251,6 +251,7 @@ pub fn parse_manifest(run_id: &str, content: &str) -> Result<WorkflowItem, Strin
         total_tokens: raw.total_tokens,
         duration_ms: raw.duration_ms,
         error,
+        detail_omitted: false,
     })
 }
 
@@ -279,7 +280,7 @@ fn extract_index_from_log(log: &str) -> Option<usize> {
 /// 收集 `(run_id, script_path)` 候选——按 `run_id` 去重，`script_path` 取第一个非空值。
 ///
 /// 携带 `workflow_script_path`，供运行态降级（manifest 缺失）时剥取 workflow name。
-fn collect_workflow_candidates(chunks: &[cdt_core::Chunk]) -> Vec<(String, Option<String>)> {
+pub fn collect_workflow_candidates(chunks: &[cdt_core::Chunk]) -> Vec<(String, Option<String>)> {
     let mut seen = std::collections::HashSet::new();
     let mut out: Vec<(String, Option<String>)> = Vec::new();
     for chunk in chunks {
@@ -302,11 +303,15 @@ fn collect_workflow_candidates(chunks: &[cdt_core::Chunk]) -> Vec<(String, Optio
     out
 }
 
-pub async fn resolve_workflow_items(
+/// 轻量骨架解析：只 stat manifest 文件判断 status，不读 journal / script。
+///
+/// `get_session_detail` 主路径调此函数以避免 per-workflow I/O——只做一次 `stat`
+/// syscall。前端按 `detail_omitted: true` 显示骨架，用户展开时调 `get_workflow_detail`
+/// 拉取完整 `WorkflowItem`。
+pub async fn resolve_workflow_skeletons(
     chunks: &[cdt_core::Chunk],
     session_dir: &Path,
     fs: &dyn FileSystemProvider,
-    cache: &std::sync::Mutex<WorkflowManifestCache>,
 ) -> Vec<WorkflowItem> {
     let candidates = collect_workflow_candidates(chunks);
     if candidates.is_empty() {
@@ -318,24 +323,43 @@ pub async fn resolve_workflow_items(
 
     for (run_id, script_path) in &candidates {
         let manifest_path = workflows_dir.join(format!("{run_id}.json"));
-        let journal_path = session_dir
-            .join("subagents")
-            .join("workflows")
-            .join(run_id)
-            .join("journal.jsonl");
-        let item = resolve_single(
-            run_id,
-            &manifest_path,
-            &journal_path,
-            script_path.as_deref(),
-            fs,
-            cache,
-        )
-        .await;
-        items.push(item);
+        let status = match fs.stat(&manifest_path).await {
+            Ok(_) => WorkflowStatus::Completed,
+            Err(FsError::NotFound(_)) => WorkflowStatus::Running,
+            Err(_) => WorkflowStatus::Pending,
+        };
+        let name = script_path
+            .as_deref()
+            .and_then(|p| workflow_name_from_script_path(p, run_id));
+
+        items.push(WorkflowItem {
+            run_id: run_id.clone(),
+            name,
+            status,
+            phases: Vec::new(),
+            agents: Vec::new(),
+            total_tokens: 0,
+            duration_ms: 0,
+            error: None,
+            detail_omitted: true,
+        });
     }
 
     items
+}
+
+/// 完整解析单个 workflow（manifest + journal + script）。
+///
+/// 对外暴露给 `get_workflow_detail` IPC command 使用。
+pub async fn resolve_single_detail(
+    run_id: &str,
+    manifest_path: &Path,
+    journal_path: &Path,
+    script_path: Option<&str>,
+    fs: &dyn FileSystemProvider,
+    cache: &std::sync::Mutex<WorkflowManifestCache>,
+) -> WorkflowItem {
+    resolve_single(run_id, manifest_path, journal_path, script_path, fs, cache).await
 }
 
 async fn resolve_single(
@@ -457,6 +481,7 @@ async fn resolve_running_state(
         total_tokens: 0,
         duration_ms: 0,
         error: None,
+        detail_omitted: false,
     }
 }
 

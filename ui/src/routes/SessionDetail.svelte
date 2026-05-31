@@ -425,7 +425,8 @@
     const lastMsgCount = lastChunk?.kind === "ai"
       ? (lastChunk as AIChunk).responses.length
       : 0;
-    return `${chunks.length}:${lastMsgCount}:${d.isOngoing}:${d.metrics.message_count}:${d.title ?? ""}`;
+    const wfFp = (d.workflowItems ?? []).map(wf => `${wf.runId}:${wf.status}`).join("|");
+    return `${chunks.length}:${lastMsgCount}:${d.isOngoing}:${d.metrics.message_count}:${d.title ?? ""}:${wfFp}`;
   }
 
   onMount(async () => {
@@ -1244,7 +1245,7 @@
                     {@const exec = item.execution}
                     {@const matchedWf = exec.workflowRunId ? workflowMap.get(exec.workflowRunId) : undefined}
                     {#if matchedWf}
-                      <WorkflowCard workflow={matchedWf} {sessionId} />
+                      <WorkflowCard workflow={matchedWf} {sessionId} {projectId} />
                     {:else}
                       {@const key = `${chunk.chunkId}-tool-${exec.toolUseId}`}
                       {@const eff = effectiveExec(exec)}
