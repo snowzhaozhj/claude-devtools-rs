@@ -507,18 +507,23 @@ impl CdtMcpServer {
 
         let total_chunks = windowed.len();
 
-        // Apply pagination (cursor + max_chunks)
-        let offset = parse_cursor_offset(params.cursor.as_deref());
-        let page_size = params
-            .max_chunks
-            .unwrap_or(DEFAULT_PAGE_SIZE)
-            .min(MAX_PAGE_SIZE);
-
-        let page_chunks: Vec<(usize, &Chunk)> =
-            windowed.into_iter().skip(offset).take(page_size).collect();
+        // Pagination: only when no explicit window (range/tail) was specified.
+        // range/tail already define a bounded window — return all of it.
+        let has_explicit_window = range.is_some() || params.tail.is_some();
+        let (page_chunks, offset): (Vec<(usize, &Chunk)>, usize) = if has_explicit_window {
+            (windowed, 0)
+        } else {
+            let off = parse_cursor_offset(params.cursor.as_deref());
+            let page_size = params
+                .max_chunks
+                .unwrap_or(DEFAULT_PAGE_SIZE)
+                .min(MAX_PAGE_SIZE);
+            let page: Vec<_> = windowed.into_iter().skip(off).take(page_size).collect();
+            (page, off)
+        };
 
         let returned_chunks = page_chunks.len();
-        let has_more = offset + returned_chunks < total_chunks;
+        let has_more = !has_explicit_window && (offset + returned_chunks < total_chunks);
 
         let envelopes: Vec<ChunkEnvelope> = page_chunks
             .iter()
@@ -763,7 +768,7 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
                 .iter()
                 .map(|r| {
                     let text = message_content_text(&r.content);
-                    let content_chars = text.len();
+                    let content_chars = text.chars().count();
                     match mode {
                         ContentMode::Omit => ResponseEnvelope {
                             model: r.model.clone(),
@@ -796,7 +801,7 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
         }
         Chunk::User(user) => {
             let text = message_content_text(&user.content);
-            let chars = text.len();
+            let chars = text.chars().count();
             let user_content = match mode {
                 ContentMode::Omit => ContentField {
                     text: if chars <= 200 { Some(text) } else { None },
@@ -823,7 +828,7 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
             }
         }
         Chunk::System(sys) => {
-            let chars = sys.content_text.len();
+            let chars = sys.content_text.chars().count();
             let system_content = match mode {
                 ContentMode::Omit => ContentField {
                     text: if chars <= 200 {
@@ -878,7 +883,7 @@ fn tool_output_to_value(output: &ToolOutput) -> serde_json::Value {
 
 fn build_tool_exec_envelope(te: &cdt_core::ToolExecution, mode: &ContentMode) -> ToolExecEnvelope {
     let output_text = tool_output_text(&te.output);
-    let output_chars = output_text.len();
+    let output_chars = output_text.chars().count();
 
     match mode {
         ContentMode::Omit => ToolExecEnvelope {
