@@ -63,7 +63,11 @@ pub fn truncate_message(message: &str) -> String {
     if message.len() <= MAX_MESSAGE_LENGTH {
         message.to_owned()
     } else {
-        let mut s = message[..MAX_MESSAGE_LENGTH].to_owned();
+        let mut end = MAX_MESSAGE_LENGTH;
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        let mut s = message[..end].to_owned();
         s.push_str("...");
         s
     }
@@ -234,6 +238,17 @@ mod tests {
         let result = truncate_message(&msg);
         assert_eq!(result.len(), 503); // 500 + "..."
         assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_cjk_does_not_panic() {
+        // 600 CJK chars = 1800 bytes; byte 500 lands mid-char
+        let msg = "中".repeat(600);
+        let result = truncate_message(&msg);
+        assert!(result.ends_with("..."));
+        // Should truncate at a valid char boundary (each "中" is 3 bytes,
+        // floor(500/3)=166 chars × 3 = 498 bytes)
+        assert!(result.len() <= 503);
     }
 
     fn sample_params() -> CreateDetectedErrorParams {

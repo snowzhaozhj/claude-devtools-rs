@@ -91,7 +91,11 @@ pub fn check_tool_result_trigger(
                     }
 
                     let preview = if content_str.len() > 200 {
-                        format!("{}...", &content_str[..200])
+                        let mut end = 200;
+                        while !content_str.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        format!("{}...", &content_str[..end])
                     } else {
                         content_str
                     };
@@ -171,7 +175,11 @@ pub fn check_tool_use_trigger(
         }
 
         let preview = if val.len() > 200 {
-            format!("{}...", &val[..200])
+            let mut end = 200;
+            while !val.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &val[..end])
         } else {
             val.clone()
         };
