@@ -9,6 +9,19 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-05-31
+
+### Added
+- Context window usage progress bar in session detail panel.
+
+### Fixed
+- New sessions from other projects no longer trigger unnecessary project list refresh.
+
+### Performance
+- Workflow lazy-loading: skeleton placeholder + on-demand detail fetch.
+- Cap grouper concurrency + add groups cache to reduce cold-start CPU.
+- Replace hand-rolled LRU with `lru` crate in cdt-api (simpler, faster eviction).
+
 ## [0.6.2] — 2026-05-31
 
 ### Fixed
@@ -231,7 +244,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.5.14...v0.6.0
