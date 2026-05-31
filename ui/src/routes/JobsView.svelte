@@ -117,6 +117,7 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     padding: 20px 16px;
     gap: 16px;
   }
