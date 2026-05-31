@@ -4508,7 +4508,6 @@ fn session_detail_workflow_items_present_when_populated() {
     assert_eq!(back.workflow_items[0].status, WorkflowStatus::Pending);
 }
 
-
 // =============================================================================
 // list_jobs IPC contract
 // =============================================================================
