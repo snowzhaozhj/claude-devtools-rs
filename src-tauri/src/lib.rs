@@ -71,11 +71,7 @@ async fn get_session_detail(
 ) -> Result<serde_json::Value, String> {
     let resp = data
         .api
-        .get_session_detail(
-            &project_id,
-            &session_id,
-            known_fingerprint.as_deref(),
-        )
+        .get_session_detail(&project_id, &session_id, known_fingerprint.as_deref())
         .await
         .map_err(|e| e.to_string())?;
     serde_json::to_value(&resp).map_err(|e| e.to_string())
@@ -208,11 +204,7 @@ async fn search_sessions(
         project_id: Some(project_id),
         session_id: None,
     };
-    let result = data
-        .api
-        .search(&request)
-        .await
-        .map_err(|e| e.to_string())?;
+    let result = data.api.search(&request).await.map_err(|e| e.to_string())?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
@@ -232,7 +224,11 @@ async fn search_group_sessions(
 
 #[tauri::command]
 async fn get_config(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
-    let (config, version) = data.api.get_config_versioned().await.map_err(|e| e.to_string())?;
+    let (config, version) = data
+        .api
+        .get_config_versioned()
+        .await
+        .map_err(|e| e.to_string())?;
     let mut value = serde_json::to_value(&config).map_err(|e| e.to_string())?;
     if let Some(obj) = value.as_object_mut() {
         obj.insert("_version".to_string(), serde_json::Value::from(version));
@@ -541,6 +537,33 @@ async fn get_project_session_prefs(
         .await
         .map_err(|e| e.to_string())?;
     serde_json::to_value(&prefs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_jobs(data: State<'_, AppData>) -> Result<serde_json::Value, String> {
+    let resp = data.api.list_jobs().await.map_err(|e| e.to_string())?;
+    serde_json::to_value(&resp).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn stop_job(data: State<'_, AppData>, job_id: String) -> Result<(), String> {
+    data.api.stop_job(&job_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_job(data: State<'_, AppData>, job_id: String) -> Result<(), String> {
+    data.api
+        .delete_job(&job_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_completed_jobs(data: State<'_, AppData>) -> Result<u32, String> {
+    data.api
+        .delete_completed_jobs()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1202,6 +1225,20 @@ pub fn run() {
                     }
                 });
 
+                let mut jobs_rx = api.subscribe_jobs();
+                let app_handle_for_jobs = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match jobs_rx.recv().await {
+                            Ok(event) => {
+                                let _ = app_handle_for_jobs.emit("jobs-update", &event);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+
                 let mut ssh_status_rx = api.subscribe_ssh_status();
                 let app_handle_for_ssh_status = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -1280,9 +1317,8 @@ pub fn run() {
                                     .as_ref()
                                     .map(|c| c.notifications.sound_enabled)
                                     .unwrap_or(true);
-                                let snoozed_until = cfg
-                                    .as_ref()
-                                    .and_then(|c| c.notifications.snoozed_until);
+                                let snoozed_until =
+                                    cfg.as_ref().and_then(|c| c.notifications.snoozed_until);
                                 let now_ms = i64::try_from(
                                     std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
@@ -1396,6 +1432,10 @@ pub fn run() {
             http_server_start,
             http_server_stop,
             http_server_status,
+            list_jobs,
+            stop_job,
+            delete_job,
+            delete_completed_jobs,
             get_telemetry_snapshot,
             record_correctness_events,
             open_in_terminal,

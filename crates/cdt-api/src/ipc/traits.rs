@@ -188,6 +188,35 @@ pub trait DataApi: Send + Sync {
     }
 
     // =========================================================================
+    // Background Jobs
+    // =========================================================================
+
+    async fn list_jobs(&self) -> Result<cdt_core::JobsResponse, ApiError> {
+        Ok(cdt_core::JobsResponse {
+            jobs: Vec::new(),
+            badge: cdt_core::BadgeColor::None,
+            badge_count: 0,
+            jobs_dir_exists: false,
+        })
+    }
+
+    /// 停止指定 background job（调用 `claude stop <short_id>`）。
+    async fn stop_job(&self, _job_id: &str) -> Result<(), ApiError> {
+        Err(ApiError::internal("not implemented"))
+    }
+
+    /// 删除指定 background job（调用 `claude rm <short_id>`）。
+    /// 仅允许删除 terminal 状态的 job (done/failed/stopped)。
+    async fn delete_job(&self, _job_id: &str) -> Result<(), ApiError> {
+        Err(ApiError::internal("not implemented"))
+    }
+
+    /// 批量删除所有 terminal 状态的 jobs（done/failed/stopped/idle）。返回被删除的 job 数量。
+    async fn delete_completed_jobs(&self) -> Result<u32, ApiError> {
+        Err(ApiError::internal("not implemented"))
+    }
+
+    // =========================================================================
     // 搜索
     // =========================================================================
 

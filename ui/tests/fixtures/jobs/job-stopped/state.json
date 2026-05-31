@@ -1,0 +1,14 @@
+{
+  "state": "stopped",
+  "name": "Manually stopped",
+  "detail": "User cancelled via CLI",
+  "intent": "Deploy hotfix to staging",
+  "children": [],
+  "sessionId": "sess-stop-006",
+  "linkScanPath": "",
+  "cwd": "/Users/eve/deploy-tools",
+  "tempo": "stopped",
+  "inFlight": "",
+  "createdAt": "2026-05-29T20:00:00.000Z",
+  "updatedAt": "2026-05-29T20:05:00.000Z"
+}

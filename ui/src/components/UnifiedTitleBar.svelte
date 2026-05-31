@@ -1,11 +1,15 @@
 <script lang="ts">
   import type { ProjectInfo, RepositoryGroup } from "../lib/api";
-  import { BELL, SETTINGS, PANEL_LEFT_SVG } from "../lib/icons";
+  import { BELL, SETTINGS, PANEL_LEFT_SVG, JOBS_SVG } from "../lib/icons";
   import {
     getSidebarCollapsed,
     toggleSidebarCollapsed,
   } from "../lib/sidebarStore.svelte";
-  import { openNotificationsTab, openSettingsTab, getUnreadCount } from "../lib/tabStore.svelte";
+  import { openNotificationsTab, openSettingsTab, openJobsTab, getUnreadCount } from "../lib/tabStore.svelte";
+  import {
+    getJobsDirExists,
+    getBadgeColor,
+  } from "../lib/jobsStore.svelte";
   import ProjectSwitcher from "./ProjectSwitcher.svelte";
   import RosettaStatusIcon from "./RosettaStatusIcon.svelte";
   import UpdateStatusPill from "./UpdateStatusPill.svelte";
@@ -43,6 +47,8 @@
 
   const collapsed = $derived(getSidebarCollapsed());
   const unreadCount = $derived(getUnreadCount());
+  const jobsDirExists = $derived(getJobsDirExists());
+  const jobsBadge = $derived(getBadgeColor());
 </script>
 
 <header
@@ -82,6 +88,25 @@
   <div class="zone-status">
     <RosettaStatusIcon visible={rosettaVisible} />
     <UpdateStatusPill />
+
+    {#if jobsDirExists}
+      <button
+        class="icon-btn"
+        data-tauri-drag-region="false"
+        onclick={() => openJobsTab()}
+        title="后台任务"
+        aria-label="后台任务"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          {@html JOBS_SVG}
+        </svg>
+        {#if jobsBadge === "red"}
+          <span class="badge badge-red" aria-label="有失败的后台任务"></span>
+        {:else if jobsBadge === "amber"}
+          <span class="badge badge-amber" aria-label="有需要输入的后台任务"></span>
+        {/if}
+      </button>
+    {/if}
 
     <button
       class="icon-btn"
@@ -206,5 +231,30 @@
     padding: 0 4px;
     line-height: 1;
     pointer-events: none;
+  }
+
+  /* Jobs badge — 无数字的色点 */
+  .badge-red,
+  .badge-amber,
+  .badge-green {
+    min-width: 8px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    padding: 0;
+    top: 4px;
+    right: 2px;
+  }
+
+  .badge-red {
+    background: var(--color-danger);
+  }
+
+  .badge-amber {
+    background: var(--color-warning);
+  }
+
+  .badge-green {
+    background: var(--color-success-bright);
   }
 </style>

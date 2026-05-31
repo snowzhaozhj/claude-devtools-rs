@@ -1,0 +1,14 @@
+{
+  "state": "blocked",
+  "name": "Waiting for review",
+  "detail": "Blocked on user input",
+  "intent": "Needs approval before proceeding with database migration",
+  "children": [],
+  "sessionId": "sess-block-002",
+  "linkScanPath": "/.claude/projects/-Users-bob-backend/sess-block-002.jsonl",
+  "cwd": "/Users/bob/backend",
+  "tempo": "paused",
+  "inFlight": "",
+  "createdAt": "2026-05-29T14:00:00.000Z",
+  "updatedAt": "2026-05-30T07:15:00.000Z"
+}

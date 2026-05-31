@@ -542,6 +542,7 @@ pub struct LocalDataApi {
     /// 订阅这条稳定 channel，避免继续绑在旧 watcher 的 receiver 上。
     file_tx: Option<broadcast::Sender<cdt_core::FileChangeEvent>>,
     todo_tx: Option<broadcast::Sender<cdt_core::TodoChangeEvent>>,
+    jobs_tx: Option<broadcast::Sender<cdt_core::JobChangeEvent>>,
     /// 内部 `FileWatcher` 句柄（`new_with_watcher` 路径下注入）。仅用于让
     /// `attach_remote_watcher` 走 `FileWatcher::attach_remote` 把 SSH polling
     /// 事件喂回同一 `file_tx`，让 SSH 与 Local 共用 unified invalidator 的
@@ -1718,6 +1719,7 @@ impl LocalDataApi {
             error_tx: None,
             file_tx: None,
             todo_tx: None,
+            jobs_tx: None,
             watcher: Mutex::new(None),
             watcher_tasks: Mutex::new(Vec::new()),
             remote_watchers: Mutex::new(HashMap::new()),
@@ -1781,6 +1783,7 @@ impl LocalDataApi {
         let (error_tx, _) = broadcast::channel::<DetectedError>(64);
         let (file_tx, _) = broadcast::channel::<cdt_core::FileChangeEvent>(64);
         let (todo_tx, _) = broadcast::channel::<cdt_core::TodoChangeEvent>(64);
+        let (jobs_tx, _) = broadcast::channel::<cdt_core::JobChangeEvent>(32);
 
         let (session_metadata_tx, _) =
             broadcast::channel::<SessionMetadataUpdate>(METADATA_BROADCAST_CAPACITY);
@@ -1822,6 +1825,7 @@ impl LocalDataApi {
                 errors: error_tx.clone(),
                 files: file_tx.clone(),
                 todos: todo_tx.clone(),
+                jobs: jobs_tx.clone(),
             },
             parsed_msg_cache.clone(),
             project_scan_cache.clone(),
@@ -1838,6 +1842,7 @@ impl LocalDataApi {
             error_tx: Some(error_tx),
             file_tx: Some(file_tx),
             todo_tx: Some(todo_tx),
+            jobs_tx: Some(jobs_tx.clone()),
             watcher: Mutex::new(Some(internal_watcher)),
             watcher_tasks,
             remote_watchers: Mutex::new(HashMap::new()),
@@ -1902,8 +1907,27 @@ impl LocalDataApi {
         }
     }
 
+    /// 订阅 jobs 变更事件。
+    pub fn subscribe_jobs(&self) -> broadcast::Receiver<cdt_core::JobChangeEvent> {
+        if let Some(tx) = &self.jobs_tx {
+            tx.subscribe()
+        } else {
+            let (_tx, rx) = broadcast::channel::<cdt_core::JobChangeEvent>(1);
+            rx
+        }
+    }
+
     pub fn subscribe_ssh_status(&self) -> broadcast::Receiver<cdt_ssh::SshStatusChange> {
         self.ssh_mgr.subscribe_status()
+    }
+
+    /// 列出所有 background jobs（全量扫描 `~/.claude/jobs/*/state.json`）。
+    /// 测试辅助——直接调 `list_jobs_from_dir` 指定目录。
+    #[cfg(test)]
+    pub async fn list_jobs_from_dir_test(
+        jobs_dir: &Path,
+    ) -> Result<cdt_core::JobsResponse, ApiError> {
+        list_jobs_from_dir(jobs_dir).await
     }
 
     pub async fn insert_test_ssh_context(
@@ -2214,8 +2238,8 @@ impl LocalDataApi {
         );
         *self.projects_dir.lock().await = projects_dir.clone();
 
-        if let (Some(error_tx), Some(file_tx), Some(todo_tx)) =
-            (&self.error_tx, &self.file_tx, &self.todo_tx)
+        if let (Some(error_tx), Some(file_tx), Some(todo_tx), Some(jobs_tx)) =
+            (&self.error_tx, &self.file_tx, &self.todo_tx, &self.jobs_tx)
         {
             // codex CRIT-1（change `enrich-file-change-with-session-list-changed`
             // 二审）：先收集当前 active SSH context_ids + cancel 旧 remote_watchers，
@@ -2249,6 +2273,7 @@ impl LocalDataApi {
                     errors: error_tx.clone(),
                     files: file_tx.clone(),
                     todos: todo_tx.clone(),
+                    jobs: jobs_tx.clone(),
                 },
                 self.parsed_msg_cache.clone(),
                 self.project_scan_cache.clone(),
@@ -2670,10 +2695,136 @@ fn todos_dir_from_projects_dir(projects_dir: &Path) -> PathBuf {
     )
 }
 
+/// 扫描 `jobs_dir` 下所有 `<job_id>/state.json`，解析 + 分组 + badge 计算。
+///
+/// jobs 目录不存在时返回空响应（降级）。
+async fn list_jobs_from_dir(jobs_dir: &Path) -> Result<cdt_core::JobsResponse, ApiError> {
+    use cdt_core::job::{
+        BackgroundJob, JobSummary, classify_job_group, compute_badge,
+        extract_project_id_from_link_scan_path,
+    };
+
+    if !jobs_dir.is_dir() {
+        return Ok(cdt_core::JobsResponse {
+            jobs: Vec::new(),
+            badge: cdt_core::BadgeColor::None,
+            badge_count: 0,
+            jobs_dir_exists: false,
+        });
+    }
+
+    let mut jobs: Vec<JobSummary> = Vec::new();
+
+    let mut entries = match tokio::fs::read_dir(jobs_dir).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(path = %jobs_dir.display(), error = %e, "cannot read jobs directory");
+            return Ok(cdt_core::JobsResponse {
+                jobs: Vec::new(),
+                badge: cdt_core::BadgeColor::None,
+                badge_count: 0,
+                jobs_dir_exists: true,
+            });
+        }
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let state_path = path.join("state.json");
+        let Ok(content) = tokio::fs::read(&state_path).await else {
+            continue;
+        };
+        let mut bg_job = match serde_json::from_slice::<BackgroundJob>(&content) {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::warn!(path = %state_path.display(), error = %e, "skipping job with unparseable state.json");
+                continue;
+            }
+        };
+
+        let job_id = entry.file_name().to_string_lossy().into_owned();
+
+        // tempo 是 daemon 实时活跃度信号，优先级高于 state：
+        // - tempo=active → 无条件 Working（对齐 CLI: status=busy → Working）
+        // - tempo=blocked + 非终态 → Blocked
+        // - tempo=idle / 其他 → 不覆盖，尊重 state 字段
+        match bg_job.tempo.as_str() {
+            "active" => {
+                bg_job.state = cdt_core::JobState::Working;
+            }
+            "blocked"
+                if !matches!(
+                    bg_job.state,
+                    cdt_core::JobState::Done
+                        | cdt_core::JobState::Failed
+                        | cdt_core::JobState::Stopped
+                ) =>
+            {
+                bg_job.state = cdt_core::JobState::Blocked;
+            }
+            _ => {}
+        }
+
+        let project_id = extract_project_id_from_link_scan_path(&bg_job.link_scan_path)
+            .unwrap_or_else(|| {
+                if bg_job.cwd.is_empty() {
+                    String::new()
+                } else {
+                    cdt_discover::encode_path(&bg_job.cwd)
+                }
+            });
+
+        let group = classify_job_group(&bg_job);
+
+        jobs.push(JobSummary {
+            id: job_id,
+            name: bg_job.name,
+            detail: bg_job.detail,
+            intent: bg_job.intent,
+            state: bg_job.state,
+            group,
+            children: bg_job.children.unwrap_or_default(),
+            session_id: bg_job.session_id,
+            project_id,
+            tempo: bg_job.tempo,
+            needs: bg_job.needs,
+            in_flight: bg_job.in_flight,
+            created_at: bg_job.created_at,
+            updated_at: bg_job.updated_at,
+        });
+    }
+
+    // 按分组排序：ReadyForReview > NeedsInput > Working > Completed
+    jobs.sort_by_key(|a| group_order(&a.group));
+
+    let (badge, badge_count) = compute_badge(&jobs);
+
+    Ok(cdt_core::JobsResponse {
+        jobs,
+        badge,
+        badge_count,
+        jobs_dir_exists: true,
+    })
+}
+
+/// 分组排序权重。
+fn group_order(group: &cdt_core::JobGroup) -> u8 {
+    match group {
+        cdt_core::JobGroup::ReadyForReview => 0,
+        cdt_core::JobGroup::NeedsInput => 1,
+        cdt_core::JobGroup::Working => 2,
+        cdt_core::JobGroup::Completed => 3,
+    }
+}
+
 struct WatcherRuntimeChannels {
     errors: broadcast::Sender<DetectedError>,
     files: broadcast::Sender<cdt_core::FileChangeEvent>,
     todos: broadcast::Sender<cdt_core::TodoChangeEvent>,
+    jobs: broadcast::Sender<cdt_core::JobChangeEvent>,
 }
 
 // `watcher: Arc<FileWatcher>` 按值传——内部 clone 给 start_task 与
@@ -2703,11 +2854,26 @@ fn spawn_watcher_runtime(
     });
 
     let mut todo_rx = watcher.subscribe_todos();
+    let todos_tx = channels.todos;
     let todo_bridge_task = tokio::spawn(async move {
         loop {
             match todo_rx.recv().await {
                 Ok(event) => {
-                    let _ = channels.todos.send(event);
+                    let _ = todos_tx.send(event);
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    let mut jobs_rx = watcher.subscribe_jobs();
+    let jobs_tx = channels.jobs;
+    let jobs_bridge_task = tokio::spawn(async move {
+        loop {
+            match jobs_rx.recv().await {
+                Ok(event) => {
+                    let _ = jobs_tx.send(event);
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,
@@ -2753,6 +2919,7 @@ fn spawn_watcher_runtime(
     vec![
         start_task,
         todo_bridge_task,
+        jobs_bridge_task,
         notifier_task,
         unified_invalidator_task,
     ]
@@ -4792,6 +4959,92 @@ impl DataApi for LocalDataApi {
     }
 
     // list_available_terminals 走 trait default impl（无状态依赖）
+
+    // =========================================================================
+    // Background Jobs
+    // =========================================================================
+
+    async fn list_jobs(&self) -> Result<cdt_core::JobsResponse, ApiError> {
+        let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let jobs_dir = home.join(".claude").join("jobs");
+        list_jobs_from_dir(&jobs_dir).await
+    }
+
+    async fn stop_job(&self, job_id: &str) -> Result<(), ApiError> {
+        if job_id.is_empty() {
+            return Err(ApiError::validation("job_id must not be empty"));
+        }
+        let short: String = job_id.chars().take(8).collect();
+        let output = tokio::process::Command::new("claude")
+            .args(["stop", &short])
+            .output()
+            .await
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    ApiError::internal(
+                        "claude CLI not found on PATH — install Claude Code CLI to stop background jobs".to_owned(),
+                    )
+                } else {
+                    ApiError::internal(format!("failed to spawn claude stop: {e}"))
+                }
+            })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(ApiError::internal(format!("stop failed: {stderr}")));
+        }
+        Ok(())
+    }
+
+    async fn delete_job(&self, job_id: &str) -> Result<(), ApiError> {
+        if job_id.is_empty() {
+            return Err(ApiError::validation("job_id must not be empty"));
+        }
+        let short: String = job_id.chars().take(8).collect();
+        let output = tokio::process::Command::new("claude")
+            .args(["rm", &short])
+            .output()
+            .await
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    ApiError::internal(
+                        "claude CLI not found on PATH — install Claude Code CLI to delete background jobs".to_owned(),
+                    )
+                } else {
+                    ApiError::internal(format!("failed to spawn claude rm: {e}"))
+                }
+            })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(ApiError::internal(format!("delete failed: {stderr}")));
+        }
+        Ok(())
+    }
+
+    async fn delete_completed_jobs(&self) -> Result<u32, ApiError> {
+        let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let jobs_dir = home.join(".claude").join("jobs");
+        let response = list_jobs_from_dir(&jobs_dir).await?;
+
+        let mut deleted = 0u32;
+        for job in &response.jobs {
+            let is_completed = matches!(
+                job.state,
+                cdt_core::JobState::Done
+                    | cdt_core::JobState::Failed
+                    | cdt_core::JobState::Stopped
+                    | cdt_core::JobState::Idle
+            );
+            if is_completed {
+                match self.delete_job(&job.id).await {
+                    Ok(()) => deleted += 1,
+                    Err(e) => {
+                        tracing::warn!(job_id = %job.id, error = %e, "failed to delete job");
+                    }
+                }
+            }
+        }
+        Ok(deleted)
+    }
 }
 
 // =============================================================================
@@ -7244,6 +7497,7 @@ mod tests {
         // 各 task，外部留这份 Arc 仅用于 inject + 防止 invalidator 还在跑时
         // watcher 被 drop 触发 RecvError::Closed 提前退出 loop。
         let watcher_arc = watcher.clone();
+        let (jobs_tx, _) = broadcast::channel::<cdt_core::JobChangeEvent>(32);
         let tasks = spawn_watcher_runtime(
             watcher,
             cfg,
@@ -7252,6 +7506,7 @@ mod tests {
                 errors: err_tx,
                 files: file_tx,
                 todos: todo_tx,
+                jobs: jobs_tx,
             },
             parsed,
             scan,
@@ -7263,9 +7518,8 @@ mod tests {
         // 任何回退（重新引入 bridge_task / 删合并某个 task）都会让数字偏离
         assert_eq!(
             tasks.len(),
-            4,
-            "spawn_watcher_runtime SHALL 返回 4 个 task（start / todo_bridge / notifier / unified_invalidator）。\
-             如果出现 5 个意味着 bridge_task 被错加回来，违反 change D1 sole producer 契约"
+            5,
+            "spawn_watcher_runtime SHALL 返回 5 个 task（start / todo_bridge / jobs_bridge / notifier / unified_invalidator）。"
         );
 
         // **行为级 sole producer 断言**（codex round 2 WARN-1 修订）：

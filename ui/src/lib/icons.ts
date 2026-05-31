@@ -276,3 +276,10 @@ export const COPY_SVG = `
 
 /** Lucide check — 复制成功反馈（单 path） */
 export const CHECK = "M20 6 9 17l-5-5";
+
+/** Lucide square-terminal — Background Jobs icon（多段，使用 {@html}） */
+export const JOBS_SVG = `
+<path d="m7 11 2-2-2-2"/>
+<path d="M11 13h4"/>
+<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+`;

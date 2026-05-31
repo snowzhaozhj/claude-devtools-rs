@@ -53,6 +53,7 @@ class TauriTransport implements Transport {
       // 对齐。原实现 Tauri runtime 不订阅 → lag 期间错过 structural 信号
       // 滞后到 LOCAL_CACHE_TTL=5min 才恢复。
       listen("sse-lagged", (event) => handler("sse-lagged", event.payload)),
+      listen("jobs-update", (event) => handler("jobs_update", event.payload)),
     ]);
     return () => {
       for (const unlisten of unlisteners) unlisten();
@@ -299,6 +300,14 @@ interface HttpRequest {
 function httpRequestForCommand(cmd: string, args: InvokeArgs): HttpRequest {
   const a = args as Record<string, unknown>;
   switch (cmd) {
+    case "list_jobs":
+      return { method: "GET", path: "/api/jobs" };
+    case "stop_job":
+      return { method: "POST", path: `/api/jobs/${enc(a.jobId)}/stop` };
+    case "delete_job":
+      return { method: "DELETE", path: `/api/jobs/${enc(a.jobId)}` };
+    case "delete_completed_jobs":
+      return { method: "DELETE", path: "/api/jobs/completed" };
     case "list_projects":
       return { method: "GET", path: "/api/projects" };
     case "list_repository_groups":
@@ -538,6 +547,8 @@ function normalizePushPayload(type: string | undefined, payload: Record<string, 
         source: payload.source,
         missed: payload.missed,
       };
+    case "jobs_update":
+      return { jobId: payload.job_id };
     default:
       return payload;
   }

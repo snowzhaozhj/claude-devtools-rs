@@ -13,6 +13,7 @@
 
 pub mod chunk;
 pub mod context;
+pub mod job;
 pub mod message;
 pub mod process;
 pub mod project;
@@ -33,6 +34,10 @@ pub use context::{
     TaskCoordinationInjection, TaskCoordinationKind, ThinkingTextBreakdown, ThinkingTextInjection,
     ThinkingTextKind, TokensByCategory, ToolOutputInjection, ToolTokenBreakdown, TurnContextStats,
     UserMessageInjection,
+};
+pub use job::{
+    BackgroundJob, BadgeColor, JobChangeEvent, JobChild, JobGroup, JobState, JobSummary,
+    JobsResponse,
 };
 pub use message::{
     ContentBlock, HardNoiseReason, ImageSource, MessageCategory, MessageContent, MessageType,

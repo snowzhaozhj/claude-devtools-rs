@@ -1,0 +1,14 @@
+{
+  "state": "working",
+  "name": "Cross-project task",
+  "detail": "Syncing changes from upstream",
+  "intent": "Port upstream fixes to local fork",
+  "children": [],
+  "sessionId": "sess-abc",
+  "linkScanPath": "/.claude/projects/-Users-alice-other-repo/sess-abc.jsonl",
+  "cwd": "/Users/alice/other-repo",
+  "tempo": "active",
+  "inFlight": "git cherry-pick",
+  "createdAt": "2026-05-30T08:30:00.000Z",
+  "updatedAt": "2026-05-30T09:15:00.000Z"
+}

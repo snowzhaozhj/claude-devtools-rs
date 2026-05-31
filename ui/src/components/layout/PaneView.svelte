@@ -5,6 +5,7 @@
   import SettingsView from "../../routes/SettingsView.svelte";
   import NotificationsView from "../../routes/NotificationsView.svelte";
   import MemoryView from "../../routes/MemoryView.svelte";
+  import JobsView from "../../routes/JobsView.svelte";
   import DashboardView from "../../routes/DashboardView.svelte";
   import {
     focusPane,
@@ -58,6 +59,8 @@
       <SettingsView />
     {:else if activeTab?.type === "notifications"}
       <NotificationsView />
+    {:else if activeTab?.type === "jobs"}
+      <JobsView />
     {:else if activeTab?.type === "memory"}
       <MemoryView projectId={activeTab.projectId} />
     {:else if activeTab?.type === "session"}

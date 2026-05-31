@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use cdt_api::{PushEvent, SessionMetadataUpdate, spawn_event_bridge};
 use cdt_config::{DetectedError, DetectedErrorContext};
+use cdt_core::JobChangeEvent;
 use cdt_core::{FileChangeEvent, TodoChangeEvent};
 use cdt_ssh::ContextChanged;
 use tokio::sync::broadcast;
@@ -25,6 +26,7 @@ fn spawn_test_event_bridge(
 ) {
     let (_metadata_tx, metadata_rx) = broadcast::channel::<SessionMetadataUpdate>(16);
     let (_context_tx, context_rx) = broadcast::channel::<ContextChanged>(16);
+    let (_jobs_tx, jobs_rx) = broadcast::channel::<JobChangeEvent>(16);
     spawn_event_bridge(
         events_tx,
         file_rx,
@@ -32,6 +34,7 @@ fn spawn_test_event_bridge(
         error_rx,
         metadata_rx,
         context_rx,
+        jobs_rx,
     );
 }
 
@@ -221,6 +224,7 @@ async fn session_metadata_forwarded_as_push_event() {
     let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
     let (metadata_tx, metadata_rx) = broadcast::channel::<SessionMetadataUpdate>(16);
     let (_context_tx, context_rx) = broadcast::channel::<ContextChanged>(16);
+    let (_jobs_tx, jobs_rx) = broadcast::channel::<JobChangeEvent>(16);
 
     spawn_event_bridge(
         events_tx,
@@ -229,6 +233,7 @@ async fn session_metadata_forwarded_as_push_event() {
         error_rx,
         metadata_rx,
         context_rx,
+        jobs_rx,
     );
 
     metadata_tx
@@ -288,6 +293,7 @@ async fn context_changed_forwarded_as_push_event_ssh() {
     let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
     let (_metadata_tx, metadata_rx) = broadcast::channel::<SessionMetadataUpdate>(16);
     let (context_tx, context_rx) = broadcast::channel::<ContextChanged>(16);
+    let (_jobs_tx2, jobs_rx) = broadcast::channel::<JobChangeEvent>(16);
 
     spawn_event_bridge(
         events_tx,
@@ -296,6 +302,7 @@ async fn context_changed_forwarded_as_push_event_ssh() {
         error_rx,
         metadata_rx,
         context_rx,
+        jobs_rx,
     );
 
     context_tx
@@ -333,6 +340,7 @@ async fn context_changed_forwarded_as_push_event_local() {
     let (_error_tx, error_rx) = broadcast::channel::<DetectedError>(16);
     let (_metadata_tx, metadata_rx) = broadcast::channel::<SessionMetadataUpdate>(16);
     let (context_tx, context_rx) = broadcast::channel::<ContextChanged>(16);
+    let (_jobs_tx2, jobs_rx) = broadcast::channel::<JobChangeEvent>(16);
 
     spawn_event_bridge(
         events_tx,
@@ -341,6 +349,7 @@ async fn context_changed_forwarded_as_push_event_local() {
         error_rx,
         metadata_rx,
         context_rx,
+        jobs_rx,
     );
 
     context_tx

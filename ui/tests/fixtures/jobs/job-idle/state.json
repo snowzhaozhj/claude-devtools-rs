@@ -1,0 +1,14 @@
+{
+  "state": "idle",
+  "name": "Paused task",
+  "detail": "",
+  "intent": "Refactor configuration loading module",
+  "children": [],
+  "sessionId": "sess-idle-003",
+  "linkScanPath": "/.claude/projects/-Users-alice-my-app/sess-idle-003.jsonl",
+  "cwd": "/Users/alice/my-app",
+  "tempo": "idle",
+  "inFlight": "",
+  "createdAt": "2026-05-28T10:00:00.000Z",
+  "updatedAt": "2026-05-29T16:00:00.000Z"
+}

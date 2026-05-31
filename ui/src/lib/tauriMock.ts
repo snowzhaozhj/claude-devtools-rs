@@ -78,6 +78,10 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'open_in_terminal',
   'open_in_editor',
   'list_available_terminals',
+  'list_jobs',
+  'stop_job',
+  'delete_job',
+  'delete_completed_jobs',
 ] as const
 
 export { KNOWN_TAURI_COMMANDS }
@@ -935,6 +939,129 @@ function buildHandler(fx: Fixture) {
         // 浏览器 mock 默认返 macOS 集合（Tauri runtime 真按 cfg!(target_os) 返）；
         // 不在 fixture 暴露平台分支——浏览器调试不依赖平台行为。
         return ['terminal', 'i_term', 'warp']
+      }
+
+      case 'list_jobs': {
+        // mock 返示例 jobs 数据——URL ?jobs=none 隐藏入口 / ?jobs=empty 空列表
+        const params = new URLSearchParams(window.location.search)
+        if (params.get('jobs') === 'none') {
+          return Promise.reject(new Error('jobs directory does not exist'))
+        }
+        if (params.get('jobs') === 'empty') {
+          return { jobs: [], badge: 'none', badgeCount: 0, jobsDirExists: true }
+        }
+        return {
+          badge: 'red',
+          badgeCount: 1,
+          jobsDirExists: true,
+          jobs: [
+            {
+              id: 'job-abc123',
+              name: 'feat/add-auth-flow',
+              state: 'working',
+              detail: 'Running tests...',
+              intent: 'Implement OAuth2 authentication flow',
+              group: 'working',
+              children: [],
+              sessionId: 'sess-001',
+              projectId: 'project-a',
+              tempo: '',
+              needs: '',
+              inFlight: null,
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 120_000).toISOString(),
+            },
+            {
+              id: 'job-pqr678',
+              name: 'feat/perf-optimization',
+              state: 'idle',
+              detail: 'PR opened, waiting CI',
+              intent: 'Optimize cold start performance',
+              group: 'ready-for-review',
+              children: [{ kind: 'pr', href: 'https://github.com/example/repo/pull/99' }],
+              sessionId: 'sess-005',
+              projectId: 'project-a',
+              tempo: '',
+              needs: '',
+              inFlight: null,
+              createdAt: new Date(Date.now() - 900_000).toISOString(),
+              updatedAt: new Date(Date.now() - 60_000).toISOString(),
+            },
+            {
+              id: 'job-def456',
+              name: 'fix/memory-leak',
+              state: 'blocked',
+              detail: 'Waiting for user input',
+              intent: 'Fix memory leak in event loop',
+              group: 'needs-input',
+              children: [],
+              sessionId: 'sess-002',
+              projectId: 'project-b',
+              tempo: 'blocked',
+              needs: 'reply `go` to continue',
+              inFlight: null,
+              createdAt: new Date(Date.now() - 3_600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+            },
+            {
+              id: 'job-ghi789',
+              name: 'feat/dashboard-redesign',
+              state: 'done',
+              detail: 'PR merged',
+              intent: 'Redesign dashboard layout',
+              group: 'completed',
+              children: [{ kind: 'pr', href: 'https://github.com/example/repo/pull/42' }],
+              sessionId: 'sess-003',
+              projectId: 'project-a',
+              tempo: '',
+              needs: '',
+              inFlight: null,
+              createdAt: new Date(Date.now() - 86_400_000).toISOString(),
+              updatedAt: new Date(Date.now() - 7_200_000).toISOString(),
+            },
+            {
+              id: 'job-jkl012',
+              name: 'refactor/api-types',
+              state: 'failed',
+              detail: 'Test suite failed',
+              intent: '',
+              group: 'completed',
+              children: [],
+              sessionId: 'sess-004',
+              projectId: 'project-c',
+              tempo: '',
+              needs: '',
+              inFlight: null,
+              createdAt: new Date(Date.now() - 7_200_000).toISOString(),
+              updatedAt: new Date(Date.now() - 1_800_000).toISOString(),
+            },
+            {
+              id: 'job-mno345',
+              name: 'feat/notification-system',
+              state: 'idle',
+              detail: '',
+              intent: 'Add push notification support',
+              group: 'working',
+              children: [],
+              sessionId: '',
+              projectId: '',
+              tempo: '',
+              needs: '',
+              inFlight: null,
+              createdAt: new Date(Date.now() - 1_800_000).toISOString(),
+              updatedAt: new Date(Date.now() - 900_000).toISOString(),
+            },
+          ],
+        }
+      }
+
+      case 'stop_job':
+      case 'delete_job': {
+        return null
+      }
+
+      case 'delete_completed_jobs': {
+        return 0
       }
 
       default:

@@ -1,0 +1,14 @@
+{
+  "state": "failed",
+  "name": "Build failed",
+  "detail": "Exit code 1",
+  "intent": "Run full CI pipeline",
+  "children": [],
+  "sessionId": "sess-fail-005",
+  "linkScanPath": "/.claude/projects/-Users-dave-frontend/sess-fail-005.jsonl",
+  "cwd": "/Users/dave/frontend",
+  "tempo": "error",
+  "inFlight": "",
+  "createdAt": "2026-05-30T06:00:00.000Z",
+  "updatedAt": "2026-05-30T06:45:00.000Z"
+}

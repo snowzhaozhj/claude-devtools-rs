@@ -11,7 +11,7 @@
 //! 静默忽略——SSE 客户端连接才订阅，无连接时事件本就 fire-and-forget。
 
 use cdt_config::DetectedError;
-use cdt_core::{FileChangeEvent, TodoChangeEvent};
+use cdt_core::{FileChangeEvent, JobChangeEvent, TodoChangeEvent};
 use cdt_ssh::{ContextChanged, ContextKind};
 use tokio::sync::broadcast;
 
@@ -30,12 +30,33 @@ pub fn spawn_event_bridge(
     error_rx: broadcast::Receiver<DetectedError>,
     metadata_rx: broadcast::Receiver<SessionMetadataUpdate>,
     context_rx: broadcast::Receiver<ContextChanged>,
+    jobs_rx: broadcast::Receiver<JobChangeEvent>,
 ) {
     spawn_file_bridge(events_tx.clone(), file_rx);
     spawn_todo_bridge(events_tx.clone(), todo_rx);
     spawn_detected_error_bridge(events_tx.clone(), error_rx);
     spawn_metadata_bridge(events_tx.clone(), metadata_rx);
-    spawn_context_changed_bridge(events_tx, context_rx);
+    spawn_context_changed_bridge(events_tx.clone(), context_rx);
+    spawn_jobs_bridge(events_tx, jobs_rx);
+}
+
+fn spawn_jobs_bridge(
+    events_tx: broadcast::Sender<PushEvent>,
+    mut jobs_rx: broadcast::Receiver<JobChangeEvent>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match jobs_rx.recv().await {
+                Ok(event) => {
+                    let _ = events_tx.send(PushEvent::JobsUpdate {
+                        job_id: event.job_id,
+                    });
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
 }
 
 fn spawn_file_bridge(

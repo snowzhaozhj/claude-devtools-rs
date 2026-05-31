@@ -18,13 +18,14 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::{Instant, sleep_until};
 
-use cdt_core::{FileChangeEvent, TodoChangeEvent};
+use cdt_core::{FileChangeEvent, JobChangeEvent, TodoChangeEvent};
 use cdt_discover::{normalize_path_for_compare, path_starts_with, path_strip_prefix};
 use cdt_ssh::{CancelToken, RemotePollingWatcher, RemoteWatcherHandle, SftpClient};
 
 use crate::error::WatchError;
 
 const CHANNEL_CAPACITY: usize = 64;
+const JOBS_CHANNEL_CAPACITY: usize = 32;
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
 fn initial_projects(projects_dir: &Path) -> HashSet<PathBuf> {
@@ -41,12 +42,14 @@ fn initial_projects(projects_dir: &Path) -> HashSet<PathBuf> {
         .collect()
 }
 
-/// 文件系统监听器，监听 projects 和 todos 目录变更。
+/// 文件系统监听器，监听 projects、todos 和 jobs 目录变更。
 pub struct FileWatcher {
     file_tx: broadcast::Sender<FileChangeEvent>,
     todo_tx: broadcast::Sender<TodoChangeEvent>,
+    jobs_tx: broadcast::Sender<JobChangeEvent>,
     projects_dir: PathBuf,
     todos_dir: PathBuf,
+    jobs_dir: PathBuf,
     known_projects: Mutex<HashSet<PathBuf>>,
     /// 跟踪已观察到的 `(normalized_project_path, session_id)` 组合，用于填写
     /// `FileChangeEvent.session_list_changed` 字段。启动时为空（lazy），
@@ -68,12 +71,13 @@ impl Default for FileWatcher {
 }
 
 impl FileWatcher {
-    /// 创建监听默认路径（`~/.claude/projects/` 和 `~/.claude/todos/`）的 watcher。
+    /// 创建监听默认路径（`~/.claude/projects/`、`~/.claude/todos/`、`~/.claude/jobs/`）的 watcher。
     pub fn new() -> Self {
         let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let projects_dir = home.join(".claude").join("projects");
         let todos_dir = home.join(".claude").join("todos");
-        Self::with_paths(projects_dir, todos_dir)
+        let jobs_dir = home.join(".claude").join("jobs");
+        Self::with_paths_and_jobs(projects_dir, todos_dir, jobs_dir)
     }
 
     /// 创建监听自定义路径的 watcher（用于测试）。
@@ -84,15 +88,29 @@ impl FileWatcher {
     /// 不匹配，`starts_with` 永远 false —— 改用 `dunce::canonicalize` 自动去掉
     /// 非 UNC 路径的 `\\?\` 前缀。macOS / Linux 行为与 `std` 一致。
     pub fn with_paths(projects_dir: PathBuf, todos_dir: PathBuf) -> Self {
+        let home = cdt_discover::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let jobs_dir = home.join(".claude").join("jobs");
+        Self::with_paths_and_jobs(projects_dir, todos_dir, jobs_dir)
+    }
+
+    /// 创建监听自定义路径（含 jobs）的 watcher（用于测试）。
+    pub fn with_paths_and_jobs(
+        projects_dir: PathBuf,
+        todos_dir: PathBuf,
+        jobs_dir: PathBuf,
+    ) -> Self {
         let (file_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
         let (todo_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+        let (jobs_tx, _) = broadcast::channel(JOBS_CHANNEL_CAPACITY);
         let projects_dir = dunce::canonicalize(&projects_dir).unwrap_or(projects_dir);
         let known_projects = initial_projects(&projects_dir);
         Self {
             file_tx,
             todo_tx,
+            jobs_tx,
             projects_dir,
             todos_dir: dunce::canonicalize(&todos_dir).unwrap_or(todos_dir),
+            jobs_dir: dunce::canonicalize(&jobs_dir).unwrap_or(jobs_dir),
             known_projects: Mutex::new(known_projects),
             known_sessions: Mutex::new(HashSet::new()),
             local_projects_seen: Mutex::new(HashSet::new()),
@@ -107,6 +125,11 @@ impl FileWatcher {
     /// 订阅 todo 变更事件。
     pub fn subscribe_todos(&self) -> broadcast::Receiver<TodoChangeEvent> {
         self.todo_tx.subscribe()
+    }
+
+    /// 订阅 jobs 变更事件。
+    pub fn subscribe_jobs(&self) -> broadcast::Receiver<JobChangeEvent> {
+        self.jobs_tx.subscribe()
     }
 
     /// 判断 `project_id` 是否属于本地 `parse_project_event` 路径 emit 过事件的项目。
@@ -205,6 +228,9 @@ impl FileWatcher {
         if self.todos_dir.is_dir() {
             watcher.watch(&self.todos_dir, RecursiveMode::NonRecursive)?;
         }
+        if self.jobs_dir.is_dir() {
+            watcher.watch(&self.jobs_dir, RecursiveMode::Recursive)?;
+        }
 
         // 持有 watcher 防止被 drop
         let _watcher = watcher;
@@ -232,7 +258,30 @@ impl FileWatcher {
             if let Some(todo_event) = Self::parse_todo_event(path) {
                 let _ = self.todo_tx.send(todo_event);
             }
+        } else if path_starts_with(path, &self.jobs_dir) {
+            if let Some(job_event) = self.parse_jobs_event(path) {
+                let _ = self.jobs_tx.send(job_event);
+            }
         }
+    }
+
+    /// 从 jobs 目录下的路径解析 `JobChangeEvent`。
+    ///
+    /// 路径格式：`<jobs_dir>/<job_id>/state.json`
+    /// 严格匹配 2 级路径 + 文件名 `state.json`（design D2），其它路径
+    /// （`timeline.jsonl` / `pins.json` / tmp 等）全忽略。
+    fn parse_jobs_event(&self, path: &Path) -> Option<JobChangeEvent> {
+        let rel = path_strip_prefix(path, &self.jobs_dir)?;
+        let components: Vec<_> = rel.components().collect();
+        if components.len() != 2 {
+            return None;
+        }
+        let file_name = components[1].as_os_str().to_string_lossy();
+        if file_name != "state.json" {
+            return None;
+        }
+        let job_id = components[0].as_os_str().to_string_lossy().into_owned();
+        Some(JobChangeEvent { job_id })
     }
 
     /// 从 projects 目录下的路径解析 `FileChangeEvent`。
@@ -1748,5 +1797,83 @@ mod tests {
 
         assert_eq!(paths[0], main_jsonl);
         assert_eq!(paths[1], subagent);
+    }
+
+    // --- Jobs 路由单元测 ---
+
+    /// 建含 jobs 目录的 watcher。
+    fn setup_watcher_with_jobs() -> (TempDir, PathBuf, PathBuf, PathBuf, FileWatcher) {
+        let tmp = TempDir::new().unwrap();
+        let projects_raw = tmp.path().join("projects");
+        let todos_raw = tmp.path().join("todos");
+        let jobs_raw = tmp.path().join("jobs");
+        std::fs::create_dir_all(&projects_raw).unwrap();
+        std::fs::create_dir_all(&todos_raw).unwrap();
+        std::fs::create_dir_all(&jobs_raw).unwrap();
+        let projects = dunce::canonicalize(&projects_raw).unwrap();
+        let todos = dunce::canonicalize(&todos_raw).unwrap();
+        let jobs = dunce::canonicalize(&jobs_raw).unwrap();
+        let watcher =
+            FileWatcher::with_paths_and_jobs(projects.clone(), todos.clone(), jobs.clone());
+        (tmp, projects, todos, jobs, watcher)
+    }
+
+    #[test]
+    fn parse_jobs_event_accepts_state_json() {
+        let (_tmp, _projects, _todos, jobs, watcher) = setup_watcher_with_jobs();
+        let path = jobs.join("job-abc-123").join("state.json");
+        let event = watcher.parse_jobs_event(&path).expect("should parse");
+        assert_eq!(event.job_id, "job-abc-123");
+    }
+
+    #[test]
+    fn parse_jobs_event_rejects_timeline_jsonl() {
+        let (_tmp, _projects, _todos, jobs, watcher) = setup_watcher_with_jobs();
+        let path = jobs.join("job-abc").join("timeline.jsonl");
+        assert!(watcher.parse_jobs_event(&path).is_none());
+    }
+
+    #[test]
+    fn parse_jobs_event_rejects_pins_json() {
+        let (_tmp, _projects, _todos, jobs, watcher) = setup_watcher_with_jobs();
+        let path = jobs.join("job-abc").join("pins.json");
+        assert!(watcher.parse_jobs_event(&path).is_none());
+    }
+
+    #[test]
+    fn parse_jobs_event_rejects_nested_path() {
+        let (_tmp, _projects, _todos, jobs, watcher) = setup_watcher_with_jobs();
+        let path = jobs.join("job-abc").join("sub").join("state.json");
+        assert!(watcher.parse_jobs_event(&path).is_none());
+    }
+
+    #[test]
+    fn parse_jobs_event_rejects_bare_state_json() {
+        let (_tmp, _projects, _todos, jobs, watcher) = setup_watcher_with_jobs();
+        let path = jobs.join("state.json");
+        assert!(watcher.parse_jobs_event(&path).is_none());
+    }
+
+    #[test]
+    fn route_event_dispatches_jobs_to_correct_channel() {
+        let (_tmp, _projects, _todos, jobs, watcher) = setup_watcher_with_jobs();
+        let mut jobs_rx = watcher.subscribe_jobs();
+
+        let state_path = jobs.join("job-xyz").join("state.json");
+        watcher.route_event(&state_path, false, None);
+
+        let event = jobs_rx.try_recv().expect("should have jobs event");
+        assert_eq!(event.job_id, "job-xyz");
+    }
+
+    #[test]
+    fn route_event_ignores_non_state_json_in_jobs_dir() {
+        let (_tmp, _projects, _todos, jobs, watcher) = setup_watcher_with_jobs();
+        let mut jobs_rx = watcher.subscribe_jobs();
+
+        let timeline_path = jobs.join("job-xyz").join("timeline.jsonl");
+        watcher.route_event(&timeline_path, false, None);
+
+        assert!(jobs_rx.try_recv().is_err());
     }
 }

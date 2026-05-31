@@ -40,6 +40,7 @@
   import { subscribeEvent } from "./lib/transport";
   import { getSidebarCollapsed, toggleSidebarCollapsed } from "./lib/sidebarStore.svelte";
   import { attachExternalLinkInterceptor } from "./lib/externalLinks";
+  import { initializeJobs, cleanupJobs } from "./lib/jobsStore.svelte";
   import { bootstrapOverrides } from "./lib/keyboard/customization";
   import { registerAppShortcuts } from "./lib/keyboard/register-app-shortcuts";
   import { setMenuSettings } from "./lib/contextMenu/settings.svelte";
@@ -209,6 +210,8 @@
     await loadAgentConfigs();
     // 单例 listen("file-change") —— 路由组件通过 fileChangeStore 注册 handler
     await initFileChangeStore();
+    // 初始化 Background Jobs store（TitleBar 入口依赖 jobsDirExists 判断是否渲染）
+    await initializeJobs();
     // 启动时同步一次 Dock badge（显示持久化的未读数）
     await onNotificationUpdate();
     // 主路径走 push event：`notification-update`（mark-as-read）+ `notification-added`
@@ -228,6 +231,13 @@
     // loadProjectData 经 projectDataStore 内 cache 自动同步（同一模块级 data
     // 引用），App 这边 $effect 监听 getProjectData() 同步本地副本
     await refreshChromeProjects();
+
+    // dev/test 信号：所有异步初始化完毕（含 initializeJobs → jobsDirExists 就绪）。
+    // Playwright 等 __cdtReady 而非 __cdtTest——后者在 mount 前就注入，此时 TitleBar
+    // 的条件渲染（如 jobs icon）可能还没数据。
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__cdtReady = true;
+    }
   });
 
   // Sidebar 也调 loadProjectData，模块级 cache 更新后这边通过 effect 同步
@@ -246,6 +256,7 @@
     unlistenNotifAdded?.();
     unlistenUpdater?.();
     detachExternalLinks?.();
+    cleanupJobs();
     if (notificationPollTimer) clearInterval(notificationPollTimer);
   });
 

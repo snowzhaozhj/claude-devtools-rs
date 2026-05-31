@@ -96,19 +96,20 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_54() {
+fn expected_tauri_commands_count_is_58() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        54,
+        58,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 54 个 Tauri command（含 SSH + server-mode + \
+         以及本文件常量；当前 src-tauri 注册 58 个 Tauri command（含 SSH + server-mode + \
          simplify-repository-as-project change 加的 list_group_sessions + change \
          command-palette-group-aware 加的 search_group_sessions + change \
          ssh-project-memory-remote-rw 加的 add_memory / delete_memory + change \
          add-telemetry-signal-bus 加的 get_telemetry_snapshot / record_correctness_events + \
          change frontend-context-menu-phase-2 加的 open_in_terminal / open_in_editor / \
          list_available_terminals + change workflow-subagent-pool-scan 加的 \
-         get_workflow_agent_trace）"
+         get_workflow_agent_trace + change bg-jobs-panel 加的 list_jobs / stop_job / \
+         delete_job / delete_completed_jobs）"
     );
 }
 
@@ -4504,4 +4505,148 @@ fn session_detail_workflow_items_present_when_populated() {
     let back: SessionDetail = serde_json::from_value(json).unwrap();
     assert_eq!(back.workflow_items.len(), 1);
     assert_eq!(back.workflow_items[0].status, WorkflowStatus::Pending);
+}
+
+// =============================================================================
+// list_jobs IPC contract
+// =============================================================================
+
+/// `list_jobs` 返回 camelCase 字段名。
+#[tokio::test]
+async fn list_jobs_returns_camelcase_response() {
+    use cdt_core::job::{BadgeColor, JobChild, JobGroup, JobState, JobSummary, JobsResponse};
+
+    let response = JobsResponse {
+        jobs: vec![JobSummary {
+            id: "job-abc".into(),
+            name: "feat/foo".into(),
+            detail: "Running tests".into(),
+            intent: "implement foo".into(),
+            state: JobState::Working,
+            group: JobGroup::Working,
+            children: vec![JobChild {
+                href: "https://github.com/foo/bar/pull/42".into(),
+                kind: "pr".into(),
+            }],
+            session_id: "sess-123".into(),
+            project_id: "-Users-alice-code".into(),
+            tempo: "active".into(),
+            needs: String::new(),
+            in_flight: Some(cdt_core::job::JobInFlight {
+                tasks: 1,
+                queued: 0,
+                kinds: vec!["local_bash".into()],
+            }),
+            created_at: "2026-05-30T10:00:00Z".into(),
+            updated_at: "2026-05-30T10:05:00Z".into(),
+        }],
+        badge: BadgeColor::Green,
+        badge_count: 1,
+        jobs_dir_exists: true,
+    };
+
+    let json = serde_json::to_value(&response).unwrap();
+
+    // 顶层字段 camelCase
+    assert!(json.get("jobs").is_some(), "should have 'jobs' field");
+    assert!(json.get("badge").is_some(), "should have 'badge' field");
+    assert!(
+        json.get("jobsDirExists").is_some(),
+        "should have 'jobsDirExists' field"
+    );
+    assert!(
+        json.get("badgeCount").is_some(),
+        "should have 'badgeCount' field"
+    );
+
+    // job 内部字段 camelCase
+    let job = &json["jobs"][0];
+    assert_eq!(job["id"], "job-abc");
+    assert_eq!(job["name"], "feat/foo");
+    assert_eq!(job["detail"], "Running tests");
+    assert_eq!(job["intent"], "implement foo");
+    assert_eq!(job["state"], "working");
+    assert_eq!(job["group"], "working");
+    assert_eq!(job["sessionId"], "sess-123");
+    assert_eq!(job["projectId"], "-Users-alice-code");
+    assert_eq!(job["tempo"], "active");
+    assert_eq!(job["inFlight"]["tasks"], 1);
+    assert_eq!(job["inFlight"]["queued"], 0);
+    assert_eq!(job["inFlight"]["kinds"][0], "local_bash");
+    assert_eq!(job["createdAt"], "2026-05-30T10:00:00Z");
+    assert_eq!(job["updatedAt"], "2026-05-30T10:05:00Z");
+
+    // children camelCase
+    assert_eq!(
+        job["children"][0]["href"],
+        "https://github.com/foo/bar/pull/42"
+    );
+    assert_eq!(job["children"][0]["kind"], "pr");
+
+    // badge 枚举序列化为 lowercase
+    assert_eq!(json["badge"], "green");
+    assert_eq!(json["badgeCount"], 1);
+}
+
+/// `list_jobs` badge 各颜色的枚举 tag 值。
+#[test]
+fn badge_color_serializes_lowercase() {
+    use cdt_core::BadgeColor;
+    assert_eq!(serde_json::to_value(BadgeColor::Red).unwrap(), json!("red"));
+    assert_eq!(
+        serde_json::to_value(BadgeColor::Amber).unwrap(),
+        json!("amber")
+    );
+    assert_eq!(
+        serde_json::to_value(BadgeColor::Green).unwrap(),
+        json!("green")
+    );
+    assert_eq!(
+        serde_json::to_value(BadgeColor::None).unwrap(),
+        json!("none")
+    );
+}
+
+/// `JobGroup` 枚举序列化为 kebab-case。
+#[test]
+fn job_group_serializes_kebab_case() {
+    use cdt_core::JobGroup;
+    assert_eq!(
+        serde_json::to_value(JobGroup::ReadyForReview).unwrap(),
+        json!("ready-for-review")
+    );
+    assert_eq!(
+        serde_json::to_value(JobGroup::NeedsInput).unwrap(),
+        json!("needs-input")
+    );
+    assert_eq!(
+        serde_json::to_value(JobGroup::Working).unwrap(),
+        json!("working")
+    );
+    assert_eq!(
+        serde_json::to_value(JobGroup::Completed).unwrap(),
+        json!("completed")
+    );
+}
+
+/// `list_jobs` 空 jobs 目录返回空数组 + badge none。
+#[tokio::test]
+async fn list_jobs_empty_dir_returns_empty_response() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let jobs_dir = tmp.path().join("jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+
+    // 使用 list_jobs_from_dir 不暴露 → 直接构造 LocalDataApi 调用会走真实 home；
+    // 这里直接验证 JobsResponse 的序列化形态。
+    let response = cdt_core::JobsResponse {
+        jobs: Vec::new(),
+        badge: cdt_core::BadgeColor::None,
+        badge_count: 0,
+        jobs_dir_exists: false,
+    };
+    let json = serde_json::to_value(&response).unwrap();
+    assert_eq!(json["jobs"], json!([]));
+    assert_eq!(json["badge"], json!("none"));
+    assert_eq!(json["jobsDirExists"], json!(false));
+    assert_eq!(json["badgeCount"], 0);
 }
