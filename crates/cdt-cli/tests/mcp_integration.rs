@@ -74,13 +74,17 @@ async fn mcp_server_responds_to_list_tools() {
     assert!(tool_names.contains(&"get_session_summary"));
     assert!(tool_names.contains(&"get_session_detail"));
     assert!(tool_names.contains(&"search_sessions"));
+    assert!(tool_names.contains(&"get_session_errors"));
+    assert!(tool_names.contains(&"get_session_cost"));
+    assert!(tool_names.contains(&"list_sessions"));
+    assert!(tool_names.contains(&"get_stats"));
     assert_eq!(tool_names.len(), 8);
 
     client.cancel().await.unwrap();
 }
 
 #[tokio::test]
-async fn mcp_list_projects_returns_json() {
+async fn mcp_list_projects_returns_compact_json() {
     let client = setup_pair().await;
 
     let result = client
@@ -100,9 +104,95 @@ async fn mcp_list_projects_returns_json() {
         .as_text()
         .expect("expected text content");
     let text = &text_content.text;
-    // Should be valid JSON (array)
+    // Should be valid JSON (array) and compact (no leading whitespace after opening bracket)
     let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
     assert!(parsed.is_array());
+    // Compact JSON should not have newlines
+    assert!(
+        !text.contains('\n'),
+        "expected compact JSON without newlines"
+    );
+
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn mcp_list_sessions_returns_error_for_unknown_project() {
+    let client = setup_pair().await;
+
+    let params = serde_json::json!({
+        "project": "nonexistent-project-for-test"
+    });
+
+    let result = client
+        .send_request(rmcp::model::ClientRequest::CallToolRequest(
+            rmcp::model::Request::new(
+                CallToolRequestParams::new("list_sessions")
+                    .with_arguments(serde_json::from_value(params).unwrap()),
+            ),
+        ))
+        .await;
+
+    // MCP returns JSON-RPC error for invalid params
+    assert!(result.is_err(), "expected error for nonexistent project");
+
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn mcp_get_session_detail_rejects_conflicting_window_params() {
+    let client = setup_pair().await;
+
+    let params = serde_json::json!({
+        "session": "test-session-id",
+        "range": "0:10",
+        "tail": 5
+    });
+
+    let result = client
+        .send_request(rmcp::model::ClientRequest::CallToolRequest(
+            rmcp::model::Request::new(
+                CallToolRequestParams::new("get_session_detail")
+                    .with_arguments(serde_json::from_value(params).unwrap()),
+            ),
+        ))
+        .await;
+
+    // Mutually exclusive params → JSON-RPC error
+    let err = result.unwrap_err();
+    let err_str = format!("{err:?}");
+    assert!(
+        err_str.contains("mutually exclusive"),
+        "error should mention mutual exclusivity, got: {err_str}"
+    );
+
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn mcp_get_session_detail_rejects_invalid_content_mode() {
+    let client = setup_pair().await;
+
+    let params = serde_json::json!({
+        "session": "test-session-id",
+        "content_mode": "invalid"
+    });
+
+    let result = client
+        .send_request(rmcp::model::ClientRequest::CallToolRequest(
+            rmcp::model::Request::new(
+                CallToolRequestParams::new("get_session_detail")
+                    .with_arguments(serde_json::from_value(params).unwrap()),
+            ),
+        ))
+        .await;
+
+    let err = result.unwrap_err();
+    let err_str = format!("{err:?}");
+    assert!(
+        err_str.contains("Invalid content_mode"),
+        "error should mention invalid content_mode, got: {err_str}"
+    );
 
     client.cancel().await.unwrap();
 }
