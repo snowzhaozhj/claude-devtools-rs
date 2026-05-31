@@ -216,7 +216,7 @@
     // projectDataStore inflight dedupe，不会产生额外 IPC。
     registerHandler("app-global-projects", (payload) => {
       if (payload.projectListChanged || payload.sessionListChanged || payload.deleted) {
-        loadProjectData({ refresh: true });
+        void loadProjectData({ refresh: true }).catch(() => {});
       }
     });
     // 初始化 Background Jobs store（TitleBar 入口依赖 jobsDirExists 判断是否渲染）
