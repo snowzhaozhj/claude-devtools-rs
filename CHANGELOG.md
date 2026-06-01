@@ -9,6 +9,11 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-06-01
+
+### Fixed
+- CLI completions now resolve the correct project name from JSONL session cwd.
+
 ## [0.6.5] — 2026-06-01
 
 ### Added
@@ -255,7 +260,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.7...HEAD
+[0.6.7]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.5...v0.6.7
 [0.6.5]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.2...v0.6.3
