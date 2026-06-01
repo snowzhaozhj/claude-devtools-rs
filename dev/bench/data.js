@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780279420338,
+  "lastUpdate": 1780289027377,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -10031,6 +10031,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12790,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "68e167eb2f0cf346b29999ac6ef8f4a291dc1a8e",
+          "message": "fix(cli): accept hyphen-prefixed --project values and reduce completion noise (#456)\n\n* fix(cli): accept hyphen-prefixed --project values and reduce completion noise\n\nTwo fixes:\n1. Add allow_hyphen_values to --project arg so encoded IDs like\n   -Users-zhaohejie-... are no longer rejected as unknown flags.\n2. ProjectCompleter now outputs display names (e.g. \"claude-devtools-rs\")\n   instead of full encoded paths, skips worktree directories, and dedupes\n   by name — reducing candidates from ~300 to ~50.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli): handle duplicate display names and improve worktree filter\n\nCodex review findings:\n- When multiple projects share the same display name (e.g. /foo/app and\n  /bar/app both named \"app\"), fall back to encoded IDs for those entries\n  instead of silently dropping duplicates.\n- Replace substring match on encoded name with decoded path check for\n  /.claude/worktrees/ to avoid false positives on unlikely but possible\n  legitimate paths.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli): simplify project completion to match UI display names\n\nAlways use the short display name (e.g. \"claude-devtools-rs\") as the\ncompletion value — same as what the project list UI shows. Help text\nuses ~/relative paths for context. Removes fallback to encoded IDs\nwhich was noisy and unfriendly.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli): remove allow_hyphen_values to prevent flag swallowing\n\nWith completions now using display names (no hyphen prefix), this flag\nis no longer needed for normal usage. Encoded IDs can still be passed\nvia --project=<id> (= form). Removing avoids the footgun where a\nmissing value silently consumes the next flag.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli): guard against empty home_dir in make_home_relative\n\nWhen home_dir() returns empty PathBuf, strip_prefix(\"\") succeeds on any\nstring, causing all help text to be incorrectly prefixed with ~.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli): use encoded name for worktree filter, fix Windows path in help\n\nPR review found two bugs:\n1. decode_path is lossy (all `-` become `/`), so decoded paths never\n   contain `/.claude/worktrees/` — the filter was dead code. Fix: match\n   on the encoded directory name directly (`--claude-worktrees-`).\n2. On Windows, home_dir returns backslashes but decode_path uses forward\n   slashes, so strip_prefix never matched. Fix: normalize to `/`.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* refactor(discover): extract worktree path detection to path_decoder\n\nMove the worktree encoded path detection logic (split on\n`-.claude-worktrees-` / `--claude-worktrees-`) from project_scanner\ninto path_decoder as reusable functions:\n- is_worktree_encoded_path: bool check (used by CLI completer)\n- split_worktree_encoded_path: returns (repo, worktree) parts (used by\n  scanner's decode_historical_worktree_dir)\n\nThis ensures the CLI completion filter uses the exact same logic as the\nproject list panel, not a reimplemented heuristic.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-01T12:39:53+08:00",
+          "tree_id": "b1eed03e205ac2cd738e17b2bdb81abf0acd777c",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/68e167eb2f0cf346b29999ac6ef8f4a291dc1a8e"
+        },
+        "date": 1780289026802,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 113,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1111,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 5240,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.861,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.272,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 48.06,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 34.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 293.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1212,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3254,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3253,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 40640,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.341,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 61.91,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 627,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6305,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 192.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1947,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 51.55,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 525.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5269,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 131.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1321,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.691,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 76.66,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8913,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 939.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8888,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 964.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 49.72,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 523.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 96.11,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 973.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9776,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 203.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1348,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12830,
             "unit": "µs"
           }
         ]
