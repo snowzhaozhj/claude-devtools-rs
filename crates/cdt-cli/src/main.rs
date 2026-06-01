@@ -36,7 +36,7 @@ struct Cli {
     format: OutputFormat,
 
     /// 限定项目范围（项目名或 ID）
-    #[arg(long, global = true, add = ArgValueCandidates::new(completions::ProjectCompleter))]
+    #[arg(long, global = true, allow_hyphen_values = true, add = ArgValueCandidates::new(completions::ProjectCompleter))]
     project: Option<String>,
 
     #[command(subcommand)]

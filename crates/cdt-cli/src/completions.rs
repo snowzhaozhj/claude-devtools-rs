@@ -184,19 +184,31 @@ impl ValueCandidates for ProjectCompleter {
             return Vec::new();
         };
 
-        entries
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()))
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                if !path_decoder::is_valid_encoded_path(&name) {
-                    return None;
-                }
-                let decoded = path_decoder::decode_path(&name);
-                let display_name = path_decoder::extract_project_name(&decoded);
-                Some(CompletionCandidate::new(name).help(Some(display_name.into())))
-            })
-            .collect()
+        let mut seen = std::collections::HashSet::new();
+        let mut candidates = Vec::new();
+
+        for entry in entries.filter_map(Result::ok) {
+            if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !path_decoder::is_valid_encoded_path(&name) {
+                continue;
+            }
+            // worktree 目录名过长且数量爆炸，跳过
+            if name.contains("--claude-worktrees-") {
+                continue;
+            }
+            let decoded = path_decoder::decode_path(&name);
+            let display_name = path_decoder::extract_project_name(&decoded);
+            if !seen.insert(display_name.clone()) {
+                continue;
+            }
+            let help = decoded.to_string_lossy().into_owned();
+            candidates.push(CompletionCandidate::new(display_name).help(Some(help.into())));
+        }
+
+        candidates
     }
 }
 
