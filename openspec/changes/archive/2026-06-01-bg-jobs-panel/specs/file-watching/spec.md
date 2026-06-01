@@ -1,10 +1,10 @@
 # file-watching
 
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: Watch directories for changes
+### Requirement: Watch Claude jobs directory for background job state changes
 
-FileWatcher SHALL 监听 `projects/`、`todos/` 和 `jobs/` 三个目录的文件变更。每个目录在 `start()` 时以 `is_dir()` 判断是否存在——不存在则跳过（不 panic、不建目录）。
+FileWatcher SHALL 监听 `~/.claude/jobs/` 目录的文件变更。`start()` 时以 `is_dir()` 判断是否存在——不存在则跳过（不 panic、不建目录）。
 
 #### Scenario: Jobs directory exists at startup
 
