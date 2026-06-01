@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780241989440,
+  "lastUpdate": 1780278575523,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -9613,6 +9613,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12980,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "567f6f848aa627fa7b8abd1aa0a09bf7f04c82ce",
+          "message": "feat(cli): add shell completion support (zsh/bash/fish/powershell) (#450)\n\nImplements dynamic shell completions using clap_complete's CompleteEnv\nwith custom env var CDT_COMPLETE (following `just`'s pattern to avoid\ncollision with other tools).\n\nFeatures:\n- `cdt setup completions` — auto-detect shell, install to correct path\n- `cdt completions <shell>` — output registration script to stdout\n- `cdt self-update` — auto-refresh installed completions after update\n- Dynamic `--project` completion with decoded project names\n- Dynamic session ID completion with [project] title preview (top 20 by mtime)\n\nArchitecture (following community best practices):\n- CompleteEnv at main() entry with custom var CDT_COMPLETE\n- Completions subcommand uses subprocess self-invocation (official pattern)\n- Default `cdt setup` gracefully skips on unsupported shells\n- Session title extraction skips malformed JSONL lines\n\nPerformance (release build, 293 projects / 794 sessions):\n- Static completion: ~110ms\n- Project name completion: ~110ms\n- Session ID completion: ~140ms\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-01T09:45:45+08:00",
+          "tree_id": "c96b23e5a96ff2e0ab81cad4bc435552a4a7b07c",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/567f6f848aa627fa7b8abd1aa0a09bf7f04c82ce"
+        },
+        "date": 1780278575141,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 111.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1115,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 6858,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.542,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.522,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 46.43,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.57,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 291.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1235,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3372,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3551,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 40600,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 5.848,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 62.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 634.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6358,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 198.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1945,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 52.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 531.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5319,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 128.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1295,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.691,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 76.66,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8747,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 893.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9494,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 918,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 48.78,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 514.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 94.91,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 952,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9561,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 192.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1364,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13260,
             "unit": "µs"
           }
         ]
