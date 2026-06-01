@@ -35,7 +35,7 @@ struct Cli {
     #[arg(long, global = true, default_value = "table")]
     format: OutputFormat,
 
-    /// 限定项目范围（项目名或 ID）
+    /// 限定项目范围（项目名或 ID；编码 ID 需用 --project=<id> 形式）
     #[arg(long, global = true, add = ArgValueCandidates::new(completions::ProjectCompleter))]
     project: Option<String>,
 

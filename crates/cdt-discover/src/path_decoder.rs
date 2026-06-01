@@ -201,6 +201,17 @@ pub fn is_valid_encoded_path(name: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-') || c.is_whitespace())
 }
 
+#[must_use]
+pub fn is_worktree_encoded_path(encoded: &str) -> bool {
+    split_worktree_encoded_path(encoded).is_some()
+}
+
+pub fn split_worktree_encoded_path(encoded: &str) -> Option<(&str, &str)> {
+    encoded
+        .split_once("-.claude-worktrees-")
+        .or_else(|| encoded.split_once("--claude-worktrees-"))
+}
+
 /// `~/.claude/` —— 根据 home 目录动态解析。
 #[must_use]
 pub fn get_claude_base_path() -> PathBuf {
