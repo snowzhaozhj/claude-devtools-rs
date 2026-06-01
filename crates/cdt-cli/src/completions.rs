@@ -184,8 +184,9 @@ impl ValueCandidates for ProjectCompleter {
             return Vec::new();
         };
 
-        let mut by_name: std::collections::HashMap<String, Vec<(String, String)>> =
-            std::collections::HashMap::new();
+        let home = cdt_discover::home_dir().unwrap_or_default();
+        let mut seen = std::collections::HashSet::new();
+        let mut candidates = Vec::new();
 
         for entry in entries.filter_map(Result::ok) {
             if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
@@ -201,31 +202,23 @@ impl ValueCandidates for ProjectCompleter {
                 continue;
             }
             let display_name = path_decoder::extract_project_name(&decoded);
-            by_name
-                .entry(display_name)
-                .or_default()
-                .push((encoded, decoded_str.into_owned()));
-        }
-
-        let mut candidates = Vec::new();
-        for (display_name, entries) in &by_name {
-            if entries.len() == 1 {
-                candidates.push(
-                    CompletionCandidate::new(display_name.clone())
-                        .help(Some(entries[0].1.clone().into())),
-                );
-            } else {
-                for (encoded, decoded_path) in entries {
-                    candidates.push(
-                        CompletionCandidate::new(encoded.clone())
-                            .help(Some(decoded_path.clone().into())),
-                    );
-                }
+            if !seen.insert(display_name.clone()) {
+                continue;
             }
+            let help = make_home_relative(&decoded_str, &home);
+            candidates.push(CompletionCandidate::new(display_name).help(Some(help.into())));
         }
 
         candidates
     }
+}
+
+fn make_home_relative(path: &str, home: &Path) -> String {
+    let home_str = home.to_string_lossy();
+    if let Some(rest) = path.strip_prefix(home_str.as_ref()) {
+        return format!("~{rest}");
+    }
+    path.to_owned()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
