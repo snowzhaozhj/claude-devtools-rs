@@ -196,15 +196,15 @@ impl ValueCandidates for ProjectCompleter {
             if !path_decoder::is_valid_encoded_path(&encoded) {
                 continue;
             }
-            let decoded = path_decoder::decode_path(&encoded);
-            let decoded_str = decoded.to_string_lossy();
-            if decoded_str.contains("/.claude/worktrees/") {
+            if is_worktree_dir(&encoded) {
                 continue;
             }
+            let decoded = path_decoder::decode_path(&encoded);
             let display_name = path_decoder::extract_project_name(&decoded);
             if !seen.insert(display_name.clone()) {
                 continue;
             }
+            let decoded_str = decoded.to_string_lossy();
             let help = make_home_relative(&decoded_str, &home);
             candidates.push(CompletionCandidate::new(display_name).help(Some(help.into())));
         }
@@ -213,10 +213,15 @@ impl ValueCandidates for ProjectCompleter {
     }
 }
 
+fn is_worktree_dir(encoded: &str) -> bool {
+    encoded.contains("--claude-worktrees-") || encoded.contains("-.claude-worktrees-")
+}
+
 fn make_home_relative(path: &str, home: &Path) -> String {
     let home_str = home.to_string_lossy();
     if !home_str.is_empty() {
-        if let Some(rest) = path.strip_prefix(home_str.as_ref()) {
+        let normalized = home_str.replace('\\', "/");
+        if let Some(rest) = path.strip_prefix(normalized.as_str()) {
             return format!("~{rest}");
         }
     }
