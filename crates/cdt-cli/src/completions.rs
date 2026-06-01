@@ -184,28 +184,44 @@ impl ValueCandidates for ProjectCompleter {
             return Vec::new();
         };
 
-        let mut seen = std::collections::HashSet::new();
-        let mut candidates = Vec::new();
+        let mut by_name: std::collections::HashMap<String, Vec<(String, String)>> =
+            std::collections::HashMap::new();
 
         for entry in entries.filter_map(Result::ok) {
             if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
                 continue;
             }
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !path_decoder::is_valid_encoded_path(&name) {
+            let encoded = entry.file_name().to_string_lossy().to_string();
+            if !path_decoder::is_valid_encoded_path(&encoded) {
                 continue;
             }
-            // worktree 目录名过长且数量爆炸，跳过
-            if name.contains("--claude-worktrees-") {
+            let decoded = path_decoder::decode_path(&encoded);
+            let decoded_str = decoded.to_string_lossy();
+            if decoded_str.contains("/.claude/worktrees/") {
                 continue;
             }
-            let decoded = path_decoder::decode_path(&name);
             let display_name = path_decoder::extract_project_name(&decoded);
-            if !seen.insert(display_name.clone()) {
-                continue;
+            by_name
+                .entry(display_name)
+                .or_default()
+                .push((encoded, decoded_str.into_owned()));
+        }
+
+        let mut candidates = Vec::new();
+        for (display_name, entries) in &by_name {
+            if entries.len() == 1 {
+                candidates.push(
+                    CompletionCandidate::new(display_name.clone())
+                        .help(Some(entries[0].1.clone().into())),
+                );
+            } else {
+                for (encoded, decoded_path) in entries {
+                    candidates.push(
+                        CompletionCandidate::new(encoded.clone())
+                            .help(Some(decoded_path.clone().into())),
+                    );
+                }
             }
-            let help = decoded.to_string_lossy().into_owned();
-            candidates.push(CompletionCandidate::new(display_name).help(Some(help.into())));
         }
 
         candidates
