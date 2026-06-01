@@ -196,7 +196,7 @@ impl ValueCandidates for ProjectCompleter {
             if !path_decoder::is_valid_encoded_path(&encoded) {
                 continue;
             }
-            if is_worktree_dir(&encoded) {
+            if path_decoder::is_worktree_encoded_path(&encoded) {
                 continue;
             }
             let decoded = path_decoder::decode_path(&encoded);
@@ -211,10 +211,6 @@ impl ValueCandidates for ProjectCompleter {
 
         candidates
     }
-}
-
-fn is_worktree_dir(encoded: &str) -> bool {
-    encoded.contains("--claude-worktrees-") || encoded.contains("-.claude-worktrees-")
 }
 
 fn make_home_relative(path: &str, home: &Path) -> String {

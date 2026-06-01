@@ -37,7 +37,8 @@ pub use path_compare::{
 };
 pub use path_decoder::{
     decode_path, encode_path, extract_base_dir, extract_project_name, get_projects_base_path,
-    get_todos_base_path, home_dir, is_valid_encoded_path, looks_like_absolute_path,
+    get_todos_base_path, home_dir, is_valid_encoded_path, is_worktree_encoded_path,
+    looks_like_absolute_path,
 };
 pub use project_path_resolver::ProjectPathResolver;
 pub use project_scanner::ProjectScanner;

@@ -25,6 +25,7 @@ use crate::error::DiscoverError;
 use crate::fs_provider::{FileSystemProvider, FsKind};
 use crate::path_decoder::{
     decode_path, extract_base_dir, extract_project_name, is_valid_encoded_path,
+    split_worktree_encoded_path,
 };
 use crate::project_path_resolver::ProjectPathResolver;
 
@@ -365,9 +366,7 @@ impl ProjectScanner {
     }
 
     async fn decode_historical_worktree_dir(&self, dir_name: &str) -> Option<PathBuf> {
-        let (repo_encoded, worktree_encoded) = dir_name
-            .split_once("-.claude-worktrees-")
-            .or_else(|| dir_name.split_once("--claude-worktrees-"))?;
+        let (repo_encoded, worktree_encoded) = split_worktree_encoded_path(dir_name)?;
         if worktree_encoded.is_empty() {
             return None;
         }
