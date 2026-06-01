@@ -177,6 +177,57 @@ pub fn extract_project_name(path: &Path) -> String {
     )
 }
 
+/// 从项目目录中 session JSONL 读取 `cwd` 字段来消除 `decode_path` 歧义。
+///
+/// 按 mtime 倒序尝试多个 JSONL（最新优先），每个只读头部 20 行。
+/// 返回 `None` 时调用方应 fallback 到 `extract_project_name(&decode_path(encoded))`。
+pub fn resolve_project_name_from_jsonl(project_dir: &Path) -> Option<String> {
+    const MAX_ATTEMPTS: usize = 3;
+
+    let mut jsonl_files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    let entries = std::fs::read_dir(project_dir).ok()?;
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let mtime = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        jsonl_files.push((mtime, path));
+    }
+
+    jsonl_files.sort_unstable_by_key(|item| std::cmp::Reverse(item.0));
+
+    for (_, jsonl_path) in jsonl_files.iter().take(MAX_ATTEMPTS) {
+        if let Some(name) = extract_cwd_from_jsonl_head(jsonl_path) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn extract_cwd_from_jsonl_head(jsonl_path: &Path) -> Option<String> {
+    use std::io::{BufRead, BufReader};
+
+    let file = std::fs::File::open(jsonl_path).ok()?;
+    let reader = BufReader::new(file);
+
+    for line in reader.lines().take(20) {
+        let Ok(line) = line else { continue };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if let Some(cwd) = value.get("cwd").and_then(|v| v.as_str()) {
+            if !cwd.is_empty() {
+                return Some(extract_project_name(Path::new(cwd)));
+            }
+        }
+    }
+    None
+}
+
 /// 是否是合法的 Claude Code 编码目录名。
 ///
 /// 两种合法形式（对齐 TS `pathDecoder.ts::isValidEncodedPath` 的 regex）：
@@ -494,5 +545,81 @@ mod tests {
             todos_base_path_for(Some(Path::new("/data/claude-alt"))),
             PathBuf::from("/data/claude-alt/todos")
         );
+    }
+
+    #[test]
+    fn resolve_project_name_from_jsonl_extracts_cwd() {
+        let tmp = std::env::temp_dir().join("cdt_test_jsonl_resolve");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let jsonl_content = r#"{"type":"user","cwd":"/Users/alice/code/claude-devtools-rs","message":{"content":"hi"}}"#;
+        std::fs::write(tmp.join("session1.jsonl"), jsonl_content).unwrap();
+
+        let result = resolve_project_name_from_jsonl(&tmp);
+        assert_eq!(result, Some("claude-devtools-rs".to_string()));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn resolve_project_name_from_jsonl_returns_none_for_empty_dir() {
+        let tmp = std::env::temp_dir().join("cdt_test_jsonl_empty");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let result = resolve_project_name_from_jsonl(&tmp);
+        assert_eq!(result, None);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn resolve_project_name_from_jsonl_returns_none_if_no_cwd() {
+        let tmp = std::env::temp_dir().join("cdt_test_jsonl_nocwd");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let jsonl_content = r#"{"type":"user","message":{"content":"hi"}}"#;
+        std::fs::write(tmp.join("session1.jsonl"), jsonl_content).unwrap();
+
+        let result = resolve_project_name_from_jsonl(&tmp);
+        assert_eq!(result, None);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn resolve_project_name_from_jsonl_skips_malformed_lines() {
+        let tmp = std::env::temp_dir().join("cdt_test_jsonl_malformed");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let content = "not valid json\n{\"broken\n{\"cwd\":\"/Users/bob/my-project\"}\n";
+        std::fs::write(tmp.join("s.jsonl"), content).unwrap();
+
+        let result = resolve_project_name_from_jsonl(&tmp);
+        assert_eq!(result, Some("my-project".to_string()));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn resolve_project_name_from_jsonl_falls_through_to_older_file() {
+        let tmp = std::env::temp_dir().join("cdt_test_jsonl_fallthrough");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Older file has valid cwd
+        let old_path = tmp.join("old.jsonl");
+        std::fs::write(&old_path, r#"{"cwd":"/home/user/real-project"}"#).unwrap();
+        // Set old mtime
+        let old_time =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        filetime::set_file_mtime(&old_path, filetime::FileTime::from_system_time(old_time)).ok();
+
+        // Newer file has no cwd (e.g. being written)
+        let new_path = tmp.join("new.jsonl");
+        std::fs::write(&new_path, "{\"type\":\"system\"}\n").unwrap();
+
+        let result = resolve_project_name_from_jsonl(&tmp);
+        assert_eq!(result, Some("real-project".to_string()));
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

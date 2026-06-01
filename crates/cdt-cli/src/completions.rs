@@ -177,6 +177,12 @@ fn is_system_path(path: &Path) -> bool {
 
 pub struct ProjectCompleter;
 
+struct RawCandidate {
+    name: String,
+    encoded: String,
+    help: String,
+}
+
 impl ValueCandidates for ProjectCompleter {
     fn candidates(&self) -> Vec<CompletionCandidate> {
         let base = projects_dir();
@@ -185,8 +191,8 @@ impl ValueCandidates for ProjectCompleter {
         };
 
         let home = cdt_discover::home_dir().unwrap_or_default();
-        let mut seen = std::collections::HashSet::new();
-        let mut candidates = Vec::new();
+
+        let mut raw: Vec<RawCandidate> = Vec::new();
 
         for entry in entries.filter_map(Result::ok) {
             if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
@@ -199,14 +205,42 @@ impl ValueCandidates for ProjectCompleter {
             if path_decoder::is_worktree_encoded_path(&encoded) {
                 continue;
             }
+
+            let project_dir = base.join(&encoded);
             let decoded = path_decoder::decode_path(&encoded);
-            let display_name = path_decoder::extract_project_name(&decoded);
-            if !seen.insert(display_name.clone()) {
-                continue;
-            }
+            let display_name = path_decoder::resolve_project_name_from_jsonl(&project_dir)
+                .unwrap_or_else(|| path_decoder::extract_project_name(&decoded));
+
             let decoded_str = decoded.to_string_lossy();
             let help = make_home_relative(&decoded_str, &home);
-            candidates.push(CompletionCandidate::new(display_name).help(Some(help.into())));
+
+            raw.push(RawCandidate {
+                name: display_name,
+                encoded,
+                help,
+            });
+        }
+
+        // resolve_project uses eq_ignore_ascii_case, so dedup must match
+        let mut name_counts = std::collections::HashMap::<String, usize>::new();
+        for c in &raw {
+            *name_counts.entry(c.name.to_ascii_lowercase()).or_default() += 1;
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut candidates = Vec::new();
+
+        for c in raw {
+            if name_counts[&c.name.to_ascii_lowercase()] == 1 {
+                if seen.insert(c.name.to_ascii_lowercase()) {
+                    candidates.push(CompletionCandidate::new(c.name).help(Some(c.help.into())));
+                }
+            } else {
+                candidates.push(
+                    CompletionCandidate::new(c.encoded)
+                        .help(Some(format!("{} · {}", c.name, c.help).into())),
+                );
+            }
         }
 
         candidates
@@ -250,8 +284,10 @@ impl ValueCompleter for SessionCompleter {
             if !path_decoder::is_valid_encoded_path(&dir_name) {
                 continue;
             }
-            let project_name =
-                path_decoder::extract_project_name(&path_decoder::decode_path(&dir_name));
+            let project_name = path_decoder::resolve_project_name_from_jsonl(&project_entry.path())
+                .unwrap_or_else(|| {
+                    path_decoder::extract_project_name(&path_decoder::decode_path(&dir_name))
+                });
 
             let Ok(entries) = fs::read_dir(project_entry.path()) else {
                 continue;
