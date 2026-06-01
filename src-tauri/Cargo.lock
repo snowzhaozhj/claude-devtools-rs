@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-analyze"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "cdt-core",
  "cdt-parse",
@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-api"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-config"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "cdt-core",
  "cdt-discover",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-core"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "chrono",
  "serde",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-discover"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "cdt-core",
@@ -746,7 +746,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-fs"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "futures",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-parse"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "cdt-core",
  "cdt-fs",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-ssh"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "cdt-core",
@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-telemetry"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "chrono",
  "crossbeam-queue",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-watch"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "cdt-core",
  "cdt-discover",
@@ -898,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "claude-devtools-tauri"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "cdt-api",
  "cdt-config",
