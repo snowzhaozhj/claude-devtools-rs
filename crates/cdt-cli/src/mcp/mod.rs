@@ -1,7 +1,6 @@
 //! MCP Server implementation for claude-devtools session intelligence.
 
 pub mod redact;
-pub mod truncate;
 
 use std::sync::Arc;
 
@@ -14,13 +13,15 @@ use rmcp::{
 use serde::Serialize;
 
 use cdt_api::DataApi;
-use cdt_query::{
-    CharRatioEstimator, ChunkKindFilter, QueryEngine, QueryFilter, SessionQueryOptions,
-    TokenEstimator,
-};
+use cdt_core::{Chunk, message::MessageContent, tool_execution::ToolOutput};
+use cdt_query::{ChunkKindFilter, QueryEngine, QueryFilter, SessionQueryOptions};
 
 use redact::Redactor;
-use truncate::truncate_chunks_to_budget;
+
+const DEFAULT_PAGE_SIZE: usize = 20;
+const MAX_PAGE_SIZE: usize = 100;
+const DEFAULT_LIST_LIMIT: usize = 20;
+const ERROR_MESSAGE_MAX_CHARS: usize = 500;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Parameter types
@@ -28,14 +29,16 @@ use truncate::truncate_chunks_to_budget;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ListSessionsParams {
-    #[schemars(description = "Project name or ID. Required unless --project is global.")]
+    #[schemars(description = "Project name or ID.")]
     pub project: Option<String>,
     #[schemars(description = "Only sessions since this time period (e.g. '7d', '24h', '1h')")]
     pub since: Option<String>,
     #[schemars(description = "Filter by title keyword (case-insensitive)")]
     pub grep: Option<String>,
-    #[schemars(description = "Maximum number of sessions to return")]
+    #[schemars(description = "Maximum number of sessions to return (default 20, max 100)")]
     pub limit: Option<usize>,
+    #[schemars(description = "Pagination cursor from previous response")]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -52,24 +55,52 @@ pub struct SessionDetailParams {
     pub session: String,
     #[schemars(description = "Project name or ID (auto-resolved if omitted)")]
     pub project: Option<String>,
-    #[schemars(description = "Chunk range, e.g. '10:30'")]
+    #[schemars(
+        description = "Window selection: chunk range, e.g. '10:30'. Mutually exclusive with cursor and tail."
+    )]
     pub range: Option<String>,
-    #[schemars(description = "Return only the last N chunks")]
+    #[schemars(
+        description = "Window selection: return only the last N chunks. Mutually exclusive with cursor and range."
+    )]
     pub tail: Option<usize>,
+    #[schemars(
+        description = "Window selection: pagination cursor from previous response. Mutually exclusive with range and tail."
+    )]
+    pub cursor: Option<String>,
     #[schemars(description = "Filter: 'errors_only' or 'tool_calls'")]
     pub filter: Option<String>,
-    #[schemars(description = "Maximum estimated tokens in response (truncates by chunk boundary)")]
-    pub max_tokens: Option<usize>,
+    #[schemars(
+        description = "Content mode: 'omit' (default) returns chunk structure with large fields omitted; 'full' includes all content. Use 'full' with a narrow range for specific chunks, or for export/file-write."
+    )]
+    pub content_mode: Option<String>,
+    #[schemars(
+        description = "Max chunks per page (default 20, max 100). Ignored when content_mode='full' without range/tail (returns all)."
+    )]
+    pub max_chunks: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SessionErrorsParams {
+    #[schemars(description = "Session ID (full or short prefix)")]
+    pub session: String,
+    #[schemars(description = "Project name or ID (auto-resolved if omitted)")]
+    pub project: Option<String>,
+    #[schemars(description = "Maximum errors to return (default 20, max 100)")]
+    pub limit: Option<usize>,
+    #[schemars(description = "Pagination cursor from previous response")]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SearchParams {
     #[schemars(description = "Search query text")]
     pub query: String,
-    #[schemars(description = "Maximum results to return (default 50)")]
+    #[schemars(description = "Maximum results to return (default 20, max 100)")]
     pub limit: Option<usize>,
     #[schemars(description = "Project name or ID to limit search scope")]
     pub project: Option<String>,
+    #[schemars(description = "Pagination cursor from previous response")]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -82,13 +113,113 @@ pub struct StatsParams {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Response envelope types
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PaginatedResponse<T: Serialize> {
+    items: T,
+    total: usize,
+    returned: usize,
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDetailResponse {
+    session_id: String,
+    total_chunks: usize,
+    returned_chunks: usize,
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    is_ongoing: bool,
+    content_mode: String,
+    chunks: Vec<ChunkEnvelope>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChunkEnvelope {
+    chunk_index: usize,
+    chunk_id: String,
+    #[serde(rename = "type")]
+    kind: String,
+    timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_executions: Vec<ToolExecEnvelope>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    responses: Vec<ResponseEnvelope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_content: Option<ContentField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system_content: Option<ContentField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compact_summary: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolExecEnvelope {
+    tool_name: String,
+    tool_use_id: String,
+    is_error: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<serde_json::Value>,
+    output_omitted: bool,
+    output_chars: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_message: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResponseEnvelope {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    content_omitted: bool,
+    content_chars: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentField {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    omitted: bool,
+    chars: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ErrorEntry {
+    chunk_index: usize,
+    tool_name: String,
+    tool_use_id: String,
+    is_error: bool,
+    error_message: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    message_truncated: bool,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Server struct
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct CdtMcpServer {
     engine: Arc<QueryEngine>,
     redactor: Redactor,
-    estimator: Arc<dyn TokenEstimator>,
 }
 
 impl CdtMcpServer {
@@ -96,7 +227,6 @@ impl CdtMcpServer {
         Self {
             engine,
             redactor: Redactor::new(!allow_sensitive),
-            estimator: Arc::new(CharRatioEstimator::default()),
         }
     }
 
@@ -125,22 +255,23 @@ impl CdtMcpServer {
         }
     }
 
-    fn redact_json<T: Serialize>(&self, value: &T) -> Result<CallToolResult, McpError> {
-        let json = serde_json::to_string_pretty(value)
+    fn emit_json<T: Serialize>(&self, value: &T) -> Result<CallToolResult, McpError> {
+        let json = serde_json::to_string(value)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let (text, redacted_count) = self.redactor.redact(&json);
 
         if redacted_count > 0 {
             let wrapper = serde_json::json!({
-                "data": serde_json::from_str::<serde_json::Value>(&text).unwrap_or(serde_json::Value::String(text)),
+                "data": serde_json::from_str::<serde_json::Value>(&text)
+                    .unwrap_or(serde_json::Value::String(text)),
                 "redacted": true,
                 "redactedCount": redacted_count,
             });
             Ok(CallToolResult::success(vec![Content::text(
-                serde_json::to_string_pretty(&wrapper).unwrap_or_default(),
+                serde_json::to_string(&wrapper).unwrap_or_default(),
             )]))
         } else {
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            Ok(CallToolResult::success(vec![Content::text(text)]))
         }
     }
 }
@@ -168,12 +299,12 @@ impl CdtMcpServer {
             .list_repository_groups()
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        self.redact_json(&groups)
+        self.emit_json(&groups)
     }
 
     #[tool(
         name = "list_sessions",
-        description = "List sessions for a project. Supports filtering by time range (since), title keyword (grep), and limit. Returns session ID, title, duration, status, and message count.",
+        description = "List sessions for a project. Returns paginated results (default 20 per page). Check `hasMore` and use `cursor` for next page. Supports filtering by time range (since), title keyword (grep).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -190,24 +321,46 @@ impl CdtMcpServer {
             .await?;
 
         let since_ms = params.since.as_deref().and_then(parse_duration_to_epoch_ms);
+        let limit = params
+            .limit
+            .unwrap_or(DEFAULT_LIST_LIMIT)
+            .clamp(1, MAX_PAGE_SIZE);
+        let offset = parse_cursor_offset(params.cursor.as_deref());
 
         let filter = QueryFilter {
             since: since_ms,
             grep: params.grep,
-            limit: params.limit,
+            limit: None,
             ..Default::default()
         };
-        let sessions = self
+        let all_sessions = self
             .engine
             .list_sessions(&project_id, &filter)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        self.redact_json(&sessions)
+
+        let total = all_sessions.len();
+        let page: Vec<_> = all_sessions.into_iter().skip(offset).take(limit).collect();
+        let returned = page.len();
+        let has_more = offset + returned < total;
+
+        let response = PaginatedResponse {
+            items: page,
+            total,
+            returned,
+            has_more,
+            cursor: if has_more {
+                Some(format!("{}", offset + returned))
+            } else {
+                None
+            },
+        };
+        self.emit_json(&response)
     }
 
     #[tool(
         name = "get_session_summary",
-        description = "Get a structured diagnostic summary of a session. Returns: time phases, tool usage stats, error density, idle gaps, top files touched, and estimated cost. ALWAYS call this FIRST before get_session_detail — it's compact (~2K tokens) and tells you whether you need to drill deeper.",
+        description = "Get a structured diagnostic summary of a session (~2K tokens). Returns: time phases, tool usage stats, error density, idle gaps, top files touched, and estimated cost. ALWAYS call this FIRST before get_session_detail.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -229,12 +382,24 @@ impl CdtMcpServer {
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let summary_output = cdt_query::summary::build_summary(&detail);
-        self.redact_json(&summary_output)
+        self.emit_json(&summary_output)
     }
 
     #[tool(
         name = "get_session_detail",
-        description = "Get detailed chunk data from a session. Supports range ('10:30'), tail (last N chunks), filter ('errors_only' or 'tool_calls'), and max_tokens (truncates by chunk boundary to fit context budget). Use get_session_summary first to understand the session before requesting full detail.",
+        description = "Get chunk data from a session with pagination and field control.\n\n\
+            DEFAULT BEHAVIOR: Returns 20 chunks per page with large fields OMITTED (tool output, response content). \
+            Each chunk includes stable `chunkIndex` (absolute, unaffected by filters) and size metadata \
+            (`outputChars`, `contentChars`) so you know what's omitted.\n\n\
+            WINDOW SELECTION (mutually exclusive — pick one or none):\n\
+            - `range`: e.g. '10:30' for specific chunks\n\
+            - `tail`: last N chunks\n\
+            - `cursor`: from previous response's `cursor` field\n\n\
+            CONTENT MODE:\n\
+            - 'omit' (default): structure + metadata only, large fields replaced with size info\n\
+            - 'full': includes all original content — use with narrow range for specific chunks, or for export\n\n\
+            PAGINATION: Check `hasMore` and pass returned `cursor` for next page.\n\n\
+            TYPICAL WORKFLOW: get_session_summary → get_session_detail (omit mode, scan structure) → get_session_detail(range:'5:6', content_mode:'full') for specific content.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -246,6 +411,28 @@ impl CdtMcpServer {
         &self,
         Parameters(params): Parameters<SessionDetailParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Validate mutually exclusive window params (before resolving project)
+        let window_count = u8::from(params.range.is_some())
+            + u8::from(params.tail.is_some())
+            + u8::from(params.cursor.is_some());
+        if window_count > 1 {
+            return Err(McpError::invalid_params(
+                "Parameters 'range', 'tail', and 'cursor' are mutually exclusive. Pick one or none.",
+                None,
+            ));
+        }
+
+        let content_mode = match params.content_mode.as_deref() {
+            None | Some("omit") => ContentMode::Omit,
+            Some("full") => ContentMode::Full,
+            Some(other) => {
+                return Err(McpError::invalid_params(
+                    format!("Invalid content_mode '{other}'. Supported: 'omit', 'full'"),
+                    None,
+                ));
+            }
+        };
+
         let project_id = self
             .resolve_project_id(params.project.as_deref(), Some(&params.session))
             .await?;
@@ -256,28 +443,28 @@ impl CdtMcpServer {
             Some("tool_calls") => Some(ChunkKindFilter::ToolCalls),
             Some(other) => {
                 return Err(McpError::invalid_params(
-                    format!(
-                        "Invalid filter '{other}'. Supported values: 'errors_only', 'tool_calls'"
-                    ),
+                    format!("Invalid filter '{other}'. Supported: 'errors_only', 'tool_calls'"),
                     None,
                 ));
             }
         };
 
+        // Parse range if provided (absolute chunk indices)
         let range = match params.range.as_deref() {
             None => None,
             Some(s) => Some(parse_range(s).ok_or_else(|| {
                 McpError::invalid_params(
-                    format!("Invalid range '{s}'. Expected format: 'start:end' (e.g. '10:30')"),
+                    format!("Invalid range '{s}'. Expected: 'start:end' (e.g. '10:30')"),
                     None,
                 )
             })?),
         };
 
+        // Fetch ALL chunks (no range/tail applied at query layer) so we keep absolute indices
         let options = SessionQueryOptions {
-            range,
-            tail: params.tail,
-            kind_filter,
+            range: None,
+            tail: None,
+            kind_filter: None,
             errors_only: false,
         };
 
@@ -287,33 +474,91 @@ impl CdtMcpServer {
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        if let Some(budget) = params.max_tokens {
-            let truncated =
-                truncate_chunks_to_budget(&detail.chunks, self.estimator.as_ref(), budget);
-            let (text, redacted_count) = self.redactor.redact(
-                &serde_json::to_string_pretty(&truncated)
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?,
-            );
-            if redacted_count > 0 {
-                let wrapper = serde_json::json!({
-                    "data": serde_json::from_str::<serde_json::Value>(&text).unwrap_or(serde_json::Value::String(text.clone())),
-                    "redacted": true,
-                    "redactedCount": redacted_count,
-                });
-                Ok(CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&wrapper).unwrap_or_default(),
-                )]))
+        let is_ongoing = detail.is_ongoing;
+
+        // Build indexed chunks with absolute indices, then apply filter
+        let indexed_chunks: Vec<(usize, &Chunk)> = detail
+            .chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, chunk)| match kind_filter {
+                None => true,
+                Some(ChunkKindFilter::ErrorsOnly) => matches!(chunk, Chunk::Ai(ai) if ai.tool_executions.iter().any(|te| te.is_error)),
+                Some(ChunkKindFilter::ToolCalls) => matches!(chunk, Chunk::Ai(ai) if !ai.tool_executions.is_empty()),
+            })
+            .collect();
+
+        // Apply window selection (range/tail) on filtered set, preserving absolute indices
+        let windowed: Vec<(usize, &Chunk)> = if let Some((start, end)) = range {
+            indexed_chunks
+                .into_iter()
+                .filter(|(abs_idx, _)| *abs_idx >= start && *abs_idx < end)
+                .collect()
+        } else if let Some(tail) = params.tail {
+            let len = indexed_chunks.len();
+            if tail < len {
+                indexed_chunks[len - tail..].to_vec()
             } else {
-                Ok(CallToolResult::success(vec![Content::text(text)]))
+                indexed_chunks
             }
         } else {
-            self.redact_json(&detail)
-        }
+            indexed_chunks
+        };
+
+        let total_chunks = windowed.len();
+
+        // Pagination logic:
+        // - range/tail: explicit window, return all of it (no further pagination)
+        // - content_mode=full without window: return all (documented behavior for export)
+        // - otherwise: paginate with cursor + max_chunks
+        let has_explicit_window = range.is_some() || params.tail.is_some();
+        let return_all = has_explicit_window
+            || (matches!(content_mode, ContentMode::Full) && params.cursor.is_none());
+
+        let (page_chunks, offset): (Vec<(usize, &Chunk)>, usize) = if return_all {
+            (windowed, 0)
+        } else {
+            let off = parse_cursor_offset(params.cursor.as_deref());
+            let page_size = params
+                .max_chunks
+                .unwrap_or(DEFAULT_PAGE_SIZE)
+                .clamp(1, MAX_PAGE_SIZE);
+            let page: Vec<_> = windowed.into_iter().skip(off).take(page_size).collect();
+            (page, off)
+        };
+
+        let returned_chunks = page_chunks.len();
+        let has_more = !return_all && (offset + returned_chunks < total_chunks);
+
+        let envelopes: Vec<ChunkEnvelope> = page_chunks
+            .iter()
+            .map(|(abs_idx, chunk)| build_chunk_envelope(*abs_idx, chunk, &content_mode))
+            .collect();
+
+        let response = SessionDetailResponse {
+            session_id: detail.session_id.clone(),
+            total_chunks,
+            returned_chunks,
+            has_more,
+            cursor: if has_more {
+                Some(format!("{}", offset + returned_chunks))
+            } else {
+                None
+            },
+            is_ongoing,
+            content_mode: match content_mode {
+                ContentMode::Omit => "omit".to_string(),
+                ContentMode::Full => "full".to_string(),
+            },
+            chunks: envelopes,
+        };
+
+        self.emit_json(&response)
     }
 
     #[tool(
         name = "get_session_errors",
-        description = "Get all errors from a session. Returns chunk index, tool name, tool_use_id, and error message for each failed tool execution.",
+        description = "Get errors from a session. Returns paginated results (default 20). Long error messages are truncated to 500 chars (check `messageTruncated` flag). Use get_session_detail with range + content_mode='full' for full error output.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -323,22 +568,61 @@ impl CdtMcpServer {
     )]
     async fn get_session_errors(
         &self,
-        Parameters(params): Parameters<SessionIdParams>,
+        Parameters(params): Parameters<SessionErrorsParams>,
     ) -> Result<CallToolResult, McpError> {
         let project_id = self
             .resolve_project_id(params.project.as_deref(), Some(&params.session))
             .await?;
-        let errors = self
+        let all_errors = self
             .engine
             .get_session_errors(&project_id, &params.session)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        self.redact_json(&errors)
+
+        let limit = params
+            .limit
+            .unwrap_or(DEFAULT_LIST_LIMIT)
+            .clamp(1, MAX_PAGE_SIZE);
+        let offset = parse_cursor_offset(params.cursor.as_deref());
+        let total = all_errors.len();
+
+        let page: Vec<ErrorEntry> = all_errors
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|e| {
+                let (msg, truncated) = truncate_error_message(e.error_message);
+                ErrorEntry {
+                    chunk_index: e.chunk_index,
+                    tool_name: e.tool_name,
+                    tool_use_id: e.tool_use_id,
+                    is_error: true,
+                    error_message: msg,
+                    message_truncated: truncated,
+                }
+            })
+            .collect();
+
+        let returned = page.len();
+        let has_more = offset + returned < total;
+
+        let response = PaginatedResponse {
+            items: page,
+            total,
+            returned,
+            has_more,
+            cursor: if has_more {
+                Some(format!("{}", offset + returned))
+            } else {
+                None
+            },
+        };
+        self.emit_json(&response)
     }
 
     #[tool(
         name = "search_sessions",
-        description = "Full-text search across all sessions. Returns matching session IDs, titles, and match context. Useful for finding sessions that discussed a specific topic or encountered a specific error.",
+        description = "Full-text search across sessions. Returns paginated results (default 20). Check `hasMore` and use `cursor` for more results.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -350,7 +634,12 @@ impl CdtMcpServer {
         &self,
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, McpError> {
-        let limit = params.limit.unwrap_or(50);
+        let limit = params
+            .limit
+            .unwrap_or(DEFAULT_LIST_LIMIT)
+            .clamp(1, MAX_PAGE_SIZE);
+        let offset = parse_cursor_offset(params.cursor.as_deref());
+
         let project_id = match params.project.as_deref() {
             Some(p) => Some(
                 self.engine
@@ -360,17 +649,34 @@ impl CdtMcpServer {
             ),
             None => None,
         };
+
         let results = self
             .engine
-            .search(&params.query, project_id.as_deref(), 0, limit)
+            .search(&params.query, project_id.as_deref(), offset, limit)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        self.redact_json(&results)
+
+        let total = results.total_matches;
+        let returned = results.results.len();
+        let has_more = offset + returned < total;
+
+        let response = PaginatedResponse {
+            items: results.results,
+            total,
+            returned,
+            has_more,
+            cursor: if has_more {
+                Some(format!("{}", offset + returned))
+            } else {
+                None
+            },
+        };
+        self.emit_json(&response)
     }
 
     #[tool(
         name = "get_session_cost",
-        description = "Get token usage and estimated cost for a session. Breaks down by input/output/cache tokens with per-model pricing (Opus $5/$25, Sonnet $3/$15, Haiku $1/$5 per million tokens).",
+        description = "Get token usage and estimated cost for a session. Returns aggregated breakdown by input/output/cache tokens with per-model pricing.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -392,12 +698,12 @@ impl CdtMcpServer {
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let cost = cdt_query::cost::compute_session_cost(&detail);
-        self.redact_json(&cost)
+        self.emit_json(&cost)
     }
 
     #[tool(
         name = "get_stats",
-        description = "Get aggregated statistics across sessions for a time period. Note: this requires loading all sessions in the period and may be slow for large datasets. Consider using get_session_cost for individual sessions instead.",
+        description = "Get aggregated statistics across sessions for a time period. Note: not yet implemented in MCP mode. Use `cdt stats` CLI command directly.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -410,8 +716,7 @@ impl CdtMcpServer {
         Parameters(_params): Parameters<StatsParams>,
     ) -> Result<CallToolResult, McpError> {
         Err(McpError::internal_error(
-            "get_stats is not yet implemented in MCP mode. Use `cdt stats` CLI command directly. \
-             This tool will be fully implemented in a follow-up PR.",
+            "get_stats is not yet implemented in MCP mode. Use `cdt stats` CLI command directly.",
             None,
         ))
     }
@@ -427,10 +732,14 @@ impl ServerHandler for CdtMcpServer {
         )
         .with_server_info(Implementation::from_build_env())
         .with_instructions(
-            "Claude DevTools session intelligence server. Provides read-only access to Claude Code session history, diagnostics, and cost analysis.\n\n\
-             USAGE PATTERN: Always call get_session_summary FIRST before get_session_detail to avoid context overflow. \
-             Summary gives you phases, tool usage, errors, and cost in ~2K tokens. \
-             Only request detail (with range/tail/max_tokens) when you need specific chunks.\n\n\
+            "Claude DevTools session intelligence. Read-only access to Claude Code session history.\n\n\
+             USAGE PATTERN:\n\
+             1. list_projects → list_sessions → get_session_summary (compact ~2K tokens)\n\
+             2. get_session_detail returns STRUCTURE ONLY by default (content omitted).\n\
+                Each chunk has stable `chunkIndex` + `outputOmitted`/`contentOmitted` flags with char counts.\n\
+             3. To read specific content: get_session_detail(range:'5:8', content_mode:'full')\n\
+             4. All lists are paginated (default 20 items). Check `hasMore` and pass `cursor` for next page.\n\
+             5. `chunkIndex` is always absolute — stable across filter/pagination calls.\n\n\
              All tools are read-only and safe to call repeatedly."
                 .to_string(),
         )
@@ -438,8 +747,265 @@ impl ServerHandler for CdtMcpServer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Content mode
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum ContentMode {
+    Omit,
+    Full,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chunk envelope builder
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> ChunkEnvelope {
+    match chunk {
+        Chunk::Ai(ai) => {
+            let tool_execs: Vec<ToolExecEnvelope> = ai
+                .tool_executions
+                .iter()
+                .map(|te| build_tool_exec_envelope(te, mode))
+                .collect();
+
+            let responses: Vec<ResponseEnvelope> = ai
+                .responses
+                .iter()
+                .map(|r| {
+                    let text = message_content_text(&r.content);
+                    let content_chars = text.chars().count();
+                    // Upstream IPC layer may have already omitted content
+                    let upstream_omitted = r.content_omitted;
+                    match mode {
+                        ContentMode::Omit => ResponseEnvelope {
+                            model: r.model.clone(),
+                            content: None,
+                            content_omitted: true,
+                            content_chars,
+                        },
+                        ContentMode::Full => ResponseEnvelope {
+                            model: r.model.clone(),
+                            content: if upstream_omitted { None } else { Some(text) },
+                            content_omitted: upstream_omitted,
+                            content_chars,
+                        },
+                    }
+                })
+                .collect();
+
+            ChunkEnvelope {
+                chunk_index: abs_index,
+                chunk_id: ai.chunk_id.clone(),
+                kind: "ai".to_string(),
+                timestamp: ai.timestamp.to_rfc3339(),
+                duration_ms: ai.duration_ms,
+                tool_executions: tool_execs,
+                responses,
+                user_content: None,
+                system_content: None,
+                compact_summary: None,
+            }
+        }
+        Chunk::User(user) => {
+            let text = message_content_text(&user.content);
+            let chars = text.chars().count();
+            let user_content = match mode {
+                ContentMode::Omit => ContentField {
+                    text: if chars <= 200 { Some(text) } else { None },
+                    omitted: chars > 200,
+                    chars,
+                },
+                ContentMode::Full => ContentField {
+                    text: Some(text),
+                    omitted: false,
+                    chars,
+                },
+            };
+            ChunkEnvelope {
+                chunk_index: abs_index,
+                chunk_id: user.chunk_id.clone(),
+                kind: "user".to_string(),
+                timestamp: user.timestamp.to_rfc3339(),
+                duration_ms: user.duration_ms,
+                tool_executions: vec![],
+                responses: vec![],
+                user_content: Some(user_content),
+                system_content: None,
+                compact_summary: None,
+            }
+        }
+        Chunk::System(sys) => {
+            let chars = sys.content_text.chars().count();
+            let system_content = match mode {
+                ContentMode::Omit => ContentField {
+                    text: if chars <= 200 {
+                        Some(sys.content_text.clone())
+                    } else {
+                        None
+                    },
+                    omitted: chars > 200,
+                    chars,
+                },
+                ContentMode::Full => ContentField {
+                    text: Some(sys.content_text.clone()),
+                    omitted: false,
+                    chars,
+                },
+            };
+            ChunkEnvelope {
+                chunk_index: abs_index,
+                chunk_id: sys.chunk_id.clone(),
+                kind: "system".to_string(),
+                timestamp: sys.timestamp.to_rfc3339(),
+                duration_ms: sys.duration_ms,
+                tool_executions: vec![],
+                responses: vec![],
+                user_content: None,
+                system_content: Some(system_content),
+                compact_summary: None,
+            }
+        }
+        Chunk::Compact(compact) => ChunkEnvelope {
+            chunk_index: abs_index,
+            chunk_id: compact.chunk_id.clone(),
+            kind: "compact".to_string(),
+            timestamp: compact.timestamp.to_rfc3339(),
+            duration_ms: compact.duration_ms,
+            tool_executions: vec![],
+            responses: vec![],
+            user_content: None,
+            system_content: None,
+            compact_summary: Some(compact.summary_text.clone()),
+        },
+    }
+}
+
+fn tool_output_to_value(output: &ToolOutput) -> serde_json::Value {
+    match output {
+        ToolOutput::Text { text } => serde_json::Value::String(text.clone()),
+        ToolOutput::Structured { value } => value.clone(),
+        ToolOutput::Missing => serde_json::Value::Null,
+    }
+}
+
+fn build_tool_exec_envelope(te: &cdt_core::ToolExecution, mode: &ContentMode) -> ToolExecEnvelope {
+    let output_text = tool_output_text(&te.output);
+    // If upstream omitted output, use output_bytes as approximate char count
+    let upstream_omitted = te.output_omitted;
+    let output_chars = if upstream_omitted {
+        te.output_bytes
+            .map_or(0, |b| usize::try_from(b).unwrap_or(usize::MAX))
+    } else {
+        output_text.chars().count()
+    };
+
+    match mode {
+        ContentMode::Omit => ToolExecEnvelope {
+            tool_name: te.tool_name.clone(),
+            tool_use_id: te.tool_use_id.clone(),
+            is_error: te.is_error,
+            input_summary: Some(summarize_input(&te.input)),
+            input: None,
+            output: None,
+            output_omitted: true,
+            output_chars,
+            error_message: te.error_message.clone(),
+        },
+        ContentMode::Full => ToolExecEnvelope {
+            tool_name: te.tool_name.clone(),
+            tool_use_id: te.tool_use_id.clone(),
+            is_error: te.is_error,
+            input_summary: None,
+            input: Some(te.input.clone()),
+            output: if upstream_omitted {
+                None
+            } else {
+                Some(tool_output_to_value(&te.output))
+            },
+            output_omitted: upstream_omitted,
+            output_chars,
+            error_message: te.error_message.clone(),
+        },
+    }
+}
+
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(max_chars).collect();
+    format!("{truncated}...")
+}
+
+fn summarize_input(input: &serde_json::Value) -> String {
+    match input {
+        serde_json::Value::Object(map) => {
+            let parts: Vec<String> = map
+                .iter()
+                .take(3)
+                .map(|(k, v)| {
+                    let val_str = match v {
+                        serde_json::Value::String(s) => truncate_str(s, 57),
+                        other => truncate_str(&other.to_string(), 57),
+                    };
+                    format!("{k}: {val_str}")
+                })
+                .collect();
+            if map.len() > 3 {
+                format!("{} (+{} more)", parts.join(", "), map.len() - 3)
+            } else {
+                parts.join(", ")
+            }
+        }
+        other => truncate_str(&other.to_string(), 117),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+fn message_content_text(content: &MessageContent) -> String {
+    match content {
+        MessageContent::Text(s) => s.clone(),
+        MessageContent::Blocks(blocks) => {
+            let mut parts = Vec::new();
+            for block in blocks {
+                match block {
+                    cdt_core::message::ContentBlock::Text { text } => parts.push(text.as_str()),
+                    cdt_core::message::ContentBlock::Thinking { thinking, .. } => {
+                        parts.push(thinking.as_str());
+                    }
+                    _ => {}
+                }
+            }
+            parts.join("\n")
+        }
+    }
+}
+
+fn tool_output_text(output: &ToolOutput) -> String {
+    match output {
+        ToolOutput::Text { text } => text.clone(),
+        ToolOutput::Structured { value } => serde_json::to_string(value).unwrap_or_default(),
+        ToolOutput::Missing => String::new(),
+    }
+}
+
+fn parse_cursor_offset(cursor: Option<&str>) -> usize {
+    cursor
+        .and_then(|s| s.split(':').next())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+fn truncate_error_message(msg: Option<String>) -> (Option<String>, bool) {
+    match msg {
+        None => (None, false),
+        Some(s) if s.chars().count() <= ERROR_MESSAGE_MAX_CHARS => (Some(s), false),
+        Some(s) => (Some(truncate_str(&s, ERROR_MESSAGE_MAX_CHARS)), true),
+    }
+}
 
 fn parse_duration_to_epoch_ms(s: &str) -> Option<i64> {
     let now = chrono::Utc::now().timestamp_millis();
@@ -456,12 +1022,12 @@ fn parse_duration_to_epoch_ms(s: &str) -> Option<i64> {
     let (num_str, unit) = s.split_at(split_pos);
     let num: i64 = num_str.parse().ok()?;
     let ms = match unit {
-        "m" => num * 60 * 1000,
-        "h" => num * 3600 * 1000,
-        "d" => num * 24 * 3600 * 1000,
+        "m" => num.checked_mul(60 * 1000)?,
+        "h" => num.checked_mul(3600 * 1000)?,
+        "d" => num.checked_mul(24 * 3600 * 1000)?,
         _ => return None,
     };
-    Some(now - ms)
+    now.checked_sub(ms)
 }
 
 fn parse_range(s: &str) -> Option<(usize, usize)> {
