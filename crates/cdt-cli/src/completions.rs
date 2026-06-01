@@ -215,8 +215,10 @@ impl ValueCandidates for ProjectCompleter {
 
 fn make_home_relative(path: &str, home: &Path) -> String {
     let home_str = home.to_string_lossy();
-    if let Some(rest) = path.strip_prefix(home_str.as_ref()) {
-        return format!("~{rest}");
+    if !home_str.is_empty() {
+        if let Some(rest) = path.strip_prefix(home_str.as_ref()) {
+            return format!("~{rest}");
+        }
     }
     path.to_owned()
 }
