@@ -7,8 +7,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::engine::{ArgValueCandidates, ArgValueCompleter};
 use tokio::sync::Semaphore;
+
+mod completions;
 
 use cdt_api::http::spawn_event_bridge;
 use cdt_api::{AppState, DataApi, LocalDataApi, StaticServe, start_server};
@@ -33,7 +36,7 @@ struct Cli {
     format: OutputFormat,
 
     /// 限定项目范围（项目名或 ID）
-    #[arg(long, global = true)]
+    #[arg(long, global = true, add = ArgValueCandidates::new(completions::ProjectCompleter))]
     project: Option<String>,
 
     #[command(subcommand)]
@@ -106,6 +109,12 @@ enum Command {
         #[arg(long, global = true)]
         force: bool,
     },
+    /// 生成 shell 补全脚本
+    Completions {
+        /// 目标 shell
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
     /// 自更新到最新版本
     #[command(name = "self-update")]
     SelfUpdate {
@@ -152,11 +161,13 @@ enum SessionsAction {
     /// 显示会话元数据（不含 chunks）
     Show {
         /// 会话 ID
+        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
         id: String,
     },
     /// 显示会话详情（chunk 流）
     Detail {
         /// 会话 ID
+        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
         id: String,
 
         /// 指定 chunk 区间（如 10:30）
@@ -178,16 +189,19 @@ enum SessionsAction {
     /// 聚合会话中的所有错误
     Errors {
         /// 会话 ID
+        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
         id: String,
     },
     /// 会话结构化诊断摘要
     Summary {
         /// 会话 ID
+        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
         id: String,
     },
     /// 会话 token 费用估算
     Cost {
         /// 会话 ID
+        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
         id: String,
     },
 }
@@ -218,6 +232,8 @@ enum SetupAction {
     Mcp,
     /// 安装示例 Skills
     Skills,
+    /// 安装 shell 补全
+    Completions,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1318,6 +1334,9 @@ fn format_ms(ms: i64) -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    clap_complete::CompleteEnv::with_factory(Cli::command)
+        .var(completions::ENV_VAR)
+        .complete();
     let default_filter = if cfg!(debug_assertions) {
         "info"
     } else {
@@ -1334,6 +1353,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Completions { shell } => {
+            let script = completions::generate_script(shell)?;
+            std::io::Write::write_all(&mut std::io::stdout(), &script)?;
+            Ok(())
+        }
         Command::Serve => run_serve().await,
         Command::Projects { action } => match action {
             ProjectsAction::List => cmd_projects_list(&cli.format).await,
@@ -1401,9 +1425,13 @@ async fn main() -> Result<()> {
         } => match action {
             Some(SetupAction::Mcp) => cmd_setup_mcp(&scope, dry_run),
             Some(SetupAction::Skills) => cmd_setup_skills(&scope, dry_run, force),
+            Some(SetupAction::Completions) => completions::install(dry_run),
             None => {
                 let mcp_result = cmd_setup_mcp(&scope, dry_run);
                 let skills_result = cmd_setup_skills(&scope, dry_run, force);
+                if let Err(e) = completions::install(dry_run) {
+                    eprintln!("Note: shell completions skipped ({e:#})");
+                }
                 mcp_result.and(skills_result)
             }
         },
