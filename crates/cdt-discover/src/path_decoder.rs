@@ -177,14 +177,14 @@ pub fn extract_project_name(path: &Path) -> String {
     )
 }
 
-/// 从项目目录中最新 session JSONL 读取 `cwd` 字段来消除 `decode_path` 歧义。
+/// 从项目目录中 session JSONL 读取 `cwd` 字段来消除 `decode_path` 歧义。
 ///
-/// 只读头部 20 行（`cwd` 通常在第 1 行），每个项目 I/O 开销约 1-3ms。
+/// 按 mtime 倒序尝试多个 JSONL（最新优先），每个只读头部 20 行。
 /// 返回 `None` 时调用方应 fallback 到 `extract_project_name(&decode_path(encoded))`。
 pub fn resolve_project_name_from_jsonl(project_dir: &Path) -> Option<String> {
-    use std::io::{BufRead, BufReader};
+    const MAX_ATTEMPTS: usize = 3;
 
-    let mut latest: Option<(std::time::SystemTime, PathBuf)> = None;
+    let mut jsonl_files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
     let entries = std::fs::read_dir(project_dir).ok()?;
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
@@ -195,13 +195,23 @@ pub fn resolve_project_name_from_jsonl(project_dir: &Path) -> Option<String> {
             .metadata()
             .and_then(|m| m.modified())
             .unwrap_or(std::time::UNIX_EPOCH);
-        if latest.as_ref().is_none_or(|(t, _)| mtime > *t) {
-            latest = Some((mtime, path));
-        }
+        jsonl_files.push((mtime, path));
     }
 
-    let (_, jsonl_path) = latest?;
-    let file = std::fs::File::open(&jsonl_path).ok()?;
+    jsonl_files.sort_unstable_by_key(|item| std::cmp::Reverse(item.0));
+
+    for (_, jsonl_path) in jsonl_files.iter().take(MAX_ATTEMPTS) {
+        if let Some(name) = extract_cwd_from_jsonl_head(jsonl_path) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn extract_cwd_from_jsonl_head(jsonl_path: &Path) -> Option<String> {
+    use std::io::{BufRead, BufReader};
+
+    let file = std::fs::File::open(jsonl_path).ok()?;
     let reader = BufReader::new(file);
 
     for line in reader.lines().take(20) {
@@ -572,6 +582,43 @@ mod tests {
 
         let result = resolve_project_name_from_jsonl(&tmp);
         assert_eq!(result, None);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn resolve_project_name_from_jsonl_skips_malformed_lines() {
+        let tmp = std::env::temp_dir().join("cdt_test_jsonl_malformed");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let content = "not valid json\n{\"broken\n{\"cwd\":\"/Users/bob/my-project\"}\n";
+        std::fs::write(tmp.join("s.jsonl"), content).unwrap();
+
+        let result = resolve_project_name_from_jsonl(&tmp);
+        assert_eq!(result, Some("my-project".to_string()));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn resolve_project_name_from_jsonl_falls_through_to_older_file() {
+        let tmp = std::env::temp_dir().join("cdt_test_jsonl_fallthrough");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Older file has valid cwd
+        let old_path = tmp.join("old.jsonl");
+        std::fs::write(&old_path, r#"{"cwd":"/home/user/real-project"}"#).unwrap();
+        // Set old mtime
+        let old_time =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        filetime::set_file_mtime(&old_path, filetime::FileTime::from_system_time(old_time)).ok();
+
+        // Newer file has no cwd (e.g. being written)
+        let new_path = tmp.join("new.jsonl");
+        std::fs::write(&new_path, "{\"type\":\"system\"}\n").unwrap();
+
+        let result = resolve_project_name_from_jsonl(&tmp);
+        assert_eq!(result, Some("real-project".to_string()));
 
         std::fs::remove_dir_all(&tmp).ok();
     }

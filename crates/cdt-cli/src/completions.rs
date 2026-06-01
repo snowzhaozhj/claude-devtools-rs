@@ -207,12 +207,10 @@ impl ValueCandidates for ProjectCompleter {
             }
 
             let project_dir = base.join(&encoded);
-            let display_name = path_decoder::resolve_project_name_from_jsonl(&project_dir)
-                .unwrap_or_else(|| {
-                    path_decoder::extract_project_name(&path_decoder::decode_path(&encoded))
-                });
-
             let decoded = path_decoder::decode_path(&encoded);
+            let display_name = path_decoder::resolve_project_name_from_jsonl(&project_dir)
+                .unwrap_or_else(|| path_decoder::extract_project_name(&decoded));
+
             let decoded_str = decoded.to_string_lossy();
             let help = make_home_relative(&decoded_str, &home);
 
@@ -223,17 +221,18 @@ impl ValueCandidates for ProjectCompleter {
             });
         }
 
+        // resolve_project uses eq_ignore_ascii_case, so dedup must match
         let mut name_counts = std::collections::HashMap::<String, usize>::new();
         for c in &raw {
-            *name_counts.entry(c.name.clone()).or_default() += 1;
+            *name_counts.entry(c.name.to_ascii_lowercase()).or_default() += 1;
         }
 
         let mut seen = std::collections::HashSet::new();
         let mut candidates = Vec::new();
 
         for c in raw {
-            if name_counts.get(&c.name).copied().unwrap_or(0) == 1 {
-                if seen.insert(c.name.clone()) {
+            if name_counts[&c.name.to_ascii_lowercase()] == 1 {
+                if seen.insert(c.name.to_ascii_lowercase()) {
                     candidates.push(CompletionCandidate::new(c.name).help(Some(c.help.into())));
                 }
             } else {
