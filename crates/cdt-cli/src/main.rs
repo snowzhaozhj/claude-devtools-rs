@@ -263,7 +263,8 @@ async fn build_local_data_api() -> Result<Arc<LocalDataApi>> {
     );
 
     let scanner_semaphore = Arc::new(Semaphore::new(64));
-    let scanner = ProjectScanner::new_with_cwd_cache(fs, projects_dir, scanner_semaphore, new_cwd_cache());
+    let scanner =
+        ProjectScanner::new_with_cwd_cache(fs, projects_dir, scanner_semaphore, new_cwd_cache());
 
     let ssh_mgr = SshConnectionManager::new();
     let api = LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr);
