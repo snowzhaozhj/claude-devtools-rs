@@ -26,7 +26,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex 二审通过
+- [x] N.1 push 分支 + 开 PR
+- [x] N.2 wait-ci 全绿
+- [x] N.3 codex 二审通过（1 BUG accepted as documented limitation + 2 NOTEs, CLI fix applied）
 - [ ] N.4 archive change
