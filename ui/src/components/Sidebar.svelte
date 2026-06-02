@@ -741,13 +741,20 @@
         hasDeferredSessionRefresh = true;
         return;
       }
-      scheduleRefresh(`sidebar:${currentGroupId}`, () =>
-        untrack(() => loadSessions(currentGroupId, true)),
-      );
+      const isStructural = payload.sessionListChanged || payload.deleted;
+      const refreshFn = () => untrack(() => loadSessions(currentGroupId, true));
+      if (isStructural) {
+        scheduleRefresh(`sidebar-structural:${currentGroupId}`, refreshFn, 250);
+      } else {
+        scheduleRefresh(`sidebar-append:${currentGroupId}`, refreshFn, 1000);
+      }
     });
     return () => {
       unregisterHandler("sidebar");
-      if (currentGroupId) cancelScheduledRefresh(`sidebar:${currentGroupId}`);
+      if (currentGroupId) {
+        cancelScheduledRefresh(`sidebar-structural:${currentGroupId}`);
+        cancelScheduledRefresh(`sidebar-append:${currentGroupId}`);
+      }
       cancelScheduledRefresh("sidebar:projects");
     };
   });

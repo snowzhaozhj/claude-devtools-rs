@@ -13,8 +13,11 @@
 //! `Resolve historical Claude worktree directories` Requirement。
 
 use std::collections::BTreeSet;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+use lru::LruCache;
 
 use cdt_core::{Project, Session};
 use cdt_parse::parse_entry_at;
@@ -41,11 +44,22 @@ const PROJECT_SCAN_CONCURRENCY: usize = 8;
 /// fd 上限"的硬闸门。
 const FILE_READ_CONCURRENCY: usize = 64;
 
+pub type CwdCache = Arc<Mutex<LruCache<PathBuf, String>>>;
+
+const CWD_CACHE_CAPACITY: usize = 2048;
+
+pub fn new_cwd_cache() -> CwdCache {
+    Arc::new(Mutex::new(LruCache::new(
+        NonZero::new(CWD_CACHE_CAPACITY).expect("non-zero"),
+    )))
+}
+
 pub struct ProjectScanner {
     fs: Arc<dyn FileSystemProvider>,
     projects_dir: PathBuf,
     path_resolver: ProjectPathResolver,
     read_semaphore: Arc<Semaphore>,
+    cwd_cache: Option<CwdCache>,
 }
 
 impl ProjectScanner {
@@ -77,6 +91,27 @@ impl ProjectScanner {
             projects_dir,
             path_resolver,
             read_semaphore,
+            cwd_cache: None,
+        }
+    }
+
+    /// 在 `new_with_semaphore` 基础上注入共享 cwd 缓存。生产路径 SHALL 使用
+    /// 此构造器确保跨 IPC 调用复用 cwd 读取结果。
+    /// change `sidebar-cpu-throttle-and-cwd-cache::D1`。
+    #[must_use]
+    pub fn new_with_cwd_cache(
+        fs: Arc<dyn FileSystemProvider>,
+        projects_dir: PathBuf,
+        read_semaphore: Arc<Semaphore>,
+        cwd_cache: CwdCache,
+    ) -> Self {
+        let path_resolver = ProjectPathResolver::new(fs.clone(), projects_dir.clone());
+        Self {
+            fs,
+            projects_dir,
+            path_resolver,
+            read_semaphore,
+            cwd_cache: Some(cwd_cache),
         }
     }
 
@@ -346,9 +381,17 @@ impl ProjectScanner {
     }
 
     async fn extract_session_cwd(&self, path: &Path) -> Option<String> {
-        // permit 在真正发起 fd-密集型 fs 读之前 acquire——并发顶层 8 project ×
-        // 各自 join_all 的子 future 在这里排队，确保全局 in-flight read 数量
-        // 不超过 `FILE_READ_CONCURRENCY`，否则会撞 macOS 默认 256 fd 软上限。
+        // Safety: no stat validation needed — relies on `extract_session_cwd_uses_first_line_only`
+        // + `jsonl_append_after_first_line_does_not_change_cwd` invariants (Claude Code JSONL is
+        // append-only, never truncated/rewritten). LRU eviction handles stale deleted paths.
+        if self.fs.kind() != FsKind::Ssh {
+            if let Some(cache) = &self.cwd_cache {
+                if let Some(cached) = cache.lock().ok().and_then(|mut c| c.get(path).cloned()) {
+                    return Some(cached);
+                }
+            }
+        }
+
         let _permit = self.read_semaphore.acquire().await.ok()?;
         let head = self
             .fs
@@ -356,13 +399,28 @@ impl ProjectScanner {
             .await
             .ok()?;
         if let Some(cwd) = extract_cwd_from_lines(path, &head) {
+            if self.fs.kind() != FsKind::Ssh {
+                if let Some(cache) = &self.cwd_cache {
+                    if let Ok(mut guard) = cache.lock() {
+                        guard.put(path.to_path_buf(), cwd.clone());
+                    }
+                }
+            }
             return Some(cwd);
         }
         if self.fs.kind() == FsKind::Ssh {
             return None;
         }
         let content = self.fs.read_to_string(path).await.ok()?;
-        extract_cwd_from_iter(path, content.lines())
+        let result = extract_cwd_from_iter(path, content.lines());
+        if let Some(ref cwd) = result {
+            if let Some(cache) = &self.cwd_cache {
+                if let Ok(mut guard) = cache.lock() {
+                    guard.put(path.to_path_buf(), cwd.clone());
+                }
+            }
+        }
+        result
     }
 
     async fn decode_historical_worktree_dir(&self, dir_name: &str) -> Option<PathBuf> {
@@ -549,5 +607,139 @@ mod tests {
             with_fs_counter(|| async { scanner.extract_session_cwd(&jsonl_path).await }).await;
         assert_eq!(r2, r1, "append 后 cwd SHALL 不变");
         assert_eq!(counts2.read_to_string, 0);
+    }
+
+    #[tokio::test]
+    async fn cwd_cache_hit_skips_file_io() {
+        let dir = tempdir().unwrap();
+        let jsonl_path = dir.path().join("session.jsonl");
+        tokio::fs::write(
+            &jsonl_path,
+            br#"{"uuid":"u1","type":"user","cwd":"/cached/path","message":{"role":"user"}}
+"#,
+        )
+        .await
+        .unwrap();
+
+        let fs: Arc<dyn FileSystemProvider> =
+            Arc::new(InstrumentedFs::new(LocalFileSystemProvider::new()));
+        let cache = new_cwd_cache();
+        let scanner = ProjectScanner::new_with_cwd_cache(
+            fs,
+            dir.path().to_path_buf(),
+            Arc::new(Semaphore::new(64)),
+            cache.clone(),
+        );
+
+        let (r1, c1) =
+            with_fs_counter(|| async { scanner.extract_session_cwd(&jsonl_path).await }).await;
+        assert_eq!(r1, Some("/cached/path".to_string()));
+        assert_eq!(c1.read_lines_head, 1);
+
+        let (r2, c2) =
+            with_fs_counter(|| async { scanner.extract_session_cwd(&jsonl_path).await }).await;
+        assert_eq!(r2, Some("/cached/path".to_string()));
+        assert_eq!(
+            c2.read_lines_head, 0,
+            "cache hit SHALL skip read_lines_head"
+        );
+    }
+
+    #[tokio::test]
+    async fn cwd_cache_does_not_cache_none_result() {
+        let dir = tempdir().unwrap();
+        let jsonl_path = dir.path().join("session.jsonl");
+        tokio::fs::write(
+            &jsonl_path,
+            br#"{"uuid":"u1","type":"assistant","message":{"role":"assistant"}}
+"#,
+        )
+        .await
+        .unwrap();
+
+        let fs: Arc<dyn FileSystemProvider> =
+            Arc::new(InstrumentedFs::new(LocalFileSystemProvider::new()));
+        let cache = new_cwd_cache();
+        let scanner = ProjectScanner::new_with_cwd_cache(
+            fs,
+            dir.path().to_path_buf(),
+            Arc::new(Semaphore::new(64)),
+            cache.clone(),
+        );
+
+        let r1 = scanner.extract_session_cwd(&jsonl_path).await;
+        assert_eq!(r1, None);
+        assert!(
+            cache.lock().unwrap().peek(&jsonl_path).is_none(),
+            "None result SHALL NOT be cached"
+        );
+    }
+
+    #[tokio::test]
+    async fn cwd_cache_lru_eviction() {
+        let dir = tempdir().unwrap();
+        let small_cache = Arc::new(Mutex::new(LruCache::new(NonZero::new(2).unwrap())));
+        let fs: Arc<dyn FileSystemProvider> =
+            Arc::new(InstrumentedFs::new(LocalFileSystemProvider::new()));
+
+        for i in 0..3 {
+            let p = dir.path().join(format!("s{i}.jsonl"));
+            tokio::fs::write(
+                &p,
+                format!(
+                    r#"{{"uuid":"u1","type":"user","cwd":"/path/{i}","message":{{"role":"user"}}}}{}"#,
+                    "\n"
+                ),
+            )
+            .await
+            .unwrap();
+            let scanner = ProjectScanner::new_with_cwd_cache(
+                fs.clone(),
+                dir.path().to_path_buf(),
+                Arc::new(Semaphore::new(64)),
+                small_cache.clone(),
+            );
+            let r = scanner.extract_session_cwd(&p).await;
+            assert_eq!(r, Some(format!("/path/{i}")));
+        }
+
+        let guard = small_cache.lock().unwrap();
+        assert_eq!(guard.len(), 2, "LRU cap=2 should evict oldest");
+        assert!(
+            guard.peek(&dir.path().join("s0.jsonl")).is_none(),
+            "oldest entry evicted"
+        );
+        assert!(guard.peek(&dir.path().join("s1.jsonl")).is_some());
+        assert!(guard.peek(&dir.path().join("s2.jsonl")).is_some());
+    }
+
+    #[tokio::test]
+    async fn cwd_cache_only_used_for_local_fs_kind() {
+        let dir = tempdir().unwrap();
+        let jsonl_path = dir.path().join("session.jsonl");
+        tokio::fs::write(
+            &jsonl_path,
+            br#"{"uuid":"u1","type":"user","cwd":"/real/path","message":{"role":"user"}}
+"#,
+        )
+        .await
+        .unwrap();
+
+        let cache = new_cwd_cache();
+        let fs: Arc<dyn FileSystemProvider> =
+            Arc::new(InstrumentedFs::new(LocalFileSystemProvider::new()));
+        let scanner = ProjectScanner::new_with_cwd_cache(
+            fs,
+            dir.path().to_path_buf(),
+            Arc::new(Semaphore::new(64)),
+            cache.clone(),
+        );
+
+        let r = scanner.extract_session_cwd(&jsonl_path).await;
+        assert_eq!(r, Some("/real/path".to_string()));
+        assert!(
+            cache.lock().unwrap().peek(&jsonl_path).is_some(),
+            "Local FsKind SHALL write to cache"
+        );
     }
 }

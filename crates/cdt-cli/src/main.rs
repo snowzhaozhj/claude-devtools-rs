@@ -16,7 +16,7 @@ mod completions;
 use cdt_api::http::spawn_event_bridge;
 use cdt_api::{AppState, DataApi, LocalDataApi, StaticServe, start_server};
 use cdt_config::{ConfigManager, NotificationManager};
-use cdt_discover::{ProjectScanner, local_handle, path_decoder};
+use cdt_discover::{ProjectScanner, local_handle, new_cwd_cache, path_decoder};
 use cdt_query::{ChunkKindFilter, QueryEngine, QueryFilter, SessionQueryOptions};
 use cdt_query::{cost, stats, summary};
 use cdt_ssh::SshConnectionManager;
@@ -263,7 +263,8 @@ async fn build_local_data_api() -> Result<Arc<LocalDataApi>> {
     );
 
     let scanner_semaphore = Arc::new(Semaphore::new(64));
-    let scanner = ProjectScanner::new_with_semaphore(fs, projects_dir, scanner_semaphore);
+    let scanner =
+        ProjectScanner::new_with_cwd_cache(fs, projects_dir, scanner_semaphore, new_cwd_cache());
 
     let ssh_mgr = SshConnectionManager::new();
     let api = LocalDataApi::new(scanner, config_mgr, notif_mgr, ssh_mgr);
