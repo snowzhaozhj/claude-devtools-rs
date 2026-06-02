@@ -625,6 +625,7 @@ pub struct LocalDataApi {
     /// 复用本字段，避免 N 个 IPC 并发 × 64 击穿到 N×64 文件描述符并发。
     /// change `simplify-repository-as-project::D4`。
     shared_read_semaphore: Arc<Semaphore>,
+    shared_cwd_cache: cdt_discover::CwdCache,
     /// worktree → group meta join 缓存（scheme c, change
     /// `simplify-repository-as-project::D2`）：随 `list_repository_groups`
     /// 调用刷新；`list_sessions` / `list_group_sessions` /
@@ -1029,10 +1030,11 @@ impl LocalDataApi {
 
         let cursor_state = parse_group_cursor(cursor);
         let pinned = std::collections::BTreeSet::<String>::new();
-        let scanner = ProjectScanner::new_with_semaphore(
+        let scanner = ProjectScanner::new_with_cwd_cache(
             fs.clone(),
             projects_dir.clone(),
             self.shared_read_semaphore.clone(),
+            self.shared_cwd_cache.clone(),
         );
         let scanner = Arc::new(scanner);
 
@@ -1376,10 +1378,11 @@ impl LocalDataApi {
             ));
         }
         let projects_dir = self.projects_dir.lock().await.clone();
-        Ok(ProjectScanner::new_with_semaphore(
+        Ok(ProjectScanner::new_with_cwd_cache(
             local_handle(),
             projects_dir,
             self.shared_read_semaphore.clone(),
+            self.shared_cwd_cache.clone(),
         ))
     }
 
@@ -1681,10 +1684,11 @@ impl LocalDataApi {
         };
 
         // miss：真正 scan。错误路径 SHALL `abort_scan` 配对 begin_scan。
-        let mut scanner = ProjectScanner::new_with_semaphore(
+        let mut scanner = ProjectScanner::new_with_cwd_cache(
             fs.clone(),
             projects_dir.to_path_buf(),
             self.shared_read_semaphore.clone(),
+            self.shared_cwd_cache.clone(),
         );
         let projects = match scanner.scan().await {
             Ok(p) => p,
@@ -1806,6 +1810,7 @@ impl LocalDataApi {
             // 默认 `FILE_READ_CONCURRENCY=64` 等价（design D4）。硬编码 64 避免
             // 跨 crate 暴露内部常量。
             shared_read_semaphore: Arc::new(Semaphore::new(64)),
+            shared_cwd_cache: cdt_discover::new_cwd_cache(),
             worktree_meta_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
             project_scan_cache: Arc::new(std::sync::Mutex::new(ProjectScanCache::new())),
             groups_cache: Arc::new(std::sync::Mutex::new(None)),
@@ -1930,6 +1935,7 @@ impl LocalDataApi {
             // 默认 `FILE_READ_CONCURRENCY=64` 等价（design D4）。硬编码 64 避免
             // 跨 crate 暴露内部常量。
             shared_read_semaphore: Arc::new(Semaphore::new(64)),
+            shared_cwd_cache: cdt_discover::new_cwd_cache(),
             worktree_meta_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
             project_scan_cache,
             groups_cache: Arc::new(std::sync::Mutex::new(None)),
@@ -2297,10 +2303,11 @@ impl LocalDataApi {
         // SSH active 时的远端 metadata scan（reconfigure_claude_root 仅改 Local
         // projects_dir，不影响 SSH ContextId 下的 scan）。
         self.abort_local_scans();
-        *self.scanner.lock().await = ProjectScanner::new_with_semaphore(
+        *self.scanner.lock().await = ProjectScanner::new_with_cwd_cache(
             local_handle(),
             projects_dir.clone(),
             self.shared_read_semaphore.clone(),
+            self.shared_cwd_cache.clone(),
         );
         *self.projects_dir.lock().await = projects_dir.clone();
 
@@ -2409,10 +2416,11 @@ impl LocalDataApi {
         // 而非静默降级（PR-C codex commit-stage round-2 Q1）。
         let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
         let is_remote = fs.kind() == cdt_discover::FsKind::Ssh;
-        let scanner = ProjectScanner::new_with_semaphore(
+        let scanner = ProjectScanner::new_with_cwd_cache(
             fs.clone(),
             projects_dir.clone(),
             self.shared_read_semaphore.clone(),
+            self.shared_cwd_cache.clone(),
         );
         let sessions = scanner
             .list_sessions(project_id, &std::collections::BTreeSet::new())
