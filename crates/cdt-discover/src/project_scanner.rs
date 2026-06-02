@@ -381,6 +381,9 @@ impl ProjectScanner {
     }
 
     async fn extract_session_cwd(&self, path: &Path) -> Option<String> {
+        // Safety: no stat validation needed — relies on `extract_session_cwd_uses_first_line_only`
+        // + `jsonl_append_after_first_line_does_not_change_cwd` invariants (Claude Code JSONL is
+        // append-only, never truncated/rewritten). LRU eviction handles stale deleted paths.
         if self.fs.kind() != FsKind::Ssh {
             if let Some(cache) = &self.cwd_cache {
                 if let Some(cached) = cache.lock().ok().and_then(|mut c| c.get(path).cloned()) {
