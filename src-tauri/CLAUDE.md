@@ -39,7 +39,7 @@ Tauri webview IPC 吞吐实测：**6.5 KB/ms（含 V8 JSON.parse 端到端，前
 ## 桌面通知 / 系统托盘
 
 - `tauri-plugin-notification`：`Cargo.toml` + `capabilities/default.json` 加 `"notification:default"`
-- `TrayIconBuilder::with_id("main-tray")` 在 `setup` 里构建，icon 取 `app.default_window_icon()`
+- `TrayIconBuilder::with_id("main-tray")` 在 `setup` 里构建，tray icon 独立于 app icon（见 `icons/tray-icon*.png`）
 - 后端发通知：`app_handle.notification().builder().title(..).body(..).sound("default").show()`
 - 前端 Dock badge：`getCurrentWindow().setBadgeCount()`（macOS 独占）
 
