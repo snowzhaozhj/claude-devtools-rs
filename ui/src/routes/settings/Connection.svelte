@@ -434,13 +434,6 @@
     font-size: 12px;
     overflow-wrap: anywhere;
   }
-  .status-copy code {
-    padding: 1px 5px;
-    border-radius: 3px;
-    background: var(--color-surface-overlay);
-    font-family: var(--font-mono);
-    font-size: 11px;
-  }
 
   .profile-list {
     display: flex;

@@ -235,8 +235,7 @@
 
   /* Jobs badge — 无数字的色点 */
   .badge-red,
-  .badge-amber,
-  .badge-green {
+  .badge-amber {
     min-width: 8px;
     width: 8px;
     height: 8px;
@@ -254,7 +253,4 @@
     background: var(--color-warning);
   }
 
-  .badge-green {
-    background: var(--color-success-bright);
-  }
 </style>

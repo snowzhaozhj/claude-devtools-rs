@@ -1169,12 +1169,12 @@ pub fn run() {
                 let tray_menu = MenuBuilder::new(app)
                     .items(&[&show_item, &quit_item])
                     .build()?;
+                let tray_icon_bytes = include_bytes!("../icons/tray-icon@2x.png");
+                let tray_image = tauri::image::Image::from_bytes(tray_icon_bytes)
+                    .expect("tray icon should be valid PNG");
                 let _tray = TrayIconBuilder::with_id("main-tray")
-                    .icon(
-                        app.default_window_icon()
-                            .cloned()
-                            .expect("app should have default icon"),
-                    )
+                    .icon(tray_image)
+                    .icon_as_template(true)
                     .tooltip("Claude DevTools")
                     .menu(&tray_menu)
                     .on_menu_event(|app, event| match event.id().as_ref() {
