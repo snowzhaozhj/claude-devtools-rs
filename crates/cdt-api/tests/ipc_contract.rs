@@ -96,12 +96,12 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_59() {
+fn expected_tauri_commands_count_is_61() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        59,
+        61,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 59 个 Tauri command（含 SSH + server-mode + \
+         以及本文件常量；当前 src-tauri 注册 61 个 Tauri command（含 SSH + server-mode + \
          simplify-repository-as-project change 加的 list_group_sessions + change \
          command-palette-group-aware 加的 search_group_sessions + change \
          ssh-project-memory-remote-rw 加的 add_memory / delete_memory + change \
@@ -110,7 +110,8 @@ fn expected_tauri_commands_count_is_59() {
          list_available_terminals + change workflow-subagent-pool-scan 加的 \
          get_workflow_agent_trace + change bg-jobs-panel 加的 list_jobs / stop_job / \
          delete_job / delete_completed_jobs + fix-workflow-status-update 加的 \
-         get_workflow_detail）"
+         get_workflow_detail + change cli-download-from-desktop 加的 \
+         get_cli_status / install_cli）"
     );
 }
 

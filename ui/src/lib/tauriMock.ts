@@ -83,6 +83,8 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'stop_job',
   'delete_job',
   'delete_completed_jobs',
+  'get_cli_status',
+  'install_cli',
 ] as const
 
 export { KNOWN_TAURI_COMMANDS }
@@ -890,6 +892,22 @@ function buildHandler(fx: Fixture) {
           }
         }
         return { status: 'up_to_date', currentVersion: '0.2.0' }
+      }
+
+      case 'get_cli_status': {
+        const params = new URLSearchParams(window.location.search)
+        const cliMock = params.get('cli') ?? 'installed'
+        if (cliMock === 'none') {
+          return { status: 'not_installed', version: null, path: null, managed: false }
+        }
+        if (cliMock === 'outdated') {
+          return { status: 'installed_outdated', version: '0.5.0', path: '/Users/dev/.local/bin/cdt', managed: true }
+        }
+        return { status: 'installed_current', version: '0.6.7', path: '/Users/dev/.local/bin/cdt', managed: true }
+      }
+
+      case 'install_cli': {
+        return { status: 'installed_current', version: '0.6.7', path: '/Users/dev/.local/bin/cdt', managed: true }
       }
 
       case 'plugin:opener|open_url': {

@@ -1165,3 +1165,20 @@ export async function recordCorrectnessEvents(
 ): Promise<void> {
   await invoke("record_correctness_events", { items });
 }
+
+// ── CLI Distribution ──
+
+export interface CliStatus {
+  status: "detecting" | "not_installed" | "installed_current" | "installed_outdated" | "installed_not_in_path" | "externally_managed";
+  version: string | null;
+  path: string | null;
+  managed: boolean;
+}
+
+export async function getCliStatus(): Promise<CliStatus> {
+  return await invoke("get_cli_status");
+}
+
+export async function installCli(): Promise<CliStatus> {
+  return await invoke("install_cli");
+}

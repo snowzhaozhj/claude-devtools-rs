@@ -10,11 +10,14 @@
     startHttpServer,
     stopHttpServer,
     getHttpServerStatus,
+    getCliStatus,
+    installCli,
     type AppConfig,
     type NotificationTrigger,
     type CheckUpdateResult,
     type WslDistroCandidate,
     type HttpServerStatus,
+    type CliStatus,
   } from "../lib/api";
   import { invoke } from "@tauri-apps/api/core";
   import { setMenuSettings } from "../lib/contextMenu/settings.svelte";
@@ -53,9 +56,10 @@
     ALERT_CIRCLE_SVG,
     BELL_RING_SVG,
     KEYBOARD_SVG,
+    TERMINAL,
   } from "../lib/icons";
 
-  type SectionId = "general" | "display" | "notifications" | "connection" | "keyboard" | "diagnostics" | "about";
+  type SectionId = "general" | "display" | "notifications" | "connection" | "keyboard" | "cli" | "diagnostics" | "about";
 
   let config: AppConfig | null = $state(null);
   let configVersion: number | undefined = $state(undefined);
@@ -90,6 +94,12 @@
   /** 关闭 banner 后焦点回归的目标按钮（"检查更新"），避免焦点丢到 body。 */
   let checkUpdateBtnEl: HTMLButtonElement | null = $state(null);
 
+  // ── CLI section state ──
+  let cliStatus: CliStatus | null = $state(null);
+  let cliInstalling = $state(false);
+  let cliError: string | null = $state(null);
+  let cliPathCopied = $state(false);
+
   let showAddForm = $state(false);
   let newName = $state("");
   let newMode: string = $state("error_status");
@@ -110,6 +120,9 @@
       ? [{ id: "connection" as const, label: "连接", description: "SSH 远端工作区", icon: MONITOR_SVG }]
       : []),
     { id: "keyboard", label: "键盘快捷键", description: "查看与自定义快捷键", icon: KEYBOARD_SVG },
+    ...(isTauriDesktop
+      ? [{ id: "cli" as const, label: "CLI", description: "命令行工具安装与更新", icon: TERMINAL }]
+      : []),
     { id: "diagnostics", label: "诊断", description: "应用状态与事件", icon: INFO_SVG },
     { id: "about", label: "关于", description: "版本与更新", icon: INFO_SVG },
   ];
@@ -232,6 +245,13 @@
       } catch (e) {
         // mock / 非 Tauri runtime 不报错——showBrowserAccess 已经做了 gate
         console.warn("[server-mode] failed to fetch initial status:", e);
+      }
+    }
+    if (isTauriDesktop) {
+      try {
+        cliStatus = await getCliStatus();
+      } catch {
+        /* 静默：启动检测失败不阻塞 */
       }
     }
   });
@@ -453,6 +473,34 @@
     // banner DOM 卸载后焦点会丢到 body；显式还给触发按钮，键盘用户不丢上下文
     await tick();
     checkUpdateBtnEl?.focus();
+  }
+
+  async function handleCliInstall() {
+    cliInstalling = true;
+    cliError = null;
+    try {
+      cliStatus = await installCli();
+    } catch (e) {
+      cliError = String(e);
+    } finally {
+      cliInstalling = false;
+    }
+  }
+
+  async function handleCliRefresh() {
+    try {
+      cliStatus = await getCliStatus();
+      cliError = null;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function copyCliPath() {
+    if (!cliStatus?.path) return;
+    navigator.clipboard.writeText(`export PATH="$HOME/.local/bin:$PATH"`);
+    cliPathCopied = true;
+    setTimeout(() => { cliPathCopied = false; }, 2000);
   }
 
   async function updateTimeFormat(value: TimeFormat) {
@@ -1221,6 +1269,80 @@
           </SettingsGroup>
         {:else if activeSection === "keyboard"}
           <KeyboardShortcutsPanel initialOverrides={config!.keyboardShortcuts ?? {}} />
+        {:else if activeSection === "cli"}
+          <SettingsGroup title="命令行工具" description="安装或更新 cdt CLI，在终端中使用 Claude DevTools">
+            {#snippet children()}
+              {#if !cliStatus}
+                <SettingsField label="状态" description="正在检测...">
+                  {#snippet control()}
+                    <span class="cli-detecting">检测中</span>
+                  {/snippet}
+                </SettingsField>
+              {:else if cliStatus.status === "not_installed"}
+                <SettingsField label="状态" description="未安装 CLI，点击安装到 ~/.local/bin/cdt">
+                  {#snippet control()}
+                    <SettingsButton
+                      variant="primary"
+                      disabled={cliInstalling}
+                      onClick={handleCliInstall}
+                    >
+                      {#snippet icon()}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={DOWNLOAD_CLOUD_SVG}></path></svg>
+                      {/snippet}
+                      {cliInstalling ? "安装中..." : "安装 CLI"}
+                    </SettingsButton>
+                  {/snippet}
+                </SettingsField>
+              {:else if cliStatus.status === "installed_outdated"}
+                <SettingsField label="版本" description="v{cliStatus.version} → 有更新可用">
+                  {#snippet control()}
+                    <SettingsButton
+                      variant="primary"
+                      disabled={cliInstalling}
+                      onClick={handleCliInstall}
+                    >
+                      {#snippet icon()}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={DOWNLOAD_CLOUD_SVG}></path></svg>
+                      {/snippet}
+                      {cliInstalling ? "更新中..." : "更新 CLI"}
+                    </SettingsButton>
+                  {/snippet}
+                </SettingsField>
+                <SettingsField label="路径" description={cliStatus.path ?? ""} />
+              {:else if cliStatus.status === "installed_current"}
+                <SettingsField label="版本" description="v{cliStatus.version ?? '未知'} — 已是最新">
+                  {#snippet control()}
+                    <span class="cli-badge cli-badge-ok">已安装</span>
+                  {/snippet}
+                </SettingsField>
+                <SettingsField label="路径" description={cliStatus.path ?? ""} />
+              {:else}
+                <SettingsField label="版本" description="v{cliStatus.version ?? '未知'}">
+                  {#snippet control()}
+                    <span class="cli-badge">{cliStatus?.managed ? "自管理" : "外部管理"}</span>
+                  {/snippet}
+                </SettingsField>
+                <SettingsField label="路径" description={cliStatus.path ?? ""} />
+              {/if}
+
+              {#if cliError}
+                <div class="cli-error" role="alert">{cliError}</div>
+              {/if}
+
+              {#if cliStatus && cliStatus.status !== "not_installed"}
+                <SettingsField label="PATH 设置" layout="stack">
+                  {#snippet control()}
+                    <div class="cli-path-hint">
+                      <code>export PATH="$HOME/.local/bin:$PATH"</code>
+                      <SettingsButton size="sm" onClick={copyCliPath}>
+                        {cliPathCopied ? "已复制" : "复制"}
+                      </SettingsButton>
+                    </div>
+                  {/snippet}
+                </SettingsField>
+              {/if}
+            {/snippet}
+          </SettingsGroup>
         {:else if activeSection === "diagnostics"}
           <DiagnosticsTab />
         {:else if activeSection === "about"}
@@ -1959,5 +2081,44 @@
     font-size: 11px;
     color: var(--color-danger);
     margin-top: 2px;
+  }
+
+  /* ── CLI section ── */
+  .cli-detecting {
+    font-size: 12px;
+    color: var(--color-text-muted);
+  }
+  .cli-badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--color-border);
+    color: var(--color-text-secondary);
+  }
+  .cli-badge-ok {
+    background: color-mix(in oklch, var(--color-success) 18%, transparent);
+    color: var(--color-success);
+  }
+  .cli-error {
+    font-size: 12px;
+    color: var(--color-danger);
+    padding: 6px 12px;
+    background: color-mix(in oklch, var(--color-danger) 8%, transparent);
+    border-radius: 4px;
+    margin-top: 4px;
+  }
+  .cli-path-hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .cli-path-hint code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 4px 8px;
+    background: var(--code-block-bg, var(--color-surface));
+    border-radius: 4px;
+    color: var(--color-text-secondary);
   }
 </style>
