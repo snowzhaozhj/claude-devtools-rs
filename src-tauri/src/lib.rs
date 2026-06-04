@@ -871,6 +871,286 @@ async fn check_for_update(app: tauri::AppHandle) -> Result<CheckUpdateResult, St
     }
 }
 
+// ── CLI distribution ──────────────────────────────────────────────────────────
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CliStatus {
+    status: String,
+    version: Option<String>,
+    path: Option<String>,
+    managed: bool,
+}
+
+struct CliStatusCache(tokio::sync::Mutex<Option<CliStatus>>);
+
+#[tauri::command]
+async fn get_cli_status(
+    cache: State<'_, CliStatusCache>,
+    app: tauri::AppHandle,
+) -> Result<CliStatus, String> {
+    let cached = cache.0.lock().await.clone();
+    if let Some(s) = cached {
+        return Ok(s);
+    }
+    let result = detect_cli_status(&app).await;
+    *cache.0.lock().await = Some(result.clone());
+    Ok(result)
+}
+
+#[tauri::command]
+async fn install_cli(
+    cache: State<'_, CliStatusCache>,
+    app: tauri::AppHandle,
+) -> Result<CliStatus, String> {
+    let version = app.package_info().version.to_string();
+    let home = cdt_discover::path_decoder::home_dir()
+        .ok_or_else(|| "无法确定用户 home 目录".to_string())?;
+    let target_dir = home.join(".local").join("bin");
+    let target_path = target_dir.join(if cfg!(windows) { "cdt.exe" } else { "cdt" });
+
+    // Create directory
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|e| format!("无法创建目录 {}: {e}", target_dir.display()))?;
+
+    // Check write permission
+    let probe = target_dir.join(".cdt-install-probe");
+    std::fs::write(&probe, b"").map_err(|e| format!("无写入权限 {}: {e}", target_dir.display()))?;
+    let _ = std::fs::remove_file(&probe);
+
+    // Download
+    let asset_name = cdt_cli::install::platform_asset_name().map_err(|e| e.to_string())?;
+    let url = format!(
+        "https://github.com/{}/releases/download/v{version}/{asset_name}",
+        cdt_cli::install::REPO
+    );
+    let timeout = std::time::Duration::from_secs(60);
+    let binary_bytes =
+        cdt_cli::install::download_and_extract_with_timeout(&url, &asset_name, timeout)
+            .await
+            .map_err(|e| format!("下载失败: {e}"))?;
+
+    // Validate binary magic before writing
+    cdt_cli::install::validate_binary_magic(&binary_bytes)
+        .map_err(|e| format!("二进制校验失败: {e}"))?;
+
+    // Write to temp file
+    let temp_path = target_dir.join(format!(".cdt-install-{}.tmp", std::process::id()));
+    if let Err(e) = std::fs::write(&temp_path, &binary_bytes) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!("写入临时文件失败: {e}"));
+    }
+
+    // Set executable permission
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o755)).map_err(
+            |e| {
+                let _ = std::fs::remove_file(&temp_path);
+                format!("设置权限失败: {e}")
+            },
+        )?;
+    }
+
+    // macOS: remove quarantine
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("xattr")
+            .args(["-d", "com.apple.quarantine"])
+            .arg(&temp_path)
+            .output();
+    }
+
+    // Verify temp binary using absolute path
+    let verify_output = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        tokio::process::Command::new(&temp_path)
+            .arg("--version")
+            .output(),
+    )
+    .await;
+
+    match verify_output {
+        Ok(Ok(output)) if output.status.success() => {}
+        _ => {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err("验证失败：安装的 CLI 无法执行，可能是架构不匹配".to_string());
+        }
+    }
+
+    // Atomic rename (backup existing)
+    let backup_path = target_dir.join(if cfg!(windows) {
+        "cdt.old.exe"
+    } else {
+        "cdt.old"
+    });
+    if target_path.exists() {
+        let _ = std::fs::remove_file(&backup_path);
+        std::fs::rename(&target_path, &backup_path).map_err(|e| {
+            let _ = std::fs::remove_file(&temp_path);
+            format!("备份旧版本失败: {e}")
+        })?;
+    }
+
+    if let Err(e) = std::fs::rename(&temp_path, &target_path) {
+        // Rollback
+        if backup_path.exists() {
+            let _ = std::fs::rename(&backup_path, &target_path);
+        }
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!("安装失败: {e}"));
+    }
+
+    let _ = std::fs::remove_file(&backup_path);
+
+    // Refresh status
+    let new_status = detect_cli_status(&app).await;
+    *cache.0.lock().await = Some(new_status.clone());
+    Ok(new_status)
+}
+
+async fn detect_cli_status(app: &tauri::AppHandle) -> CliStatus {
+    let Some(home) = cdt_discover::path_decoder::home_dir() else {
+        return CliStatus {
+            status: "not_installed".to_string(),
+            version: None,
+            path: None,
+            managed: false,
+        };
+    };
+    let managed_path =
+        home.join(".local")
+            .join("bin")
+            .join(if cfg!(windows) { "cdt.exe" } else { "cdt" });
+
+    let candidate_paths: Vec<std::path::PathBuf> = vec![
+        managed_path.clone(),
+        std::path::PathBuf::from("/usr/local/bin/cdt"),
+        std::path::PathBuf::from("/opt/homebrew/bin/cdt"),
+        home.join(".cargo").join("bin").join("cdt"),
+    ];
+
+    for path in &candidate_paths {
+        if !path.exists() {
+            continue;
+        }
+        if let Some(version) = get_version_from_path(path).await {
+            let is_managed = path == &managed_path;
+            let app_version = app.package_info().version.to_string();
+
+            let status = if let (Ok(cli_v), Ok(app_v)) = (
+                semver::Version::parse(&version),
+                semver::Version::parse(&app_version),
+            ) {
+                if cli_v >= app_v {
+                    "installed_current"
+                } else if is_managed {
+                    "installed_outdated"
+                } else {
+                    "externally_managed"
+                }
+            } else {
+                "installed_current"
+            };
+
+            return CliStatus {
+                status: status.to_string(),
+                version: Some(version),
+                path: Some(path.to_string_lossy().to_string()),
+                managed: is_managed,
+            };
+        }
+    }
+
+    // Check if managed path exists but version couldn't be read
+    if managed_path.exists() {
+        return CliStatus {
+            status: "installed_current".to_string(),
+            version: None,
+            path: Some(managed_path.to_string_lossy().to_string()),
+            managed: true,
+        };
+    }
+
+    // Login shell fallback
+    if let Some((path, version)) = try_login_shell_which().await {
+        let is_managed = std::path::Path::new(&path) == managed_path.as_path();
+        let app_version = app.package_info().version.to_string();
+        let status = if let (Ok(cli_v), Ok(app_v)) = (
+            semver::Version::parse(&version),
+            semver::Version::parse(&app_version),
+        ) {
+            if cli_v >= app_v {
+                "installed_current"
+            } else if is_managed {
+                "installed_outdated"
+            } else {
+                "externally_managed"
+            }
+        } else {
+            "installed_current"
+        };
+        return CliStatus {
+            status: status.to_string(),
+            version: Some(version),
+            path: Some(path),
+            managed: is_managed,
+        };
+    }
+
+    CliStatus {
+        status: "not_installed".to_string(),
+        version: None,
+        path: None,
+        managed: false,
+    }
+}
+
+async fn get_version_from_path(path: &std::path::Path) -> Option<String> {
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        tokio::process::Command::new(path).arg("--version").output(),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(output)) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout
+                .split_whitespace()
+                .nth(1)
+                .map(|s| s.trim().to_string())
+        }
+        _ => None,
+    }
+}
+
+async fn try_login_shell_which() -> Option<(String, String)> {
+    let shell = std::env::var("SHELL").ok()?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        tokio::process::Command::new(&shell)
+            .args(["-lc", "which cdt"])
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        return None;
+    }
+
+    let version = get_version_from_path(std::path::Path::new(&path)).await?;
+    Some((path, version))
+}
+
 /// 启动后台静默检查的实现。
 ///
 /// 节拍：读 config gate → 调 `updater().check()` → 与 `skipped_update_version` 比 semver
@@ -1149,6 +1429,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppData { api: api.clone() })
+        .manage(CliStatusCache(tokio::sync::Mutex::new(None)))
         .setup({
             let api = api.clone();
             move |app| {
@@ -1313,6 +1594,19 @@ pub fn run() {
                     run_startup_update_check(api_for_updater, app_handle_for_updater).await;
                 });
 
+                // 启动时异步检测 CLI 安装状态（不阻塞 UI）
+                // 只在缓存仍为 None 时写入，避免覆盖用户安装后的新状态
+                let app_handle_for_cli = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let status = detect_cli_status(&app_handle_for_cli).await;
+                    if let Some(cache) = app_handle_for_cli.try_state::<CliStatusCache>() {
+                        let mut guard = cache.0.lock().await;
+                        if guard.is_none() {
+                            *guard = Some(status);
+                        }
+                    }
+                });
+
                 // 把自动通知管线产出的 DetectedError 桥到前端 `notification-added` 事件
                 // 同时按 config.notifications.{enabled,soundEnabled} 发 OS native 通知
                 let mut error_rx = api.subscribe_detected_errors();
@@ -1461,6 +1755,8 @@ pub fn run() {
             open_in_terminal,
             open_in_editor,
             list_available_terminals,
+            get_cli_status,
+            install_cli,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

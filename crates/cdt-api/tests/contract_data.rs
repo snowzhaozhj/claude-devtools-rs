@@ -72,6 +72,9 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "open_in_terminal",
     "open_in_editor",
     "list_available_terminals",
+    // CLI distribution：Settings 一键安装/更新 CLI
+    "get_cli_status",
+    "install_cli",
 ];
 
 /// 浏览器 runtime 不实现的 IPC command 集合——这些 command 在 `?http=1` 模式
@@ -98,4 +101,6 @@ pub const BROWSER_UNSUPPORTED_COMMANDS: &[&str] = &[
     "read_agent_configs",
     "add_memory",
     "delete_memory",
+    "get_cli_status",
+    "install_cli",
 ];

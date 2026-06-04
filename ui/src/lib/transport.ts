@@ -29,6 +29,8 @@ const unsupportedBrowserCommands = new Set([
   // 详见 crates/cdt-api/tests/contract_data.rs::BROWSER_UNSUPPORTED_COMMANDS。
   "add_memory",
   "delete_memory",
+  "get_cli_status",
+  "install_cli",
 ]);
 
 class TauriTransport implements Transport {
