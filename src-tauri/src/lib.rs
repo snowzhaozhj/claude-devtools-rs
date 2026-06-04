@@ -930,9 +930,16 @@ async fn install_cli(
             .await
             .map_err(|e| format!("下载失败: {e}"))?;
 
+    // Validate binary magic before writing
+    cdt_cli::install::validate_binary_magic(&binary_bytes)
+        .map_err(|e| format!("二进制校验失败: {e}"))?;
+
     // Write to temp file
     let temp_path = target_dir.join(format!(".cdt-install-{}.tmp", std::process::id()));
-    std::fs::write(&temp_path, &binary_bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
+    if let Err(e) = std::fs::write(&temp_path, &binary_bytes) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!("写入临时文件失败: {e}"));
+    }
 
     // Set executable permission
     #[cfg(unix)]
@@ -1038,8 +1045,10 @@ async fn detect_cli_status(app: &tauri::AppHandle) -> CliStatus {
             ) {
                 if cli_v >= app_v {
                     "installed_current"
-                } else {
+                } else if is_managed {
                     "installed_outdated"
+                } else {
+                    "externally_managed"
                 }
             } else {
                 "installed_current"
@@ -1067,8 +1076,23 @@ async fn detect_cli_status(app: &tauri::AppHandle) -> CliStatus {
     // Login shell fallback
     if let Some((path, version)) = try_login_shell_which().await {
         let is_managed = std::path::Path::new(&path) == managed_path.as_path();
+        let app_version = app.package_info().version.to_string();
+        let status = if let (Ok(cli_v), Ok(app_v)) = (
+            semver::Version::parse(&version),
+            semver::Version::parse(&app_version),
+        ) {
+            if cli_v >= app_v {
+                "installed_current"
+            } else if is_managed {
+                "installed_outdated"
+            } else {
+                "externally_managed"
+            }
+        } else {
+            "installed_current"
+        };
         return CliStatus {
-            status: "installed_current".to_string(),
+            status: status.to_string(),
             version: Some(version),
             path: Some(path),
             managed: is_managed,
@@ -1568,11 +1592,15 @@ pub fn run() {
                 });
 
                 // 启动时异步检测 CLI 安装状态（不阻塞 UI）
+                // 只在缓存仍为 None 时写入，避免覆盖用户安装后的新状态
                 let app_handle_for_cli = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let status = detect_cli_status(&app_handle_for_cli).await;
                     if let Some(cache) = app_handle_for_cli.try_state::<CliStatusCache>() {
-                        *cache.0.lock().await = Some(status);
+                        let mut guard = cache.0.lock().await;
+                        if guard.is_none() {
+                            *guard = Some(status);
+                        }
                     }
                 });
 
