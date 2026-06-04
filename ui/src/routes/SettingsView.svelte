@@ -56,7 +56,7 @@
     ALERT_CIRCLE_SVG,
     BELL_RING_SVG,
     KEYBOARD_SVG,
-    TERMINAL,
+    TERMINAL_SVG,
   } from "../lib/icons";
 
   type SectionId = "general" | "display" | "notifications" | "connection" | "keyboard" | "cli" | "diagnostics" | "about";
@@ -121,7 +121,7 @@
       : []),
     { id: "keyboard", label: "键盘快捷键", description: "查看与自定义快捷键", icon: KEYBOARD_SVG },
     ...(isTauriDesktop
-      ? [{ id: "cli" as const, label: "CLI", description: "命令行工具安装与更新", icon: TERMINAL }]
+      ? [{ id: "cli" as const, label: "CLI", description: "命令行工具安装与更新", icon: TERMINAL_SVG }]
       : []),
     { id: "diagnostics", label: "诊断", description: "应用状态与事件", icon: INFO_SVG },
     { id: "about", label: "关于", description: "版本与更新", icon: INFO_SVG },
@@ -1287,7 +1287,7 @@
                       onClick={handleCliInstall}
                     >
                       {#snippet icon()}
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={DOWNLOAD_CLOUD_SVG}></path></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html DOWNLOAD_CLOUD_SVG}</svg>
                       {/snippet}
                       {cliInstalling ? "安装中..." : "安装 CLI"}
                     </SettingsButton>
@@ -1302,7 +1302,7 @@
                       onClick={handleCliInstall}
                     >
                       {#snippet icon()}
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={DOWNLOAD_CLOUD_SVG}></path></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html DOWNLOAD_CLOUD_SVG}</svg>
                       {/snippet}
                       {cliInstalling ? "更新中..." : "更新 CLI"}
                     </SettingsButton>

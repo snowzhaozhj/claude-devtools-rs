@@ -194,6 +194,11 @@ export const KEYBOARD_SVG = `
 <path d="M7 16h10"/>
 `;
 
+export const TERMINAL_SVG = `
+<polyline points="4 17 10 11 4 5"/>
+<line x1="12" x2="20" y1="19" y2="19"/>
+`;
+
 /** Lucide folder — 目录选择按钮 */
 export const FOLDER_SVG = `
 <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
