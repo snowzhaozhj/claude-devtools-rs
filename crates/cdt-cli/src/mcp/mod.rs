@@ -391,7 +391,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_session_summary",
-        description = "Get a structured diagnostic summary of a session (~2K tokens). Returns: time phases, tool usage stats, error density, idle gaps, top files touched, and estimated cost. ALWAYS call this FIRST before get_session_detail.",
+        description = "Get a structured diagnostic summary of a session (~2K tokens). Returns: time phases, tool usage stats, error density, idle gaps, top files touched, estimated cost, and toolActivity (top commands, files edited, git ops, CLI tools detected). ALWAYS call this FIRST before get_session_detail.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -430,7 +430,11 @@ impl CdtMcpServer {
             - 'omit' (default): structure + metadata only, large fields replaced with size info\n\
             - 'full': includes all original content — use with narrow range for specific chunks, or for export\n\n\
             PAGINATION: Check `hasMore` and pass returned `cursor` for next page.\n\n\
-            TYPICAL WORKFLOW: get_session_summary → get_session_detail (omit mode, scan structure) → get_session_detail(range:'5:6', content_mode:'full') for specific content.",
+            GREP: Use `grep` to filter chunks by content match (case-insensitive substring). \
+            Searches text, tool inputs (JSON values only, not keys), tool outputs, and tool names. \
+            Matched chunks auto-promote to full content mode; use `grep_context` (default 1) for surrounding chunks. \
+            Each chunk has `grepHit: true/false` to distinguish matches from context.\n\n\
+            TYPICAL WORKFLOW: get_session_summary → search_sessions (find content) → get_session_detail(grep:'keyword') for filtered detail.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -830,12 +834,11 @@ impl ServerHandler for CdtMcpServer {
         .with_instructions(
             "Claude DevTools session intelligence. Read-only access to Claude Code session history.\n\n\
              USAGE PATTERN:\n\
-             1. list_projects → list_sessions → get_session_summary (compact ~2K tokens)\n\
-             2. get_session_detail returns STRUCTURE ONLY by default (content omitted).\n\
-                Each chunk has stable `chunkIndex` + `outputOmitted`/`contentOmitted` flags with char counts.\n\
-             3. To read specific content: get_session_detail(range:'5:8', content_mode:'full')\n\
-             4. All lists are paginated (default 20 items). Check `hasMore` and pass `cursor` for next page.\n\
-             5. `chunkIndex` is always absolute — stable across filter/pagination calls.\n\n\
+             1. list_projects → list_sessions → get_session_summary (includes toolActivity: commands, files, git ops)\n\
+             2. To find specific content: search_sessions(query, session?) — searches user, assistant, tool input, tool output\n\
+             3. To browse with filtering: get_session_detail(grep='keyword') — matched chunks auto-expand to full content\n\
+             4. get_session_detail returns STRUCTURE ONLY by default (content omitted). Use range + content_mode='full' for specific chunks.\n\
+             5. All lists are paginated (default 20 items). chunkIndex is always absolute — stable across filter/pagination calls.\n\n\
              All tools are read-only and safe to call repeatedly."
                 .to_string(),
         )

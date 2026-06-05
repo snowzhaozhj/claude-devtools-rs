@@ -52,9 +52,7 @@ fn collect_leaves(value: &serde_json::Value, buf: &mut String, max_bytes: usize)
 pub fn json_value_contains(value: &serde_json::Value, needle_lower: &str) -> bool {
     match value {
         serde_json::Value::String(s) => s.to_lowercase().contains(needle_lower),
-        serde_json::Value::Array(arr) => {
-            arr.iter().any(|v| json_value_contains(v, needle_lower))
-        }
+        serde_json::Value::Array(arr) => arr.iter().any(|v| json_value_contains(v, needle_lower)),
         serde_json::Value::Object(map) => {
             map.values().any(|v| json_value_contains(v, needle_lower))
         }

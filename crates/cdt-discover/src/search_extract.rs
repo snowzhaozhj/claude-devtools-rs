@@ -290,24 +290,29 @@ mod tests {
 
     #[test]
     fn tool_use_input_command_indexed() {
-        let msgs = vec![make_msg(
-            "a1",
-            MessageCategory::Assistant,
-            MessageType::Assistant,
-            MessageContent::Blocks(vec![ContentBlock::ToolUse {
-                id: "tu1".into(),
-                name: "Bash".into(),
-                input: serde_json::json!({"command": "mw switch get carts2", "description": "Get switch"}),
-            }]),
-        ),
-        make_msg(
-            "u1",
-            MessageCategory::User,
-            MessageType::User,
-            MessageContent::Text("ok".into()),
-        )];
+        let msgs = vec![
+            make_msg(
+                "a1",
+                MessageCategory::Assistant,
+                MessageType::Assistant,
+                MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "tu1".into(),
+                    name: "Bash".into(),
+                    input: serde_json::json!({"command": "mw switch get carts2", "description": "Get switch"}),
+                }]),
+            ),
+            make_msg(
+                "u1",
+                MessageCategory::User,
+                MessageType::User,
+                MessageContent::Text("ok".into()),
+            ),
+        ];
         let (entries, _) = extract_searchable_entries(&msgs);
-        let tool_entries: Vec<_> = entries.iter().filter(|e| e.message_type == "tool_use").collect();
+        let tool_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.message_type == "tool_use")
+            .collect();
         assert_eq!(tool_entries.len(), 1);
         assert!(tool_entries[0].text.contains("mw switch get carts2"));
         assert!(tool_entries[0].text.starts_with("tool:Bash"));
@@ -326,31 +331,39 @@ mod tests {
             }]),
         )];
         let (entries, _) = extract_searchable_entries(&msgs);
-        let result_entries: Vec<_> = entries.iter().filter(|e| e.message_type == "tool_result").collect();
+        let result_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.message_type == "tool_result")
+            .collect();
         assert_eq!(result_entries.len(), 1);
         assert!(result_entries[0].text.contains("enabled: true"));
     }
 
     #[test]
     fn json_key_not_indexed_in_tool_use() {
-        let msgs = vec![make_msg(
-            "a1",
-            MessageCategory::Assistant,
-            MessageType::Assistant,
-            MessageContent::Blocks(vec![ContentBlock::ToolUse {
-                id: "tu1".into(),
-                name: "Bash".into(),
-                input: serde_json::json!({"command": "ls -la"}),
-            }]),
-        ),
-        make_msg(
-            "u1",
-            MessageCategory::User,
-            MessageType::User,
-            MessageContent::Text("done".into()),
-        )];
+        let msgs = vec![
+            make_msg(
+                "a1",
+                MessageCategory::Assistant,
+                MessageType::Assistant,
+                MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "tu1".into(),
+                    name: "Bash".into(),
+                    input: serde_json::json!({"command": "ls -la"}),
+                }]),
+            ),
+            make_msg(
+                "u1",
+                MessageCategory::User,
+                MessageType::User,
+                MessageContent::Text("done".into()),
+            ),
+        ];
         let (entries, _) = extract_searchable_entries(&msgs);
-        let tool_entries: Vec<_> = entries.iter().filter(|e| e.message_type == "tool_use").collect();
+        let tool_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.message_type == "tool_use")
+            .collect();
         assert!(!tool_entries[0].text.contains("\"command\""));
     }
 

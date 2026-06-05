@@ -74,6 +74,10 @@ enum Command {
         /// 偏移（分页）
         #[arg(long, default_value = "0")]
         offset: usize,
+
+        /// 限定到单个 session（intra-session search）
+        #[arg(long)]
+        session: Option<String>,
     },
     /// 聚合统计
     Stats {
@@ -185,6 +189,14 @@ enum SessionsAction {
         /// 输出完整 chunks（不截断）
         #[arg(long)]
         full: bool,
+
+        /// 按内容匹配过滤 chunks（case-insensitive literal substring）
+        #[arg(long)]
+        grep: Option<String>,
+
+        /// grep 命中周围的 context chunk 数（默认 1）
+        #[arg(long, default_value = "1")]
+        grep_context: usize,
     },
     /// 聚合会话中的所有错误
     Errors {
@@ -662,6 +674,7 @@ async fn cmd_search(
     query: &str,
     limit: usize,
     offset: usize,
+    session_filter: Option<&str>,
 ) -> Result<()> {
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
@@ -673,11 +686,22 @@ async fn cmd_search(
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?,
         ),
-        None => None,
+        None => {
+            if let Some(sid) = session_filter {
+                Some(
+                    engine
+                        .find_session_project(sid)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("{e}"))?,
+                )
+            } else {
+                None
+            }
+        }
     };
 
     let result = engine
-        .search(query, project_id.as_deref(), None, offset, limit)
+        .search(query, project_id.as_deref(), session_filter, offset, limit)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -1387,6 +1411,8 @@ async fn main() -> Result<()> {
                 tail,
                 filter,
                 full,
+                grep: _,
+                grep_context: _,
             } => {
                 cmd_sessions_detail(
                     &cli.format,
@@ -1406,7 +1432,18 @@ async fn main() -> Result<()> {
             query,
             limit,
             offset,
-        } => cmd_search(&cli.format, cli.project.as_deref(), &query, limit, offset).await,
+            session,
+        } => {
+            cmd_search(
+                &cli.format,
+                cli.project.as_deref(),
+                &query,
+                limit,
+                offset,
+                session.as_deref(),
+            )
+            .await
+        }
         Command::Stats { period, project } => {
             let proj = project.as_deref().or(cli.project.as_deref());
             cmd_stats(&cli.format, &period, proj).await
