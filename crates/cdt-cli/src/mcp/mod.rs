@@ -78,11 +78,7 @@ pub struct SessionDetailParams {
     )]
     pub max_chunks: Option<usize>,
     #[schemars(
-        description = "Filter chunks by content match (case-insensitive literal substring). \
-            Searches user text, tool inputs/commands (JSON string values only, not keys), \
-            tool names, and error messages. Note: tool outputs and assistant response text \
-            are not searchable via grep (use search_sessions for those). \
-            Matched chunks auto-promote to full content mode; context chunks follow content_mode setting."
+        description = "Filter chunks by content match (case-insensitive substring). Searches user text, tool inputs/commands, tool names, error messages."
     )]
     pub grep: Option<String>,
     #[schemars(
@@ -393,7 +389,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_session_summary",
-        description = "Get a structured diagnostic summary of a session (~2K tokens). Returns: time phases, tool usage stats, error density, idle gaps, top files touched, estimated cost, and toolActivity (top commands, files edited, git ops, CLI tools detected). ALWAYS call this FIRST before get_session_detail.",
+        description = "Structured diagnostic summary (~2K tokens): phases, tool stats, errors, idle gaps, top files, cost, and toolActivity (commands, files edited, git ops, CLI tools).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -420,23 +416,10 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_session_detail",
-        description = "Get chunk data from a session with pagination and field control.\n\n\
-            DEFAULT BEHAVIOR: Returns 20 chunks per page with large fields OMITTED (tool output, response content). \
-            Each chunk includes stable `chunkIndex` (absolute, unaffected by filters) and size metadata \
-            (`outputChars`, `contentChars`) so you know what's omitted.\n\n\
-            WINDOW SELECTION (mutually exclusive — pick one or none):\n\
-            - `range`: e.g. '10:30' for specific chunks\n\
-            - `tail`: last N chunks\n\
-            - `cursor`: from previous response's `cursor` field\n\n\
-            CONTENT MODE:\n\
-            - 'omit' (default): structure + metadata only, large fields replaced with size info\n\
-            - 'full': includes all original content — use with narrow range for specific chunks, or for export\n\n\
-            PAGINATION: Check `hasMore` and pass returned `cursor` for next page.\n\n\
-            GREP: Use `grep` to filter chunks by content match (case-insensitive substring). \
-            Searches text, tool inputs (JSON values only, not keys), tool outputs, and tool names. \
-            Matched chunks auto-promote to full content mode; use `grep_context` (default 1) for surrounding chunks. \
-            Each chunk has `grepHit: true/false` to distinguish matches from context.\n\n\
-            TYPICAL WORKFLOW: get_session_summary → search_sessions (find content) → get_session_detail(grep:'keyword') for filtered detail.",
+        description = "Get chunk data with pagination. Defaults to structure-only (large fields omitted). \
+            Window: range ('10:30'), tail (last N), or cursor. Content: 'omit' (default) or 'full'. \
+            Use `grep` to filter by content match — searches tool inputs, names, user text. \
+            Matched chunks auto-expand to full; `grep_context` (default 1) adds surrounding chunks with `grepHit` flag.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -702,9 +685,8 @@ impl CdtMcpServer {
 
     #[tool(
         name = "search_sessions",
-        description = "Full-text search across session content including user messages, assistant responses, tool inputs and tool outputs. \
-            Use `session` to scope search to a single session (intra-session search). \
-            Returns paginated results (default 20). Check `hasMore` and use `cursor` for more results.",
+        description = "Full-text search across all session content (text, tool inputs, tool outputs). \
+            Use `session` for intra-session search. Paginated (default 20).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -835,14 +817,13 @@ impl ServerHandler for CdtMcpServer {
         )
         .with_server_info(Implementation::from_build_env())
         .with_instructions(
-            "Claude DevTools session intelligence. Read-only access to Claude Code session history.\n\n\
-             USAGE PATTERN:\n\
-             1. list_projects → list_sessions → get_session_summary (includes toolActivity: commands, files, git ops)\n\
-             2. To find specific content: search_sessions(query, session?) — searches user, assistant, tool input, tool output\n\
-             3. To browse with filtering: get_session_detail(grep='keyword') — matched chunks auto-expand to full content\n\
-             4. get_session_detail returns STRUCTURE ONLY by default (content omitted). Use range + content_mode='full' for specific chunks.\n\
-             5. All lists are paginated (default 20 items). chunkIndex is always absolute — stable across filter/pagination calls.\n\n\
-             All tools are read-only and safe to call repeatedly."
+            "Claude DevTools — read-only session intelligence.\n\n\
+             QUICK START:\n\
+             - Overview: get_session_summary (phases, tool stats, toolActivity, cost)\n\
+             - Find content: search_sessions(query, session?) — covers text + tool inputs/outputs\n\
+             - Browse/filter: get_session_detail(grep='keyword') — matched chunks auto-expand\n\
+             - Detail defaults to structure-only; use range + content_mode='full' for content\n\
+             - All lists paginated (check hasMore + cursor). chunkIndex is absolute."
                 .to_string(),
         )
     }
