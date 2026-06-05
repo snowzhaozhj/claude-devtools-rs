@@ -1,10 +1,12 @@
 import { parseModelString } from "./modelParser";
 
-const MODEL_CONTEXT_LIMITS: Record<string, number> = {
-  opus: 1_000_000,
-  sonnet: 200_000,
-  haiku: 200_000,
-};
+function familyContextLimit(family: string, majorVersion: number | null): number {
+  if (family === "haiku") return 200_000;
+  if (family === "opus" || family === "sonnet") {
+    return (majorVersion !== null && majorVersion >= 4) ? 1_000_000 : 200_000;
+  }
+  return 200_000;
+}
 
 export function getModelContextLimit(model: string | null | undefined): number | null {
   if (!model) return null;
@@ -12,11 +14,11 @@ export function getModelContextLimit(model: string | null | undefined): number |
   if (/\b1m\b|\[1m\]|-1m$/.test(normalized)) return 1_000_000;
   const info = parseModelString(model);
   if (!info) {
-    if (normalized === "opus") return 1_000_000;
-    if (normalized === "sonnet" || normalized === "haiku") return 200_000;
+    if (normalized === "opus" || normalized === "sonnet") return 1_000_000;
+    if (normalized === "haiku") return 200_000;
     return null;
   }
-  return MODEL_CONTEXT_LIMITS[info.family] ?? null;
+  return familyContextLimit(info.family, info.majorVersion);
 }
 
 export interface ContextWindowUsage {
@@ -59,7 +61,9 @@ export function getLastAssistantUsage(
       if (total > 0) {
         let limit = getModelContextLimit(resp.model);
         if (!limit) return null;
-        if (total > limit) limit = 1_000_000;
+        const info = parseModelString(resp.model ?? "");
+        const canUpgrade = info && (info.family === "opus" || info.family === "sonnet");
+        if (total > limit && canUpgrade) limit = 1_000_000;
         return {
           inputTokens: total,
           contextLimit: limit,
