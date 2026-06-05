@@ -242,10 +242,12 @@ fn find_first_ai_after(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core
 ///   `post - pre`；任一缺值 → `None`
 ///
 /// 两趟扫描避免可变借用冲突：Pass 1 不可变借用算 (delta, phase)，Pass 2 可变借用写入。
-/// 统一的 IPC payload 瘦身流水线：compact derived → image → response content
-/// → tool output → subagent messages。提取自 `get_session_detail` 的序列化阶段。
-fn apply_all_payload_omissions(chunks: &mut Vec<cdt_core::Chunk>) {
-    apply_compact_derived(chunks, COMPACT_DERIVED_ENABLED);
+/// Tauri IPC 消费者层调用的展示裁剪流水线：image → response content
+/// → tool output → subagent messages。
+///
+/// `LocalDataApi::get_session_detail` 返回完整数据；Tauri IPC command handler
+/// 在序列化返回前端之前调用本函数裁剪 payload。MCP / CLI / HTTP 消费者不调用。
+pub fn apply_display_omissions(chunks: &mut Vec<cdt_core::Chunk>) {
     if OMIT_IMAGE_DATA {
         apply_image_omit(chunks);
     }
@@ -3946,10 +3948,10 @@ impl DataApi for LocalDataApi {
         )
         .await;
 
-        // Step 6: apply payload omissions + assemble response
+        // Step 6: fill compact derived fields + assemble response
         let t_serde = std::time::Instant::now();
         let mut chunks = chunks;
-        apply_all_payload_omissions(&mut chunks);
+        apply_compact_derived(&mut chunks, COMPACT_DERIVED_ENABLED);
         let session_cwd: Option<&str> = messages.iter().find_map(|m| m.cwd.as_deref());
         let title_metadata = extract_session_metadata_from_parsed(&messages, !is_ongoing);
         let detail = SessionDetail {
