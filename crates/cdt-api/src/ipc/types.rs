@@ -239,6 +239,16 @@ pub enum SessionDetailResponse {
     },
 }
 
+impl SessionDetailResponse {
+    /// 对 `Full` variant 的 chunks 执行展示裁剪（omit image/response/tool/subagent）。
+    /// `Unchanged` variant 无数据，调用为 no-op。
+    pub fn apply_omissions(&mut self) {
+        if let Self::Full { detail, .. } = self {
+            super::local::apply_display_omissions(&mut detail.chunks);
+        }
+    }
+}
+
 // =============================================================================
 // 搜索
 // =============================================================================
