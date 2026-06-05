@@ -53,6 +53,11 @@
     ]
   },
   "worktree": {
-    "symlinkDirectories": ["ui/node_modules"]
+    "symlinkDirectories": [
+      "ui/node_modules"
+    ]
+  },
+  "enabledPlugins": {
+    "impeccable@impeccable": true
   }
 }
