@@ -9,6 +9,17 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- **MCP**: session recall grep and search tool content indexing for richer session queries.
+- **CLI**: download and install the CLI directly from the desktop Settings page.
+- Redesigned app icon and tray icon.
+
+### Fixed
+- Context window now displays correct token counts (missing cache fields caused near-zero display).
+
+### Performance
+- CWD cache and sidebar debounce throttle reduce workflow-triggered CPU usage.
+
 ## [0.6.7] — 2026-06-01
 
 ### Fixed
