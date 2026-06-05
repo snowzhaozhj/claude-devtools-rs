@@ -79,8 +79,9 @@ pub struct SessionDetailParams {
     pub max_chunks: Option<usize>,
     #[schemars(
         description = "Filter chunks by content match (case-insensitive literal substring). \
-            Searches assistant text, user text, tool inputs (JSON string values only, not keys), \
-            tool outputs, tool names, and error messages. \
+            Searches user text, tool inputs/commands (JSON string values only, not keys), \
+            tool names, and error messages. Note: tool outputs and assistant response text \
+            are not searchable via grep (use search_sessions for those). \
             Matched chunks auto-promote to full content mode; context chunks follow content_mode setting."
     )]
     pub grep: Option<String>,
@@ -151,6 +152,7 @@ struct SearchResponse {
     has_more: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     cursor: Option<String>,
+    total_matches: usize,
     sessions_searched: usize,
     query: String,
     is_partial: bool,
@@ -523,11 +525,11 @@ impl CdtMcpServer {
             })
             .collect();
 
+        // Reject empty grep (W3: empty string matches everything)
+        let grep_param = params.grep.as_deref().filter(|s| !s.trim().is_empty());
+
         // Apply grep filter + context expansion (D7: kind_filter → grep → context → range)
-        let grep_matcher = params
-            .grep
-            .as_deref()
-            .map(cdt_discover::search_text::GrepMatcher::literal);
+        let grep_matcher = grep_param.map(cdt_discover::search_text::GrepMatcher::literal);
         let grep_hits: std::collections::HashSet<usize> = if let Some(ref matcher) = grep_matcher {
             indexed_chunks
                 .iter()
@@ -753,13 +755,13 @@ impl CdtMcpServer {
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let total = results.total_matches;
-        let returned = results.results.len();
-        let has_more = offset + returned < total;
+        let total_results = results.results.len();
+        let returned = total_results.saturating_sub(offset).min(limit);
+        let has_more = offset + returned < total_results;
 
         let response = SearchResponse {
             results: results.results,
-            total,
+            total: total_results,
             returned,
             has_more,
             cursor: if has_more {
@@ -767,6 +769,7 @@ impl CdtMcpServer {
             } else {
                 None
             },
+            total_matches: results.total_matches,
             sessions_searched: results.sessions_searched,
             query: results.query,
             is_partial: results.is_partial,

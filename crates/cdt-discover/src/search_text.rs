@@ -21,8 +21,8 @@ fn collect_leaves(value: &serde_json::Value, buf: &mut String, max_bytes: usize)
             if s.len() <= remaining {
                 buf.push_str(s);
             } else {
-                let truncated: String = s.chars().take(remaining).collect();
-                buf.push_str(&truncated);
+                let truncated = truncate_to_char_boundary(s, remaining);
+                buf.push_str(truncated);
             }
             buf.push(' ');
         }
@@ -44,6 +44,17 @@ fn collect_leaves(value: &serde_json::Value, buf: &mut String, max_bytes: usize)
         }
         _ => {}
     }
+}
+
+fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if max_bytes >= s.len() {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// 递归检查 `serde_json::Value` 的 string leaf 是否包含 needle（已预转小写）。
