@@ -4371,11 +4371,14 @@ impl DataApi for LocalDataApi {
         let searcher = SessionSearcher::new(fs, self.search_cache.clone(), &projects_dir);
 
         if let Some(ref sid) = request.session_id {
+            if sid.contains("..") || sid.contains('/') || sid.contains('\\') {
+                return Err(ApiError::validation(format!("invalid session ID: {sid}")));
+            }
             let session_path = projects_dir.join(project_id).join(format!("{sid}.jsonl"));
             let session_result = searcher
                 .search_session_file(project_id, sid, &session_path, &request.query, max_results)
                 .await
-                .map_err(|e| ApiError::internal(format!("search error: {e}")))?;
+                .map_err(|e| ApiError::internal(format!("search in session {sid} failed: {e}")))?;
             let total_matches = session_result.total_matches;
             let results = if session_result.hits.is_empty() {
                 Vec::new()

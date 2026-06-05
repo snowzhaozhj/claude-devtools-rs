@@ -96,6 +96,55 @@ impl GrepMatcher {
     }
 }
 
+/// Chunk 级 grep 匹配——CLI 和 MCP 共用。
+pub fn chunk_matches_grep(chunk: &cdt_core::Chunk, matcher: &GrepMatcher) -> bool {
+    use cdt_core::Chunk;
+    match chunk {
+        Chunk::Ai(ai) => {
+            ai.responses
+                .iter()
+                .any(|r| matcher.matches(&message_content_text(&r.content)))
+                || ai.tool_executions.iter().any(|te| {
+                    matcher.matches(&te.tool_name)
+                        || matcher.matches_json_value(&te.input)
+                        || match &te.output {
+                            cdt_core::tool_execution::ToolOutput::Text { text } => {
+                                matcher.matches(text)
+                            }
+                            cdt_core::tool_execution::ToolOutput::Structured { value } => {
+                                matcher.matches_json_value(value)
+                            }
+                            cdt_core::tool_execution::ToolOutput::Missing => false,
+                        }
+                        || te
+                            .error_message
+                            .as_deref()
+                            .is_some_and(|m| matcher.matches(m))
+                })
+        }
+        Chunk::User(u) => matcher.matches(&message_content_text(&u.content)),
+        Chunk::System(s) => matcher.matches(&s.content_text),
+        Chunk::Compact(c) => matcher.matches(&c.summary_text),
+    }
+}
+
+fn message_content_text(content: &cdt_core::message::MessageContent) -> String {
+    match content {
+        cdt_core::message::MessageContent::Text(s) => s.clone(),
+        cdt_core::message::MessageContent::Blocks(blocks) => {
+            let mut parts = Vec::new();
+            for block in blocks {
+                if let cdt_core::message::ContentBlock::Text { text } = block {
+                    if !text.is_empty() {
+                        parts.push(text.as_str());
+                    }
+                }
+            }
+            parts.join("\n")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

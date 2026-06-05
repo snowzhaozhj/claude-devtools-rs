@@ -594,31 +594,7 @@ async fn cmd_sessions_detail(
             .chunks
             .iter()
             .enumerate()
-            .filter(|(_, chunk)| {
-                use cdt_core::Chunk;
-                match chunk {
-                    Chunk::Ai(ai) => {
-                        ai.tool_executions.iter().any(|te| {
-                            matcher.matches(&te.tool_name) || matcher.matches_json_value(&te.input)
-                        }) || ai.responses.iter().any(|r| {
-                            let text = match &r.content {
-                                cdt_core::message::MessageContent::Text(s) => s.as_str(),
-                                cdt_core::message::MessageContent::Blocks(_) => "",
-                            };
-                            matcher.matches(text)
-                        })
-                    }
-                    Chunk::User(u) => {
-                        let text = match &u.content {
-                            cdt_core::message::MessageContent::Text(s) => s.as_str(),
-                            cdt_core::message::MessageContent::Blocks(_) => "",
-                        };
-                        matcher.matches(text)
-                    }
-                    Chunk::System(s) => matcher.matches(&s.content_text),
-                    Chunk::Compact(c) => matcher.matches(&c.summary_text),
-                }
-            })
+            .filter(|(_, chunk)| cdt_discover::search_text::chunk_matches_grep(chunk, &matcher))
             .map(|(i, _)| i)
             .collect();
         let visible: std::collections::HashSet<usize> = hits
@@ -749,10 +725,19 @@ async fn cmd_search(
         }
     };
 
-    let result = engine
-        .search(query, project_id.as_deref(), session_filter, offset, limit)
+    let mut result = engine
+        .search(query, project_id.as_deref(), session_filter)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if offset > 0 || result.results.len() > limit {
+        result.results = result
+            .results
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect();
+    }
 
     if result.results.is_empty() {
         match format {

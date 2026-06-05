@@ -517,7 +517,7 @@ impl CdtMcpServer {
         let grep_hits: std::collections::HashSet<usize> = if let Some(ref matcher) = grep_matcher {
             indexed_chunks
                 .iter()
-                .filter(|(_, chunk)| chunk_matches_grep(chunk, matcher))
+                .filter(|(_, chunk)| cdt_discover::search_text::chunk_matches_grep(chunk, matcher))
                 .map(|(idx, _)| *idx)
                 .collect()
         } else {
@@ -525,7 +525,7 @@ impl CdtMcpServer {
         };
 
         let indexed_chunks: Vec<(usize, &Chunk)> = if grep_matcher.is_some() {
-            let ctx = params.grep_context.unwrap_or(1);
+            let ctx = params.grep_context.unwrap_or(1).min(50);
             let visible: std::collections::HashSet<usize> = grep_hits
                 .iter()
                 .flat_map(|&i| {
@@ -732,18 +732,22 @@ impl CdtMcpServer {
                 &params.query,
                 project_id.as_deref(),
                 params.session.as_deref(),
-                offset,
-                limit,
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let total_results = results.results.len();
-        let returned = total_results.saturating_sub(offset).min(limit);
+        let page: Vec<_> = results
+            .results
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect();
+        let returned = page.len();
         let has_more = offset + returned < total_results;
 
         let response = SearchResponse {
-            results: results.results,
+            results: page,
             total: total_results,
             returned,
             has_more,
@@ -839,36 +843,6 @@ enum ContentMode {
 // ─────────────────────────────────────────────────────────────────────────────
 // Chunk envelope builder
 // ─────────────────────────────────────────────────────────────────────────────
-
-fn chunk_matches_grep(chunk: &Chunk, matcher: &cdt_discover::search_text::GrepMatcher) -> bool {
-    match chunk {
-        Chunk::Ai(ai) => {
-            ai.responses
-                .iter()
-                .any(|r| matcher.matches(&message_content_text(&r.content)))
-                || ai.tool_executions.iter().any(|te| {
-                    matcher.matches(&te.tool_name)
-                        || matcher.matches_json_value(&te.input)
-                        || match &te.output {
-                            cdt_core::tool_execution::ToolOutput::Text { text } => {
-                                matcher.matches(text)
-                            }
-                            cdt_core::tool_execution::ToolOutput::Structured { value } => {
-                                matcher.matches_json_value(value)
-                            }
-                            cdt_core::tool_execution::ToolOutput::Missing => false,
-                        }
-                        || te
-                            .error_message
-                            .as_deref()
-                            .is_some_and(|m| matcher.matches(m))
-                })
-        }
-        Chunk::User(u) => matcher.matches(&message_content_text(&u.content)),
-        Chunk::System(s) => matcher.matches(&s.content_text),
-        Chunk::Compact(c) => matcher.matches(&c.summary_text),
-    }
-}
 
 fn build_chunk_envelope(
     abs_index: usize,
