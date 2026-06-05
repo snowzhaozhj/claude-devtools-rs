@@ -91,6 +91,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
+      - name: Disable Windows Defender real-time monitoring
+        if: matrix.os == 'windows-latest'
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+        shell: pwsh
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -124,6 +128,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
+      - name: Disable Windows Defender real-time monitoring
+        if: matrix.os == 'windows-latest'
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+        shell: pwsh
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Install Linux dependencies
