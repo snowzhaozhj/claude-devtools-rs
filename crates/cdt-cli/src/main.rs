@@ -547,6 +547,7 @@ async fn cmd_sessions_show(format: &OutputFormat, session_id: &str) -> Result<()
 // sessions detail
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_sessions_detail(
     format: &OutputFormat,
     session_id: &str,
@@ -554,6 +555,8 @@ async fn cmd_sessions_detail(
     tail: Option<usize>,
     filter: Option<&str>,
     full: bool,
+    grep: Option<&str>,
+    grep_context: usize,
 ) -> Result<()> {
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
@@ -580,10 +583,56 @@ async fn cmd_sessions_detail(
         }
     };
 
-    let detail = engine
+    let mut detail = engine
         .get_session_detail(&project_id, session_id, &options)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if let Some(needle) = grep.filter(|s| !s.trim().is_empty()) {
+        let matcher = cdt_discover::search_text::GrepMatcher::literal(needle);
+        let hits: std::collections::HashSet<usize> = detail
+            .chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, chunk)| {
+                use cdt_core::Chunk;
+                match chunk {
+                    Chunk::Ai(ai) => {
+                        ai.tool_executions.iter().any(|te| {
+                            matcher.matches(&te.tool_name) || matcher.matches_json_value(&te.input)
+                        }) || ai.responses.iter().any(|r| {
+                            let text = match &r.content {
+                                cdt_core::message::MessageContent::Text(s) => s.as_str(),
+                                cdt_core::message::MessageContent::Blocks(_) => "",
+                            };
+                            matcher.matches(text)
+                        })
+                    }
+                    Chunk::User(u) => {
+                        let text = match &u.content {
+                            cdt_core::message::MessageContent::Text(s) => s.as_str(),
+                            cdt_core::message::MessageContent::Blocks(_) => "",
+                        };
+                        matcher.matches(text)
+                    }
+                    Chunk::System(s) => matcher.matches(&s.content_text),
+                    Chunk::Compact(c) => matcher.matches(&c.summary_text),
+                }
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let visible: std::collections::HashSet<usize> = hits
+            .iter()
+            .flat_map(|&i| i.saturating_sub(grep_context)..=i + grep_context)
+            .collect();
+        detail.chunks = detail
+            .chunks
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| visible.contains(i))
+            .map(|(_, c)| c)
+            .collect();
+    }
 
     match format {
         OutputFormat::Json => {
@@ -1411,8 +1460,8 @@ async fn main() -> Result<()> {
                 tail,
                 filter,
                 full,
-                grep: _,
-                grep_context: _,
+                grep,
+                grep_context,
             } => {
                 cmd_sessions_detail(
                     &cli.format,
@@ -1421,6 +1470,8 @@ async fn main() -> Result<()> {
                     tail,
                     filter.as_deref(),
                     full,
+                    grep.as_deref(),
+                    grep_context,
                 )
                 .await
             }
