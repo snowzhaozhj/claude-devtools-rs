@@ -70,13 +70,21 @@ pub struct SessionDetailParams {
     #[schemars(description = "Filter: 'errors_only' or 'tool_calls'")]
     pub filter: Option<String>,
     #[schemars(
-        description = "Content mode: 'omit' (default) returns chunk structure with large fields omitted; 'full' includes all content. Use 'full' with a narrow range for specific chunks, or for export/file-write."
+        description = "Content mode: 'omit' (default) returns structure + size metadata; 'full' includes content. Do NOT use 'full' without range/tail except for export — it returns the entire session."
     )]
     pub content_mode: Option<String>,
     #[schemars(
         description = "Max chunks per page (default 20, max 100). Ignored when content_mode='full' without range/tail (returns all)."
     )]
     pub max_chunks: Option<usize>,
+    #[schemars(
+        description = "Case-insensitive literal chunk filter. Matches text, tool inputs/outputs, tool names, error messages. Empty string ignored."
+    )]
+    pub grep: Option<String>,
+    #[schemars(
+        description = "Number of context chunks around each grep hit (default 1). Only used with grep."
+    )]
+    pub grep_context: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -99,6 +107,10 @@ pub struct SearchParams {
     pub limit: Option<usize>,
     #[schemars(description = "Project name or ID to limit search scope")]
     pub project: Option<String>,
+    #[schemars(
+        description = "Session ID to scope search to a single session (intra-session search). Auto-resolves project if omitted."
+    )]
+    pub session: Option<String>,
     #[schemars(description = "Pagination cursor from previous response")]
     pub cursor: Option<String>,
 }
@@ -125,6 +137,21 @@ struct PaginatedResponse<T: Serialize> {
     has_more: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchResponse {
+    results: Vec<cdt_core::SessionSearchResult>,
+    total: usize,
+    returned: usize,
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    total_matches: usize,
+    sessions_searched: usize,
+    query: String,
+    is_partial: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -161,6 +188,8 @@ struct ChunkEnvelope {
     system_content: Option<ContentField>,
     #[serde(skip_serializing_if = "Option::is_none")]
     compact_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grep_hit: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -360,7 +389,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_session_summary",
-        description = "Get a structured diagnostic summary of a session (~2K tokens). Returns: time phases, tool usage stats, error density, idle gaps, top files touched, and estimated cost. ALWAYS call this FIRST before get_session_detail.",
+        description = "Structured diagnostic summary (~2K tokens): phases, tool stats, errors, idle gaps, top files, cost, and toolActivity (commands, files edited, git ops, CLI tools). Good starting point for session overview.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -387,19 +416,11 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_session_detail",
-        description = "Get chunk data from a session with pagination and field control.\n\n\
-            DEFAULT BEHAVIOR: Returns 20 chunks per page with large fields OMITTED (tool output, response content). \
-            Each chunk includes stable `chunkIndex` (absolute, unaffected by filters) and size metadata \
-            (`outputChars`, `contentChars`) so you know what's omitted.\n\n\
-            WINDOW SELECTION (mutually exclusive — pick one or none):\n\
-            - `range`: e.g. '10:30' for specific chunks\n\
-            - `tail`: last N chunks\n\
-            - `cursor`: from previous response's `cursor` field\n\n\
-            CONTENT MODE:\n\
-            - 'omit' (default): structure + metadata only, large fields replaced with size info\n\
-            - 'full': includes all original content — use with narrow range for specific chunks, or for export\n\n\
-            PAGINATION: Check `hasMore` and pass returned `cursor` for next page.\n\n\
-            TYPICAL WORKFLOW: get_session_summary → get_session_detail (omit mode, scan structure) → get_session_detail(range:'5:6', content_mode:'full') for specific content.",
+        description = "Inspect chunks for a known session. Defaults to structure-only (`outputChars`/`contentChars` show omitted sizes). \
+            `chunkIndex` is absolute and stable. Window: range, tail, or cursor. Content: 'omit' or 'full' \
+            (avoid 'full' without range/tail — returns entire session). \
+            `grep`: case-insensitive literal filter across text, tool inputs/outputs, tool names, error messages; \
+            hits auto-expand to full with `grepHit` flag. Not for cross-session discovery — use search_sessions first.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -488,6 +509,39 @@ impl CdtMcpServer {
             })
             .collect();
 
+        // Reject empty grep (W3: empty string matches everything)
+        let grep_param = params.grep.as_deref().filter(|s| !s.trim().is_empty());
+
+        // Apply grep filter + context expansion (D7: kind_filter → grep → context → range)
+        let grep_matcher = grep_param.map(cdt_discover::search_text::GrepMatcher::literal);
+        let grep_hits: std::collections::HashSet<usize> = if let Some(ref matcher) = grep_matcher {
+            indexed_chunks
+                .iter()
+                .filter(|(_, chunk)| cdt_discover::search_text::chunk_matches_grep(chunk, matcher))
+                .map(|(idx, _)| *idx)
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+
+        let indexed_chunks: Vec<(usize, &Chunk)> = if grep_matcher.is_some() {
+            let ctx = params.grep_context.unwrap_or(1).min(50);
+            let visible: std::collections::HashSet<usize> = grep_hits
+                .iter()
+                .flat_map(|&i| {
+                    let lo = i.saturating_sub(ctx);
+                    let hi = i + ctx;
+                    lo..=hi
+                })
+                .collect();
+            indexed_chunks
+                .into_iter()
+                .filter(|(idx, _)| visible.contains(idx))
+                .collect()
+        } else {
+            indexed_chunks
+        };
+
         // Apply window selection (range/tail) on filtered set, preserving absolute indices
         let windowed: Vec<(usize, &Chunk)> = if let Some((start, end)) = range {
             indexed_chunks
@@ -532,7 +586,17 @@ impl CdtMcpServer {
 
         let envelopes: Vec<ChunkEnvelope> = page_chunks
             .iter()
-            .map(|(abs_idx, chunk)| build_chunk_envelope(*abs_idx, chunk, &content_mode))
+            .map(|(abs_idx, chunk)| {
+                let is_grep_mode = grep_matcher.is_some();
+                let is_hit = grep_hits.contains(abs_idx);
+                let effective_mode = if is_hit {
+                    &ContentMode::Full
+                } else {
+                    &content_mode
+                };
+                let hit_flag = if is_grep_mode { Some(is_hit) } else { None };
+                build_chunk_envelope(*abs_idx, chunk, effective_mode, hit_flag)
+            })
             .collect();
 
         let response = SessionDetailResponse {
@@ -622,7 +686,8 @@ impl CdtMcpServer {
 
     #[tool(
         name = "search_sessions",
-        description = "Full-text search across sessions. Returns paginated results (default 20). Check `hasMore` and use `cursor` for more results.",
+        description = "Full-text discovery across session search index. Returns grouped session hits with preview snippets, not chunk envelopes. \
+            Use `session` for intra-session search. Use get_session_detail with grep/range for chunk-level content.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -647,22 +712,43 @@ impl CdtMcpServer {
                     .await
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?,
             ),
-            None => None,
+            None => {
+                if let Some(ref sid) = params.session {
+                    Some(
+                        self.engine
+                            .find_session_project(sid)
+                            .await
+                            .map_err(|e| McpError::invalid_params(e.to_string(), None))?,
+                    )
+                } else {
+                    None
+                }
+            }
         };
 
         let results = self
             .engine
-            .search(&params.query, project_id.as_deref(), offset, limit)
+            .search(
+                &params.query,
+                project_id.as_deref(),
+                params.session.as_deref(),
+            )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let total = results.total_matches;
-        let returned = results.results.len();
-        let has_more = offset + returned < total;
+        let total_results = results.results.len();
+        let page: Vec<_> = results
+            .results
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect();
+        let returned = page.len();
+        let has_more = offset + returned < total_results;
 
-        let response = PaginatedResponse {
-            items: results.results,
-            total,
+        let response = SearchResponse {
+            results: page,
+            total: total_results,
             returned,
             has_more,
             cursor: if has_more {
@@ -670,6 +756,10 @@ impl CdtMcpServer {
             } else {
                 None
             },
+            total_matches: results.total_matches,
+            sessions_searched: results.sessions_searched,
+            query: results.query,
+            is_partial: results.is_partial,
         };
         self.emit_json(&response)
     }
@@ -725,24 +815,19 @@ impl CdtMcpServer {
 #[tool_handler]
 impl ServerHandler for CdtMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-        )
-        .with_server_info(Implementation::from_build_env())
-        .with_instructions(
-            "Claude DevTools session intelligence. Read-only access to Claude Code session history.\n\n\
-             USAGE PATTERN:\n\
-             1. list_projects → list_sessions → get_session_summary (compact ~2K tokens)\n\
-             2. get_session_detail returns STRUCTURE ONLY by default (content omitted).\n\
-                Each chunk has stable `chunkIndex` + `outputOmitted`/`contentOmitted` flags with char counts.\n\
-             3. To read specific content: get_session_detail(range:'5:8', content_mode:'full')\n\
-             4. All lists are paginated (default 20 items). Check `hasMore` and pass `cursor` for next page.\n\
-             5. `chunkIndex` is always absolute — stable across filter/pagination calls.\n\n\
-             All tools are read-only and safe to call repeatedly."
-                .to_string(),
-        )
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::from_build_env())
+            .with_instructions(
+                "Claude DevTools — read-only session intelligence.\n\n\
+             QUICK START:\n\
+             - Overview: get_session_summary → phases, tool stats, toolActivity, cost\n\
+             - Discover: search_sessions(query, session?) → grouped hit previews across search index\n\
+             - Inspect: get_session_detail(session, grep?, range?) → chunk envelopes with chunkIndex\n\
+             - search_sessions finds WHICH session/content; get_session_detail inspects WHAT's inside\n\
+             - Avoid content_mode='full' without range/tail; use grep for filtered browsing\n\
+             - All lists paginated (hasMore + cursor). chunkIndex is absolute."
+                    .to_string(),
+            )
     }
 }
 
@@ -759,7 +844,12 @@ enum ContentMode {
 // Chunk envelope builder
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> ChunkEnvelope {
+fn build_chunk_envelope(
+    abs_index: usize,
+    chunk: &Chunk,
+    mode: &ContentMode,
+    grep_hit: Option<bool>,
+) -> ChunkEnvelope {
     match chunk {
         Chunk::Ai(ai) => {
             let tool_execs: Vec<ToolExecEnvelope> = ai
@@ -804,6 +894,7 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
                 user_content: None,
                 system_content: None,
                 compact_summary: None,
+                grep_hit,
             }
         }
         Chunk::User(user) => {
@@ -832,6 +923,7 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
                 user_content: Some(user_content),
                 system_content: None,
                 compact_summary: None,
+                grep_hit,
             }
         }
         Chunk::System(sys) => {
@@ -863,6 +955,7 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
                 user_content: None,
                 system_content: Some(system_content),
                 compact_summary: None,
+                grep_hit,
             }
         }
         Chunk::Compact(compact) => ChunkEnvelope {
@@ -876,6 +969,7 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
             user_content: None,
             system_content: None,
             compact_summary: Some(compact.summary_text.clone()),
+            grep_hit,
         },
     }
 }

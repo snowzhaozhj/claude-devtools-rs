@@ -28,6 +28,32 @@ pub struct SessionSummaryOutput {
     pub compaction_count: usize,
     pub idle_gaps: Vec<IdleGap>,
     pub cost: cost::SessionCost,
+    pub tool_activity: ToolActivity,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolActivity {
+    pub top_commands: Vec<CommandEntry>,
+    pub top_files: Vec<FileEntry>,
+    pub git_ops: Vec<CommandEntry>,
+    pub cli_tools: Vec<String>,
+    pub total_tool_executions: usize,
+    pub omitted_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandEntry {
+    pub command: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEntry {
+    pub path: String,
+    pub count: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,6 +114,7 @@ pub fn build_summary(detail: &cdt_api::SessionDetail) -> SessionSummaryOutput {
         .count();
     let idle_gaps = find_idle_gaps(chunks);
     let session_cost = cost::compute_session_cost(detail);
+    let tool_activity = compute_tool_activity(chunks);
 
     SessionSummaryOutput {
         session_id: detail.session_id.clone(),
@@ -100,6 +127,7 @@ pub fn build_summary(detail: &cdt_api::SessionDetail) -> SessionSummaryOutput {
         compaction_count,
         idle_gaps,
         cost: session_cost,
+        tool_activity,
     }
 }
 
@@ -279,6 +307,90 @@ fn find_idle_gaps(chunks: &[Chunk]) -> Vec<IdleGap> {
     }
 
     gaps
+}
+
+const MAX_TOP_COMMANDS: usize = 20;
+const MAX_TOP_FILES: usize = 20;
+const MAX_GIT_OPS: usize = 10;
+const MAX_COMMAND_CHARS: usize = 200;
+
+fn compute_tool_activity(chunks: &[Chunk]) -> ToolActivity {
+    let mut command_counts: HashMap<String, u64> = HashMap::new();
+    let mut file_counts: HashMap<String, u64> = HashMap::new();
+    let mut git_counts: HashMap<String, u64> = HashMap::new();
+    let mut cli_tools: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut total_tool_executions: usize = 0;
+
+    for chunk in chunks {
+        let Chunk::Ai(ai) = chunk else { continue };
+        for exec in &ai.tool_executions {
+            total_tool_executions += 1;
+
+            if exec.tool_name == "Bash" {
+                if let Some(cmd) = exec.input.get("command").and_then(|v| v.as_str()) {
+                    let first_line: String = cmd
+                        .lines()
+                        .next()
+                        .unwrap_or(cmd)
+                        .chars()
+                        .take(MAX_COMMAND_CHARS)
+                        .collect();
+                    *command_counts.entry(first_line.clone()).or_default() += 1;
+
+                    if let Some(first_token) = cmd.split_whitespace().next() {
+                        let tool_name = first_token.rsplit('/').next().unwrap_or(first_token);
+                        cli_tools.insert(tool_name.to_owned());
+                    }
+
+                    if cmd.trim_start().starts_with("git ") {
+                        let git_cmd: String =
+                            cmd.split_whitespace().take(3).collect::<Vec<_>>().join(" ");
+                        *git_counts.entry(git_cmd).or_default() += 1;
+                    }
+                }
+            }
+
+            if let Some(path) = extract_file_path(&exec.tool_name, &exec.input) {
+                *file_counts.entry(path).or_default() += 1;
+            }
+        }
+    }
+
+    let mut top_commands: Vec<CommandEntry> = command_counts
+        .into_iter()
+        .map(|(command, count)| CommandEntry { command, count })
+        .collect();
+    top_commands.sort_by_key(|e| std::cmp::Reverse(e.count));
+    let omitted_commands = top_commands.len().saturating_sub(MAX_TOP_COMMANDS);
+    top_commands.truncate(MAX_TOP_COMMANDS);
+
+    let mut top_files: Vec<FileEntry> = file_counts
+        .into_iter()
+        .map(|(path, count)| FileEntry { path, count })
+        .collect();
+    top_files.sort_by_key(|e| std::cmp::Reverse(e.count));
+    let omitted_files = top_files.len().saturating_sub(MAX_TOP_FILES);
+    top_files.truncate(MAX_TOP_FILES);
+
+    let mut git_ops: Vec<CommandEntry> = git_counts
+        .into_iter()
+        .map(|(command, count)| CommandEntry { command, count })
+        .collect();
+    git_ops.sort_by_key(|e| std::cmp::Reverse(e.count));
+    let omitted_git = git_ops.len().saturating_sub(MAX_GIT_OPS);
+    git_ops.truncate(MAX_GIT_OPS);
+
+    let mut cli_tools_vec: Vec<String> = cli_tools.into_iter().collect();
+    cli_tools_vec.sort();
+
+    ToolActivity {
+        top_commands,
+        top_files,
+        git_ops,
+        cli_tools: cli_tools_vec,
+        total_tool_executions,
+        omitted_count: omitted_commands + omitted_files + omitted_git,
+    }
 }
 
 #[cfg(test)]

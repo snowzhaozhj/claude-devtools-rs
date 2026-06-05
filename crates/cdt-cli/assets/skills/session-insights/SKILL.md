@@ -15,6 +15,7 @@ Provides session analysis workflows using the `cdt` CLI. Choose the appropriate 
 | "how much did I spend" / "token usage" / "cost" | Token & Cost |
 | "find sessions with X" / "search for error" | Search |
 | "what happened in session X" / "diagnose" / "session report" | Single Session Diagnosis |
+| "what did we do in session X" / "what switches were pushed" / "recall" | Session Recall |
 
 ## Error Analysis
 
@@ -52,7 +53,7 @@ Present: total tokens (input/output), estimated cost, top sessions by usage.
 
 ## Search
 
-Full-text search across session content.
+Full-text search across session content (user messages, assistant responses, tool inputs, and tool outputs).
 
 ```bash
 # Search all sessions
@@ -60,9 +61,12 @@ cdt search "<query>" --limit 20
 
 # Search within a project
 cdt search "<query>" --project <project-name> --limit 20
+
+# Search within a specific session (intra-session search)
+cdt search "<query>" --session <session-id>
 ```
 
-Examples: `cdt search "permission denied"`, `cdt search "rate limit"`, `cdt search "ENOENT"`.
+Examples: `cdt search "permission denied"`, `cdt search "mw switch" --session abc123`, `cdt search "ENOENT"`.
 
 ## Single Session Diagnosis
 
@@ -86,6 +90,23 @@ cdt sessions detail <session-id> --tail 20
 ```
 
 Present: overview (title, duration, status, messages), resource usage, tool activity, errors, outcome.
+
+## Session Recall
+
+Recall what actions were taken in a previous session (commands executed, files edited, configs pushed).
+
+```bash
+# Quick overview — summary now includes toolActivity (commands, files, git ops, CLI tools)
+cdt sessions summary <session-id>
+
+# Search for specific actions within the session
+cdt search "mw switch" --session <session-id>
+
+# Browse with content filtering — grep auto-expands matched chunks
+cdt sessions detail <session-id> --grep "mw switch"
+```
+
+The `toolActivity` section in summary shows: top commands, files edited, git operations, and CLI tools detected. Use this for quick "what happened" answers without digging into full detail.
 
 ## Common Notes
 

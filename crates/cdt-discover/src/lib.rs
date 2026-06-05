@@ -17,6 +17,7 @@ pub mod project_path_resolver;
 pub mod project_scanner;
 pub mod search_cache;
 pub mod search_extract;
+pub mod search_text;
 pub mod session_search;
 pub mod worktree_grouper;
 pub mod wsl;

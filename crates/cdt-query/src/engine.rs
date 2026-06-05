@@ -168,8 +168,7 @@ impl QueryEngine {
         &self,
         query: &str,
         project_id: Option<&str>,
-        offset: usize,
-        limit: usize,
+        session_id: Option<&str>,
     ) -> Result<cdt_core::SearchSessionsResult, QueryError> {
         let project_id_resolved = project_id.map(ToOwned::to_owned);
 
@@ -177,17 +176,9 @@ impl QueryEngine {
             let request = SearchRequest {
                 query: query.to_owned(),
                 project_id: Some(pid.clone()),
-                session_id: None,
+                session_id: session_id.map(ToOwned::to_owned),
             };
-            let mut result = self.api.search(&request).await?;
-            let total = result.results.len();
-            if offset < total {
-                result.results = result.results[offset..].to_vec();
-            } else {
-                result.results.clear();
-            }
-            result.results.truncate(limit);
-            return Ok(result);
+            return Ok(self.api.search(&request).await?);
         }
 
         // 全局搜索
@@ -222,14 +213,6 @@ impl QueryEngine {
                 }
             }
         }
-
-        let total = all_results.len();
-        if offset < total {
-            all_results = all_results[offset..].to_vec();
-        } else {
-            all_results.clear();
-        }
-        all_results.truncate(limit);
 
         Ok(cdt_core::SearchSessionsResult {
             results: all_results,
