@@ -61,14 +61,14 @@ pub const METADATA_SCAN_CONCURRENCY: usize = 8;
 /// `user/real` ≤ 0.66（避免辅助工具短时打满 CPU）。
 const SUBAGENT_PARSE_CONCURRENCY: usize = 4;
 
-/// IPC payload 优化：`get_session_detail` 默认把每个 `Process.messages`
+/// IPC payload 优化：`apply_display_omissions` 默认把每个 `Process.messages`
 /// 裁剪为空 `Vec`、设 `messages_omitted=true`，砍掉 ~60% payload。前端
 /// `SubagentCard` 展开时调 `get_subagent_trace` 懒拉取。
 ///
 /// 紧急回滚：把本常量改为 `false` 即恢复完整 payload；前端 fallback 路径自动生效。
 const OMIT_SUBAGENT_MESSAGES: bool = true;
 
-/// IPC payload 优化（phase 3）：`get_session_detail` 默认把所有 `ContentBlock::Image`
+/// IPC payload 优化（phase 3）：`apply_display_omissions` 默认把所有 `ContentBlock::Image`
 /// 的 base64 `data` 替换为空 + 设 `data_omitted=true`，砍掉 image-heavy session 的
 /// 大头 payload（实测 7826d1b8 case 4840 KB → ~620 KB）。前端 `ImageBlock`
 /// `IntersectionObserver` 进视口时调 `get_image_asset` 懒拉文件 URL。
@@ -77,7 +77,7 @@ const OMIT_SUBAGENT_MESSAGES: bool = true;
 /// 走 `data:` URI 路径。行为契约见 change `session-detail-image-asset-cache`。
 const OMIT_IMAGE_DATA: bool = true;
 
-/// IPC payload 优化（phase 4）：`get_session_detail` 默认把所有
+/// IPC payload 优化（phase 4）：`apply_display_omissions` 默认把所有
 /// `AIChunk.responses[].content` 替换为空 `MessageContent::Text("")` + 设
 /// `content_omitted=true`，砍掉首屏 IPC 最大单一字段（实测 46a25772 case
 /// 1257 KB / 41%）。前端无任何代码读 `responses[].content`（chunk 显示文本
@@ -87,7 +87,7 @@ const OMIT_IMAGE_DATA: bool = true;
 /// 行为契约见 change `session-detail-response-content-omit`。
 const OMIT_RESPONSE_CONTENT: bool = true;
 
-/// IPC payload 优化（phase 5）：`get_session_detail` 默认把所有
+/// IPC payload 优化（phase 5）：`apply_display_omissions` 默认把所有
 /// `AIChunk.tool_executions[].output` 内 `text` / `value` 字段清空（保留 enum
 /// variant kind）+ 设 `output_omitted=true`，砍掉首屏 IPC 中 tool 输出（实测
 /// 46a25772 case 436 KB / 26%）。前端 `ExecutionTrace` 默认折叠，用户点击展开时
@@ -229,25 +229,12 @@ fn find_first_ai_after(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core
     })
 }
 
-/// 派生 `CompactChunk` 的 `token_delta` / `phase_number` 两个可选字段。
-///
-/// 算法（D1c phaseNumber + D1d tokenDelta，详见 design.md 修订链）：
-///
-/// - 派生层**完全独立**于 `cdt_core::ContextPhaseInfo`——避开 cdt-analyze 内部
-///   `current_phase_compact_group_id` 在连续 compact 时被覆盖的问题
-/// - phaseNumber：按 chunks 顺序遍历，每遇 `Compact` 就 `compact_counter += 1`
-///   （从 1 起），赋 `Some(counter)`。chunks 中第 i 个 compact → phase i+1
-/// - tokenDelta：对每个 compact 独立查 `find_last_ai_before` /
-///   `find_first_ai_after`，分别取它们的 last/first response usage 总和算
-///   `post - pre`；任一缺值 → `None`
-///
-/// 两趟扫描避免可变借用冲突：Pass 1 不可变借用算 (delta, phase)，Pass 2 可变借用写入。
 /// Tauri IPC 消费者层调用的展示裁剪流水线：image → response content
 /// → tool output → subagent messages。
 ///
 /// `LocalDataApi::get_session_detail` 返回完整数据；Tauri IPC command handler
 /// 在序列化返回前端之前调用本函数裁剪 payload。MCP / CLI / HTTP 消费者不调用。
-pub fn apply_display_omissions(chunks: &mut Vec<cdt_core::Chunk>) {
+pub(crate) fn apply_display_omissions(chunks: &mut [cdt_core::Chunk]) {
     if OMIT_IMAGE_DATA {
         apply_image_omit(chunks);
     }
@@ -291,6 +278,16 @@ fn parse_jsonl_content(content: &str) -> Result<Vec<cdt_core::ParsedMessage>, Pa
     Ok(out)
 }
 
+/// 派生 `CompactChunk` 的 `token_delta` / `phase_number` 两个可选字段。
+///
+/// 算法（D1c `phaseNumber` + D1d `tokenDelta`，详见 design.md 修订链）：
+///
+/// - 派生层**完全独立**于 `cdt_core::ContextPhaseInfo`
+/// - `phaseNumber`：按 chunks 顺序遍历，每遇 `Compact` 就 `compact_counter += 1`
+/// - `tokenDelta`：对每个 compact 独立查 `find_last_ai_before` /
+///   `find_first_ai_after`，算 `post - pre`；任一缺值 → `None`
+///
+/// 两趟扫描避免可变借用冲突：Pass 1 不可变借用算 (delta, phase)，Pass 2 可变借用写入。
 fn apply_compact_derived(chunks: &mut [cdt_core::Chunk], enabled: bool) {
     if !enabled {
         return;
@@ -329,8 +326,8 @@ fn apply_compact_derived(chunks: &mut [cdt_core::Chunk], enabled: bool) {
 /// 遍历 chunks 内所有 `ContentBlock::Image`，把 `source.data` 替换为空字符串
 /// 并设 `source.data_omitted = true`。覆盖 `UserChunk.content`、
 /// `AIChunk.responses[].content` 与 `AIChunk.subagents[].messages[]` 嵌套层。
-/// `subagent.messages` 在 `OMIT_SUBAGENT_MESSAGES=true` 时已为空，本函数对其
-/// 是安全 no-op；`OMIT_SUBAGENT_MESSAGES=false` 回滚时本函数仍能命中嵌套层。
+/// 在 `apply_display_omissions` 中先于 subagent 裁剪执行，故嵌套层 messages
+/// 可能非空；`OMIT_SUBAGENT_MESSAGES=false` 回滚时同样命中嵌套层。
 fn apply_image_omit(chunks: &mut [cdt_core::Chunk]) {
     for chunk in chunks {
         match chunk {
@@ -382,9 +379,9 @@ fn compute_new_tokens_by_category(
 
 /// 遍历 chunks 内所有 `AIChunk.responses[].content`，替换为空
 /// `MessageContent::Text("")` 并设 `content_omitted = true`。覆盖顶层
-/// `AIChunk` 与 `AIChunk.subagents[].messages[]` 嵌套层。`subagent.messages`
-/// 在 `OMIT_SUBAGENT_MESSAGES=true` 时已为空，本函数对其是安全 no-op；
-/// `OMIT_SUBAGENT_MESSAGES=false` 回滚时本函数仍能命中嵌套层。
+/// `AIChunk` 与 `AIChunk.subagents[].messages[]` 嵌套层。在
+/// `apply_display_omissions` 中先于 subagent 裁剪执行，故嵌套层 messages
+/// 可能非空；`OMIT_SUBAGENT_MESSAGES=false` 回滚时同样命中嵌套层。
 fn apply_response_content_omit(chunks: &mut [cdt_core::Chunk]) {
     for chunk in chunks {
         if let cdt_core::Chunk::Ai(ai) = chunk {
@@ -401,10 +398,9 @@ fn apply_response_content_omit(chunks: &mut [cdt_core::Chunk]) {
 
 /// 遍历 chunks 内所有 `AIChunk.tool_executions[].output`，inner `text` /
 /// `value` 字段清空（保留 enum variant kind）并设 `output_omitted = true`。
-/// 覆盖顶层 `AIChunk` 与 `AIChunk.subagents[].messages[]` 嵌套层。
-/// `subagent.messages` 在 `OMIT_SUBAGENT_MESSAGES=true` 时已为空，本函数
-/// 对其是安全 no-op；`OMIT_SUBAGENT_MESSAGES=false` 回滚时本函数仍能命中
-/// 嵌套层。
+/// 覆盖顶层 `AIChunk` 与 `AIChunk.subagents[].messages[]` 嵌套层。在
+/// `apply_display_omissions` 中先于 subagent 裁剪执行，故嵌套层 messages
+/// 可能非空；`OMIT_SUBAGENT_MESSAGES=false` 回滚时同样命中嵌套层。
 fn apply_tool_output_omit(chunks: &mut [cdt_core::Chunk]) {
     for chunk in chunks {
         if let cdt_core::Chunk::Ai(ai) = chunk {

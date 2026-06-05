@@ -905,6 +905,106 @@ fn image_source_data_omitted_field_name() {
     assert!(json.get("imageOmitted").is_none(), "MUST 不出现命名变体");
 }
 
+/// spec `ipc-data-api` "Expose project and session queries"：`get_session_detail` 返回
+/// 完整数据，`apply_omissions` 由消费者层调用后设置 omit flags。
+#[test]
+fn apply_omissions_sets_flags_on_full_variant() {
+    use cdt_api::SessionDetailResponse;
+    use std::collections::{BTreeMap, HashMap};
+
+    let detail = cdt_api::SessionDetail {
+        session_id: "s1".into(),
+        project_id: "p1".into(),
+        chunks: vec![Chunk::Ai(AIChunk {
+            chunk_id: "a1".into(),
+            timestamp: ts(),
+            duration_ms: None,
+            responses: vec![AssistantResponse {
+                uuid: "r1".into(),
+                timestamp: ts(),
+                content: MessageContent::Text("hello world".into()),
+                tool_calls: vec![],
+                usage: None,
+                model: None,
+                content_omitted: false,
+            }],
+            tool_executions: vec![ToolExecution {
+                tool_use_id: "tu1".into(),
+                tool_name: "Bash".into(),
+                input: json!({}),
+                output: ToolOutput::Text {
+                    text: "output data".into(),
+                },
+                is_error: false,
+                start_ts: ts(),
+                end_ts: None,
+                source_assistant_uuid: "a1".into(),
+                result_agent_id: None,
+                error_message: None,
+                teammate_spawn: None,
+                output_omitted: false,
+                output_bytes: None,
+                workflow_run_id: None,
+                workflow_script_path: None,
+            }],
+            semantic_steps: vec![],
+            slash_commands: vec![],
+            subagents: vec![],
+            teammate_messages: vec![],
+            metrics: ChunkMetrics::default(),
+        })],
+        metrics: cdt_api::SessionDetailMetrics { message_count: 1 },
+        metadata: cdt_api::SessionDetailMetadata {
+            last_modified: Some(0),
+            size: Some(100),
+            cwd: None,
+        },
+        context_injections: vec![],
+        injections_by_phase: BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: HashMap::new(),
+        is_ongoing: false,
+        title: None,
+        workflow_items: vec![],
+    };
+    let mut resp = SessionDetailResponse::Full {
+        fingerprint: "fp1".into(),
+        detail: Box::new(detail),
+    };
+
+    resp.apply_omissions();
+
+    if let SessionDetailResponse::Full { detail, .. } = &resp {
+        let Chunk::Ai(ai) = &detail.chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        assert!(ai.responses[0].content_omitted, "content SHALL be omitted");
+        assert!(
+            ai.tool_executions[0].output_omitted,
+            "tool output SHALL be omitted"
+        );
+        assert_eq!(
+            ai.tool_executions[0].output_bytes,
+            Some(11),
+            "outputBytes SHALL record original length"
+        );
+    } else {
+        panic!("expected Full variant");
+    }
+}
+
+#[test]
+fn apply_omissions_is_noop_on_unchanged_variant() {
+    let mut resp = cdt_api::SessionDetailResponse::Unchanged {
+        fingerprint: "fp1".into(),
+    };
+    resp.apply_omissions();
+    assert!(
+        matches!(resp, cdt_api::SessionDetailResponse::Unchanged { .. }),
+        "Unchanged variant SHALL remain unchanged"
+    );
+}
+
 /// spec `ipc-data-api` "Expose subagent messages total count"：OMIT 默认路径下
 /// `messagesTotalCount` MUST 等于 subagent `build_chunks` 后的真实 chunk 数（即裁剪
 /// 前的 `messages.len()`），即使 `messages` 已被清空、`messagesOmitted=true`。
