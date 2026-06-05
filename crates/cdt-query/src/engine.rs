@@ -168,6 +168,7 @@ impl QueryEngine {
         &self,
         query: &str,
         project_id: Option<&str>,
+        session_id: Option<&str>,
         offset: usize,
         limit: usize,
     ) -> Result<cdt_core::SearchSessionsResult, QueryError> {
@@ -177,7 +178,7 @@ impl QueryEngine {
             let request = SearchRequest {
                 query: query.to_owned(),
                 project_id: Some(pid.clone()),
-                session_id: None,
+                session_id: session_id.map(ToOwned::to_owned),
             };
             let mut result = self.api.search(&request).await?;
             let total = result.results.len();

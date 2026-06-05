@@ -677,7 +677,7 @@ async fn cmd_search(
     };
 
     let result = engine
-        .search(query, project_id.as_deref(), offset, limit)
+        .search(query, project_id.as_deref(), None, offset, limit)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 

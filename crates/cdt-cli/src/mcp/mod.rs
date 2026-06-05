@@ -77,6 +77,17 @@ pub struct SessionDetailParams {
         description = "Max chunks per page (default 20, max 100). Ignored when content_mode='full' without range/tail (returns all)."
     )]
     pub max_chunks: Option<usize>,
+    #[schemars(
+        description = "Filter chunks by content match (case-insensitive literal substring). \
+            Searches assistant text, user text, tool inputs (JSON string values only, not keys), \
+            tool outputs, tool names, and error messages. \
+            Matched chunks auto-promote to full content mode; context chunks follow content_mode setting."
+    )]
+    pub grep: Option<String>,
+    #[schemars(
+        description = "Number of context chunks around each grep hit (default 1). Only used with grep."
+    )]
+    pub grep_context: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -99,6 +110,10 @@ pub struct SearchParams {
     pub limit: Option<usize>,
     #[schemars(description = "Project name or ID to limit search scope")]
     pub project: Option<String>,
+    #[schemars(
+        description = "Session ID to scope search to a single session (intra-session search). Auto-resolves project if omitted."
+    )]
+    pub session: Option<String>,
     #[schemars(description = "Pagination cursor from previous response")]
     pub cursor: Option<String>,
 }
@@ -125,6 +140,20 @@ struct PaginatedResponse<T: Serialize> {
     has_more: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchResponse {
+    results: Vec<cdt_core::SessionSearchResult>,
+    total: usize,
+    returned: usize,
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    sessions_searched: usize,
+    query: String,
+    is_partial: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -161,6 +190,8 @@ struct ChunkEnvelope {
     system_content: Option<ContentField>,
     #[serde(skip_serializing_if = "Option::is_none")]
     compact_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grep_hit: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -488,6 +519,39 @@ impl CdtMcpServer {
             })
             .collect();
 
+        // Apply grep filter + context expansion (D7: kind_filter → grep → context → range)
+        let grep_matcher = params
+            .grep
+            .as_deref()
+            .map(cdt_discover::search_text::GrepMatcher::literal);
+        let grep_hits: std::collections::HashSet<usize> = if let Some(ref matcher) = grep_matcher {
+            indexed_chunks
+                .iter()
+                .filter(|(_, chunk)| chunk_matches_grep(chunk, matcher))
+                .map(|(idx, _)| *idx)
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+
+        let indexed_chunks: Vec<(usize, &Chunk)> = if grep_matcher.is_some() {
+            let ctx = params.grep_context.unwrap_or(1);
+            let visible: std::collections::HashSet<usize> = grep_hits
+                .iter()
+                .flat_map(|&i| {
+                    let lo = i.saturating_sub(ctx);
+                    let hi = i + ctx;
+                    lo..=hi
+                })
+                .collect();
+            indexed_chunks
+                .into_iter()
+                .filter(|(idx, _)| visible.contains(idx))
+                .collect()
+        } else {
+            indexed_chunks
+        };
+
         // Apply window selection (range/tail) on filtered set, preserving absolute indices
         let windowed: Vec<(usize, &Chunk)> = if let Some((start, end)) = range {
             indexed_chunks
@@ -532,7 +596,17 @@ impl CdtMcpServer {
 
         let envelopes: Vec<ChunkEnvelope> = page_chunks
             .iter()
-            .map(|(abs_idx, chunk)| build_chunk_envelope(*abs_idx, chunk, &content_mode))
+            .map(|(abs_idx, chunk)| {
+                let is_grep_mode = grep_matcher.is_some();
+                let is_hit = grep_hits.contains(abs_idx);
+                let effective_mode = if is_hit {
+                    &ContentMode::Full
+                } else {
+                    &content_mode
+                };
+                let hit_flag = if is_grep_mode { Some(is_hit) } else { None };
+                build_chunk_envelope(*abs_idx, chunk, effective_mode, hit_flag)
+            })
             .collect();
 
         let response = SessionDetailResponse {
@@ -622,7 +696,9 @@ impl CdtMcpServer {
 
     #[tool(
         name = "search_sessions",
-        description = "Full-text search across sessions. Returns paginated results (default 20). Check `hasMore` and use `cursor` for more results.",
+        description = "Full-text search across session content including user messages, assistant responses, tool inputs and tool outputs. \
+            Use `session` to scope search to a single session (intra-session search). \
+            Returns paginated results (default 20). Check `hasMore` and use `cursor` for more results.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -647,12 +723,29 @@ impl CdtMcpServer {
                     .await
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?,
             ),
-            None => None,
+            None => {
+                if let Some(ref sid) = params.session {
+                    Some(
+                        self.engine
+                            .find_session_project(sid)
+                            .await
+                            .map_err(|e| McpError::invalid_params(e.to_string(), None))?,
+                    )
+                } else {
+                    None
+                }
+            }
         };
 
         let results = self
             .engine
-            .search(&params.query, project_id.as_deref(), offset, limit)
+            .search(
+                &params.query,
+                project_id.as_deref(),
+                params.session.as_deref(),
+                offset,
+                limit,
+            )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
@@ -660,8 +753,8 @@ impl CdtMcpServer {
         let returned = results.results.len();
         let has_more = offset + returned < total;
 
-        let response = PaginatedResponse {
-            items: results.results,
+        let response = SearchResponse {
+            results: results.results,
             total,
             returned,
             has_more,
@@ -670,6 +763,9 @@ impl CdtMcpServer {
             } else {
                 None
             },
+            sessions_searched: results.sessions_searched,
+            query: results.query,
+            is_partial: results.is_partial,
         };
         self.emit_json(&response)
     }
@@ -759,7 +855,42 @@ enum ContentMode {
 // Chunk envelope builder
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> ChunkEnvelope {
+fn chunk_matches_grep(chunk: &Chunk, matcher: &cdt_discover::search_text::GrepMatcher) -> bool {
+    match chunk {
+        Chunk::Ai(ai) => {
+            ai.responses
+                .iter()
+                .any(|r| matcher.matches(&message_content_text(&r.content)))
+                || ai.tool_executions.iter().any(|te| {
+                    matcher.matches(&te.tool_name)
+                        || matcher.matches_json_value(&te.input)
+                        || match &te.output {
+                            cdt_core::tool_execution::ToolOutput::Text { text } => {
+                                matcher.matches(text)
+                            }
+                            cdt_core::tool_execution::ToolOutput::Structured { value } => {
+                                matcher.matches_json_value(value)
+                            }
+                            cdt_core::tool_execution::ToolOutput::Missing => false,
+                        }
+                        || te
+                            .error_message
+                            .as_deref()
+                            .is_some_and(|m| matcher.matches(m))
+                })
+        }
+        Chunk::User(u) => matcher.matches(&message_content_text(&u.content)),
+        Chunk::System(s) => matcher.matches(&s.content_text),
+        Chunk::Compact(c) => matcher.matches(&c.summary_text),
+    }
+}
+
+fn build_chunk_envelope(
+    abs_index: usize,
+    chunk: &Chunk,
+    mode: &ContentMode,
+    grep_hit: Option<bool>,
+) -> ChunkEnvelope {
     match chunk {
         Chunk::Ai(ai) => {
             let tool_execs: Vec<ToolExecEnvelope> = ai
@@ -804,6 +935,7 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
                 user_content: None,
                 system_content: None,
                 compact_summary: None,
+                grep_hit,
             }
         }
         Chunk::User(user) => {
@@ -832,6 +964,7 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
                 user_content: Some(user_content),
                 system_content: None,
                 compact_summary: None,
+                grep_hit,
             }
         }
         Chunk::System(sys) => {
@@ -863,6 +996,7 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
                 user_content: None,
                 system_content: Some(system_content),
                 compact_summary: None,
+                grep_hit,
             }
         }
         Chunk::Compact(compact) => ChunkEnvelope {
@@ -876,6 +1010,7 @@ fn build_chunk_envelope(abs_index: usize, chunk: &Chunk, mode: &ContentMode) -> 
             user_content: None,
             system_content: None,
             compact_summary: Some(compact.summary_text.clone()),
+            grep_hit,
         },
     }
 }

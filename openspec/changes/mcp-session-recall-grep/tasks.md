@@ -11,10 +11,10 @@
 
 ## 3. search_sessions 加 session 参数
 
-- [ ] 3.1 `QueryEngine::search` 新增 session_id 参数，有值时直接调 `search_session_file` 而非 `search_sessions`
-- [ ] 3.2 MCP 层 `SearchParams` 新增 `session: Option<String>` 字段，传入 QueryEngine
-- [ ] 3.3 MCP `search_sessions` 改为返回完整 `SearchSessionsResult`（含 `sessionsSearched` / `isPartial` / `query`），在 `results` 上做分页
-- [ ] 3.4 更新 `search_sessions` tool description 说明 session 参数用途 + 搜索范围含 tool content
+- [x] 3.1 `QueryEngine::search` 新增 session_id 参数，有值时直接调 `search_session_file` 而非 `search_sessions`
+- [x] 3.2 MCP 层 `SearchParams` 新增 `session: Option<String>` 字段，传入 QueryEngine
+- [x] 3.3 MCP `search_sessions` 改为返回完整 `SearchSessionsResult`（含 `sessionsSearched` / `isPartial` / `query`），在 `results` 上做分页
+- [x] 3.4 更新 `search_sessions` tool description 说明 session 参数用途 + 搜索范围含 tool content
 - [ ] 3.5 测试：带 session 参数的 intra-session search 返回正确结果；不带 session 参数行为不变
 
 ## 4. get_session_detail 加 grep

@@ -4368,10 +4368,32 @@ impl DataApi for LocalDataApi {
             .ok_or_else(|| ApiError::validation("project_id is required for search"))?;
 
         let (fs, projects_dir, _ctx, _policy, resolvers) = self.active_fs_and_policy().await?;
+        let searcher = SessionSearcher::new(fs, self.search_cache.clone(), &projects_dir);
+
+        if let Some(ref sid) = request.session_id {
+            let session_path = projects_dir.join(project_id).join(format!("{sid}.jsonl"));
+            let session_result = searcher
+                .search_session_file(project_id, sid, &session_path, &request.query, max_results)
+                .await
+                .map_err(|e| ApiError::internal(format!("search error: {e}")))?;
+            let total_matches = session_result.total_matches;
+            let results = if session_result.hits.is_empty() {
+                Vec::new()
+            } else {
+                vec![session_result]
+            };
+            return Ok(cdt_core::SearchSessionsResult {
+                results,
+                total_matches,
+                sessions_searched: 1,
+                query: request.query.clone(),
+                is_partial: false,
+            });
+        }
+
         // SSH 走 SearchConfig.is_ssh=true（stage-limit 避免远端 SFTP 全量扫描），
         // Local 走默认；选择由 BackendResolvers 在 LazyLock 实例化时一次决定（D1）。
         let config = resolvers.search_config.clone();
-        let searcher = SessionSearcher::new(fs, self.search_cache.clone(), projects_dir);
         let result = searcher
             .search_sessions(project_id, &request.query, max_results, &config)
             .await
