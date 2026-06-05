@@ -6,6 +6,10 @@
 
 use cdt_core::{ContentBlock, MessageCategory, MessageContent, MessageType, ParsedMessage};
 
+use crate::search_text::json_value_to_search_text;
+
+const MAX_TOOL_SEARCH_BYTES: usize = 8192;
+
 /// 可搜索条目——从一条消息中提取的文本。
 #[derive(Debug, Clone)]
 pub struct SearchableEntry {
@@ -43,6 +47,7 @@ pub fn extract_searchable_entries(messages: &[ParsedMessage]) -> (Vec<Searchable
                         message_type: format_message_type(msg.message_type),
                     });
                 }
+                extract_tool_blocks(&msg.uuid, &msg.content, &mut entries);
             }
             MessageCategory::Assistant => {
                 ai_buffer.push(msg);
@@ -64,7 +69,7 @@ pub fn extract_searchable_entries(messages: &[ParsedMessage]) -> (Vec<Searchable
     (entries, session_title)
 }
 
-/// flush AI buffer：只取最后一条 assistant 消息的最后一个 text block。
+/// flush AI buffer：取最后一条 assistant 消息的最后 text block + 所有消息的 tool blocks。
 fn flush_ai_buffer(buffer: &[&ParsedMessage], entries: &mut Vec<SearchableEntry>) {
     if let Some(last) = buffer.last() {
         let text = extract_last_text_block(&last.content);
@@ -74,6 +79,42 @@ fn flush_ai_buffer(buffer: &[&ParsedMessage], entries: &mut Vec<SearchableEntry>
                 text,
                 message_type: format_message_type(last.message_type),
             });
+        }
+    }
+    for msg in buffer {
+        extract_tool_blocks(&msg.uuid, &msg.content, entries);
+    }
+}
+
+/// 从 content blocks 中提取 `ToolUse` input 和 `ToolResult` content 为搜索条目。
+fn extract_tool_blocks(uuid: &str, content: &MessageContent, entries: &mut Vec<SearchableEntry>) {
+    let blocks = match content {
+        MessageContent::Blocks(blocks) => blocks,
+        MessageContent::Text(_) => return,
+    };
+    for block in blocks {
+        match block {
+            ContentBlock::ToolUse { name, input, .. } => {
+                let text = json_value_to_search_text(input, MAX_TOOL_SEARCH_BYTES);
+                if !text.trim().is_empty() {
+                    entries.push(SearchableEntry {
+                        uuid: uuid.to_owned(),
+                        text: format!("tool:{name} {text}"),
+                        message_type: "tool_use".to_owned(),
+                    });
+                }
+            }
+            ContentBlock::ToolResult { content, .. } => {
+                let text = json_value_to_search_text(content, MAX_TOOL_SEARCH_BYTES);
+                if !text.trim().is_empty() {
+                    entries.push(SearchableEntry {
+                        uuid: uuid.to_owned(),
+                        text,
+                        message_type: "tool_result".to_owned(),
+                    });
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -245,6 +286,72 @@ mod tests {
         msg.is_sidechain = true;
         let (entries, _) = extract_searchable_entries(&[msg]);
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn tool_use_input_command_indexed() {
+        let msgs = vec![make_msg(
+            "a1",
+            MessageCategory::Assistant,
+            MessageType::Assistant,
+            MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "tu1".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command": "mw switch get carts2", "description": "Get switch"}),
+            }]),
+        ),
+        make_msg(
+            "u1",
+            MessageCategory::User,
+            MessageType::User,
+            MessageContent::Text("ok".into()),
+        )];
+        let (entries, _) = extract_searchable_entries(&msgs);
+        let tool_entries: Vec<_> = entries.iter().filter(|e| e.message_type == "tool_use").collect();
+        assert_eq!(tool_entries.len(), 1);
+        assert!(tool_entries[0].text.contains("mw switch get carts2"));
+        assert!(tool_entries[0].text.starts_with("tool:Bash"));
+    }
+
+    #[test]
+    fn tool_result_content_indexed_from_user_message() {
+        let msgs = vec![make_msg(
+            "u1",
+            MessageCategory::User,
+            MessageType::User,
+            MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "tu1".into(),
+                content: serde_json::json!("enabled: true, value: 42"),
+                is_error: false,
+            }]),
+        )];
+        let (entries, _) = extract_searchable_entries(&msgs);
+        let result_entries: Vec<_> = entries.iter().filter(|e| e.message_type == "tool_result").collect();
+        assert_eq!(result_entries.len(), 1);
+        assert!(result_entries[0].text.contains("enabled: true"));
+    }
+
+    #[test]
+    fn json_key_not_indexed_in_tool_use() {
+        let msgs = vec![make_msg(
+            "a1",
+            MessageCategory::Assistant,
+            MessageType::Assistant,
+            MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "tu1".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command": "ls -la"}),
+            }]),
+        ),
+        make_msg(
+            "u1",
+            MessageCategory::User,
+            MessageType::User,
+            MessageContent::Text("done".into()),
+        )];
+        let (entries, _) = extract_searchable_entries(&msgs);
+        let tool_entries: Vec<_> = entries.iter().filter(|e| e.message_type == "tool_use").collect();
+        assert!(!tool_entries[0].text.contains("\"command\""));
     }
 
     #[test]
