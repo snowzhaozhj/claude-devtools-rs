@@ -389,7 +389,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_session_summary",
-        description = "Structured diagnostic summary (~2K tokens): phases, tool stats, errors, idle gaps, top files, cost, and toolActivity (commands, files edited, git ops, CLI tools).",
+        description = "Structured diagnostic summary (~2K tokens): phases, tool stats, errors, idle gaps, top files, cost, and toolActivity (commands, files edited, git ops, CLI tools). Good starting point for session overview.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -416,10 +416,11 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_session_detail",
-        description = "Get chunk data with pagination. Defaults to structure-only (large fields omitted). \
-            Window: range ('10:30'), tail (last N), or cursor. Content: 'omit' (default) or 'full'. \
-            Use `grep` to filter by content match — searches tool inputs, names, user text. \
-            Matched chunks auto-expand to full; `grep_context` (default 1) adds surrounding chunks with `grepHit` flag.",
+        description = "Get chunk data with pagination. Defaults to structure-only (large fields omitted, \
+            with `outputChars`/`contentChars` showing sizes). `chunkIndex` is absolute and stable across filters. \
+            Window: range, tail, or cursor. Content: 'omit' (default) or 'full'. \
+            Use `grep` to filter by content match — searches tool inputs, names, user text (not tool outputs; \
+            use search_sessions for output content). Matched chunks auto-expand to full; `grepHit` flag distinguishes hits from context.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
