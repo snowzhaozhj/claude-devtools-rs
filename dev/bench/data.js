@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780594618266,
+  "lastUpdate": 1780656994178,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -12330,6 +12330,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 13070,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38a7b5d859747086b06b1445dd8ef32b42a497f7",
+          "message": "feat(mcp): session recall grep + search tool content indexing (#467)\n\n* feat(mcp): add search_text helper + index tool content in search\n\n- Add cdt-discover/search_text.rs with json_value_to_search_text (bounded\n  leaf extraction), json_value_contains (recursive leaf visitor), and\n  GrepMatcher enum for grep abstraction\n- Modify search_extract.rs to index ToolUse input and ToolResult content\n  in searchable entries (8KB per-block limit, leaf-only, no JSON key match)\n- Extract tool blocks from both assistant (ToolUse) and user (ToolResult)\n  message branches\n- 11 unit tests for helpers, 3 new tests for search_extract tool indexing\n\nPart of change mcp-session-recall-grep (§1-§2 of 8).\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* feat(mcp): add grep param to get_session_detail + session param to search_sessions\n\n- search_sessions: add session param for intra-session search, auto-resolve\n  project when only session provided, return full SearchResponse with\n  sessionsSearched/isPartial/query metadata (design D8)\n- get_session_detail: add grep + grep_context params with chunk_matches_grep\n  using recursive JSON leaf visitor (design D1), context window expansion,\n  auto-promote matched chunks to full content mode (design D2), grepHit\n  boolean flag on chunk envelope\n- QueryEngine::search: add session_id parameter passed through to DataApi\n- LocalDataApi::search: handle session_id with direct search_session_file call\n- Pipeline order: kind_filter → grep → context → range/tail → pagination (D7)\n\nPart of change mcp-session-recall-grep (§3-§4 of 9).\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* feat(mcp): add toolActivity to summary + CLI params + SKILL + descriptions\n\n- summary.rs: add ToolActivity struct with topCommands/topFiles/gitOps/\n  cliTools/totalToolExecutions/omittedCount, bounded deterministic extraction\n- CLI: add --session to cdt search, --grep/--grep-context to cdt sessions detail\n- MCP: update server instructions USAGE PATTERN with search/grep/toolActivity\n- MCP: update tool descriptions for search_sessions, get_session_detail,\n  get_session_summary\n- SKILL: update session-insights with Session Recall workflow, --session\n  and --grep examples\n\nPart of change mcp-session-recall-grep (§5-§8 of 9).\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(mcp): address codex review findings (W1-W4)\n\n- W1: Fix search pagination to use results count instead of hit count,\n  add totalMatches field to SearchResponse\n- W3: Reject empty grep string (treats as no-grep)\n- W4: Fix search_text truncation to use byte boundary instead of char count\n- Update grep description to clarify tool outputs are not searchable\n  (CRITICAL #1 accepted as v1 limitation — tool inputs/commands still match)\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* refactor(mcp): streamline tool descriptions and server instructions\n\n- Instructions: compact 5-line QUICK START replaces verbose USAGE PATTERN\n- get_session_summary: remove \"ALWAYS call FIRST\" (no longer true with search/grep)\n- get_session_detail: compress 5-paragraph description to 3 lines\n- search_sessions: remove redundant content-type list (covered by instructions)\n- grep param: remove defensive caveats, keep positive capability statement\n- Open issue #468 for omit layer refactor (codex CRITICAL #1)\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(mcp): restore useful agent routing info in tool descriptions\n\nRestore 3 pieces of information that were incorrectly removed:\n- get_session_summary: \"Good starting point\" soft guidance (was \"ALWAYS FIRST\")\n- get_session_detail: chunkIndex stability guarantee + outputChars/contentChars hint\n- get_session_detail grep: explicit \"not tool outputs; use search_sessions\" routing\n\nThese guide agent tool selection behavior, not just documentation.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(mcp): address codex prompt review — accurate descriptions + routing signals\n\n- Fix #1: remove \"not tool outputs\" claim (grep code DOES match outputs;\n  omit-layer limitation is tracked in #468, not a grep feature constraint)\n- Fix #2: search_sessions description clarifies return shape (grouped hits\n  with previews, not chunk envelopes)\n- Fix #3: QUICK START distinguishes search (discover WHICH) vs detail (inspect\n  WHAT) with return-type hints\n- Fix #4: content_mode param adds \"Do NOT use full without range/tail\" guard\n- Fix rustfmt CI failure from prior commit\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive mcp-session-recall-grep\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli): wire up --grep/--grep-context in cdt sessions detail\n\nCLI detail --grep was declared but handler ignored it (grep: _).\nNow properly filters chunks using GrepMatcher on tool inputs,\ntool names, user/system/compact text. Context window via --grep-context.\n\nVerified with real session data: grep=\"mw switch\" correctly filters\n3 matching chunks from a 20+ chunk session.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(mcp): address PR review — pagination, grep consistency, security\n\nCode review fixes:\n- CRITICAL: Fix double-pagination in search — remove offset/limit from\n  QueryEngine::search, let MCP/CLI handle pagination independently\n- CRITICAL: Unify CLI/MCP grep by extracting chunk_matches_grep to shared\n  cdt-discover::search_text module (CLI was missing tool output + error_message)\n- Security: Validate session_id against path traversal (../ and separators)\n- Guard: Clamp grep_context to max 50 (prevent OOM on huge values)\n- Error: Include session_id in search error messages\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-05T18:52:59+08:00",
+          "tree_id": "2d9110d6024dd0da84647b9e7eaf879ad780625e",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/38a7b5d859747086b06b1445dd8ef32b42a497f7"
+        },
+        "date": 1780656993621,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 113.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1124,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4778,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.831,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.387,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 47.14,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.91,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 291.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1215,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3347,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2917,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 39840,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 5.017,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 62.26,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 629.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6300,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 194.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1951,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 51.97,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 528.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5265,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 129.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1302,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.35,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 73.17,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8730,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 966,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8723,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 907.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 49.51,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 523,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 95.53,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 960,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9616,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 185.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1330,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12820,
             "unit": "µs"
           }
         ]
