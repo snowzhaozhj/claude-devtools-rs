@@ -1,116 +1,59 @@
 ---
 name: session-insights
-description: Analyze Claude Code sessions — find errors, check token usage, search content, or diagnose a specific session. Use when the user asks about session failures, costs, token consumption, or wants to understand what happened in a session.
+description: "Analyze Claude Code sessions — errors, token usage, costs, search, diagnostics, recall."
 ---
 
 # Session Insights
 
-Provides session analysis workflows using the `cdt` CLI. Choose the appropriate workflow based on what the user needs.
+Load session data progressively — only go deeper when the previous step isn't enough.
 
-## Workflow Selection
+## Step 1: Discover
 
-| User intent | Workflow |
+```bash
+cdt projects list --format json
+cdt --json=sessionId,title,messageCount,isOngoing sessions list --project <name> --since 7d
+```
+
+## Step 2: Overview
+
+```bash
+cdt sessions summary <id>
+# → phases, tool stats, errors, cost, toolActivity (~2K tokens)
+```
+
+## Step 3: Structure browse
+
+```bash
+cdt sessions detail <id> --format json --content omit
+# → chunk structure overview: ~500B/chunk (vs ~200KB full)
+# With grep, matched chunks auto-expand to full; others stay omit:
+cdt sessions detail <id> --format json --content omit --grep "<keyword>"
+```
+
+## Step 4: Precise fetch
+
+```bash
+cdt sessions detail <id> --format json --content full --range <start>:<end>
+```
+
+## Scenario quick reference
+
+| Scenario | Command sequence |
 |---|---|
-| "what went wrong" / "show me errors" / "failed sessions" | Error Analysis |
-| "how much did I spend" / "token usage" / "cost" | Token & Cost |
-| "find sessions with X" / "search for error" | Search |
-| "what happened in session X" / "diagnose" / "session report" | Single Session Diagnosis |
-| "what did we do in session X" / "what switches were pushed" / "recall" | Session Recall |
+| Error analysis | `sessions list` → `sessions errors <id>` → `sessions detail <id> --content omit --filter errors_only` → `--content full --range` by chunkIndex |
+| Cost | `stats 7d` → `sessions cost <id>` |
+| Search | `search "<query>"` → `sessions detail <id> --content omit --grep "<query>"` |
+| Diagnostics | `sessions summary <id>` → `sessions errors <id>` → `sessions detail <id> --content omit --tail 20` |
+| Recall | `sessions summary <id>` (check toolActivity) → `sessions detail <id> --content omit --grep "<action>"` |
 
-## Error Analysis
+## Flag quick reference
 
-Find sessions with errors and identify patterns.
-
-```bash
-# List recent sessions for a project
-cdt sessions list --project <project-name> --since 7d
-
-# Get errors for a specific session
-cdt sessions errors <session-id>
-
-# Error-focused detail view
-cdt sessions detail <session-id> --filter errors_only
-```
-
-Summarize: which tools failed, common error messages, time clustering, suggested actions.
-
-## Token & Cost
-
-Aggregate token usage and estimated cost.
-
-```bash
-# Overall stats for a time period
-cdt stats 7d
-
-# Project-specific stats
-cdt stats 7d --project <project-name>
-
-# Per-session cost breakdown
-cdt sessions cost <session-id>
-```
-
-Present: total tokens (input/output), estimated cost, top sessions by usage.
-
-## Search
-
-Full-text search across session content (user messages, assistant responses, tool inputs, and tool outputs).
-
-```bash
-# Search all sessions
-cdt search "<query>" --limit 20
-
-# Search within a project
-cdt search "<query>" --project <project-name> --limit 20
-
-# Search within a specific session (intra-session search)
-cdt search "<query>" --session <session-id>
-```
-
-Examples: `cdt search "permission denied"`, `cdt search "mw switch" --session abc123`, `cdt search "ENOENT"`.
-
-## Single Session Diagnosis
-
-Comprehensive report for one session.
-
-```bash
-# Metadata
-cdt sessions show <session-id> --format json
-
-# Structured summary
-cdt sessions summary <session-id>
-
-# Cost
-cdt sessions cost <session-id>
-
-# Errors
-cdt sessions errors <session-id>
-
-# Recent chunks
-cdt sessions detail <session-id> --tail 20
-```
-
-Present: overview (title, duration, status, messages), resource usage, tool activity, errors, outcome.
-
-## Session Recall
-
-Recall what actions were taken in a previous session (commands executed, files edited, configs pushed).
-
-```bash
-# Quick overview — summary now includes toolActivity (commands, files, git ops, CLI tools)
-cdt sessions summary <session-id>
-
-# Search for specific actions within the session
-cdt search "mw switch" --session <session-id>
-
-# Browse with content filtering — grep auto-expands matched chunks
-cdt sessions detail <session-id> --grep "mw switch"
-```
-
-The `toolActivity` section in summary shows: top commands, files edited, git operations, and CLI tools detected. Use this for quick "what happened" answers without digging into full detail.
-
-## Common Notes
-
-- Use `cdt projects list` to discover available project names
-- `--since` accepts: 7d, 24h, 30d, today, week
-- `--format json` available on most commands for structured output
-- Session IDs come from `cdt sessions list` output
+| Flag | Effect |
+|---|---|
+| `--json=f1,f2` | Implies `--format json` + field projection + compact output; `--json` alone lists available fields |
+| `--content omit\|full` | Content granularity for `sessions detail` JSON/JSONL |
+| `--grep <kw>` | Chunk content filter; matched chunks auto-expand to full |
+| `--filter errors_only\|tool_calls` | Chunk type filter |
+| `--all` (alias `--full`) | Disable default tail=20 |
+| `--range M:N` / `--tail N` | Window selection (mutually exclusive) |
+| `--since 7d\|24h\|30d` | Time range |

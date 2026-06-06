@@ -44,6 +44,8 @@ tracing-subscriber = { workspace = true }
 rmcp = { workspace = true }
 schemars = { workspace = true }
 regex = { workspace = true }
+unicode-width = { workspace = true }
+terminal_size = { workspace = true }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/cdt-{ target }{ archive-suffix }"
