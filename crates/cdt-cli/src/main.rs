@@ -670,6 +670,15 @@ async fn cmd_sessions_detail(
         }
     };
 
+    if windowed.is_empty() && range.is_some() {
+        let range_str = range.unwrap_or("");
+        eprintln!(
+            "hint: 0 chunks matched. --range uses [start, end) semantics (left-inclusive, \
+             right-exclusive by chunkIndex). \"{range_str}\" → try \
+             adjusting end to be at least start+1."
+        );
+    }
+
     if matches!(format, OutputFormat::Table) {
         let tw = term_width();
         let content_w = tw.saturating_sub(16).max(20);
@@ -1041,14 +1050,20 @@ fn parse_duration_to_ms(s: &str) -> Result<i64> {
 fn parse_range(s: &str) -> Result<(usize, usize)> {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() != 2 {
-        anyhow::bail!("invalid range format: {s} (expected start:end, e.g. 10:30)");
+        anyhow::bail!(
+            "invalid range format: {s} (expected start:end, e.g. 10:30 or 10: for open-ended)"
+        );
     }
     let start: usize = parts[0]
         .parse()
         .with_context(|| format!("invalid range start: {}", parts[0]))?;
-    let end: usize = parts[1]
-        .parse()
-        .with_context(|| format!("invalid range end: {}", parts[1]))?;
+    let end: usize = if parts[1].is_empty() {
+        usize::MAX
+    } else {
+        parts[1]
+            .parse()
+            .with_context(|| format!("invalid range end: {}", parts[1]))?
+    };
     if start > end {
         anyhow::bail!("invalid range: start ({start}) > end ({end})");
     }

@@ -764,7 +764,13 @@ impl ServerHandler for CdtMcpServer {
              - Inspect: get_session_detail(session, grep?, range?) → chunk envelopes with chunkIndex\n\
              - search_sessions finds WHICH session/content; get_session_detail inspects WHAT's inside\n\
              - Avoid content_mode='full' without range/tail; use grep for filtered browsing\n\
-             - All lists paginated (hasMore + cursor). chunkIndex is absolute."
+             - All lists paginated (hasMore + cursor). chunkIndex is absolute.\n\n\
+             SCHEMA HINTS:\n\
+             - Chunks have `toolExecutions[]` (with isError, toolName, input, output, errorMessage) \
+             and `responses[]` (with model, content). Errors live in toolExecutions, NOT responses.\n\
+             - range param is [start, end) by chunkIndex — use 5:6 for single chunk at index 5.\n\
+             - get_session_summary, get_session_cost, get_session_errors are independent — call in parallel.\n\
+             - grep auto-expands matched chunks to content_mode=full; use grep_context=0 to limit."
                     .to_string(),
             )
     }
