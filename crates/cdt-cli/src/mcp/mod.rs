@@ -57,7 +57,7 @@ pub struct SessionDetailParams {
     #[schemars(description = "Project name or ID (auto-resolved if omitted)")]
     pub project: Option<String>,
     #[schemars(
-        description = "Window selection: chunk range, e.g. '10:30'. Mutually exclusive with cursor and tail."
+        description = "Window selection: chunk range [start, end) by chunkIndex, e.g. '10:30' or '10:' (open-ended). Mutually exclusive with cursor and tail."
     )]
     pub range: Option<String>,
     #[schemars(
@@ -414,7 +414,7 @@ impl CdtMcpServer {
             None => None,
             Some(s) => Some(parse_range(s).ok_or_else(|| {
                 McpError::invalid_params(
-                    format!("Invalid range '{s}'. Expected: 'start:end' (e.g. '10:30')"),
+                    format!("Invalid range '{s}'. Expected: 'start:end' [start, end) e.g. '10:30' or '10:' (open-ended). start must be <= end."),
                     None,
                 )
             })?),
@@ -829,6 +829,9 @@ fn parse_range(s: &str) -> Option<(usize, usize)> {
     } else {
         parts[1].parse().ok()?
     };
+    if start > end {
+        return None;
+    }
     Some((start, end))
 }
 

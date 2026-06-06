@@ -34,8 +34,10 @@ cdt sessions errors <id>     # → chunkIndex + toolName + errorMessage for each
 ## Step 3: Structure browse
 
 ```bash
+cdt sessions detail <id> --format json --content omit
+# → last 20 chunks in structure view: ~500B/chunk (vs ~200KB full)
+# For full session map (large sessions may return ~5MB): add --all
 cdt sessions detail <id> --format json --content omit --all
-# → full chunk structure: ~500B/chunk (vs ~200KB full). Shows chunkIndex, type, toolExecutions summary
 # With grep (matched chunks auto-expand to full; others stay omit):
 cdt sessions detail <id> --format json --content omit --grep "<keyword>"
 ```
@@ -82,7 +84,7 @@ cdt sessions detail <id> --format json --content full --range <start>:<end>
 | `errorMessage` | ✓ (if error) | ✓ (if error) |
 | `inputSummary` | ✓ (abbreviated) | — |
 | `input` | — | ✓ (full JSON) |
-| `output` | — | ✓ (full text) |
+| `output` | — | ✓ (string \| object \| null) |
 | `outputOmitted` | ✓ | ✓ (if upstream-trimmed) |
 | `outputChars` | ✓ | ✓ |
 
@@ -91,7 +93,7 @@ cdt sessions detail <id> --format json --content full --range <start>:<end>
 | Field | omit mode | full mode |
 |---|---|---|
 | `model` | ✓ | ✓ |
-| `content` | — (null) | ✓ |
+| `content` | absent (key omitted) | ✓ |
 | `contentOmitted` | ✓ (true) | ✓ (if upstream-trimmed) |
 | `contentChars` | ✓ | ✓ |
 

@@ -670,12 +670,12 @@ async fn cmd_sessions_detail(
         }
     };
 
-    if windowed.is_empty() && range.is_some() {
+    if windowed.is_empty() && range.is_some() && filter.is_none() && grep.is_none() {
         let range_str = range.unwrap_or("");
         eprintln!(
-            "hint: 0 chunks matched. --range uses [start, end) semantics (left-inclusive, \
-             right-exclusive by chunkIndex). \"{range_str}\" → try \
-             adjusting end to be at least start+1."
+            "hint: 0 chunks in range \"{range_str}\". --range uses [start, end) semantics \
+             (left-inclusive, right-exclusive by chunkIndex). For a single chunk at index N, \
+             use N:N+1."
         );
     }
 
