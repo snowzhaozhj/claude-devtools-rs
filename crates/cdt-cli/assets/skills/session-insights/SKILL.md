@@ -94,27 +94,22 @@ Envelope: `{ sessionId, totalChunks, returnedChunks, contentMode, chunks: [Chunk
 
 ## Patterns
 
-**Extract errors:**
+**Extract errors (flat, one per line):**
 ```bash
-cdt sessions detail <id> --format json --content full --filter errors_only | \
-  python3 -c "
-import json,sys
-for c in json.load(sys.stdin)['chunks']:
-  for t in c.get('toolExecutions',[]):
-    if t.get('isError'):
-      print(f\"[Chunk {c['chunkIndex']}] {t['toolName']}: {t.get('errorMessage','')[:200]}\")
-"
+cdt sessions detail <id> --extract errors --all
+# JSON: cdt sessions detail <id> --extract errors --all --format json
 ```
 
-**Structure overview:**
+**Structure overview (one line per chunk):**
 ```bash
-cdt sessions detail <id> --format json --content omit --all | \
-  python3 -c "
-import json,sys
-for c in json.load(sys.stdin)['chunks']:
-  te=c.get('toolExecutions',[]);errs=sum(1 for t in te if t.get('isError'))
-  print(f\"[{c['chunkIndex']:3d}] {c['timestamp'][:19]} {c['type'][:4]} tools={len(te)}{f' err={errs}' if errs else ''}\")
-"
+cdt sessions detail <id> --extract overview --all
+# JSON: cdt sessions detail <id> --extract overview --all --format json
+```
+
+**All tool executions (flat list):**
+```bash
+cdt sessions detail <id> --extract tools --all
+# Only tools from error chunks: --extract tools --filter errors_only --all
 ```
 
 **Single chunk:** `--range 5:6` (remember: [M, N) so N=M+1 for one chunk)
@@ -123,10 +118,12 @@ for c in json.load(sys.stdin)['chunks']:
 
 | Goal | Sequence |
 |---|---|
-| Errors | `summary`+`errors` ∥ → `detail --filter errors_only --content omit` → `--content full --range` |
+| Errors | `--extract errors --all` (flat list) → `--content full --range` for detail |
+| Overview | `--extract overview --all` (one line per chunk) |
 | Cost | `cost <id>` |
 | Search | `search "<q>"` → `detail --grep "<q>"` |
-| Diagnostics | `summary`+`errors` ∥ → `detail --content omit --tail 20` → `--range` |
+| Tools | `--extract tools --all` → filter by chunkIndex |
+| Diagnostics | `summary`+`errors` ∥ → `--extract overview --tail 20` → `--range` |
 
 ## Flags
 
@@ -139,4 +136,5 @@ for c in json.load(sys.stdin)['chunks']:
 | `--all` | disable default tail=20 |
 | `--range M:N` | `[M,N)` by chunkIndex; `M:` open-ended |
 | `--tail N` | last N chunks (exclusive with --range) |
+| `--extract overview\|errors\|tools` | flat item-level output (conflicts with --content) |
 | `--json=f1,f2` | field projection + compact output |

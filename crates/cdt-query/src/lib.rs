@@ -10,6 +10,7 @@
 pub mod cost;
 mod engine;
 mod error;
+pub mod extract;
 mod filter;
 mod options;
 pub mod stats;
@@ -18,6 +19,7 @@ pub mod token;
 
 pub use engine::QueryEngine;
 pub use error::QueryError;
+pub use extract::{ChunkOverviewEntry, ToolExecEntry};
 pub use filter::QueryFilter;
 pub use options::{ChunkKindFilter, SessionQueryOptions};
 pub use token::{CharRatioEstimator, TokenEstimator};
