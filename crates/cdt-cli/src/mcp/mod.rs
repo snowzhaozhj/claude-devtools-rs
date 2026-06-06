@@ -757,20 +757,19 @@ impl ServerHandler for CdtMcpServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "Claude DevTools — read-only session intelligence.\n\n\
-             QUICK START:\n\
-             - Overview: get_session_summary → phases, tool stats, toolActivity, cost\n\
-             - Discover: search_sessions(query, session?) → grouped hit previews across search index\n\
-             - Inspect: get_session_detail(session, grep?, range?) → chunk envelopes with chunkIndex\n\
-             - search_sessions finds WHICH session/content; get_session_detail inspects WHAT's inside\n\
-             - Avoid content_mode='full' without range/tail; use grep for filtered browsing\n\
-             - All lists paginated (hasMore + cursor). chunkIndex is absolute.\n\n\
-             SCHEMA HINTS:\n\
-             - Chunks have `toolExecutions[]` (with isError, toolName, input, output, errorMessage) \
-             and `responses[]` (with model, content). Errors live in toolExecutions, NOT responses.\n\
-             - range param is [start, end) by chunkIndex — use 5:6 for single chunk at index 5.\n\
-             - get_session_summary, get_session_cost, get_session_errors are independent — call in parallel.\n\
-             - grep auto-expands matched chunks to content_mode=full; use grep_context=0 to limit."
+                "Claude DevTools — read-only session intelligence.\n\
+\n\
+QUICK START:\n\
+- get_session_summary → phases, tool stats, cost, toolActivity\n\
+- get_session_detail(session, range?, grep?) → chunks with chunkIndex\n\
+- search_sessions(query) → find WHICH session; get_session_detail → inspect WHAT's inside\n\
+- Avoid content_mode='full' without range/tail. All lists paginated (hasMore + cursor).\n\
+\n\
+KEY RULES:\n\
+- Errors in chunks[].toolExecutions[].isError — NOT in responses[]\n\
+- range is [start, end) by chunkIndex: 5:6 = chunk 5; 5: = from 5 to end\n\
+- get_session_summary, get_session_cost, get_session_errors: call in parallel\n\
+- grep auto-expands hits to full; use grep_context=0 to limit"
                     .to_string(),
             )
     }

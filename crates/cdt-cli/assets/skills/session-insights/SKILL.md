@@ -5,16 +5,16 @@ description: "Analyze Claude Code sessions — errors, token usage, costs, searc
 
 # Session Insights
 
-Load session data progressively — only go deeper when the previous step isn't enough.
+Progressive data loading — go deeper only when needed.
 
-## Constraints
+## Rules
 
-1. **Step 2 commands are independent** — call `summary`, `cost`, `errors` in parallel (single tool-call batch)
-2. **Step 3 MUST precede Step 4** for unknown sessions — never fetch `--content full` without first browsing structure via `--content omit`
-3. **`--grep` auto-expands matched chunks to full** — when grepping common terms, expect large responses; use `--grep-context 0` to limit expansion
-4. **If a pipe/jq/python filter returns no output**: next call MUST print the raw JSON keys (`jq 'keys'` or `python3 -c "... print(list(data.keys()))"`) to discover structure — do NOT guess field names repeatedly
-5. **Range is `[start, end)` left-inclusive, right-exclusive** — `--range 5:5` returns nothing; use `--range 5:6` for chunk at index 5
-6. **Default tail=20**: without `--range`, `--tail`, or `--all`, only the last 20 chunks are returned
+1. `summary`, `cost`, `errors` are independent — **call in parallel**
+2. `--content omit` before `--content full` — browse structure first, then fetch precisely
+3. `--range M:N` is **[M, N)** left-inclusive right-exclusive — `5:6` for chunk at index 5; `5:` for open-ended
+4. Default **tail=20** without `--range`/`--tail`/`--all`
+5. `--grep` auto-expands matched chunks to full content — use `--grep-context 0` to limit
+6. Empty pipe output → print `keys()` to discover structure, don't guess field names
 
 ## Step 1: Discover
 
@@ -23,147 +23,120 @@ cdt projects list --format json
 cdt --json=sessionId,title,messageCount,isOngoing sessions list --project <name> --since 7d
 ```
 
-## Step 2: Overview (parallel — no dependencies between these)
+## Step 2: Overview (parallel — no deps)
 
 ```bash
-cdt sessions summary <id>    # → phases, tool stats, errors, cost, toolActivity
-cdt sessions cost <id>       # → token breakdown by category + model pricing
-cdt sessions errors <id>     # → chunkIndex + toolName + errorMessage for each error
+cdt sessions summary <id>    # phases, tool stats, cost, toolActivity
+cdt sessions cost <id>       # token breakdown + model pricing
+cdt sessions errors <id>     # chunkIndex + toolName + errorMessage per error
 ```
 
 ## Step 3: Structure browse
 
 ```bash
-cdt sessions detail <id> --format json --content omit
-# → last 20 chunks in structure view: ~500B/chunk (vs ~200KB full)
-# For full session map (large sessions may return ~5MB): add --all
-cdt sessions detail <id> --format json --content omit --all
-# With grep (matched chunks auto-expand to full; others stay omit):
-cdt sessions detail <id> --format json --content omit --grep "<keyword>"
+cdt sessions detail <id> --format json --content omit          # last 20 chunks, ~500B each
+cdt sessions detail <id> --format json --content omit --all    # full map (may be ~5MB)
+cdt sessions detail <id> --format json --content omit --grep "<kw>"  # hits auto-expand
 ```
 
 ## Step 4: Precise fetch
 
 ```bash
-cdt sessions detail <id> --format json --content full --range <start>:<end>
-# Range is [start, end) by absolute chunkIndex. Example: --range 10:13 returns chunks 10, 11, 12
-# Open-ended: --range 10: returns from chunk 10 to the end
+cdt sessions detail <id> --format json --content full --range 10:13  # chunks 10, 11, 12
 ```
 
-## JSON schema reference
+## JSON Schema
 
-### Envelope (sessions detail --format json)
+Envelope: `{ sessionId, totalChunks, returnedChunks, contentMode, chunks: [ChunkView] }`
 
-```
-{ sessionId, totalChunks, returnedChunks, contentMode, chunks: [ChunkView...] }
-```
+### ChunkView
 
-### ChunkView fields
-
-| Field | Type | When present |
+| Field | Type | Notes |
 |---|---|---|
-| `chunkIndex` | number | Always (absolute 0-based position) |
-| `chunkId` | string | Always |
-| `type` | `"ai" \| "user" \| "system" \| "compact"` | Always |
-| `timestamp` | ISO 8601 | Always |
-| `durationMs` | number? | AI chunks |
-| `toolExecutions` | ToolExecView[] | AI chunks — **this is where errors live** |
-| `responses` | ResponseView[] | AI chunks — model text content only |
-| `userContent` | ContentField? | User chunks |
-| `systemContent` | ContentField? | System chunks |
-| `compactSummary` | string? | Compact (compaction) chunks |
-| `grepHit` | boolean? | Only when `--grep` active |
+| `chunkIndex` | int | absolute 0-based position |
+| `chunkId` | string | unique identifier |
+| `type` | `"ai"\|"user"\|"system"\|"compact"` | |
+| `timestamp` | ISO 8601 | |
+| `durationMs` | int? | AI chunks only |
+| `toolExecutions` | ToolExecView[] | AI chunks — **errors live here** |
+| `responses` | ResponseView[] | AI chunks — model text only, NO tool info |
+| `userContent` | ContentField? | user chunks |
+| `systemContent` | ContentField? | system chunks |
+| `compactSummary` | string? | compact chunks |
+| `grepHit` | bool? | only present when `--grep` active |
 
-### ToolExecView fields (errors are here, NOT in responses)
+### ToolExecView — errors are here, NOT in responses
 
 | Field | omit mode | full mode |
 |---|---|---|
 | `toolName` | ✓ | ✓ |
 | `toolUseId` | ✓ | ✓ |
 | `isError` | ✓ | ✓ |
-| `errorMessage` | ✓ (if error) | ✓ (if error) |
+| `errorMessage` | ✓ (when error) | ✓ (when error) |
 | `inputSummary` | ✓ (abbreviated) | — |
 | `input` | — | ✓ (full JSON) |
 | `output` | — | ✓ (string \| object \| null) |
-| `outputOmitted` | ✓ | ✓ (if upstream-trimmed) |
+| `outputOmitted` | ✓ | ✓ |
 | `outputChars` | ✓ | ✓ |
 
-### ResponseView fields (model output text, NO tool info)
+### ResponseView (model text content, NO tool info)
 
 | Field | omit mode | full mode |
 |---|---|---|
 | `model` | ✓ | ✓ |
-| `content` | absent (key omitted) | ✓ |
+| `content` | absent (key not present) | ✓ (full text) |
 | `contentOmitted` | ✓ (true) | ✓ (if upstream-trimmed) |
 | `contentChars` | ✓ | ✓ |
 
-### ContentField (user/system content)
+### ContentField
 
-```
-{ text: string|null, omitted: boolean, chars: number }
-```
+`{ text: string|null, omitted: bool, chars: int }`
 
-## Common patterns
+## Patterns
 
-### Extract errors in one shot
-
+**Extract errors:**
 ```bash
 cdt sessions detail <id> --format json --content full --filter errors_only | \
   python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-for chunk in data['chunks']:
-    for te in chunk.get('toolExecutions', []):
-        if te.get('isError'):
-            print(f\"[Chunk {chunk['chunkIndex']}] {te['toolName']}: {te.get('errorMessage', 'no message')}\")
-            print(f\"  Input: {str(te.get('input',''))[:200]}\")
-            print()
+import json,sys
+for c in json.load(sys.stdin)['chunks']:
+  for t in c.get('toolExecutions',[]):
+    if t.get('isError'):
+      print(f\"[Chunk {c['chunkIndex']}] {t['toolName']}: {t.get('errorMessage','')[:200]}\")
 "
 ```
 
-### Browse full structure for phase-level understanding
-
+**Structure overview:**
 ```bash
 cdt sessions detail <id> --format json --content omit --all | \
   python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-for c in data['chunks']:
-    tools = len(c.get('toolExecutions', []))
-    errs = sum(1 for t in c.get('toolExecutions', []) if t.get('isError'))
-    err_flag = f' ⚠️{errs}err' if errs else ''
-    typ = c['type'][:4]
-    print(f\"[{c['chunkIndex']:3d}] {c['timestamp'][:19]} {typ} tools={tools}{err_flag}\")
+import json,sys
+for c in json.load(sys.stdin)['chunks']:
+  te=c.get('toolExecutions',[]);errs=sum(1 for t in te if t.get('isError'))
+  print(f\"[{c['chunkIndex']:3d}] {c['timestamp'][:19]} {c['type'][:4]} tools={len(te)}{f' err={errs}' if errs else ''}\")
 "
 ```
 
-### Fetch a single chunk by index
+**Single chunk:** `--range 5:6` (remember: [M, N) so N=M+1 for one chunk)
 
-```bash
-# Remember: range is [start, end), so use N:N+1 for single chunk
-cdt sessions detail <id> --format json --content full --range 5:6
-```
+## Scenarios
 
-## Scenario quick reference
-
-| Scenario | Command sequence |
+| Goal | Sequence |
 |---|---|
-| Error analysis | `summary` + `errors` (parallel) → `detail --content omit --filter errors_only` → `--content full --range` by chunkIndex |
-| Cost | `cost <id>` (or `stats 7d` for aggregate) |
-| Search | `search "<query>"` → `detail --content omit --grep "<query>"` |
-| Diagnostics | `summary` + `errors` (parallel) → `detail --content omit --tail 20` → precise fetch |
-| Recall | `summary` (check toolActivity) → `detail --content omit --grep "<action>"` |
+| Errors | `summary`+`errors` ∥ → `detail --filter errors_only --content omit` → `--content full --range` |
+| Cost | `cost <id>` |
+| Search | `search "<q>"` → `detail --grep "<q>"` |
+| Diagnostics | `summary`+`errors` ∥ → `detail --content omit --tail 20` → `--range` |
 
-## Flag quick reference
+## Flags
 
 | Flag | Effect |
 |---|---|
-| `--json=f1,f2` | Implies `--format json` + field projection + compact output; `--json` alone lists available fields |
-| `--content omit\|full` | Content granularity for `sessions detail` JSON/JSONL |
-| `--grep <kw>` | Chunk content filter; matched chunks auto-expand to full content |
-| `--grep-context N` | Number of surrounding chunks to include around grep hits (default 1) |
-| `--filter errors_only\|tool_calls` | Chunk type filter |
-| `--all` (alias `--full`) | Disable default tail=20; return all chunks |
-| `--range M:N` | Window by chunkIndex `[M, N)`; `M:` = from M to end |
-| `--tail N` | Last N chunks (mutually exclusive with --range) |
-| `--since 7d\|24h\|30d` | Time range for list commands |
+| `--content omit\|full` | structure-only vs full content |
+| `--grep <kw>` | filter chunks; matched auto-expand to full |
+| `--grep-context N` | context chunks around hits (default 1) |
+| `--filter errors_only\|tool_calls` | chunk type filter |
+| `--all` | disable default tail=20 |
+| `--range M:N` | `[M,N)` by chunkIndex; `M:` open-ended |
+| `--tail N` | last N chunks (exclusive with --range) |
+| `--json=f1,f2` | field projection + compact output |
