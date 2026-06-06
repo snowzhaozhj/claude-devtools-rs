@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-analyze"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "cdt-core",
  "cdt-parse",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-api"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "async-trait",
  "axum",
@@ -739,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-cli"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "anyhow",
  "cdt-api",
@@ -762,15 +762,17 @@ dependencies = [
  "serde",
  "serde_json",
  "tar",
+ "terminal_size",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "unicode-width",
  "zip 8.6.0",
 ]
 
 [[package]]
 name = "cdt-config"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "cdt-core",
  "cdt-discover",
@@ -792,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-core"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "chrono",
  "serde",
@@ -802,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-discover"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "async-trait",
  "cdt-core",
@@ -823,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-fs"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "async-trait",
  "futures",
@@ -835,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-parse"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "cdt-core",
  "cdt-fs",
@@ -850,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-query"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "cdt-api",
  "cdt-config",
@@ -869,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-ssh"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "async-trait",
  "cdt-core",
@@ -888,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-telemetry"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "chrono",
  "crossbeam-queue",
@@ -900,7 +902,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-watch"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "cdt-core",
  "cdt-discover",
@@ -1046,7 +1048,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "claude-devtools-tauri"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "cdt-api",
  "cdt-cli",
@@ -6163,6 +6165,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6689,6 +6701,12 @@ name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
+
+[[package]]
+name = "unicode-width"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "unicode-xid"
