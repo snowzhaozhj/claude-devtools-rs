@@ -88,6 +88,48 @@ pub struct ContentField {
 // Builders
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// 构造 `ContentField`，User 和 System chunk 共用。
+/// Omit 模式下短文本（<= 200 chars）仍内联，长文本省略。
+fn build_content_field(text: String, mode: &ContentMode) -> ContentField {
+    let chars = text.chars().count();
+    match mode {
+        ContentMode::Omit => ContentField {
+            omitted: chars > 200,
+            text: if chars <= 200 { Some(text) } else { None },
+            chars,
+        },
+        ContentMode::Full => ContentField {
+            text: Some(text),
+            omitted: false,
+            chars,
+        },
+    }
+}
+
+/// 公共字段全置默认值的 `ChunkView` 骨架，各 variant 用 struct update 覆盖差异字段。
+fn base_chunk_view(
+    chunk_index: usize,
+    chunk_id: String,
+    kind: &str,
+    timestamp: String,
+    duration_ms: Option<i64>,
+    grep_hit: Option<bool>,
+) -> ChunkView {
+    ChunkView {
+        chunk_index,
+        chunk_id,
+        kind: kind.to_string(),
+        timestamp,
+        duration_ms,
+        tool_executions: vec![],
+        responses: vec![],
+        user_content: None,
+        system_content: None,
+        compact_summary: None,
+        grep_hit,
+    }
+}
+
 pub fn build_chunk_view(
     abs_index: usize,
     chunk: &Chunk,
@@ -96,13 +138,13 @@ pub fn build_chunk_view(
 ) -> ChunkView {
     match chunk {
         Chunk::Ai(ai) => {
-            let tool_execs: Vec<ToolExecView> = ai
+            let tool_execs = ai
                 .tool_executions
                 .iter()
                 .map(|te| build_tool_exec_view(te, mode))
                 .collect();
 
-            let responses: Vec<ResponseView> = ai
+            let responses = ai
                 .responses
                 .iter()
                 .map(|r| {
@@ -127,92 +169,53 @@ pub fn build_chunk_view(
                 .collect();
 
             ChunkView {
-                chunk_index: abs_index,
-                chunk_id: ai.chunk_id.clone(),
-                kind: "ai".to_string(),
-                timestamp: ai.timestamp.to_rfc3339(),
-                duration_ms: ai.duration_ms,
                 tool_executions: tool_execs,
                 responses,
-                user_content: None,
-                system_content: None,
-                compact_summary: None,
-                grep_hit,
+                ..base_chunk_view(
+                    abs_index,
+                    ai.chunk_id.clone(),
+                    "ai",
+                    ai.timestamp.to_rfc3339(),
+                    ai.duration_ms,
+                    grep_hit,
+                )
             }
         }
-        Chunk::User(user) => {
-            let text = message_content_text(&user.content);
-            let chars = text.chars().count();
-            let user_content = match mode {
-                ContentMode::Omit => ContentField {
-                    text: if chars <= 200 { Some(text) } else { None },
-                    omitted: chars > 200,
-                    chars,
-                },
-                ContentMode::Full => ContentField {
-                    text: Some(text),
-                    omitted: false,
-                    chars,
-                },
-            };
-            ChunkView {
-                chunk_index: abs_index,
-                chunk_id: user.chunk_id.clone(),
-                kind: "user".to_string(),
-                timestamp: user.timestamp.to_rfc3339(),
-                duration_ms: user.duration_ms,
-                tool_executions: vec![],
-                responses: vec![],
-                user_content: Some(user_content),
-                system_content: None,
-                compact_summary: None,
+        Chunk::User(user) => ChunkView {
+            user_content: Some(build_content_field(
+                message_content_text(&user.content),
+                mode,
+            )),
+            ..base_chunk_view(
+                abs_index,
+                user.chunk_id.clone(),
+                "user",
+                user.timestamp.to_rfc3339(),
+                user.duration_ms,
                 grep_hit,
-            }
-        }
-        Chunk::System(sys) => {
-            let chars = sys.content_text.chars().count();
-            let system_content = match mode {
-                ContentMode::Omit => ContentField {
-                    text: if chars <= 200 {
-                        Some(sys.content_text.clone())
-                    } else {
-                        None
-                    },
-                    omitted: chars > 200,
-                    chars,
-                },
-                ContentMode::Full => ContentField {
-                    text: Some(sys.content_text.clone()),
-                    omitted: false,
-                    chars,
-                },
-            };
-            ChunkView {
-                chunk_index: abs_index,
-                chunk_id: sys.chunk_id.clone(),
-                kind: "system".to_string(),
-                timestamp: sys.timestamp.to_rfc3339(),
-                duration_ms: sys.duration_ms,
-                tool_executions: vec![],
-                responses: vec![],
-                user_content: None,
-                system_content: Some(system_content),
-                compact_summary: None,
+            )
+        },
+        Chunk::System(sys) => ChunkView {
+            system_content: Some(build_content_field(sys.content_text.clone(), mode)),
+            ..base_chunk_view(
+                abs_index,
+                sys.chunk_id.clone(),
+                "system",
+                sys.timestamp.to_rfc3339(),
+                sys.duration_ms,
                 grep_hit,
-            }
-        }
+            )
+        },
         Chunk::Compact(compact) => ChunkView {
-            chunk_index: abs_index,
-            chunk_id: compact.chunk_id.clone(),
-            kind: "compact".to_string(),
-            timestamp: compact.timestamp.to_rfc3339(),
-            duration_ms: compact.duration_ms,
-            tool_executions: vec![],
-            responses: vec![],
-            user_content: None,
-            system_content: None,
             compact_summary: Some(compact.summary_text.clone()),
-            grep_hit,
+            ..base_chunk_view(
+                abs_index,
+                compact.chunk_id.clone(),
+                "compact",
+                compact.timestamp.to_rfc3339(),
+                compact.duration_ms,
+                grep_hit,
+            )
         },
     }
 }
@@ -307,8 +310,12 @@ pub fn truncate_str(s: &str, max_chars: usize) -> String {
 /// Display-width-aware truncation using Unicode width.
 pub fn truncate_display(s: &str, max_width: usize) -> String {
     use unicode_width::UnicodeWidthChar;
+    use unicode_width::UnicodeWidthStr;
     if max_width == 0 {
         return String::new();
+    }
+    if s.width() <= max_width {
+        return s.to_string();
     }
     let mut width = 0;
     let mut result = String::new();
@@ -374,5 +381,109 @@ pub fn summarize_input(input: &serde_json::Value) -> String {
             }
         }
         other => truncate_str(&other.to_string(), 117),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_display_ascii_within_limit() {
+        assert_eq!(truncate_display("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_display_ascii_exact_fit() {
+        assert_eq!(truncate_display("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_display_ascii_over_limit() {
+        assert_eq!(truncate_display("hello world", 5), "hell…");
+    }
+
+    #[test]
+    fn truncate_display_cjk_exact_fit() {
+        assert_eq!(truncate_display("你好", 4), "你好");
+    }
+
+    #[test]
+    fn truncate_display_cjk_over_limit() {
+        assert_eq!(truncate_display("你好世界", 5), "你好…");
+    }
+
+    #[test]
+    fn truncate_display_mixed_ascii_cjk() {
+        assert_eq!(truncate_display("hi你好", 6), "hi你好");
+        // "hi你好world" width=11 > 6, truncate: content budget=5, "hi你"=4, "好" would be 6 > 5
+        assert_eq!(truncate_display("hi你好world", 6), "hi你…");
+    }
+
+    #[test]
+    fn truncate_display_empty_string() {
+        assert_eq!(truncate_display("", 10), "");
+    }
+
+    #[test]
+    fn truncate_display_max_width_zero() {
+        assert_eq!(truncate_display("hello", 0), "");
+    }
+
+    #[test]
+    fn truncate_display_max_width_one() {
+        assert_eq!(truncate_display("hello", 1), "…");
+    }
+
+    #[test]
+    fn project_fields_array_projection() {
+        let input = serde_json::json!([
+            {"sessionId": "abc", "title": "test", "count": 5},
+            {"sessionId": "def", "title": "other", "count": 3},
+        ]);
+        let result = project_fields(input, &["sessionId", "title"]);
+        let expected = serde_json::json!([
+            {"sessionId": "abc", "title": "test"},
+            {"sessionId": "def", "title": "other"},
+        ]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn project_fields_single_object() {
+        let input = serde_json::json!({"model": "claude", "cost": 1.5, "tokens": 100});
+        let result = project_fields(input, &["model", "cost"]);
+        let expected = serde_json::json!({"model": "claude", "cost": 1.5});
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn project_fields_unknown_fields_ignored() {
+        let input = serde_json::json!({"sessionId": "abc", "title": "test"});
+        let result = project_fields(input, &["sessionId", "nonExistent"]);
+        let expected = serde_json::json!({"sessionId": "abc"});
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn project_fields_non_object_passthrough() {
+        let input = serde_json::json!("just a string");
+        let result = project_fields(input.clone(), &["field"]);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn summarize_input_small_object() {
+        let input = serde_json::json!({"file_path": "/tmp/test.rs", "command": "ls"});
+        let result = summarize_input(&input);
+        assert!(result.contains("file_path"));
+        assert!(result.contains("command"));
+    }
+
+    #[test]
+    fn summarize_input_large_object_truncated() {
+        let input = serde_json::json!({"a": 1, "b": 2, "c": 3, "d": 4, "e": 5});
+        let result = summarize_input(&input);
+        assert!(result.contains("(+2 more)"));
     }
 }

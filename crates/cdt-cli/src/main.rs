@@ -471,7 +471,8 @@ async fn cmd_sessions_list(
 
     if items.is_empty() {
         match format {
-            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
+            OutputFormat::Json => println!("[]"),
+            OutputFormat::Jsonl => {}
             OutputFormat::Table => eprintln!("No sessions found."),
         }
         return Ok(());
@@ -669,66 +670,62 @@ async fn cmd_sessions_detail(
         }
     };
 
-    match format {
-        OutputFormat::Json | OutputFormat::Jsonl if content_mode.is_some() => {
-            let mode = content_mode.as_ref().unwrap();
-            let views: Vec<view::ChunkView> = windowed
-                .iter()
-                .map(|(abs_idx, chunk)| {
-                    let is_hit = grep_hits.contains(abs_idx);
-                    let effective_mode = if is_hit {
-                        &view::ContentMode::Full
-                    } else {
-                        mode
-                    };
-                    let hit_flag = if grep_matcher.is_some() {
-                        Some(is_hit)
-                    } else {
-                        None
-                    };
-                    view::build_chunk_view(*abs_idx, chunk, effective_mode, hit_flag)
-                })
-                .collect();
+    if matches!(format, OutputFormat::Table) {
+        let tw = term_width();
+        let content_w = tw.saturating_sub(16).max(20);
+        println!("Session: {} ({} chunks)", detail.session_id, windowed.len());
+        println!("{}", "-".repeat(tw));
+        for (i, (_, chunk)) in windowed.iter().enumerate() {
+            print_chunk_summary(i, chunk, content_w);
+        }
+    } else if let Some(ref mode) = content_mode {
+        // --content 指定时构造结构化 ChunkView
+        let views: Vec<view::ChunkView> = windowed
+            .iter()
+            .map(|(abs_idx, chunk)| {
+                let is_hit = grep_hits.contains(abs_idx);
+                let effective_mode = if is_hit {
+                    &view::ContentMode::Full
+                } else {
+                    mode
+                };
+                let hit_flag = grep_matcher.as_ref().map(|_| is_hit);
+                view::build_chunk_view(*abs_idx, chunk, effective_mode, hit_flag)
+            })
+            .collect();
 
-            match format {
-                OutputFormat::Json => {
-                    let output = serde_json::json!({
-                        "sessionId": detail.session_id,
-                        "totalChunks": views.len(),
-                        "contentMode": match mode {
-                            view::ContentMode::Omit => "omit",
-                            view::ContentMode::Full => "full",
-                        },
-                        "chunks": views,
-                    });
-                    emit_json(&output, json_fields)?;
-                }
-                OutputFormat::Jsonl => {
-                    for v in &views {
-                        println!("{}", serde_json::to_string(v)?);
-                    }
-                }
-                OutputFormat::Table => unreachable!(),
+        if matches!(format, OutputFormat::Jsonl) {
+            for v in &views {
+                println!("{}", serde_json::to_string(v)?);
             }
+        } else {
+            let output = serde_json::json!({
+                "sessionId": detail.session_id,
+                "totalChunks": detail.chunks.len(),
+                "returnedChunks": views.len(),
+                "contentMode": match mode {
+                    view::ContentMode::Omit => "omit",
+                    view::ContentMode::Full => "full",
+                },
+                "chunks": views,
+            });
+            emit_json(&output, json_fields)?;
         }
-        OutputFormat::Json => {
-            // No --content: output raw SessionDetail (compatible with original format)
-            emit_json(&detail, json_fields)?;
+    } else if matches!(format, OutputFormat::Jsonl) {
+        for (_, chunk) in &windowed {
+            println!("{}", serde_json::to_string(chunk)?);
         }
-        OutputFormat::Jsonl => {
-            for (_, chunk) in &windowed {
-                println!("{}", serde_json::to_string(chunk)?);
-            }
-        }
-        OutputFormat::Table => {
-            let tw = term_width();
-            let content_w = tw.saturating_sub(16).max(20);
-            println!("Session: {} ({} chunks)", detail.session_id, windowed.len());
-            println!("{}", "-".repeat(tw));
-            for (i, (_, chunk)) in windowed.iter().enumerate() {
-                print_chunk_summary(i, chunk, content_w);
-            }
-        }
+    } else {
+        let filtered_chunks: Vec<&cdt_core::Chunk> = windowed.iter().map(|(_, c)| *c).collect();
+        let output = serde_json::json!({
+            "sessionId": detail.session_id,
+            "projectId": detail.project_id,
+            "isOngoing": detail.is_ongoing,
+            "metrics": detail.metrics,
+            "metadata": detail.metadata,
+            "chunks": filtered_chunks,
+        });
+        emit_json(&output, json_fields)?;
     }
     Ok(())
 }
@@ -757,7 +754,8 @@ async fn cmd_sessions_errors(
 
     if errors.is_empty() {
         match format {
-            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
+            OutputFormat::Json => println!("[]"),
+            OutputFormat::Jsonl => {}
             OutputFormat::Table => eprintln!("No errors found."),
         }
         return Ok(());
@@ -843,7 +841,8 @@ async fn cmd_search(
 
     if result.results.is_empty() {
         match format {
-            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
+            OutputFormat::Json => println!("[]"),
+            OutputFormat::Jsonl => {}
             OutputFormat::Table => eprintln!("No results found."),
         }
         return Ok(());
