@@ -9,7 +9,7 @@
 用户首条 message 含**开工信号词且未含明确停手词** → SHALL 默认一路推到底：
 
 ```
-preflight → 实现 → 本地验证 → (simplify) → commit → push → PR → wait-ci 与 codex + pr-review-toolkit 并行 → 全部通过 → (openspec change 才有的) archive → 文本总结
+preflight → 实现 → 本地验证 → commit → push → PR → wait-ci 与 codex + pr-review-toolkit 并行 → 全部通过 → (openspec change 才有的) archive → 文本总结
 ```
 
 开工信号词 / 停手词权威定义见 `.claude/skills/preflight/SKILL.md::Q4`，本文不维护副本。
@@ -63,7 +63,6 @@ design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 
    - **禁止**在常规 PR 里偷偷改 openspec change 文件而不走 openspec 路径——hybrid 场景 SHALL 升级到 openspec 路径
 8. **CHANGELOG**（条件触发）：改动有**用户可感知影响**（新功能 / bug fix / 性能改善 / breaking change）→ 追加一行到 `CHANGELOG.md` 的 `## [Unreleased]` 对应小节（`### Added` / `### Fixed` / `### Performance` / `### Changed`）。纯内部重构 / CI / docs / openspec 流程文件不写。条目面向用户，一句话说清"改了什么 + 用户看到什么变化"
 9. `openspec-verify-change <slug>`（**条件触发**：change 含状态机 / 缓存淘汰 / 并发控制 / 新增 ≥ 3 个 SHALL 句 / 跨 ≥ 2 capability 时 SHALL 跑；单点 bug fix / 纯样式 / ≤ 50 行可跳过）。CRITICAL → 修后 re-verify；WARNING → 判断修或记录 rationale；0 CRITICAL 才进 N.1。与 codex PR 二审互补：verify 查 spec 覆盖完整性，codex 查 diff 逻辑盲点
-10. `pr-review-toolkit:code-simplifier`（改动较大时可选）。有改动 → 回 step 2 重验
 
 ### 发布尾段
 
