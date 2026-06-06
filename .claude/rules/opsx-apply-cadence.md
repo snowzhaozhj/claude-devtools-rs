@@ -63,7 +63,7 @@ design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 
    - **禁止**在常规 PR 里偷偷改 openspec change 文件而不走 openspec 路径——hybrid 场景 SHALL 升级到 openspec 路径
 8. **CHANGELOG**（条件触发）：改动有**用户可感知影响**（新功能 / bug fix / 性能改善 / breaking change）→ 追加一行到 `CHANGELOG.md` 的 `## [Unreleased]` 对应小节（`### Added` / `### Fixed` / `### Performance` / `### Changed`）。纯内部重构 / CI / docs / openspec 流程文件不写。条目面向用户，一句话说清"改了什么 + 用户看到什么变化"
 9. `openspec-verify-change <slug>`（**条件触发**：change 含状态机 / 缓存淘汰 / 并发控制 / 新增 ≥ 3 个 SHALL 句 / 跨 ≥ 2 capability 时 SHALL 跑；单点 bug fix / 纯样式 / ≤ 50 行可跳过）。CRITICAL → 修后 re-verify；WARNING → 判断修或记录 rationale；0 CRITICAL 才进 N.1。与 codex PR 二审互补：verify 查 spec 覆盖完整性，codex 查 diff 逻辑盲点
-10. `pr-review-toolkit:code-simplifier`（**条件触发**：改动 ≥ 100 行生产代码且非纯重构/移动）。跑完若有改动 → 回到 step 2 重走 clippy/fmt/test 验证。与 codex 互补：codex 查逻辑 bug，simplifier 查可读性与冗余
+10. `pr-review-toolkit:code-simplifier`（**条件触发**：改动 ≥ 100 行生产代码且非纯重构/移动）。有改动 → 回 step 2 重验
 
 ### 发布尾段
 
@@ -85,15 +85,13 @@ design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 
 9. PR 创建后立刻并行启动三件事：
    - **CI watch**：`/wait-ci <pr>` 或后台 `gh pr checks <pr> --watch --fail-fast --interval 30`
    - **codex 二审**：`Agent({ subagent_type: "codex:codex-rescue", ... })`（prompt 模板见 `.claude/templates/codex-prompt-pr-review.md`）
-   - **pr-review-toolkit**（条件触发，与 codex 同时启动）：
-     - `silent-failure-hunter`：diff 含 `catch` / `unwrap_or` / `map_err` / fallback / `Result` 新路径时 SHALL 调
-     - `pr-test-analyzer`：diff 含测试文件（`*_test.rs` / `*.test.ts` / `tests/`）时 SHALL 调
-     - `type-design-analyzer`：新增 ≥ 2 个 pub struct/enum 时可选调
-     - 调用方式：`Agent({ subagent_type: "pr-review-toolkit:<agent>", ... })`，多个条件命中时一个 message 并行发多个 Agent tool call
+   - **pr-review-toolkit**（条件触发，与 codex 同时启动，`Agent({ subagent_type: "pr-review-toolkit:<agent>" })`）：
+     - `silent-failure-hunter`：diff 含 error handling 模式（`catch` / `unwrap_or` / `map_err` / fallback）时调
+     - `pr-test-analyzer`：diff 含测试文件时调
+     - `type-design-analyzer`：新增 ≥ 2 个 pub struct/enum 时可选
 10. 收敛规则：
-   - CI 红了 → 立刻 `gh run view --log-failed` 定位 + 修；其他审查仍在跑则等返回后合并修
-   - codex / pr-review-toolkit 任一报 bug → 修 + 本地验证；等所有审查返回后把问题合并成**一个修复 commit**，再 push 并回到 step 9
-   - **全部通过** → 才认为 N.2 / N.3 通过
+   - CI / codex / pr-review-toolkit 任一报问题 → 合并成**一个修复 commit** → push → 回 step 9
+   - **全部通过** → N.2 / N.3 通过
 11. checkbox 落地规则：**不要为 N.2 / N.3 单独发 checkbox-only commit**（会白跑整套 CI）。N.2 / N.3 勾选只随下一次实质修复 commit 一起提交；若已无实质改动，保持未勾到 N.4 archive 原子提交前即可。
 12. **N.4 是原子操作**——二者都通过后直接跑 `openspec archive <slug> -y`（一步同时完成 mv + sync），随后 `git add -A` + `git commit -m "chore(opsx): archive <slug>"` + push。**不要**先单独 commit "勾 N.4" 再跑 archive——会触发 CI 拦截窗口（见下）。**常规 PR 跳过此步直接到 step 14**
 13. archive commit push 后再走一次 wait-ci 全绿
