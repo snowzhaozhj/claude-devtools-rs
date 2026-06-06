@@ -9,8 +9,11 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.10] — 2026-06-06
+
 ### Fixed
 - **CLI**: `self-update` and desktop CLI install now show friendly error messages instead of raw URLs and error chains; connection timeout 10s for fast failure, download timeout 90s for slow networks.
+- Dock and tray icons now use transparent dark variant for better visibility.
 
 ## [0.6.9] — 2026-06-06
 
@@ -287,7 +290,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.9...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.10...HEAD
+[0.6.10]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.9...v0.6.10
 [0.6.9]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.5...v0.6.7
