@@ -5,9 +5,7 @@
 
 use std::collections::HashMap;
 
-use regex::Regex;
 use serde::Serialize;
-use std::sync::LazyLock;
 
 use cdt_core::tool_execution::ToolOutput;
 use cdt_core::{Chunk, ToolExecution};
@@ -124,13 +122,11 @@ pub fn extract_errors(indexed: &[(usize, &Chunk)]) -> Vec<ToolExecEntry> {
 // Error summary extraction
 // ─────────────────────────────────────────────────────────────────────────────
 
-static EXIT_CODE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"exit (?:code|status) (\d+)").expect("valid regex"));
-
 pub fn extract_error_summary(te: &ToolExecution) -> Option<String> {
     if let Some(ref msg) = te.error_message {
-        if !msg.is_empty() {
-            return Some(msg.clone());
+        let trimmed = msg.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
         }
     }
 
@@ -180,10 +176,6 @@ fn extract_from_text(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
-    }
-
-    if let Some(caps) = EXIT_CODE_RE.captures(trimmed) {
-        return Some(format!("exit code {}", &caps[1]));
     }
 
     Some(truncate_tail(trimmed, 200))
@@ -239,7 +231,9 @@ fn build_tool_exec_entry(
     } else {
         match &te.output {
             ToolOutput::Text { text } => text.chars().count(),
-            ToolOutput::Structured { value } => serde_json::to_string(value).map_or(0, |s| s.len()),
+            ToolOutput::Structured { value } => {
+                serde_json::to_string(value).map_or(0, |s| s.chars().count())
+            }
             ToolOutput::Missing => 0,
         }
     };
@@ -529,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn error_summary_text_exit_code() {
+    fn error_summary_text_returns_tail() {
         let te = make_tool_exec(
             "Bash",
             true,
@@ -538,7 +532,9 @@ mod tests {
                 text: "some output\nexit code 42\n".into(),
             },
         );
-        assert_eq!(extract_error_summary(&te).as_deref(), Some("exit code 42"));
+        let summary = extract_error_summary(&te).unwrap();
+        assert!(summary.contains("exit code 42"));
+        assert!(summary.contains("some output"));
     }
 
     #[test]

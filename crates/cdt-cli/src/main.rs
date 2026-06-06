@@ -793,9 +793,6 @@ fn cmd_extract(
                     println!("{}", serde_json::to_string(e)?);
                 }
             } else {
-                if entries.is_empty() {
-                    eprintln!("No errors found.");
-                }
                 for e in &entries {
                     let msg = e.error_summary.as_deref().unwrap_or("(no details)");
                     println!(
@@ -882,7 +879,7 @@ async fn cmd_sessions_errors(
             println!("{:>6} {:<20} {:<error_w$}", "CHUNK", "TOOL", "ERROR");
             println!("{}", "-".repeat(tw));
             for e in &errors {
-                let msg = e.error_message.as_deref().unwrap_or("(no message)");
+                let msg = e.error_message.as_deref().unwrap_or("(no details)");
                 println!(
                     "{:>6} {:<20} {:<error_w$}",
                     e.chunk_index,
