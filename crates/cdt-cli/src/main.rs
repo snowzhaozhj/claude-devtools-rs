@@ -670,7 +670,7 @@ async fn cmd_sessions_detail(
         }
     };
 
-    if windowed.is_empty() && range.is_some() && filter.is_none() && grep.is_none() {
+    if windowed.is_empty() && range.is_some() && !all && filter.is_none() && grep.is_none() {
         let range_str = range.unwrap_or("");
         eprintln!(
             "hint: 0 chunks in range \"{range_str}\". --range uses [start, end) semantics \
@@ -1779,5 +1779,50 @@ async fn main() -> Result<()> {
             })
             .await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_range_normal() {
+        assert_eq!(parse_range("10:20").unwrap(), (10, 20));
+    }
+
+    #[test]
+    fn parse_range_single_chunk() {
+        assert_eq!(parse_range("5:6").unwrap(), (5, 6));
+    }
+
+    #[test]
+    fn parse_range_open_ended() {
+        assert_eq!(parse_range("10:").unwrap(), (10, usize::MAX));
+    }
+
+    #[test]
+    fn parse_range_zero_start() {
+        assert_eq!(parse_range("0:5").unwrap(), (0, 5));
+    }
+
+    #[test]
+    fn parse_range_rejects_inverted() {
+        assert!(parse_range("20:10").is_err());
+    }
+
+    #[test]
+    fn parse_range_rejects_empty_start() {
+        assert!(parse_range(":10").is_err());
+    }
+
+    #[test]
+    fn parse_range_rejects_non_numeric() {
+        assert!(parse_range("abc:10").is_err());
+    }
+
+    #[test]
+    fn parse_range_rejects_no_colon() {
+        assert!(parse_range("1020").is_err());
     }
 }

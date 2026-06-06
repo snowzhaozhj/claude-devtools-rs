@@ -854,3 +854,33 @@ pub async fn run_mcp_server(engine: Arc<QueryEngine>, allow_sensitive: bool) -> 
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_parse_range_normal() {
+        assert_eq!(parse_range("10:20"), Some((10, 20)));
+    }
+
+    #[test]
+    fn mcp_parse_range_open_ended() {
+        assert_eq!(parse_range("10:"), Some((10, usize::MAX)));
+    }
+
+    #[test]
+    fn mcp_parse_range_rejects_inverted() {
+        assert_eq!(parse_range("20:10"), None);
+    }
+
+    #[test]
+    fn mcp_parse_range_rejects_non_numeric() {
+        assert_eq!(parse_range("abc:10"), None);
+    }
+
+    #[test]
+    fn mcp_parse_range_rejects_no_colon() {
+        assert_eq!(parse_range("1020"), None);
+    }
+}
