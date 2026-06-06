@@ -43,6 +43,8 @@ fn help_output(args: &[&str]) -> String {
 fn insta_settings() -> insta::Settings {
     let mut settings = insta::Settings::clone_current();
     settings.add_filter(r"\b\d+\.\d+\.\d+\b", "[VERSION]");
+    // Windows 上 binary 名是 cdt.exe
+    settings.add_filter(r"\bcdt\.exe\b", "cdt");
     settings
 }
 
