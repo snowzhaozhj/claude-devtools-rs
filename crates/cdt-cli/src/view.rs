@@ -307,6 +307,9 @@ pub fn truncate_str(s: &str, max_chars: usize) -> String {
 /// Display-width-aware truncation using Unicode width.
 pub fn truncate_display(s: &str, max_width: usize) -> String {
     use unicode_width::UnicodeWidthChar;
+    if max_width == 0 {
+        return String::new();
+    }
     let mut width = 0;
     let mut result = String::new();
     for c in s.chars() {

@@ -597,10 +597,11 @@ async fn cmd_sessions_detail(
 
     let kind_filter = filter.map(parse_kind_filter).transpose()?;
 
+    // Fetch ALL chunks; apply kind_filter + grep + range/tail in-process to preserve absolute indices
     let options = SessionQueryOptions {
         range: None,
         tail: None,
-        kind_filter,
+        kind_filter: None,
         errors_only: false,
     };
 
@@ -609,9 +610,17 @@ async fn cmd_sessions_detail(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    // Track absolute indices for grep hit detection
-    let indexed_chunks: Vec<(usize, cdt_core::Chunk)> =
-        detail.chunks.into_iter().enumerate().collect();
+    // Enumerate on full set for absolute indices, then apply kind_filter
+    let indexed_chunks: Vec<(usize, &cdt_core::Chunk)> = detail
+        .chunks
+        .iter()
+        .enumerate()
+        .filter(|(_, chunk)| match kind_filter {
+            None => true,
+            Some(ChunkKindFilter::ErrorsOnly) => matches!(chunk, cdt_core::Chunk::Ai(ai) if ai.tool_executions.iter().any(|te| te.is_error)),
+            Some(ChunkKindFilter::ToolCalls) => matches!(chunk, cdt_core::Chunk::Ai(ai) if !ai.tool_executions.is_empty()),
+        })
+        .collect();
 
     // grep on full set (after kind_filter, before range/tail)
     let grep_needle = grep.filter(|s| !s.trim().is_empty());
@@ -626,7 +635,7 @@ async fn cmd_sessions_detail(
         std::collections::HashSet::new()
     };
 
-    let filtered: Vec<(usize, cdt_core::Chunk)> = if grep_matcher.is_some() {
+    let filtered: Vec<(usize, &cdt_core::Chunk)> = if grep_matcher.is_some() {
         let visible: std::collections::HashSet<usize> = grep_hits
             .iter()
             .flat_map(|&i| i.saturating_sub(grep_context)..=i + grep_context)
@@ -640,7 +649,7 @@ async fn cmd_sessions_detail(
     };
 
     // range/tail applied after grep
-    let windowed: Vec<(usize, cdt_core::Chunk)> = if all {
+    let windowed: Vec<(usize, &cdt_core::Chunk)> = if all {
         filtered
     } else {
         let parsed_range = range.map(parse_range).transpose()?;
@@ -703,12 +712,8 @@ async fn cmd_sessions_detail(
             }
         }
         OutputFormat::Json => {
-            let chunks: Vec<&cdt_core::Chunk> = windowed.iter().map(|(_, c)| c).collect();
-            let output = serde_json::json!({
-                "sessionId": detail.session_id,
-                "chunks": chunks,
-            });
-            emit_json(&output, json_fields)?;
+            // No --content: output raw SessionDetail (compatible with original format)
+            emit_json(&detail, json_fields)?;
         }
         OutputFormat::Jsonl => {
             for (_, chunk) in &windowed {
