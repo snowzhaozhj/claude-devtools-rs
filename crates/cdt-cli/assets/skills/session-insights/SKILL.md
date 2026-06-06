@@ -1,137 +1,59 @@
 ---
 name: session-insights
-description: Analyze Claude Code sessions — find errors, check token usage, search content, or diagnose a specific session. Use when the user asks about session failures, costs, token consumption, or wants to understand what happened in a session.
+description: "Analyze Claude Code sessions via the `cdt` CLI. Use this skill whenever the user mentions sessions, errors, costs, token usage, debugging a session, understanding what happened, recalling past actions, or searching session content — even if they don't say 'session-insights' explicitly."
 ---
 
 # Session Insights
 
-Provides session analysis workflows using the `cdt` CLI. Choose the appropriate workflow based on what the user needs.
+渐进式加载 session 数据，每步只在上一步信息不够时才往下走。
 
-## Workflow Selection
+## Step 1: 发现
 
-| User intent | Workflow |
+```bash
+cdt projects list --format json
+cdt --json=sessionId,title,messageCount,isOngoing sessions list --project <name> --since 7d
+```
+
+## Step 2: 概览
+
+```bash
+cdt sessions summary <id>
+# → phases, tool stats, errors, cost, toolActivity (~2K tokens)
+```
+
+## Step 3: 结构浏览
+
+```bash
+cdt sessions detail <id> --format json --content omit
+# → chunk 结构概览：每个 chunk ~500B（vs 完整 ~200KB）
+# 带 grep 时命中 chunk auto-expand 为 full，其余保持 omit：
+cdt sessions detail <id> --format json --content omit --grep "<keyword>"
+```
+
+## Step 4: 精确拉取
+
+```bash
+cdt sessions detail <id> --format json --content full --range <start>:<end>
+```
+
+## 场景速查
+
+| 场景 | 命令序列 |
 |---|---|
-| "what went wrong" / "show me errors" / "failed sessions" | Error Analysis |
-| "how much did I spend" / "token usage" / "cost" | Token & Cost |
-| "find sessions with X" / "search for error" | Search |
-| "what happened in session X" / "diagnose" / "session report" | Single Session Diagnosis |
-| "what did we do in session X" / "what switches were pushed" / "recall" | Session Recall |
+| 错误分析 | `sessions list` → `sessions errors <id>` → `sessions detail <id> --content omit --filter errors_only` → 按 chunkIndex `--content full --range` |
+| 费用 | `stats 7d` → `sessions cost <id>` |
+| 搜索 | `search "<query>"` → `sessions detail <id> --content omit --grep "<query>"` |
+| 诊断 | `sessions summary <id>` → `sessions errors <id>` → `sessions detail <id> --content omit --tail 20` |
+| 回忆 | `sessions summary <id>`（看 toolActivity）→ `sessions detail <id> --content omit --grep "<action>"` |
 
-## Error Analysis
+## Flag 速查
 
-Find sessions with errors and identify patterns.
-
-```bash
-# List recent sessions for a project
-cdt sessions list --project <project-name> --since 7d
-
-# Get errors for a specific session
-cdt sessions errors <session-id>
-
-# Error-focused detail view
-cdt sessions detail <session-id> --filter errors_only
-```
-
-Summarize: which tools failed, common error messages, time clustering, suggested actions.
-
-## Token & Cost
-
-Aggregate token usage and estimated cost.
-
-```bash
-# Overall stats for a time period
-cdt stats 7d
-
-# Project-specific stats
-cdt stats 7d --project <project-name>
-
-# Per-session cost breakdown
-cdt sessions cost <session-id>
-```
-
-Present: total tokens (input/output), estimated cost, top sessions by usage.
-
-## Search
-
-Full-text search across session content (user messages, assistant responses, tool inputs, and tool outputs).
-
-```bash
-# Search all sessions
-cdt search "<query>" --limit 20
-
-# Search within a project
-cdt search "<query>" --project <project-name> --limit 20
-
-# Search within a specific session (intra-session search)
-cdt search "<query>" --session <session-id>
-```
-
-Examples: `cdt search "permission denied"`, `cdt search "mw switch" --session abc123`, `cdt search "ENOENT"`.
-
-## Single Session Diagnosis
-
-Comprehensive report for one session.
-
-```bash
-# Metadata
-cdt sessions show <session-id> --format json
-
-# Structured summary
-cdt sessions summary <session-id>
-
-# Cost
-cdt sessions cost <session-id>
-
-# Errors
-cdt sessions errors <session-id>
-
-# Recent chunks
-cdt sessions detail <session-id> --tail 20
-```
-
-Present: overview (title, duration, status, messages), resource usage, tool activity, errors, outcome.
-
-## Session Recall
-
-Recall what actions were taken in a previous session (commands executed, files edited, configs pushed).
-
-```bash
-# Quick overview — summary now includes toolActivity (commands, files, git ops, CLI tools)
-cdt sessions summary <session-id>
-
-# Search for specific actions within the session
-cdt search "mw switch" --session <session-id>
-
-# Browse with content filtering — grep auto-expands matched chunks
-cdt sessions detail <session-id> --grep "mw switch"
-```
-
-The `toolActivity` section in summary shows: top commands, files edited, git operations, and CLI tools detected. Use this for quick "what happened" answers without digging into full detail.
-
-## Token-Efficient Access (for agents)
-
-When consuming CLI output programmatically, use these flags to minimize token waste:
-
-```bash
-# Structure overview without content (saves ~300x tokens on large sessions)
-cdt sessions detail <session-id> --format json --content omit
-
-# Select only needed fields (compact JSON, no pretty-print)
-cdt --json=sessionId,title,messageCount sessions list --project <project-name>
-
-# Grep + omit: only matched chunks get full content
-cdt sessions detail <session-id> --format json --content omit --grep "<keyword>"
-```
-
-## Common Notes
-
-- Use `cdt projects list` to discover available project names
-- `--since` accepts: 7d, 24h, 30d, today, week
-- `--format json` available on most commands for structured output
-- `--json` (no value) lists available fields for the current command
-- `--json=field1,field2` implies `--format json` + field projection + compact output
-- `--content omit|full` controls JSON/JSONL content detail level for `sessions detail`
-- `--no-truncate` prevents table column truncation
-- `--all` (alias `--full`) disables default tail=20 for `sessions detail`
-- `--range` and `--tail` are mutually exclusive
-- Session IDs come from `cdt sessions list` output
+| Flag | 作用 |
+|---|---|
+| `--json=f1,f2` | 隐含 `--format json` + 字段投影 + 紧凑输出；`--json` 无值列出可用字段 |
+| `--content omit\|full` | `sessions detail` JSON/JSONL 内容粒度 |
+| `--grep <kw>` | chunk 内容过滤，命中 chunk auto-expand 为 full |
+| `--filter errors_only\|tool_calls` | chunk 类型过滤 |
+| `--all` (alias `--full`) | 禁用默认 tail=20 |
+| `--range M:N` / `--tail N` | 窗口选择（互斥） |
+| `--since 7d\|24h\|30d` | 时间范围 |
