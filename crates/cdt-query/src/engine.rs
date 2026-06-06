@@ -125,6 +125,7 @@ impl QueryEngine {
     }
 
     /// Extract all errors from a session.
+    #[deprecated(note = "use cdt_query::extract::extract_errors() instead")]
     pub async fn get_session_errors(
         &self,
         project_id: &str,
@@ -144,21 +145,17 @@ impl QueryEngine {
             }
         };
 
-        let mut errors = Vec::new();
-        for (i, chunk) in detail.chunks.iter().enumerate() {
-            if let cdt_core::Chunk::Ai(ai) = chunk {
-                for te in &ai.tool_executions {
-                    if te.is_error {
-                        errors.push(ErrorEntry {
-                            chunk_index: i,
-                            tool_name: te.tool_name.clone(),
-                            tool_use_id: te.tool_use_id.clone(),
-                            error_message: te.error_message.clone(),
-                        });
-                    }
-                }
-            }
-        }
+        let indexed: Vec<(usize, &cdt_core::Chunk)> = detail.chunks.iter().enumerate().collect();
+        let entries = crate::extract::extract_errors(&indexed);
+        let errors = entries
+            .into_iter()
+            .map(|e| ErrorEntry {
+                chunk_index: e.chunk_index,
+                tool_name: e.tool_name,
+                tool_use_id: e.tool_use_id,
+                error_message: e.error_summary,
+            })
+            .collect();
 
         Ok(errors)
     }

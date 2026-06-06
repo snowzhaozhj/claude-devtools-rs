@@ -360,29 +360,7 @@ fn project_object_fields(value: serde_json::Value, fields: &[&str]) -> serde_jso
     }
 }
 
-pub fn summarize_input(input: &serde_json::Value) -> String {
-    match input {
-        serde_json::Value::Object(map) => {
-            let parts: Vec<String> = map
-                .iter()
-                .take(3)
-                .map(|(k, v)| {
-                    let val_str = match v {
-                        serde_json::Value::String(s) => truncate_str(s, 57),
-                        other => truncate_str(&other.to_string(), 57),
-                    };
-                    format!("{k}: {val_str}")
-                })
-                .collect();
-            if map.len() > 3 {
-                format!("{} (+{} more)", parts.join(", "), map.len() - 3)
-            } else {
-                parts.join(", ")
-            }
-        }
-        other => truncate_str(&other.to_string(), 117),
-    }
-}
+pub use cdt_query::extract::summarize_input;
 
 #[cfg(test)]
 mod tests {

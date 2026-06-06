@@ -209,8 +209,12 @@ enum SessionsAction {
         grep_context: usize,
 
         /// JSON/JSONL 输出的内容模式：omit（结构概览）或 full（完整内容）
-        #[arg(long)]
+        #[arg(long, conflicts_with = "extract")]
         content: Option<String>,
+
+        /// 展平提取模式：overview（每 chunk 一条）/ errors（每条错误一条）/ tools（每次工具调用一条）
+        #[arg(long, conflicts_with = "content")]
+        extract: Option<String>,
     },
     /// 聚合会话中的所有错误
     Errors {
@@ -577,6 +581,7 @@ async fn cmd_sessions_detail(
     grep: Option<&str>,
     grep_context: usize,
     content: Option<&str>,
+    extract: Option<&str>,
     json_fields: Option<&str>,
 ) -> Result<()> {
     let content_mode = match content {
@@ -679,6 +684,10 @@ async fn cmd_sessions_detail(
         );
     }
 
+    if let Some(extract_mode) = extract {
+        return cmd_extract(&windowed, extract_mode, format, json_fields);
+    }
+
     if matches!(format, OutputFormat::Table) {
         let tw = term_width();
         let content_w = tw.saturating_sub(16).max(20);
@@ -740,9 +749,98 @@ async fn cmd_sessions_detail(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// --extract dispatch
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn cmd_extract(
+    windowed: &[(usize, &cdt_core::Chunk)],
+    mode: &str,
+    format: &OutputFormat,
+    json_fields: Option<&str>,
+) -> Result<()> {
+    match mode {
+        "overview" => {
+            let entries = cdt_query::extract::extract_overview(windowed);
+            if matches!(format, OutputFormat::Json) {
+                emit_json(&serde_json::to_value(&entries)?, json_fields)?;
+            } else if matches!(format, OutputFormat::Jsonl) {
+                for e in &entries {
+                    println!("{}", serde_json::to_string(e)?);
+                }
+            } else {
+                for e in &entries {
+                    let tools_str = if e.tool_names.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  {}", e.tool_names.join(","))
+                    };
+                    let dur = e
+                        .duration_ms
+                        .map_or(String::new(), |ms| format!("  {}", format_ms(ms)));
+                    println!(
+                        "[{:>3}] {:<8} tools={:<3} err={}{}{dur}",
+                        e.chunk_index, e.kind, e.tool_count, e.error_count, tools_str,
+                    );
+                }
+            }
+        }
+        "errors" => {
+            let entries = cdt_query::extract::extract_errors(windowed);
+            if matches!(format, OutputFormat::Json) {
+                emit_json(&serde_json::to_value(&entries)?, json_fields)?;
+            } else if matches!(format, OutputFormat::Jsonl) {
+                for e in &entries {
+                    println!("{}", serde_json::to_string(e)?);
+                }
+            } else {
+                if entries.is_empty() {
+                    eprintln!("No errors found.");
+                }
+                for e in &entries {
+                    let msg = e.error_summary.as_deref().unwrap_or("(no details)");
+                    println!(
+                        "[{:>3}] {}  {}",
+                        e.chunk_index,
+                        truncate(&e.tool_name, 19),
+                        truncate(msg, 80),
+                    );
+                }
+            }
+        }
+        "tools" => {
+            let entries = cdt_query::extract::extract_tool_executions(windowed);
+            if matches!(format, OutputFormat::Json) {
+                emit_json(&serde_json::to_value(&entries)?, json_fields)?;
+            } else if matches!(format, OutputFormat::Jsonl) {
+                for e in &entries {
+                    println!("{}", serde_json::to_string(e)?);
+                }
+            } else {
+                for e in &entries {
+                    let status = if e.is_error { "ERR" } else { "ok " };
+                    println!(
+                        "[{:>3}.{:<2}] {:<20} {}  {}",
+                        e.chunk_index,
+                        e.tool_index,
+                        truncate(&e.tool_name, 19),
+                        status,
+                        truncate(&e.input_summary, 60),
+                    );
+                }
+            }
+        }
+        other => {
+            anyhow::bail!("invalid --extract value: '{other}'. Supported: overview, errors, tools");
+        }
+    }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // sessions errors
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(deprecated)]
 async fn cmd_sessions_errors(
     format: &OutputFormat,
     session_id: &str,
@@ -941,6 +1039,33 @@ fn list_available_fields(command: &Command) {
                 "metrics",
                 "metadata",
             ],
+            SessionsAction::Detail {
+                extract: Some(mode),
+                ..
+            } => match mode.as_str() {
+                "overview" => &[
+                    "chunkIndex",
+                    "kind",
+                    "timestamp",
+                    "durationMs",
+                    "toolCount",
+                    "errorCount",
+                    "toolNames",
+                    "responseCount",
+                    "contentChars",
+                ],
+                "errors" | "tools" => &[
+                    "chunkIndex",
+                    "toolIndex",
+                    "toolName",
+                    "toolUseId",
+                    "isError",
+                    "inputSummary",
+                    "errorSummary",
+                    "outputChars",
+                ],
+                _ => &["sessionId", "chunks", "totalChunks", "contentMode"],
+            },
             SessionsAction::Detail { .. } => &["sessionId", "chunks", "totalChunks", "contentMode"],
             SessionsAction::Errors { .. } => {
                 &["chunkIndex", "toolName", "toolUseId", "errorMessage"]
@@ -1703,6 +1828,7 @@ async fn main() -> Result<()> {
                 grep,
                 grep_context,
                 content,
+                extract,
             } => {
                 cmd_sessions_detail(
                     &effective_format,
@@ -1714,6 +1840,7 @@ async fn main() -> Result<()> {
                     grep.as_deref(),
                     grep_context,
                     content.as_deref(),
+                    extract.as_deref(),
                     json_fields,
                 )
                 .await

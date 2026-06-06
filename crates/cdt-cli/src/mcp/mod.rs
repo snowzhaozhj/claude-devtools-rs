@@ -569,6 +569,7 @@ impl CdtMcpServer {
             open_world_hint = false
         )
     )]
+    #[allow(deprecated)]
     async fn get_session_errors(
         &self,
         Parameters(params): Parameters<SessionErrorsParams>,
