@@ -309,15 +309,10 @@
   function attachConversationScroll(el: HTMLElement) {
     // bind:this 已经把 conversationEl 设上，attach 仅负责挂 listener + cleanup
     const onScroll = () => {
-      if (isScrollCompensating()) return;
+      if (conversationEl && isScrollCompensating(conversationEl)) return;
       latestAnchor = captureScrollAnchor(conversationEl);
       scheduleUpdateIsFar();
     };
-
-
-
-
-
     const onScrollEnd = () => {
       stopProgrammaticScroll();
       // smooth 自然完成 → 启动 pin 兜底处理 lazy markdown reveal 期间让

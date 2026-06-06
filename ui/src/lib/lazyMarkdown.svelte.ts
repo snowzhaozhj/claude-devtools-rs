@@ -10,16 +10,6 @@ import { renderMarkdown } from "./render";
 /** 紧急回滚开关：false 时 observe() 立即同步渲染（旧行为）。 */
 export const LAZY_MARKDOWN_ENABLED = true;
 
-/**
- * 补偿标志：手动 scrollTop 调整期间置 true，scroll listener 应跳过
- * 该帧的 anchor 捕获和 isFar 计算，避免补偿触发的 scroll event 产生
- * 误判（如 bottom-pin、isFar 重显）。
- */
-let _compensating = false;
-export function isScrollCompensating(): boolean {
-  return _compensating;
-}
-
 type Kind = "user" | "ai" | "system" | "thinking" | "output" | "slash" | "teammate";
 
 /**
@@ -41,6 +31,19 @@ export function estimatePlaceholderHeight(text: string, kind: Kind): number {
       return Math.max(60, lines * 18);
     }
   }
+}
+
+// Per-root compensating 状态（避免模块级单例跨实例污染）
+const _compensatingRoots = new WeakSet<HTMLElement>();
+
+export function isScrollCompensating(root: HTMLElement): boolean {
+  return _compensatingRoots.has(root);
+}
+
+function beginCompensation(root: HTMLElement): void {
+  _compensatingRoots.add(root);
+  requestAnimationFrame(() => { _compensatingRoots.delete(root); });
+  setTimeout(() => { _compensatingRoots.delete(root); }, 100);
 }
 
 interface LazyMarkdownObserver {
@@ -77,27 +80,32 @@ export function createLazyMarkdownObserver(
   >();
 
   // ResizeObserver 捕获异步高度变化（mermaid 图表、图片加载等）。
-  // 只对视口上方元素补偿 scrollTop，稳定后自动 unobserve。
   const resizeLastHeight = new WeakMap<Element, number>();
   const resizeStableTimers = new WeakMap<Element, ReturnType<typeof setTimeout>>();
   const RESIZE_STABLE_MS = 500;
 
   const ro = new ResizeObserver((entries) => {
+    if (!root.isConnected) return;
     let totalDelta = 0;
     const rootRect = root.getBoundingClientRect();
+
     for (const entry of entries) {
       const el = entry.target as HTMLElement;
-      const elRect = el.getBoundingClientRect();
-      // 只补偿完全在视口上方的元素
-      if (elRect.bottom > rootRect.top) continue;
-
-      const oldH = resizeLastHeight.get(el) ?? 0;
+      const oldH = resizeLastHeight.get(el);
+      if (oldH === undefined) continue;
       const newH = el.offsetHeight;
-      if (newH !== oldH) {
+      if (newH === oldH) continue;
+
+      // 始终更新高度记录
+      resizeLastHeight.set(el, newH);
+
+      // 只对视口上方的元素累计补偿 delta
+      const elRect = el.getBoundingClientRect();
+      if (elRect.bottom <= rootRect.top) {
         totalDelta += newH - oldH;
-        resizeLastHeight.set(el, newH);
       }
 
+      // 所有 entry 都重置 stable timer（不论位置）
       const existing = resizeStableTimers.get(el);
       if (existing !== undefined) clearTimeout(existing);
       resizeStableTimers.set(el, setTimeout(() => {
@@ -106,15 +114,17 @@ export function createLazyMarkdownObserver(
         resizeLastHeight.delete(el);
       }, RESIZE_STABLE_MS));
     }
+
     if (totalDelta !== 0) {
-      _compensating = true;
+      beginCompensation(root);
       root.scrollTop += totalDelta;
-      requestAnimationFrame(() => { _compensating = false; });
     }
   });
 
   const io = new IntersectionObserver(
     (entries) => {
+      if (!root.isConnected) return;
+
       // Phase 1: 收集需要渲染的元素
       const toRender: Array<{ el: HTMLElement; text: string; onRendered?: (el: HTMLElement) => void | Promise<void> }> = [];
       for (const entry of entries) {
@@ -137,9 +147,13 @@ export function createLazyMarkdownObserver(
         }
       }
 
-      // Phase 3: 批量 DOM 写入
+      // Phase 3: 批量 DOM 写入（try-catch 防 partial state）
       for (const item of toRender) {
-        renderInto(item.el, item.text, item.onRendered);
+        try {
+          renderInto(item.el, item.text, item.onRendered);
+        } catch (e) {
+          console.error("[lazy-markdown] renderInto failed:", e);
+        }
         pending.delete(item.el);
         io.unobserve(item.el);
       }
@@ -154,13 +168,12 @@ export function createLazyMarkdownObserver(
           ro.observe(item.el);
         }
         if (totalDelta !== 0) {
-          _compensating = true;
+          beginCompensation(root);
           root.scrollTop += totalDelta;
-          requestAnimationFrame(() => { _compensating = false; });
         }
       }
 
-      // 视口内元素也注册 RO（滚过后可能变为"上方"，异步变化仍需补偿）
+      // 视口内元素注册 RO（滚过后异步变化仍需补偿）
       for (const item of toRender) {
         if (!aboveItems.some(a => a.el === item.el)) {
           resizeLastHeight.set(item.el, item.el.offsetHeight);
@@ -194,6 +207,7 @@ export function createLazyMarkdownObserver(
       io.disconnect();
       ro.disconnect();
       pending.clear();
+      _compensatingRoots.delete(root);
     },
   };
 }
@@ -206,6 +220,8 @@ function renderInto(
   el.innerHTML = renderMarkdown(text);
   el.dataset.rendered = "1";
   if (onRendered) {
-    void Promise.resolve(onRendered(el));
+    Promise.resolve(onRendered(el)).catch((e) => {
+      console.error("[lazy-markdown] onRendered failed:", e);
+    });
   }
 }
