@@ -1,0 +1,48 @@
+---
+source: crates/cdt-cli/tests/cli_help_snapshots.rs
+expression: text
+---
+一键配置（MCP 注册 + Skills 安装）
+
+Usage: cdt setup [OPTIONS] [COMMAND]
+
+Commands:
+  mcp          注册 MCP server 到 Claude Code
+  skills       安装示例 Skills
+  completions  安装 shell 补全
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+      --format <FORMAT>
+          输出格式
+          
+          [default: table]
+          [possible values: json, jsonl, table]
+
+      --project <PROJECT>
+          限定项目范围（项目名或 ID；编码 ID 需用 --project=<id> 形式）
+
+      --json[=<JSON>]
+          JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
+
+      --no-truncate
+          table 模式不截断任何字段
+
+  -s, --scope <SCOPE>
+          配置范围：local（个人私有）、project（团队共享 .mcp.json）、user（全局）
+
+          Possible values:
+          - local:   个人私有（~/.claude/settings.local.json），不入版本控制
+          - project: 团队共享（.mcp.json / .claude/skills/），可 git commit
+          - user:    全局（~/.claude/settings.json / ~/.claude/skills/），所有项目可用
+          
+          [default: local]
+
+      --dry-run
+          仅打印将执行的操作，不实际执行
+
+      --force
+          强制覆盖已有文件（Skills）
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -1,0 +1,17 @@
+---
+source: crates/cdt-cli/tests/cli_help_snapshots.rs
+expression: text
+---
+自更新到最新版本
+
+Usage: cdt self-update [OPTIONS]
+
+Options:
+      --check                        仅检查是否有新版本，不执行更新
+      --format <FORMAT>              输出格式 [default: table] [possible values: json, jsonl, table]
+      --project <PROJECT>            限定项目范围（项目名或 ID；编码 ID 需用 --project=<id> 形式）
+      --version <VERSION>            指定目标版本（如 v0.5.14）
+      --install-path <INSTALL_PATH>  指定安装路径（默认替换当前可执行文件）
+      --json[=<JSON>]                JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
+      --no-truncate                  table 模式不截断任何字段
+  -h, --help                         Print help
