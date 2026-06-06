@@ -9,7 +9,7 @@
 用户首条 message 含**开工信号词且未含明确停手词** → SHALL 默认一路推到底：
 
 ```
-preflight → 实现 → 本地验证 → commit → push → PR → wait-ci 与 codex 并行 → 二者都通过 → (openspec change 才有的) archive → 文本总结
+preflight → 实现 → 本地验证 → commit → push → PR → wait-ci 与 codex + pr-review-toolkit 并行 → 全部通过 → (openspec change 才有的) archive → 文本总结
 ```
 
 开工信号词 / 停手词权威定义见 `.claude/skills/preflight/SKILL.md::Q4`，本文不维护副本。
@@ -72,7 +72,7 @@ design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 
 ## N. 发布
 - [ ] N.1 push 分支 + 开 PR
 - [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
+- [ ] N.3 codex + pr-review-toolkit 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
 ```
 
@@ -81,13 +81,13 @@ design.md 涉及**新增/重构 UI 组件**（新建 `.svelte` 文件 / 改 ≥ 
 按以下顺序勾 + 操作，**禁止**跳步；但 N.2 / N.3 的等待动作 SHALL 并行启动，避免串行空等：
 
 8. 勾 N.1 → `git push -u origin <branch>` + `gh pr create`
-9. PR 创建后立刻并行启动两件事：
+9. PR 创建后立刻并行启动三件事：
    - **CI watch**：`/wait-ci <pr>` 或后台 `gh pr checks <pr> --watch --fail-fast --interval 30`
    - **codex 二审**：`Agent({ subagent_type: "codex:codex-rescue", ... })`（prompt 模板见 `.claude/templates/codex-prompt-pr-review.md`）
+   - **pr-review-toolkit**：`Skill(pr-review-toolkit:review-pr)`，与 codex 同时启动
 10. 收敛规则：
-   - CI 红了 → 立刻 `gh run view --log-failed` 定位 + 修；如果 codex 仍在跑，等它返回后把两边问题合并成**一个修复 commit**，再 push 并回到 step 9
-   - codex 报 bug → 修 + 本地验证；如果 CI 仍在跑，继续等 CI 结果，把 CI 问题一起合并修；修完 push 后回到 step 9
-   - 二者都通过 → 才认为 N.2 / N.3 通过
+   - CI / codex / pr-review-toolkit 任一报问题 → 合并成**一个修复 commit** → push → 回 step 9
+   - **全部通过** → N.2 / N.3 通过
 11. checkbox 落地规则：**不要为 N.2 / N.3 单独发 checkbox-only commit**（会白跑整套 CI）。N.2 / N.3 勾选只随下一次实质修复 commit 一起提交；若已无实质改动，保持未勾到 N.4 archive 原子提交前即可。
 12. **N.4 是原子操作**——二者都通过后直接跑 `openspec archive <slug> -y`（一步同时完成 mv + sync），随后 `git add -A` + `git commit -m "chore(opsx): archive <slug>"` + push。**不要**先单独 commit "勾 N.4" 再跑 archive——会触发 CI 拦截窗口（见下）。**常规 PR 跳过此步直接到 step 14**
 13. archive commit push 后再走一次 wait-ci 全绿
