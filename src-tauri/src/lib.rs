@@ -1451,14 +1451,8 @@ pub fn run() {
                 let tray_menu = MenuBuilder::new(app)
                     .items(&[&show_item, &quit_item])
                     .build()?;
-                let tray_rgba = include_bytes!("../icons/tray-icon-rgba.bin");
-                let tray_image = tauri::image::Image::new_owned(
-                    tray_rgba[8..].to_vec(),
-                    u32::from_le_bytes(tray_rgba[0..4].try_into().unwrap()),
-                    u32::from_le_bytes(tray_rgba[4..8].try_into().unwrap()),
-                );
                 let _tray = TrayIconBuilder::with_id("main-tray")
-                    .icon(tray_image)
+                    .icon(app.default_window_icon().unwrap().clone())
                     .icon_as_template(true)
                     .tooltip("Claude DevTools")
                     .menu(&tray_menu)
