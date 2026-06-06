@@ -9,6 +9,16 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.11] — 2026-06-06
+
+### Added
+- **CLI**: `--extract` mode for item-level flat output, enabling granular data extraction from sessions.
+- **CLI**: improved `session-insights` skill and MCP tool instructions for better AI-assisted analysis.
+
+### Fixed
+- **CLI**: `summary` Top Files paths no longer hard-code truncation, respecting actual path lengths.
+- **UI**: eliminated scroll jumping during lazy markdown hydration in session detail view.
+
 ## [0.6.10] — 2026-06-06
 
 ### Fixed
@@ -290,7 +300,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.10...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.11...HEAD
+[0.6.11]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.10...v0.6.11
 [0.6.10]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.9...v0.6.10
 [0.6.9]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.7...v0.6.8
