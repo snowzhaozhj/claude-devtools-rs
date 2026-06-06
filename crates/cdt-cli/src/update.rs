@@ -10,6 +10,41 @@ use cdt_cli::install::{
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+const VERSION_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn friendly_error(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("deadline")
+        || lower.contains("operation timed out")
+    {
+        "Network timeout, please check your connection and try again".to_string()
+    } else if lower.contains("dns")
+        || lower.contains("failed to lookup")
+        || lower.contains("name resolution")
+        || lower.contains("no such host")
+    {
+        "DNS resolution failed, please check your network".to_string()
+    } else if lower.contains("connect")
+        || lower.contains("connection")
+        || lower.contains("error sending request")
+        || lower.contains("tls")
+        || lower.contains("certificate")
+    {
+        "Cannot connect to GitHub, please check your network or proxy settings".to_string()
+    } else if lower.contains("rate limit") {
+        "GitHub API rate limit exceeded. Set GH_TOKEN or GITHUB_TOKEN to increase the limit"
+            .to_string()
+    } else if lower.contains("404") || lower.contains("not found") {
+        "Release not found. The requested version may not exist".to_string()
+    } else if lower.contains("http 403") || lower.contains("forbidden") {
+        "Access denied. If this is a private repo, set GH_TOKEN or GITHUB_TOKEN".to_string()
+    } else {
+        format!("Update failed: {raw}")
+    }
+}
+
 pub struct UpdateOptions {
     pub check_only: bool,
     pub target_version: Option<String>,
@@ -28,7 +63,13 @@ pub async fn run(opts: UpdateOptions) -> Result<()> {
                 format!("v{v}")
             }
         }
-        None => fetch_latest_tag().await?,
+        None => match fetch_latest_tag().await {
+            Ok(tag) => tag,
+            Err(e) => {
+                tracing::debug!("version check failed: {e:#}");
+                bail!("{}", friendly_error(&format!("{e:#}")));
+            }
+        },
     };
 
     let target_ver_str = target_tag.strip_prefix('v').unwrap_or(&target_tag);
@@ -68,7 +109,13 @@ pub async fn run(opts: UpdateOptions) -> Result<()> {
     let asset_name = platform_asset_name()?;
     let url = format!("https://github.com/{REPO}/releases/download/{target_tag}/{asset_name}");
 
-    let binary_bytes = download_and_extract(&url, &asset_name).await?;
+    let binary_bytes = match download_and_extract(&url, &asset_name).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::debug!("download failed: {e:#}");
+            bail!("{}", friendly_error(&format!("{e:#}")));
+        }
+    };
     replace_binary(&install_path, &binary_bytes)?;
 
     println!(
@@ -108,7 +155,10 @@ async fn fetch_latest_tag() -> Result<String> {
 /// 重定向，丢失 302 + `Location`，让本探测静默降级回 API；`GET` 更不易被代理篡改。
 async fn fetch_latest_tag_via_redirect() -> Result<String> {
     let url = format!("https://github.com/{REPO}/releases/latest");
-    let client = build_client(reqwest::redirect::Policy::none(), None)?;
+    let client = build_client(
+        reqwest::redirect::Policy::none(),
+        Some(VERSION_CHECK_TIMEOUT),
+    )?;
 
     let resp = client
         .get(&url)
@@ -146,7 +196,10 @@ fn parse_tag_from_location(location: &str) -> Result<String> {
 
 async fn fetch_latest_tag_via_api() -> Result<String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let client = build_client(reqwest::redirect::Policy::default(), None)?;
+    let client = build_client(
+        reqwest::redirect::Policy::default(),
+        Some(VERSION_CHECK_TIMEOUT),
+    )?;
 
     let resp = client
         .get(&url)

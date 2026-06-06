@@ -11,6 +11,8 @@ use anyhow::{Context, Result, bail};
 
 pub const REPO: &str = "snowzhaozhj/claude-devtools-rs";
 
+pub const DEFAULT_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub fn platform_asset_name() -> Result<String> {
     let os = env::consts::OS;
     let arch = env::consts::ARCH;
@@ -27,7 +29,10 @@ pub fn platform_asset_name() -> Result<String> {
 }
 
 pub async fn download_and_extract(url: &str, asset_name: &str) -> Result<Vec<u8>> {
-    let client = build_client(reqwest::redirect::Policy::default(), None)?;
+    let client = build_client(
+        reqwest::redirect::Policy::default(),
+        Some(DEFAULT_DOWNLOAD_TIMEOUT),
+    )?;
     let resp = client
         .get(url)
         .send()
