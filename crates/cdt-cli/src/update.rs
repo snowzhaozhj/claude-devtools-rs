@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use cdt_cli::install::{
-    REPO, build_client, download_and_extract, platform_asset_name, validate_binary_magic,
+    DownloadErrorKind, REPO, build_client, classify_download_error, download_and_extract,
+    platform_asset_name, validate_binary_magic,
 };
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -13,35 +14,25 @@ const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const VERSION_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn friendly_error(raw: &str) -> String {
-    let lower = raw.to_ascii_lowercase();
-    if lower.contains("timed out")
-        || lower.contains("timeout")
-        || lower.contains("deadline")
-        || lower.contains("operation timed out")
-    {
-        "Network timeout, please check your connection and try again".to_string()
-    } else if lower.contains("dns")
-        || lower.contains("failed to lookup")
-        || lower.contains("name resolution")
-        || lower.contains("no such host")
-    {
-        "DNS resolution failed, please check your network".to_string()
-    } else if lower.contains("connect")
-        || lower.contains("connection")
-        || lower.contains("error sending request")
-        || lower.contains("tls")
-        || lower.contains("certificate")
-    {
-        "Cannot connect to GitHub, please check your network or proxy settings".to_string()
-    } else if lower.contains("rate limit") {
-        "GitHub API rate limit exceeded. Set GH_TOKEN or GITHUB_TOKEN to increase the limit"
-            .to_string()
-    } else if lower.contains("404") || lower.contains("not found") {
-        "Release not found. The requested version may not exist".to_string()
-    } else if lower.contains("http 403") || lower.contains("forbidden") {
-        "Access denied. If this is a private repo, set GH_TOKEN or GITHUB_TOKEN".to_string()
-    } else {
-        format!("Update failed: {raw}")
+    match classify_download_error(raw) {
+        DownloadErrorKind::Timeout => {
+            "Network timeout, please check your connection and try again".to_string()
+        }
+        DownloadErrorKind::Dns => "DNS resolution failed, please check your network".to_string(),
+        DownloadErrorKind::Connection => {
+            "Cannot connect to GitHub, please check your network or proxy settings".to_string()
+        }
+        DownloadErrorKind::RateLimit => {
+            "GitHub API rate limit exceeded. Set GH_TOKEN or GITHUB_TOKEN to increase the limit"
+                .to_string()
+        }
+        DownloadErrorKind::NotFound => {
+            "Release not found. The requested version may not exist".to_string()
+        }
+        DownloadErrorKind::Forbidden => {
+            "Access denied. If this is a private repo, set GH_TOKEN or GITHUB_TOKEN".to_string()
+        }
+        DownloadErrorKind::Other => "Update failed, please try again later".to_string(),
     }
 }
 
@@ -66,7 +57,7 @@ pub async fn run(opts: UpdateOptions) -> Result<()> {
         None => match fetch_latest_tag().await {
             Ok(tag) => tag,
             Err(e) => {
-                tracing::debug!("version check failed: {e:#}");
+                tracing::warn!(target: "cdt_cli::update", error = %e, "version check failed");
                 bail!("{}", friendly_error(&format!("{e:#}")));
             }
         },
@@ -112,7 +103,7 @@ pub async fn run(opts: UpdateOptions) -> Result<()> {
     let binary_bytes = match download_and_extract(&url, &asset_name).await {
         Ok(bytes) => bytes,
         Err(e) => {
-            tracing::debug!("download failed: {e:#}");
+            tracing::warn!(target: "cdt_cli::update", error = %e, "download failed");
             bail!("{}", friendly_error(&format!("{e:#}")));
         }
     };
@@ -333,7 +324,7 @@ fn replace_binary(target: &Path, new_bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_tag_from_location;
+    use super::{friendly_error, parse_tag_from_location};
 
     #[test]
     fn parses_tag_from_releases_latest_redirect() {
@@ -368,5 +359,65 @@ mod tests {
         assert!(parse_tag_from_location("https://github.com/owner/repo/releases/").is_err());
         assert!(parse_tag_from_location("https://github.com/owner/repo/releases/tag/").is_err());
         assert!(parse_tag_from_location("https://example.com/").is_err());
+    }
+
+    #[test]
+    fn friendly_error_never_leaks_url() {
+        let raw = "download failed: HTTP 500 Internal Server Error for https://github.com/owner/repo/releases/download/v1.0.0/cdt-darwin-arm64.tar.gz";
+        let msg = friendly_error(raw);
+        assert!(
+            !msg.contains("github.com"),
+            "URL leaked in friendly error: {msg}"
+        );
+    }
+
+    #[test]
+    fn friendly_error_maps_timeout() {
+        assert!(friendly_error("Operation timed out (os error 60)").contains("timeout"));
+        assert!(friendly_error("request deadline exceeded").contains("timeout"));
+    }
+
+    #[test]
+    fn friendly_error_maps_dns() {
+        assert!(friendly_error("failed to lookup address").contains("DNS"));
+    }
+
+    #[test]
+    fn friendly_error_maps_connection() {
+        assert!(friendly_error("connection refused").contains("connect"));
+        assert!(friendly_error("error sending request for url").contains("connect"));
+        assert!(friendly_error("network is unreachable").contains("connect"));
+    }
+
+    #[test]
+    fn friendly_error_maps_rate_limit() {
+        assert!(friendly_error("GitHub API rate limit exceeded").contains("rate limit"));
+    }
+
+    #[test]
+    fn friendly_error_does_not_misclassify_extraction_not_found() {
+        let msg = friendly_error("binary 'cdt' not found in archive");
+        assert!(
+            !msg.contains("not exist"),
+            "extraction error misclassified as missing release: {msg}"
+        );
+    }
+
+    #[test]
+    fn friendly_error_maps_http_404() {
+        let msg = friendly_error("download failed: HTTP 404 Not Found for https://example.com");
+        assert!(
+            msg.contains("not exist"),
+            "HTTP 404 should map to not-exist: {msg}"
+        );
+    }
+
+    #[test]
+    fn friendly_error_fallback_is_generic() {
+        let msg = friendly_error("some unknown error happened");
+        assert!(
+            !msg.contains("some unknown error"),
+            "raw error leaked: {msg}"
+        );
     }
 }

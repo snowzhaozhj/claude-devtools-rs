@@ -804,59 +804,30 @@ const STARTUP_UPDATE_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::f
 /// 原始错误（含完整 URL / reqwest 内部链路）只写入 tracing，**不**返回给前端——
 /// 截图反馈过完整 URL 直接 leak 到 banner 既不友好也暴露发行渠道细节。
 fn friendly_cli_install_error(raw: &str) -> String {
-    let lower = raw.to_ascii_lowercase();
-    if lower.contains("timed out")
-        || lower.contains("timeout")
-        || lower.contains("deadline")
-        || lower.contains("operation timed out")
-    {
-        "下载超时，请检查网络后重试".to_string()
-    } else if lower.contains("dns")
-        || lower.contains("failed to lookup")
-        || lower.contains("name resolution")
-        || lower.contains("no such host")
-    {
-        "无法解析下载服务器域名，请检查网络".to_string()
-    } else if lower.contains("connect")
-        || lower.contains("connection")
-        || lower.contains("error sending request")
-        || lower.contains("tls")
-        || lower.contains("certificate")
-    {
-        "无法连接到下载服务器，请检查网络或代理设置".to_string()
-    } else if lower.contains("404") || lower.contains("not found") {
-        "未找到对应版本的安装包".to_string()
-    } else {
-        "下载失败，请稍后重试".to_string()
+    use cdt_cli::install::{DownloadErrorKind, classify_download_error};
+    match classify_download_error(raw) {
+        DownloadErrorKind::Timeout => "下载超时，请检查网络后重试".to_string(),
+        DownloadErrorKind::Dns => "无法解析下载服务器域名，请检查网络".to_string(),
+        DownloadErrorKind::Connection => "无法连接到下载服务器，请检查网络或代理设置".to_string(),
+        DownloadErrorKind::RateLimit | DownloadErrorKind::Forbidden => {
+            "访问被拒绝，请设置 GH_TOKEN 环境变量后重试".to_string()
+        }
+        DownloadErrorKind::NotFound => "未找到对应版本的安装包".to_string(),
+        DownloadErrorKind::Other => "下载失败，请稍后重试".to_string(),
     }
 }
 
 fn friendly_update_error(raw: &str) -> &'static str {
-    let lower = raw.to_ascii_lowercase();
-    if lower.contains("timed out")
-        || lower.contains("timeout")
-        || lower.contains("deadline")
-        || lower.contains("operation timed out")
-    {
-        "网络超时，请稍后重试"
-    } else if lower.contains("dns")
-        || lower.contains("failed to lookup")
-        || lower.contains("name resolution")
-        || lower.contains("no such host")
-    {
-        "无法解析更新服务器域名，请检查网络"
-    } else if lower.contains("connect")
-        || lower.contains("connection")
-        || lower.contains("network")
-        || lower.contains("error sending request")
-        || lower.contains("tls")
-        || lower.contains("certificate")
-    {
-        "无法连接到更新服务器，请检查网络"
-    } else if lower.contains("404") || lower.contains("not found") {
-        "暂无可用版本信息"
-    } else {
-        "检查更新失败，请稍后重试"
+    use cdt_cli::install::{DownloadErrorKind, classify_download_error};
+    match classify_download_error(raw) {
+        DownloadErrorKind::Timeout => "网络超时，请稍后重试",
+        DownloadErrorKind::Dns => "无法解析更新服务器域名，请检查网络",
+        DownloadErrorKind::Connection => "无法连接到更新服务器，请检查网络",
+        DownloadErrorKind::RateLimit | DownloadErrorKind::Forbidden => {
+            "访问被拒绝，请设置 GH_TOKEN 环境变量后重试"
+        }
+        DownloadErrorKind::NotFound => "暂无可用版本信息",
+        DownloadErrorKind::Other => "检查更新失败，请稍后重试",
     }
 }
 
@@ -953,9 +924,12 @@ async fn install_cli(
         "https://github.com/{}/releases/download/v{version}/{asset_name}",
         cdt_cli::install::REPO
     );
-    let timeout = std::time::Duration::from_secs(30);
     let binary_bytes =
-        cdt_cli::install::download_and_extract_with_timeout(&url, &asset_name, timeout)
+        cdt_cli::install::download_and_extract_with_timeout(
+            &url,
+            &asset_name,
+            cdt_cli::install::DEFAULT_DOWNLOAD_TIMEOUT,
+        )
             .await
             .map_err(|e| {
                 tracing::warn!(target: "cdt_tauri::cli", error = %e, "CLI download failed");

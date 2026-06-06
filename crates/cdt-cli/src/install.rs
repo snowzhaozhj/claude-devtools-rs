@@ -11,7 +11,49 @@ use anyhow::{Context, Result, bail};
 
 pub const REPO: &str = "snowzhaozhj/claude-devtools-rs";
 
-pub const DEFAULT_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub const DEFAULT_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadErrorKind {
+    Timeout,
+    Dns,
+    Connection,
+    RateLimit,
+    NotFound,
+    Forbidden,
+    Other,
+}
+
+pub fn classify_download_error(raw: &str) -> DownloadErrorKind {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("timed out") || lower.contains("timeout") || lower.contains("deadline") {
+        DownloadErrorKind::Timeout
+    } else if lower.contains("dns")
+        || lower.contains("failed to lookup")
+        || lower.contains("name resolution")
+        || lower.contains("no such host")
+    {
+        DownloadErrorKind::Dns
+    } else if lower.contains("connection refused")
+        || lower.contains("connection reset")
+        || lower.contains("failed to connect")
+        || lower.contains("error sending request")
+        || lower.contains("network")
+        || lower.contains("tls")
+        || lower.contains("certificate")
+    {
+        DownloadErrorKind::Connection
+    } else if lower.contains("rate limit") {
+        DownloadErrorKind::RateLimit
+    } else if lower.contains("http 404") || lower.contains("download failed: http 404") {
+        DownloadErrorKind::NotFound
+    } else if lower.contains("http 403") || lower.contains("forbidden") {
+        DownloadErrorKind::Forbidden
+    } else {
+        DownloadErrorKind::Other
+    }
+}
 
 pub fn platform_asset_name() -> Result<String> {
     let os = env::consts::OS;
@@ -231,11 +273,102 @@ pub fn build_client(
 
     let mut builder = reqwest::Client::builder()
         .default_headers(headers)
-        .redirect(redirect);
+        .redirect(redirect)
+        .connect_timeout(DEFAULT_CONNECT_TIMEOUT);
 
     if let Some(t) = timeout {
         builder = builder.timeout(t);
     }
 
     builder.build().context("failed to build HTTP client")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DownloadErrorKind, classify_download_error};
+
+    #[test]
+    fn classifies_timeout_errors() {
+        assert_eq!(
+            classify_download_error("Operation timed out (os error 60)"),
+            DownloadErrorKind::Timeout
+        );
+        assert_eq!(
+            classify_download_error("request deadline exceeded"),
+            DownloadErrorKind::Timeout
+        );
+    }
+
+    #[test]
+    fn classifies_dns_errors() {
+        assert_eq!(
+            classify_download_error("failed to lookup address"),
+            DownloadErrorKind::Dns
+        );
+        assert_eq!(
+            classify_download_error("no such host is known"),
+            DownloadErrorKind::Dns
+        );
+    }
+
+    #[test]
+    fn classifies_connection_errors() {
+        assert_eq!(
+            classify_download_error("connection refused"),
+            DownloadErrorKind::Connection
+        );
+        assert_eq!(
+            classify_download_error("error sending request for url"),
+            DownloadErrorKind::Connection
+        );
+        assert_eq!(
+            classify_download_error("network is unreachable"),
+            DownloadErrorKind::Connection
+        );
+        assert_eq!(
+            classify_download_error("tls handshake failure"),
+            DownloadErrorKind::Connection
+        );
+    }
+
+    #[test]
+    fn classifies_rate_limit() {
+        assert_eq!(
+            classify_download_error("GitHub API rate limit exceeded"),
+            DownloadErrorKind::RateLimit
+        );
+    }
+
+    #[test]
+    fn classifies_http_404_but_not_archive_not_found() {
+        assert_eq!(
+            classify_download_error("download failed: HTTP 404 Not Found"),
+            DownloadErrorKind::NotFound
+        );
+        // Archive extraction "not found" must NOT match
+        assert_eq!(
+            classify_download_error("binary 'cdt' not found in archive"),
+            DownloadErrorKind::Other
+        );
+        assert_eq!(
+            classify_download_error("binary 'cdt.exe' not found in zip archive"),
+            DownloadErrorKind::Other
+        );
+    }
+
+    #[test]
+    fn classifies_forbidden() {
+        assert_eq!(
+            classify_download_error("HTTP 403 Forbidden"),
+            DownloadErrorKind::Forbidden
+        );
+    }
+
+    #[test]
+    fn unknown_errors_classify_as_other() {
+        assert_eq!(
+            classify_download_error("some completely unknown error"),
+            DownloadErrorKind::Other
+        );
+    }
 }

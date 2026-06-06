@@ -10,7 +10,7 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 ## [Unreleased]
 
 ### Fixed
-- **CLI**: `self-update` and desktop CLI install now show friendly error messages instead of raw URLs and error chains; download timeout reduced from unlimited/60s to 30s for faster failure feedback.
+- **CLI**: `self-update` and desktop CLI install now show friendly error messages instead of raw URLs and error chains; connection timeout 10s for fast failure, download timeout 90s for slow networks.
 
 ## [0.6.9] — 2026-06-06
 
