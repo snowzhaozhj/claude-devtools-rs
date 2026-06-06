@@ -1,0 +1,18 @@
+---
+source: crates/cdt-cli/tests/cli_help_snapshots.rs
+expression: text
+---
+MCP server 模式
+
+Usage: cdt mcp [OPTIONS] <COMMAND>
+
+Commands:
+  serve  启动 MCP stdio server
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --format <FORMAT>    输出格式 [default: table] [possible values: json, jsonl, table]
+      --project <PROJECT>  限定项目范围（项目名或 ID；编码 ID 需用 --project=<id> 形式）
+      --json[=<JSON>]      JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
+      --no-truncate        table 模式不截断任何字段
+  -h, --help               Print help

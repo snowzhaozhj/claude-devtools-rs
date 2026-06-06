@@ -1,0 +1,20 @@
+---
+source: crates/cdt-cli/tests/cli_help_snapshots.rs
+expression: text
+---
+全文搜索
+
+Usage: cdt search [OPTIONS] <QUERY>
+
+Arguments:
+  <QUERY>  搜索关键词
+
+Options:
+      --format <FORMAT>    输出格式 [default: table] [possible values: json, jsonl, table]
+      --limit <LIMIT>      最多返回 N 条结果 [default: 50]
+      --offset <OFFSET>    偏移（分页） [default: 0]
+      --project <PROJECT>  限定项目范围（项目名或 ID；编码 ID 需用 --project=<id> 形式）
+      --json[=<JSON>]      JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
+      --session <SESSION>  限定到单个 session（intra-session search）
+      --no-truncate        table 模式不截断任何字段
+  -h, --help               Print help

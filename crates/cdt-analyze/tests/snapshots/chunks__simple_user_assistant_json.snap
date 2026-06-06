@@ -1,0 +1,67 @@
+---
+source: crates/cdt-analyze/tests/chunks.rs
+expression: chunks
+---
+[
+  {
+    "kind": "user",
+    "chunkId": "u1:0",
+    "uuid": "u1",
+    "timestamp": "2026-04-11T00:00:00Z",
+    "durationMs": null,
+    "content": "hello",
+    "metrics": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "toolCount": 0,
+      "costUsd": null
+    }
+  },
+  {
+    "kind": "ai",
+    "chunkId": "a1:0",
+    "timestamp": "2026-04-11T00:00:01Z",
+    "durationMs": null,
+    "responses": [
+      {
+        "uuid": "a1",
+        "timestamp": "2026-04-11T00:00:01Z",
+        "content": [
+          {
+            "type": "text",
+            "text": "hi there"
+          }
+        ],
+        "toolCalls": [],
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 3,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "model": "claude-opus-4-6",
+        "contentOmitted": false
+      }
+    ],
+    "metrics": {
+      "inputTokens": 5,
+      "outputTokens": 3,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "toolCount": 0,
+      "costUsd": null
+    },
+    "semanticSteps": [
+      {
+        "kind": "text",
+        "text": "hi there",
+        "timestamp": "2026-04-11T00:00:01Z"
+      }
+    ],
+    "toolExecutions": [],
+    "subagents": [],
+    "slashCommands": []
+  }
+]

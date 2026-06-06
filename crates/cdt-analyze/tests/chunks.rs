@@ -87,10 +87,24 @@ fn simple_user_assistant_snapshot() {
 }
 
 #[test]
+fn simple_user_assistant_json() {
+    let msgs = parse_fixture("simple.jsonl");
+    let chunks = build_chunks(&msgs);
+    insta::assert_json_snapshot!(chunks);
+}
+
+#[test]
 fn multi_assistant_coalescing_snapshot() {
     let msgs = parse_fixture("multi_ai.jsonl");
     let chunks = build_chunks(&msgs);
     insta::assert_debug_snapshot!(summarize(&chunks));
+}
+
+#[test]
+fn multi_assistant_coalescing_json() {
+    let msgs = parse_fixture("multi_ai.jsonl");
+    let chunks = build_chunks(&msgs);
+    insta::assert_json_snapshot!(chunks);
 }
 
 #[test]
@@ -101,8 +115,22 @@ fn tool_result_paired_snapshot() {
 }
 
 #[test]
+fn tool_result_paired_json() {
+    let msgs = parse_fixture("with_tool_result.jsonl");
+    let chunks = build_chunks(&msgs);
+    insta::assert_json_snapshot!(chunks);
+}
+
+#[test]
 fn compact_boundary_snapshot() {
     let msgs = parse_fixture("with_compact.jsonl");
     let chunks = build_chunks(&msgs);
     insta::assert_debug_snapshot!(summarize(&chunks));
+}
+
+#[test]
+fn compact_boundary_json() {
+    let msgs = parse_fixture("with_compact.jsonl");
+    let chunks = build_chunks(&msgs);
+    insta::assert_json_snapshot!(chunks);
 }
