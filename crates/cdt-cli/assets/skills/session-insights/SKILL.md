@@ -5,55 +5,55 @@ description: "Analyze Claude Code sessions — errors, token usage, costs, searc
 
 # Session Insights
 
-渐进式加载 session 数据，每步只在上一步信息不够时才往下走。
+Load session data progressively — only go deeper when the previous step isn't enough.
 
-## Step 1: 发现
+## Step 1: Discover
 
 ```bash
 cdt projects list --format json
 cdt --json=sessionId,title,messageCount,isOngoing sessions list --project <name> --since 7d
 ```
 
-## Step 2: 概览
+## Step 2: Overview
 
 ```bash
 cdt sessions summary <id>
 # → phases, tool stats, errors, cost, toolActivity (~2K tokens)
 ```
 
-## Step 3: 结构浏览
+## Step 3: Structure browse
 
 ```bash
 cdt sessions detail <id> --format json --content omit
-# → chunk 结构概览：每个 chunk ~500B（vs 完整 ~200KB）
-# 带 grep 时命中 chunk auto-expand 为 full，其余保持 omit：
+# → chunk structure overview: ~500B/chunk (vs ~200KB full)
+# With grep, matched chunks auto-expand to full; others stay omit:
 cdt sessions detail <id> --format json --content omit --grep "<keyword>"
 ```
 
-## Step 4: 精确拉取
+## Step 4: Precise fetch
 
 ```bash
 cdt sessions detail <id> --format json --content full --range <start>:<end>
 ```
 
-## 场景速查
+## Scenario quick reference
 
-| 场景 | 命令序列 |
+| Scenario | Command sequence |
 |---|---|
-| 错误分析 | `sessions list` → `sessions errors <id>` → `sessions detail <id> --content omit --filter errors_only` → 按 chunkIndex `--content full --range` |
-| 费用 | `stats 7d` → `sessions cost <id>` |
-| 搜索 | `search "<query>"` → `sessions detail <id> --content omit --grep "<query>"` |
-| 诊断 | `sessions summary <id>` → `sessions errors <id>` → `sessions detail <id> --content omit --tail 20` |
-| 回忆 | `sessions summary <id>`（看 toolActivity）→ `sessions detail <id> --content omit --grep "<action>"` |
+| Error analysis | `sessions list` → `sessions errors <id>` → `sessions detail <id> --content omit --filter errors_only` → `--content full --range` by chunkIndex |
+| Cost | `stats 7d` → `sessions cost <id>` |
+| Search | `search "<query>"` → `sessions detail <id> --content omit --grep "<query>"` |
+| Diagnostics | `sessions summary <id>` → `sessions errors <id>` → `sessions detail <id> --content omit --tail 20` |
+| Recall | `sessions summary <id>` (check toolActivity) → `sessions detail <id> --content omit --grep "<action>"` |
 
-## Flag 速查
+## Flag quick reference
 
-| Flag | 作用 |
+| Flag | Effect |
 |---|---|
-| `--json=f1,f2` | 隐含 `--format json` + 字段投影 + 紧凑输出；`--json` 无值列出可用字段 |
-| `--content omit\|full` | `sessions detail` JSON/JSONL 内容粒度 |
-| `--grep <kw>` | chunk 内容过滤，命中 chunk auto-expand 为 full |
-| `--filter errors_only\|tool_calls` | chunk 类型过滤 |
-| `--all` (alias `--full`) | 禁用默认 tail=20 |
-| `--range M:N` / `--tail N` | 窗口选择（互斥） |
-| `--since 7d\|24h\|30d` | 时间范围 |
+| `--json=f1,f2` | Implies `--format json` + field projection + compact output; `--json` alone lists available fields |
+| `--content omit\|full` | Content granularity for `sessions detail` JSON/JSONL |
+| `--grep <kw>` | Chunk content filter; matched chunks auto-expand to full |
+| `--filter errors_only\|tool_calls` | Chunk type filter |
+| `--all` (alias `--full`) | Disable default tail=20 |
+| `--range M:N` / `--tail N` | Window selection (mutually exclusive) |
+| `--since 7d\|24h\|30d` | Time range |
