@@ -57,7 +57,7 @@ pub struct SessionDetailParams {
     #[schemars(description = "Project name or ID (auto-resolved if omitted)")]
     pub project: Option<String>,
     #[schemars(
-        description = "Window selection: chunk range, e.g. '10:30'. Mutually exclusive with cursor and tail."
+        description = "Window selection: chunk range [start, end) by chunkIndex, e.g. '10:30' or '10:' (open-ended). Mutually exclusive with cursor and tail."
     )]
     pub range: Option<String>,
     #[schemars(
@@ -414,7 +414,7 @@ impl CdtMcpServer {
             None => None,
             Some(s) => Some(parse_range(s).ok_or_else(|| {
                 McpError::invalid_params(
-                    format!("Invalid range '{s}'. Expected: 'start:end' (e.g. '10:30')"),
+                    format!("Invalid range '{s}'. Expected: 'start:end' [start, end) e.g. '10:30' or '10:' (open-ended). start must be <= end."),
                     None,
                 )
             })?),
@@ -757,14 +757,19 @@ impl ServerHandler for CdtMcpServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "Claude DevTools — read-only session intelligence.\n\n\
-             QUICK START:\n\
-             - Overview: get_session_summary → phases, tool stats, toolActivity, cost\n\
-             - Discover: search_sessions(query, session?) → grouped hit previews across search index\n\
-             - Inspect: get_session_detail(session, grep?, range?) → chunk envelopes with chunkIndex\n\
-             - search_sessions finds WHICH session/content; get_session_detail inspects WHAT's inside\n\
-             - Avoid content_mode='full' without range/tail; use grep for filtered browsing\n\
-             - All lists paginated (hasMore + cursor). chunkIndex is absolute."
+                "Claude DevTools — read-only session intelligence.\n\
+\n\
+QUICK START:\n\
+- get_session_summary → phases, tool stats, cost, toolActivity\n\
+- get_session_detail(session, range?, grep?) → chunks with chunkIndex\n\
+- search_sessions(query) → find WHICH session; get_session_detail → inspect WHAT's inside\n\
+- Avoid content_mode='full' without range/tail. All lists paginated (hasMore + cursor).\n\
+\n\
+KEY RULES:\n\
+- Errors in chunks[].toolExecutions[].isError — NOT in responses[]\n\
+- range is [start, end) by chunkIndex: 5:6 = chunk 5; 5: = from 5 to end\n\
+- get_session_summary, get_session_cost, get_session_errors: call in parallel\n\
+- grep auto-expands hits to full; use grep_context=0 to limit"
                     .to_string(),
             )
     }
@@ -823,6 +828,9 @@ fn parse_range(s: &str) -> Option<(usize, usize)> {
     } else {
         parts[1].parse().ok()?
     };
+    if start > end {
+        return None;
+    }
     Some((start, end))
 }
 
@@ -845,4 +853,34 @@ pub async fn run_mcp_server(engine: Arc<QueryEngine>, allow_sensitive: bool) -> 
         .map_err(|e| anyhow::anyhow!("MCP server error: {e}"))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_parse_range_normal() {
+        assert_eq!(parse_range("10:20"), Some((10, 20)));
+    }
+
+    #[test]
+    fn mcp_parse_range_open_ended() {
+        assert_eq!(parse_range("10:"), Some((10, usize::MAX)));
+    }
+
+    #[test]
+    fn mcp_parse_range_rejects_inverted() {
+        assert_eq!(parse_range("20:10"), None);
+    }
+
+    #[test]
+    fn mcp_parse_range_rejects_non_numeric() {
+        assert_eq!(parse_range("abc:10"), None);
+    }
+
+    #[test]
+    fn mcp_parse_range_rejects_no_colon() {
+        assert_eq!(parse_range("1020"), None);
+    }
 }

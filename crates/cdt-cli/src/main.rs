@@ -670,6 +670,15 @@ async fn cmd_sessions_detail(
         }
     };
 
+    if windowed.is_empty() && range.is_some() && !all && filter.is_none() && grep.is_none() {
+        let range_str = range.unwrap_or("");
+        eprintln!(
+            "hint: 0 chunks in range \"{range_str}\". --range uses [start, end) semantics \
+             (left-inclusive, right-exclusive by chunkIndex). For a single chunk at index N, \
+             use N:N+1."
+        );
+    }
+
     if matches!(format, OutputFormat::Table) {
         let tw = term_width();
         let content_w = tw.saturating_sub(16).max(20);
@@ -1041,14 +1050,20 @@ fn parse_duration_to_ms(s: &str) -> Result<i64> {
 fn parse_range(s: &str) -> Result<(usize, usize)> {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() != 2 {
-        anyhow::bail!("invalid range format: {s} (expected start:end, e.g. 10:30)");
+        anyhow::bail!(
+            "invalid range format: {s} (expected start:end, e.g. 10:30 or 10: for open-ended)"
+        );
     }
     let start: usize = parts[0]
         .parse()
         .with_context(|| format!("invalid range start: {}", parts[0]))?;
-    let end: usize = parts[1]
-        .parse()
-        .with_context(|| format!("invalid range end: {}", parts[1]))?;
+    let end: usize = if parts[1].is_empty() {
+        usize::MAX
+    } else {
+        parts[1]
+            .parse()
+            .with_context(|| format!("invalid range end: {}", parts[1]))?
+    };
     if start > end {
         anyhow::bail!("invalid range: start ({start}) > end ({end})");
     }
@@ -1771,5 +1786,50 @@ async fn main() -> Result<()> {
             })
             .await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_range_normal() {
+        assert_eq!(parse_range("10:20").unwrap(), (10, 20));
+    }
+
+    #[test]
+    fn parse_range_single_chunk() {
+        assert_eq!(parse_range("5:6").unwrap(), (5, 6));
+    }
+
+    #[test]
+    fn parse_range_open_ended() {
+        assert_eq!(parse_range("10:").unwrap(), (10, usize::MAX));
+    }
+
+    #[test]
+    fn parse_range_zero_start() {
+        assert_eq!(parse_range("0:5").unwrap(), (0, 5));
+    }
+
+    #[test]
+    fn parse_range_rejects_inverted() {
+        assert!(parse_range("20:10").is_err());
+    }
+
+    #[test]
+    fn parse_range_rejects_empty_start() {
+        assert!(parse_range(":10").is_err());
+    }
+
+    #[test]
+    fn parse_range_rejects_non_numeric() {
+        assert!(parse_range("abc:10").is_err());
+    }
+
+    #[test]
+    fn parse_range_rejects_no_colon() {
+        assert!(parse_range("1020").is_err());
     }
 }
