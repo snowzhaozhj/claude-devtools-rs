@@ -150,7 +150,7 @@ fn sessions_errors_without_valid_id_fails() {
 }
 
 #[test]
-fn search_without_results_exits_2() {
+fn search_with_nonexistent_project_fails() {
     let output = cdt_bin()
         .args([
             "--format",
@@ -162,7 +162,6 @@ fn search_without_results_exits_2() {
         ])
         .output()
         .unwrap();
-    // Either error (project not found) or exit 2 (no results)
     assert!(!output.status.success());
 }
 
@@ -198,7 +197,7 @@ fn sessions_list_with_filter_flags_accepted() {
 fn sessions_detail_with_range_flag_accepted() {
     let output = cdt_bin()
         .args([
-            "--format", "json", "sessions", "detail", "fake-id", "--range", "0:10", "--tail", "5",
+            "--format", "json", "sessions", "detail", "fake-id", "--range", "0:10",
         ])
         .output()
         .unwrap();
@@ -206,6 +205,111 @@ fn sessions_detail_with_range_flag_accepted() {
     assert!(
         !stderr.contains("unexpected argument"),
         "flags not recognized: {stderr}"
+    );
+}
+
+#[test]
+fn sessions_detail_range_and_tail_are_mutually_exclusive() {
+    let output = cdt_bin()
+        .args([
+            "--format", "json", "sessions", "detail", "fake-id", "--range", "0:10", "--tail", "5",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "should reject --range + --tail together"
+    );
+}
+
+#[test]
+fn sessions_detail_all_flag_accepted() {
+    let output = cdt_bin()
+        .args(["--format", "json", "sessions", "detail", "fake-id", "--all"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "--all flag not recognized: {stderr}"
+    );
+}
+
+#[test]
+fn sessions_detail_full_alias_accepted() {
+    let output = cdt_bin()
+        .args([
+            "--format", "json", "sessions", "detail", "fake-id", "--full",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "--full alias not recognized: {stderr}"
+    );
+}
+
+#[test]
+fn sessions_detail_content_omit_accepted() {
+    let output = cdt_bin()
+        .args([
+            "--format",
+            "json",
+            "sessions",
+            "detail",
+            "fake-id",
+            "--content",
+            "omit",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "--content omit not recognized: {stderr}"
+    );
+}
+
+#[test]
+fn sessions_detail_content_full_accepted() {
+    let output = cdt_bin()
+        .args([
+            "--format",
+            "json",
+            "sessions",
+            "detail",
+            "fake-id",
+            "--content",
+            "full",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "--content full not recognized: {stderr}"
+    );
+}
+
+#[test]
+fn sessions_detail_content_invalid_rejected() {
+    let output = cdt_bin()
+        .args([
+            "--format",
+            "json",
+            "sessions",
+            "detail",
+            "fake-id",
+            "--content",
+            "invalid",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid --content value") || !output.status.success(),
+        "should reject invalid content mode: {stderr}"
     );
 }
 
@@ -258,4 +362,31 @@ fn sessions_summary_without_session_id_fails() {
 fn sessions_cost_without_session_id_fails() {
     let output = cdt_bin().args(["sessions", "cost"]).output().unwrap();
     assert!(!output.status.success());
+}
+
+#[test]
+fn json_flag_lists_fields_when_no_args() {
+    let output = cdt_bin()
+        .args(["--json", "projects", "list"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("name") && stdout.contains("totalSessions"),
+        "should list available fields: {stdout}"
+    );
+}
+
+#[test]
+fn json_flag_accepted_with_fields() {
+    let output = cdt_bin()
+        .args(["--json=name,totalSessions", "projects", "list"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "--json fields not recognized: {stderr}"
+    );
 }

@@ -13,9 +13,10 @@ use rmcp::{
 use serde::Serialize;
 
 use cdt_api::DataApi;
-use cdt_core::{Chunk, message::MessageContent, tool_execution::ToolOutput};
+use cdt_core::Chunk;
 use cdt_query::{ChunkKindFilter, QueryEngine, QueryFilter, SessionQueryOptions};
 
+use crate::view::{self, ChunkView, ContentMode, build_chunk_view};
 use redact::Redactor;
 
 const DEFAULT_PAGE_SIZE: usize = 20;
@@ -156,7 +157,7 @@ struct SearchResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionDetailResponse {
+struct SessionDetailMcpResponse {
     session_id: String,
     total_chunks: usize,
     returned_chunks: usize,
@@ -165,74 +166,12 @@ struct SessionDetailResponse {
     cursor: Option<String>,
     is_ongoing: bool,
     content_mode: String,
-    chunks: Vec<ChunkEnvelope>,
+    chunks: Vec<ChunkView>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ChunkEnvelope {
-    chunk_index: usize,
-    chunk_id: String,
-    #[serde(rename = "type")]
-    kind: String,
-    timestamp: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    duration_ms: Option<i64>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    tool_executions: Vec<ToolExecEnvelope>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    responses: Vec<ResponseEnvelope>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    user_content: Option<ContentField>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system_content: Option<ContentField>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    compact_summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    grep_hit: Option<bool>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ToolExecEnvelope {
-    tool_name: String,
-    tool_use_id: String,
-    is_error: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    input_summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    input: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output: Option<serde_json::Value>,
-    output_omitted: bool,
-    output_chars: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error_message: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ResponseEnvelope {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
-    content_omitted: bool,
-    content_chars: usize,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ContentField {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    text: Option<String>,
-    omitted: bool,
-    chars: usize,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ErrorEntry {
+struct McpErrorEntry {
     chunk_index: usize,
     tool_name: String,
     tool_use_id: String,
@@ -584,7 +523,7 @@ impl CdtMcpServer {
         let returned_chunks = page_chunks.len();
         let has_more = !return_all && (offset + returned_chunks < total_chunks);
 
-        let envelopes: Vec<ChunkEnvelope> = page_chunks
+        let envelopes: Vec<ChunkView> = page_chunks
             .iter()
             .map(|(abs_idx, chunk)| {
                 let is_grep_mode = grep_matcher.is_some();
@@ -595,11 +534,11 @@ impl CdtMcpServer {
                     &content_mode
                 };
                 let hit_flag = if is_grep_mode { Some(is_hit) } else { None };
-                build_chunk_envelope(*abs_idx, chunk, effective_mode, hit_flag)
+                build_chunk_view(*abs_idx, chunk, effective_mode, hit_flag)
             })
             .collect();
 
-        let response = SessionDetailResponse {
+        let response = SessionDetailMcpResponse {
             session_id: detail.session_id.clone(),
             total_chunks,
             returned_chunks,
@@ -650,13 +589,13 @@ impl CdtMcpServer {
         let offset = parse_cursor_offset(params.cursor.as_deref());
         let total = all_errors.len();
 
-        let page: Vec<ErrorEntry> = all_errors
+        let page: Vec<McpErrorEntry> = all_errors
             .into_iter()
             .skip(offset)
             .take(limit)
             .map(|e| {
                 let (msg, truncated) = truncate_error_message(e.error_message);
-                ErrorEntry {
+                McpErrorEntry {
                     chunk_index: e.chunk_index,
                     tool_name: e.tool_name,
                     tool_use_id: e.tool_use_id,
@@ -832,259 +771,8 @@ impl ServerHandler for CdtMcpServer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Content mode
-// ─────────────────────────────────────────────────────────────────────────────
-
-enum ContentMode {
-    Omit,
-    Full,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Chunk envelope builder
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn build_chunk_envelope(
-    abs_index: usize,
-    chunk: &Chunk,
-    mode: &ContentMode,
-    grep_hit: Option<bool>,
-) -> ChunkEnvelope {
-    match chunk {
-        Chunk::Ai(ai) => {
-            let tool_execs: Vec<ToolExecEnvelope> = ai
-                .tool_executions
-                .iter()
-                .map(|te| build_tool_exec_envelope(te, mode))
-                .collect();
-
-            let responses: Vec<ResponseEnvelope> = ai
-                .responses
-                .iter()
-                .map(|r| {
-                    let text = message_content_text(&r.content);
-                    let content_chars = text.chars().count();
-                    // Upstream IPC layer may have already omitted content
-                    let upstream_omitted = r.content_omitted;
-                    match mode {
-                        ContentMode::Omit => ResponseEnvelope {
-                            model: r.model.clone(),
-                            content: None,
-                            content_omitted: true,
-                            content_chars,
-                        },
-                        ContentMode::Full => ResponseEnvelope {
-                            model: r.model.clone(),
-                            content: if upstream_omitted { None } else { Some(text) },
-                            content_omitted: upstream_omitted,
-                            content_chars,
-                        },
-                    }
-                })
-                .collect();
-
-            ChunkEnvelope {
-                chunk_index: abs_index,
-                chunk_id: ai.chunk_id.clone(),
-                kind: "ai".to_string(),
-                timestamp: ai.timestamp.to_rfc3339(),
-                duration_ms: ai.duration_ms,
-                tool_executions: tool_execs,
-                responses,
-                user_content: None,
-                system_content: None,
-                compact_summary: None,
-                grep_hit,
-            }
-        }
-        Chunk::User(user) => {
-            let text = message_content_text(&user.content);
-            let chars = text.chars().count();
-            let user_content = match mode {
-                ContentMode::Omit => ContentField {
-                    text: if chars <= 200 { Some(text) } else { None },
-                    omitted: chars > 200,
-                    chars,
-                },
-                ContentMode::Full => ContentField {
-                    text: Some(text),
-                    omitted: false,
-                    chars,
-                },
-            };
-            ChunkEnvelope {
-                chunk_index: abs_index,
-                chunk_id: user.chunk_id.clone(),
-                kind: "user".to_string(),
-                timestamp: user.timestamp.to_rfc3339(),
-                duration_ms: user.duration_ms,
-                tool_executions: vec![],
-                responses: vec![],
-                user_content: Some(user_content),
-                system_content: None,
-                compact_summary: None,
-                grep_hit,
-            }
-        }
-        Chunk::System(sys) => {
-            let chars = sys.content_text.chars().count();
-            let system_content = match mode {
-                ContentMode::Omit => ContentField {
-                    text: if chars <= 200 {
-                        Some(sys.content_text.clone())
-                    } else {
-                        None
-                    },
-                    omitted: chars > 200,
-                    chars,
-                },
-                ContentMode::Full => ContentField {
-                    text: Some(sys.content_text.clone()),
-                    omitted: false,
-                    chars,
-                },
-            };
-            ChunkEnvelope {
-                chunk_index: abs_index,
-                chunk_id: sys.chunk_id.clone(),
-                kind: "system".to_string(),
-                timestamp: sys.timestamp.to_rfc3339(),
-                duration_ms: sys.duration_ms,
-                tool_executions: vec![],
-                responses: vec![],
-                user_content: None,
-                system_content: Some(system_content),
-                compact_summary: None,
-                grep_hit,
-            }
-        }
-        Chunk::Compact(compact) => ChunkEnvelope {
-            chunk_index: abs_index,
-            chunk_id: compact.chunk_id.clone(),
-            kind: "compact".to_string(),
-            timestamp: compact.timestamp.to_rfc3339(),
-            duration_ms: compact.duration_ms,
-            tool_executions: vec![],
-            responses: vec![],
-            user_content: None,
-            system_content: None,
-            compact_summary: Some(compact.summary_text.clone()),
-            grep_hit,
-        },
-    }
-}
-
-fn tool_output_to_value(output: &ToolOutput) -> serde_json::Value {
-    match output {
-        ToolOutput::Text { text } => serde_json::Value::String(text.clone()),
-        ToolOutput::Structured { value } => value.clone(),
-        ToolOutput::Missing => serde_json::Value::Null,
-    }
-}
-
-fn build_tool_exec_envelope(te: &cdt_core::ToolExecution, mode: &ContentMode) -> ToolExecEnvelope {
-    let output_text = tool_output_text(&te.output);
-    // If upstream omitted output, use output_bytes as approximate char count
-    let upstream_omitted = te.output_omitted;
-    let output_chars = if upstream_omitted {
-        te.output_bytes
-            .map_or(0, |b| usize::try_from(b).unwrap_or(usize::MAX))
-    } else {
-        output_text.chars().count()
-    };
-
-    match mode {
-        ContentMode::Omit => ToolExecEnvelope {
-            tool_name: te.tool_name.clone(),
-            tool_use_id: te.tool_use_id.clone(),
-            is_error: te.is_error,
-            input_summary: Some(summarize_input(&te.input)),
-            input: None,
-            output: None,
-            output_omitted: true,
-            output_chars,
-            error_message: te.error_message.clone(),
-        },
-        ContentMode::Full => ToolExecEnvelope {
-            tool_name: te.tool_name.clone(),
-            tool_use_id: te.tool_use_id.clone(),
-            is_error: te.is_error,
-            input_summary: None,
-            input: Some(te.input.clone()),
-            output: if upstream_omitted {
-                None
-            } else {
-                Some(tool_output_to_value(&te.output))
-            },
-            output_omitted: upstream_omitted,
-            output_chars,
-            error_message: te.error_message.clone(),
-        },
-    }
-}
-
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_string();
-    }
-    let truncated: String = s.chars().take(max_chars).collect();
-    format!("{truncated}...")
-}
-
-fn summarize_input(input: &serde_json::Value) -> String {
-    match input {
-        serde_json::Value::Object(map) => {
-            let parts: Vec<String> = map
-                .iter()
-                .take(3)
-                .map(|(k, v)| {
-                    let val_str = match v {
-                        serde_json::Value::String(s) => truncate_str(s, 57),
-                        other => truncate_str(&other.to_string(), 57),
-                    };
-                    format!("{k}: {val_str}")
-                })
-                .collect();
-            if map.len() > 3 {
-                format!("{} (+{} more)", parts.join(", "), map.len() - 3)
-            } else {
-                parts.join(", ")
-            }
-        }
-        other => truncate_str(&other.to_string(), 117),
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-fn message_content_text(content: &MessageContent) -> String {
-    match content {
-        MessageContent::Text(s) => s.clone(),
-        MessageContent::Blocks(blocks) => {
-            let mut parts = Vec::new();
-            for block in blocks {
-                match block {
-                    cdt_core::message::ContentBlock::Text { text } => parts.push(text.as_str()),
-                    cdt_core::message::ContentBlock::Thinking { thinking, .. } => {
-                        parts.push(thinking.as_str());
-                    }
-                    _ => {}
-                }
-            }
-            parts.join("\n")
-        }
-    }
-}
-
-fn tool_output_text(output: &ToolOutput) -> String {
-    match output {
-        ToolOutput::Text { text } => text.clone(),
-        ToolOutput::Structured { value } => serde_json::to_string(value).unwrap_or_default(),
-        ToolOutput::Missing => String::new(),
-    }
-}
 
 fn parse_cursor_offset(cursor: Option<&str>) -> usize {
     cursor
@@ -1097,7 +785,7 @@ fn truncate_error_message(msg: Option<String>) -> (Option<String>, bool) {
     match msg {
         None => (None, false),
         Some(s) if s.chars().count() <= ERROR_MESSAGE_MAX_CHARS => (Some(s), false),
-        Some(s) => (Some(truncate_str(&s, ERROR_MESSAGE_MAX_CHARS)), true),
+        Some(s) => (Some(view::truncate_str(&s, ERROR_MESSAGE_MAX_CHARS)), true),
     }
 }
 

@@ -23,6 +23,7 @@ use cdt_ssh::SshConnectionManager;
 
 mod mcp;
 mod update;
+mod view;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI 定义
@@ -38,6 +39,15 @@ struct Cli {
     /// 限定项目范围（项目名或 ID；编码 ID 需用 --project=<id> 形式）
     #[arg(long, global = true, add = ArgValueCandidates::new(completions::ProjectCompleter))]
     project: Option<String>,
+
+    /// JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。
+    /// 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
+    #[arg(long, global = true, num_args = 0..=1, default_missing_value = "", require_equals = true)]
+    json: Option<String>,
+
+    /// table 模式不截断任何字段
+    #[arg(long, global = true)]
+    no_truncate: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -174,21 +184,21 @@ enum SessionsAction {
         #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
         id: String,
 
-        /// 指定 chunk 区间（如 10:30）
-        #[arg(long)]
+        /// 指定 chunk 区间（如 10:30），与 --tail 互斥
+        #[arg(long, conflicts_with = "tail")]
         range: Option<String>,
 
-        /// 仅显示最后 N 条 chunks
-        #[arg(long)]
+        /// 仅显示最后 N 条 chunks，与 --range 互斥
+        #[arg(long, conflicts_with = "range")]
         tail: Option<usize>,
 
         /// 过滤条件：`errors_only` 或 `tool_calls`
         #[arg(long)]
         filter: Option<String>,
 
-        /// 输出完整 chunks（不截断）
-        #[arg(long)]
-        full: bool,
+        /// 返回全部 chunk，禁用默认 tail=20
+        #[arg(long, visible_alias = "full")]
+        all: bool,
 
         /// 按内容匹配过滤 chunks（case-insensitive literal substring）
         #[arg(long)]
@@ -197,6 +207,10 @@ enum SessionsAction {
         /// grep 命中周围的 context chunk 数（默认 1）
         #[arg(long, default_value = "1")]
         grep_context: usize,
+
+        /// JSON/JSONL 输出的内容模式：omit（结构概览）或 full（完整内容）
+        #[arg(long)]
+        content: Option<String>,
     },
     /// 聚合会话中的所有错误
     Errors {
@@ -365,7 +379,7 @@ async fn run_serve() -> Result<()> {
 // projects list
 // ─────────────────────────────────────────────────────────────────────────────
 
-async fn cmd_projects_list(format: &OutputFormat) -> Result<()> {
+async fn cmd_projects_list(format: &OutputFormat, json_fields: Option<&str>) -> Result<()> {
     let api = build_local_data_api().await?;
     let groups = api
         .list_repository_groups()
@@ -373,34 +387,37 @@ async fn cmd_projects_list(format: &OutputFormat) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     match format {
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&groups)?;
-            println!("{json}");
-        }
+        OutputFormat::Json => emit_json(&groups, json_fields)?,
         OutputFormat::Jsonl => {
             for group in &groups {
                 println!("{}", serde_json::to_string(group)?);
             }
         }
         OutputFormat::Table => {
+            let tw = term_width();
+            let fixed = 8 + 20 + 6; // SESSIONS + LAST ACTIVE + padding
+            let flex = tw.saturating_sub(fixed);
+            let name_w = flex * 2 / 5;
+            let path_w = flex * 3 / 5;
             println!(
-                "{:<40} {:<50} {:>8} {:>20}",
-                "NAME", "PATH", "SESSIONS", "LAST ACTIVE"
+                "{:<name_w$} {:<path_w$} {:>8} {:>20}",
+                "NAME", "PATH", "SESSIONS", "LAST ACTIVE",
             );
-            println!("{}", "-".repeat(120));
+            println!("{}", "-".repeat(tw));
             for group in &groups {
-                let path = group
+                let raw_path = group
                     .worktrees
                     .first()
                     .map(|w| w.path.display().to_string())
                     .unwrap_or_default();
+                let path = shorten_path(&raw_path);
                 let last_active = group
                     .most_recent_session
                     .map_or_else(|| "-".to_string(), format_timestamp);
                 println!(
-                    "{:<40} {:<50} {:>8} {:>20}",
-                    truncate(&group.name, 39),
-                    truncate(&path, 49),
+                    "{:<name_w$} {:<path_w$} {:>8} {:>20}",
+                    truncate(&group.name, name_w.saturating_sub(1)),
+                    truncate(&path, path_w.saturating_sub(1)),
                     group.total_sessions,
                     last_active,
                 );
@@ -421,6 +438,7 @@ async fn cmd_sessions_list(
     since: Option<&str>,
     grep: Option<&str>,
     min_messages: Option<usize>,
+    json_fields: Option<&str>,
 ) -> Result<()> {
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
@@ -453,37 +471,36 @@ async fn cmd_sessions_list(
 
     if items.is_empty() {
         match format {
-            OutputFormat::Json => println!("[]"),
-            OutputFormat::Jsonl => {}
+            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
             OutputFormat::Table => eprintln!("No sessions found."),
         }
-        std::process::exit(2);
+        return Ok(());
     }
 
     match format {
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&items)?;
-            println!("{json}");
-        }
+        OutputFormat::Json => emit_json(&items, json_fields)?,
         OutputFormat::Jsonl => {
             for item in &items {
                 println!("{}", serde_json::to_string(item)?);
             }
         }
         OutputFormat::Table => {
+            let tw = term_width();
+            let fixed = 38 + 10 + 8 + 8 + 8; // ID + DURATION + STATUS + MESSAGES + padding
+            let title_w = tw.saturating_sub(fixed).max(10);
             println!(
-                "{:<38} {:<40} {:>10} {:>8} {:>8}",
+                "{:<38} {:<title_w$} {:>10} {:>8} {:>8}",
                 "ID", "TITLE", "DURATION", "STATUS", "MESSAGES"
             );
-            println!("{}", "-".repeat(108));
+            println!("{}", "-".repeat(tw));
             for s in &items {
                 let title = s.title.as_deref().unwrap_or("(untitled)");
                 let status = if s.is_ongoing { "active" } else { "done" };
                 let duration = format_duration(s.timestamp);
                 println!(
-                    "{:<38} {:<40} {:>10} {:>8} {:>8}",
+                    "{:<38} {:<title_w$} {:>10} {:>8} {:>8}",
                     &s.session_id,
-                    truncate(title, 39),
+                    truncate(title, title_w.saturating_sub(1)),
                     duration,
                     status,
                     s.message_count,
@@ -498,7 +515,11 @@ async fn cmd_sessions_list(
 // sessions show
 // ─────────────────────────────────────────────────────────────────────────────
 
-async fn cmd_sessions_show(format: &OutputFormat, session_id: &str) -> Result<()> {
+async fn cmd_sessions_show(
+    format: &OutputFormat,
+    session_id: &str,
+    json_fields: Option<&str>,
+) -> Result<()> {
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
 
@@ -513,10 +534,7 @@ async fn cmd_sessions_show(format: &OutputFormat, session_id: &str) -> Result<()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     match format {
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&detail)?;
-            println!("{json}");
-        }
+        OutputFormat::Json => emit_json(&detail, json_fields)?,
         OutputFormat::Jsonl => {
             println!("{}", serde_json::to_string(&detail)?);
         }
@@ -554,10 +572,21 @@ async fn cmd_sessions_detail(
     range: Option<&str>,
     tail: Option<usize>,
     filter: Option<&str>,
-    full: bool,
+    all: bool,
     grep: Option<&str>,
     grep_context: usize,
+    content: Option<&str>,
+    json_fields: Option<&str>,
 ) -> Result<()> {
+    let content_mode = match content {
+        None => None,
+        Some("omit") => Some(view::ContentMode::Omit),
+        Some("full") => Some(view::ContentMode::Full),
+        Some(other) => {
+            anyhow::bail!("invalid --content value: '{other}'. Supported: omit, full");
+        }
+    };
+
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
 
@@ -566,69 +595,133 @@ async fn cmd_sessions_detail(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let options = if full {
-        SessionQueryOptions::full()
-    } else {
-        let parsed_range = range.map(parse_range).transpose()?;
-        let kind_filter = filter.map(parse_kind_filter).transpose()?;
-        SessionQueryOptions {
-            range: parsed_range,
-            tail: tail.or(if parsed_range.is_some() {
-                None
-            } else {
-                Some(20)
-            }),
-            kind_filter,
-            errors_only: false,
-        }
+    let kind_filter = filter.map(parse_kind_filter).transpose()?;
+
+    let options = SessionQueryOptions {
+        range: None,
+        tail: None,
+        kind_filter,
+        errors_only: false,
     };
 
-    let mut detail = engine
+    let detail = engine
         .get_session_detail(&project_id, session_id, &options)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    if let Some(needle) = grep.filter(|s| !s.trim().is_empty()) {
-        let matcher = cdt_discover::search_text::GrepMatcher::literal(needle);
-        let hits: std::collections::HashSet<usize> = detail
-            .chunks
+    // Track absolute indices for grep hit detection
+    let indexed_chunks: Vec<(usize, cdt_core::Chunk)> =
+        detail.chunks.into_iter().enumerate().collect();
+
+    // grep on full set (after kind_filter, before range/tail)
+    let grep_needle = grep.filter(|s| !s.trim().is_empty());
+    let grep_matcher = grep_needle.map(cdt_discover::search_text::GrepMatcher::literal);
+    let grep_hits: std::collections::HashSet<usize> = if let Some(ref matcher) = grep_matcher {
+        indexed_chunks
             .iter()
-            .enumerate()
-            .filter(|(_, chunk)| cdt_discover::search_text::chunk_matches_grep(chunk, &matcher))
-            .map(|(i, _)| i)
-            .collect();
-        let visible: std::collections::HashSet<usize> = hits
+            .filter(|(_, chunk)| cdt_discover::search_text::chunk_matches_grep(chunk, matcher))
+            .map(|(i, _)| *i)
+            .collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+
+    let filtered: Vec<(usize, cdt_core::Chunk)> = if grep_matcher.is_some() {
+        let visible: std::collections::HashSet<usize> = grep_hits
             .iter()
             .flat_map(|&i| i.saturating_sub(grep_context)..=i + grep_context)
             .collect();
-        detail.chunks = detail
-            .chunks
+        indexed_chunks
             .into_iter()
-            .enumerate()
             .filter(|(i, _)| visible.contains(i))
-            .map(|(_, c)| c)
-            .collect();
-    }
+            .collect()
+    } else {
+        indexed_chunks
+    };
+
+    // range/tail applied after grep
+    let windowed: Vec<(usize, cdt_core::Chunk)> = if all {
+        filtered
+    } else {
+        let parsed_range = range.map(parse_range).transpose()?;
+        if let Some((start, end)) = parsed_range {
+            filtered
+                .into_iter()
+                .filter(|(i, _)| *i >= start && *i < end)
+                .collect()
+        } else {
+            let effective_tail = tail.unwrap_or(20);
+            let len = filtered.len();
+            if effective_tail < len {
+                filtered.into_iter().skip(len - effective_tail).collect()
+            } else {
+                filtered
+            }
+        }
+    };
 
     match format {
+        OutputFormat::Json | OutputFormat::Jsonl if content_mode.is_some() => {
+            let mode = content_mode.as_ref().unwrap();
+            let views: Vec<view::ChunkView> = windowed
+                .iter()
+                .map(|(abs_idx, chunk)| {
+                    let is_hit = grep_hits.contains(abs_idx);
+                    let effective_mode = if is_hit {
+                        &view::ContentMode::Full
+                    } else {
+                        mode
+                    };
+                    let hit_flag = if grep_matcher.is_some() {
+                        Some(is_hit)
+                    } else {
+                        None
+                    };
+                    view::build_chunk_view(*abs_idx, chunk, effective_mode, hit_flag)
+                })
+                .collect();
+
+            match format {
+                OutputFormat::Json => {
+                    let output = serde_json::json!({
+                        "sessionId": detail.session_id,
+                        "totalChunks": views.len(),
+                        "contentMode": match mode {
+                            view::ContentMode::Omit => "omit",
+                            view::ContentMode::Full => "full",
+                        },
+                        "chunks": views,
+                    });
+                    emit_json(&output, json_fields)?;
+                }
+                OutputFormat::Jsonl => {
+                    for v in &views {
+                        println!("{}", serde_json::to_string(v)?);
+                    }
+                }
+                OutputFormat::Table => unreachable!(),
+            }
+        }
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&detail)?;
-            println!("{json}");
+            let chunks: Vec<&cdt_core::Chunk> = windowed.iter().map(|(_, c)| c).collect();
+            let output = serde_json::json!({
+                "sessionId": detail.session_id,
+                "chunks": chunks,
+            });
+            emit_json(&output, json_fields)?;
         }
         OutputFormat::Jsonl => {
-            for chunk in &detail.chunks {
+            for (_, chunk) in &windowed {
                 println!("{}", serde_json::to_string(chunk)?);
             }
         }
         OutputFormat::Table => {
-            println!(
-                "Session: {} ({} chunks)",
-                detail.session_id,
-                detail.chunks.len()
-            );
-            println!("{}", "-".repeat(60));
-            for (i, chunk) in detail.chunks.iter().enumerate() {
-                print_chunk_summary(i, chunk);
+            let tw = term_width();
+            let content_w = tw.saturating_sub(16).max(20);
+            println!("Session: {} ({} chunks)", detail.session_id, windowed.len());
+            println!("{}", "-".repeat(tw));
+            for (i, (_, chunk)) in windowed.iter().enumerate() {
+                print_chunk_summary(i, chunk, content_w);
             }
         }
     }
@@ -639,7 +732,11 @@ async fn cmd_sessions_detail(
 // sessions errors
 // ─────────────────────────────────────────────────────────────────────────────
 
-async fn cmd_sessions_errors(format: &OutputFormat, session_id: &str) -> Result<()> {
+async fn cmd_sessions_errors(
+    format: &OutputFormat,
+    session_id: &str,
+    json_fields: Option<&str>,
+) -> Result<()> {
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
 
@@ -655,33 +752,32 @@ async fn cmd_sessions_errors(format: &OutputFormat, session_id: &str) -> Result<
 
     if errors.is_empty() {
         match format {
-            OutputFormat::Json => println!("[]"),
-            OutputFormat::Jsonl => {}
+            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
             OutputFormat::Table => eprintln!("No errors found."),
         }
-        std::process::exit(2);
+        return Ok(());
     }
 
     match format {
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&errors)?;
-            println!("{json}");
-        }
+        OutputFormat::Json => emit_json(&errors, json_fields)?,
         OutputFormat::Jsonl => {
             for e in &errors {
                 println!("{}", serde_json::to_string(e)?);
             }
         }
         OutputFormat::Table => {
-            println!("{:>6} {:<20} {:<50}", "CHUNK", "TOOL", "ERROR");
-            println!("{}", "-".repeat(78));
+            let tw = term_width();
+            let fixed = 6 + 20 + 4; // CHUNK + TOOL + padding
+            let error_w = tw.saturating_sub(fixed).max(20);
+            println!("{:>6} {:<20} {:<error_w$}", "CHUNK", "TOOL", "ERROR");
+            println!("{}", "-".repeat(tw));
             for e in &errors {
                 let msg = e.error_message.as_deref().unwrap_or("(no message)");
                 println!(
-                    "{:>6} {:<20} {:<50}",
+                    "{:>6} {:<20} {:<error_w$}",
                     e.chunk_index,
                     truncate(&e.tool_name, 19),
-                    truncate(msg, 49),
+                    truncate(msg, error_w.saturating_sub(1)),
                 );
             }
         }
@@ -700,6 +796,7 @@ async fn cmd_search(
     limit: usize,
     offset: usize,
     session_filter: Option<&str>,
+    json_fields: Option<&str>,
 ) -> Result<()> {
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
@@ -741,37 +838,38 @@ async fn cmd_search(
 
     if result.results.is_empty() {
         match format {
-            OutputFormat::Json => println!("[]"),
-            OutputFormat::Jsonl => {}
+            OutputFormat::Json | OutputFormat::Jsonl => println!("[]"),
             OutputFormat::Table => eprintln!("No results found."),
         }
-        std::process::exit(2);
+        return Ok(());
     }
 
     match format {
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&result.results)?;
-            println!("{json}");
-        }
+        OutputFormat::Json => emit_json(&result.results, json_fields)?,
         OutputFormat::Jsonl => {
             for r in &result.results {
                 println!("{}", serde_json::to_string(r)?);
             }
         }
         OutputFormat::Table => {
+            let tw = term_width();
+            let fixed = 38 + 8 + 4; // SESSION + MATCHES + padding
+            let flex = tw.saturating_sub(fixed);
+            let title_w = flex * 2 / 5;
+            let preview_w = flex * 3 / 5;
             println!(
-                "{:<38} {:<30} {:>8} {:<40}",
+                "{:<38} {:<title_w$} {:>8} {:<preview_w$}",
                 "SESSION", "TITLE", "MATCHES", "PREVIEW"
             );
-            println!("{}", "-".repeat(119));
+            println!("{}", "-".repeat(tw));
             for r in &result.results {
                 let preview = r.hits.first().map_or("", |h| h.preview.as_str());
                 println!(
-                    "{:<38} {:<30} {:>8} {:<40}",
+                    "{:<38} {:<title_w$} {:>8} {:<preview_w$}",
                     &r.session_id,
-                    truncate(&r.session_title, 29),
+                    truncate(&r.session_title, title_w.saturating_sub(1)),
                     r.total_matches,
-                    truncate(preview, 39),
+                    truncate(preview, preview_w.saturating_sub(1)),
                 );
             }
         }
@@ -783,13 +881,109 @@ async fn cmd_search(
 // 工具函数
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max - 1).collect();
-        format!("{truncated}…")
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static NO_TRUNCATE: AtomicBool = AtomicBool::new(false);
+
+fn term_width() -> usize {
+    terminal_size::terminal_size().map_or(120, |(w, _)| w.0 as usize)
+}
+
+fn shorten_path(path: &str) -> String {
+    if let Some(home) = cdt_discover::home_dir() {
+        let home_str = home.display().to_string();
+        if path.starts_with(&home_str) {
+            return format!("~{}", &path[home_str.len()..]);
+        }
     }
+    path.to_string()
+}
+
+fn truncate(s: &str, max_width: usize) -> String {
+    if NO_TRUNCATE.load(Ordering::Relaxed) {
+        return s.to_string();
+    }
+    view::truncate_display(s, max_width)
+}
+
+fn list_available_fields(command: &Command) {
+    let fields: &[&str] = match command {
+        Command::Projects { .. } => &["name", "worktrees", "totalSessions", "mostRecentSession"],
+        Command::Sessions { action } => match action {
+            SessionsAction::List { .. } => &[
+                "sessionId",
+                "title",
+                "timestamp",
+                "messageCount",
+                "isOngoing",
+                "model",
+                "gitBranch",
+                "cwd",
+            ],
+            SessionsAction::Show { .. } => &[
+                "sessionId",
+                "projectId",
+                "title",
+                "isOngoing",
+                "metrics",
+                "metadata",
+            ],
+            SessionsAction::Detail { .. } => &["sessionId", "chunks", "totalChunks", "contentMode"],
+            SessionsAction::Errors { .. } => {
+                &["chunkIndex", "toolName", "toolUseId", "errorMessage"]
+            }
+            SessionsAction::Summary { .. } => &[
+                "sessionId",
+                "messageCount",
+                "errorCount",
+                "cost",
+                "phases",
+                "toolUsage",
+                "topFiles",
+            ],
+            SessionsAction::Cost { .. } => &[
+                "model",
+                "totalTokens",
+                "totalCost",
+                "inputTokens",
+                "outputTokens",
+                "cacheReadTokens",
+                "cacheCreationTokens",
+            ],
+        },
+        Command::Search { .. } => &["sessionId", "sessionTitle", "totalMatches", "hits"],
+        Command::Stats { .. } => &[
+            "sessionCount",
+            "totalMessages",
+            "totalTokens",
+            "totalCost",
+            "modelUsage",
+            "toolFrequency",
+        ],
+        _ => &[],
+    };
+    if fields.is_empty() {
+        eprintln!("No JSON fields available for this command.");
+    } else {
+        for f in fields {
+            println!("{f}");
+        }
+    }
+}
+
+fn emit_json(value: &impl serde::Serialize, json_fields: Option<&str>) -> Result<()> {
+    let serialized = serde_json::to_value(value)?;
+    match json_fields {
+        Some(fields_str) if !fields_str.is_empty() => {
+            let fields: Vec<&str> = fields_str.split(',').map(str::trim).collect();
+            let projected = view::project_fields(serialized, &fields);
+            println!("{}", serde_json::to_string(&projected)?);
+        }
+        _ => {
+            println!("{}", serde_json::to_string_pretty(&serialized)?);
+        }
+    }
+    Ok(())
 }
 
 fn format_timestamp(ts: i64) -> String {
@@ -865,11 +1059,11 @@ fn parse_kind_filter(s: &str) -> Result<ChunkKindFilter> {
     }
 }
 
-fn print_chunk_summary(index: usize, chunk: &cdt_core::Chunk) {
+fn print_chunk_summary(index: usize, chunk: &cdt_core::Chunk, content_width: usize) {
     match chunk {
         cdt_core::Chunk::User(u) => {
             let text = match &u.content {
-                cdt_core::MessageContent::Text(t) => truncate(t, 60),
+                cdt_core::MessageContent::Text(t) => truncate(t, content_width),
                 cdt_core::MessageContent::Blocks(_) => "(non-text)".to_string(),
             };
             println!("[{index:>4}] USER: {text}");
@@ -886,17 +1080,26 @@ fn print_chunk_summary(index: usize, chunk: &cdt_core::Chunk) {
             } else if errors > 0 {
                 println!(
                     "[{index:>4}] AI: tools=[{}] ({errors} errors)",
-                    tools.join(", ")
+                    truncate(&tools.join(", "), content_width)
                 );
             } else {
-                println!("[{index:>4}] AI: tools=[{}]", tools.join(", "));
+                println!(
+                    "[{index:>4}] AI: tools=[{}]",
+                    truncate(&tools.join(", "), content_width)
+                );
             }
         }
         cdt_core::Chunk::System(s) => {
-            println!("[{index:>4}] SYSTEM: {}", truncate(&s.content_text, 60));
+            println!(
+                "[{index:>4}] SYSTEM: {}",
+                truncate(&s.content_text, content_width)
+            );
         }
         cdt_core::Chunk::Compact(c) => {
-            println!("[{index:>4}] COMPACT: {}", truncate(&c.summary_text, 60));
+            println!(
+                "[{index:>4}] COMPACT: {}",
+                truncate(&c.summary_text, content_width)
+            );
         }
     }
 }
@@ -1057,7 +1260,11 @@ fn cmd_setup_skills(scope: &SetupScope, dry_run: bool, force: bool) -> Result<()
 // sessions summary
 // ─────────────────────────────────────────────────────────────────────────────
 
-async fn cmd_sessions_summary(format: &OutputFormat, session_id: &str) -> Result<()> {
+async fn cmd_sessions_summary(
+    format: &OutputFormat,
+    session_id: &str,
+    json_fields: Option<&str>,
+) -> Result<()> {
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
 
@@ -1082,9 +1289,9 @@ async fn cmd_sessions_summary(format: &OutputFormat, session_id: &str) -> Result
     let output = summary::build_summary(&detail);
 
     match format {
-        OutputFormat::Json | OutputFormat::Jsonl => {
-            let json = serde_json::to_string_pretty(&output)?;
-            println!("{json}");
+        OutputFormat::Json => emit_json(&output, json_fields)?,
+        OutputFormat::Jsonl => {
+            println!("{}", serde_json::to_string(&output)?);
         }
         OutputFormat::Table => {
             print_summary_table(&output);
@@ -1161,7 +1368,11 @@ fn print_summary_table(s: &summary::SessionSummaryOutput) {
 // sessions cost
 // ─────────────────────────────────────────────────────────────────────────────
 
-async fn cmd_sessions_cost(format: &OutputFormat, session_id: &str) -> Result<()> {
+async fn cmd_sessions_cost(
+    format: &OutputFormat,
+    session_id: &str,
+    json_fields: Option<&str>,
+) -> Result<()> {
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
 
@@ -1186,9 +1397,9 @@ async fn cmd_sessions_cost(format: &OutputFormat, session_id: &str) -> Result<()
     let output = cost::compute_session_cost(&detail);
 
     match format {
-        OutputFormat::Json | OutputFormat::Jsonl => {
-            let json = serde_json::to_string_pretty(&output)?;
-            println!("{json}");
+        OutputFormat::Json => emit_json(&output, json_fields)?,
+        OutputFormat::Jsonl => {
+            println!("{}", serde_json::to_string(&output)?);
         }
         OutputFormat::Table => {
             println!(
@@ -1242,6 +1453,7 @@ async fn cmd_stats(
     format: &OutputFormat,
     period: &str,
     project_filter: Option<&str>,
+    json_fields: Option<&str>,
 ) -> Result<()> {
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(Arc::clone(&api));
@@ -1301,20 +1513,19 @@ async fn cmd_stats(
 
     if session_data_list.is_empty() {
         match format {
-            OutputFormat::Json | OutputFormat::Jsonl => {
-                println!("{{\"sessionCount\": 0}}");
-            }
+            OutputFormat::Json => println!("{{\"sessionCount\": 0}}"),
+            OutputFormat::Jsonl => println!("{{\"sessionCount\":0}}"),
             OutputFormat::Table => eprintln!("No sessions found in the given period."),
         }
-        std::process::exit(2);
+        return Ok(());
     }
 
     let result = stats::aggregate(&session_data_list, since_dt);
 
     match format {
-        OutputFormat::Json | OutputFormat::Jsonl => {
-            let json = serde_json::to_string_pretty(&result)?;
-            println!("{json}");
+        OutputFormat::Json => emit_json(&result, json_fields)?,
+        OutputFormat::Jsonl => {
+            println!("{}", serde_json::to_string(&result)?);
         }
         OutputFormat::Table => {
             print_stats_table(&result);
@@ -1411,6 +1622,21 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    if cli.no_truncate {
+        NO_TRUNCATE.store(true, Ordering::Relaxed);
+    }
+
+    // --json overrides format; empty string means "list available fields"
+    let (effective_format, json_fields) = if let Some(ref json_arg) = cli.json {
+        if json_arg.is_empty() {
+            list_available_fields(&cli.command);
+            return Ok(());
+        }
+        (OutputFormat::Json, Some(json_arg.as_str()))
+    } else {
+        (cli.format, None)
+    };
+
     match cli.command {
         Command::Completions { shell } => {
             let script = completions::generate_script(shell)?;
@@ -1419,7 +1645,7 @@ async fn main() -> Result<()> {
         }
         Command::Serve => run_serve().await,
         Command::Projects { action } => match action {
-            ProjectsAction::List => cmd_projects_list(&cli.format).await,
+            ProjectsAction::List => cmd_projects_list(&effective_format, json_fields).await,
         },
         Command::Sessions { action } => match action {
             SessionsAction::List {
@@ -1429,40 +1655,52 @@ async fn main() -> Result<()> {
                 min_messages,
             } => {
                 cmd_sessions_list(
-                    &cli.format,
+                    &effective_format,
                     cli.project.as_deref(),
                     limit,
                     since.as_deref(),
                     grep.as_deref(),
                     min_messages,
+                    json_fields,
                 )
                 .await
             }
-            SessionsAction::Show { id } => cmd_sessions_show(&cli.format, &id).await,
+            SessionsAction::Show { id } => {
+                cmd_sessions_show(&effective_format, &id, json_fields).await
+            }
             SessionsAction::Detail {
                 id,
                 range,
                 tail,
                 filter,
-                full,
+                all,
                 grep,
                 grep_context,
+                content,
             } => {
                 cmd_sessions_detail(
-                    &cli.format,
+                    &effective_format,
                     &id,
                     range.as_deref(),
                     tail,
                     filter.as_deref(),
-                    full,
+                    all,
                     grep.as_deref(),
                     grep_context,
+                    content.as_deref(),
+                    json_fields,
                 )
                 .await
             }
-            SessionsAction::Errors { id } => cmd_sessions_errors(&cli.format, &id).await,
-            SessionsAction::Summary { id } => cmd_sessions_summary(&cli.format, &id).await,
-            SessionsAction::Cost { id } => cmd_sessions_cost(&cli.format, &id).await,
+            SessionsAction::Errors { id } => {
+                cmd_sessions_errors(&effective_format, &id, json_fields).await
+            }
+            SessionsAction::Summary { id } => {
+                cmd_sessions_summary(&effective_format, &id, json_fields).await
+            }
+            SessionsAction::Cost { id } => {
+                cmd_sessions_cost(&effective_format, &id, json_fields).await
+            }
         },
         Command::Search {
             query,
@@ -1471,18 +1709,19 @@ async fn main() -> Result<()> {
             session,
         } => {
             cmd_search(
-                &cli.format,
+                &effective_format,
                 cli.project.as_deref(),
                 &query,
                 limit,
                 offset,
                 session.as_deref(),
+                json_fields,
             )
             .await
         }
         Command::Stats { period, project } => {
             let proj = project.as_deref().or(cli.project.as_deref());
-            cmd_stats(&cli.format, &period, proj).await
+            cmd_stats(&effective_format, &period, proj, json_fields).await
         }
         Command::Mcp { action } => match action {
             McpAction::Serve { allow_sensitive } => {

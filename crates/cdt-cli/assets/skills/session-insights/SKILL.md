@@ -108,9 +108,30 @@ cdt sessions detail <session-id> --grep "mw switch"
 
 The `toolActivity` section in summary shows: top commands, files edited, git operations, and CLI tools detected. Use this for quick "what happened" answers without digging into full detail.
 
+## Token-Efficient Access (for agents)
+
+When consuming CLI output programmatically, use these flags to minimize token waste:
+
+```bash
+# Structure overview without content (saves ~300x tokens on large sessions)
+cdt sessions detail <session-id> --format json --content omit
+
+# Select only needed fields (compact JSON, no pretty-print)
+cdt --json=sessionId,title,messageCount sessions list --project <project-name>
+
+# Grep + omit: only matched chunks get full content
+cdt sessions detail <session-id> --format json --content omit --grep "<keyword>"
+```
+
 ## Common Notes
 
 - Use `cdt projects list` to discover available project names
 - `--since` accepts: 7d, 24h, 30d, today, week
 - `--format json` available on most commands for structured output
+- `--json` (no value) lists available fields for the current command
+- `--json=field1,field2` implies `--format json` + field projection + compact output
+- `--content omit|full` controls JSON/JSONL content detail level for `sessions detail`
+- `--no-truncate` prevents table column truncation
+- `--all` (alias `--full`) disables default tail=20 for `sessions detail`
+- `--range` and `--tail` are mutually exclusive
 - Session IDs come from `cdt sessions list` output
