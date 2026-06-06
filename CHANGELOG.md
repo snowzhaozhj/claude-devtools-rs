@@ -9,6 +9,17 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.9] — 2026-06-06
+
+### Added
+- **CLI**: shared view layer with field selection and unified output formatting.
+
+### Fixed
+- App icons now use transparent background for cleaner appearance on all platforms.
+
+### Changed
+- Redesigned app icon and tray icon to Clawd robot design.
+
 ## [0.6.8] — 2026-06-06
 
 ### Added
@@ -273,7 +284,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.8...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.9...HEAD
+[0.6.9]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.5...v0.6.7
 [0.6.5]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.4...v0.6.5
