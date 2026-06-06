@@ -9,7 +9,7 @@
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
-  import { createLazyMarkdownObserver, estimatePlaceholderHeight } from "../lib/lazyMarkdown.svelte";
+  import { createLazyMarkdownObserver, estimatePlaceholderHeight, isScrollCompensating } from "../lib/lazyMarkdown.svelte";
   import { isAtBottom, captureScrollAnchor, restoreScrollAnchor, startBottomPin, type ScrollAnchorState } from "../lib/scrollAnchor";
   import { getTabUIState, saveTabUIState, getTabSessionId, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
   import { isMac } from "../lib/platform";
@@ -309,7 +309,7 @@
   function attachConversationScroll(el: HTMLElement) {
     // bind:this 已经把 conversationEl 设上，attach 仅负责挂 listener + cleanup
     const onScroll = () => {
-      // 同步写入 latestAnchor 供 onDestroy 用——element detach 后无法读 rect/scrollTop
+      if (conversationEl && isScrollCompensating(conversationEl)) return;
       latestAnchor = captureScrollAnchor(conversationEl);
       scheduleUpdateIsFar();
     };
@@ -1747,6 +1747,7 @@
     flex: 1;
     min-width: 0;
     overflow-y: scroll;
+    overflow-anchor: none;
     overflow-x: hidden;
     scrollbar-gutter: stable;
     padding: 20px 28px 56px;

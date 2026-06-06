@@ -49,6 +49,14 @@ beforeEach(() => {
   lastObserver = undefined
   ;(globalThis as unknown as { IntersectionObserver: typeof IntersectionObserver }).IntersectionObserver =
     MockIntersectionObserver as unknown as typeof IntersectionObserver
+  // Mock ResizeObserver for scroll compensation
+  if (typeof globalThis.ResizeObserver === "undefined") {
+    ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  }
 })
 
 afterEach(() => {
