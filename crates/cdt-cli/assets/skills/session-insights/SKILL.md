@@ -1,6 +1,6 @@
 ---
 name: session-insights
-description: "Analyze Claude Code sessions — errors, costs, search, diagnostics, recall."
+description: "Analyze Claude Code sessions — errors, token usage, costs, search, diagnostics, recall."
 ---
 
 # Session Insights
