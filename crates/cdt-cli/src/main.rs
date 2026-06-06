@@ -1350,8 +1350,15 @@ fn print_summary_table(s: &summary::SessionSummaryOutput) {
 
     if !s.top_files.is_empty() {
         println!("Top Files:");
+        let path_width = term_width().saturating_sub(8);
         for f in s.top_files.iter().take(5) {
-            println!("  {:<60} {:>3}x", truncate(&f.path, 59), f.count);
+            let short = shorten_path(&f.path);
+            println!(
+                "  {:<width$} {:>3}x",
+                truncate(&short, path_width),
+                f.count,
+                width = path_width + 1,
+            );
         }
         println!();
     }
