@@ -1,6 +1,6 @@
 ---
 name: session-insights
-description: "Analyze Claude Code sessions via the `cdt` CLI. Use this skill whenever the user mentions sessions, errors, costs, token usage, debugging a session, understanding what happened, recalling past actions, or searching session content — even if they don't say 'session-insights' explicitly."
+description: "Analyze Claude Code sessions via the `cdt` CLI — errors, costs, search, diagnostics, recall."
 ---
 
 # Session Insights
