@@ -1,6 +1,6 @@
 ---
 name: session-insights
-description: "Analyze Claude Code sessions via the `cdt` CLI — errors, costs, search, diagnostics, recall."
+description: "Analyze Claude Code sessions — errors, costs, search, diagnostics, recall."
 ---
 
 # Session Insights
