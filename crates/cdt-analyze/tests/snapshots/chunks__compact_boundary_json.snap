@@ -1,0 +1,152 @@
+---
+source: crates/cdt-analyze/tests/chunks.rs
+expression: chunks
+---
+[
+  {
+    "kind": "user",
+    "chunkId": "u1:0",
+    "uuid": "u1",
+    "timestamp": "2026-04-11T00:00:00Z",
+    "durationMs": null,
+    "content": "start",
+    "metrics": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "toolCount": 0,
+      "costUsd": null
+    }
+  },
+  {
+    "kind": "ai",
+    "chunkId": "a1:0",
+    "timestamp": "2026-04-11T00:00:01Z",
+    "durationMs": 1000,
+    "responses": [
+      {
+        "uuid": "a1",
+        "timestamp": "2026-04-11T00:00:01Z",
+        "content": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ],
+        "toolCalls": [],
+        "usage": {
+          "input_tokens": 3,
+          "output_tokens": 1,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "model": "claude-opus-4-6",
+        "contentOmitted": false
+      },
+      {
+        "uuid": "a2",
+        "timestamp": "2026-04-11T00:00:02Z",
+        "content": [
+          {
+            "type": "text",
+            "text": "more"
+          }
+        ],
+        "toolCalls": [],
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 1,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "model": "claude-opus-4-6",
+        "contentOmitted": false
+      }
+    ],
+    "metrics": {
+      "inputTokens": 3,
+      "outputTokens": 2,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "toolCount": 0,
+      "costUsd": null
+    },
+    "semanticSteps": [
+      {
+        "kind": "text",
+        "text": "ok",
+        "timestamp": "2026-04-11T00:00:01Z"
+      },
+      {
+        "kind": "text",
+        "text": "more",
+        "timestamp": "2026-04-11T00:00:02Z"
+      }
+    ],
+    "toolExecutions": [],
+    "subagents": [],
+    "slashCommands": []
+  },
+  {
+    "kind": "compact",
+    "chunkId": "c1:0",
+    "uuid": "c1",
+    "timestamp": "2026-04-11T00:00:03Z",
+    "durationMs": null,
+    "summaryText": "summary of so far",
+    "metrics": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "toolCount": 0,
+      "costUsd": null
+    }
+  },
+  {
+    "kind": "ai",
+    "chunkId": "a3:0",
+    "timestamp": "2026-04-11T00:00:04Z",
+    "durationMs": null,
+    "responses": [
+      {
+        "uuid": "a3",
+        "timestamp": "2026-04-11T00:00:04Z",
+        "content": [
+          {
+            "type": "text",
+            "text": "after compact"
+          }
+        ],
+        "toolCalls": [],
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "model": "claude-opus-4-6",
+        "contentOmitted": false
+      }
+    ],
+    "metrics": {
+      "inputTokens": 1,
+      "outputTokens": 1,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "toolCount": 0,
+      "costUsd": null
+    },
+    "semanticSteps": [
+      {
+        "kind": "text",
+        "text": "after compact",
+        "timestamp": "2026-04-11T00:00:04Z"
+      }
+    ],
+    "toolExecutions": [],
+    "subagents": [],
+    "slashCommands": []
+  }
+]

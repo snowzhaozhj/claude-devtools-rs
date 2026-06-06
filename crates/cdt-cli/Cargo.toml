@@ -66,6 +66,7 @@ pkg-url = "{ repo }/releases/download/v{ version }/cdt-darwin-x64.tar.gz"
 pkg-url = "{ repo }/releases/download/v{ version }/cdt-linux-x64.tar.gz"
 
 [dev-dependencies]
+insta = { workspace = true }
 serde_json = { workspace = true }
 rmcp = { workspace = true, features = ["client"] }
 tokio = { workspace = true, features = ["test-util"] }

@@ -1,0 +1,132 @@
+---
+source: crates/cdt-analyze/tests/chunks.rs
+expression: chunks
+---
+[
+  {
+    "kind": "user",
+    "chunkId": "u1:0",
+    "uuid": "u1",
+    "timestamp": "2026-04-11T00:00:00Z",
+    "durationMs": null,
+    "content": "run ls",
+    "metrics": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "toolCount": 0,
+      "costUsd": null
+    }
+  },
+  {
+    "kind": "ai",
+    "chunkId": "a1:0",
+    "timestamp": "2026-04-11T00:00:01Z",
+    "durationMs": 2000,
+    "responses": [
+      {
+        "uuid": "a1",
+        "timestamp": "2026-04-11T00:00:01Z",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tu1",
+            "name": "Bash",
+            "input": {
+              "cmd": "ls"
+            }
+          },
+          {
+            "type": "tool_result",
+            "tool_use_id": "tu1",
+            "content": "a\nb\nc",
+            "is_error": false
+          }
+        ],
+        "toolCalls": [
+          {
+            "id": "tu1",
+            "name": "Bash",
+            "input": {
+              "cmd": "ls"
+            },
+            "isTask": false,
+            "taskDescription": null,
+            "taskSubagentType": null
+          }
+        ],
+        "usage": {
+          "input_tokens": 3,
+          "output_tokens": 2,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "model": "claude-opus-4-6",
+        "contentOmitted": false
+      },
+      {
+        "uuid": "a2",
+        "timestamp": "2026-04-11T00:00:03Z",
+        "content": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ],
+        "toolCalls": [],
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "model": "claude-opus-4-6",
+        "contentOmitted": false
+      }
+    ],
+    "metrics": {
+      "inputTokens": 4,
+      "outputTokens": 3,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "toolCount": 1,
+      "costUsd": null
+    },
+    "semanticSteps": [
+      {
+        "kind": "tool_execution",
+        "toolUseId": "tu1",
+        "toolName": "Bash",
+        "timestamp": "2026-04-11T00:00:01Z"
+      },
+      {
+        "kind": "text",
+        "text": "done",
+        "timestamp": "2026-04-11T00:00:03Z"
+      }
+    ],
+    "toolExecutions": [
+      {
+        "toolUseId": "tu1",
+        "toolName": "Bash",
+        "input": {
+          "cmd": "ls"
+        },
+        "output": {
+          "kind": "text",
+          "text": "a\nb\nc"
+        },
+        "isError": false,
+        "startTs": "2026-04-11T00:00:01Z",
+        "endTs": "2026-04-11T00:00:02Z",
+        "sourceAssistantUuid": "a1",
+        "resultAgentId": null,
+        "outputOmitted": false,
+        "outputBytes": null
+      }
+    ],
+    "subagents": [],
+    "slashCommands": []
+  }
+]

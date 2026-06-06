@@ -1,0 +1,149 @@
+---
+source: crates/cdt-analyze/tests/chunks.rs
+expression: chunks
+---
+[
+  {
+    "kind": "user",
+    "chunkId": "u1:0",
+    "uuid": "u1",
+    "timestamp": "2026-04-11T00:00:00Z",
+    "durationMs": null,
+    "content": "do two things",
+    "metrics": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "toolCount": 0,
+      "costUsd": null
+    }
+  },
+  {
+    "kind": "ai",
+    "chunkId": "a1:0",
+    "timestamp": "2026-04-11T00:00:01Z",
+    "durationMs": 2000,
+    "responses": [
+      {
+        "uuid": "a1",
+        "timestamp": "2026-04-11T00:00:01Z",
+        "content": [
+          {
+            "type": "text",
+            "text": "first"
+          }
+        ],
+        "toolCalls": [],
+        "usage": {
+          "input_tokens": 4,
+          "output_tokens": 2,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "model": "claude-opus-4-6",
+        "contentOmitted": false
+      },
+      {
+        "uuid": "a2",
+        "timestamp": "2026-04-11T00:00:02Z",
+        "content": [
+          {
+            "type": "text",
+            "text": "second"
+          }
+        ],
+        "toolCalls": [],
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 2,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "model": "claude-opus-4-6",
+        "contentOmitted": false
+      },
+      {
+        "uuid": "a3",
+        "timestamp": "2026-04-11T00:00:03Z",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "t1",
+            "name": "Bash",
+            "input": {
+              "cmd": "ls"
+            }
+          }
+        ],
+        "toolCalls": [
+          {
+            "id": "t1",
+            "name": "Bash",
+            "input": {
+              "cmd": "ls"
+            },
+            "isTask": false,
+            "taskDescription": null,
+            "taskSubagentType": null
+          }
+        ],
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 1,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "model": "claude-opus-4-6",
+        "contentOmitted": false
+      }
+    ],
+    "metrics": {
+      "inputTokens": 4,
+      "outputTokens": 5,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "toolCount": 1,
+      "costUsd": null
+    },
+    "semanticSteps": [
+      {
+        "kind": "text",
+        "text": "first",
+        "timestamp": "2026-04-11T00:00:01Z"
+      },
+      {
+        "kind": "text",
+        "text": "second",
+        "timestamp": "2026-04-11T00:00:02Z"
+      },
+      {
+        "kind": "tool_execution",
+        "toolUseId": "t1",
+        "toolName": "Bash",
+        "timestamp": "2026-04-11T00:00:03Z"
+      }
+    ],
+    "toolExecutions": [
+      {
+        "toolUseId": "t1",
+        "toolName": "Bash",
+        "input": {
+          "cmd": "ls"
+        },
+        "output": {
+          "kind": "missing"
+        },
+        "isError": false,
+        "startTs": "2026-04-11T00:00:03Z",
+        "endTs": null,
+        "sourceAssistantUuid": "a3",
+        "resultAgentId": null,
+        "outputOmitted": false,
+        "outputBytes": null
+      }
+    ],
+    "subagents": [],
+    "slashCommands": []
+  }
+]

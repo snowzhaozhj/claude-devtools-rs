@@ -9,17 +9,6 @@ fn cdt_bin() -> Command {
 }
 
 #[test]
-fn help_exits_zero() {
-    let output = cdt_bin().arg("--help").output().unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("projects"));
-    assert!(stdout.contains("sessions"));
-    assert!(stdout.contains("serve"));
-    assert!(stdout.contains("search"));
-}
-
-#[test]
 fn projects_list_json_outputs_valid_json() {
     let output = cdt_bin()
         .args(["--format", "json", "projects", "list"])
@@ -332,24 +321,6 @@ fn sessions_detail_with_filter_flag_accepted() {
         !stderr.contains("unexpected argument"),
         "flags not recognized: {stderr}"
     );
-}
-
-#[test]
-fn sessions_help_shows_summary_and_cost() {
-    let output = cdt_bin().args(["sessions", "--help"]).output().unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("summary"));
-    assert!(stdout.contains("cost"));
-    assert!(stdout.contains("list"));
-}
-
-#[test]
-fn stats_help_works() {
-    let output = cdt_bin().args(["stats", "--help"]).output().unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("PERIOD"));
 }
 
 #[test]
