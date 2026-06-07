@@ -9,7 +9,10 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.12] — 2026-06-07
+
 ### Fixed
+- **UI**: compensate scroll position on expand/collapse toggle to prevent content jumping.
 - **HTTP mode**: release desktop app now serves frontend at `http://localhost:3456/` by bundling `ui/dist` into app resources (was 404 since server-mode was first introduced).
 
 ## [0.6.11] — 2026-06-06
@@ -303,7 +306,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.11...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.12...HEAD
+[0.6.12]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.11...v0.6.12
 [0.6.11]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.10...v0.6.11
 [0.6.10]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.9...v0.6.10
 [0.6.9]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.8...v0.6.9
