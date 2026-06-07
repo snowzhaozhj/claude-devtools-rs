@@ -49,6 +49,9 @@
     ],
     "macOS": {
       "signingIdentity": "-"
+    },
+    "resources": {
+      "../ui/dist/": ""
     }
   },
   "plugins": {

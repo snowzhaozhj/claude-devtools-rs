@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- **HTTP mode**: release desktop app now serves frontend at `http://localhost:3456/` by bundling `ui/dist` into app resources (was 404 since server-mode was first introduced).
+
 ## [0.6.11] — 2026-06-06
 
 ### Added
