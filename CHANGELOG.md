@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- **HTTP 模式**: release 桌面端访问 `http://localhost:3456/` 不再返回 404，改用 Tauri `AssetResolver` 从 binary 嵌入资源 serve 前端页面，零体积冗余。
+
 ## [0.6.11] — 2026-06-06
 
 ### Added

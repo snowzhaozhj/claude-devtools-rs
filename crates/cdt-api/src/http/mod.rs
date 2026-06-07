@@ -17,31 +17,90 @@ pub use cors::localhost_cors_layer;
 pub use routes::build_router;
 pub use state::AppState;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::ipc::ApiError;
 
-/// 静态资源 serve 策略——dev `cargo tauri dev` 默认重定向浏览器到 vite dev
-/// server，让两端共享同一份热重载 UI；release 与 cdt-cli 用 `Dir`。
+/// 从 Tauri binary 嵌入资源预加载的静态资源表。
 ///
-/// 历史回归：dev 模式下 Tauri 内置 HTTP server 直接 `ServeDir` 一份**预构建**
-/// 的 `ui/dist`（`pnpm --dir ui build` 产物），UI 改动后只更新 vite dev server
-/// 的内存 bundle，磁盘 dist 不动——浏览器访问 `localhost:3456` 看到的是
-/// 上次 build 时刻的旧 UI，与桌面 Tauri 窗口（走 vite hmr）行为分叉。
-/// `Redirect` 让浏览器跳到 vite 自己的 origin，HMR / source map / 最新源码
-/// 全部在 vite 域内工作；`/api/*` 仍由 axum 处理保证 HTTP 后端行为真实。
+/// 启动时一次性从 `AssetResolver::iter()` 构建精确索引，避免运行时依赖
+/// `AssetResolver::get()` 的 SPA fallback 语义（它会把未命中路径 fallback
+/// 到 `index.html`，导致 JS/CSS 404 变成返回 HTML 白屏）。
+#[derive(Clone)]
+pub struct EmbeddedAssets {
+    assets: Arc<HashMap<String, (Vec<u8>, String)>>,
+}
+
+impl std::fmt::Debug for EmbeddedAssets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddedAssets")
+            .field("count", &self.assets.len())
+            .finish()
+    }
+}
+
+impl EmbeddedAssets {
+    /// 从 `(path, bytes)` 迭代器构建。mime type 按扩展名推断。
+    pub fn from_assets(iter: impl Iterator<Item = (String, Vec<u8>)>) -> Self {
+        let mut map = HashMap::new();
+        for (path, bytes) in iter {
+            let mime = mime_from_extension(&path);
+            map.insert(path, (bytes, mime));
+        }
+        tracing::info!(
+            target: "cdt_api::http",
+            count = map.len(),
+            "embedded assets loaded"
+        );
+        Self {
+            assets: Arc::new(map),
+        }
+    }
+
+    /// 精确查找——不做 SPA fallback。
+    pub fn get(&self, path: &str) -> Option<(&[u8], &str)> {
+        self.assets
+            .get(path)
+            .map(|(b, m)| (b.as_slice(), m.as_str()))
+    }
+}
+
+fn mime_from_extension(path: &str) -> String {
+    let ext = path.rsplit('.').next().unwrap_or("");
+    match ext {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "wasm" => "application/wasm",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
+/// 静态资源 serve 策略。
 #[derive(Clone, Debug)]
 pub enum StaticServe {
     /// 不挂 fallback，未命中 `/api/*` 直接 404。cdt-cli 默认行为 + 测试常用。
     None,
     /// SPA `ServeDir`：未命中 `/api/*` 的 GET fallback 到该目录的文件 / `index.html`。
-    /// release 走 `resource_dir`；dev 模式下 `CDT_DEV_USE_PREBUILT_DIST=1` 切回此分支
-    /// 验证 release 形态。
+    /// dev 模式下 `CDT_DEV_USE_PREBUILT_DIST=1` 切回此分支验证 release 形态。
     Dir(PathBuf),
     /// HTTP 302 redirect：未命中 `/api/*` 的请求重定向到指定 base URL（典型
     /// `http://127.0.0.1:5173`），自动追加 `?http=1` query 让前端 `main.ts`
     /// 走 `BrowserTransport`。dev `cargo tauri dev` 默认此分支。
     Redirect(String),
+    /// 从 Tauri binary 嵌入资源 serve。release 桌面端默认此分支——零冗余，
+    /// 不需要在 `bundle.resources` 里重复拷贝前端文件。
+    Embedded(EmbeddedAssets),
 }
 
 impl From<Option<PathBuf>> for StaticServe {
@@ -87,4 +146,50 @@ pub async fn serve_with_listener(
         .await
         .map_err(|e| ApiError::internal(format!("HTTP server error: {e}")))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_assets_exact_lookup() {
+        let assets = EmbeddedAssets::from_assets(
+            vec![
+                ("index.html".to_string(), b"<html></html>".to_vec()),
+                ("assets/app.js".to_string(), b"console.log(1)".to_vec()),
+            ]
+            .into_iter(),
+        );
+        let (bytes, mime) = assets.get("index.html").unwrap();
+        assert_eq!(bytes, b"<html></html>");
+        assert!(mime.contains("text/html"));
+
+        let (bytes, mime) = assets.get("assets/app.js").unwrap();
+        assert_eq!(bytes, b"console.log(1)");
+        assert!(mime.contains("javascript"));
+
+        assert!(assets.get("missing.js").is_none());
+    }
+
+    #[test]
+    fn embedded_assets_no_spa_fallback() {
+        let assets = EmbeddedAssets::from_assets(
+            vec![("index.html".to_string(), b"<html></html>".to_vec())].into_iter(),
+        );
+        assert!(
+            assets.get("nonexistent.js").is_none(),
+            "exact lookup must not fallback to index.html"
+        );
+    }
+
+    #[test]
+    fn mime_from_extension_covers_common_types() {
+        assert!(mime_from_extension("app.js").contains("javascript"));
+        assert!(mime_from_extension("style.css").contains("text/css"));
+        assert!(mime_from_extension("icon.svg").contains("svg"));
+        assert!(mime_from_extension("font.woff2").contains("woff2"));
+        assert!(mime_from_extension("data.json").contains("json"));
+        assert!(mime_from_extension("unknown.xyz").contains("octet-stream"));
+    }
 }

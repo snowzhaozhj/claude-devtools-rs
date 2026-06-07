@@ -1853,17 +1853,11 @@ fn resolve_static_serve(_app: &tauri::AppHandle) -> cdt_api::StaticServe {
 
 #[cfg(not(debug_assertions))]
 fn resolve_static_serve(app: &tauri::AppHandle) -> cdt_api::StaticServe {
-    match app.path().resource_dir() {
-        Ok(dir) => cdt_api::StaticServe::Dir(dir),
-        Err(e) => {
-            tracing::warn!(
-                target: "cdt_tauri::server_mode",
-                error = %e,
-                "failed to resolve resource_dir for static serve"
-            );
-            cdt_api::StaticServe::None
-        }
-    }
+    let resolver = app.asset_resolver();
+    let assets = cdt_api::EmbeddedAssets::from_assets(resolver.iter().map(|(path, bytes)| {
+        (path.into_owned(), bytes.into_owned())
+    }));
+    cdt_api::StaticServe::Embedded(assets)
 }
 
 /// 从 src-tauri manifest dir 推 `<repo>/ui/dist`，仅当目标存在且是目录时返

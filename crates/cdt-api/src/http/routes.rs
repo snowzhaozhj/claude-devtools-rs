@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -223,6 +223,10 @@ pub fn build_router(state: AppState, static_serve: StaticServe) -> Router {
                 },
             )
         }
+        StaticServe::Embedded(assets) => api_router.fallback(move |uri: axum::http::Uri| {
+            let assets = assets.clone();
+            async move { embedded_fallback(&assets, &uri) }
+        }),
         StaticServe::None => api_router,
     };
 
@@ -383,6 +387,44 @@ async fn static_fallback(dir: Arc<PathBuf>, uri: axum::http::Uri) -> axum::respo
     let is_navigation = raw.is_empty() || !raw.contains('.');
     if is_navigation {
         return serve_file(&dir.join("index.html")).await;
+    }
+    StatusCode::NOT_FOUND.into_response()
+}
+
+/// 从 `EmbeddedAssets` 精确索引 serve 嵌入资源。
+///
+/// 与 `static_fallback` 语义一致：精确命中 serve + navigation fallback
+/// `index.html` + 带扩展名未命中 404。区别在于从内存索引读而非磁盘。
+fn embedded_fallback(
+    assets: &super::EmbeddedAssets,
+    uri: &axum::http::Uri,
+) -> axum::response::Response {
+    let raw = uri.path().trim_start_matches('/');
+    if !is_path_safe(raw) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if let Some((bytes, mime)) = assets.get(raw) {
+        return (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            bytes.to_vec(),
+        )
+            .into_response();
+    }
+    let is_navigation = raw.is_empty() || !raw.contains('.');
+    if is_navigation {
+        if let Some((bytes, mime)) = assets.get("index.html") {
+            return (
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                ],
+                bytes.to_vec(),
+            )
+                .into_response();
+        }
     }
     StatusCode::NOT_FOUND.into_response()
 }
