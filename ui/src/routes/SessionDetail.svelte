@@ -149,7 +149,7 @@
   }
 
   function applyScrollCompensation(anchor: { el: HTMLElement; top: number } | null): void {
-    if (!anchor || !conversationEl) return;
+    if (!anchor || !conversationEl || !anchor.el.isConnected) return;
     const delta = anchor.el.getBoundingClientRect().top - anchor.top;
     if (delta !== 0) {
       beginCompensation(conversationEl);
@@ -708,8 +708,8 @@
   });
 
   async function toggle(key: string, exec?: ToolExecution) {
-    const anchor = captureVisualAnchor();
     if (expandedItems.has(key)) {
+      const anchor = captureVisualAnchor();
       const next = new Set(expandedItems);
       next.delete(key);
       expandedItems = next;
@@ -721,6 +721,7 @@
       await ensureToolOutput(exec);
       if (!isOutputReady(exec)) return;
     }
+    const anchor = captureVisualAnchor();
     const next = new Set(expandedItems);
     next.add(key);
     expandedItems = next;
