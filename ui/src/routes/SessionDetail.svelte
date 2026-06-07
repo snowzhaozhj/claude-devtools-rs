@@ -139,6 +139,14 @@
     if (!conversationEl) return null;
     const convRect = conversationEl.getBoundingClientRect();
     const chunks = conversationEl.querySelectorAll<HTMLElement>("[data-chunk-id]");
+    // 优先：top 在视口顶部或之下的第一个 chunk（不跨越视口顶部的大 chunk）
+    for (const c of chunks) {
+      const r = c.getBoundingClientRect();
+      if (r.top >= convRect.top - 1) {
+        return { el: c, top: r.top };
+      }
+    }
+    // 兜底：第一个 bottom 过视口顶的 chunk（视口被单个大 chunk 填满时）
     for (const c of chunks) {
       const r = c.getBoundingClientRect();
       if (r.bottom > convRect.top + 1) {
