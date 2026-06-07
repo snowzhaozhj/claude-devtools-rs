@@ -22,6 +22,7 @@ use cdt_query::{cost, stats, summary};
 use cdt_ssh::SshConnectionManager;
 
 mod mcp;
+mod time_expr;
 mod update;
 mod view;
 
@@ -160,9 +161,13 @@ enum SessionsAction {
         #[arg(long, default_value = "100")]
         limit: usize,
 
-        /// 仅显示指定时间范围内的会话（如 7d、24h、30m）
-        #[arg(long)]
+        /// 仅显示指定时间范围内的会话（如 7d、24h、30m、today、yesterday、2026-06-06）
+        #[arg(long, add = ArgValueCandidates::new(completions::SinceCompleter))]
         since: Option<String>,
+
+        /// 仅显示此时间之前的会话（格式同 --since）
+        #[arg(long, add = ArgValueCandidates::new(completions::SinceCompleter))]
+        until: Option<String>,
 
         /// 标题关键词过滤（大小写不敏感）
         #[arg(long)]
@@ -435,11 +440,13 @@ async fn cmd_projects_list(format: &OutputFormat, json_fields: Option<&str>) -> 
 // sessions list
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_sessions_list(
     format: &OutputFormat,
     project_filter: Option<&str>,
     limit: usize,
     since: Option<&str>,
+    until: Option<&str>,
     grep: Option<&str>,
     min_messages: Option<usize>,
     json_fields: Option<&str>,
@@ -447,31 +454,39 @@ async fn cmd_sessions_list(
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
 
-    let project_id = match project_filter {
-        Some(name) => engine
-            .resolve_project(name)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?,
-        None => {
-            anyhow::bail!(
-                "--project is required for `sessions list`. Use `projects list` to see available projects."
-            );
-        }
-    };
-
-    let since_ms = since.map(parse_duration_to_ms).transpose()?;
+    let is_cross_project = project_filter.is_none();
+    let since_ms = since
+        .or(if is_cross_project { Some("7d") } else { None })
+        .map(cdt_cli::time_expr::parse_time_expr_local)
+        .transpose()
+        .with_context(|| "invalid --since value")?;
+    let until_ms = until
+        .map(cdt_cli::time_expr::parse_time_expr_local)
+        .transpose()
+        .with_context(|| "invalid --until value")?;
     let filter = QueryFilter {
         since: since_ms,
+        until: until_ms,
         grep: grep.map(ToOwned::to_owned),
         min_messages,
         limit: Some(limit),
-        ..Default::default()
     };
 
-    let items = engine
-        .list_sessions(&project_id, &filter)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let items = if is_cross_project {
+        engine
+            .list_sessions_cross_project(&filter)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+    } else {
+        let project_id = engine
+            .resolve_project(project_filter.unwrap())
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        engine
+            .list_sessions(&project_id, &filter)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+    };
 
     if items.is_empty() {
         match format {
@@ -724,6 +739,7 @@ async fn cmd_sessions_detail(
                 "contentMode": match mode {
                     view::ContentMode::Omit => "omit",
                     view::ContentMode::Full => "full",
+                    view::ContentMode::Overview => "overview",
                 },
                 "chunks": views,
             });
@@ -1147,25 +1163,6 @@ fn format_duration(session_ts: i64) -> String {
     } else {
         format!("{}d", diff / 86400)
     }
-}
-
-/// 解析 `7d` / `24h` / `30m` 格式的 duration 为截止时间戳（毫秒）。
-fn parse_duration_to_ms(s: &str) -> Result<i64> {
-    let s = s.trim();
-    let split_pos = s.char_indices().next_back().map_or(0, |(i, _)| i);
-    let (num_str, unit) = s.split_at(split_pos);
-    let num: i64 = num_str
-        .parse()
-        .with_context(|| format!("invalid duration: {s}"))?;
-    let seconds = match unit {
-        "m" => num * 60,
-        "h" => num * 3600,
-        "d" => num * 86400,
-        "w" => num * 604_800,
-        _ => anyhow::bail!("unsupported duration unit: {s} (use m/h/d/w)"),
-    };
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    Ok(now_ms - seconds * 1000)
 }
 
 /// 解析 `10:30` 格式的 range 为 `(start, end)`。
@@ -1606,12 +1603,8 @@ async fn cmd_stats(
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(Arc::clone(&api));
 
-    let since_str = match period {
-        "today" => "24h",
-        "week" => "7d",
-        other => other,
-    };
-    let since_ms = parse_duration_to_ms(since_str)?;
+    let since_ms = cdt_cli::time_expr::parse_time_expr_local(period)
+        .with_context(|| format!("invalid period: {period}"))?;
     let since_dt = chrono::DateTime::from_timestamp_millis(since_ms).unwrap_or_default();
 
     let project_ids = if let Some(name) = project_filter {
@@ -1799,6 +1792,7 @@ async fn main() -> Result<()> {
             SessionsAction::List {
                 limit,
                 since,
+                until,
                 grep,
                 min_messages,
             } => {
@@ -1807,6 +1801,7 @@ async fn main() -> Result<()> {
                     cli.project.as_deref(),
                     limit,
                     since.as_deref(),
+                    until.as_deref(),
                     grep.as_deref(),
                     min_messages,
                     json_fields,

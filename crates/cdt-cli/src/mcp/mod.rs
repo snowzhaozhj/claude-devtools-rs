@@ -29,17 +29,42 @@ const ERROR_MESSAGE_MAX_CHARS: usize = 500;
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[allow(dead_code)]
 pub struct ListSessionsParams {
-    #[schemars(description = "Project name or ID.")]
+    #[schemars(description = "Project name or ID. Omit for cross-project query.")]
     pub project: Option<String>,
-    #[schemars(description = "Only sessions since this time period (e.g. '7d', '24h', '1h')")]
+    #[schemars(
+        description = "Only sessions since this time. Formats: relative (7d, 24h, 30m), named (today, yesterday, week), absolute (2026-06-06, ISO 8601)"
+    )]
     pub since: Option<String>,
+    #[schemars(description = "Only sessions until this time. Same formats as 'since'.")]
+    pub until: Option<String>,
+    #[schemars(description = "Filter by git branch (case-insensitive substring match)")]
+    pub branch: Option<String>,
+    #[schemars(description = "Group results by: none, project, day")]
+    pub group_by: Option<String>,
+    #[schemars(description = "Filter to only ongoing/active sessions")]
+    pub is_ongoing: Option<bool>,
     #[schemars(description = "Filter by title keyword (case-insensitive)")]
     pub grep: Option<String>,
     #[schemars(description = "Maximum number of sessions to return (default 20, max 100)")]
     pub limit: Option<usize>,
     #[schemars(description = "Pagination cursor from previous response")]
     pub cursor: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GetSessionParams {
+    #[schemars(
+        description = "Session ID (full or short prefix). Use 'latest' for most recent session."
+    )]
+    pub session: String,
+    #[schemars(description = "Project name or ID (auto-resolved if omitted)")]
+    pub project: Option<String>,
+    #[schemars(
+        description = "Comma-separated list of additional facets to include: phases, tools, activity, idle_gaps, files"
+    )]
+    pub include: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -112,6 +137,10 @@ pub struct SearchParams {
         description = "Session ID to scope search to a single session (intra-session search). Auto-resolves project if omitted."
     )]
     pub session: Option<String>,
+    #[schemars(
+        description = "Only search sessions since this time. Same formats as list_sessions since."
+    )]
+    pub since: Option<String>,
     #[schemars(description = "Pagination cursor from previous response")]
     pub cursor: Option<String>,
 }
@@ -223,6 +252,43 @@ impl CdtMcpServer {
         }
     }
 
+    async fn resolve_session_latest(
+        &self,
+        session: &str,
+        project: Option<&str>,
+    ) -> Result<String, McpError> {
+        if session != "latest" {
+            return Ok(session.to_string());
+        }
+        let filter = QueryFilter {
+            since: None,
+            until: None,
+            grep: None,
+            min_messages: None,
+            limit: Some(1),
+        };
+        let sessions = if let Some(p) = project {
+            let project_id = self
+                .engine
+                .resolve_project(p)
+                .await
+                .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+            self.engine
+                .list_sessions(&project_id, &filter)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        } else {
+            self.engine
+                .list_sessions_cross_project(&filter)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        };
+        sessions
+            .first()
+            .map(|s| s.session_id.clone())
+            .ok_or_else(|| McpError::invalid_params("No sessions found for 'latest'", None))
+    }
+
     fn emit_json<T: Serialize>(&self, value: &T) -> Result<CallToolResult, McpError> {
         let json = serde_json::to_string(value)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -284,11 +350,21 @@ impl CdtMcpServer {
         &self,
         Parameters(params): Parameters<ListSessionsParams>,
     ) -> Result<CallToolResult, McpError> {
-        let project_id = self
-            .resolve_project_id(params.project.as_deref(), None)
-            .await?;
+        let is_cross_project = params.project.is_none();
 
-        let since_ms = params.since.as_deref().and_then(parse_duration_to_epoch_ms);
+        let since_ms = params
+            .since
+            .as_deref()
+            .or(if is_cross_project { Some("7d") } else { None })
+            .map(super::time_expr::parse_time_expr_local)
+            .transpose()
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+        let until_ms = params
+            .until
+            .as_deref()
+            .map(super::time_expr::parse_time_expr_local)
+            .transpose()
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
         let limit = params
             .limit
             .unwrap_or(DEFAULT_LIST_LIMIT)
@@ -297,18 +373,44 @@ impl CdtMcpServer {
 
         let filter = QueryFilter {
             since: since_ms,
+            until: until_ms,
             grep: params.grep,
+            min_messages: None,
             limit: None,
-            ..Default::default()
         };
-        let all_sessions = self
-            .engine
-            .list_sessions(&project_id, &filter)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let total = all_sessions.len();
-        let page: Vec<_> = all_sessions.into_iter().skip(offset).take(limit).collect();
+        let all_sessions = if is_cross_project {
+            self.engine
+                .list_sessions_cross_project(&filter)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        } else {
+            let project_id = self
+                .resolve_project_id(params.project.as_deref(), None)
+                .await?;
+            self.engine
+                .list_sessions(&project_id, &filter)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        };
+
+        let mut sessions = all_sessions;
+
+        if let Some(ref branch) = params.branch {
+            let lower = branch.to_lowercase();
+            sessions.retain(|s| {
+                s.git_branch
+                    .as_deref()
+                    .is_some_and(|b| b.to_lowercase().contains(&lower))
+            });
+        }
+
+        if let Some(ongoing) = params.is_ongoing {
+            sessions.retain(|s| s.is_ongoing == ongoing);
+        }
+
+        let total = sessions.len();
+        let page: Vec<_> = sessions.into_iter().skip(offset).take(limit).collect();
         let returned = page.len();
         let has_more = offset + returned < total;
 
@@ -354,10 +456,9 @@ impl CdtMcpServer {
     }
 
     #[tool(
-        name = "get_session_detail",
-        description = "Inspect chunks for a known session. Defaults to structure-only (`outputChars`/`contentChars` show omitted sizes). \
-            `chunkIndex` is absolute and stable. Window: range, tail, or cursor. Content: 'omit' or 'full' \
-            (avoid 'full' without range/tail — returns entire session). \
+        name = "get_session_chunks",
+        description = "Inspect chunks for a known session. content_mode: 'omit' (default, structure-only with sizes), 'full' (complete content), 'overview' (one-line per chunk: kind/timestamp/tools/errorCount/headline). \
+            `chunkIndex` is absolute and stable. Window: range, tail, or cursor. \
             `grep`: case-insensitive literal filter across text, tool inputs/outputs, tool names, error messages; \
             hits auto-expand to full with `grepHit` flag. Not for cross-session discovery — use search_sessions first.",
         annotations(
@@ -385,9 +486,12 @@ impl CdtMcpServer {
         let content_mode = match params.content_mode.as_deref() {
             None | Some("omit") => ContentMode::Omit,
             Some("full") => ContentMode::Full,
+            Some("overview") => ContentMode::Overview,
             Some(other) => {
                 return Err(McpError::invalid_params(
-                    format!("Invalid content_mode '{other}'. Supported: 'omit', 'full'"),
+                    format!(
+                        "Invalid content_mode '{other}'. Supported: 'omit', 'full', 'overview'"
+                    ),
                     None,
                 ));
             }
@@ -523,6 +627,25 @@ impl CdtMcpServer {
         let returned_chunks = page_chunks.len();
         let has_more = !return_all && (offset + returned_chunks < total_chunks);
 
+        if matches!(content_mode, ContentMode::Overview) {
+            let overview_chunks: Vec<serde_json::Value> = page_chunks
+                .iter()
+                .map(|(abs_idx, chunk)| build_overview_entry(*abs_idx, chunk))
+                .collect();
+
+            let response = serde_json::json!({
+                "sessionId": detail.session_id,
+                "totalChunks": total_chunks,
+                "returnedChunks": returned_chunks,
+                "hasMore": has_more,
+                "cursor": if has_more { Some(format!("{}", offset + returned_chunks)) } else { None },
+                "isOngoing": is_ongoing,
+                "contentMode": "overview",
+                "chunks": overview_chunks,
+            });
+            return self.emit_json(&response);
+        }
+
         let envelopes: Vec<ChunkView> = page_chunks
             .iter()
             .map(|(abs_idx, chunk)| {
@@ -552,6 +675,7 @@ impl CdtMcpServer {
             content_mode: match content_mode {
                 ContentMode::Omit => "omit".to_string(),
                 ContentMode::Full => "full".to_string(),
+                ContentMode::Overview => unreachable!(),
             },
             chunks: envelopes,
         };
@@ -644,6 +768,12 @@ impl CdtMcpServer {
             .unwrap_or(DEFAULT_LIST_LIMIT)
             .clamp(1, MAX_PAGE_SIZE);
         let offset = parse_cursor_offset(params.cursor.as_deref());
+        let since_ms = params
+            .since
+            .as_deref()
+            .map(super::time_expr::parse_time_expr_local)
+            .transpose()
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         let project_id = match params.project.as_deref() {
             Some(p) => Some(
@@ -668,10 +798,11 @@ impl CdtMcpServer {
 
         let results = self
             .engine
-            .search(
+            .search_with_since(
                 &params.query,
                 project_id.as_deref(),
                 params.session.as_deref(),
+                since_ms,
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -732,8 +863,97 @@ impl CdtMcpServer {
     }
 
     #[tool(
+        name = "get_session",
+        description = "Composite session view: summary + cost + errors in one call. Default returns compact view (metadata, cost, error count, first 10 errors). Use 'include' for heavy facets (phases, tools, activity, idle_gaps, files). Use 'latest' as session ID for most recent session.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_session(
+        &self,
+        Parameters(params): Parameters<GetSessionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let session_id = self
+            .resolve_session_latest(&params.session, params.project.as_deref())
+            .await?;
+        let project_id = self
+            .resolve_project_id(params.project.as_deref(), Some(&session_id))
+            .await?;
+
+        let options = SessionQueryOptions::default();
+        let detail = self
+            .engine
+            .get_session_detail(&project_id, &session_id, &options)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let summary = cdt_query::summary::build_summary(&detail);
+        let cost = cdt_query::cost::compute_session_cost(&detail);
+
+        let indexed: Vec<(usize, &cdt_core::Chunk)> = detail.chunks.iter().enumerate().collect();
+        let error_entries = cdt_query::extract::extract_errors(&indexed);
+        let error_count = error_entries.len();
+        let top_errors: Vec<McpErrorEntry> = error_entries
+            .into_iter()
+            .take(10)
+            .map(|e| {
+                let (msg, truncated) = truncate_error_message(e.error_summary);
+                McpErrorEntry {
+                    chunk_index: e.chunk_index,
+                    tool_name: e.tool_name,
+                    tool_use_id: e.tool_use_id,
+                    is_error: true,
+                    error_message: msg,
+                    message_truncated: truncated,
+                }
+            })
+            .collect();
+
+        let include_set: std::collections::HashSet<&str> = params
+            .include
+            .as_deref()
+            .map(|s| s.split(',').map(str::trim).collect())
+            .unwrap_or_default();
+
+        let chunk_count = detail.chunks.len();
+
+        let mut result = serde_json::json!({
+            "sessionId": session_id,
+            "projectId": project_id,
+            "messageCount": summary.message_count,
+            "chunkCount": chunk_count,
+            "durationMs": summary.total_duration_ms,
+            "cost": cost,
+            "errorCount": error_count,
+            "errors": top_errors,
+        });
+
+        if include_set.contains("phases") {
+            result["phases"] = serde_json::to_value(&summary.phases).unwrap_or_default();
+        }
+        if include_set.contains("tools") {
+            result["toolUsage"] = serde_json::to_value(&summary.tool_usage).unwrap_or_default();
+        }
+        if include_set.contains("activity") {
+            result["toolActivity"] =
+                serde_json::to_value(&summary.tool_activity).unwrap_or_default();
+        }
+        if include_set.contains("idle_gaps") {
+            result["idleGaps"] = serde_json::to_value(&summary.idle_gaps).unwrap_or_default();
+        }
+        if include_set.contains("files") {
+            result["topFiles"] = serde_json::to_value(&summary.top_files).unwrap_or_default();
+        }
+
+        self.emit_json(&result)
+    }
+
+    #[tool(
         name = "get_stats",
-        description = "Get aggregated statistics across sessions for a time period. Note: not yet implemented in MCP mode. Use `cdt stats` CLI command directly.",
+        description = "Get aggregated statistics across sessions for a time period. Returns session count, total messages, cost, tool frequency, error rate, model usage.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -743,12 +963,70 @@ impl CdtMcpServer {
     )]
     async fn get_stats(
         &self,
-        Parameters(_params): Parameters<StatsParams>,
+        Parameters(params): Parameters<StatsParams>,
     ) -> Result<CallToolResult, McpError> {
-        Err(McpError::internal_error(
-            "get_stats is not yet implemented in MCP mode. Use `cdt stats` CLI command directly.",
-            None,
-        ))
+        let period = params.period.as_deref().unwrap_or("7d");
+        let since_ms = super::time_expr::parse_time_expr_local(period)
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+        let since_dt = chrono::DateTime::from_timestamp_millis(since_ms).unwrap_or_default();
+
+        let project_ids: Vec<String> = if let Some(ref p) = params.project {
+            vec![
+                self.engine
+                    .resolve_project(p)
+                    .await
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?,
+            ]
+        } else {
+            let groups = self
+                .engine
+                .api()
+                .list_repository_groups()
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            groups
+                .iter()
+                .flat_map(|g| g.worktrees.iter().map(|w| w.id.clone()))
+                .collect()
+        };
+
+        let pagination = cdt_api::PaginatedRequest {
+            page_size: 500,
+            cursor: None,
+        };
+        let mut session_data_list = Vec::new();
+
+        for pid in &project_ids {
+            let resp = self
+                .engine
+                .api()
+                .list_sessions_sync(pid, &pagination)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+            for session in &resp.items {
+                if session.timestamp < since_ms {
+                    continue;
+                }
+                let detail = self
+                    .engine
+                    .api()
+                    .get_session_detail(pid, &session.session_id, None)
+                    .await
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                if let cdt_api::SessionDetailResponse::Full { detail, .. } = detail {
+                    session_data_list.push(cdt_query::stats::build_session_data(&detail));
+                }
+            }
+        }
+
+        if session_data_list.is_empty() {
+            return self.emit_json(&serde_json::json!({"sessionCount": 0}));
+        }
+
+        let result = cdt_query::stats::aggregate(&session_data_list, since_dt);
+        self.emit_json(&result)
     }
 }
 
@@ -758,19 +1036,25 @@ impl ServerHandler for CdtMcpServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "Claude DevTools — read-only session intelligence.\n\
+                "Claude DevTools — read-only session intelligence (6 tools).\n\
 \n\
-QUICK START:\n\
-- get_session_summary → phases, tool stats, cost, toolActivity\n\
-- get_session_detail(session, range?, grep?) → chunks with chunkIndex\n\
-- search_sessions(query) → find WHICH session; get_session_detail → inspect WHAT's inside\n\
-- Avoid content_mode='full' without range/tail. All lists paginated (hasMore + cursor).\n\
+DECISION TREE — pick by intent:\n\
+- \"What did I do?\" → list_sessions(since='yesterday') — one call, cross-project\n\
+- \"Summarize session X\" → get_session(session=X) — composite: summary+cost+errors\n\
+- \"Deep dive into session X\" → get_session_chunks(session=X, content_mode='overview') then range/grep\n\
+- \"Find sessions mentioning Y\" → search_sessions(query=Y) — cross-session discovery\n\
+- \"How much did I spend?\" → get_stats(period='7d') — aggregated statistics\n\
+- \"Which projects exist?\" → list_projects — rarely needed, prefer list_sessions\n\
 \n\
 KEY RULES:\n\
-- Errors in chunks[].toolExecutions[].isError — NOT in responses[]\n\
-- range is [start, end) by chunkIndex: 5:6 = chunk 5; 5: = from 5 to end\n\
-- get_session_summary, get_session_cost, get_session_errors: call in parallel\n\
-- grep auto-expands hits to full; use grep_context=0 to limit"
+- 'latest' works as session ID (resolves to most recent)\n\
+- project is always optional — omit for cross-project queries\n\
+- since/until accept: relative (7d, 24h), named (today, yesterday, week), absolute (2026-06-06)\n\
+- get_session_chunks: use content_mode='overview' for scan, 'full' only with range/tail\n\
+- grep on get_session_chunks filters within a known session (full ChunkView)\n\
+- search_sessions finds WHICH session (lightweight snippets) — different intent\n\
+- Errors live in chunks[].toolExecutions[].isError, not in responses[]\n\
+- range format: start:end (0-indexed chunkIndex), e.g. 5:10"
                     .to_string(),
             )
     }
@@ -795,29 +1079,6 @@ fn truncate_error_message(msg: Option<String>) -> (Option<String>, bool) {
     }
 }
 
-fn parse_duration_to_epoch_ms(s: &str) -> Option<i64> {
-    let now = chrono::Utc::now().timestamp_millis();
-    let s = s.trim();
-    if s == "today" {
-        let start_of_day = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0)?;
-        return Some(start_of_day.and_utc().timestamp_millis());
-    }
-    if s == "week" {
-        return Some(now - 7 * 24 * 3600 * 1000);
-    }
-
-    let split_pos = s.char_indices().next_back().map_or(0, |(i, _)| i);
-    let (num_str, unit) = s.split_at(split_pos);
-    let num: i64 = num_str.parse().ok()?;
-    let ms = match unit {
-        "m" => num.checked_mul(60 * 1000)?,
-        "h" => num.checked_mul(3600 * 1000)?,
-        "d" => num.checked_mul(24 * 3600 * 1000)?,
-        _ => return None,
-    };
-    now.checked_sub(ms)
-}
-
 fn parse_range(s: &str) -> Option<(usize, usize)> {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() != 2 {
@@ -833,6 +1094,68 @@ fn parse_range(s: &str) -> Option<(usize, usize)> {
         return None;
     }
     Some((start, end))
+}
+
+fn build_overview_entry(abs_index: usize, chunk: &Chunk) -> serde_json::Value {
+    match chunk {
+        Chunk::Ai(ai) => {
+            let tool_names: Vec<&str> = ai
+                .tool_executions
+                .iter()
+                .map(|te| te.tool_name.as_str())
+                .collect();
+            let error_count = ai.tool_executions.iter().filter(|te| te.is_error).count();
+            let headline = ai
+                .responses
+                .first()
+                .map(|r| {
+                    let text = view::message_content_text(&r.content);
+                    text.chars().take(100).collect::<String>()
+                })
+                .unwrap_or_default();
+            serde_json::json!({
+                "chunkIndex": abs_index,
+                "kind": "ai",
+                "timestamp": ai.timestamp.to_rfc3339(),
+                "toolNames": tool_names,
+                "errorCount": error_count,
+                "headline": headline,
+            })
+        }
+        Chunk::User(user) => {
+            let text = view::message_content_text(&user.content);
+            let headline: String = text.chars().take(100).collect();
+            serde_json::json!({
+                "chunkIndex": abs_index,
+                "kind": "user",
+                "timestamp": user.timestamp.to_rfc3339(),
+                "toolNames": [],
+                "errorCount": 0,
+                "headline": headline,
+            })
+        }
+        Chunk::System(sys) => {
+            let headline: String = sys.content_text.chars().take(100).collect();
+            serde_json::json!({
+                "chunkIndex": abs_index,
+                "kind": "system",
+                "timestamp": sys.timestamp.to_rfc3339(),
+                "toolNames": [],
+                "errorCount": 0,
+                "headline": headline,
+            })
+        }
+        Chunk::Compact(compact) => {
+            serde_json::json!({
+                "chunkIndex": abs_index,
+                "kind": "compact",
+                "timestamp": compact.timestamp.to_rfc3339(),
+                "toolNames": [],
+                "errorCount": 0,
+                "headline": compact.summary_text.chars().take(100).collect::<String>(),
+            })
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

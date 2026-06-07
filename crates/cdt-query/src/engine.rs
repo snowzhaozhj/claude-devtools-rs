@@ -57,7 +57,7 @@ impl QueryEngine {
         Err(QueryError::NotFound(format!("project not found: {name}")))
     }
 
-    /// List sessions with optional filter.
+    /// List sessions with optional filter (single project).
     pub async fn list_sessions(
         &self,
         project_id: &str,
@@ -70,6 +70,37 @@ impl QueryEngine {
         let resp = self.api.list_sessions_sync(project_id, &pagination).await?;
 
         Ok(filter.apply(resp.items))
+    }
+
+    /// List sessions across all projects, with filter applied.
+    /// Returns sessions sorted by timestamp descending.
+    pub async fn list_sessions_cross_project(
+        &self,
+        filter: &QueryFilter,
+    ) -> Result<Vec<SessionSummary>, QueryError> {
+        let groups = self
+            .api
+            .list_repository_groups()
+            .await
+            .map_err(|e| QueryError::Api(e.to_string()))?;
+
+        let pagination = PaginatedRequest {
+            page_size: usize::MAX,
+            cursor: None,
+        };
+
+        let mut all_sessions = Vec::new();
+        for group in &groups {
+            for wt in &group.worktrees {
+                if let Ok(resp) = self.api.list_sessions_sync(&wt.id, &pagination).await {
+                    all_sessions.extend(resp.items);
+                }
+            }
+        }
+
+        all_sessions.sort_by_key(|s| std::cmp::Reverse(s.timestamp));
+
+        Ok(filter.apply(all_sessions))
     }
 
     /// Get session detail (full parse + build), then apply query options.
@@ -166,6 +197,17 @@ impl QueryEngine {
         query: &str,
         project_id: Option<&str>,
         session_id: Option<&str>,
+    ) -> Result<cdt_core::SearchSessionsResult, QueryError> {
+        self.search_with_since(query, project_id, session_id, None)
+            .await
+    }
+
+    pub async fn search_with_since(
+        &self,
+        query: &str,
+        project_id: Option<&str>,
+        session_id: Option<&str>,
+        _since_ms: Option<i64>,
     ) -> Result<cdt_core::SearchSessionsResult, QueryError> {
         let project_id_resolved = project_id.map(ToOwned::to_owned);
 

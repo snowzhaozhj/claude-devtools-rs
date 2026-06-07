@@ -51,14 +51,15 @@ fn projects_list_json_has_camel_case_fields() {
 }
 
 #[test]
-fn sessions_list_without_project_fails() {
+fn sessions_list_without_project_succeeds_cross_project() {
     let output = cdt_bin()
         .args(["--format", "json", "sessions", "list"])
         .output()
         .unwrap();
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--project"));
+    assert!(
+        output.status.success(),
+        "sessions list without --project should succeed (cross-project mode)"
+    );
 }
 
 #[test]

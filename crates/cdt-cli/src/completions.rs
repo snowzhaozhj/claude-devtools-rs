@@ -382,3 +382,79 @@ fn truncate_chars(s: &str, max: usize) -> String {
         s.to_string()
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Value completers for enum/time parameters
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct SinceCompleter;
+
+impl ValueCandidates for SinceCompleter {
+    fn candidates(&self) -> Vec<CompletionCandidate> {
+        vec![
+            CompletionCandidate::new("today").help(Some("Start of today (local timezone)".into())),
+            CompletionCandidate::new("yesterday")
+                .help(Some("Start of yesterday (local timezone)".into())),
+            CompletionCandidate::new("week")
+                .help(Some("Start of this week (Monday, local timezone)".into())),
+            CompletionCandidate::new("7d").help(Some("Last 7 days".into())),
+            CompletionCandidate::new("24h").help(Some("Last 24 hours".into())),
+            CompletionCandidate::new("30d").help(Some("Last 30 days".into())),
+        ]
+    }
+}
+
+#[allow(dead_code)]
+pub struct GroupBySessionsCompleter;
+
+impl ValueCandidates for GroupBySessionsCompleter {
+    fn candidates(&self) -> Vec<CompletionCandidate> {
+        vec![
+            CompletionCandidate::new("none").help(Some("No grouping (flat list)".into())),
+            CompletionCandidate::new("project").help(Some("Group by project name".into())),
+            CompletionCandidate::new("day").help(Some("Group by day".into())),
+        ]
+    }
+}
+
+#[allow(dead_code)]
+pub struct IncludeCompleter;
+
+impl ValueCandidates for IncludeCompleter {
+    fn candidates(&self) -> Vec<CompletionCandidate> {
+        vec![
+            CompletionCandidate::new("phases").help(Some("Session phases with durations".into())),
+            CompletionCandidate::new("tools").help(Some("Tool usage statistics".into())),
+            CompletionCandidate::new("activity")
+                .help(Some("Tool activity (commands, files, git)".into())),
+            CompletionCandidate::new("idle_gaps").help(Some("Idle time gaps".into())),
+            CompletionCandidate::new("files").help(Some("Top files touched".into())),
+        ]
+    }
+}
+
+#[allow(dead_code)]
+pub struct ContentModeCompleter;
+
+impl ValueCandidates for ContentModeCompleter {
+    fn candidates(&self) -> Vec<CompletionCandidate> {
+        vec![
+            CompletionCandidate::new("omit")
+                .help(Some("Structure only, content omitted (default)".into())),
+            CompletionCandidate::new("overview").help(Some("One-line per chunk summary".into())),
+            CompletionCandidate::new("full").help(Some("Complete content".into())),
+        ]
+    }
+}
+
+#[allow(dead_code)]
+pub struct FilterCompleter;
+
+impl ValueCandidates for FilterCompleter {
+    fn candidates(&self) -> Vec<CompletionCandidate> {
+        vec![
+            CompletionCandidate::new("errors_only").help(Some("Only error chunks".into())),
+            CompletionCandidate::new("tool_calls").help(Some("Only tool call chunks".into())),
+        ]
+    }
+}
