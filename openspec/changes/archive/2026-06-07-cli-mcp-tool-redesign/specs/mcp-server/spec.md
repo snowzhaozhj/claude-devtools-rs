@@ -100,6 +100,8 @@ MCP server SHALL 暴露以下 6 个 tools，全部标注 `readOnlyHint=true`、`
 - **THEN** 服务端 SHALL 内部转发到 `get_session(session="abc123", include="phases,tools,activity")`
 - **AND** 返回结构 SHALL 兼容原 `SessionSummaryOutput` 格式
 
+## ADDED Requirements
+
 ### Requirement: 时间表达式解析
 
 MCP server 所有接受时间参数（`since`/`until`）的 tools SHALL 支持以下三类格式：
