@@ -183,7 +183,7 @@ struct McpErrorEntry {
     is_error: bool,
     error_message: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    message_truncated: bool,
+    message_summarized: bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -294,7 +294,7 @@ impl CdtMcpServer {
 impl CdtMcpServer {
     #[tool(
         name = "list_projects",
-        description = "List all Claude Code projects (repository groups) with session counts and last active time. Call this first to discover available projects.",
+        description = "List all Claude Code projects. When to use: need project names for filtering. When NOT to use: prefer list_sessions without project param for cross-project queries.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -314,7 +314,9 @@ impl CdtMcpServer {
 
     #[tool(
         name = "list_sessions",
-        description = "List sessions for a project. Returns paginated results (default 20 per page). Check `hasMore` and use `cursor` for next page. Supports filtering by time range (since), title keyword (grep).",
+        description = "List sessions with filtering. Omit 'project' for cross-project query (defaults to since='7d'). \
+            When to use: 'what sessions exist', 'what did I do yesterday', 'show ongoing sessions'. \
+            When NOT to use: need session content — use get_session or get_session_chunks instead.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -406,10 +408,11 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_session_chunks",
-        description = "Inspect chunks for a known session. content_mode: 'omit' (default, structure-only with sizes), 'full' (complete content), 'overview' (one-line per chunk: kind/timestamp/tools/errorCount/headline). \
-            `chunkIndex` is absolute and stable. Window: range, tail, or cursor. \
-            `grep`: case-insensitive literal filter across text, tool inputs/outputs, tool names, error messages; \
-            hits auto-expand to full with `grepHit` flag. Not for cross-session discovery — use search_sessions first.",
+        description = "Inspect chunk-level content of a known session. \
+            When to use: deep dive into conversation flow, find specific tool calls/errors within a session, grep within a session. \
+            When NOT to use: just need summary/cost/errors — use get_session instead; finding which session — use search_sessions. \
+            content_mode: 'omit' (default), 'overview' (one-line per chunk), 'full' (complete). \
+            Use range/tail to window. grep filters chunks with context expansion.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -634,8 +637,10 @@ impl CdtMcpServer {
 
     #[tool(
         name = "search_sessions",
-        description = "Full-text discovery across session search index. Returns grouped session hits with preview snippets, not chunk envelopes. \
-            Use `session` for intra-session search. Use get_session_detail with grep/range for chunk-level content.",
+        description = "Cross-session full-text search. Returns lightweight snippets grouped by session. \
+            When to use: 'find sessions mentioning X', 'which session had the deploy error'. \
+            When NOT to use: already know the session — use get_session_chunks with grep instead. \
+            Use 'since' to limit time scope. Use 'session' param for intra-session search.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -721,7 +726,11 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_session",
-        description = "Composite session view: summary + cost + errors in one call. Default returns compact view (metadata, cost, error count, first 10 errors). Use 'include' for heavy facets (phases, tools, activity, idle_gaps, files). Use 'latest' as session ID for most recent session.",
+        description = "Composite session view: summary + cost + errors in one call. \
+            When to use: 'summarize session X', 'how much did session cost', 'what errors occurred'. \
+            When NOT to use: need chunk-level content — use get_session_chunks. \
+            Default: compact (metadata + cost + first 10 errors). Use 'include' for phases/tools/activity/idle_gaps/files. \
+            session='latest' resolves to most recent.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -757,14 +766,14 @@ impl CdtMcpServer {
             .into_iter()
             .take(10)
             .map(|e| {
-                let (msg, truncated) = truncate_error_message(e.error_summary);
+                let (msg, truncated) = summarize_error_message(e.error_summary);
                 McpErrorEntry {
                     chunk_index: e.chunk_index,
                     tool_name: e.tool_name,
                     tool_use_id: e.tool_use_id,
                     is_error: true,
                     error_message: msg,
-                    message_truncated: truncated,
+                    message_summarized: truncated,
                 }
             })
             .collect();
@@ -810,7 +819,10 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_stats",
-        description = "Get aggregated statistics across sessions for a time period. Returns session count, total messages, cost, tool frequency, error rate, model usage.",
+        description = "Aggregated statistics across sessions. \
+            When to use: 'how much did I spend this week', 'usage summary for last 30 days'. \
+            When NOT to use: need per-session detail — use get_session. \
+            Default period='7d'. Returns sessionCount, totalCost, toolFrequency, modelUsage.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -928,11 +940,18 @@ fn parse_cursor_offset(cursor: Option<&str>) -> usize {
         .unwrap_or(0)
 }
 
-fn truncate_error_message(msg: Option<String>) -> (Option<String>, bool) {
+fn summarize_error_message(msg: Option<String>) -> (Option<String>, bool) {
     match msg {
         None => (None, false),
         Some(s) if s.chars().count() <= ERROR_MESSAGE_MAX_CHARS => (Some(s), false),
-        Some(s) => (Some(view::truncate_str(&s, ERROR_MESSAGE_MAX_CHARS)), true),
+        Some(s) => {
+            let chars: Vec<char> = s.chars().collect();
+            let head_len = ERROR_MESSAGE_MAX_CHARS * 3 / 5;
+            let tail_len = ERROR_MESSAGE_MAX_CHARS * 2 / 5;
+            let head: String = chars[..head_len].iter().collect();
+            let tail: String = chars[chars.len() - tail_len..].iter().collect();
+            (Some(format!("{head}\n…\n{tail}")), true)
+        }
     }
 }
 

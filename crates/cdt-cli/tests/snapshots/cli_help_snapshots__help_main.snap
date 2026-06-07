@@ -8,7 +8,8 @@ Usage: cdt [OPTIONS] <COMMAND>
 
 Commands:
   projects     项目相关操作
-  sessions     会话相关操作
+  sessions     会话列表
+  session      单 session 复合视图（summary + cost + errors）
   search       全文搜索
   stats        聚合统计
   serve        启动 HTTP API server

@@ -300,14 +300,6 @@ pub fn tool_output_to_value(output: &ToolOutput) -> serde_json::Value {
     }
 }
 
-pub fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_string();
-    }
-    let truncated: String = s.chars().take(max_chars).collect();
-    format!("{truncated}...")
-}
-
 /// Display-width-aware truncation using Unicode width.
 pub fn truncate_display(s: &str, max_width: usize) -> String {
     use unicode_width::UnicodeWidthChar;

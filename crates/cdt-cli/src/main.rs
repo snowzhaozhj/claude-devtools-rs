@@ -68,10 +68,56 @@ enum Command {
         #[command(subcommand)]
         action: ProjectsAction,
     },
-    /// 会话相关操作
+    /// 会话列表
     Sessions {
         #[command(subcommand)]
         action: SessionsAction,
+    },
+    /// 单 session 复合视图（summary + cost + errors）
+    Session {
+        /// 会话 ID（支持 'latest'）
+        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
+        id: String,
+
+        /// 切换到 chunk 模式（显示 chunk 流而非复合视图）
+        #[arg(long)]
+        chunks: bool,
+
+        /// 追加重数据（逗号分隔）
+        #[arg(long, add = ArgValueCandidates::new(completions::IncludeCompleter))]
+        include: Option<String>,
+
+        /// chunk 模式：指定 chunk 区间（如 10:30），与 --tail 互斥
+        #[arg(long, conflicts_with = "tail", requires = "chunks")]
+        range: Option<String>,
+
+        /// chunk 模式：仅显示最后 N 条 chunks
+        #[arg(long, conflicts_with = "range", requires = "chunks")]
+        tail: Option<usize>,
+
+        /// chunk 模式：过滤条件
+        #[arg(long, requires = "chunks", add = ArgValueCandidates::new(completions::FilterCompleter))]
+        filter: Option<String>,
+
+        /// chunk 模式：内容模式 omit / overview / full
+        #[arg(long, requires = "chunks", add = ArgValueCandidates::new(completions::ContentModeCompleter))]
+        content: Option<String>,
+
+        /// chunk 模式：grep 过滤
+        #[arg(long, requires = "chunks")]
+        grep: Option<String>,
+
+        /// chunk 模式：grep context 数
+        #[arg(long, default_value = "1", requires = "chunks")]
+        grep_context: usize,
+
+        /// chunk 模式：返回全部 chunk
+        #[arg(long, visible_alias = "full", requires = "chunks")]
+        all: bool,
+
+        /// chunk 模式：展平提取 overview/errors/tools
+        #[arg(long, conflicts_with = "content", requires = "chunks")]
+        extract: Option<String>,
     },
     /// 全文搜索
     Search {
@@ -89,6 +135,10 @@ enum Command {
         /// 限定到单个 session（intra-session search）
         #[arg(long)]
         session: Option<String>,
+
+        /// 仅搜索此时间之后的 session
+        #[arg(long, add = ArgValueCandidates::new(completions::SinceCompleter))]
+        since: Option<String>,
     },
     /// 聚合统计
     Stats {
@@ -99,6 +149,10 @@ enum Command {
         /// 限定项目
         #[arg(long)]
         project: Option<String>,
+
+        /// 按维度分组：none / project / model / day
+        #[arg(long, default_value = "none")]
+        group_by: String,
     },
     /// 启动 HTTP API server
     Serve,
@@ -169,6 +223,14 @@ enum SessionsAction {
         #[arg(long, add = ArgValueCandidates::new(completions::SinceCompleter))]
         until: Option<String>,
 
+        /// 按 git 分支过滤（大小写不敏感子串匹配）
+        #[arg(long)]
+        branch: Option<String>,
+
+        /// 仅显示活跃 session
+        #[arg(long)]
+        is_ongoing: bool,
+
         /// 标题关键词过滤（大小写不敏感）
         #[arg(long)]
         grep: Option<String>,
@@ -176,44 +238,6 @@ enum SessionsAction {
         /// 仅显示消息数 >= N 的会话
         #[arg(long)]
         min_messages: Option<usize>,
-    },
-    /// 显示会话详情（chunk 流）
-    Detail {
-        /// 会话 ID
-        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
-        id: String,
-
-        /// 指定 chunk 区间（如 10:30），与 --tail 互斥
-        #[arg(long, conflicts_with = "tail")]
-        range: Option<String>,
-
-        /// 仅显示最后 N 条 chunks，与 --range 互斥
-        #[arg(long, conflicts_with = "range")]
-        tail: Option<usize>,
-
-        /// 过滤条件：`errors_only` 或 `tool_calls`
-        #[arg(long)]
-        filter: Option<String>,
-
-        /// 返回全部 chunk，禁用默认 tail=20
-        #[arg(long, visible_alias = "full")]
-        all: bool,
-
-        /// 按内容匹配过滤 chunks（case-insensitive literal substring）
-        #[arg(long)]
-        grep: Option<String>,
-
-        /// grep 命中周围的 context chunk 数（默认 1）
-        #[arg(long, default_value = "1")]
-        grep_context: usize,
-
-        /// JSON/JSONL 输出的内容模式：omit（结构概览）或 full（完整内容）
-        #[arg(long, conflicts_with = "extract")]
-        content: Option<String>,
-
-        /// 展平提取模式：overview（每 chunk 一条）/ errors（每条错误一条）/ tools（每次工具调用一条）
-        #[arg(long, conflicts_with = "content")]
-        extract: Option<String>,
     },
 }
 
@@ -423,6 +447,8 @@ async fn cmd_sessions_list(
     limit: usize,
     since: Option<&str>,
     until: Option<&str>,
+    branch: Option<&str>,
+    is_ongoing: bool,
     grep: Option<&str>,
     min_messages: Option<usize>,
     json_fields: Option<&str>,
@@ -463,6 +489,19 @@ async fn cmd_sessions_list(
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
     };
+
+    let mut items = items;
+    if let Some(b) = branch {
+        let lower = b.to_lowercase();
+        items.retain(|s| {
+            s.git_branch
+                .as_deref()
+                .is_some_and(|gb| gb.to_lowercase().contains(&lower))
+        });
+    }
+    if is_ongoing {
+        items.retain(|s| s.is_ongoing);
+    }
 
     if items.is_empty() {
         match format {
@@ -508,7 +547,118 @@ async fn cmd_sessions_list(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// sessions detail
+// session inspect (composite view)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn cmd_session_inspect(
+    format: &OutputFormat,
+    session_id: &str,
+    include: Option<&str>,
+    json_fields: Option<&str>,
+) -> Result<()> {
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(api);
+
+    let project_id = engine
+        .find_session_project(session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let options = SessionQueryOptions::default();
+    let detail = engine
+        .get_session_detail(&project_id, session_id, &options)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let summary = cdt_query::summary::build_summary(&detail);
+    let cost = cdt_query::cost::compute_session_cost(&detail);
+
+    let indexed: Vec<(usize, &cdt_core::Chunk)> = detail.chunks.iter().enumerate().collect();
+    let error_entries = cdt_query::extract::extract_errors(&indexed);
+    let error_count = error_entries.len();
+    let top_errors: Vec<serde_json::Value> = error_entries
+        .into_iter()
+        .take(10)
+        .map(|e| {
+            serde_json::json!({
+                "chunkIndex": e.chunk_index,
+                "toolName": e.tool_name,
+                "errorMessage": e.error_summary,
+            })
+        })
+        .collect();
+
+    let include_set: std::collections::HashSet<&str> = include
+        .map(|s| s.split(',').map(str::trim).collect())
+        .unwrap_or_default();
+
+    let mut result = serde_json::json!({
+        "sessionId": session_id,
+        "projectId": project_id,
+        "messageCount": summary.message_count,
+        "chunkCount": detail.chunks.len(),
+        "durationMs": summary.total_duration_ms,
+        "cost": cost,
+        "errorCount": error_count,
+        "errors": top_errors,
+    });
+
+    if include_set.contains("phases") {
+        result["phases"] = serde_json::to_value(&summary.phases).unwrap_or_default();
+    }
+    if include_set.contains("tools") {
+        result["toolUsage"] = serde_json::to_value(&summary.tool_usage).unwrap_or_default();
+    }
+    if include_set.contains("activity") {
+        result["toolActivity"] = serde_json::to_value(&summary.tool_activity).unwrap_or_default();
+    }
+    if include_set.contains("idle_gaps") {
+        result["idleGaps"] = serde_json::to_value(&summary.idle_gaps).unwrap_or_default();
+    }
+    if include_set.contains("files") {
+        result["topFiles"] = serde_json::to_value(&summary.top_files).unwrap_or_default();
+    }
+
+    match format {
+        OutputFormat::Json => emit_json(&result, json_fields)?,
+        OutputFormat::Jsonl => println!("{}", serde_json::to_string(&result)?),
+        OutputFormat::Table => {
+            println!("Session: {session_id}");
+            println!(
+                "Messages: {}  Chunks: {}  Duration: {}s",
+                summary.message_count,
+                detail.chunks.len(),
+                summary.total_duration_ms / 1000
+            );
+            println!(
+                "Cost: ${:.4} ({} tokens, {})",
+                cost.total_cost, cost.total_tokens, cost.model
+            );
+            println!("Errors: {error_count}");
+            if !top_errors.is_empty() {
+                println!();
+                let tw = term_width();
+                let fixed = 6 + 20 + 4;
+                let error_w = tw.saturating_sub(fixed).max(20);
+                println!("{:>6} {:<20} {:<error_w$}", "CHUNK", "TOOL", "ERROR");
+                println!("{}", "-".repeat(tw));
+                for e in &top_errors {
+                    let msg = e["errorMessage"].as_str().unwrap_or("(no details)");
+                    println!(
+                        "{:>6} {:<20} {:<error_w$}",
+                        e["chunkIndex"],
+                        truncate(e["toolName"].as_str().unwrap_or(""), 19),
+                        truncate(msg, error_w.saturating_sub(1)),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// session chunks (was sessions detail)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -779,6 +929,7 @@ fn cmd_extract(
 // search
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_search(
     format: &OutputFormat,
     project_filter: Option<&str>,
@@ -786,10 +937,16 @@ async fn cmd_search(
     limit: usize,
     offset: usize,
     session_filter: Option<&str>,
+    since: Option<&str>,
     json_fields: Option<&str>,
 ) -> Result<()> {
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
+
+    let since_ms = since
+        .map(cdt_cli::time_expr::parse_time_expr_local)
+        .transpose()
+        .with_context(|| "invalid --since value")?;
 
     let project_id = match project_filter {
         Some(name) => Some(
@@ -813,7 +970,7 @@ async fn cmd_search(
     };
 
     let mut result = engine
-        .search(query, project_id.as_deref(), session_filter)
+        .search_with_since(query, project_id.as_deref(), session_filter, since_ms)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -911,35 +1068,19 @@ fn list_available_fields(command: &Command) {
                 "gitBranch",
                 "cwd",
             ],
-            SessionsAction::Detail {
-                extract: Some(mode),
-                ..
-            } => match mode.as_str() {
-                "overview" => &[
-                    "chunkIndex",
-                    "kind",
-                    "timestamp",
-                    "durationMs",
-                    "toolCount",
-                    "errorCount",
-                    "toolNames",
-                    "responseCount",
-                    "contentChars",
-                ],
-                "errors" | "tools" => &[
-                    "chunkIndex",
-                    "toolIndex",
-                    "toolName",
-                    "toolUseId",
-                    "isError",
-                    "inputSummary",
-                    "errorSummary",
-                    "outputChars",
-                ],
-                _ => &["sessionId", "chunks", "totalChunks", "contentMode"],
-            },
-            SessionsAction::Detail { .. } => &["sessionId", "chunks", "totalChunks", "contentMode"],
         },
+        Command::Session { chunks: true, .. } => {
+            &["sessionId", "chunks", "totalChunks", "contentMode"]
+        }
+        Command::Session { .. } => &[
+            "sessionId",
+            "messageCount",
+            "chunkCount",
+            "durationMs",
+            "cost",
+            "errorCount",
+            "errors",
+        ],
         Command::Search { .. } => &["sessionId", "sessionTitle", "totalMatches", "hits"],
         Command::Stats { .. } => &[
             "sessionCount",
@@ -1240,6 +1381,7 @@ async fn cmd_stats(
     format: &OutputFormat,
     period: &str,
     project_filter: Option<&str>,
+    _group_by: &str,
     json_fields: Option<&str>,
 ) -> Result<()> {
     let api = build_local_data_api().await?;
@@ -1435,6 +1577,8 @@ async fn main() -> Result<()> {
                 limit,
                 since,
                 until,
+                branch,
+                is_ongoing,
                 grep,
                 min_messages,
             } => {
@@ -1444,23 +1588,29 @@ async fn main() -> Result<()> {
                     limit,
                     since.as_deref(),
                     until.as_deref(),
+                    branch.as_deref(),
+                    is_ongoing,
                     grep.as_deref(),
                     min_messages,
                     json_fields,
                 )
                 .await
             }
-            SessionsAction::Detail {
-                id,
-                range,
-                tail,
-                filter,
-                all,
-                grep,
-                grep_context,
-                content,
-                extract,
-            } => {
+        },
+        Command::Session {
+            id,
+            chunks,
+            include,
+            range,
+            tail,
+            filter,
+            content,
+            grep,
+            grep_context,
+            all,
+            extract,
+        } => {
+            if chunks {
                 cmd_sessions_detail(
                     &effective_format,
                     &id,
@@ -1475,13 +1625,16 @@ async fn main() -> Result<()> {
                     json_fields,
                 )
                 .await
+            } else {
+                cmd_session_inspect(&effective_format, &id, include.as_deref(), json_fields).await
             }
-        },
+        }
         Command::Search {
             query,
             limit,
             offset,
             session,
+            since,
         } => {
             cmd_search(
                 &effective_format,
@@ -1490,13 +1643,18 @@ async fn main() -> Result<()> {
                 limit,
                 offset,
                 session.as_deref(),
+                since.as_deref(),
                 json_fields,
             )
             .await
         }
-        Command::Stats { period, project } => {
+        Command::Stats {
+            period,
+            project,
+            group_by,
+        } => {
             let proj = project.as_deref().or(cli.project.as_deref());
-            cmd_stats(&effective_format, &period, proj, json_fields).await
+            cmd_stats(&effective_format, &period, proj, &group_by, json_fields).await
         }
         Command::Mcp { action } => match action {
             McpAction::Serve { allow_sensitive } => {
