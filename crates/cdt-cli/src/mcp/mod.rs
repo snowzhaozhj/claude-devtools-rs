@@ -300,7 +300,7 @@ impl CdtMcpServer {
 impl CdtMcpServer {
     #[tool(
         name = "list_projects",
-        description = "List all Claude Code projects. When to use: need project names for filtering. When NOT to use: prefer list_sessions without project param for cross-project queries.",
+        description = "List all Claude Code projects (name, path, session count). Rarely needed — prefer list_sessions without project.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -320,9 +320,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "list_sessions",
-        description = "List sessions with filtering. Omit 'project' for cross-project query (defaults to since='7d'). \
-            When to use: 'what sessions exist', 'what did I do yesterday', 'show ongoing sessions'. \
-            When NOT to use: need session content — use get_session or get_session_chunks instead.",
+        description = "List sessions with filtering. Omit 'project' for cross-project query (defaults since='7d').",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -444,11 +442,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_session_chunks",
-        description = "Inspect chunk-level content of a known session. \
-            When to use: deep dive into conversation flow, find specific tool calls/errors within a session, grep within a session. \
-            When NOT to use: just need summary/cost/errors — use get_session instead; finding which session — use search_sessions. \
-            content_mode: 'omit' (default), 'overview' (one-line per chunk), 'full' (complete). \
-            Use range/tail to window. grep filters chunks with context expansion.",
+        description = "Get chunk-level content of a session. Use range/tail to window, grep to filter.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -673,10 +667,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "search_sessions",
-        description = "Cross-session full-text search. Returns lightweight snippets grouped by session. \
-            When to use: 'find sessions mentioning X', 'which session had the deploy error'. \
-            When NOT to use: already know the session — use get_session_chunks with grep instead. \
-            Use 'since' to limit time scope. Use 'session' param for intra-session search.",
+        description = "Full-text search across sessions. Returns lightweight snippets grouped by session.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -762,11 +753,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_session",
-        description = "Composite session view: summary + cost + errors in one call. \
-            When to use: 'summarize session X', 'how much did session cost', 'what errors occurred'. \
-            When NOT to use: need chunk-level content — use get_session_chunks. \
-            Default: compact (metadata + cost + first 10 errors). Use 'include' for phases/tools/activity/idle_gaps/files. \
-            session='latest' resolves to most recent.",
+        description = "Session summary + cost + errors in one call. Use 'include' to add phases/tools/activity/idle_gaps/files.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -855,10 +842,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_stats",
-        description = "Aggregated statistics across sessions. \
-            When to use: 'how much did I spend this week', 'usage summary for last 30 days'. \
-            When NOT to use: need per-session detail — use get_session. \
-            Default period='7d'. Returns sessionCount, totalCost, toolFrequency, modelUsage.",
+        description = "Aggregated statistics: cost, tokens, tool frequency, model usage. Default period='7d'.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -962,25 +946,20 @@ impl ServerHandler for CdtMcpServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "Claude DevTools — read-only session intelligence (6 tools).\n\
+                "Claude DevTools — read-only session intelligence.\n\
 \n\
-DECISION TREE — pick by intent:\n\
-- \"What did I do?\" → list_sessions(since='yesterday') — one call, cross-project\n\
-- \"Summarize session X\" → get_session(session=X) — composite: summary+cost+errors\n\
-- \"Deep dive into session X\" → get_session_chunks(session=X, content_mode='overview') then range/grep\n\
-- \"Find sessions mentioning Y\" → search_sessions(query=Y) — cross-session discovery\n\
-- \"How much did I spend?\" → get_stats(period='7d') — aggregated statistics\n\
-- \"Which projects exist?\" → list_projects — rarely needed, prefer list_sessions\n\
+Pick by intent:\n\
+- \"What did I do?\" → list_sessions(since='yesterday')\n\
+- \"Summarize session X\" → get_session(session=X)\n\
+- \"Deep dive\" → get_session_chunks(session=X, content_mode='overview') then range/grep\n\
+- \"Find sessions about Y\" → search_sessions(query=Y)\n\
+- \"How much did I spend?\" → get_stats(period='7d')\n\
 \n\
-KEY RULES:\n\
-- 'latest' works as session ID (resolves to most recent)\n\
-- project is always optional — omit for cross-project queries\n\
-- since/until accept: relative (7d, 24h), named (today, yesterday, week), absolute (2026-06-06)\n\
-- get_session_chunks: use content_mode='overview' for scan, 'full' only with range/tail\n\
-- grep on get_session_chunks filters within a known session (full ChunkView)\n\
-- search_sessions finds WHICH session (lightweight snippets) — different intent\n\
-- Errors live in chunks[].toolExecutions[].isError, not in responses[]\n\
-- range format: start:end (0-indexed chunkIndex), e.g. 5:10"
+Rules:\n\
+- 'latest' as session ID = most recent session\n\
+- project is always optional — omit for cross-project\n\
+- since/until: relative (7d, 24h), named (today, yesterday, week), absolute (2026-06-06)\n\
+- search_sessions finds WHICH session; get_session_chunks grep filters WITHIN a session"
                     .to_string(),
             )
     }
