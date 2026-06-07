@@ -17,4 +17,5 @@ Options:
       --json[=<JSON>]      JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
       --session <SESSION>  限定到单个 session（intra-session search）
       --no-truncate        table 模式不截断任何字段
+      --since <SINCE>      仅搜索此时间之后的 session
   -h, --help               Print help

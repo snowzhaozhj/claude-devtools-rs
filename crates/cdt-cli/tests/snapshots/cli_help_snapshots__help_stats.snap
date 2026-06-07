@@ -10,8 +10,9 @@ Arguments:
   [PERIOD]  时间范围（today / week / 7d / 24h / 30d） [default: 7d]
 
 Options:
-      --format <FORMAT>    输出格式 [default: table] [possible values: json, jsonl, table]
-      --project <PROJECT>  限定项目
-      --json[=<JSON>]      JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
-      --no-truncate        table 模式不截断任何字段
-  -h, --help               Print help
+      --format <FORMAT>      输出格式 [default: table] [possible values: json, jsonl, table]
+      --project <PROJECT>    限定项目
+      --group-by <GROUP_BY>  按维度分组：none / model / day [default: none]
+      --json[=<JSON>]        JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
+      --no-truncate          table 模式不截断任何字段
+  -h, --help                 Print help

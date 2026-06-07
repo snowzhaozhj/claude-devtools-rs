@@ -16,6 +16,7 @@ use cdt_core::{Chunk, ToolExecution};
 pub enum ContentMode {
     Omit,
     Full,
+    Overview,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,7 +94,7 @@ pub struct ContentField {
 fn build_content_field(text: String, mode: &ContentMode) -> ContentField {
     let chars = text.chars().count();
     match mode {
-        ContentMode::Omit => ContentField {
+        ContentMode::Omit | ContentMode::Overview => ContentField {
             omitted: chars > 200,
             text: if chars <= 200 { Some(text) } else { None },
             chars,
@@ -152,7 +153,7 @@ pub fn build_chunk_view(
                     let content_chars = text.chars().count();
                     let upstream_omitted = r.content_omitted;
                     match mode {
-                        ContentMode::Omit => ResponseView {
+                        ContentMode::Omit | ContentMode::Overview => ResponseView {
                             model: r.model.clone(),
                             content: None,
                             content_omitted: true,
@@ -231,7 +232,7 @@ pub fn build_tool_exec_view(te: &ToolExecution, mode: &ContentMode) -> ToolExecV
     };
 
     match mode {
-        ContentMode::Omit => ToolExecView {
+        ContentMode::Omit | ContentMode::Overview => ToolExecView {
             tool_name: te.tool_name.clone(),
             tool_use_id: te.tool_use_id.clone(),
             is_error: te.is_error,
@@ -297,14 +298,6 @@ pub fn tool_output_to_value(output: &ToolOutput) -> serde_json::Value {
         ToolOutput::Structured { value } => value.clone(),
         ToolOutput::Missing => serde_json::Value::Null,
     }
-}
-
-pub fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_string();
-    }
-    let truncated: String = s.chars().take(max_chars).collect();
-    format!("{truncated}...")
 }
 
 /// Display-width-aware truncation using Unicode width.

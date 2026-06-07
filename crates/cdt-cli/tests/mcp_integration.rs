@@ -71,14 +71,12 @@ async fn mcp_server_responds_to_list_tools() {
 
     let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_ref()).collect();
     assert!(tool_names.contains(&"list_projects"));
-    assert!(tool_names.contains(&"get_session_summary"));
-    assert!(tool_names.contains(&"get_session_detail"));
-    assert!(tool_names.contains(&"search_sessions"));
-    assert!(tool_names.contains(&"get_session_errors"));
-    assert!(tool_names.contains(&"get_session_cost"));
     assert!(tool_names.contains(&"list_sessions"));
+    assert!(tool_names.contains(&"get_session"));
+    assert!(tool_names.contains(&"get_session_chunks"));
+    assert!(tool_names.contains(&"search_sessions"));
     assert!(tool_names.contains(&"get_stats"));
-    assert_eq!(tool_names.len(), 8);
+    assert_eq!(tool_names.len(), 6);
 
     client.cancel().await.unwrap();
 }
@@ -140,7 +138,7 @@ async fn mcp_list_sessions_returns_error_for_unknown_project() {
 }
 
 #[tokio::test]
-async fn mcp_get_session_detail_rejects_conflicting_window_params() {
+async fn mcp_get_session_chunks_rejects_conflicting_window_params() {
     let client = setup_pair().await;
 
     let params = serde_json::json!({
@@ -152,7 +150,7 @@ async fn mcp_get_session_detail_rejects_conflicting_window_params() {
     let result = client
         .send_request(rmcp::model::ClientRequest::CallToolRequest(
             rmcp::model::Request::new(
-                CallToolRequestParams::new("get_session_detail")
+                CallToolRequestParams::new("get_session_chunks")
                     .with_arguments(serde_json::from_value(params).unwrap()),
             ),
         ))
@@ -170,7 +168,7 @@ async fn mcp_get_session_detail_rejects_conflicting_window_params() {
 }
 
 #[tokio::test]
-async fn mcp_get_session_detail_rejects_invalid_content_mode() {
+async fn mcp_get_session_chunks_rejects_invalid_content_mode() {
     let client = setup_pair().await;
 
     let params = serde_json::json!({
@@ -181,7 +179,7 @@ async fn mcp_get_session_detail_rejects_invalid_content_mode() {
     let result = client
         .send_request(rmcp::model::ClientRequest::CallToolRequest(
             rmcp::model::Request::new(
-                CallToolRequestParams::new("get_session_detail")
+                CallToolRequestParams::new("get_session_chunks")
                     .with_arguments(serde_json::from_value(params).unwrap()),
             ),
         ))

@@ -9,16 +9,6 @@ use crate::error::QueryError;
 use crate::filter::QueryFilter;
 use crate::options::SessionQueryOptions;
 
-/// Error detail extracted from a session's chunks.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ErrorEntry {
-    pub chunk_index: usize,
-    pub tool_name: String,
-    pub tool_use_id: String,
-    pub error_message: Option<String>,
-}
-
 /// High-level query orchestration over `LocalDataApi`.
 pub struct QueryEngine {
     api: Arc<LocalDataApi>,
@@ -57,7 +47,7 @@ impl QueryEngine {
         Err(QueryError::NotFound(format!("project not found: {name}")))
     }
 
-    /// List sessions with optional filter.
+    /// List sessions with optional filter (single project).
     pub async fn list_sessions(
         &self,
         project_id: &str,
@@ -70,6 +60,54 @@ impl QueryEngine {
         let resp = self.api.list_sessions_sync(project_id, &pagination).await?;
 
         Ok(filter.apply(resp.items))
+    }
+
+    /// List sessions across all projects, with filter applied.
+    /// Returns sessions sorted by timestamp descending.
+    pub async fn list_sessions_cross_project(
+        &self,
+        filter: &QueryFilter,
+    ) -> Result<Vec<SessionSummary>, QueryError> {
+        let groups = self
+            .api
+            .list_repository_groups()
+            .await
+            .map_err(|e| QueryError::Api(e.to_string()))?;
+
+        let pagination = PaginatedRequest {
+            page_size: usize::MAX,
+            cursor: None,
+        };
+
+        let mut all_sessions = Vec::new();
+        for group in &groups {
+            if let Some(since) = filter.since {
+                if group.most_recent_session.is_some_and(|mtime| mtime < since) {
+                    continue;
+                }
+            }
+            for wt in &group.worktrees {
+                match self.api.list_sessions_sync(&wt.id, &pagination).await {
+                    Ok(resp) => {
+                        for mut s in resp.items {
+                            s.project_name = Some(group.name.clone());
+                            all_sessions.push(s);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            project_id = %wt.id,
+                            error = %e,
+                            "cross-project list_sessions: skipping worktree"
+                        );
+                    }
+                }
+            }
+        }
+
+        all_sessions.sort_by_key(|s| std::cmp::Reverse(s.timestamp));
+
+        Ok(filter.apply(all_sessions))
     }
 
     /// Get session detail (full parse + build), then apply query options.
@@ -124,48 +162,23 @@ impl QueryEngine {
         })
     }
 
-    /// Extract all errors from a session.
-    #[deprecated(note = "use cdt_query::extract::extract_errors() instead")]
-    pub async fn get_session_errors(
-        &self,
-        project_id: &str,
-        session_id: &str,
-    ) -> Result<Vec<ErrorEntry>, QueryError> {
-        let resp = self
-            .api
-            .get_session_detail(project_id, session_id, None)
-            .await?;
-
-        let detail = match resp {
-            SessionDetailResponse::Full { detail, .. } => *detail,
-            SessionDetailResponse::Unchanged { .. } => {
-                return Err(QueryError::Api(
-                    "unexpected unchanged response without fingerprint".into(),
-                ));
-            }
-        };
-
-        let indexed: Vec<(usize, &cdt_core::Chunk)> = detail.chunks.iter().enumerate().collect();
-        let entries = crate::extract::extract_errors(&indexed);
-        let errors = entries
-            .into_iter()
-            .map(|e| ErrorEntry {
-                chunk_index: e.chunk_index,
-                tool_name: e.tool_name,
-                tool_use_id: e.tool_use_id,
-                error_message: e.error_summary,
-            })
-            .collect();
-
-        Ok(errors)
-    }
-
     /// Search across sessions.
     pub async fn search(
         &self,
         query: &str,
         project_id: Option<&str>,
         session_id: Option<&str>,
+    ) -> Result<cdt_core::SearchSessionsResult, QueryError> {
+        self.search_with_since(query, project_id, session_id, None)
+            .await
+    }
+
+    pub async fn search_with_since(
+        &self,
+        query: &str,
+        project_id: Option<&str>,
+        session_id: Option<&str>,
+        since_ms: Option<i64>,
     ) -> Result<cdt_core::SearchSessionsResult, QueryError> {
         let project_id_resolved = project_id.map(ToOwned::to_owned);
 
@@ -191,6 +204,11 @@ impl QueryEngine {
         let mut has_error = false;
 
         for group in &groups {
+            if let Some(since) = since_ms {
+                if group.most_recent_session.is_some_and(|mtime| mtime < since) {
+                    continue;
+                }
+            }
             for wt in &group.worktrees {
                 let request = SearchRequest {
                     query: query.to_owned(),

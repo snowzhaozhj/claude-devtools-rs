@@ -11,7 +11,7 @@ use cdt_core::Chunk;
 
 use crate::cost::{self, SessionCost};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AggregatedStats {
     pub period_start: DateTime<Utc>,
@@ -31,14 +31,14 @@ pub struct AggregatedStats {
     pub active_hours: Vec<HourBucket>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolFrequency {
     pub name: String,
     pub count: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelUsage {
     pub model: String,
@@ -46,7 +46,7 @@ pub struct ModelUsage {
     pub total_cost: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HourBucket {
     pub hour: u32,
@@ -54,12 +54,15 @@ pub struct HourBucket {
     pub message_count: usize,
 }
 
+#[derive(Clone)]
 pub struct SessionData {
     pub timestamp: i64,
     pub message_count: usize,
     pub chunks: Vec<Chunk>,
     pub cost: SessionCost,
     pub model: String,
+    pub tool_names: Option<Vec<String>>,
+    pub shallow_error_count: Option<usize>,
 }
 
 pub fn aggregate(sessions: &[SessionData], since: DateTime<Utc>) -> AggregatedStats {
@@ -95,13 +98,21 @@ pub fn aggregate(sessions: &[SessionData], since: DateTime<Utc>) -> AggregatedSt
         h_entry.0 += 1;
         h_entry.1 += s.message_count;
 
-        for chunk in &s.chunks {
-            if let Chunk::Ai(ai) = chunk {
-                for exec in &ai.tool_executions {
-                    *tool_map.entry(exec.tool_name.clone()).or_default() += 1;
-                    tool_total += 1;
-                    if exec.is_error {
-                        error_count += 1;
+        if let Some(ref names) = s.tool_names {
+            for name in names {
+                *tool_map.entry(name.clone()).or_default() += 1;
+                tool_total += 1;
+            }
+            error_count += s.shallow_error_count.unwrap_or(0);
+        } else {
+            for chunk in &s.chunks {
+                if let Chunk::Ai(ai) = chunk {
+                    for exec in &ai.tool_executions {
+                        *tool_map.entry(exec.tool_name.clone()).or_default() += 1;
+                        tool_total += 1;
+                        if exec.is_error {
+                            error_count += 1;
+                        }
                     }
                 }
             }
@@ -172,6 +183,25 @@ pub fn build_session_data(detail: &cdt_api::SessionDetail) -> SessionData {
         chunks: detail.chunks.clone(),
         cost: session_cost,
         model,
+        tool_names: None,
+        shallow_error_count: None,
+    }
+}
+
+pub fn build_session_data_shallow(
+    timestamp: i64,
+    shallow: &cdt_parse::ShallowSessionStats,
+) -> SessionData {
+    let model = shallow.model.as_deref().unwrap_or("unknown");
+    let session_cost = cost::compute_cost_from_usage(&shallow.usage, model);
+    SessionData {
+        timestamp,
+        message_count: shallow.message_count,
+        chunks: Vec::new(),
+        cost: session_cost,
+        model: model.to_string(),
+        tool_names: Some(shallow.tool_names.clone()),
+        shallow_error_count: Some(shallow.error_count),
     }
 }
 
@@ -202,5 +232,65 @@ mod tests {
             .unwrap()
             .timestamp_millis();
         assert_eq!(session_hour(ts), 14);
+    }
+
+    #[test]
+    fn build_session_data_shallow_computes_cost() {
+        let shallow = cdt_parse::ShallowSessionStats {
+            message_count: 10,
+            usage: cdt_core::TokenUsage {
+                input_tokens: 1_000_000,
+                output_tokens: 500_000,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            },
+            tool_names: vec!["Bash".to_string(), "Read".to_string(), "Bash".to_string()],
+            error_count: 1,
+            model: Some("claude-sonnet-4-6-20260401".to_string()),
+        };
+        let data = build_session_data_shallow(1000, &shallow);
+        assert_eq!(data.message_count, 10);
+        assert_eq!(data.model, "claude-sonnet-4-6-20260401");
+        assert!(data.cost.total_cost > 0.0);
+        assert_eq!(data.tool_names.as_ref().unwrap().len(), 3);
+        assert_eq!(data.shallow_error_count, Some(1));
+        assert!(data.chunks.is_empty());
+    }
+
+    #[test]
+    fn aggregate_uses_shallow_tool_names() {
+        let since = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let sessions = vec![SessionData {
+            timestamp: since.timestamp_millis(),
+            message_count: 5,
+            chunks: Vec::new(),
+            cost: SessionCost {
+                total_cost: 1.0,
+                total_tokens: 100,
+                ..Default::default()
+            },
+            model: "test".to_string(),
+            tool_names: Some(vec![
+                "Bash".to_string(),
+                "Read".to_string(),
+                "Bash".to_string(),
+            ]),
+            shallow_error_count: Some(2),
+        }];
+        let result = aggregate(&sessions, since);
+        assert_eq!(result.session_count, 1);
+        assert_eq!(result.error_count, 2);
+        let bash_freq = result
+            .tool_frequency
+            .iter()
+            .find(|t| t.name == "Bash")
+            .unwrap();
+        assert_eq!(bash_freq.count, 2);
+        let read_freq = result
+            .tool_frequency
+            .iter()
+            .find(|t| t.name == "Read")
+            .unwrap();
+        assert_eq!(read_freq.count, 1);
     }
 }

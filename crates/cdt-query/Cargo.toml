@@ -14,6 +14,7 @@ workspace = true
 cdt-api = { workspace = true }
 cdt-core = { workspace = true }
 cdt-discover = { path = "../cdt-discover" }
+cdt-parse = { workspace = true }
 cdt-config = { workspace = true }
 cdt-ssh = { workspace = true }
 cdt-fs = { workspace = true }

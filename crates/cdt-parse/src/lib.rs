@@ -16,7 +16,10 @@ pub(crate) mod file;
 pub(crate) mod noise;
 pub(crate) mod parser;
 
+pub mod shallow;
+
 pub use dedupe::dedupe_by_request_id;
 pub use error::ParseError;
 pub use file::{parse_file, parse_file_via_fs};
 pub use parser::{parse_entry, parse_entry_at};
+pub use shallow::{ShallowSessionStats, parse_session_shallow};

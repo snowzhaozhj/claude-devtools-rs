@@ -560,6 +560,7 @@ dependencies = [
  "cdt-core",
  "cdt-discover",
  "cdt-fs",
+ "cdt-parse",
  "cdt-ssh",
  "chrono",
  "regex",

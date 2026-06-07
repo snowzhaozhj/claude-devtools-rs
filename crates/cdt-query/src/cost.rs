@@ -177,6 +177,45 @@ pub fn compute_session_cost(detail: &cdt_api::SessionDetail) -> SessionCost {
     }
 }
 
+pub fn compute_cost_from_usage(usage: &cdt_core::TokenUsage, model: &str) -> SessionCost {
+    let pricing = lookup_pricing(model);
+    let input_tokens = usage.input_tokens;
+    let output_tokens = usage.output_tokens;
+    let cache_read_tokens = usage.cache_read_input_tokens;
+    let cache_creation_tokens = usage.cache_creation_input_tokens;
+
+    #[allow(clippy::cast_precision_loss)]
+    let input_cost = input_tokens as f64 * pricing.input_per_mtok / 1_000_000.0;
+    #[allow(clippy::cast_precision_loss)]
+    let output_cost = output_tokens as f64 * pricing.output_per_mtok / 1_000_000.0;
+    #[allow(clippy::cast_precision_loss)]
+    let cache_read_cost = cache_read_tokens as f64 * pricing.cache_read_per_mtok / 1_000_000.0;
+    #[allow(clippy::cast_precision_loss)]
+    let cache_creation_cost =
+        cache_creation_tokens as f64 * pricing.cache_write_per_mtok / 1_000_000.0;
+
+    let total_tokens = input_tokens
+        .saturating_add(output_tokens)
+        .saturating_add(cache_read_tokens)
+        .saturating_add(cache_creation_tokens);
+    let total_cost = input_cost + output_cost + cache_read_cost + cache_creation_cost;
+
+    SessionCost {
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+        total_tokens,
+        input_cost,
+        output_cost,
+        cache_read_cost,
+        cache_creation_cost,
+        total_cost,
+        model_pricing_used: pricing.model_prefix.to_string(),
+        model: model.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
