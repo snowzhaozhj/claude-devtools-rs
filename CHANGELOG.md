@@ -9,6 +9,12 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- **MCP/CLI**: redesigned tools to intent-oriented surface — tools now map to user goals (analyze, search, compare, extract) instead of raw data endpoints, with richer built-in prompts.
+
+### Fixed
+- **UI**: removed broken scroll compensation on expand/collapse toggle that caused content jumping in opposite direction.
+
 ## [0.6.12] — 2026-06-07
 
 ### Fixed
