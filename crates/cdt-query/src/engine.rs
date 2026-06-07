@@ -92,8 +92,15 @@ impl QueryEngine {
         let mut all_sessions = Vec::new();
         for group in &groups {
             for wt in &group.worktrees {
-                if let Ok(resp) = self.api.list_sessions_sync(&wt.id, &pagination).await {
-                    all_sessions.extend(resp.items);
+                match self.api.list_sessions_sync(&wt.id, &pagination).await {
+                    Ok(resp) => all_sessions.extend(resp.items),
+                    Err(e) => {
+                        tracing::warn!(
+                            project_id = %wt.id,
+                            error = %e,
+                            "cross-project list_sessions: skipping worktree"
+                        );
+                    }
                 }
             }
         }
@@ -207,7 +214,7 @@ impl QueryEngine {
         query: &str,
         project_id: Option<&str>,
         session_id: Option<&str>,
-        _since_ms: Option<i64>,
+        since_ms: Option<i64>,
     ) -> Result<cdt_core::SearchSessionsResult, QueryError> {
         let project_id_resolved = project_id.map(ToOwned::to_owned);
 
@@ -233,6 +240,11 @@ impl QueryEngine {
         let mut has_error = false;
 
         for group in &groups {
+            if let Some(since) = since_ms {
+                if group.most_recent_session.is_some_and(|mtime| mtime < since) {
+                    continue;
+                }
+            }
             for wt in &group.worktrees {
                 let request = SearchRequest {
                     query: query.to_owned(),
