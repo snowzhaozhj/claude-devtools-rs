@@ -9,16 +9,6 @@ use crate::error::QueryError;
 use crate::filter::QueryFilter;
 use crate::options::SessionQueryOptions;
 
-/// Error detail extracted from a session's chunks.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ErrorEntry {
-    pub chunk_index: usize,
-    pub tool_name: String,
-    pub tool_use_id: String,
-    pub error_message: Option<String>,
-}
-
 /// High-level query orchestration over `LocalDataApi`.
 pub struct QueryEngine {
     api: Arc<LocalDataApi>,
@@ -160,42 +150,6 @@ impl QueryEngine {
             chunks: Vec::new(),
             ..detail
         })
-    }
-
-    /// Extract all errors from a session.
-    #[deprecated(note = "use cdt_query::extract::extract_errors() instead")]
-    pub async fn get_session_errors(
-        &self,
-        project_id: &str,
-        session_id: &str,
-    ) -> Result<Vec<ErrorEntry>, QueryError> {
-        let resp = self
-            .api
-            .get_session_detail(project_id, session_id, None)
-            .await?;
-
-        let detail = match resp {
-            SessionDetailResponse::Full { detail, .. } => *detail,
-            SessionDetailResponse::Unchanged { .. } => {
-                return Err(QueryError::Api(
-                    "unexpected unchanged response without fingerprint".into(),
-                ));
-            }
-        };
-
-        let indexed: Vec<(usize, &cdt_core::Chunk)> = detail.chunks.iter().enumerate().collect();
-        let entries = crate::extract::extract_errors(&indexed);
-        let errors = entries
-            .into_iter()
-            .map(|e| ErrorEntry {
-                chunk_index: e.chunk_index,
-                tool_name: e.tool_name,
-                tool_use_id: e.tool_use_id,
-                error_message: e.error_summary,
-            })
-            .collect();
-
-        Ok(errors)
     }
 
     /// Search across sessions.

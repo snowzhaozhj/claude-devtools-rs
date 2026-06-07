@@ -68,14 +68,6 @@ pub struct GetSessionParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct SessionIdParams {
-    #[schemars(description = "Session ID (full or short prefix)")]
-    pub session: String,
-    #[schemars(description = "Project name or ID (auto-resolved if omitted)")]
-    pub project: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SessionDetailParams {
     #[schemars(description = "Session ID (full or short prefix)")]
     pub session: String,
@@ -114,18 +106,6 @@ pub struct SessionDetailParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct SessionErrorsParams {
-    #[schemars(description = "Session ID (full or short prefix)")]
-    pub session: String,
-    #[schemars(description = "Project name or ID (auto-resolved if omitted)")]
-    pub project: Option<String>,
-    #[schemars(description = "Maximum errors to return (default 20, max 100)")]
-    pub limit: Option<usize>,
-    #[schemars(description = "Pagination cursor from previous response")]
-    pub cursor: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SearchParams {
     #[schemars(description = "Search query text")]
     pub query: String,
@@ -146,7 +126,6 @@ pub struct SearchParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-#[allow(dead_code)]
 pub struct StatsParams {
     #[schemars(description = "Time period: 'today', 'week', '7d', '24h', '30d' (default '7d')")]
     pub period: Option<String>,
@@ -429,33 +408,6 @@ impl CdtMcpServer {
     }
 
     #[tool(
-        name = "get_session_summary",
-        description = "Structured diagnostic summary (~2K tokens): phases, tool stats, errors, idle gaps, top files, cost, and toolActivity (commands, files edited, git ops, CLI tools). Good starting point for session overview.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn get_session_summary(
-        &self,
-        Parameters(params): Parameters<SessionIdParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let project_id = self
-            .resolve_project_id(params.project.as_deref(), Some(&params.session))
-            .await?;
-        let options = SessionQueryOptions::default();
-        let detail = self
-            .engine
-            .get_session_detail(&project_id, &params.session, &options)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let summary_output = cdt_query::summary::build_summary(&detail);
-        self.emit_json(&summary_output)
-    }
-
-    #[tool(
         name = "get_session_chunks",
         description = "Inspect chunks for a known session. content_mode: 'omit' (default, structure-only with sizes), 'full' (complete content), 'overview' (one-line per chunk: kind/timestamp/tools/errorCount/headline). \
             `chunkIndex` is absolute and stable. Window: range, tail, or cursor. \
@@ -684,71 +636,6 @@ impl CdtMcpServer {
     }
 
     #[tool(
-        name = "get_session_errors",
-        description = "Get errors from a session. Returns paginated results (default 20). Long error messages are truncated to 500 chars (check `messageTruncated` flag). Use get_session_detail with range + content_mode='full' for full error output.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    #[allow(deprecated)]
-    async fn get_session_errors(
-        &self,
-        Parameters(params): Parameters<SessionErrorsParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let project_id = self
-            .resolve_project_id(params.project.as_deref(), Some(&params.session))
-            .await?;
-        let all_errors = self
-            .engine
-            .get_session_errors(&project_id, &params.session)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let limit = params
-            .limit
-            .unwrap_or(DEFAULT_LIST_LIMIT)
-            .clamp(1, MAX_PAGE_SIZE);
-        let offset = parse_cursor_offset(params.cursor.as_deref());
-        let total = all_errors.len();
-
-        let page: Vec<McpErrorEntry> = all_errors
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .map(|e| {
-                let (msg, truncated) = truncate_error_message(e.error_message);
-                McpErrorEntry {
-                    chunk_index: e.chunk_index,
-                    tool_name: e.tool_name,
-                    tool_use_id: e.tool_use_id,
-                    is_error: true,
-                    error_message: msg,
-                    message_truncated: truncated,
-                }
-            })
-            .collect();
-
-        let returned = page.len();
-        let has_more = offset + returned < total;
-
-        let response = PaginatedResponse {
-            items: page,
-            total,
-            returned,
-            has_more,
-            cursor: if has_more {
-                Some(format!("{}", offset + returned))
-            } else {
-                None
-            },
-        };
-        self.emit_json(&response)
-    }
-
-    #[tool(
         name = "search_sessions",
         description = "Full-text discovery across session search index. Returns grouped session hits with preview snippets, not chunk envelopes. \
             Use `session` for intra-session search. Use get_session_detail with grep/range for chunk-level content.",
@@ -833,33 +720,6 @@ impl CdtMcpServer {
             is_partial: results.is_partial,
         };
         self.emit_json(&response)
-    }
-
-    #[tool(
-        name = "get_session_cost",
-        description = "Get token usage and estimated cost for a session. Returns aggregated breakdown by input/output/cache tokens with per-model pricing.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn get_session_cost(
-        &self,
-        Parameters(params): Parameters<SessionIdParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let project_id = self
-            .resolve_project_id(params.project.as_deref(), Some(&params.session))
-            .await?;
-        let options = SessionQueryOptions::default();
-        let detail = self
-            .engine
-            .get_session_detail(&project_id, &params.session, &options)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let cost = cdt_query::cost::compute_session_cost(&detail);
-        self.emit_json(&cost)
     }
 
     #[tool(

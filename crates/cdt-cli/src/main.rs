@@ -17,8 +17,8 @@ use cdt_api::http::spawn_event_bridge;
 use cdt_api::{AppState, DataApi, LocalDataApi, StaticServe, start_server};
 use cdt_config::{ConfigManager, NotificationManager};
 use cdt_discover::{ProjectScanner, local_handle, new_cwd_cache, path_decoder};
+use cdt_query::stats;
 use cdt_query::{ChunkKindFilter, QueryEngine, QueryFilter, SessionQueryOptions};
-use cdt_query::{cost, stats, summary};
 use cdt_ssh::SshConnectionManager;
 
 mod mcp;
@@ -177,12 +177,6 @@ enum SessionsAction {
         #[arg(long)]
         min_messages: Option<usize>,
     },
-    /// 显示会话元数据（不含 chunks）
-    Show {
-        /// 会话 ID
-        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
-        id: String,
-    },
     /// 显示会话详情（chunk 流）
     Detail {
         /// 会话 ID
@@ -220,24 +214,6 @@ enum SessionsAction {
         /// 展平提取模式：overview（每 chunk 一条）/ errors（每条错误一条）/ tools（每次工具调用一条）
         #[arg(long, conflicts_with = "content")]
         extract: Option<String>,
-    },
-    /// 聚合会话中的所有错误
-    Errors {
-        /// 会话 ID
-        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
-        id: String,
-    },
-    /// 会话结构化诊断摘要
-    Summary {
-        /// 会话 ID
-        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
-        id: String,
-    },
-    /// 会话 token 费用估算
-    Cost {
-        /// 会话 ID
-        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
-        id: String,
     },
 }
 
@@ -532,56 +508,6 @@ async fn cmd_sessions_list(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// sessions show
-// ─────────────────────────────────────────────────────────────────────────────
-
-async fn cmd_sessions_show(
-    format: &OutputFormat,
-    session_id: &str,
-    json_fields: Option<&str>,
-) -> Result<()> {
-    let api = build_local_data_api().await?;
-    let engine = QueryEngine::new(api);
-
-    let project_id = engine
-        .find_session_project(session_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let detail = engine
-        .get_session_show(&project_id, session_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    match format {
-        OutputFormat::Json => emit_json(&detail, json_fields)?,
-        OutputFormat::Jsonl => {
-            println!("{}", serde_json::to_string(&detail)?);
-        }
-        OutputFormat::Table => {
-            println!("Session:   {}", detail.session_id);
-            println!("Project:   {}", detail.project_id);
-            println!(
-                "Title:     {}",
-                detail.title.as_deref().unwrap_or("(untitled)")
-            );
-            println!("Messages:  {}", detail.metrics.message_count);
-            println!(
-                "Status:    {}",
-                if detail.is_ongoing { "active" } else { "done" }
-            );
-            if let Some(cwd) = &detail.metadata.cwd {
-                println!("CWD:       {cwd}");
-            }
-            if let Some(modified) = detail.metadata.last_modified {
-                println!("Modified:  {}", format_timestamp(modified));
-            }
-        }
-    }
-    Ok(())
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // sessions detail
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -850,65 +776,6 @@ fn cmd_extract(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// sessions errors
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[allow(deprecated)]
-async fn cmd_sessions_errors(
-    format: &OutputFormat,
-    session_id: &str,
-    json_fields: Option<&str>,
-) -> Result<()> {
-    let api = build_local_data_api().await?;
-    let engine = QueryEngine::new(api);
-
-    let project_id = engine
-        .find_session_project(session_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let errors = engine
-        .get_session_errors(&project_id, session_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    if errors.is_empty() {
-        match format {
-            OutputFormat::Json => println!("[]"),
-            OutputFormat::Jsonl => {}
-            OutputFormat::Table => eprintln!("No errors found."),
-        }
-        return Ok(());
-    }
-
-    match format {
-        OutputFormat::Json => emit_json(&errors, json_fields)?,
-        OutputFormat::Jsonl => {
-            for e in &errors {
-                println!("{}", serde_json::to_string(e)?);
-            }
-        }
-        OutputFormat::Table => {
-            let tw = term_width();
-            let fixed = 6 + 20 + 4; // CHUNK + TOOL + padding
-            let error_w = tw.saturating_sub(fixed).max(20);
-            println!("{:>6} {:<20} {:<error_w$}", "CHUNK", "TOOL", "ERROR");
-            println!("{}", "-".repeat(tw));
-            for e in &errors {
-                let msg = e.error_message.as_deref().unwrap_or("(no details)");
-                println!(
-                    "{:>6} {:<20} {:<error_w$}",
-                    e.chunk_index,
-                    truncate(&e.tool_name, 19),
-                    truncate(msg, error_w.saturating_sub(1)),
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // search
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1044,14 +911,6 @@ fn list_available_fields(command: &Command) {
                 "gitBranch",
                 "cwd",
             ],
-            SessionsAction::Show { .. } => &[
-                "sessionId",
-                "projectId",
-                "title",
-                "isOngoing",
-                "metrics",
-                "metadata",
-            ],
             SessionsAction::Detail {
                 extract: Some(mode),
                 ..
@@ -1080,27 +939,6 @@ fn list_available_fields(command: &Command) {
                 _ => &["sessionId", "chunks", "totalChunks", "contentMode"],
             },
             SessionsAction::Detail { .. } => &["sessionId", "chunks", "totalChunks", "contentMode"],
-            SessionsAction::Errors { .. } => {
-                &["chunkIndex", "toolName", "toolUseId", "errorMessage"]
-            }
-            SessionsAction::Summary { .. } => &[
-                "sessionId",
-                "messageCount",
-                "errorCount",
-                "cost",
-                "phases",
-                "toolUsage",
-                "topFiles",
-            ],
-            SessionsAction::Cost { .. } => &[
-                "model",
-                "totalTokens",
-                "totalCost",
-                "inputTokens",
-                "outputTokens",
-                "cacheReadTokens",
-                "cacheCreationTokens",
-            ],
         },
         Command::Search { .. } => &["sessionId", "sessionTitle", "totalMatches", "hits"],
         Command::Stats { .. } => &[
@@ -1395,202 +1233,6 @@ fn cmd_setup_skills(scope: &SetupScope, dry_run: bool, force: bool) -> Result<()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// sessions summary
-// ─────────────────────────────────────────────────────────────────────────────
-
-async fn cmd_sessions_summary(
-    format: &OutputFormat,
-    session_id: &str,
-    json_fields: Option<&str>,
-) -> Result<()> {
-    let api = build_local_data_api().await?;
-    let engine = QueryEngine::new(api);
-
-    let project_id = engine
-        .find_session_project(session_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let detail = engine
-        .api()
-        .get_session_detail(&project_id, session_id, None)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let detail = match detail {
-        cdt_api::SessionDetailResponse::Full { detail, .. } => *detail,
-        cdt_api::SessionDetailResponse::Unchanged { .. } => {
-            anyhow::bail!("unexpected unchanged response");
-        }
-    };
-
-    let output = summary::build_summary(&detail);
-
-    match format {
-        OutputFormat::Json => emit_json(&output, json_fields)?,
-        OutputFormat::Jsonl => {
-            println!("{}", serde_json::to_string(&output)?);
-        }
-        OutputFormat::Table => {
-            print_summary_table(&output);
-        }
-    }
-    Ok(())
-}
-
-fn print_summary_table(s: &summary::SessionSummaryOutput) {
-    println!("Session: {}", s.session_id);
-    println!(
-        "Duration: {}  Messages: {}  Errors: {}  Compactions: {}",
-        format_ms(s.total_duration_ms),
-        s.message_count,
-        s.error_count,
-        s.compaction_count,
-    );
-    println!(
-        "Cost: ${:.4} ({} tokens)",
-        s.cost.total_cost, s.cost.total_tokens
-    );
-    println!();
-
-    if !s.phases.is_empty() {
-        println!("Phases ({}):", s.phases.len());
-        for p in &s.phases {
-            println!(
-                "  #{}: {} | {} chunks, {} tools, {} errors | {}",
-                p.index,
-                format_ms(p.duration_ms),
-                p.chunk_count,
-                p.tool_count,
-                p.error_count,
-                p.top_tools.join(", "),
-            );
-        }
-        println!();
-    }
-
-    if !s.tool_usage.is_empty() {
-        println!("Tool Usage:");
-        for t in s.tool_usage.iter().take(10) {
-            println!(
-                "  {:<20} {:>5}x  ({:.0}% success)",
-                t.name,
-                t.count,
-                t.success_rate * 100.0,
-            );
-        }
-        println!();
-    }
-
-    if !s.top_files.is_empty() {
-        println!("Top Files:");
-        let path_width = term_width().saturating_sub(8);
-        for f in s.top_files.iter().take(5) {
-            let short = shorten_path(&f.path);
-            println!(
-                "  {:<width$} {:>3}x",
-                truncate(&short, path_width),
-                f.count,
-                width = path_width + 1,
-            );
-        }
-        println!();
-    }
-
-    if !s.idle_gaps.is_empty() {
-        println!("Idle Gaps (>2min):");
-        for g in s.idle_gaps.iter().take(5) {
-            println!(
-                "  {} idle at {}",
-                format_ms(g.gap_ms),
-                g.after_ts.format("%H:%M")
-            );
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// sessions cost
-// ─────────────────────────────────────────────────────────────────────────────
-
-async fn cmd_sessions_cost(
-    format: &OutputFormat,
-    session_id: &str,
-    json_fields: Option<&str>,
-) -> Result<()> {
-    let api = build_local_data_api().await?;
-    let engine = QueryEngine::new(api);
-
-    let project_id = engine
-        .find_session_project(session_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let detail = engine
-        .api()
-        .get_session_detail(&project_id, session_id, None)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let detail = match detail {
-        cdt_api::SessionDetailResponse::Full { detail, .. } => *detail,
-        cdt_api::SessionDetailResponse::Unchanged { .. } => {
-            anyhow::bail!("unexpected unchanged response");
-        }
-    };
-
-    let output = cost::compute_session_cost(&detail);
-
-    match format {
-        OutputFormat::Json => emit_json(&output, json_fields)?,
-        OutputFormat::Jsonl => {
-            println!("{}", serde_json::to_string(&output)?);
-        }
-        OutputFormat::Table => {
-            println!(
-                "Model: {} (pricing: {})",
-                output.model, output.model_pricing_used
-            );
-            println!();
-            println!("{:<22} {:>12} {:>12}", "CATEGORY", "TOKENS", "COST");
-            println!("{}", "-".repeat(48));
-            println!(
-                "{:<22} {:>12} {:>12}",
-                "Input",
-                output.input_tokens,
-                format!("${:.4}", output.input_cost)
-            );
-            println!(
-                "{:<22} {:>12} {:>12}",
-                "Output",
-                output.output_tokens,
-                format!("${:.4}", output.output_cost)
-            );
-            println!(
-                "{:<22} {:>12} {:>12}",
-                "Cache Read",
-                output.cache_read_tokens,
-                format!("${:.4}", output.cache_read_cost)
-            );
-            println!(
-                "{:<22} {:>12} {:>12}",
-                "Cache Creation",
-                output.cache_creation_tokens,
-                format!("${:.4}", output.cache_creation_cost)
-            );
-            println!("{}", "-".repeat(48));
-            println!(
-                "{:<22} {:>12} {:>12}",
-                "TOTAL",
-                output.total_tokens,
-                format!("${:.4}", output.total_cost)
-            );
-        }
-    }
-    Ok(())
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // stats
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1808,9 +1450,6 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
-            SessionsAction::Show { id } => {
-                cmd_sessions_show(&effective_format, &id, json_fields).await
-            }
             SessionsAction::Detail {
                 id,
                 range,
@@ -1836,15 +1475,6 @@ async fn main() -> Result<()> {
                     json_fields,
                 )
                 .await
-            }
-            SessionsAction::Errors { id } => {
-                cmd_sessions_errors(&effective_format, &id, json_fields).await
-            }
-            SessionsAction::Summary { id } => {
-                cmd_sessions_summary(&effective_format, &id, json_fields).await
-            }
-            SessionsAction::Cost { id } => {
-                cmd_sessions_cost(&effective_format, &id, json_fields).await
             }
         },
         Command::Search {

@@ -71,15 +71,12 @@ async fn mcp_server_responds_to_list_tools() {
 
     let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_ref()).collect();
     assert!(tool_names.contains(&"list_projects"));
+    assert!(tool_names.contains(&"list_sessions"));
     assert!(tool_names.contains(&"get_session"));
-    assert!(tool_names.contains(&"get_session_summary"));
     assert!(tool_names.contains(&"get_session_chunks"));
     assert!(tool_names.contains(&"search_sessions"));
-    assert!(tool_names.contains(&"get_session_errors"));
-    assert!(tool_names.contains(&"get_session_cost"));
-    assert!(tool_names.contains(&"list_sessions"));
     assert!(tool_names.contains(&"get_stats"));
-    assert_eq!(tool_names.len(), 9);
+    assert_eq!(tool_names.len(), 6);
 
     client.cancel().await.unwrap();
 }
