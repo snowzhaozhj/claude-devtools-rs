@@ -40,7 +40,7 @@ export function isScrollCompensating(root: HTMLElement): boolean {
   return _compensatingRoots.has(root);
 }
 
-function beginCompensation(root: HTMLElement): void {
+export function beginCompensation(root: HTMLElement): void {
   _compensatingRoots.add(root);
   requestAnimationFrame(() => { _compensatingRoots.delete(root); });
   setTimeout(() => { _compensatingRoots.delete(root); }, 100);
@@ -91,21 +91,27 @@ export function createLazyMarkdownObserver(
 
     for (const entry of entries) {
       const el = entry.target as HTMLElement;
+
+      if (!el.isConnected) {
+        ro.unobserve(el);
+        resizeLastHeight.delete(el);
+        const t = resizeStableTimers.get(el);
+        if (t !== undefined) { clearTimeout(t); resizeStableTimers.delete(el); }
+        continue;
+      }
+
       const oldH = resizeLastHeight.get(el);
       if (oldH === undefined) continue;
       const newH = el.offsetHeight;
       if (newH === oldH) continue;
 
-      // 始终更新高度记录
       resizeLastHeight.set(el, newH);
 
-      // 只对视口上方的元素累计补偿 delta
       const elRect = el.getBoundingClientRect();
       if (elRect.bottom <= rootRect.top) {
         totalDelta += newH - oldH;
       }
 
-      // 所有 entry 都重置 stable timer（不论位置）
       const existing = resizeStableTimers.get(el);
       if (existing !== undefined) clearTimeout(existing);
       resizeStableTimers.set(el, setTimeout(() => {
