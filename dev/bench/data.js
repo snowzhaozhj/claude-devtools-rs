@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780825565822,
+  "lastUpdate": 1780850777679,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -16928,6 +16928,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12800,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "006a7198be01a08eca397b832ac8d8917f16c4f5",
+          "message": "feat(mcp): redesign CLI/MCP tools to intent-oriented surface (#494)\n\n* feat(mcp): redesign CLI/MCP tools from 8 entity-oriented to 6+3 intent-oriented\n\nReduce agent round-trips for common questions from 34 calls to 1-2 calls\nby restructuring the tool surface around user intents rather than data entities.\n\nNew:\n- get_session: composite view (summary+cost+errors) in one call\n- list_sessions: project now optional (cross-project with since='7d' default)\n- get_session_chunks: renamed from get_session_detail, +overview mode\n- time_expr: unified time parsing (relative/named/absolute) with TZ injection\n- get_stats: MCP implementation (was stub)\n- search_sessions: +since parameter for time-scoped discovery\n\nAlso: 'latest' session alias, branch/is_ongoing filters, CLI --until flag,\nshell completion candidates for since/group-by/include/content/filter values.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(mcp): address codex review — search since filter + cross-project warning\n\n- search_with_since: actually use since_ms to skip groups whose\n  most_recent_session < since (was _since_ms unused)\n- list_sessions_cross_project: log warning on individual worktree\n  failures instead of silent swallow\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive cli-mcp-tool-redesign\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* refactor(mcp): remove deprecated tools and CLI commands\n\nDelete code replaced by the new intent-oriented tool surface:\n\nMCP: remove get_session_summary, get_session_cost, get_session_errors\n  handlers + SessionErrorsParams + SessionIdParams (all replaced by\n  get_session composite tool)\n\nCLI: remove sessions show/summary/cost/errors subcommands + their\n  handler functions (replaced by MCP get_session; CLI equivalent\n  to be added as `cdt session <id>`)\n\nEngine: remove deprecated get_session_errors + ErrorEntry\n  (callers migrated to extract::extract_errors)\n\nCompletions: remove 4 unused completers (GroupBySessions, Include,\n  ContentMode, Filter) — were defined but never wired to CLI args\n\nTests: update tool count 9→6, remove old tool name assertions,\n  update help snapshot\n\n-622 lines\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(spec): sync mcp-server spec after archive — replace stale tool names\n\nArchive didn't replace the old \"Read-only tool set\" requirement (was\ntreated as ADDED instead of MODIFIED due to delta section mismatch).\nManually replaced with the new 6-tool definition and updated all\nremaining get_session_detail → get_session_chunks, get_session_summary\n→ get_session references across the spec.\n\nAlso removed group_by field from ListSessionsParams (was defined but\nunused, hidden behind #[allow(dead_code)]).\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* feat(cli): implement missing CLI commands and features\n\n- Add `cdt session <id>` composite command (summary+cost+errors)\n  with --include for heavy facets, replaces old show/summary/cost/errors\n- Add `cdt session <id> --chunks` mode (replaces old sessions detail)\n- Add --branch and --is-ongoing flags to `cdt sessions list`\n- Add --since flag to `cdt search`\n- Add --group-by flag to `cdt stats`\n- Implement head+tail error message summarization (messageSummarized)\n  replacing hard truncation\n- Add shell completers: IncludeCompleter, ContentModeCompleter,\n  FilterCompleter wired to CLI args\n- Update all 6 MCP tool descriptions with when-to-use/when-NOT-to-use\n- Update help snapshots for new command structure\n- Remove unused truncate_str function\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* feat(api): add projectName to SessionSummary for cross-project queries\n\nAdd project_name: Option<String> field to SessionSummary (skip when\nNone to avoid IPC impact). Populated by list_sessions_cross_project\nfrom RepositoryGroup.name, so cross-project list results include\nthe human-readable project name.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* feat(cli/mcp): complete all missing task implementations\n\n- 2.2: Add mtime pre-filtering in cross-project queries (skip groups\n  whose most_recent_session < filter.since)\n- 2.6: Add group_by parameter (none/project/day) to list_sessions\n  MCP + CLI, returns grouped response with key/count/sessions\n- 6.1: Add shallow parse module (parse_session_shallow) for fast\n  stats extraction without chunk building\n- 6.2-6.4: Add group_by parameter (none/model/day) to get_stats\n  MCP + CLI, with per-group aggregated stats\n- 4.5: Add overview mode to CLI --content=overview\n- Add GroupBySessionsCompleter and GroupByStatsCompleter\n- Add compute_cost_from_usage for shallow parse cost calculation\n- Add SessionData.tool_names/shallow_error_count fields for\n  aggregate() to use shallow data path\n- Tests: summarize_error_message, group_sessions, overview entries,\n  build_session_data_shallow, aggregate with shallow tool_names\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli/mcp): address PR review findings\n\nCritical fixes:\n- Remove stats group_by=\"project\" (SessionData has no project info,\n  was silently falling back to \"all\")\n- Add CLI latest session alias resolution via resolve_latest_cli\n- Validate group_by values — return error for unknown values instead\n  of silent fallback to \"all\"\n\nImportant fixes:\n- Add overview to content_mode schema description\n- Populate project_name for single-project list_sessions queries\n- Show is_partial warning in CLI search output\n- Use warn+skip pattern in get_stats (both MCP and CLI) instead of\n  early abort on first worktree error\n- Derive Clone on SessionData, remove manual clone_session_data\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(spec): update cli-output and mcp-server specs for new tool structure\n\ncli-output spec:\n- Replace all `sessions detail` references with `session <id> --chunks`\n- Remove deleted commands (sessions summary/cost/errors)\n- Add overview mode scenario\n- Fix project filter syntax (--project global flag)\n- Update Purpose from TBD\n\nmcp-server spec:\n- Update Purpose from TBD\n- Fix instructions description (decision tree, not summary-first)\n- Fix setup mcp to match actual implementation (no --apply)\n- Remove redundant rename note\n- Fix content_mode \"compact\" → \"omit\"\n- Fix ChunkEnvelope → ChunkView references\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(skill): update session-insights for new CLI command structure\n\n- Replace `cdt sessions summary/cost/errors <id>` with single\n  `cdt session <id>` composite command\n- Replace `cdt sessions detail <id>` with `cdt session <id> --chunks`\n- Add overview mode, latest alias, stats, search patterns\n- Update Scenarios table and Flags table with new command paths\n- Add --include, --since, --branch, --group-by flags\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* refactor(mcp): trim tool descriptions and instructions\n\n- Each description reduced to 1 sentence (was 3-5 with redundant\n  When to use/When NOT to use that duplicated instructions)\n- Instructions: remove internal details (errors JSON path, range\n  format, content_mode values) — already in parameter schemas\n- ~40% fewer schema tokens for LLM consumers\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-08T00:42:46+08:00",
+          "tree_id": "764a9f75a3734af9b3a219157bfde1da256e12ab",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/006a7198be01a08eca397b832ac8d8917f16c4f5"
+        },
+        "date": 1780850777149,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 118,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1142,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4757,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.862,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.846,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 40.31,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.07,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 291,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1184,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3373,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3323,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 38200,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.136,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 61.81,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 617,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6115,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 194.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1954,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 54.24,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 547.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5462,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 116.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1171,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.811,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9450,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1010,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9534,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 1014,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 46.42,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 493.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 99.07,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 988.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9907,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 210.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1448,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13700,
             "unit": "µs"
           }
         ]
