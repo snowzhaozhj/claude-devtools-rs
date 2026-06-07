@@ -1150,6 +1150,7 @@ impl LocalDataApi {
                 group_id: None,
                 cwd_relative_to_repo_root: None,
                 cwd: s.cwd.clone(),
+                project_name: None,
             };
             self.apply_worktree_meta(&mut summary);
             page.push(summary);
@@ -2521,6 +2522,7 @@ impl LocalDataApi {
                 group_id: None,
                 cwd_relative_to_repo_root: None,
                 cwd: s.cwd,
+                project_name: None,
             };
             self.apply_worktree_meta(&mut summary);
             page.push(summary);
@@ -3761,6 +3763,7 @@ impl DataApi for LocalDataApi {
                     group_id: None,
                     cwd_relative_to_repo_root: None,
                     cwd: session.cwd,
+                    project_name: None,
                 };
                 self.apply_worktree_meta(&mut summary);
                 (session.id, summary)

@@ -83,7 +83,12 @@ impl QueryEngine {
         for group in &groups {
             for wt in &group.worktrees {
                 match self.api.list_sessions_sync(&wt.id, &pagination).await {
-                    Ok(resp) => all_sessions.extend(resp.items),
+                    Ok(resp) => {
+                        for mut s in resp.items {
+                            s.project_name = Some(group.name.clone());
+                            all_sessions.push(s);
+                        }
+                    }
                     Err(e) => {
                         tracing::warn!(
                             project_id = %wt.id,

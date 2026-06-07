@@ -309,6 +309,7 @@ fn session_summary_serializes_camelcase_with_optional_title() {
         group_id: None,
         cwd_relative_to_repo_root: None,
         cwd: Some("/Users/foo/repo".into()),
+        project_name: None,
     };
     let json = serde_json::to_value(&s).unwrap();
     assert_eq!(json["sessionId"], json!("sess-1"));
@@ -2873,6 +2874,7 @@ async fn get_worktree_sessions_paginated_response_serializes_camelcase() {
             group_id: Some("g-1".into()),
             cwd_relative_to_repo_root: Some("crates".into()),
             cwd: None,
+            project_name: None,
         }],
         next_cursor: Some("1".into()),
         total: 5,
@@ -2904,6 +2906,7 @@ fn session_summary_skips_worktree_fields_when_none() {
         group_id: None,
         cwd_relative_to_repo_root: None,
         cwd: None,
+        project_name: None,
     };
     let json = serde_json::to_value(&s).unwrap();
     assert!(

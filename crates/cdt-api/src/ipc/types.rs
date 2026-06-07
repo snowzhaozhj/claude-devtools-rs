@@ -137,6 +137,8 @@ pub struct SessionSummary {
     /// Spec：`ipc-data-api::Session 列表序列化暴露 cwd 字段`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
 }
 
 /// `SessionDetail.metrics` 字段 typed 形态。wire 内部字段保 `snake_case` 与

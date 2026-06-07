@@ -17,6 +17,7 @@ fn make_session(id: &str, title: Option<&str>, ts: i64, msg_count: usize) -> Ses
         group_id: None,
         cwd_relative_to_repo_root: None,
         cwd: None,
+        project_name: None,
     }
 }
 
