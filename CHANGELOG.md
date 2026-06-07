@@ -9,6 +9,14 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.13] — 2026-06-08
+
+### Added
+- **MCP/CLI**: redesigned tools to intent-oriented surface — tools now map to user goals (analyze, search, compare, extract) instead of raw data endpoints, with richer built-in prompts.
+
+### Fixed
+- **UI**: removed broken scroll compensation on expand/collapse toggle that caused content jumping in opposite direction.
+
 ## [0.6.12] — 2026-06-07
 
 ### Fixed
@@ -306,7 +314,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.12...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.13...HEAD
+[0.6.13]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.12...v0.6.13
 [0.6.12]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.11...v0.6.12
 [0.6.11]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.10...v0.6.11
 [0.6.10]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.9...v0.6.10
