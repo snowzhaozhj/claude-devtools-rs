@@ -29,7 +29,6 @@ const ERROR_MESSAGE_MAX_CHARS: usize = 500;
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-#[allow(dead_code)]
 pub struct ListSessionsParams {
     #[schemars(description = "Project name or ID. Omit for cross-project query.")]
     pub project: Option<String>,
@@ -41,8 +40,6 @@ pub struct ListSessionsParams {
     pub until: Option<String>,
     #[schemars(description = "Filter by git branch (case-insensitive substring match)")]
     pub branch: Option<String>,
-    #[schemars(description = "Group results by: none, project, day")]
-    pub group_by: Option<String>,
     #[schemars(description = "Filter to only ongoing/active sessions")]
     pub is_ongoing: Option<bool>,
     #[schemars(description = "Filter by title keyword (case-insensitive)")]
