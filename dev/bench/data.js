@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780756446428,
+  "lastUpdate": 1780798524584,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -16092,6 +16092,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 13300,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bc5f6de6d3c756e0153bb3e58b1b617d45173ebd",
+          "message": "fix(ui): compensate scroll position on expand/collapse toggle (#490)\n\n* fix(ui): compensate scroll position on expand/collapse toggle\n\nPR #488 disabled browser scroll anchoring (overflow-anchor: none) to\nenable manual compensation for lazy markdown hydration. However, the\nmanual compensation only covered IO/RO callbacks, leaving user-initiated\nexpand/collapse interactions uncompensated — causing up to 300px visual\njumps when toggling tool details above the viewport.\n\nAdd captureVisualAnchor/applyScrollCompensation to toggleChunk, toggle,\nand toggleCompact. Pattern is identical to PR #488's lazy render\ncompensation: record visible chunk position before state change, measure\ndisplacement after tick(), adjust scrollTop + mark compensating flag.\n\nVerified with real session data (330 chunks, 57801px scrollHeight):\n- Before: ±299px jump on expand/collapse above viewport\n- After: 0px displacement across all toggle types\n- PR #488 lazy hydration compensation unaffected\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(ui): address review findings for scroll compensation\n\n- Add anchor.el.isConnected guard to prevent wrong-direction jump when\n  anchor element is detached from DOM (file-change refresh during tick)\n- Move anchor capture in toggle() expand path to after ensureToolOutput,\n  avoiding stale geometry baseline across long IPC round-trip\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(ui): prevent RO false compensation on user-initiated collapse\n\nRoot cause: PR #488's ResizeObserver watches lazy-rendered markdown\nelements for async height changes (mermaid, images). When a user\ncollapses an expanded Thinking/Output block, Svelte destroys the\nsubtree. The RO fires one last time before GC, sees offsetHeight→0\nfor an above-viewport element, and incorrectly adjusts scrollTop\nby a large negative delta — causing visible scroll jumps.\n\nFix: Add `!el.isConnected` guard at the top of the RO callback loop.\nDetached elements are immediately unobserved and cleaned up, preventing\nfalse compensation. This is the true root cause; the toggle-level\nscroll compensation (previous commits) provides additional coverage\nfor non-RO height changes.\n\nVerified: expand Thinking → scroll down → collapse → 0px visual jump\n(was -300 to -600px before fix).\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-07T10:11:56+08:00",
+          "tree_id": "33af6c36214bf6047d947597dd5a66cfdd13efbb",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/bc5f6de6d3c756e0153bb3e58b1b617d45173ebd"
+        },
+        "date": 1780798524070,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 116.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1155,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4654,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.862,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 10.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 41.73,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.32,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 299.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1226,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3319,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3197,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 37670,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.387,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 60.76,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 615.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6110,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 196.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1963,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 55.21,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 558.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5564,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 119.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1200,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.812,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9130,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1006,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9424,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 1011,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 47.25,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 524.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 97.71,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 986.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9962,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 232.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1442,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13560,
             "unit": "µs"
           }
         ]
