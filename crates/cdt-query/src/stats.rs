@@ -54,6 +54,7 @@ pub struct HourBucket {
     pub message_count: usize,
 }
 
+#[derive(Clone)]
 pub struct SessionData {
     pub timestamp: i64,
     pub message_count: usize,

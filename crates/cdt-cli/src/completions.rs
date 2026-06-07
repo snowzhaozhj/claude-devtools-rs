@@ -459,7 +459,6 @@ impl ValueCandidates for GroupByStatsCompleter {
     fn candidates(&self) -> Vec<CompletionCandidate> {
         vec![
             CompletionCandidate::new("none").help(Some("No grouping (default)".into())),
-            CompletionCandidate::new("project").help(Some("Group by project".into())),
             CompletionCandidate::new("model").help(Some("Group by model".into())),
             CompletionCandidate::new("day").help(Some("Group by day".into())),
         ]

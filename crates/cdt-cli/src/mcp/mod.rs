@@ -89,7 +89,7 @@ pub struct SessionDetailParams {
     #[schemars(description = "Filter: 'errors_only' or 'tool_calls'")]
     pub filter: Option<String>,
     #[schemars(
-        description = "Content mode: 'omit' (default) returns structure + size metadata; 'full' includes content. Do NOT use 'full' without range/tail except for export — it returns the entire session."
+        description = "Content mode: 'omit' (default) returns structure + size metadata; 'overview' returns one-line per chunk summary; 'full' includes complete content. Do NOT use 'full' without range/tail except for export."
     )]
     pub content_mode: Option<String>,
     #[schemars(
@@ -132,9 +132,7 @@ pub struct StatsParams {
     pub period: Option<String>,
     #[schemars(description = "Project name or ID to limit stats scope")]
     pub project: Option<String>,
-    #[schemars(
-        description = "Group results by dimension: 'none' (default), 'project', 'model', 'day'"
-    )]
+    #[schemars(description = "Group results by dimension: 'none' (default), 'model', 'day'")]
     pub group_by: Option<String>,
 }
 
@@ -371,13 +369,23 @@ impl CdtMcpServer {
                 .await
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?
         } else {
+            let project_name = params.project.clone();
             let project_id = self
                 .resolve_project_id(params.project.as_deref(), None)
                 .await?;
-            self.engine
+            let mut items = self
+                .engine
                 .list_sessions(&project_id, &filter)
                 .await
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            if let Some(ref name) = project_name {
+                for s in &mut items {
+                    if s.project_name.is_none() {
+                        s.project_name = Some(name.clone());
+                    }
+                }
+            }
+            items
         };
 
         let mut sessions = all_sessions;
@@ -401,6 +409,12 @@ impl CdtMcpServer {
         let has_more = offset + returned < total;
 
         let group_by = params.group_by.as_deref().unwrap_or("none");
+        if !["none", "project", "day"].contains(&group_by) {
+            return Err(McpError::invalid_params(
+                format!("Invalid group_by '{group_by}'. Supported: 'none', 'project', 'day'"),
+                None,
+            ));
+        }
 
         if group_by != "none" {
             let groups = group_sessions(&page, group_by);
@@ -888,26 +902,35 @@ impl CdtMcpServer {
         let mut session_data_list = Vec::new();
 
         for pid in &project_ids {
-            let resp = self
-                .engine
-                .api()
-                .list_sessions_sync(pid, &pagination)
-                .await
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            let resp = match self.engine.api().list_sessions_sync(pid, &pagination).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(project_id = %pid, error = %e, "get_stats: skipping project");
+                    continue;
+                }
+            };
 
             for session in &resp.items {
                 if session.timestamp < since_ms {
                     continue;
                 }
-                let detail = self
+                match self
                     .engine
                     .api()
                     .get_session_detail(pid, &session.session_id, None)
                     .await
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-                if let cdt_api::SessionDetailResponse::Full { detail, .. } = detail {
-                    session_data_list.push(cdt_query::stats::build_session_data(&detail));
+                {
+                    Ok(cdt_api::SessionDetailResponse::Full { detail, .. }) => {
+                        session_data_list.push(cdt_query::stats::build_session_data(&detail));
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            session_id = %session.session_id,
+                            error = %e,
+                            "get_stats: skipping session"
+                        );
+                    }
                 }
             }
         }
@@ -917,6 +940,12 @@ impl CdtMcpServer {
         }
 
         let group_by = params.group_by.as_deref().unwrap_or("none");
+        if !["none", "model", "day"].contains(&group_by) {
+            return Err(McpError::invalid_params(
+                format!("Invalid group_by '{group_by}'. Supported: 'none', 'model', 'day'"),
+                None,
+            ));
+        }
         if group_by != "none" {
             let grouped = group_stats_data(&session_data_list, group_by, since_dt);
             return self.emit_json(&grouped);
@@ -1029,7 +1058,7 @@ fn group_stats_data(
         .filter_map(|key| {
             groups.get(key).map(|items| {
                 let owned: Vec<cdt_query::stats::SessionData> =
-                    items.iter().map(|s| clone_session_data(s)).collect();
+                    items.iter().map(|s| (*s).clone()).collect();
                 let stats = cdt_query::stats::aggregate(&owned, since);
                 serde_json::json!({
                     "key": key,
@@ -1044,18 +1073,6 @@ fn group_stats_data(
         "total": total,
         "groups": group_results,
     })
-}
-
-fn clone_session_data(s: &cdt_query::stats::SessionData) -> cdt_query::stats::SessionData {
-    cdt_query::stats::SessionData {
-        timestamp: s.timestamp,
-        message_count: s.message_count,
-        chunks: s.chunks.clone(),
-        cost: s.cost.clone(),
-        model: s.model.clone(),
-        tool_names: s.tool_names.clone(),
-        shallow_error_count: s.shallow_error_count,
-    }
 }
 
 fn group_sessions(sessions: &[cdt_api::SessionSummary], group_by: &str) -> Vec<serde_json::Value> {

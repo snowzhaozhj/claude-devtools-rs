@@ -150,7 +150,7 @@ enum Command {
         #[arg(long)]
         project: Option<String>,
 
-        /// 按维度分组：none / project / model / day
+        /// 按维度分组：none / model / day
         #[arg(long, default_value = "none", add = ArgValueCandidates::new(completions::GroupByStatsCompleter))]
         group_by: String,
     },
@@ -611,14 +611,16 @@ async fn cmd_session_inspect(
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
 
+    let session_id = resolve_latest_cli(&engine, session_id).await?;
+
     let project_id = engine
-        .find_session_project(session_id)
+        .find_session_project(&session_id)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let options = SessionQueryOptions::default();
     let detail = engine
-        .get_session_detail(&project_id, session_id, &options)
+        .get_session_detail(&project_id, &session_id, &options)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -645,7 +647,7 @@ async fn cmd_session_inspect(
         .unwrap_or_default();
 
     let mut result = serde_json::json!({
-        "sessionId": session_id,
+        "sessionId": &session_id,
         "projectId": project_id,
         "messageCount": summary.message_count,
         "chunkCount": detail.chunks.len(),
@@ -740,8 +742,10 @@ async fn cmd_sessions_detail(
     let api = build_local_data_api().await?;
     let engine = QueryEngine::new(api);
 
+    let session_id = resolve_latest_cli(&engine, session_id).await?;
+
     let project_id = engine
-        .find_session_project(session_id)
+        .find_session_project(&session_id)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -756,7 +760,7 @@ async fn cmd_sessions_detail(
     };
 
     let detail = engine
-        .get_session_detail(&project_id, session_id, &options)
+        .get_session_detail(&project_id, &session_id, &options)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -1046,6 +1050,12 @@ async fn cmd_search(
         .search_with_since(query, project_id.as_deref(), session_filter, since_ms)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if result.is_partial {
+        eprintln!(
+            "warning: search results may be incomplete (some projects could not be searched)"
+        );
+    }
 
     if offset > 0 || result.results.len() > limit {
         result.results = result
@@ -1489,22 +1499,26 @@ async fn cmd_stats(
     };
 
     for pid in &project_ids {
-        let resp = api
-            .list_sessions_sync(pid, &pagination)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let resp = match api.list_sessions_sync(pid, &pagination).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("warning: skipping project {pid}: {e}");
+                continue;
+            }
+        };
 
         for session in &resp.items {
             if session.timestamp < since_ms {
                 continue;
             }
-            let detail = api
-                .get_session_detail(pid, &session.session_id, None)
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-            if let cdt_api::SessionDetailResponse::Full { detail, .. } = detail {
-                session_data_list.push(stats::build_session_data(&detail));
+            match api.get_session_detail(pid, &session.session_id, None).await {
+                Ok(cdt_api::SessionDetailResponse::Full { detail, .. }) => {
+                    session_data_list.push(stats::build_session_data(&detail));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("warning: skipping session {}: {e}", session.session_id);
+                }
             }
         }
     }
@@ -1607,6 +1621,24 @@ fn print_stats_table(s: &stats::AggregatedStats) {
     }
 }
 
+async fn resolve_latest_cli(engine: &QueryEngine, session_id: &str) -> Result<String> {
+    if session_id != "latest" {
+        return Ok(session_id.to_string());
+    }
+    let filter = QueryFilter {
+        limit: Some(1),
+        ..Default::default()
+    };
+    let sessions = engine
+        .list_sessions_cross_project(&filter)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    sessions
+        .first()
+        .map(|s| s.session_id.clone())
+        .ok_or_else(|| anyhow::anyhow!("No sessions found for 'latest'"))
+}
+
 fn group_stats_data_cli(
     sessions: &[stats::SessionData],
     group_by: &str,
@@ -1635,18 +1667,7 @@ fn group_stats_data_cli(
         .iter()
         .filter_map(|key| {
             groups.get(key).map(|items| {
-                let owned: Vec<stats::SessionData> = items
-                    .iter()
-                    .map(|s| stats::SessionData {
-                        timestamp: s.timestamp,
-                        message_count: s.message_count,
-                        chunks: s.chunks.clone(),
-                        cost: s.cost.clone(),
-                        model: s.model.clone(),
-                        tool_names: s.tool_names.clone(),
-                        shallow_error_count: s.shallow_error_count,
-                    })
-                    .collect();
+                let owned: Vec<stats::SessionData> = items.iter().map(|s| (*s).clone()).collect();
                 let agg = stats::aggregate(&owned, since);
                 serde_json::json!({
                     "key": key,
