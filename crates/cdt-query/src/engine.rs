@@ -81,6 +81,11 @@ impl QueryEngine {
 
         let mut all_sessions = Vec::new();
         for group in &groups {
+            if let Some(since) = filter.since {
+                if group.most_recent_session.is_some_and(|mtime| mtime < since) {
+                    continue;
+                }
+            }
             for wt in &group.worktrees {
                 match self.api.list_sessions_sync(&wt.id, &pagination).await {
                     Ok(resp) => {

@@ -151,7 +151,7 @@ enum Command {
         project: Option<String>,
 
         /// 按维度分组：none / project / model / day
-        #[arg(long, default_value = "none")]
+        #[arg(long, default_value = "none", add = ArgValueCandidates::new(completions::GroupByStatsCompleter))]
         group_by: String,
     },
     /// 启动 HTTP API server
@@ -238,6 +238,10 @@ enum SessionsAction {
         /// 仅显示消息数 >= N 的会话
         #[arg(long)]
         min_messages: Option<usize>,
+
+        /// 按维度分组：none / project / day
+        #[arg(long, default_value = "none", add = ArgValueCandidates::new(completions::GroupBySessionsCompleter))]
+        group_by: String,
     },
 }
 
@@ -451,6 +455,7 @@ async fn cmd_sessions_list(
     is_ongoing: bool,
     grep: Option<&str>,
     min_messages: Option<usize>,
+    group_by: &str,
     json_fields: Option<&str>,
 ) -> Result<()> {
     let api = build_local_data_api().await?;
@@ -512,6 +517,53 @@ async fn cmd_sessions_list(
         return Ok(());
     }
 
+    if group_by != "none" {
+        let grouped = group_sessions_cli(&items, group_by);
+        match format {
+            OutputFormat::Json => emit_json(&grouped, json_fields)?,
+            OutputFormat::Jsonl => {
+                for g in &grouped {
+                    println!("{}", serde_json::to_string(g)?);
+                }
+            }
+            OutputFormat::Table => {
+                let tw = term_width();
+                let fixed = 38 + 10 + 8 + 8 + 8;
+                let title_w = tw.saturating_sub(fixed).max(10);
+                for g in &grouped {
+                    let key = g["key"].as_str().unwrap_or("?");
+                    let count = g["count"].as_u64().unwrap_or(0);
+                    println!("\n=== {key} ({count} sessions) ===");
+                    println!(
+                        "{:<38} {:<title_w$} {:>10} {:>8} {:>8}",
+                        "ID", "TITLE", "DURATION", "STATUS", "MESSAGES"
+                    );
+                    println!("{}", "-".repeat(tw));
+                    if let Some(sessions) = g["sessions"].as_array() {
+                        for sv in sessions {
+                            let sid = sv["sessionId"].as_str().unwrap_or("");
+                            let title = sv["title"].as_str().unwrap_or("(untitled)");
+                            let ongoing = sv["isOngoing"].as_bool().unwrap_or(false);
+                            let status = if ongoing { "active" } else { "done" };
+                            let ts = sv["timestamp"].as_i64().unwrap_or(0);
+                            let duration = format_duration(ts);
+                            let msgs = sv["messageCount"].as_u64().unwrap_or(0);
+                            println!(
+                                "{:<38} {:<title_w$} {:>10} {:>8} {:>8}",
+                                sid,
+                                truncate(title, title_w.saturating_sub(1)),
+                                duration,
+                                status,
+                                msgs,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+
     match format {
         OutputFormat::Json => emit_json(&items, json_fields)?,
         OutputFormat::Jsonl => {
@@ -521,7 +573,7 @@ async fn cmd_sessions_list(
         }
         OutputFormat::Table => {
             let tw = term_width();
-            let fixed = 38 + 10 + 8 + 8 + 8; // ID + DURATION + STATUS + MESSAGES + padding
+            let fixed = 38 + 10 + 8 + 8 + 8;
             let title_w = tw.saturating_sub(fixed).max(10);
             println!(
                 "{:<38} {:<title_w$} {:>10} {:>8} {:>8}",
@@ -679,8 +731,9 @@ async fn cmd_sessions_detail(
         None => None,
         Some("omit") => Some(view::ContentMode::Omit),
         Some("full") => Some(view::ContentMode::Full),
+        Some("overview") => Some(view::ContentMode::Overview),
         Some(other) => {
-            anyhow::bail!("invalid --content value: '{other}'. Supported: omit, full");
+            anyhow::bail!("invalid --content value: '{other}'. Supported: omit, overview, full");
         }
     };
 
@@ -788,38 +841,58 @@ async fn cmd_sessions_detail(
             print_chunk_summary(i, chunk, content_w);
         }
     } else if let Some(ref mode) = content_mode {
-        // --content 指定时构造结构化 ChunkView
-        let views: Vec<view::ChunkView> = windowed
-            .iter()
-            .map(|(abs_idx, chunk)| {
-                let is_hit = grep_hits.contains(abs_idx);
-                let effective_mode = if is_hit {
-                    &view::ContentMode::Full
-                } else {
-                    mode
-                };
-                let hit_flag = grep_matcher.as_ref().map(|_| is_hit);
-                view::build_chunk_view(*abs_idx, chunk, effective_mode, hit_flag)
-            })
-            .collect();
-
-        if matches!(format, OutputFormat::Jsonl) {
-            for v in &views {
-                println!("{}", serde_json::to_string(v)?);
+        if matches!(mode, view::ContentMode::Overview) {
+            let overview_entries: Vec<serde_json::Value> = windowed
+                .iter()
+                .map(|(abs_idx, chunk)| build_overview_entry_cli(*abs_idx, chunk))
+                .collect();
+            if matches!(format, OutputFormat::Jsonl) {
+                for e in &overview_entries {
+                    println!("{}", serde_json::to_string(e)?);
+                }
+            } else {
+                let output = serde_json::json!({
+                    "sessionId": detail.session_id,
+                    "totalChunks": detail.chunks.len(),
+                    "returnedChunks": overview_entries.len(),
+                    "contentMode": "overview",
+                    "chunks": overview_entries,
+                });
+                emit_json(&output, json_fields)?;
             }
         } else {
-            let output = serde_json::json!({
-                "sessionId": detail.session_id,
-                "totalChunks": detail.chunks.len(),
-                "returnedChunks": views.len(),
-                "contentMode": match mode {
-                    view::ContentMode::Omit => "omit",
-                    view::ContentMode::Full => "full",
-                    view::ContentMode::Overview => "overview",
-                },
-                "chunks": views,
-            });
-            emit_json(&output, json_fields)?;
+            let views: Vec<view::ChunkView> = windowed
+                .iter()
+                .map(|(abs_idx, chunk)| {
+                    let is_hit = grep_hits.contains(abs_idx);
+                    let effective_mode = if is_hit {
+                        &view::ContentMode::Full
+                    } else {
+                        mode
+                    };
+                    let hit_flag = grep_matcher.as_ref().map(|_| is_hit);
+                    view::build_chunk_view(*abs_idx, chunk, effective_mode, hit_flag)
+                })
+                .collect();
+
+            if matches!(format, OutputFormat::Jsonl) {
+                for v in &views {
+                    println!("{}", serde_json::to_string(v)?);
+                }
+            } else {
+                let output = serde_json::json!({
+                    "sessionId": detail.session_id,
+                    "totalChunks": detail.chunks.len(),
+                    "returnedChunks": views.len(),
+                    "contentMode": match mode {
+                        view::ContentMode::Omit => "omit",
+                        view::ContentMode::Full => "full",
+                        view::ContentMode::Overview => unreachable!(),
+                    },
+                    "chunks": views,
+                });
+                emit_json(&output, json_fields)?;
+            }
         }
     } else if matches!(format, OutputFormat::Jsonl) {
         for (_, chunk) in &windowed {
@@ -1381,7 +1454,7 @@ async fn cmd_stats(
     format: &OutputFormat,
     period: &str,
     project_filter: Option<&str>,
-    _group_by: &str,
+    group_by: &str,
     json_fields: Option<&str>,
 ) -> Result<()> {
     let api = build_local_data_api().await?;
@@ -1441,6 +1514,28 @@ async fn cmd_stats(
             OutputFormat::Json => println!("{{\"sessionCount\": 0}}"),
             OutputFormat::Jsonl => println!("{{\"sessionCount\":0}}"),
             OutputFormat::Table => eprintln!("No sessions found in the given period."),
+        }
+        return Ok(());
+    }
+
+    if group_by != "none" {
+        let grouped = group_stats_data_cli(&session_data_list, group_by, since_dt);
+        match format {
+            OutputFormat::Json => emit_json(&grouped, json_fields)?,
+            OutputFormat::Jsonl => println!("{}", serde_json::to_string(&grouped)?),
+            OutputFormat::Table => {
+                if let Some(groups) = grouped["groups"].as_array() {
+                    for g in groups {
+                        let key = g["key"].as_str().unwrap_or("?");
+                        println!("\n=== {key} ===");
+                        if let Ok(stats_val) =
+                            serde_json::from_value::<stats::AggregatedStats>(g["stats"].clone())
+                        {
+                            print_stats_table(&stats_val);
+                        }
+                    }
+                }
+            }
         }
         return Ok(());
     }
@@ -1512,6 +1607,158 @@ fn print_stats_table(s: &stats::AggregatedStats) {
     }
 }
 
+fn group_stats_data_cli(
+    sessions: &[stats::SessionData],
+    group_by: &str,
+    since: chrono::DateTime<chrono::Utc>,
+) -> serde_json::Value {
+    let mut keys: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, Vec<&stats::SessionData>> =
+        std::collections::HashMap::new();
+    for s in sessions {
+        let key = match group_by {
+            "model" => s.model.clone(),
+            "day" => chrono::DateTime::from_timestamp_millis(s.timestamp).map_or_else(
+                || "unknown".to_string(),
+                |dt| dt.format("%Y-%m-%d").to_string(),
+            ),
+            _ => "all".to_string(),
+        };
+        if !groups.contains_key(&key) {
+            keys.push(key.clone());
+        }
+        groups.entry(key).or_default().push(s);
+    }
+
+    let total = stats::aggregate(sessions, since);
+    let group_results: Vec<serde_json::Value> = keys
+        .iter()
+        .filter_map(|key| {
+            groups.get(key).map(|items| {
+                let owned: Vec<stats::SessionData> = items
+                    .iter()
+                    .map(|s| stats::SessionData {
+                        timestamp: s.timestamp,
+                        message_count: s.message_count,
+                        chunks: s.chunks.clone(),
+                        cost: s.cost.clone(),
+                        model: s.model.clone(),
+                        tool_names: s.tool_names.clone(),
+                        shallow_error_count: s.shallow_error_count,
+                    })
+                    .collect();
+                let agg = stats::aggregate(&owned, since);
+                serde_json::json!({
+                    "key": key,
+                    "stats": agg,
+                })
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "groupBy": group_by,
+        "total": total,
+        "groups": group_results,
+    })
+}
+
+fn build_overview_entry_cli(abs_index: usize, chunk: &cdt_core::Chunk) -> serde_json::Value {
+    match chunk {
+        cdt_core::Chunk::Ai(ai) => {
+            let tool_names: Vec<&str> = ai
+                .tool_executions
+                .iter()
+                .map(|te| te.tool_name.as_str())
+                .collect();
+            let error_count = ai.tool_executions.iter().filter(|te| te.is_error).count();
+            let headline = ai
+                .responses
+                .first()
+                .map(|r| {
+                    let text = view::message_content_text(&r.content);
+                    text.chars().take(100).collect::<String>()
+                })
+                .unwrap_or_default();
+            serde_json::json!({
+                "chunkIndex": abs_index,
+                "kind": "ai",
+                "timestamp": ai.timestamp.to_rfc3339(),
+                "toolNames": tool_names,
+                "errorCount": error_count,
+                "headline": headline,
+            })
+        }
+        cdt_core::Chunk::User(user) => {
+            let text = view::message_content_text(&user.content);
+            let headline: String = text.chars().take(100).collect();
+            serde_json::json!({
+                "chunkIndex": abs_index,
+                "kind": "user",
+                "timestamp": user.timestamp.to_rfc3339(),
+                "toolNames": [],
+                "errorCount": 0,
+                "headline": headline,
+            })
+        }
+        cdt_core::Chunk::System(sys) => {
+            let headline: String = sys.content_text.chars().take(100).collect();
+            serde_json::json!({
+                "chunkIndex": abs_index,
+                "kind": "system",
+                "timestamp": sys.timestamp.to_rfc3339(),
+                "toolNames": [],
+                "errorCount": 0,
+                "headline": headline,
+            })
+        }
+        cdt_core::Chunk::Compact(compact) => {
+            serde_json::json!({
+                "chunkIndex": abs_index,
+                "kind": "compact",
+                "timestamp": compact.timestamp.to_rfc3339(),
+                "toolNames": [],
+                "errorCount": 0,
+                "headline": compact.summary_text.chars().take(100).collect::<String>(),
+            })
+        }
+    }
+}
+
+fn group_sessions_cli(
+    sessions: &[cdt_api::SessionSummary],
+    group_by: &str,
+) -> Vec<serde_json::Value> {
+    let mut keys: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, Vec<&cdt_api::SessionSummary>> =
+        std::collections::HashMap::new();
+    for s in sessions {
+        let key = match group_by {
+            "project" => s.project_name.as_deref().unwrap_or("(unknown)").to_string(),
+            "day" => chrono::DateTime::from_timestamp_millis(s.timestamp).map_or_else(
+                || "unknown".to_string(),
+                |dt| dt.format("%Y-%m-%d").to_string(),
+            ),
+            _ => "all".to_string(),
+        };
+        if !groups.contains_key(&key) {
+            keys.push(key.clone());
+        }
+        groups.entry(key).or_default().push(s);
+    }
+    keys.iter()
+        .filter_map(|key| {
+            groups.get(key).map(|items| {
+                serde_json::json!({
+                    "key": key,
+                    "count": items.len(),
+                    "sessions": items,
+                })
+            })
+        })
+        .collect()
+}
+
 fn format_ms(ms: i64) -> String {
     let secs = ms / 1000;
     if secs < 60 {
@@ -1581,6 +1828,7 @@ async fn main() -> Result<()> {
                 is_ongoing,
                 grep,
                 min_messages,
+                group_by,
             } => {
                 cmd_sessions_list(
                     &effective_format,
@@ -1592,6 +1840,7 @@ async fn main() -> Result<()> {
                     is_ongoing,
                     grep.as_deref(),
                     min_messages,
+                    &group_by,
                     json_fields,
                 )
                 .await

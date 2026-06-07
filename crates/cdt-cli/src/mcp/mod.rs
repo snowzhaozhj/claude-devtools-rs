@@ -46,6 +46,10 @@ pub struct ListSessionsParams {
     pub grep: Option<String>,
     #[schemars(description = "Maximum number of sessions to return (default 20, max 100)")]
     pub limit: Option<usize>,
+    #[schemars(
+        description = "Group results by dimension: 'none' (default flat list), 'project' (by project name), 'day' (by date)"
+    )]
+    pub group_by: Option<String>,
     #[schemars(description = "Pagination cursor from previous response")]
     pub cursor: Option<String>,
 }
@@ -128,6 +132,10 @@ pub struct StatsParams {
     pub period: Option<String>,
     #[schemars(description = "Project name or ID to limit stats scope")]
     pub project: Option<String>,
+    #[schemars(
+        description = "Group results by dimension: 'none' (default), 'project', 'model', 'day'"
+    )]
+    pub group_by: Option<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -391,6 +399,20 @@ impl CdtMcpServer {
         let page: Vec<_> = sessions.into_iter().skip(offset).take(limit).collect();
         let returned = page.len();
         let has_more = offset + returned < total;
+
+        let group_by = params.group_by.as_deref().unwrap_or("none");
+
+        if group_by != "none" {
+            let groups = group_sessions(&page, group_by);
+            let response = serde_json::json!({
+                "groups": groups,
+                "total": total,
+                "returned": returned,
+                "hasMore": has_more,
+                "cursor": if has_more { Some(format!("{}", offset + returned)) } else { None },
+            });
+            return self.emit_json(&response);
+        }
 
         let response = PaginatedResponse {
             items: page,
@@ -894,6 +916,12 @@ impl CdtMcpServer {
             return self.emit_json(&serde_json::json!({"sessionCount": 0}));
         }
 
+        let group_by = params.group_by.as_deref().unwrap_or("none");
+        if group_by != "none" {
+            let grouped = group_stats_data(&session_data_list, group_by, since_dt);
+            return self.emit_json(&grouped);
+        }
+
         let result = cdt_query::stats::aggregate(&session_data_list, since_dt);
         self.emit_json(&result)
     }
@@ -970,6 +998,95 @@ fn parse_range(s: &str) -> Option<(usize, usize)> {
         return None;
     }
     Some((start, end))
+}
+
+fn group_stats_data(
+    sessions: &[cdt_query::stats::SessionData],
+    group_by: &str,
+    since: chrono::DateTime<chrono::Utc>,
+) -> serde_json::Value {
+    let mut keys: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, Vec<&cdt_query::stats::SessionData>> =
+        std::collections::HashMap::new();
+    for s in sessions {
+        let key = match group_by {
+            "model" => s.model.clone(),
+            "day" => chrono::DateTime::from_timestamp_millis(s.timestamp).map_or_else(
+                || "unknown".to_string(),
+                |dt| dt.format("%Y-%m-%d").to_string(),
+            ),
+            _ => "all".to_string(),
+        };
+        if !groups.contains_key(&key) {
+            keys.push(key.clone());
+        }
+        groups.entry(key).or_default().push(s);
+    }
+
+    let total = cdt_query::stats::aggregate(sessions, since);
+    let group_results: Vec<serde_json::Value> = keys
+        .iter()
+        .filter_map(|key| {
+            groups.get(key).map(|items| {
+                let owned: Vec<cdt_query::stats::SessionData> =
+                    items.iter().map(|s| clone_session_data(s)).collect();
+                let stats = cdt_query::stats::aggregate(&owned, since);
+                serde_json::json!({
+                    "key": key,
+                    "stats": stats,
+                })
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "groupBy": group_by,
+        "total": total,
+        "groups": group_results,
+    })
+}
+
+fn clone_session_data(s: &cdt_query::stats::SessionData) -> cdt_query::stats::SessionData {
+    cdt_query::stats::SessionData {
+        timestamp: s.timestamp,
+        message_count: s.message_count,
+        chunks: s.chunks.clone(),
+        cost: s.cost.clone(),
+        model: s.model.clone(),
+        tool_names: s.tool_names.clone(),
+        shallow_error_count: s.shallow_error_count,
+    }
+}
+
+fn group_sessions(sessions: &[cdt_api::SessionSummary], group_by: &str) -> Vec<serde_json::Value> {
+    let mut keys: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, Vec<&cdt_api::SessionSummary>> =
+        std::collections::HashMap::new();
+    for s in sessions {
+        let key = match group_by {
+            "project" => s.project_name.as_deref().unwrap_or("(unknown)").to_string(),
+            "day" => chrono::DateTime::from_timestamp_millis(s.timestamp).map_or_else(
+                || "unknown".to_string(),
+                |dt| dt.format("%Y-%m-%d").to_string(),
+            ),
+            _ => "all".to_string(),
+        };
+        if !groups.contains_key(&key) {
+            keys.push(key.clone());
+        }
+        groups.entry(key).or_default().push(s);
+    }
+    keys.iter()
+        .filter_map(|key| {
+            groups.get(key).map(|items| {
+                serde_json::json!({
+                    "key": key,
+                    "count": items.len(),
+                    "sessions": items,
+                })
+            })
+        })
+        .collect()
 }
 
 fn build_overview_entry(abs_index: usize, chunk: &Chunk) -> serde_json::Value {
@@ -1082,5 +1199,151 @@ mod tests {
     #[test]
     fn mcp_parse_range_rejects_no_colon() {
         assert_eq!(parse_range("1020"), None);
+    }
+
+    #[test]
+    fn summarize_short_message_unchanged() {
+        let (msg, summarized) = summarize_error_message(Some("short error".to_string()));
+        assert_eq!(msg.unwrap(), "short error");
+        assert!(!summarized);
+    }
+
+    #[test]
+    fn summarize_none_message() {
+        let (msg, summarized) = summarize_error_message(None);
+        assert!(msg.is_none());
+        assert!(!summarized);
+    }
+
+    #[test]
+    fn summarize_long_message_uses_head_tail() {
+        let long_msg: String = (0..1000u32)
+            .map(|i| char::from(b'a' + (i % 26) as u8))
+            .collect();
+        let (msg, summarized) = summarize_error_message(Some(long_msg.clone()));
+        assert!(summarized);
+        let result = msg.unwrap();
+        assert!(result.contains('\n'));
+        assert!(result.len() < long_msg.len());
+    }
+
+    #[test]
+    fn group_sessions_by_project() {
+        let sessions = vec![
+            make_test_session("s1", Some("proj-a"), 1000),
+            make_test_session("s2", Some("proj-a"), 2000),
+            make_test_session("s3", Some("proj-b"), 3000),
+        ];
+        let groups = group_sessions(&sessions, "project");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0]["key"], "proj-a");
+        assert_eq!(groups[0]["count"], 2);
+        assert_eq!(groups[1]["key"], "proj-b");
+        assert_eq!(groups[1]["count"], 1);
+    }
+
+    #[test]
+    fn group_sessions_by_day() {
+        let sessions = vec![
+            make_test_session("s1", None, 1_717_718_400_000), // 2024-06-07
+            make_test_session("s2", None, 1_717_718_400_000), // 2024-06-07
+            make_test_session("s3", None, 1_717_804_800_000), // 2024-06-08
+        ];
+        let groups = group_sessions(&sessions, "day");
+        assert_eq!(groups.len(), 2);
+    }
+
+    #[test]
+    fn overview_entry_user_chunk() {
+        let chunk = Chunk::User(cdt_core::UserChunk {
+            chunk_id: "u1".into(),
+            uuid: "u1".into(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: None,
+            content: cdt_core::MessageContent::Text("hello world".into()),
+            metrics: cdt_core::ChunkMetrics::default(),
+        });
+        let entry = build_overview_entry(0, &chunk);
+        assert_eq!(entry["kind"], "user");
+        assert_eq!(entry["chunkIndex"], 0);
+        assert_eq!(entry["headline"], "hello world");
+        assert_eq!(entry["errorCount"], 0);
+    }
+
+    #[test]
+    fn overview_entry_ai_chunk_with_tools() {
+        let chunk = Chunk::Ai(cdt_core::AIChunk {
+            chunk_id: "ai1".into(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: None,
+            responses: Vec::new(),
+            metrics: cdt_core::ChunkMetrics::default(),
+            semantic_steps: Vec::new(),
+            tool_executions: vec![
+                cdt_core::ToolExecution {
+                    tool_use_id: "t1".into(),
+                    tool_name: "Bash".into(),
+                    input: serde_json::json!({}),
+                    output: cdt_core::ToolOutput::Missing,
+                    is_error: false,
+                    start_ts: chrono::Utc::now(),
+                    end_ts: None,
+                    source_assistant_uuid: "a1".into(),
+                    result_agent_id: None,
+                    error_message: None,
+                    output_omitted: false,
+                    output_bytes: None,
+                    teammate_spawn: None,
+                    workflow_run_id: None,
+                    workflow_script_path: None,
+                },
+                cdt_core::ToolExecution {
+                    tool_use_id: "t2".into(),
+                    tool_name: "Read".into(),
+                    input: serde_json::json!({}),
+                    output: cdt_core::ToolOutput::Missing,
+                    is_error: true,
+                    start_ts: chrono::Utc::now(),
+                    end_ts: None,
+                    source_assistant_uuid: "a1".into(),
+                    result_agent_id: None,
+                    error_message: Some("file not found".into()),
+                    output_omitted: false,
+                    output_bytes: None,
+                    teammate_spawn: None,
+                    workflow_run_id: None,
+                    workflow_script_path: None,
+                },
+            ],
+            subagents: Vec::new(),
+            slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
+        });
+        let entry = build_overview_entry(5, &chunk);
+        assert_eq!(entry["kind"], "ai");
+        assert_eq!(entry["chunkIndex"], 5);
+        assert_eq!(entry["errorCount"], 1);
+        let tools = entry["toolNames"].as_array().unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0], "Bash");
+        assert_eq!(tools[1], "Read");
+    }
+
+    fn make_test_session(id: &str, project: Option<&str>, ts: i64) -> cdt_api::SessionSummary {
+        cdt_api::SessionSummary {
+            session_id: id.to_owned(),
+            project_id: "p1".to_owned(),
+            timestamp: ts,
+            message_count: 5,
+            title: Some("test".to_owned()),
+            is_ongoing: false,
+            git_branch: None,
+            worktree_id: None,
+            worktree_name: None,
+            group_id: None,
+            cwd_relative_to_repo_root: None,
+            cwd: None,
+            project_name: project.map(ToOwned::to_owned),
+        }
     }
 }
