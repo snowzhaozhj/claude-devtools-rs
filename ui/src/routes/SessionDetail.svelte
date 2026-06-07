@@ -9,7 +9,7 @@
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
   import { processMermaidBlocks } from "../lib/mermaid";
-  import { createLazyMarkdownObserver, estimatePlaceholderHeight, isScrollCompensating } from "../lib/lazyMarkdown.svelte";
+  import { createLazyMarkdownObserver, estimatePlaceholderHeight, isScrollCompensating, beginCompensation } from "../lib/lazyMarkdown.svelte";
   import { isAtBottom, captureScrollAnchor, restoreScrollAnchor, startBottomPin, type ScrollAnchorState } from "../lib/scrollAnchor";
   import { getTabUIState, saveTabUIState, getTabSessionId, getCachedSession, setCachedSession } from "../lib/tabStore.svelte";
   import { isMac } from "../lib/platform";
@@ -135,10 +135,35 @@
   // 重置为默认值，对齐原版 CompactBoundary.tsx 的 useState(false)，**不**进 tabStore 持久化）
   let expandedCompacts: Set<string> = $state(new Set());
 
-  function toggleCompact(chunkId: string) {
+  function captureVisualAnchor(): { el: HTMLElement; top: number } | null {
+    if (!conversationEl) return null;
+    const convRect = conversationEl.getBoundingClientRect();
+    const chunks = conversationEl.querySelectorAll<HTMLElement>("[data-chunk-id]");
+    for (const c of chunks) {
+      const r = c.getBoundingClientRect();
+      if (r.bottom > convRect.top + 1) {
+        return { el: c, top: r.top };
+      }
+    }
+    return null;
+  }
+
+  function applyScrollCompensation(anchor: { el: HTMLElement; top: number } | null): void {
+    if (!anchor || !conversationEl) return;
+    const delta = anchor.el.getBoundingClientRect().top - anchor.top;
+    if (delta !== 0) {
+      beginCompensation(conversationEl);
+      conversationEl.scrollTop += delta;
+    }
+  }
+
+  async function toggleCompact(chunkId: string) {
+    const anchor = captureVisualAnchor();
     const n = new Set(expandedCompacts);
     if (n.has(chunkId)) n.delete(chunkId); else n.add(chunkId);
     expandedCompacts = n;
+    await tick();
+    applyScrollCompensation(anchor);
   }
   let searchVisible = $state(uiState.searchVisible);
   let contextPanelVisible = $state(uiState.contextPanelVisible);
@@ -146,7 +171,8 @@
   // 在 visible+query 状态下自动重搜，避免 file-change 后 mark 索引过期。
   let searchContentVersion = $state(0);
 
-  function toggleChunk(chunk: AIChunk) {
+  async function toggleChunk(chunk: AIChunk) {
+    const anchor = captureVisualAnchor();
     const n = new Set(expandedChunks);
     const opening = !n.has(chunk.chunkId);
     if (opening) n.add(chunk.chunkId); else n.delete(chunk.chunkId);
@@ -154,6 +180,8 @@
     if (opening) {
       prefetchReadOutputs(chunk);
     }
+    await tick();
+    applyScrollCompensation(anchor);
   }
 
   function isChunkToolsVisible(chunk: AIChunk): boolean {
@@ -680,10 +708,13 @@
   });
 
   async function toggle(key: string, exec?: ToolExecution) {
+    const anchor = captureVisualAnchor();
     if (expandedItems.has(key)) {
       const next = new Set(expandedItems);
       next.delete(key);
       expandedItems = next;
+      await tick();
+      applyScrollCompensation(anchor);
       return;
     }
     if (exec && viewerUsesOutput(exec) && !isOutputReady(exec)) {
@@ -693,6 +724,8 @@
     const next = new Set(expandedItems);
     next.add(key);
     expandedItems = next;
+    await tick();
+    applyScrollCompensation(anchor);
   }
 
   function chunkKey(c: Chunk): string {

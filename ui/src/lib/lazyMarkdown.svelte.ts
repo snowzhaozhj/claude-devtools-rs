@@ -40,7 +40,7 @@ export function isScrollCompensating(root: HTMLElement): boolean {
   return _compensatingRoots.has(root);
 }
 
-function beginCompensation(root: HTMLElement): void {
+export function beginCompensation(root: HTMLElement): void {
   _compensatingRoots.add(root);
   requestAnimationFrame(() => { _compensatingRoots.delete(root); });
   setTimeout(() => { _compensatingRoots.delete(root); }, 100);
