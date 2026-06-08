@@ -9,6 +9,10 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- **Export**: session export to Markdown, JSON, and HTML formats via context menu or keyboard shortcut.
+- **Query**: session date filter now uses interval intersection for more accurate date range matching.
+
 ### Removed
 - **UI**: removed unusable "Copy Deeplink" option from message context menu (generated `tauri://` URLs have no practical use in desktop app).
 
