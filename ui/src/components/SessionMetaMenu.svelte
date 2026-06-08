@@ -3,15 +3,20 @@
   import { openPath } from "@tauri-apps/plugin-opener";
   import { isTauriRuntime } from "../lib/runtime";
   import { MORE_HORIZONTAL_SVG } from "../lib/icons";
+  import { getSessionDetail } from "../lib/api";
+  import type { ExportFormat } from "../lib/export";
+  import { exportSession, getExportFileName, getExportFilterExt } from "../lib/export";
+  import { getTransport } from "../lib/transport";
 
   interface Props {
     cwd: string | undefined;
     sessionId: string;
+    projectId: string;
   }
-  let { cwd, sessionId }: Props = $props();
+  let { cwd, sessionId, projectId }: Props = $props();
 
-  type ItemKey = "open-finder" | "copy-cwd" | "copy-id";
-  type FeedbackKind = "copied" | "open-fail" | "copy-fail";
+  type ItemKey = "open-finder" | "copy-cwd" | "copy-id" | "export-md" | "export-json" | "export-html";
+  type FeedbackKind = "copied" | "open-fail" | "copy-fail" | "exported" | "export-fail";
 
   let triggerEl: HTMLButtonElement | undefined = $state();
   let menuEl: HTMLDivElement | undefined = $state();
@@ -25,6 +30,8 @@
   const menuId = untrack(() => `session-meta-menu-${sessionId.slice(0, 8)}`);
   const tauri = isTauriRuntime();
 
+  let exporting = $state(false);
+
   const items = $derived.by(() => {
     const cwdAvailable = typeof cwd === "string" && cwd.length > 0;
     const list: Array<{ key: ItemKey; label: string; disabled: boolean }> = [];
@@ -37,6 +44,9 @@
     }
     list.push({ key: "copy-cwd", label: "复制工作目录路径", disabled: !cwdAvailable });
     list.push({ key: "copy-id", label: "复制 Session ID", disabled: false });
+    list.push({ key: "export-md", label: exporting ? "导出中..." : "导出为 Markdown", disabled: exporting });
+    list.push({ key: "export-json", label: exporting ? "导出中..." : "导出为 JSON", disabled: exporting });
+    list.push({ key: "export-html", label: exporting ? "导出中..." : "导出为 HTML", disabled: exporting });
     return list;
   });
 
@@ -122,7 +132,7 @@
         console.warn("[SessionMetaMenu] copy cwd failed:", e);
         setFeedback("copy-fail");
       }
-    } else {
+    } else if (key === "copy-id") {
       try {
         await navigator.clipboard.writeText(sessionId);
         setFeedback("copied");
@@ -130,7 +140,65 @@
         console.warn("[SessionMetaMenu] copy sessionId failed:", e);
         setFeedback("copy-fail");
       }
+    } else if (key === "export-md" || key === "export-json" || key === "export-html") {
+      const formatMap: Record<string, ExportFormat> = {
+        "export-md": "markdown",
+        "export-json": "json",
+        "export-html": "html",
+      };
+      await doExport(formatMap[key]);
     }
+  }
+
+  async function doExport(format: ExportFormat) {
+    if (exporting) return;
+    exporting = true;
+    try {
+      const resp = await getSessionDetail(projectId, sessionId, null);
+      if (resp.status !== "full" || !resp.detail) {
+        setFeedback("export-fail");
+        return;
+      }
+
+      const content = exportSession(resp.detail, format);
+      const defaultName = getExportFileName(sessionId, format);
+      const filterExt = getExportFilterExt(format);
+
+      if (tauri) {
+        const result = await getTransport().invoke<string | null>("export_save_session", {
+          defaultName,
+          filterExt,
+          content,
+        });
+        if (result === null) return;
+        setFeedback("exported");
+      } else {
+        triggerBrowserDownload(content, defaultName, format);
+        setFeedback("exported");
+      }
+    } catch (e) {
+      console.warn("[SessionMetaMenu] export failed:", e);
+      setFeedback("export-fail");
+    } finally {
+      exporting = false;
+    }
+  }
+
+  function triggerBrowserDownload(content: string, filename: string, format: ExportFormat) {
+    const mimeMap: Record<ExportFormat, string> = {
+      markdown: "text/markdown;charset=utf-8",
+      json: "application/json;charset=utf-8",
+      html: "text/html;charset=utf-8",
+    };
+    const blob = new Blob([content], { type: mimeMap[format] });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -191,7 +259,9 @@
 
   function feedbackText(kind: FeedbackKind): string {
     if (kind === "copied") return "已复制";
+    if (kind === "exported") return "已导出";
     if (kind === "open-fail") return "打开失败";
+    if (kind === "export-fail") return "导出失败";
     return "复制失败";
   }
 </script>
@@ -235,8 +305,9 @@
   >
     {#each items as item, i (item.key)}
       {#if tauri && item.key === "copy-id"}
-        <!-- 仅 Tauri mode（含 open-finder 项）才在 copy-id 前渲染分隔线；
-             HTTP server mode 只有两项 copy 操作，无视觉分组必要 -->
+        <div class="meta-menu-sep" role="separator"></div>
+      {/if}
+      {#if item.key === "export-md"}
         <div class="meta-menu-sep" role="separator"></div>
       {/if}
       <button
@@ -257,7 +328,7 @@
 {#if feedback}
   <div
     class="meta-toast"
-    class:meta-toast-error={feedback !== "copied"}
+    class:meta-toast-error={feedback !== "copied" && feedback !== "exported"}
     style={toastStyle}
     role="status"
     aria-live="polite"

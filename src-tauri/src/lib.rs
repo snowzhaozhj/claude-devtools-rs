@@ -14,6 +14,7 @@ use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -899,6 +900,52 @@ async fn get_cli_status(
 }
 
 #[tauri::command]
+async fn export_save_session(
+    app: tauri::AppHandle,
+    default_name: String,
+    filter_ext: String,
+    content: String,
+) -> Result<Option<String>, String> {
+    let allowed_exts = ["md", "json", "html"];
+    if !allowed_exts.contains(&filter_ext.as_str()) {
+        return Err(format!("不支持的导出格式: {filter_ext}"));
+    }
+
+    let filter_label = match filter_ext.as_str() {
+        "md" => "Markdown",
+        "json" => "JSON",
+        "html" => "HTML",
+        _ => "File",
+    };
+
+    let file_path = app
+        .dialog()
+        .file()
+        .set_file_name(&default_name)
+        .add_filter(filter_label, &[&filter_ext])
+        .set_title("导出会话")
+        .blocking_save_file();
+
+    let path = match file_path {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    let path_str = path.to_string();
+    let dest = std::path::Path::new(&path_str);
+
+    if dest.is_symlink() {
+        return Err("目标路径是符号链接，拒绝写入".to_string());
+    }
+
+    tokio::fs::write(dest, content.as_bytes())
+        .await
+        .map_err(|e| format!("写入失败: {e}"))?;
+
+    Ok(Some(path_str))
+}
+
+#[tauri::command]
 async fn install_cli(
     cache: State<'_, CliStatusCache>,
     app: tauri::AppHandle,
@@ -1757,6 +1804,7 @@ pub fn run() {
             list_available_terminals,
             get_cli_status,
             install_cli,
+            export_save_session,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

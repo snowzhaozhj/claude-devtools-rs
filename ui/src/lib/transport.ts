@@ -31,6 +31,7 @@ const unsupportedBrowserCommands = new Set([
   "delete_memory",
   "get_cli_status",
   "install_cli",
+  "export_save_session",
 ]);
 
 class TauriTransport implements Transport {

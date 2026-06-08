@@ -59,6 +59,7 @@ describe("SessionMetaMenu trigger 渲染", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     const trigger = getTrigger(container);
     expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
@@ -72,6 +73,7 @@ describe("SessionMetaMenu trigger 渲染", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     const trigger = getTrigger(container);
     expect(trigger.querySelector("svg")).not.toBeNull();
@@ -84,6 +86,7 @@ describe("SessionMetaMenu menu 展开", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     const trigger = getTrigger(container);
     await fireEvent.click(trigger);
@@ -98,6 +101,7 @@ describe("SessionMetaMenu menu 展开", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -115,6 +119,7 @@ describe("SessionMetaMenu menu 展开", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -129,6 +134,7 @@ describe("SessionMetaMenu menu 展开", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: undefined,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -144,6 +150,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -158,6 +165,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -173,6 +181,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -188,6 +197,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -205,6 +215,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -220,6 +231,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -240,6 +252,7 @@ describe("SessionMetaMenu 关闭行为", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     const trigger = getTrigger(container);
     await fireEvent.click(trigger);
@@ -254,6 +267,7 @@ describe("SessionMetaMenu 关闭行为", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -271,6 +285,7 @@ describe("SessionMetaMenu 关闭行为", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: undefined,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();

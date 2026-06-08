@@ -979,7 +979,7 @@
       </div>
     </div>
     <div class="top-meta">
-      <SessionMetaMenu cwd={metaCwd} sessionId={sessionId} />
+      <SessionMetaMenu cwd={metaCwd} sessionId={sessionId} projectId={projectId} />
       {#if contextCount > 0}
         <button
           type="button"
