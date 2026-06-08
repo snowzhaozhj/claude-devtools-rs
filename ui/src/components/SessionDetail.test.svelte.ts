@@ -229,7 +229,6 @@ describe('SessionDetail smoke', () => {
       atBottom: false,
       anchorChunkId: 'sentinel-from-prior-session',
       anchorOffsetPx: 42,
-      pendingScrollChunkId: null,
     })
 
     const { container, unmount } = render(SessionDetail, {

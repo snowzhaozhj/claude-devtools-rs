@@ -58,16 +58,6 @@ export interface TabUIState {
   anchorChunkId: string | null;
   /** anchor 元素 rect.top - container rect.top；可正（视口内）可负（跨越视口顶） */
   anchorOffsetPx: number;
-  /**
-   * Deeplink 触发后等待 SessionDetail 消费的目标 chunkId（spec
-   * `session-display::pendingScrollChunkId 绑定 tab lifecycle`）。
-   * 生命周期：
-   * - deeplink watcher 调 `openSessionTab` 后由 caller 设此字段
-   * - SessionDetail mount + chunks 加载完毕后消费一次（scroll + 高亮 + clear）
-   * - 用户始终未激活该 tab 时 SHALL **不**超时清除（绑 tab lifecycle 而非 timer）
-   * - tab 关闭随 tabUIStates.delete 自动清
-   */
-  pendingScrollChunkId: string | null;
 }
 
 function createDefaultUIState(): TabUIState {
@@ -79,7 +69,6 @@ function createDefaultUIState(): TabUIState {
     atBottom: false,
     anchorChunkId: null,
     anchorOffsetPx: 0,
-    pendingScrollChunkId: null,
   };
 }
 
@@ -697,30 +686,6 @@ export function saveTabUIState(tabId: string, state: TabUIState): void {
   tabUIStates.set(tabId, state);
 }
 
-/**
- * 给 deeplink watcher 用：把目标 chunkId 写入对应 tab 的 pendingScrollChunkId。
- * SessionDetail mount + chunks 加载完毕后从 getTabUIState 读取消费一次。
- *
- * 找不到 sessionId 对应 tab（极少；调用方应先 openSessionTab 再调本函数）
- * 时 silently no-op——用户切到该 session 时 pending 已不存在，与"始终未激活
- * 不超时"语义一致。
- */
-export function setPendingScrollChunkIdForSession(
-  sessionId: string,
-  chunkId: string,
-): void {
-  for (const pane of paneLayout.panes) {
-    for (const tab of pane.tabs) {
-      if (tab.type === "session" && tab.sessionId === sessionId) {
-        const st = getTabUIState(tab.id);
-        st.pendingScrollChunkId = chunkId;
-        // mutate 后写回（getTabUIState 返回的是引用，但显式 set 让来意可读）
-        tabUIStates.set(tab.id, st);
-        return;
-      }
-    }
-  }
-}
 
 /**
  * 查找 tabId 当前指向的 sessionId（用于跨 pane 找 tab）。

@@ -54,7 +54,7 @@ export interface ContextMenuItem {
    * 不同时插入 `{ separator: true }`。AppContextMenu 渲染层 SHALL **不**
    * 消费此字段（无视觉变化），保证 kind 是纯语义标记不影响渲染契约。
    */
-  kind?: "copy" | "navigate" | "external";
+  kind?: "copy" | "external";
 
   /**
    * 路径类 label 的中段截断形态（D-V6）。CSS 原生不支持中段 ellipsis，

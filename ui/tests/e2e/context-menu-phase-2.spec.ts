@@ -75,26 +75,23 @@ async function closeOpenMenu(page: Page) {
 }
 
 test.describe('frontend-context-menu Phase 2 surface 接入', () => {
-  test('用户消息 chunk 右键 → 含 Phase 2 复制 / Deeplink items', async ({ page }) => {
+  test('用户消息 chunk 右键 → 含复制纯文本 / 复制为 Markdown', async ({ page }) => {
     await openSessionWithChunks(page)
     await dispatchContextMenu(page, '.msg-row-user', 0)
     const menu = page.locator('[role="menu"]').first()
     await expect(menu).toBeVisible({ timeout: 2_000 })
-    // Phase 2 user message 菜单（参 menu-items.ts::buildUserMessageItems）
     await expect(menu).toContainText('复制纯文本')
     await expect(menu).toContainText('复制为 Markdown')
-    await expect(menu).toContainText('复制 Deeplink')
     await closeOpenMenu(page)
   })
 
-  test('AI 消息 chunk 右键 → 含复制 / Deeplink items', async ({ page }) => {
+  test('AI 消息 chunk 右键 → 含复制纯文本 / 复制为 Markdown', async ({ page }) => {
     await openSessionWithChunks(page)
     await dispatchContextMenu(page, '.msg-row-ai', 0)
     const menu = page.locator('[role="menu"]').first()
     await expect(menu).toBeVisible({ timeout: 2_000 })
     await expect(menu).toContainText('复制纯文本')
     await expect(menu).toContainText('复制为 Markdown')
-    await expect(menu).toContainText('复制 Deeplink')
     await closeOpenMenu(page)
   })
 
@@ -203,12 +200,12 @@ test.describe('frontend-context-menu Phase 2 window-level 选区菜单', () => {
     await expect(menu).toBeVisible({ timeout: 2_000 })
     // surface 菜单含"复制选中文本"作为选区融合 item（spec 选区融合）
     await expect(menu).toContainText('复制选中文本')
-    // surface 菜单也含"复制 Deeplink"——证明这是 surface 菜单，非纯选区菜单
-    await expect(menu).toContainText('复制 Deeplink')
+    // surface 菜单也含"复制纯文本"——证明这是 surface 菜单，非纯选区菜单
+    await expect(menu).toContainText('复制纯文本')
     await closeOpenMenu(page)
   })
 
-  test('选区 + 右键非 surface 区 → 弹纯选区菜单（含"在浏览器搜索"且不含 Deeplink）', async ({ page }) => {
+  test('选区 + 右键非 surface 区 → 弹纯选区菜单（含"在浏览器搜索"且不含 surface 专属项）', async ({ page }) => {
     await openSessionWithChunks(page)
     // 在 user-bubble 内选区 + 在同次 evaluate 内立即 dispatch contextmenu，
     // 避免跨 evaluate 间隙浏览器自动清掉选区（Chromium 在某些 focus 切换会清）
@@ -254,7 +251,7 @@ test.describe('frontend-context-menu Phase 2 window-level 选区菜单', () => {
     if (menuVisible) {
       await expect(menu).toContainText('在浏览器搜索')
       const text = (await menu.textContent()) ?? ''
-      expect(text).not.toContain('复制 Deeplink')
+      expect(text).not.toContain('复制纯文本')
     } else {
       // 防御伪覆盖 #7：Layer 2 vs Layer 3 行为差异——若菜单没弹（Layer 3 抢先 preventDefault），
       // 验 default 已被 prevent（Layer 3 fallback 行为）。这是 by-design 边界 case。

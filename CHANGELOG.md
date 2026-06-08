@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Removed
+- **UI**: removed unusable "Copy Deeplink" option from message context menu (generated `tauri://` URLs have no practical use in desktop app).
+
 ## [0.6.13] — 2026-06-08
 
 ### Added

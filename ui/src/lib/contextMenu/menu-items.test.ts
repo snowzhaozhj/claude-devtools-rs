@@ -201,14 +201,13 @@ describe('selectionText 融合', () => {
 // ---- separator 自动插入 ----
 
 describe('separator 自动插入', () => {
-  test('UserMessage 无选区：copy 段 + separator + navigate 段', () => {
+  test('UserMessage 无选区：仅 copy 段，无 separator', () => {
     const ctx = makeCtx()
     const items = buildUserMessageItems(makeUserChunk(), ctx)
     const ls = labels(items)
-    // 期望：复制纯文本 / 复制为 Markdown / --- / 复制 Deeplink
-    expect(ls.indexOf('复制纯文本')).toBeLessThan(ls.indexOf('---'))
-    expect(ls.indexOf('---')).toBeLessThan(ls.indexOf('复制 Deeplink'))
-    // 首尾不应是 separator
+    expect(ls).toContain('复制纯文本')
+    expect(ls).toContain('复制为 Markdown')
+    expect(ls).not.toContain('---')
     expect(items[0].separator).toBeFalsy()
     expect(items[items.length - 1].separator).toBeFalsy()
   })
@@ -312,17 +311,6 @@ describe('item action → dispatch 调用', () => {
     expect(calls[0][0]).toBe('https://example.com/?q=foo')
   })
 
-  test('"复制 Deeplink" 写入 origin + pathname + #/session/.../chunk/...', () => {
-    const ctx = makeCtx({ sessionId: 'sess-1' })
-    const chunk = makeUserChunk()
-    const items = buildUserMessageItems(chunk, ctx)
-    const dl = items.find((it) => it.label === '复制 Deeplink')!
-    dl.action?.()
-    const calls = (ctx.dispatch.copyToClipboard as ReturnType<typeof vi.fn>).mock.calls
-    const clipboardText = calls[calls.length - 1][0] as string
-    expect(clipboardText).toContain('#/session/sess-1/chunk/')
-    expect(clipboardText.includes(window.location.origin)).toBe(true)
-  })
 })
 
 // ---- pathLabel ----
