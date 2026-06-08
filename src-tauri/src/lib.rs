@@ -947,39 +947,17 @@ async fn export_save_session(
         ));
     }
 
-    // Atomic no-follow write: open with O_NOFOLLOW to prevent TOCTOU symlink race.
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        // O_NOFOLLOW: macOS=0x0100, Linux=0x20000. Use platform-specific values.
-        #[cfg(target_os = "macos")]
-        const O_NOFOLLOW: i32 = 0x0100;
-        #[cfg(target_os = "linux")]
-        const O_NOFOLLOW: i32 = 0x20000;
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        const O_NOFOLLOW: i32 = 0;
+    // Reject symlinks to prevent writing to unintended targets.
+    // TOCTOU window is acceptable: path comes from native OS save dialog,
+    // attacker would need local filesystem control in the ~ms between check and write.
+    let meta = tokio::fs::symlink_metadata(dest).await;
+    if meta.is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("目标路径是符号链接，拒绝写入".to_string());
+    }
 
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .custom_flags(O_NOFOLLOW)
-            .open(dest)
-            .map_err(|e| format!("写入失败: {e}"))?;
-        file.write_all(content.as_bytes())
-            .map_err(|e| format!("写入失败: {e}"))?;
-    }
-    #[cfg(not(unix))]
-    {
-        // Windows: symlink_metadata check + write (no O_NOFOLLOW equivalent).
-        if dest.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err("目标路径是符号链接，拒绝写入".to_string());
-        }
-        tokio::fs::write(dest, content.as_bytes())
-            .await
-            .map_err(|e| format!("写入失败: {e}"))?;
-    }
+    tokio::fs::write(dest, content.as_bytes())
+        .await
+        .map_err(|e| format!("写入失败: {e}"))?;
 
     Ok(Some(path_str))
 }
