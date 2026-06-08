@@ -39,6 +39,8 @@ pub struct Project {
 pub struct Session {
     pub id: String,
     pub last_modified: i64,
+    #[serde(default)]
+    pub created: i64,
     pub size: u64,
     pub is_pinned: bool,
     /// session jsonl 内首条带 `cwd` 字段消息的 `cwd` 值；缺失时为 `None`。

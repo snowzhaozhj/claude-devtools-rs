@@ -113,6 +113,7 @@ fn fs_metadata_from_std(meta: &std::fs::Metadata) -> FsMetadata {
     FsMetadata {
         size: meta.len(),
         mtime,
+        created: meta.created().ok(),
         identity: identity_from_std(meta),
     }
 }

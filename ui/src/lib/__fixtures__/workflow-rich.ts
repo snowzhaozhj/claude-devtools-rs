@@ -352,6 +352,7 @@ export const workflowRichFixture: Fixture = {
         sessionId: 'sess-wf-1',
         projectId: 'mock-wf-project',
         timestamp: TS_BASE,
+        created: TS_BASE,
         messageCount: 7,
         title: 'Workflow rendering test',
         isOngoing: true,

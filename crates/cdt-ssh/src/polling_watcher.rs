@@ -871,6 +871,7 @@ mod tests {
         FsMetadata {
             size,
             mtime,
+            created: None,
             identity: None,
         }
     }

@@ -1330,6 +1330,7 @@ mod tests {
             session_id: id.to_owned(),
             project_id: "p1".to_owned(),
             timestamp: ts,
+            created: 0,
             message_count: 5,
             title: Some("test".to_owned()),
             is_ongoing: false,

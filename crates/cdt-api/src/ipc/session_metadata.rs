@@ -2064,6 +2064,7 @@ mod tests {
                 .map(|(size, mtime, _)| FsMetadata {
                     size: *size,
                     mtime: *mtime,
+                    created: None,
                     identity: None,
                 })
                 .ok_or_else(|| FsError::NotFound(path.to_path_buf()))

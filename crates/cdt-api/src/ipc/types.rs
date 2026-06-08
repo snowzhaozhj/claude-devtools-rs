@@ -92,6 +92,8 @@ pub struct SessionSummary {
     pub session_id: String,
     pub project_id: String,
     pub timestamp: i64,
+    #[serde(default)]
+    pub created: i64,
     pub message_count: usize,
     /// 第一条用户消息（清洗后），用作 sidebar 标题。
     #[serde(default)]

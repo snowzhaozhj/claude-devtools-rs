@@ -1141,6 +1141,7 @@ impl LocalDataApi {
                 session_id: s.id.clone(),
                 project_id: top.wt_id.clone(),
                 timestamp: s.last_modified,
+                created: s.created,
                 message_count: 0,
                 title: None,
                 is_ongoing: false,
@@ -2513,6 +2514,7 @@ impl LocalDataApi {
                 session_id: s.id,
                 project_id: project_id.to_owned(),
                 timestamp: s.last_modified,
+                created: s.created,
                 message_count,
                 title,
                 is_ongoing,
@@ -3754,6 +3756,7 @@ impl DataApi for LocalDataApi {
                     session_id: session.id.clone(),
                     project_id: project_id.to_owned(),
                     timestamp: session.last_modified,
+                    created: session.created,
                     message_count: 0,
                     title: None,
                     is_ongoing: false,
@@ -7745,6 +7748,7 @@ mod tests {
                 Ok(cdt_discover::FsMetadata {
                     size: 0,
                     mtime: std::time::UNIX_EPOCH,
+                    created: None,
                     identity: None,
                 })
             }
@@ -7880,6 +7884,7 @@ mod tests {
                 Ok(cdt_discover::FsMetadata {
                     size: 0,
                     mtime: std::time::UNIX_EPOCH,
+                    created: None,
                     identity: None,
                 })
             }
@@ -8400,6 +8405,7 @@ mod tests {
                 Ok(cdt_discover::FsMetadata {
                     size: 100,
                     mtime: std::time::UNIX_EPOCH,
+                    created: None,
                     identity: None,
                 })
             }
@@ -8427,6 +8433,7 @@ mod tests {
                             size: 256,
                             mtime: std::time::SystemTime::UNIX_EPOCH
                                 + std::time::Duration::from_secs(1_000_000),
+                            created: None,
                             identity: None,
                         }),
                         mtime_missing: false,
@@ -8743,6 +8750,7 @@ mod tests {
                 Ok(cdt_discover::FsMetadata {
                     size: 50,
                     mtime: std::time::UNIX_EPOCH,
+                    created: None,
                     identity: None,
                 })
             }
@@ -8768,6 +8776,7 @@ mod tests {
                             size: 128,
                             mtime: std::time::SystemTime::UNIX_EPOCH
                                 + std::time::Duration::from_secs(500_000),
+                            created: None,
                             identity: None,
                         }),
                         mtime_missing: false,

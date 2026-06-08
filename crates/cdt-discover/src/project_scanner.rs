@@ -249,6 +249,7 @@ impl ProjectScanner {
                 id: id.to_string(),
                 path: full,
                 mtime_ms: stat.mtime_ms(),
+                created_ms: stat.created_ms(),
                 size: stat.size,
             });
         }
@@ -260,6 +261,7 @@ impl ProjectScanner {
             .zip(cwds)
             .map(|(rec, cwd)| Session {
                 last_modified: rec.mtime_ms,
+                created: rec.created_ms,
                 size: rec.size,
                 is_pinned: pinned.contains(&rec.id),
                 id: rec.id,
@@ -302,6 +304,7 @@ impl ProjectScanner {
                 id: id.to_string(),
                 path: full,
                 mtime_ms: stat.mtime_ms(),
+                created_ms: stat.created_ms(),
                 size: stat.size,
             });
         }
@@ -328,7 +331,11 @@ impl ProjectScanner {
 
         let session_ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
         let most_recent_ms: i64 = records.iter().map(|r| r.mtime_ms).max().unwrap_or(0);
-        let created_ms: i64 = records.iter().map(|r| r.mtime_ms).min().unwrap_or(i64::MAX);
+        let created_ms: i64 = records
+            .iter()
+            .map(|r| r.created_ms)
+            .min()
+            .unwrap_or(i64::MAX);
 
         // 收集所有 session 的 cwd 去重集合，保留 mtime 倒序：
         // 让 `agent-configs` 等消费方覆盖所有 cwd 的 `.claude/agents/` 扫描，
@@ -492,6 +499,7 @@ struct SessionStat {
     id: String,
     path: PathBuf,
     mtime_ms: i64,
+    created_ms: i64,
     size: u64,
 }
 
