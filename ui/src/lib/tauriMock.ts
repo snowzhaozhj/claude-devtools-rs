@@ -85,6 +85,7 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'delete_completed_jobs',
   'get_cli_status',
   'install_cli',
+  'export_save_session',
 ] as const
 
 export { KNOWN_TAURI_COMMANDS }
@@ -908,6 +909,10 @@ function buildHandler(fx: Fixture) {
 
       case 'install_cli': {
         return { status: 'installed_current', version: '0.6.7', path: '/Users/dev/.local/bin/cdt', managed: true }
+      }
+
+      case 'export_save_session': {
+        return '/tmp/mock-export.html'
       }
 
       case 'plugin:opener|open_url': {

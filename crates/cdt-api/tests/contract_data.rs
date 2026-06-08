@@ -75,6 +75,8 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     // CLI distribution：Settings 一键安装/更新 CLI
     "get_cli_status",
     "install_cli",
+    // Session export：导出会话到文件
+    "export_save_session",
 ];
 
 /// 浏览器 runtime 不实现的 IPC command 集合——这些 command 在 `?http=1` 模式
@@ -103,4 +105,5 @@ pub const BROWSER_UNSUPPORTED_COMMANDS: &[&str] = &[
     "delete_memory",
     "get_cli_status",
     "install_cli",
+    "export_save_session",
 ];

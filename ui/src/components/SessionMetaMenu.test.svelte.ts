@@ -59,6 +59,7 @@ describe("SessionMetaMenu trigger 渲染", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     const trigger = getTrigger(container);
     expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
@@ -72,6 +73,7 @@ describe("SessionMetaMenu trigger 渲染", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     const trigger = getTrigger(container);
     expect(trigger.querySelector("svg")).not.toBeNull();
@@ -84,6 +86,7 @@ describe("SessionMetaMenu menu 展开", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     const trigger = getTrigger(container);
     await fireEvent.click(trigger);
@@ -94,41 +97,48 @@ describe("SessionMetaMenu menu 展开", () => {
     expect(menu!.getAttribute("aria-orientation")).toBe("vertical");
   });
 
-  test("Tauri mode 渲染 3 项 + 第 3 项前有 separator", async () => {
+  test("Tauri mode 渲染 6 项（含 3 导出项）+ 2 个 separator", async () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
     const items = container.querySelectorAll('[role="menuitem"]');
-    expect(items.length).toBe(3);
+    expect(items.length).toBe(6);
     expect(items[0].textContent).toMatch(/(Finder|文件管理器)/);
     expect(items[1].textContent).toContain("复制工作目录路径");
     expect(items[2].textContent).toContain("复制 Session ID");
+    expect(items[3].textContent).toContain("Markdown");
+    expect(items[4].textContent).toContain("JSON");
+    expect(items[5].textContent).toContain("HTML");
     const seps = container.querySelectorAll('[role="separator"]');
-    expect(seps.length).toBe(1);
+    expect(seps.length).toBe(2);
   });
 
-  test("HTTP server mode 隐藏 Finder 项 + 不渲染 separator", async () => {
+  test("HTTP server mode 隐藏 Finder 项 + 1 个 separator（导出组前）", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(false);
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
     const items = container.querySelectorAll('[role="menuitem"]');
-    expect(items.length).toBe(2);
+    expect(items.length).toBe(5);
     expect(items[0].textContent).toContain("复制工作目录路径");
     expect(items[1].textContent).toContain("复制 Session ID");
-    expect(container.querySelectorAll('[role="separator"]').length).toBe(0);
+    expect(items[2].textContent).toContain("Markdown");
+    expect(container.querySelectorAll('[role="separator"]').length).toBe(1);
   });
 
   test("cwd 缺失：前两项 disabled，复制 Session ID 可用", async () => {
     const { container } = render(SessionMetaMenu, {
       cwd: undefined,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -144,6 +154,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -158,6 +169,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -173,6 +185,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -188,6 +201,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -205,6 +219,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -220,6 +235,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -240,6 +256,7 @@ describe("SessionMetaMenu 关闭行为", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     const trigger = getTrigger(container);
     await fireEvent.click(trigger);
@@ -254,6 +271,7 @@ describe("SessionMetaMenu 关闭行为", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: SAMPLE_CWD,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
@@ -271,6 +289,7 @@ describe("SessionMetaMenu 关闭行为", () => {
     const { container } = render(SessionMetaMenu, {
       cwd: undefined,
       sessionId: SAMPLE_SID,
+      projectId: "test-project-id",
     });
     await fireEvent.click(getTrigger(container));
     await tick();
