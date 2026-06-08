@@ -331,7 +331,11 @@ impl ProjectScanner {
 
         let session_ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
         let most_recent_ms: i64 = records.iter().map(|r| r.mtime_ms).max().unwrap_or(0);
-        let created_ms: i64 = records.iter().map(|r| r.created_ms).min().unwrap_or(i64::MAX);
+        let created_ms: i64 = records
+            .iter()
+            .map(|r| r.created_ms)
+            .min()
+            .unwrap_or(i64::MAX);
 
         // 收集所有 session 的 cwd 去重集合，保留 mtime 倒序：
         // 让 `agent-configs` 等消费方覆盖所有 cwd 的 `.claude/agents/` 扫描，
