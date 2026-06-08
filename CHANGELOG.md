@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Removed
+- **UI**: 移除消息右键菜单的"复制 Deeplink"选项（桌面端生成的 URL 不可用）
+
 ## [0.6.13] — 2026-06-08
 
 ### Added

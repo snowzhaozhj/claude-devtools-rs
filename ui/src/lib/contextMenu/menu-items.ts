@@ -16,10 +16,10 @@
  * - 调用方在 oncontextmenu 触发瞬间预读 selectionText 后通过 ctx 传入
  *   （详 spec menu-items 函数库 Requirement 第一段）
  *
- * separator 自动插入（design.md::D-V3 三段式 + D6）：
+ * separator 自动插入（design.md::D-V3 + D6）：
  * - 相邻 item kind 切换处插 `{ separator: true }`
  * - factory 内部 trim 首尾孤立 separator
- * - 三段顺序：① copy → ② navigate → ③ external
+ * - 两段顺序：① copy → ② external
  */
 
 import type { ContextMenuItem } from "./types";
@@ -318,7 +318,7 @@ function copyItem(
   textFn: () => string,
   ctx: MenuItemContext,
   shortcut?: string,
-  kind: "copy" | "navigate" = "copy",
+  kind: "copy" = "copy",
   disabled = false,
 ): RawItem {
   return {

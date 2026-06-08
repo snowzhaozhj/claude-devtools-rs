@@ -360,7 +360,7 @@ Phase 2 引入路径类 item（"在编辑器打开 ~/Rustrove…/contextMenu.sve
 
 - **`--cm-max-width: 320px`**（默认）：保证菜单不过宽——桌面窗口最小宽度 800px 时菜单 ≤ 40% 宽度。`min-width: 200px` 保证短 label item 仍达可点击宽度。
 - **路径类 item 中段截断**：menu-items factory（`ui/src/lib/contextMenu/menu-items.ts::buildPathLabel`）在构造 item 时预处理路径——保留首段 home 前缀（`~/`）+ 尾段文件名最多 30 字符 + 中间 `…`，总长 ≤ 50 字符。CSS `text-overflow: ellipsis` 不能做中段截断，故必须 JS 层处理。`title` 属性挂完整原始路径，悬浮 tooltip 显示。引用 `The Machine Information Rule`（路径用 mono 辅助识别）。
-- **末段截断 fallback**：未走 `pathLabel` 的长 label（如长 deeplink 标题）通过 `.cm-item-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }` CSS 末段省略；shortcut / chevron `flex-shrink: 0` 不参与压缩。
+- **末段截断 fallback**：未走 `pathLabel` 的长 label 通过 `.cm-item-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }` CSS 末段省略；shortcut / chevron `flex-shrink: 0` 不参与压缩。
 
 ### Floating affordances
 
