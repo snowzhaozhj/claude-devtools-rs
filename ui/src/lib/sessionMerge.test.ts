@@ -13,6 +13,7 @@ function skel(id: string, ts: number, overrides: Partial<SessionSummary> = {}): 
     sessionId: id,
     projectId: 'projectA',
     timestamp: ts,
+    created: ts,
     messageCount: 0,
     title: null,
     isOngoing: false,

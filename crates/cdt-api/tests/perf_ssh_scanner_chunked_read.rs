@@ -57,6 +57,7 @@ impl SftpClient for ThrottledFakeSftpClient {
             Ok(FsMetadata {
                 size: self.file_bytes.len() as u64,
                 mtime: std::time::UNIX_EPOCH + Duration::from_secs(1_800_000_000),
+                created: None,
                 identity: None,
             })
         } else {
@@ -113,6 +114,7 @@ impl SftpClient for ThrottledFakeSftpClient {
             metadata: Some(FsMetadata {
                 size: self.file_bytes.len() as u64,
                 mtime: std::time::UNIX_EPOCH + Duration::from_secs(1_800_000_000),
+                created: None,
                 identity: None,
             }),
             mtime_missing: false,

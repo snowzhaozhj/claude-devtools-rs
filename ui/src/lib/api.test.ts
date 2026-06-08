@@ -12,6 +12,7 @@ function session(index: number): SessionSummary {
     sessionId: `sess-${index}`,
     projectId: 'project-with-history',
     timestamp: index,
+    created: index,
     messageCount: index,
     title: `Session ${index}`,
     isOngoing: false,

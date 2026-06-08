@@ -25,6 +25,7 @@ function sessionSummary(sessionId: string, projectId = "p1"): SessionSummary {
     sessionId,
     projectId,
     timestamp: 1_700_000_000_000,
+    created: 1_700_000_000_000,
     messageCount: 0,
     title: null,
     isOngoing: false,

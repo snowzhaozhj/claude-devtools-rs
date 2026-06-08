@@ -36,6 +36,7 @@ export interface SessionSummary {
   sessionId: string;
   projectId: string;
   timestamp: number;
+  created: number;
   messageCount: number;
   title: string | null;
   isOngoing: boolean;

@@ -1157,6 +1157,7 @@ mod tests {
             cdt_fs::FsMetadata {
                 size,
                 mtime: std::time::SystemTime::UNIX_EPOCH,
+                created: None,
                 identity: None,
             }
         }

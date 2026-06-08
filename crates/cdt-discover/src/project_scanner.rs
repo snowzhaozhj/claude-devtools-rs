@@ -249,6 +249,7 @@ impl ProjectScanner {
                 id: id.to_string(),
                 path: full,
                 mtime_ms: stat.mtime_ms(),
+                created_ms: stat.created_ms(),
                 size: stat.size,
             });
         }
@@ -260,6 +261,7 @@ impl ProjectScanner {
             .zip(cwds)
             .map(|(rec, cwd)| Session {
                 last_modified: rec.mtime_ms,
+                created: rec.created_ms,
                 size: rec.size,
                 is_pinned: pinned.contains(&rec.id),
                 id: rec.id,
@@ -302,6 +304,7 @@ impl ProjectScanner {
                 id: id.to_string(),
                 path: full,
                 mtime_ms: stat.mtime_ms(),
+                created_ms: stat.created_ms(),
                 size: stat.size,
             });
         }
@@ -492,6 +495,7 @@ struct SessionStat {
     id: String,
     path: PathBuf,
     mtime_ms: i64,
+    created_ms: i64,
     size: u64,
 }
 

@@ -1310,6 +1310,7 @@ mod tests {
             metadata: Some(FsMetadata {
                 size,
                 mtime: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+                created: None,
                 identity: None,
             }),
             mtime_missing: false,

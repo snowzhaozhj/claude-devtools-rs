@@ -37,6 +37,7 @@ function buildSession(
     sessionId,
     projectId,
     timestamp: TS_BASE + offsetMin * 60_000,
+    created: TS_BASE + offsetMin * 60_000,
     messageCount,
     title,
     isOngoing,

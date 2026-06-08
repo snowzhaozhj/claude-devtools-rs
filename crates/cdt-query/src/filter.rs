@@ -3,10 +3,11 @@ use cdt_api::SessionSummary;
 /// Cross-session filter applied to session lists.
 #[derive(Debug, Clone, Default)]
 pub struct QueryFilter {
-    /// Only sessions with timestamp >= since (epoch ms).
+    /// Only sessions with mtime >= since (epoch ms).
     pub since: Option<i64>,
 
-    /// Only sessions with timestamp <= until (epoch ms).
+    /// Only sessions with created <= until (epoch ms). Interval intersection
+    /// semantics: session `[created, mtime]` overlaps query `[since, until]`.
     pub until: Option<i64>,
 
     /// Only sessions whose title matches this substring (case-insensitive).
@@ -29,7 +30,7 @@ impl QueryFilter {
         }
 
         if let Some(until) = self.until {
-            result.retain(|s| s.timestamp <= until);
+            result.retain(|s| s.created <= until);
         }
 
         if let Some(ref pattern) = self.grep {

@@ -300,6 +300,7 @@ fn session_summary_serializes_camelcase_with_optional_title() {
         session_id: "sess-1".into(),
         project_id: "proj-1".into(),
         timestamp: 1_700_000_000,
+        created: 1_699_990_000,
         message_count: 12,
         title: Some("hello".into()),
         is_ongoing: true,
@@ -319,6 +320,7 @@ fn session_summary_serializes_camelcase_with_optional_title() {
     assert_eq!(json["title"], json!("hello"));
     assert_eq!(json["gitBranch"], json!("feat/x"));
     assert_eq!(json["cwd"], json!("/Users/foo/repo"));
+    assert_eq!(json["created"], json!(1_699_990_000));
     assert!(
         json.get("git_branch").is_none(),
         "MUST 不出现 snake_case 字段名"
@@ -2865,6 +2867,7 @@ async fn get_worktree_sessions_paginated_response_serializes_camelcase() {
             session_id: "sess-1".into(),
             project_id: "wt-1".into(),
             timestamp: 1_700_000_000,
+            created: 0,
             message_count: 0,
             title: None,
             is_ongoing: false,
@@ -2897,6 +2900,7 @@ fn session_summary_skips_worktree_fields_when_none() {
         session_id: "sess-1".into(),
         project_id: "proj-1".into(),
         timestamp: 0,
+        created: 0,
         message_count: 0,
         title: None,
         is_ongoing: false,

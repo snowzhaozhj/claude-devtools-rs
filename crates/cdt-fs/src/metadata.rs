@@ -34,17 +34,67 @@ pub enum FsIdentity {
 pub struct FsMetadata {
     pub size: u64,
     pub mtime: SystemTime,
+    pub created: Option<SystemTime>,
     pub identity: Option<FsIdentity>,
 }
 
 impl FsMetadata {
-    /// mtime 折算成 epoch 毫秒——对齐 TS 侧 `Project.mostRecentSession` 类型。
     #[must_use]
     pub fn mtime_ms(&self) -> i64 {
-        self.mtime
-            .duration_since(UNIX_EPOCH)
+        Self::system_time_to_ms(self.mtime)
+    }
+
+    /// `min(created, mtime)` 的 epoch 毫秒。`created = None` 时 fallback 到 mtime。
+    #[must_use]
+    pub fn created_ms(&self) -> i64 {
+        match self.created {
+            Some(c) => std::cmp::min(Self::system_time_to_ms(c), self.mtime_ms()),
+            None => self.mtime_ms(),
+        }
+    }
+
+    fn system_time_to_ms(t: SystemTime) -> i64 {
+        t.duration_since(UNIX_EPOCH)
             .ok()
             .and_then(|d| i64::try_from(d.as_millis()).ok())
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn meta(mtime_secs: u64, created: Option<u64>) -> FsMetadata {
+        FsMetadata {
+            size: 100,
+            mtime: UNIX_EPOCH + Duration::from_secs(mtime_secs),
+            created: created.map(|s| UNIX_EPOCH + Duration::from_secs(s)),
+            identity: None,
+        }
+    }
+
+    #[test]
+    fn created_ms_returns_created_when_before_mtime() {
+        let m = meta(2000, Some(1000));
+        assert_eq!(m.created_ms(), 1_000_000);
+        assert_eq!(m.mtime_ms(), 2_000_000);
+    }
+
+    #[test]
+    fn created_ms_fallback_to_mtime_when_none() {
+        let m = meta(2000, None);
+        assert_eq!(m.created_ms(), m.mtime_ms());
+    }
+
+    #[test]
+    fn created_ms_normalizes_when_created_after_mtime() {
+        let m = meta(1000, Some(2000));
+        assert_eq!(
+            m.created_ms(),
+            1_000_000,
+            "should return min(created, mtime)"
+        );
     }
 }

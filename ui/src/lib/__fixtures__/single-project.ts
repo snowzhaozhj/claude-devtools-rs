@@ -90,6 +90,7 @@ export const singleProjectFixture: Fixture = {
         sessionId: SESSION_ID,
         projectId: PROJECT_ID,
         timestamp: 1_712_822_400_000,
+        created: 1_712_822_400_000,
         messageCount: 2,
         title: '帮我看一下这个 bug',
         isOngoing: false,

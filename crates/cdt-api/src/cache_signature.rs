@@ -232,6 +232,7 @@ mod tests {
         let fs_meta = CdtFsMetadata {
             size: std_meta.len(),
             mtime,
+            created: None,
             identity,
         };
         let sig_new = FileSignature::from_fs_metadata(&fs_meta);
@@ -247,6 +248,7 @@ mod tests {
         let fs_meta = CdtFsMetadata {
             size: 1024,
             mtime,
+            created: None,
             identity: Some(CdtFsIdentity::Unix { dev: 42, ino: 9999 }),
         };
         let sig = FileSignature::from_fs_metadata(&fs_meta);
@@ -263,6 +265,7 @@ mod tests {
         let fs_meta = CdtFsMetadata {
             size: 4096,
             mtime,
+            created: None,
             identity: None,
         };
         let sig = FileSignature::from_fs_metadata(&fs_meta);

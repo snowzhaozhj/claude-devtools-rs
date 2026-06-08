@@ -4,10 +4,21 @@ use cdt_api::SessionSummary;
 use cdt_query::{ChunkKindFilter, QueryFilter, SessionQueryOptions};
 
 fn make_session(id: &str, title: Option<&str>, ts: i64, msg_count: usize) -> SessionSummary {
+    make_session_with_created(id, title, ts, ts, msg_count)
+}
+
+fn make_session_with_created(
+    id: &str,
+    title: Option<&str>,
+    ts: i64,
+    created: i64,
+    msg_count: usize,
+) -> SessionSummary {
     SessionSummary {
         session_id: id.to_owned(),
         project_id: "proj-1".to_owned(),
         timestamp: ts,
+        created,
         message_count: msg_count,
         title: title.map(ToOwned::to_owned),
         is_ongoing: false,
@@ -160,6 +171,66 @@ fn options_tool_calls_filter() {
     };
     let result = opts.apply(chunks);
     assert_eq!(result.len(), 2);
+}
+
+#[test]
+fn filter_until_uses_created_for_interval_intersection() {
+    let sessions = vec![
+        // session A: created=1000 mtime=3000 (spans midnight)
+        make_session_with_created("a", Some("evening session"), 3000, 1000, 5),
+        // session B: created=2500 mtime=3500 (starts after until)
+        make_session_with_created("b", Some("late session"), 3500, 2500, 5),
+    ];
+    let filter = QueryFilter {
+        until: Some(2000),
+        ..Default::default()
+    };
+    let result = filter.apply(sessions);
+    assert_eq!(
+        result.len(),
+        1,
+        "session A created <= until, should be included"
+    );
+    assert_eq!(result[0].session_id, "a");
+}
+
+#[test]
+fn filter_since_and_until_interval_intersection() {
+    let sessions = vec![
+        // created=500 mtime=800 — entirely before window
+        make_session_with_created("before", Some("old"), 800, 500, 5),
+        // created=900 mtime=1500 — spans start of window
+        make_session_with_created("span-start", Some("spans"), 1500, 900, 5),
+        // created=1100 mtime=1400 — entirely within window
+        make_session_with_created("inside", Some("inside"), 1400, 1100, 5),
+        // created=1300 mtime=2200 — spans end of window
+        make_session_with_created("span-end", Some("evening"), 2200, 1300, 5),
+        // created=2100 mtime=2500 — entirely after window
+        make_session_with_created("after", Some("next day"), 2500, 2100, 5),
+    ];
+    let filter = QueryFilter {
+        since: Some(1000),
+        until: Some(2000),
+        ..Default::default()
+    };
+    let result = filter.apply(sessions);
+    let ids: Vec<&str> = result.iter().map(|s| s.session_id.as_str()).collect();
+    assert_eq!(ids, vec!["span-start", "inside", "span-end"]);
+}
+
+#[test]
+fn filter_since_only_still_uses_mtime() {
+    let sessions = vec![
+        make_session_with_created("old", Some("old"), 500, 100, 5),
+        make_session_with_created("active", Some("active"), 2000, 100, 5),
+    ];
+    let filter = QueryFilter {
+        since: Some(1000),
+        ..Default::default()
+    };
+    let result = filter.apply(sessions);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].session_id, "active");
 }
 
 fn make_dummy_chunks(n: usize) -> Vec<cdt_core::Chunk> {

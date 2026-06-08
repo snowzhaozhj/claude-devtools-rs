@@ -1015,6 +1015,7 @@ impl SftpClient for RusshSftpClient {
         Ok(FsMetadata {
             size: meta.len(),
             mtime: meta.modified().unwrap_or(UNIX_EPOCH),
+            created: None,
             identity: None,
         })
     }
@@ -1078,6 +1079,7 @@ impl SftpClient for RusshSftpClient {
                     Some(FsMetadata {
                         size: meta.len(),
                         mtime: modified.unwrap_or(UNIX_EPOCH),
+                        created: None,
                         identity: None,
                     })
                 } else {
@@ -1360,6 +1362,7 @@ mod tests {
         fake.set_metadata(Ok(FsMetadata {
             size: 42,
             mtime: now,
+            created: None,
             identity: None,
         }))
         .await;
@@ -1380,6 +1383,7 @@ mod tests {
                 metadata: Some(FsMetadata {
                     size: 100,
                     mtime: now,
+                    created: None,
                     identity: None,
                 }),
                 mtime_missing: false,
@@ -1423,6 +1427,7 @@ mod tests {
             metadata: Some(FsMetadata {
                 size: 200,
                 mtime: SystemTime::UNIX_EPOCH, // RusshSftpClient 填的占位
+                created: None,
                 identity: None,
             }),
             mtime_missing: true,
@@ -1455,6 +1460,7 @@ mod tests {
                 metadata: Some(FsMetadata {
                     size: 100,
                     mtime: now,
+                    created: None,
                     identity: None,
                 }),
                 mtime_missing: false,
@@ -1465,6 +1471,7 @@ mod tests {
                 metadata: Some(FsMetadata {
                     size: 200,
                     mtime: now,
+                    created: None,
                     identity: None,
                 }),
                 mtime_missing: false,
@@ -1475,6 +1482,7 @@ mod tests {
                 metadata: Some(FsMetadata {
                     size: 300,
                     mtime: now,
+                    created: None,
                     identity: None,
                 }),
                 mtime_missing: false,

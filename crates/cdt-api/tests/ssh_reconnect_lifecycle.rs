@@ -44,6 +44,7 @@ impl FakeRemoteSftp {
                 metadata: Some(FsMetadata {
                     size: content.len() as u64,
                     mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
+                    created: None,
                     identity: None,
                 }),
                 mtime_missing: false,
@@ -61,12 +62,14 @@ impl SftpClient for FakeRemoteSftp {
             Ok(FsMetadata {
                 size: bytes.len() as u64,
                 mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
+                created: None,
                 identity: None,
             })
         } else if self.dirs.contains_key(path) {
             Ok(FsMetadata {
                 size: 0,
                 mtime: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
+                created: None,
                 identity: None,
             })
         } else {
