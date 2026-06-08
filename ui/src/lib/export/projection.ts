@@ -57,12 +57,26 @@ function projectToolExecutions(execs: ToolExecution[], options: ExportOptions): 
 
 function truncateToolExecution(exec: ToolExecution, maxLen: number): ToolExecution {
   const output = exec.output;
-  if (!output || output.kind !== "text") return exec;
-  if (!output.text || output.text.length <= maxLen) return exec;
-  return {
-    ...exec,
-    output: { kind: "text", text: output.text.slice(0, maxLen) + "... (truncated)" },
-  };
+  if (!output || output.kind === "missing") return exec;
+
+  if (output.kind === "text") {
+    if (!output.text || output.text.length <= maxLen) return exec;
+    return {
+      ...exec,
+      output: { kind: "text", text: output.text.slice(0, maxLen) + "... (truncated)" },
+    };
+  }
+
+  if (output.kind === "structured") {
+    const str = JSON.stringify(output.value);
+    if (str.length <= maxLen) return exec;
+    return {
+      ...exec,
+      output: { kind: "text", text: str.slice(0, maxLen) + "... (truncated)" },
+    };
+  }
+
+  return exec;
 }
 
 function projectSubagents(procs: SubagentProcess[], options: ExportOptions): SubagentProcess[] {

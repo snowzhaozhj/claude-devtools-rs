@@ -934,13 +934,52 @@ async fn export_save_session(
     let path_str = path.to_string();
     let dest = std::path::Path::new(&path_str);
 
-    if dest.is_symlink() {
-        return Err("目标路径是符号链接，拒绝写入".to_string());
+    // Validate the actual file extension matches the whitelist (user may
+    // manually type a different extension in the save dialog).
+    let actual_ext = dest
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if !allowed_exts.contains(&actual_ext.as_str()) {
+        return Err(format!(
+            "不支持的文件扩展名 .{actual_ext}，仅允许 .md / .json / .html"
+        ));
     }
 
-    tokio::fs::write(dest, content.as_bytes())
-        .await
-        .map_err(|e| format!("写入失败: {e}"))?;
+    // Atomic no-follow write: open with O_NOFOLLOW to prevent TOCTOU symlink race.
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        // O_NOFOLLOW: macOS=0x0100, Linux=0x20000. Use platform-specific values.
+        #[cfg(target_os = "macos")]
+        const O_NOFOLLOW: i32 = 0x0100;
+        #[cfg(target_os = "linux")]
+        const O_NOFOLLOW: i32 = 0x20000;
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        const O_NOFOLLOW: i32 = 0;
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .custom_flags(O_NOFOLLOW)
+            .open(dest)
+            .map_err(|e| format!("写入失败: {e}"))?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("写入失败: {e}"))?;
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows: symlink_metadata check + write (no O_NOFOLLOW equivalent).
+        if dest.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err("目标路径是符号链接，拒绝写入".to_string());
+        }
+        tokio::fs::write(dest, content.as_bytes())
+            .await
+            .map_err(|e| format!("写入失败: {e}"))?;
+    }
 
     Ok(Some(path_str))
 }
