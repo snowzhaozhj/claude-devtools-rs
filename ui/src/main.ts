@@ -6,8 +6,7 @@ import { installSelectionContextMenu } from './lib/contextMenu/selectionMenu'
 import { getMenuSettings } from './lib/contextMenu/settings.svelte'
 import { getMenuItemDispatch } from './lib/contextMenu/dispatch'
 import type { MenuItemContext } from './lib/contextMenu/menu-items'
-import { installDeeplinkWatcher } from './lib/deeplink'
-import { setPendingScrollChunkIdForSession, getActiveTab } from './lib/tabStore.svelte'
+import { getActiveTab } from './lib/tabStore.svelte'
 
 // dev/test 环境注入 mockIPC：URL ?mock=1 强制开启，或浏览器无 Tauri runtime
 // 时自动开启。真 cargo tauri dev 窗口由 Tauri 注入 __TAURI_INTERNALS__，
@@ -92,25 +91,6 @@ async function bootstrap(): Promise<void> {
   })
 
   installGlobalContextMenuFallback()
-
-  // Deeplink hash route watcher（spec session-display::pendingScrollChunkId）：
-  // 解析 `#/session/<sid>/chunk/<cid>` → openSessionTab + 把 chunkId 写入对应
-  // tab 的 pendingScrollChunkId。SessionDetail.onMount 加载 chunks 后消费一次。
-  // 找不到 sessionId 对应的已开 tab 时 openSessionTab 会新开（projectId 留空——
-  // 真 deeplink 场景下 sessionId 已唯一定位 session，但本仓 IPC 设计下 projectId
-  // 是必传字段。Phase 2 仅在 sessionId 已被 cdt-cli 暴露的 list_sessions 收录时
-  // 工作；外部跨 app deeplink 留 follow-up 用 Tauri deep-link plugin 注册 cdt://
-  // protocol 时再补 sessionId → projectId 反查 IPC）。
-  installDeeplinkWatcher((target) => {
-    // 仅在 sessionId 已对应已开 tab 时设置 pendingScrollChunkId（spec 设计：
-    // 用户复制 deeplink → 粘贴回 App 时 session 通常已在某个 tab 中打开）。
-    // 找不到 tab 时 setPendingScrollChunkIdForSession 静默 no-op。
-    //
-    // Follow-up：若需支持"app 启动后从外部 URL 直接打开未在 tab 中的 session"，
-    // 需新增 sessionId → projectId 反查 IPC（或 Tauri deep-link plugin 注册
-    // cdt:// custom protocol），届时这里追加 openSessionTab(sessionId, projectId, label)。
-    setPendingScrollChunkIdForSession(target.sessionId, target.chunkId)
-  })
 
   await maybeSetupMock()
   mount(App, {

@@ -26,7 +26,6 @@ import type { ContextMenuItem } from "./types";
 import type { UserChunk, AIChunk, ToolExecution } from "../api";
 import { userChunkToMarkdown, aiChunkToMarkdown, toolExecToMarkdown, chunkToPlainText } from "./markdown";
 import { truncatePath } from "./pathLabel";
-import { buildDeeplinkHash } from "../deeplink";
 
 // ---------------------------------------------------------------------------
 // 共享类型
@@ -55,7 +54,7 @@ export type TerminalAppSetting = string;
  * 字段传入，**不**让 factory 内部读 DOM。
  */
 export interface MenuItemContext {
-  /** 当前 session id（deeplink 拼接 + IPC dispatch） */
+  /** 当前 session id */
   sessionId: string;
   /** 当前 project id */
   projectId: string;
@@ -96,15 +95,6 @@ export function buildUserMessageItems(chunk: UserChunk, ctx: MenuItemContext): C
   items.push(copyItem("复制纯文本", () => chunkToPlainText(chunk), ctx, "⌘C"));
   items.push(copyItem("复制为 Markdown", () => userChunkToMarkdown(chunk), ctx));
 
-  // 导航类
-  items.push(copyItem(
-    "复制 Deeplink",
-    () => buildDeeplinkUrl(ctx.sessionId, chunk.chunkId),
-    ctx,
-    undefined,
-    "navigate",
-  ));
-
   return finalizeWithSeparators(items);
 }
 
@@ -118,18 +108,6 @@ export function buildAssistantMessageItems(chunk: AIChunk, ctx: MenuItemContext)
 
   items.push(copyItem("复制纯文本", () => chunkToPlainText(chunk), ctx, "⌘C"));
   items.push(copyItem("复制为 Markdown", () => aiChunkToMarkdown(chunk), ctx));
-  // "复制完整对话上下文" — Phase 2 暂只 export AI chunk 自身的 markdown
-  // （cross-chunk 拼接需要 SessionDetail 上下文，超出 factory 纯函数范围）。
-  // 后续可加 ctx 字段传入"截至本 chunk 的所有 chunks"实现，现 phase 暂跳过。
-
-  // 导航类
-  items.push(copyItem(
-    "复制 Deeplink",
-    () => buildDeeplinkUrl(ctx.sessionId, chunk.chunkId),
-    ctx,
-    undefined,
-    "navigate",
-  ));
 
   return finalizeWithSeparators(items);
 }
@@ -426,14 +404,6 @@ function makePathLabel(prefix: string, path: string): { short: string; full: str
 // ---------------------------------------------------------------------------
 // 内部：URL / path / 文本辅助
 // ---------------------------------------------------------------------------
-
-/** 拼 deeplink 完整 URL：origin + pathname + hash */
-function buildDeeplinkUrl(sessionId: string, chunkId: string): string {
-  const hash = buildDeeplinkHash(sessionId, chunkId);
-  // jsdom / vitest 环境 location 已有；浏览器 / Tauri WKWebView 也有
-  const { origin, pathname } = window.location;
-  return `${origin}${pathname}${hash}`;
-}
 
 /** 用 settings.searchEngine 拼搜索 URL（Custom 必含 {query}） */
 function buildSearchUrl(query: string, engine: SearchEngineSetting): string {

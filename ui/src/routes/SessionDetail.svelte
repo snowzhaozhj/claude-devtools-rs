@@ -515,32 +515,6 @@
       scheduleRefresh(`detail:${projectId}|${sessionId}`, refreshDetail, getAdaptiveDebounceMs());
     });
 
-    // 消费 deeplink 触发的 pendingScrollChunkId（spec session-display
-    // "pendingScrollChunkId 绑定 tab lifecycle 消费一次"）。
-    //
-    // 已满足三条件：
-    // (a) tab focused —— SessionDetail 仅在 tab active 时 mount（PaneView {#key}）
-    // (b) SessionDetail mount —— 走到此处即满足
-    // (c) chunks 加载完成 —— cached 路径直接命中；非 cached 路径上面 await 了 IPC
-    //
-    // 找不到 chunk 时弹 toast + clear 避免后续重试。
-    if (uiState.pendingScrollChunkId && detail) {
-      const target = uiState.pendingScrollChunkId;
-      uiState.pendingScrollChunkId = null;
-      saveTabUIState(tabId, uiState);
-      const exists = detail.chunks.some((c) => c.chunkId === target);
-      if (exists) {
-        // tick 让 chunk DOM 完成首屏 commit 再 scroll（cached 路径下 detail 已就位
-        // 但 anchor restore 刚跑完，再让 scrollAnchor 抢先一帧可能与 deeplink 冲突）
-        await tick();
-        await handleNavigateToChunk(target);
-      } else {
-        // 容忍：spec "目标 chunk 不存在时弹 toast"
-        // 本仓暂无统一 toast 组件——降级到 console.warn + 不阻塞流程。
-        // 后续 follow-up 接入 toast 系统时替换此处（见 D9 风险段）。
-        console.warn(`[deeplink] target chunk not found in this session: ${target}`);
-      }
-    }
   });
 
   // Mermaid 图表后处理：旧版本在首屏 effect 全树扫描；现在迁移到
@@ -578,10 +552,6 @@
         atBottom: latestAnchor.atBottom,
         anchorChunkId: latestAnchor.anchorChunkId,
         anchorOffsetPx: latestAnchor.anchorOffsetPx,
-        // pendingScrollChunkId 由 onMount 消费一次后清；onDestroy 不需要透传——
-        // 切走再切回时若仍有 pending（消费失败 / 未激活），从 getTabUIState 读取
-        // 重新走消费路径，本地 save 不持有此字段
-        pendingScrollChunkId: uiState.pendingScrollChunkId,
       });
     }
   });
