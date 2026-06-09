@@ -1,10 +1,10 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: Read-only tool set
+### Requirement: list_sessions 活动摘要字段
 
 MCP `list_sessions` tool 返回的 session 对象 SHALL 包含活动摘要字段（`userIntents`、`lastActive`、`durationMs`、`totalCost`、`toolErrorCount`、`filesTouched`、`gitSummary`），与 CLI `sessions list --format json` 输出的字段一致。
 
-新增字段通过 `SessionSummary` struct 的 serde 序列化自动透传，MCP tool handler 无需额外代码。
+新增字段通过 `SessionSummary` 的 serde 序列化自动透传。
 
 #### Scenario: list_sessions 返回活动摘要
 

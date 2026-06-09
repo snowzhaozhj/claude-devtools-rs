@@ -1,30 +1,20 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: Expose project and session queries
+### Requirement: Session activity summary fields on SessionSummary
 
-系统 SHALL 在 `SessionSummary` 中包含会话活动摘要字段，让消费端在列表阶段即可掌握每个会话的用户意图、活动产出和关键指标，无需逐个拉取 chunk 级详情。
-
-`SessionSummary` SHALL 新增以下字段（全部可选，`skip_serializing_if` 为空时不序列化）：
+`SessionSummary` SHALL 包含会话活动摘要字段，让消费端在列表阶段即可掌握每个会话的用户意图、活动产出和关键指标，无需逐个拉取 chunk 级详情。
 
 | 字段 | 类型 | 语义 |
 |---|---|---|
 | `userIntents` | `string[]` | 用户消息首行序列，上限 30 条，每条 ≤100 字符 |
 | `lastActive` | `int64` | 最后一条消息的时间戳（epoch ms） |
 | `durationMs` | `int64` | `lastActive - created`，会话跨度 |
-| `totalCost` | `float64?` | 基于 token usage 的费用估算 |
+| `totalCost` | `float64` | 基于 token usage 的费用估算 |
 | `toolErrorCount` | `int` | 工具执行错误计数 |
 | `filesTouched` | `string[]` | 被编辑文件路径（去重），上限 20 条 |
 | `gitSummary` | `string[]` | commit message 和 PR URL，上限 10 条 |
 
-`userIntents` SHALL 过滤噪声确认词（≤3 字符的纯确认，如 `ok` / `yes` / `嗯` / `好` / `继续`），只保留有语义的用户输入。
-
-`filesTouched` SHALL 从 `Edit` / `Write` / `MultiEdit` 工具调用的文件路径参数提取。
-
-`gitSummary` SHALL 从 `Bash` 工具调用的 `command` 中提取 `git commit -m` 的 message，以及从工具输出中提取 GitHub PR URL。
-
-所有新增字段 SHALL 在 metadata 扫描（`extract_session_metadata`）期间提取，不引入额外 I/O。
-
-`SessionMetadataUpdate` event SHALL 同步包含新增字段，让前端 / SSE 消费端在 metadata push 时即可获得活动摘要。
+`userIntents` SHALL 过滤噪声确认词（≤3 字符的纯确认，如 `ok` / `yes` / `嗯` / `好` / `继续`），只保留有语义的用户输入。`filesTouched` SHALL 从 `Edit` / `Write` / `MultiEdit` 工具调用的文件路径参数提取。`gitSummary` SHALL 从 `Bash` 工具调用的 `command` 中提取 `git commit -m` 的 message，以及从对应 ToolResult 输出中提取 GitHub PR URL。所有新增字段 SHALL 在 metadata 扫描期间提取，不引入额外 I/O。`SessionMetadataUpdate` event SHALL 同步包含新增字段。
 
 #### Scenario: 列表包含用户意图序列
 
