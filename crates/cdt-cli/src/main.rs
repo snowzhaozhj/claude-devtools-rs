@@ -1591,7 +1591,7 @@ fn print_stats_table(s: &stats::AggregatedStats) {
         s.cache_read_tokens,
         s.cache_creation_tokens,
     );
-    println!("Cache Hit Rate: {:.1}%", s.cache_hit_rate * 100.0,);
+    println!("Cache Hit Rate: {:.1}%", s.cache_hit_rate * 100.0);
     println!(
         "Total Cost: ${:.4} (avg ${:.4}/session)",
         s.total_cost, s.avg_cost_per_session,

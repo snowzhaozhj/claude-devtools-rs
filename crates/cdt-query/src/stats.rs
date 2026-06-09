@@ -24,14 +24,18 @@ pub struct AggregatedStats {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
+    #[serde(default)]
     pub cache_hit_rate: f64,
+    #[serde(default)]
     pub avg_cost_per_session: f64,
+    #[serde(default)]
     pub avg_messages_per_session: f64,
     pub tool_frequency: Vec<ToolFrequency>,
     pub error_count: usize,
     pub error_rate: f64,
     pub model_usage: Vec<ModelUsage>,
     pub active_hours: Vec<HourBucket>,
+    #[serde(default)]
     pub languages: Vec<LanguageFrequency>,
 }
 
@@ -292,7 +296,7 @@ fn extract_languages_from_session(session: &SessionData, lang_map: &mut HashMap<
 }
 
 fn extension_to_language(path: &str) -> Option<&'static str> {
-    let basename = path.rsplit('/').next().unwrap_or(path);
+    let basename = path.rsplit(['/', '\\']).next().unwrap_or(path);
 
     match basename {
         "Dockerfile" | "Containerfile" => return Some("Docker"),
@@ -414,6 +418,11 @@ mod tests {
         assert_eq!(extension_to_language("/foo/Cargo.toml"), Some("Rust"));
         assert_eq!(extension_to_language("/foo/bar.unknown"), None);
         assert_eq!(extension_to_language("noext"), None);
+        assert_eq!(
+            extension_to_language(r"C:\Users\foo\Dockerfile"),
+            Some("Docker")
+        );
+        assert_eq!(extension_to_language(r"C:\Users\foo\bar.rs"), Some("Rust"));
     }
 
     #[test]
