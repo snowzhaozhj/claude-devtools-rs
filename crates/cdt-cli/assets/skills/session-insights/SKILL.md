@@ -144,6 +144,7 @@ cdt search "keyword" --session <id>       # intra-session search
 
 | Goal | Sequence |
 |---|---|
+| **Daily summary** | `sessions list --since 2026-06-08 --until 2026-06-09 --group-by project --json=projectName,sessionId,title,userIntents,durationMs,totalCost,filesTouched,gitSummary` — one command, all data for a daily report. Use `--since/--until YYYY-MM-DD` for calendar days, NOT `--since 1d` (rolling 24h window). |
 | Errors | `session <id>` (errors included) → `--chunks --extract errors --all` for detail → `--chunks --content full --range` for full context |
 | Overview | `--chunks --extract overview --all` or `--chunks --content overview` |
 | Cost | `session <id>` (cost included) |

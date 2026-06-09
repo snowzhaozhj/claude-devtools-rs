@@ -1152,6 +1152,13 @@ impl LocalDataApi {
                 cwd_relative_to_repo_root: None,
                 cwd: s.cwd.clone(),
                 project_name: None,
+                user_intents: Vec::new(),
+                last_active: 0,
+                duration_ms: 0,
+                total_cost: 0.0,
+                tool_error_count: 0,
+                files_touched: Vec::new(),
+                git_summary: Vec::new(),
             };
             self.apply_worktree_meta(&mut summary);
             page.push(summary);
@@ -1208,9 +1215,15 @@ impl LocalDataApi {
                         .map(|entry| SessionMetadata {
                             title: entry.title,
                             message_count: entry.message_count,
-                            // SSH stale check policy fork（同 line 2171）
                             is_ongoing: entry.messages_ongoing,
                             git_branch: entry.git_branch,
+                            user_intents: entry.user_intents,
+                            last_active: entry.last_active,
+                            duration_ms: entry.duration_ms,
+                            total_cost: entry.total_cost,
+                            tool_error_count: entry.tool_error_count,
+                            files_touched: entry.files_touched,
+                            git_summary: entry.git_summary,
                         });
                     return (wt_id, session_id, jsonl_path, cached);
                 }
@@ -2475,10 +2488,15 @@ impl LocalDataApi {
                         .map(|entry| SessionMetadata {
                             title: entry.title,
                             message_count: entry.message_count,
-                            // SSH 远端 mtime / 本机 SystemTime::now() 跨 clock domain
-                            // 不可比对，stale check 跳过（policy fork 同 line 2171）。
                             is_ongoing: entry.messages_ongoing,
                             git_branch: entry.git_branch,
+                            user_intents: entry.user_intents,
+                            last_active: entry.last_active,
+                            duration_ms: entry.duration_ms,
+                            total_cost: entry.total_cost,
+                            tool_error_count: entry.tool_error_count,
+                            files_touched: entry.files_touched,
+                            git_summary: entry.git_summary,
                         });
                     return (jsonl_path, cached);
                 }
@@ -2501,30 +2519,53 @@ impl LocalDataApi {
             // Local cache hit 走 `try_lookup_cached_metadata` 已 stat 校验，无需重 scan。
             let need_background_validation = is_remote || cached_meta.is_none();
             let session_id_for_jobs = s.id.clone();
-            let (message_count, title, is_ongoing, git_branch) = match cached_meta {
-                Some(meta) => (
-                    meta.message_count,
-                    meta.title,
-                    meta.is_ongoing,
-                    meta.git_branch,
-                ),
-                None => (0, None, false, None),
-            };
-            let mut summary = SessionSummary {
-                session_id: s.id,
-                project_id: project_id.to_owned(),
-                timestamp: s.last_modified,
-                created: s.created,
-                message_count,
-                title,
-                is_ongoing,
-                git_branch,
-                worktree_id: None,
-                worktree_name: None,
-                group_id: None,
-                cwd_relative_to_repo_root: None,
-                cwd: s.cwd,
-                project_name: None,
+            let mut summary = match cached_meta {
+                Some(meta) => SessionSummary {
+                    session_id: s.id,
+                    project_id: project_id.to_owned(),
+                    timestamp: s.last_modified,
+                    created: s.created,
+                    message_count: meta.message_count,
+                    title: meta.title,
+                    is_ongoing: meta.is_ongoing,
+                    git_branch: meta.git_branch,
+                    worktree_id: None,
+                    worktree_name: None,
+                    group_id: None,
+                    cwd_relative_to_repo_root: None,
+                    cwd: s.cwd,
+                    project_name: None,
+                    user_intents: meta.user_intents,
+                    last_active: meta.last_active,
+                    duration_ms: meta.duration_ms,
+                    total_cost: meta.total_cost,
+                    tool_error_count: meta.tool_error_count,
+                    files_touched: meta.files_touched,
+                    git_summary: meta.git_summary,
+                },
+                None => SessionSummary {
+                    session_id: s.id,
+                    project_id: project_id.to_owned(),
+                    timestamp: s.last_modified,
+                    created: s.created,
+                    message_count: 0,
+                    title: None,
+                    is_ongoing: false,
+                    git_branch: None,
+                    worktree_id: None,
+                    worktree_name: None,
+                    group_id: None,
+                    cwd_relative_to_repo_root: None,
+                    cwd: s.cwd,
+                    project_name: None,
+                    user_intents: Vec::new(),
+                    last_active: 0,
+                    duration_ms: 0,
+                    total_cost: 0.0,
+                    tool_error_count: 0,
+                    files_touched: Vec::new(),
+                    git_summary: Vec::new(),
+                },
             };
             self.apply_worktree_meta(&mut summary);
             page.push(summary);
@@ -3275,6 +3316,13 @@ async fn scan_metadata_for_page(
                 is_ongoing: meta.is_ongoing,
                 git_branch: meta.git_branch,
                 group_id,
+                user_intents: meta.user_intents,
+                last_active: meta.last_active,
+                duration_ms: meta.duration_ms,
+                total_cost: meta.total_cost,
+                tool_error_count: meta.tool_error_count,
+                files_touched: meta.files_touched,
+                git_summary: meta.git_summary,
             });
         });
     }
@@ -3499,6 +3547,13 @@ async fn scan_metadata_for_page_batched(
                 is_ongoing: entry.messages_ongoing,
                 git_branch: entry.git_branch,
                 group_id,
+                user_intents: entry.user_intents,
+                last_active: entry.last_active,
+                duration_ms: entry.duration_ms,
+                total_cost: entry.total_cost,
+                tool_error_count: entry.tool_error_count,
+                files_touched: entry.files_touched,
+                git_summary: entry.git_summary,
             });
             continue;
         }
@@ -3543,6 +3598,13 @@ async fn scan_metadata_for_page_batched(
                 is_ongoing: meta.is_ongoing,
                 git_branch: meta.git_branch,
                 group_id,
+                user_intents: meta.user_intents,
+                last_active: meta.last_active,
+                duration_ms: meta.duration_ms,
+                total_cost: meta.total_cost,
+                tool_error_count: meta.tool_error_count,
+                files_touched: meta.files_touched,
+                git_summary: meta.git_summary,
             });
         });
     }
@@ -3767,6 +3829,13 @@ impl DataApi for LocalDataApi {
                     cwd_relative_to_repo_root: None,
                     cwd: session.cwd,
                     project_name: None,
+                    user_intents: Vec::new(),
+                    last_active: 0,
+                    duration_ms: 0,
+                    total_cost: 0.0,
+                    tool_error_count: 0,
+                    files_touched: Vec::new(),
+                    git_summary: Vec::new(),
                 };
                 self.apply_worktree_meta(&mut summary);
                 (session.id, summary)

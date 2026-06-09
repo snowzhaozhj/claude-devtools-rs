@@ -60,13 +60,82 @@ pub struct SessionMetadata {
     /// `cdt_analyze::check_messages_ongoing`。
     pub is_ongoing: bool,
     /// 会话最后一条携带 `git_branch` 的消息行所记录的分支名。
-    /// 与原版 `claude-devtools/src/renderer/utils/sessionExporter.ts:304`
-    /// 的 `session.gitBranch` 取值方式一致——反映会话最后所在 git 分支。
     pub git_branch: Option<String>,
+    /// 用户消息首行序列（过滤噪声确认词，上限 30 条，每条 ≤100 chars）。
+    pub user_intents: Vec<String>,
+    /// 最后一条消息的时间戳（epoch ms）。
+    pub last_active: i64,
+    /// 会话跨度（`last_active` - `first_timestamp`，ms）。
+    pub duration_ms: i64,
+    /// 基于 token usage 和简化定价的费用估算（USD）。
+    pub total_cost: f64,
+    /// 工具执行错误计数（`ToolResult` `is_error=true`）。
+    pub tool_error_count: usize,
+    /// 被编辑文件路径（去重，上限 20 条）。
+    pub files_touched: Vec<String>,
+    /// commit message + PR URL（上限 10 条）。
+    pub git_summary: Vec<String>,
 }
 
 /// 扫描标题时读取的最大行数（与原版 `maxLines: 200` 对齐）。
 const TITLE_MAX_LINES: usize = 200;
+
+/// `user_intents` 每条最大字符数。
+const INTENT_MAX_CHARS: usize = 100;
+/// `user_intents` 最大条数。
+const MAX_USER_INTENTS: usize = 30;
+/// `files_touched` 最大条数。
+const MAX_FILES_TOUCHED: usize = 20;
+/// `git_summary` 最大条数。
+const MAX_GIT_SUMMARY: usize = 10;
+
+/// 噪声确认词——跳过纯确认性质的用户消息。
+const NOISE_CONFIRMATIONS: &[&str] = &[
+    "ok",
+    "OK",
+    "Ok",
+    "yes",
+    "Yes",
+    "y",
+    "Y",
+    "嗯",
+    "好",
+    "好的",
+    "继续",
+    "go",
+    "Go",
+    "是",
+    "对",
+    "行",
+    "可以",
+    "没问题",
+];
+
+fn git_commit_message_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"git\s+commit\s+(?:[^-]|-[^m])*-m\s+["']([^"']+)["']"#)
+            .expect("git commit regex 字面量合法")
+    })
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn estimate_cost_per_mtok(model: &str) -> (f64, f64) {
+    if model.starts_with("claude-opus") {
+        (5.0, 25.0)
+    } else if model.starts_with("claude-haiku") {
+        (1.0, 5.0)
+    } else {
+        (3.0, 15.0)
+    }
+}
+
+fn github_pr_url_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"https://github\.com/[^\s]+/pull/\d+").expect("github PR URL regex 字面量合法")
+    })
+}
 
 /// 原版 `SYSTEM_OUTPUT_TAGS`（`messageTags.ts`）：以这些标签起首的 user
 /// 内容是命令输出 / 系统注入，不算用户输入。
@@ -133,6 +202,91 @@ fn is_user_chunk_message(msg: &ParsedMessage) -> bool {
     }
 }
 
+fn extract_tool_use_activity(
+    content: &MessageContent,
+    files_set: &mut std::collections::HashSet<String>,
+    files_touched: &mut Vec<String>,
+    git_summary: &mut Vec<String>,
+    pending_bash_ids: &mut std::collections::HashSet<String>,
+) {
+    let MessageContent::Blocks(blocks) = content else {
+        return;
+    };
+    for block in blocks {
+        if let ContentBlock::ToolUse { id, name, input } = block {
+            match name.as_str() {
+                "Edit" | "Write" => {
+                    if let Some(fp) = input.get("file_path").and_then(|v| v.as_str()) {
+                        if files_touched.len() < MAX_FILES_TOUCHED
+                            && files_set.insert(fp.to_string())
+                        {
+                            files_touched.push(fp.to_string());
+                        }
+                    }
+                }
+                "MultiEdit" => {
+                    if let Some(files) = input.get("files").and_then(|v| v.as_array()) {
+                        for f in files {
+                            if let Some(fp) = f.get("file_path").and_then(|v| v.as_str()) {
+                                if files_touched.len() < MAX_FILES_TOUCHED
+                                    && files_set.insert(fp.to_string())
+                                {
+                                    files_touched.push(fp.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                "Bash" => {
+                    if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
+                        if git_summary.len() < MAX_GIT_SUMMARY {
+                            if let Some(caps) = git_commit_message_regex().captures(cmd) {
+                                if let Some(m) = caps.get(1) {
+                                    git_summary.push(m.as_str().to_string());
+                                }
+                            }
+                        }
+                        pending_bash_ids.insert(id.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn extract_tool_result_activity(
+    content: &MessageContent,
+    tool_error_count: &mut usize,
+    git_summary: &mut Vec<String>,
+    pending_bash_ids: &mut std::collections::HashSet<String>,
+) {
+    let MessageContent::Blocks(blocks) = content else {
+        return;
+    };
+    for block in blocks {
+        if let ContentBlock::ToolResult {
+            tool_use_id,
+            content: result_content,
+            is_error,
+        } = block
+        {
+            if *is_error {
+                *tool_error_count += 1;
+            }
+            if pending_bash_ids.remove(tool_use_id) && git_summary.len() < MAX_GIT_SUMMARY {
+                if let Some(text) = result_content.as_str() {
+                    for m in github_pr_url_regex().find_iter(text) {
+                        if git_summary.len() < MAX_GIT_SUMMARY {
+                            git_summary.push(m.as_str().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn starts_with_system_output_tag(text: &str) -> bool {
     SYSTEM_OUTPUT_TAG_PREFIXES
         .iter()
@@ -169,6 +323,13 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
                 message_count: 0,
                 is_ongoing: false,
                 git_branch: None,
+                user_intents: Vec::new(),
+                last_active: 0,
+                duration_ms: 0,
+                total_cost: 0.0,
+                tool_error_count: 0,
+                files_touched: Vec::new(),
+                git_summary: Vec::new(),
             },
             false,
         );
@@ -182,12 +343,19 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
     let mut message_count: usize = 0;
     let mut awaiting_ai = false;
     let mut line_number: usize = 0;
-    // ongoing 流式判定状态机——逐行喂消息，避免在内存中保留全量 ParsedMessage Vec
-    // （详见 change `metadata-streaming-ongoing` 与 spec ipc-data-api §
-    // `extract_session_metadata` 流式判定 isOngoing 不收集全量消息向量）。
     let mut ongoing_sm = cdt_analyze::IsOngoingStateMachine::new();
-    // 取最后一条非空 git_branch（与原版 sessionExporter.ts 取值一致）
     let mut last_git_branch: Option<String> = None;
+
+    // --- activity summary 状态 ---
+    let mut user_intents: Vec<String> = Vec::new();
+    let mut first_timestamp: Option<i64> = None;
+    let mut last_active: i64 = 0;
+    let mut total_cost: f64 = 0.0;
+    let mut tool_error_count: usize = 0;
+    let mut files_touched_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut files_touched: Vec<String> = Vec::new();
+    let mut git_summary: Vec<String> = Vec::new();
+    let mut pending_bash_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     while let Ok(Some(line)) = lines.next_line().await {
         line_number += 1;
@@ -199,24 +367,37 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
             continue;
         };
 
+        // --- 时间戳追踪 ---
+        let ts = msg.timestamp.timestamp_millis();
+        if first_timestamp.is_none() {
+            first_timestamp = Some(ts);
+        }
+        if ts > last_active {
+            last_active = ts;
+        }
+
         if let Some(branch) = &msg.git_branch {
-            // 过滤字面 "HEAD" —— 原版 Claude Code 在 detached HEAD（worktree
-            // 检出某 commit / rebase 中等）状态下会把字面字符串 "HEAD" 写进
-            // JSONL 的 `gitBranch` 字段，对用户没有可读语义。与
-            // `worktree_grouper::parse_head_branch` detached → None 保持一致：
-            // 一律返 None 让 sidebar 隐藏分支 chip（spec sidebar-navigation §
-            // "gitBranch 为 null SHALL NOT 渲染该 chip"）。
             if !branch.is_empty() && branch != "HEAD" {
                 last_git_branch = Some(branch.clone());
             }
         }
 
-        // --- 消息计数（对齐原版 isParsedUserChunkMessage 过滤；详见
-        //     `is_user_chunk_message` doc 与 spec sidebar-navigation
-        //     §"会话项展示"）---
+        // --- 消息计数 + user_intents 提取 ---
         if is_user_chunk_message(&msg) {
             message_count += 1;
             awaiting_ai = true;
+
+            // user_intents：取首行，过滤噪声
+            if user_intents.len() < MAX_USER_INTENTS {
+                let text = extract_text(&msg.content);
+                if !text.is_empty() {
+                    let first_line = text.lines().next().unwrap_or("");
+                    let trimmed = first_line.trim();
+                    if !trimmed.is_empty() && !NOISE_CONFIRMATIONS.contains(&trimmed) {
+                        user_intents.push(truncate_str(trimmed, INTENT_MAX_CHARS));
+                    }
+                }
+            }
         } else if awaiting_ai
             && msg.category == MessageCategory::Assistant
             && msg.model.as_deref() != Some("<synthetic>")
@@ -226,9 +407,37 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
             awaiting_ai = false;
         }
 
+        // --- assistant 消息：token 计数 + ToolUse 提取 ---
+        if msg.category == MessageCategory::Assistant && !msg.is_sidechain {
+            if let Some(usage) = &msg.usage {
+                let model_name = msg.model.as_deref().unwrap_or("");
+                let (inp_rate, out_rate) = estimate_cost_per_mtok(model_name);
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    total_cost += usage.input_tokens as f64 * inp_rate / 1_000_000.0
+                        + usage.output_tokens as f64 * out_rate / 1_000_000.0;
+                }
+            }
+            extract_tool_use_activity(
+                &msg.content,
+                &mut files_touched_set,
+                &mut files_touched,
+                &mut git_summary,
+                &mut pending_bash_ids,
+            );
+        }
+
+        // --- user 消息：ToolResult 提取 ---
+        if msg.category == MessageCategory::User {
+            extract_tool_result_activity(
+                &msg.content,
+                &mut tool_error_count,
+                &mut git_summary,
+                &mut pending_bash_ids,
+            );
+        }
+
         // --- 标题提取（只在前 TITLE_MAX_LINES 行内）---
-        // spec：`ipc-data-api/spec.md` §`Title prefers slash command with non-empty args ...`
-        //                              §`Sanitize title against interruption and task-output instructions`
         if line_number <= TITLE_MAX_LINES
             && title.is_none()
             && msg.category == MessageCategory::User
@@ -240,11 +449,10 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
                 if is_command_output(&text) {
                     // 跳过命令输出
                 } else if trimmed.starts_with(REQUEST_INTERRUPTED_PREFIX) {
-                    // 跳过用户中断标记（既不进 title 也不进 fallback）
+                    // 跳过用户中断标记
                 } else if is_command_content(&text) {
                     match extract_command_parts(&text) {
                         Some((slash_name, args)) if !args.is_empty() => {
-                            // 带非空 args 的 slash 直接作 title
                             let display = format!("{slash_name} {args}");
                             title = Some(truncate_str(&display, TITLE_MAX_CHARS));
                         }
@@ -254,7 +462,6 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
                         _ => {}
                     }
                 } else if let Some(summary) = extract_teammate_summary_title(&text) {
-                    // teammate-message 包裹的消息：优先取 `summary` 属性作为标题
                     title = Some(truncate_str(&summary, TITLE_MAX_CHARS));
                 } else {
                     let sanitized = sanitize_for_title(&text);
@@ -268,7 +475,6 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
         ongoing_sm.feed(&msg);
     }
 
-    // 没有真实用户消息时用 slash 命令后备
     if title.is_none() {
         title = command_fallback;
     }
@@ -280,12 +486,21 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
         false
     };
 
+    let duration_ms = first_timestamp.map_or(0, |first| last_active - first);
+
     (
         SessionMetadata {
             title,
             message_count,
             is_ongoing,
             git_branch: last_git_branch,
+            user_intents,
+            last_active,
+            duration_ms,
+            total_cost,
+            tool_error_count,
+            files_touched,
+            git_summary,
         },
         messages_ongoing,
     )
@@ -303,7 +518,25 @@ pub(crate) fn extract_session_metadata_from_parsed(
     let mut ongoing_sm = cdt_analyze::IsOngoingStateMachine::new();
     let mut last_git_branch: Option<String> = None;
 
+    let mut user_intents: Vec<String> = Vec::new();
+    let mut first_timestamp: Option<i64> = None;
+    let mut last_active: i64 = 0;
+    let mut total_cost: f64 = 0.0;
+    let mut tool_error_count: usize = 0;
+    let mut files_touched_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut files_touched: Vec<String> = Vec::new();
+    let mut git_summary: Vec<String> = Vec::new();
+    let mut pending_bash_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for (idx, msg) in messages.iter().enumerate() {
+        let ts = msg.timestamp.timestamp_millis();
+        if first_timestamp.is_none() {
+            first_timestamp = Some(ts);
+        }
+        if ts > last_active {
+            last_active = ts;
+        }
+
         if let Some(branch) = &msg.git_branch {
             if !branch.is_empty() && branch != "HEAD" {
                 last_git_branch = Some(branch.clone());
@@ -313,6 +546,17 @@ pub(crate) fn extract_session_metadata_from_parsed(
         if is_user_chunk_message(msg) {
             message_count += 1;
             awaiting_ai = true;
+
+            if user_intents.len() < MAX_USER_INTENTS {
+                let text = extract_text(&msg.content);
+                if !text.is_empty() {
+                    let first_line = text.lines().next().unwrap_or("");
+                    let trimmed = first_line.trim();
+                    if !trimmed.is_empty() && !NOISE_CONFIRMATIONS.contains(&trimmed) {
+                        user_intents.push(truncate_str(trimmed, INTENT_MAX_CHARS));
+                    }
+                }
+            }
         } else if awaiting_ai
             && msg.category == MessageCategory::Assistant
             && msg.model.as_deref() != Some("<synthetic>")
@@ -320,6 +564,34 @@ pub(crate) fn extract_session_metadata_from_parsed(
         {
             message_count += 1;
             awaiting_ai = false;
+        }
+
+        if msg.category == MessageCategory::Assistant && !msg.is_sidechain {
+            if let Some(usage) = &msg.usage {
+                let model_name = msg.model.as_deref().unwrap_or("");
+                let (inp_rate, out_rate) = estimate_cost_per_mtok(model_name);
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    total_cost += usage.input_tokens as f64 * inp_rate / 1_000_000.0
+                        + usage.output_tokens as f64 * out_rate / 1_000_000.0;
+                }
+            }
+            extract_tool_use_activity(
+                &msg.content,
+                &mut files_touched_set,
+                &mut files_touched,
+                &mut git_summary,
+                &mut pending_bash_ids,
+            );
+        }
+
+        if msg.category == MessageCategory::User {
+            extract_tool_result_activity(
+                &msg.content,
+                &mut tool_error_count,
+                &mut git_summary,
+                &mut pending_bash_ids,
+            );
         }
 
         if idx < TITLE_MAX_LINES
@@ -360,11 +632,20 @@ pub(crate) fn extract_session_metadata_from_parsed(
         title = command_fallback;
     }
 
+    let duration_ms = first_timestamp.map_or(0, |first| last_active - first);
+
     SessionMetadata {
         title,
         message_count,
         is_ongoing: ongoing_sm.finalize() && !is_stale,
         git_branch: last_git_branch,
+        user_intents,
+        last_active,
+        duration_ms,
+        total_cost,
+        tool_error_count,
+        files_touched,
+        git_summary,
     }
 }
 
@@ -392,6 +673,13 @@ pub(crate) struct MetadataCacheEntry {
     pub(crate) message_count: usize,
     pub(crate) messages_ongoing: bool,
     pub(crate) git_branch: Option<String>,
+    pub(crate) user_intents: Vec<String>,
+    pub(crate) last_active: i64,
+    pub(crate) duration_ms: i64,
+    pub(crate) total_cost: f64,
+    pub(crate) tool_error_count: usize,
+    pub(crate) files_touched: Vec<String>,
+    pub(crate) git_summary: Vec<String>,
 }
 
 /// cache key —— `(ContextId, PathBuf)` tuple，按 PR-A spec
@@ -505,6 +793,13 @@ pub(crate) async fn try_lookup_cached_metadata(
         message_count: entry.message_count,
         is_ongoing,
         git_branch: entry.git_branch,
+        user_intents: entry.user_intents,
+        last_active: entry.last_active,
+        duration_ms: entry.duration_ms,
+        total_cost: entry.total_cost,
+        tool_error_count: entry.tool_error_count,
+        files_touched: entry.files_touched,
+        git_summary: entry.git_summary,
     })
 }
 
@@ -555,6 +850,13 @@ pub(crate) async fn extract_session_metadata_cached(
                     message_count: entry.message_count,
                     is_ongoing,
                     git_branch: entry.git_branch,
+                    user_intents: entry.user_intents,
+                    last_active: entry.last_active,
+                    duration_ms: entry.duration_ms,
+                    total_cost: entry.total_cost,
+                    tool_error_count: entry.tool_error_count,
+                    files_touched: entry.files_touched,
+                    git_summary: entry.git_summary,
                 };
             }
         }
@@ -577,6 +879,13 @@ pub(crate) async fn extract_session_metadata_cached(
                 message_count: meta.message_count,
                 messages_ongoing,
                 git_branch: meta.git_branch.clone(),
+                user_intents: meta.user_intents.clone(),
+                last_active: meta.last_active,
+                duration_ms: meta.duration_ms,
+                total_cost: meta.total_cost,
+                tool_error_count: meta.tool_error_count,
+                files_touched: meta.files_touched.clone(),
+                git_summary: meta.git_summary.clone(),
             },
         );
     }
@@ -1401,6 +1710,13 @@ mod tests {
             message_count: usize::try_from(size).unwrap_or(0),
             messages_ongoing: false,
             git_branch: None,
+            user_intents: Vec::new(),
+            last_active: 0,
+            duration_ms: 0,
+            total_cost: 0.0,
+            tool_error_count: 0,
+            files_touched: Vec::new(),
+            git_summary: Vec::new(),
         }
     }
 
@@ -1900,6 +2216,13 @@ mod tests {
                 message_count: 7,
                 messages_ongoing: false,
                 git_branch: None,
+                user_intents: Vec::new(),
+                last_active: 0,
+                duration_ms: 0,
+                total_cost: 0.0,
+                tool_error_count: 0,
+                files_touched: Vec::new(),
+                git_summary: Vec::new(),
             },
         );
 

@@ -245,6 +245,13 @@ async fn session_metadata_forwarded_as_push_event() {
             is_ongoing: true,
             git_branch: Some("main".into()),
             group_id: Some("g1".into()),
+            user_intents: Vec::new(),
+            last_active: 0,
+            duration_ms: 0,
+            total_cost: 0.0,
+            tool_error_count: 0,
+            files_touched: Vec::new(),
+            git_summary: Vec::new(),
         })
         .unwrap();
 
@@ -261,6 +268,7 @@ async fn session_metadata_forwarded_as_push_event() {
             is_ongoing,
             git_branch,
             group_id,
+            ..
         } => {
             assert_eq!(project_id, "p1");
             assert_eq!(session_id, "s1");

@@ -29,6 +29,13 @@ fn make_session_with_created(
         cwd_relative_to_repo_root: None,
         cwd: None,
         project_name: None,
+        user_intents: Vec::new(),
+        last_active: 0,
+        duration_ms: 0,
+        total_cost: 0.0,
+        tool_error_count: 0,
+        files_touched: Vec::new(),
+        git_summary: Vec::new(),
     }
 }
 

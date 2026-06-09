@@ -141,6 +141,20 @@ pub struct SessionSummary {
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_intents: Vec<String>,
+    #[serde(default)]
+    pub last_active: i64,
+    #[serde(default)]
+    pub duration_ms: i64,
+    #[serde(default)]
+    pub total_cost: f64,
+    #[serde(default)]
+    pub tool_error_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_touched: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git_summary: Vec<String>,
 }
 
 /// `SessionDetail.metrics` 字段 typed 形态。wire 内部字段保 `snake_case` 与
