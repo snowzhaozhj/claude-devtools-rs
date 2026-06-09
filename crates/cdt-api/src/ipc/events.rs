@@ -53,6 +53,20 @@ pub enum PushEvent {
         /// change `simplify-repository-as-project::D7`）。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        user_intents: Vec<String>,
+        #[serde(default)]
+        last_active: i64,
+        #[serde(default)]
+        duration_ms: i64,
+        #[serde(default)]
+        total_cost: f64,
+        #[serde(default)]
+        tool_error_count: usize,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files_touched: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        git_summary: Vec<String>,
     },
     /// Active context 切换（SSH connect / disconnect / `switch_context` /
     /// polling watcher 检测到 SFTP 死亡触发的自愈 disconnect）。
@@ -120,4 +134,18 @@ pub struct SessionMetadataUpdate {
     /// 未跑过时为 None；前端 fallback 用 `projectId` 当 groupId。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_intents: Vec<String>,
+    #[serde(default)]
+    pub last_active: i64,
+    #[serde(default)]
+    pub duration_ms: i64,
+    #[serde(default)]
+    pub total_cost: f64,
+    #[serde(default)]
+    pub tool_error_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_touched: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git_summary: Vec<String>,
 }

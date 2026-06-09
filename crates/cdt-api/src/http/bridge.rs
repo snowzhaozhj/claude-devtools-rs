@@ -157,6 +157,13 @@ fn spawn_metadata_bridge(
                         is_ongoing: event.is_ongoing,
                         git_branch: event.git_branch,
                         group_id: event.group_id,
+                        user_intents: event.user_intents,
+                        last_active: event.last_active,
+                        duration_ms: event.duration_ms,
+                        total_cost: event.total_cost,
+                        tool_error_count: event.tool_error_count,
+                        files_touched: event.files_touched,
+                        git_summary: event.git_summary,
                     });
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}

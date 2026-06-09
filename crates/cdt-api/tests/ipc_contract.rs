@@ -312,6 +312,13 @@ fn session_summary_serializes_camelcase_with_optional_title() {
         cwd_relative_to_repo_root: None,
         cwd: Some("/Users/foo/repo".into()),
         project_name: None,
+        user_intents: Vec::new(),
+        last_active: 0,
+        duration_ms: 0,
+        total_cost: 0.0,
+        tool_error_count: 0,
+        files_touched: Vec::new(),
+        git_summary: Vec::new(),
     };
     let json = serde_json::to_value(&s).unwrap();
     assert_eq!(json["sessionId"], json!("sess-1"));
@@ -355,6 +362,13 @@ fn session_metadata_update_serializes_camelcase_with_git_branch() {
         is_ongoing: true,
         git_branch: Some("feat/x".into()),
         group_id: Some("group-1".into()),
+        user_intents: Vec::new(),
+        last_active: 0,
+        duration_ms: 0,
+        total_cost: 0.0,
+        tool_error_count: 0,
+        files_touched: Vec::new(),
+        git_summary: Vec::new(),
     };
     let json = serde_json::to_value(&u).unwrap();
     assert_eq!(json["projectId"], json!("proj-1"));
@@ -2879,6 +2893,13 @@ async fn get_worktree_sessions_paginated_response_serializes_camelcase() {
             cwd_relative_to_repo_root: Some("crates".into()),
             cwd: None,
             project_name: None,
+            user_intents: Vec::new(),
+            last_active: 0,
+            duration_ms: 0,
+            total_cost: 0.0,
+            tool_error_count: 0,
+            files_touched: Vec::new(),
+            git_summary: Vec::new(),
         }],
         next_cursor: Some("1".into()),
         total: 5,
@@ -2912,6 +2933,13 @@ fn session_summary_skips_worktree_fields_when_none() {
         cwd_relative_to_repo_root: None,
         cwd: None,
         project_name: None,
+        user_intents: Vec::new(),
+        last_active: 0,
+        duration_ms: 0,
+        total_cost: 0.0,
+        tool_error_count: 0,
+        files_touched: Vec::new(),
+        git_summary: Vec::new(),
     };
     let json = serde_json::to_value(&s).unwrap();
     assert!(
