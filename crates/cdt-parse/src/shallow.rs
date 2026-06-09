@@ -42,7 +42,10 @@ pub fn parse_session_shallow(lines: &[String]) -> ShallowSessionStats {
             continue;
         };
 
-        if entry.entry_type.as_deref() != Some("conversation") {
+        if !matches!(
+            entry.entry_type.as_deref(),
+            Some("assistant" | "user" | "conversation")
+        ) {
             continue;
         }
 
@@ -66,6 +69,8 @@ pub fn parse_session_shallow(lines: &[String]) -> ShallowSessionStats {
             if let Some(content) = msg.content {
                 extract_tool_info(&content, &mut stats);
             }
+        } else if let Some(content) = msg.content {
+            extract_error_info(&content, &mut stats);
         }
     }
 
@@ -77,21 +82,26 @@ fn extract_tool_info(content: &serde_json::Value, stats: &mut ShallowSessionStat
         return;
     };
     for block in blocks {
-        match block.get("type").and_then(|t| t.as_str()) {
-            Some("tool_use") => {
-                if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
-                    stats.tool_names.push(name.to_string());
-                }
+        if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+            if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
+                stats.tool_names.push(name.to_string());
             }
-            Some("tool_result")
-                if block
-                    .get("is_error")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false) =>
-            {
-                stats.error_count += 1;
-            }
-            _ => {}
+        }
+    }
+}
+
+fn extract_error_info(content: &serde_json::Value, stats: &mut ShallowSessionStats) {
+    let Some(blocks) = content.as_array() else {
+        return;
+    };
+    for block in blocks {
+        if block.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+            && block
+                .get("is_error")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        {
+            stats.error_count += 1;
         }
     }
 }
@@ -100,13 +110,16 @@ fn extract_tool_info(content: &serde_json::Value, stats: &mut ShallowSessionStat
 mod tests {
     use super::*;
 
-    fn make_assistant_line(usage: Option<(i64, i64)>, tools: &[(&str, bool)]) -> String {
+    fn make_assistant_line_with_type(
+        entry_type: &str,
+        usage: Option<(i64, i64)>,
+        tools: &[&str],
+    ) -> String {
         let mut content = Vec::new();
-        for (name, is_error) in tools {
+        for name in tools {
             content.push(
                 serde_json::json!({"type": "tool_use", "name": name, "id": "t1", "input": {}}),
             );
-            content.push(serde_json::json!({"type": "tool_result", "tool_use_id": "t1", "is_error": is_error, "content": "ok"}));
         }
         let mut msg = serde_json::json!({
             "role": "assistant",
@@ -122,7 +135,7 @@ mod tests {
             });
         }
         serde_json::json!({
-            "type": "conversation",
+            "type": entry_type,
             "uuid": "u1",
             "timestamp": "2026-01-01T00:00:00Z",
             "message": msg,
@@ -130,14 +143,37 @@ mod tests {
         .to_string()
     }
 
+    fn make_user_line_with_errors(entry_type: &str, error_count: usize) -> String {
+        let mut content = Vec::new();
+        for _ in 0..error_count {
+            content.push(serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": "t1",
+                "is_error": true,
+                "content": "error"
+            }));
+        }
+        serde_json::json!({
+            "type": entry_type,
+            "uuid": "u2",
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {
+                "role": "user",
+                "content": content,
+            },
+        })
+        .to_string()
+    }
+
     #[test]
-    fn shallow_parse_extracts_usage_and_tools() {
+    fn shallow_parse_real_jsonl_format() {
         let lines = vec![
-            make_assistant_line(Some((100, 50)), &[("Bash", false), ("Read", true)]),
-            make_assistant_line(Some((200, 100)), &[("Write", false)]),
+            make_assistant_line_with_type("assistant", Some((100, 50)), &["Bash", "Read"]),
+            make_user_line_with_errors("user", 1),
+            make_assistant_line_with_type("assistant", Some((200, 100)), &["Write"]),
         ];
         let stats = parse_session_shallow(&lines);
-        assert_eq!(stats.message_count, 2);
+        assert_eq!(stats.message_count, 3);
         assert_eq!(stats.usage.input_tokens, 300);
         assert_eq!(stats.usage.output_tokens, 150);
         assert_eq!(stats.tool_names, vec!["Bash", "Read", "Write"]);
@@ -146,11 +182,61 @@ mod tests {
     }
 
     #[test]
+    fn shallow_parse_legacy_conversation_format() {
+        let lines = vec![make_assistant_line_with_type(
+            "conversation",
+            Some((100, 50)),
+            &["Bash"],
+        )];
+        let stats = parse_session_shallow(&lines);
+        assert_eq!(stats.message_count, 1);
+        assert_eq!(stats.usage.input_tokens, 100);
+        assert_eq!(stats.tool_names, vec!["Bash"]);
+    }
+
+    #[test]
+    fn shallow_parse_cache_tokens() {
+        let line = serde_json::json!({
+            "type": "assistant",
+            "uuid": "u1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {
+                "role": "assistant",
+                "content": [],
+                "model": "claude-sonnet-4-20250514",
+                "usage": {
+                    "input_tokens": 6,
+                    "output_tokens": 205,
+                    "cache_creation_input_tokens": 104_641,
+                    "cache_read_input_tokens": 0,
+                },
+            },
+        })
+        .to_string();
+        let stats = parse_session_shallow(&[line]);
+        assert_eq!(stats.usage.input_tokens, 6);
+        assert_eq!(stats.usage.cache_creation_input_tokens, 104_641);
+        assert_eq!(stats.usage.cache_read_input_tokens, 0);
+    }
+
+    #[test]
+    fn shallow_parse_skips_non_conversation_types() {
+        let lines = vec![
+            serde_json::json!({"type": "custom-title", "title": "test"}).to_string(),
+            serde_json::json!({"type": "permission-mode", "mode": "auto"}).to_string(),
+            make_assistant_line_with_type("assistant", Some((10, 5)), &[]),
+        ];
+        let stats = parse_session_shallow(&lines);
+        assert_eq!(stats.message_count, 1);
+        assert_eq!(stats.usage.input_tokens, 10);
+    }
+
+    #[test]
     fn shallow_parse_skips_bad_lines() {
         let lines = vec![
             "not json".to_string(),
             String::new(),
-            make_assistant_line(Some((10, 5)), &[]),
+            make_assistant_line_with_type("assistant", Some((10, 5)), &[]),
         ];
         let stats = parse_session_shallow(&lines);
         assert_eq!(stats.message_count, 1);

@@ -24,11 +24,15 @@ pub struct AggregatedStats {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
+    pub cache_hit_rate: f64,
+    pub avg_cost_per_session: f64,
+    pub avg_messages_per_session: f64,
     pub tool_frequency: Vec<ToolFrequency>,
     pub error_count: usize,
     pub error_rate: f64,
     pub model_usage: Vec<ModelUsage>,
     pub active_hours: Vec<HourBucket>,
+    pub languages: Vec<LanguageFrequency>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -52,6 +56,13 @@ pub struct HourBucket {
     pub hour: u32,
     pub session_count: usize,
     pub message_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguageFrequency {
+    pub language: String,
+    pub file_count: u64,
 }
 
 #[derive(Clone)]
@@ -152,10 +163,50 @@ pub fn aggregate(sessions: &[SessionData], since: DateTime<Utc>) -> AggregatedSt
         .collect();
     active_hours.sort_by_key(|h| h.hour);
 
+    let total_input_tokens = input_tokens
+        .saturating_add(cache_creation_tokens)
+        .saturating_add(cache_read_tokens);
+
+    #[allow(clippy::cast_precision_loss)]
+    let cache_hit_rate = if total_input_tokens > 0 {
+        cache_read_tokens as f64 / total_input_tokens as f64
+    } else {
+        0.0
+    };
+
+    let session_count = sessions.len();
+
+    #[allow(clippy::cast_precision_loss)]
+    let avg_cost_per_session = if session_count > 0 {
+        total_cost / session_count as f64
+    } else {
+        0.0
+    };
+
+    #[allow(clippy::cast_precision_loss)]
+    let avg_messages_per_session = if session_count > 0 {
+        total_messages as f64 / session_count as f64
+    } else {
+        0.0
+    };
+
+    let mut lang_map: HashMap<String, u64> = HashMap::new();
+    for s in sessions {
+        extract_languages_from_session(s, &mut lang_map);
+    }
+    let mut languages: Vec<LanguageFrequency> = lang_map
+        .into_iter()
+        .map(|(language, file_count)| LanguageFrequency {
+            language,
+            file_count,
+        })
+        .collect();
+    languages.sort_by_key(|l| std::cmp::Reverse(l.file_count));
+
     AggregatedStats {
         period_start: since,
         period_end: now,
-        session_count: sessions.len(),
+        session_count,
         total_messages,
         total_tokens,
         total_cost,
@@ -163,11 +214,15 @@ pub fn aggregate(sessions: &[SessionData], since: DateTime<Utc>) -> AggregatedSt
         output_tokens,
         cache_read_tokens,
         cache_creation_tokens,
+        cache_hit_rate,
+        avg_cost_per_session,
+        avg_messages_per_session,
         tool_frequency,
         error_count,
         error_rate,
         model_usage,
         active_hours,
+        languages,
     }
 }
 
@@ -205,6 +260,100 @@ pub fn build_session_data_shallow(
     }
 }
 
+const FILE_TOOLS: &[&str] = &[
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookRead",
+    "NotebookEdit",
+];
+
+const PATH_FIELDS: &[&str] = &["file_path", "path", "notebook_path"];
+
+fn extract_languages_from_session(session: &SessionData, lang_map: &mut HashMap<String, u64>) {
+    for chunk in &session.chunks {
+        if let Chunk::Ai(ai) = chunk {
+            for exec in &ai.tool_executions {
+                if !FILE_TOOLS.contains(&exec.tool_name.as_str()) {
+                    continue;
+                }
+                for field in PATH_FIELDS {
+                    if let Some(path) = exec.input.get(field).and_then(|v| v.as_str()) {
+                        if let Some(lang) = extension_to_language(path) {
+                            *lang_map.entry(lang.to_string()).or_default() += 1;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn extension_to_language(path: &str) -> Option<&'static str> {
+    let basename = path.rsplit('/').next().unwrap_or(path);
+
+    match basename {
+        "Dockerfile" | "Containerfile" => return Some("Docker"),
+        "Makefile" | "GNUmakefile" => return Some("Makefile"),
+        "Justfile" | "justfile" => return Some("Just"),
+        "Cargo.toml" | "Cargo.lock" => return Some("Rust"),
+        "package.json" | "tsconfig.json" => return Some("JavaScript"),
+        _ => {}
+    }
+
+    let ext = path.rsplit('.').next()?;
+    if ext == path {
+        return None;
+    }
+
+    match ext {
+        "rs" => Some("Rust"),
+        "ts" | "mts" | "cts" => Some("TypeScript"),
+        "tsx" => Some("TSX"),
+        "js" | "mjs" | "cjs" => Some("JavaScript"),
+        "jsx" => Some("JSX"),
+        "svelte" => Some("Svelte"),
+        "py" => Some("Python"),
+        "go" => Some("Go"),
+        "java" => Some("Java"),
+        "kt" | "kts" => Some("Kotlin"),
+        "swift" => Some("Swift"),
+        "c" | "h" => Some("C"),
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some("C++"),
+        "cs" => Some("C#"),
+        "rb" => Some("Ruby"),
+        "php" => Some("PHP"),
+        "html" | "htm" => Some("HTML"),
+        "css" => Some("CSS"),
+        "scss" | "sass" => Some("SCSS"),
+        "vue" => Some("Vue"),
+        "json" | "jsonc" => Some("JSON"),
+        "yaml" | "yml" => Some("YAML"),
+        "toml" => Some("TOML"),
+        "xml" => Some("XML"),
+        "sql" => Some("SQL"),
+        "sh" | "bash" | "zsh" => Some("Shell"),
+        "md" | "mdx" => Some("Markdown"),
+        "lua" => Some("Lua"),
+        "zig" => Some("Zig"),
+        "ex" | "exs" => Some("Elixir"),
+        "erl" => Some("Erlang"),
+        "r" | "R" => Some("R"),
+        "dart" => Some("Dart"),
+        "scala" => Some("Scala"),
+        "clj" | "cljs" => Some("Clojure"),
+        "hs" => Some("Haskell"),
+        "ml" | "mli" => Some("OCaml"),
+        "tf" | "hcl" => Some("Terraform"),
+        "proto" => Some("Protobuf"),
+        "graphql" | "gql" => Some("GraphQL"),
+        "ipynb" => Some("Jupyter"),
+        _ => None,
+    }
+}
+
 fn session_hour(timestamp_ms: i64) -> u32 {
     let secs = timestamp_ms / 1000;
     let dt = DateTime::from_timestamp(secs, 0).unwrap_or_default();
@@ -223,6 +372,48 @@ mod tests {
         assert_eq!(result.session_count, 0);
         assert_eq!(result.total_tokens, 0);
         assert!((result.total_cost).abs() < f64::EPSILON);
+        assert!((result.cache_hit_rate).abs() < f64::EPSILON);
+        assert!((result.avg_cost_per_session).abs() < f64::EPSILON);
+        assert!((result.avg_messages_per_session).abs() < f64::EPSILON);
+        assert!(result.languages.is_empty());
+    }
+
+    #[test]
+    fn aggregate_computes_cache_hit_rate() {
+        let since = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let sessions = vec![SessionData {
+            timestamp: since.timestamp_millis(),
+            message_count: 10,
+            chunks: Vec::new(),
+            cost: SessionCost {
+                input_tokens: 6,
+                output_tokens: 200,
+                cache_read_tokens: 100_000,
+                cache_creation_tokens: 400,
+                total_tokens: 100_606,
+                total_cost: 1.5,
+                ..Default::default()
+            },
+            model: "test".to_string(),
+            tool_names: Some(Vec::new()),
+            shallow_error_count: Some(0),
+        }];
+        let result = aggregate(&sessions, since);
+        // cache_hit_rate = 100_000 / (6 + 400 + 100_000) = 0.99596...
+        assert!(result.cache_hit_rate > 0.99);
+        assert!(result.cache_hit_rate < 1.0);
+        assert!((result.avg_cost_per_session - 1.5).abs() < f64::EPSILON);
+        assert!((result.avg_messages_per_session - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn extension_to_language_maps_correctly() {
+        assert_eq!(extension_to_language("/foo/bar.rs"), Some("Rust"));
+        assert_eq!(extension_to_language("/foo/bar.tsx"), Some("TSX"));
+        assert_eq!(extension_to_language("/foo/Dockerfile"), Some("Docker"));
+        assert_eq!(extension_to_language("/foo/Cargo.toml"), Some("Rust"));
+        assert_eq!(extension_to_language("/foo/bar.unknown"), None);
+        assert_eq!(extension_to_language("noext"), None);
     }
 
     #[test]

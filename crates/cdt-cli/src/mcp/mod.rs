@@ -842,7 +842,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "get_stats",
-        description = "Aggregated statistics: cost, tokens, tool frequency, model usage. Default period='7d'.",
+        description = "Aggregated statistics: cost, tokens, cache hit rate, tool frequency, model usage, languages. Default period='7d'.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
