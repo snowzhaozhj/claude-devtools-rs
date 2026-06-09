@@ -2683,4 +2683,162 @@ mod tests {
         let meta = extract_session_metadata_from_parsed(&msgs, false);
         assert_eq!(meta.title.as_deref(), Some("实际 body 文本"));
     }
+
+    // ---- activity summary fields ----
+
+    fn assistant_edit_line(uuid: &str, ts: &str, tool_id: &str, file_path: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"assistant","model":"claude-sonnet","content":[{{"type":"tool_use","id":"{tool_id}","name":"Edit","input":{{"file_path":"{file_path}","old_string":"a","new_string":"b"}}}}]}}}}"#
+        )
+    }
+
+    fn assistant_bash_commit_line(uuid: &str, ts: &str, tool_id: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"assistant","model":"claude-opus-4-6","content":[{{"type":"tool_use","id":"{tool_id}","name":"Bash","input":{{"command":"git commit -m 'fix: session cache'"}}}}],"usage":{{"input_tokens":1000,"output_tokens":500}}}}}}"#
+        )
+    }
+
+    fn user_tool_result_text_line(
+        uuid: &str,
+        ts: &str,
+        tool_id: &str,
+        text: &str,
+        is_error: bool,
+    ) -> String {
+        let escaped = text.replace('"', "\\\"");
+        format!(
+            r#"{{"type":"user","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"{tool_id}","content":"{escaped}","is_error":{is_error}}}]}}}}"#
+        )
+    }
+
+    #[tokio::test]
+    async fn activity_user_intents_extracted_with_noise_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "修复工具展开方向问题"),
+                &assistant_line("a1", "2026-06-08T10:01:00.000Z"),
+                &user_text_line("u2", "2026-06-08T10:02:00.000Z", "ok"),
+                &assistant_line("a2", "2026-06-08T10:03:00.000Z"),
+                &user_text_line("u3", "2026-06-08T10:04:00.000Z", "push 到远程"),
+                &assistant_line("a3", "2026-06-08T10:05:00.000Z"),
+                &user_text_line("u4", "2026-06-08T10:06:00.000Z", "嗯"),
+                &assistant_line("a4", "2026-06-08T10:07:00.000Z"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(
+            meta.user_intents,
+            vec!["修复工具展开方向问题", "push 到远程"]
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_files_touched_deduped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "修改文件"),
+                &assistant_edit_line("a1", "2026-06-08T10:01:00.000Z", "t1", "/src/main.rs"),
+                &user_tool_result_line("u2", "2026-06-08T10:02:00.000Z", "t1"),
+                &assistant_edit_line("a2", "2026-06-08T10:03:00.000Z", "t2", "/src/main.rs"),
+                &user_tool_result_line("u3", "2026-06-08T10:04:00.000Z", "t2"),
+                &assistant_edit_line("a3", "2026-06-08T10:05:00.000Z", "t3", "/src/lib.rs"),
+                &user_tool_result_line("u4", "2026-06-08T10:06:00.000Z", "t3"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.files_touched, vec!["/src/main.rs", "/src/lib.rs"]);
+    }
+
+    #[tokio::test]
+    async fn activity_git_summary_commit_and_pr_url() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "提交代码"),
+                &assistant_bash_commit_line("a1", "2026-06-08T10:01:00.000Z", "t1"),
+                &user_tool_result_text_line(
+                    "u2",
+                    "2026-06-08T10:02:00.000Z",
+                    "t1",
+                    "Created https://github.com/user/repo/pull/42",
+                    false,
+                ),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.git_summary.len(), 2);
+        assert_eq!(meta.git_summary[0], "fix: session cache");
+        assert_eq!(meta.git_summary[1], "https://github.com/user/repo/pull/42");
+    }
+
+    #[tokio::test]
+    async fn activity_tool_error_count_and_cost() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "跑测试"),
+                &assistant_bash_commit_line("a1", "2026-06-08T10:01:00.000Z", "t1"),
+                &user_tool_result_text_line(
+                    "u2",
+                    "2026-06-08T10:02:00.000Z",
+                    "t1",
+                    "error: test failed",
+                    true,
+                ),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.tool_error_count, 1);
+        assert!(meta.total_cost > 0.0, "cost should be positive");
+    }
+
+    #[tokio::test]
+    async fn activity_duration_and_last_active() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "开始"),
+                &assistant_line("a1", "2026-06-08T10:00:00.000Z"),
+                &user_text_line("u2", "2026-06-08T11:00:00.000Z", "结束"),
+                &assistant_line("a2", "2026-06-08T11:00:00.000Z"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.duration_ms, 3_600_000);
+        assert!(meta.last_active > 0);
+    }
+
+    #[tokio::test]
+    async fn activity_pr_url_only_from_bash_tool_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let edit_with_pr_in_result =
+            assistant_edit_line("a1", "2026-06-08T10:01:00.000Z", "t1", "/src/main.rs");
+        let result_with_pr = user_tool_result_text_line(
+            "u2",
+            "2026-06-08T10:02:00.000Z",
+            "t1",
+            "See https://github.com/user/repo/pull/99",
+            false,
+        );
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "编辑文件"),
+                &edit_with_pr_in_result,
+                &result_with_pr,
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert!(
+            meta.git_summary.is_empty(),
+            "PR URL from Edit tool result should NOT be extracted"
+        );
+    }
 }

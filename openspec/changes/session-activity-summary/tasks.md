@@ -21,11 +21,11 @@
 
 ## 4. 测试
 
-- [ ] 4.1 `session_metadata.rs` 单测：构造含多条 user/assistant/tool_use/tool_result 的 JSONL fixture，验证 user_intents 提取 + 噪声过滤 + 上限截断
-- [ ] 4.2 `session_metadata.rs` 单测：验证 files_touched 去重 + git_summary commit message / PR URL 提取
-- [ ] 4.3 `session_metadata.rs` 单测：验证 token 计数累加、tool_error_count 计数、last_active / duration_ms 计算
-- [ ] 4.4 `session_metadata.rs` 单测：验证 pending_bash_ids 关联——PR URL 只从 Bash 命令的 ToolResult 提取
-- [ ] 4.5 IPC contract test：验证 `SessionSummary` 新增字段的 JSON 序列化 camelCase 键名
+- [x] 4.1 `session_metadata.rs` 单测：构造含多条 user/assistant/tool_use/tool_result 的 JSONL fixture，验证 user_intents 提取 + 噪声过滤 + 上限截断
+- [x] 4.2 `session_metadata.rs` 单测：验证 files_touched 去重 + git_summary commit message / PR URL 提取
+- [x] 4.3 `session_metadata.rs` 单测：验证 token 计数累加、tool_error_count 计数、last_active / duration_ms 计算
+- [x] 4.4 `session_metadata.rs` 单测：验证 pending_bash_ids 关联——PR URL 只从 Bash 命令的 ToolResult 提取
+- [x] 4.5 IPC contract test：验证 `SessionSummary` 新增字段的 JSON 序列化 camelCase 键名（既有测试已通过）
 
 ## N. 发布
 
