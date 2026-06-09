@@ -27,19 +27,93 @@ tracing/log 输出 SHALL 仅写入 stderr，stdout 专用于 JSON-RPC 通道。
 
 ### Requirement: Read-only tool set
 
-MCP `list_sessions` tool 返回的 session 对象 SHALL 包含活动摘要字段（`userIntents`、`lastActive`、`durationMs`、`totalCost`、`toolErrorCount`、`filesTouched`、`gitSummary`），与 CLI `sessions list --format json` 输出的字段一致。
+MCP server SHALL 暴露以下 6 个 tools，全部标注 `readOnlyHint=true`、`destructiveHint=false`、`idempotentHint=true`：`list_projects`、`list_sessions`、`get_session`、`get_session_chunks`、`search_sessions`、`get_stats`。
 
-新增字段通过 `SessionSummary` struct 的 serde 序列化自动透传，MCP tool handler 无需额外代码。
+所有 tools SHALL 返回 JSON 结构化数据（不返回纯文本大段 dump）。
 
-#### Scenario: list_sessions 返回活动摘要
+#### Scenario: list_projects 返回项目列表
 
-- **WHEN** MCP client 调用 `list_sessions` tool
-- **THEN** 返回的每个 session 对象 SHALL 包含 `userIntents` 数组和 `filesTouched` 数组
+- **GIVEN** 用户有至少一个 Claude Code 项目
+- **WHEN** AI 调用 `list_projects` tool
+- **THEN** 返回 SHALL 包含 `name`、`path`、`sessions`、`lastActive` 字段的 JSON 数组
 
-#### Scenario: 新字段为空时不序列化
+#### Scenario: list_sessions 全局跨项目查询
 
-- **WHEN** 某会话的 `filesTouched` 为空数组
-- **THEN** MCP 返回的 JSON 中该字段 SHALL NOT 出现（`skip_serializing_if` 生效）
+- **GIVEN** 用户有多个项目
+- **WHEN** AI 调用 `list_sessions` 不传 `project` 参数，传 `since="yesterday"`
+- **THEN** 返回 SHALL 包含所有项目中时间范围内的 session 列表
+- **AND** 每条 SHALL 包含 `sessionId`、`projectName`、`title`、`messageCount`、`timestamp`、`gitBranch`、`isOngoing`
+
+#### Scenario: list_sessions 按项目过滤
+
+- **GIVEN** 用户有多个项目
+- **WHEN** AI 调用 `list_sessions` 传 `project="my-app"`
+- **THEN** 返回 SHALL 只包含 "my-app" 项目的 session
+
+#### Scenario: list_sessions 按分支过滤
+
+- **WHEN** AI 调用 `list_sessions` 传 `branch="feat/auth"`
+- **THEN** 返回 SHALL 只包含 gitBranch 含 "feat/auth" 子串的 session
+
+#### Scenario: list_sessions group_by 分组
+
+- **WHEN** AI 调用 `list_sessions` 传 `since="7d"` 和 `group_by="project"`
+- **THEN** 返回 SHALL 按 projectName 分组，每组含该项目的 session 列表
+
+#### Scenario: list_sessions is_ongoing 过滤
+
+- **WHEN** AI 调用 `list_sessions` 传 `is_ongoing=true`
+- **THEN** 返回 SHALL 只包含 `isOngoing=true` 的活跃 session
+
+#### Scenario: get_session 默认返回复合视图
+
+- **GIVEN** 一个含 50+ 消息的 session
+- **WHEN** AI 调用 `get_session` 只传 `session` 参数
+- **THEN** 返回 SHALL 包含 `sessionId`、`projectName`、`messageCount`、`durationMs`、`chunkCount`
+- **AND** SHALL 包含 `cost` 对象（含 `totalCost`、`inputTokens`、`outputTokens`、`model`）
+- **AND** SHALL 包含 `errorCount` 整数
+- **AND** SHALL 包含 `errors` 数组（前 10 条，每条含 `chunkIndex`、`toolName`、`errorMessage`）
+
+#### Scenario: get_session include 追加重数据
+
+- **WHEN** AI 调用 `get_session` 传 `include="phases,tools"`
+- **THEN** 返回 SHALL 额外包含 `phases` 数组
+- **AND** SHALL 额外包含 `toolUsage` 数组
+
+#### Scenario: get_session session='latest' 解析
+
+- **WHEN** AI 调用 `get_session` 传 `session="latest"`
+- **THEN** 服务端 SHALL 解析为最近一次 session（按 timestamp 降序第一条）
+- **AND** 若同时传 `project`，SHALL 限定在该项目内
+
+#### Scenario: get_session_chunks 支持 range 和 tail
+
+- **GIVEN** 一个含 200 条 chunks 的 session
+- **WHEN** AI 调用 `get_session_chunks` 带 `tail=20`
+- **THEN** SHALL 只返回最后 20 条 chunks
+- **WHEN** AI 调用 `get_session_chunks` 带 `range="50:70"`
+- **THEN** SHALL 只返回第 50-70 条 chunks
+
+#### Scenario: get_session_chunks content_mode overview
+
+- **WHEN** AI 调用 `get_session_chunks` 带 `content_mode="overview"`
+- **THEN** 每条 chunk SHALL 包含 `chunkIndex`、`kind`、`timestamp`、`toolNames`（数组）、`errorCount`、`headline`
+- **AND** SHALL NOT 包含完整 content 文本
+
+#### Scenario: get_stats 返回聚合统计
+
+- **WHEN** AI 调用 `get_stats` 传 `period="7d"`
+- **THEN** 返回 SHALL 包含 `sessionCount`、`totalMessages`、`totalCost`、`toolFrequency`、`errorRate`、`modelUsage`
+
+#### Scenario: get_stats group_by 分组
+
+- **WHEN** AI 调用 `get_stats` 传 `period="30d"` 和 `group_by="model"`
+- **THEN** 返回 SHALL 按 model 分组，每组含该模型的聚合统计
+
+#### Scenario: search_sessions 支持 since 参数
+
+- **WHEN** AI 调用 `search_sessions` 传 `query="deploy"` 和 `since="7d"`
+- **THEN** 系统 SHALL 先按时间过滤再执行全文搜索
 
 ### Requirement: Secret redaction
 
