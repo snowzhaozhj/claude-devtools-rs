@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: sessions list JSON 字段选择
+### Requirement: --json fields 字段选择
 
 `cdt sessions list --json` 无参数时列出的可用字段 SHALL 包含活动摘要字段：`projectId`、`projectName`、`userIntents`、`lastActive`、`durationMs`、`totalCost`、`toolErrorCount`、`filesTouched`、`gitSummary`。
 
