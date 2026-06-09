@@ -1259,6 +1259,13 @@ impl LocalDataApi {
                 summary.message_count = meta.message_count;
                 summary.is_ongoing = meta.is_ongoing;
                 summary.git_branch = meta.git_branch;
+                summary.user_intents = meta.user_intents;
+                summary.last_active = meta.last_active;
+                summary.duration_ms = meta.duration_ms;
+                summary.total_cost = meta.total_cost;
+                summary.tool_error_count = meta.tool_error_count;
+                summary.files_touched = meta.files_touched;
+                summary.git_summary = meta.git_summary;
             }
             if need_background_validation {
                 let base_dir = cdt_discover::path_decoder::extract_base_dir(&wt_id);
@@ -3695,6 +3702,13 @@ impl DataApi for LocalDataApi {
             summary.message_count = meta.message_count;
             summary.is_ongoing = meta.is_ongoing;
             summary.git_branch = meta.git_branch;
+            summary.user_intents = meta.user_intents;
+            summary.last_active = meta.last_active;
+            summary.duration_ms = meta.duration_ms;
+            summary.total_cost = meta.total_cost;
+            summary.tool_error_count = meta.tool_error_count;
+            summary.files_touched = meta.files_touched;
+            summary.git_summary = meta.git_summary;
         }
 
         Ok(PaginatedResponse {
