@@ -9,6 +9,12 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- **Stats**: new derived metrics — cache hit rate, average cost/messages per session, and programming language frequency in `cdt stats` and MCP `get_stats`.
+
+### Fixed
+- **Parse**: shallow session parser now correctly handles real JSONL entry types (`assistant`/`user`) instead of only matching the legacy `conversation` type.
+
 ## [0.6.14] — 2026-06-08
 
 ### Added

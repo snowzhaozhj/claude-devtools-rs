@@ -1170,8 +1170,12 @@ fn list_available_fields(command: &Command) {
             "totalMessages",
             "totalTokens",
             "totalCost",
+            "cacheHitRate",
+            "avgCostPerSession",
+            "avgMessagesPerSession",
             "modelUsage",
             "toolFrequency",
+            "languages",
         ],
         _ => &[],
     };
@@ -1576,8 +1580,8 @@ fn print_stats_table(s: &stats::AggregatedStats) {
     );
     println!();
     println!(
-        "Sessions: {}  Messages: {}",
-        s.session_count, s.total_messages
+        "Sessions: {}  Messages: {} (avg {:.1}/session)",
+        s.session_count, s.total_messages, s.avg_messages_per_session,
     );
     println!(
         "Tokens: {} (input: {}, output: {}, cache_read: {}, cache_write: {})",
@@ -1587,7 +1591,11 @@ fn print_stats_table(s: &stats::AggregatedStats) {
         s.cache_read_tokens,
         s.cache_creation_tokens,
     );
-    println!("Total Cost: ${:.4}", s.total_cost);
+    println!("Cache Hit Rate: {:.1}%", s.cache_hit_rate * 100.0);
+    println!(
+        "Total Cost: ${:.4} (avg ${:.4}/session)",
+        s.total_cost, s.avg_cost_per_session,
+    );
     println!("Error Rate: {:.1}%", s.error_rate * 100.0);
     println!();
 
@@ -1606,6 +1614,14 @@ fn print_stats_table(s: &stats::AggregatedStats) {
         println!("Top Tools:");
         for t in s.tool_frequency.iter().take(10) {
             println!("  {:<25} {:>5}x", t.name, t.count);
+        }
+        println!();
+    }
+
+    if !s.languages.is_empty() {
+        println!("Languages:");
+        for l in s.languages.iter().take(10) {
+            println!("  {:<25} {:>5} files", l.language, l.file_count);
         }
         println!();
     }
