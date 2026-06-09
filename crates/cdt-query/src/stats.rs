@@ -94,6 +94,7 @@ pub fn aggregate(sessions: &[SessionData], since: DateTime<Utc>) -> AggregatedSt
     let mut tool_map: HashMap<String, u64> = HashMap::new();
     let mut model_map: HashMap<String, (usize, f64)> = HashMap::new();
     let mut hour_map: HashMap<u32, (usize, usize)> = HashMap::new();
+    let mut lang_map: HashMap<String, u64> = HashMap::new();
 
     for s in sessions {
         total_messages = total_messages.saturating_add(s.message_count);
@@ -128,6 +129,7 @@ pub fn aggregate(sessions: &[SessionData], since: DateTime<Utc>) -> AggregatedSt
                         if exec.is_error {
                             error_count += 1;
                         }
+                        extract_language_from_tool(exec, &mut lang_map);
                     }
                 }
             }
@@ -194,10 +196,6 @@ pub fn aggregate(sessions: &[SessionData], since: DateTime<Utc>) -> AggregatedSt
         0.0
     };
 
-    let mut lang_map: HashMap<String, u64> = HashMap::new();
-    for s in sessions {
-        extract_languages_from_session(s, &mut lang_map);
-    }
     let mut languages: Vec<LanguageFrequency> = lang_map
         .into_iter()
         .map(|(language, file_count)| LanguageFrequency {
@@ -205,7 +203,11 @@ pub fn aggregate(sessions: &[SessionData], since: DateTime<Utc>) -> AggregatedSt
             file_count,
         })
         .collect();
-    languages.sort_by_key(|l| std::cmp::Reverse(l.file_count));
+    languages.sort_by(|a, b| {
+        b.file_count
+            .cmp(&a.file_count)
+            .then_with(|| a.language.cmp(&b.language))
+    });
 
     AggregatedStats {
         period_start: since,
@@ -275,22 +277,16 @@ const FILE_TOOLS: &[&str] = &[
 
 const PATH_FIELDS: &[&str] = &["file_path", "path", "notebook_path"];
 
-fn extract_languages_from_session(session: &SessionData, lang_map: &mut HashMap<String, u64>) {
-    for chunk in &session.chunks {
-        if let Chunk::Ai(ai) = chunk {
-            for exec in &ai.tool_executions {
-                if !FILE_TOOLS.contains(&exec.tool_name.as_str()) {
-                    continue;
-                }
-                for field in PATH_FIELDS {
-                    if let Some(path) = exec.input.get(field).and_then(|v| v.as_str()) {
-                        if let Some(lang) = extension_to_language(path) {
-                            *lang_map.entry(lang.to_string()).or_default() += 1;
-                        }
-                        break;
-                    }
-                }
+fn extract_language_from_tool(exec: &cdt_core::ToolExecution, lang_map: &mut HashMap<String, u64>) {
+    if !FILE_TOOLS.contains(&exec.tool_name.as_str()) {
+        return;
+    }
+    for field in PATH_FIELDS {
+        if let Some(path) = exec.input.get(field).and_then(|v| v.as_str()) {
+            if let Some(lang) = extension_to_language(path) {
+                *lang_map.entry(lang.to_string()).or_default() += 1;
             }
+            break;
         }
     }
 }
@@ -300,17 +296,19 @@ fn extension_to_language(path: &str) -> Option<&'static str> {
 
     match basename {
         "Dockerfile" | "Containerfile" => return Some("Docker"),
-        "Makefile" | "GNUmakefile" => return Some("Makefile"),
+        "Makefile" | "makefile" | "GNUmakefile" => return Some("Makefile"),
         "Justfile" | "justfile" => return Some("Just"),
         "Cargo.toml" | "Cargo.lock" => return Some("Rust"),
-        "package.json" | "tsconfig.json" => return Some("JavaScript"),
+        "package.json" => return Some("JavaScript"),
+        "tsconfig.json" => return Some("TypeScript"),
         _ => {}
     }
 
-    let ext = path.rsplit('.').next()?;
-    if ext == path {
+    let dot_pos = basename.rfind('.')?;
+    if dot_pos == 0 {
         return None;
     }
+    let ext = &basename[dot_pos + 1..];
 
     match ext {
         "rs" => Some("Rust"),
@@ -331,7 +329,8 @@ fn extension_to_language(path: &str) -> Option<&'static str> {
         "php" => Some("PHP"),
         "html" | "htm" => Some("HTML"),
         "css" => Some("CSS"),
-        "scss" | "sass" => Some("SCSS"),
+        "scss" => Some("SCSS"),
+        "sass" => Some("Sass"),
         "vue" => Some("Vue"),
         "json" | "jsonc" => Some("JSON"),
         "yaml" | "yml" => Some("YAML"),
@@ -423,6 +422,17 @@ mod tests {
             Some("Docker")
         );
         assert_eq!(extension_to_language(r"C:\Users\foo\bar.rs"), Some("Rust"));
+        assert_eq!(
+            extension_to_language("/foo/.ts"),
+            None,
+            "dotfile not a source file"
+        );
+        assert_eq!(extension_to_language("/foo/.gitignore"), None);
+        assert_eq!(extension_to_language("/home/user.name/README"), None);
+        assert_eq!(extension_to_language("/foo/makefile"), Some("Makefile"));
+        assert_eq!(extension_to_language("tsconfig.json"), Some("TypeScript"));
+        assert_eq!(extension_to_language("/foo/styles.sass"), Some("Sass"));
+        assert_eq!(extension_to_language("/foo/styles.scss"), Some("SCSS"));
     }
 
     #[test]

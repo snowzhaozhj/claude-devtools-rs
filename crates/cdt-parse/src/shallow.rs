@@ -69,8 +69,10 @@ pub fn parse_session_shallow(lines: &[String]) -> ShallowSessionStats {
             if let Some(content) = msg.content {
                 extract_tool_info(&content, &mut stats);
             }
-        } else if let Some(content) = msg.content {
-            extract_error_info(&content, &mut stats);
+        } else if msg.role.as_deref() == Some("user") {
+            if let Some(content) = msg.content {
+                extract_error_info(&content, &mut stats);
+            }
         }
     }
 
