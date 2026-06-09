@@ -111,10 +111,39 @@ const NOISE_CONFIRMATIONS: &[&str] = &[
     "没问题",
 ];
 
+const INTENT_NOISE_PREFIXES: &[&str] = &[
+    "<task-notification>",
+    "<command-name>",
+    "<local-command-caveat>",
+];
+
+fn clean_intent(text: &str) -> Option<String> {
+    let first_line = text.lines().next().unwrap_or("");
+    let trimmed = first_line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if NOISE_CONFIRMATIONS.contains(&trimmed) {
+        return None;
+    }
+    for prefix in INTENT_NOISE_PREFIXES {
+        if trimmed.starts_with(prefix) {
+            return None;
+        }
+    }
+    if trimmed.starts_with("<command-message>") {
+        if let Some(name) = extract_tag_content(trimmed, "command-message") {
+            return Some(truncate_str(&format!("/{name}"), INTENT_MAX_CHARS));
+        }
+        return None;
+    }
+    Some(truncate_str(trimmed, INTENT_MAX_CHARS))
+}
+
 fn git_commit_message_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"git\s+commit\s+(?:[^-]|-[^m])*-m\s+["']([^"']+)["']"#)
+        Regex::new(r#"git\s+commit\s+(?:[^-]|-[^m])*-m\s+["']([^"'$][^"']*)["']"#)
             .expect("git commit regex 字面量合法")
     })
 }
@@ -390,12 +419,8 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
             // user_intents：取首行，过滤噪声
             if user_intents.len() < MAX_USER_INTENTS {
                 let text = extract_text(&msg.content);
-                if !text.is_empty() {
-                    let first_line = text.lines().next().unwrap_or("");
-                    let trimmed = first_line.trim();
-                    if !trimmed.is_empty() && !NOISE_CONFIRMATIONS.contains(&trimmed) {
-                        user_intents.push(truncate_str(trimmed, INTENT_MAX_CHARS));
-                    }
+                if let Some(intent) = clean_intent(&text) {
+                    user_intents.push(intent);
                 }
             }
         } else if awaiting_ai
@@ -549,12 +574,8 @@ pub(crate) fn extract_session_metadata_from_parsed(
 
             if user_intents.len() < MAX_USER_INTENTS {
                 let text = extract_text(&msg.content);
-                if !text.is_empty() {
-                    let first_line = text.lines().next().unwrap_or("");
-                    let trimmed = first_line.trim();
-                    if !trimmed.is_empty() && !NOISE_CONFIRMATIONS.contains(&trimmed) {
-                        user_intents.push(truncate_str(trimmed, INTENT_MAX_CHARS));
-                    }
+                if let Some(intent) = clean_intent(&text) {
+                    user_intents.push(intent);
                 }
             }
         } else if awaiting_ai
@@ -2839,6 +2860,59 @@ mod tests {
         assert!(
             meta.git_summary.is_empty(),
             "PR URL from Edit tool result should NOT be extracted"
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_git_summary_skips_heredoc_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let heredoc_commit = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-06-08T10:01:00.000Z","sessionId":"sid","cwd":"/tmp","message":{"role":"assistant","model":"claude-opus-4-6","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git commit -m \"$(cat <<'EOF'\nfix: real message\n\nCo-Authored-By: Claude\nEOF\n)\""}}],"usage":{"input_tokens":1000,"output_tokens":500}}}"#.to_string();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "提交"),
+                &heredoc_commit,
+                &user_tool_result_line("u2", "2026-06-08T10:02:00.000Z", "t1"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert!(
+            !meta.git_summary.iter().any(|s| s.contains("$(cat")),
+            "heredoc $(cat should not appear in git_summary: {:?}",
+            meta.git_summary,
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_user_intents_filters_system_noise() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "分析会话"),
+                &assistant_line("a1", "2026-06-08T10:01:00.000Z"),
+                &user_text_line("u2", "2026-06-08T10:02:00.000Z", "<task-notification>"),
+                &assistant_line("a2", "2026-06-08T10:03:00.000Z"),
+                &user_text_line(
+                    "u3",
+                    "2026-06-08T10:04:00.000Z",
+                    "<command-name>/compact</command-name>",
+                ),
+                &assistant_line("a3", "2026-06-08T10:05:00.000Z"),
+                &user_text_line(
+                    "u4",
+                    "2026-06-08T10:06:00.000Z",
+                    "<command-message>openspec-explore</command-message>",
+                ),
+                &assistant_line("a4", "2026-06-08T10:07:00.000Z"),
+                &user_text_line("u5", "2026-06-08T10:08:00.000Z", "继续优化"),
+                &assistant_line("a5", "2026-06-08T10:09:00.000Z"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(
+            meta.user_intents,
+            vec!["分析会话", "/openspec-explore", "继续优化"],
         );
     }
 }
