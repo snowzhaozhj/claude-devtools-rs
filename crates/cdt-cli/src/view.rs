@@ -342,18 +342,14 @@ pub fn project_fields(value: serde_json::Value, fields: &[&str]) -> serde_json::
 }
 
 fn project_object_fields(value: serde_json::Value, fields: &[&str]) -> serde_json::Value {
-    if let serde_json::Value::Object(map) = value {
-        if map.contains_key("sessions") {
-            let mut result = serde_json::Map::new();
-            for (k, v) in map {
-                if k == "sessions" {
-                    let projected = project_fields(v, fields);
-                    result.insert(k, projected);
-                } else {
-                    result.insert(k, v);
-                }
+    if let serde_json::Value::Object(mut map) = value {
+        let is_group =
+            map.contains_key("key") && map.get("sessions").is_some_and(serde_json::Value::is_array);
+        if is_group {
+            if let Some(sessions) = map.remove("sessions") {
+                map.insert("sessions".to_string(), project_fields(sessions, fields));
             }
-            return serde_json::Value::Object(result);
+            return serde_json::Value::Object(map);
         }
         let filtered: serde_json::Map<String, serde_json::Value> = map
             .into_iter()

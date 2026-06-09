@@ -126,13 +126,14 @@ fn clean_intent(text: &str) -> Option<String> {
     if NOISE_CONFIRMATIONS.contains(&trimmed) {
         return None;
     }
-    for prefix in INTENT_NOISE_PREFIXES {
-        if trimmed.starts_with(prefix) {
-            return None;
-        }
+    if INTENT_NOISE_PREFIXES.iter().any(|p| trimmed.starts_with(p)) {
+        return None;
     }
+    // `<command-message>` = skill invocation, meaningful user intent; transform to `/name`
+    // `<command-name>` = bare slash command (/compact, /clear), filtered as noise above
     if trimmed.starts_with("<command-message>") {
         if let Some(name) = extract_tag_content(trimmed, "command-message") {
+            let name = name.strip_prefix('/').unwrap_or(&name);
             return Some(truncate_str(&format!("/{name}"), INTENT_MAX_CHARS));
         }
         return None;
@@ -143,7 +144,7 @@ fn clean_intent(text: &str) -> Option<String> {
 fn git_commit_message_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"git\s+commit\s+(?:[^-]|-[^m])*-m\s+["']([^"'$][^"']*)["']"#)
+        Regex::new(r#"git\s+commit\s+(?:[^-]|-[^m])*-m\s+["']([^"']+)["']"#)
             .expect("git commit regex 字面量合法")
     })
 }
@@ -271,7 +272,10 @@ fn extract_tool_use_activity(
                         if git_summary.len() < MAX_GIT_SUMMARY {
                             if let Some(caps) = git_commit_message_regex().captures(cmd) {
                                 if let Some(m) = caps.get(1) {
-                                    git_summary.push(m.as_str().to_string());
+                                    let msg = m.as_str();
+                                    if !msg.starts_with("$(") {
+                                        git_summary.push(msg.to_string());
+                                    }
                                 }
                             }
                         }
@@ -2714,8 +2718,13 @@ mod tests {
     }
 
     fn assistant_bash_commit_line(uuid: &str, ts: &str, tool_id: &str) -> String {
+        assistant_bash_line(uuid, ts, tool_id, "git commit -m 'fix: session cache'")
+    }
+
+    fn assistant_bash_line(uuid: &str, ts: &str, tool_id: &str, command: &str) -> String {
+        let escaped = command.replace('\\', "\\\\").replace('"', "\\\"");
         format!(
-            r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"assistant","model":"claude-opus-4-6","content":[{{"type":"tool_use","id":"{tool_id}","name":"Bash","input":{{"command":"git commit -m 'fix: session cache'"}}}}],"usage":{{"input_tokens":1000,"output_tokens":500}}}}}}"#
+            r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"assistant","model":"claude-opus-4-6","content":[{{"type":"tool_use","id":"{tool_id}","name":"Bash","input":{{"command":"{escaped}"}}}}],"usage":{{"input_tokens":1000,"output_tokens":500}}}}}}"#
         )
     }
 
@@ -2877,10 +2886,31 @@ mod tests {
         );
         let meta = extract_session_metadata(&path).await;
         assert!(
-            !meta.git_summary.iter().any(|s| s.contains("$(cat")),
-            "heredoc $(cat should not appear in git_summary: {:?}",
+            meta.git_summary.is_empty(),
+            "heredoc commit should produce empty git_summary: {:?}",
             meta.git_summary,
         );
+    }
+
+    #[tokio::test]
+    async fn activity_git_summary_captures_dollar_prefixed_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dollar_commit = assistant_bash_line(
+            "a1",
+            "2026-06-08T10:01:00.000Z",
+            "t1",
+            "git commit -m '$scope: fix env var'",
+        );
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "提交"),
+                &dollar_commit,
+                &user_tool_result_line("u2", "2026-06-08T10:02:00.000Z", "t1"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.git_summary, vec!["$scope: fix env var"]);
     }
 
     #[tokio::test]
