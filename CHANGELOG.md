@@ -9,6 +9,8 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.16] — 2026-06-10
+
 ### Fixed
 - **CLI**: `--group-by project --json=field1,field2` now correctly projects fields into nested session objects instead of returning empty objects.
 - **Session activity**: `gitSummary` no longer captures `$(cat <<` from heredoc-style commit commands as false commit messages.
@@ -337,7 +339,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.15...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.16...HEAD
+[0.6.16]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.15...v0.6.16
 [0.6.15]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.14...v0.6.15
 [0.6.14]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.13...v0.6.14
 [0.6.13]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.12...v0.6.13
