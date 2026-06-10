@@ -111,6 +111,36 @@ const NOISE_CONFIRMATIONS: &[&str] = &[
     "没问题",
 ];
 
+const INTENT_NOISE_PREFIXES: &[&str] = &[
+    "<task-notification>",
+    "<command-name>",
+    "<local-command-caveat>",
+];
+
+fn clean_intent(text: &str) -> Option<String> {
+    let first_line = text.lines().next().unwrap_or("");
+    let trimmed = first_line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if NOISE_CONFIRMATIONS.contains(&trimmed) {
+        return None;
+    }
+    if INTENT_NOISE_PREFIXES.iter().any(|p| trimmed.starts_with(p)) {
+        return None;
+    }
+    // `<command-message>` = skill invocation, meaningful user intent; transform to `/name`
+    // `<command-name>` = bare slash command (/compact, /clear), filtered as noise above
+    if trimmed.starts_with("<command-message>") {
+        if let Some(name) = extract_tag_content(trimmed, "command-message") {
+            let name = name.strip_prefix('/').unwrap_or(&name);
+            return Some(truncate_str(&format!("/{name}"), INTENT_MAX_CHARS));
+        }
+        return None;
+    }
+    Some(truncate_str(trimmed, INTENT_MAX_CHARS))
+}
+
 fn git_commit_message_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -242,7 +272,10 @@ fn extract_tool_use_activity(
                         if git_summary.len() < MAX_GIT_SUMMARY {
                             if let Some(caps) = git_commit_message_regex().captures(cmd) {
                                 if let Some(m) = caps.get(1) {
-                                    git_summary.push(m.as_str().to_string());
+                                    let msg = m.as_str();
+                                    if !msg.starts_with("$(") {
+                                        git_summary.push(msg.to_string());
+                                    }
                                 }
                             }
                         }
@@ -390,12 +423,8 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
             // user_intents：取首行，过滤噪声
             if user_intents.len() < MAX_USER_INTENTS {
                 let text = extract_text(&msg.content);
-                if !text.is_empty() {
-                    let first_line = text.lines().next().unwrap_or("");
-                    let trimmed = first_line.trim();
-                    if !trimmed.is_empty() && !NOISE_CONFIRMATIONS.contains(&trimmed) {
-                        user_intents.push(truncate_str(trimmed, INTENT_MAX_CHARS));
-                    }
+                if let Some(intent) = clean_intent(&text) {
+                    user_intents.push(intent);
                 }
             }
         } else if awaiting_ai
@@ -549,12 +578,8 @@ pub(crate) fn extract_session_metadata_from_parsed(
 
             if user_intents.len() < MAX_USER_INTENTS {
                 let text = extract_text(&msg.content);
-                if !text.is_empty() {
-                    let first_line = text.lines().next().unwrap_or("");
-                    let trimmed = first_line.trim();
-                    if !trimmed.is_empty() && !NOISE_CONFIRMATIONS.contains(&trimmed) {
-                        user_intents.push(truncate_str(trimmed, INTENT_MAX_CHARS));
-                    }
+                if let Some(intent) = clean_intent(&text) {
+                    user_intents.push(intent);
                 }
             }
         } else if awaiting_ai
@@ -2693,8 +2718,13 @@ mod tests {
     }
 
     fn assistant_bash_commit_line(uuid: &str, ts: &str, tool_id: &str) -> String {
+        assistant_bash_line(uuid, ts, tool_id, "git commit -m 'fix: session cache'")
+    }
+
+    fn assistant_bash_line(uuid: &str, ts: &str, tool_id: &str, command: &str) -> String {
+        let escaped = command.replace('\\', "\\\\").replace('"', "\\\"");
         format!(
-            r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"assistant","model":"claude-opus-4-6","content":[{{"type":"tool_use","id":"{tool_id}","name":"Bash","input":{{"command":"git commit -m 'fix: session cache'"}}}}],"usage":{{"input_tokens":1000,"output_tokens":500}}}}}}"#
+            r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"{ts}","sessionId":"sid","cwd":"/tmp","message":{{"role":"assistant","model":"claude-opus-4-6","content":[{{"type":"tool_use","id":"{tool_id}","name":"Bash","input":{{"command":"{escaped}"}}}}],"usage":{{"input_tokens":1000,"output_tokens":500}}}}}}"#
         )
     }
 
@@ -2839,6 +2869,80 @@ mod tests {
         assert!(
             meta.git_summary.is_empty(),
             "PR URL from Edit tool result should NOT be extracted"
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_git_summary_skips_heredoc_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let heredoc_commit = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-06-08T10:01:00.000Z","sessionId":"sid","cwd":"/tmp","message":{"role":"assistant","model":"claude-opus-4-6","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git commit -m \"$(cat <<'EOF'\nfix: real message\n\nCo-Authored-By: Claude\nEOF\n)\""}}],"usage":{"input_tokens":1000,"output_tokens":500}}}"#.to_string();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "提交"),
+                &heredoc_commit,
+                &user_tool_result_line("u2", "2026-06-08T10:02:00.000Z", "t1"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert!(
+            meta.git_summary.is_empty(),
+            "heredoc commit should produce empty git_summary: {:?}",
+            meta.git_summary,
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_git_summary_captures_dollar_prefixed_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dollar_commit = assistant_bash_line(
+            "a1",
+            "2026-06-08T10:01:00.000Z",
+            "t1",
+            "git commit -m '$scope: fix env var'",
+        );
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "提交"),
+                &dollar_commit,
+                &user_tool_result_line("u2", "2026-06-08T10:02:00.000Z", "t1"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(meta.git_summary, vec!["$scope: fix env var"]);
+    }
+
+    #[tokio::test]
+    async fn activity_user_intents_filters_system_noise() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_jsonl(
+            tmp.path(),
+            &[
+                &user_text_line("u1", "2026-06-08T10:00:00.000Z", "分析会话"),
+                &assistant_line("a1", "2026-06-08T10:01:00.000Z"),
+                &user_text_line("u2", "2026-06-08T10:02:00.000Z", "<task-notification>"),
+                &assistant_line("a2", "2026-06-08T10:03:00.000Z"),
+                &user_text_line(
+                    "u3",
+                    "2026-06-08T10:04:00.000Z",
+                    "<command-name>/compact</command-name>",
+                ),
+                &assistant_line("a3", "2026-06-08T10:05:00.000Z"),
+                &user_text_line(
+                    "u4",
+                    "2026-06-08T10:06:00.000Z",
+                    "<command-message>openspec-explore</command-message>",
+                ),
+                &assistant_line("a4", "2026-06-08T10:07:00.000Z"),
+                &user_text_line("u5", "2026-06-08T10:08:00.000Z", "继续优化"),
+                &assistant_line("a5", "2026-06-08T10:09:00.000Z"),
+            ],
+        );
+        let meta = extract_session_metadata(&path).await;
+        assert_eq!(
+            meta.user_intents,
+            vec!["分析会话", "/openspec-explore", "继续优化"],
         );
     }
 }

@@ -342,7 +342,15 @@ pub fn project_fields(value: serde_json::Value, fields: &[&str]) -> serde_json::
 }
 
 fn project_object_fields(value: serde_json::Value, fields: &[&str]) -> serde_json::Value {
-    if let serde_json::Value::Object(map) = value {
+    if let serde_json::Value::Object(mut map) = value {
+        let is_group =
+            map.contains_key("key") && map.get("sessions").is_some_and(serde_json::Value::is_array);
+        if is_group {
+            if let Some(sessions) = map.remove("sessions") {
+                map.insert("sessions".to_string(), project_fields(sessions, fields));
+            }
+            return serde_json::Value::Object(map);
+        }
         let filtered: serde_json::Map<String, serde_json::Value> = map
             .into_iter()
             .filter(|(k, _)| fields.contains(&k.as_str()))
@@ -441,6 +449,32 @@ mod tests {
         let input = serde_json::json!("just a string");
         let result = project_fields(input.clone(), &["field"]);
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn project_fields_group_by_projects_into_sessions() {
+        let input = serde_json::json!([
+            {
+                "key": "my-project",
+                "count": 2,
+                "sessions": [
+                    {"sessionId": "abc", "title": "test", "totalCost": 0.5},
+                    {"sessionId": "def", "title": "other", "totalCost": 1.0},
+                ]
+            }
+        ]);
+        let result = project_fields(input, &["sessionId", "title"]);
+        let expected = serde_json::json!([
+            {
+                "key": "my-project",
+                "count": 2,
+                "sessions": [
+                    {"sessionId": "abc", "title": "test"},
+                    {"sessionId": "def", "title": "other"},
+                ]
+            }
+        ]);
+        assert_eq!(result, expected);
     }
 
     #[test]

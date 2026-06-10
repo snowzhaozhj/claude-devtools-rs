@@ -9,6 +9,11 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- **CLI**: `--group-by project --json=field1,field2` now correctly projects fields into nested session objects instead of returning empty objects.
+- **Session activity**: `gitSummary` no longer captures `$(cat <<` from heredoc-style commit commands as false commit messages.
+- **Session activity**: `userIntents` no longer includes system noise (`<task-notification>`, slash commands); skill invocations are rendered as `/skill-name`.
+
 ## [0.6.15] — 2026-06-10
 
 ### Added
