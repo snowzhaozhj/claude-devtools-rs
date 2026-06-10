@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781063953877,
+  "lastUpdate": 1781105048264,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -19018,6 +19018,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 13150,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b5423e61920a91949aa187f709374053f07c7c9f",
+          "message": "chore(deps/ui): bump the ui-deps group in /ui with 8 updates (#497)\n\nBumps the ui-deps group in /ui with 8 updates:\n\n| Package | From | To |\n| --- | --- | --- |\n| [dompurify](https://github.com/cure53/DOMPurify) | `3.4.7` | `3.4.8` |\n| [marked](https://github.com/markedjs/marked) | `18.0.4` | `18.0.5` |\n| [@types/node](https://github.com/DefinitelyTyped/DefinitelyTyped/tree/HEAD/types/node) | `25.9.1` | `25.9.2` |\n| [@vitest/ui](https://github.com/vitest-dev/vitest/tree/HEAD/packages/ui) | `4.1.7` | `4.1.8` |\n| [svelte](https://github.com/sveltejs/svelte/tree/HEAD/packages/svelte) | `5.56.0` | `5.56.3` |\n| [svelte-check](https://github.com/sveltejs/language-tools) | `4.4.8` | `4.6.0` |\n| [vite](https://github.com/vitejs/vite/tree/HEAD/packages/vite) | `8.0.14` | `8.0.16` |\n| [vitest](https://github.com/vitest-dev/vitest/tree/HEAD/packages/vitest) | `4.1.7` | `4.1.8` |\n\n\nUpdates `dompurify` from 3.4.7 to 3.4.8\n- [Release notes](https://github.com/cure53/DOMPurify/releases)\n- [Commits](https://github.com/cure53/DOMPurify/compare/3.4.7...3.4.8)\n\nUpdates `marked` from 18.0.4 to 18.0.5\n- [Release notes](https://github.com/markedjs/marked/releases)\n- [Commits](https://github.com/markedjs/marked/compare/v18.0.4...v18.0.5)\n\nUpdates `@types/node` from 25.9.1 to 25.9.2\n- [Release notes](https://github.com/DefinitelyTyped/DefinitelyTyped/releases)\n- [Commits](https://github.com/DefinitelyTyped/DefinitelyTyped/commits/HEAD/types/node)\n\nUpdates `@vitest/ui` from 4.1.7 to 4.1.8\n- [Release notes](https://github.com/vitest-dev/vitest/releases)\n- [Changelog](https://github.com/vitest-dev/vitest/blob/main/docs/releases.md)\n- [Commits](https://github.com/vitest-dev/vitest/commits/v4.1.8/packages/ui)\n\nUpdates `svelte` from 5.56.0 to 5.56.3\n- [Release notes](https://github.com/sveltejs/svelte/releases)\n- [Changelog](https://github.com/sveltejs/svelte/blob/main/packages/svelte/CHANGELOG.md)\n- [Commits](https://github.com/sveltejs/svelte/commits/svelte@5.56.3/packages/svelte)\n\nUpdates `svelte-check` from 4.4.8 to 4.6.0\n- [Release notes](https://github.com/sveltejs/language-tools/releases)\n- [Commits](https://github.com/sveltejs/language-tools/compare/svelte-check@4.4.8...svelte-check@4.6.0)\n\nUpdates `vite` from 8.0.14 to 8.0.16\n- [Release notes](https://github.com/vitejs/vite/releases)\n- [Changelog](https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md)\n- [Commits](https://github.com/vitejs/vite/commits/v8.0.16/packages/vite)\n\nUpdates `vitest` from 4.1.7 to 4.1.8\n- [Release notes](https://github.com/vitest-dev/vitest/releases)\n- [Changelog](https://github.com/vitest-dev/vitest/blob/main/docs/releases.md)\n- [Commits](https://github.com/vitest-dev/vitest/commits/v4.1.8/packages/vitest)\n\n---\nupdated-dependencies:\n- dependency-name: dompurify\n  dependency-version: 3.4.8\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: ui-deps\n- dependency-name: marked\n  dependency-version: 18.0.5\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: ui-deps\n- dependency-name: \"@types/node\"\n  dependency-version: 25.9.2\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: ui-deps\n- dependency-name: \"@vitest/ui\"\n  dependency-version: 4.1.8\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: ui-deps\n- dependency-name: svelte\n  dependency-version: 5.56.3\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: ui-deps\n- dependency-name: svelte-check\n  dependency-version: 4.6.0\n  dependency-type: direct:development\n  update-type: version-update:semver-minor\n  dependency-group: ui-deps\n- dependency-name: vite\n  dependency-version: 8.0.16\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: ui-deps\n- dependency-name: vitest\n  dependency-version: 4.1.8\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: ui-deps\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-06-10T23:20:20+08:00",
+          "tree_id": "5db20fc4ca322b689494f87dd45e500f066dfa9b",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/b5423e61920a91949aa187f709374053f07c7c9f"
+        },
+        "date": 1781105047825,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 116.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1126,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 7050,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.841,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.242,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 48.45,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.35,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 294.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1241,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3131,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3185,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 40280,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.306,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 62.51,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 629.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6368,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 202,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2011,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 51.75,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 523.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5264,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 131,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1318,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.69,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 73.18,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8839,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 893.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8707,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 927.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 48.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 513,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 96.41,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 974.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9754,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 190.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1360,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12860,
             "unit": "µs"
           }
         ]
