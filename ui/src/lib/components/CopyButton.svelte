@@ -31,6 +31,7 @@
 <button
   class="copy-btn"
   class:copied
+  onmousedown={(e) => { if (e.button === 0) e.preventDefault(); }}
   onclick={copy}
   aria-label={copied ? "已复制" : "复制"}
 >
