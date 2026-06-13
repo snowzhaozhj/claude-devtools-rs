@@ -83,7 +83,8 @@
     const margin = 8;
     const vw = window.innerWidth;
     let right = vw - r.right;
-    const width = menuEl?.getBoundingClientRect().width ?? 260;
+    // fallback to CSS max-width when menuEl not yet measured
+    const width = menuEl?.getBoundingClientRect().width ?? 280;
     const maxRight = vw - width - margin;
     if (right > maxRight) right = Math.max(maxRight, margin);
     if (right < margin) right = margin;
@@ -577,7 +578,8 @@
     .meta-trigger,
     .meta-trigger-icon,
     .meta-menu-item,
-    .meta-menu-item-icon {
+    .meta-menu-item-icon,
+    .meta-toast-exit {
       transition: none;
     }
   }
