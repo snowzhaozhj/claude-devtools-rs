@@ -439,6 +439,11 @@ describe('buildMarkdownBlockItems', () => {
     expect(buildMarkdownBlockItems('', makeCtx())).toEqual([])
   })
 
+  test('null / undefined 文本走 `?? ""` 兜底返回空数组（slash instructions 可能缺失）', () => {
+    expect(buildMarkdownBlockItems(null as unknown as string, makeCtx())).toEqual([])
+    expect(buildMarkdownBlockItems(undefined as unknown as string, makeCtx())).toEqual([])
+  })
+
   test('纯函数：相同输入 → 相同输出', () => {
     const ctx = makeCtx()
     expect(labels(buildMarkdownBlockItems(MD, ctx))).toEqual(labels(buildMarkdownBlockItems(MD, ctx)))
