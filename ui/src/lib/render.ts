@@ -145,7 +145,7 @@ if (typeof document !== "undefined") {
         btn.innerHTML = COPY_ICON_SVG;
         _copyTimeouts.delete(btn);
       }, 2000));
-    });
+    }, () => {});
   });
 }
 
