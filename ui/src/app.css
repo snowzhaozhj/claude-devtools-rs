@@ -746,3 +746,70 @@ mark[data-search-current] {
   font-weight: 600;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Code block wrapper (markdown prose 内的 fenced code block)
+   render.ts::renderer.code 产出，document-level 事件委托驱动复制。
+   ═══════════════════════════════════════════════════════════════ */
+
+.code-block-wrapper {
+  position: relative;
+  margin: 0.6em 0;
+}
+
+.code-block-wrapper pre {
+  margin: 0;
+}
+
+.code-block-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.code-block-wrapper:hover .code-block-actions,
+.code-block-wrapper:focus-within .code-block-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.code-block-lang {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  line-height: 1;
+  user-select: none;
+}
+
+.code-block-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xs, 4px);
+  background: var(--color-surface, #f9f9f7);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: color 150ms, background 150ms, border-color 150ms;
+  padding: 0;
+}
+
+.code-block-copy:hover {
+  color: var(--color-text-secondary);
+  background: var(--color-surface-raised, #f0efed);
+  border-color: var(--color-border-emphasis, #d5d3cf);
+}
+
+.code-block-copy.copied {
+  color: var(--color-success, #15803d);
+  border-color: var(--color-success, #15803d);
+}
+

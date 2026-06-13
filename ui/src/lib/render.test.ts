@@ -17,14 +17,20 @@ describe('renderMarkdown', () => {
 
     expect(html).toContain('class="hljs-keyword"')
     expect(html).toContain('fn')
+    expect(html).toContain('class="code-block-wrapper"')
+    expect(html).toContain('class="code-block-copy"')
+    expect(html).toContain('data-code=')
+    expect(html).toContain('<span class="code-block-lang">rust</span>')
   })
 
   test('未声明语言代码块按 plaintext 转义，不自动猜测语言', () => {
     const html = renderMarkdown('```\nfn main() { let value = 1; }\n```')
 
+    expect(html).toContain('class="code-block-wrapper"')
     expect(html).toContain('<pre><code class="hljs">')
     expect(html).toContain('fn main()')
     expect(html).not.toContain('hljs-keyword')
+    expect(html).not.toContain('code-block-lang')
   })
 
   test('大块未声明语言代码块不自动猜测语言', () => {
