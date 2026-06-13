@@ -22,7 +22,7 @@ export interface ContextMenuItem {
   separator?: boolean;
   /** 显示文本；有 pathLabel 时被覆盖 */
   label?: string;
-  /** 可选 lucide path 字符串。Phase 2 D-V1 决定不渲染（保留预留字段） */
+  /** 可选 lucide SVG path 字符串，作为菜单项前导图标渲染 */
   icon?: string;
   /** 不可用 item，渲染为 opacity 0.45 + aria-disabled，键盘可经过但 Enter no-op */
   disabled?: boolean;

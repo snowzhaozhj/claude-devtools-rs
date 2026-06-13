@@ -309,6 +309,32 @@ export const CODE_SVG = `
 <polyline points="8 6 2 12 8 18"/>
 `;
 
+/** Lucide search — 搜索 */
+export const SEARCH_SVG = `
+<circle cx="11" cy="11" r="8"/>
+<line x1="21" x2="16.65" y1="21" y2="16.65"/>
+`;
+
+/** Lucide pin — 置顶 */
+export const PIN_SVG = `
+<line x1="12" x2="12" y1="17" y2="22"/>
+<path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
+`;
+
+/** Lucide eye — 可见 */
+export const EYE_SVG = `
+<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+<circle cx="12" cy="12" r="3"/>
+`;
+
+/** Lucide eye-off — 隐藏 */
+export const EYE_OFF_SVG = `
+<path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+<path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/>
+<path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/>
+<line x1="2" x2="22" y1="2" y2="22"/>
+`;
+
 /** Lucide square-terminal — Background Jobs icon（多段，使用 {@html}） */
 export const JOBS_SVG = `
 <path d="m7 11 2-2-2-2"/>
