@@ -9,6 +9,11 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- **UI**: polished SessionMetaMenu styling — consistent padding, hover states, and keyboard interaction.
+- **UI**: improved markdown prose styling and added code block copy button for assistant messages.
+- **UI**: prevented WKWebView focus-scroll jump when clicking copy buttons.
+
 ## [0.6.16] — 2026-06-10
 
 ### Fixed
