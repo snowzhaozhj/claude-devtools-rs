@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- **UI**: right-clicking an expanded tool block (SKILL/slash instructions, Output, Thinking, User message) in the session view now copies that block's own content. Previously the menu bubbled to the whole AI message and copied the wrong text, forcing manual text selection.
+
 ## [0.6.17] — 2026-06-13
 
 ### Fixed

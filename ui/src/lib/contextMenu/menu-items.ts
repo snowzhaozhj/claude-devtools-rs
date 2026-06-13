@@ -24,7 +24,7 @@
 
 import type { ContextMenuItem } from "./types";
 import type { UserChunk, AIChunk, ToolExecution } from "../api";
-import { userChunkToMarkdown, aiChunkToMarkdown, toolExecToMarkdown, chunkToPlainText } from "./markdown";
+import { userChunkToMarkdown, aiChunkToMarkdown, toolExecToMarkdown, chunkToPlainText, stripMarkdownFormatting } from "./markdown";
 import { truncatePath } from "./pathLabel";
 import {
   COPY_SVG,
@@ -319,6 +319,36 @@ export function buildSelectionItems(selectionText: string, ctx: MenuItemContext)
     () => ctx.dispatch.openUrl(buildSearchUrl(text, ctx.settings.searchEngine)),
     undefined, SEARCH_SVG,
   ));
+
+  return finalizeWithSeparators(items);
+}
+
+// ---------------------------------------------------------------------------
+// factory：会话详情流的 markdown 工具展开块（slash / Output / Thinking / User message）
+// ---------------------------------------------------------------------------
+
+/**
+ * 服务于承载单段 markdown 源文本的工具展开块——slash/SKILL 指令、Output、
+ * Thinking、User message。这四类块的复制源都是一段 markdown string
+ * （`item.text` / `item.slash.instructions`），复制语义同构，故共用一个
+ * factory 而非按块拆分（design D1）。
+ *
+ * - 「复制纯文本」：strip markdown 标记（复用 `stripMarkdownFormatting`）
+ * - 「复制为 Markdown」：原文
+ * - 有选区时 `appendSelectionCopyIfAny` 在首项前融合「复制选中文本」
+ *
+ * `text` 为空时返回空数组——调用方据此不挂 / 不弹空菜单（design D3 + spec
+ * `frontend-context-menu::menu-items 函数库` 的空文本 Scenario）。
+ */
+export function buildMarkdownBlockItems(text: string, ctx: MenuItemContext): ContextMenuItem[] {
+  const md = text ?? "";
+  if (!md) return [];
+
+  const items: RawItem[] = [];
+  appendSelectionCopyIfAny(items, ctx);
+
+  items.push(copyItem("复制纯文本", () => stripMarkdownFormatting(md), ctx, "⌘C"));
+  items.push(copyItem("复制为 Markdown", () => md, ctx, undefined, "copy", false, FILE_TEXT_SVG));
 
   return finalizeWithSeparators(items);
 }

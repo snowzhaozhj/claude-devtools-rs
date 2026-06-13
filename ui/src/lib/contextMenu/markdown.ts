@@ -232,7 +232,7 @@ function guessLangFromPath(path: string): string {
  * - blockquote `> x` → `x`
  * - list marker `- ` / `* ` / `1. ` → 去掉
  */
-function stripMarkdownFormatting(md: string): string {
+export function stripMarkdownFormatting(md: string): string {
   let s = md;
   // 1. fenced block：去掉首尾 fence 行（``` 或 ```lang），保留内部内容
   s = s.replace(/```[a-zA-Z0-9]*\n([\s\S]*?)\n```/g, "$1");
