@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781350086024,
+  "lastUpdate": 1781372564447,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -19854,6 +19854,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 13380,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f120fd1a78801bed2b1cbe819bda98bc8343960f",
+          "message": "feat(ui): 右键工具展开块复制该块内容 (#516)\n\n* feat(ui): right-click tool blocks to copy their own content\n\n会话详情流里 AI 消息内的工具展开块（slash/SKILL 指令、Output、Thinking、\nUser message）此前右键时事件冒泡到整条 AI 消息菜单，复制项（aiChunkToMarkdown\n只取 kind=\"text\" 步骤）复制不到这些块内容，用户被迫手动选中文本。\n\n给这四类块的 .prose.lazy-md 各挂 use:contextMenu，弹该块自己的复制菜单\n（复制纯文本 / 复制为 Markdown，有选区时融合复制选中文本），复用现有\nbuildXxxItems 菜单语言。子块 action 的 stopPropagation 阻止冒泡到父 chunk。\n零新增按钮 / 零新增组件。\n\n- menu-items.ts: 新增 buildMarkdownBlockItems factory；导出 stripMarkdownFormatting\n- SessionDetail.svelte: 4 处工具展开块挂 use:contextMenu\n- 单测 6 个 + e2e 2 个（user_message 块复制内容 + 不冒泡）\n\nopenspec: tool-block-copy-context-menu（frontend-context-menu + session-display）\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* test(ui): strengthen tool-block copy coverage per review\n\npr-review-toolkit 二审提出的 2 个覆盖 gap：\n- 单测补 null/undefined 文本走 `?? \"\"` 兜底返回 [] 的路径（此前仅 '' 覆盖）\n- e2e 第二个 case 从仅验 toHaveCount(1) 改为强断言「复制纯文本」内容 ==\n  块文本 != 整条 AI 消息文本——count 断言抓不到\"误弹成父 AI 菜单\"（父菜单\n  instance 也是 1），内容断言才有判别力。两个 e2e 分别覆盖复制为 Markdown /\n  复制纯文本两条 copy item，并抽 helper 去重。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive tool-block-copy-context-menu\n\n二审全过（codex / pr-review-toolkit）+ CI 全绿 + 真实数据 e2e-http-verify\n通过（右键真实 Output 块复制该块内容、单 instance 不冒泡、菜单视觉正常）。\nsync frontend-context-menu + session-display 主 spec。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-14T01:39:14+08:00",
+          "tree_id": "4dc45045dcd44d39757495cf5acb8b491466d0ee",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/f120fd1a78801bed2b1cbe819bda98bc8343960f"
+        },
+        "date": 1781372563677,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 116.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1126,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 5660,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.861,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.891,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 41.51,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.62,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 284.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1180,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3305,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3037,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 37480,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.858,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 59,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 609.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6022,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 198,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1980,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 53.97,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 547.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5471,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 117.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1187,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.812,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9431,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1071,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 10150,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 1135,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 47.81,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 500.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 95.41,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 962,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9594,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 211.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1382,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13200,
             "unit": "µs"
           }
         ]
