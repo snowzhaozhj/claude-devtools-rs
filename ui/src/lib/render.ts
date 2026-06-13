@@ -125,16 +125,16 @@ renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
   const highlighted = language ? hljs.highlight(text, { language }).value : escapeHtml(text);
   const encoded = btoa(unescape(encodeURIComponent(text)));
   const langLabel = language ? `<span class="code-block-lang">${escapeHtml(language)}</span>` : "";
-  return `<div class="code-block-wrapper"><div class="code-block-actions">${langLabel}<button type="button" class="code-block-copy" data-code="${encoded}" title="Copy code">${COPY_ICON_SVG}</button></div><pre><code class="hljs">${highlighted}</code></pre></div>`;
+  return `<div class="code-block-wrapper"><div class="code-block-actions">${langLabel}<button type="button" class="code-block-copy" data-code="${encoded}" title="Copy code" aria-label="Copy code">${COPY_ICON_SVG}</button></div><pre><code class="hljs">${highlighted}</code></pre></div>`;
 };
 
 const _copyTimeouts = new WeakMap<Element, ReturnType<typeof setTimeout>>();
 if (typeof document !== "undefined") {
   document.addEventListener("click", (e) => {
     const btn = (e.target as HTMLElement).closest(".code-block-copy") as HTMLElement | null;
-    if (!btn?.dataset.code) return;
+    if (!btn || !("code" in btn.dataset)) return;
     e.stopPropagation();
-    const raw = decodeURIComponent(escape(atob(btn.dataset.code)));
+    const raw = btn.dataset.code ? decodeURIComponent(escape(atob(btn.dataset.code))) : "";
     navigator.clipboard.writeText(raw).then(() => {
       const prev = _copyTimeouts.get(btn);
       if (prev !== undefined) clearTimeout(prev);
