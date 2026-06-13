@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781347856823,
+  "lastUpdate": 1781349299674,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -19436,6 +19436,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 10010,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "49ebc9e3a031172c0a691f8e25db0996aad5183b",
+          "message": "fix(ui): polish SessionMetaMenu styling and interaction (#512)\n\n* fix(ui): polish SessionMetaMenu styling and align with AppContextMenu tokens\n\n- Fix invisible hover state by using --tool-item-hover-bg (matching AppContextMenu)\n- Add leading Lucide icons to all 6 menu items for faster visual scanning\n- Add success/error icons to toast feedback with color-coded backgrounds\n- Add toast exit animation (120ms fade-out) instead of abrupt disappearance\n- Align visual tokens with AppContextMenu: border-emphasis, 4px item radius,\n  7px 12px padding, unified box-shadow\n- Fix icon color from text-muted to text-secondary for WCAG 1.4.11 non-text\n  contrast compliance (3:1 minimum)\n- Fix roving tabindex: all menu items now tabindex=-1 (focus managed by\n  container + highlightIdx), matching WAI-ARIA menu pattern\n- Increase trigger icon from 13px to 15px for better click target\n- New icons in icons.ts: EXTERNAL_LINK_SVG, HASH_SVG, BRACES_SVG, CODE_SVG\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(ui): address code review findings in SessionMetaMenu\n\n- Fix stale fallback width 260→280 to match CSS max-width\n- Add prefers-reduced-motion override for toast exit transition\n- Add comment linking fallback value to CSS max-width\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(a11y): sync DOM focus to highlighted menu item for screen readers\n\nMove focus to the active menuitem on highlightIdx change via $effect,\nmatching AppContextMenu's approach (el.focus({ preventScroll: true })).\nPreviously only visual highlight changed; screen readers could not\nperceive keyboard navigation within the menu.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* feat(ui): add icons to all right-click context menus\n\nActivate the existing but unused ContextMenuItem.icon field across the\nentire context menu system:\n\n- AppContextMenu.svelte: render icon SVG before label, with hover/active\n  color transition matching SessionMetaMenu's icon treatment\n- menu-items.ts: add icon param to copyItem/externalItem helpers;\n  COPY_SVG default for copy items, specific icons per external action\n  (TERMINAL, FOLDER, CODE, SEARCH, FILE_TEXT)\n- Sidebar.svelte: add icons to session context menu (open/pin/hide/copy)\n- TabBar.svelte: add icons to tab context menu (close/split)\n- icons.ts: add SEARCH_SVG, PIN_SVG, EYE_SVG, EYE_OFF_SVG\n- types.ts: update icon field comment to reflect active rendering\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-13T19:10:58+08:00",
+          "tree_id": "63c1effa2f52f27f144a6d4293382e1ab809fcd3",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/49ebc9e3a031172c0a691f8e25db0996aad5183b"
+        },
+        "date": 1781349299303,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 114,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1117,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 6771,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.501,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.262,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 56.32,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 34.19,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 291.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1237,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3338,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2946,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 40750,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 5.367,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 63.77,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 640.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6419,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 194.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1941,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 52.03,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 526.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5268,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 129.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1303,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.34,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 73.18,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8669,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 877.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9306,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 956.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 48.26,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 512.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 94.96,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 960,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9683,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 189.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1319,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12920,
             "unit": "µs"
           }
         ]
