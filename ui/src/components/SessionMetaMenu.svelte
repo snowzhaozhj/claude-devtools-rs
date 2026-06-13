@@ -2,7 +2,17 @@
   import { onDestroy, tick, untrack } from "svelte";
   import { openPath } from "@tauri-apps/plugin-opener";
   import { isTauriRuntime } from "../lib/runtime";
-  import { MORE_HORIZONTAL_SVG } from "../lib/icons";
+  import {
+    MORE_HORIZONTAL_SVG,
+    EXTERNAL_LINK_SVG,
+    COPY_SVG,
+    HASH_SVG,
+    FILE_TEXT_SVG,
+    BRACES_SVG,
+    CODE_SVG,
+    CHECK_SVG,
+    ALERT_CIRCLE_SVG,
+  } from "../lib/icons";
   import { getSessionDetail } from "../lib/api";
   import type { ExportFormat } from "../lib/export";
   import { exportSession, getExportFileName, getExportFilterExt } from "../lib/export";
@@ -25,28 +35,40 @@
   let menuStyle = $state("");
   let toastStyle = $state("");
   let feedback: FeedbackKind | null = $state(null);
+  let toastExiting = $state(false);
   let feedbackTimer: ReturnType<typeof setTimeout> | null = null;
+  let exitTimer: ReturnType<typeof setTimeout> | null = null;
 
   const menuId = untrack(() => `session-meta-menu-${sessionId.slice(0, 8)}`);
   const tauri = isTauriRuntime();
 
   let exporting = $state(false);
 
+  const ITEM_ICONS: Record<ItemKey, string> = {
+    "open-finder": EXTERNAL_LINK_SVG,
+    "copy-cwd": COPY_SVG,
+    "copy-id": HASH_SVG,
+    "export-md": FILE_TEXT_SVG,
+    "export-json": BRACES_SVG,
+    "export-html": CODE_SVG,
+  };
+
   const items = $derived.by(() => {
     const cwdAvailable = typeof cwd === "string" && cwd.length > 0;
-    const list: Array<{ key: ItemKey; label: string; disabled: boolean }> = [];
+    const list: Array<{ key: ItemKey; label: string; disabled: boolean; icon: string }> = [];
     if (tauri) {
       list.push({
         key: "open-finder",
         label: navigator.platform.startsWith("Mac") ? "在 Finder 中打开" : "在文件管理器中打开",
         disabled: !cwdAvailable,
+        icon: ITEM_ICONS["open-finder"],
       });
     }
-    list.push({ key: "copy-cwd", label: "复制工作目录路径", disabled: !cwdAvailable });
-    list.push({ key: "copy-id", label: "复制 Session ID", disabled: false });
-    list.push({ key: "export-md", label: exporting ? "导出中..." : "导出为 Markdown", disabled: exporting });
-    list.push({ key: "export-json", label: exporting ? "导出中..." : "导出为 JSON", disabled: exporting });
-    list.push({ key: "export-html", label: exporting ? "导出中..." : "导出为 HTML", disabled: exporting });
+    list.push({ key: "copy-cwd", label: "复制工作目录路径", disabled: !cwdAvailable, icon: ITEM_ICONS["copy-cwd"] });
+    list.push({ key: "copy-id", label: "复制 Session ID", disabled: false, icon: ITEM_ICONS["copy-id"] });
+    list.push({ key: "export-md", label: exporting ? "导出中..." : "导出为 Markdown", disabled: exporting, icon: ITEM_ICONS["export-md"] });
+    list.push({ key: "export-json", label: exporting ? "导出中..." : "导出为 JSON", disabled: exporting, icon: ITEM_ICONS["export-json"] });
+    list.push({ key: "export-html", label: exporting ? "导出中..." : "导出为 HTML", disabled: exporting, icon: ITEM_ICONS["export-html"] });
     return list;
   });
 
@@ -61,10 +83,6 @@
     const margin = 8;
     const vw = window.innerWidth;
     let right = vw - r.right;
-    // 防左溢出：测 menu 实际宽度，确保 left 边界 ≥ margin。
-    // left = vw - right - width；left ≥ margin → right ≤ vw - width - margin。
-    // menuEl 在首次 placeMenu 已挂载（openMenu await tick 后调用）；
-    // 取不到时 fallback 到 max-width 260（CSS 上限）保守估计。
     const width = menuEl?.getBoundingClientRect().width ?? 260;
     const maxRight = vw - width - margin;
     if (right > maxRight) right = Math.max(maxRight, margin);
@@ -79,7 +97,6 @@
     const margin = 8;
     const vw = window.innerWidth;
     let right = vw - r.right;
-    // toast 比 menu 短（~60-80px），左溢出概率低，但仍 clamp 保险
     if (right < margin) right = margin;
     toastStyle = `top: ${r.bottom + gap}px; right: ${right}px;`;
   }
@@ -105,11 +122,18 @@
 
   function setFeedback(kind: FeedbackKind) {
     if (feedbackTimer) clearTimeout(feedbackTimer);
+    if (exitTimer) clearTimeout(exitTimer);
+    toastExiting = false;
     feedback = kind;
     placeToast();
     feedbackTimer = setTimeout(() => {
-      feedback = null;
-      feedbackTimer = null;
+      toastExiting = true;
+      exitTimer = setTimeout(() => {
+        feedback = null;
+        toastExiting = false;
+        feedbackTimer = null;
+        exitTimer = null;
+      }, 120);
     }, 1500);
   }
 
@@ -255,6 +279,7 @@
 
   onDestroy(() => {
     if (feedbackTimer) clearTimeout(feedbackTimer);
+    if (exitTimer) clearTimeout(exitTimer);
   });
 
   function feedbackText(kind: FeedbackKind): string {
@@ -263,6 +288,10 @@
     if (kind === "open-fail") return "打开失败";
     if (kind === "export-fail") return "导出失败";
     return "复制失败";
+  }
+
+  function isSuccess(kind: FeedbackKind): boolean {
+    return kind === "copied" || kind === "exported";
   }
 </script>
 
@@ -316,9 +345,21 @@
         class="meta-menu-item"
         class:meta-menu-item-highlight={highlightIdx === i && !item.disabled}
         aria-disabled={item.disabled || undefined}
-        tabindex={item.disabled ? -1 : 0}
+        tabindex="-1"
         onclick={() => !item.disabled && runItem(item.key)}
       >
+        <svg
+          class="meta-menu-item-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          {@html item.icon}
+        </svg>
         <span class="meta-menu-label">{item.label}</span>
       </button>
     {/each}
@@ -328,11 +369,29 @@
 {#if feedback}
   <div
     class="meta-toast"
-    class:meta-toast-error={feedback !== "copied" && feedback !== "exported"}
+    class:meta-toast-success={isSuccess(feedback)}
+    class:meta-toast-error={!isSuccess(feedback)}
+    class:meta-toast-exit={toastExiting}
     style={toastStyle}
     role="status"
     aria-live="polite"
   >
+    <svg
+      class="meta-toast-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      {#if isSuccess(feedback)}
+        {@html CHECK_SVG}
+      {:else}
+        {@html ALERT_CIRCLE_SVG}
+      {/if}
+    </svg>
     {feedbackText(feedback)}
   </div>
 {/if}
@@ -342,7 +401,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 6px 8px;
+    padding: 6px;
     background: transparent;
     border: 1px solid transparent;
     border-radius: 6px;
@@ -352,8 +411,8 @@
   }
 
   .meta-trigger-icon {
-    width: 13px;
-    height: 13px;
+    width: 15px;
+    height: 15px;
     color: var(--color-text-muted);
     flex-shrink: 0;
     transition: color 120ms ease-out;
@@ -364,7 +423,7 @@
     border-color: var(--color-border);
   }
   .meta-trigger:hover .meta-trigger-icon {
-    color: var(--color-text);
+    color: var(--color-text-secondary);
   }
   .meta-trigger:focus-visible {
     outline: 2px solid color-mix(in oklch, var(--color-accent-blue) 50%, transparent);
@@ -381,19 +440,19 @@
   .meta-menu {
     position: fixed;
     z-index: 200;
-    min-width: 180px;
-    max-width: 260px;
+    min-width: 200px;
+    max-width: 280px;
     padding: 4px;
-    background: var(--color-surface-raised);
+    background: var(--color-surface);
     border: 1px solid var(--color-border-emphasis);
     border-radius: 8px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
     outline: none;
     animation: meta-menu-in 150ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   :global([data-theme="dark"]) .meta-menu {
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   }
 
   @keyframes meta-menu-in {
@@ -412,7 +471,7 @@
     align-items: center;
     gap: 8px;
     width: 100%;
-    padding: 6px 12px;
+    padding: 7px 12px;
     background: transparent;
     border: none;
     border-radius: 4px;
@@ -424,9 +483,22 @@
     transition: background 100ms ease-out;
   }
 
+  .meta-menu-item-icon {
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+    transition: color 100ms ease-out;
+  }
+
   .meta-menu-item:hover:not([aria-disabled]),
   .meta-menu-item.meta-menu-item-highlight {
-    background: var(--color-surface-raised);
+    background: var(--tool-item-hover-bg);
+  }
+
+  .meta-menu-item:hover:not([aria-disabled]) .meta-menu-item-icon,
+  .meta-menu-item.meta-menu-item-highlight .meta-menu-item-icon {
+    color: var(--color-text);
   }
 
   .meta-menu-item:active:not([aria-disabled]) {
@@ -437,35 +509,59 @@
     color: var(--color-text-muted);
     cursor: not-allowed;
   }
+  .meta-menu-item[aria-disabled] .meta-menu-item-icon {
+    opacity: 0.5;
+  }
 
   .meta-menu-sep {
     height: 1px;
     background: var(--color-border-subtle);
-    margin: 4px 4px;
+    margin: 4px 8px;
   }
 
   .meta-toast {
     position: fixed;
     z-index: 200;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     font-size: 11px;
-    padding: 4px 8px;
-    border-radius: 4px;
-    background: var(--color-surface-overlay);
-    border: 1px solid var(--color-border);
-    color: var(--color-text-secondary);
+    font-weight: 500;
+    padding: 5px 10px;
+    border-radius: 6px;
     white-space: nowrap;
     pointer-events: none;
-    animation: meta-toast-in 100ms ease-out;
+    animation: meta-toast-in 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .meta-toast-icon {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  .meta-toast-success {
+    background: color-mix(in oklch, var(--color-success) 12%, var(--color-surface));
+    border: 1px solid color-mix(in oklch, var(--color-success) 25%, var(--color-border));
+    color: var(--color-success);
   }
 
   .meta-toast-error {
+    background: color-mix(in oklch, var(--color-danger) 10%, var(--color-surface));
+    border: 1px solid color-mix(in oklch, var(--color-danger) 20%, var(--color-border));
     color: var(--color-danger);
+  }
+
+  .meta-toast-exit {
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity 120ms ease-out, transform 120ms ease-out;
   }
 
   @keyframes meta-toast-in {
     0% {
       opacity: 0;
-      transform: translateY(-2px);
+      transform: translateY(-4px);
     }
     100% {
       opacity: 1;
@@ -480,7 +576,8 @@
     }
     .meta-trigger,
     .meta-trigger-icon,
-    .meta-menu-item {
+    .meta-menu-item,
+    .meta-menu-item-icon {
       transition: none;
     }
   }

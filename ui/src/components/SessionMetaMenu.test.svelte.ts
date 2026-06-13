@@ -245,7 +245,7 @@ describe("SessionMetaMenu 操作 + 反馈", () => {
     await Promise.resolve();
     await tick();
     expect(container.querySelector('[role="status"]')).not.toBeNull();
-    vi.advanceTimersByTime(1600);
+    vi.advanceTimersByTime(1700);
     await tick();
     expect(container.querySelector('[role="status"]')).toBeNull();
   });

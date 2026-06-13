@@ -282,6 +282,33 @@ export const COPY_SVG = `
 /** Lucide check — 复制成功反馈（单 path） */
 export const CHECK = "M20 6 9 17l-5-5";
 
+/** Lucide external-link — 外部打开 */
+export const EXTERNAL_LINK_SVG = `
+<path d="M15 3h6v6"/>
+<path d="M10 14 21 3"/>
+<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+`;
+
+/** Lucide hash — Session ID / 标识符 */
+export const HASH_SVG = `
+<line x1="4" x2="20" y1="9" y2="9"/>
+<line x1="4" x2="20" y1="15" y2="15"/>
+<line x1="10" x2="8" y1="3" y2="21"/>
+<line x1="16" x2="14" y1="3" y2="21"/>
+`;
+
+/** Lucide braces — JSON */
+export const BRACES_SVG = `
+<path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"/>
+<path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/>
+`;
+
+/** Lucide code — HTML / 代码 */
+export const CODE_SVG = `
+<polyline points="16 18 22 12 16 6"/>
+<polyline points="8 6 2 12 8 18"/>
+`;
+
 /** Lucide square-terminal — Background Jobs icon（多段，使用 {@html}） */
 export const JOBS_SVG = `
 <path d="m7 11 2-2-2-2"/>
