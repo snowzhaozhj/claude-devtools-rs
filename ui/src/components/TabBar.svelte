@@ -9,7 +9,7 @@
   } from "../lib/tabStore.svelte";
   import { MAX_PANES } from "../lib/paneTypes";
   import { beginDrag, getDragSource, getHit, isDragging } from "../lib/dragSession.svelte";
-  import { BELL, SETTINGS, FILE_TEXT_SVG, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
+  import { BELL, SETTINGS, FILE_TEXT_SVG, BOOK_OPEN_TEXT_SVG, X_SVG, PANEL_LEFT_SVG } from "../lib/icons";
   import {
     contextMenu,
     type ContextMenuItem,
@@ -66,20 +66,23 @@
     const canSplit = getPaneLayout().panes.length < MAX_PANES;
     const canCloseOthers = (pane?.tabs.length ?? 0) > 1;
     return [
-      { label: "关闭", action: () => closeTab(tabId) },
+      { label: "关闭", icon: X_SVG, action: () => closeTab(tabId) },
       {
         label: "关闭其他",
+        icon: X_SVG,
         disabled: !canCloseOthers,
         action: () => closeOthers(tabId),
       },
       { separator: true },
       {
         label: "Split Left",
+        icon: PANEL_LEFT_SVG,
         disabled: !canSplit,
         action: () => splitPane(paneId, tabId, "left"),
       },
       {
         label: "Split Right",
+        icon: PANEL_LEFT_SVG,
         disabled: !canSplit,
         action: () => splitPane(paneId, tabId, "right"),
       },

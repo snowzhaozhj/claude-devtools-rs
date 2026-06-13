@@ -26,6 +26,15 @@ import type { ContextMenuItem } from "./types";
 import type { UserChunk, AIChunk, ToolExecution } from "../api";
 import { userChunkToMarkdown, aiChunkToMarkdown, toolExecToMarkdown, chunkToPlainText } from "./markdown";
 import { truncatePath } from "./pathLabel";
+import {
+  COPY_SVG,
+  FILE_TEXT_SVG,
+  TERMINAL_SVG,
+  SEARCH_SVG,
+  CODE_SVG,
+  FOLDER_SVG,
+  EXTERNAL_LINK_SVG,
+} from "../icons";
 
 // ---------------------------------------------------------------------------
 // 共享类型
@@ -93,7 +102,7 @@ export function buildUserMessageItems(chunk: UserChunk, ctx: MenuItemContext): C
   appendSelectionCopyIfAny(items, ctx);
 
   items.push(copyItem("复制纯文本", () => chunkToPlainText(chunk), ctx, "⌘C"));
-  items.push(copyItem("复制为 Markdown", () => userChunkToMarkdown(chunk), ctx));
+  items.push(copyItem("复制为 Markdown", () => userChunkToMarkdown(chunk), ctx, undefined, "copy", false, FILE_TEXT_SVG));
 
   return finalizeWithSeparators(items);
 }
@@ -107,7 +116,7 @@ export function buildAssistantMessageItems(chunk: AIChunk, ctx: MenuItemContext)
   appendSelectionCopyIfAny(items, ctx);
 
   items.push(copyItem("复制纯文本", () => chunkToPlainText(chunk), ctx, "⌘C"));
-  items.push(copyItem("复制为 Markdown", () => aiChunkToMarkdown(chunk), ctx));
+  items.push(copyItem("复制为 Markdown", () => aiChunkToMarkdown(chunk), ctx, undefined, "copy", false, FILE_TEXT_SVG));
 
   return finalizeWithSeparators(items);
 }
@@ -138,6 +147,7 @@ export function buildBashToolItems(exec: ToolExecution, ctx: MenuItemContext): C
     "复制完整 Markdown",
     () => toolExecToMarkdown(exec),
     ctx,
+    undefined, "copy", false, FILE_TEXT_SVG,
   ));
   if (outputText) {
     items.push(copyItem(
@@ -147,19 +157,19 @@ export function buildBashToolItems(exec: ToolExecution, ctx: MenuItemContext): C
     ));
   }
 
-  // 外部类：在终端打开 cwd
   if (cwd) {
     items.push(externalItem(
       "在终端打开",
       () => ctx.dispatch.openInTerminal(cwd),
+      undefined, TERMINAL_SVG,
     ));
   }
 
-  // 错误时提供"在浏览器搜索错误信息"
   if (exec.isError && outputText) {
     items.push(externalItem(
       "在浏览器搜索错误",
       () => ctx.dispatch.openUrl(buildSearchUrl(firstLine(outputText), ctx.settings.searchEngine)),
+      undefined, SEARCH_SVG,
     ));
   }
 
@@ -190,6 +200,7 @@ export function buildFileToolItems(exec: ToolExecution, ctx: MenuItemContext): C
     "复制完整 Markdown",
     () => toolExecToMarkdown(exec),
     ctx,
+    undefined, "copy", false, FILE_TEXT_SVG,
   ));
   if (exec.toolName === "Edit" || exec.toolName === "Write") {
     items.push(copyItem(
@@ -199,20 +210,22 @@ export function buildFileToolItems(exec: ToolExecution, ctx: MenuItemContext): C
     ));
   }
 
-  // 外部类
   if (path) {
     items.push(externalItem(
       "在编辑器打开",
       () => ctx.dispatch.openInEditor(path),
       makePathLabel("在编辑器打开", path),
+      CODE_SVG,
     ));
     items.push(externalItem(
       "在 Finder 中显示",
       () => ctx.dispatch.revealInDir(path),
+      undefined, FOLDER_SVG,
     ));
     items.push(externalItem(
       "在终端打开父目录",
       () => ctx.dispatch.openInTerminal(parentDir(path)),
+      undefined, TERMINAL_SVG,
     ));
   }
 
@@ -237,14 +250,17 @@ export function buildWorktreeChipItems(
       "在编辑器打开",
       () => ctx.dispatch.openInEditor(worktree.path),
       makePathLabel("在编辑器打开", worktree.path),
+      CODE_SVG,
     ));
     items.push(externalItem(
       "在终端打开",
       () => ctx.dispatch.openInTerminal(worktree.path),
+      undefined, TERMINAL_SVG,
     ));
     items.push(externalItem(
       "在 Finder 中显示",
       () => ctx.dispatch.revealInDir(worktree.path),
+      undefined, FOLDER_SVG,
     ));
   }
 
@@ -270,10 +286,12 @@ export function buildProjectCardItems(
       "在编辑器打开",
       () => ctx.dispatch.openInEditor(project.path),
       makePathLabel("在编辑器打开", project.path),
+      CODE_SVG,
     ));
     items.push(externalItem(
       "在终端打开",
       () => ctx.dispatch.openInTerminal(project.path),
+      undefined, TERMINAL_SVG,
     ));
   }
 
@@ -294,10 +312,12 @@ export function buildSelectionItems(selectionText: string, ctx: MenuItemContext)
     "复制为引用 Markdown",
     () => quoteAsMarkdown(text),
     ctx,
+    undefined, "copy", false, FILE_TEXT_SVG,
   ));
   items.push(externalItem(
     "在浏览器搜索",
     () => ctx.dispatch.openUrl(buildSearchUrl(text, ctx.settings.searchEngine)),
+    undefined, SEARCH_SVG,
   ));
 
   return finalizeWithSeparators(items);
@@ -320,12 +340,14 @@ function copyItem(
   shortcut?: string,
   kind: "copy" = "copy",
   disabled = false,
+  icon: string = COPY_SVG,
 ): RawItem {
   return {
     label,
     kind,
     shortcut,
     disabled,
+    icon,
     feedback: { label: "已复制!" },
     action: () => {
       const text = textFn();
@@ -339,10 +361,12 @@ function externalItem(
   label: string,
   fn: () => Promise<unknown> | void,
   pathLabel?: { short: string; full: string },
+  icon?: string,
 ): RawItem {
   const item: RawItem = {
     label,
     kind: "external",
+    icon,
     action: () => {
       void fn();
     },

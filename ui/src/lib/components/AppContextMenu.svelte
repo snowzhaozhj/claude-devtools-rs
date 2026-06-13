@@ -362,6 +362,11 @@
           }
         }}
       >
+        {#if item.icon}
+          <svg class="cm-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            {@html item.icon}
+          </svg>
+        {/if}
         <span class="cm-item-label">{renderLabel(item, idx)}</span>
         {#if hasSubmenu}
           <span class="cm-item-chevron" aria-hidden="true">›</span>
@@ -439,6 +444,23 @@
     -webkit-user-select: none;
     /* min-width: 0 让 flex 子元素允许 shrink 触发 ellipsis（CSS flex 默认 min-content） */
     min-width: 0;
+  }
+
+  .cm-item-icon {
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+    transition: color 0.1s;
+  }
+
+  .cm-item:hover:not(.cm-item-disabled) .cm-item-icon,
+  .cm-item-active:not(.cm-item-disabled) .cm-item-icon {
+    color: var(--color-text);
+  }
+
+  .cm-item-disabled .cm-item-icon {
+    opacity: 0.5;
   }
 
   .cm-item-label {

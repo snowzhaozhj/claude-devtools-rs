@@ -44,7 +44,19 @@
     applyMetadata as cacheApplyMetadata,
   } from "../lib/sessionListStore.svelte";
   import { buildFilterCursor, sessionListCacheKey } from "../lib/groupCursor";
-  import { MESSAGE_SQUARE, BOOK_OPEN_TEXT_SVG } from "../lib/icons";
+  import {
+    MESSAGE_SQUARE,
+    BOOK_OPEN_TEXT_SVG,
+    EXTERNAL_LINK_SVG,
+    PLUS_SVG,
+    PANEL_LEFT_SVG,
+    PIN_SVG,
+    EYE_OFF_SVG,
+    EYE_SVG,
+    HASH_SVG,
+    COPY_SVG,
+    TERMINAL_SVG,
+  } from "../lib/icons";
   import {
     contextMenu,
     type ContextMenuItem,
@@ -158,15 +170,18 @@
     return [
       {
         label: "在当前标签页打开",
+        icon: EXTERNAL_LINK_SVG,
         action: () =>
           openOrReplaceTab(session.sessionId, sessionProjectId, label),
       },
       {
         label: "在新标签页打开",
+        icon: PLUS_SVG,
         action: () => openTab(session.sessionId, sessionProjectId, label),
       },
       {
         label: "在新 Pane 打开",
+        icon: PANEL_LEFT_SVG,
         disabled: !canSplit,
         action: () =>
           openTabInNewPane(session.sessionId, sessionProjectId, label),
@@ -174,20 +189,24 @@
       { separator: true },
       {
         label: pinned ? "取消置顶" : "置顶会话",
+        icon: PIN_SVG,
         action: () => togglePin(sessionProjectId, session.sessionId),
       },
       {
         label: hidden ? "取消隐藏" : "隐藏会话",
+        icon: hidden ? EYE_SVG : EYE_OFF_SVG,
         action: () => toggleHide(sessionProjectId, session.sessionId),
       },
       { separator: true },
       {
         label: "复制 Session ID",
+        icon: HASH_SVG,
         action: () => navigator.clipboard.writeText(session.sessionId),
         feedback: { label: "已复制!" },
       },
       {
         label: "复制恢复命令",
+        icon: TERMINAL_SVG,
         action: () =>
           navigator.clipboard.writeText(`claude --resume ${session.sessionId}`),
         feedback: { label: "已复制!" },
