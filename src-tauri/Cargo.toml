@@ -6,7 +6,7 @@
 
 [package]
 name = "claude-devtools-tauri"
-version = "0.6.16"
+version = "0.6.17"
 description = "Claude DevTools desktop app"
 authors = ["zhaohejie"]
 license = "MIT"
