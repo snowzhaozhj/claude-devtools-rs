@@ -112,17 +112,42 @@ hljs.registerLanguage("gradle", gradle);
 hljs.registerLanguage("cmake", cmake);
 hljs.registerLanguage("latex", latex);
 
+const COPY_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+const CHECK_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+
 const renderer = new marked.Renderer();
 renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
-  // Mermaid 代码块：输出占位 div，由 processMermaidBlocks 后处理
   if (lang === "mermaid") {
     const encoded = btoa(unescape(encodeURIComponent(text)));
     return `<div class="mermaid-block" data-code="${encoded}"><pre><code class="hljs">${DOMPurify.sanitize(text)}</code></pre></div>`;
   }
   const language = lang && hljs.getLanguage(lang) ? lang : undefined;
   const highlighted = language ? hljs.highlight(text, { language }).value : escapeHtml(text);
-  return `<pre><code class="hljs">${highlighted}</code></pre>`;
+  const encoded = btoa(unescape(encodeURIComponent(text)));
+  const langLabel = language ? `<span class="code-block-lang">${escapeHtml(language)}</span>` : "";
+  return `<div class="code-block-wrapper"><div class="code-block-actions">${langLabel}<button type="button" class="code-block-copy" data-code="${encoded}" title="Copy code">${COPY_ICON_SVG}</button></div><pre><code class="hljs">${highlighted}</code></pre></div>`;
 };
+
+const _copyTimeouts = new WeakMap<Element, ReturnType<typeof setTimeout>>();
+if (typeof document !== "undefined") {
+  document.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest(".code-block-copy") as HTMLElement | null;
+    if (!btn?.dataset.code) return;
+    e.stopPropagation();
+    const raw = decodeURIComponent(escape(atob(btn.dataset.code)));
+    navigator.clipboard.writeText(raw).then(() => {
+      const prev = _copyTimeouts.get(btn);
+      if (prev !== undefined) clearTimeout(prev);
+      btn.classList.add("copied");
+      btn.innerHTML = CHECK_ICON_SVG;
+      _copyTimeouts.set(btn, setTimeout(() => {
+        btn.classList.remove("copied");
+        btn.innerHTML = COPY_ICON_SVG;
+        _copyTimeouts.delete(btn);
+      }, 2000));
+    });
+  });
+}
 
 renderer.table = function (token) {
   let header = "";

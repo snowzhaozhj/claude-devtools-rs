@@ -2589,17 +2589,19 @@
   .prose :global(h1) { font-size: 1.25em; }
   .prose :global(h2) { font-size: 1.12em; }
   .prose :global(h3) { font-size: 1.05em; }
-  .prose :global(ul), .prose :global(ol) { margin: 0.35em 0; padding-left: 1.4em; }
+  .prose :global(ul), .prose :global(ol) { margin: 0.35em 0; padding-left: 1.8em; }
   .prose :global(li) { margin: 0.15em 0; }
   .prose :global(code) {
     max-width: 100%;
     background: var(--prose-code-bg);
     color: var(--prose-code-text);
-    padding: 1px 5px;
+    padding: 2px 6px;
     border-radius: 4px;
     font-family: var(--font-mono);
     font-size: 0.87em;
     overflow-wrap: anywhere;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
   }
   .prose :global(pre) {
     min-width: 0;
@@ -2612,6 +2614,14 @@
     overflow-x: auto;
     margin: 0.6em 0;
     line-height: 1.5;
+    cursor: text;
+  }
+  .prose :global(pre code::selection),
+  .prose :global(pre code *::selection) {
+    background: rgba(59, 130, 246, 0.2);
+  }
+  .prose :global(.code-block-wrapper pre) {
+    margin: 0;
   }
   .prose :global(pre code) {
     display: block;
