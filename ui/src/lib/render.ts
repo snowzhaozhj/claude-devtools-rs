@@ -1,4 +1,5 @@
 import { marked } from "marked";
+import { COPY_SVG, CHECK } from "./icons";
 import hljs from "highlight.js/lib/core";
 import json from "highlight.js/lib/languages/json";
 import bash from "highlight.js/lib/languages/bash";
@@ -112,8 +113,10 @@ hljs.registerLanguage("gradle", gradle);
 hljs.registerLanguage("cmake", cmake);
 hljs.registerLanguage("latex", latex);
 
-const COPY_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
-const CHECK_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+const SVG_WRAP = (inner: string) =>
+  `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+const COPY_ICON_SVG = SVG_WRAP(COPY_SVG);
+const CHECK_ICON_SVG = SVG_WRAP(`<path d="${CHECK}"/>`);
 
 const renderer = new marked.Renderer();
 renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
