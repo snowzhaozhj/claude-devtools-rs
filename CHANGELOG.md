@@ -9,6 +9,13 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.17] — 2026-06-13
+
+### Fixed
+- **UI**: polished SessionMetaMenu styling — consistent padding, hover states, and keyboard interaction.
+- **UI**: improved markdown prose styling and added code block copy button for assistant messages.
+- **UI**: prevented WKWebView focus-scroll jump when clicking copy buttons.
+
 ## [0.6.16] — 2026-06-10
 
 ### Fixed
@@ -339,7 +346,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.16...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.17...HEAD
+[0.6.17]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.16...v0.6.17
 [0.6.16]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.15...v0.6.16
 [0.6.15]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.14...v0.6.15
 [0.6.14]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.13...v0.6.14
