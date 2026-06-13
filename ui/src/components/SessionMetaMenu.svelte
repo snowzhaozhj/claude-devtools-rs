@@ -38,6 +38,7 @@
   let toastExiting = $state(false);
   let feedbackTimer: ReturnType<typeof setTimeout> | null = null;
   let exitTimer: ReturnType<typeof setTimeout> | null = null;
+  let itemEls: HTMLButtonElement[] = $state([]);
 
   const menuId = untrack(() => `session-meta-menu-${sessionId.slice(0, 8)}`);
   const tauri = isTauriRuntime();
@@ -107,8 +108,16 @@
     highlightIdx = enabledIndices[0] ?? -1;
     await tick();
     placeMenu();
-    menuEl?.focus();
+    const first = itemEls[highlightIdx];
+    if (first) first.focus({ preventScroll: true });
+    else menuEl?.focus();
   }
+
+  $effect(() => {
+    if (!open || highlightIdx < 0) return;
+    const el = itemEls[highlightIdx];
+    if (el && document.activeElement !== el) el.focus({ preventScroll: true });
+  });
 
   function closeMenu() {
     if (!open) return;
@@ -341,6 +350,7 @@
         <div class="meta-menu-sep" role="separator"></div>
       {/if}
       <button
+        bind:this={itemEls[i]}
         type="button"
         role="menuitem"
         class="meta-menu-item"
