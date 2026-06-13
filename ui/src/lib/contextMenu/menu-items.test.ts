@@ -14,6 +14,7 @@ import {
   buildWorktreeChipItems,
   buildProjectCardItems,
   buildSelectionItems,
+  buildMarkdownBlockItems,
   type MenuItemContext,
   type MenuItemDispatch,
 } from './menu-items'
@@ -393,5 +394,58 @@ describe('边界 case', () => {
     const items = buildProjectCardItems({ path: '/repo/foo', name: 'foo' }, ctx)
     expect(labels(items)).toContain('复制路径')
     expect(labels(items)).toContain('复制项目名')
+  })
+})
+
+// ---- buildMarkdownBlockItems（工具展开块：slash / Output / Thinking / User message） ----
+
+describe('buildMarkdownBlockItems', () => {
+  const MD = '# 标题\n正文 **粗体**'
+
+  test('输出"复制纯文本" + "复制为 Markdown"两项', () => {
+    const ls = labels(buildMarkdownBlockItems(MD, makeCtx()))
+    expect(ls).toContain('复制纯文本')
+    expect(ls).toContain('复制为 Markdown')
+  })
+
+  test('"复制为 Markdown" 写入原始 markdown 源', () => {
+    const ctx = makeCtx()
+    const items = buildMarkdownBlockItems(MD, ctx)
+    items.find((it) => it.label === '复制为 Markdown')!.action?.()
+    expect(ctx.dispatch.copyToClipboard).toHaveBeenCalledWith(MD)
+  })
+
+  test('"复制纯文本" strip markdown 标记（去 heading hash / 加粗星号）', () => {
+    const ctx = makeCtx()
+    const items = buildMarkdownBlockItems(MD, ctx)
+    items.find((it) => it.label === '复制纯文本')!.action?.()
+    const written = (ctx.dispatch.copyToClipboard as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
+    expect(written).not.toContain('#')
+    expect(written).not.toContain('**')
+    expect(written).toContain('标题')
+    expect(written).toContain('粗体')
+  })
+
+  test('有选区时首项融合"复制选中文本"并传选区', () => {
+    const ctx = makeCtx({ selectionText: 'sel slice' })
+    const items = buildMarkdownBlockItems(MD, ctx)
+    expect(items[0].label).toBe('复制选中文本')
+    expect(items[0].shortcut).toBe('⌘C')
+    items[0].action?.()
+    expect(ctx.dispatch.copyToClipboard).toHaveBeenCalledWith('sel slice')
+  })
+
+  test('空文本返回空数组（调用方据此不弹菜单）', () => {
+    expect(buildMarkdownBlockItems('', makeCtx())).toEqual([])
+  })
+
+  test('null / undefined 文本走 `?? ""` 兜底返回空数组（slash instructions 可能缺失）', () => {
+    expect(buildMarkdownBlockItems(null as unknown as string, makeCtx())).toEqual([])
+    expect(buildMarkdownBlockItems(undefined as unknown as string, makeCtx())).toEqual([])
+  })
+
+  test('纯函数：相同输入 → 相同输出', () => {
+    const ctx = makeCtx()
+    expect(labels(buildMarkdownBlockItems(MD, ctx))).toEqual(labels(buildMarkdownBlockItems(MD, ctx)))
   })
 })

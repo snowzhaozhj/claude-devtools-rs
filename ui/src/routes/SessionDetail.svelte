@@ -19,7 +19,7 @@
   } from "../lib/keyboard/session-detail-handlers";
   import { registerHandler, unregisterHandler, scheduleRefresh, cancelScheduledRefresh } from "../lib/fileChangeStore.svelte";
   import { contextMenu } from "../lib/contextMenu.svelte";
-  import { buildUserMessageItems, buildAssistantMessageItems, type MenuItemContext } from "../lib/contextMenu/menu-items";
+  import { buildUserMessageItems, buildAssistantMessageItems, buildMarkdownBlockItems, type MenuItemContext } from "../lib/contextMenu/menu-items";
   import { getMenuSettings } from "../lib/contextMenu/settings.svelte";
   import { getMenuItemDispatch } from "../lib/contextMenu/dispatch";
   import BaseItem from "../components/BaseItem.svelte";
@@ -1206,7 +1206,7 @@
                     >
                       {#snippet children()}
                         {#if item.slash.instructions}
-                          <div class="prose slash-instructions lazy-md" {@attach attachMarkdown(item.slash.instructions, "slash")}></div>
+                          <div class="prose slash-instructions lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.slash.instructions ?? "", buildMenuCtx())} {@attach attachMarkdown(item.slash.instructions, "slash")}></div>
                         {/if}
                       {/snippet}
                     </BaseItem>
@@ -1259,7 +1259,7 @@
                       onclick={() => toggle(key)}
                     >
                       {#snippet children()}
-                        <div class="prose prose-thinking lazy-md" {@attach attachMarkdown(item.text, "thinking")}></div>
+                        <div class="prose prose-thinking lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildMenuCtx())} {@attach attachMarkdown(item.text, "thinking")}></div>
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "output"}
@@ -1273,7 +1273,7 @@
                       onclick={() => toggle(key)}
                     >
                       {#snippet children()}
-                        <div class="prose lazy-md" {@attach attachMarkdown(item.text, "output")}></div>
+                        <div class="prose lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildMenuCtx())} {@attach attachMarkdown(item.text, "output")}></div>
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "user_message"}
@@ -1286,7 +1286,7 @@
                       onclick={() => toggle(key)}
                     >
                       {#snippet children()}
-                        <div class="prose lazy-md" {@attach attachMarkdown(item.text, "output")}></div>
+                        <div class="prose lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildMenuCtx())} {@attach attachMarkdown(item.text, "output")}></div>
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "subagent"}
