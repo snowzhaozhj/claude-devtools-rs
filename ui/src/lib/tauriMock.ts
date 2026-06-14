@@ -507,8 +507,10 @@ function buildHandler(fx: Fixture) {
       case 'get_subagent_trace':
         return []
 
-      case 'get_workflow_agent_trace':
-        return []
+      case 'get_workflow_agent_trace': {
+        const agentId = getArg<string>(payload, 'agentId') ?? ''
+        return fx.workflowAgentTraces?.[agentId] ?? []
+      }
 
       case 'get_workflow_detail':
         return { runId: getArg<string>(payload, 'runId') ?? '', status: 'pending', totalTokens: 0, durationMs: 0 }

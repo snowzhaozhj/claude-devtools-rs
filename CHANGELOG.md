@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- **UI**: right-clicking an expanded tool block (Thinking, Output, User message) inside a subagent's or workflow agent's Execution Trace now copies that block's own content. The earlier fix only covered the main session view; trace blocks render through a separate component that was still missing the per-block copy menu.
+
 ## [0.6.18] — 2026-06-14
 
 ### Fixed

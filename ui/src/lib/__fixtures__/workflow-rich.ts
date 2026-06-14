@@ -36,7 +36,7 @@ const workflowCompleted: WorkflowItem = {
     { index: 1, title: 'Test' },
   ],
   agents: [
-    { label: 'builder-1', phaseIndex: 0, state: 'completed', tokens: 12400, toolCalls: 8, durationMs: 45000 },
+    { label: 'builder-1', phaseIndex: 0, state: 'completed', tokens: 12400, toolCalls: 8, durationMs: 45000, sessionId: 'wf-agent-builder-1' },
     { label: 'builder-2', phaseIndex: 0, state: 'completed', tokens: 9800, toolCalls: 5, durationMs: 38000 },
     { label: 'tester-1', phaseIndex: 1, state: 'completed', tokens: 6200, toolCalls: 12, durationMs: 62000 },
     { label: 'tester-2', phaseIndex: 1, state: 'completed', tokens: 7100, toolCalls: 9, durationMs: 55000 },
@@ -333,6 +333,59 @@ const chunks: Chunk[] = [
 ]
 
 // ---------------------------------------------------------------------------
+// Workflow agent drilldown trace（builder-1 / wf-agent-builder-1）
+// 经 WorkflowCard → ExecutionTrace 渲染，验证执行链内工具展开块右键复制。
+// 各块文本刻意区分，便于 e2e 断言"复制的是该块自身文本"。
+// ---------------------------------------------------------------------------
+
+const wfAgentPromptChunk: UserChunk = {
+  kind: 'user',
+  chunkId: 'wf-agent-builder-1:prompt:0',
+  uuid: 'wf-agent-builder-1-prompt',
+  timestamp: ts(1.1),
+  durationMs: null,
+  content: 'Build the project and report the bundle size delta after the new dependency.',
+  metrics: emptyMetrics(),
+}
+
+const wfAgentTraceChunk: AIChunk = {
+  kind: 'ai',
+  chunkId: 'wf-agent-builder-1:a1:0',
+  timestamp: ts(1.2),
+  durationMs: 45000,
+  responses: [
+    {
+      uuid: 'wf-agent-builder-1-a1',
+      timestamp: ts(1.2),
+      content: 'Build succeeded; bundle grew by 4.2 KB after adding the new dependency.',
+      toolCalls: [],
+      usage: {
+        input_tokens: 4200,
+        output_tokens: 310,
+        cache_read_input_tokens: 1100,
+        cache_creation_input_tokens: 60,
+      },
+      model: 'claude-sonnet-4-6',
+    },
+  ],
+  metrics: {
+    inputTokens: 4200,
+    outputTokens: 310,
+    cacheCreationTokens: 60,
+    cacheReadTokens: 1100,
+    toolCount: 0,
+    costUsd: null,
+  },
+  semanticSteps: [
+    { kind: 'thinking', text: 'Inspect the build config before running the bundler step.', timestamp: ts(1.2) },
+    { kind: 'text', text: 'Build succeeded; bundle grew by 4.2 KB after adding the new dependency.', timestamp: ts(1.3) },
+  ],
+  toolExecutions: [],
+  subagents: [],
+  slashCommands: [],
+}
+
+// ---------------------------------------------------------------------------
 // Fixture 组装
 // ---------------------------------------------------------------------------
 
@@ -372,6 +425,9 @@ export const workflowRichFixture: Fixture = {
       title: 'Workflow rendering test',
       workflowItems: [workflowCompleted, workflowPartialFailure, workflowRunning, workflowEmpty],
     },
+  },
+  workflowAgentTraces: {
+    'wf-agent-builder-1': [wfAgentPromptChunk, wfAgentTraceChunk],
   },
   prefs: {
     'mock-wf-project': { pinned: [], hidden: [] },
