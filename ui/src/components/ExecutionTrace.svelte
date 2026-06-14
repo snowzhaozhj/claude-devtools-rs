@@ -4,6 +4,10 @@
   import { renderMarkdown } from "../lib/render";
   import { getToolSummary, getToolStatus, getToolDurationMs, isToolPending, cleanDisplayText, getToolContextTokens, estimateTokens, viewerUsesOutput } from "../lib/toolHelpers";
   import { WRENCH, BRAIN, SLASH, MESSAGE_SQUARE, USER_ICON } from "../lib/icons";
+  import { contextMenu } from "../lib/contextMenu.svelte";
+  import { buildMarkdownBlockItems, type MenuItemContext } from "../lib/contextMenu/menu-items";
+  import { getMenuSettings } from "../lib/contextMenu/settings.svelte";
+  import { getMenuItemDispatch } from "../lib/contextMenu/dispatch";
   import BaseItem from "./BaseItem.svelte";
   import SubagentCard from "./SubagentCard.svelte";
   import WorkflowCard from "./WorkflowCard.svelte";
@@ -37,6 +41,20 @@
     return map;
   });
   const traceSessionId = $derived(sessionId ?? rootSessionId);
+
+  // 右键复制菜单上下文构造（对齐 SessionDetail::buildMenuCtx）。
+  // buildMarkdownBlockItems 对纯 markdown 块复制仅消费 selectionText 与
+  // dispatch.copyToClipboard；sessionId / projectId / settings 不参与 markdown
+  // 块复制计算（它们服务于文件类 item），故嵌套场景 projectId 为空不影响正确性。
+  function buildBlockMenuCtx(): MenuItemContext {
+    return {
+      sessionId: traceSessionId,
+      projectId,
+      settings: getMenuSettings(),
+      selectionText: window.getSelection()?.toString() ?? "",
+      dispatch: getMenuItemDispatch(),
+    };
+  }
 
   const MAX_DEPTH = 8;
 
@@ -170,7 +188,7 @@
         onclick={() => toggle(key)}
       >
         {#snippet children()}
-          <div class="prose prose-thinking">{@html renderMarkdown(item.text)}</div>
+          <div class="prose prose-thinking" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildBlockMenuCtx())}>{@html renderMarkdown(item.text)}</div>
         {/snippet}
       </BaseItem>
     {:else if item.type === "output"}
@@ -185,7 +203,7 @@
         onclick={() => toggle(key)}
       >
         {#snippet children()}
-          <div class="prose">{@html renderMarkdown(item.text)}</div>
+          <div class="prose" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildBlockMenuCtx())}>{@html renderMarkdown(item.text)}</div>
         {/snippet}
       </BaseItem>
     {:else if item.type === "user_message"}
@@ -199,7 +217,7 @@
         onclick={() => toggle(key)}
       >
         {#snippet children()}
-          <div class="prose">{@html renderMarkdown(item.text)}</div>
+          <div class="prose" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildBlockMenuCtx())}>{@html renderMarkdown(item.text)}</div>
         {/snippet}
       </BaseItem>
     {:else if item.type === "subagent"}

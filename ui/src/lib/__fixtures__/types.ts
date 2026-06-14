@@ -4,6 +4,7 @@
 
 import type {
   AppConfig,
+  Chunk,
   GetNotificationsResult,
   HttpServerStatus,
   PaginatedResponse,
@@ -34,6 +35,9 @@ export interface Fixture {
   prefs: Record<string, ProjectSessionPrefs>
   /** projectId → ProjectMemory。get_project_memory 查找。 */
   memories?: Record<string, ProjectMemory>
+  /** agentId（WorkflowAgent.sessionId）→ 该 workflow agent 的 trace chunks。
+   *  get_workflow_agent_trace 查找；无则返回 []（agent 不可 drilldown）。 */
+  workflowAgentTraces?: Record<string, Chunk[]>
   /** "<projectId>:<file>" → Markdown 内容。read_memory_file 查找。 */
   memoryFiles?: Record<string, string>
   /** AppConfig。get_config / update_config 返回。 */
