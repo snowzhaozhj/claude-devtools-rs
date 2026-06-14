@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781372564447,
+  "lastUpdate": 1781419765307,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -20063,6 +20063,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 13200,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "718c3687060d197eb6eb876d5417e55c09c69065",
+          "message": "fix(ui): subagent ExecutionTrace 显示首条 input（父会话 prompt） (#518)\n\n* fix(ui): subagent ExecutionTrace 显示首条 input（父会话 prompt）\n\nbuildDisplayItemsFromChunks 此前一刀切跳过所有非 AI chunk，把承载\n父会话 prompt 的 UserChunk 整个丢弃 —— 展开 subagent 只见 thinking/\ntool/output，看不到\"它被要求做什么\"。后端数据本身正确（subagent 首条\n纯文本 prompt 经 build_chunks 产出独立 UserChunk）；问题纯在前端展示。\n原版 TS 有专门的 subagent_input DisplayItem，port 时丢了。\n\n修复：\n- buildDisplayItemsFromChunks 对 user chunk 提取文本、清洗后非空则产\n  user_message DisplayItem（复用已有类型）；slash UserChunk 用\n  extractSlashInfo 判定后跳过，避免与下个 AIChunk 的 slash item 重复\n  渲染（codex 二审抓的硬伤）；system/compact 仍跳过。\n- ExecutionTrace.svelte 新增 user_message 渲染分支。\n\n影响面仅 SubagentCard/WorkflowCard（都经 ExecutionTrace），主会话视图\n不经此函数零影响。无后端/IPC/serde 改动。\n\n验证：vitest 单测含反转验证（删 fix → 测试 fail）；真数据 e2e 在\n?http=1 浏览器展开真实 subagent，prompt（2497 字符）正确显示在轨迹\n顶部，0 console error。\n\n走 openspec：改 session-display spec 的 \"Execution Trace 内独立展开\"\nScenario 枚举 + 补 prompt 展示 / slash 不重复两个 Scenario。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* fix(ui): userChunkText 拼接所有 text 块 + 补测试加固\n\n二审收敛修复：\n- codex Finding 1（WARNING）：userChunkText 原只取首个 text 块，\n  `text + image + text` 形态会丢 part2。改为拼接所有 text 块，对齐\n  后端 extract_plain_text 与 TS 原版 .join('')。\n- pr-test-analyzer 建议：补 system/compact 跳过、多 UserChunk 保序、\n  空数组、多 text 块 4 个 case；首个 case 加硬断言防 narrowing 假绿。\n\nvitest 24 passed（含多 text 块反转验证：只取首块→fail，join→pass）；\nsvelte-check 0 error。\n\ncode-reviewer 0 critical/important；codex 无硬伤；CI 全绿。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive restore-subagent-trace-prompt\n\n二审收敛（codex 可合并 / code-reviewer 0 / pr-test-analyzer 0 critical）+\n两轮 CI 全绿后归档。主 spec session-display 同步 'Execution Trace 内独立展开'\n枚举 + prompt 展示 / slash 不重复两个 Scenario。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-14T14:45:55+08:00",
+          "tree_id": "701bd55d6c623598182e3341e2e4e0e6ccddae85",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/718c3687060d197eb6eb876d5417e55c09c69065"
+        },
+        "date": 1781419764964,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 116.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1130,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4861,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.632,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 9.838,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 46.35,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 32.37,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 288.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1201,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 2986,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2900,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 38060,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 5.329,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 59.02,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 601.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6117,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 196.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1966,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 53.96,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 547.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5472,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 119.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1200,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.811,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9600,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1021,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9227,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 1030,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 47.86,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 505.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 97.25,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 967.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9723,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 215.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1405,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13270,
             "unit": "µs"
           }
         ]
