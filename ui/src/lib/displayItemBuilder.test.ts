@@ -3,11 +3,12 @@
 
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import type { AIChunk, SubagentProcess, TeammateMessage, ToolExecution } from './api'
+import type { AIChunk, CompactChunk, SubagentProcess, SystemChunk, TeammateMessage, ToolExecution, UserChunk } from './api'
 import {
   _resetDisplayItemsCacheForTest,
   buildDisplayItems,
   buildDisplayItemsCached,
+  buildDisplayItemsFromChunks,
 } from './displayItemBuilder'
 
 function makeAIChunk(
@@ -398,5 +399,144 @@ describe('buildDisplayItems — empty-responses AIChunk with teammate', () => {
       expect(userMsgItems[0].text).toBe('user interjection')
       expect(userMsgItems[0].timestamp).toBe('2026-05-30T15:18:02Z')
     }
+  })
+})
+
+const zeroMetrics = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheCreationTokens: 0,
+  cacheReadTokens: 0,
+  toolCount: 0,
+  costUsd: null,
+}
+
+function makeUserChunk(uuid: string, content: string, ts = '2026-06-14T00:00:00Z'): UserChunk {
+  return {
+    kind: 'user',
+    chunkId: `user:${uuid}`,
+    uuid,
+    timestamp: ts,
+    durationMs: null,
+    content,
+    metrics: zeroMetrics,
+  }
+}
+
+function makeSystemChunk(uuid: string, contentText = 'sys'): SystemChunk {
+  return {
+    kind: 'system',
+    chunkId: `sys:${uuid}`,
+    uuid,
+    timestamp: '2026-06-14T00:00:00Z',
+    durationMs: null,
+    contentText,
+    metrics: zeroMetrics,
+  }
+}
+
+function makeCompactChunk(uuid: string): CompactChunk {
+  return {
+    kind: 'compact',
+    chunkId: `compact:${uuid}`,
+    uuid,
+    timestamp: '2026-06-14T00:00:00Z',
+    durationMs: null,
+    summaryText: 'compacted',
+    metrics: zeroMetrics,
+  }
+}
+
+describe('buildDisplayItemsFromChunks subagent prompt 还原', () => {
+  test('UserChunk(prompt) 产出 user_message item 含文本与 timestamp', () => {
+    const prompt = makeUserChunk('p1', '修复 PR#3 的设计契约偏差', '2026-06-14T09:00:00Z')
+    const ai = makeAIChunk('a1', 2)
+    const items = buildDisplayItemsFromChunks([prompt, ai])
+
+    const userMsgs = items.filter((i) => i.type === 'user_message')
+    expect(userMsgs.length).toBe(1)
+    // 硬断言类型，避免下方 narrowing 为 false 时 expect 被静默跳过（假绿）
+    expect(userMsgs[0].type).toBe('user_message')
+    if (userMsgs[0].type === 'user_message') {
+      expect(userMsgs[0].text).toBe('修复 PR#3 的设计契约偏差')
+      expect(userMsgs[0].timestamp).toBe('2026-06-14T09:00:00Z')
+    }
+    // prompt 在 AIChunk 之前 → 排在轨迹首位
+    expect(items[0].type).toBe('user_message')
+    // AIChunk 仍正常平铺（至少含 output）
+    expect(items.some((i) => i.type === 'output')).toBe(true)
+  })
+
+  test('slash UserChunk 不产 user_message（交给 AIChunk slash item 渲染）', () => {
+    const slash = makeUserChunk('s1', '<command-name>/clear</command-name>')
+    const items = buildDisplayItemsFromChunks([slash])
+    expect(items.filter((i) => i.type === 'user_message').length).toBe(0)
+  })
+
+  test('清洗后为空的 UserChunk 不产 item，AIChunk 仍平铺', () => {
+    const noise = makeUserChunk('n1', '<system-reminder>noise</system-reminder>')
+    const ai = makeAIChunk('a2', 2)
+    const items = buildDisplayItemsFromChunks([noise, ai])
+    expect(items.filter((i) => i.type === 'user_message').length).toBe(0)
+    expect(items.some((i) => i.type === 'output')).toBe(true)
+  })
+
+  test('content 为 ContentBlock[] 时提取首个 text 块', () => {
+    const blocks = makeUserChunk('b1', '')
+    blocks.content = [
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x' } },
+      { type: 'text', text: '带图片的 prompt' },
+    ] as unknown as UserChunk['content']
+    const items = buildDisplayItemsFromChunks([blocks])
+    const userMsgs = items.filter((i) => i.type === 'user_message')
+    expect(userMsgs.length).toBe(1)
+    if (userMsgs[0].type === 'user_message') {
+      expect(userMsgs[0].text).toBe('带图片的 prompt')
+    }
+  })
+
+  test('content 多 text 块时拼接全部（text + image + text 不丢后段）', () => {
+    // 对齐后端 extract_plain_text / TS .join('')；只取首块会丢 part2
+    const blocks = makeUserChunk('b2', '')
+    blocks.content = [
+      { type: 'text', text: 'part1 ' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x' } },
+      { type: 'text', text: 'part2' },
+    ] as unknown as UserChunk['content']
+    const items = buildDisplayItemsFromChunks([blocks])
+    const userMsgs = items.filter((i) => i.type === 'user_message')
+    expect(userMsgs.length).toBe(1)
+    if (userMsgs[0].type === 'user_message') {
+      expect(userMsgs[0].text).toBe('part1 part2')
+    }
+  })
+
+  test('system / compact chunk 跳过，AIChunk 仍平铺', () => {
+    const items = buildDisplayItemsFromChunks([
+      makeSystemChunk('s1'),
+      makeCompactChunk('c1'),
+      makeAIChunk('a3', 2),
+    ])
+    expect(items.filter((i) => i.type === 'user_message').length).toBe(0)
+    expect(items.some((i) => i.type === 'output')).toBe(true)
+  })
+
+  test('多个 UserChunk 交错保持原序', () => {
+    const items = buildDisplayItemsFromChunks([
+      makeUserChunk('u1', 'first input', '2026-06-14T09:00:00Z'),
+      makeAIChunk('a4', 2),
+      makeUserChunk('u2', 'second input', '2026-06-14T09:10:00Z'),
+      makeAIChunk('a5', 2),
+    ])
+    const userMsgs = items.filter((i) => i.type === 'user_message')
+    expect(userMsgs.length).toBe(2)
+    expect(userMsgs.map((i) => (i.type === 'user_message' ? i.text : ''))).toEqual([
+      'first input',
+      'second input',
+    ])
+  })
+
+  test('空 chunks 数组返回空', () => {
+    expect(buildDisplayItemsFromChunks([])).toEqual([])
   })
 })

@@ -9,12 +9,14 @@
 import type {
   AIChunk,
   Chunk,
+  ContentBlock,
   ToolExecution,
   SubagentProcess,
   SlashCommand,
   TeammateMessage,
   WorkflowItem,
 } from "./api";
+import { cleanDisplayText, extractSlashInfo } from "./toolHelpers";
 
 export type { WorkflowItem };
 
@@ -344,19 +346,48 @@ export function _resetDisplayItemsCacheForTest(): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * 从 `UserChunk.content`（string | ContentBlock[]）提取文本。
+ * `ContentBlock[]` 时拼接**所有** text 块（对齐原版 TS `buildDisplayItemsFromMessages`
+ * 的 `.filter(text).map(text).join('')` 与后端 `extract_plain_text`）——只取首块会在
+ * `text + image + text` 形态下丢失后续文本。
+ */
+function userChunkText(content: string | ContentBlock[]): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((b) => b.type === "text" && typeof b.text === "string")
+      .map((b) => b.text as string)
+      .join("");
+  }
+  return "";
+}
+
+/**
  * 从 subagent 的 `messages: Chunk[]` 串联构建 DisplayItem 流。
  *
- * 对齐原版 `aiGroupEnhancer.ts::buildDisplayItemsFromMessages`：把 subagent session
- * 里所有 AI chunk 的 DisplayItem 平铺串接；user / system / compact chunk 忽略
- * （subagent 内部的 user 消息通常是 tool_result，已由 ExecutionTrace 的 tool item 覆盖）。
+ * 对齐原版 `aiGroupEnhancer.ts::buildDisplayItemsFromMessages`：
+ * - `ai` chunk：平铺其 DisplayItem（含 lastOutput）。
+ * - `user` chunk：承载父会话给 subagent 的 prompt 及真实用户输入（tool_result-only
+ *   的 user 消息在 builder 已 merge 进 AIChunk，不会产 UserChunk，所以残留的
+ *   UserChunk 一定是真实输入），产出 `user_message` DisplayItem——对齐 TS 的
+ *   `subagent_input`。**slash 命令 UserChunk 跳过**：其 slash 信息已挂到后续
+ *   AIChunk 的 slash item，重复渲染须避免（`extractSlashInfo` 命中即跳）。清洗后
+ *   为空（纯 system-reminder 等）也跳过。
+ * - `system` / `compact` chunk：忽略。
  */
 export function buildDisplayItemsFromChunks(chunks: Chunk[]): DisplayItem[] {
   const out: DisplayItem[] = [];
   for (const c of chunks) {
-    if (c.kind !== "ai") continue;
-    const { items, lastOutput } = buildDisplayItems(c);
-    out.push(...items);
-    if (lastOutput) out.push(lastOutput);
+    if (c.kind === "ai") {
+      const { items, lastOutput } = buildDisplayItems(c);
+      out.push(...items);
+      if (lastOutput) out.push(lastOutput);
+    } else if (c.kind === "user") {
+      const raw = userChunkText(c.content);
+      if (!raw || extractSlashInfo(raw) !== null) continue;
+      const text = cleanDisplayText(raw);
+      if (text) out.push({ type: "user_message", text, timestamp: c.timestamp });
+    }
   }
   return out;
 }
