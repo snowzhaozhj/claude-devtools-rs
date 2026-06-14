@@ -345,13 +345,19 @@ export function _resetDisplayItemsCacheForTest(): void {
 // buildSummary
 // ---------------------------------------------------------------------------
 
-/** 从 `UserChunk.content`（string | ContentBlock[]）提取首个 text 片段。 */
+/**
+ * 从 `UserChunk.content`（string | ContentBlock[]）提取文本。
+ * `ContentBlock[]` 时拼接**所有** text 块（对齐原版 TS `buildDisplayItemsFromMessages`
+ * 的 `.filter(text).map(text).join('')` 与后端 `extract_plain_text`）——只取首块会在
+ * `text + image + text` 形态下丢失后续文本。
+ */
 function userChunkText(content: string | ContentBlock[]): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
-    for (const b of content) {
-      if (b.type === "text" && typeof b.text === "string") return b.text;
-    }
+    return content
+      .filter((b) => b.type === "text" && typeof b.text === "string")
+      .map((b) => b.text as string)
+      .join("");
   }
   return "";
 }
