@@ -3,11 +3,12 @@
 
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import type { AIChunk, SubagentProcess, TeammateMessage, ToolExecution } from './api'
+import type { AIChunk, SubagentProcess, TeammateMessage, ToolExecution, UserChunk } from './api'
 import {
   _resetDisplayItemsCacheForTest,
   buildDisplayItems,
   buildDisplayItemsCached,
+  buildDisplayItemsFromChunks,
 } from './displayItemBuilder'
 
 function makeAIChunk(
@@ -397,6 +398,72 @@ describe('buildDisplayItems — empty-responses AIChunk with teammate', () => {
     if (userMsgItems[0].type === 'user_message') {
       expect(userMsgItems[0].text).toBe('user interjection')
       expect(userMsgItems[0].timestamp).toBe('2026-05-30T15:18:02Z')
+    }
+  })
+})
+
+function makeUserChunk(uuid: string, content: string, ts = '2026-06-14T00:00:00Z'): UserChunk {
+  return {
+    kind: 'user',
+    chunkId: `user:${uuid}`,
+    uuid,
+    timestamp: ts,
+    durationMs: null,
+    content,
+    metrics: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      toolCount: 0,
+      costUsd: null,
+    },
+  }
+}
+
+describe('buildDisplayItemsFromChunks subagent prompt 还原', () => {
+  test('UserChunk(prompt) 产出 user_message item 含文本与 timestamp', () => {
+    const prompt = makeUserChunk('p1', '修复 PR#3 的设计契约偏差', '2026-06-14T09:00:00Z')
+    const ai = makeAIChunk('a1', 2)
+    const items = buildDisplayItemsFromChunks([prompt, ai])
+
+    const userMsgs = items.filter((i) => i.type === 'user_message')
+    expect(userMsgs.length).toBe(1)
+    if (userMsgs[0].type === 'user_message') {
+      expect(userMsgs[0].text).toBe('修复 PR#3 的设计契约偏差')
+      expect(userMsgs[0].timestamp).toBe('2026-06-14T09:00:00Z')
+    }
+    // prompt 在 AIChunk 之前 → 排在轨迹首位
+    expect(items[0].type).toBe('user_message')
+    // AIChunk 仍正常平铺（至少含 output）
+    expect(items.some((i) => i.type === 'output')).toBe(true)
+  })
+
+  test('slash UserChunk 不产 user_message（交给 AIChunk slash item 渲染）', () => {
+    const slash = makeUserChunk('s1', '<command-name>/clear</command-name>')
+    const items = buildDisplayItemsFromChunks([slash])
+    expect(items.filter((i) => i.type === 'user_message').length).toBe(0)
+  })
+
+  test('清洗后为空的 UserChunk 不产 item，AIChunk 仍平铺', () => {
+    const noise = makeUserChunk('n1', '<system-reminder>noise</system-reminder>')
+    const ai = makeAIChunk('a2', 2)
+    const items = buildDisplayItemsFromChunks([noise, ai])
+    expect(items.filter((i) => i.type === 'user_message').length).toBe(0)
+    expect(items.some((i) => i.type === 'output')).toBe(true)
+  })
+
+  test('content 为 ContentBlock[] 时提取首个 text 块', () => {
+    const blocks = makeUserChunk('b1', '')
+    blocks.content = [
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x' } },
+      { type: 'text', text: '带图片的 prompt' },
+    ] as unknown as UserChunk['content']
+    const items = buildDisplayItemsFromChunks([blocks])
+    const userMsgs = items.filter((i) => i.type === 'user_message')
+    expect(userMsgs.length).toBe(1)
+    if (userMsgs[0].type === 'user_message') {
+      expect(userMsgs[0].text).toBe('带图片的 prompt')
     }
   })
 })

@@ -3,7 +3,7 @@
   import { getToolOutput, type ToolExecution, type ToolOutput, type WorkflowItem } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
   import { getToolSummary, getToolStatus, getToolDurationMs, isToolPending, cleanDisplayText, getToolContextTokens, estimateTokens, viewerUsesOutput } from "../lib/toolHelpers";
-  import { WRENCH, BRAIN, SLASH, MESSAGE_SQUARE } from "../lib/icons";
+  import { WRENCH, BRAIN, SLASH, MESSAGE_SQUARE, USER_ICON } from "../lib/icons";
   import BaseItem from "./BaseItem.svelte";
   import SubagentCard from "./SubagentCard.svelte";
   import WorkflowCard from "./WorkflowCard.svelte";
@@ -180,6 +180,20 @@
         svgIcon={MESSAGE_SQUARE}
         label="Output"
         summary={cleaned.length > 60 ? cleaned.slice(0, 60) + "…" : cleaned}
+        tokenCount={estimateTokens(item.text)}
+        isExpanded={expandedKeys.has(key)}
+        onclick={() => toggle(key)}
+      >
+        {#snippet children()}
+          <div class="prose">{@html renderMarkdown(item.text)}</div>
+        {/snippet}
+      </BaseItem>
+    {:else if item.type === "user_message"}
+      {@const key = `usermsg-${i}`}
+      <BaseItem
+        svgIcon={USER_ICON}
+        label="User"
+        summary={item.text.length > 60 ? item.text.slice(0, 60) + "…" : item.text}
         tokenCount={estimateTokens(item.text)}
         isExpanded={expandedKeys.has(key)}
         onclick={() => toggle(key)}

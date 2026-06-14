@@ -11,6 +11,7 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ### Fixed
 - **UI**: right-clicking an expanded tool block (SKILL/slash instructions, Output, Thinking, User message) in the session view now copies that block's own content. Previously the menu bubbled to the whole AI message and copied the wrong text, forcing manual text selection.
+- **UI**: a subagent's Execution Trace now shows its first input — the prompt the parent session handed it — at the top of the trace. Previously this prompt was dropped, so an expanded subagent only showed its thinking/tools/output with no record of what it was asked to do.
 
 ## [0.6.17] — 2026-06-13
 

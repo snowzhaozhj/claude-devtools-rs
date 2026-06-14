@@ -150,6 +150,18 @@ const systemChunk: SystemChunk = {
   metrics: emptyMetrics(),
 }
 
+// subagent 流首条 = 父会话给它的 prompt（真实 subagent JSONL 首行 isSidechain
+// 被清后产出的 UserChunk）；ExecutionTrace 应渲染为 user_message item。
+const subagentPromptChunk: UserChunk = {
+  kind: 'user',
+  chunkId: 'sub-rich-1:prompt:0',
+  uuid: 'sub-rich-1-prompt',
+  timestamp: ts(0.35),
+  durationMs: null,
+  content: '审计 IPC 字段映射的 fixture 覆盖：对比 SubagentProcess 各字段与 mock 渲染需求，列出缺失项。',
+  metrics: emptyMetrics(),
+}
+
 const subagentTraceChunk: AIChunk = {
   kind: 'ai',
   chunkId: 'sub-rich-1:a1:0',
@@ -370,7 +382,7 @@ const aiChunk: AIChunk = {
       },
       team: null,
       subagentType: 'general-purpose',
-      messages: [subagentTraceChunk],
+      messages: [subagentPromptChunk, subagentTraceChunk],
       mainSessionImpact: { totalTokens: 96 },
       isOngoing: false,
       durationMs: 7800,
@@ -379,7 +391,7 @@ const aiChunk: AIChunk = {
       headerModel: 'sonnet4.6',
       lastIsolatedTokens: 5040,
       messagesOmitted: false,
-      messagesTotalCount: 1,
+      messagesTotalCount: 2,
     },
   ],
   slashCommands: [
