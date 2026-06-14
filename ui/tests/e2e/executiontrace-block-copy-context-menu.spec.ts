@@ -136,6 +136,31 @@ test.describe('Subagent ExecutionTrace 工具展开块右键复制', () => {
       .toContain('Fixture needs a subagent_spawn semantic step plus a matching SubagentProcess.')
     expect(await readCopied(page)).not.toContain(PARENT_AI_TEXT)
   })
+
+  // 覆盖本 PR 净新增 wiring：buildBlockMenuCtx 在右键瞬间读 window.getSelection()，
+  // 有选区时 factory 融合「复制选中文本」。整块选中后右键（点击落在选区内，避免
+  // Chromium 右键选区外折叠选区）→ 菜单含「复制选中文本」项（仅当 selectionText
+  // 非空才出现，证明选区读取生效）→ 点击复制选区文本。
+  test('块内有选区时融合「复制选中文本」并复制选区', async ({ page }) => {
+    await interceptClipboard(page)
+    const trace = await openSubagentTrace(page)
+    const prose = await expandBlockProse(trace, PROMPT_TEXT)
+
+    const selected = await prose.evaluate((el) => {
+      const sel = window.getSelection()
+      sel?.removeAllRanges()
+      sel?.selectAllChildren(el)
+      return sel?.toString() ?? ''
+    })
+    expect(selected.length).toBeGreaterThan(0)
+
+    await prose.click({ button: 'right' })
+    const menu = page.locator('[role="menu"]').first()
+    await expect(menu).toBeVisible({ timeout: 2_000 })
+    await expect(menu).toContainText('复制选中文本')
+    await menu.getByText('复制选中文本').click()
+    await expect.poll(() => readCopied(page), { timeout: 2_000 }).toContain(selected)
+  })
 })
 
 test.describe('Workflow agent ExecutionTrace 工具展开块右键复制', () => {
