@@ -219,6 +219,10 @@ Category 视图中的 CLAUDE.md Files Section SHALL 按 `scope` 把文件分为 
 
 ExecutionTrace 的 DisplayItem 流由 `buildDisplayItemsFromChunks(chunks)` 从 subagent 的 `Process.messages: Chunk[]` 构建。该函数 SHALL 对每个 `kind === "ai"` 的 AIChunk 平铺其 DisplayItem；对 `kind === "user"` 的 UserChunk SHALL 提取文本并产出一个 `user_message` DisplayItem（承载父会话给 subagent 的 prompt 及任何真实用户输入），但 SHALL 跳过 slash 命令 UserChunk（其 slash 信息已由后续 AIChunk 的 slash item 渲染，重复渲染须避免）与清洗后为空的 UserChunk；`kind === "system"` / `kind === "compact"` 的 chunk SHALL 跳过。
 
+ExecutionTrace 内承载单段 markdown 源文本的展开块——Thinking（`item.type==="thinking"`）、Output（`item.type==="output"`）、User message（`item.type==="user_message"`），复制源均为各自的 `item.text`——SHALL 各自在其展开后的 `.prose` 容器上通过 `use:contextMenu` action 挂载右键菜单，items 由 frontend-context-menu capability 的 `buildMarkdownBlockItems(text, ctx)` factory 构造，输出「复制纯文本 / 复制为 Markdown」（有选区时融合「复制选中文本」）。该契约 SHALL 适用于 ExecutionTrace 的所有渲染路径——经 `SubagentCard` 渲染的 subagent 执行链与经 `WorkflowCard` 渲染的 workflow agent 执行链一致覆盖，含嵌套 subagent。`use:contextMenu` action 内置的 `stopPropagation` SHALL 阻止事件冒泡到外层 trace 或父消息 chunk 菜单，使右键这些块时仅弹出**该块**的复制菜单，复制内容为该块自身 `item.text` 而非整条消息。块文本为空时 `buildMarkdownBlockItems` 返回空数组，SHALL NOT 弹出空菜单。ExecutionTrace 内的 slash 块（`collapsible={false}` 无展开 body）与 tool 块（由各 ToolViewer 自带复制路径覆盖）不在本契约范围。
+
+调用方 SHALL 在 ExecutionTrace 内构造 `MenuItemContext`：`sessionId` 用 trace 所属会话 id（`sessionId ?? rootSessionId`）、`projectId` 用 props `projectId`（嵌套场景可为空字符串）、`selectionText` 在 oncontextmenu 触发瞬间读取当前选区、`settings` 与 `dispatch` 复用全局 helper。`buildMarkdownBlockItems` 对纯 markdown 块复制仅消费 `ctx.selectionText` 与 `ctx.dispatch.copyToClipboard`，不消费 `sessionId` / `projectId` / `settings`，故 `projectId` 为空不影响复制正确性。
+
 #### Scenario: Subagent 默认折叠
 - **WHEN** 一条 AI 组首次渲染，其中包含一个 subagent
 - **THEN** subagent 卡片 SHALL 以单行 Header 形式展示，Dashboard 与 ExecutionTrace 均不可见
@@ -261,6 +265,22 @@ ExecutionTrace 的 DisplayItem 流由 `buildDisplayItemsFromChunks(chunks)` 从 
 #### Scenario: 不产生"打开新 tab"副作用
 - **WHEN** 用户点击 subagent 卡片的任意区域
 - **THEN** 应用 SHALL NOT 创建新 tab，也 SHALL NOT 调用 `openTab(subagent.sessionId, ...)`
+
+#### Scenario: 右键 subagent ExecutionTrace 内 Output 块弹该块菜单
+- **WHEN** 用户展开一个 SubagentCard 的 Execution Trace，并在其中某 Output 块（`item.type==="output"` 的展开 prose）上右键
+- **THEN** SHALL 弹出由 `buildMarkdownBlockItems(item.text, ctx)` 构造的菜单（含「复制纯文本」「复制为 Markdown」）
+- **AND** action 内置 `stopPropagation` SHALL 阻止冒泡，父 AI 消息 chunk 菜单 SHALL **不**触发
+- **AND** 点击「复制为 Markdown」SHALL 把该 Output 块的 `item.text` 写入 clipboard（**不**是整条消息文本）
+
+#### Scenario: 右键 ExecutionTrace 内 Thinking / User message 块弹该块菜单
+- **WHEN** 用户在已展开 trace 内某 Thinking 块（`item.type==="thinking"`）或 User message 块（`item.type==="user_message"`）上右键
+- **THEN** SHALL 弹出由 `buildMarkdownBlockItems(item.text, ctx)` 构造的该块复制菜单
+- **AND** 复制内容为该块自身 `item.text`，事件 SHALL NOT 冒泡到父消息菜单
+
+#### Scenario: 右键 workflow agent ExecutionTrace 内块弹该块菜单
+- **WHEN** 用户展开一个 WorkflowCard 的某 agent drilldown trace（经 ExecutionTrace 渲染），并在其中 Thinking / Output / User message 块上右键
+- **THEN** SHALL 弹出由 `buildMarkdownBlockItems(item.text, ctx)` 构造的该块复制菜单，行为与 subagent 执行链一致
+- **AND** 复制内容为该块自身 `item.text`
 
 ### Requirement: Subagent 彩色标识体系
 
