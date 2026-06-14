@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781420761659,
+  "lastUpdate": 1781434285387,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -20481,6 +20481,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12930,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ce4eb1fafc88759e0b2e5d22004bfc6609dc2177",
+          "message": "fix(ui): subagent / workflow ExecutionTrace 内工具展开块右键复制 (#516 后续) (#520)\n\n* fix(ui): subagent / workflow ExecutionTrace 内工具展开块右键复制\n\nPR #516 给工具展开块（slash/Output/Thinking/User message）加右键复制时\n只挂在 SessionDetail.svelte 上。subagent 与 workflow 的执行链都经独立的\nExecutionTrace.svelte 渲染（SubagentCard / WorkflowCard 均委托给它），其\nthinking/output/user_message 三块裸 .prose 容器从未挂 use:contextMenu——\n展开执行链后右键这些块复制不到该块内容，复现 PR #516 想消除的 friction。\n\n修复：ExecutionTrace 给三块各挂 use:contextMenu={buildMarkdownBlockItems}\n（复用 PR #516 已落地 factory），新增 buildBlockMenuCtx 构造 MenuItemContext。\n单点修一个共用组件即同时覆盖 subagent + workflow 两个场景。action 内置\nstopPropagation 阻止冒泡到父 chunk 菜单。\n\n- ExecutionTrace.svelte：import + buildBlockMenuCtx + 三块挂载\n- 测试：新增 e2e 覆盖 subagent + workflow trace 块右键复制（内容断言判别\n  右键落块、不冒泡）；workflow 路径需 fixture 支持——给 builder-1 加\n  sessionId + workflowAgentTraces map + mock get_workflow_agent_trace 回读\n- buildMarkdownBlockItems 单测已由 PR #516 覆盖，未重复\n\n走 openspec：session-display spec 的 \"Subagent 内联展开 ExecutionTrace\"\nRequirement 扩展块复制契约 + 补 3 个 Scenario（覆盖 subagent + workflow）。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* test(ui): 补 ExecutionTrace 块选区融合「复制选中文本」e2e\n\npr-test-analyzer 二审指出：buildBlockMenuCtx 在右键瞬间读 window.getSelection()\n是本 PR 净新增 wiring，此前未被 e2e 覆盖（factory 选区融合逻辑由 #516 单测覆盖，\n但 DOM 选区读取这段是新的）。补一个 case：整块选中后右键 → 菜单出现「复制选中\n文本」项（仅当 selectionText 非空才出现，证明选区读取生效）→ 点击复制选区文本。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive executiontrace-block-copy-context-menu\n\n二审全过（codex 0 / code-reviewer 0 / pr-test-analyzer ship-ready）+ CI 全绿\n+ 真浏览器验证。sync session-display 主 spec：「Subagent 内联展开 ExecutionTrace」\nRequirement 扩展块复制契约 + 3 个 Scenario（subagent Output / Thinking·User /\nworkflow agent）。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-14T18:47:47+08:00",
+          "tree_id": "3564a08ca98a88e41aafb264ca3d1d80e6d50ad8",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/ce4eb1fafc88759e0b2e5d22004bfc6609dc2177"
+        },
+        "date": 1781434285018,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 113.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1119,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 6566,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.851,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.107,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 47.73,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.74,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 294.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1274,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3307,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2800,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 40000,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.646,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 63.18,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 640.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6481,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 222.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2243,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 65,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 659.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 6579,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 134.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1354,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.34,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 73.17,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8835,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 949.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8849,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 941,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 48.52,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 513.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 96.86,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 977.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9797,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 186.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1340,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12630,
             "unit": "µs"
           }
         ]
