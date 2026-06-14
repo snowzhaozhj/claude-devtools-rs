@@ -21,7 +21,7 @@
 - [x] 4.3 浏览器 mock 或 `?http=1` 真数据展开一个 subagent trace，确认 prompt 显示在轨迹顶部、slash 不重复（视觉自验截图）
 
 ## 5. 发布
-- [ ] 5.1 push 分支 + 开 PR
-- [ ] 5.2 wait-ci 全绿
-- [ ] 5.3 codex + pr-review-toolkit 二审通过（如发现 bug：修 → push → 回 5.2；可循环）
-- [ ] 5.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
+- [x] 5.1 push 分支 + 开 PR
+- [x] 5.2 wait-ci 全绿
+- [x] 5.3 codex + pr-review-toolkit 二审通过（如发现 bug：修 → push → 回 5.2；可循环）
+- [x] 5.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
