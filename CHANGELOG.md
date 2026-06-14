@@ -9,6 +9,8 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.18] — 2026-06-14
+
 ### Fixed
 - **UI**: right-clicking an expanded tool block (SKILL/slash instructions, Output, Thinking, User message) in the session view now copies that block's own content. Previously the menu bubbled to the whole AI message and copied the wrong text, forcing manual text selection.
 - **UI**: a subagent's Execution Trace now shows its first input — the prompt the parent session handed it — at the top of the trace. Previously this prompt was dropped, so an expanded subagent only showed its thinking/tools/output with no record of what it was asked to do.
@@ -350,7 +352,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.17...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.18...HEAD
+[0.6.18]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.17...v0.6.18
 [0.6.17]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.16...v0.6.17
 [0.6.16]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.15...v0.6.16
 [0.6.15]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.14...v0.6.15
