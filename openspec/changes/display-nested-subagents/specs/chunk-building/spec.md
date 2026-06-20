@@ -2,7 +2,7 @@
 
 ### Requirement: Promote nested Agent calls to skeleton subagents
 
-系统 SHALL 提供纯函数 `promote_result_agent_tasks(chunks)`，在一段**已构建**的 chunks 上,把每个携带 `result_agent_id` 的 `Agent` / `Task` `ToolExecution` 就地升级成一个**骨架 subagent** `Process`,attach 进其所属 `AIChunk.subagents`,并在 `semantic_steps` 中插入对应 `SubagentSpawn`。该后处理用于 `build_chunks_with_subagents` 不可用的路径(典型:`get_subagent_trace` 对单个 subagent transcript 调 `build_chunks` 之后),让嵌套 `Agent` 调用暴露为可展开 subagent 而非普通工具。workflow agent trace(`get_workflow_agent_trace`)**不**在本后处理范围——其嵌套子文件落 `subagents/workflows/`,递归懒拉的 `getSubagentTrace` 定位不到,接入会产"可展开但展开为空"的假骨架(理由见 design D8)。
+系统 SHALL 提供纯函数 `promote_result_agent_tasks(chunks)`，在一段**已构建**的 chunks 上,把每个携带 `result_agent_id` 的 `Agent` / `Task` `ToolExecution` 就地升级成一个**骨架 subagent** `Process`,attach 进其所属 `AIChunk.subagents`,并在 `semantic_steps` 中插入对应 `SubagentSpawn`。该后处理用于 `build_chunks_with_subagents` 不可用的路径(典型:`get_subagent_trace` 对单个 subagent transcript 调 `build_chunks` 之后;以及 `get_session_detail` 经 `parse_subagent_candidate` 构建 subagent candidate 内联 `messages` 调 `build_chunks` 之后),让嵌套 `Agent` 调用暴露为可展开 subagent 而非普通工具。workflow agent trace(`get_workflow_agent_trace`)**不**在本后处理范围——其嵌套子文件落 `subagents/workflows/`,递归懒拉的 `getSubagentTrace` 定位不到,接入会产"可展开但展开为空"的假骨架(理由见 design D8)。
 
 骨架 `Process` 的字段 MUST 按以下策略合成,缺一不可:
 

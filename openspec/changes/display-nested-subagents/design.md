@@ -18,7 +18,7 @@
 **Goals:**
 
 - 展开任意 subagent 时,其内部 spawn 的子 subagent 可作为内联卡片继续展开,逐层深入。
-- 不引入新文件 IO / 不触碰 `get_session_detail` 主路径 / 单次 payload 与今天展开 level-1 同量级。
+- 不引入新文件 IO / 单次 payload 与今天展开 level-1 同量级。(原"不触碰 `get_session_detail` 主路径"于 apply 阶段修正——内联未裁剪路径也需 promote,见 D1b;仍为纯内存零 IO。)
 - 前端零渲染改动,复用既有递归 `SubagentCard` + 深度保护。
 
 **Non-Goals:**
@@ -36,6 +36,15 @@
 
 - 备选(已否决):让 `get_subagent_trace` 走 `build_chunks_with_subagents` + candidate 池递归。problem:`candidate_to_process` 依赖 candidate 的完整 `messages` 派生 `header_model` / `messages_total_count`,且会 clone 子完整 messages,一层 fan-out 100 子就把整层内联进单次 IPC,撞穿 payload 预算;还需建父子图 / 缓存,工作量放大一个数量级。
 - 取舍:骨架升级只消费已解析的 `result_agent_id`,零新 IO,每层只在被展开时拉一个 transcript。
+
+### D1b:内联 subagent messages 路径同样需 promote(apply 阶段发现,修正 D1 单点假设)
+
+D1 原假设 promote 只需挂在 `get_subagent_trace` 单一返回路径,前提是 subagent messages 在首屏 IPC 总被裁剪(`messagesOmitted=true`)→ 前端必走 `getSubagentTrace` 懒拉。**apply 阶段真实数据验证(HTTP `?http=1` 页面)证伪此前提**:`LocalDataApi::get_session_detail` 按 ipc-data-api spec 返回**完整未裁剪**数据,裁剪只发生在 Tauri command handler 的 `apply_display_omissions`;HTTP route / MCP / CLI 消费者 + Tauri 回滚裁剪开关时,subagent `messagesOmitted=false`,前端**直接渲染内联 `Process.messages`**,绕过 `get_subagent_trace`,内联层的嵌套 `Agent` 调用因此仍显示为普通工具(用户实测复现:level-1 subagent 内 `Trace build_graph_profiled callers` 等嵌套调用为裸工具)。
+
+- 修正:`parse_subagent_candidate`(构建 candidate `messages` → 内联 `Process.messages`)在 `build_chunks` 后**同样**调 `promote_result_agent_tasks`。两处共用同一纯函数,语义一致(`chunk-building::Promote nested Agent calls to skeleton subagents` Requirement body 已泛化为"`build_chunks_with_subagents` 不可用的路径",本就涵盖内联路径,只是 D1 文字漏列)。
+- 性能:promote 是纯内存 O(chunks/候选)变换,零新文件 IO;每个 candidate 在 scan 阶段已 `build_chunks`,promote 仅多一次同数据线性扫描。实测 7f59237e(63 个 level-1 candidate)内联升级出 96 个 level-2 骨架、0 个裸嵌套 Agent 工具,主路径 wall 无可感知回归(纯内存,不触发 perf.md 反模式)。
+- 取舍:此修正让 promote 进入 `get_session_detail` 主路径(原 D1 声明的"不碰主路径"作废)——但代价是已 build 好的 chunks 上一次零 IO 线性扫描,远低于"内联嵌套层永远显示为工具"的功能缺陷。
+- 验证:HTTP 页面端到端确认——`a179ec85`(level-2)从裸工具变为可展开骨架卡片,展开后懒拉出其自身 `Execution Trace`(2 tool calls)。
 
 ### D2:骨架必须回填 `parent_task_id = exec.tool_use_id`(否则重复渲染)
 
@@ -64,6 +73,14 @@
 
 - 备选 b(已否决):合成骨架时读子文件首尾行补 `is_ongoing` + 计数。problem:每层 fan-out N 子就多 N 次轻量读,违背"零新 IO";且嵌套子多数已完成,收益低。
 - 缓解:`SubagentCard` 对 `messagesOmitted=true` 的骨架首次展开 MUST 调 `getSubagentTrace` 懒拉,拉到真实 trace 后状态以懒拉结果为准。用测试把"骨架展开前 done / 展开后纠正"这一降级行为固定下来,使其是**已知契约**而非 bug。
+
+### D4b:骨架 header 的 model badge 只读 `headerModel`,不从懒拉 messages 派生(apply 阶段发现)
+
+apply 阶段真实数据验证发现 D4 降级有一个**布局跳动**副作用:`SubagentCard.modelName` 原逻辑是"`process.headerModel` 优先,缺省则从 `effectiveMessages` 派生"。骨架 `headerModel` 缺省 + `messages` 懒拉,导致**折叠时 header 无 model badge、展开懒拉到 messages 后 header 突然冒出 model badge**(用户反馈:"展开后突然多冒出来一个模型")。始终可见的 header 在展开瞬间发生宽度跳变。
+
+- 修正:`SubagentCard` header(始终可见)的 model badge **只读** `process.headerModel`(后端候选转换阶段预算的稳定值);`modelName`(含 messages 派生 fallback)仅用于**展开后** body 的 `Model` 详情行。骨架 `headerModel` 缺省 → header 不显示 model(展开前后一致);真实 model 随展开 body 的详情行一并出现,属正常展开行为,非 header 跳变。
+- 取舍:嵌套骨架 header 不显示 model(零 IO 下本就无法廉价获知子 agent 的 model);完整 resolve 的(非骨架)subagent 候选转换阶段已预算 `headerModel`,header 不受影响。代价是嵌套层折叠态少一个 model badge,换 header 不跳动。
+- 验证:HTTP 页面端到端(playwright)——`Trace build_graph_profiled callers`(a179ec85)展开前后 header 均无 model badge,Model 仅出现在展开 body 的 `Type Task · Model opus4.6 · ID a179ec85` 详情行。
 
 ### D5:`description` 字符上限防 fan-out payload 膨胀
 
@@ -98,8 +115,8 @@
 
 ## Migration Plan
 
-- 纯增量,无数据迁移。骨架升级只对 `get_subagent_trace` 返回路径生效,`get_session_detail` 主路径不变。
-- 回滚:`promote_result_agent_tasks` 是 `get_subagent_trace` 内一次后处理调用,移除调用即回退到"嵌套显示为普通工具"的现状,无残留状态。
+- 纯增量,无数据迁移。骨架升级作用于两处:`get_subagent_trace` 返回路径(懒拉)+ `get_session_detail` 经 `parse_subagent_candidate` 构建的内联 subagent `messages`(未裁剪时,见 D1b)。两处共用纯函数,均为已 build chunks 上的零 IO 线性扫描。
+- 回滚:`promote_result_agent_tasks` 是两处各一次后处理调用,移除两处调用即回退到"嵌套显示为普通工具"的现状,无残留状态。
 
 ## Open Questions
 
