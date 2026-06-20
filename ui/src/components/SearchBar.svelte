@@ -106,7 +106,8 @@
     // 无条件读取 focusRequestVersion 建立依赖——若放进下面 if 内会被
     // `visible` 为 false 时短路，nonce 递增便无法触发 effect 重跑（Svelte 5
     // effect 依赖集是动态的，只追踪上次实际读到的响应式变量）。
-    focusRequestVersion;
+    // void 前缀明确"刻意读取以建立依赖"的意图，避免被误判为无用语句。
+    void focusRequestVersion;
     if (visible && inputEl) {
       inputEl.focus();
       inputEl.select();
