@@ -28,6 +28,7 @@ pub mod tool_linking;
 
 pub use chunk::{
     aggregate_metrics, build_chunks, build_chunks_with_subagents, extract_semantic_steps,
+    promote_result_agent_tasks,
 };
 pub use context::{
     ComputeStatsParams, ComputeStatsResult, ProcessSessionParams, SessionContextResult,

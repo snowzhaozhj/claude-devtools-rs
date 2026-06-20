@@ -1,0 +1,97 @@
+## Context
+
+会话目录 `<root>/subagents/agent-*.jsonl` 扁平存放该 root 会话的所有 subagent transcript,含嵌套层(subagent 内部再 spawn 的子 subagent)。当前:
+
+- 主会话打开走 `build_chunks_with_subagents(messages, candidates)`(`local.rs:2656`),用 `resolve_subagents` 三阶段匹配把主会话的 `Agent`/`Task` 调用解析成 `Process`,attach 到 `AIChunk.subagents`,只覆盖 **level-1**。
+- 展开某个 subagent 时走 `get_subagent_trace`(`local.rs:4179`),它对子 transcript 用**非递归** `build_chunks`,子里的 `Agent` 调用只产一个 `ToolExecution`,前端按普通工具渲染——这就是嵌套层无法展开的根因。
+
+关键已查实事实(决定方案可行性):
+
+1. 父执行链里每个 spawn 子 agent 的 `Agent` 调用,其 JSONL 顶层 `toolUseResult.agentId` = 子 agent 的 session id,`cdt-parse` 已提取为 `ToolExecution.result_agent_id`(`tool_execution.rs:70`),已 camelCase `resultAgentId` 透传前端。
+2. 前端递归渲染基建已就位(`session-display` spec §`Subagent 内联展开 ExecutionTrace`):`ExecutionTrace` 对 `DisplayItem.type === "subagent"` 渲染 `SubagentCard`,`rootSessionId` 一路向下传递,`messagesOmitted` 首展开懒拉,深度上限已实现。
+3. `get_subagent_trace(rootSessionId, subSessionId)` 已能按子 session id 在 `<root>/subagents/` 定位文件并返回 `Vec<Chunk>`。
+
+即:数据已解析、前端能递归、懒加载端点已存在;唯一缺口是 `get_subagent_trace` 返回的子 chunks 没把嵌套 `Agent` 调用标成 subagent item。本设计经 codex 异构二审(7 finding,0 critical),Decisions 已吸收其修正。
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- 展开任意 subagent 时,其内部 spawn 的子 subagent 可作为内联卡片继续展开,逐层深入。
+- 不引入新文件 IO / 不触碰 `get_session_detail` 主路径 / 单次 payload 与今天展开 level-1 同量级。
+- 前端零渲染改动,复用既有递归 `SubagentCard` + 深度保护。
+
+**Non-Goals:**
+
+- 不在主会话打开时预解析整棵嵌套树(会撞穿 payload 与 build 预算)。
+- 不为骨架引入精确实时状态(`is_ongoing` / 计数);状态以首次展开懒拉为准(见 D4)。
+- 不修 `find_subagent_jsonl` 兜底路径歧义(main 既有隐患,见 D7,范围外)。
+- 不新增 trace 级缓存(可选后续优化,见 Risks)。
+
+## Decisions
+
+### D1:骨架升级作为 `get_subagent_trace` 的后处理,而非递归 resolver
+
+`get_subagent_trace` 在 `build_chunks` 后调用新纯函数 `promote_result_agent_tasks(chunks)`,把带 `result_agent_id` 的 `Agent`/`Task` `ToolExecution` 升级成骨架 subagent。**不**改成递归 `build_chunks_with_subagents`。
+
+- 备选(已否决):让 `get_subagent_trace` 走 `build_chunks_with_subagents` + candidate 池递归。problem:`candidate_to_process` 依赖 candidate 的完整 `messages` 派生 `header_model` / `messages_total_count`,且会 clone 子完整 messages,一层 fan-out 100 子就把整层内联进单次 IPC,撞穿 payload 预算;还需建父子图 / 缓存,工作量放大一个数量级。
+- 取舍:骨架升级只消费已解析的 `result_agent_id`,零新 IO,每层只在被展开时拉一个 transcript。
+
+### D2:骨架必须回填 `parent_task_id = exec.tool_use_id`(否则重复渲染)
+
+前端 `displayItemBuilder.ts` 靠 subagent 的 `parentTaskId` 命中来**跳过**原始 `Agent`/`Task` 工具 item。骨架若不回填 `parent_task_id`,前端会**同时**渲染骨架 subagent 卡片与原始 Agent 工具块,造成重复。
+
+- 同时:`SubagentSpawn.placeholder_id` MUST 等于骨架 `Process.session_id`,与现有完整 resolve 路径(`builder.rs:590-604`)一致,前端才能正确去重 + 定位。
+- 这是 codex 二审的首要 finding,作为硬约束写进 spec。
+
+### D3:骨架 `Process` 字段策略
+
+由 `ToolExecution` 就地合成,字段固定:
+
+- `session_id = exec.result_agent_id`
+- `subagent_type` 取自 `exec`(沿用现有 subagent_type 来源)
+- `description` 取自 `exec.input.description`,**加字节上限**(见 D5)
+- `parent_task_id = Some(exec.tool_use_id)`(D2)
+- `spawn_ts = exec.start_ts`,`metrics = Default::default()`
+- `messages = []`,`messages_omitted = true`,`messages_total_count = 0`(或 `None`)
+- `is_ongoing = false`(D4 降级)
+
+`Process` 的 `spawn_ts` / `metrics` 无 `serde(default)`,必须显式提供——骨架工厂统一兜住,避免散落构造点遗漏。
+
+### D4:状态降级方案 a(零 IO 优先,展开即纠正)—— 已与用户确认
+
+骨架 `is_ongoing=false` / `messages_total_count=0`。后果:展开**前**,一个真在运行的嵌套 subagent 在父执行链里短暂显示为已完成。
+
+- 备选 b(已否决):合成骨架时读子文件首尾行补 `is_ongoing` + 计数。problem:每层 fan-out N 子就多 N 次轻量读,违背"零新 IO";且嵌套子多数已完成,收益低。
+- 缓解:`SubagentCard` 对 `messagesOmitted=true` 的骨架首次展开 MUST 调 `getSubagentTrace` 懒拉,拉到真实 trace 后状态以懒拉结果为准。用测试把"骨架展开前 done / 展开后纠正"这一降级行为固定下来,使其是**已知契约**而非 bug。
+
+### D5:`description` 字节上限防 fan-out payload 膨胀
+
+一层可能 fan-out ~100 个子骨架,每个携带 `description`。骨架 `description` SHALL 截断到固定字节上限(沿用既有 description 截断口径,如 200 字符),完整内容仍可由该 subagent 自身的 `input.description` / 展开后 trace 查看。
+
+### D6:核心逻辑抽成 cdt-analyze 纯函数 `promote_result_agent_tasks(chunks)`
+
+不在 API 层散写。纯函数输入 `Vec<Chunk>`、输出升级后的 `Vec<Chunk>`,便于单测直接喂构造的 AIChunk 验证:骨架生成、`parent_task_id` 回填、`SubagentSpawn` 紧随对应 `ToolExecution` 的顺序、`description` 截断、去重(不重复渲染)。复用 chunk-building 现有 `Attach subagents` / `Filter Task tool uses` / SubagentSpawn 插入顺序的语义。
+
+### D7:`find_subagent_jsonl` 路径歧义 —— 范围外
+
+`find_subagent_jsonl` 兜底遍历同 `project_dir` 下"任意 session 目录"的 `subagents/`,两个 session 都有 `agent-<id>.jsonl` 时按 `read_dir` 顺序取第一份,可能拿错文件。这是 main 既有隐患,嵌套展开会更频繁触发。
+
+- 决定:本 change **不**修,单独记 GitHub issue / 独立 PR(精确路径优先 + 命中后读首行校验 parent/session id)。理由:与骨架升级正交,混入会放大 diff 与 review 面。
+
+## Risks / Trade-offs
+
+- [无 `result_agent_id` 的嵌套 subagent 不可展开] → 已知局限。零 IO 方案只升级 tool_result 已回填 `toolUseResult.agentId` 的嵌套调用;未完成 / 中断 / 未回填 agentId 的嵌套 `Agent` 调用保持工具显示（现状，不退化）。真实样本 7f59237e 验证:某 level-1 agent 内两个 Agent 调用，已完成的（有 agentId）正确升级、未回填的保持工具。绝大多数历史会话的嵌套已完成，覆盖足够。未来若需全覆盖，可引入 `meta.json.toolUseId` 父子键作 Phase0（codex 第一轮 finding 1），代价是每层读 N 个 meta.json——本 change 不做。
+- [展开前状态短暂不准(D4)] → 接受为已知降级;首次展开懒拉纠正;测试固定行为。
+- [无 trace 缓存,反复折叠重开重复 parse 同一文件] → 非阻塞 info;`get_subagent_trace` 单文件 parse 成本可控;留作后续可选短生命周期缓存(`rootSessionId+subSessionId+signature`)。
+- [深层嵌套无限递归 / 环] → 由前端既有深度上限兜底;骨架不递归预解析,深度由用户点击驱动,天然有界。
+- [路径歧义拿错文件(D7)] → 范围外,但需在 issue 留痕,避免被当作本 change 回归。
+
+## Migration Plan
+
+- 纯增量,无数据迁移。骨架升级只对 `get_subagent_trace` 返回路径生效,`get_session_detail` 主路径不变。
+- 回滚:`promote_result_agent_tasks` 是 `get_subagent_trace` 内一次后处理调用,移除调用即回退到"嵌套显示为普通工具"的现状,无残留状态。
+
+## Open Questions
+
+- 无阻塞性未决项。`messages_total_count` 填 `0` 还是 `None` 在实现期按 `Process` 现有类型与 IPC 契约定(二者前端表现等价,以不破坏 `messagesTotalCount` round-trip 测试为准)。

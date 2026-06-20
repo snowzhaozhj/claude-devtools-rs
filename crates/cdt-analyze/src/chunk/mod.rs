@@ -7,8 +7,10 @@
 
 mod builder;
 mod metrics;
+mod promote;
 mod semantic;
 
 pub use builder::{build_chunks, build_chunks_with_subagents};
 pub use metrics::aggregate_metrics;
+pub use promote::promote_result_agent_tasks;
 pub use semantic::extract_semantic_steps;

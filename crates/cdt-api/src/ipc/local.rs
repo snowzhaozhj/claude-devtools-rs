@@ -4176,7 +4176,12 @@ impl DataApi for LocalDataApi {
         for m in &mut msgs {
             m.is_sidechain = false;
         }
-        let chunks = cdt_analyze::build_chunks(&msgs);
+        // 子 transcript 用非递归 build_chunks 后，把内部带 result_agent_id 的嵌套
+        // Agent/Task 调用升级为骨架 subagent，让 UI 可逐级懒拉展开（零新 IO）。
+        // spec: ipc-data-api::Lazy load subagent trace / chunk-building::Promote
+        // nested Agent calls to skeleton subagents。
+        let mut chunks = cdt_analyze::build_chunks(&msgs);
+        cdt_analyze::promote_result_agent_tasks(&mut chunks);
         Ok(chunks)
     }
 
