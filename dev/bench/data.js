@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781969070512,
+  "lastUpdate": 1781974977949,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -21108,6 +21108,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 9747,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38d05ccf35f248b8d823914f9996744ba3ad845d",
+          "message": "feat(ui): 嵌套 subagent 逐层展开 (#526)\n\n* feat(ui): 嵌套 subagent 逐层展开\n\nsubagent 内部 spawn 的子 subagent 此前只显示为普通工具,无法展开。\n新增 cdt-analyze 纯函数 promote_result_agent_tasks:在已构建 chunks 上把\n带 result_agent_id 的嵌套 Agent/Task ToolExecution 就地升级为骨架 subagent\n(messages 空 + messagesOmitted=true),get_subagent_trace 返回前调用它,\n让前端既有递归 SubagentCard 逐级懒拉展开。零新文件 IO、不碰主路径。\n\n- 骨架填 parent_task_id=tool_use_id 供前端去重;SubagentSpawn 紧随 ToolExecution\n- 移除被升级的 Agent ToolExecution 瘦身 payload\n- 状态降级(design D4):骨架 isOngoing=false,首次展开懒拉纠正\n- 边界:无 result_agent_id(未完成嵌套)保持工具显示\n- 真实样本 7f59237e 验证 level-2 骨架升级 + 未完成边界\n\nopenspec: display-nested-subagents (chunk-building / ipc-data-api / session-display)\n范围外: find_subagent_jsonl 路径歧义 → #525\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* fix(analyze): 处理 codex/pr-review 二审 — 空 agentId 校验 + workflow 排除文档\n\n- 空字符串 result_agent_id 视同缺失,不产 session_id=\"\" 空骨架、不删原工具\n  (codex warn 1)+ empty_result_agent_id_not_promoted 测试\n- 补 mixed_agents_only_promote_those_with_agent_id 测试(多 Agent 混合有/无 id)\n- design D8 + chunk-building spec:显式记录 get_workflow_agent_trace 不接 promote\n  的理由(workflow 子文件落 subagents/workflows/,getSubagentTrace 定位不到,\n  接入会产展开为空的假骨架)(codex warn 2)\n- spec/design/proposal/tasks:description 截断措辞 字节→字符,对齐 chars().take(200)\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive display-nested-subagents\n\n二审通过(codex 2 warn 修复 + pr-review 0 issue)+ CI 全绿后归档。\n主 spec sync:chunk-building(+1)/ ipc-data-api(~1)/ session-display(+1)。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* Revert \"chore(opsx): archive display-nested-subagents\"\n\nThis reverts commit 9b49e379185088ffaf59ab3b66ab0583b446fdab.\n\n* fix(ui): 嵌套 subagent 内联路径升级 + header model badge 防跳动\n\napply 阶段真实数据(HTTP ?http=1)验证发现原 change 两处缺口，折进同一 change：\n\n1. 内联路径未 promote（用户报\"看着并没有好\"）\n   - 根因：LocalDataApi::get_session_detail 按 spec 返回完整未裁剪数据，\n     HTTP / MCP / CLI 消费者 subagent messagesOmitted=false，前端直接渲染\n     内联 Process.messages 绕过 get_subagent_trace，内联层嵌套 Agent 仍显示\n     为普通工具。\n   - 修：parse_subagent_candidate 在 build_chunks 后同样调\n     promote_result_agent_tasks（与 get_subagent_trace 路径对齐，纯内存零新 IO）。\n   - 实测 7f59237e：63 个 level-1 candidate 内联升级出 96 个 level-2 骨架、\n     0 个裸嵌套 Agent 工具。\n\n2. header model badge 展开懒拉时跳动（用户报\"展开后突然多冒出来一个模型\"）\n   - 根因：SubagentCard.modelName 缺省从 effectiveMessages 派生，骨架展开懒拉\n     到 messages 后 header 突然冒出 model badge，始终可见的 header 宽度跳变。\n   - 修：header model badge 只读稳定的 process.headerModel，不从懒拉 messages\n     派生；真实 model 随展开 body 的 Model 详情行出现（design D4b）。\n\nopenspec：design D1b/D4b 修订块 + ipc-data-api/chunk-building/session-display\nspec delta 补内联路径与 header 稳定 scenario + proposal/tasks 同步（rule 7）。\n测试：nested_subagent_trace.rs 加 get_session_detail 内联路径端到端用例。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): re-archive display-nested-subagents\n\n折入 apply 阶段两处修复(内联路径 promote + header model badge 防跳动)后\n重新归档。主 spec sync:chunk-building / ipc-data-api / session-display。\ncodex 0 问题 + pr-review 代码 clean + CI 16 项全绿。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-21T00:59:26+08:00",
+          "tree_id": "2d956b109c282f6dde42a74712e8808d06da8abe",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/38d05ccf35f248b8d823914f9996744ba3ad845d"
+        },
+        "date": 1781974977529,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 113.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1118,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 5841,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.516,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.281,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 45.34,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.83,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 295.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1251,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3292,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3287,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 40050,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.411,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 63.19,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 637.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6410,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 196.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1949,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 51.97,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 525,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5262,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 129,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1297,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.691,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 76.66,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9200,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 948.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9195,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 924.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 48.37,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 511.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 98.87,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 997.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9979,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 190.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1367,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13290,
             "unit": "µs"
           }
         ]
