@@ -200,6 +200,11 @@
   // ----------------- Model 提取 -----------------
   // 优先用后端预算的 headerModel；缺失（老后端）时 fallback 派生。effectiveMessages
   // 在 messagesOmitted=true 且未懒拉时为空数组——派生返回 null 即可。
+  // 注意：`modelName` 仅用于展开后的 Model 详情行；**始终可见的卡片 header** 的
+  // model badge 只读 `process.headerModel`（稳定值），不走 messages 派生——否则嵌套
+  // 骨架（headerModel 缺省 + messages 懒拉）展开时会让 header 突然冒出 model badge
+  // 造成布局跳动（用户反馈）。骨架不知自身 model（零 IO 不读子文件），header 留空即可，
+  // 真实 model 随展开 body 的 Model 详情行一并出现，属正常展开行为。
   const modelName = $derived.by(() => {
     if (process.headerModel) return process.headerModel;
     for (const c of effectiveMessages) {
@@ -315,8 +320,8 @@
         <span class="sa-badge sa-badge-neutral">TASK</span>
       {/if}
 
-      {#if modelName}
-        <span class="sa-model">{modelName}</span>
+      {#if process.headerModel}
+        <span class="sa-model">{process.headerModel}</span>
       {/if}
 
       <span class="sa-desc">{truncatedDesc}</span>

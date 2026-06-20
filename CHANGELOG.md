@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- **UI**: nested subagents can now be expanded inline. When a subagent spawns its own subagents, those child agents previously rendered as plain tool calls with no way to drill in; they now appear as expandable subagent cards and load each deeper level on demand. Only nested agents that finished and recorded their result are expandable — still-running ones keep showing as a tool call until they complete.
+
 ### Fixed
 - **UI**: right-clicking an expanded tool block (Thinking, Output, User message) inside a subagent's or workflow agent's Execution Trace now copies that block's own content. The earlier fix only covered the main session view; trace blocks render through a separate component that was still missing the per-block copy menu.
 - **UI**: pressing Cmd/Ctrl+F again now re-focuses the in-session search box after you have clicked elsewhere. Previously, once the search box lost focus, repeated Cmd/Ctrl+F had no effect and the cursor never returned to the input.

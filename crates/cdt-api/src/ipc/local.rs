@@ -4176,7 +4176,12 @@ impl DataApi for LocalDataApi {
         for m in &mut msgs {
             m.is_sidechain = false;
         }
-        let chunks = cdt_analyze::build_chunks(&msgs);
+        // 子 transcript 用非递归 build_chunks 后，把内部带 result_agent_id 的嵌套
+        // Agent/Task 调用升级为骨架 subagent，让 UI 可逐级懒拉展开（零新 IO）。
+        // spec: ipc-data-api::Lazy load subagent trace / chunk-building::Promote
+        // nested Agent calls to skeleton subagents。
+        let mut chunks = cdt_analyze::build_chunks(&msgs);
+        cdt_analyze::promote_result_agent_tasks(&mut chunks);
         Ok(chunks)
     }
 
@@ -6002,7 +6007,14 @@ async fn parse_subagent_candidate(
     for m in &mut msgs {
         m.is_sidechain = false;
     }
-    let messages = cdt_analyze::build_chunks(&msgs);
+    // 内联展示路径（get_session_detail 把 candidate.messages 作为
+    // Process.messages 内联进 AIChunk.subagents；HTTP server mode 不裁剪、
+    // messagesOmitted=false，前端直接渲染 process.messages 绕过
+    // get_subagent_trace）同样需把内部带 result_agent_id 的嵌套 Agent 调用
+    // 升级为骨架 subagent，否则嵌套层显示为普通工具。与 get_subagent_trace
+    // 路径（build_chunks 后调 promote）对齐。promote 为纯内存变换、零新 IO。
+    let mut messages = cdt_analyze::build_chunks(&msgs);
+    cdt_analyze::promote_result_agent_tasks(&mut messages);
 
     Some(cdt_core::SubagentCandidate {
         session_id,
