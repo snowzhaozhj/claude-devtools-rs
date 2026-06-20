@@ -90,4 +90,30 @@ test.describe('会话内搜索：重复 Cmd+F 重新聚焦', () => {
     expect(sel.start).toBe(0)
     expect(sel.end).toBe(sel.len)
   })
+
+  test('已聚焦且光标在中间时再按 Cmd+F：保持聚焦并重新全选', async ({ page }) => {
+    // spec「重复按 Cmd+F」措辞是「SearchBar 已可见时再按」，不限定已失焦。
+    // 用户输入文本后光标停在中间（非全选态），再按 Cmd+F 期望全选已有文本以便整体替换。
+    await openSession(page)
+    const searchInput = page.locator('.search-bar input').first()
+
+    await pressMod(page, 'f')
+    await searchInput.waitFor({ state: 'visible', timeout: 2_000 })
+    await searchInput.fill('error')
+    // 把光标落到中间，制造"非全选"状态（搜索框仍聚焦，未失焦）
+    await searchInput.evaluate((el: HTMLInputElement) => el.setSelectionRange(2, 2))
+    await expect(searchInput).toBeFocused()
+
+    // 再按 Cmd+F → 仍聚焦 + 重新全选（回归点：修复前 nonce 不生效，光标保持在中间）
+    await pressMod(page, 'f')
+    await expect(searchInput).toBeFocused()
+    const sel = await searchInput.evaluate((el: HTMLInputElement) => ({
+      start: el.selectionStart,
+      end: el.selectionEnd,
+      len: el.value.length,
+    }))
+    expect(sel.len).toBeGreaterThan(0)
+    expect(sel.start).toBe(0)
+    expect(sel.end).toBe(sel.len)
+  })
 })
