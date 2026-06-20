@@ -1,6 +1,6 @@
 ## 1. cdt-analyze:骨架升级纯函数
 
-- [x] 1.1 在 cdt-analyze 新增骨架 `Process` 工厂:由 `ToolExecution` 合成,按 design D3 填齐字段(`session_id=result_agent_id`、`parent_task_id=Some(tool_use_id)`、`spawn_ts=start_ts`、`metrics=Default`、`messages=[]`、`messages_omitted=true`、`is_ongoing=false`、`description` 截断到字节上限)
+- [x] 1.1 在 cdt-analyze 新增骨架 `Process` 工厂:由 `ToolExecution` 合成,按 design D3 填齐字段(`session_id=result_agent_id`、`parent_task_id=Some(tool_use_id)`、`spawn_ts=start_ts`、`metrics=Default`、`messages=[]`、`messages_omitted=true`、`is_ongoing=false`、`description` 截断到字符上限)
 - [x] 1.2 实现纯函数 `promote_result_agent_tasks(chunks)`:遍历各 `AIChunk` 的 `ToolExecution`,对带 `result_agent_id` 的 `Agent`/`Task` 升级成骨架 subagent → push 进 `AIChunk.subagents`
 - [x] 1.3 插入 `SubagentSpawn`:`placeholder_id=session_id`,按对应 `tool_use_id` 找到同 id 的 `ToolExecution` step 后相邻 insert(找不到则 append + `tracing::warn!`),复用既有插入顺序契约
 - [x] 1.4 去重:骨架填 `parent_task_id` + 移除被升级的 Agent/Task `ToolExecution`(payload 瘦身),前端靠 `parent_task_id` 跳过不重复
@@ -12,7 +12,7 @@
 - [x] 2.2 验证 `SubagentSpawn` 紧随对应 `ToolExecution` 的插入顺序
 - [x] 2.3 验证无 `result_agent_id` 的工具不升级、原样保留(普通工具 + 未完成的 Agent 调用两例)
 - [x] 2.4 验证骨架不与原始 Agent 工具重复渲染(去重 + 已 resolve 不重复)
-- [x] 2.5 验证 `description` 超长被截断到字节上限
+- [x] 2.5 验证 `description` 超长被截断到字符上限
 
 ## 3. cdt-api:接入 get_subagent_trace
 

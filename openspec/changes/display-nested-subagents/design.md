@@ -50,7 +50,7 @@
 
 - `session_id = exec.result_agent_id`
 - `subagent_type` 取自 `exec`(沿用现有 subagent_type 来源)
-- `description` 取自 `exec.input.description`,**加字节上限**(见 D5)
+- `description` 取自 `exec.input.description`,**加字符上限**(见 D5)
 - `parent_task_id = Some(exec.tool_use_id)`(D2)
 - `spawn_ts = exec.start_ts`,`metrics = Default::default()`
 - `messages = []`,`messages_omitted = true`,`messages_total_count = 0`(或 `None`)
@@ -65,9 +65,9 @@
 - 备选 b(已否决):合成骨架时读子文件首尾行补 `is_ongoing` + 计数。problem:每层 fan-out N 子就多 N 次轻量读,违背"零新 IO";且嵌套子多数已完成,收益低。
 - 缓解:`SubagentCard` 对 `messagesOmitted=true` 的骨架首次展开 MUST 调 `getSubagentTrace` 懒拉,拉到真实 trace 后状态以懒拉结果为准。用测试把"骨架展开前 done / 展开后纠正"这一降级行为固定下来,使其是**已知契约**而非 bug。
 
-### D5:`description` 字节上限防 fan-out payload 膨胀
+### D5:`description` 字符上限防 fan-out payload 膨胀
 
-一层可能 fan-out ~100 个子骨架,每个携带 `description`。骨架 `description` SHALL 截断到固定字节上限(沿用既有 description 截断口径,如 200 字符),完整内容仍可由该 subagent 自身的 `input.description` / 展开后 trace 查看。
+一层可能 fan-out ~100 个子骨架,每个携带 `description`。骨架 `description` SHALL 截断到固定字符上限(沿用既有 description 截断口径,如 200 字符),完整内容仍可由该 subagent 自身的 `input.description` / 展开后 trace 查看。
 
 ### D6:核心逻辑抽成 cdt-analyze 纯函数 `promote_result_agent_tasks(chunks)`
 
@@ -78,6 +78,15 @@
 `find_subagent_jsonl` 兜底遍历同 `project_dir` 下"任意 session 目录"的 `subagents/`,两个 session 都有 `agent-<id>.jsonl` 时按 `read_dir` 顺序取第一份,可能拿错文件。这是 main 既有隐患,嵌套展开会更频繁触发。
 
 - 决定:本 change **不**修,单独记 GitHub issue / 独立 PR(精确路径优先 + 命中后读首行校验 parent/session id)。理由:与骨架升级正交,混入会放大 diff 与 review 面。
+
+### D8:只接 `get_subagent_trace`,显式不接 `get_workflow_agent_trace`
+
+`get_workflow_agent_trace`(WorkflowCard 渲染 workflow agent trace 用)同样走 `buildDisplayItemsFromChunks` → `ExecutionTrace`,表面看也该接 promote(codex 二审 warn)。但**刻意不接**:
+
+- workflow agent 的子文件落在 `<root>/subagents/workflows/<runId>/agent-*.jsonl`,而 `SubagentCard` 递归展开统一调 `getSubagentTrace` → `find_subagent_jsonl`,后者只扫 `<root>/subagents/agent-*.jsonl`(**不含** `workflows/` 子目录)。
+- 若给 `get_workflow_agent_trace` 接 promote,会产出一个"可展开但展开必为空"的假骨架——比现状(显示为工具)更糟。
+- 完整支持 workflow agent 内嵌套 subagent 需要 `SubagentCard` 感知 workflow 上下文并改用 `getWorkflowAgentTrace` 懒拉,是独立的较大改动。
+- 取舍:本 change 只覆盖普通 subagent 嵌套(Agent/Task 工具,落 `subagents/` 扁平目录,真实样本 7f59237e 即此类)。workflow agent 嵌套留待后续。
 
 ## Risks / Trade-offs
 

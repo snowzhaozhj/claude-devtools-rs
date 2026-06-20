@@ -39,7 +39,8 @@ pub fn promote_result_agent_tasks(chunks: &mut [Chunk]) {
             if !is_task_tool(&exec.tool_name) {
                 continue;
             }
-            let Some(agent_id) = exec.result_agent_id.as_deref() else {
+            // 空字符串 agentId 视同缺失——否则会产 session_id="" 的骨架且删掉原工具。
+            let Some(agent_id) = exec.result_agent_id.as_deref().filter(|s| !s.is_empty()) else {
                 continue;
             };
             // 完整 resolve 路径已为该 task 产出 subagent → 跳过，避免重复。
@@ -271,6 +272,74 @@ mod tests {
             "无 agentId 的 Agent 调用 SHALL NOT 升级"
         );
         assert_eq!(ai.tool_executions.len(), 1, "原始 Agent 工具 SHALL 保留");
+    }
+
+    #[test]
+    fn empty_result_agent_id_not_promoted() {
+        // 空字符串 agentId 视同缺失：不升级、不产 session_id="" 的空骨架、不删原工具。
+        let e = exec("Agent", "toolu_empty", Some(""), serde_json::json!({}));
+        let mut chunks = vec![ai_chunk(vec![e], vec![tool_step("toolu_empty")])];
+        promote_result_agent_tasks(&mut chunks);
+
+        let Chunk::Ai(ai) = &chunks[0] else { panic!() };
+        assert!(ai.subagents.is_empty(), "空 agentId SHALL NOT 升级");
+        assert_eq!(
+            ai.tool_executions.len(),
+            1,
+            "空 agentId 时原始工具 SHALL 保留"
+        );
+    }
+
+    #[test]
+    fn mixed_agents_only_promote_those_with_agent_id() {
+        // 同一 chunk 多调用混合：Agent(有 id) / Bash / Agent(无 id) / Task(有 id)
+        // → 只升级 a / b，顺序各自紧贴对应 ToolExecution step，未升级项保留。
+        let ea = exec("Agent", "tu_a", Some("sub-a"), serde_json::json!({}));
+        let eb = exec(
+            "Bash",
+            "tu_bash",
+            None,
+            serde_json::json!({ "command": "ls" }),
+        );
+        let ec = exec("Agent", "tu_pending", None, serde_json::json!({}));
+        let ed = exec("Task", "tu_b", Some("sub-b"), serde_json::json!({}));
+        let steps = vec![
+            tool_step("tu_a"),
+            tool_step("tu_bash"),
+            tool_step("tu_pending"),
+            tool_step("tu_b"),
+        ];
+        let mut chunks = vec![ai_chunk(vec![ea, eb, ec, ed], steps)];
+        promote_result_agent_tasks(&mut chunks);
+
+        let Chunk::Ai(ai) = &chunks[0] else { panic!() };
+        // 只升级 sub-a / sub-b 两个骨架。
+        let ids: Vec<&str> = ai.subagents.iter().map(|p| p.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["sub-a", "sub-b"]);
+        // 未升级的 Bash / pending Agent 的 ToolExecution 保留；a / b 被移除。
+        let kept: Vec<&str> = ai
+            .tool_executions
+            .iter()
+            .map(|e| e.tool_use_id.as_str())
+            .collect();
+        assert_eq!(kept, vec!["tu_bash", "tu_pending"]);
+        // 每个 SubagentSpawn 紧贴其对应 ToolExecution step。
+        let pos_a = ai
+            .semantic_steps
+            .iter()
+            .position(|s| matches!(s, SemanticStep::ToolExecution { tool_use_id, .. } if tool_use_id == "tu_a"))
+            .unwrap();
+        assert!(
+            matches!(&ai.semantic_steps[pos_a + 1], SemanticStep::SubagentSpawn { placeholder_id, .. } if placeholder_id == "sub-a")
+        );
+        let pos_b = ai
+            .semantic_steps
+            .iter()
+            .position(|s| matches!(s, SemanticStep::ToolExecution { tool_use_id, .. } if tool_use_id == "tu_b"))
+            .unwrap();
+        assert!(
+            matches!(&ai.semantic_steps[pos_b + 1], SemanticStep::SubagentSpawn { placeholder_id, .. } if placeholder_id == "sub-b")
+        );
     }
 
     #[test]
