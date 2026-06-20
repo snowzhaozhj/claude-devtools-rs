@@ -41,7 +41,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR(贴 Perf impact:升级步骤零新 IO;内联路径 promote 进入 `get_session_detail` 主路径但仅纯内存线性扫描,实测无可感知回归)
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex + pr-review-toolkit 二审通过(如发现 bug:修 → push → 回 N.2 重跑;可循环)
-- [ ] N.4 archive change(archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿)
+- [x] N.1 push 分支 + 开 PR(贴 Perf impact:升级步骤零新 IO;内联路径 promote 进入 `get_session_detail` 主路径但仅纯内存线性扫描,实测无可感知回归)
+- [x] N.2 wait-ci 全绿(commit 52b9afb9:16 项 check 全 pass——test×3 平台 / clippy×3 平台 / playwright / vitest / perf / openspec / ipc command sync 等)
+- [x] N.3 codex + pr-review-toolkit 二审通过(codex 0 个问题;pr-review 代码 clean,一个非阻塞 Important——header SHALL scenario 走 e2e/manual 覆盖,与本 change 其它骨架 scenario 同先例,见 task 5.5)
+- [x] N.4 archive change(archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿)
