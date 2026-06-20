@@ -37,7 +37,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR(贴 Perf impact:升级步骤零新 IO,不碰主路径)
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex + pr-review-toolkit 二审通过(如发现 bug:修 → push → 回 N.2 重跑;可循环)
-- [ ] N.4 archive change(archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿)
+- [x] N.1 push 分支 + 开 PR #526(贴 Perf impact:升级步骤零新 IO,不碰主路径)
+- [x] N.2 wait-ci 全绿(两轮:业务 commit + 修复 commit)
+- [x] N.3 codex 二审(2 warn → 修复 → 验证通过)+ pr-review-toolkit code-reviewer(0 issue)
+- [x] N.4 archive change(archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿)
