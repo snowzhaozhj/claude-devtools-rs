@@ -21,9 +21,25 @@
      * `file-change 后自动重搜同步索引` Scenario。
      */
     contentVersion?: number;
+    /**
+     * 调用方每次请求"重新聚焦搜索框"时递增此值（典型：SearchBar 已可见但
+     * 失焦后用户再次按 Cmd+F）。仅靠 `visible` 不够——`visible` 已是 true 时
+     * 父组件再置 true 是 Svelte 相等性 no-op，不会触发 focus `$effect` 重跑。
+     * 用单调递增的 nonce 强制 effect 重跑。详见
+     * `openspec/specs/ui-search/spec.md` `Cmd+F 激活会话内搜索` Requirement
+     * `重复按 Cmd+F` Scenario。
+     */
+    focusRequestVersion?: number;
   }
 
-  let { visible, containerEl, onClose, onBeforeSearch, contentVersion = 0 }: Props = $props();
+  let {
+    visible,
+    containerEl,
+    onClose,
+    onBeforeSearch,
+    contentVersion = 0,
+    focusRequestVersion = 0,
+  }: Props = $props();
 
   let inputEl: HTMLInputElement | undefined = $state();
   let query = $state("");
@@ -87,6 +103,10 @@
   }
 
   $effect(() => {
+    // 无条件读取 focusRequestVersion 建立依赖——若放进下面 if 内会被
+    // `visible` 为 false 时短路，nonce 递增便无法触发 effect 重跑（Svelte 5
+    // effect 依赖集是动态的，只追踪上次实际读到的响应式变量）。
+    focusRequestVersion;
     if (visible && inputEl) {
       inputEl.focus();
       inputEl.select();

@@ -145,6 +145,10 @@
   // SearchBar 内容版本号：refreshDetail 替换 detail 后递增，让 SearchBar
   // 在 visible+query 状态下自动重搜，避免 file-change 后 mark 索引过期。
   let searchContentVersion = $state(0);
+  // SearchBar 聚焦请求版本号：每次 openSearch 递增，强制 SearchBar 重新
+  // focus+select——SearchBar 已可见但失焦（点击别处）后再按 Cmd+F 时，
+  // 仅置 searchVisible=true 是 no-op（已是 true），无法触发 focus effect。
+  let searchFocusRequest = $state(0);
 
   async function toggleChunk(chunk: AIChunk) {
     const n = new Set(expandedChunks);
@@ -438,6 +442,7 @@
       jumpToLatest: scrollToLatest,
       openSearch: () => {
         searchVisible = true;
+        searchFocusRequest++;
       },
     });
 
@@ -976,6 +981,7 @@
     onClose={() => searchVisible = false}
     onBeforeSearch={() => lazyObserver?.flushAll()}
     contentVersion={searchContentVersion}
+    focusRequestVersion={searchFocusRequest}
   />
 
   <!-- Content area (conversation + optional context panel) -->
