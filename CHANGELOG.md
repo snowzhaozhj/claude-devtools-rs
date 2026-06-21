@@ -9,6 +9,8 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.19] — 2026-06-21
+
 ### Added
 - **UI**: nested subagents can now be expanded inline. When a subagent spawns its own subagents, those child agents previously rendered as plain tool calls with no way to drill in; they now appear as expandable subagent cards and load each deeper level on demand. Only nested agents that finished and recorded their result are expandable — still-running ones keep showing as a tool call until they complete.
 
@@ -359,7 +361,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.18...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.19...HEAD
+[0.6.19]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.18...v0.6.19
 [0.6.18]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.17...v0.6.18
 [0.6.17]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.16...v0.6.17
 [0.6.16]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.15...v0.6.16
