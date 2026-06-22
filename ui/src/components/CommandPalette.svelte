@@ -6,7 +6,7 @@
     type SessionSearchResult,
     type SessionSummary,
   } from "../lib/api";
-  import { getProjectData, loadProjectData } from "../lib/projectDataStore.svelte";
+  import { getProjectData, getProjectDataError, loadProjectData } from "../lib/projectDataStore.svelte";
   import { openTab, openJobsTab } from "../lib/tabStore.svelte";
   import { getJobsDirExists } from "../lib/jobsStore.svelte";
   import { shortenPath } from "../lib/toolHelpers";
@@ -43,6 +43,9 @@
   let debouncedQuery = $state("");
   let sessions: SessionSummary[] = $state([]);
   let searchResults: SessionSearchResult[] = $state([]);
+  // 这批 searchResults 对应的 query（trim 后）。debounce 间隙 / 失败时与当前 query
+  // 不符 → contentMatchRows 丢弃，避免旧正文命中混入当前查询（codex F1 / SFH#1）。
+  let searchResultsQuery = $state("");
   let sessionsSeq = 0;
   let searchSeq = 0;
   let selectedIndex = $state(0);
@@ -70,18 +73,22 @@
   $effect(() => {
     const groupId = selectedProjectId;
     const seq = ++sessionsSeq;
-    if (!groupId) {
-      sessions = [];
-      return;
-    }
+    // 切组同步清空：避免旧组会话在新数据到达前被冠以新组 groupId/projectName 展示
+    // 甚至以错归属打开（SFH#2）。
+    sessions = [];
+    if (!groupId) return;
     void listGroupSessions(groupId, 20)
       .then((r) => {
         if (seq === sessionsSeq) sessions = r.sessions;
       })
-      .catch((e) => console.error("CommandPalette: failed to load sessions", e));
+      .catch((e) => {
+        console.error("CommandPalette: failed to load sessions", e);
+        if (seq === sessionsSeq) sessions = [];
+      });
   });
 
-  // query → debouncedQuery（D8：整段重算统一防抖）
+  // query → debouncedQuery（D8b：仅后端 searchGroupSessions IPC 防抖；前端 filter/sort
+  // 走 raw query 即时更新——候选列表已 $derived 构建一次，每键只是轻量 filter，<1ms）
   $effect(() => {
     const q = query;
     const t = setTimeout(() => { debouncedQuery = q; }, QUERY_DEBOUNCE_MS);
@@ -139,7 +146,7 @@
   // ── 过滤 ──
 
   const filteredProjects = $derived.by(() => {
-    const q = debouncedQuery.toLowerCase();
+    const q = query.toLowerCase();
     const list = q
       ? projects.filter(p =>
           p.displayName.toLowerCase().includes(q) ||
@@ -160,7 +167,7 @@
 
   // A 路：全局 sessionId 子串定位（仅 query ≥ 4，跨所有项目）
   const globalIdMatches = $derived.by((): SessionRow[] => {
-    const q = debouncedQuery.trim().toLowerCase();
+    const q = query.trim().toLowerCase();
     if (q.length < MIN_GLOBAL_ID_LEN) return [];
     const matched = allSessionRows.filter(r => r.sessionId.toLowerCase().includes(q));
     return dedupBySessionId(matched);
@@ -168,6 +175,8 @@
 
   // B 路：组内正文搜索结果 → normalized row（归属由 worktreeIndex 补 groupId/projectName）
   const contentMatchRows = $derived.by((): SessionRow[] => {
+    // debounce 间隙 / 后端失败：searchResults 属于旧 query → 丢弃，不混入当前查询（codex F1 / SFH#1）
+    if (searchResultsQuery !== query.trim()) return [];
     return searchResults.map((r): SessionRow => {
       const idx = worktreeIndex.get(r.projectId);
       return {
@@ -186,7 +195,7 @@
   });
 
   const filteredSessions = $derived.by((): SessionRow[] => {
-    const q = debouncedQuery.trim();
+    const q = query.trim();
     // 空 query：维持现状——展示当前选中组的已加载会话
     if (!q) {
       if (!selectedProjectId) return [];
@@ -227,7 +236,7 @@
 
   // 截断提示（无静默 cap）：合并去重后总数 > 展示上限
   const sessionTotalBeforeCap = $derived.by(() => {
-    const q = debouncedQuery.trim();
+    const q = query.trim();
     if (!q) return selectedProjectId ? sessions.length : 0;
     const ids = new Set<string>();
     for (const a of globalIdMatches) ids.add(a.sessionId);
@@ -238,7 +247,7 @@
 
   // 短查询（1–3 字符）未选项目 → 给提示，不留无解释空白（D5）
   const showShortQueryHint = $derived.by(() => {
-    const q = debouncedQuery.trim();
+    const q = query.trim();
     return q.length > 0 && q.length < MIN_GLOBAL_ID_LEN && !selectedProjectId;
   });
 
@@ -251,7 +260,7 @@
   }
 
   const actions = $derived.by((): PaletteAction[] => {
-    const q = debouncedQuery.toLowerCase();
+    const q = query.toLowerCase();
     const items: PaletteAction[] = [];
     if (getJobsDirExists()) {
       const matches = !q || "background jobs".includes(q) || "open jobs".includes(q) || "bg".includes(q);
@@ -277,17 +286,23 @@
     const seq = ++searchSeq;
     if (!q || !projectId) {
       searchResults = [];
+      searchResultsQuery = q;
       return;
     }
     void searchGroupSessions(projectId, q)
       .then((result) => {
-        if (seq === searchSeq) searchResults = result.results;
+        if (seq === searchSeq) { searchResults = result.results; searchResultsQuery = q; }
       })
-      .catch((e) => console.error("CommandPalette: failed to search sessions", e));
+      .catch((e) => {
+        console.error("CommandPalette: failed to search sessions", e);
+        // seq 守卫清空 + 标记当前 query：失败不残留旧命中（SFH#1）；全局 id 定位
+        // 走纯前端内存，后端搜索失败时仍可用（graceful degradation）。
+        if (seq === searchSeq) { searchResults = []; searchResultsQuery = q; }
+      });
   });
 
-  // 查询变化 → 重置选中
-  $effect(() => { debouncedQuery; selectedIndex = 0; });
+  // 查询变化 → 重置选中（跟 raw query 即时，避免 type-then-Enter 选到旧列表项，codex F2）
+  $effect(() => { query; selectedIndex = 0; });
 
   // ── 键盘导航 ──
 
@@ -475,9 +490,14 @@
       {/each}
     {/if}
 
-    {#if totalResults === 0}
-      {#if showShortQueryHint}
-        <div class="cp-empty">输入 ≥{MIN_GLOBAL_ID_LEN} 个字符按 Session ID 全局定位</div>
+    <!-- 短查询提示独立渲染，不被 actions(jobs) 撑非零的 totalResults 挤掉（codex F3） -->
+    {#if showShortQueryHint}
+      <div class="cp-truncation">输入 ≥{MIN_GLOBAL_ID_LEN} 个字符按 Session ID 全局定位</div>
+    {/if}
+
+    {#if totalResults === 0 && !showShortQueryHint}
+      {#if getProjectDataError()}
+        <div class="cp-empty">加载失败，请重试</div>
       {:else}
         <div class="cp-empty">无匹配结果</div>
       {/if}

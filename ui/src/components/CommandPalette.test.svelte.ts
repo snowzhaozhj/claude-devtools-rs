@@ -206,6 +206,63 @@ describe("CommandPalette A+B 合并与 title", () => {
   });
 });
 
+describe("CommandPalette 排序 / 截断 / title 兜底", () => {
+  test("确定性排序：按 worktreeMostRecent 倒序", async () => {
+    await setSnapshot([
+      group("Ghi", "hi", [worktree("phi", "hi", ["hi00match0001"], { mostRecentSession: 300 })], 300),
+      group("Glo", "lo", [worktree("plo", "lo", ["lo00match0003"], { mostRecentSession: 100 })], 100),
+      group("Gmid", "mid", [worktree("pmid", "mid", ["mid0match0002"], { mostRecentSession: 200 })], 200),
+    ])
+    const { container, getByLabelText } = await renderPalette();
+    await type(getByLabelText("命令面板搜索"), "match");
+    // query "match" 不匹配任何项目名 → 会话区即全部结果，直接比对顺序
+    await waitFor(() => {
+      expect(sessionLabels(container)).toEqual(["hi00matc", "mid0matc", "lo00matc"]);
+    });
+  });
+
+  test("命中超过上限：截断到 20 条 + 显式提示", async () => {
+    const ids = Array.from({ length: 25 }, (_, i) => `cap${String(i).padStart(2, "0")}match`);
+    await setSnapshot([
+      group("Gcap", "cap", [worktree("pcap", "cap", ids, { mostRecentSession: 10 })], 10),
+    ]);
+    const { container, getByLabelText } = await renderPalette();
+    await type(getByLabelText("命令面板搜索"), "match");
+    await waitFor(() => {
+      const rows = sessionLabels(container).filter((l) => l.startsWith("cap"));
+      expect(rows.length).toBe(20);
+      expect(container.textContent).toContain("仅显示前 20 条");
+    });
+  });
+
+  test("title 未加载：显示 id 前缀 + 项目名定位，且不发补 title IPC", async () => {
+    await setSnapshot(snapshot());
+    const { container, getByLabelText } = await renderPalette(); // 未选项目 → 不应调 listGroupSessions
+    await type(getByLabelText("命令面板搜索"), "aaaa1111");
+    let row: Element | undefined;
+    await waitFor(() => {
+      row = Array.from(container.querySelectorAll(".cp-item")).find((el) =>
+        el.querySelector(".cp-item-label")?.textContent?.startsWith("aaaa1111"),
+      );
+      expect(row).toBeTruthy();
+    });
+    // 标签是 id 前缀（无 title），detail 含项目名定位
+    expect(row!.querySelector(".cp-item-label")?.textContent?.trim()).toBe("aaaa1111");
+    expect(row!.querySelector(".cp-item-detail")?.textContent).toContain("alpha");
+    // 未选项目 → 全程不为补 title 调 listGroupSessions
+    expect(vi.mocked(listGroupSessions)).not.toHaveBeenCalled();
+  });
+
+  test("短查询提示在有 actions 时仍显示（不被 totalResults 挤掉）", async () => {
+    await setSnapshot(snapshot());
+    const { container, getByLabelText } = await renderPalette();
+    await type(getByLabelText("命令面板搜索"), "abc"); // <4，未选项目
+    await waitFor(() => {
+      expect(container.textContent).toContain("个字符按 Session ID 全局定位");
+    });
+  });
+});
+
 describe("CommandPalette stale 快照修复", () => {
   test("store 刷新后已打开面板的全局命中同步（新增可见）", async () => {
     await setSnapshot(snapshot());

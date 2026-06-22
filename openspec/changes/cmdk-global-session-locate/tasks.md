@@ -9,7 +9,10 @@
 - [x] 2.1 `filteredSessions`：query 长度 ≥ 4 时启用全局 id 子串匹配；< 4 维持现有组内行为（D5）
 - [x] 2.2 合并 A（全局 id）+ B（组内正文 `searchGroupSessions`，先转 normalized row）：identity = `sessionId` 合并（与 1.3 同一 key）；双路命中保留 B 的 `projectId/groupId/hits`（B 来自选中组、归属权威），合并 A 的 title?/projectName 兜底（D7）
 - [x] 2.3 确定性排序：worktreeMostRecent 倒序 → 项目名 + sessionId 稳定兜底；排序后截断到 `MAX_SESSIONS`；超限显示"仅显示前 N 条"提示（D6 / 无静默 cap）
-- [x] 2.4 query 驱动的整段重算（全局 filter+排序 + `searchGroupSessions`）统一加 debounce（~300ms）；candidate 列表随快照变化构建一次、query 变化只轻量 filter（D8）
+- [x] 2.4 仅 debounce 后端 `searchGroupSessions` IPC；前端 filter/sort/selectedIndex 走 raw query 即时更新（D8b 反转 D8，修 type-then-Enter 选旧项）；candidate 列表随快照构建一次
+- [x] 2.6 B 路 `searchResults` 配 `searchResultsQuery` 标记，`contentMatchRows` 仅当与当前 query 一致才采用；后端 reject seq 守卫清空（D7b，修 stale-as-fresh）
+- [x] 2.7 切组 select-effect 起始同步清 `sessions` + catch seq 守卫（D4b，消除身份错配）
+- [x] 2.8 短查询提示独立渲染不门控 totalResults；空态用 `getProjectDataError()` 区分加载失败（D5b/D3b）
 - [x] 2.5 短查询（1–3 字符）未选项目时显示"输入 ≥4 个字符按 Session ID 全局定位"提示（D5 / 空态）
 
 ## 3. 前端打开归属 + UI 行展示
@@ -26,6 +29,8 @@
 - [x] 4.5 active-context 边界单测/e2e mock：未连接 host 的 group 不出现，文案不宣称所有 host（D9 / codex T3）
 - [x] 4.6 Playwright user story：粘一个其他项目的 sessionId → 跨项目定位 → Enter 打开正确会话
 - [x] 4.7 确认无新增后端 IPC、无 metadata scan 触发（grep / 断言不调补 title 路径）
+- [x] 4.8 vitest：确定性排序顺序 / 截断到 20 + 提示 / title 未加载兜底(id 前缀+项目名,不调 IPC) / 短查询提示有 actions 时仍显示（codex+test-analyzer 二审补）
+- [x] 4.9 e2e 强化：用 getPaneLayout 断言打开的 tab 归属 mock-rich-ts 的 sess-ts-* 会话（验跨项目归属，非仅面板关闭）
 
 ## 5. 验证 + 流程
 
