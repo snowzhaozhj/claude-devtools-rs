@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782013986314,
+  "lastUpdate": 1782136880416,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -21526,6 +21526,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12720,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c03adfcc5143377a3386887f421e69dbaca7d4c3",
+          "message": "chore(deps): bump the rust-deps group with 3 updates (#530)\n\nBumps the rust-deps group with 3 updates: [bytes](https://github.com/tokio-rs/bytes), [tower-http](https://github.com/tower-rs/tower-http) and [syn](https://github.com/dtolnay/syn).\n\n\nUpdates `bytes` from 1.11.1 to 1.12.0\n- [Release notes](https://github.com/tokio-rs/bytes/releases)\n- [Changelog](https://github.com/tokio-rs/bytes/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/tokio-rs/bytes/compare/v1.11.1...v1.12.0)\n\nUpdates `tower-http` from 0.6.11 to 0.7.0\n- [Release notes](https://github.com/tower-rs/tower-http/releases)\n- [Commits](https://github.com/tower-rs/tower-http/compare/tower-http-0.6.11...tower-http-0.7.0)\n\nUpdates `syn` from 2.0.117 to 2.0.118\n- [Release notes](https://github.com/dtolnay/syn/releases)\n- [Commits](https://github.com/dtolnay/syn/compare/2.0.117...2.0.118)\n\n---\nupdated-dependencies:\n- dependency-name: bytes\n  dependency-version: 1.12.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: rust-deps\n- dependency-name: tower-http\n  dependency-version: 0.7.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: rust-deps\n- dependency-name: syn\n  dependency-version: 2.0.118\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: rust-deps\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-06-22T21:57:22+08:00",
+          "tree_id": "caf05d1c783693c67b1c13cbf19fbe47ceda90c2",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/c03adfcc5143377a3386887f421e69dbaca7d4c3"
+        },
+        "date": 1782136880056,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 116.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1133,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4745,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.861,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 9.036,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 40.49,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.46,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 292.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1207,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3230,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2990,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 37380,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.077,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 60.27,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 611,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6151,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 194.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2005,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 54.09,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 547.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5460,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 115.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1167,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.811,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9436,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1165,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9371,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 1001,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 50.97,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 536.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 97.23,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 972.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9752,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 235.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1462,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13210,
             "unit": "µs"
           }
         ]
