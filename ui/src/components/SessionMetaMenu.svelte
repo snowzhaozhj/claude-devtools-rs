@@ -190,6 +190,7 @@
     try {
       const resp = await getSessionDetailForExport(projectId, sessionId);
       if (resp.status !== "full" || !resp.detail) {
+        console.error("[SessionMetaMenu] export: unexpected response", resp.status);
         setFeedback("export-fail");
         return;
       }

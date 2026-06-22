@@ -78,6 +78,12 @@ function renderAIChunk(chunk: AIChunk, index: number, options: ExportOptions): s
     if (rendered) parts.push(rendered);
   }
 
+  for (const step of chunk.semanticSteps) {
+    if (step.kind === "interruption") {
+      parts.push(`*[interrupted]* ${step.text}\n`);
+    }
+  }
+
   if (lastOutput) {
     const cleaned = cleanDisplayText(lastOutput.text);
     if (cleaned) parts.push(`${cleaned}\n`);
@@ -103,7 +109,10 @@ function renderDisplayItem(item: DisplayItem, options: ExportOptions): string {
       return renderSubagent(item.process);
     case "user_message":
       return `*[user]* ${cleanDisplayText(item.text)}\n`;
-    default:
+    case "slash":
+    case "teammate_message":
+    case "teammate_spawn":
+    case "workflow":
       return "";
   }
 }

@@ -86,6 +86,12 @@ function renderAIHtml(
     if (rendered) parts.push(rendered);
   }
 
+  for (const step of chunk.semanticSteps) {
+    if (step.kind === "interruption") {
+      parts.push(`<p><em>[interrupted]</em> ${escapeHtml(step.text)}</p>`);
+    }
+  }
+
   if (lastOutput) {
     const cleaned = cleanDisplayText(lastOutput.text);
     if (cleaned) parts.push(renderMarkdownSafe(cleaned));
@@ -118,7 +124,10 @@ function renderDisplayItemHtml(item: DisplayItem, options: ExportOptions): strin
       return renderSubagentHtml(item.process);
     case "user_message":
       return `<p><em>[user]</em> ${escapeHtml(item.text)}</p>`;
-    default:
+    case "slash":
+    case "teammate_message":
+    case "teammate_spawn":
+    case "workflow":
       return "";
   }
 }
