@@ -330,6 +330,7 @@ function httpRequestForCommand(cmd: string, args: InvokeArgs): HttpRequest {
     case "search_group_sessions":
       return { method: "POST", path: `/api/repository-groups/${enc(a.groupId)}/search`, body: { query: a.query } };
     case "get_session_detail":
+    case "get_session_detail_for_export":
       return { method: "GET", path: `/api/sessions/${enc(a.sessionId)}` };
     case "get_project_memory":
       return { method: "GET", path: `/api/projects/${enc(a.projectId)}/memory` };

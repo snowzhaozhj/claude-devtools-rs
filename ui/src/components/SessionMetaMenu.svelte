@@ -13,7 +13,7 @@
     CHECK_SVG,
     ALERT_CIRCLE_SVG,
   } from "../lib/icons";
-  import { getSessionDetail } from "../lib/api";
+  import { getSessionDetailForExport } from "../lib/api";
   import type { ExportFormat } from "../lib/export";
   import { exportSession, getExportFileName, getExportFilterExt } from "../lib/export";
   import { getTransport } from "../lib/transport";
@@ -188,7 +188,7 @@
     if (exporting) return;
     exporting = true;
     try {
-      const resp = await getSessionDetail(projectId, sessionId, null);
+      const resp = await getSessionDetailForExport(projectId, sessionId);
       if (resp.status !== "full" || !resp.detail) {
         setFeedback("export-fail");
         return;

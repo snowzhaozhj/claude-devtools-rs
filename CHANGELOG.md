@@ -12,6 +12,10 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 ### Added
 - **UI**: Command Palette (Cmd+K) now locates sessions globally by Session ID across all projects. Paste a copied Session ID (4+ characters) to jump straight to its session without first selecting the project it belongs to; matches show the project name for cross-project disambiguation. Existing in-project content search is preserved.
 
+### Fixed
+- **Export**: Tool calls and subagent cards now appear in chronological order (interleaved with text), matching the session detail view. Previously they were all dumped after the assistant's final text.
+- **Export**: Tool call output is no longer empty in exported files. Desktop export now uses a dedicated IPC command that preserves tool output and response content instead of reusing the display-optimized payload.
+
 ## [0.6.19] — 2026-06-21
 
 ### Added

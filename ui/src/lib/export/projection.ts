@@ -81,5 +81,5 @@ function truncateToolExecution(exec: ToolExecution, maxLen: number): ToolExecuti
 
 function projectSubagents(procs: SubagentProcess[], options: ExportOptions): SubagentProcess[] {
   if (options.includeSubagents) return procs;
-  return procs.map((p) => ({ ...p, messages: [] }));
+  return [];
 }

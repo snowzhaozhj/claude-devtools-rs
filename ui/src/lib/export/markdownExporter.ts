@@ -1,7 +1,8 @@
-import type { SessionDetail, Chunk, AIChunk, UserChunk, SystemChunk, CompactChunk, SemanticStep, ToolExecution, SubagentProcess } from "../api";
+import type { SessionDetail, Chunk, AIChunk, UserChunk, SystemChunk, CompactChunk, ToolExecution, SubagentProcess } from "../api";
 import type { ExportOptions } from "./types";
 import { projectSessionDetail } from "./projection";
-import { userChunkToMarkdown, aiChunkToMarkdown, toolExecToMarkdown } from "../contextMenu/markdown";
+import { buildDisplayItems, type DisplayItem } from "../displayItemBuilder";
+import { userChunkToMarkdown, toolExecToMarkdown } from "../contextMenu/markdown";
 import { cleanDisplayText } from "../toolHelpers";
 
 export function exportAsMarkdown(detail: SessionDetail, options: ExportOptions): string {
@@ -70,37 +71,41 @@ function renderAIChunk(chunk: AIChunk, index: number, options: ExportOptions): s
   const parts: string[] = [];
   parts.push(`## Turn ${index} — Assistant\n`);
 
-  for (const step of chunk.semanticSteps) {
-    parts.push(renderSemanticStep(step, options));
+  const { items, lastOutput } = buildDisplayItems(chunk);
+
+  for (const item of items) {
+    const rendered = renderDisplayItem(item, options);
+    if (rendered) parts.push(rendered);
   }
 
-  for (const exec of chunk.toolExecutions) {
-    parts.push(renderToolExecution(exec));
-  }
-
-  if (options.includeSubagents && chunk.subagents.length > 0) {
-    for (const sub of chunk.subagents) {
-      parts.push(renderSubagent(sub));
-    }
+  if (lastOutput) {
+    const cleaned = cleanDisplayText(lastOutput.text);
+    if (cleaned) parts.push(`${cleaned}\n`);
   }
 
   parts.push("---\n");
   return parts.join("\n");
 }
 
-function renderSemanticStep(step: SemanticStep, options: ExportOptions): string {
-  if (step.kind === "thinking") {
-    if (!options.includeThinking) return "";
-    return `> [thinking] ${step.text}\n`;
+function renderDisplayItem(item: DisplayItem, options: ExportOptions): string {
+  switch (item.type) {
+    case "thinking":
+      if (!options.includeThinking) return "";
+      return `> [thinking] ${item.text}\n`;
+    case "output":
+      {
+        const cleaned = cleanDisplayText(item.text);
+        return cleaned ? `${cleaned}\n` : "";
+      }
+    case "tool":
+      return renderToolExecution(item.execution);
+    case "subagent":
+      return renderSubagent(item.process);
+    case "user_message":
+      return `*[user]* ${cleanDisplayText(item.text)}\n`;
+    default:
+      return "";
   }
-  if (step.kind === "text") {
-    const cleaned = cleanDisplayText(step.text);
-    return cleaned ? `${cleaned}\n` : "";
-  }
-  if (step.kind === "interruption") {
-    return `*[interrupted]* ${step.text}\n`;
-  }
-  return "";
 }
 
 function renderToolExecution(exec: ToolExecution): string {
