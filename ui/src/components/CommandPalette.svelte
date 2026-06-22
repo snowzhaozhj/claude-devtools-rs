@@ -1,13 +1,12 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount } from "svelte";
   import {
     listGroupSessions,
     searchGroupSessions,
-    type ProjectInfo,
     type SessionSearchResult,
     type SessionSummary,
   } from "../lib/api";
-  import { loadProjectData } from "../lib/projectDataStore.svelte";
+  import { getProjectData, loadProjectData } from "../lib/projectDataStore.svelte";
   import { openTab, openJobsTab } from "../lib/tabStore.svelte";
   import { getJobsDirExists } from "../lib/jobsStore.svelte";
   import { shortenPath } from "../lib/toolHelpers";
@@ -21,35 +20,126 @@
 
   let { selectedProjectId, onSelectProject, onClose }: Props = $props();
 
+  // 归一化会话结果行：A（全局 id）/ B（组内正文）两路共用，统一身份与归属。
+  // change cmdk-global-session-locate：前端无 per-session title/mtime，title 仅
+  // 来自已加载会话，时间用 worktree 级近似（仅排序，不展示为会话时间）。
+  interface SessionRow {
+    sessionId: string;
+    projectId: string;
+    groupId: string;
+    projectName: string;
+    worktreeName: string;
+    gitBranch: string | null;
+    worktreeMostRecent: number;
+    isPrimary: boolean;
+    title?: string;
+    hits?: number;
+    /** 仅 empty-query 已加载会话有真实会话时间；全局命中无 per-session 时间故不展示 */
+    timestamp?: number;
+    messageCount?: number;
+  }
+
   let query = $state("");
-  let projects: ProjectInfo[] = $state([]);
+  let debouncedQuery = $state("");
   let sessions: SessionSummary[] = $state([]);
   let searchResults: SessionSearchResult[] = $state([]);
+  let sessionsSeq = 0;
   let searchSeq = 0;
   let selectedIndex = $state(0);
   let inputEl: HTMLInputElement | undefined = $state(undefined);
 
   const MAX_PROJECTS = 5;
   const MAX_SESSIONS = 20;
+  /** 全局 sessionId 子串匹配的最小 query 长度（hex id 防爆量，D5） */
+  const MIN_GLOBAL_ID_LEN = 4;
+  const QUERY_DEBOUNCE_MS = 250;
 
-  onMount(async () => {
+  // 响应式读 store 快照（D3：不再 onMount 一次性复制；store 刷新后面板自动同步）
+  const projectData = $derived(getProjectData());
+  const projects = $derived(projectData?.projects ?? []);
+  const repositoryGroups = $derived(projectData?.repositoryGroups ?? []);
+
+  onMount(() => {
     inputEl?.focus();
-    try {
-      const data = await loadProjectData();
-      projects = data.projects;
-      if (selectedProjectId) {
-        const r = await listGroupSessions(selectedProjectId, 20);
-        sessions = r.sessions;
-      }
-    } catch (e) {
-      console.error("CommandPalette: failed to load data", e);
+    void loadProjectData().catch((e) =>
+      console.error("CommandPalette: failed to load data", e),
+    );
+  });
+
+  // 选中项目变化 → 拉该组已加载会话（带 title，作为 title 来源 + 空 query 列表）
+  $effect(() => {
+    const groupId = selectedProjectId;
+    const seq = ++sessionsSeq;
+    if (!groupId) {
+      sessions = [];
+      return;
     }
+    void listGroupSessions(groupId, 20)
+      .then((r) => {
+        if (seq === sessionsSeq) sessions = r.sessions;
+      })
+      .catch((e) => console.error("CommandPalette: failed to load sessions", e));
+  });
+
+  // query → debouncedQuery（D8：整段重算统一防抖）
+  $effect(() => {
+    const q = query;
+    const t = setTimeout(() => { debouncedQuery = q; }, QUERY_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  });
+
+  // worktree id → 归属索引（B 路结果与全局命中共用，projectName 取 group 名以与项目区一致）
+  const worktreeIndex = $derived.by(() => {
+    const m = new Map<string, { groupId: string; projectName: string; worktreeName: string; gitBranch: string | null; mostRecent: number; isPrimary: boolean }>();
+    for (const g of repositoryGroups) {
+      for (const w of g.worktrees) {
+        m.set(w.id, {
+          groupId: g.id,
+          projectName: g.name,
+          worktreeName: w.name,
+          gitBranch: w.gitBranch,
+          mostRecent: w.mostRecentSession ?? 0,
+          isPrimary: !!(w.isRepoRoot || w.isMainWorktree),
+        });
+      }
+    }
+    return m;
+  });
+
+  // 全部会话候选（normalized row），随快照变化构建一次（D1/D4）
+  const allSessionRows = $derived.by((): SessionRow[] => {
+    const rows: SessionRow[] = [];
+    for (const g of repositoryGroups) {
+      for (const w of g.worktrees) {
+        const isPrimary = !!(w.isRepoRoot || w.isMainWorktree);
+        for (const sid of w.sessions) {
+          rows.push({
+            sessionId: sid,
+            projectId: w.id,
+            groupId: g.id,
+            projectName: g.name,
+            worktreeName: w.name,
+            gitBranch: w.gitBranch,
+            worktreeMostRecent: w.mostRecentSession ?? 0,
+            isPrimary,
+          });
+        }
+      }
+    }
+    return rows;
+  });
+
+  // 已加载会话的 title 索引（D2：title 唯一来源，绝不为补 title 发 IPC）
+  const loadedTitles = $derived.by(() => {
+    const m = new Map<string, string>();
+    for (const s of sessions) if (s.title) m.set(s.sessionId, s.title);
+    return m;
   });
 
   // ── 过滤 ──
 
   const filteredProjects = $derived.by(() => {
-    const q = query.toLowerCase();
+    const q = debouncedQuery.toLowerCase();
     const list = q
       ? projects.filter(p =>
           p.displayName.toLowerCase().includes(q) ||
@@ -58,11 +148,98 @@
     return list.slice(0, MAX_PROJECTS);
   });
 
-  const filteredSessions = $derived.by(() => {
-    if (!selectedProjectId) return [];
-    const q = query.toLowerCase();
-    if (q) return searchResults.slice(0, MAX_SESSIONS);
-    return sessions.slice(0, MAX_SESSIONS);
+  // 同 sessionId 去重，确定性 tie-break：优先 main/repo-root worktree，否则遍历首条（D4）
+  function dedupBySessionId(rows: SessionRow[]): SessionRow[] {
+    const map = new Map<string, SessionRow>();
+    for (const r of rows) {
+      const existing = map.get(r.sessionId);
+      if (!existing || (r.isPrimary && !existing.isPrimary)) map.set(r.sessionId, r);
+    }
+    return [...map.values()];
+  }
+
+  // A 路：全局 sessionId 子串定位（仅 query ≥ 4，跨所有项目）
+  const globalIdMatches = $derived.by((): SessionRow[] => {
+    const q = debouncedQuery.trim().toLowerCase();
+    if (q.length < MIN_GLOBAL_ID_LEN) return [];
+    const matched = allSessionRows.filter(r => r.sessionId.toLowerCase().includes(q));
+    return dedupBySessionId(matched);
+  });
+
+  // B 路：组内正文搜索结果 → normalized row（归属由 worktreeIndex 补 groupId/projectName）
+  const contentMatchRows = $derived.by((): SessionRow[] => {
+    return searchResults.map((r): SessionRow => {
+      const idx = worktreeIndex.get(r.projectId);
+      return {
+        sessionId: r.sessionId,
+        projectId: r.projectId,
+        groupId: idx?.groupId ?? selectedProjectId,
+        projectName: idx?.projectName ?? "",
+        worktreeName: idx?.worktreeName ?? "",
+        gitBranch: idx?.gitBranch ?? null,
+        worktreeMostRecent: idx?.mostRecent ?? 0,
+        isPrimary: idx?.isPrimary ?? true,
+        title: r.sessionTitle || loadedTitles.get(r.sessionId) || undefined,
+        hits: r.totalMatches,
+      };
+    });
+  });
+
+  const filteredSessions = $derived.by((): SessionRow[] => {
+    const q = debouncedQuery.trim();
+    // 空 query：维持现状——展示当前选中组的已加载会话
+    if (!q) {
+      if (!selectedProjectId) return [];
+      const idx = worktreeIndex.get(selectedProjectId);
+      const groupName = projects.find(p => p.id === selectedProjectId)?.displayName ?? idx?.projectName ?? "";
+      return sessions.slice(0, MAX_SESSIONS).map((s): SessionRow => ({
+        sessionId: s.sessionId,
+        projectId: s.projectId,
+        groupId: selectedProjectId,
+        projectName: groupName,
+        worktreeName: idx?.worktreeName ?? "",
+        gitBranch: s.gitBranch ?? null,
+        worktreeMostRecent: s.timestamp ?? 0,
+        isPrimary: true,
+        title: s.title ?? undefined,
+        timestamp: s.timestamp,
+        messageCount: s.messageCount,
+      }));
+    }
+
+    // identity = sessionId 合并 A + B：B 优先补 projectId/groupId/hits（归属权威）
+    const map = new Map<string, SessionRow>();
+    for (const a of globalIdMatches) {
+      map.set(a.sessionId, { ...a, title: loadedTitles.get(a.sessionId) ?? a.title });
+    }
+    for (const b of contentMatchRows) {
+      const a = map.get(b.sessionId);
+      map.set(b.sessionId, { ...(a ?? {}), ...b, title: b.title ?? a?.title });
+    }
+
+    // 确定性排序：worktreeMostRecent 倒序 → projectName → sessionId（D6）
+    const merged = [...map.values()].sort((x, y) =>
+      (y.worktreeMostRecent - x.worktreeMostRecent) ||
+      x.projectName.localeCompare(y.projectName) ||
+      x.sessionId.localeCompare(y.sessionId));
+    return merged.slice(0, MAX_SESSIONS);
+  });
+
+  // 截断提示（无静默 cap）：合并去重后总数 > 展示上限
+  const sessionTotalBeforeCap = $derived.by(() => {
+    const q = debouncedQuery.trim();
+    if (!q) return selectedProjectId ? sessions.length : 0;
+    const ids = new Set<string>();
+    for (const a of globalIdMatches) ids.add(a.sessionId);
+    for (const b of contentMatchRows) ids.add(b.sessionId);
+    return ids.size;
+  });
+  const sessionsTruncated = $derived(sessionTotalBeforeCap > filteredSessions.length);
+
+  // 短查询（1–3 字符）未选项目 → 给提示，不留无解释空白（D5）
+  const showShortQueryHint = $derived.by(() => {
+    const q = debouncedQuery.trim();
+    return q.length > 0 && q.length < MIN_GLOBAL_ID_LEN && !selectedProjectId;
   });
 
   interface PaletteAction {
@@ -74,7 +251,7 @@
   }
 
   const actions = $derived.by((): PaletteAction[] => {
-    const q = query.toLowerCase();
+    const q = debouncedQuery.toLowerCase();
     const items: PaletteAction[] = [];
     if (getJobsDirExists()) {
       const matches = !q || "background jobs".includes(q) || "open jobs".includes(q) || "bg".includes(q);
@@ -93,8 +270,9 @@
 
   const totalResults = $derived(filteredProjects.length + filteredSessions.length + actions.length);
 
+  // B 路后端正文搜索（debounced，scoped 当前选中组）
   $effect(() => {
-    const q = query.trim();
+    const q = debouncedQuery.trim();
     const projectId = selectedProjectId;
     const seq = ++searchSeq;
     if (!q || !projectId) {
@@ -109,7 +287,7 @@
   });
 
   // 查询变化 → 重置选中
-  $effect(() => { query; selectedIndex = 0; });
+  $effect(() => { debouncedQuery; selectedIndex = 0; });
 
   // ── 键盘导航 ──
 
@@ -134,18 +312,21 @@
     }
   }
 
-  function sessionTitle(session: SessionSummary | SessionSearchResult): string {
-    return "sessionTitle" in session
-      ? session.sessionTitle || session.sessionId.slice(0, 8)
-      : session.title || session.sessionId.slice(0, 8);
+  function rowTitle(row: SessionRow): string {
+    return row.title || row.sessionId.slice(0, 8);
   }
 
-  function sessionCount(session: SessionSummary | SessionSearchResult): number {
-    return "totalMatches" in session ? session.totalMatches : session.messageCount;
+  // 无 title 时的定位补充：项目名 + worktree/branch（D2 兜底）
+  function rowLocation(row: SessionRow): string {
+    if (row.title) return row.projectName;
+    const parts = [row.projectName];
+    if (row.worktreeName && row.worktreeName !== row.projectName) parts.push(row.worktreeName);
+    else if (row.gitBranch) parts.push(row.gitBranch);
+    return parts.filter(Boolean).join(" · ");
   }
 
-  function openSession(session: SessionSummary | SessionSearchResult) {
-    openTab(session.sessionId, session.projectId, sessionTitle(session));
+  function openSession(row: SessionRow) {
+    openTab(row.sessionId, row.projectId, rowTitle(row), row.groupId);
     onClose();
   }
 
@@ -229,12 +410,12 @@
 
     {#if filteredSessions.length > 0}
       <div class="cp-section">会话</div>
-      {#each filteredSessions as session, i}
+      {#each filteredSessions as row, i (row.sessionId)}
         {@const flatIdx = filteredProjects.length + i}
         <button
           class="cp-item"
           class:cp-item-selected={flatIdx === selectedIndex}
-          onclick={() => openSession(session)}
+          onclick={() => openSession(row)}
         >
           <svg
             class="cp-item-icon"
@@ -249,15 +430,21 @@
           >
             <path d={MESSAGE_SQUARE} />
           </svg>
-          <span class="cp-item-label">{sessionTitle(session)}</span>
-          <span class="cp-item-detail" title="消息数量">
-            {#if sessionCount(session)}{sessionCount(session)} 条{/if}
-          </span>
-          {#if "timestamp" in session}
-            <span class="cp-item-time">{formatTime(session.timestamp)}</span>
+          <span class="cp-item-label">{rowTitle(row)}</span>
+          <span class="cp-item-detail" title={rowLocation(row)}>{rowLocation(row)}</span>
+          {#if row.hits}
+            <span class="cp-item-badge" title="正文匹配数">{row.hits}</span>
+          {:else if row.messageCount}
+            <span class="cp-item-badge" title="消息数量">{row.messageCount}</span>
+          {/if}
+          {#if row.timestamp}
+            <span class="cp-item-time">{formatTime(row.timestamp)}</span>
           {/if}
         </button>
       {/each}
+      {#if sessionsTruncated}
+        <div class="cp-truncation">仅显示前 {MAX_SESSIONS} 条，输入更多字符缩小范围</div>
+      {/if}
     {/if}
 
     {#if actions.length > 0}
@@ -289,7 +476,11 @@
     {/if}
 
     {#if totalResults === 0}
-      <div class="cp-empty">无匹配结果</div>
+      {#if showShortQueryHint}
+        <div class="cp-empty">输入 ≥{MIN_GLOBAL_ID_LEN} 个字符按 Session ID 全局定位</div>
+      {:else}
+        <div class="cp-empty">无匹配结果</div>
+      {/if}
     {/if}
   </div>
 
@@ -434,6 +625,13 @@
     padding: 24px;
     color: var(--color-text-muted);
     font-size: 13px;
+  }
+
+  .cp-truncation {
+    text-align: center;
+    padding: 6px 12px;
+    color: var(--color-text-muted);
+    font-size: 11px;
   }
 
   .cp-footer {

@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- **UI**: Command Palette (Cmd+K) now locates sessions globally by Session ID across all projects. Paste a copied Session ID (4+ characters) to jump straight to its session without first selecting the project it belongs to; matches show the project name for cross-project disambiguation. Existing in-project content search is preserved.
+
 ## [0.6.19] — 2026-06-21
 
 ### Added
