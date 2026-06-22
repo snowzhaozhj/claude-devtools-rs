@@ -235,7 +235,7 @@ describe("CommandPalette 排序 / 截断 / title 兜底", () => {
     });
   });
 
-  test("title 未加载：显示 id 前缀 + 项目名定位，且不发补 title IPC", async () => {
+  test("title 未加载：显示完整 sessionId + 项目名定位，且不发补 title IPC", async () => {
     await setSnapshot(snapshot());
     const { container, getByLabelText } = await renderPalette(); // 未选项目 → 不应调 listGroupSessions
     await type(getByLabelText("命令面板搜索"), "aaaa1111");
@@ -253,6 +253,42 @@ describe("CommandPalette 排序 / 截断 / title 兜底", () => {
     expect(row!.querySelector("mark.cp-match")?.textContent).toBe("aaaa1111");
     // 未选项目 → 全程不为补 title 调 listGroupSessions
     expect(vi.mocked(listGroupSessions)).not.toHaveBeenCalled();
+  });
+
+  test("匹配在 id 中间：高亮该段，前后文正确（matchSegments 边界）", async () => {
+    await setSnapshot(snapshot());
+    const { container, getByLabelText } = await renderPalette();
+    await type(getByLabelText("命令面板搜索"), "1111"); // 仅 SID_A1 含，且在中间
+    let label: Element | undefined;
+    await waitFor(() => {
+      label = Array.from(container.querySelectorAll(".cp-item-label")).find((el) =>
+        el.textContent === SID_A1,
+      );
+      expect(label).toBeTruthy();
+    });
+    expect(label!.querySelector("mark.cp-match")?.textContent).toBe("1111");
+    // mark 前是 "aaaa"（前缀未被吞），整体仍是完整 id
+    expect(label!.textContent).toBe(SID_A1);
+    expect(label!.textContent!.indexOf("1111")).toBe(4);
+  });
+
+  test("title 本身命中 query 时 title 内也高亮", async () => {
+    await setSnapshot(snapshot());
+    vi.mocked(listGroupSessions).mockResolvedValue({
+      sessions: [{ sessionId: SID_A1, projectId: "p1", timestamp: 200, created: 0, messageCount: 3, title: "标aaaa题", isOngoing: false, gitBranch: "main" }],
+      nextCursor: null,
+    } as never);
+    const { container, getByLabelText } = await renderPalette({ selectedProjectId: "p1" });
+    await waitFor(() => expect(vi.mocked(listGroupSessions)).toHaveBeenCalled());
+    await type(getByLabelText("命令面板搜索"), "aaaa");
+    let label: Element | undefined;
+    await waitFor(() => {
+      label = Array.from(container.querySelectorAll(".cp-item-label")).find((el) =>
+        el.textContent === "标aaaa题",
+      );
+      expect(label).toBeTruthy();
+    });
+    expect(label!.querySelector("mark.cp-match")?.textContent).toBe("aaaa");
   });
 
   test("短查询提示在有 actions 时仍显示（不被 totalResults 挤掉）", async () => {
