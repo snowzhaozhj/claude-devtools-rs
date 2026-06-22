@@ -43,9 +43,11 @@
   let debouncedQuery = $state("");
   let sessions: SessionSummary[] = $state([]);
   let searchResults: SessionSearchResult[] = $state([]);
-  // 这批 searchResults 对应的 query（trim 后）。debounce 间隙 / 失败时与当前 query
-  // 不符 → contentMatchRows 丢弃，避免旧正文命中混入当前查询（codex F1 / SFH#1）。
+  // 这批 searchResults 对应的 (query, projectId) 双维身份。debounce 间隙 / 失败 /
+  // 相同 query 切组时与当前不符 → contentMatchRows 丢弃，避免旧组或旧查询的正文命中
+  // 混入当前（codex F1 + 跨组残留 / SFH#1）。
   let searchResultsQuery = $state("");
+  let searchResultsProjectId = $state("");
   let sessionsSeq = 0;
   let searchSeq = 0;
   let selectedIndex = $state(0);
@@ -175,8 +177,8 @@
 
   // B 路：组内正文搜索结果 → normalized row（归属由 worktreeIndex 补 groupId/projectName）
   const contentMatchRows = $derived.by((): SessionRow[] => {
-    // debounce 间隙 / 后端失败：searchResults 属于旧 query → 丢弃，不混入当前查询（codex F1 / SFH#1）
-    if (searchResultsQuery !== query.trim()) return [];
+    // 双维守卫：searchResults 属于旧 query 或旧 group → 丢弃，不混入当前（codex F1 + 跨组残留 / SFH#1）
+    if (searchResultsQuery !== query.trim() || searchResultsProjectId !== selectedProjectId) return [];
     return searchResults.map((r): SessionRow => {
       const idx = worktreeIndex.get(r.projectId);
       return {
@@ -287,17 +289,18 @@
     if (!q || !projectId) {
       searchResults = [];
       searchResultsQuery = q;
+      searchResultsProjectId = projectId;
       return;
     }
     void searchGroupSessions(projectId, q)
       .then((result) => {
-        if (seq === searchSeq) { searchResults = result.results; searchResultsQuery = q; }
+        if (seq === searchSeq) { searchResults = result.results; searchResultsQuery = q; searchResultsProjectId = projectId; }
       })
       .catch((e) => {
         console.error("CommandPalette: failed to search sessions", e);
-        // seq 守卫清空 + 标记当前 query：失败不残留旧命中（SFH#1）；全局 id 定位
-        // 走纯前端内存，后端搜索失败时仍可用（graceful degradation）。
-        if (seq === searchSeq) { searchResults = []; searchResultsQuery = q; }
+        // seq 守卫清空 + 标记当前 (query, projectId)：失败/旧组不残留命中（SFH#1 + 跨组）；
+        // 全局 id 定位走纯前端内存，后端搜索失败时仍可用（graceful degradation）。
+        if (seq === searchSeq) { searchResults = []; searchResultsQuery = q; searchResultsProjectId = projectId; }
       });
   });
 

@@ -263,6 +263,28 @@ describe("CommandPalette 排序 / 截断 / title 兜底", () => {
   });
 });
 
+describe("CommandPalette 跨组 stale 守卫", () => {
+  test("相同 query 切到另一组：旧组正文命中不残留（双维守卫 query+projectId）", async () => {
+    await setSnapshot(snapshot());
+    vi.mocked(searchGroupSessions).mockImplementation((groupId: string) => {
+      if (groupId === "p1") {
+        return Promise.resolve({
+          results: [{ sessionId: SID_A1, projectId: "p1", sessionTitle: "p1正文命中", totalMatches: 3 }],
+          totalMatches: 3, sessionsSearched: 1, query: "zzzz", isPartial: false,
+        }) as never;
+      }
+      return new Promise(() => {}) as never; // p2 的搜索 pending，模拟切组后新结果未到
+    });
+    const { container, getByLabelText, rerender } = await renderPalette({ selectedProjectId: "p1" });
+    await type(getByLabelText("命令面板搜索"), "zzzz"); // 仅 B 路命中（无全局 id 命中）
+    await waitFor(() => expect(container.textContent).toContain("p1正文命中"));
+
+    // 相同 query 切到 p2，p2 搜索 pending → 旧 p1 命中应立即消失（不 stale-as-fresh）
+    await rerender({ selectedProjectId: "p2", onSelectProject: vi.fn(), onClose: vi.fn() });
+    await waitFor(() => expect(container.textContent).not.toContain("p1正文命中"));
+  });
+});
+
 describe("CommandPalette stale 快照修复", () => {
   test("store 刷新后已打开面板的全局命中同步（新增可见）", async () => {
     await setSnapshot(snapshot());
