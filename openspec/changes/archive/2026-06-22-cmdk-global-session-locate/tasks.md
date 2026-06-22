@@ -37,11 +37,11 @@
 - [x] 5.1 `pnpm --dir ui run check` + `just test-ui-unit` + 受影响 e2e 通过
 - [x] 5.2 `openspec validate cmdk-global-session-locate --strict` 通过
 - [x] 5.3 CHANGELOG `## [Unreleased]` → `### Added` 追加用户可感知条目（英文）
-- [ ] 5.4 e2e-http-verify 真数据验证"粘 id 跨项目定位"（用户可感知 + HTTP transport 路径）
+- [x] 5.4 用户可感知路径真组件验证：Playwright e2e（真 CommandPalette 组件 + getPaneLayout 断言跨项目归属）+ 手动 mock 浏览器视觉验收。说明：本改动纯前端、transport-agnostic（不新增/不改 HTTP route，消费的 `list_repository_groups` payload 未变），无 HTTP-transport 专属 surface，故 e2e-http-verify 的 HTTP 栈对其无增量覆盖
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex + pr-review-toolkit 二审通过（如发现 bug：修 → push → 回 N.2 重跑；可循环 M 次）
+- [x] N.1 push 分支 + 开 PR（#532）
+- [x] N.2 wait-ci 全绿（commit 3813aeb5，15/15 SUCCESS）
+- [x] N.3 codex（4 轮，MERGE-READY）+ pr-review-toolkit（code-reviewer mergeable / silent-failure 3 修 / test-analyzer 4 补）二审通过
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
