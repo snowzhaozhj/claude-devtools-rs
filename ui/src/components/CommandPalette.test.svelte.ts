@@ -215,9 +215,9 @@ describe("CommandPalette 排序 / 截断 / title 兜底", () => {
     ])
     const { container, getByLabelText } = await renderPalette();
     await type(getByLabelText("命令面板搜索"), "match");
-    // query "match" 不匹配任何项目名 → 会话区即全部结果，直接比对顺序
+    // query "match" 不匹配任何项目名 → 会话区即全部结果，直接比对顺序（无 title → 完整 id）
     await waitFor(() => {
-      expect(sessionLabels(container)).toEqual(["hi00matc", "mid0matc", "lo00matc"]);
+      expect(sessionLabels(container)).toEqual(["hi00match0001", "mid0match0002", "lo00match0003"]);
     });
   });
 
@@ -246,9 +246,11 @@ describe("CommandPalette 排序 / 截断 / title 兜底", () => {
       );
       expect(row).toBeTruthy();
     });
-    // 标签是 id 前缀（无 title），detail 含项目名定位
-    expect(row!.querySelector(".cp-item-label")?.textContent?.trim()).toBe("aaaa1111");
+    // 无 title → 显示**完整** sessionId（不截断），detail 含项目名定位
+    expect(row!.querySelector(".cp-item-label")?.textContent?.trim()).toBe(SID_A1);
     expect(row!.querySelector(".cp-item-detail")?.textContent).toContain("alpha");
+    // 匹配子串高亮为 <mark class="cp-match">
+    expect(row!.querySelector("mark.cp-match")?.textContent).toBe("aaaa1111");
     // 未选项目 → 全程不为补 title 调 listGroupSessions
     expect(vi.mocked(listGroupSessions)).not.toHaveBeenCalled();
   });

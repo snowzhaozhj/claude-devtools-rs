@@ -19,6 +19,7 @@
 
 - [x] 3.1 `openSession` 使用结果行自身 `projectId/groupId` 打开，杜绝跨项目归属错误（D7 / codex R3）
 - [x] 3.2 会话结果行展示项目名 + title（有则显示）/ sessionId 前缀兜底；空结果 / 截断状态文案（D-V1）
+- [x] 3.3 无 title 时回显**完整** sessionId（不截断）+ `matchSegments` 高亮命中子串（`<mark class="cp-match">`，用 `--highlight-bg`）；更新 title-fallback / sort 测试断言为完整 id + 高亮（D2c，用户反馈）
 
 ## 4. 测试
 

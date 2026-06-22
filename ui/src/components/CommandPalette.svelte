@@ -331,7 +331,16 @@
   }
 
   function rowTitle(row: SessionRow): string {
-    return row.title || row.sessionId.slice(0, 8);
+    // 无 title 时回显**完整** sessionId（locate-by-id 场景需确认找对会话；不再截成 8 位）
+    return row.title || row.sessionId;
+  }
+
+  // 把 text 按 query（大小写不敏感，首个匹配）切成 before/match/after 供模板 <mark> 高亮
+  function matchSegments(text: string, q: string): { before: string; match: string; after: string } {
+    if (!q) return { before: text, match: "", after: "" };
+    const i = text.toLowerCase().indexOf(q.toLowerCase());
+    if (i < 0) return { before: text, match: "", after: "" };
+    return { before: text.slice(0, i), match: text.slice(i, i + q.length), after: text.slice(i + q.length) };
   }
 
   // 无 title 时的定位补充：项目名 + worktree/branch（D2 兜底）
@@ -430,6 +439,7 @@
       <div class="cp-section">会话</div>
       {#each filteredSessions as row, i (row.sessionId)}
         {@const flatIdx = filteredProjects.length + i}
+        {@const seg = matchSegments(rowTitle(row), query.trim())}
         <button
           class="cp-item"
           class:cp-item-selected={flatIdx === selectedIndex}
@@ -448,7 +458,7 @@
           >
             <path d={MESSAGE_SQUARE} />
           </svg>
-          <span class="cp-item-label">{rowTitle(row)}</span>
+          <span class="cp-item-label">{seg.before}{#if seg.match}<mark class="cp-match">{seg.match}</mark>{/if}{seg.after}</span>
           <span class="cp-item-detail" title={rowLocation(row)}>{rowLocation(row)}</span>
           {#if row.hits}
             <span class="cp-item-badge" title="正文匹配数">{row.hits}</span>
@@ -614,6 +624,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-weight: 500;
+  }
+
+  .cp-item-label :global(.cp-match) {
+    background: var(--highlight-bg);
+    color: inherit;
+    border-radius: 2px;
   }
 
   .cp-item-detail {
