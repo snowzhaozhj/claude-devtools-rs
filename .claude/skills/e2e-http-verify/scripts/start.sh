@@ -81,7 +81,7 @@ check_port $PORT_BE || exit $?
 check_port $PORT_FE
 
 echo "→ 起 cdt-cli on :$PORT_BE (log: $LOG_BE)"
-( cd "$REPO_ROOT" && nohup cargo run -p cdt-cli > "$LOG_BE" 2>&1 & )
+( cd "$REPO_ROOT" && nohup cargo run -p cdt-cli -- serve > "$LOG_BE" 2>&1 & )
 if ! wait_http_200 "http://127.0.0.1:$PORT_BE/api/projects" 90 cdt-cli; then
   echo "--- $LOG_BE tail ---" >&2
   tail -15 "$LOG_BE" >&2
