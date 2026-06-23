@@ -235,13 +235,29 @@ fn find_first_ai_after(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core
 /// `LocalDataApi::get_session_detail` 返回完整数据；Tauri IPC command handler
 /// 在序列化返回前端之前调用本函数裁剪 payload。MCP / CLI / HTTP 消费者不调用。
 pub(crate) fn apply_display_omissions(chunks: &mut [cdt_core::Chunk]) {
+    apply_omissions_impl(chunks, true, true);
+}
+
+/// 导出专用裁剪：保留 tool output + response content（导出器实际消费），
+/// 裁剪 image data + subagent messages（导出器不渲染、且是 payload 大头）。
+///
+/// `get_session_detail_for_export` Tauri command 调用。
+pub(crate) fn apply_export_omissions(chunks: &mut [cdt_core::Chunk]) {
+    apply_omissions_impl(chunks, false, false);
+}
+
+fn apply_omissions_impl(
+    chunks: &mut [cdt_core::Chunk],
+    omit_tool_output: bool,
+    omit_response_content: bool,
+) {
     if OMIT_IMAGE_DATA {
         apply_image_omit(chunks);
     }
-    if OMIT_RESPONSE_CONTENT {
+    if omit_response_content && OMIT_RESPONSE_CONTENT {
         apply_response_content_omit(chunks);
     }
-    if OMIT_TOOL_OUTPUT {
+    if omit_tool_output && OMIT_TOOL_OUTPUT {
         apply_tool_output_omit(chunks);
     }
     if OMIT_SUBAGENT_MESSAGES {

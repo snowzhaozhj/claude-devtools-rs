@@ -265,6 +265,13 @@ impl SessionDetailResponse {
             super::local::apply_display_omissions(&mut detail.chunks);
         }
     }
+
+    /// 导出专用裁剪：保留 tool output + response content，裁剪 image + subagent messages。
+    pub fn apply_export_omissions(&mut self) {
+        if let Self::Full { detail, .. } = self {
+            super::local::apply_export_omissions(&mut detail.chunks);
+        }
+    }
 }
 
 // =============================================================================

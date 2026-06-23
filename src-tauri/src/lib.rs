@@ -80,6 +80,21 @@ async fn get_session_detail(
 }
 
 #[tauri::command]
+async fn get_session_detail_for_export(
+    data: State<'_, AppData>,
+    project_id: String,
+    session_id: String,
+) -> Result<serde_json::Value, String> {
+    let mut resp = data
+        .api
+        .get_session_detail(&project_id, &session_id, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    resp.apply_export_omissions();
+    serde_json::to_value(&resp).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_project_memory(
     data: State<'_, AppData>,
     project_id: String,
@@ -988,17 +1003,16 @@ async fn install_cli(
         "https://github.com/{}/releases/download/v{version}/{asset_name}",
         cdt_cli::install::REPO
     );
-    let binary_bytes =
-        cdt_cli::install::download_and_extract_with_timeout(
-            &url,
-            &asset_name,
-            cdt_cli::install::DEFAULT_DOWNLOAD_TIMEOUT,
-        )
-            .await
-            .map_err(|e| {
-                tracing::warn!(target: "cdt_tauri::cli", error = %e, "CLI download failed");
-                friendly_cli_install_error(&format!("{e:#}"))
-            })?;
+    let binary_bytes = cdt_cli::install::download_and_extract_with_timeout(
+        &url,
+        &asset_name,
+        cdt_cli::install::DEFAULT_DOWNLOAD_TIMEOUT,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(target: "cdt_tauri::cli", error = %e, "CLI download failed");
+        friendly_cli_install_error(&format!("{e:#}"))
+    })?;
 
     // Validate binary magic before writing
     cdt_cli::install::validate_binary_magic(&binary_bytes)
@@ -1764,6 +1778,7 @@ pub fn run() {
             list_sessions,
             get_session_summaries_by_ids,
             get_session_detail,
+            get_session_detail_for_export,
             get_project_memory,
             read_memory_file,
             add_memory,

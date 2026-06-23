@@ -1,6 +1,9 @@
 import { describe, test, expect } from "vitest";
 import { exportSession } from "./index";
-import type { SessionDetail, AIChunk, UserChunk, SystemChunk, CompactChunk, SemanticStep, ToolExecution } from "../api";
+import { exportAsMarkdown } from "./markdownExporter";
+import { projectSessionDetail } from "./projection";
+import type { ExportOptions } from "./types";
+import type { SessionDetail, AIChunk, UserChunk, SystemChunk, CompactChunk, SemanticStep, ToolExecution, SubagentProcess } from "../api";
 
 function makeMinimalDetail(overrides?: Partial<SessionDetail>): SessionDetail {
   return {
@@ -30,6 +33,9 @@ function makeUserChunk(text: string): UserChunk {
 
 function makeAIChunk(textSteps: string[], toolExecs?: ToolExecution[]): AIChunk {
   const semanticSteps: SemanticStep[] = textSteps.map((t) => ({ kind: "text" as const, text: t, timestamp: "2024-01-01T00:00:01Z" }));
+  for (const exec of toolExecs ?? []) {
+    semanticSteps.push({ kind: "tool_execution", toolUseId: exec.toolUseId, toolName: exec.toolName, timestamp: exec.startTs });
+  }
   return {
     kind: "ai",
     chunkId: "a1",
@@ -196,5 +202,191 @@ describe("HTML XSS protection", () => {
     detail.metadata.cwd = '"><script>alert(1)</script>';
     const html = exportSession(detail, "html");
     expect(html).not.toContain("<script>alert(1)</script>");
+  });
+});
+
+describe("Bug 1: chronological ordering", () => {
+  function makeChronologicalAIChunk(): AIChunk {
+    const toolExec: ToolExecution = {
+      toolUseId: "t1",
+      toolName: "Bash",
+      input: { command: "echo hello" },
+      output: { kind: "text", text: "hello" },
+      isError: false,
+      startTs: "2024-01-01T00:00:02Z",
+      endTs: "2024-01-01T00:00:03Z",
+      sourceAssistantUuid: "a-uuid",
+      outputOmitted: false,
+    };
+    const steps: SemanticStep[] = [
+      { kind: "text", text: "Text before tool", timestamp: "2024-01-01T00:00:01Z" },
+      { kind: "tool_execution", toolUseId: "t1", toolName: "Bash", timestamp: "2024-01-01T00:00:02Z" },
+      { kind: "text", text: "Text after tool (final)", timestamp: "2024-01-01T00:00:04Z" },
+    ];
+    return {
+      kind: "ai",
+      chunkId: "a1",
+      timestamp: "2024-01-01T00:00:01Z",
+      durationMs: 5000,
+      responses: [],
+      metrics: { inputTokens: 0, outputTokens: 100, cacheReadTokens: 0, cacheCreationTokens: 0, toolCount: 1, costUsd: null },
+      semanticSteps: steps,
+      toolExecutions: [toolExec],
+      subagents: [],
+      slashCommands: [],
+    };
+  }
+
+  test("markdown: tool call appears between text A and text B, not after B", () => {
+    const detail = makeMinimalDetail({ chunks: [makeChronologicalAIChunk()] });
+    const md = exportSession(detail, "markdown");
+    const textBeforeIdx = md.indexOf("Text before tool");
+    const toolIdx = md.indexOf("### Tool: Bash");
+    const textAfterIdx = md.indexOf("Text after tool (final)");
+    expect(textBeforeIdx).toBeGreaterThan(-1);
+    expect(toolIdx).toBeGreaterThan(-1);
+    expect(textAfterIdx).toBeGreaterThan(-1);
+    expect(textBeforeIdx).toBeLessThan(toolIdx);
+    expect(toolIdx).toBeLessThan(textAfterIdx);
+  });
+
+  test("html: tool call appears between text A and text B, not after B", () => {
+    const detail = makeMinimalDetail({ chunks: [makeChronologicalAIChunk()] });
+    const html = exportSession(detail, "html");
+    const textBeforeIdx = html.indexOf("Text before tool");
+    const toolIdx = html.indexOf("Bash");
+    const textAfterIdx = html.indexOf("Text after tool (final)");
+    expect(textBeforeIdx).toBeGreaterThan(-1);
+    expect(toolIdx).toBeGreaterThan(-1);
+    expect(textAfterIdx).toBeGreaterThan(-1);
+    expect(textBeforeIdx).toBeLessThan(toolIdx);
+    expect(toolIdx).toBeLessThan(textAfterIdx);
+  });
+
+  test("subagent card appears at spawn position, not at end", () => {
+    const sub: SubagentProcess = {
+      sessionId: "sub-1",
+      rootTaskDescription: null,
+      spawnTs: "2024-01-01T00:00:02Z",
+      endTs: "2024-01-01T00:00:05Z",
+      metrics: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, toolCount: 0, costUsd: null },
+      team: null,
+      subagentType: "code-reviewer",
+      messages: [],
+      mainSessionImpact: null,
+      isOngoing: false,
+      durationMs: 3000,
+      parentTaskId: null,
+      description: "Review code",
+    };
+    const steps: SemanticStep[] = [
+      { kind: "text", text: "Before subagent", timestamp: "2024-01-01T00:00:01Z" },
+      { kind: "subagent_spawn", placeholderId: "sub-1", timestamp: "2024-01-01T00:00:02Z" },
+      { kind: "text", text: "After subagent final", timestamp: "2024-01-01T00:00:06Z" },
+    ];
+    const ai: AIChunk = {
+      kind: "ai",
+      chunkId: "a1",
+      timestamp: "2024-01-01T00:00:01Z",
+      durationMs: 5000,
+      responses: [],
+      metrics: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, toolCount: 0, costUsd: null },
+      semanticSteps: steps,
+      toolExecutions: [],
+      subagents: [sub],
+      slashCommands: [],
+    };
+    const detail = makeMinimalDetail({ chunks: [ai] });
+    const md = exportSession(detail, "markdown");
+    const beforeIdx = md.indexOf("Before subagent");
+    const subIdx = md.indexOf("Review code");
+    const afterIdx = md.indexOf("After subagent final");
+    expect(beforeIdx).toBeLessThan(subIdx);
+    expect(subIdx).toBeLessThan(afterIdx);
+  });
+});
+
+describe("Bug 2: tool output completeness", () => {
+  test("markdown: full mode renders tool output content", () => {
+    const toolExec: ToolExecution = {
+      toolUseId: "t1",
+      toolName: "Read",
+      input: { file_path: "/tmp/test.txt" },
+      output: { kind: "text", text: "file contents here" },
+      isError: false,
+      startTs: "2024-01-01T00:00:01Z",
+      endTs: "2024-01-01T00:00:02Z",
+      sourceAssistantUuid: "a-uuid",
+      outputOmitted: false,
+    };
+    const ai: AIChunk = {
+      kind: "ai",
+      chunkId: "a1",
+      timestamp: "2024-01-01T00:00:01Z",
+      durationMs: 1000,
+      responses: [],
+      metrics: { inputTokens: 0, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0, toolCount: 1, costUsd: null },
+      semanticSteps: [
+        { kind: "tool_execution", toolUseId: "t1", toolName: "Read", timestamp: "2024-01-01T00:00:01Z" },
+      ],
+      toolExecutions: [toolExec],
+      subagents: [],
+      slashCommands: [],
+    };
+    const detail = makeMinimalDetail({ chunks: [ai] });
+    const md = exportSession(detail, "markdown");
+    expect(md).toContain("file contents here");
+  });
+});
+
+describe("D7: includeSubagents=false with Task tool", () => {
+  test("Task tool still renders when subagents disabled", () => {
+    const taskExec: ToolExecution = {
+      toolUseId: "task-1",
+      toolName: "Task",
+      input: { description: "Do something" },
+      output: { kind: "text", text: "task result" },
+      isError: false,
+      startTs: "2024-01-01T00:00:02Z",
+      endTs: "2024-01-01T00:00:10Z",
+      sourceAssistantUuid: "a-uuid",
+      outputOmitted: false,
+    };
+    const sub: SubagentProcess = {
+      sessionId: "sub-1",
+      rootTaskDescription: null,
+      spawnTs: "2024-01-01T00:00:02Z",
+      endTs: "2024-01-01T00:00:10Z",
+      metrics: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, toolCount: 0, costUsd: null },
+      team: null,
+      subagentType: null,
+      messages: [],
+      mainSessionImpact: null,
+      isOngoing: false,
+      durationMs: 8000,
+      parentTaskId: "task-1",
+      description: "Do something",
+    };
+    const steps: SemanticStep[] = [
+      { kind: "tool_execution", toolUseId: "task-1", toolName: "Task", timestamp: "2024-01-01T00:00:02Z" },
+      { kind: "subagent_spawn", placeholderId: "sub-1", timestamp: "2024-01-01T00:00:02Z" },
+    ];
+    const ai: AIChunk = {
+      kind: "ai",
+      chunkId: "a1",
+      timestamp: "2024-01-01T00:00:01Z",
+      durationMs: 10000,
+      responses: [],
+      metrics: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, toolCount: 1, costUsd: null },
+      semanticSteps: steps,
+      toolExecutions: [taskExec],
+      subagents: [sub],
+      slashCommands: [],
+    };
+    const detail = makeMinimalDetail({ chunks: [ai] });
+    const opts: ExportOptions = { format: "markdown", includeThinking: true, toolOutputMode: "full", toolOutputMaxLength: 2000, includeSubagents: false };
+    const md = exportAsMarkdown(detail, opts);
+    expect(md).toContain("### Tool: Task");
+    expect(md).not.toContain("Subagent:");
   });
 });

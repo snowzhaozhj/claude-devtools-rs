@@ -28,6 +28,7 @@ const KNOWN_TAURI_COMMANDS: readonly string[] = [
   'list_sessions',
   'get_session_summaries_by_ids',
   'get_session_detail',
+  'get_session_detail_for_export',
   'get_project_memory',
   'read_memory_file',
   'add_memory',
@@ -416,6 +417,19 @@ function buildHandler(fx: Fixture) {
       }
 
       case 'get_session_detail': {
+        const projectId = getArg<string>(payload, 'projectId') ?? ''
+        const sessionId = getArg<string>(payload, 'sessionId') ?? ''
+        const detail = fx.sessionDetails[`${projectId}:${sessionId}`]
+        if (!detail) {
+          return Promise.reject(
+            new Error(`[mockIPC] no SessionDetail fixture for ${projectId}:${sessionId}`),
+          )
+        }
+        const fingerprint = `v1:${Date.now()}:${JSON.stringify(detail).length}`
+        return { status: 'full', fingerprint, detail }
+      }
+
+      case 'get_session_detail_for_export': {
         const projectId = getArg<string>(payload, 'projectId') ?? ''
         const sessionId = getArg<string>(payload, 'sessionId') ?? ''
         const detail = fx.sessionDetails[`${projectId}:${sessionId}`]

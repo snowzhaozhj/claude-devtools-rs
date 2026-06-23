@@ -77,6 +77,7 @@ pub const EXPECTED_TAURI_COMMANDS: &[&str] = &[
     "install_cli",
     // Session export：导出会话到文件
     "export_save_session",
+    "get_session_detail_for_export",
 ];
 
 /// 浏览器 runtime 不实现的 IPC command 集合——这些 command 在 `?http=1` 模式

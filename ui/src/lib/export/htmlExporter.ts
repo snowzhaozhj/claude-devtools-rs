@@ -1,6 +1,7 @@
-import type { SessionDetail, Chunk, AIChunk, UserChunk, SystemChunk, CompactChunk, SemanticStep, ToolExecution, SubagentProcess } from "../api";
+import type { SessionDetail, Chunk, AIChunk, UserChunk, SystemChunk, CompactChunk, ToolExecution, SubagentProcess } from "../api";
 import type { ExportOptions } from "./types";
 import { projectSessionDetail } from "./projection";
+import { buildDisplayItems, type DisplayItem } from "../displayItemBuilder";
 import { buildHtmlShell, escapeHtml } from "./htmlTemplate";
 import { renderMarkdown } from "../render";
 import { cleanDisplayText } from "../toolHelpers";
@@ -78,19 +79,22 @@ function renderAIHtml(
 ): { label: string; html: string } {
   const parts: string[] = [];
 
+  const { items, lastOutput } = buildDisplayItems(chunk);
+
+  for (const item of items) {
+    const rendered = renderDisplayItemHtml(item, options);
+    if (rendered) parts.push(rendered);
+  }
+
   for (const step of chunk.semanticSteps) {
-    const stepHtml = renderStepHtml(step, options);
-    if (stepHtml) parts.push(stepHtml);
-  }
-
-  for (const exec of chunk.toolExecutions) {
-    parts.push(renderToolHtml(exec));
-  }
-
-  if (options.includeSubagents) {
-    for (const sub of chunk.subagents) {
-      parts.push(renderSubagentHtml(sub));
+    if (step.kind === "interruption") {
+      parts.push(`<p><em>[interrupted]</em> ${escapeHtml(step.text)}</p>`);
     }
+  }
+
+  if (lastOutput) {
+    const cleaned = cleanDisplayText(lastOutput.text);
+    if (cleaned) parts.push(renderMarkdownSafe(cleaned));
   }
 
   const html = `<div class="turn" id="turn-${index}">
@@ -100,24 +104,32 @@ function renderAIHtml(
   return { label: `${index}. Assistant`, html };
 }
 
-function renderStepHtml(step: SemanticStep, options: ExportOptions): string {
-  if (step.kind === "thinking") {
-    if (!options.includeThinking) return "";
-    const escaped = escapeHtml(step.text);
-    return `<div class="thinking">
+function renderDisplayItemHtml(item: DisplayItem, options: ExportOptions): string {
+  switch (item.type) {
+    case "thinking":
+      if (!options.includeThinking) return "";
+      return `<div class="thinking">
   <div class="thinking-header">💭 Thinking...</div>
-  <div class="thinking-content">${escaped}</div>
+  <div class="thinking-content">${escapeHtml(item.text)}</div>
 </div>`;
+    case "output":
+      {
+        const cleaned = cleanDisplayText(item.text);
+        if (!cleaned) return "";
+        return renderMarkdownSafe(cleaned);
+      }
+    case "tool":
+      return renderToolHtml(item.execution);
+    case "subagent":
+      return renderSubagentHtml(item.process);
+    case "user_message":
+      return `<p><em>[user]</em> ${escapeHtml(item.text)}</p>`;
+    case "slash":
+    case "teammate_message":
+    case "teammate_spawn":
+    case "workflow":
+      return "";
   }
-  if (step.kind === "text") {
-    const cleaned = cleanDisplayText(step.text);
-    if (!cleaned) return "";
-    return renderMarkdownSafe(cleaned);
-  }
-  if (step.kind === "interruption") {
-    return `<p><em>[interrupted]</em> ${escapeHtml(step.text)}</p>`;
-  }
-  return "";
 }
 
 function renderToolHtml(exec: ToolExecution): string {

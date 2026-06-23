@@ -679,6 +679,16 @@ export async function getSessionDetail(
   });
 }
 
+export async function getSessionDetailForExport(
+  projectId: string,
+  sessionId: string,
+): Promise<SessionDetailResponse> {
+  return await invoke("get_session_detail_for_export", {
+    projectId,
+    sessionId,
+  });
+}
+
 export async function getProjectMemory(projectId: string): Promise<ProjectMemory> {
   return await invoke("get_project_memory", { projectId });
 }

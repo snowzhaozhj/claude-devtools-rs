@@ -96,12 +96,12 @@ async fn write_user_session(dir: &std::path::Path, session_id: &str, cwd: &str, 
 // =============================================================================
 
 #[test]
-fn expected_tauri_commands_count_is_62() {
+fn expected_tauri_commands_count_is_63() {
     assert_eq!(
         EXPECTED_TAURI_COMMANDS.len(),
-        62,
+        63,
         "EXPECTED_TAURI_COMMANDS 长度变化时 SHALL 同步更新 src-tauri/src/lib.rs::invoke_handler! \
-         以及本文件常量；当前 src-tauri 注册 62 个 Tauri command（含 SSH + server-mode + \
+         以及本文件常量；当前 src-tauri 注册 63 个 Tauri command（含 SSH + server-mode + \
          simplify-repository-as-project change 加的 list_group_sessions + change \
          command-palette-group-aware 加的 search_group_sessions + change \
          ssh-project-memory-remote-rw 加的 add_memory / delete_memory + change \
@@ -112,7 +112,8 @@ fn expected_tauri_commands_count_is_62() {
          delete_job / delete_completed_jobs + fix-workflow-status-update 加的 \
          get_workflow_detail + change cli-download-from-desktop 加的 \
          get_cli_status / install_cli + change session-export 加的 \
-         export_save_session）"
+         export_save_session + change fix-export-tool-order-and-output 加的 \
+         get_session_detail_for_export）"
     );
 }
 
@@ -1021,6 +1022,139 @@ fn apply_omissions_is_noop_on_unchanged_variant() {
         matches!(resp, cdt_api::SessionDetailResponse::Unchanged { .. }),
         "Unchanged variant SHALL remain unchanged"
     );
+}
+
+/// spec `ipc-data-api` "Expose full session detail for export"：
+/// `apply_export_omissions` SHALL 保留 tool output + response content，
+/// 裁剪 image + subagent messages。
+#[test]
+fn apply_export_omissions_preserves_tool_output_and_response_content() {
+    use cdt_api::SessionDetailResponse;
+    use std::collections::{BTreeMap, HashMap};
+
+    let detail = cdt_api::SessionDetail {
+        session_id: "export-s".into(),
+        project_id: "export-p".into(),
+        chunks: vec![Chunk::Ai(AIChunk {
+            chunk_id: "a1".into(),
+            timestamp: ts(),
+            duration_ms: None,
+            responses: vec![AssistantResponse {
+                uuid: "r1".into(),
+                timestamp: ts(),
+                content: MessageContent::Text("response text".into()),
+                tool_calls: vec![],
+                usage: None,
+                model: None,
+                content_omitted: false,
+            }],
+            tool_executions: vec![ToolExecution {
+                tool_use_id: "tu1".into(),
+                tool_name: "Bash".into(),
+                input: json!({}),
+                output: ToolOutput::Text {
+                    text: "tool output data".into(),
+                },
+                is_error: false,
+                start_ts: ts(),
+                end_ts: None,
+                source_assistant_uuid: "a1".into(),
+                result_agent_id: None,
+                error_message: None,
+                teammate_spawn: None,
+                output_omitted: false,
+                output_bytes: None,
+                workflow_run_id: None,
+                workflow_script_path: None,
+            }],
+            semantic_steps: vec![],
+            slash_commands: vec![],
+            subagents: vec![Process {
+                session_id: "sub1".into(),
+                root_task_description: None,
+                spawn_ts: ts(),
+                end_ts: None,
+                metrics: ChunkMetrics::default(),
+                team: None,
+                subagent_type: None,
+                messages: vec![Chunk::Ai(AIChunk {
+                    chunk_id: "sub-a1".into(),
+                    timestamp: ts(),
+                    duration_ms: None,
+                    responses: vec![],
+                    tool_executions: vec![],
+                    semantic_steps: vec![],
+                    slash_commands: vec![],
+                    subagents: vec![],
+                    teammate_messages: vec![],
+                    metrics: ChunkMetrics::default(),
+                })],
+                main_session_impact: None,
+                is_ongoing: false,
+                duration_ms: None,
+                parent_task_id: None,
+                description: None,
+                header_model: None,
+                last_isolated_tokens: 0,
+                is_shutdown_only: false,
+                messages_omitted: false,
+                messages_total_count: 1,
+            }],
+            teammate_messages: vec![],
+            metrics: ChunkMetrics::default(),
+        })],
+        metrics: cdt_api::SessionDetailMetrics { message_count: 1 },
+        metadata: cdt_api::SessionDetailMetadata {
+            last_modified: Some(0),
+            size: Some(100),
+            cwd: None,
+        },
+        context_injections: vec![],
+        injections_by_phase: BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: HashMap::new(),
+        is_ongoing: false,
+        title: None,
+        workflow_items: vec![],
+    };
+
+    let mut resp = SessionDetailResponse::Full {
+        fingerprint: "fp-export".into(),
+        detail: Box::new(detail),
+    };
+
+    resp.apply_export_omissions();
+
+    if let SessionDetailResponse::Full { detail, .. } = &resp {
+        let Chunk::Ai(ai) = &detail.chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        assert!(
+            !ai.responses[0].content_omitted,
+            "export SHALL preserve response content (not omit)"
+        );
+        assert!(
+            !ai.tool_executions[0].output_omitted,
+            "export SHALL preserve tool output (not omit)"
+        );
+        assert!(
+            matches!(
+                &ai.tool_executions[0].output,
+                ToolOutput::Text { text } if text == "tool output data"
+            ),
+            "export tool output text SHALL be intact"
+        );
+        assert!(
+            ai.subagents[0].messages_omitted,
+            "export SHALL omit subagent messages"
+        );
+        assert!(
+            ai.subagents[0].messages.is_empty(),
+            "export SHALL clear subagent messages"
+        );
+    } else {
+        panic!("expected Full variant");
+    }
 }
 
 /// spec `ipc-data-api` "Expose subagent messages total count"：OMIT 默认路径下
