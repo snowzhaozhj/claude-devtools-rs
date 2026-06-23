@@ -9,6 +9,8 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.20] — 2026-06-23
+
 ### Added
 - **UI**: Command Palette (Cmd+K) now locates sessions globally by Session ID across all projects. Paste a copied Session ID (4+ characters) to jump straight to its session without first selecting the project it belongs to; matches show the project name for cross-project disambiguation. Existing in-project content search is preserved.
 
@@ -368,7 +370,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.19...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.20...HEAD
+[0.6.20]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.19...v0.6.20
 [0.6.19]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.18...v0.6.19
 [0.6.18]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.17...v0.6.18
 [0.6.17]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.16...v0.6.17
