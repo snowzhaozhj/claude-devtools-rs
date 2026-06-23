@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-analyze"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "cdt-core",
  "cdt-parse",
@@ -697,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-api"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "async-trait",
  "axum",
@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-cli"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "anyhow",
  "cdt-api",
@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-config"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "cdt-core",
  "cdt-discover",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-core"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "chrono",
  "serde",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-discover"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "async-trait",
  "cdt-core",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-fs"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "async-trait",
  "futures",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-parse"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "cdt-core",
  "cdt-fs",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-query"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "cdt-api",
  "cdt-config",
@@ -863,7 +863,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-ssh"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "async-trait",
  "cdt-core",
@@ -882,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-telemetry"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "chrono",
  "crossbeam-queue",
@@ -894,7 +894,7 @@ dependencies = [
 
 [[package]]
 name = "cdt-watch"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "cdt-core",
  "cdt-discover",
@@ -1040,7 +1040,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "claude-devtools-tauri"
-version = "0.6.19"
+version = "0.6.20"
 dependencies = [
  "cdt-api",
  "cdt-cli",
