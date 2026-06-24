@@ -96,7 +96,7 @@ export function resizeAdjacent(
     Math.min(combined - MIN_FRACTION, newFraction),
   );
   const nextWidth = combined - clamped;
-  if (nextWidth < MIN_FRACTION) return layout;
+  if (nextWidth < MIN_FRACTION - 1e-9) return layout;
 
   const panes = layout.panes.map((p, i) => {
     if (i === idx) return { ...p, widthFraction: clamped };
