@@ -21,6 +21,7 @@ use cdt_query::stats;
 use cdt_query::{ChunkKindFilter, QueryEngine, QueryFilter, SessionQueryOptions};
 use cdt_ssh::SshConnectionManager;
 
+mod export;
 mod mcp;
 mod time_expr;
 mod update;
@@ -118,6 +119,56 @@ enum Command {
         /// chunk 模式：展平提取 overview/errors/tools
         #[arg(long, conflicts_with = "content", requires = "chunks")]
         extract: Option<String>,
+    },
+    /// 导出会话为 Markdown / JSON
+    Export {
+        /// 会话 ID（支持 'latest'）
+        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
+        id: String,
+
+        /// 导出格式：md（默认）/ json
+        #[arg(long = "export-format", default_value = "md")]
+        export_format: String,
+
+        /// 输出文件路径（默认 stdout）
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// 工具输出详略：full（默认）/ summary / name-only
+        #[arg(long, default_value = "full")]
+        detail: String,
+
+        /// 排除 thinking blocks
+        #[arg(long)]
+        no_thinking: bool,
+
+        /// 排除子代理卡片
+        #[arg(long)]
+        no_subagents: bool,
+
+        /// 指定 chunk 区间（如 10:30），与 --tail 互斥
+        #[arg(long, conflicts_with = "tail")]
+        range: Option<String>,
+
+        /// 仅导出最后 N 条 chunks
+        #[arg(long, conflicts_with = "range")]
+        tail: Option<usize>,
+
+        /// grep 过滤
+        #[arg(long)]
+        grep: Option<String>,
+
+        /// grep context 数
+        #[arg(long, default_value = "1")]
+        grep_context: usize,
+
+        /// 过滤条件（`errors_only` / `tool_calls`）
+        #[arg(long)]
+        filter: Option<String>,
+
+        /// 导出全部 chunk（禁用默认 tail）
+        #[arg(long)]
+        all: bool,
     },
     /// 全文搜索
     Search {
@@ -708,6 +759,159 @@ async fn cmd_session_inspect(
             }
         }
     }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// export
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_export(
+    session_id: &str,
+    format: &str,
+    output_path: Option<&std::path::Path>,
+    detail: &str,
+    no_thinking: bool,
+    no_subagents: bool,
+    range: Option<&str>,
+    tail: Option<usize>,
+    grep: Option<&str>,
+    grep_context: usize,
+    filter: Option<&str>,
+    all: bool,
+) -> Result<()> {
+    let export_format = match format {
+        "md" | "markdown" => export::ExportFormat::Markdown,
+        "json" => export::ExportFormat::Json,
+        other => anyhow::bail!("invalid export format: '{other}'. Supported: md, json"),
+    };
+
+    let detail_mode = match detail {
+        "full" => export::ToolDetailMode::Full,
+        "summary" => export::ToolDetailMode::Summary,
+        "name-only" => export::ToolDetailMode::NameOnly,
+        other => {
+            anyhow::bail!("invalid --detail value: '{other}'. Supported: full, summary, name-only")
+        }
+    };
+
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(Arc::clone(&api));
+
+    let session_id = resolve_latest_cli(&engine, session_id).await?;
+
+    let project_id = engine
+        .find_session_project(&session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let options = SessionQueryOptions::default();
+    let session_detail = engine
+        .get_session_detail(&project_id, &session_id, &options)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // Apply chunk filters (same pipeline as session --chunks)
+    let kind_filter = filter.map(parse_kind_filter).transpose()?;
+    let indexed: Vec<(usize, &cdt_core::Chunk)> = session_detail
+        .chunks
+        .iter()
+        .enumerate()
+        .filter(|(_, chunk)| match kind_filter {
+            None => true,
+            Some(ChunkKindFilter::ErrorsOnly) => {
+                matches!(chunk, cdt_core::Chunk::Ai(ai) if ai.tool_executions.iter().any(|te| te.is_error))
+            }
+            Some(ChunkKindFilter::ToolCalls) => {
+                matches!(chunk, cdt_core::Chunk::Ai(ai) if !ai.tool_executions.is_empty())
+            }
+        })
+        .collect();
+
+    let grep_needle = grep.filter(|s| !s.trim().is_empty());
+    let grep_matcher = grep_needle.map(cdt_discover::search_text::GrepMatcher::literal);
+    let grep_hits: std::collections::HashSet<usize> = if let Some(ref matcher) = grep_matcher {
+        indexed
+            .iter()
+            .filter(|(_, chunk)| cdt_discover::search_text::chunk_matches_grep(chunk, matcher))
+            .map(|(i, _)| *i)
+            .collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+
+    let filtered: Vec<(usize, &cdt_core::Chunk)> = if grep_matcher.is_some() {
+        let visible: std::collections::HashSet<usize> = grep_hits
+            .iter()
+            .flat_map(|&i| i.saturating_sub(grep_context)..=i + grep_context)
+            .collect();
+        indexed
+            .into_iter()
+            .filter(|(i, _)| visible.contains(i))
+            .collect()
+    } else {
+        indexed
+    };
+
+    let windowed: Vec<&cdt_core::Chunk> = if all {
+        filtered.into_iter().map(|(_, c)| c).collect()
+    } else {
+        let parsed_range = range.map(parse_range).transpose()?;
+        if let Some((start, end)) = parsed_range {
+            filtered
+                .into_iter()
+                .filter(|(i, _)| *i >= start && *i < end)
+                .map(|(_, c)| c)
+                .collect()
+        } else {
+            let effective_tail = tail.unwrap_or(usize::MAX);
+            let items: Vec<&cdt_core::Chunk> = filtered.into_iter().map(|(_, c)| c).collect();
+            let len = items.len();
+            if effective_tail < len {
+                items.into_iter().skip(len - effective_tail).collect()
+            } else {
+                items
+            }
+        }
+    };
+
+    // Build a filtered SessionDetail with only the selected chunks
+    let filtered_detail = cdt_api::SessionDetail {
+        session_id: session_detail.session_id.clone(),
+        project_id: session_detail.project_id.clone(),
+        chunks: windowed.into_iter().cloned().collect(),
+        metrics: session_detail.metrics.clone(),
+        metadata: session_detail.metadata.clone(),
+        context_injections: vec![],
+        injections_by_phase: std::collections::BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: std::collections::HashMap::new(),
+        is_ongoing: session_detail.is_ongoing,
+        title: session_detail.title.clone(),
+        workflow_items: vec![],
+    };
+
+    let summary = cdt_query::summary::build_summary(&filtered_detail);
+    let cost = cdt_query::cost::compute_session_cost(&session_detail);
+
+    let export_options = export::ExportOptions {
+        format: export_format,
+        detail: detail_mode,
+        include_thinking: !no_thinking,
+        include_subagents: !no_subagents,
+    };
+
+    let content = export::export_session(&filtered_detail, &summary, &cost, &export_options);
+
+    if let Some(path) = output_path {
+        std::fs::write(path, &content)
+            .with_context(|| format!("failed to write export to {}", path.display()))?;
+        eprintln!("Exported to {}", path.display());
+    } else {
+        print!("{content}");
+    }
+
     Ok(())
 }
 
@@ -1925,6 +2129,36 @@ async fn main() -> Result<()> {
             } else {
                 cmd_session_inspect(&effective_format, &id, include.as_deref(), json_fields).await
             }
+        }
+        Command::Export {
+            id,
+            export_format,
+            output,
+            detail,
+            no_thinking,
+            no_subagents,
+            range,
+            tail,
+            grep,
+            grep_context,
+            filter,
+            all,
+        } => {
+            cmd_export(
+                &id,
+                &export_format,
+                output.as_deref(),
+                &detail,
+                no_thinking,
+                no_subagents,
+                range.as_deref(),
+                tail,
+                grep.as_deref(),
+                grep_context,
+                filter.as_deref(),
+                all,
+            )
+            .await
         }
         Command::Search {
             query,
