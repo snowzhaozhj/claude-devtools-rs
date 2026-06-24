@@ -9,6 +9,11 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.6.21] — 2026-06-24
+
+### Fixed
+- **UI**: Pane resize handle now shows a persistent 1px divider line between panes, replacing the invisible 6px transparent hit area. Added full keyboard support (Arrow keys ±5%, Shift+Arrow ±15%, Home/End) and WAI-ARIA Window Splitter pattern. Fixed floating-point precision bug that incorrectly rejected valid resize fractions near the minimum.
+
 ## [0.6.20] — 2026-06-23
 
 ### Added
@@ -370,7 +375,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.20...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.21...HEAD
+[0.6.21]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.20...v0.6.21
 [0.6.20]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.19...v0.6.20
 [0.6.19]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.18...v0.6.19
 [0.6.18]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.17...v0.6.18
