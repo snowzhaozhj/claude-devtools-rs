@@ -51,9 +51,9 @@ pub fn export_session(
     summary: &SessionSummaryOutput,
     cost: &SessionCost,
     options: &ExportOptions,
-) -> String {
+) -> Result<String, serde_json::Error> {
     match options.format {
-        ExportFormat::Markdown => export_as_markdown(detail, summary, cost, options),
+        ExportFormat::Markdown => Ok(export_as_markdown(detail, summary, cost, options)),
         ExportFormat::Json => export_as_json(detail, options),
     }
 }
@@ -170,7 +170,12 @@ fn render_ai_chunk_md(ai: &AIChunk, index: usize, options: &ExportOptions) -> St
             SemanticStep::Interruption { text, .. } => {
                 parts.push(format!("*[interrupted]* {text}\n"));
             }
-            SemanticStep::SubagentSpawn { .. } | SemanticStep::UserMessage { .. } => {}
+            SemanticStep::UserMessage { text, .. } => {
+                if !text.is_empty() {
+                    parts.push(format!("*[user]* {text}\n"));
+                }
+            }
+            SemanticStep::SubagentSpawn { .. } => {}
         }
     }
 
@@ -246,13 +251,19 @@ fn render_tool_md(te: &ToolExecution, options: &ExportOptions) -> String {
 // JSON
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn export_as_json(detail: &SessionDetail, options: &ExportOptions) -> String {
-    let projected = project_detail(detail, options);
-    serde_json::to_string_pretty(&projected).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+fn export_as_json(
+    detail: &SessionDetail,
+    options: &ExportOptions,
+) -> Result<String, serde_json::Error> {
+    let projected = project_detail(detail, options)?;
+    serde_json::to_string_pretty(&projected)
 }
 
-fn project_detail(detail: &SessionDetail, options: &ExportOptions) -> serde_json::Value {
-    let mut val = serde_json::to_value(detail).unwrap_or_default();
+fn project_detail(
+    detail: &SessionDetail,
+    options: &ExportOptions,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut val = serde_json::to_value(detail)?;
     if let Some(obj) = val.as_object_mut() {
         if let Some(chunks) = obj.get_mut("chunks") {
             if let Some(arr) = chunks.as_array_mut() {
@@ -262,7 +273,7 @@ fn project_detail(detail: &SessionDetail, options: &ExportOptions) -> serde_json
             }
         }
     }
-    val
+    Ok(val)
 }
 
 fn project_chunk_json(chunk: &mut serde_json::Value, options: &ExportOptions) {
@@ -345,7 +356,7 @@ fn truncate_tool_output_json(tool: &mut serde_json::Value) {
             if let Some(out_obj) = output.as_object_mut() {
                 if let Some(text) = out_obj.get_mut("text") {
                     if let Some(s) = text.as_str() {
-                        if s.len() > TOOL_OUTPUT_TRUNCATE_LEN {
+                        if s.chars().count() > TOOL_OUTPUT_TRUNCATE_LEN {
                             *text = serde_json::Value::String(truncate_chars(
                                 s,
                                 TOOL_OUTPUT_TRUNCATE_LEN,
@@ -589,7 +600,7 @@ mod tests {
         let summary = make_summary();
         let cost = make_cost();
         let options = ExportOptions::default();
-        let md = export_session(&detail, &summary, &cost, &options);
+        let md = export_session(&detail, &summary, &cost, &options).unwrap();
 
         assert!(md.contains("# Test Session"));
         assert!(md.contains("| Session ID | test-session-123 |"));
@@ -609,7 +620,7 @@ mod tests {
             include_thinking: false,
             ..Default::default()
         };
-        let json = export_session(&detail, &make_summary(), &make_cost(), &options);
+        let json = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let chunks = parsed["chunks"].as_array().unwrap();
@@ -624,7 +635,7 @@ mod tests {
             detail: ToolDetailMode::NameOnly,
             ..Default::default()
         };
-        let md = export_session(&detail, &make_summary(), &make_cost(), &options);
+        let md = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
 
         assert!(md.contains("### Tool: Bash"));
         assert!(!md.contains("long output"));
@@ -640,7 +651,7 @@ mod tests {
             detail: ToolDetailMode::Summary,
             ..Default::default()
         };
-        let md = export_session(&detail, &make_summary(), &make_cost(), &options);
+        let md = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
 
         assert!(md.contains("... (truncated)"));
         assert!(!md.contains(&long_output));
@@ -650,11 +661,160 @@ mod tests {
     fn system_and_compact_chunks_render() {
         let detail = make_detail(vec![make_system_chunk("system msg"), make_compact_chunk()]);
         let options = ExportOptions::default();
-        let md = export_session(&detail, &make_summary(), &make_cost(), &options);
+        let md = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
 
         assert!(md.contains("## Turn 1 — System"));
         assert!(md.contains("*system msg*"));
         assert!(md.contains("## Turn 2 — Context Compacted"));
+    }
+
+    fn make_ai_chunk_with_thinking() -> Chunk {
+        let ts = Utc::now();
+        Chunk::Ai(AIChunk {
+            chunk_id: "a2".into(),
+            timestamp: ts,
+            duration_ms: None,
+            responses: vec![],
+            metrics: default_metrics(),
+            semantic_steps: vec![
+                SemanticStep::Thinking {
+                    text: "internal reasoning here".into(),
+                    timestamp: ts,
+                },
+                SemanticStep::Text {
+                    text: "visible reply".into(),
+                    timestamp: ts,
+                },
+            ],
+            tool_executions: vec![],
+            subagents: vec![cdt_core::Process {
+                session_id: "sub-1".into(),
+                root_task_description: Some("run tests".into()),
+                spawn_ts: ts,
+                end_ts: None,
+                metrics: default_metrics(),
+                team: None,
+                subagent_type: Some("qa".into()),
+                messages: vec![],
+                main_session_impact: None,
+                is_ongoing: false,
+                duration_ms: Some(5000),
+                parent_task_id: None,
+                description: Some("QA agent".into()),
+                header_model: None,
+                last_isolated_tokens: 0,
+                is_shutdown_only: false,
+                messages_omitted: false,
+                messages_total_count: 0,
+            }],
+            slash_commands: vec![],
+            teammate_messages: vec![],
+        })
+    }
+
+    #[test]
+    fn no_thinking_excludes_thinking_in_markdown() {
+        let detail = make_detail(vec![make_ai_chunk_with_thinking()]);
+        let options = ExportOptions {
+            include_thinking: false,
+            ..Default::default()
+        };
+        let md = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
+
+        assert!(!md.contains("[thinking]"));
+        assert!(!md.contains("internal reasoning here"));
+        assert!(md.contains("visible reply"));
+    }
+
+    #[test]
+    fn default_includes_thinking_in_markdown() {
+        let detail = make_detail(vec![make_ai_chunk_with_thinking()]);
+        let options = ExportOptions::default();
+        let md = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
+
+        assert!(md.contains("> [thinking] internal reasoning here"));
+        assert!(md.contains("visible reply"));
+    }
+
+    #[test]
+    fn no_subagents_excludes_subagent_card() {
+        let detail = make_detail(vec![make_ai_chunk_with_thinking()]);
+        let with = ExportOptions::default();
+        let md_with = export_session(&detail, &make_summary(), &make_cost(), &with).unwrap();
+        assert!(md_with.contains("### Subagent: QA agent (qa)"));
+
+        let without = ExportOptions {
+            include_subagents: false,
+            ..Default::default()
+        };
+        let md_without = export_session(&detail, &make_summary(), &make_cost(), &without).unwrap();
+        assert!(!md_without.contains("### Subagent:"));
+    }
+
+    #[test]
+    fn json_no_thinking_removes_thinking_from_steps_and_content() {
+        let detail = make_detail(vec![make_ai_chunk_with_thinking()]);
+        let options = ExportOptions {
+            format: ExportFormat::Json,
+            include_thinking: false,
+            ..Default::default()
+        };
+        let json = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let chunks = parsed["chunks"].as_array().unwrap();
+        for chunk in chunks {
+            if let Some(steps) = chunk.get("semanticSteps") {
+                if let Some(arr) = steps.as_array() {
+                    for step in arr {
+                        let kind = step["kind"].as_str().unwrap_or("");
+                        assert_ne!(kind, "thinking", "thinking step should be filtered");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn json_name_only_clears_tool_input_and_output() {
+        let detail = make_detail(vec![make_ai_chunk_with_tool("Bash", "real output")]);
+        let options = ExportOptions {
+            format: ExportFormat::Json,
+            detail: ToolDetailMode::NameOnly,
+            ..Default::default()
+        };
+        let json = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let chunks = parsed["chunks"].as_array().unwrap();
+        for chunk in chunks {
+            if let Some(tools) = chunk.get("toolExecutions") {
+                if let Some(arr) = tools.as_array() {
+                    for tool in arr {
+                        let input = &tool["input"];
+                        assert!(
+                            input.as_object().is_none_or(serde_json::Map::is_empty),
+                            "input should be empty object"
+                        );
+                        assert_eq!(
+                            tool["output"]["kind"].as_str().unwrap_or(""),
+                            "missing",
+                            "output should be missing"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn markdown_full_detail_includes_tool_input() {
+        let detail = make_detail(vec![make_ai_chunk_with_tool("Bash", "output")]);
+        let options = ExportOptions::default();
+        let md = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
+
+        assert!(md.contains("**Input:**"));
+        assert!(md.contains("\"command\": \"ls\""));
+        assert!(md.contains("**Output:**"));
+        assert!(md.contains("output"));
     }
 
     #[test]
@@ -662,5 +822,18 @@ mod tests {
         assert_eq!(truncate_chars("hello", 10), "hello");
         assert_eq!(truncate_chars("hello world", 5), "hello... (truncated)");
         assert_eq!(truncate_chars("你好世界", 2), "你好... (truncated)");
+    }
+
+    #[test]
+    fn json_summary_truncates_by_char_count_not_bytes() {
+        let cjk_output = "中".repeat(2001);
+        let detail = make_detail(vec![make_ai_chunk_with_tool("Bash", &cjk_output)]);
+        let options = ExportOptions {
+            format: ExportFormat::Json,
+            detail: ToolDetailMode::Summary,
+            ..Default::default()
+        };
+        let json = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
+        assert!(json.contains("truncated"));
     }
 }

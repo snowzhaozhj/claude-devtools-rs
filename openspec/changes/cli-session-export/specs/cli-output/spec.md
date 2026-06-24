@@ -36,12 +36,12 @@ CLI binary `cdt` SHALL 提供以下顶级命令结构：
 
 - **WHEN** 用户运行 `cdt export <session-id>`
 - **THEN** SHALL 以 Markdown 格式输出会话内容到 stdout
-- **AND** 支持 `--format md/json`、`-o <path>`、`--detail`、`--no-thinking`、`--no-subagents`
+- **AND** 支持 `--export-format md/json`、`-o <path>`、`--detail`、`--no-thinking`、`--no-subagents`
 
 #### Scenario: cdt export 与全局参数隔离
 
-- **WHEN** 用户运行 `cdt export <id> --format md`
-- **THEN** `--format` SHALL 为 export 子命令本地参数（md / json），与全局 `--format`（json / jsonl / table）隔离互不影响
+- **WHEN** 用户运行 `cdt export <id> --export-format md`
+- **THEN** `--export-format` SHALL 为 export 子命令专用参数（md / json），与全局 `--format`（json / jsonl / table）隔离互不影响
 
 #### Scenario: cdt sessions list 支持全局查询
 

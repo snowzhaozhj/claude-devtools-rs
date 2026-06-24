@@ -865,7 +865,7 @@ async fn cmd_export(
                 .map(|(_, c)| c)
                 .collect()
         } else {
-            let effective_tail = tail.unwrap_or(usize::MAX);
+            let effective_tail = tail.unwrap_or(100);
             let items: Vec<&cdt_core::Chunk> = filtered.into_iter().map(|(_, c)| c).collect();
             let len = items.len();
             if effective_tail < len {
@@ -902,7 +902,8 @@ async fn cmd_export(
         include_subagents: !no_subagents,
     };
 
-    let content = export::export_session(&filtered_detail, &summary, &cost, &export_options);
+    let content = export::export_session(&filtered_detail, &summary, &cost, &export_options)
+        .context("failed to generate export content")?;
 
     if let Some(path) = output_path {
         std::fs::write(path, &content)
