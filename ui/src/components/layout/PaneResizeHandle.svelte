@@ -11,16 +11,23 @@
 
   let active = $state(false);
 
-  const leftPane = $derived(
-    getPaneLayout().panes.find((p) => p.id === leftPaneId),
+  const leftPaneIdx = $derived(
+    getPaneLayout().panes.findIndex((p) => p.id === leftPaneId),
   );
-  const paneCount = $derived(getPaneLayout().panes.length);
+  const leftPane = $derived(
+    leftPaneIdx >= 0 ? getPaneLayout().panes[leftPaneIdx] : undefined,
+  );
+  const rightPane = $derived(
+    leftPaneIdx >= 0 ? getPaneLayout().panes[leftPaneIdx + 1] : undefined,
+  );
   const ariaValueNow = $derived(
     leftPane ? Math.round(leftPane.widthFraction * 100) : 50,
   );
   const ariaValueMin = $derived(Math.round(MIN_FRACTION * 100));
   const ariaValueMax = $derived(
-    Math.round((1 - MIN_FRACTION * (paneCount - 1)) * 100),
+    leftPane && rightPane
+      ? Math.round((leftPane.widthFraction + rightPane.widthFraction - MIN_FRACTION) * 100)
+      : 90,
   );
 
   function onPointerDown(e: PointerEvent) {
@@ -94,6 +101,7 @@
   tabindex="0"
   aria-orientation="vertical"
   aria-label="拖动调整面板宽度"
+  aria-controls={`pane-${leftPaneId}`}
   aria-valuemin={ariaValueMin}
   aria-valuemax={ariaValueMax}
   aria-valuenow={ariaValueNow}
@@ -123,6 +131,7 @@
   .pane-resize-handle:hover,
   .active,
   .pane-resize-handle:focus-visible {
+    background: rgba(213, 211, 207, 0.6);
     background: color-mix(in oklch, var(--color-border-emphasis) 60%, transparent);
     outline: none;
   }

@@ -44,6 +44,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
+  id={`pane-${pane.id}`}
   class="pane-view"
   class:focused
   class:sole={isSolePane}

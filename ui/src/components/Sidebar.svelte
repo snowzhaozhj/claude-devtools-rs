@@ -1788,6 +1788,7 @@
   .resize-handle:hover,
   .resize-handle-active,
   .resize-handle:focus-visible {
+    background: rgba(213, 211, 207, 0.6);
     background: color-mix(in oklch, var(--color-border-emphasis) 60%, transparent);
     outline: none;
   }
