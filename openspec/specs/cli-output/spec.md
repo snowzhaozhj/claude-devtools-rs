@@ -310,6 +310,7 @@ CLI binary `cdt` SHALL 提供以下顶级命令结构：
 - `cdt sessions list` — 列出 session（支持全局或按项目过滤）
 - `cdt session <id>` — 单 session 复合视图（summary + cost + errors）
 - `cdt session <id> --chunks` — chunk 级内容取数
+- `cdt export <id>` — 导出会话为 Markdown / JSON 文档
 - `cdt search <query>` — 全文搜索
 - `cdt stats [period]` — 聚合统计
 - `cdt serve` — HTTP API server
@@ -320,7 +321,7 @@ CLI binary `cdt` SHALL 提供以下顶级命令结构：
 
 `cdt session <id>` 和 `cdt session <id> --chunks` 共用同一子命令入口，通过 `--chunks` flag 区分模式。
 
-`session` 支持 `latest` 作为 session ID 别名，解析为最近一次 session。
+`session` 和 `export` 均支持 `latest` 作为 session ID 别名，解析为最近一次 session。
 
 #### Scenario: cdt session 默认返回复合视图
 
@@ -332,6 +333,17 @@ CLI binary `cdt` SHALL 提供以下顶级命令结构：
 
 - **WHEN** 用户运行 `cdt session abc123 --chunks --tail 5 --content full`
 - **THEN** SHALL 输出最后 5 条 chunk 的完整内容
+
+#### Scenario: cdt export 导出会话
+
+- **WHEN** 用户运行 `cdt export <session-id>`
+- **THEN** SHALL 以 Markdown 格式输出会话内容到 stdout
+- **AND** 支持 `--export-format md/json`、`-o <path>`、`--detail`、`--no-thinking`、`--no-subagents`
+
+#### Scenario: cdt export 与全局参数隔离
+
+- **WHEN** 用户运行 `cdt export <id> --export-format md`
+- **THEN** `--export-format` SHALL 为 export 子命令专用参数（md / json），与全局 `--format`（json / jsonl / table）隔离互不影响
 
 #### Scenario: cdt sessions list 支持全局查询
 
