@@ -17,7 +17,7 @@
 
 ## 4. 发布
 
-- [ ] 4.1 push 分支 + 开 PR
-- [ ] 4.2 wait-ci 全绿
-- [ ] 4.3 codex + pr-review-toolkit 二审通过
+- [x] 4.1 push 分支 + 开 PR
+- [x] 4.2 wait-ci 全绿
+- [x] 4.3 codex + pr-review-toolkit 二审通过
 - [ ] 4.4 archive change
