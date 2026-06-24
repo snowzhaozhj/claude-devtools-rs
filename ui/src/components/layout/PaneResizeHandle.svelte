@@ -1,15 +1,34 @@
 <script lang="ts">
-  import { resizePanes } from "../../lib/tabStore.svelte";
+  import { resizePanes, getPaneLayout } from "../../lib/tabStore.svelte";
+  import { MIN_FRACTION } from "../../lib/paneTypes";
 
   interface Props {
     leftPaneId: string;
-    /** 容器整体宽度（px），用于把 rel-x 转成 fraction */
     containerEl: HTMLElement | null;
   }
 
   let { leftPaneId, containerEl }: Props = $props();
 
   let active = $state(false);
+
+  const leftPaneIdx = $derived(
+    getPaneLayout().panes.findIndex((p) => p.id === leftPaneId),
+  );
+  const leftPane = $derived(
+    leftPaneIdx >= 0 ? getPaneLayout().panes[leftPaneIdx] : undefined,
+  );
+  const rightPane = $derived(
+    leftPaneIdx >= 0 ? getPaneLayout().panes[leftPaneIdx + 1] : undefined,
+  );
+  const ariaValueNow = $derived(
+    leftPane ? Math.round(leftPane.widthFraction * 100) : 50,
+  );
+  const ariaValueMin = $derived(Math.round(MIN_FRACTION * 100));
+  const ariaValueMax = $derived(
+    leftPane && rightPane
+      ? Math.round((leftPane.widthFraction + rightPane.widthFraction - MIN_FRACTION) * 100)
+      : 90,
+  );
 
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0 || !containerEl) return;
@@ -24,29 +43,8 @@
 
     function onMove(ev: PointerEvent) {
       if (width <= 0) return;
-      // 找到 leftPane 在容器内的起始 X（累加前面所有 pane 的 widthFraction）
-      // 近似做法：rel = (ev.clientX - startLeft) / width 作为新"累积 fraction"；
-      // 再减去 leftPane 之前所有 pane 的 fraction 得到 leftPane 的新 fraction
-      // 简化：假设 ResizeHandle 放在两个 pane 之间，用户的拖动作用于
-      // 直接 sibling。这里直接把 "手柄当前位置相对 leftPane 起始点" 的占比
-      // 作为新 leftPane.widthFraction。
-      const handleEl = (ev.target as HTMLElement).closest<HTMLElement>(
-        ".pane-resize-handle",
-      );
-      void handleEl;
-      // 近似：用相对整个容器的 X - leftPane 左侧起始的 fraction
-      // 因调用方传的是 containerEl，rel 即 leftPane 起点前的 cumulative fraction + leftPane.fraction
-      // 这里直接算从容器左到 pointer 的 fraction，由 tabStore.resizePanes 内部做 clamp
       const relFraction = Math.max(0, Math.min(1, (ev.clientX - startLeft) / width));
-      // 交给 resizeAdjacent；实际的"leftPane 起点前 fraction"由调用方通过 paneLayout 已知，
-      // 但 resizeAdjacent 只管相邻两 pane 的重分配，传入的 newFraction 是 **leftPane 独占** 的新值。
-      // 简化：取 relFraction 作为"容器左侧到 handle 的 fraction"，减去前序 fraction 交给 resizePanes。
-      // 这里就把 relFraction 交给 resizePanes，依赖 clamp 防越界。调用方需保证 handle 放在 leftPane 右侧。
-      // （TODO: 若后续发现拖拽不直观，再引入精确的 cumulative fraction 计算。）
-      const deltaFromLeft = relFraction; // 0..1 of container
-      // resizePanes 的语义：newFraction 是 leftPane 单独的 widthFraction
-      // 故从 deltaFromLeft 减去 leftPane 之前所有 pane 的 fraction 累积值
-      resizePanesFromContainerFraction(leftPaneId, deltaFromLeft);
+      resizePanesFromContainerFraction(leftPaneId, relFraction);
     }
 
     function onUp() {
@@ -61,11 +59,6 @@
     document.addEventListener("pointerup", onUp);
   }
 
-  // resizePanes 需要的是 leftPane 自己的 newFraction；containerFraction 包含
-  // 前序 pane 的宽度之和，所以调用前需要减去 "前序 pane fraction 累积"。
-  // 这个计算需要 paneLayout 信息，我们通过 tabStore 的公共查询获取。
-  import { getPaneLayout } from "../../lib/tabStore.svelte";
-
   function resizePanesFromContainerFraction(paneId: string, containerFraction: number): void {
     const layout = getPaneLayout();
     const idx = layout.panes.findIndex((p) => p.id === paneId);
@@ -75,26 +68,76 @@
     const newFraction = containerFraction - cumulative;
     resizePanes(paneId, newFraction);
   }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+
+    const step = e.shiftKey ? 0.15 : 0.05;
+    const layout = getPaneLayout();
+    const idx = layout.panes.findIndex((p) => p.id === leftPaneId);
+    if (idx === -1 || idx >= layout.panes.length - 1) return;
+    const current = layout.panes[idx].widthFraction;
+    const combined = current + layout.panes[idx + 1].widthFraction;
+
+    if (e.key === "ArrowLeft") {
+      resizePanes(leftPaneId, current - step);
+    } else if (e.key === "ArrowRight") {
+      resizePanes(leftPaneId, current + step);
+    } else if (e.key === "Home") {
+      resizePanes(leftPaneId, MIN_FRACTION);
+    } else if (e.key === "End") {
+      resizePanes(leftPaneId, combined - MIN_FRACTION);
+    }
+  }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="pane-resize-handle"
   class:active
+  role="separator"
+  tabindex="0"
+  aria-orientation="vertical"
+  aria-label="拖动调整面板宽度"
+  aria-controls={`pane-${leftPaneId}`}
+  aria-valuemin={ariaValueMin}
+  aria-valuemax={ariaValueMax}
+  aria-valuenow={ariaValueNow}
   onpointerdown={onPointerDown}
+  onkeydown={onKeyDown}
 ></div>
 
 <style>
   .pane-resize-handle {
-    width: 6px;
+    width: 5px;
     flex-shrink: 0;
     background: transparent;
     cursor: col-resize;
     transition: background 0.15s;
     position: relative;
   }
-  .pane-resize-handle:hover,
-  .active {
+  .pane-resize-handle::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 2px;
+    width: 1px;
     background: var(--color-border-emphasis);
+    transition: opacity 0.15s;
+  }
+  .pane-resize-handle:hover,
+  .active,
+  .pane-resize-handle:focus-visible {
+    background: rgba(213, 211, 207, 0.6);
+    background: color-mix(in oklch, var(--color-border-emphasis) 60%, transparent);
+    outline: none;
+  }
+  .pane-resize-handle:hover::after,
+  .active::after,
+  .pane-resize-handle:focus-visible::after {
+    opacity: 0;
   }
 </style>
