@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782315371890,
+  "lastUpdate": 1782359733456,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -22780,6 +22780,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12880,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "980aefb0d73547e1f383d62afd76b405ef4bb967",
+          "message": "feat(cli): add session export command (#539)\n\n* feat(cli): add `cdt export` command for session export to Markdown/JSON\n\nAdd new `cdt export <session-id>` subcommand that exports sessions as\nreadable Markdown or JSON documents. Supports --export-format md/json,\n--detail full/summary/name-only, --no-thinking, --no-subagents, and\nall existing chunk filter params (--range/--tail/--grep/--filter/--all).\n\nMarkdown output includes metadata table (session ID, model, cost, tokens,\nduration) and turn-structured content with tool calls rendered inline at\ntheir semantic_steps position. JSON output applies projection (thinking\nfilter, tool output truncation, subagent removal) before pretty-printing.\n\nZero new dependencies. Export module is ~400 lines in cdt-cli/src/export.rs.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(export): address review findings — byte/char bug, Result propagation, tests\n\n- Fix truncate_tool_output_json: use chars().count() not bytes len() for\n  Unicode-correct threshold comparison (test reviewer bug find)\n- Change export_session return type to Result<String, serde_json::Error>,\n  propagate errors properly instead of silent fallback (error reviewer HIGH)\n- Render SemanticStep::UserMessage in Markdown (codex W3: mid-turn user\n  input was silently dropped)\n- Add 7 new tests: thinking include/exclude, subagent include/exclude,\n  JSON projection assertions, full detail input presence, CJK truncation\n- Set default export tail to 100 (makes --all meaningful)\n- Align spec delta to use --export-format (matches implementation)\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive cli-session-export\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(export): use full session ID as fallback title, not truncated 8 chars\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(ui): stop truncating sessionId in fallback titles and exports\n\nUse full sessionId everywhere instead of .slice(0, 8) or .slice(0, 12).\nTruncated IDs are neither recognizable nor usable as CLI arguments.\n\nAffected: export (md/html), SessionDetail <h1>, Sidebar session label,\ntab labels (App/NotificationsView), doc comments (api.ts, types.rs),\nand the corresponding test assertion.\n\nPreserved truncation only where visually justified with hover tooltip\n(SubagentCard meta ID) or in ephemeral dev console logs.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(ui): remove all remaining ID truncation — use full IDs everywhere\n\nRemove .slice(0, 8) from SubagentCard meta, SessionMetaMenu DOM ID,\nSessionDetail perf console logs, and JobRow label/name fallbacks.\n\nCSS text-overflow: ellipsis (already present on .sa-meta-id) is the\ncorrect approach for space-constrained UI — the browser decides what\nto truncate based on actual render width, not a hardcoded magic number.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(export): truncate structured tool output in JSON summary mode\n\nAlso add white-space: nowrap to SubagentCard .sa-meta-id to prevent\nUUID hyphen line breaks with CSS text-overflow: ellipsis.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* style: fix rustfmt in export.rs\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-25T11:52:07+08:00",
+          "tree_id": "e48f335051920130d15644c890c97c88a03826e2",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/980aefb0d73547e1f383d62afd76b405ef4bb967"
+        },
+        "date": 1782359732704,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 117.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1138,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4773,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.861,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 9.857,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 47,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.03,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 297.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1209,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3389,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3291,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 38160,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 5.069,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 60.19,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 617.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6230,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 201.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2022,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 55.23,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 559.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5587,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 114.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1158,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.817,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9638,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1032,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9647,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 1033,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 47.36,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 503.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 95.87,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 957.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9770,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 208.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1382,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13370,
             "unit": "µs"
           }
         ]
