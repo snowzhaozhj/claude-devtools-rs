@@ -370,4 +370,32 @@ async fn interrupted_user_message_surfaces_in_context_injections_not_turn_stats(
         !detail.turn_context_stats.contains_key(anchor),
         "被打断 turn SHALL NOT 出现在 turnContextStats（无 AI group，无 badge）"
     );
+
+    // 正向一致性（MODIFIED `Per-turn context stats exposure`）：turnContextStats 的 key
+    // 全是 AIChunk chunkId；且对 contextInjections 按 aiGroupId 分组，aiGroupId ∈ AIChunk
+    // 集合的组其 count 与 turnContextStats[aiGroupId].newCount 一致（被打断 injection 排除）。
+    for key in detail.turn_context_stats.keys() {
+        assert!(
+            ai_ids.contains(key),
+            "turnContextStats key {key} SHALL ∈ AIChunk chunkId 集合"
+        );
+    }
+    let mut grouped: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for inj in &detail.context_injections {
+        if let cdt_core::ContextInjection::UserMessage(x) = inj {
+            if ai_ids.contains(&x.ai_group_id) {
+                *grouped.entry(x.ai_group_id.as_str()).or_insert(0) += 1;
+            }
+        }
+    }
+    for (gid, count) in grouped {
+        let stats = detail
+            .turn_context_stats
+            .get(gid)
+            .unwrap_or_else(|| panic!("AIChunk turn {gid} SHALL 有 turnContextStats 条目"));
+        assert_eq!(
+            stats.counts_by_category.user_messages, count,
+            "turn {gid} 的 user-message 计数 SHALL 与 contextInjections 分组计数一致"
+        );
+    }
 }

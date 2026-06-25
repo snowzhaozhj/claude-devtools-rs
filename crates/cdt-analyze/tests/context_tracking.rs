@@ -448,3 +448,60 @@ fn consecutive_interruptions_each_open_a_turn() {
         ]
     );
 }
+
+#[test]
+fn interrupted_turn_before_compaction_lands_in_pre_compact_phase() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    // U1 在 compact 前被打断（A0 与 compact 之间无 AI group 承载 U1）。
+    let chunks = vec![
+        user_chunk("u0", "first answered", 0),
+        ai_chunk("a0", 1, None, vec![]),
+        user_chunk("u1", "interrupted before compact", 2),
+        compact_chunk("c0", 3),
+        user_chunk("u2", "after compact", 4),
+        ai_chunk("a2", 5, None, vec![]),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    // U1 的 injection 经 compact 分支 flush + backfill 落在 compact 前 phase 的 A0。
+    let a0 = result.stats_map.get("a0:0").unwrap();
+    assert_eq!(
+        user_msg_anchors(&a0.accumulated_injections),
+        vec![(0, "a0:0".to_string()), (1, "u1:0".to_string())]
+    );
+    // compact 后 phase 的 A2 锚定 U2（turn 2）。
+    let a2 = result.stats_map.get("a2:0").unwrap();
+    assert_eq!(
+        user_msg_anchors(&a2.accumulated_injections),
+        vec![(2, "a2:0".to_string())]
+    );
+}
+
+#[test]
+fn interrupted_turn_with_no_ai_carrier_phase_is_dropped() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    // 退化情形：compact 前 phase 只有被打断的 U1、无任何 AI group 承载累积链。
+    // 文档化的已知限制：不 panic，U1 injection 无承载点而丢失。
+    let chunks = vec![
+        user_chunk("u1", "interrupted with no carrier", 0),
+        compact_chunk("c0", 1),
+        ai_chunk("a0", 2, None, vec![]),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    // 良定义结果：只有 compact 后 phase 的 A0 进 stats_map；U1 不在任何地方 surface。
+    assert_eq!(result.stats_map.len(), 1);
+    assert!(result.stats_map.contains_key("a0:0"));
+    assert!(!result.stats_map.contains_key("u1:0"));
+    let a0 = result.stats_map.get("a0:0").unwrap();
+    assert!(
+        user_msg_anchors(&a0.accumulated_injections).is_empty(),
+        "无 AI carrier 的被打断 injection 不应 surface（已知限制）"
+    );
+}

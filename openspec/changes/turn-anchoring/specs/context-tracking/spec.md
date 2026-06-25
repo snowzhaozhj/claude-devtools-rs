@@ -2,7 +2,11 @@
 
 ### Requirement: Anchor turns on real user messages
 
-系统 SHALL 以每条真实用户消息为 turn 锚点：每条真实 `UserChunk` SHALL 开启恰好一个 turn 并占用一个单调递增的 turn 序号，无论其 AI 响应是否产出。被打断的 turn——即一条真实用户消息之后，在下一条真实用户消息、compact 边界或会话结束之前**没有**产出任何 AI group——SHALL 仍产出一条 `user-message` injection 并占用一个 turn 序号；该 injection SHALL 进入累积 injection 链，使其在后续 AI group 的累计列表（以及由此驱动的 context panel injection 列表）中可见。
+系统 SHALL 以每条真实用户消息为 turn 锚点：每条真实 `UserChunk` SHALL 开启恰好一个 turn 并占用一个单调递增的 turn 序号，无论其 AI 响应是否产出。被打断的 turn——即一条真实用户消息之后，在下一条真实用户消息、compact 边界或会话结束之前**没有**产出任何 AI group——SHALL 仍占用一个 turn 序号并产出一条 `user-message` injection 进入累积 injection 链。
+
+该被打断 injection 的可见性取决于承载点：当该 turn 所在 phase 存在至少一个 AI group（在其前或其后）承载累积链时，该 injection SHALL 出现在该 phase 末尾 AI group 的累计列表（及由此驱动的 context panel injection 列表）中。当该 turn 所在 phase **完全没有任何 AI group**（退化情形，如整段 phase 仅由被打断的用户消息构成）时，累积链无承载点，该 injection SHALL NOT 出现在 context panel injection 列表中——此为**已知限制**（记入 `openspec/followups.md`），但该 turn 序号仍被占用。
+
+turn 序号是单调递增计数：每条真实 `UserChunk` 占用一个；无前置用户消息的 AI group（AI-only group）也占用一个。因此 turn 序号 SHALL NOT 被解读为"用户消息序号"，而是"对话轮序号"。
 
 被打断的 turn SHALL NOT 产出独立的 per-turn `ContextStats` 记录，也 SHALL NOT 出现在 per-turn stats map（`turnContextStats`）中——它没有 AI group，因此不产生 per-turn badge；它对 context 的唯一贡献是其 `user-message` injection。
 
@@ -30,6 +34,18 @@
 - **WHEN** 一个被打断的 turn（无 AI group）被处理
 - **THEN** `turnContextStats` map SHALL NOT 含以该 turn 的 `UserChunk` chunkId 为 key 的条目
 - **AND** `stats_map` SHALL NOT 含以该 `UserChunk` chunkId 为 key 的 `ContextStats` 记录
+
+#### Scenario: Interrupted turn whose phase has no AI group is a documented limitation
+
+- **WHEN** 会话序列为 `[User(U1), Compact, AI(A0)]`，`U1` 所在的 compact 前 phase 没有任何 AI group 承载累积链
+- **THEN** 处理 SHALL NOT panic，SHALL 产出良定义结果（`U1` 占用 turn 序号 `0`，`A0` 落在 compact 后的新 phase）
+- **AND** `U1` 的 `user-message` injection SHALL NOT 出现在任何 phase 的 `accumulatedInjections` / `contextInjections` 中（无承载点，已知限制）
+
+#### Scenario: Interrupted turn before a compaction lands in the pre-compact phase
+
+- **WHEN** 会话序列为 `[User(U0), AI(A0), User(U1), Compact, User(U2), AI(A2)]`，`U1` 在 compact 前被打断（`A0` 与 compact 之间无 AI group 承载 `U1`）
+- **THEN** `U1` 的 `user-message` injection SHALL 出现在 compact 前 phase 的末尾 AI group（`A0`）的 `accumulatedInjections` 中
+- **AND** `U2` 的完整 turn SHALL 落在 compact 后的 phase，锚定 `A2`
 
 ## MODIFIED Requirements
 

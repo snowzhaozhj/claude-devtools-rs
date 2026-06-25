@@ -13,15 +13,18 @@
 - [x] 2.4 `interrupted_user_message_still_opens_a_turn` 含断言：stats_map 不含 UserChunk chunkId
 - [x] 2.5 `interrupted_turn_anchor_is_userchunk_not_any_aichunk`：injection.aiGroupId == UserChunk.chunkId 且 ∉ AIChunk 集合
 - [x] 2.6 `consecutive_interruptions_each_open_a_turn`：`[U1, U2, U3, A3]` → 前两条各占一 turn，第三条锚 AI，不丢不吞
+- [x] 2.7 `interrupted_turn_before_compaction_lands_in_pre_compact_phase`（codex/test-analyzer：compact 分支 flush 路径）：`[U0, A0, U1, Compact, U2, A2]` → U1 落 compact 前 phase 的 A0
+- [x] 2.8 `interrupted_turn_with_no_ai_carrier_phase_is_dropped`（D4 退化 characterization）：`[U1, Compact, A0]` → 不 panic，U1 无承载点丢失（pin 已知限制）
 
 ## 3. 前端导航分流（D5，codex CRITICAL）
 
 - [x] 3.1 抽纯函数 `lib/contextNavigation.ts::resolveUserGroupNavTarget`（命中 chunk 是 user → 直接定位；是 ai → 向前找前置 UserChunk）；`SessionDetail.svelte::handleNavigateToUserGroup` 接入
 - [x] 3.2 `lib/contextNavigation.test.ts` vitest 覆盖 4 分支：完整 turn / 被打断 turn 直接定位不回溯 / 无前置退化 / 命中不到返 null
+- [x] 3.3 nav 防御（codex NIT）：仅 `kind==="ai"` 回溯，aiGroupId 异常命中 system/compact 退化为自身 + 对应用例
 
 ## 4. 下游一致性复核
 
-- [x] 4.1 `cdt-api/tests/http_session_detail_global_lookup.rs::interrupted_user_message_surfaces_in_context_injections_not_turn_stats`：全链路（build_chunks→SessionDetail）证明被打断 injection 进 contextInjections、不进 turnContextStats（ipc_contract 既有断言无破坏，148 全过）
+- [x] 4.1 `cdt-api/tests/http_session_detail_global_lookup.rs::interrupted_user_message_surfaces_in_context_injections_not_turn_stats`：全链路（build_chunks→SessionDetail）证明被打断 injection 进 contextInjections、不进 turnContextStats；并断言正向一致性（turnContextStats key ⊆ AIChunk 集合 + 真实 turn newCount 与分组计数一致，test-analyzer #3）。ipc_contract 既有断言无破坏，148 全过
 - [x] 4.2 vitest ContextPanel / contextExtractor 全过（22），无快照漂移（未改渲染）
 - [ ] 4.3 `just dev` 手动 smoke：打开 issue 示例 session `21ea4d75-...`，确认 Context Panel "User Messages" 出现被打断消息 Turn 且点击跳到该消息本身。**注**：后端正确性已由 corpus 真实语料（C=1193 被救回）+ 全链路 ipc 测试证明；此项为最终桌面视觉确认，留人工
 

@@ -84,6 +84,25 @@ context-tracking spec 的本意（Requirement `Classify context injections into 
 - **D-apply1（诊断落点）**：`corpus_turn_fidelity` 最终**留在 `cdt-api/tests/`**，不迁 `cdt-analyze`。原因：诊断要扫全语料用 async `parse_file`（`cdt-analyze` 是 sync crate、无 tokio dev-dep），且度量 C 需 `process_session_context_with_phases` 全链路；`cdt-api` 已具备全部依赖。
 - **D-apply2（回归度量方向修正）**：原 proposal/tasks 写"修复后 B（真实消息丢 turn）趋近 0"——**这是错的**。本修复**不改 chunk 流**（被打断响应本就无 AIChunk），所以 B（chunk 层 UserChunk 后无 AIChunk）修复后**不变**（实测仍 597）。真正归零→非零的是 context turn 层：新增度量 **C = 锚到 UserChunk 的 user-message injection 数**（修复前 0，修复后实测 **1193**）。C 才是"被打断消息被救回 turn injection"的正确证据。spec delta / tasks 5.x 已同步此修正。
 
+## D-apply3：是否重构为 first-class Turn 模型——否（经影响面调研）
+
+PR review 阶段质疑"本修复是否只是 band-aid，原链路若不合理应重构而非打补丁"。调研全部消费点后**否决重构**，保留本 change 的修法。证据：
+
+- **`stats_map` 仅在 `cdt-api::local.rs::inject_context_annotations`（约 949-1003）一处展开**成 IPC 字段（contextInjections / injectionsByPhase / turnContextStats / phaseInfo）。
+- **`turn_index` 不进 IPC**——它是后端 context-tracking 的临时递增计数；**前端完全无 turn 概念**，所有"turn"靠 **chunkId** 表达（DOM `data-chunk-id`、导航 `findIndex`、`turnContextStats[chunkId]` 反查）。
+- 真实架构是**"injection 锚定 chunkId"**，不是"turn = AI group"。AIChunk / UserChunk 都有 chunk_id；本 change 让被打断 turn 的 injection 锚到 `UserChunk.chunk_id`——是该模型的**自然延伸**，不是例外补丁。
+- 改成 `turns: Vec<Turn>`（turn_index 为主键）要把 turn_index 塞进 IPC + 前端建 turn_index→chunkId 反向索引 + 重写 15+ 后端测试 + IPC 契约 + 前端导航，**净亏**——只换"显式"边际收益，还破坏正在工作的 chunkId 导航模型。
+
+**API 一等公民 turn 的正确落点是 `cdt-query`（CLI/MCP-only 层），从 chunk 流派生**——chunk 流里被打断的用户消息本就是 `Chunk::User`，API 直接枚举即可，无 AI 的 turn 在 API 层做完整一等公民，**不碰桌面端 core**（保"扩展锁 cdt-query、桌面端零影响"边界）。故本 change 与 `redesign-cli-mcp-api` 解耦：本 change 修桌面端 Context Panel，API turn 视图在 cdt-query 另建。
+
+## PR review 收敛（codex + pr-review-toolkit 三 agent）
+
+- **codex CRITICAL（spec overclaim）**：原 ADDED requirement 称被打断 injection"SHALL 可见"，但无 AI carrier 的退化 phase 会丢。→ spec 措辞改为可见性取决于承载点 + 显式 documented limitation + 2 个 scenario（pin 退化不 panic / compact 前 flush 落对 phase）。
+- **codex WARNING（AI-only 消耗 turn_index）**：pre-existing。→ spec 加"turn 序号是对话轮序号，非用户消息序号；AI-only group 也占一个"。
+- **codex NIT + test-analyzer（nav 防御 / compact 分支零覆盖 / 一致性正向未测）**：→ nav 仅 `kind==="ai"` 回溯 + system/compact 用例；补 compact-flush + 退化 characterization 单测；API 测试加 turnContextStats↔contextInjections 正向一致性断言。
+- **comment-analyzer（模块头 stale-by-omission）**：→ session.rs 模块头补 compact flush 步骤 + turn 锚定说明。
+- **code-reviewer**：0 高置信问题。
+
 ## 前瞻：CLI/MCP turn 模型的字段拆分（codex 二审魔鬼代言人）
 
 codex 指出扩展瓶颈：`aiGroupId` 同时承担"AI group id"与"通用导航锚点"两个语义，被打断 turn 是被迫复用该字段的例外。规划中的 `redesign-cli-mcp-api` turn 模型若继续建在 `accumulated list + last AI backfill` 上，所有"无 AI 的真实 turn"都缺一等公民位置（无 stats row、无 phase row）。**建议**该 change 的 turn 数据模型显式拆 `turnId` / `anchorChunkId`（导航锚，可指 User 或 AI）/ `aiGroupId?`（可空，仅完整 turn 有），不要围绕例外继续打补丁。本 change 范围内不引入该拆分（仅修 bug + 放宽现有不变量），但作为 [[redesign-cli-mcp-api]] 的设计输入记此。

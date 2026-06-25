@@ -30,4 +30,14 @@ describe("resolveUserGroupNavTarget", () => {
     const chunks = [{ chunkId: "a0:0", kind: "ai" }];
     expect(resolveUserGroupNavTarget(chunks, "ghost:0")).toBeNull();
   });
+
+  test("aiGroupId 异常命中 system/compact → 退化为自身，不回溯上一条用户消息", () => {
+    // 防御：aiGroupId 理论上只会是 user/ai chunkId；若命中 compact，不应跳到 u0。
+    const chunks = [
+      { chunkId: "u0:0", kind: "user" },
+      { chunkId: "a0:0", kind: "ai" },
+      { chunkId: "c0:0", kind: "compact" },
+    ];
+    expect(resolveUserGroupNavTarget(chunks, "c0:0")).toBe("c0:0");
+  });
 });

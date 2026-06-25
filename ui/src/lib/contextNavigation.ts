@@ -32,12 +32,15 @@ export function resolveUserGroupNavTarget(
   if (chunks[idx].kind === "user") {
     return aiGroupId;
   }
-  // 完整 turn：向前找紧邻 UserChunk。
-  for (let i = idx - 1; i >= 0; i--) {
-    if (chunks[i].kind === "user") {
-      return chunks[i].chunkId;
+  // 完整 turn：aiGroupId 是 AIChunk，向前找紧邻 UserChunk。仅 ai 命中才回溯——
+  // aiGroupId 异常命中 system / compact 时不回溯（否则会跳到无关的上一条用户消息）。
+  if (chunks[idx].kind === "ai") {
+    for (let i = idx - 1; i >= 0; i--) {
+      if (chunks[i].kind === "user") {
+        return chunks[i].chunkId;
+      }
     }
   }
-  // 无前置 UserChunk：退化为 AIChunk 本身。
+  // AIChunk 无前置 UserChunk，或命中 system / compact：退化为命中 chunk 自身。
   return aiGroupId;
 }

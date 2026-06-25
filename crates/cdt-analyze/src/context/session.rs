@@ -3,6 +3,8 @@
 //! 对齐 TS `processSessionContextWithPhases`：
 //! 1. 初始 `phase = 1`；无 compact 时整条 session 是 phase 1。
 //! 2. 碰到 `Chunk::Compact`：
+//!    - **先 flush** 仍 pending 的被打断 user turn（见下方 turn 锚定）进累积链，
+//!      使其 injection 随接下来的 backfill 落入 compact 前 phase 的 last AI group；
 //!    - backfill 上一个 AI group 的 `accumulated_injections`；
 //!    - finalize 当前 phase（写入 `phases` vec）；
 //!    - 清空 `accumulated_injections` / `previous_paths` / `is_first_ai_group`；
@@ -10,7 +12,15 @@
 //!    - **保留** `last_ai_group_before_compact`，留给新 phase 的 first group 计算 delta。
 //! 3. 新 phase 的第一个 AI group：若存在 `last_ai_group_before_compact`，
 //!    算出 `CompactionTokenDelta { pre, post, delta }` 塞进 `compaction_token_deltas`。
-//! 4. 循环结束后 backfill 最后一个 AI group + finalize 最后一个 phase。
+//! 4. 循环结束后 flush 末尾仍 pending 的被打断 user turn，再 backfill 最后一个
+//!    AI group + finalize 最后一个 phase。
+//!
+//! **turn 锚定**（issue #540）：turn 锚在真实用户消息上。`pending_user` 持有一条
+//! 尚未被 AI 响应消费的真实 `UserChunk`。三处 flush 点——遇下一条 `Chunk::User`、
+//! 遇 `Chunk::Compact`、循环结束——若 `pending_user` 仍在，则它是被打断的 turn，
+//! 照样产 `user-message` injection（aiGroupId 锚 `UserChunk.chunk_id`）+ 占一个
+//! `turn_index`。被打断 turn 不写 `stats_map`；其 injection 仅靠累积链 surface，
+//! 故所在 phase 无任何 AI group 承载时会丢失（已知限制，见 `openspec/followups.md`）。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
