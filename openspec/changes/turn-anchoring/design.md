@@ -53,6 +53,14 @@ context-tracking spec 的本意（Requirement `Classify context injections into 
 
 **理由**：badge 表达"这一轮 AI 响应新引入多少 context"，被打断 turn 没有 AI 响应，无可 badge。让它进 stats_map 会迫使 local.rs:977 的 `turnContextStats` 构建特判过滤，得不偿失。
 
+**连带契约修订（codex 二审 WARNING）**：主 spec `Per-turn context stats exposure` 的 `turn stats 与 context_injections 一致` scenario 要求"`contextInjections` 按 `aiGroupId` 分组后每组 count == `turnContextStats` 的 newCount"。被打断 turn 的 injection `aiGroupId`（= UserChunk id）不在 `turnContextStats` 里，会破坏该一致性。故 delta MODIFY 该 requirement：一致性校验**仅覆盖 `aiGroupId` 属于 AIChunk chunkId 集合的 injection**，显式排除被打断 injection；ipc_contract 对应断言同步更新。
+
+### D5：被打断 turn 的前端导航分流（codex 二审 CRITICAL）
+
+`handleNavigateToUserGroup(aiGroupId)`（`ui/src/routes/SessionDetail.svelte:756`）现逻辑：`findIndex(chunkId == aiGroupId)` 命中 idx 后**从 idx-1 向前**找 UserChunk。D2 后被打断 turn 的 `aiGroupId` 本身就是 UserChunk id → 向前回溯会跳到**上一条**用户消息（点 695 跳到更早消息），导航破裂。
+
+**修法**：命中的 chunk 若 `kind === "user"`（被打断 turn）→ 直接 `handleNavigateToChunk(aiGroupId)`；否则（完整 turn，命中 AIChunk）→ 保持向前找前置 UserChunk。这使本 change 触及 `ui/`（前端 + e2e 点击断言），spec owner 是 session-display `Context Panel turn 锚点导航`（MODIFY + 新增"被打断 turn 直接定位"scenario）。
+
 ### D4：累积链承载的边界条件
 
 被打断 turn 的 injection 通过 `accumulatedInjections` 滚动向前；phase 末尾 backfill（session.rs:182-188）把累积链写回 last AI group。**已知边界**：若一个 phase 内**完全没有** AI group（只有被打断的用户消息），`current_phase_last_ai_group_id` 为 `None`，无 backfill 目标，该 phase 的被打断 turn injection 不显现。此场景下 `contextInjections` 本就为空（无 AI group），属退化情形，记入 Risks 不在本 change 兜底。
@@ -60,8 +68,8 @@ context-tracking spec 的本意（Requirement `Classify context injections into 
 ## Risks / Trade-offs
 
 - [turn 序号右移破坏现有快照] → 含被打断 turn 的会话其后续 turn 序号 +1。这是**预期的正确化**，非回归。Mitigation：更新受影响的 context-tracking 单测、ipc_contract turn 断言、前端 ContextPanel 快照；用 `corpus_turn_fidelity` 跨真实语料验证总体方向。
-- [纯被打断 phase 的 injection 丢失（D4 边界）] → 退化情形，`contextInjections` 本为空。Mitigation：记入 `openspec/followups.md`，不在本 change 兜底。
-- [aiGroupId 不变量放宽影响其它消费者] → grep 全消费点确认仅 Context Panel 导航 + ipc_contract 断言依赖该不变量。Mitigation：codex 二审专项核查不变量放宽的波及面。
+- [纯被打断 phase 的 injection 丢失 + phase 编号稀疏（D4 边界，codex 二审 WARNING）] → `[AI, compact, User-only, compact, AI]` 这类"phase 内无任何 AI group"的情形：(a) 该 phase 的被打断 injection 无 backfill 目标而丢失；(b) `current_phase_number` 在 compact 处仍递增但空 phase 不 push 进 `phases`，PhaseSelector 出现跳号（Phase 1、Phase 3）。**二者均为 pre-existing**——本 change 不改 phase push / number 逻辑，空 phase（无 AI group）在改前就不入 `phases`。Mitigation：记入 `openspec/followups.md`，不在本 change 兜底；不改 session-display PhaseSelector spec。
+- [aiGroupId 不变量放宽影响其它消费者] → codex 全仓 grep 确认真实依赖仅 Context Panel 导航（D5 已修）+ ipc_contract / turnContextStats 一致性断言（D3 已 MODIFY）。无其它消费者用 aiGroupId 反查 stats_map。
 
 ## Migration Plan
 
@@ -71,3 +79,7 @@ context-tracking spec 的本意（Requirement `Classify context injections into 
 
 - 被打断 turn 的 `user-message` injection 是否应在 preview 文本上加视觉标记（如"(interrupted)"）以区别于完整 turn？倾向**否**（保持 injection 纯数据，视觉区分留给前端），apply 时复核前端 UserMessagesSection 是否需要。
 - `corpus_turn_fidelity` 纳入哪个 crate 的 tests/——倾向放 `cdt-analyze`（被测逻辑所在 crate，纯同步），而非现在的 `cdt-api`；apply 时定。
+
+## 前瞻：CLI/MCP turn 模型的字段拆分（codex 二审魔鬼代言人）
+
+codex 指出扩展瓶颈：`aiGroupId` 同时承担"AI group id"与"通用导航锚点"两个语义，被打断 turn 是被迫复用该字段的例外。规划中的 `redesign-cli-mcp-api` turn 模型若继续建在 `accumulated list + last AI backfill` 上，所有"无 AI 的真实 turn"都缺一等公民位置（无 stats row、无 phase row）。**建议**该 change 的 turn 数据模型显式拆 `turnId` / `anchorChunkId`（导航锚，可指 User 或 AI）/ `aiGroupId?`（可空，仅完整 turn 有），不要围绕例外继续打补丁。本 change 范围内不引入该拆分（仅修 bug + 放宽现有不变量），但作为 [[redesign-cli-mcp-api]] 的设计输入记此。

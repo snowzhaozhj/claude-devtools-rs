@@ -59,3 +59,41 @@
 - **WHEN** 一个被打断的 turn 对应 `UserChunk { chunk_id: "u-abc:0" }` 且其后在下一条真实用户消息 / compact / 会话结束之前没有 AI group
 - **THEN** 该 turn 产出的 `user-message` injection 的 `aiGroupId` SHALL 等于 `"u-abc:0"`（与 `UserChunk.chunk_id` 字节级相等）
 - **AND** SHALL NOT 等于任何 `AIChunk.chunkId`
+
+### Requirement: Per-turn context stats exposure
+
+SessionDetail IPC SHALL 返回精简的 per-turn context stats map（字段 `turnContextStats`），让前端无需遍历完整 injection 列表即可渲染 per-turn badge。
+
+Stats 结构包含：`newCount`（本轮新增注入数）、`newTokens`（本轮新增 token 总数）、`newTokensByCategory`（本轮新增按 6 类分的 token）、`countsByCategory`（按 6 类分的 count）、`cumulativeEstimatedTokens`（到该轮为止的累积 context 大小）、`cumulativeTokensByCategory`（到该轮为止的累积按类分布）。
+
+Map 为稀疏结构：只包含 `newCount > 0` 的 AI turn，key MUST equal `AIChunk.chunkId` byte-for-byte。被打断的 turn（无 AI group）SHALL NOT 出现在该 map 中——其 `user-message` injection 的 `aiGroupId` 等于 `UserChunk.chunkId`，不属于 AIChunk chunkId 集合，因此 `turnContextStats` 与 `contextInjections` 的一致性校验 SHALL 仅覆盖 `aiGroupId` 属于 AIChunk chunkId 集合的 injection。
+
+#### Scenario: SessionDetail 返回 turn context stats
+
+- **GIVEN** 一个包含多个 AI turn 的 session
+- **WHEN** 调用 get_session_detail
+- **THEN** 返回的 `turnContextStats` 字段包含每个有新 context 注入的 AI turn 的精简 stats
+- **AND** stats 包含 `newCount`, `newTokens`, `newTokensByCategory`, `countsByCategory`, `cumulativeEstimatedTokens`, `cumulativeTokensByCategory`
+- **AND** 没有新 context 注入的 turn 不在 map 中
+
+#### Scenario: turn stats 只计算新增注入
+
+- **GIVEN** 一个 AI turn 使用了 3 个 tool 并引用了 1 个 @file
+- **AND** @file 在之前的 turn 已经被引用过
+- **WHEN** 计算该 turn 的 TurnContextStats
+- **THEN** newCount = 3（只有 tool outputs 是本轮新增）
+- **AND** newTokensByCategory.toolOutput > 0
+- **AND** newTokensByCategory.mentionedFile = 0（非首次出现不计为 new）
+
+#### Scenario: turn stats 与 context_injections 一致
+
+- **GIVEN** SessionDetail 返回了 turnContextStats 和 contextInjections
+- **WHEN** 对 contextInjections 中 `aiGroupId` 属于 AIChunk chunkId 集合的条目按 aiGroupId 分组并计数（排除被打断 turn 的 user-message injection）
+- **THEN** 每组的 count 与 turnContextStats 中对应 entry 的 newCount 一致
+- **AND** `aiGroupId` 不属于 AIChunk chunkId 集合的被打断 injection SHALL NOT 参与该一致性校验
+
+#### Scenario: turn stats key 等于 AIChunk chunkId
+
+- **GIVEN** SessionDetail 返回了 turnContextStats 和 chunks
+- **WHEN** 收集所有 AI chunk 的 chunkId
+- **THEN** turnContextStats 的所有 key 均属于 AI chunkId 集合的子集
