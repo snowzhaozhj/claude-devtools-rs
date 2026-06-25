@@ -575,7 +575,7 @@
   }
   .sa-meta-label { color: var(--card-icon-muted); }
   .sa-meta-value { color: var(--card-text-light); font-family: var(--font-mono); }
-  .sa-meta-id { max-width: 120px; overflow: hidden; text-overflow: ellipsis; color: var(--card-icon-muted); }
+  .sa-meta-id { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--card-icon-muted); }
   .sa-meta-sep { color: var(--card-separator); }
 
   .sa-context {

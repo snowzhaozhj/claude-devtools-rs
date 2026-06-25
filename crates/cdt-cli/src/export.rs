@@ -348,20 +348,43 @@ fn project_chunk_json(chunk: &mut serde_json::Value, options: &ExportOptions) {
 }
 
 fn truncate_tool_output_json(tool: &mut serde_json::Value) {
-    if let Some(obj) = tool.as_object_mut() {
-        if let Some(output) = obj.get_mut("output") {
-            if let Some(out_obj) = output.as_object_mut() {
-                if let Some(text) = out_obj.get_mut("text") {
-                    if let Some(s) = text.as_str() {
-                        if s.chars().count() > TOOL_OUTPUT_TRUNCATE_LEN {
-                            *text = serde_json::Value::String(truncate_chars(
-                                s,
-                                TOOL_OUTPUT_TRUNCATE_LEN,
-                            ));
-                        }
-                    }
-                }
+    let Some(obj) = tool.as_object_mut() else {
+        return;
+    };
+    let Some(output) = obj.get_mut("output") else {
+        return;
+    };
+    let Some(out_obj) = output.as_object_mut() else {
+        return;
+    };
+
+    // Truncate text output
+    if let Some(text) = out_obj.get_mut("text") {
+        if let Some(s) = text.as_str() {
+            if s.chars().count() > TOOL_OUTPUT_TRUNCATE_LEN {
+                *text =
+                    serde_json::Value::String(truncate_chars(s, TOOL_OUTPUT_TRUNCATE_LEN));
             }
+        }
+    }
+
+    // Truncate structured output by serializing to string
+    if let Some(value) = out_obj.get_mut("value") {
+        let serialized = serde_json::to_string(value).unwrap_or_default();
+        if serialized.chars().count() > TOOL_OUTPUT_TRUNCATE_LEN {
+            *out_obj = serde_json::Map::from_iter([
+                (
+                    "kind".to_string(),
+                    serde_json::Value::String("text".to_string()),
+                ),
+                (
+                    "text".to_string(),
+                    serde_json::Value::String(truncate_chars(
+                        &serialized,
+                        TOOL_OUTPUT_TRUNCATE_LEN,
+                    )),
+                ),
+            ]);
         }
     }
 }
