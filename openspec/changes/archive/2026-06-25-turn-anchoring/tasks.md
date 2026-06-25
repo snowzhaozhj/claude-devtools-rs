@@ -39,7 +39,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex + pr-review-toolkit 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
-- [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
+- [x] N.1 push 分支 + 开 PR（#541）
+- [x] N.2 wait-ci 全绿（15/0）
+- [x] N.3 codex + pr-review-toolkit 二审通过（codex CRITICAL/WARNING/NIT + test-analyzer + comment-analyzer 全收敛于 commit 73125bd8；code-reviewer 0 高置信）
+- [x] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
