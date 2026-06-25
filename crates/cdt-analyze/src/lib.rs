@@ -25,6 +25,7 @@ pub mod chunk;
 pub mod context;
 pub mod session_state;
 pub mod tool_linking;
+pub mod turn;
 
 pub use chunk::{
     aggregate_metrics, build_chunks, build_chunks_with_subagents, extract_semantic_steps,
@@ -39,6 +40,7 @@ pub use tool_linking::{
     Resolution, ResolvedTask, ToolLinkingResult, filter_resolved_tasks, pair_tool_executions,
     resolve_subagents,
 };
+pub use turn::{Turn, TurnDriver, derive_turns};
 
 pub mod team;
 pub use team::contains_teammate_message;

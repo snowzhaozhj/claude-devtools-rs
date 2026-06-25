@@ -480,6 +480,118 @@ fn interrupted_turn_before_compaction_lands_in_pre_compact_phase() {
     );
 }
 
+// ===== turn 折叠（change first-class-turn，D5/D7/D9）=====
+
+/// 抽某 AI group 的 tool-output injection 的 `(turn_index, id)`。
+fn tool_output_turn_and_id(stats: &cdt_core::ContextStats) -> Option<(u32, String)> {
+    stats.new_injections.iter().find_map(|inj| match inj {
+        ContextInjection::ToolOutput(x) => Some((x.turn_index, x.id.clone())),
+        _ => None,
+    })
+}
+
+#[test]
+fn compaction_only_continuation_folds_into_its_turn() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    // [U0, A0, Compact, A1]：A0 与 A1 是压缩前后的同一轮响应（A1 无新驱动续写）。
+    let chunks = vec![
+        user_chunk("u0", "ask", 0),
+        ai_chunk("a0", 1, None, vec![bash_tool("tu0", "ls", "out0")]),
+        compact_chunk("c0", 2),
+        ai_chunk("a1", 3, None, vec![bash_tool("tu1", "pwd", "out1")]),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    let (a0_ti, a0_id) = tool_output_turn_and_id(result.stats_map.get("a0:0").unwrap()).unwrap();
+    let (a1_ti, a1_id) = tool_output_turn_and_id(result.stats_map.get("a1:0").unwrap()).unwrap();
+    // D5：A0 与 A1 折进 U0 的同一 turn → 共享 turnIndex 0。
+    assert_eq!(a0_ti, 0, "A0 turnIndex");
+    assert_eq!(a1_ti, 0, "A1 折进同一 turn，turnIndex 仍为 0（不再各占号）");
+    // D7：折叠后两 group 共享 turnIndex，injection id 须按 chunkId 派生保持唯一。
+    assert_eq!(a0_id, "tool-output-a0:0");
+    assert_eq!(a1_id, "tool-output-a1:0");
+    assert_ne!(
+        a0_id, a1_id,
+        "折叠后 injection id 必须仍唯一（按 chunkId 而非 turn 号）"
+    );
+    // A1 所在的压缩后 phase 照常记录，turn 跨越该 phase 边界。
+    assert_eq!(result.stats_map.get("a0:0").unwrap().phase_number, Some(1));
+    assert_eq!(result.stats_map.get("a1:0").unwrap().phase_number, Some(2));
+}
+
+#[test]
+fn compaction_before_any_ai_group_folds_post_compact_response_into_user_turn() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    // D9：[U1, Compact, A0]，U1 与 Compact 之间无 AI group，A0 之前无新驱动。
+    let chunks = vec![
+        user_chunk("u1", "ask before compact", 0),
+        compact_chunk("c0", 1),
+        ai_chunk("a0", 2, None, vec![bash_tool("tu0", "ls", "out0")]),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    // A0 折进 U1 的 turn（turn 跨压缩边界）→ A0 的 injection turnIndex 等于 U1 的 turn 0。
+    let (a0_ti, _) = tool_output_turn_and_id(result.stats_map.get("a0:0").unwrap()).unwrap();
+    assert_eq!(a0_ti, 0, "A0 折进 U1 的 turn，turnIndex == 0");
+
+    // U1 的 user-message injection 在其无 AI group 的压缩前 phase 仍无承载点，
+    // 不出现在任何 phase 的 contextInjections（phase 重置承载缺口，与 A0 折入 U1 turn 正交）。
+    let a0 = result.stats_map.get("a0:0").unwrap();
+    assert!(
+        user_msg_anchors(&a0.accumulated_injections).is_empty(),
+        "U1 的 user-message injection 因压缩前 phase 无 carrier 而不 surface（已知限制）"
+    );
+}
+
+#[test]
+fn turn_context_stats_consistency_under_folding_groups_by_ai_group() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    // 一个 turn 含两个 AI group（折叠）：stats_map 仍按 chunkId 各产一条，不因同 turn 合并。
+    let chunks = vec![
+        user_chunk("u0", "ask", 0),
+        ai_chunk("a0", 1, None, vec![bash_tool("tu0", "ls", "out0")]),
+        compact_chunk("c0", 2),
+        ai_chunk("a1", 3, None, vec![bash_tool("tu1", "pwd", "out1")]),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    // 两个 AI group 各产一条 stats（key=chunkId），不因同属一个 turn（折叠后共享 turnIndex）
+    // 而合并——turnContextStats 仍是 per-AI-group 粒度。
+    assert!(result.stats_map.contains_key("a0:0"));
+    assert!(result.stats_map.contains_key("a1:0"));
+    // 一致性校验按 aiGroupId（chunkId）分组、不按 turnIndex：每个 AI group 各产一条 tool-output，
+    // id 按 chunkId 派生，aiGroupId 等于其 stats key——共享 turnIndex 不影响该分组。
+    let mut tool_groups: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for stats in result.stats_map.values() {
+        for inj in &stats.new_injections {
+            if let ContextInjection::ToolOutput(x) = inj {
+                assert_eq!(
+                    x.id,
+                    format!("tool-output-{}", x.ai_group_id),
+                    "id 须按 chunkId 派生"
+                );
+                tool_groups.insert(x.ai_group_id.clone());
+            }
+        }
+    }
+    assert_eq!(
+        tool_groups,
+        ["a0:0".to_string(), "a1:0".to_string()]
+            .into_iter()
+            .collect(),
+        "折叠后每个 AI group 的 tool-output 仍按各自 chunkId 分组，不丢不并"
+    );
+}
+
 #[test]
 fn interrupted_turn_with_no_ai_carrier_phase_is_dropped() {
     let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
