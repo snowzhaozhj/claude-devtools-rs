@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cdt API Redesign — Final</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif; background: #0a0a0f; color: #e0e0e0; line-height: 1.6; padding: 40px 20px; }
+.container { max-width: 1200px; margin: 0 auto; }
+h1 { font-size: 28px; font-weight: 600; margin-bottom: 8px; color: #fff; }
+h2 { font-size: 20px; font-weight: 600; margin: 48px 0 16px; color: #fff; border-bottom: 1px solid #222; padding-bottom: 8px; }
+h3 { font-size: 16px; font-weight: 600; margin: 24px 0 12px; color: #ccc; }
+.subtitle { color: #888; font-size: 14px; margin-bottom: 40px; }
+p { margin: 8px 0; font-size: 14px; }
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 24px 0; }
+@media (max-width: 900px) { .compare { grid-template-columns: 1fr; } }
+.card { background: #141419; border: 1px solid #222; border-radius: 12px; padding: 24px; }
+.card.before { border-color: #3a1a1a; }
+.card.after { border-color: #1a3a1a; }
+.card-title { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 16px; }
+.card.before .card-title { color: #f87171; }
+.card.after .card-title { color: #4ade80; }
+.tool-block { background: #1a1a22; border-radius: 8px; padding: 16px; margin: 12px 0; }
+.tool-name { font-family: 'SF Mono', monospace; font-size: 14px; font-weight: 600; color: #93c5fd; }
+.tool-tag { font-size: 11px; padding: 2px 8px; border-radius: 4px; margin-left: 8px; }
+.tool-tag.new { background: #152d15; color: #4ade80; }
+.tool-tag.changed { background: #2d2d15; color: #fbbf24; }
+.tool-tag.same { background: #1e1e2e; color: #6b7280; }
+.tool-tag.removed { background: #2d1515; color: #f87171; }
+.params { margin-top: 8px; }
+.param { font-family: 'SF Mono', monospace; font-size: 12px; padding: 3px 0; color: #a0a0a0; }
+.param .name { color: #fbbf24; }
+.param .required { color: #f87171; font-size: 10px; margin-left: 4px; }
+.param .optional { color: #6b7280; font-size: 10px; margin-left: 4px; }
+.param .desc { color: #6b7280; margin-left: 8px; }
+.stat { display: inline-block; background: #1e1e2e; border-radius: 6px; padding: 4px 10px; margin: 4px; font-size: 12px; font-family: 'SF Mono', monospace; }
+.stat.bad { background: #2d1515; color: #f87171; }
+.stat.good { background: #152d15; color: #4ade80; }
+.stat.neutral { background: #1e1e2e; color: #93c5fd; }
+.flow { background: #1a1a22; border-radius: 8px; padding: 20px; margin: 16px 0; font-family: 'SF Mono', monospace; font-size: 13px; line-height: 1.8; white-space: pre-wrap; overflow-x: auto; }
+.flow .comment { color: #6b7280; }
+.flow .call { color: #93c5fd; }
+.flow .result { color: #4ade80; }
+.flow .error { color: #f87171; }
+.flow .arrow { color: #fbbf24; }
+.data-model { background: #1a1a22; border-radius: 8px; padding: 20px; margin: 16px 0; font-family: 'SF Mono', monospace; font-size: 12px; line-height: 1.7; white-space: pre; overflow-x: auto; color: #d4d4d4; }
+.highlight { background: #2a2a1a; border-left: 3px solid #fbbf24; padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; font-size: 14px; }
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #222; }
+th { color: #888; font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+td { color: #ccc; }
+td code { background: #1a1a22; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+.keep { color: #4ade80; }
+.remove { color: #f87171; }
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; margin: 24px 0; }
+.metric { background: #141419; border: 1px solid #222; border-radius: 8px; padding: 16px; text-align: center; }
+.metric .value { font-size: 28px; font-weight: 700; font-family: 'SF Mono', monospace; }
+.metric .label { font-size: 11px; color: #888; margin-top: 4px; }
+.metric.red .value { color: #f87171; }
+.metric.green .value { color: #4ade80; }
+.principle { background: linear-gradient(135deg, #1a1a2e, #16213e); border: 1px solid #2a2a4a; border-radius: 12px; padding: 20px; margin: 16px 0; }
+.principle-title { color: #93c5fd; font-weight: 600; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>cdt API Redesign — Final</h1>
+<p class="subtitle">7 tools / 21 参数 · Turn 模型 · 渐进式披露 · CLI 和 MCP 统一接口 · MCP 分页约定</p>
+
+<div class="metric-grid">
+  <div class="metric red"><div class="value">6</div><div class="label">现有 tools</div></div>
+  <div class="metric green"><div class="value">7</div><div class="label">新 tools</div></div>
+  <div class="metric red"><div class="value">31</div><div class="label">现有参数</div></div>
+  <div class="metric green"><div class="value">21</div><div class="label">新参数</div></div>
+  <div class="metric red"><div class="value">≥3</div><div class="label">看一条调用链的调用次数</div></div>
+  <div class="metric green"><div class="value">1</div><div class="label">新设计一次 get_turn</div></div>
+</div>
+
+<!-- ============================================================ -->
+<h2>一、设计原则</h2>
+
+<div class="principle">
+  <div class="principle-title">渐进式披露，每层 schema 稳定</div>
+  <p>list_sessions（选 session）→ get_session（看全貌）→ get_turn（看调用链）→ get_step_output（看原文）。<br>
+  每个工具永远返回同一结构，不因参数组合变形。</p>
+</div>
+<div class="principle">
+  <div class="principle-title">统一分页：total + nextCursor（MCP 协议约定）</div>
+  <p>跟 MCP 协议一致：<code>nextCursor</code> 存在 = 还有下一页，不存在 = 到底了。<br>
+  <code>hasMore</code> 和 <code>returned</code> 是冗余字段（<code>nextCursor</code> 存在即 hasMore，<code>items.length</code> 即 returned），不加。<br>
+  分页字段只有 2 个（<code>total</code> + <code>nextCursor</code>），直接写在各 response struct 里，不做泛型/组合抽象。</p>
+</div>
+<div class="principle">
+  <div class="principle-title">CLI 和 MCP 数据参数完全一致</div>
+  <p>CLI 额外只有终端渲染 flags（<code>--format</code> / <code>--json</code> / <code>--no-truncate</code> / <code>--raw</code>），不存在"CLI-only 数据参数"。</p>
+</div>
+<div class="principle">
+  <div class="principle-title">API 自闭环</div>
+  <p>截断的数据都有 escape hatch 取回全文（<code>get_step_output</code>），不依赖外部工具（如 Read）。</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>二、接口前后对比</h2>
+
+<div class="compare">
+  <div class="card before">
+    <div class="card-title">Before — 6 tools / 31 params</div>
+
+    <div class="tool-block">
+      <div class="tool-name">list_projects</div>
+      <div class="stat neutral">0 参数</div>
+    </div>
+    <div class="tool-block">
+      <div class="tool-name">list_sessions</div>
+      <div class="params">
+        <div class="param"><span class="name">project</span> <span class="name">since</span> <span class="name">until</span> <span class="name">branch</span> <span class="name">is_ongoing</span> <span class="name">grep</span> <span class="name">limit</span> <span class="name">group_by</span> <span class="name">cursor</span></div>
+      </div>
+      <div class="stat bad">9 参数</div>
+    </div>
+    <div class="tool-block">
+      <div class="tool-name">get_session</div>
+      <div class="params">
+        <div class="param"><span class="name">session</span> <span class="name">project</span> <span class="name">include</span></div>
+      </div>
+      <div class="stat neutral">3 参数</div>
+      <div class="param"><span class="desc">只返回元数据 + 费用 + 错误列表，看不到对话内容</span></div>
+    </div>
+    <div class="tool-block">
+      <div class="tool-name">get_session_chunks</div>
+      <div class="params">
+        <div class="param"><span class="name">session</span> <span class="name">project</span> <span class="name">range</span> <span class="name">tail</span> <span class="name">cursor</span> <span class="name">filter</span> <span class="name">content_mode</span> <span class="name">max_chunks</span> <span class="name">grep</span> <span class="name">grep_context</span></div>
+      </div>
+      <div class="stat bad">10 参数</div>
+      <div class="param"><span class="desc">content_mode 默认 omit，AI 必须多次调用才能看到内容</span></div>
+    </div>
+    <div class="tool-block">
+      <div class="tool-name">search_sessions</div>
+      <div class="params">
+        <div class="param"><span class="name">query</span> <span class="name">limit</span> <span class="name">project</span> <span class="name">session</span> <span class="name">since</span> <span class="name">cursor</span></div>
+      </div>
+      <div class="stat bad">6 参数</div>
+    </div>
+    <div class="tool-block">
+      <div class="tool-name">get_stats</div>
+      <div class="params">
+        <div class="param"><span class="name">period</span> <span class="name">project</span> <span class="name">group_by</span></div>
+      </div>
+      <div class="stat neutral">3 参数</div>
+    </div>
+  </div>
+
+  <div class="card after">
+    <div class="card-title">After — 7 tools / 21 params</div>
+
+    <div class="tool-block">
+      <div class="tool-name">list_projects<span class="tool-tag same">不变</span></div>
+      <div class="stat good">0 参数</div>
+    </div>
+    <div class="tool-block">
+      <div class="tool-name">list_sessions<span class="tool-tag changed">精简</span></div>
+      <div class="params">
+        <div class="param"><span class="name">project</span><span class="optional">opt</span> <span class="name">since</span><span class="optional">opt</span> <span class="name">until</span><span class="optional">opt</span> <span class="name">grep</span><span class="optional">opt</span> <span class="name">cursor</span><span class="optional">opt</span></div>
+      </div>
+      <div class="stat good">5 参数</div>
+      <div class="param"><span class="desc">删 branch/is_ongoing/limit/group_by。返回含 filesTouched</span></div>
+    </div>
+    <div class="tool-block">
+      <div class="tool-name">get_session<span class="tool-tag changed">重定义</span></div>
+      <div class="params">
+        <div class="param"><span class="name">session</span><span class="required">req</span> <span class="name">grep</span><span class="optional">opt</span> <span class="name">cursor</span><span class="optional">opt</span></div>
+      </div>
+      <div class="stat good">3 参数</div>
+      <div class="param"><span class="desc">compact overview：每 turn 的 question + answer + tools 聚合 + metrics。含 userIntents/filesTouched</span></div>
+    </div>
+    <div class="tool-block">
+      <div class="tool-name">get_turn<span class="tool-tag new">新增</span></div>
+      <div class="params">
+        <div class="param"><span class="name">session</span><span class="required">req</span> <span class="name">turn</span><span class="required">req</span> <span class="name">cursor</span><span class="optional">opt</span></div>
+      </div>
+      <div class="stat good">3 参数</div>
+      <div class="param"><span class="desc">单 turn 完整 steps。50 steps/page，output ≥5KB 截断，thinking 不截断</span></div>
+    </div>
+    <div class="tool-block">
+      <div class="tool-name">get_step_output<span class="tool-tag new">新增</span></div>
+      <div class="params">
+        <div class="param"><span class="name">session</span><span class="required">req</span> <span class="name">turn</span><span class="required">req</span> <span class="name">step</span><span class="required">req</span></div>
+      </div>
+      <div class="stat good">3 参数</div>
+      <div class="param"><span class="desc">单 step 完整 output，不截断。API 自闭环 escape hatch</span></div>
+    </div>
+    <div class="tool-block">
+      <div class="tool-name">search<span class="tool-tag changed">精简</span></div>
+      <div class="params">
+        <div class="param"><span class="name">query</span><span class="required">req</span> <span class="name">session</span><span class="optional">opt</span> <span class="name">project</span><span class="optional">opt</span> <span class="name">since</span><span class="optional">opt</span> <span class="name">until</span><span class="optional">opt</span></div>
+      </div>
+      <div class="stat good">5 参数</div>
+      <div class="param"><span class="desc">返回 turn 级命中（sessionId + turnIndex + matchSnippet）</span></div>
+    </div>
+    <div class="tool-block">
+      <div class="tool-name">get_stats<span class="tool-tag changed">精简</span></div>
+      <div class="params">
+        <div class="param"><span class="name">period</span><span class="optional">opt</span> <span class="name">project</span><span class="optional">opt</span></div>
+      </div>
+      <div class="stat good">2 参数</div>
+      <div class="param"><span class="desc">删 group_by</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>三、渐进式披露模型</h2>
+
+<div class="data-model">┌─────────────────────────────────────────────────────────────────────┐
+│ <span style="color:#93c5fd">list_sessions</span>  会话列表                                           │
+│                                                                     │
+│  每条: sessionId, title, timestamp, messageCount, isOngoing,        │
+│        gitBranch, projectName, totalCost, durationMs,               │
+│        toolErrorCount, <span style="color:#4ade80">filesTouched</span>                                 │
+│  上限: <span style="color:#fbbf24">20 sessions/page</span>，cursor 翻页                                │
+├─────────────────────────────────────────────────────────────────────┤
+│ <span style="color:#93c5fd">get_session</span>  compact overview                                      │
+│                                                                     │
+│  session 级: sessionId, model, totalCost, durationMs,               │
+│              <span style="color:#4ade80">filesTouched</span>, <span style="color:#4ade80">userIntents</span>                                │
+│  每 turn: index, question, answer,                                  │
+│           tools:[{name, count, errorCount}],                        │
+│           stepsCount, metrics:{cost, durationMs}                    │
+│  grep: 匹配完整 steps 内容，返回 <span style="color:#4ade80">matchedIn</span> 标注命中位置             │
+│  上限: <span style="color:#fbbf24">20 turns/page</span>，cursor 翻页                                   │
+├─────────────────────────────────────────────────────────────────────┤
+│ <span style="color:#93c5fd">get_turn</span>  单 turn 完整 steps                                       │
+│                                                                     │
+│  顶层: turnIndex, question, answer, metrics                         │
+│  steps: [{index, type, text/name+input+output,                      │
+│           outputTruncated, outputBytes}]                             │
+│  截断: tool output ≥5KB → 前 2000 字。<span style="color:#f87171">thinking 不截断</span>               │
+│  顺序: <span style="color:#fbbf24">从前往后</span>                                                    │
+│  上限: <span style="color:#fbbf24">50 steps/page</span>，cursor 翻页                                   │
+├─────────────────────────────────────────────────────────────────────┤
+│ <span style="color:#93c5fd">get_step_output</span>  单 step 完整 output                               │
+│                                                                     │
+│  返回被截断 step 的完整 output 原文，不截断                          │
+│  用途: escape hatch，API 自闭环                                      │
+└─────────────────────────────────────────────────────────────────────┘</div>
+
+<!-- ============================================================ -->
+<h2>四、数据模型</h2>
+
+<h3>list_sessions 每条 session</h3>
+<div class="data-model">{
+  <span style="color:#4ade80">"sessionId"</span>: "a69fed9e-23b8-42c3-...",
+  <span style="color:#4ade80">"title"</span>: "帮我对比一下这两个会话...",
+  <span style="color:#4ade80">"timestamp"</span>: 1719200000000,
+  <span style="color:#4ade80">"messageCount"</span>: 117,
+  <span style="color:#4ade80">"isOngoing"</span>: false,
+  <span style="color:#4ade80">"gitBranch"</span>: "feat/api-redesign",
+  <span style="color:#4ade80">"projectName"</span>: "claude-devtools-rs",
+  <span style="color:#4ade80">"totalCost"</span>: 4.47,
+  <span style="color:#4ade80">"durationMs"</span>: 593240,
+  <span style="color:#4ade80">"toolErrorCount"</span>: 1,
+  <span style="color:#4ade80">"filesTouched"</span>: ["src/main.rs", "lib/api.ts", "tests/test.rs"]
+}</div>
+
+<h3>get_session 响应</h3>
+<div class="data-model">{
+  <span style="color:#4ade80">"sessionId"</span>: "a69fed9e-...",
+  <span style="color:#4ade80">"model"</span>: "claude-opus-4-6",
+  <span style="color:#4ade80">"totalCost"</span>: 4.47,
+  <span style="color:#4ade80">"durationMs"</span>: 593240,
+  <span style="color:#4ade80">"filesTouched"</span>: ["src/main.rs", "lib/api.ts"],
+  <span style="color:#4ade80">"userIntents"</span>: ["对比会话", "分析优缺点"],
+  <span style="color:#4ade80">"totalTurns"</span>: 6,
+  <span style="color:#6b7280">"nextCursor"</span>: null,
+  <span style="color:#4ade80">"turns"</span>: [
+    {
+      <span style="color:#fbbf24">"index"</span>: 0,
+      <span style="color:#fbbf24">"question"</span>: "帮我对比一下这两个会话...",
+      <span style="color:#fbbf24">"answer"</span>: "## 对比分析\n\n### trade-doc 方案...",
+      <span style="color:#fbbf24">"tools"</span>: [
+        { "name": "Read", "count": 12, "errorCount": 0 },
+        { "name": "Bash", "count": 8, "errorCount": 1 },
+        { "name": "mcp__trade-doc__search", "count": 5, "errorCount": 0 }
+      ],
+      <span style="color:#fbbf24">"stepsCount"</span>: 42,
+      <span style="color:#fbbf24">"metrics"</span>: { "cost": 2.31, "durationMs": 280000 }
+    }
+  ]
+}</div>
+
+<h3>get_session + grep 响应（turn 匹配时额外字段）</h3>
+<div class="data-model">  <span style="color:#6b7280">// grep="main.rs" 命中时，turn 多一个 matchedIn 字段</span>
+  {
+    "index": 2,
+    "question": "帮我优化一下这个函数",
+    "answer": "已优化完成...",
+    "tools": [...],
+    "stepsCount": 15,
+    "metrics": {...},
+    <span style="color:#4ade80">"matchedIn"</span>: "tool:Read"
+  }</div>
+
+<h3>get_turn 响应</h3>
+<div class="data-model">{
+  <span style="color:#4ade80">"sessionId"</span>: "a69fed9e-...",
+  <span style="color:#4ade80">"turnIndex"</span>: 0,
+  <span style="color:#4ade80">"question"</span>: "帮我对比一下这两个会话...",
+  <span style="color:#4ade80">"answer"</span>: "## 对比分析\n\n...",
+  <span style="color:#4ade80">"stepsTotal"</span>: 42,
+  <span style="color:#6b7280">"nextCursor"</span>: null,
+  <span style="color:#4ade80">"metrics"</span>: { "cost": 2.31, "durationMs": 280000 },
+  <span style="color:#4ade80">"steps"</span>: [
+    { "index": 0, "type": "thinking", "text": "用户想对比两种方案..." },
+    { "index": 1, "type": "text", "text": "让我先看第一个会话的内容。" },
+    { "index": 2, "type": "tool", "name": "mcp__trade-doc__search",
+      "input": { "query": "商品价格文案前缀" },
+      "output": "{\"hits\":[{\"title\":\"ItemAbilityUtils...\"}]}",
+      "outputTruncated": false, "outputBytes": 847 },
+    { "index": 3, "type": "thinking", "text": "搜到了，让我获取详情..." },
+    { "index": 4, "type": "tool", "name": "Read",
+      "input": { "path": "src/main.rs" },
+      "output": "use std::io;\nfn main() {\n    // 前 2000 字...",
+      <span style="color:#f87171">"outputTruncated": true, "outputBytes": 48210</span> }
+  ]
+}</div>
+
+<h3>get_step_output 响应</h3>
+<div class="data-model">{
+  <span style="color:#4ade80">"sessionId"</span>: "a69fed9e-...",
+  <span style="color:#4ade80">"turnIndex"</span>: 0,
+  <span style="color:#4ade80">"stepIndex"</span>: 4,
+  <span style="color:#4ade80">"toolName"</span>: "Read",
+  <span style="color:#4ade80">"outputBytes"</span>: 48210,
+  <span style="color:#4ade80">"output"</span>: "use std::io;\nfn main() {\n    let args: Vec&lt;String&gt; = ..."
+  <span style="color:#6b7280">// 完整 48KB 内容，不截断</span>
+}</div>
+
+<h3>search 响应</h3>
+<div class="data-model">{
+  <span style="color:#4ade80">"total"</span>: 3,
+  <span style="color:#6b7280">"nextCursor"</span>: null,
+  <span style="color:#4ade80">"results"</span>: [
+    {
+      <span style="color:#fbbf24">"sessionId"</span>: "a69fed9e-...",
+      <span style="color:#fbbf24">"turnIndex"</span>: 2,
+      <span style="color:#fbbf24">"question"</span>: "帮我优化一下这个函数",
+      <span style="color:#fbbf24">"matchSnippet"</span>: "...找到了 main.rs 中的性能瓶颈...",
+      <span style="color:#fbbf24">"timestamp"</span>: "2026-06-20T10:30:00Z",
+      <span style="color:#fbbf24">"projectName"</span>: "claude-devtools-rs"
+    },
+    {
+      "sessionId": "a69fed9e-...",
+      "turnIndex": 5,
+      "question": "测试跑一下",
+      "matchSnippet": "...main.rs 编译通过...",
+      "timestamp": "2026-06-20T10:45:00Z",
+      "projectName": "claude-devtools-rs"
+    }
+  ]
+}</div>
+
+<!-- ============================================================ -->
+<h2>五、删除参数总览</h2>
+
+<h3>反模式类（为省 token 加的有害参数）</h3>
+<table>
+  <tr><th>参数</th><th>原工具</th><th>问题</th></tr>
+  <tr><td><code>content_mode</code></td><td>get_session_chunks</td><td>默认 omit 逼迫多次调用。turn 模型 + 内置截断替代</td></tr>
+  <tr><td><code>include</code></td><td>get_session</td><td>AI 不知道要 opt-in 什么。turn 视图自带 tools/metrics</td></tr>
+  <tr><td><code>filter</code></td><td>get_session_chunks</td><td>返回数据已标记 isError/type，客户端一行过滤</td></tr>
+  <tr><td><code>max_chunks</code></td><td>get_session_chunks</td><td>配合 content_mode 的人为限制</td></tr>
+  <tr><td><code>grep_context</code></td><td>get_session_chunks</td><td>chunk 不是语义单元，按 chunk 切上下文断裂。turn 是语义单元</td></tr>
+</table>
+
+<h3>合并/替代类</h3>
+<table>
+  <tr><th>参数</th><th>原工具</th><th>去向</th></tr>
+  <tr><td><code>range</code> / <code>tail</code> / <code>cursor</code></td><td>get_session_chunks</td><td>→ get_turn 的 <code>turn</code> index + <code>cursor</code></td></tr>
+  <tr><td>get_session + get_session_chunks</td><td>2 tools</td><td>→ get_session（compact）+ get_turn（detail）+ get_step_output（全文）</td></tr>
+</table>
+
+<h3>客户端可做类</h3>
+<table>
+  <tr><th>参数</th><th>原工具</th><th>理由</th></tr>
+  <tr><td><code>branch</code></td><td>list_sessions</td><td>返回含 gitBranch，20 条过滤成本 ≈ 0</td></tr>
+  <tr><td><code>is_ongoing</code></td><td>list_sessions</td><td>返回含 isOngoing，一行过滤</td></tr>
+  <tr><td><code>limit</code></td><td>list_sessions / search</td><td>默认 20 + cursor</td></tr>
+  <tr><td><code>group_by</code></td><td>list_sessions / get_stats</td><td>对已返回数据做 in-memory 分桶，客户端 reduce 搞定</td></tr>
+</table>
+
+<h3>冗余类</h3>
+<table>
+  <tr><th>参数</th><th>原工具</th><th>理由</th></tr>
+  <tr><td><code>project</code></td><td>get_session / get_session_chunks</td><td>session ID 全局唯一，服务端自动解析</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>六、效果对比</h2>
+
+<div class="compare">
+  <div class="card before">
+    <div class="card-title">Before：27 次调用（会话 514 实录）</div>
+    <div class="flow"><span class="call">get_session(include=all)</span> × 2          <span class="comment">→ 元数据但没内容</span>
+<span class="call">get_session_chunks(overview)</span> × 2     <span class="comment">→ 100 字摘要无法分析</span>
+<span class="call">get_session_chunks(full,range)</span> × 6   <span class="comment">→ persisted-output 占位符</span>
+<span class="call">get_session_chunks(full,grep)</span> × 2    <span class="comment">→ 搜不到</span>
+<span class="call">search_sessions</span> × 4                  <span class="comment">→ 无结果</span>
+<span class="call">Read(jsonl)</span> × 2                       <span class="comment">→ 文件太大</span>
+<span class="call">Bash(python3)</span> × 7                     <span class="comment">→ 写脚本自己解析</span>
+<span class="comment">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+<span class="error">27 次调用 · ~100K tokens · 最终放弃 API 自己解析 JSONL</span></div>
+  </div>
+  <div class="card after">
+    <div class="card-title">After：2-3 次调用</div>
+    <div class="flow"><span class="call">get_session("514f7daa")</span>
+<span class="arrow">→</span> <span class="result">6 turns: question + answer + tools 聚合 + metrics</span>
+<span class="arrow">→</span> <span class="result">一次拿到全貌，可直接分析</span>
+
+<span class="comment">如需某个 turn 的完整调用链：</span>
+<span class="call">get_turn("514f7daa", turn=2)</span>
+<span class="arrow">→</span> <span class="result">42 steps: thinking → tool → thinking → tool → answer</span>
+
+<span class="comment">如需被截断的 tool output 原文：</span>
+<span class="call">get_step_output("514f7daa", turn=2, step=4)</span>
+<span class="arrow">→</span> <span class="result">完整 48KB 文件内容</span>
+<span class="comment">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+<span class="result">2-3 次调用 · 每次都返回有用数据 · API 自闭环</span></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>七、CLI 命令对照</h2>
+
+<table>
+  <tr><th>CLI 命令</th><th>MCP 工具</th><th>数据参数（共享）</th><th>CLI-only（终端渲染）</th></tr>
+  <tr><td><code>cdt projects</code></td><td>list_projects</td><td>(无)</td><td><code>--format</code></td></tr>
+  <tr><td><code>cdt sessions</code></td><td>list_sessions</td><td>project, since, until, grep, cursor</td><td><code>--format --json --no-truncate</code></td></tr>
+  <tr><td><code>cdt session &lt;id&gt;</code></td><td>get_session</td><td>session, grep, cursor</td><td><code>--format --raw</code></td></tr>
+  <tr><td><code>cdt turn &lt;id&gt; &lt;n&gt;</code></td><td>get_turn</td><td>session, turn, cursor</td><td><code>--format --no-truncate</code></td></tr>
+  <tr><td><code>cdt step-output &lt;id&gt; &lt;t&gt; &lt;s&gt;</code></td><td>get_step_output</td><td>session, turn, step</td><td><code>--format</code></td></tr>
+  <tr><td><code>cdt search &lt;query&gt;</code></td><td>search</td><td>query, session, project, since, until</td><td><code>--format --no-truncate</code></td></tr>
+  <tr><td><code>cdt stats</code></td><td>get_stats</td><td>period, project</td><td><code>--format --json</code></td></tr>
+  <tr><td><code>cdt export &lt;id&gt;</code></td><td>(无)</td><td colspan="2">CLI 独有，导出 markdown</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>八、实现路径</h2>
+
+<p style="color:#888; font-size:13px;">所有改动锁在 <strong>CLI/MCP 专属层</strong>。桌面端依赖 cdt-api/cdt-cli 但渲染会话走 Tauri IPC → LocalDataApi，<strong>不 link cdt-query</strong>，按构造零影响。</p>
+
+<table>
+  <tr><th>层</th><th>桌面端是否共享</th><th>变化</th></tr>
+  <tr><td>cdt-core / cdt-parse / cdt-analyze</td><td><span style="color:#f87171">共享</span></td><td><strong>不变</strong>。semantic_steps + tool_executions + AIChunk.subagents 已有</td></tr>
+  <tr><td>cdt-api::get_session_detail</td><td><span style="color:#f87171">共享</span></td><td><strong>不改 hot path</strong>，只消费其已有输出（含已嵌入的 subagent messages）</td></tr>
+  <tr><td>cdt-query::Engine</td><td><span style="color:#4ade80">CLI/MCP 专属</span></td><td>Turn 构建 + subagent 解析（含 lazy 反查索引）的主场。chunks 配对 + semantic_steps 骨架 + tool merge + answer 判定 + 截断</td></tr>
+  <tr><td>cdt-cli/src/view.rs</td><td><span style="color:#4ade80">CLI/MCP 专属</span></td><td>新增 TurnCompact / Step / StepOutput / SubagentStep view structs</td></tr>
+  <tr><td>cdt-cli/src/mcp/mod.rs</td><td><span style="color:#4ade80">CLI/MCP 专属</span></td><td>删 get_session_chunks → 新增 get_turn / get_step_output → 重定义 get_session → 精简参数</td></tr>
+  <tr><td>cdt-cli/src/main.rs</td><td><span style="color:#4ade80">CLI/MCP 专属</span></td><td>新增 turn / step-output 子命令 + session 默认 turns 输出 + --raw 保留 chunk 路径</td></tr>
+</table>
+
+<div class="highlight">
+  <strong>关键实现点</strong><br>
+  ① CLI/MCP 直接调 cdt_parse + cdt_analyze 拿完整数据，<strong>不走 IPC 的 OMIT_TOOL_OUTPUT</strong><br>
+  ② persisted-output 占位符：构建 turn 时透明回读真实文件内容<br>
+  ③ semantic_steps + AIChunk.subagents 已在数据层，当前 view.rs 没暴露——turn 视图直接读取<br>
+  ④ subagent 解析放 cdt-query::Engine（CLI/MCP 专属），桌面端不 link，扩展零影响其性能<br>
+  ⑤ Turn 构建逻辑与前端 displayItemBuilder.ts 同源，可考虑后续下沉到 cdt-analyze 共用
+</div>
+
+<!-- ============================================================ -->
+<h2>九、边界 Case</h2>
+
+<table>
+  <tr><th>场景</th><th>行为</th></tr>
+  <tr><td>会话 &gt;20 turns</td><td>get_session 返回最近 20 + nextCursor</td></tr>
+  <tr><td>turn &gt;50 steps</td><td>get_turn 返回前 50 + nextCursor</td></tr>
+  <tr><td>tool output ≥ 5KB</td><td>截前 2000 字 + outputTruncated: true + outputBytes。get_step_output 取全文</td></tr>
+  <tr><td>thinking</td><td>不截断（实测 p95 = 4.4 KB，由 step 分页控制总体积）</td></tr>
+  <tr><td>AI turn 无 answer（被打断）</td><td>answer: null，steps 保留到中断点</td></tr>
+  <tr><td>连续多个 AI chunk</td><td>合并为同一个 turn 的 steps</td></tr>
+  <tr><td>Compact chunk</td><td>不产 turn；get_session 顶层 compactions: [{afterTurn, summary}]</td></tr>
+  <tr><td>Subagent spawn</td><td>step: { type: "subagent", name: "Explore", description: "...", subagentSessionId: "agent-abc", stepsCount: 42 }。AI 用 subagentSessionId 调 get_session/get_turn 递归钻取（A1）</td></tr>
+  <tr><td>subagent 解析</td><td>subagent JSONL 在 &lt;project&gt;/&lt;父session&gt;/subagents/，cdt-query::Engine 建 lazy 反查索引（subagentSessionId → 父）。CLI/MCP 专属，桌面端不付代价</td></tr>
+  <tr><td>persisted-output 占位符</td><td>服务端透明回读文件内容</td></tr>
+  <tr><td>grep 匹配范围</td><td>匹配完整 steps 内容（含 thinking/tool input/output），返回 matchedIn 标注</td></tr>
+  <tr><td>grep + cursor</td><td>先 grep 过滤，结果集按 20/page 分页</td></tr>
+  <tr><td>search 同 session 多 turn 命中</td><td>每个 turn 独立一条 result，平铺返回</td></tr>
+  <tr><td>since + until</td><td>闭区间，在分页之前执行</td></tr>
+  <tr><td>session = "latest"</td><td>get_session / get_turn 均支持</td></tr>
+  <tr><td>step index 越界</td><td>get_step_output 返回错误</td></tr>
+  <tr><td>turn index 越界</td><td>get_turn 返回错误</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>十、设计决策记录</h2>
+
+<table>
+  <tr><th>#</th><th>决策</th><th>理由</th></tr>
+  <tr><td>D1</td><td>get_session 和 get_turn 拆两个工具</td><td>同一接口返回不同 schema 对 AI 不友好</td></tr>
+  <tr><td>D2</td><td>加 get_step_output 工具</td><td>API 自闭环，不依赖外部 Read（Bash 输出/MCP 返回无文件路径可读）</td></tr>
+  <tr><td>D3</td><td>tools 按工具类型聚合，含 per-type errorCount</td><td>per-call 列表无上限；per-type 天然有界（5-15 种），且 AI 不钻取即知哪种工具出错</td></tr>
+  <tr><td>D4</td><td>分页用 total + nextCursor，不加 hasMore/returned</td><td>跟 MCP 协议约定一致；nextCursor 存在即 hasMore，items.length 即 returned</td></tr>
+  <tr><td>D5</td><td>分页字段直接写，不做泛型/组合抽象</td><td>只有 2 个字段，泛型 fit 不了复合响应，flatten 有 serde 坑</td></tr>
+  <tr><td>D6</td><td>question/answer 不截断</td><td>实测 UserChunk content 排除系统注入后大多 10-200 B，answer 大多 100-2000 B</td></tr>
+  <tr><td>D7</td><td>thinking 不截断</td><td>实测 p95 = 4.4 KB，由 step 分页（50/page）控制总体积</td></tr>
+  <tr><td>D8</td><td>tool output ≥5KB 截断前 2000 字</td><td>大 output 主要是 Read 文件内容，单个可达几十 KB。get_step_output 取全文</td></tr>
+  <tr><td>D9</td><td>get_turn steps 从前往后</td><td>answer 已在顶层，drill-down 目的是看因果推理链，从头更自然</td></tr>
+  <tr><td>D10</td><td>search 返回 turn 级命中，平铺</td><td>AI 拿到 turnIndex 可直接 get_turn 钻取，不需要中间跳转</td></tr>
+  <tr><td>D11</td><td>grep 匹配完整 steps 内容 + matchedIn 标注</td><td>只搜 question/answer 会漏掉工具调用里出现的内容</td></tr>
+  <tr><td>D12</td><td>filesTouched 在 list_sessions，userIntents 在 get_session</td><td>filesTouched 小（800B/session）且提供"实际修改"语义（search 覆盖不了）；userIntents 大（3KB）且与 title 重叠</td></tr>
+  <tr><td>D13</td><td>删掉顶层 errors 列表</td><td>被 turn 模型覆盖：compact tools[].errorCount + get_turn steps isError</td></tr>
+  <tr><td>D14</td><td>删 branch/is_ongoing/limit/group_by/filter/content_mode/include 等</td><td>分别属于"客户端可做"/"反模式"/"冗余"，详见§五</td></tr>
+  <tr><td>D15</td><td>subagent 当独立 session 暴露（A1），step 放 subagentSessionId，复用 get_session/get_turn 递归钻取</td><td>subagent 本就是有 session_id 的独立会话，统一心智不加新工具。数据已随父加载，反查索引 lazy 化</td></tr>
+  <tr><td>D16</td><td>扩展锁在 cdt-query::Engine + cdt-cli view 层，不碰 cdt-core/cdt-analyze 及 cdt-api hot path</td><td>桌面端不 link cdt-query，按构造零性能影响；共享层只消费已有输出不改算法</td></tr>
+</table>
+
+</div>
+</body>
+</html>
