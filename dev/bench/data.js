@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782359733456,
+  "lastUpdate": 1782392652682,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -22989,6 +22989,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 13370,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7db5c526096c916507225b2884f6b4fb7eec4a36",
+          "message": "fix(context-tracking): anchor turns on real user messages (#540) (#541)\n\n* docs(opsx): propose turn-anchoring (fix #540 interrupted-message turn loss)\n\nturn 锚点从 AIChunk 改为真实用户消息，对齐 context-tracking spec 本意。\n被打断的 turn（无后继 AIChunk）仍产 user-message injection + 占 turn 序号。\n停在 propose，codex design 二审中。\n\nRefs #540\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* docs(opsx): address codex design review on turn-anchoring\n\ncodex design 二审 4 finding 全部落实：\n- CRITICAL 前端导航：被打断 turn 的 aiGroupId 是 UserChunk id，\n  原 handleNavigateToUserGroup 向前回溯会跳错 → D5 + session-display delta\n  按命中 chunk 类型分流；tasks 加前端修复 + 点击断言\n- WARNING turnContextStats↔contextInjections 一致性：MODIFY\n  Per-turn context stats exposure，排除被打断 injection\n- WARNING 纯被打断 phase 跳号：确认 pre-existing，记 followup 不兜底\n- NIT：tasks 6.1 补该 edge case followup\n- 魔鬼代言人 turnId/anchorChunkId/aiGroupId 三字段拆分作为\n  redesign-cli-mcp-api 设计输入记入 design\n\nRefs #540\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* fix(context-tracking): anchor turns on real user messages (#540)\n\n被打断的用户消息（响应被 <synthetic> 占位过滤、不产 AIChunk）从 turn 视图\n丢失。turn_index 原锚在 AIChunk 上、配对的 previous_user_chunk 被下一条用户\n消息覆盖 → 被打断的用户消息既无 turn 也无 user-message injection。\n\n改 process_session_context_with_phases：pending_user 语义化，遇新 User /\ncompact / 会话结束时若已有未消费的 pending（被打断）→ 照样产 user-message\ninjection（aiGroupId 锚 UserChunk.chunkId）+ 占一个 turn_index，推入累积链。\n被打断 turn 不进 stats_map / turnContextStats（无 AI group）。\n\n前端 handleNavigateToUserGroup 抽出纯函数 resolveUserGroupNavTarget：命中\nchunk 是 user（被打断）直接定位、是 ai（完整）向前找前置 UserChunk\n（codex CRITICAL：否则被打断 turn 点击会回溯到上一条消息）。\n\n验证：cdt-analyze 6 单测 + cdt-api 全链路 ipc 测试 + 前端 4 单测；corpus\n真实语料诊断 C=1193 被救回（修复前 0），B（chunk 层）597 不变（符合预期）。\n\nCloses #540\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* fix(context-tracking): address PR review (codex + toolkit) on turn-anchoring\n\n经影响面调研后确认本修法是 chunkId-anchored 模型的正确延伸（非 band-aid），\n否决\"重构为 first-class Turn 模型\"——turn_index 不进 IPC、前端纯 chunkId 锚定、\n重构净亏；API 一等公民 turn 应建在 cdt-query 从 chunk 派生，与本 change 解耦\n（详 design.md D-apply3）。\n\nreview 收敛：\n- codex CRITICAL（spec overclaim）：D4 退化（无 AI carrier 的 turn injection\n  丢失）改为 documented limitation + 措辞诚实 + 2 个 scenario\n- codex WARNING：spec 注明 turn 序号是对话轮序号非用户消息序号（AI-only 也占）\n- codex NIT + test-analyzer：nav 仅 kind===\"ai\" 回溯 + 防御用例；补 compact-flush\n  + 退化 characterization 单测；API 测试加正向一致性断言\n- comment-analyzer：session.rs 模块头补 compact flush 步骤 + turn 锚定说明\n\n测试：cdt-analyze 180+14 / cdt-api 7+148 / 前端 nav 5 全过。\n\nRefs #540\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* chore(opsx): archive turn-anchoring\n\n主 spec sync：context-tracking +1 Requirement（Anchor turns on real user\nmessages）~2 modified；session-display ~1 modified（Context Panel turn 锚点导航）。\n\nRefs #540\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 <noreply@anthropic.com>",
+          "timestamp": "2026-06-25T21:00:48+08:00",
+          "tree_id": "2e7cb2e850d92997273f39688fbba9ac82f27903",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/7db5c526096c916507225b2884f6b4fb7eec4a36"
+        },
+        "date": 1782392652317,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 117.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1136,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4769,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.862,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.886,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 42.35,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 32.68,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 293.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1192,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 4734,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 4904,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 38950,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.267,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 60.45,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 611.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6164,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 195.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2444,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 55.47,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 562.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5612,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 115.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1165,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.812,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9342,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 937.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9267,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 886.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 47.26,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 497.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 96.68,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 967,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9770,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 232.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1423,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13430,
             "unit": "µs"
           }
         ]
