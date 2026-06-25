@@ -25,7 +25,7 @@ export interface ProjectInfo {
  * 返回的**骨架**态下为占位（null / 0 / false），随后由
  * `session-metadata-update` 事件按 sessionId 增量 patch 为真值。
  *
- * UI 渲染时应使用 fallback：`title || sessionId.slice(0, 8) + "…"`、
+ * UI 渲染时应使用 fallback：`title || sessionId`、
  * `C${messageCount || ""}`、`{#if isOngoing}<OngoingIndicator />{/if}`，
  * 这样骨架态也能直接展示。
  *
@@ -480,7 +480,7 @@ export interface SessionDetail {
   isOngoing: boolean;
   /**
    * 会话标题（清洗后），与 `SessionSummary.title` 共用单一派生源。
-   * `null` / `undefined` 时前端 fallback 到 `sessionId.slice(0, 8)`，与 sidebar 一致。
+   * `null` / `undefined` 时前端 fallback 到完整 `sessionId`。
    * Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
    */
   title?: string | null;

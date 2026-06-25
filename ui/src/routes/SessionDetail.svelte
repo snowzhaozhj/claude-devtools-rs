@@ -896,12 +896,12 @@
   /**
    * 会话标题：直接消费 backend `extract_session_metadata_from_parsed` 派生（与
    * sidebar `SessionSummary.title` 共用单一真相源），`null/undefined` 时 fallback
-   * 到 `sessionId.slice(0, 8)` 与 sidebar 一致。
+   * 到完整 `sessionId`。
    * Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
    */
   function detailTitle(d: SessionDetail | null): string {
     if (d?.title) return d.title;
-    return sessionId.slice(0, 8);
+    return sessionId;
   }
 </script>
 

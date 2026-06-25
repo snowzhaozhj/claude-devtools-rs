@@ -291,7 +291,7 @@
     openSessionTab(
       sessionId,
       projectId,
-      label || sessionId.slice(0, 12),
+      label || sessionId,
       forceNewTab ? { forceNewTab: true, groupId } : { groupId },
     );
   }

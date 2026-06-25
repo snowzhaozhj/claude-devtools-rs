@@ -841,7 +841,7 @@
   }
 
   function sessionLabel(s: SessionSummary): string {
-    return s.title || s.sessionId.slice(0, 8);
+    return s.title || s.sessionId;
   }
 
 

@@ -8,7 +8,7 @@ import { cleanDisplayText } from "../toolHelpers";
 
 export function exportAsHtml(detail: SessionDetail, options: ExportOptions): string {
   const projected = projectSessionDetail(detail, options);
-  const title = projected.title || `Session ${projected.sessionId.slice(0, 8)}`;
+  const title = projected.title || `Session ${projected.sessionId}`;
 
   const tocItems: string[] = [];
   const bodyParts: string[] = [];

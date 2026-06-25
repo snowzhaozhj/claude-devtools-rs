@@ -23,7 +23,7 @@ export function exportAsMarkdown(detail: SessionDetail, options: ExportOptions):
 }
 
 function buildHeader(title: string | null | undefined, sessionId: string): string {
-  const displayTitle = title || `Session ${sessionId.slice(0, 8)}`;
+  const displayTitle = title || `Session ${sessionId}`;
   return `# ${displayTitle}\n`;
 }
 
