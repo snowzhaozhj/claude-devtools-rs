@@ -363,7 +363,7 @@
             <span class="sa-meta-sep">·</span>
           {/if}
           <span class="sa-meta-label">ID</span>
-          <span class="sa-meta-value sa-meta-id" title={process.sessionId}>{process.sessionId.slice(0, 8)}</span>
+          <span class="sa-meta-value sa-meta-id" title={process.sessionId}>{process.sessionId}</span>
         </div>
 
         <!-- Context Usage -->

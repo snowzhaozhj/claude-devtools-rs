@@ -31,7 +31,7 @@
     e.preventDefault();
     if (!job.sessionId) return;
     const projectId = extractProjectId(job) ?? "";
-    const label = job.name || job.intent || job.id.slice(0, 8);
+    const label = job.name || job.intent || job.id;
     openSessionTab(job.sessionId, projectId, label);
   }
 
@@ -104,7 +104,7 @@
     </div>
 
     <button class="job-name" onclick={handleOpenSession}>
-      {job.name || job.id.slice(0, 8)}
+      {job.name || job.id}
     </button>
 
     {#if prNumber}
