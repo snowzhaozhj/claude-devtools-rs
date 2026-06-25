@@ -53,7 +53,12 @@ pub fn process_session_context_with_phases(
     let mut accumulated_injections: Vec<ContextInjection> = Vec::new();
     let mut previous_paths: HashSet<String> = HashSet::new();
     let mut is_first_ai_group = true;
-    let mut previous_user_chunk: Option<&UserChunk> = None;
+    // `pending_user`：一条已产出 UserChunk、但尚未被 AI 响应消费的真实用户消息。
+    // turn 锚点在此——每条真实用户消息开启一个 turn；若它在下一条用户消息 /
+    // compact / 会话结束之前没有产出 AIChunk（被打断），仍占一个 turn_index 并
+    // 产出 user-message injection（spec: context-tracking "Anchor turns on real
+    // user messages"）。
+    let mut pending_user: Option<&UserChunk> = None;
 
     let mut current_phase_number: u32 = 1;
     let mut current_phase_first_ai_group_id: Option<String> = None;
@@ -63,12 +68,35 @@ pub fn process_session_context_with_phases(
 
     let mut turn_index: u32 = 0;
 
+    // 被打断的 turn：无对应 AIChunk，其 user-message injection 的 aiGroupId 锚到
+    // UserChunk 自身的 chunk_id（导航跳到用户气泡），并直接推入累积链，使其在后续
+    // AI group 的 accumulated_injections 中可见。不产 stats_map 条目（无 AI group）。
+    let emit_interrupted_turn =
+        |user: &UserChunk, ti: u32, accumulated: &mut Vec<ContextInjection>| {
+            if let Some(inj) =
+                super::aggregator::create_user_message_injection(user, ti, &user.chunk_id)
+            {
+                accumulated.push(inj);
+            }
+        };
+
     for chunk in chunks {
         match chunk {
             Chunk::User(u) => {
-                previous_user_chunk = Some(u);
+                // 上一条用户消息没等到 AI 响应 = 被打断的 turn，先 flush 它再开新 turn。
+                if let Some(prev) = pending_user.take() {
+                    emit_interrupted_turn(prev, turn_index, &mut accumulated_injections);
+                    turn_index += 1;
+                }
+                pending_user = Some(u);
             }
             Chunk::Compact(compact) => {
+                // compact 边界前的被打断 turn 归属当前 phase——先 flush 进累积链，
+                // 让其 injection 随下面的 backfill 写回当前 phase 的 last AI group。
+                if let Some(prev) = pending_user.take() {
+                    emit_interrupted_turn(prev, turn_index, &mut accumulated_injections);
+                    turn_index += 1;
+                }
                 // backfill 上一组 accumulated_injections
                 if let Some(last_id) = &current_phase_last_ai_group_id {
                     if let Some(prev_stats) = stats_map.get_mut(last_id) {
@@ -95,7 +123,7 @@ pub fn process_session_context_with_phases(
                 accumulated_injections.clear();
                 previous_paths.clear();
                 is_first_ai_group = true;
-                previous_user_chunk = None;
+                pending_user = None;
 
                 // start new phase
                 current_phase_number += 1;
@@ -112,7 +140,7 @@ pub fn process_session_context_with_phases(
                 let result = compute_context_stats(&ComputeStatsParams {
                     ai_chunk: ai,
                     ai_group_id: &ai_group_id,
-                    user_chunk: previous_user_chunk,
+                    user_chunk: pending_user,
                     turn_index,
                     is_first_group: is_first_ai_group,
                     previous_injections: &accumulated_injections,
@@ -169,13 +197,19 @@ pub fn process_session_context_with_phases(
 
                 previous_paths = result.next_previous_paths;
                 is_first_ai_group = false;
-                previous_user_chunk = None;
+                pending_user = None;
                 turn_index += 1;
             }
             Chunk::System(_) => {
                 // system chunks 不参与 context-tracking
             }
         }
+    }
+
+    // 会话结束时仍 pending = 末尾被打断的 turn，flush 进累积链，让其 injection
+    // 经下面的 backfill 写回最后一个 AI group。
+    if let Some(prev) = pending_user.take() {
+        emit_interrupted_turn(prev, turn_index, &mut accumulated_injections);
     }
 
     // session 末尾 backfill + finalize

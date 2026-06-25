@@ -12,7 +12,7 @@ turn 定义是规划中 AI-friendly CLI/MCP API 重设计（change `redesign-cli
 - 被打断的 turn（无 AI group）其 `UserMessage` injection 的 `aiGroupId` 锚到该 `UserChunk` 的 `chunkId`（导航跳转到用户气泡），而非任何 AIChunk。这放宽现有"`aiGroupId` 字节级等于某 `AIChunk.chunkId`"不变量——**调整 context-tracking spec 契约**（非 BREAKING：仅新增"被打断 turn"分支，已有完整 turn 行为不变）。
 - 前端导航分流：Context Panel 点击被打断 turn 的 user-message injection SHALL 直接定位到该 `UserChunk`（而非沿用"向前找前置 UserChunk"逻辑回溯到上一条消息）——**调整 session-display 导航契约**。
 - 被打断的 turn **不**进 `stats_map` / `turnContextStats`（无 AI group，无 per-turn badge），仅通过累积链显现于 injection 列表。
-- 回归守卫：把 `corpus_turn_fidelity` 诊断（现于 `investigate/turn-anchoring` 分支）正式纳入本 change 的测试，修复后"真实消息丢 turn"计数 SHALL 趋近 0。
+- 回归守卫：把 `corpus_turn_fidelity` 诊断正式纳入本 change 的测试（`cdt-api/tests/`）。**度量方向修正**：本修复不改 chunk 流，故 chunk 层"UserChunk 后无 AIChunk"（B）修复后不变；正确证据是 context turn 层新增度量 C =锚到 UserChunk 的 user-message injection 数（修复前 0，修复后实测 1193 条被救回，含真实对话消息）。
 
 显式划为 **follow-up**（不在本 change 范围，记入 `openspec/followups.md`）：
 - 子问题 2：保留被打断响应的 partial 内容（放宽 `<synthetic>` 过滤）——触及 noise.rs + chunk-building 数据模型，独立风险面。

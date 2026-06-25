@@ -77,8 +77,12 @@ context-tracking spec 的本意（Requirement `Classify context injections into 
 
 ## Open Questions
 
-- 被打断 turn 的 `user-message` injection 是否应在 preview 文本上加视觉标记（如"(interrupted)"）以区别于完整 turn？倾向**否**（保持 injection 纯数据，视觉区分留给前端），apply 时复核前端 UserMessagesSection 是否需要。
-- `corpus_turn_fidelity` 纳入哪个 crate 的 tests/——倾向放 `cdt-analyze`（被测逻辑所在 crate，纯同步），而非现在的 `cdt-api`；apply 时定。
+- 被打断 turn 的 `user-message` injection 是否应在 preview 文本上加视觉标记（如"(interrupted)"）以区别于完整 turn？倾向**否**（保持 injection 纯数据，视觉区分留给前端），apply 时复核前端 UserMessagesSection 是否需要。**apply 结论**：未加视觉标记（injection 保持纯数据，前端无新增需求）。
+
+### Apply 阶段决策修订
+
+- **D-apply1（诊断落点）**：`corpus_turn_fidelity` 最终**留在 `cdt-api/tests/`**，不迁 `cdt-analyze`。原因：诊断要扫全语料用 async `parse_file`（`cdt-analyze` 是 sync crate、无 tokio dev-dep），且度量 C 需 `process_session_context_with_phases` 全链路；`cdt-api` 已具备全部依赖。
+- **D-apply2（回归度量方向修正）**：原 proposal/tasks 写"修复后 B（真实消息丢 turn）趋近 0"——**这是错的**。本修复**不改 chunk 流**（被打断响应本就无 AIChunk），所以 B（chunk 层 UserChunk 后无 AIChunk）修复后**不变**（实测仍 597）。真正归零→非零的是 context turn 层：新增度量 **C = 锚到 UserChunk 的 user-message injection 数**（修复前 0，修复后实测 **1193**）。C 才是"被打断消息被救回 turn injection"的正确证据。spec delta / tasks 5.x 已同步此修正。
 
 ## 前瞻：CLI/MCP turn 模型的字段拆分（codex 二审魔鬼代言人）
 

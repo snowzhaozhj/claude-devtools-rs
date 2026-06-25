@@ -261,3 +261,113 @@ async fn get_sessions_by_ids_handles_mixed_existence() {
         "not-found 占位 SHALL phase_info.phases 为空"
     );
 }
+
+/// 写一个被打断的会话 jsonl：user(U1) → synthetic assistant（被过滤）→
+/// user(U2) → 真 assistant(A2)。U1 的响应被打断、不产 `AIChunk`。
+async fn write_interrupted_session(dir: &std::path::Path, session_id: &str) {
+    tokio::fs::create_dir_all(dir).await.unwrap();
+    let path = dir.join(format!("{session_id}.jsonl"));
+    let lines = [
+        serde_json::json!({
+            "type": "user", "uuid": "u1", "timestamp": "2026-04-18T10:00:00Z",
+            "cwd": "/tmp/proj",
+            "message": {"role": "user", "content": "first message that gets interrupted"}
+        }),
+        // 被打断的 partial 响应：model=<synthetic> → hard noise，不产 AIChunk
+        serde_json::json!({
+            "type": "assistant", "uuid": "syn", "timestamp": "2026-04-18T10:00:01Z",
+            "cwd": "/tmp/proj",
+            "message": {"role": "assistant", "model": "<synthetic>",
+                        "content": [{"type": "text", "text": "partial answer cut off"}]}
+        }),
+        serde_json::json!({
+            "type": "user", "uuid": "u2", "timestamp": "2026-04-18T10:00:02Z",
+            "cwd": "/tmp/proj",
+            "message": {"role": "user", "content": "second message"}
+        }),
+        serde_json::json!({
+            "type": "assistant", "uuid": "a2", "timestamp": "2026-04-18T10:00:03Z",
+            "cwd": "/tmp/proj",
+            "message": {"role": "assistant", "model": "claude-sonnet",
+                        "content": [{"type": "text", "text": "real answer"}]}
+        }),
+    ];
+    let mut f = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .await
+        .unwrap();
+    for line in lines {
+        f.write_all(line.to_string().as_bytes()).await.unwrap();
+        f.write_all(b"\n").await.unwrap();
+    }
+    f.flush().await.unwrap();
+}
+
+/// 全链路（`build_chunks` → `process_session_context_with_phases` → `SessionDetail`
+/// IPC）：被打断的用户消息 SHALL 作为 user-message injection 出现在 `contextInjections`
+/// 中（锚到 `UserChunk` chunkId），且 SHALL NOT 进入 `turnContextStats`。
+/// Spec: context-tracking `Anchor turns on real user messages` +
+/// `Interrupted turn produces no per-turn stats entry`（issue #540）。
+#[tokio::test]
+async fn interrupted_user_message_surfaces_in_context_injections_not_turn_stats() {
+    let tmp = TempDir::new().unwrap();
+    let proj_dir = tmp.path().join("projects").join("-proj-int");
+    write_interrupted_session(&proj_dir, "sid-int").await;
+
+    let api = build_api(&tmp).await;
+    let pid = api
+        .find_session_project("sid-int")
+        .await
+        .unwrap()
+        .expect("命中 SHALL 返 Some");
+    let detail = match api.get_session_detail(&pid, "sid-int", None).await.unwrap() {
+        cdt_api::SessionDetailResponse::Full { detail, .. } => *detail,
+        cdt_api::SessionDetailResponse::Unchanged { .. } => panic!("expected Full"),
+    };
+
+    // 被过滤的 synthetic 不产 chunk → 2 UserChunk + 1 AIChunk = 3 chunks。
+    assert_eq!(detail.chunks.len(), 3, "U1 + U2 + A2");
+
+    let mut ai_ids = std::collections::HashSet::new();
+    let mut user_ids = std::collections::HashSet::new();
+    for c in &detail.chunks {
+        match c {
+            cdt_core::Chunk::Ai(ai) => {
+                ai_ids.insert(ai.chunk_id.clone());
+            }
+            cdt_core::Chunk::User(u) => {
+                user_ids.insert(u.chunk_id.clone());
+            }
+            _ => {}
+        }
+    }
+
+    // 被打断 turn 的 user-message injection：aiGroupId 是 UserChunk chunkId（不属 AIChunk 集合）。
+    let interrupted: Vec<&str> = detail
+        .context_injections
+        .iter()
+        .filter_map(|inj| match inj {
+            cdt_core::ContextInjection::UserMessage(x) if !ai_ids.contains(&x.ai_group_id) => {
+                Some(x.ai_group_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        interrupted.len(),
+        1,
+        "SHALL 恰有 1 条被打断 turn 的 user-message injection，实际 {interrupted:?}"
+    );
+    let anchor = interrupted[0];
+    assert!(
+        user_ids.contains(anchor),
+        "被打断 injection 的 aiGroupId SHALL 等于某 UserChunk chunkId"
+    );
+    assert!(
+        !detail.turn_context_stats.contains_key(anchor),
+        "被打断 turn SHALL NOT 出现在 turnContextStats（无 AI group，无 badge）"
+    );
+}

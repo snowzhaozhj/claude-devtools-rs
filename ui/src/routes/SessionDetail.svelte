@@ -5,6 +5,7 @@
   import { buildDisplayItemsCached, buildSummary } from "../lib/displayItemBuilder";
   import { WRENCH, BRAIN, TERMINAL, SLASH, MESSAGE_SQUARE, CHEVRON_RIGHT, LAYERS, CLOCK_SVG, USER_SVG, USER_ICON, ALERT_TRIANGLE_SVG, CHEVRONS_DOWN_SVG } from "../lib/icons";
   import { formatClock, formatTokensCompact } from "../lib/formatters";
+  import { resolveUserGroupNavTarget } from "../lib/contextNavigation";
   import { getTimeFormat } from "../lib/displayPrefs.svelte";
   import { tick } from "svelte";
   import { clearHighlights } from "../lib/searchHighlight";
@@ -755,20 +756,12 @@
 
   function handleNavigateToUserGroup(aiGroupId: string) {
     if (!detail) return;
-    const aiIdx = detail.chunks.findIndex((c) => c.chunkId === aiGroupId);
-    if (aiIdx < 0) {
-      // 找不到对应 AIChunk，无法定位
-      return;
+    // 被打断 turn 的 aiGroupId 是 UserChunk 自身、完整 turn 是 AIChunk——分流见
+    // resolveUserGroupNavTarget（lib/contextNavigation）。
+    const target = resolveUserGroupNavTarget(detail.chunks, aiGroupId);
+    if (target) {
+      void handleNavigateToChunk(target);
     }
-    // 向前找紧邻的 UserChunk
-    for (let i = aiIdx - 1; i >= 0; i--) {
-      if (detail.chunks[i].kind === "user") {
-        void handleNavigateToChunk(detail.chunks[i].chunkId);
-        return;
-      }
-    }
-    // fallback：滚到 AIChunk 本身
-    void handleNavigateToChunk(aiGroupId);
   }
 
   /** 简化 CSS.escape：转义 querySelector 用的 `"` 与 `\`。chunkId / toolUseId 实际只
