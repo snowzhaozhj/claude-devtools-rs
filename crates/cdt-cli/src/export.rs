@@ -362,8 +362,7 @@ fn truncate_tool_output_json(tool: &mut serde_json::Value) {
     if let Some(text) = out_obj.get_mut("text") {
         if let Some(s) = text.as_str() {
             if s.chars().count() > TOOL_OUTPUT_TRUNCATE_LEN {
-                *text =
-                    serde_json::Value::String(truncate_chars(s, TOOL_OUTPUT_TRUNCATE_LEN));
+                *text = serde_json::Value::String(truncate_chars(s, TOOL_OUTPUT_TRUNCATE_LEN));
             }
         }
     }
