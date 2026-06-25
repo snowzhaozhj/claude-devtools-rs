@@ -308,3 +308,200 @@ fn context_stats_serializes_with_camel_case_fields() {
     assert!(obj.contains_key("newCounts"));
     assert!(obj.contains_key("accumulatedCounts"));
 }
+
+// ===== turn 锚点：被打断的 turn（issue #540 / change turn-anchoring）=====
+
+/// 从一组累积 injection 里抽出所有 user-message injection 的 `(turn_index, ai_group_id)`，
+/// 按 `turn_index` 升序——用于断言 turn 锚点与序号。
+fn user_msg_anchors(injs: &[ContextInjection]) -> Vec<(u32, String)> {
+    let mut v: Vec<(u32, String)> = injs
+        .iter()
+        .filter_map(|inj| match inj {
+            ContextInjection::UserMessage(x) => Some((x.turn_index, x.ai_group_id.clone())),
+            _ => None,
+        })
+        .collect();
+    v.sort_by_key(|(ti, _)| *ti);
+    v
+}
+
+#[test]
+fn completed_turn_anchors_on_its_user_message() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    let chunks = vec![
+        user_chunk("u0", "do a thing", 0),
+        ai_chunk("a0", 1, None, vec![]),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    let stats = result.stats_map.get("a0:0").unwrap();
+    let anchors = user_msg_anchors(&stats.accumulated_injections);
+    // 完整 turn：user-message injection 占 turn 0，锚到 AIChunk chunkId。
+    assert_eq!(anchors, vec![(0, "a0:0".to_string())]);
+}
+
+#[test]
+fn interrupted_user_message_still_opens_a_turn() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    // U1 被打断（U1 与 U2 之间没有 AI group），U2 → A2。
+    let chunks = vec![
+        user_chunk("u1", "first message that gets interrupted", 0),
+        user_chunk("u2", "second message", 1),
+        ai_chunk("a2", 2, None, vec![]),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    // 被打断的 U1 不进 stats_map；只有完整 turn A2 有 stats 条目。
+    assert_eq!(result.stats_map.len(), 1);
+    assert!(result.stats_map.contains_key("a2:0"));
+    assert!(!result.stats_map.contains_key("u1:0"));
+
+    // A2 的累积链里同时含 U1（被打断，turn 0，锚 UserChunk）与 U2（完整，turn 1，锚 AIChunk）。
+    let stats = result.stats_map.get("a2:0").unwrap();
+    let anchors = user_msg_anchors(&stats.accumulated_injections);
+    assert_eq!(
+        anchors,
+        vec![(0, "u1:0".to_string()), (1, "a2:0".to_string())]
+    );
+}
+
+#[test]
+fn interrupted_turn_at_end_of_session() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    // U0 → A0（完整），U1 在会话结束前没有 AI group（末尾被打断）。
+    let chunks = vec![
+        user_chunk("u0", "answered message", 0),
+        ai_chunk("a0", 1, None, vec![]),
+        user_chunk("u1", "trailing message with no response", 2),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    assert_eq!(result.stats_map.len(), 1);
+    assert!(!result.stats_map.contains_key("u1:0"));
+    // 末尾被打断的 U1 经 backfill 出现在最后一个 AI group A0 的累积链。
+    let stats = result.stats_map.get("a0:0").unwrap();
+    let anchors = user_msg_anchors(&stats.accumulated_injections);
+    assert_eq!(
+        anchors,
+        vec![(0, "a0:0".to_string()), (1, "u1:0".to_string())]
+    );
+}
+
+#[test]
+fn interrupted_turn_anchor_is_userchunk_not_any_aichunk() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    let chunks = vec![
+        user_chunk("u1", "interrupted", 0),
+        user_chunk("u2", "next", 1),
+        ai_chunk("a2", 2, None, vec![]),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    let ai_chunk_ids: std::collections::HashSet<String> =
+        result.stats_map.keys().cloned().collect();
+    let stats = result.stats_map.get("a2:0").unwrap();
+    let interrupted_anchor = user_msg_anchors(&stats.accumulated_injections)
+        .into_iter()
+        .find(|(ti, _)| *ti == 0)
+        .map(|(_, id)| id)
+        .unwrap();
+    // 被打断 turn 的锚 = UserChunk chunkId，且不属于任何 AI group（stats_map key）集合。
+    assert_eq!(interrupted_anchor, "u1:0");
+    assert!(!ai_chunk_ids.contains(&interrupted_anchor));
+}
+
+#[test]
+fn consecutive_interruptions_each_open_a_turn() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    // 连续三条被打断后才有一个 AI group——每条都该占一个 turn，不丢不吞。
+    let chunks = vec![
+        user_chunk("u1", "继续", 0),
+        user_chunk("u2", "继续", 1),
+        user_chunk("u3", "继续", 2),
+        ai_chunk("a3", 3, None, vec![]),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    let stats = result.stats_map.get("a3:0").unwrap();
+    let anchors = user_msg_anchors(&stats.accumulated_injections);
+    assert_eq!(
+        anchors,
+        vec![
+            (0, "u1:0".to_string()),
+            (1, "u2:0".to_string()),
+            (2, "a3:0".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn interrupted_turn_before_compaction_lands_in_pre_compact_phase() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    // U1 在 compact 前被打断（A0 与 compact 之间无 AI group 承载 U1）。
+    let chunks = vec![
+        user_chunk("u0", "first answered", 0),
+        ai_chunk("a0", 1, None, vec![]),
+        user_chunk("u1", "interrupted before compact", 2),
+        compact_chunk("c0", 3),
+        user_chunk("u2", "after compact", 4),
+        ai_chunk("a2", 5, None, vec![]),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    // U1 的 injection 经 compact 分支 flush + backfill 落在 compact 前 phase 的 A0。
+    let a0 = result.stats_map.get("a0:0").unwrap();
+    assert_eq!(
+        user_msg_anchors(&a0.accumulated_injections),
+        vec![(0, "a0:0".to_string()), (1, "u1:0".to_string())]
+    );
+    // compact 后 phase 的 A2 锚定 U2（turn 2）。
+    let a2 = result.stats_map.get("a2:0").unwrap();
+    assert_eq!(
+        user_msg_anchors(&a2.accumulated_injections),
+        vec![(2, "a2:0".to_string())]
+    );
+}
+
+#[test]
+fn interrupted_turn_with_no_ai_carrier_phase_is_dropped() {
+    let cm: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let dir: HashMap<String, ClaudeMdFileInfo> = HashMap::new();
+    let mf: HashMap<String, MentionedFileInfo> = HashMap::new();
+    // 退化情形：compact 前 phase 只有被打断的 U1、无任何 AI group 承载累积链。
+    // 文档化的已知限制：不 panic，U1 injection 无承载点而丢失。
+    let chunks = vec![
+        user_chunk("u1", "interrupted with no carrier", 0),
+        compact_chunk("c0", 1),
+        ai_chunk("a0", 2, None, vec![]),
+    ];
+    let params = default_params(&cm, &dir, &mf, &[]);
+    let result = process_session_context_with_phases(&chunks, &params);
+
+    // 良定义结果：只有 compact 后 phase 的 A0 进 stats_map；U1 不在任何地方 surface。
+    assert_eq!(result.stats_map.len(), 1);
+    assert!(result.stats_map.contains_key("a0:0"));
+    assert!(!result.stats_map.contains_key("u1:0"));
+    let a0 = result.stats_map.get("a0:0").unwrap();
+    assert!(
+        user_msg_anchors(&a0.accumulated_injections).is_empty(),
+        "无 AI carrier 的被打断 injection 不应 surface（已知限制）"
+    );
+}

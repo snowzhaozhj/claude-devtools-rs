@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- **UI**: interrupted user messages now appear in the Context Panel's turn view. When you sent a message, the assistant started replying, and the turn was interrupted before completing, that message used to vanish from the "User Messages" turn list (and its Turn numbering). Turns are now anchored on each real user message, so an interrupted turn still shows up — and clicking it jumps to that message instead of the previous one.
+
 ## [0.6.21] — 2026-06-24
 
 ### Fixed
