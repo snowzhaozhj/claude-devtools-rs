@@ -363,7 +363,7 @@
             <span class="sa-meta-sep">·</span>
           {/if}
           <span class="sa-meta-label">ID</span>
-          <span class="sa-meta-value sa-meta-id" title={process.sessionId}>{process.sessionId.slice(0, 8)}</span>
+          <span class="sa-meta-value sa-meta-id" title={process.sessionId}>{process.sessionId}</span>
         </div>
 
         <!-- Context Usage -->
@@ -575,7 +575,7 @@
   }
   .sa-meta-label { color: var(--card-icon-muted); }
   .sa-meta-value { color: var(--card-text-light); font-family: var(--font-mono); }
-  .sa-meta-id { max-width: 120px; overflow: hidden; text-overflow: ellipsis; color: var(--card-icon-muted); }
+  .sa-meta-id { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--card-icon-muted); }
   .sa-meta-sep { color: var(--card-separator); }
 
   .sa-context {

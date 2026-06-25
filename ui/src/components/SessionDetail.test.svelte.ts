@@ -281,7 +281,7 @@ describe('SessionDetail smoke', () => {
     })
   })
 
-  test('detail.title 缺失时 <h1> fallback 到 sessionId.slice(0, 8)（与 sidebar 一致）', async () => {
+  test('detail.title 缺失时 <h1> fallback 到完整 sessionId', async () => {
     const fx = {
       ...singleProjectFixture,
       sessionDetails: {
@@ -301,7 +301,7 @@ describe('SessionDetail smoke', () => {
     })
     await waitFor(() => {
       const h1 = container.querySelector('h1.top-title')
-      expect(h1?.textContent).toBe(SESSION_ID.slice(0, 8))
+      expect(h1?.textContent).toBe(SESSION_ID)
     })
   })
 

@@ -456,7 +456,7 @@
       detail = cached;
       lastChunksFingerprint = computeChunksFingerprint(cached);
       loading = false;
-      console.info(`[perf] SessionDetail ${sessionId.slice(0, 8)} cached hit`);
+      console.info(`[perf] SessionDetail ${sessionId} cached hit`);
       // 切走再切回时 file-change handler 已 unmount，期间发生的文件追加事件
       // 全部错过；cache 直接渲染会停留在"切走那一刻"的旧快照（典型表现：
       // 还在跑的 Bash 完成后切回仍只看到输入；resume 老 session 后追加的
@@ -487,7 +487,7 @@
         lastChunksFingerprint = computeChunksFingerprint(d);
         setCachedSession(tabId, d);
         console.info(
-          `[perf] SessionDetail ${sessionId.slice(0, 8)} IPC ${ipc_ms.toFixed(0)}ms (chunks=${chunks_len}, payload=${payload_kb.toFixed(0)}KB)`
+          `[perf] SessionDetail ${sessionId} IPC ${ipc_ms.toFixed(0)}ms (chunks=${chunks_len}, payload=${payload_kb.toFixed(0)}KB)`
         );
       } catch (e) { error = String(e); }
       finally { loading = false; }
@@ -495,7 +495,7 @@
       // 等 DOM 真正 mount 完
       await tick();
       const total_ms = performance.now() - t_mount;
-      console.info(`[perf] SessionDetail ${sessionId.slice(0, 8)} first-paint ${total_ms.toFixed(0)}ms`);
+      console.info(`[perf] SessionDetail ${sessionId} first-paint ${total_ms.toFixed(0)}ms`);
     }
 
     // 恢复滚动位置（cached path 在前面已 await tick；非 cached path 也已 await tick）
@@ -896,12 +896,12 @@
   /**
    * 会话标题：直接消费 backend `extract_session_metadata_from_parsed` 派生（与
    * sidebar `SessionSummary.title` 共用单一真相源），`null/undefined` 时 fallback
-   * 到 `sessionId.slice(0, 8)` 与 sidebar 一致。
+   * 到完整 `sessionId`。
    * Spec：`ipc-data-api::SessionDetail 暴露与 SessionSummary 同源派生的 title`。
    */
   function detailTitle(d: SessionDetail | null): string {
     if (d?.title) return d.title;
-    return sessionId.slice(0, 8);
+    return sessionId;
   }
 </script>
 

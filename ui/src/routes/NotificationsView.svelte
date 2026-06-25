@@ -54,7 +54,7 @@
   const unreadCount = $derived(notifications.filter((n) => !n.isRead).length);
 
   async function handleNavigate(notif: StoredNotification) {
-    openTab(notif.sessionId, notif.projectId, notif.message.slice(0, 50) || notif.sessionId.slice(0, 12));
+    openTab(notif.sessionId, notif.projectId, notif.message.slice(0, 50) || notif.sessionId);
     if (!notif.isRead) {
       try {
         await markNotificationRead(notif.id);

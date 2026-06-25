@@ -40,7 +40,7 @@
   let exitTimer: ReturnType<typeof setTimeout> | null = null;
   let itemEls: HTMLButtonElement[] = $state([]);
 
-  const menuId = untrack(() => `session-meta-menu-${sessionId.slice(0, 8)}`);
+  const menuId = untrack(() => `session-meta-menu-${sessionId}`);
   const tauri = isTauriRuntime();
 
   let exporting = $state(false);
