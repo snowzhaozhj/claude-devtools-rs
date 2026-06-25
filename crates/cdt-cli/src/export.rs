@@ -70,10 +70,7 @@ fn export_as_markdown(
 ) -> String {
     let mut parts = Vec::new();
 
-    let title = detail
-        .title
-        .as_deref()
-        .unwrap_or_else(|| &detail.session_id[..8.min(detail.session_id.len())]);
+    let title = detail.title.as_deref().unwrap_or(&detail.session_id);
     parts.push(format!("# {title}\n"));
 
     parts.push(build_metadata_table(detail, summary, cost));
