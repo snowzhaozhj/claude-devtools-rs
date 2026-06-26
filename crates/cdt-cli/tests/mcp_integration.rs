@@ -73,10 +73,11 @@ async fn mcp_server_responds_to_list_tools() {
     assert!(tool_names.contains(&"list_projects"));
     assert!(tool_names.contains(&"list_sessions"));
     assert!(tool_names.contains(&"get_session"));
-    assert!(tool_names.contains(&"get_session_chunks"));
-    assert!(tool_names.contains(&"search_sessions"));
+    assert!(tool_names.contains(&"get_turn"));
+    assert!(tool_names.contains(&"get_tool_output"));
+    assert!(tool_names.contains(&"search"));
     assert!(tool_names.contains(&"get_stats"));
-    assert_eq!(tool_names.len(), 6);
+    assert_eq!(tool_names.len(), 7);
 
     client.cancel().await.unwrap();
 }
@@ -137,60 +138,4 @@ async fn mcp_list_sessions_returns_error_for_unknown_project() {
     client.cancel().await.unwrap();
 }
 
-#[tokio::test]
-async fn mcp_get_session_chunks_rejects_conflicting_window_params() {
-    let client = setup_pair().await;
-
-    let params = serde_json::json!({
-        "session": "test-session-id",
-        "range": "0:10",
-        "tail": 5
-    });
-
-    let result = client
-        .send_request(rmcp::model::ClientRequest::CallToolRequest(
-            rmcp::model::Request::new(
-                CallToolRequestParams::new("get_session_chunks")
-                    .with_arguments(serde_json::from_value(params).unwrap()),
-            ),
-        ))
-        .await;
-
-    // Mutually exclusive params → JSON-RPC error
-    let err = result.unwrap_err();
-    let err_str = format!("{err:?}");
-    assert!(
-        err_str.contains("mutually exclusive"),
-        "error should mention mutual exclusivity, got: {err_str}"
-    );
-
-    client.cancel().await.unwrap();
-}
-
-#[tokio::test]
-async fn mcp_get_session_chunks_rejects_invalid_content_mode() {
-    let client = setup_pair().await;
-
-    let params = serde_json::json!({
-        "session": "test-session-id",
-        "content_mode": "invalid"
-    });
-
-    let result = client
-        .send_request(rmcp::model::ClientRequest::CallToolRequest(
-            rmcp::model::Request::new(
-                CallToolRequestParams::new("get_session_chunks")
-                    .with_arguments(serde_json::from_value(params).unwrap()),
-            ),
-        ))
-        .await;
-
-    let err = result.unwrap_err();
-    let err_str = format!("{err:?}");
-    assert!(
-        err_str.contains("Invalid content_mode"),
-        "error should mention invalid content_mode, got: {err_str}"
-    );
-
-    client.cancel().await.unwrap();
-}
+// Old get_session_chunks tests removed — tool deleted by redesign-cli-mcp-api.

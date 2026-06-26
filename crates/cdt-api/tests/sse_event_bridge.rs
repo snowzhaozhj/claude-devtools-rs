@@ -250,7 +250,7 @@ async fn session_metadata_forwarded_as_push_event() {
             duration_ms: 0,
             total_cost: 0.0,
             tool_error_count: 0,
-            files_touched: Vec::new(),
+            files_modified: Vec::new(),
             git_summary: Vec::new(),
         })
         .unwrap();

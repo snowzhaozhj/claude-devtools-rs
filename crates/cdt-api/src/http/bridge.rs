@@ -162,7 +162,7 @@ fn spawn_metadata_bridge(
                         duration_ms: event.duration_ms,
                         total_cost: event.total_cost,
                         tool_error_count: event.tool_error_count,
-                        files_touched: event.files_touched,
+                        files_modified: event.files_modified,
                         git_summary: event.git_summary,
                     });
                 }

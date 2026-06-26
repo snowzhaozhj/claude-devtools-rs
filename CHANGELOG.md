@@ -10,6 +10,7 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 ## [Unreleased]
 
 ### Changed
+- **BREAKING: CLI/MCP API redesigned around turn model.** The MCP tool set is now 7 tools (was 6): `list_projects`, `list_sessions`, `get_session` (compact turn overview), `get_turn` (single turn with full steps), `get_tool_output` (untruncated tool output), `search` (turn-level hits), `get_stats`. Removed `get_session_chunks` and all `content_mode`/`include`/`filter`/`range`/`tail`/`grep_context`/`group_by`/`branch`/`is_ongoing` parameters. AI agents now get complete conversation context in 2-3 calls instead of 20+. CLI adds `cdt turn` and `cdt tool-output` subcommands; `cdt session` defaults to turn view with `--raw` escape hatch.
 - **UI**: corrected the "Turn N" labels in the Context Panel for heavily-compacted sessions. When a long reply triggered automatic context compaction mid-turn, the continuation used to be counted as a separate turn, inflating the numbering (a 2-question session could show up to 15 "turns"). Continuations after a compaction now fold back into the question that started them, so "Turn N" reflects how many times you actually asked something. The chat stream, token stats, compaction phases, and navigation are unchanged.
 
 ### Fixed

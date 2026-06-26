@@ -2,20 +2,20 @@
 source: crates/cdt-cli/tests/cli_help_snapshots.rs
 expression: text
 ---
-全文搜索
+Full-text search across sessions
 
 Usage: cdt search [OPTIONS] <QUERY>
 
 Arguments:
-  <QUERY>  搜索关键词
+  <QUERY>  Search query
 
 Options:
-      --format <FORMAT>    输出格式 [default: table] [possible values: json, jsonl, table]
-      --limit <LIMIT>      最多返回 N 条结果 [default: 50]
-      --offset <OFFSET>    偏移（分页） [default: 0]
-      --project <PROJECT>  限定项目范围（项目名或 ID；编码 ID 需用 --project=<id> 形式）
-      --json[=<JSON>]      JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
-      --session <SESSION>  限定到单个 session（intra-session search）
-      --no-truncate        table 模式不截断任何字段
-      --since <SINCE>      仅搜索此时间之后的 session
+      --format <FORMAT>    Output format [default: table] [possible values: json, jsonl, table]
+      --limit <LIMIT>      Max results [default: 50]
+      --offset <OFFSET>    Offset for pagination [default: 0]
+      --project <PROJECT>  Scope to a project (name or encoded ID; use --project=<id> for encoded IDs)
+      --json[=<JSON>]      Select JSON fields (comma-separated), implies --format json. Without value: list available fields. Usage: --json=field1,field2
+      --session <SESSION>  Scope to a single session (intra-session search)
+      --no-truncate        Do not truncate fields in table mode
+      --since <SINCE>      Only search sessions after this time
   -h, --help               Print help

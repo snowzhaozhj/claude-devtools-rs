@@ -2,17 +2,17 @@
 source: crates/cdt-cli/tests/cli_help_snapshots.rs
 expression: text
 ---
-聚合统计
+Aggregated usage statistics
 
 Usage: cdt stats [OPTIONS] [PERIOD]
 
 Arguments:
-  [PERIOD]  时间范围（today / week / 7d / 24h / 30d） [default: 7d]
+  [PERIOD]  Time period (today / week / 7d / 24h / 30d) [default: 7d]
 
 Options:
-      --format <FORMAT>      输出格式 [default: table] [possible values: json, jsonl, table]
-      --project <PROJECT>    限定项目
-      --group-by <GROUP_BY>  按维度分组：none / model / day [default: none]
-      --json[=<JSON>]        JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
-      --no-truncate          table 模式不截断任何字段
+      --format <FORMAT>      Output format [default: table] [possible values: json, jsonl, table]
+      --project <PROJECT>    Scope to a project
+      --group-by <GROUP_BY>  Group by dimension: none / model / day [default: none]
+      --json[=<JSON>]        Select JSON fields (comma-separated), implies --format json. Without value: list available fields. Usage: --json=field1,field2
+      --no-truncate          Do not truncate fields in table mode
   -h, --help                 Print help
