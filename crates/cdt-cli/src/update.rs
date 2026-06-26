@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 
 use cdt_cli::install::{
     DownloadErrorKind, REPO, build_client, classify_download_error, download_and_extract,
-    platform_asset_name, validate_binary_magic,
+    platform_asset_name, validate_binary_arch, validate_binary_magic,
 };
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -229,7 +229,8 @@ fn resolve_install_path() -> Result<PathBuf> {
 
 fn managed_install_path() -> Option<PathBuf> {
     let home = cdt_discover::home_dir()?;
-    let managed = home.join(".local").join("bin").join("cdt");
+    let name = if cfg!(windows) { "cdt.exe" } else { "cdt" };
+    let managed = home.join(".local").join("bin").join(name);
     if managed.exists() {
         Some(managed)
     } else {
@@ -238,7 +239,22 @@ fn managed_install_path() -> Option<PathBuf> {
 }
 
 fn check_install_path(path: &Path) -> Result<()> {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let path_str = canonical.to_string_lossy();
+
+    let pkg_mgr_indicators = ["/Cellar/", "/homebrew/", "/nix/store/", "/snap/"];
+    for indicator in &pkg_mgr_indicators {
+        if path_str.contains(indicator) {
+            bail!(
+                "cdt appears to be managed by a package manager ({indicator} in path).\n\
+                 Self-update would conflict with the package manager.\n\
+                 Please upgrade using your package manager instead."
+            );
+        }
+    }
+
     let parent = path.parent().context("cannot determine parent directory")?;
+    let managed = managed_install_path();
 
     let test_file = parent.join(".cdt-update-check");
     match fs::write(&test_file, b"") {
@@ -246,7 +262,7 @@ fn check_install_path(path: &Path) -> Result<()> {
             let _ = fs::remove_file(&test_file);
         }
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            if let Some(managed) = managed_install_path() {
+            if let Some(ref managed) = managed {
                 bail!(
                     "No write permission to {}.\n\n\
                      A desktop-managed installation exists at {}.\n\
@@ -269,8 +285,8 @@ fn check_install_path(path: &Path) -> Result<()> {
     }
 
     // Warn (non-blocking) if running from a different path but managed install exists
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if let Some(managed) = managed_install_path() {
+    if let Some(ref managed) = managed {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let managed_canonical = managed.canonicalize().unwrap_or_else(|_| managed.clone());
         if canonical != managed_canonical {
             eprintln!(
@@ -289,6 +305,7 @@ fn check_install_path(path: &Path) -> Result<()> {
 
 fn replace_binary(target: &Path, new_bytes: &[u8]) -> Result<()> {
     validate_binary_magic(new_bytes)?;
+    validate_binary_arch(new_bytes)?;
 
     let parent = target.parent().context("no parent directory")?;
     let stem = target.file_name().unwrap_or_default().to_string_lossy();

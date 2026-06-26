@@ -1015,10 +1015,14 @@ async fn install_cli(
     })?;
 
     // Validate binary: magic bytes + CPU architecture match
-    cdt_cli::install::validate_binary_magic(&binary_bytes)
-        .map_err(|_| "下载的文件不是有效的可执行文件".to_string())?;
-    cdt_cli::install::validate_binary_arch(&binary_bytes)
-        .map_err(|_| "下载的文件与当前系统架构不匹配".to_string())?;
+    cdt_cli::install::validate_binary_magic(&binary_bytes).map_err(|e| {
+        tracing::warn!(target: "cdt_tauri::cli", error = %e, "binary magic validation failed");
+        format!("下载的文件不是有效的可执行文件: {e}")
+    })?;
+    cdt_cli::install::validate_binary_arch(&binary_bytes).map_err(|e| {
+        tracing::warn!(target: "cdt_tauri::cli", error = %e, "binary arch validation failed");
+        format!("下载的文件与当前系统架构不匹配: {e}")
+    })?;
 
     // Write to temp file
     let temp_path = target_dir.join(format!(".cdt-install-{}.tmp", std::process::id()));
@@ -1037,6 +1041,15 @@ async fn install_cli(
                 format!("设置权限失败: {e}")
             },
         )?;
+    }
+
+    // macOS: remove quarantine attribute to prevent Gatekeeper blocking
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("xattr")
+            .args(["-d", "com.apple.quarantine"])
+            .arg(&temp_path)
+            .output();
     }
 
     // Atomic rename (backup existing)

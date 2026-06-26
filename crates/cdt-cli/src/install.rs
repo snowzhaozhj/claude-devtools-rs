@@ -275,12 +275,7 @@ pub fn validate_binary_arch(data: &[u8]) -> Result<()> {
         // PE (Windows)
         [b'M', b'Z', ..] => validate_pe_arch(data, current_arch),
         _ => {
-            if current_os == "macos" {
-                bail!("architecture mismatch: expected a macOS (Mach-O) binary");
-            } else if current_os == "linux" {
-                bail!("architecture mismatch: expected a Linux (ELF) binary");
-            }
-            bail!("architecture mismatch: expected a Windows (PE) binary");
+            bail!("architecture mismatch: unrecognized binary format for {current_os}");
         }
     }
 }
@@ -361,7 +356,11 @@ fn validate_elf_arch(data: &[u8], arch: &str) -> Result<()> {
     if data.len() < 20 {
         bail!("ELF header truncated");
     }
-    let little_endian = data[5] == 1;
+    let little_endian = match data[5] {
+        1 => true,
+        2 => false,
+        _ => bail!("invalid ELF endianness indicator"),
+    };
     let e_machine = if little_endian {
         u16::from_le_bytes([data[18], data[19]])
     } else {
@@ -390,7 +389,8 @@ fn validate_pe_arch(data: &[u8], arch: &str) -> Result<()> {
         bail!("PE header truncated");
     }
     let pe_offset = u32::from_le_bytes([data[60], data[61], data[62], data[63]]) as usize;
-    if pe_offset + 6 > data.len() {
+    let pe_end = pe_offset.checked_add(6).context("PE offset overflow")?;
+    if pe_end > data.len() {
         bail!("PE header truncated");
     }
     if data[pe_offset..pe_offset + 4] != [b'P', b'E', 0, 0] {
