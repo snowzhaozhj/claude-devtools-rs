@@ -32,7 +32,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex + pr-review-toolkit 二审通过（跨 capability + 改既有 spec + 状态机，高风险禁豁免；如发现 bug：修 → push → 回 N.2）
-- [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再 wait-ci 全绿）
+- [x] N.1 push 分支 + 开 PR
+- [x] N.2 wait-ci 全绿
+- [x] N.3 codex + pr-review-toolkit 二审通过（跨 capability + 改既有 spec + 状态机，高风险禁豁免；如发现 bug：修 → push → 回 N.2）
+- [x] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再 wait-ci 全绿）

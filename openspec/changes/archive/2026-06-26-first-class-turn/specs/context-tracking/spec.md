@@ -51,9 +51,9 @@ AIChunk-scoped 的 injection（`tool-output` / `task-coordination` / `thinking-t
 - **THEN** 对 `contextInjections` 中 `aiGroupId` 属于 AIChunk chunkId 集合的条目按 `aiGroupId` 分组计数
 - **AND** 每组的 count SHALL 与 `turnContextStats` 中对应 entry（key=chunkId）的 `newCount` 一致——一致性校验按 `aiGroupId`（chunkId）分组，不受多个 AI group 共享同一 `turnIndex` 影响
 
-### Requirement: Compute cumulative context statistics per AI group
+### Requirement: Compute cumulative context statistics per turn
 
-系统 SHALL 为每个 AI group（`AIChunk`，按 `chunkId` 标识）计算上下文窗口当前可见的 token 总数，按六类分项细分。即使 AI group 为空（无 step、无 response、无前置 user group），SHALL 仍产出一条 `ContextStats` 记录：六类 token 全为 0，total 为 0，而非跳过。**本统计是 per-AI-group 粒度，不是 per-conversation-turn**：在 turn-model 的 conversation-turn 概念下，一个 turn 可含多个 AI group（如跨压缩折叠），各 AI group SHALL 各产一条 `ContextStats`（key=`chunkId`），SHALL NOT 因同属一个 turn 而合并。
+系统 SHALL 为每个 AI group（`AIChunk`，按 `chunkId` 标识）计算上下文窗口当前可见的 token 总数，按六类分项细分。即使 AI group 为空（无 step、无 response、无前置 user group），SHALL 仍产出一条 `ContextStats` 记录：六类 token 全为 0，total 为 0，而非跳过。**本统计是 per-AI-group 粒度，不是 per-conversation-turn**：在 turn-model 的 conversation-turn 概念下，一个 turn 可含多个 AI group（如跨压缩折叠），各 AI group SHALL 各产一条 `ContextStats`（key=`chunkId`），SHALL NOT 因同属一个 turn 而合并。（Requirement title 保留 `per turn` 措辞——title 抽象为 `per AI group` 是 design F2/F3/F5 记录的 cleanup followup，本 change 只在 body 澄清粒度，不改 title。）
 
 #### Scenario: AI group with CLAUDE.md + two tool outputs + user message
 
