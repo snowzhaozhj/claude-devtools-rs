@@ -1014,9 +1014,11 @@ async fn install_cli(
         friendly_cli_install_error(&format!("{e:#}"))
     })?;
 
-    // Validate binary magic before writing
+    // Validate binary: magic bytes + CPU architecture match
     cdt_cli::install::validate_binary_magic(&binary_bytes)
-        .map_err(|e| format!("二进制校验失败: {e}"))?;
+        .map_err(|_| "下载的文件不是有效的可执行文件".to_string())?;
+    cdt_cli::install::validate_binary_arch(&binary_bytes)
+        .map_err(|_| "下载的文件与当前系统架构不匹配".to_string())?;
 
     // Write to temp file
     let temp_path = target_dir.join(format!(".cdt-install-{}.tmp", std::process::id()));
@@ -1035,32 +1037,6 @@ async fn install_cli(
                 format!("设置权限失败: {e}")
             },
         )?;
-    }
-
-    // macOS: remove quarantine
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("xattr")
-            .args(["-d", "com.apple.quarantine"])
-            .arg(&temp_path)
-            .output();
-    }
-
-    // Verify temp binary using absolute path
-    let verify_output = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        tokio::process::Command::new(&temp_path)
-            .arg("--version")
-            .output(),
-    )
-    .await;
-
-    match verify_output {
-        Ok(Ok(output)) if output.status.success() => {}
-        _ => {
-            let _ = std::fs::remove_file(&temp_path);
-            return Err("验证失败：安装的 CLI 无法执行，可能是架构不匹配".to_string());
-        }
     }
 
     // Atomic rename (backup existing)

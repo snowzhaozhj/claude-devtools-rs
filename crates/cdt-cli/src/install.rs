@@ -248,13 +248,163 @@ pub fn validate_binary_magic(data: &[u8]) -> Result<()> {
     );
 
     if !valid {
-        bail!(
-            "downloaded file does not appear to be a valid executable (unexpected magic bytes: {:02x} {:02x} {:02x} {:02x})",
-            data[0],
-            data[1],
-            data[2],
-            data[3]
-        );
+        bail!("downloaded file is not a valid executable for this platform");
+    }
+    Ok(())
+}
+
+pub fn validate_binary_arch(data: &[u8]) -> Result<()> {
+    let current_arch = env::consts::ARCH;
+    let current_os = env::consts::OS;
+
+    let magic = if data.len() >= 4 {
+        [data[0], data[1], data[2], data[3]]
+    } else {
+        bail!("binary too small to validate architecture");
+    };
+
+    match magic {
+        // Mach-O big-endian header (64-bit or 32-bit)
+        [0xfe, 0xed, 0xfa, 0xce | 0xcf] => validate_macho_arch(data, current_arch, false),
+        // Mach-O little-endian header (64-bit or 32-bit)
+        [0xce | 0xcf, 0xfa, 0xed, 0xfe] => validate_macho_arch(data, current_arch, true),
+        // Fat (universal) Mach-O
+        [0xca, 0xfe, 0xba, 0xbe] => validate_fat_macho_arch(data, current_arch),
+        // ELF
+        [0x7f, b'E', b'L', b'F'] => validate_elf_arch(data, current_arch),
+        // PE (Windows)
+        [b'M', b'Z', ..] => validate_pe_arch(data, current_arch),
+        _ => {
+            if current_os == "macos" {
+                bail!("architecture mismatch: expected a macOS (Mach-O) binary");
+            } else if current_os == "linux" {
+                bail!("architecture mismatch: expected a Linux (ELF) binary");
+            }
+            bail!("architecture mismatch: expected a Windows (PE) binary");
+        }
+    }
+}
+
+const MACHO_CPU_TYPE_X86_64: u32 = 0x0100_0007;
+const MACHO_CPU_TYPE_ARM64: u32 = 0x0100_000C;
+const ELF_EM_X86_64: u16 = 62;
+const ELF_EM_AARCH64: u16 = 183;
+const PE_MACHINE_AMD64: u16 = 0x8664;
+
+fn expected_macho_cputype(arch: &str) -> Option<u32> {
+    match arch {
+        "x86_64" => Some(MACHO_CPU_TYPE_X86_64),
+        "aarch64" => Some(MACHO_CPU_TYPE_ARM64),
+        _ => None,
+    }
+}
+
+fn validate_macho_arch(data: &[u8], arch: &str, little_endian: bool) -> Result<()> {
+    if data.len() < 8 {
+        bail!("Mach-O header truncated");
+    }
+    let cputype = if little_endian {
+        u32::from_le_bytes([data[4], data[5], data[6], data[7]])
+    } else {
+        u32::from_be_bytes([data[4], data[5], data[6], data[7]])
+    };
+
+    let Some(expected) = expected_macho_cputype(arch) else {
+        return Ok(());
+    };
+
+    if cputype != expected {
+        let actual_name = match cputype {
+            MACHO_CPU_TYPE_X86_64 => "x86_64",
+            MACHO_CPU_TYPE_ARM64 => "arm64",
+            _ => "unknown",
+        };
+        bail!("architecture mismatch: binary is for {actual_name}, but this system is {arch}");
+    }
+    Ok(())
+}
+
+fn validate_fat_macho_arch(data: &[u8], arch: &str) -> Result<()> {
+    if data.len() < 8 {
+        bail!("fat Mach-O header truncated");
+    }
+    let Some(expected) = expected_macho_cputype(arch) else {
+        return Ok(());
+    };
+
+    let nfat = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    if nfat > 20 {
+        bail!("fat Mach-O header has too many architectures ({nfat}), likely corrupted");
+    }
+
+    let mut offset = 8usize;
+    for _ in 0..nfat {
+        if offset + 4 > data.len() {
+            bail!("fat Mach-O arch entry truncated");
+        }
+        let cputype = u32::from_be_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]);
+        if cputype == expected {
+            return Ok(());
+        }
+        offset += 20; // fat_arch struct is 20 bytes
+    }
+
+    bail!("architecture mismatch: universal binary does not contain a slice for {arch}");
+}
+
+fn validate_elf_arch(data: &[u8], arch: &str) -> Result<()> {
+    if data.len() < 20 {
+        bail!("ELF header truncated");
+    }
+    let little_endian = data[5] == 1;
+    let e_machine = if little_endian {
+        u16::from_le_bytes([data[18], data[19]])
+    } else {
+        u16::from_be_bytes([data[18], data[19]])
+    };
+
+    let expected = match arch {
+        "x86_64" => ELF_EM_X86_64,
+        "aarch64" => ELF_EM_AARCH64,
+        _ => return Ok(()),
+    };
+
+    if e_machine != expected {
+        let actual_name = match e_machine {
+            ELF_EM_X86_64 => "x86_64",
+            ELF_EM_AARCH64 => "aarch64",
+            _ => "unknown",
+        };
+        bail!("architecture mismatch: binary is for {actual_name}, but this system is {arch}");
+    }
+    Ok(())
+}
+
+fn validate_pe_arch(data: &[u8], arch: &str) -> Result<()> {
+    if data.len() < 64 {
+        bail!("PE header truncated");
+    }
+    let pe_offset = u32::from_le_bytes([data[60], data[61], data[62], data[63]]) as usize;
+    if pe_offset + 6 > data.len() {
+        bail!("PE header truncated");
+    }
+    if data[pe_offset..pe_offset + 4] != [b'P', b'E', 0, 0] {
+        bail!("invalid PE signature");
+    }
+    let machine = u16::from_le_bytes([data[pe_offset + 4], data[pe_offset + 5]]);
+
+    let expected = match arch {
+        "x86_64" => PE_MACHINE_AMD64,
+        _ => return Ok(()),
+    };
+
+    if machine != expected {
+        bail!("architecture mismatch: binary is for a different CPU architecture");
     }
     Ok(())
 }
@@ -285,7 +435,9 @@ pub fn build_client(
 
 #[cfg(test)]
 mod tests {
-    use super::{DownloadErrorKind, classify_download_error};
+    use super::{
+        DownloadErrorKind, classify_download_error, validate_binary_arch, validate_binary_magic,
+    };
 
     #[test]
     fn classifies_timeout_errors() {
@@ -370,5 +522,100 @@ mod tests {
             classify_download_error("some completely unknown error"),
             DownloadErrorKind::Other
         );
+    }
+
+    #[test]
+    fn validate_magic_rejects_without_hex_leak() {
+        let bad = b"not a binary at all!!!";
+        let err = validate_binary_magic(bad).unwrap_err();
+        let msg = err.to_string();
+        assert!(!msg.contains("6e 6f"), "hex bytes leaked in error: {msg}");
+        assert!(msg.contains("not a valid executable"));
+    }
+
+    #[test]
+    fn validate_arch_accepts_current_platform_macho_arm64() {
+        // Mach-O 64-bit little-endian, cputype = ARM64 (0x0100000C)
+        let mut data = vec![0xcf, 0xfa, 0xed, 0xfe]; // magic
+        data.extend_from_slice(&0x0100_000Cu32.to_le_bytes()); // cputype ARM64
+        data.extend_from_slice(&[0; 24]); // pad
+        let result = validate_binary_arch(&data);
+        if cfg!(target_arch = "aarch64") {
+            assert!(result.is_ok(), "should accept arm64 on arm64: {result:?}");
+        } else {
+            assert!(result.is_err(), "should reject arm64 on non-arm64");
+        }
+    }
+
+    #[test]
+    fn validate_arch_accepts_current_platform_macho_x86_64() {
+        let mut data = vec![0xcf, 0xfa, 0xed, 0xfe]; // magic
+        data.extend_from_slice(&0x0100_0007u32.to_le_bytes()); // cputype X86_64
+        data.extend_from_slice(&[0; 24]); // pad
+        let result = validate_binary_arch(&data);
+        if cfg!(target_arch = "x86_64") {
+            assert!(result.is_ok(), "should accept x86_64 on x86_64: {result:?}");
+        } else {
+            assert!(result.is_err(), "should reject x86_64 on non-x86_64");
+        }
+    }
+
+    #[test]
+    fn validate_arch_rejects_truncated() {
+        let data = vec![0xcf, 0xfa, 0xed]; // too short
+        assert!(validate_binary_arch(&data).is_err());
+    }
+
+    #[test]
+    fn validate_arch_fat_macho_with_matching_slice() {
+        // Fat Mach-O with 1 slice: ARM64
+        let mut data = vec![0xca, 0xfe, 0xba, 0xbe]; // fat magic
+        data.extend_from_slice(&1u32.to_be_bytes()); // nfat_arch = 1
+        data.extend_from_slice(&0x0100_000Cu32.to_be_bytes()); // cputype ARM64
+        data.extend_from_slice(&[0; 16]); // rest of fat_arch
+        let result = validate_binary_arch(&data);
+        if cfg!(target_arch = "aarch64") {
+            assert!(
+                result.is_ok(),
+                "fat with arm64 slice should pass on arm64: {result:?}"
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "fat with only arm64 should fail on non-arm64"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_arch_elf_x86_64() {
+        let mut data = vec![0x7f, b'E', b'L', b'F']; // ELF magic
+        data.push(2); // 64-bit
+        data.push(1); // little-endian
+        data.extend_from_slice(&[0; 12]); // pad to offset 18
+        data.extend_from_slice(&62u16.to_le_bytes()); // e_machine = EM_X86_64
+        let result = validate_binary_arch(&data);
+        if cfg!(target_arch = "x86_64") {
+            assert!(
+                result.is_ok(),
+                "ELF x86_64 should pass on x86_64: {result:?}"
+            );
+        } else {
+            assert!(result.is_err(), "ELF x86_64 should fail on non-x86_64");
+        }
+    }
+
+    #[test]
+    fn validate_arch_error_no_hex_leak() {
+        // Wrong arch Mach-O: x86_64 binary header
+        let mut data = vec![0xcf, 0xfa, 0xed, 0xfe];
+        data.extend_from_slice(&0x0100_0007u32.to_le_bytes()); // X86_64
+        data.extend_from_slice(&[0; 24]);
+        if cfg!(target_arch = "aarch64") {
+            let err = validate_binary_arch(&data).unwrap_err();
+            let msg = err.to_string();
+            assert!(!msg.contains("0x"), "hex leaked in arch error: {msg}");
+            assert!(msg.contains("architecture mismatch"));
+        }
     }
 }
