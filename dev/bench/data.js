@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782392652682,
+  "lastUpdate": 1782441330935,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -23198,6 +23198,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 13430,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0f30c9e40d73d104d539db200c4b740ad8956732",
+          "message": "feat(turn-model): derive_turns 作 turn 边界单一权威 (#542) (#543)\n\n* docs(opsx): propose first-class-turn (shared derive_turns turn authority)\n\n把 turn 从 context-tracking 副产品计数器重构为 cdt-analyze 共享 derive_turns\n单一权威（新 capability turn-model），桌面 context-tracking 消费、未来 CLI/MCP\nAPI 共享。turn 定义与 Claude Stop-界定 turn 对齐；折叠无驱动续写（compact 由\n正交 phase 表达）；修 injection id 派生（chunkId-based）。\n\n经两轮 codex 对抗审查 + 843 会话数据 + claude-code-guide 权威查证。\nblock② (redesign-cli-mcp-api) 的 API/MCP/CLI 保留在其分支，后续消费本地基。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat(turn-model): derive_turns 作 turn 边界单一权威 (#542)\n\n把 turn 升为共享 core 一等公民——抽 `derive_turns(chunks) -> Vec<Turn>` 落\ncdt-analyze，作 turn 边界 + 编号的单一权威；context-tracking 改为消费它标注\ninjection.turnIndex，不再内联自增。未来 CLI/MCP get_turn 共消费同一派生，消除\n「桌面 Turn N 与 API turn 序号分叉」（issue #542 地基）。\n\n- turn-model: 新增 Turn/TurnDriver + derive_turns（D3/D4），含 AI-only 折叠（D5）：\n  被 compact/中断切出、无驱动的续写 AIChunk 折进所属 turn，不各占 turn 号；turn\n  与 phase 正交，一个 turn 可跨压缩边界。turn 定义对齐 Claude Stop-界定 turn（D1）。\n- context-tracking: session.rs 先 derive_turns 建 chunk_id→turn.index 映射查表标\n  turnIndex；aggregator.rs injection id 改按 chunkId 派生（D7）——折叠后多个 AIChunk\n  共享 turnIndex，按 turn 号拼 id 会撞车（前端 {#each} key 重复会崩），按 chunkId 唯一。\n- D9: [User, Compact, AIChunk] 中 A0 折进 user 的 turn（turn 跨 phase），user 不算\n  被打断；其 user-message injection 因压缩前 phase 无 carrier 仍丢弃（phase 重置承载\n  缺口，与 turn 归属正交）。\n- 守卫: corpus_q2_aionly.rs 收敛为正式守卫，本机 844 session 断言 turn 计数 == 驱动\n  输入数（9223==9223，0 headless）；corpus_turn_fidelity #541 守卫继续通过。\n\n唯一用户可感知变化：重压缩会话的 \"Turn N\" 标签纠错（compact 续写归入所属提问轮）。\n聊天流渲染 / token 统计 / phase / 导航全不变。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive first-class-turn\n\narchive 时修正 context-tracking delta 的 MODIFIED header：保留原 title\n\"Compute cumulative context statistics per turn\"（title 抽象为 per AI group\n是 design F2/F3/F5 记录的 cleanup followup，本 change 只在 body 澄清 per-AI-group\n粒度）。turn-model 主 spec 新建（4 Requirement）。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-26T10:32:03+08:00",
+          "tree_id": "d2c4f272963cb0263a8a0f144dd781088a5c225b",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/0f30c9e40d73d104d539db200c4b740ad8956732"
+        },
+        "date": 1782441330607,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 115.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1113,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4647,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.861,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 9.797,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 40.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 32.77,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 289.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1192,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 4735,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 4816,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 36750,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.247,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 60.47,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 616.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6090,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 201,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2022,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 55.51,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 561.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5619,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 119.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1207,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.812,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9069,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 973.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9170,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 989.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 47.73,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 502,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 93.43,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 939.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9507,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 225.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1410,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12770,
             "unit": "µs"
           }
         ]
