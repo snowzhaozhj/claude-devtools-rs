@@ -1,5 +1,6 @@
 ---
 source: crates/cdt-cli/tests/cli_help_snapshots.rs
+assertion_line: 111
 expression: text
 ---
 One-click setup (MCP registration + Skills installation)
@@ -23,7 +24,8 @@ Options:
           Scope to a project (name or encoded ID; use --project=<id> for encoded IDs)
 
       --json[=<JSON>]
-          Select JSON fields (comma-separated), implies --format json. Without value: list available fields. Usage: --json=field1,field2
+          Select JSON fields (comma-separated), implies --format json. Without value: list available
+          fields. Usage: --json=field1,field2
 
       --no-truncate
           Do not truncate fields in table mode
@@ -32,7 +34,7 @@ Options:
           Scope: local (private), project (shared .mcp.json), user (global)
 
           Possible values:
-          - local:   Private (~/. claude/settings.local.json), not version controlled
+          - local:   Private (~/.claude/settings.local.json), not version controlled
           - project: Shared (.mcp.json / .claude/skills/), can be committed
           - user:    Global (~/.claude/settings.json / ~/.claude/skills/), all projects
           

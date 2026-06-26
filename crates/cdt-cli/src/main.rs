@@ -311,7 +311,7 @@ enum McpAction {
 
 #[derive(Clone, ValueEnum)]
 enum SetupScope {
-    /// Private (~/. claude/settings.local.json), not version controlled
+    /// Private (~/.claude/settings.local.json), not version controlled
     Local,
     /// Shared (.mcp.json / .claude/skills/), can be committed
     Project,
