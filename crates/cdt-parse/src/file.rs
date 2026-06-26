@@ -22,7 +22,7 @@ const SCANNER_BUF_BYTES: usize = 32 * 1024;
 ///
 /// - 用 `fs.open_read(path)` 拿 `Box<dyn AsyncRead + Send + Unpin>`，
 ///   `BufReader` 容量 32 KiB 与 SFTP packet 上限对齐
-/// - 收集每一条成功解析的 `ParsedMessage`：坏行 `tracing::warn!` 后跳过
+/// - 收集每一条成功解析的 `ParsedMessage`：坏行 `tracing::debug!` 后跳过
 /// - **不**对同 `requestId` 去重（详 `parse_file` doc 内同段说明）
 ///
 /// 返回值保持文件顺序。

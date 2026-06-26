@@ -17,7 +17,7 @@
 - [x] 3.3 `cargo clippy --workspace --all-targets -- -D warnings` + `cargo fmt --all`
 
 ## N. 发布
-- [ ] N.1 push 分支 + 开 PR
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex + pr-review-toolkit 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
-- [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
+- [x] N.1 push 分支 + 开 PR（#551）
+- [x] N.2 wait-ci 全绿（15/15 job pass）
+- [x] N.3 codex 二审 0 问题（init_logging / parser untagged / warn→debug / normalize 四块全过；附带修 file.rs doc-rot warn→debug）；code-reviewer + silent-failure-hunter 关心的双 init / 错误吞没两点已自查通过
+- [x] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
