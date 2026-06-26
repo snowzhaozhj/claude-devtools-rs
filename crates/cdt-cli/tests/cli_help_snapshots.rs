@@ -1,34 +1,44 @@
 //! CLI help 输出的快照测试。
 //!
-//! 锁定 `cdt --help` / 子命令 `--help` 的完整输出，
-//! 防止意外修改用户可见的命令行界面。版本号会被过滤，
-//! clap 的 help 换行会被 normalize（本地终端宽时不换行，
-//! CI 无 TTY 时 fallback 到 100 列换行）。
+//! 锁定 `cdt --help` / 子命令 `--help` 的完整输出，防止意外修改用户可见的命令行界面。
+//!
+//! clap 的 help 折行宽度依赖运行环境（workspace 构建启用了 clap 的 `wrap_help`，
+//! 于是探测终端：dev 有 tty → 宽 → 不折行；CI 无 tty → 回退默认 100 列 → 折行），
+//! 单 crate 构建甚至不折行。为不让"测试"绑架"生产 help 的自适应宽度"，**生产侧保持
+//! 终端自适应不动**，改为在测试侧把环境相关的软折行 normalize 掉——见
+//! [`normalize_help_wrapping`]。版本号也被过滤。这样快照与折行宽度无关，跨
+//! cargo test / nextest / CI 确定性，未来新增 flag 不再 flaky。
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 fn cdt_bin() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_cdt"));
     cmd.env("RUST_LOG", "off");
-    // clap 的 help 换行宽度来自 terminal_size，它会依次探测 stdout/stderr/stdin 的 tty。
-    // `.output()` 已管道 stdout/stderr，但 stdin 默认继承——本地交互式 shell 下 stdin 是
-    // 宽 tty 会让 clap 不换行，CI 无 tty 则回退默认列宽换行，导致快照跨环境 flaky。
-    // 显式 null 掉三条 std 流，让 clap 永远走无 tty 默认宽度，快照确定性。
-    cmd.stdin(Stdio::null());
     cmd
 }
 
+/// 把 clap help 的软折行规整成与宽度无关的规范形式：每个 option 的描述（无论是否被
+/// 折行、也无论是 inline 列对齐格式还是 block 缩进格式）合并回单行。
+///
+/// 判定"软折行续行"：缩进 ≥ 10 且非空，且不是结构行——`[default: ...]` /
+/// `[possible values: ...]` 以 `[` 起首，possible-value 列项以 `- ` 起首，二者保持独立；
+/// 也不并入空行（段落分隔）。其余缩进 ≥ 10 的散文行都并入上一行。
 fn normalize_help_wrapping(text: &str) -> String {
     let mut lines: Vec<String> = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim_start();
         let leading = line.len() - trimmed.len();
-        // clap 续行缩进 ≥ 25 个空格（option 描述列对齐位置）
-        if leading >= 25 && !trimmed.is_empty() {
+        let is_continuation = leading >= 10
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('[')
+            && !trimmed.starts_with("- ");
+        if is_continuation {
             if let Some(prev) = lines.last_mut() {
-                prev.push(' ');
-                prev.push_str(trimmed);
-                continue;
+                if !prev.trim().is_empty() {
+                    prev.push(' ');
+                    prev.push_str(trimmed);
+                    continue;
+                }
             }
         }
         lines.push(line.to_string());
