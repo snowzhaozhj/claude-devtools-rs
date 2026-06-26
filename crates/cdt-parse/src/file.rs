@@ -22,7 +22,7 @@ const SCANNER_BUF_BYTES: usize = 32 * 1024;
 ///
 /// - 用 `fs.open_read(path)` 拿 `Box<dyn AsyncRead + Send + Unpin>`，
 ///   `BufReader` 容量 32 KiB 与 SFTP packet 上限对齐
-/// - 收集每一条成功解析的 `ParsedMessage`：坏行 `tracing::warn!` 后跳过
+/// - 收集每一条成功解析的 `ParsedMessage`：坏行 `tracing::debug!` 后跳过
 /// - **不**对同 `requestId` 去重（详 `parse_file` doc 内同段说明）
 ///
 /// 返回值保持文件顺序。
@@ -59,7 +59,9 @@ pub async fn parse_file_via_fs(
             Ok(Some(msg)) => out.push(msg),
             Ok(None) => {}
             Err(ParseError::MalformedLine { line, source }) => {
-                tracing::warn!(
+                // 坏行（活动会话半写、个别损坏行）是处理外部数据的预期瑕疵——记 debug
+                // 不记 warn，对齐 discovery 路径（project_scanner / project_path_resolver）。
+                tracing::debug!(
                     file = %path.display(),
                     line,
                     error = %source,
@@ -67,7 +69,7 @@ pub async fn parse_file_via_fs(
                 );
             }
             Err(ParseError::SchemaMismatch { line, reason }) => {
-                tracing::warn!(
+                tracing::debug!(
                     file = %path.display(),
                     line,
                     reason = %reason,

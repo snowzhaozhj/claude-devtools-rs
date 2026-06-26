@@ -24,6 +24,9 @@
 - **crate 边界**：`cdt-core` / `cdt-analyze` 保 **sync** + no runtime deps；`tokio` 只加到真做 I/O 的 leaf crate；跨 crate import 只走 public API（`pub use` from `lib.rs`），**不**伸进 `crate::internal::...`；共用类型放 `cdt-core`，不跨 leaf re-export
 - **Error 二分**：library crate 用 `thiserror` 定 `pub enum <Crate>Error`，非 test 路径**禁** `panic!` / `unwrap()`；binary `cdt-cli` 用 `anyhow::Result<()>` + `.context()`。验证只在系统边界（external input / fs / IPC / HTTP / SSH）
 - **`tracing_subscriber` 仅在 `cdt-cli::main` 初始化一次**——library crate 不装 global subscriber；用结构化字段 `tracing::info!(session_id = %id, ...)`
+- **日志级别纪律（边界 + 语义双闸门，防 CLI/MCP 噪音回归）**：
+  - **边界**：`cdt-cli` 默认**全静默**（`init_logging` 默认 filter `off`），诊断日志是 opt-in（`-v`/`-vv`/`-vvv` = warn/info/debug，或 `RUST_LOG`）。这保证 `--format json/jsonl`、`mcp serve`（stdio JSON-RPC）、管道、终端永不被 tracing 污染，且**与 library 各处用何级别无关**——不靠"默认值恰好够低"赌。命令自身错误走 `anyhow::Result` 由 main 打印，与诊断日志两条路，static `off` 不吞它。**禁止**把这个默认改成 `info`/`warn` 基线（v0.6/0.7 `stats` 刷 321 行 WARN 的根因就是默认 `info` 基线泄漏 library WARN）。
+  - **语义**：处理外部数据的**预期内瑕疵**（坏 JSONL 行、重复 tool_use/tool_result id、schema 漂移）SHALL 记 `debug!` **不记 `warn!`**——这类是常态不是异常，逐条 warn 是 warning fatigue 反模式。有计数器的（如 `ToolLinkingResult::duplicates_dropped`）走聚合，不逐条刷。`warn!` 只留给"意外且需要有人采取行动"的事件。参照已对齐的 `cdt-parse::file` / `cdt-discover::project_scanner`。
 - **解析双形态**：`parse_entry(line) -> Result<_>`（sync per-line）+ `parse_file(path) -> impl Stream`（async per-file）
 - **依赖版本住 workspace 根**：`[workspace.dependencies]`，crate-level 用 `dep = { workspace = true }`；新依赖要 justify
 - **测试**：每 capability spec scenario 至少一个 `#[test]`，命名用 prose（如 `fn user_question_then_ai_response_emits_two_chunks`）；snapshot-heavy 用 `insta`

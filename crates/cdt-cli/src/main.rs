@@ -52,6 +52,11 @@ struct Cli {
     #[arg(long, global = true)]
     no_truncate: bool,
 
+    /// Increase diagnostic verbosity (-v warn, -vv info, -vvv debug).
+    /// All output is silent by default; `RUST_LOG` overrides this entirely.
+    #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -2180,16 +2185,21 @@ fn format_ms(ms: i64) -> String {
 // main
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    clap_complete::CompleteEnv::with_factory(Cli::command)
-        .var(completions::ENV_VAR)
-        .complete();
-    let default_filter = if cfg!(debug_assertions) {
-        "info"
-    } else {
-        "info,cdt_api::perf=warn"
+/// 边界层日志闸门：CLI 默认全静默，诊断日志是 opt-in。
+///
+/// 任何输出格式（table / json / jsonl）以及 `mcp serve` 的 stdio JSON-RPC 默认 `off`——
+/// stderr 不打任何 tracing 日志，保证终端、管道、下游消费者、MCP 协议永不被污染，
+/// 且与 library 各处用何日志级别无关（结构性解耦，不靠"级别恰好够低"）。命令本身的
+/// 错误走 `anyhow::Result` 由 main 返回时打印，与诊断日志两条路，static `off` 不会吞掉它。
+/// `-v`/`-vv`/`-vvv` 逐级抬到 warn/info/debug；`RUST_LOG` 显式覆盖一切。
+fn init_logging(verbose: u8) {
+    let default_filter = match verbose {
+        0 => "off",
+        1 => "warn",
+        2 => "info",
+        _ => "debug",
     };
+
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
@@ -2197,6 +2207,13 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| default_filter.into()),
         )
         .init();
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    clap_complete::CompleteEnv::with_factory(Cli::command)
+        .var(completions::ENV_VAR)
+        .complete();
 
     let cli = Cli::parse();
 
@@ -2214,6 +2231,9 @@ async fn main() -> Result<()> {
     } else {
         (cli.format, None)
     };
+
+    // 边界层：CLI 默认全静默，日志 opt-in。详见 init_logging。
+    init_logging(cli.verbose);
 
     match cli.command {
         Command::Completions { shell } => {

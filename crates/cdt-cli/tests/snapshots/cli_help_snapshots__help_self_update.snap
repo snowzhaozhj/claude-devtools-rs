@@ -14,4 +14,5 @@ Options:
       --install-path <INSTALL_PATH>  Install path (default: replace current executable)
       --json[=<JSON>]                Select JSON fields (comma-separated), implies --format json. Without value: list available fields. Usage: --json=field1,field2
       --no-truncate                  Do not truncate fields in table mode
+  -v, --verbose...                   Increase diagnostic verbosity (-v warn, -vv info, -vvv debug). All output is silent by default; `RUST_LOG` overrides this entirely
   -h, --help                         Print help

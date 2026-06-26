@@ -54,8 +54,11 @@ struct RawEntry {
 struct RawAttachment {
     #[serde(rename = "type", default)]
     attachment_type: Option<String>,
+    // `prompt` 可能是纯文本，也可能是多模态 content-block 数组（带图片的排队命令）。
+    // 用 `MessageContent`（untagged）同时吃下两态——曾经定成 `Option<String>` 导致带图片的
+    // queued_command 整行 serde 失败、entry 被丢弃 + 刷 warn。
     #[serde(default)]
-    prompt: Option<String>,
+    prompt: Option<MessageContent>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,7 +96,7 @@ pub fn parse_entry_at(line: &str, line_number: usize) -> Result<Option<ParsedMes
     };
 
     let Some(message_type) = parse_message_type(raw.entry_type.as_deref()) else {
-        return try_parse_queued_command(&raw, &uuid);
+        return Ok(try_parse_queued_command(&raw, &uuid));
     };
 
     let timestamp = parse_timestamp(raw.timestamp.as_deref());
@@ -246,32 +249,35 @@ fn extract_tool_results(content: &MessageContent) -> Vec<ToolResult> {
 }
 
 #[allow(clippy::unnecessary_wraps)]
-fn try_parse_queued_command(
-    raw: &RawEntry,
-    uuid: &str,
-) -> Result<Option<ParsedMessage>, ParseError> {
+fn message_content_is_empty(content: &MessageContent) -> bool {
+    match content {
+        MessageContent::Text(t) => t.is_empty(),
+        MessageContent::Blocks(b) => b.is_empty(),
+    }
+}
+
+fn try_parse_queued_command(raw: &RawEntry, uuid: &str) -> Option<ParsedMessage> {
     let is_attachment = raw.entry_type.as_deref() == Some("attachment");
     if !is_attachment {
-        return Ok(None);
+        return None;
     }
-    let Some(att) = raw.attachment.as_ref() else {
-        return Ok(None);
-    };
+    let att = raw.attachment.as_ref()?;
     if att.attachment_type.as_deref() != Some("queued_command") {
-        return Ok(None);
+        return None;
     }
-    let Some(prompt) = att.prompt.as_ref().filter(|p| !p.is_empty()) else {
-        return Ok(None);
-    };
+    let content = att
+        .prompt
+        .as_ref()
+        .filter(|c| !message_content_is_empty(c))?;
     let timestamp = parse_timestamp(raw.timestamp.as_deref());
-    Ok(Some(ParsedMessage {
+    Some(ParsedMessage {
         uuid: uuid.to_owned(),
         parent_uuid: raw.parent_uuid.clone(),
         message_type: MessageType::User,
         category: MessageCategory::User,
         timestamp,
         role: Some("user".to_owned()),
-        content: MessageContent::Text(prompt.clone()),
+        content: content.clone(),
         usage: None,
         model: None,
         cwd: raw.cwd.clone(),
@@ -288,5 +294,5 @@ fn try_parse_queued_command(
         request_id: raw.request_id.clone(),
         tool_use_result: None,
         is_queued_input: true,
-    }))
+    })
 }
