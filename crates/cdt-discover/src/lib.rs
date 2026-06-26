@@ -42,7 +42,7 @@ pub use path_decoder::{
     looks_like_absolute_path, resolve_project_name_from_jsonl,
 };
 pub use project_path_resolver::ProjectPathResolver;
-pub use project_scanner::{CwdCache, ProjectScanner, new_cwd_cache};
+pub use project_scanner::{CwdCache, ProjectScanner, SessionStat, new_cwd_cache};
 pub use search_cache::SearchTextCache;
 pub use session_search::{SearchConfig, SessionSearcher};
 pub use worktree_grouper::{

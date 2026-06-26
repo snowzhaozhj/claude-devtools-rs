@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cdt_api::{
-    DataApi, LocalDataApi, PaginatedRequest, SearchRequest, SessionDetail, SessionDetailResponse,
+    DataApi, LocalDataApi, SearchRequest, SessionDetail, SessionDetailResponse, SessionListFilter,
     SessionSummary,
 };
 
@@ -48,22 +48,21 @@ impl QueryEngine {
     }
 
     /// List sessions with optional filter (single project).
+    ///
+    /// Delegates to `LocalDataApi::list_sessions_filtered` (streaming scan).
     pub async fn list_sessions(
         &self,
         project_id: &str,
         filter: &QueryFilter,
     ) -> Result<Vec<SessionSummary>, QueryError> {
-        let pagination = PaginatedRequest {
-            page_size: usize::MAX,
-            cursor: None,
-        };
-        let resp = self.api.list_sessions_sync(project_id, &pagination).await?;
-
-        Ok(filter.apply(resp.items))
+        let f = filter.to_session_list_filter();
+        Ok(self.api.list_sessions_filtered(project_id, &f).await?)
     }
 
     /// List sessions across all projects, with filter applied.
-    /// Returns sessions sorted by timestamp descending.
+    ///
+    /// Fan-out per project → collect filtered results → global mtime sort →
+    /// truncate to limit.
     pub async fn list_sessions_cross_project(
         &self,
         filter: &QueryFilter,
@@ -74,12 +73,15 @@ impl QueryEngine {
             .await
             .map_err(|e| QueryError::Api(e.to_string()))?;
 
-        let pagination = PaginatedRequest {
-            page_size: usize::MAX,
-            cursor: None,
+        let mut all_sessions = Vec::new();
+        let per_project_filter = SessionListFilter {
+            since: filter.since,
+            until: filter.until,
+            grep: filter.grep.clone(),
+            branch: None,
+            limit: None,
         };
 
-        let mut all_sessions = Vec::new();
         for group in &groups {
             if let Some(since) = filter.since {
                 if group.most_recent_session.is_some_and(|mtime| mtime < since) {
@@ -87,12 +89,18 @@ impl QueryEngine {
                 }
             }
             for wt in &group.worktrees {
-                match self.api.list_sessions_sync(&wt.id, &pagination).await {
-                    Ok(resp) => {
-                        for mut s in resp.items {
-                            s.project_name = Some(group.name.clone());
-                            all_sessions.push(s);
+                match self
+                    .api
+                    .list_sessions_filtered(&wt.id, &per_project_filter)
+                    .await
+                {
+                    Ok(mut sessions) => {
+                        for s in &mut sessions {
+                            if s.project_name.is_none() {
+                                s.project_name = Some(group.name.clone());
+                            }
                         }
+                        all_sessions.extend(sessions);
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -107,7 +115,11 @@ impl QueryEngine {
 
         all_sessions.sort_by_key(|s| std::cmp::Reverse(s.timestamp));
 
-        Ok(filter.apply(all_sessions))
+        if let Some(limit) = filter.limit {
+            all_sessions.truncate(limit);
+        }
+
+        Ok(all_sessions)
     }
 
     /// Get session detail (full parse + build), then apply query options.

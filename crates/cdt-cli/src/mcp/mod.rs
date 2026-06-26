@@ -163,7 +163,6 @@ impl CdtMcpServer {
             since: None,
             until: None,
             grep: None,
-            min_messages: None,
             limit: Some(1),
         };
         let sessions = if let Some(p) = project {
@@ -288,7 +287,6 @@ impl CdtMcpServer {
             since: since_ms,
             until: until_ms,
             grep: params.grep,
-            min_messages: None,
             limit: None,
         };
 

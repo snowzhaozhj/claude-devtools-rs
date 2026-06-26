@@ -21,7 +21,7 @@ pub use ipc::{
     LocalDataApi, METADATA_SCAN_CONCURRENCY, MemoryFileContent, MemoryLayer, MemoryLayerKind,
     PaginatedRequest, PaginatedResponse, ProjectInfo, ProjectMemory, ProjectSessionPrefs,
     PushEvent, SearchRequest, SessionDetail, SessionDetailMetadata, SessionDetailMetrics,
-    SessionDetailResponse, SessionMetadataUpdate, SessionSummary, SshAuthMethod, SshConnectRequest,
-    SshConnectionResult, SshState, WslDistroCandidate, WslDistroScanReport,
+    SessionDetailResponse, SessionListFilter, SessionMetadataUpdate, SessionSummary, SshAuthMethod,
+    SshConnectRequest, SshConnectionResult, SshState, WslDistroCandidate, WslDistroScanReport,
 };
 pub use notifier::NotificationPipeline;

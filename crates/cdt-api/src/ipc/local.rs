@@ -3655,6 +3655,141 @@ async fn scan_metadata_for_page_batched(
     }
 }
 
+/// CLI/MCP 路径用的 session 过滤条件。
+/// 与 sidebar（IPC）路径的骨架+SSE 模式独立——sidebar 不走此 struct。
+#[derive(Debug, Clone, Default)]
+pub struct SessionListFilter {
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+    pub grep: Option<String>,
+    pub branch: Option<String>,
+    pub limit: Option<usize>,
+}
+
+impl LocalDataApi {
+    /// CLI/MCP 专用：流式扫描 session 列表。
+    ///
+    /// 与 `list_sessions_sync`（走 `list_sessions_skeleton` 全量 cwd + metadata）
+    /// 不同，本方法：
+    /// 1. `list_session_entries` 纯 readdir + since 预裁（不读 JSONL）
+    /// 2. 按 mtime 顺序逐个提取 metadata → 过滤 → 累积到 limit 即停
+    /// 3. 只对最终结果集补 cwd
+    ///
+    /// sidebar（IPC）路径仍走 async `list_sessions`（骨架+SSE），不受影响。
+    pub async fn list_sessions_filtered(
+        &self,
+        project_id: &str,
+        filter: &SessionListFilter,
+    ) -> Result<Vec<SessionSummary>, ApiError> {
+        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
+        let scanner = ProjectScanner::new_with_cwd_cache(
+            fs.clone(),
+            projects_dir.clone(),
+            self.shared_read_semaphore.clone(),
+            self.shared_cwd_cache.clone(),
+        );
+
+        let entries = scanner
+            .list_session_entries(project_id, filter.since)
+            .await
+            .map_err(|e| ApiError::internal(format!("list session entries: {e}")))?;
+
+        let base_dir = cdt_discover::path_decoder::extract_base_dir(project_id);
+        let dir = projects_dir.join(base_dir);
+        let limit = filter.limit.unwrap_or(usize::MAX);
+        let grep_lower = filter.grep.as_deref().map(str::to_lowercase);
+        let branch_lower = filter.branch.as_deref().map(str::to_lowercase);
+
+        let mut matched_entries: Vec<&cdt_discover::SessionStat> = Vec::new();
+        let mut matched_metas: Vec<SessionMetadata> = Vec::new();
+
+        for entry in &entries {
+            if let Some(until) = filter.until {
+                if entry.created_ms > until {
+                    continue;
+                }
+            }
+
+            let jsonl_path = dir.join(format!("{}.jsonl", entry.id));
+            let meta =
+                extract_session_metadata_cached(&self.metadata_cache, &*fs, &ctx, &jsonl_path)
+                    .await;
+
+            if let Some(ref needle) = grep_lower {
+                if !needle.is_empty() {
+                    let title_match = meta
+                        .title
+                        .as_deref()
+                        .is_some_and(|t| t.to_lowercase().contains(needle));
+                    if !title_match {
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(ref needle) = branch_lower {
+                let branch_match = meta
+                    .git_branch
+                    .as_deref()
+                    .is_some_and(|b| b.to_lowercase().contains(needle));
+                if !branch_match {
+                    continue;
+                }
+            }
+
+            matched_entries.push(entry);
+            matched_metas.push(meta);
+
+            if matched_entries.len() >= limit {
+                break;
+            }
+        }
+
+        let matched_stats: Vec<cdt_discover::SessionStat> = matched_entries
+            .iter()
+            .map(|e| cdt_discover::SessionStat {
+                id: e.id.clone(),
+                path: e.path.clone(),
+                mtime_ms: e.mtime_ms,
+                created_ms: e.created_ms,
+                size: e.size,
+            })
+            .collect();
+        let cwds = scanner.extract_cwds(&matched_stats).await;
+
+        let mut summaries = Vec::with_capacity(matched_entries.len());
+        for ((entry, meta), cwd) in matched_entries.into_iter().zip(matched_metas).zip(cwds) {
+            let mut summary = SessionSummary {
+                session_id: entry.id.clone(),
+                project_id: project_id.to_owned(),
+                timestamp: entry.mtime_ms,
+                created: entry.created_ms,
+                message_count: meta.message_count,
+                title: meta.title,
+                is_ongoing: meta.is_ongoing,
+                git_branch: meta.git_branch,
+                worktree_id: None,
+                worktree_name: None,
+                group_id: None,
+                cwd_relative_to_repo_root: None,
+                cwd,
+                project_name: None,
+                user_intents: meta.user_intents,
+                last_active: meta.last_active,
+                duration_ms: meta.duration_ms,
+                total_cost: meta.total_cost,
+                tool_error_count: meta.tool_error_count,
+                files_modified: meta.files_modified,
+                git_summary: meta.git_summary,
+            };
+            self.apply_worktree_meta(&mut summary);
+            summaries.push(summary);
+        }
+
+        Ok(summaries)
+    }
+}
+
 #[async_trait]
 impl DataApi for LocalDataApi {
     // =========================================================================

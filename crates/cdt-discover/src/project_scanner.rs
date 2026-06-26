@@ -209,16 +209,16 @@ impl ProjectScanner {
         (dir_name, result)
     }
 
-    /// 列出某个 project 的所有 session（带 mtime / size / cwd）。
+    /// 轻量 session 列表：纯 readdir + 可选 since 预裁 + mtime 降序排序。
     ///
-    /// 若 `pinned` 集合里命中某个 session id，返回条目的 `is_pinned = true`。
-    /// `cwd` 通过对每个 session 调 `extract_session_cwd`（head-read）填充，
-    /// 与 `scan_project_dir` 同口径，使 sidebar / session 列表行能展示 cwd badge。
-    pub async fn list_sessions(
+    /// 不读 JSONL 内容（不提取 cwd / metadata），返回 `SessionStat`（id / path /
+    /// mtime / created / size）。用于 CLI/MCP 流式扫描路径，在拿到轻量列表后
+    /// 按需对子集提取 metadata + cwd，避免全量 head-read。
+    pub async fn list_session_entries(
         &self,
         project_id: &str,
-        pinned: &BTreeSet<String>,
-    ) -> Result<Vec<Session>, DiscoverError> {
+        since_ms: Option<i64>,
+    ) -> Result<Vec<SessionStat>, DiscoverError> {
         let base_dir = extract_base_dir(project_id);
         let dir = self.projects_dir.join(base_dir);
         if self.fs.kind() != FsKind::Ssh && !self.fs.exists(&dir).await {
@@ -245,18 +245,46 @@ impl ProjectScanner {
                 Some(metadata) => metadata,
                 None => self.fs.stat(&full).await?,
             };
+            let mtime = stat.mtime_ms();
+            if let Some(since) = since_ms {
+                if mtime < since {
+                    continue;
+                }
+            }
             records.push(SessionStat {
                 id: id.to_string(),
                 path: full,
-                mtime_ms: stat.mtime_ms(),
+                mtime_ms: mtime,
                 created_ms: stat.created_ms(),
                 size: stat.size,
             });
         }
 
-        let cwds: Vec<Option<String>> = self.extract_cwds_for(&records).await;
+        records.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms).then_with(|| a.id.cmp(&b.id)));
+        Ok(records)
+    }
 
-        let mut sessions: Vec<Session> = records
+    /// 对一组 `SessionStat` 批量提取 cwd（head-read），返回与入参等长的
+    /// `Vec<Option<String>>`。公开给 `list_sessions_filtered` 等外部调用方
+    /// 在流式扫描结束后只对最终结果集补 cwd。
+    pub async fn extract_cwds(&self, entries: &[SessionStat]) -> Vec<Option<String>> {
+        self.extract_cwds_for(entries).await
+    }
+
+    /// 列出某个 project 的所有 session（带 mtime / size / cwd）。
+    ///
+    /// 若 `pinned` 集合里命中某个 session id，返回条目的 `is_pinned = true`。
+    /// `cwd` 通过对每个 session 调 `extract_session_cwd`（head-read）填充，
+    /// 与 `scan_project_dir` 同口径，使 sidebar / session 列表行能展示 cwd badge。
+    pub async fn list_sessions(
+        &self,
+        project_id: &str,
+        pinned: &BTreeSet<String>,
+    ) -> Result<Vec<Session>, DiscoverError> {
+        let records = self.list_session_entries(project_id, None).await?;
+        let cwds = self.extract_cwds_for(&records).await;
+
+        let sessions: Vec<Session> = records
             .into_iter()
             .zip(cwds)
             .map(|(rec, cwd)| Session {
@@ -268,15 +296,6 @@ impl ProjectScanner {
                 cwd,
             })
             .collect();
-        // 同 mtime 时 sid 字典序升序——k-way merge cursor 续页正确性依赖
-        // session 流稳定顺序，否则 read_dir 顺序非确定性会让 (mtime, sid)
-        // 指针的"严格之后"判定漂移。spec ipc-data-api §"Expose group session
-        // listing via k-way merge pagination" Scenario "同 mtime sid 稳序"。
-        sessions.sort_by(|a, b| {
-            b.last_modified
-                .cmp(&a.last_modified)
-                .then_with(|| a.id.cmp(&b.id))
-        });
         Ok(sessions)
     }
 
@@ -495,12 +514,12 @@ fn extract_cwd_from_iter<'a>(
     None
 }
 
-struct SessionStat {
-    id: String,
-    path: PathBuf,
-    mtime_ms: i64,
-    created_ms: i64,
-    size: u64,
+pub struct SessionStat {
+    pub id: String,
+    pub path: PathBuf,
+    pub mtime_ms: i64,
+    pub created_ms: i64,
+    pub size: u64,
 }
 
 #[cfg(test)]

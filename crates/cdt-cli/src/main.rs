@@ -281,17 +281,9 @@ enum SessionsAction {
         #[arg(long)]
         branch: Option<String>,
 
-        /// Only show ongoing sessions
-        #[arg(long)]
-        is_ongoing: bool,
-
         /// Filter by title keyword (case-insensitive)
         #[arg(long)]
         grep: Option<String>,
-
-        /// Only sessions with message count >= N
-        #[arg(long)]
-        min_messages: Option<usize>,
 
         /// Group by dimension: none / project / day
         #[arg(long, default_value = "none", add = ArgValueCandidates::new(completions::GroupBySessionsCompleter))]
@@ -506,9 +498,7 @@ async fn cmd_sessions_list(
     since: Option<&str>,
     until: Option<&str>,
     branch: Option<&str>,
-    is_ongoing: bool,
     grep: Option<&str>,
-    min_messages: Option<usize>,
     group_by: &str,
     json_fields: Option<&str>,
 ) -> Result<()> {
@@ -529,7 +519,6 @@ async fn cmd_sessions_list(
         since: since_ms,
         until: until_ms,
         grep: grep.map(ToOwned::to_owned),
-        min_messages,
         limit: Some(limit),
     };
 
@@ -557,9 +546,6 @@ async fn cmd_sessions_list(
                 .as_deref()
                 .is_some_and(|gb| gb.to_lowercase().contains(&lower))
         });
-    }
-    if is_ongoing {
-        items.retain(|s| s.is_ongoing);
     }
 
     if items.is_empty() {
@@ -2254,9 +2240,7 @@ async fn main() -> Result<()> {
                 since,
                 until,
                 branch,
-                is_ongoing,
                 grep,
-                min_messages,
                 group_by,
             } => {
                 cmd_sessions_list(
@@ -2266,9 +2250,7 @@ async fn main() -> Result<()> {
                     since.as_deref(),
                     until.as_deref(),
                     branch.as_deref(),
-                    is_ongoing,
                     grep.as_deref(),
-                    min_messages,
                     &group_by,
                     json_fields,
                 )

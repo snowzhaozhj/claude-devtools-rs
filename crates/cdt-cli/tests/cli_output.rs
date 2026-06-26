@@ -157,7 +157,6 @@ fn search_with_nonexistent_project_fails() {
 
 #[test]
 fn sessions_list_with_filter_flags_accepted() {
-    // Verify the new flags are accepted by the parser (even if no results)
     let output = cdt_bin()
         .args([
             "--format",
@@ -168,14 +167,11 @@ fn sessions_list_with_filter_flags_accepted() {
             "list",
             "--grep",
             "test",
-            "--min-messages",
-            "5",
             "--since",
             "7d",
         ])
         .output()
         .unwrap();
-    // Project not found → error, but flags parsed OK (no clap error)
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stderr.contains("unexpected argument"),

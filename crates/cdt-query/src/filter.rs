@@ -1,4 +1,4 @@
-use cdt_api::SessionSummary;
+use cdt_api::SessionListFilter;
 
 /// Cross-session filter applied to session lists.
 #[derive(Debug, Clone, Default)]
@@ -14,44 +14,19 @@ pub struct QueryFilter {
     /// Empty string is treated as no-op.
     pub grep: Option<String>,
 
-    /// Only sessions with at least this many messages.
-    pub min_messages: Option<usize>,
-
     /// Maximum results to return (applied last, after all other filters).
     pub limit: Option<usize>,
 }
 
 impl QueryFilter {
-    pub fn apply(&self, sessions: Vec<SessionSummary>) -> Vec<SessionSummary> {
-        let mut result = sessions;
-
-        if let Some(since) = self.since {
-            result.retain(|s| s.timestamp >= since);
+    /// Convert to `SessionListFilter` for `LocalDataApi::list_sessions_filtered`.
+    pub fn to_session_list_filter(&self) -> SessionListFilter {
+        SessionListFilter {
+            since: self.since,
+            until: self.until,
+            grep: self.grep.clone(),
+            branch: None,
+            limit: self.limit,
         }
-
-        if let Some(until) = self.until {
-            result.retain(|s| s.created <= until);
-        }
-
-        if let Some(ref pattern) = self.grep {
-            if !pattern.is_empty() {
-                let lower = pattern.to_lowercase();
-                result.retain(|s| {
-                    s.title
-                        .as_deref()
-                        .is_some_and(|t| t.to_lowercase().contains(&lower))
-                });
-            }
-        }
-
-        if let Some(min) = self.min_messages {
-            result.retain(|s| s.message_count >= min);
-        }
-
-        if let Some(limit) = self.limit {
-            result.truncate(limit);
-        }
-
-        result
     }
 }
