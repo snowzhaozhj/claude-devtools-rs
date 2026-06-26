@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782460687223,
+  "lastUpdate": 1782478868575,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -23616,6 +23616,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12980,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4c6aeb3e79f83d8eafbbbc61e6b925a33ea9e40b",
+          "message": "fix(perf): streaming scan for list_sessions CLI/MCP path (#545) (#547)\n\n* fix(perf): streaming scan for list_sessions CLI/MCP path (#545)\n\nRoot cause: QueryEngine passed page_size=usize::MAX to list_sessions_sync,\ntriggering full JSONL metadata extraction + cwd head-read for ALL sessions\nbefore any filtering. 60 projects / 864 sessions → 1.7s (budget <150ms).\n\nFix: introduce streaming scan in LocalDataApi::list_sessions_filtered —\nreaddir + since pre-filter → iterate by mtime, extract metadata per entry,\napply filters (grep/branch), stop at limit → extract cwd only for results.\n\nChanges:\n- Split ProjectScanner::list_session_entries (pure readdir + since + sort)\n  from list_sessions (which now composes entries + cwd extraction)\n- Add LocalDataApi::list_sessions_filtered as inherent method (no trait change)\n- Simplify QueryEngine to thin pass-through delegating to filtered method\n- Remove CLI --min-messages and --is-ongoing params (not in spec, not in MCP)\n- Keep --branch (has spec scenario), still applied as post-filter in CLI\n\nBREAKING: `cdt sessions list --min-messages` and `--is-ongoing` removed.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli): wire branch filter into streaming scan; add tests + cleanup\n\nSelf-review found the branch filter was dead code: SessionListFilter.branch\nand the streaming-loop branch check existed but CLI still applied branch as a\npost-filter AFTER limit truncation (the pre-existing limit-before-branch bug).\n\n- Add `branch` to QueryFilter; thread CLI --branch through to streaming scan\n- Cross-project: filter branch per-project, apply limit globally after sort\n  (fixes results <limit when matching sessions span multiple projects)\n- Remove CLI branch post-filter\n- extract_cwds now takes &[&Path] instead of cloning SessionStat vec\n- Streaming loop reuses entry.path instead of recomputing jsonl_path\n- Add list_sessions_filtered.rs integration test (grep/branch/limit/\n  filter-before-limit/metadata extraction)\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(perf): global cross-project merge + limit=0 fix (codex review)\n\nCodex review of PR #547 found two issues:\n\nCRITICAL (#5): limit=0 off-by-one — loop pushed before checking len()>=limit,\nso limit=0 returned 1 item. Moved the limit check to the top of the loop\n(also avoids one wasted metadata extraction for the limit+1'th entry).\n\nWARNING (#9): cross-project extracted metadata for ALL within-`since` sessions\n(e.g. 624) before global truncation to limit. Refactored to a shared streaming\ncore `list_sessions_filtered_multi`:\n- collect lightweight entries (readdir + since, no JSONL) from all projects\n- global mtime-desc merge (tie-break by sid, aligned with sidebar/spec ordering)\n- stream metadata extraction, stop at limit → only top-limit JSONL parses\n- QueryEngine cross-project now just resolves group names + delegates\n\nMeasured 336 projects / 6409 sessions (624 within 7d), warm:\n  main 1.96s → 0.52s (-73%); metadata extraction no longer the bottleneck\n  (residual ~0.25s is list_repository_groups discovery, separate subsystem)\n\nError handling: single-project propagates readdir errors (fail_fast=true);\ncross-project warns+skips an unreadable project (matches old per-worktree\ntolerance). 12 integration tests cover grep/branch/limit/limit=0/global-merge/\nskip-unreadable/tie-break/error-propagation.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-26T20:57:43+08:00",
+          "tree_id": "82f31da197d1cd472881fafed4329717ae002be4",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/4c6aeb3e79f83d8eafbbbc61e6b925a33ea9e40b"
+        },
+        "date": 1782478868198,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 116.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1158,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 5586,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.682,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 9.713,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 42.58,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.14,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 293.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1175,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3493,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2940,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 38750,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 5.149,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 60.94,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 616.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6180,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 199.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2014,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 55.14,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 557.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5579,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 114.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1154,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.812,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 10010,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1075,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8653,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 937.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 46.98,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 495.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 95.59,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 956,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9637,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 198,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1412,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13510,
             "unit": "µs"
           }
         ]
