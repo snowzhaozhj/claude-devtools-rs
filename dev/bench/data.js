@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782479567895,
+  "lastUpdate": 1782493691478,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -24034,6 +24034,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12780,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7af63f89b39805772f5990511815957e80c80d56",
+          "message": "fix(cli): 默认静默 CLI 日志 + 接受多模态排队命令 prompt (#551)\n\n* fix(cli): silence CLI logs by default + accept multimodal queued-command prompts\n\n排查 0.7.0 release `cdt stats` 默认刷 321 行日志，根因三层 + 一个真 parser bug：\n\n边界层：cdt-cli logger 此前在 Cli::parse() 之前用 \"info\" 基线初始化，\nrelease 也照打所有 library WARN/INFO。改为 parse 之后初始化，默认全静默\n(off)，-v/-vv/-vvv = warn/info/debug，RUST_LOG 覆盖。所有输出格式 + mcp\nserve 默认 stderr 零输出，与 library 各处日志级别结构性解耦。\n\n语义层：处理外部数据的预期瑕疵（重复 tool_use/tool_result id、坏 JSONL 行、\nschema 漂移）从 warn! 降到 debug!，对齐 discovery 路径；重复已有\nduplicates_dropped 聚合计数，不再逐条刷。\n\n真 bug：带图片的排队命令 attachment.prompt 是多模态 content-block 数组，\n而 RawAttachment.prompt 定成 Option<String>，导致整行 serde 失败被当\nMalformedLine 丢弃。改为 Option<MessageContent>(untagged 吃下 string/blocks\n两态)，content 忠实反映 prompt 形态。走 openspec change\nparse-multimodal-queued-command-prompt 更新 session-parsing 契约。\n\n纪律层：crates/CLAUDE.md 补日志级别约定（CLI 默认静默 + 外部数据瑕疵记\ndebug 不记 warn），防回归。\n\n附带：cli_help_snapshots 把子进程 stdin 设 Stdio::null()，消除 clap help\n换行因 tty 探测导致的跨 runner 快照 flaky。\n\n验证：stats 默认/--format json/RUST_LOG=warn stderr 0 行；-vvv 仍见 318 条\nduplicate(DEBUG)；malformed 0 条（多模态行已正常解析）。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* test(cli): make help snapshots width-independent at the source\n\nCI 的 `cargo nextest run --workspace` 因 feature 统一启用了 clap 的 wrap_help，\nhelp 折行宽度随环境漂移（CI 无 tty → 100 列折行；dev 有 tty → 宽 → 不折行；\n单 crate 构建 wrap_help off → 不折行），导致 cli_help_snapshots 反复 flaky。\n\n不把 term_width 写进生产（那会强制真实用户 help 按固定列折行、绑架 UX），改为\n测试侧 normalize：扩展 normalize_help_wrapping 覆盖 block 缩进格式（indent ≥ 10\n的描述续行并回单行，保留 [default]/[possible values]/`- ` 列项/空行结构）。\n快照变成与折行宽度无关的规范形，已验证同一套快照在单 crate(wrap off) cargo test\n与 workspace nextest(wrap on, CI 同款) 下都通过。\n\n移除上个 commit 里没起作用的 stdin Stdio::null()（clap 经 /dev/tty 探测，绕不过）。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive parse-multimodal-queued-command-prompt\n\ncodex 二审 0 问题；CI 全绿。附带修 cdt-parse/file.rs 模块 doc-rot\n（坏行注释 warn → debug，对齐已降级的实际行为，codex 指出的 cosmetic）。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-27T01:03:57+08:00",
+          "tree_id": "0845ec9acb24796f502b74988a306ff1de824b95",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/7af63f89b39805772f5990511815957e80c80d56"
+        },
+        "date": 1782493690910,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 112.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1066,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4863,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.874,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.385,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 58.87,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 30.88,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 252.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1184,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 2494,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2746,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 43100,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 5.405,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 53.99,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 545.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 5460,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 191.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2012,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 57.23,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 574.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5785,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 101.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1028,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.898,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 68.76,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 7476,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 796.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8096,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 809.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 44.76,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 569.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 87.02,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 859,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 8583,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 190.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1205,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 11900,
             "unit": "µs"
           }
         ]
