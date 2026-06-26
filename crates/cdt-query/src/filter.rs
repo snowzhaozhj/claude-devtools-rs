@@ -14,6 +14,9 @@ pub struct QueryFilter {
     /// Empty string is treated as no-op.
     pub grep: Option<String>,
 
+    /// Only sessions whose git branch matches this substring (case-insensitive).
+    pub branch: Option<String>,
+
     /// Maximum results to return (applied last, after all other filters).
     pub limit: Option<usize>,
 }
@@ -25,7 +28,7 @@ impl QueryFilter {
             since: self.since,
             until: self.until,
             grep: self.grep.clone(),
-            branch: None,
+            branch: self.branch.clone(),
             limit: self.limit,
         }
     }

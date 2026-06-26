@@ -74,11 +74,14 @@ impl QueryEngine {
             .map_err(|e| QueryError::Api(e.to_string()))?;
 
         let mut all_sessions = Vec::new();
+        // 内容过滤（grep / branch）SHALL 在 per-project 阶段做，让全局 limit 截断
+        // 发生在过滤**之后**——否则 limit 先截会漏掉后续 project 的匹配项。
+        // limit 留到全局排序后再 truncate。
         let per_project_filter = SessionListFilter {
             since: filter.since,
             until: filter.until,
             grep: filter.grep.clone(),
-            branch: None,
+            branch: filter.branch.clone(),
             limit: None,
         };
 

@@ -9,13 +9,14 @@ fn query_filter_to_session_list_filter() {
         since: Some(1000),
         until: Some(5000),
         grep: Some("auth".to_owned()),
+        branch: Some("feat/x".to_owned()),
         limit: Some(50),
     };
     let f: SessionListFilter = qf.to_session_list_filter();
     assert_eq!(f.since, Some(1000));
     assert_eq!(f.until, Some(5000));
     assert_eq!(f.grep.as_deref(), Some("auth"));
-    assert!(f.branch.is_none());
+    assert_eq!(f.branch.as_deref(), Some("feat/x"));
     assert_eq!(f.limit, Some(50));
 }
 

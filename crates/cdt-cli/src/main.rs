@@ -519,6 +519,7 @@ async fn cmd_sessions_list(
         since: since_ms,
         until: until_ms,
         grep: grep.map(ToOwned::to_owned),
+        branch: branch.map(ToOwned::to_owned),
         limit: Some(limit),
     };
 
@@ -537,16 +538,6 @@ async fn cmd_sessions_list(
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
     };
-
-    let mut items = items;
-    if let Some(b) = branch {
-        let lower = b.to_lowercase();
-        items.retain(|s| {
-            s.git_branch
-                .as_deref()
-                .is_some_and(|gb| gb.to_lowercase().contains(&lower))
-        });
-    }
 
     if items.is_empty() {
         match format {

@@ -3694,8 +3694,6 @@ impl LocalDataApi {
             .await
             .map_err(|e| ApiError::internal(format!("list session entries: {e}")))?;
 
-        let base_dir = cdt_discover::path_decoder::extract_base_dir(project_id);
-        let dir = projects_dir.join(base_dir);
         let limit = filter.limit.unwrap_or(usize::MAX);
         let grep_lower = filter.grep.as_deref().map(str::to_lowercase);
         let branch_lower = filter.branch.as_deref().map(str::to_lowercase);
@@ -3710,9 +3708,9 @@ impl LocalDataApi {
                 }
             }
 
-            let jsonl_path = dir.join(format!("{}.jsonl", entry.id));
+            // `entry.path` 即该 session 的 jsonl 路径（list_session_entries 填充）。
             let meta =
-                extract_session_metadata_cached(&self.metadata_cache, &*fs, &ctx, &jsonl_path)
+                extract_session_metadata_cached(&self.metadata_cache, &*fs, &ctx, &entry.path)
                     .await;
 
             if let Some(ref needle) = grep_lower {
@@ -3745,17 +3743,9 @@ impl LocalDataApi {
             }
         }
 
-        let matched_stats: Vec<cdt_discover::SessionStat> = matched_entries
-            .iter()
-            .map(|e| cdt_discover::SessionStat {
-                id: e.id.clone(),
-                path: e.path.clone(),
-                mtime_ms: e.mtime_ms,
-                created_ms: e.created_ms,
-                size: e.size,
-            })
-            .collect();
-        let cwds = scanner.extract_cwds(&matched_stats).await;
+        let matched_paths: Vec<&std::path::Path> =
+            matched_entries.iter().map(|e| e.path.as_path()).collect();
+        let cwds = scanner.extract_cwds(&matched_paths).await;
 
         let mut summaries = Vec::with_capacity(matched_entries.len());
         for ((entry, meta), cwd) in matched_entries.into_iter().zip(matched_metas).zip(cwds) {

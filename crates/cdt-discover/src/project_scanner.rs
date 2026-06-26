@@ -264,11 +264,19 @@ impl ProjectScanner {
         Ok(records)
     }
 
-    /// 对一组 `SessionStat` 批量提取 cwd（head-read），返回与入参等长的
+    /// 对一组 session jsonl 路径批量提取 cwd（head-read），返回与入参等长的
     /// `Vec<Option<String>>`。公开给 `list_sessions_filtered` 等外部调用方
     /// 在流式扫描结束后只对最终结果集补 cwd。
-    pub async fn extract_cwds(&self, entries: &[SessionStat]) -> Vec<Option<String>> {
-        self.extract_cwds_for(entries).await
+    pub async fn extract_cwds(&self, paths: &[&Path]) -> Vec<Option<String>> {
+        if self.fs.kind() == FsKind::Ssh {
+            let mut out = Vec::with_capacity(paths.len());
+            for path in paths {
+                out.push(self.extract_session_cwd(path).await);
+            }
+            out
+        } else {
+            futures::future::join_all(paths.iter().map(|p| self.extract_session_cwd(p))).await
+        }
     }
 
     /// 列出某个 project 的所有 session（带 mtime / size / cwd）。
@@ -394,16 +402,8 @@ impl ProjectScanner {
 
     /// 并发提取一批 session 的 cwd。SSH 走顺序、本地走 `join_all`。
     async fn extract_cwds_for(&self, records: &[SessionStat]) -> Vec<Option<String>> {
-        if self.fs.kind() == FsKind::Ssh {
-            let mut out = Vec::with_capacity(records.len());
-            for rec in records {
-                out.push(self.extract_session_cwd(&rec.path).await);
-            }
-            out
-        } else {
-            futures::future::join_all(records.iter().map(|r| self.extract_session_cwd(&r.path)))
-                .await
-        }
+        let paths: Vec<&Path> = records.iter().map(|r| r.path.as_path()).collect();
+        self.extract_cwds(&paths).await
     }
 
     async fn extract_session_cwd(&self, path: &Path) -> Option<String> {
