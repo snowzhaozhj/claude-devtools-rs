@@ -258,8 +258,13 @@ pub fn extract_files_modified(chunks: &[Chunk]) -> Vec<String> {
         let Chunk::Ai(ai) = chunk else { continue };
         for exec in &ai.tool_executions {
             match exec.tool_name.as_str() {
-                "Edit" | "Write" => {
-                    if let Some(fp) = exec.input.get("file_path").and_then(|v| v.as_str()) {
+                "Edit" | "Write" | "NotebookEdit" => {
+                    let key = if exec.tool_name == "NotebookEdit" {
+                        "notebook_path"
+                    } else {
+                        "file_path"
+                    };
+                    if let Some(fp) = exec.input.get(key).and_then(|v| v.as_str()) {
                         if seen.insert(fp.to_string()) {
                             files.push(fp.to_string());
                         }

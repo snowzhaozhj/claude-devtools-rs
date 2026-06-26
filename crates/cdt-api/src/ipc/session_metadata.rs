@@ -150,15 +150,26 @@ fn git_commit_message_regex() -> &'static Regex {
 }
 
 /// `(input, output, cache_read, cache_write)` per million tokens.
-#[allow(clippy::cast_precision_loss)]
+///
+/// Mirrors `cdt_query::cost::PRICING_TABLE`. Longest prefix first.
 fn estimate_cost_per_mtok(model: &str) -> (f64, f64, f64, f64) {
-    if model.starts_with("claude-opus") {
-        (5.0, 25.0, 0.50, 6.25)
-    } else if model.starts_with("claude-haiku") {
-        (1.0, 5.0, 0.10, 1.25)
-    } else {
-        (3.0, 15.0, 0.30, 3.75)
+    type Rates = (f64, f64, f64, f64);
+    const TABLE: &[(&str, Rates)] = &[
+        ("claude-opus-4", (5.0, 25.0, 0.50, 6.25)),
+        ("claude-sonnet-4", (3.0, 15.0, 0.30, 3.75)),
+        ("claude-haiku-4", (1.0, 5.0, 0.10, 1.25)),
+        ("claude-3-7-sonnet", (3.0, 15.0, 0.30, 3.75)),
+        ("claude-3-5-sonnet", (3.0, 15.0, 0.30, 3.75)),
+        ("claude-3-5-haiku", (1.0, 5.0, 0.10, 1.25)),
+        ("claude-3-haiku", (0.25, 1.25, 0.025, 0.3125)),
+        ("claude-3-opus", (15.0, 75.0, 1.50, 18.75)),
+    ];
+    for (prefix, rates) in TABLE {
+        if model.starts_with(prefix) {
+            return *rates;
+        }
     }
+    (3.0, 15.0, 0.30, 3.75)
 }
 
 fn github_pr_url_regex() -> &'static Regex {
