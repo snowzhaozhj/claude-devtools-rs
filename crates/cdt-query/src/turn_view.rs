@@ -97,25 +97,6 @@ pub fn build_turn_detail(chunks: &[Chunk], turn_index: u32) -> Option<TurnDetail
 /// Truncation threshold for tool output (bytes).
 pub const TOOL_OUTPUT_TRUNCATE_THRESHOLD: usize = 5 * 1024;
 
-/// Prefix length to keep when truncating tool output (chars).
-const TOOL_OUTPUT_TRUNCATE_PREFIX_CHARS: usize = 2000;
-
-/// Apply server-side truncation to tool step outputs in place.
-///
-/// For `tool` steps whose output text is >= `TOOL_OUTPUT_TRUNCATE_THRESHOLD`
-/// bytes, truncates to `TOOL_OUTPUT_TRUNCATE_PREFIX_CHARS` characters and
-/// sets `output_truncated=true` + records `output_bytes`.
-pub fn truncate_tool_outputs(steps: &mut [Step]) {
-    for step in steps.iter_mut() {
-        if let Step::Tool { output, .. } = step {
-            let bytes = output_byte_len(output);
-            if bytes >= TOOL_OUTPUT_TRUNCATE_THRESHOLD {
-                truncate_output(output, bytes);
-            }
-        }
-    }
-}
-
 /// Returns `(output_truncated, output_bytes)` for a tool step's output.
 #[must_use]
 pub fn measure_output(output: &cdt_core::ToolOutput) -> (bool, Option<u64>) {
@@ -137,24 +118,6 @@ fn output_byte_len(output: &cdt_core::ToolOutput) -> usize {
     }
 }
 
-fn truncate_output(output: &mut cdt_core::ToolOutput, _original_bytes: usize) {
-    match output {
-        cdt_core::ToolOutput::Text { text } => {
-            let truncated: String = text
-                .chars()
-                .take(TOOL_OUTPUT_TRUNCATE_PREFIX_CHARS)
-                .collect();
-            *text = truncated;
-        }
-        cdt_core::ToolOutput::Structured { value } => {
-            let s = serde_json::to_string(value).unwrap_or_default();
-            let truncated: String = s.chars().take(TOOL_OUTPUT_TRUNCATE_PREFIX_CHARS).collect();
-            *value = serde_json::Value::String(truncated);
-        }
-        cdt_core::ToolOutput::Missing => {}
-    }
-}
-
 /// Grep `matchedIn` attribution — determines which part of a turn matched.
 ///
 /// Priority: `tool:<name>` > `error` > `thinking` > `answer` > `question`.
@@ -172,21 +135,25 @@ pub fn attribute_grep_match(
             name,
             input,
             output,
-            is_error,
-            error_message,
             ..
         } = step
         {
-            if *is_error {
-                if let Some(msg) = error_message {
-                    if msg.to_lowercase().contains(&needle_lower) {
-                        return Some("error".to_string());
-                    }
-                }
-            }
             let tool_text = format!("{name} {} {}", input, output_text_for_grep(output));
             if tool_text.to_lowercase().contains(&needle_lower) {
                 return Some(format!("tool:{name}"));
+            }
+        }
+    }
+
+    for step in steps {
+        if let Step::Tool {
+            is_error: true,
+            error_message: Some(msg),
+            ..
+        } = step
+        {
+            if msg.to_lowercase().contains(&needle_lower) {
+                return Some("error".to_string());
             }
         }
     }

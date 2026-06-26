@@ -391,10 +391,7 @@ impl CdtMcpServer {
 
         let session_model = overviews.first().and_then(|o| o.metrics.model.clone());
         let total_cost: f64 = overviews.iter().map(|o| o.metrics.cost).sum();
-        let total_duration: i64 = overviews.last().map_or(0, |last| {
-            let first = overviews.first().map_or(0, |f| f.metrics.duration_ms);
-            last.metrics.duration_ms + first
-        });
+        let total_duration: i64 = overviews.iter().map(|o| o.metrics.duration_ms).sum();
 
         let files_touched: Vec<String> = {
             let filter = QueryFilter {
@@ -498,15 +495,22 @@ impl CdtMcpServer {
         &self,
         Parameters(params): Parameters<GetToolOutputParams>,
     ) -> Result<CallToolResult, McpError> {
-        let project_id = self.resolve_project_for_session(&params.session).await?;
-        let output = self
-            .engine
-            .api()
-            .get_tool_output(&params.session, &params.session, &params.tool_use_id)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let (_real_session_id, chunks, _) = self.load_session_chunks(&params.session).await?;
 
-        let output_bytes = match &output {
+        let mut tool_name = String::new();
+        let mut found_output = cdt_core::ToolOutput::Missing;
+        for chunk in &chunks {
+            if let cdt_core::Chunk::Ai(ai) = chunk {
+                for exec in &ai.tool_executions {
+                    if exec.tool_use_id == params.tool_use_id {
+                        tool_name.clone_from(&exec.tool_name);
+                        found_output = exec.output.clone();
+                    }
+                }
+            }
+        }
+
+        let output_bytes = match &found_output {
             cdt_core::ToolOutput::Text { text } => text.len() as u64,
             cdt_core::ToolOutput::Structured { value } => {
                 serde_json::to_string(value).map_or(0, |s| s.len() as u64)
@@ -514,20 +518,12 @@ impl CdtMcpServer {
             cdt_core::ToolOutput::Missing => 0,
         };
 
-        let tool_name = find_tool_name_for_id(
-            &self.engine,
-            &project_id,
-            &params.session,
-            &params.tool_use_id,
-        )
-        .await;
-
         let response = ToolOutputFullResponse {
             session_id: params.session,
             tool_use_id: params.tool_use_id,
-            tool_name: tool_name.unwrap_or_default(),
+            tool_name,
             output_bytes,
-            output: ToolOutputView::from(&output),
+            output: ToolOutputView::from(&found_output),
         };
         self.emit_json(&response)
     }
@@ -577,11 +573,15 @@ impl CdtMcpServer {
         let mut hits: Vec<TurnSearchHit> = Vec::new();
         for session_result in &results.results {
             let sid = &session_result.session_id;
-            let project_name = Some(session_result.session_title.clone());
-            let timestamp = 0i64;
+            let project_name = Some(
+                cdt_discover::decode_path(&session_result.project_id)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
 
             let chunks_result = self.load_session_chunks(sid).await;
             let Ok((_real_id, chunks, _)) = chunks_result else {
+                tracing::warn!(session_id = %sid, "search: skipping session (load failed)");
                 continue;
             };
 
@@ -610,12 +610,24 @@ impl CdtMcpServer {
                         .chars()
                         .take(200)
                         .collect();
+                    let turn_ts = chunks
+                        .iter()
+                        .find(|c| {
+                            let cid = match c {
+                                cdt_core::Chunk::User(u) => &u.chunk_id,
+                                cdt_core::Chunk::Ai(a) => &a.chunk_id,
+                                cdt_core::Chunk::System(s) => &s.chunk_id,
+                                cdt_core::Chunk::Compact(co) => &co.chunk_id,
+                            };
+                            turn.member_chunk_ids.first().is_some_and(|id| id == cid)
+                        })
+                        .map_or(0, |c| c.timestamp().timestamp_millis());
                     hits.push(TurnSearchHit {
                         session_id: sid.clone(),
                         turn_index: overview.index,
                         question: overview.question.clone(),
                         match_snippet: snippet,
-                        timestamp,
+                        timestamp: turn_ts,
                         project_name: project_name.clone(),
                     });
                 }
@@ -764,29 +776,6 @@ Tips:\n\
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-async fn find_tool_name_for_id(
-    engine: &QueryEngine,
-    project_id: &str,
-    session_id: &str,
-    tool_use_id: &str,
-) -> Option<String> {
-    let options = cdt_query::SessionQueryOptions::default();
-    let detail = engine
-        .get_session_detail(project_id, session_id, &options)
-        .await
-        .ok()?;
-    for chunk in &detail.chunks {
-        if let cdt_core::Chunk::Ai(ai) = chunk {
-            for exec in &ai.tool_executions {
-                if exec.tool_use_id == tool_use_id {
-                    return Some(exec.tool_name.clone());
-                }
-            }
-        }
-    }
-    None
-}
 
 fn group_stats_data(
     sessions: &[cdt_query::stats::SessionData],

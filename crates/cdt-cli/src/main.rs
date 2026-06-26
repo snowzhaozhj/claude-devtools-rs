@@ -980,7 +980,7 @@ async fn cmd_session_turns(
         session_id: detail.session_id,
         model: overviews.first().and_then(|o| o.metrics.model.clone()),
         total_cost: overviews.iter().map(|o| o.metrics.cost).sum(),
-        duration_ms: overviews.last().map_or(0, |l| l.metrics.duration_ms),
+        duration_ms: overviews.iter().map(|o| o.metrics.duration_ms).sum(),
         files_touched: Vec::new(),
         user_intents: Vec::new(),
         total,

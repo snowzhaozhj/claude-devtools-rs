@@ -52,7 +52,7 @@
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
+- [x] N.1 push 分支 + 开 PR
 - [ ] N.2 wait-ci 全绿
 - [ ] N.3 codex + pr-review-toolkit 二审通过（BREAKING + 跨 capability，高风险禁豁免）
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再 wait-ci 全绿）

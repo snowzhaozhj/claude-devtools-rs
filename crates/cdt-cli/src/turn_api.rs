@@ -175,6 +175,8 @@ pub enum StepView {
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        args: Option<String>,
     },
     TeammateMessage {
         index: usize,
@@ -297,10 +299,16 @@ impl StepView {
                 index,
                 text: text.clone(),
             },
-            Step::Slash { name, message, .. } => Self::Slash {
+            Step::Slash {
+                name,
+                message,
+                args,
+                ..
+            } => Self::Slash {
                 index,
                 name: name.clone(),
                 message: message.clone(),
+                args: args.clone(),
             },
             Step::TeammateMsg {
                 teammate_id,
