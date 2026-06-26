@@ -96,8 +96,3 @@
 - **THEN** 错误信息 SHALL NOT 提及 "private repo"
 - **AND** SHALL 建议检查网络/代理设置或设置 GH_TOKEN
 
-## REMOVED Requirements
-
-### Requirement: 安装前验证失败
-
-（原 Scenario "安装前验证失败" 中 spawn 临时二进制执行 `--version` 的行为被 MODIFIED Requirement "从桌面端安装 CLI" 的架构头校验替代）
