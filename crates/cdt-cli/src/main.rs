@@ -35,20 +35,20 @@ mod view;
 #[derive(Parser)]
 #[command(name = "cdt", about = "claude-devtools CLI", version)]
 struct Cli {
-    /// 输出格式
+    /// Output format
     #[arg(long, global = true, default_value = "table")]
     format: OutputFormat,
 
-    /// 限定项目范围（项目名或 ID；编码 ID 需用 --project=<id> 形式）
+    /// Scope to a project (name or encoded ID; use --project=<id> for encoded IDs)
     #[arg(long, global = true, add = ArgValueCandidates::new(completions::ProjectCompleter))]
     project: Option<String>,
 
-    /// JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。
-    /// 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
+    /// Select JSON fields (comma-separated), implies --format json.
+    /// Without value: list available fields. Usage: --json=field1,field2
     #[arg(long, global = true, num_args = 0..=1, default_missing_value = "", require_equals = true)]
     json: Option<String>,
 
-    /// table 模式不截断任何字段
+    /// Do not truncate fields in table mode
     #[arg(long, global = true)]
     no_truncate: bool,
 
@@ -65,191 +65,191 @@ enum OutputFormat {
 
 #[derive(Subcommand)]
 enum Command {
-    /// 项目相关操作
+    /// Project operations
     Projects {
         #[command(subcommand)]
         action: ProjectsAction,
     },
-    /// 会话列表
+    /// Session listing and filtering
     Sessions {
         #[command(subcommand)]
         action: SessionsAction,
     },
     /// Compact turn overview of a session (default) or raw chunks (--raw)
     Session {
-        /// 会话 ID（支持 'latest'）
+        /// Session ID (supports 'latest')
         #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
         id: String,
 
-        /// grep 过滤 turns
+        /// Filter turns by keyword (case-insensitive)
         #[arg(long)]
         grep: Option<String>,
 
-        /// 每页 turn 数
+        /// Turns per page (default 20, max 100)
         #[arg(long)]
         page_size: Option<usize>,
 
-        /// 分页游标
+        /// Pagination cursor from previous response
         #[arg(long)]
         cursor: Option<String>,
 
-        /// 输出原 chunk 结构（调试逃生舱）
+        /// Output raw chunk structure (debug escape hatch)
         #[arg(long)]
         raw: bool,
     },
     /// Single turn's complete steps (thinking, tool calls, text, etc.)
     Turn {
-        /// 会话 ID（支持 'latest'）
+        /// Session ID (supports 'latest')
         #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
         id: String,
 
         /// Turn index (0-based)
         turn: u32,
 
-        /// 每页 step 数
+        /// Steps per page (default 50, max 100)
         #[arg(long)]
         page_size: Option<usize>,
 
-        /// 分页游标
+        /// Pagination cursor from previous response
         #[arg(long)]
         cursor: Option<String>,
     },
     /// Full untruncated output of a tool call
     ToolOutput {
-        /// 会话 ID
+        /// Session ID
         #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
         id: String,
 
         /// The toolUseId from a truncated tool step
         tool_use_id: String,
     },
-    /// 导出会话为 Markdown / JSON
+    /// Export session as Markdown or JSON
     Export {
-        /// 会话 ID（支持 'latest'）
+        /// Session ID (supports 'latest')
         #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
         id: String,
 
-        /// 导出格式：md（默认）/ json
+        /// Export format: md (default) or json
         #[arg(long = "export-format", default_value = "md")]
         export_format: String,
 
-        /// 输出文件路径（默认 stdout）
+        /// Output file path (default: stdout)
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// 工具输出详略：full（默认）/ summary / name-only
+        /// Tool output detail: full (default) / summary / name-only
         #[arg(long, default_value = "full")]
         detail: String,
 
-        /// 排除 thinking blocks
+        /// Exclude thinking blocks
         #[arg(long)]
         no_thinking: bool,
 
-        /// 排除子代理卡片
+        /// Exclude subagent cards
         #[arg(long)]
         no_subagents: bool,
 
-        /// 指定 chunk 区间（如 10:30），与 --tail 互斥
+        /// Chunk range (e.g. 10:30), exclusive with --tail
         #[arg(long, conflicts_with = "tail")]
         range: Option<String>,
 
-        /// 仅导出最后 N 条 chunks
+        /// Export only the last N chunks
         #[arg(long, conflicts_with = "range")]
         tail: Option<usize>,
 
-        /// grep 过滤
+        /// Grep filter
         #[arg(long)]
         grep: Option<String>,
 
-        /// grep context 数
+        /// Grep context lines
         #[arg(long, default_value = "1")]
         grep_context: usize,
 
-        /// 过滤条件（`errors_only` / `tool_calls`）
+        /// Filter: `errors_only` or `tool_calls`
         #[arg(long)]
         filter: Option<String>,
 
-        /// 导出全部 chunk（禁用默认 tail）
+        /// Export all chunks (disable default tail)
         #[arg(long)]
         all: bool,
     },
-    /// 全文搜索
+    /// Full-text search across sessions
     Search {
-        /// 搜索关键词
+        /// Search query
         query: String,
 
-        /// 最多返回 N 条结果
+        /// Max results
         #[arg(long, default_value = "50")]
         limit: usize,
 
-        /// 偏移（分页）
+        /// Offset for pagination
         #[arg(long, default_value = "0")]
         offset: usize,
 
-        /// 限定到单个 session（intra-session search）
+        /// Scope to a single session (intra-session search)
         #[arg(long)]
         session: Option<String>,
 
-        /// 仅搜索此时间之后的 session
+        /// Only search sessions after this time
         #[arg(long, add = ArgValueCandidates::new(completions::SinceCompleter))]
         since: Option<String>,
     },
-    /// 聚合统计
+    /// Aggregated usage statistics
     Stats {
-        /// 时间范围（today / week / 7d / 24h / 30d）
+        /// Time period (today / week / 7d / 24h / 30d)
         #[arg(default_value = "7d")]
         period: String,
 
-        /// 限定项目
+        /// Scope to a project
         #[arg(long)]
         project: Option<String>,
 
-        /// 按维度分组：none / model / day
+        /// Group by dimension: none / model / day
         #[arg(long, default_value = "none", add = ArgValueCandidates::new(completions::GroupByStatsCompleter))]
         group_by: String,
     },
-    /// 启动 HTTP API server
+    /// Start HTTP API server
     Serve,
-    /// MCP server 模式
+    /// MCP server mode
     Mcp {
         #[command(subcommand)]
         action: McpAction,
     },
-    /// 一键配置（MCP 注册 + Skills 安装）
+    /// One-click setup (MCP registration + Skills installation)
     Setup {
         #[command(subcommand)]
         action: Option<SetupAction>,
 
-        /// 配置范围：local（个人私有）、project（团队共享 .mcp.json）、user（全局）
+        /// Scope: local (private), project (shared .mcp.json), user (global)
         #[arg(long, short, global = true, default_value = "local")]
         scope: SetupScope,
 
-        /// 仅打印将执行的操作，不实际执行
+        /// Dry run: print actions without executing
         #[arg(long, global = true)]
         dry_run: bool,
 
-        /// 强制覆盖已有文件（Skills）
+        /// Force overwrite existing files (Skills)
         #[arg(long, global = true)]
         force: bool,
     },
-    /// 生成 shell 补全脚本
+    /// Generate shell completion scripts
     Completions {
-        /// 目标 shell
+        /// Target shell
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
-    /// 自更新到最新版本
+    /// Self-update to the latest version
     #[command(name = "self-update")]
     SelfUpdate {
-        /// 仅检查是否有新版本，不执行更新
+        /// Check for updates without installing
         #[arg(long)]
         check: bool,
 
-        /// 指定目标版本（如 v0.5.14）
+        /// Target version (e.g. v0.5.14)
         #[arg(long)]
         version: Option<String>,
 
-        /// 指定安装路径（默认替换当前可执行文件）
+        /// Install path (default: replace current executable)
         #[arg(long)]
         install_path: Option<PathBuf>,
     },
@@ -257,43 +257,43 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ProjectsAction {
-    /// 列出所有项目（按 repository group 聚合）
+    /// List all projects (grouped by repository)
     List,
 }
 
 #[derive(Subcommand)]
 enum SessionsAction {
-    /// 列出会话
+    /// List sessions
     List {
-        /// 最多返回 N 条
+        /// Max results
         #[arg(long, default_value = "100")]
         limit: usize,
 
-        /// 仅显示指定时间范围内的会话（如 7d、24h、30m、today、yesterday、2026-06-06）
+        /// Only sessions since this time (e.g. 7d, 24h, today, 2026-06-06)
         #[arg(long, add = ArgValueCandidates::new(completions::SinceCompleter))]
         since: Option<String>,
 
-        /// 仅显示此时间之前的会话（格式同 --since）
+        /// Only sessions before this time (same formats as --since)
         #[arg(long, add = ArgValueCandidates::new(completions::SinceCompleter))]
         until: Option<String>,
 
-        /// 按 git 分支过滤（大小写不敏感子串匹配）
+        /// Filter by git branch (case-insensitive substring)
         #[arg(long)]
         branch: Option<String>,
 
-        /// 仅显示活跃 session
+        /// Only show ongoing sessions
         #[arg(long)]
         is_ongoing: bool,
 
-        /// 标题关键词过滤（大小写不敏感）
+        /// Filter by title keyword (case-insensitive)
         #[arg(long)]
         grep: Option<String>,
 
-        /// 仅显示消息数 >= N 的会话
+        /// Only sessions with message count >= N
         #[arg(long)]
         min_messages: Option<usize>,
 
-        /// 按维度分组：none / project / day
+        /// Group by dimension: none / project / day
         #[arg(long, default_value = "none", add = ArgValueCandidates::new(completions::GroupBySessionsCompleter))]
         group_by: String,
     },
@@ -301,9 +301,9 @@ enum SessionsAction {
 
 #[derive(Subcommand)]
 enum McpAction {
-    /// 启动 MCP stdio server
+    /// Start MCP stdio server
     Serve {
-        /// 跳过 secret redaction（默认启用脱敏）
+        /// Skip secret redaction (redaction enabled by default)
         #[arg(long)]
         allow_sensitive: bool,
     },
@@ -311,21 +311,21 @@ enum McpAction {
 
 #[derive(Clone, ValueEnum)]
 enum SetupScope {
-    /// 个人私有（~/.claude/settings.local.json），不入版本控制
+    /// Private (~/. claude/settings.local.json), not version controlled
     Local,
-    /// 团队共享（.mcp.json / .claude/skills/），可 git commit
+    /// Shared (.mcp.json / .claude/skills/), can be committed
     Project,
-    /// 全局（~/.claude/settings.json / ~/.claude/skills/），所有项目可用
+    /// Global (~/.claude/settings.json / ~/.claude/skills/), all projects
     User,
 }
 
 #[derive(Subcommand)]
 enum SetupAction {
-    /// 注册 MCP server 到 Claude Code
+    /// Register MCP server with Claude Code
     Mcp,
-    /// 安装示例 Skills
+    /// Install example Skills
     Skills,
-    /// 安装 shell 补全
+    /// Install shell completions
     Completions,
 }
 

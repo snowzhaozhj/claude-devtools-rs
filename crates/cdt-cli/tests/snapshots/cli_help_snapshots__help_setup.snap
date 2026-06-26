@@ -2,47 +2,47 @@
 source: crates/cdt-cli/tests/cli_help_snapshots.rs
 expression: text
 ---
-一键配置（MCP 注册 + Skills 安装）
+One-click setup (MCP registration + Skills installation)
 
 Usage: cdt setup [OPTIONS] [COMMAND]
 
 Commands:
-  mcp          注册 MCP server 到 Claude Code
-  skills       安装示例 Skills
-  completions  安装 shell 补全
+  mcp          Register MCP server with Claude Code
+  skills       Install example Skills
+  completions  Install shell completions
   help         Print this message or the help of the given subcommand(s)
 
 Options:
       --format <FORMAT>
-          输出格式
+          Output format
           
           [default: table]
           [possible values: json, jsonl, table]
 
       --project <PROJECT>
-          限定项目范围（项目名或 ID；编码 ID 需用 --project=<id> 形式）
+          Scope to a project (name or encoded ID; use --project=<id> for encoded IDs)
 
       --json[=<JSON>]
-          JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
+          Select JSON fields (comma-separated), implies --format json. Without value: list available fields. Usage: --json=field1,field2
 
       --no-truncate
-          table 模式不截断任何字段
+          Do not truncate fields in table mode
 
   -s, --scope <SCOPE>
-          配置范围：local（个人私有）、project（团队共享 .mcp.json）、user（全局）
+          Scope: local (private), project (shared .mcp.json), user (global)
 
           Possible values:
-          - local:   个人私有（~/.claude/settings.local.json），不入版本控制
-          - project: 团队共享（.mcp.json / .claude/skills/），可 git commit
-          - user:    全局（~/.claude/settings.json / ~/.claude/skills/），所有项目可用
+          - local:   Private (~/. claude/settings.local.json), not version controlled
+          - project: Shared (.mcp.json / .claude/skills/), can be committed
+          - user:    Global (~/.claude/settings.json / ~/.claude/skills/), all projects
           
           [default: local]
 
       --dry-run
-          仅打印将执行的操作，不实际执行
+          Dry run: print actions without executing
 
       --force
-          强制覆盖已有文件（Skills）
+          Force overwrite existing files (Skills)
 
   -h, --help
           Print help (see a summary with '-h')

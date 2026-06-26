@@ -7,25 +7,25 @@ claude-devtools CLI
 Usage: cdt [OPTIONS] <COMMAND>
 
 Commands:
-  projects     项目相关操作
-  sessions     会话列表
+  projects     Project operations
+  sessions     Session listing and filtering
   session      Compact turn overview of a session (default) or raw chunks (--raw)
   turn         Single turn's complete steps (thinking, tool calls, text, etc.)
   tool-output  Full untruncated output of a tool call
-  export       导出会话为 Markdown / JSON
-  search       全文搜索
-  stats        聚合统计
-  serve        启动 HTTP API server
-  mcp          MCP server 模式
-  setup        一键配置（MCP 注册 + Skills 安装）
-  completions  生成 shell 补全脚本
-  self-update  自更新到最新版本
+  export       Export session as Markdown or JSON
+  search       Full-text search across sessions
+  stats        Aggregated usage statistics
+  serve        Start HTTP API server
+  mcp          MCP server mode
+  setup        One-click setup (MCP registration + Skills installation)
+  completions  Generate shell completion scripts
+  self-update  Self-update to the latest version
   help         Print this message or the help of the given subcommand(s)
 
 Options:
-      --format <FORMAT>    输出格式 [default: table] [possible values: json, jsonl, table]
-      --project <PROJECT>  限定项目范围（项目名或 ID；编码 ID 需用 --project=<id> 形式）
-      --json[=<JSON>]      JSON 字段选择（逗号分隔），隐含 --format json + 紧凑输出。 无参数时列出可用字段。使用 --json=field1,field2 或 --json 不带值。
-      --no-truncate        table 模式不截断任何字段
+      --format <FORMAT>    Output format [default: table] [possible values: json, jsonl, table]
+      --project <PROJECT>  Scope to a project (name or encoded ID; use --project=<id> for encoded IDs)
+      --json[=<JSON>]      Select JSON fields (comma-separated), implies --format json. Without value: list available fields. Usage: --json=field1,field2
+      --no-truncate        Do not truncate fields in table mode
   -h, --help               Print help
   -V, --version            Print version
