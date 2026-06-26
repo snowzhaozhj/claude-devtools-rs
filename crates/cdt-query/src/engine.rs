@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use cdt_api::{
-    DataApi, LocalDataApi, SearchRequest, SessionDetail, SessionDetailResponse, SessionListFilter,
-    SessionSummary,
+    DataApi, LocalDataApi, SearchRequest, SessionDetail, SessionDetailResponse, SessionSummary,
 };
 
 use crate::error::QueryError;
@@ -61,8 +60,9 @@ impl QueryEngine {
 
     /// List sessions across all projects, with filter applied.
     ///
-    /// Fan-out per project → collect filtered results → global mtime sort →
-    /// truncate to limit.
+    /// 展开所有 worktree（按 `most_recent_session` 预裁 stale group），交给
+    /// `LocalDataApi::list_sessions_filtered_cross_project` 做全局 mtime 合并 +
+    /// 流式扫描——无内容过滤时只对全局 top-limit 条提取 metadata。
     pub async fn list_sessions_cross_project(
         &self,
         filter: &QueryFilter,
@@ -73,18 +73,7 @@ impl QueryEngine {
             .await
             .map_err(|e| QueryError::Api(e.to_string()))?;
 
-        let mut all_sessions = Vec::new();
-        // 内容过滤（grep / branch）SHALL 在 per-project 阶段做，让全局 limit 截断
-        // 发生在过滤**之后**——否则 limit 先截会漏掉后续 project 的匹配项。
-        // limit 留到全局排序后再 truncate。
-        let per_project_filter = SessionListFilter {
-            since: filter.since,
-            until: filter.until,
-            grep: filter.grep.clone(),
-            branch: filter.branch.clone(),
-            limit: None,
-        };
-
+        let mut projects: Vec<(String, Option<String>)> = Vec::new();
         for group in &groups {
             if let Some(since) = filter.since {
                 if group.most_recent_session.is_some_and(|mtime| mtime < since) {
@@ -92,37 +81,15 @@ impl QueryEngine {
                 }
             }
             for wt in &group.worktrees {
-                match self
-                    .api
-                    .list_sessions_filtered(&wt.id, &per_project_filter)
-                    .await
-                {
-                    Ok(mut sessions) => {
-                        for s in &mut sessions {
-                            if s.project_name.is_none() {
-                                s.project_name = Some(group.name.clone());
-                            }
-                        }
-                        all_sessions.extend(sessions);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            project_id = %wt.id,
-                            error = %e,
-                            "cross-project list_sessions: skipping worktree"
-                        );
-                    }
-                }
+                projects.push((wt.id.clone(), Some(group.name.clone())));
             }
         }
 
-        all_sessions.sort_by_key(|s| std::cmp::Reverse(s.timestamp));
-
-        if let Some(limit) = filter.limit {
-            all_sessions.truncate(limit);
-        }
-
-        Ok(all_sessions)
+        let f = filter.to_session_list_filter();
+        Ok(self
+            .api
+            .list_sessions_filtered_cross_project(&projects, &f)
+            .await?)
     }
 
     /// Get session detail (full parse + build), then apply query options.
