@@ -40,20 +40,26 @@ fn estimate_tool_tokens(tool: &ToolExecution) -> u64 {
     call + result
 }
 
-fn tool_output_id(turn_index: u32) -> String {
-    format!("tool-output-ai-{turn_index}")
+// injection id 由所属 AIChunk 的 chunkId（即 `ai_group_id`，被打断 turn 则为
+// UserChunk.chunkId）派生，而非 turn 序号（design D7，codex C2）。多个 AIChunk 折叠进同一
+// turn 序号后，按 turn 序号拼 id 会撞车（两个 group 共享 turnIndex 0 → 同名 `*-ai-0`）；
+// 按 chunkId 拼则每个 group 唯一。每类每 AIChunk 至多产一条聚合 injection，故 `{类别}-{chunkId}`
+// 唯一。
+
+fn tool_output_id(ai_group_id: &str) -> String {
+    format!("tool-output-{ai_group_id}")
 }
 
-fn thinking_text_id(turn_index: u32) -> String {
-    format!("thinking-text-ai-{turn_index}")
+fn thinking_text_id(ai_group_id: &str) -> String {
+    format!("thinking-text-{ai_group_id}")
 }
 
-fn task_coord_id(turn_index: u32) -> String {
-    format!("task-coord-ai-{turn_index}")
+fn task_coord_id(ai_group_id: &str) -> String {
+    format!("task-coord-{ai_group_id}")
 }
 
-fn user_message_id(turn_index: u32) -> String {
-    format!("user-msg-ai-{turn_index}")
+fn user_message_id(ai_group_id: &str) -> String {
+    format!("user-msg-{ai_group_id}")
 }
 
 /// 聚合 `tool-output` 桶 —— 不含 7 个 task coordination 工具。
@@ -93,7 +99,7 @@ pub(super) fn aggregate_tool_outputs(
     }
 
     Some(ContextInjection::ToolOutput(ToolOutputInjection {
-        id: tool_output_id(turn_index),
+        id: tool_output_id(ai_group_id),
         turn_index,
         ai_group_id: ai_group_id.to_string(),
         estimated_tokens: total,
@@ -155,7 +161,7 @@ pub(super) fn aggregate_task_coordination(
 
     Some(ContextInjection::TaskCoordination(
         TaskCoordinationInjection {
-            id: task_coord_id(turn_index),
+            id: task_coord_id(ai_group_id),
             turn_index,
             ai_group_id: ai_group_id.to_string(),
             estimated_tokens: total,
@@ -206,7 +212,7 @@ pub(super) fn aggregate_thinking_text(
     }
 
     Some(ContextInjection::ThinkingText(ThinkingTextInjection {
-        id: thinking_text_id(turn_index),
+        id: thinking_text_id(ai_group_id),
         turn_index,
         ai_group_id: ai_group_id.to_string(),
         estimated_tokens: total,
@@ -348,7 +354,7 @@ pub(super) fn create_user_message_injection(
     };
 
     Some(ContextInjection::UserMessage(UserMessageInjection {
-        id: user_message_id(turn_index),
+        id: user_message_id(ai_group_id),
         turn_index,
         ai_group_id: ai_group_id.to_string(),
         estimated_tokens: tokens,

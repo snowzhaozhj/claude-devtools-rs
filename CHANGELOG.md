@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Changed
+- **UI**: corrected the "Turn N" labels in the Context Panel for heavily-compacted sessions. When a long reply triggered automatic context compaction mid-turn, the continuation used to be counted as a separate turn, inflating the numbering (a 2-question session could show up to 15 "turns"). Continuations after a compaction now fold back into the question that started them, so "Turn N" reflects how many times you actually asked something. The chat stream, token stats, compaction phases, and navigation are unchanged.
+
 ### Fixed
 - **UI**: interrupted user messages now appear in the Context Panel's turn view. When you sent a message, the assistant started replying, and the turn was interrupted before completing, that message used to vanish from the "User Messages" turn list (and its Turn numbering). Turns are now anchored on each real user message, so an interrupted turn still shows up — and clicking it jumps to that message instead of the previous one.
 
