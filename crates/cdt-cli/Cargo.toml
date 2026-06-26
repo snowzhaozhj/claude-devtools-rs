@@ -19,6 +19,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+cdt-analyze = { workspace = true }
 cdt-api = { workspace = true }
 cdt-core = { workspace = true }
 cdt-query = { workspace = true }

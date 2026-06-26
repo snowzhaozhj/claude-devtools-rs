@@ -9,7 +9,9 @@ Usage: cdt [OPTIONS] <COMMAND>
 Commands:
   projects     项目相关操作
   sessions     会话列表
-  session      单 session 复合视图（summary + cost + errors）
+  session      Compact turn overview of a session (default) or raw chunks (--raw)
+  turn         Single turn's complete steps (thinking, tool calls, text, etc.)
+  tool-output  Full untruncated output of a tool call
   export       导出会话为 Markdown / JSON
   search       全文搜索
   stats        聚合统计

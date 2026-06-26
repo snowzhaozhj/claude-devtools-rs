@@ -11,6 +11,7 @@ description = "Query orchestration layer for CLI / MCP consumers of cdt-api."
 workspace = true
 
 [dependencies]
+cdt-analyze = { workspace = true }
 cdt-api = { workspace = true }
 cdt-core = { workspace = true }
 cdt-discover = { path = "../cdt-discover" }

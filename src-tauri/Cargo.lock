@@ -733,6 +733,7 @@ name = "cdt-cli"
 version = "0.6.21"
 dependencies = [
  "anyhow",
+ "cdt-analyze",
  "cdt-api",
  "cdt-config",
  "cdt-core",
@@ -845,6 +846,7 @@ dependencies = [
 name = "cdt-query"
 version = "0.6.21"
 dependencies = [
+ "cdt-analyze",
  "cdt-api",
  "cdt-config",
  "cdt-core",

@@ -404,42 +404,9 @@ impl ValueCandidates for SinceCompleter {
     }
 }
 
-pub struct IncludeCompleter;
-
-impl ValueCandidates for IncludeCompleter {
-    fn candidates(&self) -> Vec<CompletionCandidate> {
-        vec![
-            CompletionCandidate::new("phases").help(Some("Session phases".into())),
-            CompletionCandidate::new("tools").help(Some("Tool usage stats".into())),
-            CompletionCandidate::new("activity").help(Some("Tool activity".into())),
-            CompletionCandidate::new("idle_gaps").help(Some("Idle time gaps".into())),
-            CompletionCandidate::new("files").help(Some("Top files touched".into())),
-        ]
-    }
-}
-
-pub struct ContentModeCompleter;
-
-impl ValueCandidates for ContentModeCompleter {
-    fn candidates(&self) -> Vec<CompletionCandidate> {
-        vec![
-            CompletionCandidate::new("omit").help(Some("Structure only (default)".into())),
-            CompletionCandidate::new("overview").help(Some("One-line per chunk".into())),
-            CompletionCandidate::new("full").help(Some("Complete content".into())),
-        ]
-    }
-}
-
-pub struct FilterCompleter;
-
-impl ValueCandidates for FilterCompleter {
-    fn candidates(&self) -> Vec<CompletionCandidate> {
-        vec![
-            CompletionCandidate::new("errors_only").help(Some("Only error chunks".into())),
-            CompletionCandidate::new("tool_calls").help(Some("Only tool call chunks".into())),
-        ]
-    }
-}
+// IncludeCompleter, ContentModeCompleter, FilterCompleter removed — old
+// Session --chunks/--include/--content/--filter params deleted by
+// redesign-cli-mcp-api.
 
 pub struct GroupBySessionsCompleter;
 

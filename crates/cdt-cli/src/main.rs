@@ -24,6 +24,7 @@ use cdt_ssh::SshConnectionManager;
 mod export;
 mod mcp;
 mod time_expr;
+mod turn_api;
 mod update;
 mod view;
 
@@ -74,51 +75,53 @@ enum Command {
         #[command(subcommand)]
         action: SessionsAction,
     },
-    /// 单 session 复合视图（summary + cost + errors）
+    /// Compact turn overview of a session (default) or raw chunks (--raw)
     Session {
         /// 会话 ID（支持 'latest'）
         #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
         id: String,
 
-        /// 切换到 chunk 模式（显示 chunk 流而非复合视图）
+        /// grep 过滤 turns
         #[arg(long)]
-        chunks: bool,
-
-        /// 追加重数据（逗号分隔）
-        #[arg(long, add = ArgValueCandidates::new(completions::IncludeCompleter))]
-        include: Option<String>,
-
-        /// chunk 模式：指定 chunk 区间（如 10:30），与 --tail 互斥
-        #[arg(long, conflicts_with = "tail", requires = "chunks")]
-        range: Option<String>,
-
-        /// chunk 模式：仅显示最后 N 条 chunks
-        #[arg(long, conflicts_with = "range", requires = "chunks")]
-        tail: Option<usize>,
-
-        /// chunk 模式：过滤条件
-        #[arg(long, requires = "chunks", add = ArgValueCandidates::new(completions::FilterCompleter))]
-        filter: Option<String>,
-
-        /// chunk 模式：内容模式 omit / overview / full
-        #[arg(long, requires = "chunks", add = ArgValueCandidates::new(completions::ContentModeCompleter))]
-        content: Option<String>,
-
-        /// chunk 模式：grep 过滤
-        #[arg(long, requires = "chunks")]
         grep: Option<String>,
 
-        /// chunk 模式：grep context 数
-        #[arg(long, default_value = "1", requires = "chunks")]
-        grep_context: usize,
+        /// 每页 turn 数
+        #[arg(long)]
+        page_size: Option<usize>,
 
-        /// chunk 模式：返回全部 chunk
-        #[arg(long, visible_alias = "full", requires = "chunks")]
-        all: bool,
+        /// 分页游标
+        #[arg(long)]
+        cursor: Option<String>,
 
-        /// chunk 模式：展平提取 overview/errors/tools
-        #[arg(long, conflicts_with = "content", requires = "chunks")]
-        extract: Option<String>,
+        /// 输出原 chunk 结构（调试逃生舱）
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Single turn's complete steps (thinking, tool calls, text, etc.)
+    Turn {
+        /// 会话 ID（支持 'latest'）
+        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
+        id: String,
+
+        /// Turn index (0-based)
+        turn: u32,
+
+        /// 每页 step 数
+        #[arg(long)]
+        page_size: Option<usize>,
+
+        /// 分页游标
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Full untruncated output of a tool call
+    ToolOutput {
+        /// 会话 ID
+        #[arg(add = ArgValueCompleter::new(completions::SessionCompleter))]
+        id: String,
+
+        /// The toolUseId from a truncated tool step
+        tool_use_id: String,
     },
     /// 导出会话为 Markdown / JSON
     Export {
@@ -917,10 +920,171 @@ async fn cmd_export(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// session turns (turn-model API)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn cmd_session_turns(
+    _format: &OutputFormat,
+    session_id: &str,
+    grep: Option<&str>,
+    page_size: Option<usize>,
+    cursor: Option<&str>,
+    json_fields: Option<&str>,
+) -> Result<()> {
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(api);
+
+    let session_id = resolve_latest_cli(&engine, session_id).await?;
+    let project_id = engine.find_session_project(&session_id).await?;
+    let options = SessionQueryOptions::default();
+    let detail = engine
+        .get_session_detail(&project_id, &session_id, &options)
+        .await?;
+
+    let overviews = cdt_query::turn_view::build_turn_overviews(&detail.chunks);
+
+    let page_size = page_size.unwrap_or(20).clamp(1, 100);
+    let offset = turn_api::paginate_cursor(cursor);
+
+    let grep_needle = grep.filter(|s| !s.trim().is_empty());
+
+    let turns: Vec<turn_api::TurnCompactView> = if let Some(needle) = grep_needle {
+        let chunk_map = cdt_query::step::build_chunk_map(&detail.chunks);
+        let all_turns = cdt_analyze::derive_turns(&detail.chunks);
+        overviews
+            .iter()
+            .filter_map(|o| {
+                let turn = all_turns.iter().find(|t| t.index == o.index)?;
+                let steps =
+                    cdt_query::step::build_steps_for_turn(&turn.member_chunk_ids, &chunk_map);
+                let matched_in = cdt_query::turn_view::attribute_grep_match(
+                    needle,
+                    o.question.as_deref(),
+                    o.answer.as_deref(),
+                    &steps,
+                );
+                matched_in.map(|m| turn_api::TurnCompactView::from_overview(o, Some(m)))
+            })
+            .collect()
+    } else {
+        overviews
+            .iter()
+            .map(|o| turn_api::TurnCompactView::from_overview(o, None))
+            .collect()
+    };
+
+    let total = turns.len();
+    let page: Vec<_> = turns.into_iter().skip(offset).take(page_size).collect();
+
+    let response = turn_api::SessionOverviewResponse {
+        session_id: detail.session_id,
+        model: overviews.first().and_then(|o| o.metrics.model.clone()),
+        total_cost: overviews.iter().map(|o| o.metrics.cost).sum(),
+        duration_ms: overviews.last().map_or(0, |l| l.metrics.duration_ms),
+        files_touched: Vec::new(),
+        user_intents: Vec::new(),
+        total,
+        next_cursor: turn_api::next_cursor(offset, page_size, total),
+        turns: page,
+    };
+
+    emit_json(&response, json_fields)
+}
+
+async fn cmd_turn(
+    _format: &OutputFormat,
+    session_id: &str,
+    turn_index: u32,
+    page_size: Option<usize>,
+    cursor: Option<&str>,
+    json_fields: Option<&str>,
+) -> Result<()> {
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(api);
+
+    let session_id = resolve_latest_cli(&engine, session_id).await?;
+    let project_id = engine.find_session_project(&session_id).await?;
+    let options = SessionQueryOptions::default();
+    let detail = engine
+        .get_session_detail(&project_id, &session_id, &options)
+        .await?;
+
+    let turn_detail = cdt_query::turn_view::build_turn_detail(&detail.chunks, turn_index)
+        .context(format!("Turn index {turn_index} not found"))?;
+
+    let page_size = page_size.unwrap_or(50).clamp(1, 100);
+    let offset = turn_api::paginate_cursor(cursor);
+    let steps_total = turn_detail.steps.len();
+    let page_steps: Vec<turn_api::StepView> = turn_detail
+        .steps
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(page_size)
+        .map(|(i, s)| turn_api::StepView::from_step(s, i))
+        .collect();
+
+    let response = turn_api::TurnDetailResponse {
+        session_id: detail.session_id,
+        turn_index: turn_detail.index,
+        question: turn_detail.question,
+        answer: turn_detail.answer,
+        steps_total,
+        next_cursor: turn_api::next_cursor(offset, page_size, steps_total),
+        metrics: turn_api::MetricsView::from(&turn_detail.metrics),
+        steps: page_steps,
+    };
+
+    emit_json(&response, json_fields)
+}
+
+async fn cmd_tool_output(
+    _format: &OutputFormat,
+    session_id: &str,
+    tool_use_id: &str,
+    json_fields: Option<&str>,
+) -> Result<()> {
+    let api = build_local_data_api().await?;
+    let engine = QueryEngine::new(api);
+
+    let session_id = resolve_latest_cli(&engine, session_id).await?;
+    let output = engine
+        .api()
+        .get_tool_output(&session_id, &session_id, tool_use_id)
+        .await?;
+
+    let output_bytes = match &output {
+        cdt_core::ToolOutput::Text { text } => text.len() as u64,
+        cdt_core::ToolOutput::Structured { value } => {
+            serde_json::to_string(value).map_or(0, |s| s.len() as u64)
+        }
+        cdt_core::ToolOutput::Missing => 0,
+    };
+
+    let response = turn_api::ToolOutputFullResponse {
+        session_id,
+        tool_use_id: tool_use_id.to_string(),
+        tool_name: String::new(),
+        output_bytes,
+        output: turn_api::ToolOutputView::from(&output),
+    };
+
+    emit_json(&response, json_fields)
+}
+
+async fn cmd_session_raw(
+    format: &OutputFormat,
+    session_id: &str,
+    json_fields: Option<&str>,
+) -> Result<()> {
+    cmd_session_inspect(format, session_id, None, json_fields).await
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // session chunks (was sessions detail)
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, dead_code)]
 async fn cmd_sessions_detail(
     format: &OutputFormat,
     session_id: &str,
@@ -1368,17 +1532,30 @@ fn list_available_fields(command: &Command) {
                 "gitSummary",
             ],
         },
-        Command::Session { chunks: true, .. } => {
-            &["sessionId", "chunks", "totalChunks", "contentMode"]
-        }
+        Command::Session { raw: true, .. } => &["sessionId", "chunks", "totalChunks"],
         Command::Session { .. } => &[
             "sessionId",
-            "messageCount",
-            "chunkCount",
+            "model",
+            "totalCost",
             "durationMs",
-            "cost",
-            "errorCount",
-            "errors",
+            "total",
+            "turns",
+        ],
+        Command::Turn { .. } => &[
+            "sessionId",
+            "turnIndex",
+            "question",
+            "answer",
+            "stepsTotal",
+            "steps",
+            "metrics",
+        ],
+        Command::ToolOutput { .. } => &[
+            "sessionId",
+            "toolUseId",
+            "toolName",
+            "outputBytes",
+            "output",
         ],
         Command::Search { .. } => &["sessionId", "sessionTitle", "totalMatches", "hits"],
         Command::Stats { .. } => &[
@@ -2101,35 +2278,43 @@ async fn main() -> Result<()> {
         },
         Command::Session {
             id,
-            chunks,
-            include,
-            range,
-            tail,
-            filter,
-            content,
             grep,
-            grep_context,
-            all,
-            extract,
+            page_size,
+            cursor,
+            raw,
         } => {
-            if chunks {
-                cmd_sessions_detail(
+            if raw {
+                cmd_session_raw(&effective_format, &id, json_fields).await
+            } else {
+                cmd_session_turns(
                     &effective_format,
                     &id,
-                    range.as_deref(),
-                    tail,
-                    filter.as_deref(),
-                    all,
                     grep.as_deref(),
-                    grep_context,
-                    content.as_deref(),
-                    extract.as_deref(),
+                    page_size,
+                    cursor.as_deref(),
                     json_fields,
                 )
                 .await
-            } else {
-                cmd_session_inspect(&effective_format, &id, include.as_deref(), json_fields).await
             }
+        }
+        Command::Turn {
+            id,
+            turn,
+            page_size,
+            cursor,
+        } => {
+            cmd_turn(
+                &effective_format,
+                &id,
+                turn,
+                page_size,
+                cursor.as_deref(),
+                json_fields,
+            )
+            .await
+        }
+        Command::ToolOutput { id, tool_use_id } => {
+            cmd_tool_output(&effective_format, &id, &tool_use_id, json_fields).await
         }
         Command::Export {
             id,
