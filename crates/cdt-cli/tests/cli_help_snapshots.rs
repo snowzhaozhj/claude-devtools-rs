@@ -5,11 +5,16 @@
 //! clap 的 help 换行会被 normalize（本地终端宽时不换行，
 //! CI 无 TTY 时 fallback 到 100 列换行）。
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn cdt_bin() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_cdt"));
     cmd.env("RUST_LOG", "off");
+    // clap 的 help 换行宽度来自 terminal_size，它会依次探测 stdout/stderr/stdin 的 tty。
+    // `.output()` 已管道 stdout/stderr，但 stdin 默认继承——本地交互式 shell 下 stdin 是
+    // 宽 tty 会让 clap 不换行，CI 无 tty 则回退默认列宽换行，导致快照跨环境 flaky。
+    // 显式 null 掉三条 std 流，让 clap 永远走无 tty 默认宽度，快照确定性。
+    cmd.stdin(Stdio::null());
     cmd
 }
 

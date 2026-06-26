@@ -59,7 +59,9 @@ pub async fn parse_file_via_fs(
             Ok(Some(msg)) => out.push(msg),
             Ok(None) => {}
             Err(ParseError::MalformedLine { line, source }) => {
-                tracing::warn!(
+                // 坏行（活动会话半写、个别损坏行）是处理外部数据的预期瑕疵——记 debug
+                // 不记 warn，对齐 discovery 路径（project_scanner / project_path_resolver）。
+                tracing::debug!(
                     file = %path.display(),
                     line,
                     error = %source,
@@ -67,7 +69,7 @@ pub async fn parse_file_via_fs(
                 );
             }
             Err(ParseError::SchemaMismatch { line, reason }) => {
-                tracing::warn!(
+                tracing::debug!(
                     file = %path.display(),
                     line,
                     reason = %reason,

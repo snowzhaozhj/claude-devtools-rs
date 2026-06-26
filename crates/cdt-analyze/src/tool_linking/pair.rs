@@ -34,7 +34,10 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
             MessageCategory::Assistant => {
                 for call in &msg.tool_calls {
                     if pending.contains_key(&call.id) {
-                        tracing::warn!(
+                        // 真实 Claude 数据正常含重复 id（resume / sidechain / subagent），
+                        // 是处理外部数据的预期瑕疵而非异常——记 debug 不记 warn；
+                        // 聚合计数走下面的 `duplicates_dropped`（随 ToolLinkingResult 返回）。
+                        tracing::debug!(
                             tool_use_id = %call.id,
                             "duplicate tool_use id; keeping first"
                         );
@@ -71,7 +74,8 @@ pub fn pair_tool_executions(messages: &[ParsedMessage]) -> ToolLinkingResult {
                         continue;
                     };
                     if pu.linked {
-                        tracing::warn!(
+                        // 同上：预期内的数据瑕疵，debug 级 + 聚合计数，不刷 warn。
+                        tracing::debug!(
                             tool_use_id = %tool_use_id,
                             "duplicate tool_result; keeping first"
                         );

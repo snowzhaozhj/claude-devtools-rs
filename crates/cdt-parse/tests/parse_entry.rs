@@ -121,6 +121,32 @@ fn attachment_queued_command_parsed_as_user_with_queued_flag() {
 }
 
 #[test]
+fn attachment_queued_command_with_multimodal_prompt_parsed_as_blocks() {
+    // 回归：带图片的排队命令 prompt 是 content-block 数组，曾因 prompt 定成
+    // Option<String> 导致整行 serde 失败、entry 被丢 + 刷 warn。现在用 MessageContent 吃下两态。
+    let line = r#"{"type":"attachment","uuid":"att5","parentUuid":"p5","timestamp":"2026-06-26T15:00:00Z","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"look at this"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}"#;
+    let msg = parse_entry(line)
+        .unwrap()
+        .expect("multimodal queued command should parse");
+    assert_eq!(msg.uuid, "att5");
+    assert_eq!(msg.message_type, MessageType::User);
+    assert_eq!(msg.category, MessageCategory::User);
+    assert!(msg.is_queued_input);
+    let MessageContent::Blocks(blocks) = &msg.content else {
+        panic!("expected Blocks content for multimodal prompt");
+    };
+    assert_eq!(blocks.len(), 2);
+    assert!(matches!(blocks[0], ContentBlock::Text { .. }));
+    assert!(matches!(blocks[1], ContentBlock::Image { .. }));
+}
+
+#[test]
+fn attachment_queued_command_empty_blocks_prompt_skipped() {
+    let line = r#"{"type":"attachment","uuid":"att6","timestamp":"2026-06-26T15:00:00Z","attachment":{"type":"queued_command","prompt":[]}}"#;
+    assert!(parse_entry(line).unwrap().is_none());
+}
+
+#[test]
 fn attachment_non_queued_command_skipped() {
     let line = r#"{"type":"attachment","uuid":"att2","timestamp":"2026-05-30T15:00:00Z","attachment":{"type":"skill_listing","content":"..."}}"#;
     assert!(parse_entry(line).unwrap().is_none());
