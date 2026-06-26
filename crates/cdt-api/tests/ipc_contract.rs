@@ -318,7 +318,7 @@ fn session_summary_serializes_camelcase_with_optional_title() {
         duration_ms: 0,
         total_cost: 0.0,
         tool_error_count: 0,
-        files_touched: Vec::new(),
+        files_modified: Vec::new(),
         git_summary: Vec::new(),
     };
     let json = serde_json::to_value(&s).unwrap();
@@ -368,7 +368,7 @@ fn session_metadata_update_serializes_camelcase_with_git_branch() {
         duration_ms: 0,
         total_cost: 0.0,
         tool_error_count: 0,
-        files_touched: Vec::new(),
+        files_modified: Vec::new(),
         git_summary: Vec::new(),
     };
     let json = serde_json::to_value(&u).unwrap();
@@ -3032,7 +3032,7 @@ async fn get_worktree_sessions_paginated_response_serializes_camelcase() {
             duration_ms: 0,
             total_cost: 0.0,
             tool_error_count: 0,
-            files_touched: Vec::new(),
+            files_modified: Vec::new(),
             git_summary: Vec::new(),
         }],
         next_cursor: Some("1".into()),
@@ -3072,7 +3072,7 @@ fn session_summary_skips_worktree_fields_when_none() {
         duration_ms: 0,
         total_cost: 0.0,
         tool_error_count: 0,
-        files_touched: Vec::new(),
+        files_modified: Vec::new(),
         git_summary: Vec::new(),
     };
     let json = serde_json::to_value(&s).unwrap();

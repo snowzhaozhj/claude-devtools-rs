@@ -251,7 +251,7 @@ impl CdtMcpServer {
 
     #[tool(
         name = "list_sessions",
-        description = "List sessions with filtering. Omit 'project' for cross-project query (defaults since='7d'). Each session includes filesTouched for file-based lookup.",
+        description = "List sessions with filtering. Omit 'project' for cross-project query (defaults since='7d'). Each session includes filesModified for file-based lookup.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -390,37 +390,16 @@ impl CdtMcpServer {
             .collect();
 
         let session_model = overviews.first().and_then(|o| o.metrics.model.clone());
-        let total_cost: f64 = overviews.iter().map(|o| o.metrics.cost).sum();
-        let total_duration: i64 = overviews.iter().map(|o| o.metrics.duration_ms).sum();
-
-        let files_touched: Vec<String> = {
-            let filter = QueryFilter {
-                since: None,
-                until: None,
-                grep: None,
-                min_messages: None,
-                limit: None,
-            };
-            let project_id = self.resolve_project_for_session(&real_session_id).await?;
-            let sessions = self
-                .engine
-                .list_sessions(&project_id, &filter)
-                .await
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-            sessions
-                .into_iter()
-                .find(|s| s.session_id == real_session_id)
-                .map(|s| s.files_touched)
-                .unwrap_or_default()
-        };
+        let total_cost = cdt_query::turn_view::compute_session_cost_from_chunks(&chunks);
+        let duration_ms = cdt_query::turn_view::compute_session_duration_ms(&chunks);
+        let files_modified = cdt_query::turn_view::extract_files_modified(&chunks);
 
         let response = SessionOverviewResponse {
             session_id: real_session_id,
             model: session_model,
             total_cost,
-            duration_ms: total_duration,
-            files_touched,
-            user_intents: Vec::new(),
+            duration_ms,
+            files_modified,
             total,
             next_cursor: next_cursor(offset, page_size, total),
             turns: page,

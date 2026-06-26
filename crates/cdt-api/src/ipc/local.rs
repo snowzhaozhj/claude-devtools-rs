@@ -1173,7 +1173,7 @@ impl LocalDataApi {
                 duration_ms: 0,
                 total_cost: 0.0,
                 tool_error_count: 0,
-                files_touched: Vec::new(),
+                files_modified: Vec::new(),
                 git_summary: Vec::new(),
             };
             self.apply_worktree_meta(&mut summary);
@@ -1238,7 +1238,7 @@ impl LocalDataApi {
                             duration_ms: entry.duration_ms,
                             total_cost: entry.total_cost,
                             tool_error_count: entry.tool_error_count,
-                            files_touched: entry.files_touched,
+                            files_modified: entry.files_modified,
                             git_summary: entry.git_summary,
                         });
                     return (wt_id, session_id, jsonl_path, cached);
@@ -1280,7 +1280,7 @@ impl LocalDataApi {
                 summary.duration_ms = meta.duration_ms;
                 summary.total_cost = meta.total_cost;
                 summary.tool_error_count = meta.tool_error_count;
-                summary.files_touched = meta.files_touched;
+                summary.files_modified = meta.files_modified;
                 summary.git_summary = meta.git_summary;
             }
             if need_background_validation {
@@ -2518,7 +2518,7 @@ impl LocalDataApi {
                             duration_ms: entry.duration_ms,
                             total_cost: entry.total_cost,
                             tool_error_count: entry.tool_error_count,
-                            files_touched: entry.files_touched,
+                            files_modified: entry.files_modified,
                             git_summary: entry.git_summary,
                         });
                     return (jsonl_path, cached);
@@ -2563,7 +2563,7 @@ impl LocalDataApi {
                     duration_ms: meta.duration_ms,
                     total_cost: meta.total_cost,
                     tool_error_count: meta.tool_error_count,
-                    files_touched: meta.files_touched,
+                    files_modified: meta.files_modified,
                     git_summary: meta.git_summary,
                 },
                 None => SessionSummary {
@@ -2586,7 +2586,7 @@ impl LocalDataApi {
                     duration_ms: 0,
                     total_cost: 0.0,
                     tool_error_count: 0,
-                    files_touched: Vec::new(),
+                    files_modified: Vec::new(),
                     git_summary: Vec::new(),
                 },
             };
@@ -3344,7 +3344,7 @@ async fn scan_metadata_for_page(
                 duration_ms: meta.duration_ms,
                 total_cost: meta.total_cost,
                 tool_error_count: meta.tool_error_count,
-                files_touched: meta.files_touched,
+                files_modified: meta.files_modified,
                 git_summary: meta.git_summary,
             });
         });
@@ -3575,7 +3575,7 @@ async fn scan_metadata_for_page_batched(
                 duration_ms: entry.duration_ms,
                 total_cost: entry.total_cost,
                 tool_error_count: entry.tool_error_count,
-                files_touched: entry.files_touched,
+                files_modified: entry.files_modified,
                 git_summary: entry.git_summary,
             });
             continue;
@@ -3626,7 +3626,7 @@ async fn scan_metadata_for_page_batched(
                 duration_ms: meta.duration_ms,
                 total_cost: meta.total_cost,
                 tool_error_count: meta.tool_error_count,
-                files_touched: meta.files_touched,
+                files_modified: meta.files_modified,
                 git_summary: meta.git_summary,
             });
         });
@@ -3723,7 +3723,7 @@ impl DataApi for LocalDataApi {
             summary.duration_ms = meta.duration_ms;
             summary.total_cost = meta.total_cost;
             summary.tool_error_count = meta.tool_error_count;
-            summary.files_touched = meta.files_touched;
+            summary.files_modified = meta.files_modified;
             summary.git_summary = meta.git_summary;
         }
 
@@ -3864,7 +3864,7 @@ impl DataApi for LocalDataApi {
                     duration_ms: 0,
                     total_cost: 0.0,
                     tool_error_count: 0,
-                    files_touched: Vec::new(),
+                    files_modified: Vec::new(),
                     git_summary: Vec::new(),
                 };
                 self.apply_worktree_meta(&mut summary);

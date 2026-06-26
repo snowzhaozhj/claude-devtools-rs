@@ -34,7 +34,7 @@ fn make_session_with_created(
         duration_ms: 0,
         total_cost: 0.0,
         tool_error_count: 0,
-        files_touched: Vec::new(),
+        files_modified: Vec::new(),
         git_summary: Vec::new(),
     }
 }

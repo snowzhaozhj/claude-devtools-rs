@@ -152,7 +152,7 @@ pub struct SessionSummary {
     #[serde(default)]
     pub tool_error_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files_touched: Vec<String>,
+    pub files_modified: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub git_summary: Vec<String>,
 }

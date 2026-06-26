@@ -1,5 +1,7 @@
 //! Serializable view types for the turn-model CLI/MCP API.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 
 use cdt_core::ToolOutput;
@@ -17,8 +19,7 @@ pub struct SessionOverviewResponse {
     pub model: Option<String>,
     pub total_cost: f64,
     pub duration_ms: i64,
-    pub files_touched: Vec<String>,
-    pub user_intents: Vec<String>,
+    pub files_modified: Vec<String>,
     pub total: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
@@ -32,7 +33,7 @@ pub struct TurnCompactView {
     pub question: Option<String>,
     pub answer: Option<String>,
     pub tools: Vec<ToolAggView>,
-    pub steps_count: usize,
+    pub step_counts: HashMap<String, usize>,
     pub metrics: MetricsView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_in: Option<String>,
@@ -88,7 +89,7 @@ impl TurnCompactView {
                     error_count: t.error_count,
                 })
                 .collect(),
-            steps_count: o.steps_count,
+            step_counts: o.step_counts.clone(),
             metrics: MetricsView::from(&o.metrics),
             matched_in,
         }

@@ -64,7 +64,7 @@ pub enum PushEvent {
         #[serde(default)]
         tool_error_count: usize,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        files_touched: Vec<String>,
+        files_modified: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         git_summary: Vec<String>,
     },
@@ -145,7 +145,7 @@ pub struct SessionMetadataUpdate {
     #[serde(default)]
     pub tool_error_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files_touched: Vec<String>,
+    pub files_modified: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub git_summary: Vec<String>,
 }

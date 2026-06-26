@@ -72,7 +72,7 @@ pub struct SessionMetadata {
     /// 工具执行错误计数（`ToolResult` `is_error=true`）。
     pub tool_error_count: usize,
     /// 被编辑文件路径（去重，上限 20 条）。
-    pub files_touched: Vec<String>,
+    pub files_modified: Vec<String>,
     /// commit message + PR URL（上限 10 条）。
     pub git_summary: Vec<String>,
 }
@@ -84,8 +84,8 @@ const TITLE_MAX_LINES: usize = 200;
 const INTENT_MAX_CHARS: usize = 100;
 /// `user_intents` 最大条数。
 const MAX_USER_INTENTS: usize = 30;
-/// `files_touched` 最大条数。
-const MAX_FILES_TOUCHED: usize = 20;
+/// `files_modified` 最大条数。
+const MAX_FILES_MODIFIED: usize = 20;
 /// `git_summary` 最大条数。
 const MAX_GIT_SUMMARY: usize = 10;
 
@@ -149,14 +149,15 @@ fn git_commit_message_regex() -> &'static Regex {
     })
 }
 
+/// `(input, output, cache_read, cache_write)` per million tokens.
 #[allow(clippy::cast_precision_loss)]
-fn estimate_cost_per_mtok(model: &str) -> (f64, f64) {
+fn estimate_cost_per_mtok(model: &str) -> (f64, f64, f64, f64) {
     if model.starts_with("claude-opus") {
-        (5.0, 25.0)
+        (5.0, 25.0, 0.50, 6.25)
     } else if model.starts_with("claude-haiku") {
-        (1.0, 5.0)
+        (1.0, 5.0, 0.10, 1.25)
     } else {
-        (3.0, 15.0)
+        (3.0, 15.0, 0.30, 3.75)
     }
 }
 
@@ -235,7 +236,7 @@ fn is_user_chunk_message(msg: &ParsedMessage) -> bool {
 fn extract_tool_use_activity(
     content: &MessageContent,
     files_set: &mut std::collections::HashSet<String>,
-    files_touched: &mut Vec<String>,
+    files_modified: &mut Vec<String>,
     git_summary: &mut Vec<String>,
     pending_bash_ids: &mut std::collections::HashSet<String>,
 ) {
@@ -247,10 +248,10 @@ fn extract_tool_use_activity(
             match name.as_str() {
                 "Edit" | "Write" => {
                     if let Some(fp) = input.get("file_path").and_then(|v| v.as_str()) {
-                        if files_touched.len() < MAX_FILES_TOUCHED
+                        if files_modified.len() < MAX_FILES_MODIFIED
                             && files_set.insert(fp.to_string())
                         {
-                            files_touched.push(fp.to_string());
+                            files_modified.push(fp.to_string());
                         }
                     }
                 }
@@ -258,10 +259,10 @@ fn extract_tool_use_activity(
                     if let Some(files) = input.get("files").and_then(|v| v.as_array()) {
                         for f in files {
                             if let Some(fp) = f.get("file_path").and_then(|v| v.as_str()) {
-                                if files_touched.len() < MAX_FILES_TOUCHED
+                                if files_modified.len() < MAX_FILES_MODIFIED
                                     && files_set.insert(fp.to_string())
                                 {
-                                    files_touched.push(fp.to_string());
+                                    files_modified.push(fp.to_string());
                                 }
                             }
                         }
@@ -361,7 +362,7 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
                 duration_ms: 0,
                 total_cost: 0.0,
                 tool_error_count: 0,
-                files_touched: Vec::new(),
+                files_modified: Vec::new(),
                 git_summary: Vec::new(),
             },
             false,
@@ -385,8 +386,9 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
     let mut last_active: i64 = 0;
     let mut total_cost: f64 = 0.0;
     let mut tool_error_count: usize = 0;
-    let mut files_touched_set: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut files_touched: Vec<String> = Vec::new();
+    let mut files_modified_set: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut files_modified: Vec<String> = Vec::new();
     let mut git_summary: Vec<String> = Vec::new();
     let mut pending_bash_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -440,17 +442,20 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
         if msg.category == MessageCategory::Assistant && !msg.is_sidechain {
             if let Some(usage) = &msg.usage {
                 let model_name = msg.model.as_deref().unwrap_or("");
-                let (inp_rate, out_rate) = estimate_cost_per_mtok(model_name);
+                let (inp_rate, out_rate, cache_read_rate, cache_write_rate) =
+                    estimate_cost_per_mtok(model_name);
                 #[allow(clippy::cast_precision_loss)]
                 {
                     total_cost += usage.input_tokens as f64 * inp_rate / 1_000_000.0
-                        + usage.output_tokens as f64 * out_rate / 1_000_000.0;
+                        + usage.output_tokens as f64 * out_rate / 1_000_000.0
+                        + usage.cache_read_input_tokens as f64 * cache_read_rate / 1_000_000.0
+                        + usage.cache_creation_input_tokens as f64 * cache_write_rate / 1_000_000.0;
                 }
             }
             extract_tool_use_activity(
                 &msg.content,
-                &mut files_touched_set,
-                &mut files_touched,
+                &mut files_modified_set,
+                &mut files_modified,
                 &mut git_summary,
                 &mut pending_bash_ids,
             );
@@ -528,7 +533,7 @@ pub(crate) async fn extract_session_metadata_with_ongoing(
             duration_ms,
             total_cost,
             tool_error_count,
-            files_touched,
+            files_modified,
             git_summary,
         },
         messages_ongoing,
@@ -552,8 +557,9 @@ pub(crate) fn extract_session_metadata_from_parsed(
     let mut last_active: i64 = 0;
     let mut total_cost: f64 = 0.0;
     let mut tool_error_count: usize = 0;
-    let mut files_touched_set: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut files_touched: Vec<String> = Vec::new();
+    let mut files_modified_set: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut files_modified: Vec<String> = Vec::new();
     let mut git_summary: Vec<String> = Vec::new();
     let mut pending_bash_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -594,17 +600,20 @@ pub(crate) fn extract_session_metadata_from_parsed(
         if msg.category == MessageCategory::Assistant && !msg.is_sidechain {
             if let Some(usage) = &msg.usage {
                 let model_name = msg.model.as_deref().unwrap_or("");
-                let (inp_rate, out_rate) = estimate_cost_per_mtok(model_name);
+                let (inp_rate, out_rate, cache_read_rate, cache_write_rate) =
+                    estimate_cost_per_mtok(model_name);
                 #[allow(clippy::cast_precision_loss)]
                 {
                     total_cost += usage.input_tokens as f64 * inp_rate / 1_000_000.0
-                        + usage.output_tokens as f64 * out_rate / 1_000_000.0;
+                        + usage.output_tokens as f64 * out_rate / 1_000_000.0
+                        + usage.cache_read_input_tokens as f64 * cache_read_rate / 1_000_000.0
+                        + usage.cache_creation_input_tokens as f64 * cache_write_rate / 1_000_000.0;
                 }
             }
             extract_tool_use_activity(
                 &msg.content,
-                &mut files_touched_set,
-                &mut files_touched,
+                &mut files_modified_set,
+                &mut files_modified,
                 &mut git_summary,
                 &mut pending_bash_ids,
             );
@@ -669,7 +678,7 @@ pub(crate) fn extract_session_metadata_from_parsed(
         duration_ms,
         total_cost,
         tool_error_count,
-        files_touched,
+        files_modified,
         git_summary,
     }
 }
@@ -703,7 +712,7 @@ pub(crate) struct MetadataCacheEntry {
     pub(crate) duration_ms: i64,
     pub(crate) total_cost: f64,
     pub(crate) tool_error_count: usize,
-    pub(crate) files_touched: Vec<String>,
+    pub(crate) files_modified: Vec<String>,
     pub(crate) git_summary: Vec<String>,
 }
 
@@ -823,7 +832,7 @@ pub(crate) async fn try_lookup_cached_metadata(
         duration_ms: entry.duration_ms,
         total_cost: entry.total_cost,
         tool_error_count: entry.tool_error_count,
-        files_touched: entry.files_touched,
+        files_modified: entry.files_modified,
         git_summary: entry.git_summary,
     })
 }
@@ -880,7 +889,7 @@ pub(crate) async fn extract_session_metadata_cached(
                     duration_ms: entry.duration_ms,
                     total_cost: entry.total_cost,
                     tool_error_count: entry.tool_error_count,
-                    files_touched: entry.files_touched,
+                    files_modified: entry.files_modified,
                     git_summary: entry.git_summary,
                 };
             }
@@ -909,7 +918,7 @@ pub(crate) async fn extract_session_metadata_cached(
                 duration_ms: meta.duration_ms,
                 total_cost: meta.total_cost,
                 tool_error_count: meta.tool_error_count,
-                files_touched: meta.files_touched.clone(),
+                files_modified: meta.files_modified.clone(),
                 git_summary: meta.git_summary.clone(),
             },
         );
@@ -1740,7 +1749,7 @@ mod tests {
             duration_ms: 0,
             total_cost: 0.0,
             tool_error_count: 0,
-            files_touched: Vec::new(),
+            files_modified: Vec::new(),
             git_summary: Vec::new(),
         }
     }
@@ -2246,7 +2255,7 @@ mod tests {
                 duration_ms: 0,
                 total_cost: 0.0,
                 tool_error_count: 0,
-                files_touched: Vec::new(),
+                files_modified: Vec::new(),
                 git_summary: Vec::new(),
             },
         );
@@ -2765,7 +2774,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn activity_files_touched_deduped() {
+    async fn activity_files_modified_deduped() {
         let tmp = tempfile::tempdir().unwrap();
         let path = write_jsonl(
             tmp.path(),
@@ -2780,7 +2789,7 @@ mod tests {
             ],
         );
         let meta = extract_session_metadata(&path).await;
-        assert_eq!(meta.files_touched, vec!["/src/main.rs", "/src/lib.rs"]);
+        assert_eq!(meta.files_modified, vec!["/src/main.rs", "/src/lib.rs"]);
     }
 
     #[tokio::test]
