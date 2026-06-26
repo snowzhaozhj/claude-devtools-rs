@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use cdt_api::{
-    DataApi, LocalDataApi, PaginatedRequest, SearchRequest, SessionDetail, SessionDetailResponse,
-    SessionSummary,
+    DataApi, LocalDataApi, SearchRequest, SessionDetail, SessionDetailResponse, SessionSummary,
 };
 
 use crate::error::QueryError;
@@ -48,22 +47,22 @@ impl QueryEngine {
     }
 
     /// List sessions with optional filter (single project).
+    ///
+    /// Delegates to `LocalDataApi::list_sessions_filtered` (streaming scan).
     pub async fn list_sessions(
         &self,
         project_id: &str,
         filter: &QueryFilter,
     ) -> Result<Vec<SessionSummary>, QueryError> {
-        let pagination = PaginatedRequest {
-            page_size: usize::MAX,
-            cursor: None,
-        };
-        let resp = self.api.list_sessions_sync(project_id, &pagination).await?;
-
-        Ok(filter.apply(resp.items))
+        let f = filter.to_session_list_filter();
+        Ok(self.api.list_sessions_filtered(project_id, &f).await?)
     }
 
     /// List sessions across all projects, with filter applied.
-    /// Returns sessions sorted by timestamp descending.
+    ///
+    /// 展开所有 worktree（按 `most_recent_session` 预裁 stale group），交给
+    /// `LocalDataApi::list_sessions_filtered_cross_project` 做全局 mtime 合并 +
+    /// 流式扫描——无内容过滤时只对全局 top-limit 条提取 metadata。
     pub async fn list_sessions_cross_project(
         &self,
         filter: &QueryFilter,
@@ -74,12 +73,7 @@ impl QueryEngine {
             .await
             .map_err(|e| QueryError::Api(e.to_string()))?;
 
-        let pagination = PaginatedRequest {
-            page_size: usize::MAX,
-            cursor: None,
-        };
-
-        let mut all_sessions = Vec::new();
+        let mut projects: Vec<(String, Option<String>)> = Vec::new();
         for group in &groups {
             if let Some(since) = filter.since {
                 if group.most_recent_session.is_some_and(|mtime| mtime < since) {
@@ -87,27 +81,15 @@ impl QueryEngine {
                 }
             }
             for wt in &group.worktrees {
-                match self.api.list_sessions_sync(&wt.id, &pagination).await {
-                    Ok(resp) => {
-                        for mut s in resp.items {
-                            s.project_name = Some(group.name.clone());
-                            all_sessions.push(s);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            project_id = %wt.id,
-                            error = %e,
-                            "cross-project list_sessions: skipping worktree"
-                        );
-                    }
-                }
+                projects.push((wt.id.clone(), Some(group.name.clone())));
             }
         }
 
-        all_sessions.sort_by_key(|s| std::cmp::Reverse(s.timestamp));
-
-        Ok(filter.apply(all_sessions))
+        let f = filter.to_session_list_filter();
+        Ok(self
+            .api
+            .list_sessions_filtered_cross_project(&projects, &f)
+            .await?)
     }
 
     /// Get session detail (full parse + build), then apply query options.

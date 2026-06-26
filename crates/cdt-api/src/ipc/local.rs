@@ -3655,6 +3655,191 @@ async fn scan_metadata_for_page_batched(
     }
 }
 
+/// CLI/MCP 路径用的 session 过滤条件。
+/// 与 sidebar（IPC）路径的骨架+SSE 模式独立——sidebar 不走此 struct。
+#[derive(Debug, Clone, Default)]
+pub struct SessionListFilter {
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+    pub grep: Option<String>,
+    pub branch: Option<String>,
+    pub limit: Option<usize>,
+}
+
+impl LocalDataApi {
+    /// CLI/MCP 专用：单 project 流式扫描 session 列表。
+    ///
+    /// 与 `list_sessions_sync`（走 `list_sessions_skeleton` 全量 cwd + metadata）
+    /// 不同，本方法只对最终命中的 ≤limit 条 session 提取 metadata + cwd。
+    /// sidebar（IPC）路径仍走 async `list_sessions`（骨架+SSE），不受影响。
+    pub async fn list_sessions_filtered(
+        &self,
+        project_id: &str,
+        filter: &SessionListFilter,
+    ) -> Result<Vec<SessionSummary>, ApiError> {
+        // 单 project：用户显式指定，readdir 错误 SHALL 传播（fail_fast）。
+        self.list_sessions_filtered_multi(&[(project_id.to_owned(), None)], filter, true)
+            .await
+    }
+
+    /// CLI/MCP 专用：跨 project 流式扫描 session 列表。
+    ///
+    /// 入参 `projects` 为 `(project_id, project_name)` 列表（调用方按 group
+    /// 展开 worktree 并可选地按 `most_recent_session` 预裁 stale group）。
+    /// 全局按 mtime 合并后流式扫描——无内容过滤时只对**全局** top-limit 条提取
+    /// metadata（而非每个 project 全量抽再截断）。
+    pub async fn list_sessions_filtered_cross_project(
+        &self,
+        projects: &[(String, Option<String>)],
+        filter: &SessionListFilter,
+    ) -> Result<Vec<SessionSummary>, ApiError> {
+        // 跨 project：单个 project 目录不可读（权限 / 删除 race）SHALL warn + skip，
+        // 不让一个坏 project 拖垮整张列表（对齐旧 QueryEngine per-worktree 容错）。
+        self.list_sessions_filtered_multi(projects, filter, false)
+            .await
+    }
+
+    /// 单 / 跨 project 共享的流式扫描核心。
+    ///
+    /// 1. 对每个 project 跑 `list_session_entries`（纯 readdir + since 预裁）
+    /// 2. 全局按 mtime 降序合并（同 mtime 按 sid 稳序）
+    /// 3. 顺序提取 metadata → 过滤（until / grep / branch）→ 命中 limit 即停
+    /// 4. 只对最终结果集补 cwd
+    ///
+    /// `fail_fast`：某 project `list_session_entries` 失败时，`true` 传播错误
+    /// （单 project 路径），`false` warn + skip（跨 project 路径）。
+    async fn list_sessions_filtered_multi(
+        &self,
+        projects: &[(String, Option<String>)],
+        filter: &SessionListFilter,
+        fail_fast: bool,
+    ) -> Result<Vec<SessionSummary>, ApiError> {
+        let (fs, projects_dir, ctx) = self.active_fs_and_context_strict().await?;
+        let scanner = ProjectScanner::new_with_cwd_cache(
+            fs.clone(),
+            projects_dir.clone(),
+            self.shared_read_semaphore.clone(),
+            self.shared_cwd_cache.clone(),
+        );
+
+        // 1. 收集所有 project 的轻量 entry（携带 project 下标用于后续回填）。
+        let mut tagged: Vec<(cdt_discover::SessionStat, usize)> = Vec::new();
+        for (idx, (project_id, _)) in projects.iter().enumerate() {
+            match scanner.list_session_entries(project_id, filter.since).await {
+                Ok(entries) => tagged.extend(entries.into_iter().map(|e| (e, idx))),
+                Err(e) if fail_fast => {
+                    return Err(ApiError::internal(format!("list session entries: {e}")));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        project_id = %project_id,
+                        error = %e,
+                        "cross-project list_sessions: skipping unreadable project"
+                    );
+                }
+            }
+        }
+
+        // 2. 全局 mtime 降序（同 mtime 按 sid 升序保稳定）。tie-break 刻意对齐
+        //    `ProjectScanner::list_sessions`（sidebar 路径）与 spec ipc-data-api
+        //    k-way merge 分页要求的"同 mtime sid 稳序"——旧跨 project 仅按
+        //    timestamp 降序、依赖 group 遍历顺序做隐式 tie-break，本实现统一到
+        //    确定性的 (mtime, sid) 口径。
+        tagged.sort_by(|a, b| {
+            b.0.mtime_ms
+                .cmp(&a.0.mtime_ms)
+                .then_with(|| a.0.id.cmp(&b.0.id))
+        });
+
+        // 3. 流式扫描。
+        let limit = filter.limit.unwrap_or(usize::MAX);
+        let grep_lower = filter.grep.as_deref().map(str::to_lowercase);
+        let branch_lower = filter.branch.as_deref().map(str::to_lowercase);
+
+        let mut matched: Vec<(&cdt_discover::SessionStat, usize, SessionMetadata)> = Vec::new();
+
+        for (entry, idx) in &tagged {
+            // limit 检查置于循环顶部：`limit == 0` 立即停，且避免对第 limit+1
+            // 条做多余的 metadata 提取。
+            if matched.len() >= limit {
+                break;
+            }
+
+            if let Some(until) = filter.until {
+                if entry.created_ms > until {
+                    continue;
+                }
+            }
+
+            // `entry.path` 即该 session 的 jsonl 路径（list_session_entries 填充）。
+            let meta =
+                extract_session_metadata_cached(&self.metadata_cache, &*fs, &ctx, &entry.path)
+                    .await;
+
+            if let Some(ref needle) = grep_lower {
+                if !needle.is_empty() {
+                    let title_match = meta
+                        .title
+                        .as_deref()
+                        .is_some_and(|t| t.to_lowercase().contains(needle));
+                    if !title_match {
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(ref needle) = branch_lower {
+                let branch_match = meta
+                    .git_branch
+                    .as_deref()
+                    .is_some_and(|b| b.to_lowercase().contains(needle));
+                if !branch_match {
+                    continue;
+                }
+            }
+
+            matched.push((entry, *idx, meta));
+        }
+
+        // 4. 只对命中结果补 cwd。
+        let matched_paths: Vec<&std::path::Path> =
+            matched.iter().map(|(e, _, _)| e.path.as_path()).collect();
+        let cwds = scanner.extract_cwds(&matched_paths).await;
+
+        let mut summaries = Vec::with_capacity(matched.len());
+        for ((entry, idx, meta), cwd) in matched.into_iter().zip(cwds) {
+            let (project_id, project_name) = &projects[idx];
+            let mut summary = SessionSummary {
+                session_id: entry.id.clone(),
+                project_id: project_id.clone(),
+                timestamp: entry.mtime_ms,
+                created: entry.created_ms,
+                message_count: meta.message_count,
+                title: meta.title,
+                is_ongoing: meta.is_ongoing,
+                git_branch: meta.git_branch,
+                worktree_id: None,
+                worktree_name: None,
+                group_id: None,
+                cwd_relative_to_repo_root: None,
+                cwd,
+                project_name: project_name.clone(),
+                user_intents: meta.user_intents,
+                last_active: meta.last_active,
+                duration_ms: meta.duration_ms,
+                total_cost: meta.total_cost,
+                tool_error_count: meta.tool_error_count,
+                files_modified: meta.files_modified,
+                git_summary: meta.git_summary,
+            };
+            self.apply_worktree_meta(&mut summary);
+            summaries.push(summary);
+        }
+
+        Ok(summaries)
+    }
+}
+
 #[async_trait]
 impl DataApi for LocalDataApi {
     // =========================================================================
