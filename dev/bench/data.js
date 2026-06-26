@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782441330935,
+  "lastUpdate": 1782460687223,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -23407,6 +23407,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12770,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "45884f2e9376b715586a4811a8e27ced37b1b336",
+          "message": "feat(cli/mcp): redesign API around turn model (BREAKING) (#544)\n\n* docs(opsx): propose redesign-cli-mcp-api (AI-friendly turn-model API)\n\n把这次 explore 的全部结论落盘耐久保存（方案3：先落盘保命，实现待 #540）：\n- proposal: 7 工具/21 参数，删反模式参数，BREAKING 迁移\n- design: D0-D16 决策记录（含 turn 定义、subagent A1、性能边界、各 reject 理由）\n- specs delta: 新 capability session-turn-view（turn/step 模型单一 owner）+\n  mcp-server 工具集 6→7 + cli-output turn 子命令\n- tasks: #540 前置 blocker + 实现/验证/发布尾段\n- reference-redesign.html: 含 JSON 示例 + 效果对比的可视化草稿\n\n依赖 #540（turn 锚定改用户消息）先落地，故停在 propose 不进 apply。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs(opsx): grilling review redesign-cli-mcp-api design\n\nRevisions after grilling + codex design review (2 rounds):\n\n- D0b: #540/#542 blockers resolved, derive_turns is sole authority,\n  turn driver 3 types (User/Teammate/Headless), question fills\n  driving input without separate driver field\n- D2b: get_step_output renamed to get_tool_output + toolUseId\n  addressing (reuses existing DataApi::get_tool_output infra)\n- D4b: add pageSize param (replaces deleted limit), total params\n  31→23\n- D6b: delete project param confirmed (full scan 110-140ms ≈ noise)\n- D14b: step types 10→12 (add compaction/system to preserve info)\n- D15b: subagent recursive drilling deferred\n- D17: metrics schema defined (7 fields)\n- grep matchedIn attribution rule added (D11 update)\n- codex design review: 4 findings fixed + 1 second-round fix\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* feat(cli/mcp): redesign API around turn model (BREAKING)\n\nReplace the chunk-based CLI/MCP API with a turn-model API that gives AI\nagents complete conversation context in 2-3 calls instead of 20+.\n\n**7 MCP tools** (was 6): list_projects, list_sessions, get_session\n(compact turn overview), get_turn (full steps), get_tool_output\n(untruncated tool output), search (turn-level hits), get_stats.\n\nKey changes:\n- Port TS buildDisplayItems to Rust (cdt-query::step, 12 step types)\n- Turn view construction consuming cdt-analyze::derive_turns\n- Server-side truncation (tool output ≥5KB) + get_tool_output escape hatch\n- grep matchedIn attribution (tool:<name> > error > thinking > answer > question)\n- Unified pagination (total + nextCursor + pageSize)\n- CLI: cdt session (turn view), cdt turn, cdt tool-output, --raw escape hatch\n- BREAKING: removed get_session_chunks, content_mode, include, filter,\n  range, tail, grep_context, group_by, branch, is_ongoing parameters\n\nDesktop frontend is unaffected — turn model is CLI/MCP exclusive layer.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli/mcp): address review findings from codex + pr-review-toolkit\n\n- Fix get_tool_output: scan chunks directly instead of passing session_id\n  as both root_session_id and session_id (breaks subagent lookups)\n- Fix search timestamp: derive from turn's first chunk instead of hardcoded 0\n- Fix search project_name: use decoded project_id path instead of session_title\n- Fix matchedIn priority: tool:<name> > error (was error > tool)\n- Fix total_duration: sum all turns instead of adding first + last\n- Fix StepView::Slash: include args field (was silently dropped)\n- Remove dead truncate_tool_outputs + find_tool_name_for_id functions\n- Add tracing::warn for skipped sessions in search\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* chore(opsx): archive redesign-cli-mcp-api\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli/mcp): correct totalCost, durationMs, filesModified; redesign stepCounts\n\n- totalCost: compute from pricing table + ai.responses[].usage (was 0\n  because ChunkMetrics.cost_usd is always None)\n- durationMs: use wall-clock (first chunk → last chunk end) instead of\n  sum-of-turns\n- filesModified: extract from chunks' ToolExecution (Edit/Write/MultiEdit)\n  instead of O(N) list_sessions scan; rename filesTouched → filesModified\n  globally for clearer semantics\n- stepCounts: replace flat stepsCount with per-type HashMap (tool/text/\n  thinking/subagent/...) so consumers see the full breakdown\n- Remove userIntents from get_session (redundant with turns[].question)\n- Fix session_metadata.rs estimate_cost_per_mtok to include cache_read\n  and cache_creation rates (was only computing input+output cost)\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cost): align estimate_cost_per_mtok with PRICING_TABLE; add NotebookEdit to filesModified\n\n- estimate_cost_per_mtok: use table-driven lookup matching all 8 model\n  prefixes from cdt_query::cost::PRICING_TABLE (was missing claude-3-opus\n  and claude-3-haiku specific rates)\n- extract_files_modified: include NotebookEdit (notebook_path field)\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* docs(skill): rewrite session-insights for turn-model API\n\nThe skill was documenting the old chunk-based API (--chunks, --content,\n--range, --extract). Rewritten to match the turn-model API: session →\nturn → tool-output three-layer drill-down, with updated JSON schemas,\ncommands, flags, patterns, and scenarios.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli): unify help text to English (was mixed Chinese/English)\n\nAll clap doc comments (subcommand descriptions, flag help, arg\ndescriptions) unified to English. Updates insta snapshots.\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n* fix(cli): fix typo in setup help text and update snapshot\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-26T15:54:21+08:00",
+          "tree_id": "3952a3cb0b5ff5e14093c6323f9909b5c6356d28",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/45884f2e9376b715586a4811a8e27ced37b1b336"
+        },
+        "date": 1782460686865,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 114.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1112,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4722,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.862,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.836,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 40.28,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 32.81,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 292.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1180,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 2755,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2931,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 38970,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.848,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 59.36,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 605.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6194,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 195.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1945,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 55.12,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 559.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5577,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 119.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1211,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.812,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9349,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1040,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 11660,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 1160,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 47.67,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 503.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 93.25,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 935.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9493,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 196.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1330,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12980,
             "unit": "µs"
           }
         ]
