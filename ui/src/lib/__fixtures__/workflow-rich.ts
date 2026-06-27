@@ -43,7 +43,6 @@ const workflowCompleted: WorkflowItem = {
   ],
   totalTokens: 35500,
   durationMs: 162000,
-  scriptPreview: '#!/bin/bash\nset -e\npnpm install && pnpm build\npnpm test --coverage',
 }
 
 const workflowPartialFailure: WorkflowItem = {

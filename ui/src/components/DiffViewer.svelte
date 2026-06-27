@@ -2,6 +2,7 @@
   import { getLanguageFromPath, getFileName, shortenPath } from "../lib/toolHelpers";
   import { generateDiff, type DiffLine } from "../lib/diff";
   import { highlightCode } from "../lib/render";
+  import { ByteCappedCache } from "../lib/byteCappedCache";
 
   interface Props {
     fileName: string;
@@ -13,21 +14,22 @@
 
   // LRU 缓存 LCS 结果：file-change re-render 时同一 (oldString,newString) 不再重算。
   // 用 length 前缀 + \0 分隔，避免 oldString 内含分隔符碰撞。
-  const diffCache = new Map<string, DiffLine[]>();
-  const DIFF_CACHE_CAP = 64;
+  // key 含 old+new 完整内容，单条可达数 MB → count + byte 双闸门（见 byteCappedCache）。
+  const diffCache = new ByteCappedCache<DiffLine[]>({
+    maxEntries: 64,
+    maxBytes: 4 * 1024 * 1024,
+    sizeOf: (key, lines) => {
+      let v = key.length;
+      for (const l of lines) v += l.content.length + 16; // +16：type + 两个行号的粗略开销
+      return v;
+    },
+  });
+
   function cachedDiff(o: string, n: string): DiffLine[] {
     const key = `${o.length}\0${n.length}\0${o}\0${n}`;
     const hit = diffCache.get(key);
-    if (hit !== undefined) {
-      diffCache.delete(key);
-      diffCache.set(key, hit);
-      return hit;
-    }
+    if (hit !== undefined) return hit;
     const result = generateDiff(o, n);
-    if (diffCache.size >= DIFF_CACHE_CAP) {
-      const first = diffCache.keys().next().value;
-      if (first !== undefined) diffCache.delete(first);
-    }
     diffCache.set(key, result);
     return result;
   }

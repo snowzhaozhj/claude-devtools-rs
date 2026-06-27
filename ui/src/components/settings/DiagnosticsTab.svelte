@@ -77,15 +77,16 @@
     cacheHitRate == null ? "—" : `${(cacheHitRate * 100).toFixed(1)}%`,
   );
 
-  const ipcErrorTotal = $derived(
-    counterValue("cdt_api.error") + counterValue("cdt_api.warn"),
-  );
+  // error 与 warn 分开统计：warn 多为良性（如可恢复的瞬态），不应被当成"错误"
+  // 计入健康告警，否则任何 warn 都会把横幅推成 amber。
+  const ipcErrorCount = $derived(counterValue("cdt_api.error"));
+  const ipcWarnCount = $derived(counterValue("cdt_api.warn"));
   const panicCount = $derived(counterValue("panic.recovered"));
   const sshReconnectCount = $derived(counterValue("ssh.reconnect"));
 
   // ===== health derivation =====
-  // 阈值：panic > 0 → red；ipc.error+warn > 0 或 cache 命中率 < 70% → amber；
-  //       否则 → green。ssh.reconnect 不参与判定（远端工作区天然偶尔重连）。
+  // 阈值：panic > 0 → red；ipc.error > 0 或 cache 命中率 < 70% → amber；
+  //       否则 → green。warn 与 ssh.reconnect 不参与判定（前者良性、后者远端天然偶尔重连）。
   type HealthLevel = "green" | "amber" | "red";
   const health = $derived.by((): { level: HealthLevel; headline: string; detail: string } => {
     if (panicCount > 0) {
@@ -95,10 +96,10 @@
         detail: "应用本次运行中遇到内部错误并自动恢复，建议复制下方 snapshot 反馈。",
       };
     }
-    if (ipcErrorTotal > 0) {
+    if (ipcErrorCount > 0) {
       return {
         level: "amber",
-        headline: `检测到 ${ipcErrorTotal} 次内部调用错误`,
+        headline: `检测到 ${ipcErrorCount} 次内部调用错误`,
         detail: "可能与卡顿、刷新失败等异常相关，详情见下方技术数据。",
       };
     }
@@ -197,10 +198,10 @@
         <div class="metric-row">
           <div class="metric-line">
             <span class="metric-label">内部调用错误</span>
-            <span class="metric-value">{ipcErrorTotal}</span>
+            <span class="metric-value">{ipcErrorCount}</span>
           </div>
-          <div class="metric-hint">本次运行 IPC 调用累计错误次数</div>
-          <div class="metric-raw">cdt_api.error + cdt_api.warn</div>
+          <div class="metric-hint">本次运行 IPC 调用累计错误次数（warn 不计入）</div>
+          <div class="metric-raw">cdt_api.error {ipcErrorCount} · cdt_api.warn {ipcWarnCount}</div>
         </div>
         <div class="metric-row">
           <div class="metric-line">
@@ -279,7 +280,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {#each snapshot.recentEvents.slice(-50).reverse() as ev (ev.tsUnixMs + ev.kind)}
+                    {#each snapshot.recentEvents.slice(-50).reverse() as ev, i (ev.tsUnixMs + "-" + ev.kind + "-" + i)}
                       <tr>
                         <td>{new Date(ev.tsUnixMs).toLocaleTimeString()}</td>
                         <td><code>{ev.kind}</code></td>
