@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782522900263,
+  "lastUpdate": 1782529175686,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -24661,6 +24661,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 13620,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8c9cce7534c897afa6bf5e4314f2739142f8e277",
+          "message": "fix(ui): error feedback, transport routing & theme tokens (#554-#557) (#560)\n\n* fix(ui): error feedback, transport routing & theme tokens (#554-#557)\n\nBatch of frontend bug fixes surfaced by a bug-hunt scan:\n\n#554 — surface IPC failures that were swallowed:\n- DashboardView.loadData: add error state + retry button on first-load failure\n- UpdateStatusPill: toast + manual-restart guidance when relaunch() fails\n\n#555 — route external-app calls through the Transport layer so HTTP\nbrowser mode (?http=1) works (raw Tauri invoke threw, __TAURI_INTERNALS__\nabsent in browser):\n- add openInEditor / openInTerminal / listAvailableTerminals wrappers in api.ts\n- contextMenu/dispatch.ts + SettingsView use the wrappers\n\n#556 — catch-log-continue spots that left the UI in a misleading state:\n- SettingsView terminal list: platform-aware fallback (was hard-coded macOS)\n- SettingsView CLI detection: failure state + retry (was stuck on \"Detecting…\")\n- SettingsView copyCliPath: await + toast on clipboard failure\n- ImageBlock: retry button on load failure (was permanent placeholder)\n\n#557 — theming fixes (verified light+dark contrast via impeccable critique):\n- 4 contextPanel sections: undefined --color-accent-* vars (always fell back\n  to dark-tuned colors) -> semantic tokens --thinking-text / --color-danger /\n  --color-warning(-text)\n- StatusDot: hard-coded hex -> --color-success/-danger/-text-muted tokens\n- ProjectSwitcher hover: rgba(0,0,0,.06) (invisible in dark) -> --tool-item-hover-bg\n- UpdateStatusPill hover: hard-coded rgba -> color-mix on accent tokens\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* fix(ui): render error reasons via errorMessage, reachable image retry\n\nAddress PR #560 review findings:\n\n- P1: Dashboard error detail (and Settings cliError) showed \"[object Object]\"\n  on the desktop Tauri target. Rejected IPC calls reject with the raw ApiError\n  object { code, message }, so String(e) loses the reason. Extract the existing\n  errorMessage() helper from contextMenu/dispatch.ts into ui/src/lib/errorMessage.ts\n  and use it for DashboardView.loadError + SettingsView.cliError. dispatch.ts now\n  imports the shared helper instead of its local copy.\n- Minor: ImageBlock retry \"重试中…\"/disabled affordance was unreachable because\n  loadFailed reset synchronously, hiding the error branch on click. Clear\n  loadFailed only on success so the error branch stays rendered during retry.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-27T10:55:58+08:00",
+          "tree_id": "1f82042fc6b98f1d91730c17574340e37486f31d",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/8c9cce7534c897afa6bf5e4314f2739142f8e277"
+        },
+        "date": 1782529174982,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 115.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1127,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 6346,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.872,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 9.111,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 46.73,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.14,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 293.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1242,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3279,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3086,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 40010,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.367,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 60.72,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 617.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6229,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 196.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1956,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 53.91,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 547.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5460,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 123.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1241,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.811,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9416,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1124,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9523,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 1144,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 52.19,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 552.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 95.55,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 960,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9716,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 230.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1420,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12840,
             "unit": "µs"
           }
         ]
