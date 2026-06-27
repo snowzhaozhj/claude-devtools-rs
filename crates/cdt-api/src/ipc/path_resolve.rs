@@ -57,13 +57,21 @@ async fn build_augmented_path() -> OsString {
 }
 
 /// 合并 PATH 条目：按平台分隔符拼接，**保序去重**（`HashSet` 记首次出现路径）。
+///
+/// 三道过滤（顺序）：
+/// 1. **只保留绝对路径**——丢弃 `.` / 相对条目，杜绝解析到 cwd 下同名程序（安全扩面）。
+/// 2. **保序去重**。
+/// 3. **逐条剔除无法 `join` 的非法条目**（含平台分隔符，如 Unix 路径含 `:`）——避免
+///    单个坏条目让 `join_paths` 整体失败、回退空串后丢光所有目录。
 fn merge_paths(entries: impl IntoIterator<Item = PathBuf>) -> OsString {
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let unique: Vec<PathBuf> = entries
         .into_iter()
+        .filter(|p| p.is_absolute())
         .filter(|p| seen.insert(p.clone()))
+        .filter(|p| std::env::join_paths(std::iter::once(p)).is_ok())
         .collect();
-    // join_paths 在 Unix 路径含 `:` 时可能失败（极罕见）；失败回退空串
+    // 每个条目已单独验证可 join，整体 join 不会失败；unwrap_or_default 仅作兜底
     std::env::join_paths(unique).unwrap_or_default()
 }
 
@@ -72,6 +80,10 @@ fn merge_paths(entries: impl IntoIterator<Item = PathBuf>) -> OsString {
 /// 用 sentinel `__CDT_PATH_START__...__CDT_PATH_END__` 包裹，过滤 rc 文件
 /// 往 stdout 喷出的噪声（shell-env/fix-path 标准做法）。
 /// 2 秒超时 + 非 0 退出 + spawn 失败 → 返回 `None`（best-effort）。
+///
+/// 超时时 `timeout` drop 掉 `output()` future，靠 `kill_on_drop(true)` 杀掉子进程
+/// （tokio `Child` 默认不 kill，会遗留长跑 shell）。解析取**最后一个** START 标记，
+/// 这样 rc 文件在真实 `printf` 之前往 stdout 喷出含 START 字样的噪声也不会污染结果。
 #[cfg(unix)]
 async fn login_shell_path() -> Option<OsString> {
     use std::os::unix::ffi::OsStringExt;
@@ -90,6 +102,7 @@ async fn login_shell_path() -> Option<OsString> {
             .arg("-ilc")
             .arg(SCRIPT)
             .stdin(Stdio::null())
+            .kill_on_drop(true) // 超时 drop future 时杀子进程，避免遗留长跑 shell
             .output(),
     )
     .await
@@ -101,7 +114,8 @@ async fn login_shell_path() -> Option<OsString> {
     }
 
     let bytes = &output.stdout;
-    let start_pos = bytes.windows(START.len()).position(|w| w == START)?;
+    // 取最后一个 START，跳过 rc 噪声里可能出现的 START 字样
+    let start_pos = bytes.windows(START.len()).rposition(|w| w == START)?;
     let content_start = start_pos + START.len();
     let rest = &bytes[content_start..];
     let end_pos = rest.windows(END.len()).position(|w| w == END)?;
@@ -165,6 +179,37 @@ mod tests {
             paths,
             vec![
                 PathBuf::from("/usr/bin"),
+                PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/opt/homebrew/bin"),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_paths_drops_relative_and_dot_entries() {
+        // 相对条目（`.` / 相对路径）SHALL 被过滤，杜绝 cwd 同名程序注入
+        let entries = vec![
+            PathBuf::from("."),
+            PathBuf::from("relative/bin"),
+            PathBuf::from("/usr/local/bin"),
+        ];
+        let paths: Vec<PathBuf> = std::env::split_paths(&merge_paths(entries)).collect();
+        assert_eq!(paths, vec![PathBuf::from("/usr/local/bin")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merge_paths_skips_unjoinable_entry_keeps_rest() {
+        // 含分隔符 `:` 的非法条目 SHALL 被单独剔除，其余目录保留（不全量清空）
+        let entries = vec![
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/Users/a:b/.local/bin"), // 含 `:`，join_paths 单条会失败
+            PathBuf::from("/opt/homebrew/bin"),
+        ];
+        let paths: Vec<PathBuf> = std::env::split_paths(&merge_paths(entries)).collect();
+        assert_eq!(
+            paths,
+            vec![
                 PathBuf::from("/usr/local/bin"),
                 PathBuf::from("/opt/homebrew/bin"),
             ]
