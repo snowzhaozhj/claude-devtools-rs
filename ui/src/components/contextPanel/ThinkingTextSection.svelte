@@ -61,8 +61,8 @@
   .tt-turn {
     font-size: 10px;
     font-weight: 600;
-    color: var(--color-accent-purple, #a78bfa);
-    background: color-mix(in srgb, var(--color-accent-purple, #a78bfa) 14%, transparent);
+    color: var(--thinking-text);
+    background: color-mix(in srgb, var(--thinking-text) 14%, transparent);
     border-radius: 4px;
     padding: 2px 6px;
     flex-shrink: 0;
@@ -85,7 +85,7 @@
   }
 
   .tt-bd-thinking {
-    color: var(--color-accent-purple, #a78bfa);
+    color: var(--thinking-text);
   }
 
   .tt-bd-tokens {

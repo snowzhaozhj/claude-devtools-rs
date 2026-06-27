@@ -947,6 +947,29 @@ export async function getConfig(): Promise<AppConfig> {
   return await invoke("get_config");
 }
 
+// ---------------------------------------------------------------------------
+// External-app（编辑器 / 终端）—— 经 Transport 抽象层路由，HTTP `?http=1`
+// 浏览器模式走 /api/external-app/* route（见 transport.ts），桌面 Tauri 走 IPC。
+// 调用方禁止直接 import `@tauri-apps/api/core` 的 invoke（浏览器模式
+// `__TAURI_INTERNALS__` 不存在会抛异常）。
+// ---------------------------------------------------------------------------
+
+export async function openInEditor(
+  path: string,
+  line?: number,
+  column?: number
+): Promise<void> {
+  return await invoke("open_in_editor", { path, line, column });
+}
+
+export async function openInTerminal(path: string): Promise<void> {
+  return await invoke("open_in_terminal", { path });
+}
+
+export async function listAvailableTerminals(): Promise<string[]> {
+  return await invoke("list_available_terminals");
+}
+
 export async function updateConfig(
   section: string,
   configData: Record<string, unknown>,

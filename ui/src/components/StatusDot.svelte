@@ -5,11 +5,13 @@
 
   let { status }: Props = $props();
 
+  // 走主题 token（非硬编码十六进制）——浅/深主题自动切换，避免亮色主题下
+  // 用暗色调表达状态色。
   const colors: Record<string, string> = {
-    ok: "#4ade80",
-    error: "#f87171",
-    pending: "#71717a",
-    orphaned: "#71717a",
+    ok: "var(--color-success)",
+    error: "var(--color-danger)",
+    pending: "var(--color-text-muted)",
+    orphaned: "var(--color-text-muted)",
   };
 </script>
 

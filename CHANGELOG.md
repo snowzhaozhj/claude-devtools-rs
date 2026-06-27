@@ -9,6 +9,16 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- **UI**: the Dashboard no longer fails silently when project data can't be loaded. A backend/IPC failure on first load used to leave an empty dashboard with no explanation; it now shows an error message with a retry button (issue #554).
+- **UI**: the "Restart to update" pill now reports when an automatic restart fails (binary locked, Windows permissions) instead of silently doing nothing, and tells you to quit and reopen manually (issue #554).
+- **UI**: "Open in editor" / "Open in terminal" context-menu actions and the Settings terminal list now work in HTTP browser mode (`?http=1`). They previously called Tauri directly and threw because `__TAURI_INTERNALS__` is absent in the browser; they now route through the transport layer's HTTP endpoints (issue #555).
+- **UI**: Settings shows the platform-appropriate terminal list as a fallback. When terminal detection fails, Windows/Linux used to fall back to a hard-coded macOS set (iTerm/Warp); the fallback is now platform-aware (issue #556).
+- **UI**: the Settings → CLI section no longer gets stuck on "Detecting…" forever when CLI detection fails; it shows a failure state with a retry button (issue #556).
+- **UI**: a failed inline image now shows a retry button instead of a permanent "Image" placeholder (issue #556).
+- **UI**: "Copy" for the CLI PATH snippet no longer reports success when the clipboard write actually failed (issue #556).
+- **UI**: fixed theming bugs where several status colors used undefined CSS variables (falling back to dark-theme values in light mode) or hard-coded colors. Context Panel chips, status dots, the project switcher hover, and the update pill now use theme-aware tokens with correct light/dark contrast (issue #557).
+
 ## [0.7.1] — 2026-06-27
 
 ### Added

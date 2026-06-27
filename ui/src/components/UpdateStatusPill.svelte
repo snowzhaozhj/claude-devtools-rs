@@ -1,6 +1,7 @@
 <script lang="ts">
   import { relaunch } from "@tauri-apps/plugin-process";
   import { updateStore } from "../lib/updateStore.svelte";
+  import { toastStore } from "../lib/toastStore.svelte";
   import {
     DOWNLOAD_CLOUD_SVG,
     ALERT_CIRCLE_SVG,
@@ -44,7 +45,10 @@
       try {
         await relaunch();
       } catch (e) {
+        // relaunch 失败（二进制被锁 / Windows 权限）时给用户可见反馈 + 手动重启指引，
+        // 否则 pill 保持 "重启更新" 态，用户反复点击无果无解释。
         console.warn("[UpdateStatusPill] relaunch failed:", e);
+        toastStore.push("自动重启失败，请手动退出并重新打开应用以完成更新", "error");
       }
       return;
     }
@@ -172,7 +176,7 @@
   }
 
   .pill-available:hover {
-    background: rgba(37, 99, 235, 0.08);
+    background: color-mix(in oklch, var(--color-accent-blue) 8%, transparent);
     color: var(--color-accent-blue);
   }
 
@@ -198,7 +202,7 @@
   }
 
   .pill-error:hover {
-    background: rgba(220, 38, 38, 0.08);
+    background: color-mix(in oklch, var(--color-danger) 8%, transparent);
     color: var(--color-danger);
   }
 

@@ -99,8 +99,8 @@
     grid-area: chip;
     font-size: 9px;
     font-weight: 600;
-    color: var(--color-accent-red, #f87171);
-    background: color-mix(in srgb, var(--color-accent-red, #f87171) 15%, transparent);
+    color: var(--color-danger);
+    background: color-mix(in srgb, var(--color-danger) 15%, transparent);
     border-radius: 4px;
     padding: 2px 6px;
     flex-shrink: 0;

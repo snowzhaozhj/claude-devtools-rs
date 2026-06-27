@@ -7,7 +7,7 @@
  * - 单测里换 mock dispatch 不绑定到真 IPC（factory 单测已用此模式）
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { openInEditor, openInTerminal } from "../api";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { MenuItemDispatch } from "./menu-items";
 import { toastStore } from "../toastStore.svelte";
@@ -58,7 +58,7 @@ export function getMenuItemDispatch(): MenuItemDispatch {
     },
     openInEditor: async (path: string, line?: number, column?: number) => {
       try {
-        await invoke<void>("open_in_editor", { path, line, column });
+        await openInEditor(path, line, column);
       } catch (e) {
         const msg = errorMessage(e);
         console.error("[contextMenu] open_in_editor failed:", e);
@@ -67,7 +67,7 @@ export function getMenuItemDispatch(): MenuItemDispatch {
     },
     openInTerminal: async (path: string) => {
       try {
-        await invoke<void>("open_in_terminal", { path });
+        await openInTerminal(path);
       } catch (e) {
         const msg = errorMessage(e);
         console.error("[contextMenu] open_in_terminal failed:", e);

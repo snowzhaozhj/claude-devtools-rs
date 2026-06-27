@@ -12,6 +12,7 @@
     getHttpServerStatus,
     getCliStatus,
     installCli,
+    listAvailableTerminals,
     type AppConfig,
     type NotificationTrigger,
     type CheckUpdateResult,
@@ -19,7 +20,6 @@
     type HttpServerStatus,
     type CliStatus,
   } from "../lib/api";
-  import { invoke } from "@tauri-apps/api/core";
   import { setMenuSettings } from "../lib/contextMenu/settings.svelte";
   import { isTauriRuntime } from "../lib/runtime";
   import { applyTheme } from "../lib/theme";
@@ -78,6 +78,16 @@
     typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
   const isTauriDesktop =
     typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+  /** IPC 取终端列表失败时的平台感知 fallback——避免 Win/Linux 误显 macOS 终端
+   *  （iTerm/Warp）。enum 值与后端 `TerminalApp` + `TERMINAL_LABELS` 对齐。 */
+  function platformTerminalFallback(): string[] {
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+    if (/Windows/i.test(ua)) return ["windows_terminal", "cmd", "power_shell"];
+    if (/Mac OS X|Macintosh/i.test(ua)) return ["terminal", "i_term", "warp"];
+    if (/Linux|X11/i.test(ua)) return ["x_terminal_emulator", "gnome_terminal", "konsole", "alacritty"];
+    return ["terminal"];
+  }
 
   let wslLoading = $state(false);
   let wslInlineMessage: { kind: "info" | "error"; text: string } | null = $state(null);
@@ -221,15 +231,16 @@
     } finally {
       loading = false;
     }
-    // 加载当前平台合法 terminal 列表（IPC `list_available_terminals`）。
-    // 失败 fallback 到 macOS 集合（mock 模式 / 非 Tauri runtime / 老后端兼容）。
+    // 加载当前平台合法 terminal 列表（经 Transport：桌面走 IPC / 浏览器走
+    // /api/external-app/terminals）。失败 fallback 到平台感知集合（mock 模式 /
+    // 老后端兼容），避免 Win/Linux 误显 macOS 终端。
     try {
-      const terms = await invoke<string[]>("list_available_terminals");
+      const terms = await listAvailableTerminals();
       availableTerminals = Array.isArray(terms) && terms.length > 0
         ? terms
-        : ["terminal", "i_term", "warp"];
+        : platformTerminalFallback();
     } catch {
-      availableTerminals = ["terminal", "i_term", "warp"];
+      availableTerminals = platformTerminalFallback();
     }
     try {
       appVersion = await getVersion();
@@ -250,8 +261,9 @@
     if (isTauriDesktop) {
       try {
         cliStatus = await getCliStatus();
-      } catch {
-        /* 静默：启动检测失败不阻塞 */
+      } catch (e) {
+        // 检测失败要设 cliError，否则模板永久卡在 "检测中"（cliStatus 保持 null）。
+        cliError = String(e);
       }
     }
   });
@@ -491,16 +503,22 @@
     try {
       cliStatus = await getCliStatus();
       cliError = null;
-    } catch {
-      /* ignore */
+    } catch (e) {
+      cliError = String(e);
     }
   }
 
-  function copyCliPath() {
+  async function copyCliPath() {
     if (!cliStatus?.path) return;
-    navigator.clipboard.writeText(`export PATH="$HOME/.local/bin:$PATH"`);
-    cliPathCopied = true;
-    setTimeout(() => { cliPathCopied = false; }, 2000);
+    try {
+      await navigator.clipboard.writeText(`export PATH="$HOME/.local/bin:$PATH"`);
+      cliPathCopied = true;
+      setTimeout(() => { cliPathCopied = false; }, 2000);
+    } catch (e) {
+      // writeText 失败（非 secure context / 权限拒绝）时不能假装已复制——给提示。
+      console.warn("[SettingsView] clipboard.writeText failed:", e);
+      toastStore.push("复制失败，请手动复制路径", "error");
+    }
   }
 
   async function updateTimeFormat(value: TimeFormat) {
@@ -1273,11 +1291,19 @@
           <SettingsGroup title="命令行工具" description="安装或更新 cdt CLI，在终端中使用 Claude DevTools">
             {#snippet children()}
               {#if !cliStatus}
-                <SettingsField label="状态" description="正在检测...">
-                  {#snippet control()}
-                    <span class="cli-detecting">检测中</span>
-                  {/snippet}
-                </SettingsField>
+                {#if cliError}
+                  <SettingsField label="状态" description="检测失败">
+                    {#snippet control()}
+                      <SettingsButton size="sm" onClick={handleCliRefresh}>重试</SettingsButton>
+                    {/snippet}
+                  </SettingsField>
+                {:else}
+                  <SettingsField label="状态" description="正在检测...">
+                    {#snippet control()}
+                      <span class="cli-detecting">检测中</span>
+                    {/snippet}
+                  </SettingsField>
+                {/if}
               {:else if cliStatus.status === "not_installed"}
                 <SettingsField label="状态" description="未安装 CLI，点击安装到 ~/.local/bin/cdt">
                   {#snippet control()}

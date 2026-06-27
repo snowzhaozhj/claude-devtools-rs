@@ -82,8 +82,8 @@
   .tc-turn {
     font-size: 10px;
     font-weight: 600;
-    color: var(--color-accent-orange, #fb923c);
-    background: color-mix(in srgb, var(--color-accent-orange, #fb923c) 14%, transparent);
+    color: var(--color-warning-text);
+    background: color-mix(in srgb, var(--color-warning) 14%, transparent);
     border-radius: 4px;
     padding: 2px 6px;
     flex-shrink: 0;
@@ -120,8 +120,8 @@
   .tc-kind {
     font-size: 9px;
     font-weight: 600;
-    color: var(--color-accent-orange, #fb923c);
-    background: color-mix(in srgb, var(--color-accent-orange, #fb923c) 14%, transparent);
+    color: var(--color-warning-text);
+    background: color-mix(in srgb, var(--color-warning) 14%, transparent);
     border-radius: 3px;
     padding: 1px 5px;
     flex-shrink: 0;
