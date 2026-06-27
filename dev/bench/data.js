@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782529175686,
+  "lastUpdate": 1782530787598,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -24870,6 +24870,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12840,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bb35205be94ca9d5fa3302080ee5cf52de2873f3",
+          "message": "fix(ui): keyboard a11y + cache byte caps + workflow poll guard (#558, #559) (#562)\n\n* fix(ui): keyboard a11y + cache byte caps + workflow poll guard (#558, #559)\n\n- TeammateMessageItem .tm-header, WorkflowCard .wf-header + clickable agent\n  chips, SubagentCard .sa-header + .sa-trace-header were mouse-only\n  `<div onclick>` with svelte-ignore a11y_*. Add role=\"button\" + tabindex=0\n  + aria-expanded + Enter/Space activation (shared lib/a11y.ts::activateOnKey)\n  and matching :focus-visible rings (BaseItem pattern, Focus Blue token).\n- WorkflowCard agent chip split into a snippet: only chips with a sessionId\n  (drill-down available) expose button semantics; plain chips stay static.\n\n- A: OutputBlock highlightCache + DiffViewer diffCache gained a byte ceiling\n  (4 MB) on top of the entry-count cap, via a shared ByteCappedCache\n  (lib/byteCappedCache.ts) — perf.md \"count cap without byte cap\" anti-pattern.\n- B: WorkflowCard polling moved from setInterval to a setTimeout chain\n  (await before scheduling the next tick) so slow IPC no longer stacks\n  overlapping requests; added a consecutive-failure cutoff so a deleted\n  workflow stops retrying instead of looping on the empty catch.\n- C: DiagnosticsTab — split cdt_api.warn out of the \"internal call errors\"\n  count so benign warnings no longer trip the amber health banner; fix the\n  recent-events {#each} key collision (same-ms same-kind) by adding the index;\n  remove the dead scriptPreview \"View script\" UI (backend never sends the\n  field — tracked for a real backend impl in #561).\n\nUnit tests for ByteCappedCache (count/byte/LRU/overwrite/oversized) and\nactivateOnKey (Enter/Space/other). svelte-check 0/0/0, vitest 915 passed.\nVerified in browser (mock workflow-rich): focus rings render, Enter/Space\ntoggles, layout unchanged, only clickable chips are focusable.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* fix(ui): address review — robust cache accounting + keep spec-mandated script disclosure\n\ncodex二审:\n- ByteCappedCache now records each entry's accounted byte size in a parallel\n  map and subtracts that exact value on overwrite/eviction, instead of\n  recomputing sizeOf(key, oldValue). A non-pure sizeOf would otherwise drift\n  byteSize from the real contents (minor; current callers are pure). Added a\n  regression test with a non-pure sizeOf.\n\npr-review-toolkit:\n- Reverted the scriptPreview \"View script\" removal. The active spec\n  session-display \"Script disclosure 默认折叠\" SHALL-mandates this disclosure\n  when WorkflowItem.scriptPreview is non-empty; deleting it silently left the\n  spec contradicting the code. The frontend consumer is kept (backend\n  population tracked in #561); applied the same a11y treatment (role=button +\n  tabindex + activateOnKey + :focus-visible) instead of the old svelte-ignore.\n\nsvelte-check 0/0/0, vitest 916 passed. Browser-verified: restored disclosure\ndefaults collapsed, expands on Enter, focus ring renders.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 <noreply@anthropic.com>",
+          "timestamp": "2026-06-27T11:22:58+08:00",
+          "tree_id": "cfbef776fe091f71a68b1c704c1f9f4ca80569be",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/bb35205be94ca9d5fa3302080ee5cf52de2873f3"
+        },
+        "date": 1782530787236,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 118,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1128,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 5144,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.872,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.926,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 41.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 32.94,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 297.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1210,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3193,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2822,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 39610,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.302,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 59.75,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 621.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6150,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 195.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1969,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 54.13,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 547.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5461,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 122.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1225,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.812,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9723,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1113,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9269,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 1124,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 48.03,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 511.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 92.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 926.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9345,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 196.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1327,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12750,
             "unit": "µs"
           }
         ]
