@@ -10,6 +10,7 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 ## [Unreleased]
 
 ### Fixed
+- **Context menu**: "Open in editor" / "Open in terminal" now find your editor (VS Code / Cursor / Zed / Sublime) and Linux terminal even when the app is launched from Finder/Dock. macOS/Linux GUI apps get a stripped-down `PATH` that omits `/usr/local/bin`, `/opt/homebrew/bin`, `~/.cargo/bin`, etc., so installed CLIs were misreported as "not found"; the app now resolves the CLI through your login-shell `PATH` plus common install directories before launching.
 - **UI**: the Dashboard no longer fails silently when project data can't be loaded. A backend/IPC failure on first load used to leave an empty dashboard with no explanation; it now shows an error message with a retry button (issue #554).
 - **UI**: the "Restart to update" pill now reports when an automatic restart fails (binary locked, Windows permissions) instead of silently doing nothing, and tells you to quit and reopen manually (issue #554).
 - **UI**: "Open in editor" / "Open in terminal" context-menu actions and the Settings terminal list now work in HTTP browser mode (`?http=1`). They previously called Tauri directly and threw because `__TAURI_INTERNALS__` is absent in the browser; they now route through the transport layer's HTTP endpoints (issue #555).

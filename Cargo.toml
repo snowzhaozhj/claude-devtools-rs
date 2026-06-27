@@ -53,6 +53,8 @@ serial_test = "3"
 dunce = "1"
 lru = "0.18"
 regex = "1"
+# 解析外部 CLI 绝对路径（修复 GUI app 不继承登录 shell PATH）；跨平台处理 Windows PATHEXT
+which = "8.0.4"
 uuid = { version = "1", features = ["v4"] }
 axum = "0.8"
 tower-http = { version = "0.7", features = ["cors", "fs"] }
