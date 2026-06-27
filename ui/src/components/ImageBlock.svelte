@@ -42,10 +42,12 @@
   function fetchAsset() {
     if (loading) return;
     loading = true;
-    loadFailed = false;
+    // 不在此同步清 loadFailed：retry 时让错误分支保持渲染（按钮显示
+    // disabled "重试中…"），仅成功后才清除失败态。
     getImageAsset(rootSessionId, sessionId, blockId)
       .then((url) => {
         assetUrl = url;
+        loadFailed = false;
       })
       .catch((err) => {
         console.warn("[ImageBlock] getImageAsset failed", err);

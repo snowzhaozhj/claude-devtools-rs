@@ -42,6 +42,7 @@
   import { updateStore } from "../lib/updateStore.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { toastStore } from "../lib/toastStore.svelte";
+  import { errorMessage } from "../lib/errorMessage";
   import {
     SLIDERS_HORIZONTAL_SVG,
     MONITOR_SVG,
@@ -263,7 +264,7 @@
         cliStatus = await getCliStatus();
       } catch (e) {
         // 检测失败要设 cliError，否则模板永久卡在 "检测中"（cliStatus 保持 null）。
-        cliError = String(e);
+        cliError = errorMessage(e);
       }
     }
   });
@@ -493,7 +494,7 @@
     try {
       cliStatus = await installCli();
     } catch (e) {
-      cliError = String(e);
+      cliError = errorMessage(e);
     } finally {
       cliInstalling = false;
     }
@@ -504,7 +505,7 @@
       cliStatus = await getCliStatus();
       cliError = null;
     } catch (e) {
-      cliError = String(e);
+      cliError = errorMessage(e);
     }
   }
 

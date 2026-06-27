@@ -10,6 +10,7 @@
     type DashboardSortKey,
   } from "../lib/dashboardProjects";
   import { shortenPath } from "../lib/toolHelpers";
+  import { errorMessage } from "../lib/errorMessage";
   import { FOLDER_GIT2_SVG, GIT_BRANCH_SVG } from "../lib/icons";
   import Skeleton from "../components/Skeleton.svelte";
   import Dropdown from "../lib/components/Dropdown.svelte";
@@ -112,7 +113,9 @@
     } catch (e) {
       console.error("Failed to load dashboard data:", e);
       // 已有数据时静默保留旧列表；首屏无数据时把错误升到 UI 让用户可感知 + 重试。
-      if (projectData === null) loadError = String(e);
+      // 用 errorMessage 而非 String(e)：桌面端 IPC 拒绝是 ApiError 对象，
+      // String() 会显示 "[object Object]" 丢失原因。
+      if (projectData === null) loadError = errorMessage(e);
     } finally {
       loading = false;
     }
