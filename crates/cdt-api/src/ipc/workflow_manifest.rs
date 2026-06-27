@@ -329,7 +329,11 @@ pub fn collect_workflow_candidates(chunks: &[cdt_core::Chunk]) -> Vec<WorkflowCa
                         inline_script,
                     });
                 } else if let Some(slot) = out.iter_mut().find(|c| &c.run_id == run_id) {
-                    // 同 run_id 已存在但来源缺失时，补上后续 exec 的非空值
+                    // 同 run_id 已存在但来源缺失时，补上后续 exec 的非空值。
+                    // 不变量：同一 `run_id` 对应同一次 workflow 执行 = 同一个脚本——resume/
+                    // 编辑脚本会产生**新** runId（`resumeFromRunId ≠ result.runId`）。故跨 exec
+                    // 补齐的 inline 与 script_path 必指向同一脚本内容，meta（来自 path）与
+                    // preview（优先 inline）即便来自不同 exec 也不会混搭出不一致内容。
                     if slot.script_path.is_none() {
                         slot.script_path.clone_from(&exec.workflow_script_path);
                     }
@@ -588,9 +592,10 @@ fn oversize_script_marker(total_bytes: u64) -> String {
 
 /// 读 script 文件一次，派生 meta（Tier 1 name+phases）+ 截断 preview，按 `FileSignature`
 /// 缓存整个 `ScriptData`（含负缓存）。script immutable → 稳态命中缓存复用、不重读盘
-/// （并发 miss 窗口可能短暂双读，幂等无害，design D4）。stat/read 失败 → `{meta:None,
-/// preview:None}`；文件 > `MAX_SCRIPT_READ_BYTES` → 不全量读入内存，preview 仅 oversize
-/// marker、meta 降回 Tier 0（design D3/D5）。
+/// （并发 miss 窗口可能短暂双读，幂等无害，design D4）。stat `NotFound` 静默、非
+/// `NotFound`（权限 / IO / 连接抖动）留 `debug!`；read 失败留 `debug!`；两类失败均
+/// → `{meta:None, preview:None}`。文件 > `MAX_SCRIPT_READ_BYTES` → 不全量读入内存，
+/// preview 仅 oversize marker、meta 降回 Tier 0（design D3/D5）。
 async fn read_script_data(
     script_path: &Path,
     fs: &dyn FileSystemProvider,
@@ -600,8 +605,20 @@ async fn read_script_data(
         meta: None,
         preview: None,
     };
-    let Ok(fs_meta) = fs.stat(script_path).await else {
-        return empty;
+    // stat 失败分流（对齐同文件 `read_journal_agents` 约定）：`NotFound` 静默（脚本不存在
+    // 是常态），非 `NotFound` 留信号——否则「文件存在却读不到」会与「不存在」同等静默降级，
+    // UI 上 name 降 Tier 0 basename / preview 空白且无痕可排查。
+    let fs_meta = match fs.stat(script_path).await {
+        Ok(meta) => meta,
+        Err(FsError::NotFound(_)) => return empty,
+        Err(e) => {
+            tracing::debug!(
+                path = %script_path.display(),
+                error = %e,
+                "workflow script stat failed (not NotFound), falling back to Tier 0 + no preview"
+            );
+            return empty;
+        }
     };
     let sig = FileSignature::from_fs_metadata(&fs_meta);
 
@@ -1500,6 +1517,18 @@ mod tests {
         assert!(std::str::from_utf8(body.as_bytes()).is_ok());
     }
 
+    #[test]
+    fn truncate_script_preview_retreats_to_exact_char_boundary() {
+        // 全 3 字节字符 → 上限 32768 落在多字节字符中间（32768 % 3 == 2）。
+        // 截断 SHALL 回退到 ≤ 上限的最大字符边界 = 32766（3 的最大倍数 ≤ 32768）。
+        let big: String = "中".repeat(SCRIPT_PREVIEW_MAX_BYTES); // 远超上限
+        let out = truncate_script_preview(&big);
+        let body = out.split("\n\n/* ").next().unwrap();
+        let expected_boundary = (SCRIPT_PREVIEW_MAX_BYTES / 3) * 3;
+        assert_eq!(body.len(), expected_boundary);
+        assert!(big.is_char_boundary(body.len()));
+    }
+
     #[tokio::test]
     async fn resolve_script_preview_inline_zero_io() {
         use cdt_discover::LocalFileSystemProvider;
@@ -1675,6 +1704,21 @@ mod tests {
         async fn remove_file(&self, _path: &Path) -> Result<(), FsError> {
             unimplemented!("CountingFs 不走写路径")
         }
+    }
+
+    #[tokio::test]
+    async fn read_script_data_non_notfound_stat_error_is_empty() {
+        // stat 非 NotFound（权限 / IO）→ 留 debug 信号但返回 empty（不 panic、不当作内容）
+        let path = PathBuf::from("/x/scripts/locked-wf_e.js");
+        let fs = FaultyFs {
+            stat_io_err: vec![path.clone()],
+            read_io_err: vec![],
+            files: vec![],
+        };
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+        let data = read_script_data(&path, &fs, &cache).await;
+        assert!(data.meta.is_none());
+        assert!(data.preview.is_none());
     }
 
     #[tokio::test]
