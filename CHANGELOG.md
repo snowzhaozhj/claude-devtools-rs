@@ -9,6 +9,8 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-06-27
+
 ### Added
 - **UI**: workflow cards in the session view can now show the orchestration script that actually ran. The "View script" disclosure was always present in the UI but the backend never sent the script, so it never appeared on real sessions; the backend now fills it in (inline scripts with zero extra I/O, file-based scripts read once and cached). The preview is capped so large scripts can't bloat the payload (issue #561).
 
@@ -412,7 +414,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.21...v0.7.0
 [0.6.21]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.20...v0.6.21
