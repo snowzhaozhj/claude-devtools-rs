@@ -50,6 +50,7 @@
   import { untrack } from "svelte";
   import type { SubagentProcess, ContentBlock, ToolCall, Chunk } from "../lib/api";
   import { CHEVRON_RIGHT, TERMINAL } from "../lib/icons";
+  import { activateOnKey } from "../lib/a11y";
   import { getTeamColorSet, getSubagentTypeColorSet, type TeamColorSet } from "../lib/teamColors";
   import { getAgentConfigsByName } from "../lib/agentConfigsStore.svelte";
   import { formatDuration } from "../lib/formatters";
@@ -299,9 +300,15 @@
 {:else}
   <div class="sa-card" class:sa-nested={depth > 0}>
     <!-- Header -->
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="sa-header" class:sa-header-expanded={isExpanded} onclick={toggleExpanded}>
+    <div
+      class="sa-header"
+      class:sa-header-expanded={isExpanded}
+      role="button"
+      tabindex="0"
+      aria-expanded={isExpanded}
+      onclick={toggleExpanded}
+      onkeydown={(e) => activateOnKey(e, toggleExpanded)}
+    >
       <svg class="sa-chevron" class:sa-chevron-open={isExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
 
       {#if showBadgeDot}
@@ -388,9 +395,14 @@
         <!-- Execution Trace 折叠块 -->
         {#if traceItems.length > 0}
           <div class="sa-trace">
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div class="sa-trace-header" onclick={toggleTrace}>
+            <div
+              class="sa-trace-header"
+              role="button"
+              tabindex="0"
+              aria-expanded={isTraceExpanded}
+              onclick={toggleTrace}
+              onkeydown={(e) => activateOnKey(e, () => toggleTrace(e))}
+            >
               <svg class="sa-trace-chevron" class:sa-trace-chevron-open={isTraceExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
               <svg class="sa-trace-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={TERMINAL}/></svg>
               <span class="sa-trace-label">Execution Trace</span>
@@ -436,6 +448,10 @@
   }
   .sa-header:hover {
     background: var(--card-header-hover);
+  }
+  .sa-header:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
   }
   .sa-header-expanded {
     background: var(--card-header-bg);
@@ -622,6 +638,10 @@
   }
   .sa-trace-header:hover {
     background: var(--card-header-hover);
+  }
+  .sa-trace-header:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
   }
   .sa-trace-chevron {
     width: var(--bubble-icon-sm);

@@ -5,6 +5,7 @@
   import { buildDisplayItemsFromChunks } from "../lib/displayItemBuilder";
   import { formatDuration } from "../lib/formatters";
   import { CHEVRON_RIGHT } from "../lib/icons";
+  import { activateOnKey } from "../lib/a11y";
   import ExecutionTrace from "./ExecutionTrace.svelte";
 
   interface Props {
@@ -24,7 +25,7 @@
 
   // --- Poll state for running workflows ---
   let fullDetail: WorkflowItem | null = $state(null);
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let pollGeneration = 0;
 
   // fullDetail（来自 poll 的最新数据）优先；否则用 props workflow（来自 session detail）
@@ -71,25 +72,40 @@
     return map;
   });
 
+  const POLL_INTERVAL_MS = 3000;
+  const MAX_POLL_FAILURES = 5;
+
   // --- Poll logic for running/pending workflows ---
+  // 用 setTimeout 链（await 完成后再排下一次）而非 setInterval：IPC 慢于轮询间隔时
+  // setInterval 会堆积并发请求 + 响应乱序覆盖。链式调度天然串行、单次在途。
+  // 连续失败 MAX_POLL_FAILURES 次即停，避免 workflow 已删除时空 catch 无限重试。
   function startPoll(): void {
     if (pollTimer) return;
     const gen = ++pollGeneration;
-    pollTimer = setInterval(async () => {
-      if (gen !== pollGeneration) { stopPoll(); return; }
+    let failures = 0;
+    const tick = async () => {
+      pollTimer = null;
+      if (gen !== pollGeneration) return;
       try {
         const fresh = await getWorkflowDetail(projectId, sessionId, workflow.runId);
         if (gen !== pollGeneration) return;
+        failures = 0;
         fullDetail = fresh;
-        if (isTerminal(fresh.status)) {
-          stopPoll();
-        }
-      } catch { /* 忽略瞬态错误 */ }
-    }, 3000);
+        if (isTerminal(fresh.status)) return;
+      } catch {
+        if (gen !== pollGeneration) return;
+        if (++failures >= MAX_POLL_FAILURES) return; // workflow 可能已删除，停止重试
+      }
+      pollTimer = setTimeout(tick, POLL_INTERVAL_MS);
+    };
+    pollTimer = setTimeout(tick, POLL_INTERVAL_MS);
   }
 
   function stopPoll(): void {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    // 让在途 tick（已过 pollTimer=null 行、正 await）的 gen 检查失效，
+    // 杜绝其 await 返回后再次 schedule。
+    pollGeneration++;
   }
 
   function isTerminal(status: string): boolean {
@@ -152,10 +168,15 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="wf-card">
-  <div class="wf-header" onclick={toggleExpanded}>
+  <div
+    class="wf-header"
+    role="button"
+    tabindex="0"
+    aria-expanded={isExpanded}
+    onclick={toggleExpanded}
+    onkeydown={(e) => activateOnKey(e, toggleExpanded)}
+  >
     <svg class="wf-chevron" class:wf-chevron-open={isExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
 
     <svg class="wf-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -187,22 +208,41 @@
 
   <!-- index 由调用点传入（运行态 = 全局 agents 顺序；完成态 = phase 内序号，label 恒
        非空不触发 fallback）。避免在 each 内 agents.indexOf() 造成 O(n²) 渲染。 -->
+  {#snippet chipInner(agent: WorkflowAgent, index: number)}
+    <span class="wf-chip-dot" class:wf-dot-done={agent.state === "completed"} class:wf-dot-failed={agent.state === "failed"} class:wf-dot-running={agent.state === "running"} class:wf-dot-queued={agent.state === "pending"}></span>
+    <span class="wf-chip-label">{agent.label || `Agent ${index + 1}`}</span>
+    {#if agent.tokens}
+      <span class="wf-chip-meta">{agent.tokens.toLocaleString()} tk</span>
+    {/if}
+    {#if agent.durationMs}
+      <span class="wf-chip-meta">{formatDuration(agent.durationMs)}</span>
+    {/if}
+    {#if agent.sessionId}
+      <svg class="wf-chip-expand" class:wf-chip-expand-open={expandedAgentId === agent.sessionId} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
+    {/if}
+  {/snippet}
+
   {#snippet agentChip(agent: WorkflowAgent, index: number)}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="wf-chip" class:wf-chip-failed={agent.state === "failed"} class:wf-chip-clickable={!!agent.sessionId} class:wf-chip-active={expandedAgentId === agent.sessionId} onclick={() => toggleAgentDrilldown(agent)}>
-      <span class="wf-chip-dot" class:wf-dot-done={agent.state === "completed"} class:wf-dot-failed={agent.state === "failed"} class:wf-dot-running={agent.state === "running"} class:wf-dot-queued={agent.state === "pending"}></span>
-      <span class="wf-chip-label">{agent.label || `Agent ${index + 1}`}</span>
-      {#if agent.tokens}
-        <span class="wf-chip-meta">{agent.tokens.toLocaleString()} tk</span>
-      {/if}
-      {#if agent.durationMs}
-        <span class="wf-chip-meta">{formatDuration(agent.durationMs)}</span>
-      {/if}
-      {#if agent.sessionId}
-        <svg class="wf-chip-expand" class:wf-chip-expand-open={expandedAgentId === agent.sessionId} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
-      {/if}
-    </div>
+    {#if agent.sessionId}
+      <!-- 有 sessionId 才可下钻 → 渲染为可聚焦的 button 语义 -->
+      <div
+        class="wf-chip wf-chip-clickable"
+        class:wf-chip-failed={agent.state === "failed"}
+        class:wf-chip-active={expandedAgentId === agent.sessionId}
+        role="button"
+        tabindex="0"
+        aria-expanded={expandedAgentId === agent.sessionId}
+        onclick={() => toggleAgentDrilldown(agent)}
+        onkeydown={(e) => activateOnKey(e, () => toggleAgentDrilldown(agent))}
+      >
+        {@render chipInner(agent, index)}
+      </div>
+    {:else}
+      <!-- 无 trace 可展开 → 纯信息 chip，不暴露交互语义 -->
+      <div class="wf-chip" class:wf-chip-failed={agent.state === "failed"}>
+        {@render chipInner(agent, index)}
+      </div>
+    {/if}
     {#if expandedAgentId === agent.sessionId}
       <div class="wf-agent-trace">
         {#if isLoadingAgentTrace}
@@ -254,9 +294,14 @@
       {/if}
 
       {#if effectiveWorkflow.scriptPreview}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="wf-script-toggle" onclick={toggleScript}>
+        <div
+          class="wf-script-toggle"
+          role="button"
+          tabindex="0"
+          aria-expanded={isScriptExpanded}
+          onclick={toggleScript}
+          onkeydown={(e) => activateOnKey(e, () => toggleScript(e))}
+        >
           <svg class="wf-script-chevron" class:wf-chevron-open={isScriptExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
           <span>View script</span>
         </div>
@@ -286,6 +331,10 @@
   }
   .wf-header:hover {
     background: var(--card-header-hover);
+  }
+  .wf-header:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
   }
 
   .wf-chevron {
@@ -475,6 +524,10 @@
     border-color: var(--color-accent-blue);
     background: color-mix(in oklch, var(--color-accent-blue) 5%, var(--card-header-bg));
   }
+  .wf-chip-clickable:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: 1px;
+  }
   .wf-chip-active {
     border-color: var(--color-accent-blue);
     background: color-mix(in oklch, var(--color-accent-blue) 8%, var(--card-header-bg));
@@ -539,6 +592,10 @@
   .wf-script-toggle:hover {
     color: var(--card-text-light);
   }
+  .wf-script-toggle:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
+  }
   .wf-script-chevron {
     width: 12px;
     height: 12px;
@@ -560,4 +617,5 @@
     white-space: pre-wrap;
     word-break: break-all;
   }
+
 </style>

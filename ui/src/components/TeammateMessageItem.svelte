@@ -2,6 +2,7 @@
   import type { TeammateMessage } from "../lib/api";
   import { getTeamColorSet } from "../lib/teamColors";
   import { CHEVRON_RIGHT, CORNER_DOWN_LEFT, MESSAGE_SQUARE, REFRESH_CW } from "../lib/icons";
+  import { activateOnKey } from "../lib/a11y";
 
   type AttachFn = (el: HTMLElement) => void | (() => void);
 
@@ -85,9 +86,15 @@
     class:tm-resent={teammateMessage.isResend}
     style:border-color="{colorSet.border}55"
   >
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="tm-header" class:tm-header-expanded={isExpanded} onclick={toggle}>
+    <div
+      class="tm-header"
+      class:tm-header-expanded={isExpanded}
+      role="button"
+      tabindex="0"
+      aria-expanded={isExpanded}
+      onclick={toggle}
+      onkeydown={(e) => activateOnKey(e, toggle)}
+    >
       <svg
         class="tm-chevron"
         class:tm-chevron-open={isExpanded}
@@ -199,6 +206,10 @@
   }
   .tm-header:hover {
     background: var(--card-header-hover);
+  }
+  .tm-header:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
   }
   .tm-header-expanded {
     background: var(--card-header-bg);

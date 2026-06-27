@@ -18,6 +18,11 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 - **UI**: a failed inline image now shows a retry button instead of a permanent "Image" placeholder (issue #556).
 - **UI**: "Copy" for the CLI PATH snippet no longer reports success when the clipboard write actually failed (issue #556).
 - **UI**: fixed theming bugs where several status colors used undefined CSS variables (falling back to dark-theme values in light mode) or hard-coded colors. Context Panel chips, status dots, the project switcher hover, and the update pill now use theme-aware tokens with correct light/dark contrast (issue #557).
+- **UI (accessibility)**: workflow, subagent, and teammate-message cards in the session view are now keyboard-operable. Their expand/collapse headers (and the clickable workflow agent chips) used to be mouse-only `<div>`s; they now expose button semantics with Tab focus, Enter/Space activation, and a visible focus ring (issue #558).
+- **UI (diagnostics)**: benign internal warnings (`cdt_api.warn`) no longer count toward the "internal call errors" total or trip the amber health banner. The Diagnostics tab now reports errors and warnings separately (issue #559).
+
+### Performance
+- **UI**: the syntax-highlight and diff caches now enforce a 4 MB byte ceiling in addition to the entry-count limit, so opening very large files no longer inflates memory. The workflow-detail poller no longer stacks overlapping requests when IPC is slow, and stops retrying once a workflow is deleted (issue #559).
 
 ## [0.7.1] — 2026-06-27
 

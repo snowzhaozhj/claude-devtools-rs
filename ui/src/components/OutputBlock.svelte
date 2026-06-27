@@ -1,9 +1,14 @@
 <script lang="ts">
   import { highlightCode } from "../lib/render";
   import CopyButton from "../lib/components/CopyButton.svelte";
+  import { ByteCappedCache } from "../lib/byteCappedCache";
 
-  const highlightCache = new Map<string, string>();
-  const HIGHLIGHT_CACHE_CAP = 128;
+  // key 含完整源码 + 高亮后 HTML，单条可达数 MB → count + byte 双闸门（见 byteCappedCache）。
+  const highlightCache = new ByteCappedCache<string>({
+    maxEntries: 128,
+    maxBytes: 4 * 1024 * 1024,
+    sizeOf: (key, value) => key.length + value.length,
+  });
 
   interface Props {
     code: string;
@@ -18,16 +23,8 @@
   function cachedHighlight(value: string, language: string): string {
     const key = `${language}\0${value.length}\0${value}`;
     const hit = highlightCache.get(key);
-    if (hit !== undefined) {
-      highlightCache.delete(key);
-      highlightCache.set(key, hit);
-      return hit;
-    }
+    if (hit !== undefined) return hit;
     const result = highlightCode(value, language);
-    if (highlightCache.size >= HIGHLIGHT_CACHE_CAP) {
-      const first = highlightCache.keys().next().value;
-      if (first !== undefined) highlightCache.delete(first);
-    }
     highlightCache.set(key, result);
     return result;
   }
