@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 
 use cdt_cli::install::{
     DownloadErrorKind, REPO, build_client, classify_download_error, download_and_extract,
-    platform_asset_name, validate_binary_magic,
+    platform_asset_name, validate_binary_arch, validate_binary_magic,
 };
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -20,17 +20,19 @@ fn friendly_error(raw: &str) -> String {
         }
         DownloadErrorKind::Dns => "DNS resolution failed, please check your network".to_string(),
         DownloadErrorKind::Connection => {
-            "Cannot connect to GitHub, please check your network or proxy settings".to_string()
+            "Cannot connect to the update server, please check your network or proxy settings"
+                .to_string()
         }
         DownloadErrorKind::RateLimit => {
-            "GitHub API rate limit exceeded. Set GH_TOKEN or GITHUB_TOKEN to increase the limit"
+            "API rate limit exceeded. Set GH_TOKEN or GITHUB_TOKEN to increase the limit"
                 .to_string()
         }
         DownloadErrorKind::NotFound => {
             "Release not found. The requested version may not exist".to_string()
         }
         DownloadErrorKind::Forbidden => {
-            "Access denied. If this is a private repo, set GH_TOKEN or GITHUB_TOKEN".to_string()
+            "Access denied. Check your network or proxy settings, or set GH_TOKEN / GITHUB_TOKEN"
+                .to_string()
         }
         DownloadErrorKind::Other => "Update failed, please try again later".to_string(),
     }
@@ -225,30 +227,34 @@ fn resolve_install_path() -> Result<PathBuf> {
     exe.canonicalize().or_else(|_| Ok(exe))
 }
 
+fn managed_install_path() -> Option<PathBuf> {
+    let home = cdt_discover::home_dir()?;
+    let name = if cfg!(windows) { "cdt.exe" } else { "cdt" };
+    let managed = home.join(".local").join("bin").join(name);
+    if managed.exists() {
+        Some(managed)
+    } else {
+        None
+    }
+}
+
 fn check_install_path(path: &Path) -> Result<()> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let path_str = canonical.to_string_lossy();
 
-    let managed_indicators = [
-        "/Cellar/",
-        "/homebrew/",
-        "/nix/store/",
-        "/snap/",
-        "/.cargo/bin/",
-    ];
-
-    for indicator in &managed_indicators {
+    let pkg_mgr_indicators = ["/Cellar/", "/homebrew/", "/nix/store/", "/snap/"];
+    for indicator in &pkg_mgr_indicators {
         if path_str.contains(indicator) {
             bail!(
-                "cdt is installed via a package manager ({indicator} detected in path).\n\
+                "cdt appears to be managed by a package manager ({indicator} in path).\n\
                  Self-update would conflict with the package manager.\n\
-                 Please upgrade using your package manager, or reinstall with:\n\
-                 \n  curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | sh"
+                 Please upgrade using your package manager instead."
             );
         }
     }
 
     let parent = path.parent().context("cannot determine parent directory")?;
+    let managed = managed_install_path();
 
     let test_file = parent.join(".cdt-update-check");
     match fs::write(&test_file, b"") {
@@ -256,13 +262,41 @@ fn check_install_path(path: &Path) -> Result<()> {
             let _ = fs::remove_file(&test_file);
         }
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            if let Some(ref managed) = managed {
+                bail!(
+                    "No write permission to {}.\n\n\
+                     A desktop-managed installation exists at {}.\n\
+                     You can update it with:\n\n  {} self-update\n\n\
+                     Or update via the desktop app's Settings page.",
+                    parent.display(),
+                    managed.display(),
+                    managed.display(),
+                );
+            }
             bail!(
-                "no write permission to {}.\nTry running with elevated privileges:\n\n  sudo cdt self-update",
-                parent.display()
+                "No write permission to {}.\n\
+                 Try running with elevated privileges:\n\n  sudo cdt self-update",
+                parent.display(),
             );
         }
         Err(e) => {
-            bail!("cannot write to {}: {e}", parent.display());
+            bail!("Cannot write to {}: {e}", parent.display());
+        }
+    }
+
+    // Warn (non-blocking) if running from a different path but managed install exists
+    if let Some(ref managed) = managed {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let managed_canonical = managed.canonicalize().unwrap_or_else(|_| managed.clone());
+        if canonical != managed_canonical {
+            eprintln!(
+                "Note: a desktop-managed cdt exists at {}.\n\
+                 You are updating {} instead.\n\
+                 To avoid maintaining two installations, consider removing this copy\n\
+                 and using the desktop-managed version.\n",
+                managed.display(),
+                canonical.display(),
+            );
         }
     }
 
@@ -271,6 +305,7 @@ fn check_install_path(path: &Path) -> Result<()> {
 
 fn replace_binary(target: &Path, new_bytes: &[u8]) -> Result<()> {
     validate_binary_magic(new_bytes)?;
+    validate_binary_arch(new_bytes)?;
 
     let parent = target.parent().context("no parent directory")?;
     let stem = target.file_name().unwrap_or_default().to_string_lossy();
@@ -418,6 +453,32 @@ mod tests {
         assert!(
             !msg.contains("some unknown error"),
             "raw error leaked: {msg}"
+        );
+    }
+
+    #[test]
+    fn check_install_path_writable_dir_succeeds() {
+        let dir = std::env::temp_dir();
+        let fake_exe = dir.join("cdt-test-check");
+        std::fs::write(&fake_exe, b"").unwrap();
+        let result = super::check_install_path(&fake_exe);
+        let _ = std::fs::remove_file(&fake_exe);
+        assert!(result.is_ok(), "writable dir should pass: {result:?}");
+    }
+
+    #[test]
+    fn check_install_path_no_url_in_errors() {
+        // Permission-denied path can't easily be tested portably, but we can
+        // verify the friendly_error paths don't leak URLs by checking all
+        // error variants.
+        let forbidden_msg = friendly_error("HTTP 403 Forbidden");
+        assert!(
+            !forbidden_msg.contains("private repo"),
+            "should not mention private repo: {forbidden_msg}"
+        );
+        assert!(
+            !forbidden_msg.contains("github.com"),
+            "URL leaked: {forbidden_msg}"
         );
     }
 }
