@@ -4655,10 +4655,16 @@ fn workflow_item_serializes_camelcase() {
         total_tokens: 5000,
         duration_ms: 30000,
         error: None,
+        script_preview: Some("export const meta = { name: 'x' }".into()),
     };
     let json = serde_json::to_value(&item).unwrap();
 
     assert_eq!(json["runId"], json!("wf_797e9bdf-994"));
+    assert_eq!(
+        json["scriptPreview"],
+        json!("export const meta = { name: 'x' }"),
+        "WorkflowItem.scriptPreview SHALL serialize as camelCase"
+    );
     assert_eq!(json["totalTokens"], json!(5000));
     assert_eq!(json["durationMs"], json!(30000));
     assert_eq!(json["status"], json!("completed"));
@@ -4679,6 +4685,18 @@ fn workflow_item_serializes_camelcase() {
         json["agents"][0]["sessionId"],
         json!("ad34cb14a1ae5b192"),
         "WorkflowAgent.sessionId SHALL serialize as camelCase"
+    );
+}
+
+#[test]
+fn workflow_item_script_preview_none_omitted() {
+    use cdt_core::workflow::WorkflowItem;
+
+    let item = WorkflowItem::pending("wf_x".into());
+    let json = serde_json::to_value(&item).unwrap();
+    assert!(
+        json.get("scriptPreview").is_none(),
+        "None script_preview SHALL be omitted from IPC payload"
     );
 }
 

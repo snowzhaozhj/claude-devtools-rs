@@ -16,6 +16,23 @@ use cdt_fs::FsError;
 use super::workflow_script::{ScriptMeta, parse_script_meta};
 use crate::cache_signature::FileSignature;
 
+/// `scriptPreview` 截断上限——bounds IPC payload 与缓存内存。超限按 UTF-8 边界
+/// 截断并追加可见 marker（见 `truncate_script_preview`）。
+const SCRIPT_PREVIEW_MAX_BYTES: usize = 32 * 1024;
+
+/// scriptPath 文件读取上限——远高于 Workflow inline script 512 KB 合法上限，覆盖一切
+/// 合法脚本。超此值不全量 `read_to_string`（bound 异常大文件的瞬态内存，codex #7）。
+const MAX_SCRIPT_READ_BYTES: usize = 1024 * 1024;
+
+/// 从一次 script 文件读派生的两份产物——共缓存避免双读（design D4）。
+#[derive(Clone)]
+struct ScriptData {
+    /// 静态 meta（name + phases，Tier 1）。`None` = 无 meta 块 / 解析失败。
+    meta: Option<ScriptMeta>,
+    /// 截断后的脚本预览（含截断 marker）。`None` = 文件读失败。
+    preview: Option<String>,
+}
+
 struct CacheEntry {
     sig: FileSignature,
     item: WorkflowItem,
@@ -28,8 +45,8 @@ struct JournalCacheEntry {
 
 struct ScriptCacheEntry {
     sig: FileSignature,
-    /// `None` 表示「解析过但失败」——同样缓存以免每次 poll 重复解析坏 script。
-    meta: Option<ScriptMeta>,
+    /// 含「读/解析失败」的负缓存——同样缓存以免每次 poll 重复读/解析坏 script。
+    data: ScriptData,
 }
 
 #[derive(Default)]
@@ -76,18 +93,16 @@ impl WorkflowManifestCache {
             .insert(path, JournalCacheEntry { sig, agents });
     }
 
-    /// 外层 `Option` = 缓存命中/未命中；内层 `Option<ScriptMeta>` = 解析结果（含失败）。
-    #[allow(clippy::option_option)]
-    fn get_script(&self, path: &Path, sig: &FileSignature) -> Option<Option<ScriptMeta>> {
+    fn get_script(&self, path: &Path, sig: &FileSignature) -> Option<ScriptData> {
         self.script_entries
             .get(path)
             .filter(|e| &e.sig == sig)
-            .map(|e| e.meta.clone())
+            .map(|e| e.data.clone())
     }
 
-    fn insert_script(&mut self, path: PathBuf, sig: FileSignature, meta: Option<ScriptMeta>) {
+    fn insert_script(&mut self, path: PathBuf, sig: FileSignature, data: ScriptData) {
         self.script_entries
-            .insert(path, ScriptCacheEntry { sig, meta });
+            .insert(path, ScriptCacheEntry { sig, data });
     }
 }
 
@@ -251,6 +266,8 @@ pub fn parse_manifest(run_id: &str, content: &str) -> Result<WorkflowItem, Strin
         total_tokens: raw.total_tokens,
         duration_ms: raw.duration_ms,
         error,
+        // preview 由 resolve_single wrapper 统一填充（design D1），parse 阶段不设。
+        script_preview: None,
     })
 }
 
@@ -276,24 +293,52 @@ fn extract_index_from_log(log: &str) -> Option<usize> {
     None
 }
 
-/// 收集 `(run_id, script_path)` 候选——按 `run_id` 去重，`script_path` 取第一个非空值。
+/// workflow 解析候选——按 `run_id` 去重，`script_path` / `inline_script` 各取第一个
+/// 非空值。
+pub struct WorkflowCandidate {
+    pub run_id: String,
+    /// `scriptPath` 形态：脚本文件路径，供 name 剥取 + preview 读文件。
+    pub script_path: Option<String>,
+    /// inline `{script}` 形态：脚本内容（来自 `tool_use.input.script`），供 preview 零 I/O 取用。
+    pub inline_script: Option<String>,
+}
+
+/// 收集 workflow 候选——按 `run_id` 去重，`script_path` / `inline_script` 各取第一个非空值。
 ///
-/// 携带 `workflow_script_path`，供运行态降级（manifest 缺失）时剥取 workflow name。
-pub fn collect_workflow_candidates(chunks: &[cdt_core::Chunk]) -> Vec<(String, Option<String>)> {
+/// `script_path` 供运行态降级（manifest 缺失）时剥取 workflow name；`inline_script`
+/// 供 inline `{script}` 形态零文件 I/O 填充 `scriptPreview`。
+pub fn collect_workflow_candidates(chunks: &[cdt_core::Chunk]) -> Vec<WorkflowCandidate> {
     let mut seen = std::collections::HashSet::new();
-    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    let mut out: Vec<WorkflowCandidate> = Vec::new();
     for chunk in chunks {
         if let cdt_core::Chunk::Ai(ai) = chunk {
             for exec in &ai.tool_executions {
                 let Some(run_id) = exec.workflow_run_id.as_ref() else {
                     continue;
                 };
+                let inline_script = exec
+                    .input
+                    .get("script")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
                 if seen.insert(run_id.clone()) {
-                    out.push((run_id.clone(), exec.workflow_script_path.clone()));
-                } else if let Some(slot) = out.iter_mut().find(|(id, _)| id == run_id) {
-                    // 同 run_id 已存在但 script_path 缺失时，补上后续 exec 的非空值
-                    if slot.1.is_none() {
-                        slot.1.clone_from(&exec.workflow_script_path);
+                    out.push(WorkflowCandidate {
+                        run_id: run_id.clone(),
+                        script_path: exec.workflow_script_path.clone(),
+                        inline_script,
+                    });
+                } else if let Some(slot) = out.iter_mut().find(|c| &c.run_id == run_id) {
+                    // 同 run_id 已存在但来源缺失时，补上后续 exec 的非空值。
+                    // 不变量：同一 `run_id` 对应同一次 workflow 执行 = 同一个脚本——resume/
+                    // 编辑脚本会产生**新** runId（`resumeFromRunId ≠ result.runId`）。故跨 exec
+                    // 补齐的 inline 与 script_path 必指向同一脚本内容，meta（来自 path）与
+                    // preview（优先 inline）即便来自不同 exec 也不会混搭出不一致内容。
+                    if slot.script_path.is_none() {
+                        slot.script_path.clone_from(&exec.workflow_script_path);
+                    }
+                    if slot.inline_script.is_none() {
+                        slot.inline_script = inline_script;
                     }
                 }
             }
@@ -316,7 +361,8 @@ pub async fn resolve_workflow_items(
     let workflows_dir = session_dir.join("workflows");
     let mut items = Vec::with_capacity(candidates.len());
 
-    for (run_id, script_path) in &candidates {
+    for cand in &candidates {
+        let run_id = &cand.run_id;
         let manifest_path = workflows_dir.join(format!("{run_id}.json"));
         let journal_path = session_dir
             .join("subagents")
@@ -327,7 +373,8 @@ pub async fn resolve_workflow_items(
             run_id,
             &manifest_path,
             &journal_path,
-            script_path.as_deref(),
+            cand.script_path.as_deref(),
+            cand.inline_script.as_deref(),
             fs,
             cache,
         )
@@ -340,7 +387,8 @@ pub async fn resolve_workflow_items(
 
 /// 完整解析单个 workflow（manifest + journal + script）。
 ///
-/// 对外暴露给 `get_workflow_detail` IPC command 使用。
+/// 对外暴露给 `get_workflow_detail` IPC command 使用。该路径不携带 chunks，
+/// `script_path`/`inline_script` 均传 `None`（detail preview = None，见 design D6）。
 pub async fn resolve_single_detail(
     run_id: &str,
     manifest_path: &Path,
@@ -349,10 +397,37 @@ pub async fn resolve_single_detail(
     fs: &dyn FileSystemProvider,
     cache: &std::sync::Mutex<WorkflowManifestCache>,
 ) -> WorkflowItem {
-    resolve_single(run_id, manifest_path, journal_path, script_path, fs, cache).await
+    resolve_single(
+        run_id,
+        manifest_path,
+        journal_path,
+        script_path,
+        None,
+        fs,
+        cache,
+    )
+    .await
 }
 
+/// wrapper：inner 产出 item（不含 preview）后，单点统一填充 `script_preview`
+/// （design D1）。preview 来源（inline 内存 / scriptPath 文件）与 manifest 读取
+/// 相互独立——即便 inner 走错误 placeholder，仍按独立来源填 preview（design D5）。
 async fn resolve_single(
+    run_id: &str,
+    manifest_path: &Path,
+    journal_path: &Path,
+    script_path: Option<&str>,
+    inline_script: Option<&str>,
+    fs: &dyn FileSystemProvider,
+    cache: &std::sync::Mutex<WorkflowManifestCache>,
+) -> WorkflowItem {
+    let mut item =
+        resolve_single_inner(run_id, manifest_path, journal_path, script_path, fs, cache).await;
+    item.script_preview = resolve_script_preview(script_path, inline_script, fs, cache).await;
+    item
+}
+
+async fn resolve_single_inner(
     run_id: &str,
     manifest_path: &Path,
     journal_path: &Path,
@@ -452,7 +527,7 @@ async fn resolve_running_state(
 
     // Tier 1：解析 script meta 取 name + phases（失败静默降回 Tier 0）。
     let meta = match script_path {
-        Some(p) => read_script_meta(Path::new(p), fs, cache).await,
+        Some(p) => read_script_data(Path::new(p), fs, cache).await.meta,
         None => None,
     };
     // name 优先 meta.name（Tier 1 权威），否则从 scriptPath basename 剥取（Tier 0）。
@@ -471,17 +546,80 @@ async fn resolve_running_state(
         total_tokens: 0,
         duration_ms: 0,
         error: None,
+        // preview 由 resolve_single wrapper 统一填充（design D1）。
+        script_preview: None,
     }
 }
 
-/// 读 + 解析 script meta（Tier 1），按 script `FileSignature` 缓存（含解析失败结果）。
-/// script immutable → 一辈子只解析一次。文件不存在/读失败/解析失败均返回 `None`。
-async fn read_script_meta(
+/// `scriptPreview` 来源分流（design D2）：inline `{script}` 优先（零文件 I/O），
+/// 否则读 scriptPath 文件（缓存）。两者皆无 → `None`。
+async fn resolve_script_preview(
+    script_path: Option<&str>,
+    inline_script: Option<&str>,
+    fs: &dyn FileSystemProvider,
+    cache: &std::sync::Mutex<WorkflowManifestCache>,
+) -> Option<String> {
+    // inline 优先：input.script 已驻 ToolExecution.input 内存，零文件 I/O。
+    if let Some(inline) = inline_script.filter(|s| !s.is_empty()) {
+        return Some(truncate_script_preview(inline));
+    }
+    let path = script_path?;
+    read_script_data(Path::new(path), fs, cache).await.preview
+}
+
+/// 把脚本文本截断到 `SCRIPT_PREVIEW_MAX_BYTES`（UTF-8 字符边界），超限时尾部追加
+/// 可见 marker（标注原始总字节数）。≤ 上限时原样返回。
+fn truncate_script_preview(content: &str) -> String {
+    if content.len() <= SCRIPT_PREVIEW_MAX_BYTES {
+        return content.to_owned();
+    }
+    // 找 ≤ 上限的最大 UTF-8 字符边界，避免切出半个多字节字符（脚本含中文）。
+    let mut end = SCRIPT_PREVIEW_MAX_BYTES;
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n\n/* … script truncated, {} bytes total … */",
+        &content[..end],
+        content.len()
+    )
+}
+
+/// 异常大脚本（> `MAX_SCRIPT_READ_BYTES`）的 preview——不全量读入内存，仅一行 marker。
+fn oversize_script_marker(total_bytes: u64) -> String {
+    format!("/* script too large to preview, {total_bytes} bytes total */")
+}
+
+/// 读 script 文件一次，派生 meta（Tier 1 name+phases）+ 截断 preview，按 `FileSignature`
+/// 缓存整个 `ScriptData`（含负缓存）。script immutable → 稳态命中缓存复用、不重读盘
+/// （并发 miss 窗口可能短暂双读，幂等无害，design D4）。stat `NotFound` 静默、非
+/// `NotFound`（权限 / IO / 连接抖动）留 `debug!`；read 失败留 `debug!`；两类失败均
+/// → `{meta:None, preview:None}`。文件 > `MAX_SCRIPT_READ_BYTES` → 不全量读入内存，
+/// preview 仅 oversize marker、meta 降回 Tier 0（design D3/D5）。
+async fn read_script_data(
     script_path: &Path,
     fs: &dyn FileSystemProvider,
     cache: &std::sync::Mutex<WorkflowManifestCache>,
-) -> Option<ScriptMeta> {
-    let fs_meta = fs.stat(script_path).await.ok()?;
+) -> ScriptData {
+    let empty = ScriptData {
+        meta: None,
+        preview: None,
+    };
+    // stat 失败分流（对齐同文件 `read_journal_agents` 约定）：`NotFound` 静默（脚本不存在
+    // 是常态），非 `NotFound` 留信号——否则「文件存在却读不到」会与「不存在」同等静默降级，
+    // UI 上 name 降 Tier 0 basename / preview 空白且无痕可排查。
+    let fs_meta = match fs.stat(script_path).await {
+        Ok(meta) => meta,
+        Err(FsError::NotFound(_)) => return empty,
+        Err(e) => {
+            tracing::debug!(
+                path = %script_path.display(),
+                error = %e,
+                "workflow script stat failed (not NotFound), falling back to Tier 0 + no preview"
+            );
+            return empty;
+        }
+    };
     let sig = FileSignature::from_fs_metadata(&fs_meta);
 
     if let Ok(guard) = cache.lock() {
@@ -490,24 +628,35 @@ async fn read_script_meta(
         }
     }
 
-    // read 失败（异常）与 json5 解析失败（预期 graceful，如 backtick 值）都降回 Tier 0，
-    // 但两者性质不同：read 失败留 `debug!` 信号，便于排查「运行中 workflow 缺编排器名/phases」。
-    let parsed = match fs.read_to_string(script_path).await {
-        Ok(content) => parse_script_meta(&content),
-        Err(e) => {
-            tracing::debug!(
-                path = %script_path.display(),
-                error = %e,
-                "workflow script read failed, falling back to Tier 0 (basename-derived name)"
-            );
-            None
+    // 异常大文件：不全量读入内存（bound 瞬态内存），preview 仅 marker、meta 降 Tier 0。
+    let data = if fs_meta.size > MAX_SCRIPT_READ_BYTES as u64 {
+        ScriptData {
+            meta: None,
+            preview: Some(oversize_script_marker(fs_meta.size)),
+        }
+    } else {
+        // read 失败（异常）与 json5 解析失败（预期 graceful，如 backtick 值）都降回 Tier 0，
+        // 但两者性质不同：read 失败留 `debug!` 信号，便于排查「运行中 workflow 缺编排器名/phases」。
+        match fs.read_to_string(script_path).await {
+            Ok(content) => ScriptData {
+                meta: parse_script_meta(&content),
+                preview: Some(truncate_script_preview(&content)),
+            },
+            Err(e) => {
+                tracing::debug!(
+                    path = %script_path.display(),
+                    error = %e,
+                    "workflow script read failed, falling back to Tier 0 (basename-derived name)"
+                );
+                empty
+            }
         }
     };
 
     if let Ok(mut guard) = cache.lock() {
-        guard.insert_script(script_path.to_owned(), sig, parsed.clone());
+        guard.insert_script(script_path.to_owned(), sig, data.clone());
     }
-    parsed
+    data
 }
 
 /// 读 journal.jsonl 合成匿名 agents，按 `FileSignature` 缓存。journal **缺失**（`NotFound`）
@@ -788,13 +937,19 @@ mod tests {
         })];
 
         let cands = collect_workflow_candidates(&chunks);
+        let got: Vec<(String, Option<String>)> = cands
+            .iter()
+            .map(|c| (c.run_id.clone(), c.script_path.clone()))
+            .collect();
         assert_eq!(
-            cands,
+            got,
             vec![
                 ("wf_a".to_owned(), Some("/x/a-wf_a.js".to_owned())),
                 ("wf_b".to_owned(), Some("/x/b-wf_b.js".to_owned())),
             ]
         );
+        // 本用例 exec input 为空对象 → inline_script 均 None
+        assert!(cands.iter().all(|c| c.inline_script.is_none()));
     }
 
     #[test]
@@ -1072,7 +1227,7 @@ mod tests {
         let fs = LocalFileSystemProvider::new();
         let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
 
-        let item = resolve_single(run_id, &manifest_path, &jpath, None, &fs, &cache).await;
+        let item = resolve_single(run_id, &manifest_path, &jpath, None, None, &fs, &cache).await;
         // 走 manifest 完成态路径：status Completed，agent label 来自 manifest 不是匿名
         assert_eq!(item.status, WorkflowStatus::Completed);
         assert_eq!(item.agents.len(), 1);
@@ -1233,7 +1388,16 @@ mod tests {
             )],
         };
         let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
-        let item = resolve_single(run_id, &manifest_path, &journal_path, None, &fs, &cache).await;
+        let item = resolve_single(
+            run_id,
+            &manifest_path,
+            &journal_path,
+            None,
+            None,
+            &fs,
+            &cache,
+        )
+        .await;
         // 修复前：进 resolve_running_state + journal 有 started → 虚假 Running。
         // 修复后：非 NotFound → pending placeholder。
         assert_eq!(item.status, WorkflowStatus::Pending);
@@ -1253,7 +1417,16 @@ mod tests {
             files: vec![],
         };
         let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
-        let item = resolve_single(run_id, &manifest_path, &journal_path, None, &fs, &cache).await;
+        let item = resolve_single(
+            run_id,
+            &manifest_path,
+            &journal_path,
+            None,
+            None,
+            &fs,
+            &cache,
+        )
+        .await;
         assert_eq!(item.status, WorkflowStatus::Pending);
         assert!(item.agents.is_empty());
     }
@@ -1318,5 +1491,253 @@ mod tests {
 
         assert!(!item.agents[0].failed);
         assert_eq!(item.agents[0].state, WorkflowAgentState::Running);
+    }
+
+    // ---- scriptPreview 填充（issue #561）----
+
+    #[test]
+    fn truncate_script_preview_under_limit_unchanged() {
+        let s = "export const meta = { name: 'x' }\nphase('A')";
+        assert_eq!(truncate_script_preview(s), s);
+    }
+
+    #[test]
+    fn truncate_script_preview_over_limit_appends_marker_at_char_boundary() {
+        // 用多字节字符（中文）填充超上限，验证截断落在 UTF-8 边界 + marker 含总字节数
+        let unit = "中"; // 3 bytes
+        let total_chars = (SCRIPT_PREVIEW_MAX_BYTES / unit.len()) + 100;
+        let big: String = unit.repeat(total_chars);
+        let out = truncate_script_preview(&big);
+        // 截断主体 ≤ 上限；含 marker；marker 标注原始总字节数
+        assert!(out.contains("script truncated"));
+        assert!(out.contains(&big.len().to_string()));
+        // 主体部分（marker 前）是合法 UTF-8 且不超上限
+        let body = out.split("\n\n/* ").next().unwrap();
+        assert!(body.len() <= SCRIPT_PREVIEW_MAX_BYTES);
+        assert!(std::str::from_utf8(body.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn truncate_script_preview_retreats_to_exact_char_boundary() {
+        // 全 3 字节字符 → 上限 32768 落在多字节字符中间（32768 % 3 == 2）。
+        // 截断 SHALL 回退到 ≤ 上限的最大字符边界 = 32766（3 的最大倍数 ≤ 32768）。
+        let big: String = "中".repeat(SCRIPT_PREVIEW_MAX_BYTES); // 远超上限
+        let out = truncate_script_preview(&big);
+        let body = out.split("\n\n/* ").next().unwrap();
+        let expected_boundary = (SCRIPT_PREVIEW_MAX_BYTES / 3) * 3;
+        assert_eq!(body.len(), expected_boundary);
+        assert!(big.is_char_boundary(body.len()));
+    }
+
+    #[tokio::test]
+    async fn resolve_script_preview_inline_zero_io() {
+        use cdt_discover::LocalFileSystemProvider;
+        let fs = LocalFileSystemProvider::new();
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+        // script_path 指向不存在文件，但 inline 非空 → 取 inline，不读文件
+        let preview = resolve_script_preview(
+            Some("/nonexistent/should-not-be-read.js"),
+            Some("inline body here"),
+            &fs,
+            &cache,
+        )
+        .await;
+        assert_eq!(preview.as_deref(), Some("inline body here"));
+    }
+
+    #[tokio::test]
+    async fn resolve_script_preview_scriptpath_reads_file() {
+        use cdt_discover::LocalFileSystemProvider;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let spath = tmp.path().join("flow-wf_x.js");
+        std::fs::write(&spath, "export const meta = { name: 'fromfile' }").unwrap();
+        let fs = LocalFileSystemProvider::new();
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+
+        let preview =
+            resolve_script_preview(Some(spath.to_str().unwrap()), None, &fs, &cache).await;
+        assert_eq!(
+            preview.as_deref(),
+            Some("export const meta = { name: 'fromfile' }")
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_script_preview_no_source_is_none() {
+        use cdt_discover::LocalFileSystemProvider;
+        let fs = LocalFileSystemProvider::new();
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+        assert_eq!(resolve_script_preview(None, None, &fs, &cache).await, None);
+    }
+
+    #[tokio::test]
+    async fn resolve_script_preview_scriptpath_read_fail_is_none() {
+        use cdt_discover::LocalFileSystemProvider;
+        let fs = LocalFileSystemProvider::new();
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+        // 文件不存在（stat NotFound）→ preview None，不 panic
+        let preview =
+            resolve_script_preview(Some("/nonexistent/scripts/x-wf_x.js"), None, &fs, &cache).await;
+        assert_eq!(preview, None);
+    }
+
+    #[tokio::test]
+    async fn read_script_data_oversize_file_marker_not_full_read() {
+        use cdt_discover::LocalFileSystemProvider;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let spath = tmp.path().join("huge-wf_big.js");
+        // 写一个 > MAX_SCRIPT_READ_BYTES 的文件
+        let big = "x".repeat(MAX_SCRIPT_READ_BYTES + 1024);
+        std::fs::write(&spath, &big).unwrap();
+        let fs = LocalFileSystemProvider::new();
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+
+        let data = read_script_data(&spath, &fs, &cache).await;
+        assert!(data.meta.is_none(), "oversize → meta 降 Tier 0");
+        let preview = data.preview.expect("oversize → marker preview");
+        assert!(preview.contains("too large"));
+        assert!(preview.contains(&big.len().to_string()));
+        // marker 远小于文件本身（证明没把全文塞进 preview）
+        assert!(preview.len() < 200);
+    }
+
+    #[test]
+    fn collect_workflow_candidates_extracts_inline_script() {
+        use cdt_core::chunk::{AIChunk, Chunk, ChunkMetrics};
+        use cdt_core::tool_execution::{ToolExecution, ToolOutput};
+        use chrono::{TimeZone, Utc};
+
+        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 0, 0, 0).unwrap();
+        let exec = ToolExecution {
+            tool_use_id: "tu_1".into(),
+            tool_name: "Workflow".into(),
+            input: serde_json::json!({ "script": "export const meta = {}" }),
+            output: ToolOutput::Missing,
+            is_error: false,
+            start_ts: ts,
+            end_ts: None,
+            source_assistant_uuid: "a1".into(),
+            result_agent_id: None,
+            error_message: None,
+            output_omitted: false,
+            output_bytes: None,
+            teammate_spawn: None,
+            workflow_run_id: Some("wf_inline".into()),
+            workflow_script_path: None,
+        };
+        let chunks = vec![Chunk::Ai(AIChunk {
+            chunk_id: "c1".into(),
+            timestamp: ts,
+            duration_ms: None,
+            responses: vec![],
+            metrics: ChunkMetrics::default(),
+            semantic_steps: vec![],
+            tool_executions: vec![exec],
+            subagents: vec![],
+            slash_commands: vec![],
+            teammate_messages: vec![],
+        })];
+
+        let cands = collect_workflow_candidates(&chunks);
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].run_id, "wf_inline");
+        assert_eq!(cands[0].script_path, None);
+        assert_eq!(
+            cands[0].inline_script.as_deref(),
+            Some("export const meta = {}")
+        );
+    }
+
+    /// 计数型 fs：统计 `read_to_string` 真实调用次数，验证 script 缓存复用不重读盘。
+    struct CountingFs {
+        path: PathBuf,
+        content: String,
+        reads: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl FileSystemProvider for CountingFs {
+        fn kind(&self) -> cdt_fs::FsKind {
+            cdt_fs::FsKind::Local
+        }
+        async fn exists(&self, path: &Path) -> bool {
+            path == self.path
+        }
+        async fn read_dir(&self, path: &Path) -> Result<Vec<cdt_fs::DirEntry>, FsError> {
+            Err(FsError::NotFound(path.to_path_buf()))
+        }
+        async fn read_to_string(&self, path: &Path) -> Result<String, FsError> {
+            if path == self.path {
+                self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(self.content.clone())
+            } else {
+                Err(FsError::NotFound(path.to_path_buf()))
+            }
+        }
+        async fn stat(&self, path: &Path) -> Result<cdt_fs::FsMetadata, FsError> {
+            if path == self.path {
+                Ok(cdt_fs::FsMetadata {
+                    size: self.content.len() as u64,
+                    mtime: std::time::SystemTime::UNIX_EPOCH,
+                    created: None,
+                    identity: None,
+                })
+            } else {
+                Err(FsError::NotFound(path.to_path_buf()))
+            }
+        }
+        async fn read_lines_head(&self, path: &Path, _max: usize) -> Result<Vec<String>, FsError> {
+            Err(FsError::NotFound(path.to_path_buf()))
+        }
+        async fn open_read(
+            &self,
+            path: &Path,
+        ) -> Result<Box<dyn tokio::io::AsyncRead + Send + Unpin>, FsError> {
+            Err(FsError::NotFound(path.to_path_buf()))
+        }
+        async fn write_atomic(&self, _path: &Path, _content: &[u8]) -> Result<(), FsError> {
+            unimplemented!("CountingFs 不走写路径")
+        }
+        async fn create_dir_all(&self, _path: &Path) -> Result<(), FsError> {
+            unimplemented!("CountingFs 不走写路径")
+        }
+        async fn remove_file(&self, _path: &Path) -> Result<(), FsError> {
+            unimplemented!("CountingFs 不走写路径")
+        }
+    }
+
+    #[tokio::test]
+    async fn read_script_data_non_notfound_stat_error_is_empty() {
+        // stat 非 NotFound（权限 / IO）→ 留 debug 信号但返回 empty（不 panic、不当作内容）
+        let path = PathBuf::from("/x/scripts/locked-wf_e.js");
+        let fs = FaultyFs {
+            stat_io_err: vec![path.clone()],
+            read_io_err: vec![],
+            files: vec![],
+        };
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+        let data = read_script_data(&path, &fs, &cache).await;
+        assert!(data.meta.is_none());
+        assert!(data.preview.is_none());
+    }
+
+    #[tokio::test]
+    async fn read_script_data_reuses_cache_no_double_read() {
+        let path = PathBuf::from("/x/scripts/flow-wf_c.js");
+        let fs = CountingFs {
+            path: path.clone(),
+            content: "export const meta = { name: 'cached' }".to_owned(),
+            reads: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let cache = std::sync::Mutex::new(WorkflowManifestCache::new());
+
+        let d1 = read_script_data(&path, &fs, &cache).await;
+        let d2 = read_script_data(&path, &fs, &cache).await;
+        assert_eq!(d1.preview, d2.preview);
+        assert_eq!(
+            fs.reads.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "稳态下同一 script 仅一次真实读盘，第二次命中缓存"
+        );
     }
 }
