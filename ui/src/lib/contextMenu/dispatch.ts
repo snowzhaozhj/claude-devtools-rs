@@ -7,10 +7,11 @@
  * - 单测里换 mock dispatch 不绑定到真 IPC（factory 单测已用此模式）
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { openInEditor, openInTerminal } from "../api";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { MenuItemDispatch } from "./menu-items";
 import { toastStore } from "../toastStore.svelte";
+import { errorMessage } from "../errorMessage";
 
 /**
  * 单例：app 启动时初始化一次的 dispatch 闭包。
@@ -18,28 +19,6 @@ import { toastStore } from "../toastStore.svelte";
  * 性能：单例避免每个右键事件都 new 一个对象；纯闭包无状态，多 surface 共享安全。
  */
 let cachedDispatch: MenuItemDispatch | null = null;
-
-/**
- * 提取 IPC 错误的人类可读 message（兼容 ApiError / Error / unknown 三种形态）。
- *
- * codex PR 二审 MEDIUM #4 修订：dispatch 失败必须有用户可见反馈
- * （toast），不能仅 console.error 吞掉。
- */
-function errorMessage(e: unknown): string {
-  if (typeof e === "string") return e;
-  if (e && typeof e === "object") {
-    const obj = e as Record<string, unknown>;
-    // ApiError shape: { code, message }
-    if (typeof obj.message === "string" && obj.message.length > 0) {
-      return obj.message;
-    }
-    if (typeof obj.toString === "function") {
-      const s = obj.toString();
-      if (s !== "[object Object]") return s;
-    }
-  }
-  return String(e);
-}
 
 export function getMenuItemDispatch(): MenuItemDispatch {
   if (cachedDispatch) return cachedDispatch;
@@ -58,7 +37,7 @@ export function getMenuItemDispatch(): MenuItemDispatch {
     },
     openInEditor: async (path: string, line?: number, column?: number) => {
       try {
-        await invoke<void>("open_in_editor", { path, line, column });
+        await openInEditor(path, line, column);
       } catch (e) {
         const msg = errorMessage(e);
         console.error("[contextMenu] open_in_editor failed:", e);
@@ -67,7 +46,7 @@ export function getMenuItemDispatch(): MenuItemDispatch {
     },
     openInTerminal: async (path: string) => {
       try {
-        await invoke<void>("open_in_terminal", { path });
+        await openInTerminal(path);
       } catch (e) {
         const msg = errorMessage(e);
         console.error("[contextMenu] open_in_terminal failed:", e);

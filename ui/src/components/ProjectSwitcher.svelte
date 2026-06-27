@@ -174,7 +174,8 @@
   }
 
   .project-selector:hover:not(:disabled) {
-    background: rgba(0, 0, 0, 0.06);
+    /* 主题感知 hover 背景——原 rgba(0,0,0,0.06) 黑色叠加在暗色主题下不可见。 */
+    background: var(--tool-item-hover-bg);
   }
 
   .project-selector:disabled {

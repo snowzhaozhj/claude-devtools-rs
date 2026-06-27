@@ -10,6 +10,7 @@
     type DashboardSortKey,
   } from "../lib/dashboardProjects";
   import { shortenPath } from "../lib/toolHelpers";
+  import { errorMessage } from "../lib/errorMessage";
   import { FOLDER_GIT2_SVG, GIT_BRANCH_SVG } from "../lib/icons";
   import Skeleton from "../components/Skeleton.svelte";
   import Dropdown from "../lib/components/Dropdown.svelte";
@@ -81,6 +82,9 @@
   // `untrack` 抑制 svelte-check `state_referenced_locally` 警告。
   let projectData: ProjectData | null = $state(untrack(() => getProjectData()));
   let loading = $state(untrack(() => projectData === null));
+  // 首屏加载失败时的错误态：仅在无任何已有数据时升到 UI（silent 刷新失败
+  // 不抹掉已显示的项目列表），驱动模板的错误分支 + 重试按钮。
+  let loadError = $state<string | null>(null);
   let searchEl: HTMLInputElement | undefined = $state();
 
   // 点击当前已选项目时无 selectedProjectId 变化 → App 状态不更新；
@@ -105,8 +109,13 @@
     if (!silent && projectData === null) loading = true;
     try {
       projectData = await loadProjectData({ refresh: silent });
+      loadError = null;
     } catch (e) {
       console.error("Failed to load dashboard data:", e);
+      // 已有数据时静默保留旧列表；首屏无数据时把错误升到 UI 让用户可感知 + 重试。
+      // 用 errorMessage 而非 String(e)：桌面端 IPC 拒绝是 ApiError 对象，
+      // String() 会显示 "[object Object]" 丢失原因。
+      if (projectData === null) loadError = errorMessage(e);
     } finally {
       loading = false;
     }
@@ -290,6 +299,12 @@
           {/each}
         </div>
       {/if}
+    {:else if loadError && derivedProjects.length === 0}
+      <div class="dash-status dash-error" role="alert">
+        <div class="dash-error-title">加载项目失败</div>
+        <div class="dash-error-detail">{loadError}</div>
+        <button class="dash-retry" onclick={() => loadData()}>重试</button>
+      </div>
     {:else if visible.length === 0}
       <div class="dash-status">
         {filterQuery ? "无匹配项目" : "未发现项目"}
@@ -820,6 +835,42 @@
     padding: 48px 0;
     color: var(--color-text-muted);
     font-size: 14px;
+  }
+
+  .dash-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .dash-error-title {
+    color: var(--color-danger);
+    font-weight: 600;
+  }
+
+  .dash-error-detail {
+    font-size: 12px;
+    color: var(--color-text-muted);
+    max-width: 480px;
+    word-break: break-word;
+  }
+
+  .dash-retry {
+    margin-top: 4px;
+    padding: 6px 16px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--color-text);
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border-emphasis);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+
+  .dash-retry:hover {
+    background: var(--tool-item-hover-bg);
   }
 
   @keyframes dash-pulse {

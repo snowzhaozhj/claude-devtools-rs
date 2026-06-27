@@ -12,6 +12,7 @@
 
   let assetUrl = $state<string | null>(null);
   let loading = $state(false);
+  let loadFailed = $state(false);
   let inViewportOnce = $state(false);
   let previewOpen = $state(false);
 
@@ -38,6 +39,32 @@
     }
   }
 
+  function fetchAsset() {
+    if (loading) return;
+    loading = true;
+    // 不在此同步清 loadFailed：retry 时让错误分支保持渲染（按钮显示
+    // disabled "重试中…"），仅成功后才清除失败态。
+    getImageAsset(rootSessionId, sessionId, blockId)
+      .then((url) => {
+        assetUrl = url;
+        loadFailed = false;
+      })
+      .catch((err) => {
+        console.warn("[ImageBlock] getImageAsset failed", err);
+        // 后端 fallback 通常已返回 data: URI；走到这里说明取图真失败，
+        // 标记失败态让占位符暴露重试按钮（inViewportOnce 已为 true，
+        // observer 不会再自动重试）。
+        loadFailed = true;
+      })
+      .finally(() => {
+        loading = false;
+      });
+  }
+
+  function retryLoad() {
+    fetchAsset();
+  }
+
   function attachObserver(el: HTMLElement) {
     if (directDataUri) {
       // 直接路径无需懒加载。
@@ -49,18 +76,7 @@
         for (const entry of entries) {
           if (entry.isIntersecting && !inViewportOnce && !assetUrl && !loading) {
             inViewportOnce = true;
-            loading = true;
-            getImageAsset(rootSessionId, sessionId, blockId)
-              .then((url) => {
-                assetUrl = url;
-              })
-              .catch((err) => {
-                console.warn("[ImageBlock] getImageAsset failed", err);
-                // 后端 fallback 已经返回 data: URI，正常情况下这里不会触发。
-              })
-              .finally(() => {
-                loading = false;
-              });
+            fetchAsset();
           }
         }
       },
@@ -76,6 +92,13 @@
     <button class="image-trigger" type="button" onclick={openPreview} aria-label="放大查看图片">
       <img src={assetUrl} alt="inline image ({source.media_type})" />
     </button>
+  {:else if loadFailed}
+    <div class="placeholder placeholder-error" role="alert">
+      <span class="placeholder-label">图片加载失败</span>
+      <button class="placeholder-retry" type="button" onclick={retryLoad} disabled={loading}>
+        {loading ? "重试中…" : "重试"}
+      </button>
+    </div>
   {:else}
     <div class="placeholder" aria-busy={loading}>
       <span class="placeholder-label">
@@ -182,5 +205,26 @@
   }
   .placeholder-meta {
     opacity: 0.7;
+  }
+  .placeholder-error {
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+  }
+  .placeholder-retry {
+    padding: 0.25rem 0.75rem;
+    font: inherit;
+    font-size: 0.75rem;
+    color: var(--color-text);
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border-emphasis);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .placeholder-retry:hover:not(:disabled) {
+    background: var(--tool-item-hover-bg);
+  }
+  .placeholder-retry:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 </style>
