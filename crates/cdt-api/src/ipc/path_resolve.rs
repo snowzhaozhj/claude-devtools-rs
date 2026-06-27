@@ -247,7 +247,10 @@ fn well_known_dirs() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 仅 unix-gated 测试（resolve_in 命中 / shell_path_via）用到；Windows 上无引用
+    #[cfg(unix)]
     use std::ffi::OsStr;
+    #[cfg(unix)]
     use tempfile::TempDir;
 
     // -------- merge_paths 保序去重 --------
