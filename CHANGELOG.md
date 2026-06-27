@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- **CLI**: improved upgrade experience — `cdt upgrade` now shows the current and latest version, a changelog preview, and a confirmation prompt before upgrading. Skips the build entirely when already on the latest version.
+
 ### Fixed
 - **CLI**: commands no longer print diagnostic logs by default. `cdt stats` and other commands used to spew warnings (duplicate tool ids, malformed lines) and info logs to stderr on every run, even in release builds. The CLI is now silent by default — pass `-v`/`-vv`/`-vvv` (or set `RUST_LOG`) to opt into warn/info/debug diagnostics.
 - **Parsing**: queued commands that include an image are no longer dropped. A queued command with an attached image stores its prompt as a multimodal block array; the parser used to reject the whole entry as malformed. Such entries now parse correctly.
