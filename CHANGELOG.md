@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- **UI**: workflow cards in the session view can now show the orchestration script that actually ran. The "View script" disclosure was always present in the UI but the backend never sent the script, so it never appeared on real sessions; the backend now fills it in (inline scripts with zero extra I/O, file-based scripts read once and cached). The preview is capped so large scripts can't bloat the payload (issue #561).
+
 ### Fixed
 - **UI**: the Dashboard no longer fails silently when project data can't be loaded. A backend/IPC failure on first load used to leave an empty dashboard with no explanation; it now shows an error message with a retry button (issue #554).
 - **UI**: the "Restart to update" pill now reports when an automatic restart fails (binary locked, Windows permissions) instead of silently doing nothing, and tells you to quit and reopen manually (issue #554).

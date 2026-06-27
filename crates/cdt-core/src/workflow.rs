@@ -72,6 +72,11 @@ pub struct WorkflowItem {
     pub duration_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// workflow 实际执行的编排脚本预览（inline `{script}` 取 `tool_use.input.script`；
+    /// `scriptPath` 形态读脚本文件）。截断到上限并在尾部追加可见 marker。供前端
+    /// "View script" disclosure 审计渲染。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_preview: Option<String>,
 }
 
 impl WorkflowItem {
@@ -86,6 +91,7 @@ impl WorkflowItem {
             total_tokens: 0,
             duration_ms: 0,
             error: None,
+            script_preview: None,
         }
     }
 }
@@ -131,10 +137,12 @@ mod tests {
             total_tokens: 5000,
             duration_ms: 30000,
             error: None,
+            script_preview: Some("export const meta = {}".into()),
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("\"totalTokens\":5000"));
         assert!(json.contains("\"phaseIndex\":1"));
+        assert!(json.contains("\"scriptPreview\":\"export const meta = {}\""));
         let deser: WorkflowItem = serde_json::from_str(&json).unwrap();
         assert_eq!(deser, item);
     }
@@ -161,5 +169,9 @@ mod tests {
         let json = serde_json::to_string(&item).unwrap();
         assert!(!json.contains("\"name\""), "None name SHALL be omitted");
         assert!(!json.contains("\"error\""), "None error SHALL be omitted");
+        assert!(
+            !json.contains("\"scriptPreview\""),
+            "None script_preview SHALL be omitted"
+        );
     }
 }
