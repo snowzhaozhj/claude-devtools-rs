@@ -548,7 +548,19 @@ mod tests {
     }
 
     fn program_string(cmd: &Command) -> String {
-        cmd.as_std().get_program().to_string_lossy().into_owned()
+        let prog = cmd.as_std().get_program().to_string_lossy().into_owned();
+        // Windows 上 path_resolve 经 which_in 按 PATHEXT 可能解析出 `code.exe` / `code.cmd`，
+        // 剥掉可执行扩展名让 `ends_with("code")` 类断言跨平台稳定（CLI 未装时本就是 bare name）。
+        #[cfg(windows)]
+        {
+            let lower = prog.to_ascii_lowercase();
+            for ext in [".exe", ".cmd", ".bat", ".com"] {
+                if lower.ends_with(ext) {
+                    return prog[..prog.len() - ext.len()].to_owned();
+                }
+            }
+        }
+        prog
     }
 
     fn env_var(cmd: &Command, key: &str) -> Option<String> {
@@ -922,5 +934,22 @@ mod tests {
     fn format_goto_target_path_with_line_and_col() {
         let out = format_goto_target(Path::new("/foo/bar.rs"), 42, Some(8));
         assert_eq!(out, OsStr::new("/foo/bar.rs:42:8"));
+    }
+
+    // -------- spawn_command 错误语义 --------
+
+    #[test]
+    fn spawn_command_missing_cli_returns_external_app_error_with_bare_name() {
+        // Scenario「解析后仍找不到才回退 not-found」的 AND 子句：错误 message 含原始
+        // bare name（非绝对路径），错误 code 为 ExternalApp，引导用户安装 / 改 Settings。
+        const MISSING: &str = "cdt_nonexistent_cli_xyz_abc_999";
+        let cmd = Command::new(MISSING);
+        let err = spawn_command(cmd, "editor").expect_err("missing CLI SHALL error");
+        assert_eq!(err.code, crate::ipc::error::ApiErrorCode::ExternalApp);
+        assert!(
+            err.message.contains(MISSING),
+            "error message SHALL carry bare CLI name, got: {}",
+            err.message
+        );
     }
 }

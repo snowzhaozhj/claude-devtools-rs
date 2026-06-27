@@ -30,36 +30,42 @@ fn resolve_in(name: &str, search_path: &OsStr, cwd: &Path) -> OsString {
 }
 
 /// 全进程唯一「增强 PATH」，首次调用时构建后缓存。
+///
+/// 构建逻辑内联在 `async {}` 闭包里（而非独立 `async fn`）：Windows 上 login-shell
+/// 那段 `.await` 被 `#[cfg(unix)]` 去掉后整个闭包无 await，但 `clippy::unused_async`
+/// 只查 `async fn` 不查 async block，故内联可避免 Windows 上的 unused-async 报错。
 async fn augmented_path() -> &'static OsString {
     AUGMENTED_PATH
-        .get_or_init(|| async { build_augmented_path().await })
+        .get_or_init(|| async {
+            let mut entries: Vec<PathBuf> = Vec::new();
+
+            // 1. 当前进程 PATH（launchd 精简版，但总比没有好）
+            if let Some(p) = std::env::var_os("PATH") {
+                entries.extend(std::env::split_paths(&p));
+            }
+
+            // 2. login-shell 真实 PATH（仅 Unix；Windows GUI app 继承完整 PATH，跳过）
+            #[cfg(unix)]
+            if let Some(shell_path) = login_shell_path().await {
+                entries.extend(std::env::split_paths(&shell_path));
+            }
+
+            // 3. 平台 well-known 目录兜底（不依赖 PATH / login-shell）
+            entries.extend(well_known_dirs());
+
+            merge_paths(entries)
+        })
         .await
-}
-
-async fn build_augmented_path() -> OsString {
-    let mut entries: Vec<PathBuf> = Vec::new();
-
-    // 1. 当前进程 PATH（launchd 精简版，但总比没有好）
-    if let Some(p) = std::env::var_os("PATH") {
-        entries.extend(std::env::split_paths(&p));
-    }
-
-    // 2. login-shell 真实 PATH（仅 Unix；Windows GUI app 继承完整 PATH，跳过）
-    #[cfg(unix)]
-    if let Some(shell_path) = login_shell_path().await {
-        entries.extend(std::env::split_paths(&shell_path));
-    }
-
-    // 3. 平台 well-known 目录兜底（不依赖 PATH / login-shell）
-    entries.extend(well_known_dirs());
-
-    merge_paths(entries)
 }
 
 /// 合并 PATH 条目：按平台分隔符拼接，**保序去重**（`HashSet` 记首次出现路径）。
 ///
 /// 三道过滤（顺序）：
 /// 1. **只保留绝对路径**——丢弃 `.` / 相对条目，杜绝解析到 cwd 下同名程序（安全扩面）。
+///    刻意用 `Path::is_absolute()` 而非 `cdt_discover::looks_like_absolute_path`：本函数
+///    处理的是**当前运行平台**的真实本地 PATH 条目（进程 PATH / login-shell PATH(仅 unix)
+///    / 当前平台 well-known 目录），不是 JSONL `cwd` / SSH / WSL 来的跨平台编码字符串；
+///    跨平台版会在 Windows 上反而放进不可用的 POSIX `/foo` 条目。divergence 见 tasks.md。
 /// 2. **保序去重**。
 /// 3. **逐条剔除无法 `join` 的非法条目**（含平台分隔符，如 Unix 路径含 `:`）——避免
 ///    单个坏条目让 `join_paths` 整体失败、回退空串后丢光所有目录。
@@ -71,8 +77,15 @@ fn merge_paths(entries: impl IntoIterator<Item = PathBuf>) -> OsString {
         .filter(|p| seen.insert(p.clone()))
         .filter(|p| std::env::join_paths(std::iter::once(p)).is_ok())
         .collect();
-    // 每个条目已单独验证可 join，整体 join 不会失败；unwrap_or_default 仅作兜底
-    std::env::join_paths(unique).unwrap_or_default()
+    // 每个条目已单独验证可 join → 整体 join 必成功。debug_assert 锁这个不变量：
+    // 若未来有人删掉第 3 道 filter，debug 构建会炸出来，而非把"一个坏条目"无声
+    // 放大成"PATH 全空 → 所有编辑器打不开"。
+    let joined = std::env::join_paths(&unique);
+    debug_assert!(
+        joined.is_ok(),
+        "merge_paths: 逐条过滤后整体 join 仍失败，必有未过滤的非法条目"
+    );
+    joined.unwrap_or_default()
 }
 
 /// 通过 login-shell 获取用户真实 PATH（仅 Unix）。
@@ -80,7 +93,13 @@ fn merge_paths(entries: impl IntoIterator<Item = PathBuf>) -> OsString {
 /// 读 `$SHELL` 后委托 `shell_path_via`。`$SHELL` 未设 → `None`。
 #[cfg(unix)]
 async fn login_shell_path() -> Option<OsString> {
-    let shell = std::env::var_os("SHELL")?;
+    let Some(shell) = std::env::var_os("SHELL") else {
+        tracing::debug!(
+            reason = "shell_unset",
+            "login-shell PATH 解析跳过；退回 well-known 目录"
+        );
+        return None;
+    };
     shell_path_via(&shell).await
 }
 
@@ -91,9 +110,14 @@ async fn login_shell_path() -> Option<OsString> {
 ///   值含 END 字面量导致的提前截断；解析仍取**最后一个** START，跳过 rc 文件噪声。
 /// - **显式超时回收**：2s 超时后显式 `start_kill()` + `wait()`，不依赖 `kill_on_drop`
 ///   的 best-effort orphan reaper，杜绝遗留 / zombie 子进程。
-/// - 边读 stdout 边等待：避免 rc 文件喷 >64KB 撑满管道导致死锁（撑满则被超时兜底）。
+/// - 先 `read_to_end` 排空 stdout 再 `wait()`：持续消费管道，rc 文件喷 >64KB 也不会
+///   写阻塞死锁（真撑满则被 2s 超时兜底）。
 ///
-/// 超时 / 非 0 退出 / spawn 失败 / sentinel 缺失 → `None`（best-effort，调用方有兜底）。
+/// 任一失败（spawn / 超时 / 非 0 退出 / sentinel 缺失 / IO）→ `None`（best-effort，
+/// 调用方有 well-known 目录 + 进程 PATH 兜底）。每条失败带 `reason` 落 `debug!`：
+/// 这正是「用户编辑器装在非标准目录 + login-shell 解析失败 → 误报 not found」的诊断
+/// 入口，按 `crates/CLAUDE.md::日志级别纪律` 用 `debug!`（best-effort 降级是常态噪声，
+/// 非异常）——`cdt -vv` 可拉出 root cause，不污染默认输出。
 #[cfg(unix)]
 async fn shell_path_via(shell: &OsStr) -> Option<OsString> {
     use std::os::unix::ffi::OsStringExt;
@@ -110,7 +134,7 @@ async fn shell_path_via(shell: &OsStr) -> Option<OsString> {
     let end = format!("__CDT_{token}_E__");
     let script = format!("printf '{start}%s{end}' \"$PATH\"");
 
-    let mut child = tokio::process::Command::new(shell)
+    let mut child = match tokio::process::Command::new(shell)
         .arg("-ilc")
         .arg(&script)
         .stdin(Stdio::null())
@@ -118,9 +142,18 @@ async fn shell_path_via(shell: &OsStr) -> Option<OsString> {
         .stderr(Stdio::null())
         .kill_on_drop(true) // 兜底：意外 drop 路径仍杀子进程
         .spawn()
-        .ok()?;
+    {
+        Ok(child) => child,
+        Err(e) => {
+            tracing::debug!(shell = ?shell, reason = "spawn_failed", error = %e, "login-shell PATH 解析失败");
+            return None;
+        }
+    };
 
-    let mut stdout = child.stdout.take()?;
+    let Some(mut stdout) = child.stdout.take() else {
+        tracing::debug!(reason = "no_stdout", "login-shell PATH 解析失败");
+        return None;
+    };
 
     let drain = async {
         let mut buf = Vec::new();
@@ -132,20 +165,28 @@ async fn shell_path_via(shell: &OsStr) -> Option<OsString> {
     let (bytes, status) = match tokio::time::timeout(std::time::Duration::from_secs(2), drain).await
     {
         Ok(Some(pair)) => pair,
-        Ok(None) => return None, // 读 / wait IO 错误
+        Ok(None) => {
+            tracing::debug!(reason = "io_error", "login-shell PATH 解析失败");
+            return None;
+        }
         Err(_) => {
             // 超时：显式 kill + reap，不留子进程
             let _ = child.start_kill();
             let _ = child.wait().await;
+            tracing::debug!(shell = ?shell, reason = "timeout", "login-shell PATH 解析超时（2s）；退回 well-known 目录");
             return None;
         }
     };
 
     if !status.success() {
+        tracing::debug!(shell = ?shell, reason = "nonzero_exit", code = ?status.code(), "login-shell PATH 解析失败");
         return None;
     }
 
-    let content = extract_sentinel(&bytes, start.as_bytes(), end.as_bytes())?;
+    let Some(content) = extract_sentinel(&bytes, start.as_bytes(), end.as_bytes()) else {
+        tracing::debug!(reason = "sentinel_missing", "login-shell PATH 解析失败");
+        return None;
+    };
     Some(OsString::from_vec(content))
 }
 
@@ -162,6 +203,16 @@ fn extract_sentinel(bytes: &[u8], start: &[u8], end: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// 平台 well-known 可执行目录列表（不依赖 PATH / login-shell）。
+///
+/// Windows 返回空——GUI app 继承完整 PATH，无需兜底；空分支单独返回也避免
+/// `let mut dirs` 在 Windows 下三个 cfg 块全空触发 `unused_mut`。
+#[cfg(not(unix))]
+fn well_known_dirs() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// 平台 well-known 可执行目录列表（不依赖 PATH / login-shell）。
+#[cfg(unix)]
 fn well_known_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
 
@@ -180,7 +231,6 @@ fn well_known_dirs() -> Vec<PathBuf> {
     }
 
     // Unix home-based 目录（走 cdt_discover::home_dir() Windows 兼容四级 fallback）
-    #[cfg(unix)]
     if let Some(home) = cdt_discover::home_dir() {
         dirs.push(home.join(".local/bin"));
         dirs.push(home.join(".cargo/bin"));
@@ -378,6 +428,34 @@ mod tests {
         assert!(
             elapsed.as_secs() < 10,
             "SHALL return shortly after 2s timeout, took {elapsed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_path_via_returns_path_via_real_shell() {
+        // 成功链路：真 shell 跑 `-ilc 'printf <S>$PATH<E>'` → spawn → 读 stdout →
+        // 提取 sentinel → Some(PATH)。CI unix runner 必有 /bin/sh，进程 PATH 必非空。
+        let result = shell_path_via(OsStr::new("/bin/sh")).await;
+        let path = result.expect("/bin/sh SHALL resolve to Some(PATH)");
+        let dirs: Vec<_> = std::env::split_paths(&path).collect();
+        assert!(
+            !dirs.is_empty(),
+            "resolved login-shell PATH SHALL be non-empty"
+        );
+    }
+
+    // -------- well_known_dirs 平台兜底 --------
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn well_known_dirs_includes_usr_local_bin() {
+        // Scenario「login-shell 失败 well-known 目录兜底」依赖 /usr/local/bin 在列表内
+        assert!(
+            well_known_dirs()
+                .iter()
+                .any(|p| p == Path::new("/usr/local/bin")),
+            "well_known_dirs SHALL include /usr/local/bin on macOS/Linux"
         );
     }
 }
