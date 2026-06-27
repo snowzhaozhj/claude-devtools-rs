@@ -77,50 +77,88 @@ fn merge_paths(entries: impl IntoIterator<Item = PathBuf>) -> OsString {
 
 /// 通过 login-shell 获取用户真实 PATH（仅 Unix）。
 ///
-/// 用 sentinel `__CDT_PATH_START__...__CDT_PATH_END__` 包裹，过滤 rc 文件
-/// 往 stdout 喷出的噪声（shell-env/fix-path 标准做法）。
-/// 2 秒超时 + 非 0 退出 + spawn 失败 → 返回 `None`（best-effort）。
-///
-/// 超时时 `timeout` drop 掉 `output()` future，靠 `kill_on_drop(true)` 杀掉子进程
-/// （tokio `Child` 默认不 kill，会遗留长跑 shell）。解析取**最后一个** START 标记，
-/// 这样 rc 文件在真实 `printf` 之前往 stdout 喷出含 START 字样的噪声也不会污染结果。
+/// 读 `$SHELL` 后委托 `shell_path_via`。`$SHELL` 未设 → `None`。
 #[cfg(unix)]
 async fn login_shell_path() -> Option<OsString> {
+    let shell = std::env::var_os("SHELL")?;
+    shell_path_via(&shell).await
+}
+
+/// 跑 `<shell> -ilc 'printf <START>$PATH<END>'` 取交互式 PATH（shell-env/fix-path 思路）。
+///
+/// 三处稳健性（对应 codex 二审）：
+/// - **随机 sentinel**：marker 含 pid + 纳秒 token，PATH 内容不可能撞上 → 杜绝 PATH
+///   值含 END 字面量导致的提前截断；解析仍取**最后一个** START，跳过 rc 文件噪声。
+/// - **显式超时回收**：2s 超时后显式 `start_kill()` + `wait()`，不依赖 `kill_on_drop`
+///   的 best-effort orphan reaper，杜绝遗留 / zombie 子进程。
+/// - 边读 stdout 边等待：避免 rc 文件喷 >64KB 撑满管道导致死锁（撑满则被超时兜底）。
+///
+/// 超时 / 非 0 退出 / spawn 失败 / sentinel 缺失 → `None`（best-effort，调用方有兜底）。
+#[cfg(unix)]
+async fn shell_path_via(shell: &OsStr) -> Option<OsString> {
     use std::os::unix::ffi::OsStringExt;
     use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
 
-    // 常量提到函数顶部（clippy::items_after_statements）
-    const SCRIPT: &str = "printf '__CDT_PATH_START__%s__CDT_PATH_END__' \"$PATH\"";
-    const START: &[u8] = b"__CDT_PATH_START__";
-    const END: &[u8] = b"__CDT_PATH_END__";
+    let token = {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        format!("{:x}_{nanos:x}", std::process::id())
+    };
+    let start = format!("__CDT_{token}_S__");
+    let end = format!("__CDT_{token}_E__");
+    let script = format!("printf '{start}%s{end}' \"$PATH\"");
 
-    let shell = std::env::var_os("SHELL")?;
+    let mut child = tokio::process::Command::new(shell)
+        .arg("-ilc")
+        .arg(&script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true) // 兜底：意外 drop 路径仍杀子进程
+        .spawn()
+        .ok()?;
 
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        tokio::process::Command::new(&shell)
-            .arg("-ilc")
-            .arg(SCRIPT)
-            .stdin(Stdio::null())
-            .kill_on_drop(true) // 超时 drop future 时杀子进程，避免遗留长跑 shell
-            .output(),
-    )
-    .await
-    .ok()? // timeout Elapsed → None
-    .ok()?; // IO spawn error → None
+    let mut stdout = child.stdout.take()?;
 
-    if !output.status.success() {
+    let drain = async {
+        let mut buf = Vec::new();
+        stdout.read_to_end(&mut buf).await.ok()?;
+        let status = child.wait().await.ok()?;
+        Some((buf, status))
+    };
+
+    let (bytes, status) = match tokio::time::timeout(std::time::Duration::from_secs(2), drain).await
+    {
+        Ok(Some(pair)) => pair,
+        Ok(None) => return None, // 读 / wait IO 错误
+        Err(_) => {
+            // 超时：显式 kill + reap，不留子进程
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return None;
+        }
+    };
+
+    if !status.success() {
         return None;
     }
 
-    let bytes = &output.stdout;
-    // 取最后一个 START，跳过 rc 噪声里可能出现的 START 字样
-    let start_pos = bytes.windows(START.len()).rposition(|w| w == START)?;
-    let content_start = start_pos + START.len();
-    let rest = &bytes[content_start..];
-    let end_pos = rest.windows(END.len()).position(|w| w == END)?;
+    let content = extract_sentinel(&bytes, start.as_bytes(), end.as_bytes())?;
+    Some(OsString::from_vec(content))
+}
 
-    Some(OsString::from_vec(rest[..end_pos].to_vec()))
+/// 取 stdout 里**最后一个** `start` 标记之后、其后**首个** `end` 标记之前的字节。
+///
+/// 取最后一个 start 跳过 rc 文件在真实 `printf` 之前喷出的 start 字样噪声；
+/// 任一 marker 缺失 → `None`。
+#[cfg(unix)]
+fn extract_sentinel(bytes: &[u8], start: &[u8], end: &[u8]) -> Option<Vec<u8>> {
+    let start_pos = bytes.windows(start.len()).rposition(|w| w == start)?;
+    let rest = &bytes[start_pos + start.len()..];
+    let end_pos = rest.windows(end.len()).position(|w| w == end)?;
+    Some(rest[..end_pos].to_vec())
 }
 
 /// 平台 well-known 可执行目录列表（不依赖 PATH / login-shell）。
@@ -164,6 +202,7 @@ mod tests {
 
     // -------- merge_paths 保序去重 --------
 
+    #[cfg(unix)]
     #[test]
     fn merge_paths_deduplicates_preserving_insertion_order() {
         let entries = vec![
@@ -185,6 +224,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn merge_paths_drops_relative_and_dot_entries() {
         // 相对条目（`.` / 相对路径）SHALL 被过滤，杜绝 cwd 同名程序注入
@@ -195,6 +235,19 @@ mod tests {
         ];
         let paths: Vec<PathBuf> = std::env::split_paths(&merge_paths(entries)).collect();
         assert_eq!(paths, vec![PathBuf::from("/usr/local/bin")]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn merge_paths_drops_relative_keeps_drive_absolute_on_windows() {
+        // Windows：相对条目过滤，盘符绝对路径保留
+        let entries = vec![
+            PathBuf::from("."),
+            PathBuf::from(r"relative\bin"),
+            PathBuf::from(r"C:\Tools\bin"),
+        ];
+        let paths: Vec<PathBuf> = std::env::split_paths(&merge_paths(entries)).collect();
+        assert_eq!(paths, vec![PathBuf::from(r"C:\Tools\bin")]);
     }
 
     #[cfg(unix)]
@@ -271,5 +324,60 @@ mod tests {
             );
         }
         // None 也接受
+    }
+
+    // -------- extract_sentinel 边界 --------
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_sentinel_takes_content_between_markers() {
+        let out = b"PREFIX<S>/usr/local/bin:/opt/homebrew/bin<E>SUFFIX";
+        let got = extract_sentinel(out, b"<S>", b"<E>").unwrap();
+        assert_eq!(got, b"/usr/local/bin:/opt/homebrew/bin");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_sentinel_uses_last_start_skipping_rc_noise() {
+        // rc 文件在真实 printf 前喷出含 START 的噪声：取最后一个 START
+        let out = b"<S>noise-from-rc\n<S>/real/path<E>";
+        let got = extract_sentinel(out, b"<S>", b"<E>").unwrap();
+        assert_eq!(got, b"/real/path");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_sentinel_returns_none_on_missing_marker() {
+        assert!(extract_sentinel(b"no markers here", b"<S>", b"<E>").is_none());
+        assert!(extract_sentinel(b"<S>only start", b"<S>", b"<E>").is_none());
+        assert!(extract_sentinel(b"only end<E>", b"<S>", b"<E>").is_none());
+    }
+
+    // -------- shell_path_via 超时回收 --------
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_path_via_times_out_on_slow_shell_without_hanging() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Instant;
+
+        // 临时"慢 shell"：忽略 -ilc 参数，sleep 远超 2s 超时
+        let dir = TempDir::new().unwrap();
+        let slow = dir.path().join("slow-shell");
+        std::fs::write(&slow, "#!/bin/sh\nsleep 30\n").unwrap();
+        let mut perms = std::fs::metadata(&slow).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&slow, perms).unwrap();
+
+        let begin = Instant::now();
+        let result = shell_path_via(slow.as_os_str()).await;
+        let elapsed = begin.elapsed();
+
+        assert!(result.is_none(), "slow shell SHALL time out to None");
+        // 2s 超时 + kill/reap，应在远小于 sleep 30 的时间内返回（给宽松上限抗 CI 抖动）
+        assert!(
+            elapsed.as_secs() < 10,
+            "SHALL return shortly after 2s timeout, took {elapsed:?}"
+        );
     }
 }
