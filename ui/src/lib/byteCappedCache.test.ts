@@ -70,4 +70,23 @@ describe("ByteCappedCache", () => {
     expect(c.size).toBe(1);
     expect(c.byteSize).toBe(13);
   });
+
+  test("非纯 sizeOf：覆写/淘汰扣的是入账值而非重算，byteSize 不漂移", () => {
+    // sizeOf 每次调用返回递增值——若覆写/淘汰时重算就会漂移甚至变负。
+    let next = 10;
+    const c = new ByteCappedCache<string>({
+      maxEntries: 1, // 强制每次 set 触发淘汰
+      maxBytes: 1_000_000,
+      sizeOf: () => next++,
+    });
+    c.set("a", "x"); // 入账 10，byteSize=10
+    expect(c.byteSize).toBe(10);
+    c.set("b", "y"); // 淘汰 a（扣回入账的 10，不重算）→ 入账 11
+    expect(c.size).toBe(1);
+    expect(c.byteSize).toBe(11);
+    c.set("b", "z"); // 覆写 b（扣回入账的 11，不重算）→ 入账 12
+    expect(c.size).toBe(1);
+    expect(c.byteSize).toBe(12);
+    expect(c.byteSize).toBeGreaterThanOrEqual(0);
+  });
 });

@@ -17,6 +17,7 @@
   let { workflow, sessionId, projectId }: Props = $props();
 
   let isExpanded = $state(false);
+  let isScriptExpanded = $state(false);
   let expandedAgentId = $state<string | null>(null);
   let agentTrace = $state<Chunk[] | null>(null);
   let isLoadingAgentTrace = $state(false);
@@ -134,6 +135,11 @@
   onDestroy(() => {
     stopPoll();
   });
+
+  function toggleScript(e: Event) {
+    e.stopPropagation();
+    isScriptExpanded = !isScriptExpanded;
+  }
 
   async function toggleAgentDrilldown(agent: WorkflowAgent) {
     if (!agent.sessionId) return;
@@ -285,6 +291,23 @@
             </div>
           </div>
         {/each}
+      {/if}
+
+      {#if effectiveWorkflow.scriptPreview}
+        <div
+          class="wf-script-toggle"
+          role="button"
+          tabindex="0"
+          aria-expanded={isScriptExpanded}
+          onclick={toggleScript}
+          onkeydown={(e) => activateOnKey(e, () => toggleScript(e))}
+        >
+          <svg class="wf-script-chevron" class:wf-chevron-open={isScriptExpanded} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={CHEVRON_RIGHT}/></svg>
+          <span>View script</span>
+        </div>
+        {#if isScriptExpanded}
+          <pre class="wf-script">{effectiveWorkflow.scriptPreview}</pre>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -555,6 +578,44 @@
     color: var(--color-text-muted);
     font-style: italic;
     padding: 8px 4px;
+  }
+
+  .wf-script-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    padding: 4px 0;
+  }
+  .wf-script-toggle:hover {
+    color: var(--card-text-light);
+  }
+  .wf-script-toggle:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: -2px;
+  }
+  .wf-script-chevron {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    color: var(--card-icon-muted);
+    transition: transform 0.15s ease;
+  }
+
+  .wf-script {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--card-text-light);
+    background: var(--card-header-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    margin: 0;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
   }
 
 </style>

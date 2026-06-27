@@ -325,6 +325,11 @@ export interface WorkflowItem {
   totalTokens?: number;
   durationMs?: number;
   error?: string;
+  /**
+   * Workflow 编排脚本预览。后端当前不发（见 #561）；前端 disclosure UI 由
+   * `session-display` spec「Script disclosure 默认折叠」契约保留，待后端填充后即生效。
+   */
+  scriptPreview?: string;
 }
 
 export interface SlashCommand {

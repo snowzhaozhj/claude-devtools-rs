@@ -16,6 +16,9 @@ export interface ByteCappedCacheOptions<V> {
 
 export class ByteCappedCache<V> {
   private readonly map = new Map<string, V>();
+  // 每个 key 入账时实际累加的字节数。覆写 / 淘汰一律扣这个记录值，
+  // 不重算 sizeOf——否则 sizeOf 非纯（读外部可变态）时 byteSize 会与真实内容漂移。
+  private readonly sizes = new Map<string, number>();
   private bytes = 0;
 
   constructor(private readonly opts: ByteCappedCacheOptions<V>) {}
@@ -31,10 +34,11 @@ export class ByteCappedCache<V> {
 
   /** 写入并按双闸门淘汰；单条超 maxBytes 时会清空其余条目后仍存入该条。 */
   set(key: string, value: V): void {
-    const existing = this.map.get(key);
-    if (existing !== undefined) {
-      this.bytes -= this.opts.sizeOf(key, existing);
+    const existingSize = this.sizes.get(key);
+    if (existingSize !== undefined) {
+      this.bytes -= existingSize;
       this.map.delete(key);
+      this.sizes.delete(key);
     }
     const size = this.opts.sizeOf(key, value);
     while (
@@ -44,15 +48,17 @@ export class ByteCappedCache<V> {
       this.evictOldest();
     }
     this.map.set(key, value);
+    this.sizes.set(key, size);
     this.bytes += size;
   }
 
   private evictOldest(): void {
     const first = this.map.keys().next().value;
     if (first === undefined) return;
-    const evicted = this.map.get(first);
     this.map.delete(first);
-    if (evicted !== undefined) this.bytes -= this.opts.sizeOf(first, evicted);
+    const evictedSize = this.sizes.get(first);
+    this.sizes.delete(first);
+    if (evictedSize !== undefined) this.bytes -= evictedSize;
   }
 
   /** 当前条目数。 */
