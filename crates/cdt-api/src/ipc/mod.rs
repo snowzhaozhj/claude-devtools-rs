@@ -9,6 +9,7 @@ pub mod external_app;
 pub(crate) mod image_disk_cache;
 pub mod local;
 pub(crate) mod parsed_message_cache;
+mod path_resolve;
 // project_scan_cache 在 test/test-utils feature 下暴露给集成测试访问
 // `spawn_project_scan_cache_invalidator` + `ProjectScanCache::insert` 等
 // 测试 helper（详 change `project-scan-cache-semantic-invalidation` §5）。
