@@ -17,7 +17,7 @@
 - [x] 3.1 `merge_paths` 保序去重单测
 - [x] 3.2 `resolve_in` 命中（temp 可执行文件）+ 未命中（回退 bare name）单测
 - [x] 3.3 `login_shell_path` 烟雾测试（CI 无 SHELL 容错）
-- [x] 3.4 `build_*` 测试改 `#[tokio::test]`，Linux/editor 程序断言改 `ends_with`（`program_string` 在 Windows 剥 `.exe`/`.cmd` 扩展名保持跨平台稳定）
+- [x] 3.4 `build_*` 测试改 `#[tokio::test]`，Linux/editor 程序断言改 `ends_with`（Windows runner 无 editor CLI → 回退 bare name，断言稳定；TQ-2 仅在 Windows 装了 editor 时 latent，可接受）
 - [x] 3.5 codex/pr-review 补测：`extract_sentinel` 边界、`shell_path_via` 超时回收 + 成功链路、`well_known_dirs` 含 `/usr/local/bin`、`spawn_command` not-found 错误含 bare name、`merge_paths` 相对/非法条目过滤
 - [x] 3.6 `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test -p cdt-api` 全绿
 

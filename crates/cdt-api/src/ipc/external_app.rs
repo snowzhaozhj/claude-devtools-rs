@@ -548,19 +548,7 @@ mod tests {
     }
 
     fn program_string(cmd: &Command) -> String {
-        let prog = cmd.as_std().get_program().to_string_lossy().into_owned();
-        // Windows 上 path_resolve 经 which_in 按 PATHEXT 可能解析出 `code.exe` / `code.cmd`，
-        // 剥掉可执行扩展名让 `ends_with("code")` 类断言跨平台稳定（CLI 未装时本就是 bare name）。
-        #[cfg(windows)]
-        {
-            let lower = prog.to_ascii_lowercase();
-            for ext in [".exe", ".cmd", ".bat", ".com"] {
-                if lower.ends_with(ext) {
-                    return prog[..prog.len() - ext.len()].to_owned();
-                }
-            }
-        }
-        prog
+        cmd.as_std().get_program().to_string_lossy().into_owned()
     }
 
     fn env_var(cmd: &Command, key: &str) -> Option<String> {
