@@ -1250,6 +1250,75 @@ mod tests {
         assert!(cache.get_journal(&jp, &sig(1)).is_some());
     }
 
+    fn agent_with_preview(label_len: usize, preview_len: usize) -> WorkflowAgent {
+        WorkflowAgent {
+            label: "L".repeat(label_len),
+            phase_index: 0,
+            state: WorkflowAgentState::Running,
+            tokens: 0,
+            tool_calls: 0,
+            duration_ms: 0,
+            result_preview: Some("r".repeat(preview_len)),
+            queued_at: None,
+            failed: false,
+            session_id: Some("s".repeat(32)),
+        }
+    }
+
+    #[test]
+    fn journal_and_script_mismatch_pop_decrement_their_own_bytes() {
+        // get_journal / get_script 是与 get 手抄并行的路径——独立验证它们的
+        // mismatch pop 也扣减各自的字节计数（防 copy-paste 漏 saturating_sub）。
+        let mut cache =
+            WorkflowManifestCache::with_caps(100, usize::MAX, 100, usize::MAX, 100, usize::MAX);
+        let jp = PathBuf::from("/j.jsonl");
+        let sp = PathBuf::from("/s.js");
+        cache.insert_journal(jp.clone(), sig(1), vec![agent_with_preview(100, 400)]);
+        cache.insert_script(sp.clone(), sig(1), script_data_preview(400));
+        assert!(cache.journal_bytes > 400);
+        assert!(cache.script_bytes > 400);
+
+        // 签名 mismatch → 各自 pop + 扣减归零
+        assert!(cache.get_journal(&jp, &sig(999)).is_none());
+        assert!(cache.get_script(&sp, &sig(999)).is_none());
+        assert_eq!(cache.journal_bytes, 0, "journal mismatch pop 后归零");
+        assert_eq!(cache.script_bytes, 0, "script mismatch pop 后归零");
+        assert_eq!(cache.journal_entries.len(), 0);
+        assert_eq!(cache.script_entries.len(), 0);
+    }
+
+    #[test]
+    fn entries_byte_estimate_counts_agents_and_phases() {
+        // entries 测试此前只设 script_preview——本测试确认 estimate_cache_entry
+        // 真把 agents/phases（WorkflowItem 内存主体）计入字节，否则 byte cap 会
+        // 对最大 payload 失明。byte cap = 512，单条仅靠 agent payload 就超限。
+        let mut item = WorkflowItem::pending("wf".into()); // 无 script_preview
+        item.phases = vec![WorkflowPhase {
+            index: 0,
+            title: "P".repeat(100),
+        }];
+        item.agents = vec![agent_with_preview(100, 700)];
+
+        let mut cache =
+            WorkflowManifestCache::with_caps(100, 512, 100, usize::MAX, 100, usize::MAX);
+        let p1 = PathBuf::from("/a1.json");
+        let p2 = PathBuf::from("/a2.json");
+        cache.insert(p1.clone(), sig(1), item.clone());
+        // 单条仅 agent+phase payload 就 > 512（scalar 字段远不足以触发）
+        assert!(
+            cache.entries_bytes > 512,
+            "agents/phases 应被计入，实际 {}",
+            cache.entries_bytes
+        );
+        cache.insert(p2.clone(), sig(2), item);
+        // 第二条插入触发 byte cap 淘汰最旧——仅当 agents 被计入才会发生
+        assert!(
+            cache.get(&p1, &sig(1)).is_none(),
+            "agent payload 驱动了淘汰"
+        );
+        assert!(cache.get(&p2, &sig(2)).is_some());
+    }
+
     #[test]
     fn collect_workflow_candidates_dedupes_and_picks_first_script_path() {
         use cdt_core::chunk::{AIChunk, Chunk, ChunkMetrics};

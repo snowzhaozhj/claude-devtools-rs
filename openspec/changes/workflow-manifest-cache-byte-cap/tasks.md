@@ -19,6 +19,7 @@
 - [x] 4.3 签名 mismatch 移除条目时字节计数扣减归零
 - [x] 4.4 三个 cache 各自独立配额互不挤占（一个淘汰不影响另两个）
 - [x] 4.5 既有 `cache_hit_and_miss` / `read_script_data_reuses_cache_no_double_read` 等回归仍过
+- [x] 4.6 （pr-test-analyzer 加固）journal/script mismatch-pop 各自扣减字节 + entries 估算含 agents/phases
 
 ## 5. 验证
 - [x] 5.1 `cargo clippy -p cdt-api --all-targets -- -D warnings`
@@ -27,7 +28,7 @@
 - [x] 5.4 `openspec validate workflow-manifest-cache-byte-cap --strict`
 
 ## N. 发布
-- [ ] N.1 push 分支 + 开 PR
+- [x] N.1 push 分支 + 开 PR
 - [ ] N.2 wait-ci 全绿
 - [ ] N.3 codex + pr-review-toolkit 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
