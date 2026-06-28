@@ -137,3 +137,27 @@ fn list_group_sessions_dedupes_sessions_across_worktrees() {
         path.display()
     );
 }
+
+/// issue #546：`src-tauri` 桌面后端只需 self-update 工具（已提取到 `cdt-install`），
+/// **不得**直接依赖 `cdt-cli`——否则会透传整棵 CLI-only 依赖树（`cdt-analyze` /
+/// `cdt-query` / `rmcp` / `clap` …）进桌面 app，徒增编译时间与 bundle 体积却无任何
+/// 运行时收益。共享的下载/解压/校验逻辑走 `cdt-install`。本不变量靠 manifest grep
+/// 防回归（PR #544 曾因给 cdt-cli 加 cdt-analyze 依赖而无意放大该透传）。
+#[test]
+fn src_tauri_does_not_depend_on_cdt_cli() {
+    let path = workspace_root().join("src-tauri").join("Cargo.toml");
+    let body = fs::read_to_string(&path).expect("read src-tauri/Cargo.toml");
+    let depends_on_cli = body.lines().any(|l| {
+        let trimmed = l.trim_start();
+        !trimmed.starts_with('#')
+            && trimmed
+                .strip_prefix("cdt-cli")
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+    });
+    assert!(
+        !depends_on_cli,
+        "src-tauri/Cargo.toml 直接依赖 cdt-cli——issue #546 要求桌面后端只依赖 \
+         cdt-install，避免透传整棵 CLI-only 依赖树（cdt-analyze / cdt-query / rmcp / \
+         clap …）进桌面 bundle。共享 self-update 逻辑请走 cdt-install。"
+    );
+}

@@ -431,13 +431,13 @@ dependencies = [
  "cdt-core",
  "cdt-discover",
  "cdt-fs",
+ "cdt-install",
  "cdt-query",
  "cdt-ssh",
  "cdt-watch",
  "chrono",
  "clap",
  "clap_complete",
- "flate2",
  "insta",
  "regex",
  "reqwest",
@@ -446,13 +446,11 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "tar",
  "terminal_size",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "unicode-width",
- "zip",
 ]
 
 [[package]]
@@ -525,6 +523,17 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "cdt-install"
+version = "0.7.2"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "reqwest",
+ "tar",
+ "zip",
 ]
 
 [[package]]

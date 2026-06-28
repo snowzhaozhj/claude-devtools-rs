@@ -14,6 +14,7 @@ authors = ["zhaohejie"]
 [workspace.dependencies]
 # Shared crate interdeps — keep versions aligned here.
 cdt-fs = { path = "crates/cdt-fs" }
+cdt-install = { path = "crates/cdt-install" }
 cdt-core = { path = "crates/cdt-core" }
 cdt-parse = { path = "crates/cdt-parse" }
 cdt-analyze = { path = "crates/cdt-analyze" }
