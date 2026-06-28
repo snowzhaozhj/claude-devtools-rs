@@ -5,6 +5,7 @@
 //! 后续只 stat 比对。
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use cdt_core::workflow::{
@@ -12,6 +13,7 @@ use cdt_core::workflow::{
 };
 use cdt_discover::FileSystemProvider;
 use cdt_fs::FsError;
+use lru::LruCache;
 
 use super::workflow_script::{ScriptMeta, parse_script_meta};
 use crate::cache_signature::FileSignature;
@@ -33,6 +35,23 @@ struct ScriptData {
     preview: Option<String>,
 }
 
+/// 三个内部 cache 的 count cap / byte cap（issue #565：双闸门 LRU 防内存无界）。
+/// count 统一 256（远高于单 session 实际 workflow 数，主要兜底跨 session 长驻累积）；
+/// byte cap 按单条上界 × 余量定，是粗粒度上界非精确预算。参照
+/// `cdt-discover::search_cache::SearchTextCache` 的双闸门拓扑。
+const ENTRIES_MAX_COUNT: usize = 256;
+const ENTRIES_MAX_BYTES: usize = 16 * 1024 * 1024;
+const JOURNAL_MAX_COUNT: usize = 256;
+const JOURNAL_MAX_BYTES: usize = 8 * 1024 * 1024;
+const SCRIPT_MAX_COUNT: usize = 256;
+/// script preview 单条 ≤ 32 KB，256 × 32 KB ≈ 8 MiB，留 2× 余量含 meta + overhead。
+const SCRIPT_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+/// 单条 entry 的固定开销估算——`LruCache` node + `PathBuf` key + 包装 struct 的
+/// 定长字段，补足只算 `String`/`Vec` capacity 漏掉的部分（粗粒度，与
+/// `SearchTextCache::CACHE_ENTRY_OVERHEAD` 同思路）。
+const CACHE_ENTRY_OVERHEAD: usize = 96;
+
 struct CacheEntry {
     sig: FileSignature,
     item: WorkflowItem,
@@ -49,9 +68,10 @@ struct ScriptCacheEntry {
     data: ScriptData,
 }
 
-#[derive(Default)]
 pub struct WorkflowManifestCache {
-    entries: HashMap<PathBuf, CacheEntry>,
+    entries: LruCache<PathBuf, CacheEntry>,
+    entries_bytes: usize,
+    entries_max_bytes: usize,
     /// 运行态 journal 派生的合成 agents 缓存（manifest 缺失降级路径）。
     /// journal append-only → 每次 append 签名变化 → 自动失效重读；
     /// 仅在 journal 未变化（如非 journal 触发的 refresh）时复用。
@@ -60,50 +80,223 @@ pub struct WorkflowManifestCache {
     /// append-only，每次 append 后 `size` 单调增、永不回退，故即使 mtime 秒级精度
     /// 撞同秒，size 变化仍让签名 miss 重读。若未来 journal 改为 rotate/rewrite
     /// （size 可能回退到旧值）则此不变量失效，须改用内容哈希或 offset 续读。
-    journal_entries: HashMap<PathBuf, JournalCacheEntry>,
+    journal_entries: LruCache<PathBuf, JournalCacheEntry>,
+    journal_bytes: usize,
+    journal_max_bytes: usize,
     /// 运行态 script meta 解析缓存（Tier 1）。script immutable → 一辈子只解析一次。
-    script_entries: HashMap<PathBuf, ScriptCacheEntry>,
+    script_entries: LruCache<PathBuf, ScriptCacheEntry>,
+    script_bytes: usize,
+    script_max_bytes: usize,
+}
+
+impl Default for WorkflowManifestCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 把 `value` 写入 LRU cache 并维护 byte 记账，超 count/byte 上限时从 LRU 端淘汰。
+///
+/// `push` 在 (a) 同 key 替换 或 (b) count 超限驱逐 时返回旧条目——两种情形都扣减
+/// 旧条目字节；随后 while 循环按 byte cap 继续淘汰，但保留至少 1 条（即便单条就
+/// 超过 `max_bytes`，cache 内仍留它一份）。与 `SearchTextCache::put` 同构。
+fn lru_put<V>(
+    cache: &mut LruCache<PathBuf, V>,
+    current_bytes: &mut usize,
+    max_bytes: usize,
+    path: PathBuf,
+    value: V,
+    new_bytes: usize,
+    estimate: impl Fn(&V) -> usize,
+) {
+    if let Some((_, old)) = cache.push(path, value) {
+        *current_bytes = current_bytes.saturating_sub(estimate(&old));
+    }
+    *current_bytes = current_bytes.saturating_add(new_bytes);
+
+    while *current_bytes > max_bytes && cache.len() > 1 {
+        let Some((_, evicted)) = cache.pop_lru() else {
+            break;
+        };
+        *current_bytes = current_bytes.saturating_sub(estimate(&evicted));
+    }
+}
+
+fn cap(n: usize) -> NonZeroUsize {
+    NonZeroUsize::new(n).unwrap_or(NonZeroUsize::MIN)
 }
 
 impl WorkflowManifestCache {
+    #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self::with_caps(
+            ENTRIES_MAX_COUNT,
+            ENTRIES_MAX_BYTES,
+            JOURNAL_MAX_COUNT,
+            JOURNAL_MAX_BYTES,
+            SCRIPT_MAX_COUNT,
+            SCRIPT_MAX_BYTES,
+        )
     }
 
-    fn get(&self, path: &Path, sig: &FileSignature) -> Option<WorkflowItem> {
-        self.entries
-            .get(path)
-            .filter(|e| &e.sig == sig)
-            .map(|e| e.item.clone())
+    #[must_use]
+    fn with_caps(
+        entries_count: usize,
+        entries_max_bytes: usize,
+        journal_count: usize,
+        journal_max_bytes: usize,
+        script_count: usize,
+        script_max_bytes: usize,
+    ) -> Self {
+        Self {
+            entries: LruCache::new(cap(entries_count)),
+            entries_bytes: 0,
+            entries_max_bytes,
+            journal_entries: LruCache::new(cap(journal_count)),
+            journal_bytes: 0,
+            journal_max_bytes,
+            script_entries: LruCache::new(cap(script_count)),
+            script_bytes: 0,
+            script_max_bytes,
+        }
+    }
+
+    fn get(&mut self, path: &Path, sig: &FileSignature) -> Option<WorkflowItem> {
+        if self.entries.peek(path).is_some_and(|e| &e.sig == sig) {
+            // 签名匹配：用 get bump LRU 后返回克隆。
+            return self.entries.get(path).map(|e| e.item.clone());
+        }
+        // 签名 mismatch（或 miss）：移除过期条目并扣减字节计数。
+        if let Some(stale) = self.entries.pop(path) {
+            self.entries_bytes = self
+                .entries_bytes
+                .saturating_sub(estimate_cache_entry(&stale));
+        }
+        None
     }
 
     fn insert(&mut self, path: PathBuf, sig: FileSignature, item: WorkflowItem) {
-        self.entries.insert(path, CacheEntry { sig, item });
+        let entry = CacheEntry { sig, item };
+        let new_bytes = estimate_cache_entry(&entry);
+        lru_put(
+            &mut self.entries,
+            &mut self.entries_bytes,
+            self.entries_max_bytes,
+            path,
+            entry,
+            new_bytes,
+            estimate_cache_entry,
+        );
     }
 
-    fn get_journal(&self, path: &Path, sig: &FileSignature) -> Option<Vec<WorkflowAgent>> {
-        self.journal_entries
-            .get(path)
-            .filter(|e| &e.sig == sig)
-            .map(|e| e.agents.clone())
+    fn get_journal(&mut self, path: &Path, sig: &FileSignature) -> Option<Vec<WorkflowAgent>> {
+        if self
+            .journal_entries
+            .peek(path)
+            .is_some_and(|e| &e.sig == sig)
+        {
+            return self.journal_entries.get(path).map(|e| e.agents.clone());
+        }
+        if let Some(stale) = self.journal_entries.pop(path) {
+            self.journal_bytes = self
+                .journal_bytes
+                .saturating_sub(estimate_journal_entry(&stale));
+        }
+        None
     }
 
     fn insert_journal(&mut self, path: PathBuf, sig: FileSignature, agents: Vec<WorkflowAgent>) {
-        self.journal_entries
-            .insert(path, JournalCacheEntry { sig, agents });
+        let entry = JournalCacheEntry { sig, agents };
+        let new_bytes = estimate_journal_entry(&entry);
+        lru_put(
+            &mut self.journal_entries,
+            &mut self.journal_bytes,
+            self.journal_max_bytes,
+            path,
+            entry,
+            new_bytes,
+            estimate_journal_entry,
+        );
     }
 
-    fn get_script(&self, path: &Path, sig: &FileSignature) -> Option<ScriptData> {
-        self.script_entries
-            .get(path)
-            .filter(|e| &e.sig == sig)
-            .map(|e| e.data.clone())
+    fn get_script(&mut self, path: &Path, sig: &FileSignature) -> Option<ScriptData> {
+        if self
+            .script_entries
+            .peek(path)
+            .is_some_and(|e| &e.sig == sig)
+        {
+            return self.script_entries.get(path).map(|e| e.data.clone());
+        }
+        if let Some(stale) = self.script_entries.pop(path) {
+            self.script_bytes = self
+                .script_bytes
+                .saturating_sub(estimate_script_entry(&stale));
+        }
+        None
     }
 
     fn insert_script(&mut self, path: PathBuf, sig: FileSignature, data: ScriptData) {
-        self.script_entries
-            .insert(path, ScriptCacheEntry { sig, data });
+        let entry = ScriptCacheEntry { sig, data };
+        let new_bytes = estimate_script_entry(&entry);
+        lru_put(
+            &mut self.script_entries,
+            &mut self.script_bytes,
+            self.script_max_bytes,
+            path,
+            entry,
+            new_bytes,
+            estimate_script_entry,
+        );
     }
+}
+
+fn opt_str_cap(s: Option<&String>) -> usize {
+    s.map_or(0, String::capacity)
+}
+
+fn estimate_phases_bytes(phases: &[WorkflowPhase]) -> usize {
+    phases.iter().fold(0, |acc, p| {
+        acc.saturating_add(std::mem::size_of::<WorkflowPhase>())
+            .saturating_add(p.title.capacity())
+    })
+}
+
+fn estimate_agent_bytes(a: &WorkflowAgent) -> usize {
+    std::mem::size_of::<WorkflowAgent>()
+        .saturating_add(a.label.capacity())
+        .saturating_add(opt_str_cap(a.result_preview.as_ref()))
+        .saturating_add(opt_str_cap(a.queued_at.as_ref()))
+        .saturating_add(opt_str_cap(a.session_id.as_ref()))
+}
+
+fn estimate_cache_entry(e: &CacheEntry) -> usize {
+    let item = &e.item;
+    let agents = item
+        .agents
+        .iter()
+        .fold(0usize, |acc, a| acc.saturating_add(estimate_agent_bytes(a)));
+    CACHE_ENTRY_OVERHEAD
+        .saturating_add(item.run_id.capacity())
+        .saturating_add(opt_str_cap(item.name.as_ref()))
+        .saturating_add(opt_str_cap(item.error.as_ref()))
+        .saturating_add(opt_str_cap(item.script_preview.as_ref()))
+        .saturating_add(estimate_phases_bytes(&item.phases))
+        .saturating_add(agents)
+}
+
+fn estimate_journal_entry(e: &JournalCacheEntry) -> usize {
+    e.agents.iter().fold(CACHE_ENTRY_OVERHEAD, |acc, a| {
+        acc.saturating_add(estimate_agent_bytes(a))
+    })
+}
+
+fn estimate_script_entry(e: &ScriptCacheEntry) -> usize {
+    let meta_bytes = e.data.meta.as_ref().map_or(0, |m| {
+        opt_str_cap(m.name.as_ref()).saturating_add(estimate_phases_bytes(&m.phases))
+    });
+    CACHE_ENTRY_OVERHEAD
+        .saturating_add(meta_bytes)
+        .saturating_add(opt_str_cap(e.data.preview.as_ref()))
 }
 
 #[derive(serde::Deserialize)]
@@ -462,7 +655,7 @@ async fn resolve_single_inner(
     let sig = FileSignature::from_fs_metadata(&fs_meta);
 
     {
-        let Ok(guard) = cache.lock() else {
+        let Ok(mut guard) = cache.lock() else {
             return WorkflowItem::pending(run_id.to_owned());
         };
         if let Some(cached) = guard.get(manifest_path, &sig) {
@@ -622,7 +815,7 @@ async fn read_script_data(
     };
     let sig = FileSignature::from_fs_metadata(&fs_meta);
 
-    if let Ok(guard) = cache.lock() {
+    if let Ok(mut guard) = cache.lock() {
         if let Some(cached) = guard.get_script(script_path, &sig) {
             return cached;
         }
@@ -682,7 +875,7 @@ async fn read_journal_agents(
     };
     let sig = FileSignature::from_fs_metadata(&fs_meta);
 
-    if let Ok(guard) = cache.lock() {
+    if let Ok(mut guard) = cache.lock() {
         if let Some(cached) = guard.get_journal(journal_path, &sig) {
             return cached;
         }
@@ -891,6 +1084,170 @@ mod tests {
 
         assert_eq!(cache.get(&path, &sig1), Some(item));
         assert_eq!(cache.get(&path, &sig2), None);
+    }
+
+    // ---- WorkflowManifestCache 双闸门 LRU 淘汰（issue #565）----
+
+    fn sig(size: u64) -> FileSignature {
+        use crate::cache_signature::FileIdentity;
+        use std::time::SystemTime;
+        FileSignature {
+            mtime: SystemTime::UNIX_EPOCH,
+            size,
+            identity: FileIdentity::None,
+        }
+    }
+
+    fn item_with_preview(run_id: &str, preview_len: usize) -> WorkflowItem {
+        let mut it = WorkflowItem::pending(run_id.to_owned());
+        it.script_preview = Some("x".repeat(preview_len));
+        it
+    }
+
+    fn script_data_preview(preview_len: usize) -> ScriptData {
+        ScriptData {
+            meta: None,
+            preview: Some("x".repeat(preview_len)),
+        }
+    }
+
+    #[test]
+    fn cache_count_cap_evicts_lru_and_bump_protects() {
+        // entries count cap = 2，byte cap 放大不触发；插入第 3 条挤掉最久未访问的。
+        let mut cache =
+            WorkflowManifestCache::with_caps(2, usize::MAX, 2, usize::MAX, 2, usize::MAX);
+        let p1 = PathBuf::from("/1.json");
+        let p2 = PathBuf::from("/2.json");
+        let p3 = PathBuf::from("/3.json");
+
+        cache.insert(p1.clone(), sig(1), WorkflowItem::pending("a".into()));
+        cache.insert(p2.clone(), sig(2), WorkflowItem::pending("b".into()));
+        // 访问 p1 → bump 到 MRU，使 p2 成为 LRU 端
+        assert!(cache.get(&p1, &sig(1)).is_some());
+        cache.insert(p3.clone(), sig(3), WorkflowItem::pending("c".into()));
+
+        // p2 被淘汰（LRU），p1（被 bump 保护）与 p3 留存
+        assert!(cache.get(&p2, &sig(2)).is_none(), "LRU 端 p2 应被淘汰");
+        assert!(cache.get(&p1, &sig(1)).is_some(), "bump 保护的 p1 应留存");
+        assert!(cache.get(&p3, &sig(3)).is_some(), "最新 p3 应留存");
+        assert_eq!(cache.entries.len(), 2, "count 始终 ≤ cap");
+    }
+
+    #[test]
+    fn cache_byte_cap_evicts_until_within_limit() {
+        // byte cap = 1 KiB，count cap 放大不触发；多条 ~700B preview 累积超 cap。
+        let mut cache = WorkflowManifestCache::with_caps(100, 1024, 100, 1024, 100, 1024);
+        let p1 = PathBuf::from("/b1.json");
+        let p2 = PathBuf::from("/b2.json");
+        let p3 = PathBuf::from("/b3.json");
+
+        cache.insert(p1.clone(), sig(1), item_with_preview("a", 700));
+        assert!(cache.entries_bytes > 700, "首条字节含 preview + overhead");
+        cache.insert(p2.clone(), sig(2), item_with_preview("b", 700));
+        cache.insert(p3.clone(), sig(3), item_with_preview("c", 700));
+
+        assert!(
+            cache.entries_bytes <= 1024,
+            "current_bytes 应 ≤ max_bytes，实际 {}",
+            cache.entries_bytes
+        );
+        assert!(cache.get(&p3, &sig(3)).is_some(), "最新插入应保留");
+        assert!(cache.get(&p1, &sig(1)).is_none(), "最旧应被 byte cap 挤掉");
+    }
+
+    #[test]
+    fn cache_byte_cap_keeps_at_least_one_when_single_entry_exceeds() {
+        // 单条估算就超 byte cap：current_bytes 可合法 > max_bytes，但该条必须保留。
+        let mut cache = WorkflowManifestCache::with_caps(100, 100, 100, 100, 100, 100);
+        let p1 = PathBuf::from("/huge.json");
+        cache.insert(p1.clone(), sig(1), item_with_preview("a", 700));
+
+        assert!(cache.get(&p1, &sig(1)).is_some(), "单条超 cap 仍留一份");
+        assert!(
+            cache.entries_bytes > 100,
+            "单条超 cap 时 current_bytes 合法 > max_bytes"
+        );
+    }
+
+    #[test]
+    fn signature_mismatch_pop_decrements_bytes_to_zero() {
+        let mut cache =
+            WorkflowManifestCache::with_caps(100, usize::MAX, 100, usize::MAX, 100, usize::MAX);
+        let p1 = PathBuf::from("/x.json");
+        cache.insert(p1.clone(), sig(1), item_with_preview("a", 500));
+        assert!(cache.entries_bytes > 500);
+
+        // 签名 mismatch → pop 过期条目 + 扣减字节
+        assert!(cache.get(&p1, &sig(999)).is_none());
+        assert_eq!(cache.entries_bytes, 0, "mismatch pop 后字节计数归零");
+        assert_eq!(cache.entries.len(), 0);
+    }
+
+    #[test]
+    fn same_key_replace_does_not_double_count_bytes() {
+        let mut cache =
+            WorkflowManifestCache::with_caps(100, usize::MAX, 100, usize::MAX, 100, usize::MAX);
+        let p1 = PathBuf::from("/x.json");
+        cache.insert(p1.clone(), sig(1), item_with_preview("a", 100));
+        let after_first = cache.entries_bytes;
+        cache.insert(p1.clone(), sig(2), item_with_preview("a", 100));
+
+        let diff = cache.entries_bytes.abs_diff(after_first);
+        assert!(
+            diff < 50,
+            "同 key 替换字节差异 {diff} 应 < 50（常量级，不叠加）"
+        );
+        assert_eq!(cache.entries.len(), 1, "同 key 替换不增条目");
+    }
+
+    #[test]
+    fn three_caches_have_independent_budgets() {
+        // script cache byte cap 极小会频繁淘汰；entries / journal cache 不受影响。
+        let mut cache =
+            WorkflowManifestCache::with_caps(100, usize::MAX, 100, usize::MAX, 100, 1024);
+        let ep = PathBuf::from("/e.json");
+        let jp = PathBuf::from("/j.jsonl");
+        cache.insert(ep.clone(), sig(1), item_with_preview("e", 500));
+        cache.insert_journal(
+            jp.clone(),
+            sig(1),
+            vec![WorkflowAgent {
+                label: "L".repeat(300),
+                phase_index: 0,
+                state: WorkflowAgentState::Running,
+                tokens: 0,
+                tool_calls: 0,
+                duration_ms: 0,
+                result_preview: None,
+                queued_at: None,
+                failed: false,
+                session_id: None,
+            }],
+        );
+        let entries_bytes_before = cache.entries_bytes;
+        let journal_bytes_before = cache.journal_bytes;
+
+        // 灌 script cache 触发其 byte cap 淘汰
+        for i in 0..5u64 {
+            cache.insert_script(
+                PathBuf::from(format!("/s{i}.js")),
+                sig(i),
+                script_data_preview(700),
+            );
+        }
+
+        assert!(cache.script_bytes <= 1024, "script cache 自身有界");
+        // 另两个 cache 完全不受 script 淘汰影响
+        assert_eq!(
+            cache.entries_bytes, entries_bytes_before,
+            "entries 不受挤占"
+        );
+        assert_eq!(
+            cache.journal_bytes, journal_bytes_before,
+            "journal 不受挤占"
+        );
+        assert!(cache.get(&ep, &sig(1)).is_some());
+        assert!(cache.get_journal(&jp, &sig(1)).is_some());
     }
 
     #[test]
