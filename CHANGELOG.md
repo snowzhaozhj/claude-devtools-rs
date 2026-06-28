@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Performance
+- **Workflow**: the in-memory workflow caches (parsed manifests, running-state agents, and script previews) now enforce both an entry-count limit and a byte ceiling with LRU eviction, instead of growing unbounded for the life of the process. Long-running sessions that open many workflows no longer accumulate cache memory without bound (issue #565).
+
 ## [0.7.2] — 2026-06-27
 
 ### Added
