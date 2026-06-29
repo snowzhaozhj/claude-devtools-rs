@@ -16,7 +16,7 @@ doctest = false
 [dependencies]
 cdt-fs = { workspace = true }
 cdt-core = { workspace = true }
-cdt-discover = { path = "../cdt-discover" }
+cdt-discover = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

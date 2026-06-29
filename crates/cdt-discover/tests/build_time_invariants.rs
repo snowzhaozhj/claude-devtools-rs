@@ -137,3 +137,30 @@ fn list_group_sessions_dedupes_sessions_across_worktrees() {
         path.display()
     );
 }
+
+/// issue #546：`src-tauri` 桌面后端只需 self-update 工具（已提取到 `cdt-install`），
+/// **不得**把 `cdt-cli` 拉进依赖树——否则透传整棵 CLI-only 依赖树（`cdt-analyze` /
+/// `cdt-query` / `rmcp` / `clap` …）进桌面 bundle，徒增编译时间与体积却无任何运行时
+/// 收益。共享的下载/解压/校验逻辑走 `cdt-install`。
+///
+/// 断言走 `src-tauri/Cargo.lock` 而非 manifest 文本：lockfile 是 cargo 解析后的
+/// **传递依赖事实**，免疫所有 manifest 书写形式（inline-table / dotted-key
+/// `cdt-cli.path` / `[dependencies.cdt-cli]` table-header / `package = "cdt-cli"`
+/// rename-alias / target-specific 段——这些都能绕过朴素 manifest grep），并能额外
+/// 拦住经第三方 crate **间接**重新引入 cdt-cli 的情形，正是 #546 真正关心的不变量。
+/// （PR #544 曾因给 cdt-cli 加 cdt-analyze 依赖而无意放大该透传。）
+///
+/// 注：依赖 `src-tauri/Cargo.lock` 已提交且与 manifest 同步——仓库 CI 的 lock 一致性
+/// 校验保证这点；若 manifest 加了依赖但未更新 lock，本测试可能滞后一拍。
+#[test]
+fn src_tauri_does_not_depend_on_cdt_cli() {
+    let path = workspace_root().join("src-tauri").join("Cargo.lock");
+    let body = fs::read_to_string(&path).expect("read src-tauri/Cargo.lock");
+    let pulls_in_cli = body.lines().any(|l| l.trim() == "name = \"cdt-cli\"");
+    assert!(
+        !pulls_in_cli,
+        "src-tauri/Cargo.lock 含 cdt-cli——issue #546 要求桌面后端只依赖 cdt-install，\
+         不得把整棵 CLI-only 依赖树（cdt-analyze / cdt-query / rmcp / clap …）透传进\
+         桌面 bundle。共享 self-update 逻辑请走 cdt-install。"
+    );
+}

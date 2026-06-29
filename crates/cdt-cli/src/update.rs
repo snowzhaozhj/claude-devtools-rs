@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use cdt_cli::install::{
+use cdt_install::{
     DownloadErrorKind, REPO, build_client, classify_download_error, download_and_extract,
     platform_asset_name, validate_binary_arch, validate_binary_magic,
 };

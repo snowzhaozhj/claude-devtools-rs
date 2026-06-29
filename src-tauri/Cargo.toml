@@ -38,7 +38,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Data layer crates
 cdt-api = { path = "../crates/cdt-api" }
-cdt-cli = { path = "../crates/cdt-cli" }
+cdt-install = { path = "../crates/cdt-install" }
 cdt-discover = { path = "../crates/cdt-discover" }
 cdt-config = { path = "../crates/cdt-config" }
 cdt-ssh = { path = "../crates/cdt-ssh" }

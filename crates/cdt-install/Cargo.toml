@@ -1,0 +1,22 @@
+[package]
+name = "cdt-install"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared self-update utilities: platform detection, download, archive extraction, binary validation. Consumed by both the `cdt` self-update command and the Tauri desktop install-CLI feature."
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }

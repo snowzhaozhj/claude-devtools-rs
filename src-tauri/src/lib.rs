@@ -820,7 +820,7 @@ const STARTUP_UPDATE_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::f
 /// 原始错误（含完整 URL / reqwest 内部链路）只写入 tracing，**不**返回给前端——
 /// 截图反馈过完整 URL 直接 leak 到 banner 既不友好也暴露发行渠道细节。
 fn friendly_cli_install_error(raw: &str) -> String {
-    use cdt_cli::install::{DownloadErrorKind, classify_download_error};
+    use cdt_install::{DownloadErrorKind, classify_download_error};
     match classify_download_error(raw) {
         DownloadErrorKind::Timeout => "下载超时，请检查网络后重试".to_string(),
         DownloadErrorKind::Dns => "无法解析下载服务器域名，请检查网络".to_string(),
@@ -834,7 +834,7 @@ fn friendly_cli_install_error(raw: &str) -> String {
 }
 
 fn friendly_update_error(raw: &str) -> &'static str {
-    use cdt_cli::install::{DownloadErrorKind, classify_download_error};
+    use cdt_install::{DownloadErrorKind, classify_download_error};
     match classify_download_error(raw) {
         DownloadErrorKind::Timeout => "网络超时，请稍后重试",
         DownloadErrorKind::Dns => "无法解析更新服务器域名，请检查网络",
@@ -998,15 +998,15 @@ async fn install_cli(
     let _ = std::fs::remove_file(&probe);
 
     // Download
-    let asset_name = cdt_cli::install::platform_asset_name().map_err(|e| e.to_string())?;
+    let asset_name = cdt_install::platform_asset_name().map_err(|e| e.to_string())?;
     let url = format!(
         "https://github.com/{}/releases/download/v{version}/{asset_name}",
-        cdt_cli::install::REPO
+        cdt_install::REPO
     );
-    let binary_bytes = cdt_cli::install::download_and_extract_with_timeout(
+    let binary_bytes = cdt_install::download_and_extract_with_timeout(
         &url,
         &asset_name,
-        cdt_cli::install::DEFAULT_DOWNLOAD_TIMEOUT,
+        cdt_install::DEFAULT_DOWNLOAD_TIMEOUT,
     )
     .await
     .map_err(|e| {
@@ -1015,11 +1015,11 @@ async fn install_cli(
     })?;
 
     // Validate binary: magic bytes + CPU architecture match
-    cdt_cli::install::validate_binary_magic(&binary_bytes).map_err(|e| {
+    cdt_install::validate_binary_magic(&binary_bytes).map_err(|e| {
         tracing::warn!(target: "cdt_tauri::cli", error = %e, "binary magic validation failed");
         format!("下载的文件不是有效的可执行文件: {e}")
     })?;
-    cdt_cli::install::validate_binary_arch(&binary_bytes).map_err(|e| {
+    cdt_install::validate_binary_arch(&binary_bytes).map_err(|e| {
         tracing::warn!(target: "cdt_tauri::cli", error = %e, "binary arch validation failed");
         format!("下载的文件与当前系统架构不匹配: {e}")
     })?;
