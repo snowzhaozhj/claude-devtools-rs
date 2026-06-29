@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782671772584,
+  "lastUpdate": 1782700381960,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -25706,6 +25706,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12010,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "064da4c1beadeecd4c4e76e44951bb0e46a8934a",
+          "message": "chore(opsx): archive workflow-manifest-cache-byte-cap (#574)\n\nPR #567（cache byte-cap 实现）已 merge 但未含 archive commit，本 PR 补 archive：\n把 change mv 到 archive/ + sync ipc-data-api 主 spec 的「WorkflowManifestCache\n内存双闸门 LRU 淘汰」Requirement。纯 openspec 改动，无代码变更。\n\nRefs #565\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-29T10:29:04+08:00",
+          "tree_id": "c2f38e425f513578317b5d5c72616f5be267b5ea",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/064da4c1beadeecd4c4e76e44951bb0e46a8934a"
+        },
+        "date": 1782700381147,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 116.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1142,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4790,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 0.831,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.435,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 41.74,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.65,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 297.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1197,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3194,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3028,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 37460,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.287,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 63.42,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 639.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6411,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 191.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1933,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 55.28,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 559.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5599,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 118.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1193,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.812,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 67.84,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9591,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1045,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 10600,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 990.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 46.98,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 503.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 99.25,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 995.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 10040,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 213.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1394,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13350,
             "unit": "µs"
           }
         ]
