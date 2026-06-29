@@ -62,6 +62,13 @@ pub fn export_session(
 // Markdown
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// CLI markdown 导出单次贯穿的渲染上下文：导出选项 + workflow 关联 + runId 去重。
+struct ExportRenderCtx<'a> {
+    options: &'a ExportOptions,
+    workflow_map: std::collections::HashMap<&'a str, &'a cdt_core::WorkflowItem>,
+    seen_workflows: std::collections::HashSet<String>,
+}
+
 fn export_as_markdown(
     detail: &SessionDetail,
     summary: &SessionSummaryOutput,
@@ -76,10 +83,20 @@ fn export_as_markdown(
     parts.push(build_metadata_table(detail, summary, cost));
     parts.push("---\n".to_string());
 
+    let mut ctx = ExportRenderCtx {
+        options,
+        workflow_map: detail
+            .workflow_items
+            .iter()
+            .map(|w| (w.run_id.as_str(), w))
+            .collect(),
+        seen_workflows: std::collections::HashSet::new(),
+    };
+
     let mut turn = 0;
     for chunk in &detail.chunks {
         turn += 1;
-        parts.push(render_chunk_md(chunk, turn, options));
+        parts.push(render_chunk_md(chunk, turn, &mut ctx));
     }
 
     parts.join("\n")
@@ -117,13 +134,18 @@ fn build_metadata_table(
     table
 }
 
-fn render_chunk_md(chunk: &Chunk, index: usize, options: &ExportOptions) -> String {
+fn render_chunk_md(chunk: &Chunk, index: usize, ctx: &mut ExportRenderCtx) -> String {
     match chunk {
         Chunk::User(u) => {
             let content = extract_user_text(&u.content);
             format!("## Turn {index} — User\n\n{content}\n\n---\n")
         }
-        Chunk::Ai(ai) => render_ai_chunk_md(ai, index, options),
+        Chunk::Ai(ai) => {
+            let mut md = format!("## Turn {index} — Assistant\n\n");
+            md.push_str(&render_ai_body(ai, ctx).join("\n"));
+            md.push_str("\n---\n");
+            md
+        }
         Chunk::System(s) => {
             format!("## Turn {index} — System\n\n*{}*\n\n---\n", s.content_text)
         }
@@ -133,11 +155,17 @@ fn render_chunk_md(chunk: &Chunk, index: usize, options: &ExportOptions) -> Stri
     }
 }
 
-fn render_ai_chunk_md(ai: &AIChunk, index: usize, options: &ExportOptions) -> String {
+/// 渲染一个 `AIChunk` 的正文（不含 turn 标题）——供顶层 turn 与 subagent 内部对话
+/// 递归复用。slash 排最前，工具/teammate-spawn/workflow 按 `semantic_steps` 时序，
+/// teammate message 追加其后，subagent 卡片 + 内部对话最后。
+fn render_ai_body(ai: &AIChunk, ctx: &mut ExportRenderCtx) -> Vec<String> {
     let mut parts = Vec::new();
-    parts.push(format!("## Turn {index} — Assistant\n"));
 
-    // Build tool_use_id → ToolExecution map for inline rendering
+    // slash 命令排最前（对齐前端 buildDisplayItems）
+    for slash in &ai.slash_commands {
+        parts.push(render_slash_md(slash));
+    }
+
     let tool_map: std::collections::HashMap<&str, &ToolExecution> = ai
         .tool_executions
         .iter()
@@ -145,11 +173,10 @@ fn render_ai_chunk_md(ai: &AIChunk, index: usize, options: &ExportOptions) -> St
         .collect();
     let mut rendered_tools: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
-    // Render semantic_steps in order, inlining tool executions at their position
     for step in &ai.semantic_steps {
         match step {
             SemanticStep::Thinking { text, .. } => {
-                if options.include_thinking {
+                if ctx.options.include_thinking {
                     parts.push(format!("> [thinking] {text}\n"));
                 }
             }
@@ -160,7 +187,7 @@ fn render_ai_chunk_md(ai: &AIChunk, index: usize, options: &ExportOptions) -> St
             }
             SemanticStep::ToolExecution { tool_use_id, .. } => {
                 if let Some(te) = tool_map.get(tool_use_id.as_str()) {
-                    parts.push(render_tool_md(te, options));
+                    parts.push(render_tool_or_workflow_md(te, ctx));
                     rendered_tools.insert(tool_use_id.as_str());
                 }
             }
@@ -176,24 +203,99 @@ fn render_ai_chunk_md(ai: &AIChunk, index: usize, options: &ExportOptions) -> St
         }
     }
 
-    // Render any tool executions not referenced in semantic_steps
     for te in &ai.tool_executions {
         if !rendered_tools.contains(te.tool_use_id.as_str()) {
-            parts.push(render_tool_md(te, options));
+            parts.push(render_tool_or_workflow_md(te, ctx));
         }
     }
 
-    if options.include_subagents {
+    // teammate message（CLI 简化：追加在 steps 后，不严格时序——与既有 subagent 卡片
+    // 堆末尾的渲染策略一致）
+    for tm in &ai.teammate_messages {
+        parts.push(render_teammate_md(tm));
+    }
+
+    if ctx.options.include_subagents {
         for sub in &ai.subagents {
-            parts.push(render_subagent_md(sub));
+            parts.push(render_subagent_md(sub, ctx));
         }
     }
 
-    parts.push("---\n".to_string());
-    parts.join("\n")
+    parts
 }
 
-fn render_subagent_md(sub: &cdt_core::Process) -> String {
+/// tool 渲染分流：teammate-spawn / workflow 命中时替代普通 tool，否则普通 tool。
+fn render_tool_or_workflow_md(te: &ToolExecution, ctx: &mut ExportRenderCtx) -> String {
+    if let Some(ref spawn) = te.teammate_spawn {
+        return format!("*[teammate spawned]* {}\n", spawn.name);
+    }
+    if let Some(ref run_id) = te.workflow_run_id {
+        if ctx.workflow_map.contains_key(run_id.as_str()) {
+            // 同一 runId 单次导出只渲一次，后续命中跳过（codex F4）。
+            if ctx.seen_workflows.contains(run_id) {
+                return String::new();
+            }
+            ctx.seen_workflows.insert(run_id.clone());
+            let wf = *ctx
+                .workflow_map
+                .get(run_id.as_str())
+                .expect("checked above");
+            return render_workflow_md(wf);
+        }
+    }
+    render_tool_md(te, ctx.options)
+}
+
+fn render_workflow_md(wf: &cdt_core::WorkflowItem) -> String {
+    use std::fmt::Write;
+    let name = wf.name.as_deref().unwrap_or(&wf.run_id);
+    let mut md = format!("### Workflow: {name} — {:?}\n\n", wf.status);
+    let mut meta = vec![
+        format!("{} phase{}", wf.phases.len(), plural(wf.phases.len())),
+        format!("{} agent{}", wf.agents.len(), plural(wf.agents.len())),
+    ];
+    if wf.total_tokens > 0 {
+        meta.push(format!("{} tokens", wf.total_tokens));
+    }
+    if wf.duration_ms > 0 {
+        meta.push(format!("{}s", wf.duration_ms / 1000));
+    }
+    let _ = writeln!(md, "*{}*\n", meta.join(" · "));
+    for a in &wf.agents {
+        let mut am = vec![format!("{:?}", a.state)];
+        if a.tokens > 0 {
+            am.push(format!("{} tk", a.tokens));
+        }
+        if a.duration_ms > 0 {
+            am.push(format!("{}s", a.duration_ms / 1000));
+        }
+        let _ = writeln!(md, "- {} ({})", a.label, am.join(", "));
+    }
+    md
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+fn render_slash_md(slash: &cdt_core::SlashCommand) -> String {
+    use std::fmt::Write;
+    let mut md = format!("### Slash: /{}\n", slash.name);
+    if let Some(arg) = slash.args.as_deref().or(slash.message.as_deref()) {
+        let _ = writeln!(md, "\n`{arg}`");
+    }
+    if let Some(ref instr) = slash.instructions {
+        let quoted = instr.replace('\n', "\n> ");
+        let _ = writeln!(md, "\n> {quoted}");
+    }
+    md
+}
+
+fn render_teammate_md(tm: &cdt_core::TeammateMessage) -> String {
+    format!("### Teammate: {}\n\n{}\n", tm.teammate_id, tm.body)
+}
+
+fn render_subagent_md(sub: &cdt_core::Process, ctx: &mut ExportRenderCtx) -> String {
     let desc = sub
         .description
         .as_deref()
@@ -206,7 +308,34 @@ fn render_subagent_md(sub: &cdt_core::Process) -> String {
     let duration = sub
         .duration_ms
         .map_or_else(String::new, |ms| format!(" — {}s", ms / 1000));
-    format!("### Subagent: {desc}{agent_type}{duration}\n\n")
+    let mut md = format!("### Subagent: {desc}{agent_type}{duration}\n\n");
+
+    // 内部对话递归渲染（messages 由后端 cap 封顶填充）。递归层用同一 ctx.options
+    // 过滤 thinking/详略，使导出选项在内部对话层一致生效。
+    if !sub.messages.is_empty() {
+        for chunk in &sub.messages {
+            match chunk {
+                Chunk::Ai(ai) => {
+                    for part in render_ai_body(ai, ctx) {
+                        md.push_str(&part);
+                        md.push('\n');
+                    }
+                }
+                Chunk::User(u) => {
+                    use std::fmt::Write;
+                    let t = extract_user_text(&u.content);
+                    if !t.is_empty() {
+                        let _ = writeln!(md, "*[user]* {t}");
+                    }
+                }
+                Chunk::System(_) | Chunk::Compact(_) => {}
+            }
+        }
+    } else if sub.messages_omitted {
+        md.push_str("*[内部对话已省略：超出导出上限]*\n");
+    }
+
+    md
 }
 
 fn render_tool_md(te: &ToolExecution, options: &ExportOptions) -> String {
@@ -555,6 +684,244 @@ mod tests {
             title: Some("Test Session".into()),
             workflow_items: vec![],
         }
+    }
+
+    fn make_ai() -> AIChunk {
+        AIChunk {
+            chunk_id: "a1".into(),
+            timestamp: Utc::now(),
+            duration_ms: None,
+            responses: vec![],
+            metrics: default_metrics(),
+            semantic_steps: vec![],
+            tool_executions: vec![],
+            subagents: vec![],
+            slash_commands: vec![],
+            teammate_messages: vec![],
+        }
+    }
+
+    fn make_process(messages: Vec<Chunk>, messages_omitted: bool) -> cdt_core::Process {
+        cdt_core::Process {
+            session_id: "sub-1".into(),
+            root_task_description: Some("子任务".into()),
+            spawn_ts: Utc::now(),
+            end_ts: None,
+            metrics: default_metrics(),
+            team: None,
+            subagent_type: None,
+            messages,
+            main_session_impact: None,
+            is_ongoing: false,
+            duration_ms: None,
+            parent_task_id: None,
+            description: None,
+            header_model: None,
+            last_isolated_tokens: 0,
+            is_shutdown_only: false,
+            messages_omitted,
+            messages_total_count: 0,
+        }
+    }
+
+    fn tool_exec_spawn() -> ToolExecution {
+        let ts = Utc::now();
+        ToolExecution {
+            tool_use_id: "tu-spawn".into(),
+            tool_name: "Agent".into(),
+            input: serde_json::json!({}),
+            output: ToolOutput::Missing,
+            is_error: false,
+            start_ts: ts,
+            end_ts: None,
+            source_assistant_uuid: "resp-1".into(),
+            result_agent_id: None,
+            error_message: None,
+            output_omitted: false,
+            output_bytes: None,
+            teammate_spawn: Some(cdt_core::TeammateSpawnInfo {
+                name: "member-2".into(),
+                color: None,
+            }),
+            workflow_run_id: None,
+            workflow_script_path: None,
+        }
+    }
+
+    fn tool_exec_workflow(run_id: &str) -> ToolExecution {
+        let ts = Utc::now();
+        ToolExecution {
+            tool_use_id: format!("tu-{run_id}"),
+            tool_name: "Workflow".into(),
+            input: serde_json::json!({}),
+            output: ToolOutput::Missing,
+            is_error: false,
+            start_ts: ts,
+            end_ts: None,
+            source_assistant_uuid: "resp-1".into(),
+            result_agent_id: None,
+            error_message: None,
+            output_omitted: false,
+            output_bytes: None,
+            teammate_spawn: None,
+            workflow_run_id: Some(run_id.into()),
+            workflow_script_path: None,
+        }
+    }
+
+    #[test]
+    fn markdown_renders_slash_command() {
+        let mut ai = make_ai();
+        ai.slash_commands = vec![cdt_core::SlashCommand {
+            name: "review".into(),
+            message: None,
+            args: Some("PR 123".into()),
+            message_uuid: "su-1".into(),
+            timestamp: Utc::now(),
+            instructions: Some("审查指令文本".into()),
+        }];
+        let detail = make_detail(vec![Chunk::Ai(ai)]);
+        let md = export_session(
+            &detail,
+            &make_summary(),
+            &make_cost(),
+            &ExportOptions::default(),
+        )
+        .unwrap();
+        assert!(md.contains("### Slash: /review"), "{md}");
+        assert!(md.contains("PR 123"));
+        assert!(md.contains("审查指令文本"));
+    }
+
+    #[test]
+    fn markdown_renders_teammate_message() {
+        let mut ai = make_ai();
+        ai.teammate_messages = vec![cdt_core::TeammateMessage {
+            uuid: "tm-1".into(),
+            teammate_id: "member-1".into(),
+            color: None,
+            summary: None,
+            body: "队友消息内容".into(),
+            timestamp: Utc::now(),
+            reply_to_tool_use_id: None,
+            token_count: None,
+            is_noise: false,
+            is_resend: false,
+        }];
+        let detail = make_detail(vec![Chunk::Ai(ai)]);
+        let md = export_session(
+            &detail,
+            &make_summary(),
+            &make_cost(),
+            &ExportOptions::default(),
+        )
+        .unwrap();
+        assert!(md.contains("### Teammate: member-1"), "{md}");
+        assert!(md.contains("队友消息内容"));
+    }
+
+    #[test]
+    fn markdown_renders_teammate_spawn_not_as_tool() {
+        let ts = Utc::now();
+        let mut ai = make_ai();
+        ai.semantic_steps = vec![SemanticStep::ToolExecution {
+            tool_use_id: "tu-spawn".into(),
+            tool_name: "Agent".into(),
+            timestamp: ts,
+        }];
+        ai.tool_executions = vec![tool_exec_spawn()];
+        let detail = make_detail(vec![Chunk::Ai(ai)]);
+        let md = export_session(
+            &detail,
+            &make_summary(),
+            &make_cost(),
+            &ExportOptions::default(),
+        )
+        .unwrap();
+        assert!(md.contains("teammate spawned"), "{md}");
+        assert!(md.contains("member-2"));
+        assert!(!md.contains("### Tool: Agent"), "spawn 不应渲染为普通工具");
+    }
+
+    #[test]
+    fn markdown_renders_workflow_once_deduped() {
+        let ts = Utc::now();
+        let mut ai = make_ai();
+        ai.semantic_steps = vec![
+            SemanticStep::ToolExecution {
+                tool_use_id: "tu-wf_1".into(),
+                tool_name: "Workflow".into(),
+                timestamp: ts,
+            },
+            SemanticStep::ToolExecution {
+                tool_use_id: "tu-wf_1b".into(),
+                tool_name: "Workflow".into(),
+                timestamp: ts,
+            },
+        ];
+        let mut second = tool_exec_workflow("wf_1");
+        second.tool_use_id = "tu-wf_1b".into();
+        ai.tool_executions = vec![tool_exec_workflow("wf_1"), second];
+        let mut detail = make_detail(vec![Chunk::Ai(ai)]);
+        detail.workflow_items = vec![cdt_core::WorkflowItem {
+            run_id: "wf_1".into(),
+            name: Some("review-pr".into()),
+            status: cdt_core::WorkflowStatus::Completed,
+            phases: vec![],
+            agents: vec![],
+            total_tokens: 0,
+            duration_ms: 0,
+            error: None,
+            script_preview: None,
+        }];
+        let md = export_session(
+            &detail,
+            &make_summary(),
+            &make_cost(),
+            &ExportOptions::default(),
+        )
+        .unwrap();
+        assert!(md.contains("### Workflow: review-pr"), "{md}");
+        assert_eq!(md.matches("### Workflow:").count(), 1, "同 runId 只渲一次");
+        assert!(
+            !md.contains("### Tool: Workflow"),
+            "workflow 不渲为普通工具"
+        );
+    }
+
+    #[test]
+    fn markdown_renders_subagent_inner_conversation() {
+        let inner = make_ai_chunk_with_tool("Bash", "subagent inner output");
+        let mut ai = make_ai();
+        ai.subagents = vec![make_process(vec![inner], false)];
+        let detail = make_detail(vec![Chunk::Ai(ai)]);
+        let md = export_session(
+            &detail,
+            &make_summary(),
+            &make_cost(),
+            &ExportOptions::default(),
+        )
+        .unwrap();
+        assert!(md.contains("### Subagent"), "{md}");
+        assert!(
+            md.contains("subagent inner output"),
+            "内部对话工具 output 应渲染"
+        );
+    }
+
+    #[test]
+    fn markdown_marks_omitted_subagent_messages() {
+        let mut ai = make_ai();
+        ai.subagents = vec![make_process(vec![], true)];
+        let detail = make_detail(vec![Chunk::Ai(ai)]);
+        let md = export_session(
+            &detail,
+            &make_summary(),
+            &make_cost(),
+            &ExportOptions::default(),
+        )
+        .unwrap();
+        assert!(md.contains("内部对话已省略"), "{md}");
     }
 
     fn make_summary() -> SessionSummaryOutput {

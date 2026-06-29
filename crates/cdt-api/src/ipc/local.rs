@@ -235,21 +235,33 @@ fn find_first_ai_after(chunks: &[cdt_core::Chunk], i: usize) -> Option<&cdt_core
 /// `LocalDataApi::get_session_detail` 返回完整数据；Tauri IPC command handler
 /// 在序列化返回前端之前调用本函数裁剪 payload。MCP / CLI / HTTP 消费者不调用。
 pub(crate) fn apply_display_omissions(chunks: &mut [cdt_core::Chunk]) {
-    apply_omissions_impl(chunks, true, true);
+    apply_omissions_impl(chunks, true, true, SubagentMode::Clear);
 }
 
 /// 导出专用裁剪：保留 tool output + response content（导出器实际消费），
-/// 裁剪 image data + subagent messages（导出器不渲染、且是 payload 大头）。
+/// 裁剪 image data；subagent messages 不再整体清空，改为 `cap_subagent_messages`
+/// 封顶填充（递归渲染内部对话所需）。
 ///
-/// `get_session_detail_for_export` Tauri command 调用。
+/// 桌面 `get_session_detail_for_export` Tauri command、浏览器 HTTP `?export=1`、
+/// CLI in-process 三路共用，保证封顶行为一致。
 pub(crate) fn apply_export_omissions(chunks: &mut [cdt_core::Chunk]) {
-    apply_omissions_impl(chunks, false, false);
+    apply_omissions_impl(chunks, false, false, SubagentMode::Cap);
+}
+
+/// subagent messages 在 omission 时的处理模式。
+#[derive(Clone, Copy)]
+enum SubagentMode {
+    /// display 路径：整体清空，前端按需 `getSubagentTrace` 懒拉（首屏 payload 瘦身）。
+    Clear,
+    /// export 路径：`cap_subagent_messages` 三层封顶填充（导出内部对话渲染）。
+    Cap,
 }
 
 fn apply_omissions_impl(
     chunks: &mut [cdt_core::Chunk],
     omit_tool_output: bool,
     omit_response_content: bool,
+    subagent_mode: SubagentMode,
 ) {
     if OMIT_IMAGE_DATA {
         apply_image_omit(chunks);
@@ -260,13 +272,103 @@ fn apply_omissions_impl(
     if omit_tool_output && OMIT_TOOL_OUTPUT {
         apply_tool_output_omit(chunks);
     }
-    if OMIT_SUBAGENT_MESSAGES {
-        for c in chunks {
-            if let cdt_core::Chunk::Ai(ai) = c {
-                for sub in &mut ai.subagents {
+    match subagent_mode {
+        SubagentMode::Clear => {
+            if OMIT_SUBAGENT_MESSAGES {
+                for c in chunks {
+                    if let cdt_core::Chunk::Ai(ai) = c {
+                        for sub in &mut ai.subagents {
+                            sub.messages = Vec::new();
+                            sub.messages_omitted = true;
+                        }
+                    }
+                }
+            }
+        }
+        SubagentMode::Cap => cap_subagent_messages(chunks),
+    }
+}
+
+/// 导出路径 subagent messages 单个嵌套深度上限：只展开顶层 subagent 直接对话，
+/// 嵌套子代理（depth > 1）的 messages 清空（仍保留卡片摘要）。嵌套对话导出价值
+/// 低、递归爆炸风险高。
+const MAX_SUBAGENT_DEPTH: usize = 1;
+
+/// 导出路径单个 subagent messages 序列化字节上限（2 MiB）——控单个 debug-log 型
+/// 病态 subagent，正常子会话对话远低于此。
+const MAX_BYTES_PER_SUBAGENT: usize = 2 * 1024 * 1024;
+
+/// 导出路径所有 subagent messages 累计序列化字节上限（50 MiB）——控极端 fan-out
+/// （agent team N 个 teammate 各接近 per-subagent 上限）的单次 IPC payload 总量。
+const MAX_EXPORT_SUBAGENT_TOTAL_BYTES: usize = 50 * 1024 * 1024;
+
+/// 导出路径 subagent messages 三层封顶填充（替代 display 路径的整体清空）。
+///
+/// 三闸门顺序（见 change `export-missing-displayitems` design D3）：
+/// 1. depth-cap：递归清空嵌套深度 > [`MAX_SUBAGENT_DEPTH`] 的子代理 messages。
+/// 2. per-subagent byte-cap：对每个顶层保留 subagent，按 depth-cap 清空后形态真实
+///    计量序列化字节，超 [`MAX_BYTES_PER_SUBAGENT`] 者清空（单个独立，不计入全局）。
+/// 3. global byte-cap：按 chunks 顺序累计未清空者字节，超
+///    [`MAX_EXPORT_SUBAGENT_TOTAL_BYTES`] 后清空后续。
+///
+/// 任一闸门清空时设 `messages_omitted = true`，导出渲染据此标注省略。
+pub fn cap_subagent_messages(chunks: &mut [cdt_core::Chunk]) {
+    cap_subagent_messages_with_limits(
+        chunks,
+        MAX_SUBAGENT_DEPTH,
+        MAX_BYTES_PER_SUBAGENT,
+        MAX_EXPORT_SUBAGENT_TOTAL_BYTES,
+    );
+}
+
+/// [`cap_subagent_messages`] 的参数化内部版——常量提为入参便于单测用小阈值覆盖
+/// per-subagent / global 闸门，而无需在测试里构造数 MB 的 messages。
+fn cap_subagent_messages_with_limits(
+    chunks: &mut [cdt_core::Chunk],
+    max_depth: usize,
+    max_bytes_per_subagent: usize,
+    max_total_bytes: usize,
+) {
+    clear_subagents_beyond_depth(chunks, max_depth);
+
+    let mut total_bytes: usize = 0;
+    for chunk in chunks {
+        let cdt_core::Chunk::Ai(ai) = chunk else {
+            continue;
+        };
+        for sub in &mut ai.subagents {
+            if sub.messages.is_empty() {
+                continue;
+            }
+            let bytes = serde_json::to_vec(&sub.messages).map_or(0, |v| v.len());
+            if bytes > max_bytes_per_subagent || total_bytes.saturating_add(bytes) > max_total_bytes
+            {
+                sub.messages = Vec::new();
+                sub.messages_omitted = true;
+                continue;
+            }
+            total_bytes += bytes;
+        }
+    }
+}
+
+/// 递归清空嵌套深度超 `remaining_depth` 的 subagent messages。顶层 `ai.subagents`
+/// 为 depth 1（`remaining_depth` 入参即 [`MAX_SUBAGENT_DEPTH`]）：`remaining_depth > 0`
+/// 时保留该层 messages 并递归进内部（深度减一）；`remaining_depth == 0` 时该层
+/// messages 已超上限，清空 + 标记 omitted。
+fn clear_subagents_beyond_depth(chunks: &mut [cdt_core::Chunk], remaining_depth: usize) {
+    for chunk in chunks {
+        let cdt_core::Chunk::Ai(ai) = chunk else {
+            continue;
+        };
+        for sub in &mut ai.subagents {
+            if remaining_depth == 0 {
+                if !sub.messages.is_empty() {
                     sub.messages = Vec::new();
                     sub.messages_omitted = true;
                 }
+            } else {
+                clear_subagents_beyond_depth(&mut sub.messages, remaining_depth - 1);
             }
         }
     }
@@ -6716,6 +6818,145 @@ mod tests {
             matches!(&nested_ai.responses[0].content, cdt_core::MessageContent::Text(s) if s.is_empty())
         );
         assert!(nested_ai.responses[0].content_omitted);
+    }
+
+    // -------- export: cap_subagent_messages --------
+
+    fn make_process(session_id: &str, messages: Vec<cdt_core::Chunk>) -> cdt_core::Process {
+        cdt_core::Process {
+            session_id: session_id.into(),
+            root_task_description: None,
+            spawn_ts: ts(),
+            end_ts: None,
+            metrics: cdt_core::ChunkMetrics::zero(),
+            team: None,
+            subagent_type: None,
+            messages,
+            main_session_impact: None,
+            is_ongoing: false,
+            duration_ms: None,
+            parent_task_id: None,
+            description: None,
+            header_model: None,
+            last_isolated_tokens: 0,
+            is_shutdown_only: false,
+            messages_omitted: false,
+            messages_total_count: 1,
+        }
+    }
+
+    fn make_ai_with_subagents(subs: Vec<cdt_core::Process>) -> cdt_core::Chunk {
+        cdt_core::Chunk::Ai(cdt_core::AIChunk {
+            chunk_id: "ai:cap:0".into(),
+            timestamp: ts(),
+            duration_ms: None,
+            responses: Vec::new(),
+            metrics: cdt_core::ChunkMetrics::zero(),
+            semantic_steps: Vec::new(),
+            tool_executions: Vec::new(),
+            subagents: subs,
+            slash_commands: Vec::new(),
+            teammate_messages: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn cap_subagent_messages_clears_nested_beyond_depth() {
+        // depth 2：顶层 subagent.messages 内含一个携带子代理的 AIChunk。
+        let inner = make_process(
+            "sub-inner",
+            vec![make_ai_chunk_with_text("深层对话", "claude-haiku-4-5")],
+        );
+        let mid = make_ai_with_subagents(vec![inner]);
+        let top = make_process("sub-top", vec![mid]);
+        let mut chunks = vec![make_ai_with_subagents(vec![top])];
+
+        cap_subagent_messages(&mut chunks);
+
+        let cdt_core::Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected ai chunk");
+        };
+        // 顶层 subagent.messages（depth 1）保留
+        assert!(!ai.subagents[0].messages.is_empty());
+        assert!(!ai.subagents[0].messages_omitted);
+        // 嵌套子代理（depth 2）messages 清空 + omitted，卡片仍在
+        let cdt_core::Chunk::Ai(mid_ai) = &ai.subagents[0].messages[0] else {
+            panic!("expected nested ai chunk");
+        };
+        assert!(mid_ai.subagents[0].messages.is_empty());
+        assert!(mid_ai.subagents[0].messages_omitted);
+    }
+
+    #[test]
+    fn cap_subagent_per_subagent_byte_limit_clears_only_oversized() {
+        let big_msgs = vec![make_ai_chunk_with_text(
+            &"x".repeat(2000),
+            "claude-haiku-4-5",
+        )];
+        let small_msgs = vec![make_ai_chunk_with_text("ok", "claude-haiku-4-5")];
+        let small_bytes = serde_json::to_vec(&small_msgs).expect("serialize").len();
+        let big_bytes = serde_json::to_vec(&big_msgs).expect("serialize").len();
+        let big = make_process("big", big_msgs);
+        let small = make_process("small", small_msgs);
+        let mut chunks = vec![make_ai_with_subagents(vec![big, small])];
+
+        // per-subagent 阈值介于 small 与 big 之间：big 超限清空，small 保留。
+        let per = usize::midpoint(small_bytes, big_bytes);
+        cap_subagent_messages_with_limits(&mut chunks, 5, per, 1_000_000);
+
+        let cdt_core::Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected ai chunk");
+        };
+        // 单个巨型被清空，不影响其它 subagent 保留（无全局预算偏向）
+        assert!(ai.subagents[0].messages.is_empty());
+        assert!(ai.subagents[0].messages_omitted);
+        assert!(!ai.subagents[1].messages.is_empty());
+        assert!(!ai.subagents[1].messages_omitted);
+    }
+
+    #[test]
+    fn cap_subagent_global_total_limit_clears_later_subagents() {
+        let msgs = vec![make_ai_chunk_with_text(&"a".repeat(50), "claude-haiku-4-5")];
+        let single = serde_json::to_vec(&msgs).expect("serialize").len();
+        let s1 = make_process("s1", msgs.clone());
+        let s2 = make_process("s2", msgs.clone());
+        let s3 = make_process("s3", msgs);
+        let mut chunks = vec![make_ai_with_subagents(vec![s1, s2, s3])];
+
+        // per 宽松，global 只容纳前两个（s1=single<=2·single 累计 single；
+        // s2 累计 2·single<=2·single 保留；s3 累计 3·single>2·single 清空）。
+        cap_subagent_messages_with_limits(&mut chunks, 5, 1_000_000, single * 2);
+
+        let cdt_core::Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected ai chunk");
+        };
+        assert!(!ai.subagents[0].messages.is_empty());
+        assert!(!ai.subagents[1].messages.is_empty());
+        assert!(ai.subagents[2].messages.is_empty());
+        assert!(ai.subagents[2].messages_omitted);
+    }
+
+    #[test]
+    fn cap_subagent_within_limits_retains_all() {
+        let s1 = make_process(
+            "s1",
+            vec![make_ai_chunk_with_text("hi", "claude-haiku-4-5")],
+        );
+        let s2 = make_process(
+            "s2",
+            vec![make_ai_chunk_with_text("yo", "claude-haiku-4-5")],
+        );
+        let mut chunks = vec![make_ai_with_subagents(vec![s1, s2])];
+
+        cap_subagent_messages(&mut chunks);
+
+        let cdt_core::Chunk::Ai(ai) = &chunks[0] else {
+            panic!("expected ai chunk");
+        };
+        assert!(!ai.subagents[0].messages.is_empty());
+        assert!(!ai.subagents[0].messages_omitted);
+        assert!(!ai.subagents[1].messages.is_empty());
+        assert!(!ai.subagents[1].messages_omitted);
     }
 
     // -------- phase 5: tool_exec.output OMIT --------

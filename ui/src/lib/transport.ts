@@ -330,8 +330,11 @@ function httpRequestForCommand(cmd: string, args: InvokeArgs): HttpRequest {
     case "search_group_sessions":
       return { method: "POST", path: `/api/repository-groups/${enc(a.groupId)}/search`, body: { query: a.query } };
     case "get_session_detail":
-    case "get_session_detail_for_export":
       return { method: "GET", path: `/api/sessions/${enc(a.sessionId)}` };
+    case "get_session_detail_for_export":
+      // change `export-missing-displayitems`：导出走 ?export=1 让 HTTP route 应用
+      // 导出裁剪（subagent messages 封顶填充），与桌面 IPC 导出路径行为一致。
+      return { method: "GET", path: `/api/sessions/${enc(a.sessionId)}?export=1` };
     case "get_project_memory":
       return { method: "GET", path: `/api/projects/${enc(a.projectId)}/memory` };
     case "read_memory_file":

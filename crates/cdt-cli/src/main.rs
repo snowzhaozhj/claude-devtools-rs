@@ -862,7 +862,7 @@ async fn cmd_export(
     };
 
     // Build a filtered SessionDetail with only the selected chunks
-    let filtered_detail = cdt_api::SessionDetail {
+    let mut filtered_detail = cdt_api::SessionDetail {
         session_id: session_detail.session_id.clone(),
         project_id: session_detail.project_id.clone(),
         chunks: windowed.into_iter().cloned().collect(),
@@ -874,8 +874,14 @@ async fn cmd_export(
         turn_context_stats: std::collections::HashMap::new(),
         is_ongoing: session_detail.is_ongoing,
         title: session_detail.title.clone(),
-        workflow_items: vec![],
+        // change `export-missing-displayitems`：透传 workflow_items 供导出渲染
+        // workflow 摘要（此前被丢弃为 vec![]）。
+        workflow_items: session_detail.workflow_items.clone(),
     };
+
+    // 导出路径 subagent messages 三层封顶（depth + per-subagent + global），与桌面
+    // IPC / 浏览器 HTTP 导出共用同一 cap，保证三路行为一致。
+    cdt_api::cap_subagent_messages(&mut filtered_detail.chunks);
 
     let summary = cdt_query::summary::build_summary(&filtered_detail);
     let cost = cdt_query::cost::compute_session_cost(&session_detail);

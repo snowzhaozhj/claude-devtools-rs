@@ -1144,13 +1144,16 @@ fn apply_export_omissions_preserves_tool_output_and_response_content() {
             ),
             "export tool output text SHALL be intact"
         );
+        // change `export-missing-displayitems`：export 不再整体清空 subagent
+        // messages，改为 cap 封顶填充。小 subagent（远低于 per-subagent/global
+        // 上限）SHALL 保留 messages 供导出内部对话渲染。
         assert!(
-            ai.subagents[0].messages_omitted,
-            "export SHALL omit subagent messages"
+            !ai.subagents[0].messages_omitted,
+            "export SHALL retain in-budget subagent messages (not omit)"
         );
         assert!(
-            ai.subagents[0].messages.is_empty(),
-            "export SHALL clear subagent messages"
+            !ai.subagents[0].messages.is_empty(),
+            "export SHALL keep in-budget subagent messages for internal-conversation rendering"
         );
     } else {
         panic!("expected Full variant");

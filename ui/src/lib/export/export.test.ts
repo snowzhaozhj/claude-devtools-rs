@@ -390,3 +390,137 @@ describe("D7: includeSubagents=false with Task tool", () => {
     expect(md).not.toContain("Subagent:");
   });
 });
+
+describe("issue #534: missing display items", () => {
+  function aiWith(overrides: Partial<AIChunk>): AIChunk {
+    return {
+      kind: "ai",
+      chunkId: "a1",
+      timestamp: "2024-01-01T00:00:01Z",
+      durationMs: 1000,
+      responses: [],
+      metrics: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, toolCount: 0, costUsd: null },
+      semanticSteps: [],
+      toolExecutions: [],
+      subagents: [],
+      slashCommands: [],
+      teammateMessages: [],
+      ...overrides,
+    };
+  }
+
+  test("markdown renders slash command with args + instructions", () => {
+    const ai = aiWith({
+      slashCommands: [{ name: "review", message: null, args: "PR 123", messageUuid: "su-1", timestamp: "2024-01-01T00:00:01Z", instructions: "审查指令文本" }],
+    });
+    const md = exportSession(makeMinimalDetail({ chunks: [ai] }), "markdown");
+    expect(md).toContain("### Slash: /review");
+    expect(md).toContain("PR 123");
+    expect(md).toContain("审查指令文本");
+  });
+
+  test("markdown renders teammate message", () => {
+    const ai = aiWith({
+      teammateMessages: [{ uuid: "tm-1", teammateId: "member-1", color: null, summary: null, body: "队友消息内容", timestamp: "2024-01-01T00:00:01Z", isNoise: false, isResend: false }],
+    });
+    const md = exportSession(makeMinimalDetail({ chunks: [ai] }), "markdown");
+    expect(md).toContain("### Teammate: member-1");
+    expect(md).toContain("队友消息内容");
+  });
+
+  test("markdown renders teammate spawn, not as plain tool", () => {
+    const spawnExec: ToolExecution = {
+      toolUseId: "tu-spawn", toolName: "Agent", input: {}, output: { kind: "missing" },
+      isError: false, startTs: "2024-01-01T00:00:01Z", endTs: null, sourceAssistantUuid: "a-uuid",
+      outputOmitted: false, teammateSpawn: { name: "member-2", color: null },
+    };
+    const ai = aiWith({
+      semanticSteps: [{ kind: "tool_execution", toolUseId: "tu-spawn", toolName: "Agent", timestamp: "2024-01-01T00:00:01Z" }],
+      toolExecutions: [spawnExec],
+    });
+    const md = exportSession(makeMinimalDetail({ chunks: [ai] }), "markdown");
+    expect(md).toContain("teammate spawned");
+    expect(md).toContain("member-2");
+    expect(md).not.toContain("### Tool: Agent");
+  });
+
+  test("markdown renders workflow summary once, deduped, not as plain tool", () => {
+    const wfExec = (id: string): ToolExecution => ({
+      toolUseId: id, toolName: "Workflow", input: {}, output: { kind: "missing" },
+      isError: false, startTs: "2024-01-01T00:00:01Z", endTs: null, sourceAssistantUuid: "a-uuid",
+      outputOmitted: false, workflowRunId: "wf_1",
+    });
+    const ai = aiWith({
+      semanticSteps: [
+        { kind: "tool_execution", toolUseId: "w1", toolName: "Workflow", timestamp: "2024-01-01T00:00:01Z" },
+        { kind: "tool_execution", toolUseId: "w2", toolName: "Workflow", timestamp: "2024-01-01T00:00:02Z" },
+      ],
+      toolExecutions: [wfExec("w1"), wfExec("w2")],
+    });
+    const detail = makeMinimalDetail({
+      chunks: [ai],
+      workflowItems: [{ runId: "wf_1", name: "review-pr", status: "completed", phases: [], agents: [] }],
+    });
+    const md = exportSession(detail, "markdown");
+    expect(md).toContain("### Workflow: review-pr");
+    expect(md.match(/### Workflow:/g)?.length).toBe(1);
+    expect(md).not.toContain("### Tool: Workflow");
+  });
+
+  test("markdown renders subagent inner conversation", () => {
+    const inner: AIChunk = aiWith({
+      semanticSteps: [{ kind: "text", text: "inner subagent reply", timestamp: "2024-01-01T00:00:03Z" }],
+    });
+    const sub: SubagentProcess = {
+      sessionId: "sub-1", rootTaskDescription: null, spawnTs: "2024-01-01T00:00:02Z", endTs: "2024-01-01T00:00:05Z",
+      metrics: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, toolCount: 0, costUsd: null },
+      team: null, subagentType: "code-reviewer", messages: [inner], mainSessionImpact: null, isOngoing: false,
+      durationMs: 3000, parentTaskId: null, description: "Review code",
+    };
+    const ai = aiWith({
+      semanticSteps: [{ kind: "subagent_spawn", placeholderId: "sub-1", timestamp: "2024-01-01T00:00:02Z" }],
+      subagents: [sub],
+    });
+    const md = exportSession(makeMinimalDetail({ chunks: [ai] }), "markdown");
+    expect(md).toContain("### Subagent: Review code");
+    expect(md).toContain("inner subagent reply");
+  });
+
+  test("markdown marks omitted subagent messages", () => {
+    const sub: SubagentProcess = {
+      sessionId: "sub-1", rootTaskDescription: null, spawnTs: "2024-01-01T00:00:02Z", endTs: null,
+      metrics: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, toolCount: 0, costUsd: null },
+      team: null, subagentType: null, messages: [], mainSessionImpact: null, isOngoing: false,
+      durationMs: null, parentTaskId: null, description: "Big agent", messagesOmitted: true,
+    };
+    const ai = aiWith({
+      semanticSteps: [{ kind: "subagent_spawn", placeholderId: "sub-1", timestamp: "2024-01-01T00:00:02Z" }],
+      subagents: [sub],
+    });
+    const md = exportSession(makeMinimalDetail({ chunks: [ai] }), "markdown");
+    expect(md).toContain("内部对话已省略");
+  });
+
+  test("html renders slash / teammate / workflow", () => {
+    const wfExec: ToolExecution = {
+      toolUseId: "w1", toolName: "Workflow", input: {}, output: { kind: "missing" },
+      isError: false, startTs: "2024-01-01T00:00:01Z", endTs: null, sourceAssistantUuid: "a-uuid",
+      outputOmitted: false, workflowRunId: "wf_1",
+    };
+    const ai = aiWith({
+      slashCommands: [{ name: "review", message: null, args: "PR 9", messageUuid: "su-1", timestamp: "2024-01-01T00:00:01Z", instructions: null }],
+      teammateMessages: [{ uuid: "tm-1", teammateId: "member-1", color: null, summary: null, body: "hello team", timestamp: "2024-01-01T00:00:01Z", isNoise: false, isResend: false }],
+      semanticSteps: [{ kind: "tool_execution", toolUseId: "w1", toolName: "Workflow", timestamp: "2024-01-01T00:00:01Z" }],
+      toolExecutions: [wfExec],
+    });
+    const detail = makeMinimalDetail({
+      chunks: [ai],
+      workflowItems: [{ runId: "wf_1", name: "ship-it", status: "running", phases: [], agents: [] }],
+    });
+    const html = exportSession(detail, "html");
+    expect(html).toContain("/review");
+    expect(html).toContain("member-1");
+    expect(html).toContain("ship-it");
+    expect(html).not.toContain("tool-header\">Workflow");
+  });
+});

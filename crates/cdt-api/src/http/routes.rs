@@ -485,10 +485,16 @@ async fn get_session_detail(
         .await?
         .ok_or_else(|| ApiError::not_found(format!("session {session_id}")))?;
     let known_fp = params.get("fingerprint").map(String::as_str);
-    let result = s
+    let mut result = s
         .api
         .get_session_detail(&project_id, &session_id, known_fp)
         .await?;
+    // change `export-missing-displayitems`：`?export=1` 走导出裁剪（保留 tool
+    // output + response content，subagent messages 封顶填充），使浏览器 HTTP 导出
+    // 与桌面 `get_session_detail_for_export` 行为一致；无此参数的首屏路径不变。
+    if params.get("export").map(String::as_str) == Some("1") {
+        result.apply_export_omissions();
+    }
     Ok(Json(result))
 }
 

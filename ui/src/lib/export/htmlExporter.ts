@@ -1,14 +1,26 @@
-import type { SessionDetail, Chunk, AIChunk, UserChunk, SystemChunk, CompactChunk, ToolExecution, SubagentProcess } from "../api";
+import type { SessionDetail, Chunk, AIChunk, UserChunk, SystemChunk, CompactChunk, ToolExecution, SubagentProcess, WorkflowItem, TeammateMessage, SlashCommand } from "../api";
 import type { ExportOptions } from "./types";
 import { projectSessionDetail } from "./projection";
-import { buildDisplayItems, type DisplayItem } from "../displayItemBuilder";
+import { buildDisplayItems, buildDisplayItemsFromChunks, type DisplayItem } from "../displayItemBuilder";
 import { buildHtmlShell, escapeHtml } from "./htmlTemplate";
 import { renderMarkdown } from "../render";
 import { cleanDisplayText } from "../toolHelpers";
 
+/** 单次导出贯穿的渲染上下文：workflow 关联 + runId 去重。 */
+interface RenderCtx {
+  options: ExportOptions;
+  workflowMap: Map<string, WorkflowItem>;
+  seenWorkflowIds: Set<string>;
+}
+
 export function exportAsHtml(detail: SessionDetail, options: ExportOptions): string {
   const projected = projectSessionDetail(detail, options);
   const title = projected.title || `Session ${projected.sessionId}`;
+  const ctx: RenderCtx = {
+    options,
+    workflowMap: new Map(projected.workflowItems.map((w) => [w.runId, w])),
+    seenWorkflowIds: new Set(),
+  };
 
   const tocItems: string[] = [];
   const bodyParts: string[] = [];
@@ -18,7 +30,7 @@ export function exportAsHtml(detail: SessionDetail, options: ExportOptions): str
   let turnIndex = 0;
   for (const chunk of projected.chunks) {
     turnIndex++;
-    const { label, html } = renderChunkHtml(chunk, turnIndex, options);
+    const { label, html } = renderChunkHtml(chunk, turnIndex, ctx);
     tocItems.push(label);
     bodyParts.push(html);
   }
@@ -46,13 +58,13 @@ function buildMetadataSection(detail: SessionDetail): string {
 function renderChunkHtml(
   chunk: Chunk,
   index: number,
-  options: ExportOptions,
+  ctx: RenderCtx,
 ): { label: string; html: string } {
   switch (chunk.kind) {
     case "user":
       return renderUserHtml(chunk as UserChunk, index);
     case "ai":
-      return renderAIHtml(chunk as AIChunk, index, options);
+      return renderAIHtml(chunk as AIChunk, index, ctx);
     case "system":
       return renderSystemHtml(chunk as SystemChunk, index);
     case "compact":
@@ -75,14 +87,14 @@ function renderUserHtml(chunk: UserChunk, index: number): { label: string; html:
 function renderAIHtml(
   chunk: AIChunk,
   index: number,
-  options: ExportOptions,
+  ctx: RenderCtx,
 ): { label: string; html: string } {
   const parts: string[] = [];
 
   const { items, lastOutput } = buildDisplayItems(chunk);
 
   for (const item of items) {
-    const rendered = renderDisplayItemHtml(item, options);
+    const rendered = renderDisplayItemHtml(item, ctx);
     if (rendered) parts.push(rendered);
   }
 
@@ -104,10 +116,10 @@ function renderAIHtml(
   return { label: `${index}. Assistant`, html };
 }
 
-function renderDisplayItemHtml(item: DisplayItem, options: ExportOptions): string {
+function renderDisplayItemHtml(item: DisplayItem, ctx: RenderCtx): string {
   switch (item.type) {
     case "thinking":
-      if (!options.includeThinking) return "";
+      if (!ctx.options.includeThinking) return "";
       return `<div class="thinking">
   <div class="thinking-header">💭 Thinking...</div>
   <div class="thinking-content">${escapeHtml(item.text)}</div>
@@ -119,17 +131,74 @@ function renderDisplayItemHtml(item: DisplayItem, options: ExportOptions): strin
         return renderMarkdownSafe(cleaned);
       }
     case "tool":
-      return renderToolHtml(item.execution);
+      return renderToolOrWorkflowHtml(item.execution, ctx);
     case "subagent":
-      return renderSubagentHtml(item.process);
+      return renderSubagentHtml(item.process, ctx);
     case "user_message":
       return `<p><em>[user]</em> ${escapeHtml(item.text)}</p>`;
     case "slash":
+      return renderSlashHtml(item.slash);
     case "teammate_message":
+      return renderTeammateMessageHtml(item.teammateMessage);
     case "teammate_spawn":
+      return `<p class="teammate-spawn"><em>[teammate spawned]</em> ${escapeHtml(item.name)}</p>`;
     case "workflow":
+      // buildDisplayItems 不产 workflow item（workflow 经 tool.workflowRunId 关联）。
       return "";
   }
+}
+
+function renderToolOrWorkflowHtml(exec: ToolExecution, ctx: RenderCtx): string {
+  const runId = exec.workflowRunId;
+  if (runId) {
+    const wf = ctx.workflowMap.get(runId);
+    if (wf) {
+      if (ctx.seenWorkflowIds.has(runId)) return "";
+      ctx.seenWorkflowIds.add(runId);
+      return renderWorkflowHtml(wf);
+    }
+  }
+  return renderToolHtml(exec);
+}
+
+function renderWorkflowHtml(wf: WorkflowItem): string {
+  const name = escapeHtml(wf.name ?? wf.runId);
+  const phases = wf.phases?.length ?? 0;
+  const agents = wf.agents ?? [];
+  const meta: string[] = [`${phases} phase${phases === 1 ? "" : "s"}`, `${agents.length} agent${agents.length === 1 ? "" : "s"}`];
+  if (wf.totalTokens) meta.push(`${wf.totalTokens.toLocaleString()} tokens`);
+  if (wf.durationMs) meta.push(`${Math.round(wf.durationMs / 1000)}s`);
+  const agentRows = agents
+    .map((a) => {
+      const aMeta: string[] = [escapeHtml(a.state)];
+      if (a.tokens) aMeta.push(`${a.tokens.toLocaleString()} tk`);
+      if (a.durationMs) aMeta.push(`${Math.round(a.durationMs / 1000)}s`);
+      return `<li>${escapeHtml(a.label)} (${aMeta.join(", ")})</li>`;
+    })
+    .join("\n");
+  return `<div class="workflow-block">
+  <div class="workflow-header">⚙ ${name} — ${escapeHtml(wf.status)}</div>
+  <div class="workflow-meta">${escapeHtml(meta.join(" · "))}</div>
+  ${agentRows ? `<ul class="workflow-agents">${agentRows}</ul>` : ""}
+</div>`;
+}
+
+function renderSlashHtml(slash: SlashCommand): string {
+  const arg = slash.args ?? slash.message;
+  const argHtml = arg ? `<code>${escapeHtml(arg)}</code>` : "";
+  const instr = slash.instructions ? renderMarkdownSafe(slash.instructions) : "";
+  return `<div class="slash-block">
+  <div class="slash-header">/${escapeHtml(slash.name)} ${argHtml}</div>
+  ${instr ? `<div class="slash-instructions">${instr}</div>` : ""}
+</div>`;
+}
+
+function renderTeammateMessageHtml(tm: TeammateMessage): string {
+  const body = renderMarkdownSafe(cleanDisplayText(tm.body));
+  return `<div class="teammate-message">
+  <div class="teammate-header">👥 ${escapeHtml(tm.teammateId)}</div>
+  <div class="teammate-body">${body}</div>
+</div>`;
 }
 
 function renderToolHtml(exec: ToolExecution): string {
@@ -151,12 +220,26 @@ function renderToolHtml(exec: ToolExecution): string {
 </div>`;
 }
 
-function renderSubagentHtml(sub: SubagentProcess): string {
+function renderSubagentHtml(sub: SubagentProcess, ctx: RenderCtx): string {
   const desc = escapeHtml(sub.description || sub.rootTaskDescription || "subagent");
   const type = sub.subagentType ? ` (${escapeHtml(sub.subagentType)})` : "";
   const duration = sub.durationMs ? ` — ${Math.round(sub.durationMs / 1000)}s` : "";
+
+  // 内部对话递归渲染：messages 已在 projection 阶段按导出选项 project。
+  let inner = "";
+  if (sub.messages && sub.messages.length > 0) {
+    const items = buildDisplayItemsFromChunks(sub.messages);
+    inner = items
+      .map((item) => renderDisplayItemHtml(item, ctx))
+      .filter((s) => s)
+      .join("\n");
+  } else if (sub.messagesOmitted) {
+    inner = `<p class="subagent-omitted"><em>[内部对话已省略：超出导出上限]</em></p>`;
+  }
+
   return `<div class="subagent">
   <div class="subagent-header">🤖 ${desc}${type}${duration}</div>
+  ${inner ? `<div class="subagent-body">${inner}</div>` : ""}
 </div>`;
 }
 
