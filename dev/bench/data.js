@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782701170205,
+  "lastUpdate": 1782706472180,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -26119,6 +26119,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/500",
             "value": 1332,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12780,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3b81f84b7b034ad3f6bfa46cb55a87ec03a38157",
+          "message": "fix(export): render slash/teammate/workflow/subagent content in exports (#534) (#576)\n\n* fix(export): render slash/teammate/workflow/subagent content in exports (#534)\n\n导出（Markdown / HTML / CLI）此前对 slash / teammate_message /\nteammate_spawn / workflow 四类 DisplayItem 与 subagent 内部对话静默\nreturn \"\"，导出件缺失 SessionDetail 视图可见内容。\n\n- 后端 apply_export_omissions 不再整体清空 subagent messages，改为\n  cap_subagent_messages 三层封顶填充（depth + per-subagent byte +\n  global byte cap），超限清空并标 messages_omitted；桌面 IPC / 浏览器\n  HTTP ?export=1 / CLI 三路共用同一 cap。\n- 前端 markdown/html exporter 补四类渲染 + 递归渲染 subagent 内部对话\n  （递归前按导出选项 project，workflow 按 runId 去重）。\n- CLI export.rs 同步补四类 + render_subagent_md 递归，透传 workflow_items。\n\nCloses #534\n\n* fix(export): recurse JSON projection into subagents + HTML CSS + review tests\n\ncodex / pr-review 二审修复（0 CRITICAL，本批为完整性 + 测试补强）：\n\n- codex W2：CLI `--format json` 导出 project_chunk_json 递归进入\n  subagents[].messages，使 --no-thinking / --detail 在内部对话层一致生效，\n  修复内层 thinking / tool output 绕过投影泄漏。\n- code-reviewer：htmlTemplate.ts 补 subagent-body / workflow-block /\n  slash-block / teammate-message 等导出新 class 的 CSS（subagent-body 左\n  边框表达递归嵌套），此前导出新内容无样式。\n- 过时注释：types.rs apply_export_omissions doc 改为\"封顶填充\"。\n- 测试补强：CLI 递归 thinking 过滤（md+json）+ workflow-miss 降级；\n  HTTP ?export=1 route 集成测试（保留 in-budget subagent messages）；\n  ipc_contract display 路径清空回归守卫；UI 递归 includeThinking 过滤。\n- design.md：D3 标题修正为三闸门 + 记录 W1（CLI 时序简化偏差）/ W3\n  （深链栈 pre-existing）两处偏差。\n\nRefs #534\n\n* chore(opsx): archive export-missing-displayitems\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>",
+          "timestamp": "2026-06-29T12:10:56+08:00",
+          "tree_id": "9f0c7a8e7e9c09c397c2e32494cb9099c46905cf",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/3b81f84b7b034ad3f6bfa46cb55a87ec03a38157"
+        },
+        "date": 1782706471628,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 114.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1117,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4758,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.461,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 7.921,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 46.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.92,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 291.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1214,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3243,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2832,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 38030,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.601,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 62.53,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 633.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6364,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 218.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2193,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 65.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 662,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 6602,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 129.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1292,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.691,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 76.66,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8522,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 906.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8684,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 905.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 49.01,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 516.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 98.44,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 990.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9954,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 187.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1310,
             "unit": "µs"
           },
           {
