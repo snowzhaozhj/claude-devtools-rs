@@ -26,7 +26,9 @@ pub(crate) mod workflow_script;
 pub use cdt_discover::{WslDistroCandidate, WslDistroScanReport};
 pub use error::{ApiError, ApiErrorCode};
 pub use events::{PushEvent, SessionMetadataUpdate};
-pub use local::{LocalDataApi, METADATA_SCAN_CONCURRENCY, SessionListFilter};
+pub use local::{
+    LocalDataApi, METADATA_SCAN_CONCURRENCY, SessionListFilter, cap_subagent_messages,
+};
 pub use traits::{CorrectnessEventItem, DataApi};
 pub use types::{
     ConfigUpdateRequest, ContextInfo, MemoryFileContent, MemoryLayer, MemoryLayerKind,

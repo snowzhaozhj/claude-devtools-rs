@@ -23,5 +23,6 @@ pub use ipc::{
     PushEvent, SearchRequest, SessionDetail, SessionDetailMetadata, SessionDetailMetrics,
     SessionDetailResponse, SessionListFilter, SessionMetadataUpdate, SessionSummary, SshAuthMethod,
     SshConnectRequest, SshConnectionResult, SshState, WslDistroCandidate, WslDistroScanReport,
+    cap_subagent_messages,
 };
 pub use notifier::NotificationPipeline;

@@ -1144,13 +1144,108 @@ fn apply_export_omissions_preserves_tool_output_and_response_content() {
             ),
             "export tool output text SHALL be intact"
         );
+        // change `export-missing-displayitems`：export 不再整体清空 subagent
+        // messages，改为 cap 封顶填充。小 subagent（远低于 per-subagent/global
+        // 上限）SHALL 保留 messages 供导出内部对话渲染。
         assert!(
-            ai.subagents[0].messages_omitted,
-            "export SHALL omit subagent messages"
+            !ai.subagents[0].messages_omitted,
+            "export SHALL retain in-budget subagent messages (not omit)"
         );
         assert!(
+            !ai.subagents[0].messages.is_empty(),
+            "export SHALL keep in-budget subagent messages for internal-conversation rendering"
+        );
+    } else {
+        panic!("expected Full variant");
+    }
+}
+
+/// 回归守卫：display 路径（`apply_omissions`）SHALL 仍整体清空 subagent messages
+/// （首屏 payload 瘦身硬约束），只有 export 路径才封顶填充。防止 `SubagentMode`
+/// 接线滑到 display 路径走 Cap，把大 payload 漏给首屏。
+#[test]
+fn apply_display_omissions_clears_subagent_messages() {
+    use cdt_api::SessionDetailResponse;
+    use std::collections::{BTreeMap, HashMap};
+
+    let detail = cdt_api::SessionDetail {
+        session_id: "disp-s".into(),
+        project_id: "disp-p".into(),
+        chunks: vec![Chunk::Ai(AIChunk {
+            chunk_id: "a1".into(),
+            timestamp: ts(),
+            duration_ms: None,
+            responses: vec![],
+            tool_executions: vec![],
+            semantic_steps: vec![],
+            slash_commands: vec![],
+            teammate_messages: vec![],
+            subagents: vec![Process {
+                session_id: "sub1".into(),
+                root_task_description: None,
+                spawn_ts: ts(),
+                end_ts: None,
+                metrics: ChunkMetrics::default(),
+                team: None,
+                subagent_type: None,
+                messages: vec![Chunk::Ai(AIChunk {
+                    chunk_id: "sub-a1".into(),
+                    timestamp: ts(),
+                    duration_ms: None,
+                    responses: vec![],
+                    tool_executions: vec![],
+                    semantic_steps: vec![],
+                    slash_commands: vec![],
+                    subagents: vec![],
+                    teammate_messages: vec![],
+                    metrics: ChunkMetrics::default(),
+                })],
+                main_session_impact: None,
+                is_ongoing: false,
+                duration_ms: None,
+                parent_task_id: None,
+                description: None,
+                header_model: None,
+                last_isolated_tokens: 0,
+                is_shutdown_only: false,
+                messages_omitted: false,
+                messages_total_count: 1,
+            }],
+            metrics: ChunkMetrics::default(),
+        })],
+        metrics: cdt_api::SessionDetailMetrics { message_count: 1 },
+        metadata: cdt_api::SessionDetailMetadata {
+            last_modified: Some(0),
+            size: Some(100),
+            cwd: None,
+        },
+        context_injections: vec![],
+        injections_by_phase: BTreeMap::new(),
+        phase_info: cdt_core::ContextPhaseInfo::default(),
+        turn_context_stats: HashMap::new(),
+        is_ongoing: false,
+        title: None,
+        workflow_items: vec![],
+    };
+
+    let mut resp = SessionDetailResponse::Full {
+        fingerprint: "fp-disp".into(),
+        detail: Box::new(detail),
+    };
+
+    resp.apply_omissions();
+
+    if let SessionDetailResponse::Full { detail, .. } = &resp {
+        let Chunk::Ai(ai) = &detail.chunks[0] else {
+            panic!("expected AIChunk");
+        };
+        assert!(
             ai.subagents[0].messages.is_empty(),
-            "export SHALL clear subagent messages"
+            "display path SHALL clear subagent messages (first-screen slimming)"
+        );
+        assert!(
+            ai.subagents[0].messages_omitted,
+            "display path SHALL set messages_omitted"
         );
     } else {
         panic!("expected Full variant");

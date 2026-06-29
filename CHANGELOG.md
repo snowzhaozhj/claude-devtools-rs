@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- **Export**: session export (Markdown / HTML / CLI) no longer drops content that is visible in the session view. Slash commands, teammate messages, teammate spawns, and workflow summaries were silently skipped, and subagent internal conversations were stripped entirely; they are now rendered. Subagent conversations are recursively expanded (with the same thinking/tool-detail export options applied) under a depth + per-subagent + global byte cap, and anything trimmed is marked as omitted rather than left blank (issue #534).
+
 ### Performance
 - **Workflow**: the in-memory workflow caches (parsed manifests, running-state agents, and script previews) now enforce both an entry-count limit and a byte ceiling with LRU eviction, instead of growing unbounded for the life of the process. Long-running sessions that open many workflows no longer accumulate cache memory without bound (issue #565).
 
