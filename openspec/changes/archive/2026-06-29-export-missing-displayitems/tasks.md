@@ -35,12 +35,12 @@
 - [x] 4.3 CLI export 测试补四类 + subagent messages 递归 + 封顶省略
 - [x] 4.4 `cargo test -p cdt-api -p cdt-cli` + `just test-ui-unit` 全绿
 - [x] 4.5 `pnpm --dir ui run check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo fmt --all`
-- [ ] 4.6 真数据验证：起 `cdt` HTTP server，导出含 subagent/teammate/workflow/slash 的会话，核对 markdown/html 内容非空且对齐视图（e2e-http-verify）
+- [x] 4.6 真数据验证：起 `cdt` HTTP server，导出含 subagent/teammate/workflow/slash 的会话，核对 markdown/html 内容非空且对齐视图（e2e-http-verify）
 - [x] 4.7 `openspec validate export-missing-displayitems --strict`
 
 ## N. 发布
 
-- [ ] N.1 push 分支 + 开 PR
-- [ ] N.2 wait-ci 全绿
-- [ ] N.3 codex + pr-review-toolkit 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
+- [x] N.1 push 分支 + 开 PR
+- [x] N.2 wait-ci 全绿
+- [x] N.3 codex + pr-review-toolkit 二审通过（如发现 bug：修 → push → 回到 N.2 重跑；可循环 M 次）
 - [ ] N.4 archive change（archive commit 作为 PR 最后一个 commit + 再次 wait-ci 全绿）
