@@ -9,6 +9,8 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-06-29
+
 ### Fixed
 - **Export**: session export (Markdown / HTML / CLI) no longer drops content that is visible in the session view. Slash commands, teammate messages, teammate spawns, and workflow summaries were silently skipped, and subagent internal conversations were stripped entirely; they are now rendered. Subagent conversations are recursively expanded (with the same thinking/tool-detail export options applied) under a depth + per-subagent + global byte cap, and anything trimmed is marked as omitted rather than left blank (issue #534).
 
@@ -420,7 +422,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.6.21...v0.7.0
