@@ -474,6 +474,26 @@ fn project_chunk_json(chunk: &mut serde_json::Value, options: &ExportOptions) {
             }
         }
     }
+
+    // 递归投影 subagent 内部对话 messages（导出路径已由 cap_subagent_messages 封顶
+    // 填充），使 --no-thinking / --detail 在内部对话层一致生效，避免内层 thinking /
+    // tool input/output 绕过投影泄漏（codex WARNING 2）。include_subagents=false 时
+    // subagents 已在上面清空，无需递归。
+    if options.include_subagents {
+        if let Some(subs) = obj.get_mut("subagents") {
+            if let Some(sub_arr) = subs.as_array_mut() {
+                for sub in sub_arr {
+                    if let Some(messages) = sub.get_mut("messages") {
+                        if let Some(msg_arr) = messages.as_array_mut() {
+                            for msg in msg_arr {
+                                project_chunk_json(msg, options);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn truncate_tool_output_json(tool: &mut serde_json::Value) {
@@ -922,6 +942,109 @@ mod tests {
         )
         .unwrap();
         assert!(md.contains("内部对话已省略"), "{md}");
+    }
+
+    /// 构造一个含 thinking step 的 AI chunk，供 subagent 内部对话投影测试复用。
+    fn make_inner_ai_with_thinking() -> Chunk {
+        let ts = Utc::now();
+        Chunk::Ai(AIChunk {
+            chunk_id: "inner-a1".into(),
+            timestamp: ts,
+            duration_ms: None,
+            responses: vec![],
+            metrics: default_metrics(),
+            semantic_steps: vec![
+                SemanticStep::Thinking {
+                    text: "SECRET inner reasoning".into(),
+                    timestamp: ts,
+                },
+                SemanticStep::Text {
+                    text: "inner visible reply".into(),
+                    timestamp: ts,
+                },
+            ],
+            tool_executions: vec![],
+            subagents: vec![],
+            slash_commands: vec![],
+            teammate_messages: vec![],
+        })
+    }
+
+    #[test]
+    fn markdown_no_thinking_filters_subagent_inner_thinking() {
+        // spec scenario「递归层应用导出选项投影」：includeThinking=false 时 subagent
+        // 内部对话的 thinking SHALL NOT 泄漏。
+        let mut ai = make_ai();
+        ai.subagents = vec![make_process(vec![make_inner_ai_with_thinking()], false)];
+        let detail = make_detail(vec![Chunk::Ai(ai)]);
+        let options = ExportOptions {
+            include_thinking: false,
+            ..Default::default()
+        };
+        let md = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
+        assert!(
+            !md.contains("SECRET inner reasoning"),
+            "subagent 内部 thinking 不应泄漏：{md}"
+        );
+        assert!(
+            md.contains("inner visible reply"),
+            "内部可见文本应保留：{md}"
+        );
+    }
+
+    #[test]
+    fn json_no_thinking_recurses_into_subagent_messages() {
+        // codex WARNING 2：JSON 导出 project 须递归进入 subagent.messages，否则内部
+        // thinking 绕过 --no-thinking 泄漏。
+        let mut ai = make_ai();
+        ai.subagents = vec![make_process(vec![make_inner_ai_with_thinking()], false)];
+        let detail = make_detail(vec![Chunk::Ai(ai)]);
+        let options = ExportOptions {
+            format: ExportFormat::Json,
+            include_thinking: false,
+            ..Default::default()
+        };
+        let json = export_session(&detail, &make_summary(), &make_cost(), &options).unwrap();
+        assert!(
+            !json.contains("SECRET inner reasoning"),
+            "JSON 导出 subagent 内部 thinking 不应泄漏：{json}"
+        );
+        assert!(json.contains("inner visible reply"));
+    }
+
+    #[test]
+    fn markdown_workflow_run_id_without_item_renders_as_tool() {
+        // workflowRunId 命中但 workflowItems 缺失（stale / 未填充）→ 降级为普通 tool，
+        // 不静默跳过。
+        let ts = Utc::now();
+        let mut ai = make_ai();
+        ai.semantic_steps = vec![SemanticStep::ToolExecution {
+            tool_use_id: "tu-wf_ghost".into(),
+            tool_name: "Workflow".into(),
+            timestamp: ts,
+        }];
+        let mut te = tool_exec_workflow("wf_ghost");
+        te.output = ToolOutput::Text {
+            text: "raw workflow tool output".into(),
+        };
+        ai.tool_executions = vec![te];
+        // detail.workflow_items 故意留空 → map 不命中
+        let detail = make_detail(vec![Chunk::Ai(ai)]);
+        let md = export_session(
+            &detail,
+            &make_summary(),
+            &make_cost(),
+            &ExportOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            md.contains("### Tool: Workflow"),
+            "未命中 workflowItems 应降级为普通工具：{md}"
+        );
+        assert!(
+            !md.contains("### Workflow:"),
+            "无 item 不应渲染 workflow 摘要"
+        );
     }
 
     fn make_summary() -> SessionSummaryOutput {

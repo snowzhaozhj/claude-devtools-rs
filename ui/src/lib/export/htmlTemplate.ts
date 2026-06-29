@@ -211,6 +211,35 @@ code { font-family: inherit; }
 
 .subagent-header { font-weight: 500; font-size: 13px; color: var(--text-muted); margin-bottom: 8px; }
 
+/* change export-missing-displayitems：subagent 内部对话递归渲染 + workflow / slash /
+   teammate 三类内容的样式（此前导出静默跳过这些 item，无对应 class）。 */
+.subagent-body {
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+  margin-left: 2px;
+}
+
+.subagent-omitted { font-size: 12px; color: var(--text-muted); font-style: italic; }
+
+.workflow-block, .slash-block, .teammate-message {
+  background: var(--tool-bg);
+  border-radius: 6px;
+  margin: 12px 0;
+  padding: 8px 16px;
+}
+
+.workflow-header, .slash-header, .teammate-header {
+  font-weight: 500;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.workflow-meta { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.workflow-agents { margin: 4px 0 0; padding-left: 20px; font-size: 13px; }
+.slash-instructions { font-size: 13px; }
+.teammate-body { font-size: 14px; }
+.teammate-spawn { font-size: 13px; color: var(--text-muted); margin: 8px 0; }
+
 .theme-toggle {
   position: fixed;
   top: 12px;

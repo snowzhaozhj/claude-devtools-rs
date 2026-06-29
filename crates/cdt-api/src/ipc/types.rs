@@ -265,7 +265,8 @@ impl SessionDetailResponse {
         }
     }
 
-    /// 导出专用裁剪：保留 tool output + response content，裁剪 image + subagent messages。
+    /// 导出专用裁剪：保留 tool output + response content，裁剪 image；subagent messages
+    /// 不整体清空，改为三层封顶填充（递归渲染内部对话所需，见 `cap_subagent_messages`）。
     pub fn apply_export_omissions(&mut self) {
         if let Self::Full { detail, .. } = self {
             super::local::apply_export_omissions(&mut detail.chunks);

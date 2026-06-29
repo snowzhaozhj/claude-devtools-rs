@@ -501,6 +501,32 @@ describe("issue #534: missing display items", () => {
     expect(md).toContain("内部对话已省略");
   });
 
+  test("includeThinking=false filters thinking inside subagent inner conversation", () => {
+    // spec scenario「递归层应用导出选项投影」：导出选项 SHALL 在内部对话层生效，
+    // subagent 内部 thinking 不得绕过投影泄漏。
+    const inner: AIChunk = aiWith({
+      semanticSteps: [
+        { kind: "thinking", text: "SECRET inner reasoning", timestamp: "2024-01-01T00:00:03Z" },
+        { kind: "text", text: "inner visible reply", timestamp: "2024-01-01T00:00:04Z" },
+      ],
+    });
+    const sub: SubagentProcess = {
+      sessionId: "sub-1", rootTaskDescription: null, spawnTs: "2024-01-01T00:00:02Z", endTs: null,
+      metrics: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, toolCount: 0, costUsd: null },
+      team: null, subagentType: "code-reviewer", messages: [inner], mainSessionImpact: null, isOngoing: false,
+      durationMs: null, parentTaskId: null, description: "Review code",
+    };
+    const ai = aiWith({
+      semanticSteps: [{ kind: "subagent_spawn", placeholderId: "sub-1", timestamp: "2024-01-01T00:00:02Z" }],
+      subagents: [sub],
+    });
+    const detail = makeMinimalDetail({ chunks: [ai] });
+    const opts: ExportOptions = { format: "markdown", includeThinking: false, toolOutputMode: "full", toolOutputMaxLength: 2000, includeSubagents: true };
+    const md = exportAsMarkdown(detail, opts);
+    expect(md).not.toContain("SECRET inner reasoning");
+    expect(md).toContain("inner visible reply");
+  });
+
   test("html renders slash / teammate / workflow", () => {
     const wfExec: ToolExecution = {
       toolUseId: "w1", toolName: "Workflow", input: {}, output: { kind: "missing" },

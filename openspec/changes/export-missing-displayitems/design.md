@@ -43,9 +43,9 @@ exporter 接收 `workflowItems` 并构建 `Map<runId, WorkflowItem>` + 一个 `s
 
 **备选**：让 `buildDisplayItems` 产 `WorkflowDisplayItem`——否决，会改动视图共用的 builder 行为（视图当前依赖 tool+workflowMap 路径），扩大爆炸半径且与视图渲染路径不一致。保留 union 里的 `WorkflowDisplayItem` case 返回空（dead 但类型完整）。
 
-### D3：后端导出路径 subagent messages 封顶填充——depth-cap + per-subagent byte-cap（无全局累计）
+### D3：后端导出路径 subagent messages 封顶填充——depth-cap + per-subagent byte-cap + global byte-cap
 
-新增 pub 函数 `cap_subagent_messages(chunks, MAX_SUBAGENT_DEPTH, MAX_BYTES_PER_SUBAGENT)`，替代 `apply_export_omissions` 里的顶层整体清空。两闸门**顺序明确**（codex F3）：
+新增 pub 函数 `cap_subagent_messages(chunks)`（内部参数化版 `cap_subagent_messages_with_limits` 便于小阈值单测），替代 `apply_export_omissions` 里的顶层整体清空。三闸门**顺序明确**（codex F3 + 复核 (a)）：
 
 1. **先 depth-cap**：递归清空嵌套深度 > `MAX_SUBAGENT_DEPTH` 的 subagent.messages（顶层 subagent.messages 内嵌套子代理的 messages 全清空 + `messages_omitted=true`），砍掉递归爆炸最大来源。
 2. **再 per-subagent byte-cap**：对每个**保留**的 subagent，按 depth-cap **清空后形态**真实计量序列化字节（`serde_json::to_vec(&sub.messages).map(|v| v.len())`，非 text 长度近似——codex F2），超 `MAX_BYTES_PER_SUBAGENT` 则该 subagent.messages 清空 + `messages_omitted=true`。**单个 subagent 独立判定**（codex F8：低全局预算会让早期巨型 subagent 吃光、后续高价值 subagent 全省略，故 per-subagent 闸门不参与全局累计）。
@@ -84,6 +84,8 @@ exporter 接收 `workflowItems` 并构建 `Map<runId, WorkflowItem>` + 一个 `s
 - **[BREAKING：导出数据策略反转]** → 修改 spec「导出数据完整性」subagent messages 条款（从"裁剪"改"封顶填充"）；display 路径不变，仅 export 路径行为变更。`messagesOmitted` 消费方（渲染层）兼容——从"恒 true 需懒拉"变为"可能 false（有内容）或 true（省略）"，渲染按布尔分支无破坏。
 - **[CLI/HTTP engine 未填 workflow_items / 递归 messages]** → apply 阶段首先验证；未填充则 workflow 降级 + tasks.md 记 deferred，不阻塞四类渲染主交付。
 - **[per-subagent serde 计量成本]** → 仅对导出路径保留的 subagent 各算一次 `to_vec().len()`，导出非 hot path，N 个 subagent 各一次序列化可接受；不在首屏/列表路径触发。
+- **[CLI markdown subagent / teammate-message 不按 timestamp 穿插]**（codex PR 二审 W1）→ CLI `render_ai_body` 手写顺序：slash 最前 → semantic_steps 时序工具 → teammate messages 追加 → subagent 卡片末尾，**故意不严格 timestamp 穿插**（与既有 CLI subagent 堆末尾策略一致；CLI 不复用前端 `buildDisplayItems`）。spec「复用 buildDisplayItems 时序」约束**仅适用于前端 markdown/html**；CLI 是已知简化偏差，导出内容完整不缺失，仅相对顺序与视图不同。前端路径无此偏差。
+- **[深链栈安全：`apply_image_omit` 在 depth-cap 前递归完整树]**（codex PR 二审 W3，**pre-existing**）→ `apply_export_omissions` 先跑 `apply_image_omit`（递归完整原始树）再跑 `cap_subagent_messages` 的 depth=1 闸门，故 depth-cap 不保护 image-omit 的栈深度。真实 Claude 会话子代理嵌套仅 2-3 层，数千层为对抗构造；该递归在本 PR 前已存在（非本次引入）。后续硬化（image-omit 也加 depth guard）记 GitHub Issue，不阻塞本交付。
 
 ## Migration Plan
 

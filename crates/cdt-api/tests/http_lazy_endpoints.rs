@@ -347,3 +347,128 @@ async fn lazy_endpoints_are_routed_not_404() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// change `export-missing-displayitems`：HTTP `?export=1` 导出分支
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// root session：spawn 一个 Explore subagent（sub-a）。
+fn export_root_jsonl() -> String {
+    let user = json!({
+        "type": "user", "uuid": "ru1", "timestamp": "2026-06-20T09:00:00Z",
+        "cwd": "/tmp/proj", "message": {"role": "user", "content": "do top-level work"}
+    });
+    let assistant = json!({
+        "type": "assistant", "uuid": "ra1", "parentUuid": "ru1",
+        "timestamp": "2026-06-20T09:00:01Z", "cwd": "/tmp/proj",
+        "message": {"role": "assistant", "model": "claude-sonnet", "content": [
+            {"type": "text", "text": "spawning sub-a"},
+            {"type": "tool_use", "id": "toolu_root", "name": "Agent",
+             "input": {"subagent_type": "Explore", "description": "review angle"}}
+        ]}
+    });
+    let tool_result = json!({
+        "type": "user", "uuid": "ru2", "parentUuid": "ra1",
+        "timestamp": "2026-06-20T09:30:00Z", "cwd": "/tmp/proj",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_root", "content": "sub-a done"}
+        ]},
+        "toolUseResult": {"status": "completed", "agentId": "sub-a", "agentType": "Explore"}
+    });
+    format!("{user}\n{assistant}\n{tool_result}\n")
+}
+
+/// sub-a transcript：一条 user + 一条 assistant text（小体量，远低于 cap）。
+fn export_sub_a_jsonl() -> String {
+    let user = json!({
+        "type": "user", "uuid": "su1", "timestamp": "2026-06-20T09:05:00Z",
+        "cwd": "/tmp/proj", "message": {"role": "user", "content": "sub task"}
+    });
+    let assistant = json!({
+        "type": "assistant", "uuid": "sa1", "parentUuid": "su1",
+        "timestamp": "2026-06-20T09:06:00Z", "cwd": "/tmp/proj",
+        "message": {"role": "assistant", "model": "claude-haiku",
+                    "content": [{"type": "text", "text": "sub-a inner reply"}]}
+    });
+    format!("{user}\n{assistant}\n")
+}
+
+/// `GET /api/sessions/:id?export=1` SHALL 走 `apply_export_omissions`：in-budget
+/// subagent messages 被封顶填充（保留，`messagesOmitted=false`）供浏览器导出递归
+/// 渲染内部对话；无 `?export=1` 的首屏路径同样可用（不回归）。
+#[tokio::test]
+async fn http_session_detail_export_query_retains_inline_subagent_messages() {
+    let tmp = TempDir::new().unwrap();
+    let projects_base = tmp.path().join("projects");
+    let proj_dir = projects_base.join("-proj-export");
+    let subagents_dir = proj_dir.join("root-uuid").join("subagents");
+    std::fs::create_dir_all(&subagents_dir).unwrap();
+    std::fs::write(proj_dir.join("root-uuid.jsonl"), export_root_jsonl()).unwrap();
+    std::fs::write(
+        subagents_dir.join("agent-sub-a.jsonl"),
+        export_sub_a_jsonl(),
+    )
+    .unwrap();
+
+    let state = build_state(&tmp).await;
+    let app = build_router(state, StaticServe::None);
+
+    // ?export=1：导出分支命中
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/sessions/root-uuid?export=1")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = body_json(app.clone().oneshot(req).await.unwrap()).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "?export=1 SHALL 返 200, body: {body}"
+    );
+
+    let sub_a =
+        find_subagent_json(&body, "sub-a").expect("导出 payload SHALL 含内联 sub-a subagent");
+    assert_eq!(
+        sub_a.get("messagesOmitted").and_then(Value::as_bool),
+        Some(false),
+        "?export=1 in-budget subagent messages SHALL 保留（messagesOmitted=false）"
+    );
+    assert!(
+        sub_a
+            .get("messages")
+            .and_then(Value::as_array)
+            .is_some_and(|m| !m.is_empty()),
+        "?export=1 SHALL 封顶填充 subagent messages 供导出递归渲染"
+    );
+
+    // 无 query：首屏路径不回归，仍 200
+    let req2 = Request::builder()
+        .method(Method::GET)
+        .uri("/api/sessions/root-uuid")
+        .body(Body::empty())
+        .unwrap();
+    let (status2, _) = body_json(app.oneshot(req2).await.unwrap()).await;
+    assert_eq!(
+        status2,
+        StatusCode::OK,
+        "首屏路径（无 ?export）SHALL 仍 200"
+    );
+}
+
+/// 递归在 JSON 树里找 `sessionId == target` 的 subagent。
+fn find_subagent_json<'a>(value: &'a Value, target: &str) -> Option<&'a Value> {
+    match value {
+        Value::Object(map) => {
+            if let Some(subs) = map.get("subagents").and_then(|v| v.as_array()) {
+                for s in subs {
+                    if s.get("sessionId").and_then(|v| v.as_str()) == Some(target) {
+                        return Some(s);
+                    }
+                }
+            }
+            map.values().find_map(|v| find_subagent_json(v, target))
+        }
+        Value::Array(arr) => arr.iter().find_map(|v| find_subagent_json(v, target)),
+        _ => None,
+    }
+}
