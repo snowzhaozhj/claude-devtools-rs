@@ -15,7 +15,7 @@ workspace = true
 doctest = false
 
 [dependencies]
-anyhow = { workspace = true }
+thiserror = { workspace = true }
 reqwest = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }

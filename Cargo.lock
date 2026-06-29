@@ -529,10 +529,10 @@ dependencies = [
 name = "cdt-install"
 version = "0.7.2"
 dependencies = [
- "anyhow",
  "flate2",
  "reqwest",
  "tar",
+ "thiserror",
  "zip",
 ]
 
