@@ -38,6 +38,13 @@
   $effect(() => {
     const vm = virtualMatches;
     totalMatches = domMatches + vm.length;
+    if (totalMatches > 0 && currentIndex < 0) {
+      currentIndex = 0;
+    } else if (totalMatches > 0 && currentIndex >= totalMatches) {
+      currentIndex = totalMatches - 1;
+    } else if (totalMatches === 0) {
+      currentIndex = 0;
+    }
   });
 
   function doSearch(preserveIndex?: number) {
