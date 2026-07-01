@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782746873749,
+  "lastUpdate": 1782917657243,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -26751,6 +26751,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12950,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fe72825a691bad2ff079b6261ae815e3482a8185",
+          "message": "chore(deps/ui): bump the ui-deps group in /ui with 7 updates (#571)\n\nBumps the ui-deps group in /ui with 7 updates:\n\n| Package | From | To |\n| --- | --- | --- |\n| [mermaid](https://github.com/mermaid-js/mermaid) | `11.15.0` | `11.16.0` |\n| [@playwright/test](https://github.com/microsoft/playwright) | `1.61.0` | `1.61.1` |\n| [@testing-library/svelte](https://github.com/testing-library/svelte-testing-library/tree/HEAD/packages/svelte) | `5.4.1` | `5.4.2` |\n| [@types/node](https://github.com/DefinitelyTyped/DefinitelyTyped/tree/HEAD/types/node) | `26.0.0` | `26.0.1` |\n| [svelte](https://github.com/sveltejs/svelte/tree/HEAD/packages/svelte) | `5.56.3` | `5.56.4` |\n| [svelte-check](https://github.com/sveltejs/language-tools) | `4.6.0` | `4.7.1` |\n| [vite](https://github.com/vitejs/vite/tree/HEAD/packages/vite) | `8.0.16` | `8.1.0` |\n\n\nUpdates `mermaid` from 11.15.0 to 11.16.0\n- [Release notes](https://github.com/mermaid-js/mermaid/releases)\n- [Commits](https://github.com/mermaid-js/mermaid/compare/mermaid@11.15.0...mermaid@11.16.0)\n\nUpdates `@playwright/test` from 1.61.0 to 1.61.1\n- [Release notes](https://github.com/microsoft/playwright/releases)\n- [Commits](https://github.com/microsoft/playwright/compare/v1.61.0...v1.61.1)\n\nUpdates `@testing-library/svelte` from 5.4.1 to 5.4.2\n- [Release notes](https://github.com/testing-library/svelte-testing-library/releases)\n- [Changelog](https://github.com/testing-library/svelte-testing-library/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/testing-library/svelte-testing-library/commits/@testing-library/svelte@5.4.2/packages/svelte)\n\nUpdates `@types/node` from 26.0.0 to 26.0.1\n- [Release notes](https://github.com/DefinitelyTyped/DefinitelyTyped/releases)\n- [Commits](https://github.com/DefinitelyTyped/DefinitelyTyped/commits/HEAD/types/node)\n\nUpdates `svelte` from 5.56.3 to 5.56.4\n- [Release notes](https://github.com/sveltejs/svelte/releases)\n- [Changelog](https://github.com/sveltejs/svelte/blob/main/packages/svelte/CHANGELOG.md)\n- [Commits](https://github.com/sveltejs/svelte/commits/svelte@5.56.4/packages/svelte)\n\nUpdates `svelte-check` from 4.6.0 to 4.7.1\n- [Release notes](https://github.com/sveltejs/language-tools/releases)\n- [Commits](https://github.com/sveltejs/language-tools/compare/svelte-check@4.6.0...svelte-check@4.7.1)\n\nUpdates `vite` from 8.0.16 to 8.1.0\n- [Release notes](https://github.com/vitejs/vite/releases)\n- [Changelog](https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md)\n- [Commits](https://github.com/vitejs/vite/commits/create-vite@8.1.0/packages/vite)\n\n---\nupdated-dependencies:\n- dependency-name: mermaid\n  dependency-version: 11.16.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: ui-deps\n- dependency-name: \"@playwright/test\"\n  dependency-version: 1.61.1\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: ui-deps\n- dependency-name: \"@testing-library/svelte\"\n  dependency-version: 5.4.2\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: ui-deps\n- dependency-name: \"@types/node\"\n  dependency-version: 26.0.1\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: ui-deps\n- dependency-name: svelte\n  dependency-version: 5.56.4\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: ui-deps\n- dependency-name: svelte-check\n  dependency-version: 4.7.1\n  dependency-type: direct:development\n  update-type: version-update:semver-minor\n  dependency-group: ui-deps\n- dependency-name: vite\n  dependency-version: 8.1.0\n  dependency-type: direct:development\n  update-type: version-update:semver-minor\n  dependency-group: ui-deps\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-01T22:48:48+08:00",
+          "tree_id": "a6a3610291e748f291345df0048b5b9748a4da16",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/fe72825a691bad2ff079b6261ae815e3482a8185"
+        },
+        "date": 1782917656749,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 113.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1114,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 7247,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.522,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.442,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 46.43,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 290.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1249,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3331,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3177,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 38800,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.506,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 62.45,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 633,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6336,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 212.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 2170,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 60.66,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 614.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 6150,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 132.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1335,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.341,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 73.18,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8540,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 963,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8592,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 901.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 49.49,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 539.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 97.17,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 984.9,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9870,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 187.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1325,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12600,
             "unit": "µs"
           }
         ]
