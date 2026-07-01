@@ -4,8 +4,9 @@ use cdt_api::{
     DataApi, LocalDataApi, SearchRequest, SessionDetail, SessionDetailResponse, SessionSummary,
 };
 
+use cdt_api::SessionListFilter;
+
 use crate::error::QueryError;
-use crate::filter::QueryFilter;
 use crate::options::SessionQueryOptions;
 
 /// High-level query orchestration over `LocalDataApi`.
@@ -52,10 +53,9 @@ impl QueryEngine {
     pub async fn list_sessions(
         &self,
         project_id: &str,
-        filter: &QueryFilter,
+        filter: &SessionListFilter,
     ) -> Result<Vec<SessionSummary>, QueryError> {
-        let f = filter.to_session_list_filter();
-        Ok(self.api.list_sessions_filtered(project_id, &f).await?)
+        Ok(self.api.list_sessions_filtered(project_id, filter).await?)
     }
 
     /// List sessions across all projects, with filter applied.
@@ -65,7 +65,7 @@ impl QueryEngine {
     /// 流式扫描——无内容过滤时只对全局 top-limit 条提取 metadata。
     pub async fn list_sessions_cross_project(
         &self,
-        filter: &QueryFilter,
+        filter: &SessionListFilter,
     ) -> Result<Vec<SessionSummary>, QueryError> {
         let groups = self
             .api
@@ -85,10 +85,9 @@ impl QueryEngine {
             }
         }
 
-        let f = filter.to_session_list_filter();
         Ok(self
             .api
-            .list_sessions_filtered_cross_project(&projects, &f)
+            .list_sessions_filtered_cross_project(&projects, filter)
             .await?)
     }
 
