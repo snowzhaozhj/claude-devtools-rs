@@ -16,8 +16,9 @@ use rmcp::{
 use serde::Serialize;
 
 use cdt_api::DataApi;
+use cdt_api::SessionListFilter;
+use cdt_query::QueryEngine;
 use cdt_query::turn_view::{attribute_grep_match, build_turn_detail, build_turn_overviews};
-use cdt_query::{QueryEngine, QueryFilter};
 
 use crate::turn_api::{
     MetricsView, SessionOverviewResponse, StepView, ToolOutputFullResponse, ToolOutputView,
@@ -159,7 +160,7 @@ impl CdtMcpServer {
         if session != "latest" {
             return Ok(session.to_string());
         }
-        let filter = QueryFilter {
+        let filter = SessionListFilter {
             since: None,
             until: None,
             grep: None,
@@ -284,7 +285,7 @@ impl CdtMcpServer {
             .transpose()
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
-        let filter = QueryFilter {
+        let filter = SessionListFilter {
             since: since_ms,
             until: until_ms,
             grep: params.grep,

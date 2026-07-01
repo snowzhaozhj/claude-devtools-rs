@@ -13,12 +13,13 @@ use tokio::sync::Semaphore;
 
 mod completions;
 
+use cdt_api::SessionListFilter;
 use cdt_api::http::spawn_event_bridge;
 use cdt_api::{AppState, DataApi, LocalDataApi, StaticServe, start_server};
 use cdt_config::{ConfigManager, NotificationManager};
 use cdt_discover::{ProjectScanner, local_handle, new_cwd_cache, path_decoder};
 use cdt_query::stats;
-use cdt_query::{ChunkKindFilter, QueryEngine, QueryFilter, SessionQueryOptions};
+use cdt_query::{ChunkKindFilter, QueryEngine, SessionQueryOptions};
 use cdt_ssh::SshConnectionManager;
 
 mod export;
@@ -520,7 +521,7 @@ async fn cmd_sessions_list(
         .map(cdt_cli::time_expr::parse_time_expr_local)
         .transpose()
         .with_context(|| "invalid --until value")?;
-    let filter = QueryFilter {
+    let filter = SessionListFilter {
         since: since_ms,
         until: until_ms,
         grep: grep.map(ToOwned::to_owned),
@@ -2021,7 +2022,7 @@ async fn resolve_latest_cli(engine: &QueryEngine, session_id: &str) -> Result<St
     if session_id != "latest" {
         return Ok(session_id.to_string());
     }
-    let filter = QueryFilter {
+    let filter = SessionListFilter {
         limit: Some(1),
         ..Default::default()
     };

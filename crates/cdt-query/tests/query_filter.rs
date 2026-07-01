@@ -1,29 +1,11 @@
-//! Unit tests for `QueryFilter` and `SessionQueryOptions`.
+//! Unit tests for `SessionListFilter` and `SessionQueryOptions`.
 
 use cdt_api::SessionListFilter;
-use cdt_query::{ChunkKindFilter, QueryFilter, SessionQueryOptions};
+use cdt_query::{ChunkKindFilter, SessionQueryOptions};
 
 #[test]
-fn query_filter_to_session_list_filter() {
-    let qf = QueryFilter {
-        since: Some(1000),
-        until: Some(5000),
-        grep: Some("auth".to_owned()),
-        branch: Some("feat/x".to_owned()),
-        limit: Some(50),
-    };
-    let f: SessionListFilter = qf.to_session_list_filter();
-    assert_eq!(f.since, Some(1000));
-    assert_eq!(f.until, Some(5000));
-    assert_eq!(f.grep.as_deref(), Some("auth"));
-    assert_eq!(f.branch.as_deref(), Some("feat/x"));
-    assert_eq!(f.limit, Some(50));
-}
-
-#[test]
-fn query_filter_default_produces_empty_filter() {
-    let qf = QueryFilter::default();
-    let f = qf.to_session_list_filter();
+fn session_list_filter_default_produces_empty_filter() {
+    let f = SessionListFilter::default();
     assert!(f.since.is_none());
     assert!(f.until.is_none());
     assert!(f.grep.is_none());
