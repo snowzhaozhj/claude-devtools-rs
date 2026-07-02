@@ -81,3 +81,46 @@ export function scrollToMatch(container: HTMLElement, index: number): void {
     target.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 }
+
+export interface VirtualMatch {
+  chunkId: string;
+  toolUseId: string;
+  text: string;
+}
+
+export interface ToolExecLike {
+  toolUseId: string;
+  toolName: string;
+  summary: string;
+}
+
+export interface AIChunkLike {
+  chunkId: string;
+  toolExecutions: ToolExecLike[];
+}
+
+export function collectVirtualMatches(
+  query: string,
+  chunks: AIChunkLike[],
+  expandedChunkIds: Set<string>,
+): VirtualMatch[] {
+  if (!query) return [];
+  const lower = query.toLowerCase();
+  const matches: VirtualMatch[] = [];
+  for (const chunk of chunks) {
+    if (expandedChunkIds.has(chunk.chunkId)) continue;
+    for (const exec of chunk.toolExecutions) {
+      if (
+        exec.toolName.toLowerCase().includes(lower) ||
+        exec.summary.toLowerCase().includes(lower)
+      ) {
+        matches.push({
+          chunkId: chunk.chunkId,
+          toolUseId: exec.toolUseId,
+          text: `${exec.toolName} ${exec.summary}`,
+        });
+      }
+    }
+  }
+  return matches;
+}

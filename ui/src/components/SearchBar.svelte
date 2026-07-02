@@ -1,35 +1,19 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
-  import { highlightMatches, clearHighlights, scrollToMatch } from "../lib/searchHighlight";
+  import { onDestroy } from "svelte";
+  import { highlightMatches, clearHighlights, scrollToMatch, type VirtualMatch } from "../lib/searchHighlight";
   import { ARROW_UP_SVG, ARROW_DOWN_SVG, X_SVG } from "../lib/icons";
+
+  export type { VirtualMatch };
 
   interface Props {
     visible: boolean;
     containerEl: HTMLElement | null;
     onClose: () => void;
-    /**
-     * 在 `doSearch` 调用 `highlightMatches` 之前同步触发，用于让调用方
-     * 准备容器（典型：lazy markdown 全量 hydrate）。详见
-     * `openspec/specs/ui-search/spec.md` `Cmd+F 激活会话内搜索` Requirement。
-     */
-    onBeforeSearch?: () => void;
-    /**
-     * 调用方在容器内容变化时（典型：file-change 自动刷新替换 detail）
-     * 递增此值。SearchBar 在 `visible && query` 状态下检测到 `contentVersion`
-     * 变化时 SHALL 自动重跑 `doSearch` 同步索引。详见
-     * `openspec/specs/ui-search/spec.md` `Cmd+F 激活会话内搜索` Requirement
-     * `file-change 后自动重搜同步索引` Scenario。
-     */
+    onBeforeSearch?: (query: string) => void;
     contentVersion?: number;
-    /**
-     * 调用方每次请求"重新聚焦搜索框"时递增此值（典型：SearchBar 已可见但
-     * 失焦后用户再次按 Cmd+F）。仅靠 `visible` 不够——`visible` 已是 true 时
-     * 父组件再置 true 是 Svelte 相等性 no-op，不会触发 focus `$effect` 重跑。
-     * 用单调递增的 nonce 强制 effect 重跑。详见
-     * `openspec/specs/ui-search/spec.md` `Cmd+F 激活会话内搜索` Requirement
-     * `重复按 Cmd+F` Scenario。
-     */
     focusRequestVersion?: number;
+    virtualMatches?: VirtualMatch[];
+    onNavigateVirtual?: (match: VirtualMatch) => Promise<void>;
   }
 
   let {
@@ -39,51 +23,90 @@
     onBeforeSearch,
     contentVersion = 0,
     focusRequestVersion = 0,
+    virtualMatches = [],
+    onNavigateVirtual,
   }: Props = $props();
 
   let inputEl: HTMLInputElement | undefined = $state();
   let query = $state("");
   let totalMatches = $state(0);
+  let domMatches = $state(0);
   let currentIndex = $state(0);
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  let navigating = $state(false);
 
-  function doSearch() {
+  $effect(() => {
+    const vm = virtualMatches;
+    totalMatches = domMatches + vm.length;
+    if (totalMatches > 0 && currentIndex < 0) {
+      currentIndex = 0;
+    } else if (totalMatches > 0 && currentIndex >= totalMatches) {
+      currentIndex = totalMatches - 1;
+    } else if (totalMatches === 0) {
+      currentIndex = 0;
+    }
+  });
+
+  function doSearch(preserveIndex?: number) {
     if (!containerEl) return;
     clearHighlights(containerEl);
     if (!query) {
       totalMatches = 0;
+      domMatches = 0;
       currentIndex = 0;
       return;
     }
-    onBeforeSearch?.();
-    totalMatches = highlightMatches(containerEl, query);
-    currentIndex = totalMatches > 0 ? 0 : -1;
-    if (totalMatches > 0) {
-      scrollToMatch(containerEl, 0);
+    onBeforeSearch?.(query);
+    domMatches = highlightMatches(containerEl, query);
+    totalMatches = domMatches + virtualMatches.length;
+    if (preserveIndex != null && preserveIndex < totalMatches) {
+      currentIndex = preserveIndex;
+    } else {
+      currentIndex = totalMatches > 0 ? 0 : -1;
+    }
+    if (currentIndex >= 0 && currentIndex < domMatches) {
+      scrollToMatch(containerEl, currentIndex);
     }
   }
 
   function onInput() {
     clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(doSearch, 300);
+    debounceTimer = setTimeout(() => doSearch(), 300);
   }
 
-  function nextMatch() {
-    if (totalMatches === 0 || !containerEl) return;
+  async function nextMatch() {
+    if (totalMatches === 0 || !containerEl || navigating) return;
     currentIndex = (currentIndex + 1) % totalMatches;
-    scrollToMatch(containerEl, currentIndex);
+    await navigateToCurrentIndex();
   }
 
-  function prevMatch() {
-    if (totalMatches === 0 || !containerEl) return;
+  async function prevMatch() {
+    if (totalMatches === 0 || !containerEl || navigating) return;
     currentIndex = (currentIndex - 1 + totalMatches) % totalMatches;
-    scrollToMatch(containerEl, currentIndex);
+    await navigateToCurrentIndex();
+  }
+
+  async function navigateToCurrentIndex() {
+    if (currentIndex < domMatches) {
+      scrollToMatch(containerEl!, currentIndex);
+    } else {
+      const vIdx = currentIndex - domMatches;
+      if (vIdx >= 0 && vIdx < virtualMatches.length && onNavigateVirtual) {
+        navigating = true;
+        try {
+          await onNavigateVirtual(virtualMatches[vIdx]);
+        } finally {
+          navigating = false;
+        }
+      }
+    }
   }
 
   function close() {
     if (containerEl) clearHighlights(containerEl);
     query = "";
     totalMatches = 0;
+    domMatches = 0;
     currentIndex = 0;
     onClose();
   }
@@ -97,9 +120,14 @@
       clearTimeout(debounceTimer);
       if (!totalMatches) {
         doSearch();
+        return;
       }
       if (e.shiftKey) prevMatch(); else nextMatch();
     }
+  }
+
+  export function triggerResearch(preserveIndex?: number) {
+    doSearch(preserveIndex);
   }
 
   $effect(() => {
@@ -114,10 +142,6 @@
     }
   });
 
-  // 内容版本号变化时（典型：file-change 自动刷新插入新 chunk）
-  // 自动重搜，让 totalMatches 与新内容同步。doSearch 内部会调
-  // onBeforeSearch（hydrate 新 chunk）+ clearHighlights + highlightMatches。
-  // visible / query 短路在 doSearch 内由 `if (!query) return` 兜底。
   $effect(() => {
     contentVersion;
     if (visible && query) doSearch();
