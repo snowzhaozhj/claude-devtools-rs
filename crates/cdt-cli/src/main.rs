@@ -58,6 +58,11 @@ struct Cli {
     #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
     verbose: u8,
 
+    /// Override the data root for this invocation (supports ~/). Temporary,
+    /// not persisted; takes precedence over the configured claudeRootPath.
+    #[arg(long, visible_alias = "data-dir", global = true)]
+    root: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -331,10 +336,23 @@ enum SetupAction {
 // Shared query layer
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// CLI `--root` / `--data-dir` 的临时数据根覆盖（已 validate，`~/` 原形保留）。
+/// 进程级单次设置，`set_claude_root_override` 只改内存态不持久化（change
+/// `flexible-data-root` D3）。SHALL 在 `config_mgr.load()` 之后注入，让 load 的
+/// composite-id migration persist 用原始 config、override 不落盘（F3）。
+static ROOT_OVERRIDE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+fn root_override() -> Option<&'static str> {
+    ROOT_OVERRIDE.get().and_then(Option::as_deref)
+}
+
 /// 构造 `LocalDataApi`（不启动 watcher），CLI 子命令 in-process 使用。
 async fn build_local_data_api() -> Result<Arc<LocalDataApi>> {
     let mut config_mgr = ConfigManager::new(None);
     config_mgr.load().await.context("failed to load config")?;
+    if let Some(root) = root_override() {
+        config_mgr.set_claude_root_override(root);
+    }
 
     let mut notif_mgr = NotificationManager::new(None);
     notif_mgr
@@ -370,6 +388,11 @@ async fn build_local_data_api() -> Result<Arc<LocalDataApi>> {
 async fn run_serve() -> Result<()> {
     let mut config_mgr = ConfigManager::new(None);
     config_mgr.load().await.context("failed to load config")?;
+    // --root 覆盖贯穿 serve 的 projects/todos/watcher/HTTP（F2）：注入内存态后，
+    // 下面从 config 读的 projects_dir/todos_dir 均基于 override。
+    if let Some(root) = root_override() {
+        config_mgr.set_claude_root_override(root);
+    }
 
     let port = config_mgr.get_config().http_server.port;
 
@@ -2227,6 +2250,18 @@ async fn main() -> Result<()> {
     if cli.no_truncate {
         NO_TRUNCATE.store(true, Ordering::Relaxed);
     }
+
+    // --root / --data-dir：validate（拒相对路径 / ~user/）后设进程级临时覆盖，
+    // 不持久化。build_local_data_api / run_serve 在 load 后读它注入内存态。
+    let validated_root = match cli.root.as_deref() {
+        Some(r) => Some(
+            cdt_config::validate_claude_root_path(Some(r))
+                .map_err(|e| anyhow::anyhow!("invalid --root: {e}"))?
+                .ok_or_else(|| anyhow::anyhow!("--root must not be empty"))?,
+        ),
+        None => None,
+    };
+    let _ = ROOT_OVERRIDE.set(validated_root);
 
     // --json overrides format; empty string means "list available fields"
     let (effective_format, json_fields) = if let Some(ref json_arg) = cli.json {

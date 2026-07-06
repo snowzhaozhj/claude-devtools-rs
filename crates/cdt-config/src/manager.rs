@@ -22,8 +22,8 @@ use crate::types::{
 };
 use crate::types::{ExternalEditor, SearchEngine, TerminalApp};
 use crate::validation::{
-    normalize_claude_root_path, validate_claude_root_path, validate_http_port,
-    validate_search_engine, validate_snooze_minutes, validate_ssh_config,
+    normalize_claude_root_path, push_recent_root, sanitize_recent_roots, validate_claude_root_path,
+    validate_http_port, validate_search_engine, validate_snooze_minutes, validate_ssh_config,
 };
 
 /// 默认配置文件路径：`~/.claude/claude-devtools-config.json`。
@@ -74,6 +74,8 @@ impl ConfigManager {
     /// Requirement）。迁移失败 / 写盘失败 SHALL 通过 `warn!` 记录但**不阻塞**启动。
     pub async fn load(&mut self) -> Result<(), ConfigError> {
         self.config = self.load_from_disk().await?;
+        // 加载时过滤 recentRoots 非法项 + 去重（F7）；清洗后的值随下次 update 落盘。
+        self.config.general.recent_roots = sanitize_recent_roots(&self.config.general.recent_roots);
         let needs_write = migrate_composite_ids(&mut self.config);
         if needs_write {
             if let Err(e) = self.backup_pre_merge_composite().await {
@@ -91,6 +93,14 @@ impl ConfigManager {
         }
         self.trigger_manager = TriggerManager::new(self.config.notifications.triggers.clone());
         Ok(())
+    }
+
+    /// 仅覆盖内存中的数据根（CLI `--root` 临时覆盖用），**不**持久化、**不**入
+    /// `recentRoots`。SHALL 在 `load()` 之后调用——load 的 composite-id migration
+    /// persist 用原始 config（不含 override），此覆盖不落盘（change
+    /// `flexible-data-root` D3/F3）。`root` 支持 `~/` 原形，展开推迟到消费点。
+    pub fn set_claude_root_override(&mut self, root: &str) {
+        self.config.general.claude_root_path = Some(root.to_owned());
     }
 
     /// 迁移前备份原配置文件到 `<path>.pre-merge-composite.bak`（覆盖已存在的）。
@@ -367,6 +377,10 @@ impl ConfigManager {
         }
         if let Some(opt) = partial.claude_root_path {
             candidate.claude_root_path = validate_claude_root_path(opt.as_deref())?;
+            // 写入非 null 数据根时 append MRU 历史（去重 + 上限 + 过滤非法）。
+            if let Some(root) = &candidate.claude_root_path {
+                candidate.recent_roots = push_recent_root(&candidate.recent_roots, root);
+            }
         }
         if let Some(v) = partial.auto_expand_ai_groups {
             candidate.auto_expand_ai_groups = v;
@@ -1154,6 +1168,31 @@ mod tests {
         let config = mgr.get_config();
         assert!(config.notifications.enabled);
         assert_eq!(config.http_server.port, 3456);
+    }
+
+    #[tokio::test]
+    async fn set_claude_root_override_does_not_persist_to_disk() {
+        // CLI `--root` 临时覆盖：只改内存态，不落盘（change flexible-data-root D3/F3）。
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path.clone()));
+        mgr.load().await.unwrap();
+
+        mgr.set_claude_root_override("~/.qoder");
+        assert_eq!(
+            mgr.get_config().general.claude_root_path.as_deref(),
+            Some("~/.qoder"),
+            "override SHALL 在内存态生效"
+        );
+
+        // 另起 mgr 读同一磁盘文件：override 不应落盘。
+        let mut mgr2 = ConfigManager::new(Some(path));
+        mgr2.load().await.unwrap();
+        assert_ne!(
+            mgr2.get_config().general.claude_root_path.as_deref(),
+            Some("~/.qoder"),
+            "set_claude_root_override MUST NOT 落盘"
+        );
     }
 
     #[tokio::test]

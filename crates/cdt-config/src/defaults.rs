@@ -93,6 +93,7 @@ pub fn default_config() -> AppConfig {
             theme: Theme::default(),
             default_tab: DefaultTab::default(),
             claude_root_path: None,
+            recent_roots: Vec::new(),
             auto_expand_ai_groups: false,
             use_native_title_bar: false,
             session_click_behavior: SessionClickBehavior::default(),

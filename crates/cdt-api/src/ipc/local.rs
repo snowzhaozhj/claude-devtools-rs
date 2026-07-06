@@ -2347,14 +2347,11 @@ impl LocalDataApi {
 
     async fn claude_base_path(&self) -> PathBuf {
         let mgr = self.config_mgr.lock().await;
-        mgr.get_config()
-            .general
-            .claude_root_path
-            .as_deref()
-            .map_or_else(
-                cdt_discover::path_decoder::get_claude_base_path,
-                PathBuf::from,
-            )
+        let root = mgr.get_config().general.claude_root_path.clone();
+        drop(mgr);
+        // 第三个 root 消费点：过统一 helper 让 `~/` 前缀展开（与 projects/todos 一致），
+        // 否则 `~/.qoder` 会被当字面路径读 CLAUDE.md / auto-memory（change `flexible-data-root` D4）。
+        cdt_discover::path_decoder::resolve_claude_root_path(root.as_deref().map(Path::new))
     }
 
     /// 按 `ContextId` 精确 abort：retain 所有非匹配 entry，匹配的 entry handle

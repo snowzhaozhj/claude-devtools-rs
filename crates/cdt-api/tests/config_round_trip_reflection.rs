@@ -55,6 +55,9 @@ const GENERAL_EXPECTED_KEYS: &[&str] = &[
     "theme",
     "defaultTab",
     "claudeRootPath",
+    // 数据根 MRU 历史（change flexible-data-root）：后端派生只读字段，前端
+    // 不经 update_general 更新，故无对应 update round-trip；仅需 get_config 暴露。
+    "recentRoots",
     "autoExpandAiGroups",
     "useNativeTitleBar",
     "sessionClickBehavior",
@@ -102,10 +105,16 @@ async fn general_config_all_fields_round_trip() {
     ];
 
     let case_keys: HashSet<String> = cases.iter().map(|(k, _)| (*k).to_owned()).collect();
+    // recentRoots 是后端派生只读字段（append on claudeRootPath update），不经
+    // update_general 直接写，故不参与 round-trip（change flexible-data-root）。
+    let readonly_derived: HashSet<String> = ["recentRoots".to_owned()].into_iter().collect();
+    let expected_updatable: HashSet<String> = expected_keys(GENERAL_EXPECTED_KEYS)
+        .difference(&readonly_derived)
+        .cloned()
+        .collect();
     assert_eq!(
-        case_keys,
-        expected_keys(GENERAL_EXPECTED_KEYS),
-        "round-trip cases 与 GENERAL_EXPECTED_KEYS 不一致——加字段时两处都要同步"
+        case_keys, expected_updatable,
+        "round-trip cases 与 GENERAL_EXPECTED_KEYS（除只读派生字段）不一致——加可更新字段时两处都要同步"
     );
 
     for (key, alt) in cases {

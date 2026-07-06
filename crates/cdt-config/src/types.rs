@@ -211,6 +211,11 @@ pub struct GeneralConfig {
     #[serde(default, deserialize_with = "deserialize_lenient_enum")]
     pub default_tab: DefaultTab,
     pub claude_root_path: Option<String>,
+    /// 用户切换过的数据根历史（MRU），供 Settings 快速切换下拉。后端在写入
+    /// 非 null `claude_root_path` 时自动 append（去重 + MRU + 上限）；前端只读，
+    /// 不通过 `update_general` 直接更新。详 configuration-management spec。
+    #[serde(default)]
+    pub recent_roots: Vec<String>,
     pub auto_expand_ai_groups: bool,
     pub use_native_title_bar: bool,
     /// 点击 sidebar 会话项时的默认行为："replace" 替换当前 tab，"new-tab" 总开新 tab。

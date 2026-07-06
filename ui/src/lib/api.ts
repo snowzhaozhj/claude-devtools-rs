@@ -819,6 +819,12 @@ export interface GeneralConfig {
   theme: "light" | "dark" | "system";
   defaultTab: "sessions" | "dashboard";
   claudeRootPath: string | null;
+  /**
+   * 用户切换过的数据根历史（MRU），供 Settings 快速切换下拉。后端在写入非 null
+   * `claudeRootPath` 时自动 append（去重 + MRU + 上限）；前端只读、不直接更新。
+   * 老后端缺字段时为 undefined，前端 fallback 到 `[]`。
+   */
+  recentRoots?: string[];
   autoExpandAiGroups: boolean;
   /** "replace" | "new-tab"，默认 "replace" */
   sessionClickBehavior?: "replace" | "new-tab";
