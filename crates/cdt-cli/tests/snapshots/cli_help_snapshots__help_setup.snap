@@ -39,4 +39,8 @@ Options:
 
       --force Force overwrite existing files (Skills)
 
+      --root <ROOT> Override the data root for this invocation (supports ~/). Temporary, not persisted; takes precedence over the configured claudeRootPath
+          
+          [aliases: --data-dir]
+
   -h, --help Print help (see a summary with '-h')

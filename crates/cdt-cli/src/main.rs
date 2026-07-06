@@ -361,15 +361,9 @@ async fn build_local_data_api() -> Result<Arc<LocalDataApi>> {
         .context("failed to load notifications")?;
 
     let fs = local_handle();
-    let projects_dir = path_decoder::projects_base_path_for(
-        config_mgr
-            .get_config()
-            .general
-            .claude_root_path
-            .as_deref()
-            .map(PathBuf::from)
-            .as_deref(),
-    );
+    // effective_claude_root：--root override（不落盘）> 持久化 claudeRootPath > 默认。
+    let effective_root = config_mgr.effective_claude_root().map(PathBuf::from);
+    let projects_dir = path_decoder::projects_base_path_for(effective_root.as_deref());
 
     let scanner_semaphore = Arc::new(Semaphore::new(64));
     let scanner =
@@ -403,24 +397,11 @@ async fn run_serve() -> Result<()> {
         .context("failed to load notifications")?;
 
     let fs = local_handle();
-    let projects_dir = path_decoder::projects_base_path_for(
-        config_mgr
-            .get_config()
-            .general
-            .claude_root_path
-            .as_deref()
-            .map(PathBuf::from)
-            .as_deref(),
-    );
-    let todos_dir = path_decoder::todos_base_path_for(
-        config_mgr
-            .get_config()
-            .general
-            .claude_root_path
-            .as_deref()
-            .map(PathBuf::from)
-            .as_deref(),
-    );
+    // effective_claude_root：--root override（不落盘）贯穿 serve 的 projects/todos/
+    // watcher/HTTP（F2）；override 存在 config_mgr 独立字段，不进 persist（F3）。
+    let effective_root = config_mgr.effective_claude_root().map(PathBuf::from);
+    let projects_dir = path_decoder::projects_base_path_for(effective_root.as_deref());
+    let todos_dir = path_decoder::todos_base_path_for(effective_root.as_deref());
     let scanner_semaphore = Arc::new(Semaphore::new(64));
     let scanner = ProjectScanner::new_with_semaphore(fs, projects_dir.clone(), scanner_semaphore);
 

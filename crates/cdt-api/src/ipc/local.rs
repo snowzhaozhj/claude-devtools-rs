@@ -2347,10 +2347,11 @@ impl LocalDataApi {
 
     async fn claude_base_path(&self) -> PathBuf {
         let mgr = self.config_mgr.lock().await;
-        let root = mgr.get_config().general.claude_root_path.clone();
-        drop(mgr);
+        // effective_claude_root：CLI `--root` override > 持久化 claudeRootPath > 默认。
         // 第三个 root 消费点：过统一 helper 让 `~/` 前缀展开（与 projects/todos 一致），
         // 否则 `~/.qoder` 会被当字面路径读 CLAUDE.md / auto-memory（change `flexible-data-root` D4）。
+        let root = mgr.effective_claude_root().map(str::to_owned);
+        drop(mgr);
         cdt_discover::path_decoder::resolve_claude_root_path(root.as_deref().map(Path::new))
     }
 

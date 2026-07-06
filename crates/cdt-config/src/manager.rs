@@ -41,6 +41,11 @@ pub struct ConfigManager {
     /// 里加 `_version` 字段做 optimistic concurrency check 防 last-write-wins
     /// （缺省 = skip 校验，向后兼容；session-local，新建实例从 0 起）。
     version: u64,
+    /// CLI `--root` 临时覆盖数据根：独立于 `config`，**不进** `persist_config`
+    /// （后者只序列化 `self.config`），保证 serve 模式下任何 `update_*` 落盘都
+    /// 不含 override（change flexible-data-root D3/F3 + code-reviewer 二审：原
+    /// 方案把 override 写进 `config` 会经 `update_*` 的整份 persist 泄漏到磁盘）。
+    root_override: Option<String>,
 }
 
 impl ConfigManager {
@@ -54,6 +59,7 @@ impl ConfigManager {
             config_path: path,
             trigger_manager,
             version: 0,
+            root_override: None,
         }
     }
 
@@ -95,12 +101,21 @@ impl ConfigManager {
         Ok(())
     }
 
-    /// 仅覆盖内存中的数据根（CLI `--root` 临时覆盖用），**不**持久化、**不**入
-    /// `recentRoots`。SHALL 在 `load()` 之后调用——load 的 composite-id migration
-    /// persist 用原始 config（不含 override），此覆盖不落盘（change
-    /// `flexible-data-root` D3/F3）。`root` 支持 `~/` 原形，展开推迟到消费点。
+    /// 设置 CLI `--root` 临时数据根覆盖：存入独立 `root_override` 字段，**不**碰
+    /// `self.config`，故 `persist_config` / 任何 `update_*` 落盘都不含 override
+    /// （change `flexible-data-root` D3/F3）。`root` 支持 `~/` 原形，展开推迟到消费点。
     pub fn set_claude_root_override(&mut self, root: &str) {
-        self.config.general.claude_root_path = Some(root.to_owned());
+        self.root_override = Some(root.to_owned());
+    }
+
+    /// 数据根解析优先级：CLI `--root` override > 持久化 `claudeRootPath` > 默认。
+    /// 所有读侧消费者（projects / todos / `claude_base` 派生）SHALL 用此方法而非
+    /// 直接读 `config.general.claude_root_path`，让 `--root` 覆盖生效且不落盘。
+    #[must_use]
+    pub fn effective_claude_root(&self) -> Option<&str> {
+        self.root_override
+            .as_deref()
+            .or(self.config.general.claude_root_path.as_deref())
     }
 
     /// 迁移前备份原配置文件到 `<path>.pre-merge-composite.bak`（覆盖已存在的）。
@@ -1171,28 +1186,80 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_claude_root_override_does_not_persist_to_disk() {
-        // CLI `--root` 临时覆盖：只改内存态，不落盘（change flexible-data-root D3/F3）。
+    async fn set_claude_root_override_does_not_leak_to_disk_even_through_update() {
+        // CLI `--root` 覆盖：走独立 root_override 字段，不进 self.config，故任何
+        // update_* 的整份 persist 都不泄漏 override（change flexible-data-root D3/F3
+        // + code-reviewer 二审：serve 模式 PATCH /api/config 曾会把 override 落盘）。
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.json");
         let mut mgr = ConfigManager::new(Some(path.clone()));
         mgr.load().await.unwrap();
 
         mgr.set_claude_root_override("~/.qoder");
+        // override 经 effective_claude_root 生效，但不进 config
+        assert_eq!(mgr.effective_claude_root(), Some("~/.qoder"));
         assert_eq!(
-            mgr.get_config().general.claude_root_path.as_deref(),
-            Some("~/.qoder"),
-            "override SHALL 在内存态生效"
+            mgr.get_config().general.claude_root_path,
+            None,
+            "override MUST NOT 进 config（否则 update_* 会 persist 泄漏）"
         );
 
-        // 另起 mgr 读同一磁盘文件：override 不应落盘。
+        // 关键回归：override 生效期间 update 无关字段 → 触发整份 persist
+        mgr.update_general(serde_json::json!({ "theme": "dark" }))
+            .await
+            .unwrap();
+
         let mut mgr2 = ConfigManager::new(Some(path));
         mgr2.load().await.unwrap();
-        assert_ne!(
-            mgr2.get_config().general.claude_root_path.as_deref(),
-            Some("~/.qoder"),
-            "set_claude_root_override MUST NOT 落盘"
+        assert_eq!(
+            mgr2.get_config().general.claude_root_path,
+            None,
+            "update_* persist 后磁盘 claudeRootPath SHALL 仍不含 --root override"
         );
+        assert_eq!(
+            mgr2.get_config().general.theme,
+            Theme::Dark,
+            "无关字段 theme SHALL 正常落盘"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_tolerates_non_string_recent_roots_without_dropping_other_fields() {
+        // codex 二审：recentRoots 含非字符串项若走严格 Vec<String> 会让整份 config
+        // 反序列化失败回退默认，丢掉 httpServer.port 等无关字段。lenient 反序列化
+        // 跳过坏项，保留其余配置。
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let body = serde_json::json!({
+            "general": {
+                "launchAtLogin": false,
+                "showDockIcon": true,
+                "theme": "dark",
+                "defaultTab": "sessions",
+                "claudeRootPath": "/tmp/cdt-root",
+                "recentRoots": ["/tmp/cdt-root", 42, "relative/bad"],
+                "autoExpandAiGroups": false,
+                "sessionClickBehavior": "replace"
+            },
+            "httpServer": { "enabled": true, "port": 4567 }
+        });
+        tokio::fs::write(&path, serde_json::to_string_pretty(&body).unwrap())
+            .await
+            .unwrap();
+
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+        let cfg = mgr.get_config();
+
+        // 无关字段保留（未整份回默认）
+        assert_eq!(cfg.http_server.port, 4567);
+        assert_eq!(cfg.general.theme, Theme::Dark);
+        assert_eq!(
+            cfg.general.claude_root_path.as_deref(),
+            Some("/tmp/cdt-root")
+        );
+        // 非字符串项跳过 + 非法字符串项（相对路径）被 sanitize 过滤
+        assert_eq!(cfg.general.recent_roots, vec!["/tmp/cdt-root".to_owned()]);
     }
 
     #[tokio::test]

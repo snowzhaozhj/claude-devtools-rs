@@ -26,6 +26,33 @@ fn projects_list_json_outputs_valid_json() {
 }
 
 #[test]
+fn root_flag_rejects_relative_path() {
+    // --root 非法路径 SHALL 非零退出 + 错误说明（change flexible-data-root）。
+    let output = cdt_bin()
+        .args(["--root", "relative/bad", "projects", "list"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "--root 相对路径 SHALL 非零退出");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid --root"),
+        "SHALL 输出错误说明，实际 stderr: {stderr}"
+    );
+}
+
+#[test]
+fn root_flag_rejects_named_home_tilde() {
+    let output = cdt_bin()
+        .args(["--root", "~alice/x", "projects", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "--root ~user/ 具名 home SHALL 非零退出"
+    );
+}
+
+#[test]
 fn projects_list_json_has_camel_case_fields() {
     let output = cdt_bin()
         .args(["--format", "json", "projects", "list"])

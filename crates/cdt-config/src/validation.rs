@@ -45,9 +45,16 @@ pub fn validate_claude_root_path(value: Option<&str>) -> Result<Option<String>, 
     }
 
     // `~/`（Windows `~\`）前缀：保留原形不展开（可移植；展开推迟到消费点
-    // `cdt_discover::resolve_claude_root_path`）。仅 trim 尾部分隔符。
+    // `cdt_discover::resolve_claude_root_path`）。仅 trim 尾部分隔符；`~/` / `~\`
+    // 全是分隔符 trim 后剩裸 `~`，规范化回 `~/`（= home 本身），避免消费侧当
+    // 相对路径 + 下次 load 被 normalize 吞成 None（codex / silent-failure 二审）。
     if is_tilde_prefixed(trimmed) {
-        return Ok(Some(trimmed.trim_end_matches(['/', '\\']).to_owned()));
+        let stripped = trimmed.trim_end_matches(['/', '\\']);
+        return Ok(Some(if stripped == "~" {
+            "~/".to_owned()
+        } else {
+            stripped.to_owned()
+        }));
     }
 
     if !looks_like_absolute_path(trimmed) {
@@ -320,6 +327,20 @@ mod tests {
     #[test]
     fn validate_path_named_home_tilde_rejected() {
         assert!(validate_claude_root_path(Some("~alice/data")).is_err());
+    }
+
+    #[test]
+    fn validate_path_bare_tilde_normalizes_to_slash_form() {
+        // `~/` / `~\`（全是分隔符）SHALL 规范化回 `~/`（= home），不退化成裸 `~`
+        // （否则消费侧当相对路径 + 下次 load 被 normalize 吞成 None）。
+        assert_eq!(
+            validate_claude_root_path(Some("~/")).unwrap(),
+            Some("~/".to_owned())
+        );
+        assert_eq!(
+            validate_claude_root_path(Some(r"~\")).unwrap(),
+            Some("~/".to_owned())
+        );
     }
 
     #[test]

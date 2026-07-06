@@ -287,6 +287,11 @@ pub fn resolve_claude_root_path(claude_root_path: Option<&Path>) -> PathBuf {
 /// `~user/` 具名 home 不展开（校验层已拒），与 `mention` 对 `~user` 的口径一致。
 fn expand_tilde_root(p: &Path) -> PathBuf {
     if let Some(s) = p.to_str() {
+        // 裸 `~`（`~/` / `~\` 经校验 trim 尾分隔符后退化的形态）= home 本身，
+        // 避免落到 `p.to_path_buf()` 当相对 `~` 目录静默扫错（silent-failure 二审）。
+        if s == "~" {
+            return home_dir().unwrap_or_else(fallback_home);
+        }
         if let Some(rest) = s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
             return home_dir().unwrap_or_else(fallback_home).join(rest);
         }
@@ -394,6 +399,14 @@ mod tests {
             resolve_claude_root_path(Some(Path::new("/data/alt"))),
             PathBuf::from("/data/alt")
         );
+    }
+
+    #[test]
+    fn resolve_bare_and_slash_tilde_to_home() {
+        // 裸 `~`（校验产出）与 `~/` 都 SHALL 展开到 home 本身，不落相对路径
+        let home = home_dir().unwrap_or_else(fallback_home);
+        assert_eq!(resolve_claude_root_path(Some(Path::new("~"))), home.clone());
+        assert_eq!(resolve_claude_root_path(Some(Path::new("~/"))), home);
     }
 
     #[test]
