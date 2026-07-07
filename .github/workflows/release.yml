@@ -226,10 +226,10 @@ jobs:
             "Claude.DevTools_${VERSION}_aarch64.dmg"
             "Claude.DevTools_${VERSION}_x64.dmg"
             # macOS updater bundle (.app.tar.gz + .sig，updater 主力)
-            "Claude.DevTools_aarch64.app.tar.gz"
-            "Claude.DevTools_aarch64.app.tar.gz.sig"
-            "Claude.DevTools_x64.app.tar.gz"
-            "Claude.DevTools_x64.app.tar.gz.sig"
+            "Claude.DevTools_${VERSION}_aarch64.app.tar.gz"
+            "Claude.DevTools_${VERSION}_aarch64.app.tar.gz.sig"
+            "Claude.DevTools_${VERSION}_x64.app.tar.gz"
+            "Claude.DevTools_${VERSION}_x64.app.tar.gz.sig"
             # Linux 首装包 + .sig（updater 优先用 .deb；AppImage / rpm 备用）
             "Claude.DevTools_${VERSION}_amd64.deb"
             "Claude.DevTools_${VERSION}_amd64.deb.sig"
