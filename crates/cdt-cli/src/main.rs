@@ -44,7 +44,7 @@ struct Cli {
     #[arg(long, global = true, default_value = "table")]
     format: OutputFormat,
 
-    /// Scope to a project (name or encoded ID)
+    /// Project name, or --project=<id> for an encoded ID
     #[arg(long, global = true, add = ArgValueCandidates::new(completions::ProjectCompleter))]
     project: Option<String>,
 
