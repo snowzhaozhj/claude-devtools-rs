@@ -385,3 +385,29 @@ fn json_flag_accepted_with_fields() {
         "--json fields not recognized: {stderr}"
     );
 }
+
+#[test]
+fn help_lists_all_subcommands() {
+    // 黑盒兜底：--help 能成功打印且列出全部子命令，防误删命令。
+    // 不锁定完整文本（那是脆弱快照反模式）——只断言关键命令名存在。
+    let output = cdt_bin().arg("--help").output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for cmd in [
+        "projects",
+        "sessions",
+        "session",
+        "turn",
+        "tool-output",
+        "export",
+        "search",
+        "stats",
+        "serve",
+        "mcp",
+        "setup",
+        "completions",
+        "self-update",
+    ] {
+        assert!(stdout.contains(cmd), "help 缺子命令 {cmd}:\n{stdout}");
+    }
+}

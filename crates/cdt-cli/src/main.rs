@@ -44,8 +44,7 @@ struct Cli {
     #[arg(long, global = true, add = ArgValueCandidates::new(completions::ProjectCompleter))]
     project: Option<String>,
 
-    /// Select JSON fields (comma-separated), implies --format json.
-    /// Without value: list available fields. Usage: --json=field1,field2
+    /// Select JSON fields (comma-separated); empty lists available fields. Implies --format json
     #[arg(long, global = true, num_args = 0..=1, default_missing_value = "", require_equals = true)]
     json: Option<String>,
 
@@ -53,13 +52,11 @@ struct Cli {
     #[arg(long, global = true)]
     no_truncate: bool,
 
-    /// Increase diagnostic verbosity (-v warn, -vv info, -vvv debug).
-    /// All output is silent by default; `RUST_LOG` overrides this entirely.
+    /// Increase diagnostic verbosity: -v warn, -vv info, -vvv debug (silent by default)
     #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
     verbose: u8,
 
-    /// Override the data root for this invocation (supports ~/). Temporary,
-    /// not persisted; takes precedence over the configured claudeRootPath.
+    /// Override the data root for this run (supports ~/); not persisted
     #[arg(long, visible_alias = "data-dir", global = true)]
     root: Option<String>,
 
@@ -2431,6 +2428,14 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// clap 派生结构的结构性校验（重复 flag / 冲突配置 / 无效 arg 组合会 panic）。
+    /// 取代脆弱的全量 help 文本快照——校验 CLI 定义合法，不锁定环境相关的折行输出。
+    #[test]
+    fn cli_definition_is_valid() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
 
     #[test]
     fn parse_range_normal() {
