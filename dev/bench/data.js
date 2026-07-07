@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783346869278,
+  "lastUpdate": 1783404405691,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -27587,6 +27587,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12960,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0606ad5de63033f7a15936dd19b6e047cea30380",
+          "message": "feat(config): flexible data root — tilde paths, CLI --root, recent-roots switcher (#584)\n\n* feat(config): flexible data root — tilde paths, CLI --root, recent-roots switcher\n\n支撑 Claude Code → Qoder 过渡期共存，全部通用、无 Qoder 专属逻辑：\n\n- claudeRootPath / CLI 接受 `~/`（Windows `~\\`）前缀；抽统一 `resolve_claude_root_path`\n  helper（落 cdt-discover）覆盖 projects / todos / claude_base 三个 root 消费点，\n  存 tilde 原形、消费时展开（可移植）\n- CLI `--root` / `--data-dir` 临时覆盖、不持久化，贯穿普通子命令与 serve 全消费路径\n- Settings 数据根 MRU 快速切换下拉（复用 Dropdown）+ label 泛化去 Claude 化\n- recentRoots 去重（规范化字符串键）+ MRU + 上限 + 加载/写入非法项过滤\n\n3 轮 codex 设计二审闭合 7 finding + 3 盲点（含第三消费点 claude_base、serve 漏传、\n跨进程并发限制诚实记录）。CLI 真实 ~/.qoder 数据 e2e 验证读取正确且不写 config。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* fix(config): address PR review — override leak, bare tilde, non-string recentRoots\n\n四路二审（codex PR 二审 + pr-review 三维度）修复：\n\n- **override 泄漏磁盘**（code-reviewer，最严重）：--root override 原写进 self.config，\n  serve 模式下任何 update_*（如浏览器 PATCH /api/config 改 theme）的整份 persist 会把\n  override 落盘污染桌面端 config。改用 ConfigManager 独立 root_override 字段 +\n  effective_claude_root() 读侧优先级；persist 只序列化未 override 的 config，消费点\n  （projects/todos/claude_base）全走 effective。这也结构性消解了 F3 migration 顺序风险。\n- **裸 ~ 相对路径**（codex + silent-failure）：~/ trim 尾分隔符退化成裸 ~ → 消费侧当相对\n  路径静默扫错。validation 规范化回 ~/，expand_tilde_root 补认裸 ~ → home。\n- **非字符串 recentRoots**（codex）：严格 Vec<String> 遇非字符串项（如 42）让整份 config\n  反序列化失败回默认、丢 httpServer.port 等无关字段。改 lenient 反序列化跳过坏项。\n\n测试：serve 泄漏回归 + 裸 tilde（validation/resolve）+ 非字符串 recentRoots load +\nCLI --root 拒绝非法路径集成测试；help 快照更新（--root global flag）。\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* fix(config): resolve CI failures — pin help COLUMNS, rename data-root e2e label, override precedence\n\n- cli_help_snapshots: 显式 COLUMNS=1000 固定折行，消除 dev/CI 快照分歧\n- e2e spec: label 对齐 UI aria-label 数据根目录\n- local.rs: reconfigure 用 effective_claude_root，--root override 优先\n- manager.rs: 新增 override 优先测试\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* test(cli): drop brittle help snapshots, add clap debug_assert + trim global flag docs\n\n* refactor(cli): group global flags + trim help descriptions\n\n每次改 CLI 都撞上冗长 help 的根因是结构性的：6 个 global flag 被 clap\n在每个子命令 help 里与局部 flag 交错重复渲染，描述又是整句，COLUMNS=80\n下频繁折行。此前只做治标补丁（pin COLUMNS / trim docs / drop snapshots）。\n\n- next_help_heading = \"Global options\"：全局 flag 归入独立分组，子命令\n  help 变为\"局部 flag 在前，Global options 在后\"，交错混排消失\n- 收紧 --project/--json/--no-truncate/--verbose/--root 描述为短语，\n  80 列下不再折行\n\nhelp 文本非行为契约（cli-output spec 不约束长度），纯 CLI cosmetic。\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* refactor(cli): keep --project=<id> hint for encoded IDs\n\n二审（codex + pr-review-toolkit）均指出收紧 --project 描述时丢了\n\"--project=<id> for encoded IDs\" 提示：encode_path 产出的 ID 以 - 开头，\n裸 --project -Users-foo 会被 clap 当 flag，= 形式是唯一 workaround，属\n功能性提示。用更短措辞 \"Project name, or --project=<id> for an encoded ID\"\n补回，80 列仍单行不折行。\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* chore(opsx): archive flexible-data-root\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-07T14:03:39+08:00",
+          "tree_id": "f8e4b10eb82d4d88414790fa74b2ceee62404fe2",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/0606ad5de63033f7a15936dd19b6e047cea30380"
+        },
+        "date": 1783404404988,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 88.39,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 868.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 3850,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.171,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 6.569,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 45.69,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 26.46,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 228.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 954.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 2780,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 2256,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 30320,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.025,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 49.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 499,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 4992,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 166.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1686,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 47.55,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 477.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 4777,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 102.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1022,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 5.707,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 56.86,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 6974,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 725,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 7170,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 765.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 42.61,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 442.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 77.96,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 778.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 7810,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 149,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1020,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 9728,
             "unit": "µs"
           }
         ]
