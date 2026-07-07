@@ -35,28 +35,32 @@ mod view;
 
 #[derive(Parser)]
 #[command(name = "cdt", about = "claude-devtools CLI", version)]
+// 全局 flag 统一归到 "Global options" 分组，避免在每个子命令 help 里与局部 flag
+// 交错混排（clap 对 global arg 会在每个子命令重复渲染）。描述保持短语形态，
+// 防止 COLUMNS=80 下折行——help 文本非行为契约，不进 cli-output spec。
+#[command(next_help_heading = "Global options")]
 struct Cli {
     /// Output format
     #[arg(long, global = true, default_value = "table")]
     format: OutputFormat,
 
-    /// Scope to a project (name or encoded ID; use --project=<id> for encoded IDs)
+    /// Scope to a project (name or encoded ID)
     #[arg(long, global = true, add = ArgValueCandidates::new(completions::ProjectCompleter))]
     project: Option<String>,
 
-    /// Select JSON fields (comma-separated); empty lists available fields. Implies --format json
+    /// JSON output; select fields (comma-sep), empty lists them
     #[arg(long, global = true, num_args = 0..=1, default_missing_value = "", require_equals = true)]
     json: Option<String>,
 
-    /// Do not truncate fields in table mode
+    /// Don't truncate table fields
     #[arg(long, global = true)]
     no_truncate: bool,
 
-    /// Increase diagnostic verbosity: -v warn, -vv info, -vvv debug (silent by default)
+    /// Increase log verbosity (-v/-vv/-vvv)
     #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
     verbose: u8,
 
-    /// Override the data root for this run (supports ~/); not persisted
+    /// Override data root for this run (~/ ok, not persisted)
     #[arg(long, visible_alias = "data-dir", global = true)]
     root: Option<String>,
 
