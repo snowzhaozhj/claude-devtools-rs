@@ -790,6 +790,7 @@ export const multiProjectRichFixture: Fixture = {
       theme: 'system',
       defaultTab: 'sessions',
       claudeRootPath: null,
+      recentRoots: ['~/.qoder', '/Users/alice/.claude'],
       autoExpandAiGroups: false,
       sessionClickBehavior: 'replace',
     },

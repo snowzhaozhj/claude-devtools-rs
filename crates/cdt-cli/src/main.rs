@@ -35,28 +35,34 @@ mod view;
 
 #[derive(Parser)]
 #[command(name = "cdt", about = "claude-devtools CLI", version)]
+// 全局 flag 统一归到 "Global options" 分组，避免在每个子命令 help 里与局部 flag
+// 交错混排（clap 对 global arg 会在每个子命令重复渲染）。描述保持短语形态，
+// 防止 COLUMNS=80 下折行——help 文本非行为契约，不进 cli-output spec。
+#[command(next_help_heading = "Global options")]
 struct Cli {
     /// Output format
     #[arg(long, global = true, default_value = "table")]
     format: OutputFormat,
 
-    /// Scope to a project (name or encoded ID; use --project=<id> for encoded IDs)
+    /// Project name, or --project=<id> for an encoded ID
     #[arg(long, global = true, add = ArgValueCandidates::new(completions::ProjectCompleter))]
     project: Option<String>,
 
-    /// Select JSON fields (comma-separated), implies --format json.
-    /// Without value: list available fields. Usage: --json=field1,field2
+    /// JSON output; select fields (comma-sep), empty lists them
     #[arg(long, global = true, num_args = 0..=1, default_missing_value = "", require_equals = true)]
     json: Option<String>,
 
-    /// Do not truncate fields in table mode
+    /// Don't truncate table fields
     #[arg(long, global = true)]
     no_truncate: bool,
 
-    /// Increase diagnostic verbosity (-v warn, -vv info, -vvv debug).
-    /// All output is silent by default; `RUST_LOG` overrides this entirely.
+    /// Increase log verbosity (-v/-vv/-vvv)
     #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
     verbose: u8,
+
+    /// Override data root for this run (~/ ok, not persisted)
+    #[arg(long, visible_alias = "data-dir", global = true)]
+    root: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -331,10 +337,23 @@ enum SetupAction {
 // Shared query layer
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// CLI `--root` / `--data-dir` 的临时数据根覆盖（已 validate，`~/` 原形保留）。
+/// 进程级单次设置，`set_claude_root_override` 只改内存态不持久化（change
+/// `flexible-data-root` D3）。SHALL 在 `config_mgr.load()` 之后注入，让 load 的
+/// composite-id migration persist 用原始 config、override 不落盘（F3）。
+static ROOT_OVERRIDE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+fn root_override() -> Option<&'static str> {
+    ROOT_OVERRIDE.get().and_then(Option::as_deref)
+}
+
 /// 构造 `LocalDataApi`（不启动 watcher），CLI 子命令 in-process 使用。
 async fn build_local_data_api() -> Result<Arc<LocalDataApi>> {
     let mut config_mgr = ConfigManager::new(None);
     config_mgr.load().await.context("failed to load config")?;
+    if let Some(root) = root_override() {
+        config_mgr.set_claude_root_override(root);
+    }
 
     let mut notif_mgr = NotificationManager::new(None);
     notif_mgr
@@ -343,15 +362,9 @@ async fn build_local_data_api() -> Result<Arc<LocalDataApi>> {
         .context("failed to load notifications")?;
 
     let fs = local_handle();
-    let projects_dir = path_decoder::projects_base_path_for(
-        config_mgr
-            .get_config()
-            .general
-            .claude_root_path
-            .as_deref()
-            .map(PathBuf::from)
-            .as_deref(),
-    );
+    // effective_claude_root：--root override（不落盘）> 持久化 claudeRootPath > 默认。
+    let effective_root = config_mgr.effective_claude_root().map(PathBuf::from);
+    let projects_dir = path_decoder::projects_base_path_for(effective_root.as_deref());
 
     let scanner_semaphore = Arc::new(Semaphore::new(64));
     let scanner =
@@ -370,6 +383,11 @@ async fn build_local_data_api() -> Result<Arc<LocalDataApi>> {
 async fn run_serve() -> Result<()> {
     let mut config_mgr = ConfigManager::new(None);
     config_mgr.load().await.context("failed to load config")?;
+    // --root 覆盖贯穿 serve 的 projects/todos/watcher/HTTP（F2）：注入内存态后，
+    // 下面从 config 读的 projects_dir/todos_dir 均基于 override。
+    if let Some(root) = root_override() {
+        config_mgr.set_claude_root_override(root);
+    }
 
     let port = config_mgr.get_config().http_server.port;
 
@@ -380,24 +398,11 @@ async fn run_serve() -> Result<()> {
         .context("failed to load notifications")?;
 
     let fs = local_handle();
-    let projects_dir = path_decoder::projects_base_path_for(
-        config_mgr
-            .get_config()
-            .general
-            .claude_root_path
-            .as_deref()
-            .map(PathBuf::from)
-            .as_deref(),
-    );
-    let todos_dir = path_decoder::todos_base_path_for(
-        config_mgr
-            .get_config()
-            .general
-            .claude_root_path
-            .as_deref()
-            .map(PathBuf::from)
-            .as_deref(),
-    );
+    // effective_claude_root：--root override（不落盘）贯穿 serve 的 projects/todos/
+    // watcher/HTTP（F2）；override 存在 config_mgr 独立字段，不进 persist（F3）。
+    let effective_root = config_mgr.effective_claude_root().map(PathBuf::from);
+    let projects_dir = path_decoder::projects_base_path_for(effective_root.as_deref());
+    let todos_dir = path_decoder::todos_base_path_for(effective_root.as_deref());
     let scanner_semaphore = Arc::new(Semaphore::new(64));
     let scanner = ProjectScanner::new_with_semaphore(fs, projects_dir.clone(), scanner_semaphore);
 
@@ -2228,6 +2233,18 @@ async fn main() -> Result<()> {
         NO_TRUNCATE.store(true, Ordering::Relaxed);
     }
 
+    // --root / --data-dir：validate（拒相对路径 / ~user/）后设进程级临时覆盖，
+    // 不持久化。build_local_data_api / run_serve 在 load 后读它注入内存态。
+    let validated_root = match cli.root.as_deref() {
+        Some(r) => Some(
+            cdt_config::validate_claude_root_path(Some(r))
+                .map_err(|e| anyhow::anyhow!("invalid --root: {e}"))?
+                .ok_or_else(|| anyhow::anyhow!("--root must not be empty"))?,
+        ),
+        None => None,
+    };
+    let _ = ROOT_OVERRIDE.set(validated_root);
+
     // --json overrides format; empty string means "list available fields"
     let (effective_format, json_fields) = if let Some(ref json_arg) = cli.json {
         if json_arg.is_empty() {
@@ -2415,6 +2432,14 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// clap 派生结构的结构性校验（重复 flag / 冲突配置 / 无效 arg 组合会 panic）。
+    /// 取代脆弱的全量 help 文本快照——校验 CLI 定义合法，不锁定环境相关的折行输出。
+    #[test]
+    fn cli_definition_is_valid() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
 
     #[test]
     fn parse_range_normal() {

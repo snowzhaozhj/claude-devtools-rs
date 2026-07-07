@@ -32,6 +32,24 @@ where
     }
 }
 
+/// 宽容反序列化字符串数组：非字符串项（数字 / 对象 / null）静默跳过，而非让整个
+/// `AppConfig` 反序列化失败回退默认。codex 二审：`recentRoots` 含非字符串项（如
+/// `[.., 42]`）若走严格 `Vec<String>` 会连累 `httpServer.port` 等无关字段一起丢。
+/// 保留的字符串项由 `sanitize_recent_roots` 在 load 时进一步按合法性过滤。
+fn deserialize_lenient_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|v| match v {
+            serde_json::Value::String(s) => Some(s),
+            _ => None,
+        })
+        .collect())
+}
+
 // =============================================================================
 // Top-level config
 // =============================================================================
@@ -211,6 +229,11 @@ pub struct GeneralConfig {
     #[serde(default, deserialize_with = "deserialize_lenient_enum")]
     pub default_tab: DefaultTab,
     pub claude_root_path: Option<String>,
+    /// 用户切换过的数据根历史（MRU），供 Settings 快速切换下拉。后端在写入
+    /// 非 null `claude_root_path` 时自动 append（去重 + MRU + 上限）；前端只读，
+    /// 不通过 `update_general` 直接更新。详 configuration-management spec。
+    #[serde(default, deserialize_with = "deserialize_lenient_string_vec")]
+    pub recent_roots: Vec<String>,
     pub auto_expand_ai_groups: bool,
     pub use_native_title_bar: bool,
     /// 点击 sidebar 会话项时的默认行为："replace" 替换当前 tab，"new-tab" 总开新 tab。

@@ -2347,14 +2347,12 @@ impl LocalDataApi {
 
     async fn claude_base_path(&self) -> PathBuf {
         let mgr = self.config_mgr.lock().await;
-        mgr.get_config()
-            .general
-            .claude_root_path
-            .as_deref()
-            .map_or_else(
-                cdt_discover::path_decoder::get_claude_base_path,
-                PathBuf::from,
-            )
+        // effective_claude_root：CLI `--root` override > 持久化 claudeRootPath > 默认。
+        // 第三个 root 消费点：过统一 helper 让 `~/` 前缀展开（与 projects/todos 一致），
+        // 否则 `~/.qoder` 会被当字面路径读 CLAUDE.md / auto-memory（change `flexible-data-root` D4）。
+        let root = mgr.effective_claude_root().map(str::to_owned);
+        drop(mgr);
+        cdt_discover::path_decoder::resolve_claude_root_path(root.as_deref().map(Path::new))
     }
 
     /// 按 `ContextId` 精确 abort：retain 所有非匹配 entry，匹配的 entry handle
@@ -4872,7 +4870,10 @@ impl DataApi for LocalDataApi {
         };
         let config = result.map_err(|e| ApiError::internal(format!("{e}")))?;
         if request.section == "general" && request.data.get("claudeRootPath").is_some() {
-            self.reconfigure_claude_root(config.general.claude_root_path.as_deref())
+            // effective：--root override 优先（同 versioned 路径，codex 二审）。
+            let effective_root = mgr.effective_claude_root().map(str::to_owned);
+            drop(mgr);
+            self.reconfigure_claude_root(effective_root.as_deref())
                 .await;
         }
         Ok(config)
@@ -4900,10 +4901,13 @@ impl DataApi for LocalDataApi {
         };
         let config = result.map_err(|e| ApiError::internal(format!("{e}")))?;
         let version = mgr.version();
+        // effective：--root override 优先。override 生效时 PATCH claudeRootPath 不切根
+        // （effective 仍是 override），避免运行时重配绕过 override（codex 二审）。
+        let effective_root = mgr.effective_claude_root().map(str::to_owned);
         // Drop lock before async reconfigure
         drop(mgr);
         if request.section == "general" && request.data.get("claudeRootPath").is_some() {
-            self.reconfigure_claude_root(config.general.claude_root_path.as_deref())
+            self.reconfigure_claude_root(effective_root.as_deref())
                 .await;
         }
         Ok((config, version))

@@ -627,13 +627,19 @@
   async function chooseClaudeRoot() {
     saveError = null;
     try {
-      const selected = await open({ directory: true, multiple: false, title: "选择 Claude 数据根目录" });
+      const selected = await open({ directory: true, multiple: false, title: "选择数据根目录" });
       if (typeof selected !== "string") return;
       claudeRootInput = selected;
       await updateGeneral("claudeRootPath", selected);
     } catch (e) {
       saveError = `选择目录失败: ${e}`;
     }
+  }
+
+  async function applyRecentRoot(root: string) {
+    if (root === (config?.general.claudeRootPath ?? "")) return;
+    claudeRootInput = root;
+    await updateGeneral("claudeRootPath", root);
   }
 
   async function applyWslDistro(candidate: WslDistroCandidate) {
@@ -984,14 +990,14 @@
             title="数据目录"
             description="留空使用默认目录；项目来自该目录下的 projects，待办来自 todos"
           >
-            <SettingsField label="Claude 数据根目录" layout="stack" labelFor="claude-root-input">
+            <SettingsField label="数据根目录" layout="stack" labelFor="claude-root-input">
               {#snippet control()}
                 <input
                   id="claude-root-input"
                   class="control-input control-input-mono"
                   type="text"
                   placeholder="默认 ~/.claude"
-                  aria-label="Claude 数据根目录"
+                  aria-label="数据根目录"
                   bind:value={claudeRootInput}
                   onkeydown={(e) => {
                     if (e.key === "Enter") commitClaudeRoot();
@@ -1030,6 +1036,18 @@
               <p class="wsl-inline" class:wsl-inline-error={wslInlineMessage.kind === "error"} role="status">
                 {wslInlineMessage.text}
               </p>
+            {/if}
+            {#if (config!.general.recentRoots ?? []).length > 0}
+              <SettingsField label="最近使用" layout="stack" labelFor="recent-roots-dropdown">
+                {#snippet control()}
+                  <Dropdown
+                    value={config!.general.claudeRootPath ?? ""}
+                    options={(config!.general.recentRoots ?? []).map((r) => ({ value: r, label: r }))}
+                    onChange={applyRecentRoot}
+                    ariaLabel="最近使用的数据根目录"
+                  />
+                {/snippet}
+              </SettingsField>
             {/if}
           </SettingsGroup>
           {#if showBrowserAccess}
@@ -1473,7 +1491,7 @@
   onPrimary={confirmWslSelection}
   onClose={cancelWslSelection}
 >
-  <p class="wsl-modal-hint">将把 Claude 数据根目录切换为所选 distro 的 UNC 路径</p>
+  <p class="wsl-modal-hint">将把 数据根目录切换为所选 distro 的 UNC 路径</p>
   <ul class="wsl-distro-list">
     {#each wslCandidates as candidate (candidate.distro)}
       <li class="wsl-distro-item">

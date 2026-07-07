@@ -269,20 +269,46 @@ pub fn get_claude_base_path() -> PathBuf {
     home_dir().unwrap_or_else(fallback_home).join(".claude")
 }
 
+/// 把 Claude root 配置值解析成绝对基路径：`~/`（Windows `~\`）前缀展开到
+/// home，绝对路径原样，`None` 回退默认 `~/.claude`。
+///
+/// **数据读取侧唯一的 tilde 展开点**——所有消费 `claudeRootPath` 的路径
+/// （`projects/` / `todos/` / CLAUDE.md 与 auto-memory 基路径）SHALL 经此函数，
+/// 保证一致。配置持久化层保留 `~/` 原形（详 `cdt-config::validate_claude_root_path`）。
+#[must_use]
+pub fn resolve_claude_root_path(claude_root_path: Option<&Path>) -> PathBuf {
+    match claude_root_path {
+        Some(p) => expand_tilde_root(p),
+        None => get_claude_base_path(),
+    }
+}
+
+/// `~/` / `~\`（Windows）前缀（紧跟分隔符）展开到 home 目录；其余原样。
+/// `~user/` 具名 home 不展开（校验层已拒），与 `mention` 对 `~user` 的口径一致。
+fn expand_tilde_root(p: &Path) -> PathBuf {
+    if let Some(s) = p.to_str() {
+        // 裸 `~`（`~/` / `~\` 经校验 trim 尾分隔符后退化的形态）= home 本身，
+        // 避免落到 `p.to_path_buf()` 当相对 `~` 目录静默扫错（silent-failure 二审）。
+        if s == "~" {
+            return home_dir().unwrap_or_else(fallback_home);
+        }
+        if let Some(rest) = s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
+            return home_dir().unwrap_or_else(fallback_home).join(rest);
+        }
+    }
+    p.to_path_buf()
+}
+
 /// Claude root 下的 `projects/`。
 #[must_use]
 pub fn projects_base_path_for(claude_root_path: Option<&Path>) -> PathBuf {
-    claude_root_path
-        .map_or_else(get_claude_base_path, Path::to_path_buf)
-        .join("projects")
+    resolve_claude_root_path(claude_root_path).join("projects")
 }
 
 /// Claude root 下的 `todos/`。
 #[must_use]
 pub fn todos_base_path_for(claude_root_path: Option<&Path>) -> PathBuf {
-    claude_root_path
-        .map_or_else(get_claude_base_path, Path::to_path_buf)
-        .join("todos")
+    resolve_claude_root_path(claude_root_path).join("todos")
 }
 
 /// `~/.claude/projects/` —— 根据 home 目录动态解析。
@@ -351,6 +377,59 @@ mod tests {
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect();
         move |k| map.get(k).cloned()
+    }
+
+    #[test]
+    fn resolve_tilde_root_expands_to_home() {
+        let home = home_dir().unwrap_or_else(fallback_home);
+        assert_eq!(
+            resolve_claude_root_path(Some(Path::new("~/.qoder"))),
+            home.join(".qoder")
+        );
+        // Windows 反斜杠形式等价
+        assert_eq!(
+            resolve_claude_root_path(Some(Path::new(r"~\.qoder"))),
+            home.join(".qoder")
+        );
+    }
+
+    #[test]
+    fn resolve_absolute_root_verbatim() {
+        assert_eq!(
+            resolve_claude_root_path(Some(Path::new("/data/alt"))),
+            PathBuf::from("/data/alt")
+        );
+    }
+
+    #[test]
+    fn resolve_bare_and_slash_tilde_to_home() {
+        // 裸 `~`（校验产出）与 `~/` 都 SHALL 展开到 home 本身，不落相对路径
+        let home = home_dir().unwrap_or_else(fallback_home);
+        assert_eq!(resolve_claude_root_path(Some(Path::new("~"))), home.clone());
+        assert_eq!(resolve_claude_root_path(Some(Path::new("~/"))), home);
+    }
+
+    #[test]
+    fn resolve_named_home_tilde_not_expanded() {
+        // `~alice/` 不展开（当字面路径；校验层已拒此形态入 config）
+        assert_eq!(
+            resolve_claude_root_path(Some(Path::new("~alice/data"))),
+            PathBuf::from("~alice/data")
+        );
+    }
+
+    #[test]
+    fn projects_and_todos_share_tilde_expansion() {
+        let home = home_dir().unwrap_or_else(fallback_home);
+        let p = Path::new("~/.qoder");
+        assert_eq!(
+            projects_base_path_for(Some(p)),
+            home.join(".qoder").join("projects")
+        );
+        assert_eq!(
+            todos_base_path_for(Some(p)),
+            home.join(".qoder").join("todos")
+        );
     }
 
     fn none_fallback() -> Option<PathBuf> {

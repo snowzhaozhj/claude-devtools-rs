@@ -2430,6 +2430,34 @@ async fn config_version_starts_at_zero_and_increments_on_update() {
 }
 
 #[tokio::test]
+async fn update_claude_root_appends_to_recent_roots_mru() {
+    let (api, _tmp) = setup_api().await;
+
+    for root in ["/data/alpha", "~/.qoder"] {
+        api.update_config(&ConfigUpdateRequest {
+            section: "general".into(),
+            data: json!({ "claudeRootPath": root }),
+        })
+        .await
+        .unwrap();
+    }
+
+    let config = serde_json::to_value(api.get_config().await.unwrap()).unwrap();
+    let recent: Vec<&str> = config["general"]["recentRoots"]
+        .as_array()
+        .expect("recentRoots SHALL 为数组")
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    // 最近使用在前；tilde 原形保留（change flexible-data-root）。
+    assert_eq!(
+        recent,
+        vec!["~/.qoder", "/data/alpha"],
+        "recentRoots SHALL 按 MRU 记录切换过的数据根，tilde 原形保留"
+    );
+}
+
+#[tokio::test]
 async fn config_version_mismatch_rejects_stale_update() {
     let (api, _tmp) = setup_api().await;
 

@@ -44,9 +44,22 @@ pub fn validate_claude_root_path(value: Option<&str>) -> Result<Option<String>, 
         return Ok(None);
     }
 
+    // `~/`（Windows `~\`）前缀：保留原形不展开（可移植；展开推迟到消费点
+    // `cdt_discover::resolve_claude_root_path`）。仅 trim 尾部分隔符；`~/` / `~\`
+    // 全是分隔符 trim 后剩裸 `~`，规范化回 `~/`（= home 本身），避免消费侧当
+    // 相对路径 + 下次 load 被 normalize 吞成 None（codex / silent-failure 二审）。
+    if is_tilde_prefixed(trimmed) {
+        let stripped = trimmed.trim_end_matches(['/', '\\']);
+        return Ok(Some(if stripped == "~" {
+            "~/".to_owned()
+        } else {
+            stripped.to_owned()
+        }));
+    }
+
     if !looks_like_absolute_path(trimmed) {
         return Err(ConfigError::validation(
-            "general.claudeRootPath must be an absolute path or null",
+            "general.claudeRootPath must be an absolute path, a ~/ path, or null",
         ));
     }
 
@@ -68,6 +81,54 @@ fn is_windows_drive_root(path: &str) -> bool {
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
         && (bytes[2] == b'/' || bytes[2] == b'\\')
+}
+
+/// `~/` / `~\`（Windows）前缀（紧跟分隔符）。`~user/` 具名 home 不算。
+fn is_tilde_prefixed(s: &str) -> bool {
+    s.starts_with("~/") || s.starts_with("~\\")
+}
+
+/// 数据根历史（`general.recentRoots`）条目上限。
+pub const MAX_RECENT_ROOTS: usize = 8;
+
+/// MRU 去重键：trim 尾分隔符 + 反斜杠归一正斜杠 + Windows 大小写不敏感。
+/// 不做文件系统 canonicalize（详 change `flexible-data-root` 的 `design.md` D6）。
+fn recent_root_dedup_key(s: &str) -> String {
+    let unified = s.trim_end_matches(['/', '\\']).replace('\\', "/");
+    if cfg!(windows) {
+        unified.to_lowercase()
+    } else {
+        unified
+    }
+}
+
+/// 过滤非法项 + 去重（保留首次出现），用于加载时清洗历史。
+#[must_use]
+pub fn sanitize_recent_roots(roots: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for r in roots {
+        let Ok(Some(norm)) = validate_claude_root_path(Some(r)) else {
+            tracing::warn!(entry = %r, "dropping invalid general.recentRoots entry");
+            continue;
+        };
+        if seen.insert(recent_root_dedup_key(&norm)) {
+            out.push(norm);
+        }
+    }
+    out
+}
+
+/// 把新数据根加入 MRU 历史：最近在前、去重、过滤非法项、上限截断。
+/// `new_root` 应为已 normalize 的合法值（来自 `validate_claude_root_path`）。
+#[must_use]
+pub fn push_recent_root(existing: &[String], new_root: &str) -> Vec<String> {
+    let mut combined = Vec::with_capacity(existing.len() + 1);
+    combined.push(new_root.to_owned());
+    combined.extend(existing.iter().cloned());
+    let mut sanitized = sanitize_recent_roots(&combined);
+    sanitized.truncate(MAX_RECENT_ROOTS);
+    sanitized
 }
 
 /// 校验 section 名是否合法。
@@ -244,6 +305,80 @@ mod tests {
     fn validate_path_empty_clears() {
         assert_eq!(validate_claude_root_path(Some("  ")).unwrap(), None);
         assert_eq!(validate_claude_root_path(None).unwrap(), None);
+    }
+
+    #[test]
+    fn validate_path_tilde_accepted_verbatim() {
+        assert_eq!(
+            validate_claude_root_path(Some("~/.qoder")).unwrap(),
+            Some("~/.qoder".into())
+        );
+        assert_eq!(
+            validate_claude_root_path(Some(r"~\.qoder")).unwrap(),
+            Some(r"~\.qoder".into())
+        );
+        // 尾分隔符 trim，原形保留
+        assert_eq!(
+            validate_claude_root_path(Some("~/.qoder/")).unwrap(),
+            Some("~/.qoder".into())
+        );
+    }
+
+    #[test]
+    fn validate_path_named_home_tilde_rejected() {
+        assert!(validate_claude_root_path(Some("~alice/data")).is_err());
+    }
+
+    #[test]
+    fn validate_path_bare_tilde_normalizes_to_slash_form() {
+        // `~/` / `~\`（全是分隔符）SHALL 规范化回 `~/`（= home），不退化成裸 `~`
+        // （否则消费侧当相对路径 + 下次 load 被 normalize 吞成 None）。
+        assert_eq!(
+            validate_claude_root_path(Some("~/")).unwrap(),
+            Some("~/".to_owned())
+        );
+        assert_eq!(
+            validate_claude_root_path(Some(r"~\")).unwrap(),
+            Some("~/".to_owned())
+        );
+    }
+
+    #[test]
+    fn push_recent_root_dedupes_and_orders_mru() {
+        let existing = vec!["/a".to_owned(), "/b".to_owned()];
+        // 重选已有项：去重 + 移到最前
+        assert_eq!(
+            push_recent_root(&existing, "/b"),
+            vec!["/b".to_owned(), "/a".to_owned()]
+        );
+        // 新项前插
+        assert_eq!(
+            push_recent_root(&existing, "/c"),
+            vec!["/c".to_owned(), "/a".to_owned(), "/b".to_owned()]
+        );
+    }
+
+    #[test]
+    fn push_recent_root_enforces_cap() {
+        let existing: Vec<String> = (0..MAX_RECENT_ROOTS).map(|i| format!("/p{i}")).collect();
+        let out = push_recent_root(&existing, "/new");
+        assert_eq!(out.len(), MAX_RECENT_ROOTS);
+        assert_eq!(out[0], "/new");
+    }
+
+    #[test]
+    fn sanitize_recent_roots_filters_invalid_and_dedupes() {
+        let roots = vec![
+            "/valid".to_owned(),
+            "relative/bad".to_owned(),
+            "~alice/x".to_owned(),
+            "/valid/".to_owned(),
+            "~/.qoder".to_owned(),
+        ];
+        assert_eq!(
+            sanitize_recent_roots(&roots),
+            vec!["/valid".to_owned(), "~/.qoder".to_owned()]
+        );
     }
 
     #[test]
