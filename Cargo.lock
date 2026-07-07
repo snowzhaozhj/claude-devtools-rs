@@ -4447,7 +4447,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.7.3"
+version = "0.7.4"
 
 [[package]]
 name = "yoke"
