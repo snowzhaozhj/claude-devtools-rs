@@ -36,13 +36,13 @@ test.describe('settings + notifications', () => {
     await expect(page.getByText('启用通知')).toBeVisible()
   })
 
-  test('Settings 常规分区可保存并恢复 Claude 数据根目录', async ({ page }) => {
+  test('Settings 常规分区可保存并恢复 数据根目录', async ({ page }) => {
     await gotoWithMockReady(page)
     await page.evaluate(() => {
       ;(window as unknown as { __cdtTest: { openSettingsTab: () => void } }).__cdtTest.openSettingsTab()
     })
 
-    const input = page.getByRole('textbox', { name: 'Claude 数据根目录' })
+    const input = page.getByRole('textbox', { name: '数据根目录' })
     await expect(input).toBeVisible({ timeout: 5_000 })
     await expect(page.getByRole('button', { name: '恢复默认' })).toBeDisabled()
 

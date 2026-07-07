@@ -1263,6 +1263,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn override_takes_precedence_over_patched_claude_root_path() {
+        // override 生效时 PATCH claudeRootPath：effective_claude_root 仍返回 override
+        // （运行时 reconfigure 用 effective，不被 PATCH 绕过）——codex 二审。
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut mgr = ConfigManager::new(Some(path));
+        mgr.load().await.unwrap();
+
+        mgr.set_claude_root_override("/tmp/override");
+        mgr.update_general(serde_json::json!({ "claudeRootPath": "/tmp/patched" }))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mgr.effective_claude_root(),
+            Some("/tmp/override"),
+            "override SHALL 优先于 PATCH 的 claudeRootPath（运行时 reconfigure 用它）"
+        );
+        assert_eq!(
+            mgr.get_config().general.claude_root_path.as_deref(),
+            Some("/tmp/patched"),
+            "PATCH 值仍写入 config 持久化层，只是 effective 读侧用 override"
+        );
+    }
+
+    #[tokio::test]
     async fn corrupted_config_creates_backup() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.json");

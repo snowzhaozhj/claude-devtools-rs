@@ -14,6 +14,11 @@ use std::process::Command;
 fn cdt_bin() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_cdt"));
     cmd.env("RUST_LOG", "off");
+    // 固定折行宽度：clap 无 tty 时读 `COLUMNS`（回退默认 100）。dev shell 的
+    // `COLUMNS` 会泄漏进 subprocess 让 help 不折行、而 CI 无 `COLUMNS` → 100 折行，
+    // 两者快照不一致（长描述如 `--root` 的 `[aliases:]` 折行后不被 normalize 合并）。
+    // 显式设一个大宽度让快照恒不折行、跨 dev/CI 确定（配合 normalize_help_wrapping）。
+    cmd.env("COLUMNS", "1000");
     cmd
 }
 

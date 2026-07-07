@@ -4870,7 +4870,10 @@ impl DataApi for LocalDataApi {
         };
         let config = result.map_err(|e| ApiError::internal(format!("{e}")))?;
         if request.section == "general" && request.data.get("claudeRootPath").is_some() {
-            self.reconfigure_claude_root(config.general.claude_root_path.as_deref())
+            // effective：--root override 优先（同 versioned 路径，codex 二审）。
+            let effective_root = mgr.effective_claude_root().map(str::to_owned);
+            drop(mgr);
+            self.reconfigure_claude_root(effective_root.as_deref())
                 .await;
         }
         Ok(config)
@@ -4898,10 +4901,13 @@ impl DataApi for LocalDataApi {
         };
         let config = result.map_err(|e| ApiError::internal(format!("{e}")))?;
         let version = mgr.version();
+        // effective：--root override 优先。override 生效时 PATCH claudeRootPath 不切根
+        // （effective 仍是 override），避免运行时重配绕过 override（codex 二审）。
+        let effective_root = mgr.effective_claude_root().map(str::to_owned);
         // Drop lock before async reconfigure
         drop(mgr);
         if request.section == "general" && request.data.get("claudeRootPath").is_some() {
-            self.reconfigure_claude_root(config.general.claude_root_path.as_deref())
+            self.reconfigure_claude_root(effective_root.as_deref())
                 .await;
         }
         Ok((config, version))
