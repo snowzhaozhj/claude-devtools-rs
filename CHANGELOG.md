@@ -9,6 +9,8 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-07-08
+
 ### Added
 - **Settings / CLI**: the data root directory now accepts a `~/` (or Windows `~\`) home-relative path, so you can point the app at another Claude-Code-compatible data directory (e.g. `~/.qoder`) by typing it directly instead of relying on the folder picker. Settings also remembers recently-used roots in a quick-switch dropdown, and the CLI gains a `--root` / `--data-dir` flag to read from a different data root for a single command without changing your saved configuration.
 
@@ -428,7 +430,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.0...v0.7.1
