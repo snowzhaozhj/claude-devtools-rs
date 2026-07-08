@@ -185,36 +185,47 @@
 
   const DEFAULT_ROOT_LABEL = "~/.claude";
 
+  function normalizeDefaultClaudeRoot(value: string | null): string | null {
+    if (value === null) return null;
+    const trimmed = value.trim();
+    const withoutTrailingSlash = trimmed.replace(/[\\/]+$/g, "");
+    return withoutTrailingSlash === DEFAULT_ROOT_LABEL ? null : trimmed;
+  }
+
+  function rootOptionKey(value: string | null): string {
+    return normalizeDefaultClaudeRoot(value) ?? DEFAULT_ROOT_LABEL;
+  }
+
   interface RootOption {
     value: string | null;
     label: string;
   }
 
-  const currentRootLabel = $derived.by(() => {
+  const effectiveClaudeRootPath = $derived.by(() => {
     const cfg = config;
-    return cfg?.general.claudeRootPath ?? DEFAULT_ROOT_LABEL;
+    return normalizeDefaultClaudeRoot(cfg?.general.claudeRootPath ?? null);
   });
-  const currentRootKind = $derived.by(() => {
-    const cfg = config;
-    return cfg?.general.claudeRootPath === null ? "默认" : "自定义";
-  });
+  const currentRootLabel = $derived(effectiveClaudeRootPath ?? DEFAULT_ROOT_LABEL);
+  const currentRootKind = $derived(effectiveClaudeRootPath === null ? "默认" : "自定义");
   const hasRootScopedTabsOpen = $derived(hasRootScopedTabs());
   const recentRootOptions = $derived.by<RootOption[]>(() => {
     if (!config) return [];
-    const current = config.general.claudeRootPath ?? DEFAULT_ROOT_LABEL;
+    const currentKey = rootOptionKey(effectiveClaudeRootPath);
     const seen = new Set<string>();
     const options: RootOption[] = [];
 
-    if (config.general.claudeRootPath !== null) {
+    if (effectiveClaudeRootPath !== null) {
       seen.add(DEFAULT_ROOT_LABEL);
       options.push({ value: null, label: DEFAULT_ROOT_LABEL });
     }
 
     for (const root of config.general.recentRoots ?? []) {
-      if (root === current) continue;
-      if (seen.has(root)) continue;
-      seen.add(root);
-      options.push({ value: root, label: root });
+      const normalized = normalizeDefaultClaudeRoot(root);
+      const key = rootOptionKey(normalized);
+      if (key === currentKey) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push({ value: normalized, label: normalized ?? DEFAULT_ROOT_LABEL });
     }
     return options;
   });
@@ -666,14 +677,15 @@
 
   async function applyDataRoot(value: string | null): Promise<boolean> {
     if (!config || rootSwitchPending) return false;
-    const current = config.general.claudeRootPath ?? null;
-    if (value === current) {
+    const nextRoot = normalizeDefaultClaudeRoot(value);
+    const current = normalizeDefaultClaudeRoot(config.general.claudeRootPath ?? null);
+    if (nextRoot === current) {
       rootInputEditing = false;
-      claudeRootInput = config.general.claudeRootPath ?? "";
+      claudeRootInput = current ?? "";
       return true;
     }
     rootSwitchPending = true;
-    const saved = await updateGeneral("claudeRootPath", value);
+    const saved = await updateGeneral("claudeRootPath", nextRoot);
     if (saved) {
       const waitForComplete = waitForRootSwitchComplete();
       window.dispatchEvent(new CustomEvent("cdt-data-root-changed"));
@@ -1125,7 +1137,7 @@
                       ariaLabel="打开数据根目录路径输入框"
                       title="输入数据根目录路径"
                     >输入</SettingsButton>
-                    {#if config?.general.claudeRootPath !== null}
+                    {#if effectiveClaudeRootPath !== null}
                       <SettingsButton
                         variant="ghost"
                         disabled={rootSwitchPending}

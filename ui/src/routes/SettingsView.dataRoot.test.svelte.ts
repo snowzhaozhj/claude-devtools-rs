@@ -60,6 +60,46 @@ describe('SettingsView 数据目录 source switcher', () => {
     expect(document.querySelectorAll('.data-root-recent-path[title="~/.qoder"]')).toHaveLength(0)
   })
 
+  test('已有 ~/.claude 字符串配置按默认 root 展示，不出现同名默认切换项', async () => {
+    emptyFixture.config.general.claudeRootPath = '~/.claude'
+    emptyFixture.config.general.recentRoots = ['~/.claude', '/data/alpha']
+    setupMockIPC('empty')
+
+    const { container, getByText, queryByLabelText, queryByText } = render(SettingsView)
+    await waitFor(() => expect(getByText('~/.claude')).toBeTruthy())
+
+    expect(getByText('默认')).toBeTruthy()
+    expect(queryByText('自定义')).toBeNull()
+    expect(queryByLabelText('恢复默认数据根目录')).toBeNull()
+    expect(getByText('/data/alpha')).toBeTruthy()
+    expect(container.querySelectorAll('.data-root-recent-path[title="~/.claude"]')).toHaveLength(0)
+  })
+
+  test('默认 root 手动输入 ~/.claude 会归一化为 no-op，不保存自定义字符串', async () => {
+    emptyFixture.config.general.claudeRootPath = null
+    setupMockIPC('empty')
+    let rootSwitchEvents = 0
+    const onRootSwitch = () => { rootSwitchEvents += 1 }
+    window.addEventListener('cdt-data-root-changed', onRootSwitch)
+
+    try {
+      const { getByText, getByLabelText, queryByLabelText } = render(SettingsView)
+      await waitFor(() => expect(getByText('输入')).toBeTruthy())
+
+      await fireEvent.click(getByText('输入'))
+      const input = getByLabelText('输入数据根目录路径') as HTMLInputElement
+      await fireEvent.input(input, { target: { value: '~/.claude/' } })
+      await fireEvent.click(getByText('应用'))
+
+      await waitFor(() => expect(queryByLabelText('输入数据根目录路径')).toBeNull())
+      expect(getByText('默认')).toBeTruthy()
+      expect(rootSwitchEvents).toBe(0)
+      expect(emptyFixture.config.general.claudeRootPath).toBeNull()
+    } finally {
+      window.removeEventListener('cdt-data-root-changed', onRootSwitch)
+    }
+  })
+
   test('输入路径按钮原地展开，Esc 取消恢复按钮行', async () => {
     emptyFixture.config.general.claudeRootPath = '~/.qoder'
     setupMockIPC('empty')
