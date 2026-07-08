@@ -186,7 +186,7 @@
   const DEFAULT_ROOT_LABEL = "~/.claude";
 
   interface RootOption {
-    value: string;
+    value: string | null;
     label: string;
   }
 
@@ -204,6 +204,12 @@
     const current = config.general.claudeRootPath ?? DEFAULT_ROOT_LABEL;
     const seen = new Set<string>();
     const options: RootOption[] = [];
+
+    if (config.general.claudeRootPath !== null) {
+      seen.add(DEFAULT_ROOT_LABEL);
+      options.push({ value: null, label: DEFAULT_ROOT_LABEL });
+    }
+
     for (const root of config.general.recentRoots ?? []) {
       if (root === current) continue;
       if (seen.has(root)) continue;
@@ -1153,7 +1159,7 @@
               {/if}
               {#if hasRootScopedTabsOpen}
                 <p class="data-root-warning" role="status">
-                  切换会关闭已打开的标签页，回到工作台。
+                  切换会关闭会话与记忆标签页，设置页会保留。
                 </p>
               {/if}
 
@@ -2142,15 +2148,15 @@
   .data-root-block {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 12px 16px;
+    gap: 8px;
+    padding: 10px 12px;
   }
   .data-root-control {
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
-    padding: 6px;
+    padding: 4px;
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-sm);
     background: var(--color-surface);
@@ -2164,7 +2170,7 @@
     flex: 1 1 auto;
     min-width: 0;
     gap: 8px;
-    padding: 0 4px 0 8px;
+    padding: 0 4px;
   }
   .data-root-path,
   .data-root-recent-path {
@@ -2235,17 +2241,17 @@
   .data-root-recent {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    height: 128px;
+    gap: 4px;
+    max-height: 112px;
     overflow-y: auto;
     scrollbar-gutter: stable;
-    padding: 8px 6px 6px;
+    padding: 6px 4px;
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-sm);
     background: var(--color-surface);
   }
   .data-root-recent-title {
-    padding-left: 8px;
+    padding-left: 6px;
     font-size: 11px;
     font-weight: 600;
     color: var(--color-text-muted);
@@ -2254,9 +2260,9 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     min-width: 0;
-    padding: 0 0 0 8px;
+    padding: 0 0 0 6px;
   }
 
   .wsl-inline {

@@ -42,7 +42,7 @@ describe('SettingsView 数据目录 source switcher', () => {
     expect(container.querySelectorAll('.data-root-path')).toHaveLength(1)
   })
 
-  test('自定义 root 显示为自定义，最近列表过滤当前项', async () => {
+  test('自定义 root 显示为自定义，并把 ~/.claude 作为默认切换项', async () => {
     emptyFixture.config.general.claudeRootPath = '~/.qoder'
     emptyFixture.config.general.recentRoots = ['/data/alpha', '~/.qoder', '/data/beta']
     setupMockIPC('empty')
@@ -52,6 +52,7 @@ describe('SettingsView 数据目录 source switcher', () => {
 
     expect(getByText('自定义')).toBeTruthy()
     expect(getByLabelText('最近使用的数据根目录')).toBeTruthy()
+    expect(getByText('~/.claude')).toBeTruthy()
     expect(getByText('/data/alpha')).toBeTruthy()
     expect(getByText('/data/beta')).toBeTruthy()
     // 当前路径只在 current row 出现，不在“最近”列表重复出现。

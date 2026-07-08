@@ -61,22 +61,17 @@ test.describe('settings + notifications', () => {
     await input.fill('/tmp/claude-alt')
     await page.getByRole('button', { name: '应用', exact: true }).click()
 
-    // 切换成功后 root-switch-complete 触发一次，并回到工作台（Settings 关闭）
+    // 切换成功后 root-switch-complete 触发一次，Settings 原地保留并显示新 root
     await page.waitForFunction(() => ((window as unknown as { __rootSwitchCompleteCount?: number }).__rootSwitchCompleteCount ?? 0) === 1)
-    await expect(page.locator('.data-root-block')).toHaveCount(0)
-
-    // 重新打开 Settings：当前 root 已切换为自定义，出现「恢复默认」入口
-    await openSettings()
+    await expect(page.locator('.data-root-block')).toHaveCount(1)
     await expect(page.locator('.data-root-path')).toHaveText('/tmp/claude-alt', { timeout: 5_000 })
     await expect(page.locator('.data-root-kind')).toHaveText('自定义')
+    await expect(page.getByRole('button', { name: '切换到 ~/.claude' })).toBeVisible()
 
-    // 点「恢复默认」→ 再次触发一次 root switch 回到工作台
-    await page.getByRole('button', { name: '恢复默认数据根目录' }).click()
+    // 点「~/.claude」默认项 → 再次触发一次 root switch，仍停留在 Settings
+    await page.getByRole('button', { name: '切换到 ~/.claude' }).click()
     await page.waitForFunction(() => ((window as unknown as { __rootSwitchCompleteCount?: number }).__rootSwitchCompleteCount ?? 0) === 2)
-    await expect(page.locator('.data-root-block')).toHaveCount(0)
-
-    // 重新打开 Settings：已恢复默认
-    await openSettings()
+    await expect(page.locator('.data-root-block')).toHaveCount(1)
     await expect(page.locator('.data-root-path')).toHaveText('~/.claude', { timeout: 5_000 })
     await expect(page.locator('.data-root-kind')).toHaveText('默认')
   })

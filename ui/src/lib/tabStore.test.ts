@@ -23,7 +23,7 @@ import {
   setActiveTab,
   setCachedSession,
   setSessionClickBehavior,
-  resetWorkspaceTabsToDashboard,
+  closeRootScopedTabsForRootSwitch,
   hasRootScopedTabs,
 } from './tabStore.svelte'
 
@@ -165,8 +165,9 @@ describe('openSessionTab 路由', () => {
 })
 
 describe('root switch tab boundary', () => {
-  test('resetWorkspaceTabsToDashboard 收敛为单空 pane 并清所有 tab 缓存', () => {
+  test('closeRootScopedTabsForRootSwitch 只清 session/memory 并保留 settings tab', () => {
     openSettingsTab()
+    const settingsTab = getAllTabs().find((t) => t.type === 'settings')!
     openTab('sess-dashboard-reset', 'proj-dashboard-reset', 'Dashboard Reset')
     const sessionTab = getAllTabs().find((t) => t.sessionId === 'sess-dashboard-reset')!
     openMemoryTab('proj-dashboard-reset')
@@ -177,13 +178,11 @@ describe('root switch tab boundary', () => {
     setCachedSession(sessionTab.id, { chunks: [], isOngoing: false } as any)
     expect(getCachedSession(sessionTab.id)).not.toBeNull()
 
-    resetWorkspaceTabsToDashboard()
+    closeRootScopedTabsForRootSwitch()
 
-    const layout = getPaneLayout()
-    expect(layout.panes).toHaveLength(1)
-    expect(layout.panes[0].tabs).toHaveLength(0)
-    expect(layout.panes[0].activeTabId).toBeNull()
-    expect(getAllTabs()).toHaveLength(0)
+    const tabs = getAllTabs()
+    expect(tabs).toContainEqual(settingsTab)
+    expect(tabs.some((t) => t.type === 'session' || t.type === 'memory')).toBe(false)
     expect(hasRootScopedTabs()).toBe(false)
     expect(getCachedSession(sessionTab.id)).toBeNull()
     expect(getTabUIState(sessionTab.id).searchVisible).toBe(false)

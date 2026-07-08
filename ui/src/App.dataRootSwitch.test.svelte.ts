@@ -1,6 +1,6 @@
 // App root switch coordinator 集成测试（change redesign-data-root-switcher）。
-// 覆盖：root 切换成功事件后收敛到 Dashboard，清 root-scoped tabs，
-// 并只触发一次当前 root project/group 刷新。
+// 覆盖：root 切换成功事件后关闭 root-scoped tabs，保留 Settings 等
+// 非 root-scoped 工作台 tab，并只触发一次当前 root project/group 刷新。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/svelte'
@@ -29,7 +29,7 @@ afterEach(() => {
 })
 
 describe('App data root switch coordinator', () => {
-  test('cdt-data-root-changed 清 root-scoped tabs，回 Dashboard，并只刷新一次 project data', async () => {
+  test('cdt-data-root-changed 清 root-scoped tabs，保留 Settings tab，并只刷新一次 project data', async () => {
     render(App)
     await waitFor(() => expect((window as unknown as { __cdtReady?: boolean }).__cdtReady).toBe(true))
 
@@ -67,11 +67,11 @@ describe('App data root switch coordinator', () => {
 
     await waitFor(() => {
       const tabs = getAllTabs()
-      expect(tabs.some((t) => t.type === 'session' || t.type === 'memory' || t.type === 'settings')).toBe(false)
+      expect(tabs.some((t) => t.type === 'session' || t.type === 'memory')).toBe(false)
+      expect(tabs.some((t) => t.type === 'settings')).toBe(true)
       const layout = getPaneLayout()
-      expect(layout.panes).toHaveLength(1)
-      expect(layout.panes[0].tabs).toHaveLength(0)
-      expect(layout.panes[0].activeTabId).toBeNull()
+      const activeTab = tabs.find((t) => t.id === layout.panes[0].activeTabId)
+      expect(activeTab?.type).toBe('settings')
     })
     await waitFor(() => expect(listRepositoryGroupsCalls).toBe(1))
   })
