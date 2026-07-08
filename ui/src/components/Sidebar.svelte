@@ -226,6 +226,7 @@
   let sseLaggedUnlisten: Unsubscribe | null = null;
   let refreshProjectsListener: (() => void) | null = null;
   let dataRootChangedListener: (() => void) | null = null;
+  let rootSwitchCompleteListener: (() => void) | null = null;
   let sessionListEl: HTMLElement | null = null;
 
   async function loadProjects(silent = false) {
@@ -497,6 +498,11 @@
       pendingMetadataUpdates.clear();
     };
     window.addEventListener("cdt-data-root-changed", dataRootChangedListener);
+
+    rootSwitchCompleteListener = () => {
+      rootSwitching = false;
+    };
+    window.addEventListener("cdt-root-switch-complete", rootSwitchCompleteListener);
 
     try {
       await loadProjects();
@@ -829,6 +835,10 @@
     if (dataRootChangedListener) {
       window.removeEventListener("cdt-data-root-changed", dataRootChangedListener);
       dataRootChangedListener = null;
+    }
+    if (rootSwitchCompleteListener) {
+      window.removeEventListener("cdt-root-switch-complete", rootSwitchCompleteListener);
+      rootSwitchCompleteListener = null;
     }
     metadataUnlisten?.();
     metadataUnlisten = null;

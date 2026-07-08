@@ -52,7 +52,6 @@ describe('SettingsView 数据目录 source switcher', () => {
 
     expect(getByText('自定义')).toBeTruthy()
     expect(getByLabelText('最近使用的数据根目录')).toBeTruthy()
-    expect(getByText('~/.claude')).toBeTruthy()
     expect(getByText('/data/alpha')).toBeTruthy()
     expect(getByText('/data/beta')).toBeTruthy()
     // 当前路径只在 current row 出现，不在“最近”列表重复出现。
@@ -77,8 +76,11 @@ describe('SettingsView 数据目录 source switcher', () => {
     expect(getByText('输入')).toBeTruthy()
   })
 
-  test('保存失败保留输入行并在输入附近显示错误', async () => {
+  test('保存失败不会 dispatch root switch 事件', async () => {
     emptyFixture.config.general.claudeRootPath = '~/.qoder'
+    let rootSwitchEvents = 0
+    const onRootSwitch = () => { rootSwitchEvents += 1 }
+    window.addEventListener('cdt-data-root-changed', onRootSwitch)
     mockIPC(vi.fn((cmd) => {
       if (cmd === 'get_config') return { ...emptyFixture.config, _version: 0 }
       if (cmd === 'get_version') return '0.0.0-test'
@@ -88,15 +90,20 @@ describe('SettingsView 数据目录 source switcher', () => {
       throw new Error(`unexpected command: ${cmd}`)
     }))
 
-    const { getByText, getByLabelText } = render(SettingsView)
-    await waitFor(() => expect(getByText('输入')).toBeTruthy())
+    try {
+      const { getByText, getByLabelText } = render(SettingsView)
+      await waitFor(() => expect(getByText('输入')).toBeTruthy())
 
-    await fireEvent.click(getByText('输入'))
-    const input = getByLabelText('输入数据根目录路径') as HTMLInputElement
-    await fireEvent.input(input, { target: { value: 'relative/path' } })
-    await fireEvent.click(getByText('应用'))
+      await fireEvent.click(getByText('输入'))
+      const input = getByLabelText('输入数据根目录路径') as HTMLInputElement
+      await fireEvent.input(input, { target: { value: 'relative/path' } })
+      await fireEvent.click(getByText('应用'))
 
-    await waitFor(() => expect(getByText(/保存失败/)).toBeTruthy())
-    expect(getByLabelText('输入数据根目录路径')).toBeTruthy()
+      await waitFor(() => expect(getByText(/保存失败/)).toBeTruthy())
+      expect(getByLabelText('输入数据根目录路径')).toBeTruthy()
+      expect(rootSwitchEvents).toBe(0)
+    } finally {
+      window.removeEventListener('cdt-data-root-changed', onRootSwitch)
+    }
   })
 })

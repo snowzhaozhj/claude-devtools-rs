@@ -28,7 +28,7 @@
     getFocusedPaneId,
     focusPane,
     splitPane,
-    closeRootScopedTabsForRootSwitch,
+    resetWorkspaceTabsToDashboard,
   } from "./lib/tabStore.svelte";
   import { MAX_PANES } from "./lib/paneTypes";
   import { getConfig, isRunningUnderRosetta } from "./lib/api";
@@ -79,7 +79,7 @@
 
   async function handleDataRootChanged() {
     const requestGeneration = ++rootSwitchGeneration;
-    closeRootScopedTabsForRootSwitch();
+    resetWorkspaceTabsToDashboard();
     clearSessionListCache();
     selectedGroupId = "";
     selectedProjectName = "";

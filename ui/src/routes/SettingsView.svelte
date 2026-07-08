@@ -186,9 +186,8 @@
   const DEFAULT_ROOT_LABEL = "~/.claude";
 
   interface RootOption {
-    value: string | null;
+    value: string;
     label: string;
-    kind: "default" | "custom";
   }
 
   const currentRootLabel = $derived.by(() => {
@@ -205,15 +204,11 @@
     const current = config.general.claudeRootPath ?? DEFAULT_ROOT_LABEL;
     const seen = new Set<string>();
     const options: RootOption[] = [];
-    if (current !== DEFAULT_ROOT_LABEL) {
-      seen.add(DEFAULT_ROOT_LABEL);
-      options.push({ value: null, label: DEFAULT_ROOT_LABEL, kind: "default" });
-    }
     for (const root of config.general.recentRoots ?? []) {
       if (root === current) continue;
       if (seen.has(root)) continue;
       seen.add(root);
-      options.push({ value: root, label: root, kind: "custom" });
+      options.push({ value: root, label: root });
     }
     return options;
   });
@@ -694,6 +689,7 @@
   async function startRootInputEdit() {
     if (!config) return;
     saveError = null;
+    dataRootError = null;
     rootInputEditing = true;
     claudeRootInput = config.general.claudeRootPath ?? "";
     await tick();
@@ -705,11 +701,13 @@
     if (!config) return;
     rootInputEditing = false;
     saveError = null;
+    dataRootError = null;
     claudeRootInput = config.general.claudeRootPath ?? "";
   }
 
   async function chooseClaudeRoot() {
     saveError = null;
+    dataRootError = null;
     try {
       const selected = await open({ directory: true, multiple: false, title: "选择数据根目录" });
       if (typeof selected !== "string") return;
@@ -1121,6 +1119,15 @@
                       ariaLabel="打开数据根目录路径输入框"
                       title="输入数据根目录路径"
                     >输入</SettingsButton>
+                    {#if config?.general.claudeRootPath !== null}
+                      <SettingsButton
+                        variant="ghost"
+                        disabled={rootSwitchPending}
+                        onClick={() => applyDataRoot(null)}
+                        ariaLabel="恢复默认数据根目录"
+                        title="恢复默认数据根目录"
+                      >恢复默认</SettingsButton>
+                    {/if}
                     {#if isWindowsPlatform}
                       <SettingsButton
                         variant="ghost"
@@ -1146,7 +1153,7 @@
               {/if}
               {#if hasRootScopedTabsOpen}
                 <p class="data-root-warning" role="status">
-                  切换会关闭当前会话 tab，并回到工作台。
+                  切换会关闭当前会话与 Memory tab，并回到工作台。
                 </p>
               {/if}
 
@@ -1161,6 +1168,7 @@
                         size="sm"
                         disabled={rootSwitchPending}
                         onClick={() => applyRecentRoot(option.value)}
+                        ariaLabel={`切换到 ${option.label}`}
                       >切换</SettingsButton>
                     </div>
                   {/each}
@@ -1609,7 +1617,7 @@
   onPrimary={confirmWslSelection}
   onClose={cancelWslSelection}
 >
-  <p class="wsl-modal-hint">将把 数据根目录切换为所选 distro 的 UNC 路径</p>
+  <p class="wsl-modal-hint">将把数据根目录切换为所选 distro 的 UNC 路径</p>
   <ul class="wsl-distro-list">
     {#each wslCandidates as candidate (candidate.distro)}
       <li class="wsl-distro-item">
@@ -2257,7 +2265,7 @@
     border-radius: 6px;
     font-size: 12px;
     color: var(--color-text-secondary);
-    background: var(--color-bg-elevated, rgba(0, 0, 0, 0.04));
+    background: var(--color-surface-raised);
   }
   .wsl-inline-error {
     color: var(--color-danger);

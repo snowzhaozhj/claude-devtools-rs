@@ -1,6 +1,6 @@
 // App root switch coordinator 集成测试（change redesign-data-root-switcher）。
-// 覆盖：root 切换成功事件后只清 root-scoped tabs、保留全局 tabs，并只触发一次
-// 当前 root project/group 刷新。
+// 覆盖：root 切换成功事件后收敛到 Dashboard，清 root-scoped tabs，
+// 并只触发一次当前 root project/group 刷新。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/svelte'
@@ -8,7 +8,7 @@ import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 
 import App from './App.svelte'
 import { setupMockIPC } from './lib/tauriMock'
-import { getAllTabs, openMemoryTab, openSettingsTab, openTab } from './lib/tabStore.svelte'
+import { getAllTabs, openMemoryTab, openSettingsTab, openTab, getPaneLayout } from './lib/tabStore.svelte'
 import type { InvokeArgs } from '@tauri-apps/api/core'
 
 class ResizeObserverStub {
@@ -29,12 +29,11 @@ afterEach(() => {
 })
 
 describe('App data root switch coordinator', () => {
-  test('cdt-data-root-changed 清 root-scoped tabs，并只刷新一次 project data', async () => {
+  test('cdt-data-root-changed 清 root-scoped tabs，回 Dashboard，并只刷新一次 project data', async () => {
     render(App)
     await waitFor(() => expect((window as unknown as { __cdtReady?: boolean }).__cdtReady).toBe(true))
 
     openSettingsTab()
-    const settingsTab = getAllTabs().find((t) => t.type === 'settings')!
     openTab('sess-root-app', 'mock-rich-rust', 'Root App')
     openMemoryTab('mock-rich-rust')
     expect(getAllTabs().some((t) => t.type === 'session' || t.type === 'memory')).toBe(true)
@@ -68,8 +67,11 @@ describe('App data root switch coordinator', () => {
 
     await waitFor(() => {
       const tabs = getAllTabs()
-      expect(tabs.some((t) => t.type === 'session' || t.type === 'memory')).toBe(false)
-      expect(tabs.some((t) => t.id === settingsTab.id && t.type === 'settings')).toBe(true)
+      expect(tabs.some((t) => t.type === 'session' || t.type === 'memory' || t.type === 'settings')).toBe(false)
+      const layout = getPaneLayout()
+      expect(layout.panes).toHaveLength(1)
+      expect(layout.panes[0].tabs).toHaveLength(0)
+      expect(layout.panes[0].activeTabId).toBeNull()
     })
     await waitFor(() => expect(listRepositoryGroupsCalls).toBe(1))
   })
