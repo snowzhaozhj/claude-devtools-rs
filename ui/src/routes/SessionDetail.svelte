@@ -69,6 +69,7 @@
   let lastChunksFingerprint: string | null = $state(null);
   let loading = $state(true);
   let error: string | null = $state(null);
+  let mounted = true;
   let conversationEl: HTMLElement | undefined = $state();
 
   let openPopoverId: string | null = $state(null);
@@ -446,6 +447,7 @@
       const fpToSend = knownFingerprint;
       const resp: SessionDetailResponse = await getSessionDetail(projectId, sessionId, fpToSend);
       const currentSid = getTabSessionId(tabId);
+      if (!mounted) return;
       if (currentSid !== null && currentSid !== sessionId) return;
       knownFingerprint = resp.fingerprint;
       if (resp.status === "unchanged") {
@@ -527,6 +529,7 @@
         const t_ipc = performance.now();
         const resp = await getSessionDetail(projectId, sessionId, null);
         const currentSid = getTabSessionId(tabId);
+        if (!mounted) return;
         if (currentSid !== null && currentSid !== sessionId) return;
         const ipc_ms = performance.now() - t_ipc;
         knownFingerprint = resp.fingerprint;
@@ -577,6 +580,7 @@
   // 见 attachMarkdown 与 design.md decision 3。
 
   onDestroy(() => {
+    mounted = false;
     document.removeEventListener("keydown", handleKeydown);
     unregisterSessionDetailHandlers(tabId);
     unregisterHandler(fileChangeKey);
