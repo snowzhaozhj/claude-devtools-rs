@@ -137,9 +137,12 @@ jobs:
         with:
           projectPath: src-tauri
           # 复用前置 job 创建好的 draft，避免并发 race。tauri-action 在
-          # 给定 releaseId 时只上传 asset 并 merge latest.json，不会再调
-          # createRelease——根因修复见 fix/release-workflow-race。
+          # 给定 releaseId 时只上传 release assets/signatures，不创建 release；
+          # latest.json 由 publish job 统一生成，避免矩阵阶段边上传边 merge updater metadata。
           releaseId: ${{ needs.create-release.outputs.release_id }}
+          # latest.json 由 publish job 在所有 release assets 齐全后统一生成；
+          # 不让 tauri-action 在 draft/矩阵阶段边上传边 merge，避免写入 API asset URL。
+          uploadUpdaterJson: false
           args: ${{ matrix.args }}
 
   # CLI standalone binary 构建（与 Tauri build 并行，不依赖 Node/WebKit）
@@ -209,7 +212,7 @@ jobs:
     needs: [build, build-cli]
     runs-on: ubuntu-latest
     steps:
-      - name: Verify required assets present
+      - name: Verify non-updater assets present
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -219,31 +222,12 @@ jobs:
 
           ASSETS=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | sort -u)
 
-          # 必需 asset 清单 = 4 平台首装包 + updater 链 (.app.tar.gz / .deb / -setup.exe + 各自 .sig) + latest.json。
-          # 缺一即 fail：draft 保留供 inspect，re-run workflow 或 Agent 介入。
+          # publish job 自己直接依赖的必需 asset：首装 DMG + CLI standalone。
+          # Updater asset + .sig 由下一步 Generate latest.json 的 manifest 统一校验并生成 updater 元信息。
           REQUIRED=(
             # macOS 首装包（dmg 不参与 updater，故无 .sig）
             "Claude.DevTools_${VERSION}_aarch64.dmg"
             "Claude.DevTools_${VERSION}_x64.dmg"
-            # macOS updater bundle (.app.tar.gz + .sig，updater 主力)
-            "Claude.DevTools_${VERSION}_aarch64.app.tar.gz"
-            "Claude.DevTools_${VERSION}_aarch64.app.tar.gz.sig"
-            "Claude.DevTools_${VERSION}_x64.app.tar.gz"
-            "Claude.DevTools_${VERSION}_x64.app.tar.gz.sig"
-            # Linux 首装包 + .sig（updater 优先用 .deb；AppImage / rpm 备用）
-            "Claude.DevTools_${VERSION}_amd64.deb"
-            "Claude.DevTools_${VERSION}_amd64.deb.sig"
-            "Claude.DevTools_${VERSION}_amd64.AppImage"
-            "Claude.DevTools_${VERSION}_amd64.AppImage.sig"
-            "Claude.DevTools-${VERSION}-1.x86_64.rpm"
-            "Claude.DevTools-${VERSION}-1.x86_64.rpm.sig"
-            # Windows 首装包 + .sig（updater 用 NSIS -setup.exe）
-            "Claude.DevTools_${VERSION}_x64-setup.exe"
-            "Claude.DevTools_${VERSION}_x64-setup.exe.sig"
-            "Claude.DevTools_${VERSION}_x64_en-US.msi"
-            "Claude.DevTools_${VERSION}_x64_en-US.msi.sig"
-            # updater 元信息
-            "latest.json"
             # CLI standalone binary
             "cdt-darwin-arm64.tar.gz"
             "cdt-darwin-x64.tar.gz"
@@ -269,6 +253,146 @@ jobs:
           fi
 
           echo "✓ 全部 ${#REQUIRED[@]} 个必需 asset 齐全"
+
+      - name: Generate latest.json
+        uses: actions/github-script@v9
+        env:
+          TAG: ${{ github.ref_name }}
+        with:
+          script: |
+            const tag = process.env.TAG;
+            const version = tag.replace(/^v/, "");
+            const { owner, repo } = context.repo;
+
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner,
+              repo,
+              tag,
+            });
+            if (!release.draft) {
+              throw new Error(`release ${tag} is already published; refusing to replace latest.json`);
+            }
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner,
+              repo,
+              release_id: release.id,
+              per_page: 100,
+            });
+            const byName = new Map(assets.map((asset) => [asset.name, asset]));
+
+            const asset = (name) => {
+              const found = byName.get(name);
+              if (!found) {
+                throw new Error(`missing release asset: ${name}`);
+              }
+              return found;
+            };
+            const signature = async (name) => {
+              const sigAsset = asset(`${name}.sig`);
+              const response = await github.request(
+                "GET /repos/{owner}/{repo}/releases/assets/{asset_id}",
+                {
+                  owner,
+                  repo,
+                  asset_id: sigAsset.id,
+                  headers: { accept: "application/octet-stream" },
+                },
+              );
+              const text = Buffer.from(response.data).toString("utf8").trim();
+              if (!text) {
+                throw new Error(`empty signature asset: ${sigAsset.name}`);
+              }
+              return text;
+            };
+            const entry = async (name) => ({
+              signature: await signature(name),
+              url: asset(name).browser_download_url,
+            });
+
+            // Keep this manifest aligned with tauri-action@v1's updater JSON platform mapping.
+            // Re-check it when upgrading tauri-action or changing bundle types.
+            const updaterAssets = [
+              {
+                name: `Claude.DevTools_${version}_aarch64.app.tar.gz`,
+                platforms: ["darwin-aarch64", "darwin-aarch64-app"],
+              },
+              {
+                name: `Claude.DevTools_${version}_x64.app.tar.gz`,
+                platforms: ["darwin-x86_64", "darwin-x86_64-app"],
+              },
+              {
+                name: `Claude.DevTools_${version}_amd64.AppImage`,
+                platforms: ["linux-x86_64", "linux-x86_64-appimage"],
+              },
+              {
+                name: `Claude.DevTools_${version}_amd64.deb`,
+                platforms: ["linux-x86_64-deb"],
+              },
+              {
+                name: `Claude.DevTools-${version}-1.x86_64.rpm`,
+                platforms: ["linux-x86_64-rpm"],
+              },
+              {
+                // windows-x86_64 保持 tauri-action 既有默认：MSI；NSIS 只写入 -nsis 专用 key。
+                name: `Claude.DevTools_${version}_x64_en-US.msi`,
+                platforms: ["windows-x86_64", "windows-x86_64-msi"],
+              },
+              {
+                name: `Claude.DevTools_${version}_x64-setup.exe`,
+                platforms: ["windows-x86_64-nsis"],
+              },
+            ];
+
+            const platforms = {};
+            for (const item of updaterAssets) {
+              const value = await entry(item.name);
+              for (const platform of item.platforms) {
+                platforms[platform] = value;
+              }
+            }
+
+            const latest = {
+              version,
+              notes: "",
+              pub_date: new Date().toISOString(),
+              platforms,
+            };
+
+            const expectedPlatforms = updaterAssets.flatMap((item) => item.platforms).sort();
+            const actualPlatforms = Object.keys(latest.platforms).sort();
+            if (JSON.stringify(actualPlatforms) !== JSON.stringify([...expectedPlatforms].sort())) {
+              throw new Error(`latest.json platform keys mismatch: ${actualPlatforms.join(", ")}`);
+            }
+            for (const [platform, value] of Object.entries(latest.platforms)) {
+              if (!value.signature || typeof value.signature !== "string") {
+                throw new Error(`missing signature for ${platform}`);
+              }
+              if (!value.url.startsWith(`https://github.com/${owner}/${repo}/releases/download/${tag}/`)) {
+                throw new Error(`invalid download URL for ${platform}: ${value.url}`);
+              }
+            }
+
+            const existingLatest = byName.get("latest.json");
+            if (existingLatest) {
+              await github.rest.repos.deleteReleaseAsset({
+                owner,
+                repo,
+                asset_id: existingLatest.id,
+              });
+            }
+            const latestJson = JSON.stringify(latest, null, 2) + "\n";
+            await github.rest.repos.uploadReleaseAsset({
+              owner,
+              repo,
+              release_id: release.id,
+              name: "latest.json",
+              data: latestJson,
+              headers: {
+                "content-type": "application/json",
+                "content-length": Buffer.byteLength(latestJson),
+              },
+            });
+            core.info("✓ latest.json generated from current release assets");
 
       - name: Publish release (un-draft)
         env:
