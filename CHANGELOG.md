@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- **Auto-update**: the desktop updater no longer fails with `Download request failed with status: 403 Forbidden`. The release workflow now generates `latest.json` after all release assets are present, using public GitHub release download URLs instead of anonymous-blocked GitHub API asset URLs.
+
 ## [0.7.4] — 2026-07-08
 
 ### Added
