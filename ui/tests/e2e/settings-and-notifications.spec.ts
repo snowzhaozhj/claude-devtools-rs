@@ -39,34 +39,46 @@ test.describe('settings + notifications', () => {
   test('Settings 常规分区可保存并恢复 数据根目录', async ({ page }) => {
     await gotoWithMockReady(page)
     await page.evaluate(() => {
-      ;(window as unknown as { __cdtTest: { openSettingsTab: () => void } }).__cdtTest.openSettingsTab()
-    })
-
-    await expect(page.getByText('~/.claude')).toBeVisible({ timeout: 5_000 })
-    await expect(page.getByRole('button', { name: '重置' })).toHaveCount(0)
-
-    await page.evaluate(() => {
       window.addEventListener('cdt-root-switch-complete', () => {
         ;(window as unknown as { __rootSwitchCompleteCount?: number }).__rootSwitchCompleteCount = ((window as unknown as { __rootSwitchCompleteCount?: number }).__rootSwitchCompleteCount ?? 0) + 1
       })
     })
+    const openSettings = () =>
+      page.evaluate(() => {
+        ;(window as unknown as { __cdtTest: { openSettingsTab: () => void } }).__cdtTest.openSettingsTab()
+      })
 
+    // 默认 root：只显示一次，标记为「默认」，且不渲染独立「恢复默认」按钮
+    await openSettings()
+    await expect(page.locator('.data-root-path')).toHaveText('~/.claude', { timeout: 5_000 })
+    await expect(page.locator('.data-root-kind')).toHaveText('默认')
+    await expect(page.getByRole('button', { name: '恢复默认数据根目录' })).toHaveCount(0)
+
+    // 输入自定义 root 并应用
     await page.getByRole('button', { name: '打开数据根目录路径输入框' }).click()
     const input = page.getByRole('textbox', { name: '输入数据根目录路径' })
     await expect(input).toBeVisible({ timeout: 5_000 })
     await input.fill('/tmp/claude-alt')
     await page.getByRole('button', { name: '应用', exact: true }).click()
+
+    // 切换成功后 root-switch-complete 触发一次，并回到工作台（Settings 关闭）
     await page.waitForFunction(() => ((window as unknown as { __rootSwitchCompleteCount?: number }).__rootSwitchCompleteCount ?? 0) === 1)
+    await expect(page.locator('.data-root-block')).toHaveCount(0)
 
-    await expect(page.getByText('/tmp/claude-alt')).toBeVisible({ timeout: 5_000 })
-    await expect(page.getByText('~/.claude')).toBeVisible({ timeout: 5_000 })
+    // 重新打开 Settings：当前 root 已切换为自定义，出现「恢复默认」入口
+    await openSettings()
+    await expect(page.locator('.data-root-path')).toHaveText('/tmp/claude-alt', { timeout: 5_000 })
+    await expect(page.locator('.data-root-kind')).toHaveText('自定义')
 
-    await page.locator('.data-root-recent-row').filter({ hasText: '~/.claude' }).getByRole('button', { name: '切换' }).click()
+    // 点「恢复默认」→ 再次触发一次 root switch 回到工作台
+    await page.getByRole('button', { name: '恢复默认数据根目录' }).click()
     await page.waitForFunction(() => ((window as unknown as { __rootSwitchCompleteCount?: number }).__rootSwitchCompleteCount ?? 0) === 2)
+    await expect(page.locator('.data-root-block')).toHaveCount(0)
 
-    await expect(page.getByText('~/.claude')).toBeVisible({ timeout: 5_000 })
-    await expect(page.locator('.data-root-recent-row').filter({ hasText: '~/.claude' })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: '重置' })).toHaveCount(0)
+    // 重新打开 Settings：已恢复默认
+    await openSettings()
+    await expect(page.locator('.data-root-path')).toHaveText('~/.claude', { timeout: 5_000 })
+    await expect(page.locator('.data-root-kind')).toHaveText('默认')
   })
 
   test('打开 Notifications tab → 看到通知列表与 unread 计数', async ({ page }) => {

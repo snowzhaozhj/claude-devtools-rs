@@ -1153,7 +1153,7 @@
               {/if}
               {#if hasRootScopedTabsOpen}
                 <p class="data-root-warning" role="status">
-                  切换会关闭当前会话与 Memory tab，并回到工作台。
+                  切换会关闭已打开的标签页，回到工作台。
                 </p>
               {/if}
 
