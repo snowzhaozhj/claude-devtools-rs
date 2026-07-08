@@ -24,7 +24,7 @@
   import { isTauriRuntime } from "../lib/runtime";
   import { applyTheme } from "../lib/theme";
   import { applyFonts } from "../lib/fonts";
-  import { setSessionClickBehavior, type SessionClickBehavior } from "../lib/tabStore.svelte";
+  import { setSessionClickBehavior, hasRootScopedTabs, type SessionClickBehavior } from "../lib/tabStore.svelte";
   import { setTimeFormat } from "../lib/displayPrefs.svelte";
   import type { TimeFormat } from "../lib/api";
   import SettingsToggle from "../lib/components/SettingsToggle.svelte";
@@ -72,6 +72,10 @@
   let fontSansInput = $state("");
   let fontMonoInput = $state("");
   let claudeRootInput = $state("");
+  let rootInputEditing = $state(false);
+  let rootSwitchPending = $state(false);
+  let dataRootError: string | null = $state(null);
+  let rootInputEl: HTMLInputElement | null = $state(null);
 
   /** Windows 平台判定。Tauri WebView UA 在 Windows 上始终含 "Windows"。
    *  非 Windows 平台 SHALL NOT 渲染 "Use WSL" 按钮（spec settings-ui）。 */
@@ -178,6 +182,41 @@
     { value: "duck_duck_go", label: "DuckDuckGo" },
     { value: "custom", label: "自定义 URL 模板" },
   ];
+
+  const DEFAULT_ROOT_LABEL = "~/.claude";
+
+  interface RootOption {
+    value: string | null;
+    label: string;
+    kind: "default" | "custom";
+  }
+
+  const currentRootLabel = $derived.by(() => {
+    const cfg = config;
+    return cfg?.general.claudeRootPath ?? DEFAULT_ROOT_LABEL;
+  });
+  const currentRootKind = $derived.by(() => {
+    const cfg = config;
+    return cfg?.general.claudeRootPath === null ? "默认" : "自定义";
+  });
+  const hasRootScopedTabsOpen = $derived(hasRootScopedTabs());
+  const recentRootOptions = $derived.by<RootOption[]>(() => {
+    if (!config) return [];
+    const current = config.general.claudeRootPath ?? DEFAULT_ROOT_LABEL;
+    const seen = new Set<string>();
+    const options: RootOption[] = [];
+    if (current !== DEFAULT_ROOT_LABEL) {
+      seen.add(DEFAULT_ROOT_LABEL);
+      options.push({ value: null, label: DEFAULT_ROOT_LABEL, kind: "default" });
+    }
+    for (const root of config.general.recentRoots ?? []) {
+      if (root === current) continue;
+      if (seen.has(root)) continue;
+      seen.add(root);
+      options.push({ value: root, label: root, kind: "custom" });
+    }
+    return options;
+  });
 
   // 当前平台默认 terminal value（IPC list_available_terminals 返回首项即平台默认）
   const platformDefaultTerminal = $derived(availableTerminals[0] ?? "terminal");
@@ -548,9 +587,10 @@
     }
   }
 
-  async function updateGeneral(key: string, value: unknown) {
-    if (!config) return;
+  async function updateGeneral(key: string, value: unknown): Promise<boolean> {
+    if (!config) return false;
     saveError = null;
+    if (key === "claudeRootPath") dataRootError = null;
     config = { ...config, general: { ...config.general, [key]: value } };
     if (key === "theme") applyTheme(value as string);
     if (key === "sessionClickBehavior" && (value === "replace" || value === "new-tab")) {
@@ -558,19 +598,23 @@
     }
     try {
       const result = await updateConfig("general", { [key]: value }, configVersion);
+      config = result;
       syncVersion(result);
       if (key === "claudeRootPath") {
-        window.dispatchEvent(new CustomEvent("cdt-refresh-projects"));
+        claudeRootInput = result.general.claudeRootPath ?? "";
       }
       if (key === "externalEditor" || key === "searchEngine" || key === "terminalApp") {
         setMenuSettings(config.general);
       }
+      return true;
     } catch (e) {
       if (isVersionMismatch(e)) {
         await refreshAfterMismatch();
-        return;
+        return false;
       }
-      saveError = `保存失败: ${e}`;
+      const message = `保存失败: ${e}`;
+      if (key === "claudeRootPath") dataRootError = message;
+      else saveError = message;
       try {
         config = await getConfig();
         syncVersion(config);
@@ -580,9 +624,9 @@
       } catch {
         /* ignore */
       }
+      return false;
     }
   }
-
   /** 搜索引擎类型 dropdown 改变：非 custom 直接保存；custom 仅切换显示，URL
    *  由用户填后通过 commitCustomSearchUrl 真正持久化。 */
   async function onSearchEngineTypeChange(v: string) {
@@ -613,15 +657,55 @@
     await updateGeneral("searchEngine", { type: "custom", urlTemplate: tpl });
   }
 
-  async function commitClaudeRoot() {
-    const value = claudeRootInput.trim() === "" ? null : claudeRootInput.trim();
-    await updateGeneral("claudeRootPath", value);
-    if (config) claudeRootInput = config!.general.claudeRootPath ?? "";
+  function waitForRootSwitchComplete(): Promise<void> {
+    return new Promise((resolve) => {
+      window.addEventListener("cdt-root-switch-complete", () => resolve(), { once: true });
+    });
   }
 
-  async function resetClaudeRoot() {
-    claudeRootInput = "";
-    await updateGeneral("claudeRootPath", null);
+  async function applyDataRoot(value: string | null): Promise<boolean> {
+    if (!config || rootSwitchPending) return false;
+    const current = config.general.claudeRootPath ?? null;
+    if (value === current) {
+      rootInputEditing = false;
+      claudeRootInput = config.general.claudeRootPath ?? "";
+      return true;
+    }
+    rootSwitchPending = true;
+    const saved = await updateGeneral("claudeRootPath", value);
+    if (saved) {
+      const waitForComplete = waitForRootSwitchComplete();
+      window.dispatchEvent(new CustomEvent("cdt-data-root-changed"));
+      await waitForComplete;
+      rootInputEditing = false;
+      claudeRootInput = config?.general.claudeRootPath ?? "";
+    }
+    // 成功路径会触发 App root switch；失败路径保留输入行与旧上下文。
+    rootSwitchPending = false;
+    return saved;
+  }
+
+  async function commitClaudeRoot() {
+    const trimmed = claudeRootInput.trim();
+    if (trimmed === "") return;
+    await applyDataRoot(trimmed);
+  }
+
+  async function startRootInputEdit() {
+    if (!config) return;
+    saveError = null;
+    rootInputEditing = true;
+    claudeRootInput = config.general.claudeRootPath ?? "";
+    await tick();
+    rootInputEl?.focus();
+    rootInputEl?.select();
+  }
+
+  function cancelRootInputEdit() {
+    if (!config) return;
+    rootInputEditing = false;
+    saveError = null;
+    claudeRootInput = config.general.claudeRootPath ?? "";
   }
 
   async function chooseClaudeRoot() {
@@ -630,22 +714,20 @@
       const selected = await open({ directory: true, multiple: false, title: "选择数据根目录" });
       if (typeof selected !== "string") return;
       claudeRootInput = selected;
-      await updateGeneral("claudeRootPath", selected);
+      await applyDataRoot(selected);
     } catch (e) {
-      saveError = `选择目录失败: ${e}`;
+      dataRootError = `选择目录失败: ${e}`;
     }
   }
 
-  async function applyRecentRoot(root: string) {
-    if (root === (config?.general.claudeRootPath ?? "")) return;
-    claudeRootInput = root;
-    await updateGeneral("claudeRootPath", root);
+  async function applyRecentRoot(root: string | null) {
+    await applyDataRoot(root);
   }
 
   async function applyWslDistro(candidate: WslDistroCandidate) {
     claudeRootInput = candidate.claudeRootPath;
-    await updateGeneral("claudeRootPath", candidate.claudeRootPath);
-    if (saveError === null) {
+    const saved = await applyDataRoot(candidate.claudeRootPath);
+    if (saved) {
       wslInlineMessage = {
         kind: "info",
         text: `已切换到 WSL distro "${candidate.distro}" 的 ${candidate.claudeRootPath}`,
@@ -988,67 +1070,103 @@
 
           <SettingsGroup
             title="数据目录"
-            description="留空使用默认目录；项目来自该目录下的 projects，待办来自 todos"
+            description="项目来自该目录下的 projects，待办来自 todos"
           >
-            <SettingsField label="数据根目录" layout="stack" labelFor="claude-root-input">
-              {#snippet control()}
-                <input
-                  id="claude-root-input"
-                  class="control-input control-input-mono"
-                  type="text"
-                  placeholder="默认 ~/.claude"
-                  aria-label="数据根目录"
-                  bind:value={claudeRootInput}
-                  onkeydown={(e) => {
-                    if (e.key === "Enter") commitClaudeRoot();
-                  }}
-                />
-                <SettingsButton variant="ghost" onClick={chooseClaudeRoot}>
-                  {#snippet icon()}
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html FOLDER_SVG}</svg>
-                  {/snippet}
-                  选择目录
-                </SettingsButton>
-                <SettingsButton variant="ghost" onClick={commitClaudeRoot}>保存手动输入</SettingsButton>
-                <SettingsButton
-                  variant="ghost"
-                  disabled={config!.general.claudeRootPath === null}
-                  onClick={resetClaudeRoot}
-                >
-                  {#snippet icon()}
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html ROTATE_CCW_SVG}</svg>
-                  {/snippet}
-                  恢复默认
-                </SettingsButton>
-                {#if isWindowsPlatform}
-                  <SettingsButton
-                    variant="ghost"
-                    disabled={wslLoading}
-                    onClick={scanWslDistros}
-                    ariaLabel="使用 WSL distro 内的 Claude 数据"
-                  >
-                    {wslLoading ? "扫描中…" : "使用 WSL"}
-                  </SettingsButton>
-                {/if}
-              {/snippet}
-            </SettingsField>
-            {#if isWindowsPlatform && wslInlineMessage}
-              <p class="wsl-inline" class:wsl-inline-error={wslInlineMessage.kind === "error"} role="status">
-                {wslInlineMessage.text}
-              </p>
-            {/if}
-            {#if (config!.general.recentRoots ?? []).length > 0}
-              <SettingsField label="最近使用" layout="stack" labelFor="recent-roots-dropdown">
-                {#snippet control()}
-                  <Dropdown
-                    value={config!.general.claudeRootPath ?? ""}
-                    options={(config!.general.recentRoots ?? []).map((r) => ({ value: r, label: r }))}
-                    onChange={applyRecentRoot}
-                    ariaLabel="最近使用的数据根目录"
-                  />
-                {/snippet}
-              </SettingsField>
-            {/if}
+            <div class="data-root-block">
+              <div class="data-root-control" class:data-root-control-editing={rootInputEditing}>
+                <div class="data-root-main">
+                  {#if rootInputEditing}
+                    <input
+                      bind:this={rootInputEl}
+                      class="control-input control-input-mono data-root-input"
+                      type="text"
+                      placeholder="/path/to/.claude"
+                      aria-label="输入数据根目录路径"
+                      bind:value={claudeRootInput}
+                      disabled={rootSwitchPending}
+                      onkeydown={(e) => {
+                        if (e.key === "Enter") commitClaudeRoot();
+                        if (e.key === "Escape") cancelRootInputEdit();
+                      }}
+                    />
+                  {:else}
+                    <span class="data-root-path" title={currentRootLabel}>{currentRootLabel}</span>
+                    <span class="data-root-kind">{currentRootKind}</span>
+                  {/if}
+                </div>
+
+                <div class="data-root-actions">
+                  {#if rootInputEditing}
+                    <SettingsButton variant="primary" disabled={rootSwitchPending} onClick={commitClaudeRoot}>
+                      {rootSwitchPending ? "应用中…" : "应用"}
+                    </SettingsButton>
+                    <SettingsButton variant="ghost" disabled={rootSwitchPending} onClick={cancelRootInputEdit}>取消</SettingsButton>
+                  {:else}
+                    <SettingsButton
+                      variant="ghost"
+                      disabled={rootSwitchPending}
+                      onClick={chooseClaudeRoot}
+                      ariaLabel="选择数据根目录"
+                      title="选择数据根目录"
+                    >
+                      {#snippet icon()}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html FOLDER_SVG}</svg>
+                      {/snippet}
+                      选择
+                    </SettingsButton>
+                    <SettingsButton
+                      variant="ghost"
+                      disabled={rootSwitchPending}
+                      onClick={startRootInputEdit}
+                      ariaLabel="打开数据根目录路径输入框"
+                      title="输入数据根目录路径"
+                    >输入</SettingsButton>
+                    {#if isWindowsPlatform}
+                      <SettingsButton
+                        variant="ghost"
+                        disabled={rootSwitchPending || wslLoading}
+                        onClick={scanWslDistros}
+                        ariaLabel="使用 WSL distro 内的 Claude 数据"
+                        title="使用 WSL distro 内的 Claude 数据"
+                      >
+                        {wslLoading ? "扫描…" : "WSL"}
+                      </SettingsButton>
+                    {/if}
+                  {/if}
+                </div>
+              </div>
+
+              {#if dataRootError}
+                <p class="data-root-error" role="alert">{dataRootError}</p>
+              {/if}
+              {#if isWindowsPlatform && wslInlineMessage}
+                <p class="wsl-inline" class:wsl-inline-error={wslInlineMessage.kind === "error"} role="status">
+                  {wslInlineMessage.text}
+                </p>
+              {/if}
+              {#if hasRootScopedTabsOpen}
+                <p class="data-root-warning" role="status">
+                  切换会关闭当前会话 tab，并回到工作台。
+                </p>
+              {/if}
+
+              {#if recentRootOptions.length > 0}
+                <div class="data-root-recent" aria-label="最近使用的数据根目录">
+                  <div class="data-root-recent-title">最近</div>
+                  {#each recentRootOptions as option (option.label)}
+                    <div class="data-root-recent-row">
+                      <span class="data-root-recent-path" title={option.label}>{option.label}</span>
+                      <SettingsButton
+                        variant="ghost"
+                        size="sm"
+                        disabled={rootSwitchPending}
+                        onClick={() => applyRecentRoot(option.value)}
+                      >切换</SettingsButton>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
           </SettingsGroup>
           {#if showBrowserAccess}
             <SettingsGroup
@@ -1807,7 +1925,7 @@
   }
   .field-hint code {
     padding: 1px 5px;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     background: var(--color-surface-overlay);
     font-family: var(--font-mono);
     font-size: 11px;
@@ -2011,6 +2129,126 @@
       align-items: stretch;
       gap: 14px;
     }
+  }
+
+  .data-root-block {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 16px;
+  }
+  .data-root-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 6px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+  }
+  .data-root-control-editing {
+    align-items: stretch;
+  }
+  .data-root-main {
+    display: flex;
+    align-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 8px;
+    padding: 0 4px 0 8px;
+  }
+  .data-root-path,
+  .data-root-recent-path {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-text);
+  }
+  .data-root-kind {
+    flex-shrink: 0;
+    min-width: 46px;
+    padding: 2px 8px;
+    text-align: center;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface);
+    color: var(--color-text-secondary);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .data-root-actions {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+  .data-root-actions :global(.btn) {
+    flex: 0 0 auto;
+  }
+  .data-root-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    background: transparent;
+  }
+  @media (max-width: 560px) {
+    .data-root-control {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .data-root-main {
+      min-height: 30px;
+      padding: 0 4px;
+    }
+    .data-root-actions {
+      flex-wrap: wrap;
+    }
+  }
+
+  .data-root-error,
+  .data-root-warning {
+    margin: 0;
+    padding: 7px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .data-root-error {
+    color: var(--color-danger);
+    background: color-mix(in oklch, var(--color-danger-bright) 10%, transparent);
+  }
+  .data-root-warning {
+    color: var(--color-text-secondary);
+    background: var(--color-surface-raised);
+  }
+  .data-root-recent {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    height: 128px;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    padding: 8px 6px 6px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+  }
+  .data-root-recent-title {
+    padding-left: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+  }
+  .data-root-recent-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 0 0 0 8px;
   }
 
   .wsl-inline {

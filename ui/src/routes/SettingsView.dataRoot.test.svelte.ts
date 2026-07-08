@@ -1,15 +1,10 @@
-// 数据根目录 MRU 快速切换下拉单测（change flexible-data-root）。
-// 覆盖 settings-ui spec::General Section 展示 的两个 Scenario：
-//   - 从历史快速切换数据根（recentRoots 非空渲染下拉）
-//   - 无历史时不阻塞手动输入（recentRoots 空不渲染下拉）
-//
-// 走 setupMockIPC 注入 getConfig（含 recentRoots）；mockIPC structuredClone
-// fixture，改 emptyFixture 后 SHALL 重新 setupMockIPC 让 handler 拿新副本
-// （详 ui/CLAUDE.md::tauriMock）。
+// 数据根目录轻量 source switcher 单测（change redesign-data-root-switcher）。
+// 覆盖 settings-ui spec::General Section 展示：当前路径展示、最近列表过滤、
+// 最近为空隐藏、输入路径原地展开、取消与错误态。
 
-import { describe, expect, test, afterEach, beforeEach, vi } from 'vitest'
-import { render, cleanup, waitFor } from '@testing-library/svelte'
-import { clearMocks } from '@tauri-apps/api/mocks'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { render, cleanup, waitFor, fireEvent } from '@testing-library/svelte'
+import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 
 import SettingsView from './SettingsView.svelte'
 import { setupMockIPC } from '../lib/tauriMock'
@@ -20,9 +15,6 @@ class ResizeObserverStub {
   unobserve() {}
   disconnect() {}
 }
-
-const ROOT_INPUT = '#claude-root-input'
-const MRU = '[aria-label="最近使用的数据根目录"]'
 
 beforeEach(() => {
   emptyFixture.config.general.claudeRootPath = null
@@ -36,27 +28,75 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('SettingsView 数据根目录 MRU 下拉', () => {
-  test('recentRoots 非空 → 渲染最近使用快速切换下拉', async () => {
-    emptyFixture.config.general.claudeRootPath = '~/.qoder'
-    emptyFixture.config.general.recentRoots = ['/data/alpha', '~/.qoder']
+describe('SettingsView 数据目录 source switcher', () => {
+  test('默认 root 只显示一次，并以低权重状态标记为默认', async () => {
+    emptyFixture.config.general.claudeRootPath = null
+    emptyFixture.config.general.recentRoots = ['~/.claude']
     setupMockIPC('empty')
 
-    const { container } = render(SettingsView)
-    await waitFor(() => {
-      expect(container.querySelector(ROOT_INPUT)).not.toBeNull()
-    })
-    expect(container.querySelector(MRU)).not.toBeNull()
+    const { container, getByText, queryByLabelText } = render(SettingsView)
+    await waitFor(() => expect(getByText('~/.claude')).toBeTruthy())
+
+    expect(getByText('默认')).toBeTruthy()
+    expect(queryByLabelText('最近使用的数据根目录')).toBeNull()
+    expect(container.querySelectorAll('.data-root-path')).toHaveLength(1)
   })
 
-  test('recentRoots 空 → 不渲染下拉，手动输入入口仍在', async () => {
-    emptyFixture.config.general.recentRoots = []
+  test('自定义 root 显示为自定义，最近列表过滤当前项', async () => {
+    emptyFixture.config.general.claudeRootPath = '~/.qoder'
+    emptyFixture.config.general.recentRoots = ['/data/alpha', '~/.qoder', '/data/beta']
     setupMockIPC('empty')
 
-    const { container } = render(SettingsView)
-    await waitFor(() => {
-      expect(container.querySelector(ROOT_INPUT)).not.toBeNull()
-    })
-    expect(container.querySelector(MRU)).toBeNull()
+    const { getByText, queryByText, getByLabelText } = render(SettingsView)
+    await waitFor(() => expect(getByText('~/.qoder')).toBeTruthy())
+
+    expect(getByText('自定义')).toBeTruthy()
+    expect(getByLabelText('最近使用的数据根目录')).toBeTruthy()
+    expect(getByText('~/.claude')).toBeTruthy()
+    expect(getByText('/data/alpha')).toBeTruthy()
+    expect(getByText('/data/beta')).toBeTruthy()
+    // 当前路径只在 current row 出现，不在“最近”列表重复出现。
+    expect(queryByText('~/.qoder')).toBeTruthy()
+    expect(document.querySelectorAll('.data-root-recent-path[title="~/.qoder"]')).toHaveLength(0)
+  })
+
+  test('输入路径按钮原地展开，Esc 取消恢复按钮行', async () => {
+    emptyFixture.config.general.claudeRootPath = '~/.qoder'
+    setupMockIPC('empty')
+
+    const { getByText, getByLabelText, queryByLabelText } = render(SettingsView)
+    await waitFor(() => expect(getByText('输入')).toBeTruthy())
+
+    await fireEvent.click(getByText('输入'))
+    const input = getByLabelText('输入数据根目录路径') as HTMLInputElement
+    expect(input.value).toBe('~/.qoder')
+    expect(getByText('应用')).toBeTruthy()
+
+    await fireEvent.keyDown(input, { key: 'Escape' })
+    expect(queryByLabelText('输入数据根目录路径')).toBeNull()
+    expect(getByText('输入')).toBeTruthy()
+  })
+
+  test('保存失败保留输入行并在输入附近显示错误', async () => {
+    emptyFixture.config.general.claudeRootPath = '~/.qoder'
+    mockIPC(vi.fn((cmd) => {
+      if (cmd === 'get_config') return { ...emptyFixture.config, _version: 0 }
+      if (cmd === 'get_version') return '0.0.0-test'
+      if (cmd === 'list_available_terminals') return ['terminal']
+      if (cmd === 'get_http_server_status') return { running: false, port: 3456, lastError: null }
+      if (cmd === 'update_config') throw new Error('invalid root')
+      throw new Error(`unexpected command: ${cmd}`)
+    }))
+
+    const { getByText, getByLabelText } = render(SettingsView)
+    await waitFor(() => expect(getByText('输入')).toBeTruthy())
+
+    await fireEvent.click(getByText('输入'))
+    const input = getByLabelText('输入数据根目录路径') as HTMLInputElement
+    await fireEvent.input(input, { target: { value: 'relative/path' } })
+    await fireEvent.click(getByText('应用'))
+
+    await waitFor(() => expect(getByText(/保存失败/)).toBeTruthy())
+    expect(getByLabelText('输入数据根目录路径')).toBeTruthy()
   })
 })

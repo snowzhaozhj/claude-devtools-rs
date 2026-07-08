@@ -23,6 +23,8 @@ import {
   setActiveTab,
   setCachedSession,
   setSessionClickBehavior,
+  closeRootScopedTabsForRootSwitch,
+  hasRootScopedTabs,
 } from './tabStore.svelte'
 
 describe('singleton tab semantics', () => {
@@ -159,6 +161,32 @@ describe('openSessionTab 路由', () => {
     )!
     expect(after.tabs.length).toBe(beforeLen + 1)
     setSessionClickBehavior('replace') // 还原全局默认避免污染后续 test
+  })
+})
+
+describe('root switch tab boundary', () => {
+  test('closeRootScopedTabsForRootSwitch 只清 session/memory tabs、缓存与 UI state，保留 Settings', () => {
+    openSettingsTab()
+    const settingsTab = getAllTabs().find((t) => t.type === 'settings')!
+    openTab('sess-root-reset', 'proj-root-reset', 'Root Reset')
+    const sessionTab = getAllTabs().find((t) => t.sessionId === 'sess-root-reset')!
+    openMemoryTab('proj-root-reset')
+    expect(hasRootScopedTabs()).toBe(true)
+
+    const state = getTabUIState(sessionTab.id)
+    state.searchVisible = true
+    saveTabUIState(sessionTab.id, state)
+    setCachedSession(sessionTab.id, { chunks: [], isOngoing: false } as any)
+    expect(getCachedSession(sessionTab.id)).not.toBeNull()
+
+    closeRootScopedTabsForRootSwitch()
+
+    const tabs = getAllTabs()
+    expect(tabs.some((t) => t.type === 'session' || t.type === 'memory')).toBe(false)
+    expect(tabs.some((t) => t.id === settingsTab.id && t.type === 'settings')).toBe(true)
+    expect(hasRootScopedTabs()).toBe(false)
+    expect(getCachedSession(sessionTab.id)).toBeNull()
+    expect(getTabUIState(sessionTab.id).searchVisible).toBe(false)
   })
 })
 

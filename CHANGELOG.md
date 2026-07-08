@@ -10,6 +10,7 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 ## [Unreleased]
 
 ### Fixed
+- **Settings / data root**: redesigned the data directory switcher so the current path is never shown as a blank recent-root dropdown, and switching roots now returns the workspace to Dashboard while clearing old session, memory, and project caches.
 - **Auto-update**: the desktop updater no longer fails with `Download request failed with status: 403 Forbidden`. The release workflow now generates `latest.json` after all release assets are present, using public GitHub release download URLs instead of anonymous-blocked GitHub API asset URLs.
 
 ## [0.7.4] — 2026-07-08

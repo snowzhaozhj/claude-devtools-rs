@@ -12,6 +12,7 @@
     loadProjectData,
     getProjectData,
     isProjectDataLoading,
+    reloadProjectDataForRootSwitch,
   } from "./lib/projectDataStore.svelte";
   import type { ProjectInfo, RepositoryGroup } from "./lib/api";
   import {
@@ -27,6 +28,7 @@
     getFocusedPaneId,
     focusPane,
     splitPane,
+    closeRootScopedTabsForRootSwitch,
   } from "./lib/tabStore.svelte";
   import { MAX_PANES } from "./lib/paneTypes";
   import { getConfig, isRunningUnderRosetta } from "./lib/api";
@@ -44,6 +46,7 @@
   import { bootstrapOverrides } from "./lib/keyboard/customization";
   import { registerAppShortcuts } from "./lib/keyboard/register-app-shortcuts";
   import { setMenuSettings } from "./lib/contextMenu/settings.svelte";
+  import { clearSessionListCache } from "./lib/sessionListStore.svelte";
 
   let selectedGroupId: string = $state("");
   let selectedProjectName: string = $state("");
@@ -61,6 +64,7 @@
   // cache（projectDataStore 内部 in-flight dedupe + memoize），重复调用近瞬时
   let projects: ProjectInfo[] = $state([]);
   let repositoryGroups: RepositoryGroup[] = $state([]);
+  let rootSwitchGeneration = 0;
   // 首屏 projects 还在 fetch 时 ProjectSwitcher 应显示"加载中…"，避免一闪
   // "无项目"再切到真名（codex PR 二审 #7）
   const projectsLoading = $derived(isProjectDataLoading());
@@ -71,6 +75,34 @@
       projects = result.worktreeProjects;
       repositoryGroups = result.repositoryGroups;
     } catch { /* 静默：Sidebar 内有更详细的错误处理 + UI 反馈 */ }
+  }
+
+  async function handleDataRootChanged() {
+    const requestGeneration = ++rootSwitchGeneration;
+    closeRootScopedTabsForRootSwitch();
+    clearSessionListCache();
+    selectedGroupId = "";
+    selectedProjectName = "";
+    try {
+      const result = await reloadProjectDataForRootSwitch();
+      if (requestGeneration !== rootSwitchGeneration) return;
+      projects = result.worktreeProjects;
+      repositoryGroups = result.repositoryGroups;
+      const firstGroup = result.repositoryGroups[0];
+      if (firstGroup) {
+        selectProject(firstGroup.id, firstGroup.name);
+      } else if (result.worktreeProjects.length > 0) {
+        const firstProject = result.worktreeProjects[0];
+        selectProject(firstProject.id, firstProject.displayName);
+      }
+      window.dispatchEvent(new CustomEvent("cdt-root-switch-complete"));
+    } catch (e) {
+      if (requestGeneration !== rootSwitchGeneration) return;
+      console.warn("[App] data root switch project reload failed:", e);
+      projects = [];
+      repositoryGroups = [];
+      window.dispatchEvent(new CustomEvent("cdt-root-switch-complete"));
+    }
   }
 
   async function onNotificationUpdate() {
@@ -173,6 +205,7 @@
     await bootstrapOverrides();
     unregisterShortcuts = registerAppShortcuts(buildAppShortcutHandlers());
     window.addEventListener("cdt-open-command-palette", openCommandPalette);
+    window.addEventListener("cdt-data-root-changed", handleDataRootChanged);
     // 拦截 markdown 内的外链点击，走系统默认浏览器而非 webview 窗口内导航
     detachExternalLinks = attachExternalLinkInterceptor();
     // 监听后端 notification-update 事件（mark-as-read 后刷新 badge）
@@ -262,6 +295,7 @@
     unregisterShortcuts?.();
     unregisterHandler("app-global-projects");
     window.removeEventListener("cdt-open-command-palette", openCommandPalette);
+    window.removeEventListener("cdt-data-root-changed", handleDataRootChanged);
     unlistenNotif?.();
     unlistenNotifAdded?.();
     unlistenUpdater?.();

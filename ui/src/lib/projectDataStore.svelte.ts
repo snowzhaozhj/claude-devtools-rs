@@ -14,6 +14,9 @@ export interface ProjectData {
 let data: ProjectData | null = $state(null);
 let loading: boolean = $state(false);
 let error: unknown = $state(null);
+// 每次 root switch 递增 generation。旧 root 的 in-flight 请求若晚于新
+// generation 返回，不能再写回 data，也不能把旧结果返回给当前调用方。
+let generation = 0;
 // 首次 `loadProjectData` 完成前为 false。`isProjectDataLoading()` 在 initialized
 // 之前一律返回 true，避免首帧调用者（如 `UnifiedTitleBar` 的 ProjectSwitcher）
 // 在 `loading=false + data=null` 的 1 帧窗口内误显"无项目"（codex PR #140 二审）。
@@ -117,25 +120,46 @@ export function loadProjectData(options: { refresh?: boolean } = {}): Promise<Pr
 
   loading = true;
   error = null;
+  const requestGeneration = generation;
 
   inflight = (async () => {
     try {
       const next = await fetchProjectData();
+      if (requestGeneration !== generation) {
+        throw new Error("project data request superseded by root switch");
+      }
       data = next;
       return next;
     } catch (e) {
-      error = e;
+      if (requestGeneration === generation) error = e;
       throw e;
     } finally {
-      inflight = null;
-      loading = false;
-      initialized = true;
-      if (refreshAfterInflight) {
-        refreshAfterInflight = false;
-        void loadProjectData({ refresh: true });
+      if (requestGeneration === generation) {
+        inflight = null;
+        loading = false;
+        initialized = true;
+        if (refreshAfterInflight) {
+          refreshAfterInflight = false;
+          void loadProjectData({ refresh: true });
+        }
       }
     }
   })();
 
   return inflight;
+}
+
+export function clearProjectDataForRootSwitch(): void {
+  generation += 1;
+  data = null;
+  error = null;
+  inflight = null;
+  refreshAfterInflight = false;
+  loading = true;
+  initialized = false;
+}
+
+export async function reloadProjectDataForRootSwitch(): Promise<ProjectData> {
+  clearProjectDataForRootSwitch();
+  return await loadProjectData({ refresh: true });
 }

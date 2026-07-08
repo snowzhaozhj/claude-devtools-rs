@@ -42,29 +42,31 @@ test.describe('settings + notifications', () => {
       ;(window as unknown as { __cdtTest: { openSettingsTab: () => void } }).__cdtTest.openSettingsTab()
     })
 
-    const input = page.getByRole('textbox', { name: '数据根目录' })
-    await expect(input).toBeVisible({ timeout: 5_000 })
-    await expect(page.getByRole('button', { name: '恢复默认' })).toBeDisabled()
+    await expect(page.getByText('~/.claude')).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByRole('button', { name: '重置' })).toHaveCount(0)
 
-    let refreshCount = 0
     await page.evaluate(() => {
-      window.addEventListener('cdt-refresh-projects', () => {
-        ;(window as unknown as { __refreshCount?: number }).__refreshCount = ((window as unknown as { __refreshCount?: number }).__refreshCount ?? 0) + 1
+      window.addEventListener('cdt-root-switch-complete', () => {
+        ;(window as unknown as { __rootSwitchCompleteCount?: number }).__rootSwitchCompleteCount = ((window as unknown as { __rootSwitchCompleteCount?: number }).__rootSwitchCompleteCount ?? 0) + 1
       })
     })
 
+    await page.getByRole('button', { name: '打开数据根目录路径输入框' }).click()
+    const input = page.getByRole('textbox', { name: '输入数据根目录路径' })
+    await expect(input).toBeVisible({ timeout: 5_000 })
     await input.fill('/tmp/claude-alt')
-    await page.getByRole('button', { name: '保存手动输入' }).click()
-    await expect(input).toHaveValue('/tmp/claude-alt')
-    await expect(page.getByRole('button', { name: '恢复默认' })).toBeEnabled()
-    refreshCount = await page.evaluate(() => (window as unknown as { __refreshCount?: number }).__refreshCount ?? 0)
-    expect(refreshCount).toBe(1)
+    await page.getByRole('button', { name: '应用', exact: true }).click()
+    await page.waitForFunction(() => ((window as unknown as { __rootSwitchCompleteCount?: number }).__rootSwitchCompleteCount ?? 0) === 1)
 
-    await page.getByRole('button', { name: '恢复默认' }).click()
-    await expect(input).toHaveValue('')
-    await expect(page.getByRole('button', { name: '恢复默认' })).toBeDisabled()
-    refreshCount = await page.evaluate(() => (window as unknown as { __refreshCount?: number }).__refreshCount ?? 0)
-    expect(refreshCount).toBe(2)
+    await expect(page.getByText('/tmp/claude-alt')).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByText('~/.claude')).toBeVisible({ timeout: 5_000 })
+
+    await page.locator('.data-root-recent-row').filter({ hasText: '~/.claude' }).getByRole('button', { name: '切换' }).click()
+    await page.waitForFunction(() => ((window as unknown as { __rootSwitchCompleteCount?: number }).__rootSwitchCompleteCount ?? 0) === 2)
+
+    await expect(page.getByText('~/.claude')).toBeVisible({ timeout: 5_000 })
+    await expect(page.locator('.data-root-recent-row').filter({ hasText: '~/.claude' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '重置' })).toHaveCount(0)
   })
 
   test('打开 Notifications tab → 看到通知列表与 unread 计数', async ({ page }) => {
