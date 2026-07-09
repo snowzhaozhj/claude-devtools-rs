@@ -209,7 +209,7 @@ jobs:
   # 全齐 → 自动 publish，不再需要手动 `gh release edit --draft=false`。
   publish:
     name: Verify assets and publish
-    needs: [build, build-cli]
+    needs: [create-release, build, build-cli]
     runs-on: ubuntu-latest
     steps:
       - name: Verify non-updater assets present
@@ -258,17 +258,25 @@ jobs:
         uses: actions/github-script@v9
         env:
           TAG: ${{ github.ref_name }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         with:
           script: |
             const tag = process.env.TAG;
+            const releaseId = Number(process.env.RELEASE_ID);
             const version = tag.replace(/^v/, "");
             const { owner, repo } = context.repo;
 
-            const { data: release } = await github.rest.repos.getReleaseByTag({
+            if (!Number.isSafeInteger(releaseId) || releaseId <= 0) {
+              throw new Error(`invalid release id from create-release job: ${process.env.RELEASE_ID}`);
+            }
+            const { data: release } = await github.rest.repos.getRelease({
               owner,
               repo,
-              tag,
+              release_id: releaseId,
             });
+            if (release.tag_name !== tag) {
+              throw new Error(`release id ${releaseId} points to ${release.tag_name}, expected ${tag}`);
+            }
             if (!release.draft) {
               throw new Error(`release ${tag} is already published; refusing to replace latest.json`);
             }
