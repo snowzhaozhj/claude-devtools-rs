@@ -9,6 +9,8 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-07-09
+
 ### Fixed
 - **Settings / data root**: redesigned the data directory switcher so the current path is never shown as a blank recent-root dropdown, and switching roots now returns the workspace to Dashboard while clearing old session, memory, and project caches.
 - **Auto-update**: the desktop updater no longer fails with `Download request failed with status: 403 Forbidden`. The release workflow now generates `latest.json` after all release assets are present, using public GitHub release download URLs instead of anonymous-blocked GitHub API asset URLs.
@@ -434,7 +436,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.4...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.5...HEAD
+[0.7.5]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.1...v0.7.2
