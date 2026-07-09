@@ -312,9 +312,15 @@ jobs:
               }
               return text;
             };
+            const releaseDownloadUrl = (name) => {
+              // Draft release assets expose transient "untagged-*" browser URLs.
+              // Updater metadata must use the stable tag URL that becomes public after un-draft.
+              asset(name);
+              return `https://github.com/${owner}/${repo}/releases/download/${tag}/${encodeURIComponent(name)}`;
+            };
             const entry = async (name) => ({
               signature: await signature(name),
-              url: asset(name).browser_download_url,
+              url: releaseDownloadUrl(name),
             });
 
             // Keep this manifest aligned with tauri-action@v1's updater JSON platform mapping.
