@@ -24,7 +24,7 @@
   import { isTauriRuntime } from "../lib/runtime";
   import { applyTheme } from "../lib/theme";
   import { applyFonts } from "../lib/fonts";
-  import { setSessionClickBehavior, hasRootScopedTabs, type SessionClickBehavior } from "../lib/tabStore.svelte";
+  import { setSessionClickBehavior, type SessionClickBehavior } from "../lib/tabStore.svelte";
   import { setTimeFormat } from "../lib/displayPrefs.svelte";
   import type { TimeFormat } from "../lib/api";
   import SettingsToggle from "../lib/components/SettingsToggle.svelte";
@@ -207,7 +207,6 @@
   });
   const currentRootLabel = $derived(effectiveClaudeRootPath ?? DEFAULT_ROOT_LABEL);
   const currentRootKind = $derived(effectiveClaudeRootPath === null ? "默认" : "自定义");
-  const hasRootScopedTabsOpen = $derived(hasRootScopedTabs());
   const recentRootOptions = $derived.by<RootOption[]>(() => {
     if (!config) return [];
     const currentKey = rootOptionKey(effectiveClaudeRootPath);
@@ -1169,12 +1168,6 @@
                   {wslInlineMessage.text}
                 </p>
               {/if}
-              {#if hasRootScopedTabsOpen}
-                <p class="data-root-warning" role="status">
-                  切换会关闭会话与记忆标签页，设置页会保留。
-                </p>
-              {/if}
-
               {#if recentRootOptions.length > 0}
                 <div class="data-root-recent" aria-label="最近使用的数据根目录">
                   <div class="data-root-recent-title">最近</div>
@@ -2234,21 +2227,14 @@
     }
   }
 
-  .data-root-error,
-  .data-root-warning {
+  .data-root-error {
     margin: 0;
     padding: 7px 10px;
     border-radius: var(--radius-sm);
     font-size: 12px;
     line-height: 1.45;
-  }
-  .data-root-error {
     color: var(--color-danger);
     background: color-mix(in oklch, var(--color-danger-bright) 10%, transparent);
-  }
-  .data-root-warning {
-    color: var(--color-text-secondary);
-    background: var(--color-surface-raised);
   }
   .data-root-recent {
     display: flex;
