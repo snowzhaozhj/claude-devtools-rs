@@ -204,28 +204,8 @@ impl CdtMcpServer {
     }
 
     fn emit_json<T: Serialize>(&self, value: &T) -> Result<CallToolResult, McpError> {
-        // 先序列化保留字段声明顺序；命中 secret 才走结构化脱敏 + 包裹（该分支重排 key
-        // 与旧实现一致），未命中原样返回原串（禁用脱敏 / 无 secret 均走此路，字节不变）。
-        // 结构化脱敏只替换字符串叶子值与对象 key 内的 secret，不再对序列化文本正则，
-        // 从根因上杜绝脱敏破坏 JSON 结构（change `mcp-redact-preserve-json-structure`）。
-        let json = serde_json::to_string(value)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let root: serde_json::Value = serde_json::from_str(&json)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let (redacted, redacted_count) = self.redactor.redact_value(root);
-
-        if redacted_count > 0 {
-            let wrapper = serde_json::json!({
-                "data": redacted,
-                "redacted": true,
-                "redactedCount": redacted_count,
-            });
-            let text = serde_json::to_string(&wrapper)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-            Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
-        } else {
-            Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
-        }
+        let text = redact_and_serialize(&self.redactor, value)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }
 
@@ -762,6 +742,31 @@ Tips:\n\
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// 序列化 + 结构化脱敏 +（命中时）包裹，返回最终 JSON 文本。
+///
+/// 先 `to_string` 保留字段声明顺序；命中 secret 才走结构化脱敏并包成
+/// `{data, redacted, redactedCount}`（该分支经 `Value` 重排 key，与旧实现一致），
+/// 未命中原样返回原串（禁用脱敏 / 无 secret 均走此路，字节不变）。脱敏只替换字符串
+/// 叶子值与对象 key 内的 secret，不再对序列化文本正则——从根因上杜绝脱敏破坏 JSON
+/// 结构（change `mcp-redact-preserve-json-structure`）。
+fn redact_and_serialize<T: Serialize>(redactor: &Redactor, value: &T) -> Result<String, McpError> {
+    let json =
+        serde_json::to_string(value).map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let root: serde_json::Value =
+        serde_json::from_str(&json).map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let (redacted, redacted_count) = redactor.redact_value(root);
+    if redacted_count > 0 {
+        let wrapper = serde_json::json!({
+            "data": redacted,
+            "redacted": true,
+            "redactedCount": redacted_count,
+        });
+        serde_json::to_string(&wrapper).map_err(|e| McpError::internal_error(e.to_string(), None))
+    } else {
+        Ok(json)
+    }
+}
+
 fn group_stats_data(
     sessions: &[cdt_query::stats::SessionData],
     group_by: &str,
@@ -831,6 +836,8 @@ pub async fn run_mcp_server(engine: Arc<QueryEngine>, allow_sensitive: bool) -> 
 
 #[cfg(test)]
 mod tests {
+    use super::redact::Redactor;
+    use super::redact_and_serialize;
     use crate::turn_api::{next_cursor, paginate_cursor};
 
     #[test]
@@ -839,5 +846,47 @@ mod tests {
         assert_eq!(paginate_cursor(Some("10")), 10);
         assert_eq!(next_cursor(0, 20, 50), Some("20".into()));
         assert_eq!(next_cursor(40, 20, 50), None);
+    }
+
+    // ── emit_json 层：脱敏后响应始终合法 JSON（change mcp-redact-preserve-json-structure）──
+
+    #[test]
+    fn emit_layer_redacts_and_stays_valid_json() {
+        // #596 的病灶层:含 secret 的响应经脱敏后 SHALL 仍是合法 JSON、包裹 {data,...}、
+        // 兄弟字段完整保留。
+        let r = Redactor::new(true);
+        let v = serde_json::json!({ "text": "run with password=hunter2", "model": "claude-opus" });
+        let text = redact_and_serialize(&r, &v).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&text).expect("响应必须是合法 JSON");
+        assert_eq!(parsed["redacted"], true);
+        assert!(parsed["redactedCount"].as_u64().unwrap() >= 1);
+        assert_eq!(parsed["data"]["model"], "claude-opus"); // 兄弟字段存活
+        assert!(
+            parsed["data"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("[REDACTED]")
+        );
+        assert!(!text.contains("hunter2"));
+    }
+
+    #[test]
+    fn emit_layer_passthrough_when_no_secret() {
+        let r = Redactor::new(true);
+        let v = serde_json::json!({ "text": "hello", "model": "claude" });
+        let text = redact_and_serialize(&r, &v).unwrap();
+        assert!(!text.contains("redactedCount")); // 无 secret → 不包裹
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["text"], "hello");
+    }
+
+    #[test]
+    fn emit_layer_disabled_passes_secret_through() {
+        // Redactor::new(false) == CdtMcpServer::new(.., allow_sensitive=true)
+        let r = Redactor::new(false);
+        let v = serde_json::json!({ "text": "password=hunter2" });
+        let text = redact_and_serialize(&r, &v).unwrap();
+        assert!(text.contains("hunter2")); // 不脱敏
+        assert!(!text.contains("redactedCount")); // 无包裹
     }
 }

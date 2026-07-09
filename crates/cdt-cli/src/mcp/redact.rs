@@ -14,7 +14,7 @@ impl Redactor {
                 Regex::new(r"ghp_[a-zA-Z0-9]{36,}").unwrap(),
                 Regex::new(r"gho_[a-zA-Z0-9]{36,}").unwrap(),
                 Regex::new(r"Bearer\s+[a-zA-Z0-9._\-]{20,}").unwrap(),
-                Regex::new(r#"(?i)password\s*[=:]\s*[^\s"]+"#).unwrap(),
+                Regex::new(r"(?i)password\s*[=:]\s*\S+").unwrap(),
                 Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----").unwrap(),
                 Regex::new(r"eyJ[a-zA-Z0-9_\-]{20,}\.eyJ[a-zA-Z0-9_\-]{20,}").unwrap(),
             ]
