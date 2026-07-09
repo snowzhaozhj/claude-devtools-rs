@@ -163,9 +163,9 @@ describe('Sidebar smoke', () => {
       // 默认状态（无搜索）显单数字 group total，不显分式 / 已加载条数
       expect(span!.textContent?.trim()).toBe('4')
     })
-    // tooltip：hidden=0 时单层「总 4」，不追加 「· 0 已隐藏」
+    // fixture 中 anchor worktree mock-rich-rust 有 1 条 hidden prefs，tooltip 应反映真实隐藏数。
     const span = container.querySelector('.session-count-num')!
-    expect(span.getAttribute('title')).toBe('总 4')
+    expect(span.getAttribute('title')).toBe('总 4 · 1 已隐藏')
   })
 
   test('到底（无 nextCursor）时 SHALL NOT 渲染"已显示全部 N 条" footer', async () => {
@@ -411,6 +411,99 @@ describe('Sidebar smoke', () => {
     await tick()
     await tick()
     expect(container.querySelector('.memory-entry')).not.toBeNull()
+  })
+
+  test('data root changed 清理 memory cache 与当前 memory-entry', async () => {
+    const addEventSpy = vi.spyOn(window, 'addEventListener')
+    const { container } = render(Sidebar, {
+      props: {
+        selectedGroupId: 'mock-rich-rust',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+    await waitFor(() => {
+      expect(container.querySelector('.memory-entry')).not.toBeNull()
+    })
+    await waitFor(() => {
+      expect(addEventSpy).toHaveBeenCalledWith('cdt-data-root-changed', expect.any(Function))
+    })
+
+    window.dispatchEvent(new CustomEvent('cdt-data-root-changed'))
+    await tick()
+
+    expect(container.querySelector('.memory-entry')).toBeNull()
+  })
+
+  test('data root changed 后旧 list_group_sessions late response 不回写 sessions', async () => {
+    let resolveOldSessions!: (value: unknown) => void
+    const oldSessions = new Promise((resolve) => { resolveOldSessions = resolve })
+    let listGroupSessionsCalls = 0
+
+    mockWindows('main')
+    mockIPC((cmd: string, _args?: InvokeArgs): unknown => {
+      switch (cmd) {
+        case 'list_repository_groups':
+          return [{
+            id: 'g-A',
+            identity: { id: 'g-A', name: 'A' },
+            name: 'A',
+            mostRecentSession: 0,
+            totalSessions: 1,
+            worktrees: [{
+              id: 'g-A', path: '/a', name: 'A', gitBranch: null,
+              isMainWorktree: true, isRepoRoot: true, sessions: ['old-root-session'],
+              createdAt: null, mostRecentSession: 0,
+            }],
+          }]
+        case 'list_projects':
+          return [{ id: 'g-A', path: '/a', displayName: 'A', sessionCount: 1 }]
+        case 'list_group_sessions':
+          listGroupSessionsCalls += 1
+          if (listGroupSessionsCalls === 1) return oldSessions
+          return { sessions: [], nextCursor: null }
+        case 'get_project_memory':
+          return { has_memory: false, layers: [], count: 0 }
+        case 'get_project_session_prefs':
+          return { pinned: [], hidden: [] }
+        case 'get_session_summaries_by_ids':
+          return []
+        default:
+          return null
+      }
+    }, { shouldMockEvents: true })
+
+    const { queryByText } = render(Sidebar, {
+      props: {
+        selectedGroupId: 'g-A',
+        activeSessionId: null,
+        onSelectProject: () => {},
+        onSelectSession: () => {},
+      },
+    })
+    await waitFor(() => expect(listGroupSessionsCalls).toBe(1))
+
+    window.dispatchEvent(new CustomEvent('cdt-data-root-changed'))
+    resolveOldSessions({
+      sessions: [{
+        sessionId: 'old-root-session',
+        projectId: 'g-A',
+        worktreeId: 'g-A',
+        title: 'Old root session',
+        messageCount: 1,
+        isOngoing: false,
+        createdAt: 0,
+        updatedAt: 0,
+        gitBranch: null,
+        cwd: null,
+      }],
+      nextCursor: null,
+    })
+    await tick()
+    await tick()
+
+    expect(queryByText('Old root session')).toBeNull()
   })
 
   // 注意：change `enrich-file-change-with-session-list-changed::D3` 的

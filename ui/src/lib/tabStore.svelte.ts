@@ -512,6 +512,29 @@ export function openTabInNewPane(
   paneLayout = { ...next, focusedPaneId: newPaneId };
 }
 
+export function hasRootScopedTabs(): boolean {
+  return getAllTabs().some((t) => t.type === "session" || t.type === "memory");
+}
+
+export function closeRootScopedTabsForRootSwitch(): void {
+  const rootScopedTabIds = getAllTabs()
+    .filter((t) => t.type === "session" || t.type === "memory")
+    .map((t) => t.id);
+  for (const tabId of rootScopedTabIds) {
+    closeTab(tabId);
+  }
+}
+
+export function resetWorkspaceTabsToDashboard(): void {
+  paneLayout = {
+    panes: [createEmptyPane(DEFAULT_PANE_ID)],
+    focusedPaneId: DEFAULT_PANE_ID,
+  };
+  tabUIStates.clear();
+  tabSessionCache.clear();
+  tabSessionCacheOrder.length = 0;
+}
+
 export function closeTab(tabId: string): void {
   const pane = findPaneByTabId(paneLayout, tabId);
   if (!pane) return;

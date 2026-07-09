@@ -16,6 +16,7 @@ import {
   loadFirstPage,
   loadMore,
   read,
+  clearSessionListCache,
 } from "./sessionListStore.svelte";
 
 const mockedListSessions = vi.mocked(listSessions);
@@ -57,6 +58,17 @@ describe("sessionListStore", () => {
     const entry = await loadFirstPage("p1", { mode: "replace" });
     expect(entry?.sessions.map((s) => s.sessionId)).toEqual(["s1", "s2"]);
     expect(read("p1")?.total).toBe(2);
+  });
+
+  test("clearSessionListCache 清空已有 root-scoped 会话列表缓存", async () => {
+    mockedListSessions.mockResolvedValueOnce(paginated([sessionSummary("s-root")], 1));
+    await loadFirstPage("p-root", { mode: "replace" });
+    expect(read("p-root")?.sessions.map((s) => s.sessionId)).toEqual(["s-root"]);
+
+    clearSessionListCache();
+
+    expect(read("p-root")).toBeUndefined();
+    expect(__snapshotKeys()).toEqual([]);
   });
 
   test("loadFirstPage merge 首页 ghost reconcile 删除 server 已不返的 sessionId", async () => {

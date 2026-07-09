@@ -12,7 +12,7 @@
     type SessionMetadataUpdate,
     type GroupSessionPage,
   } from "../lib/api";
-  import { loadProjectData } from "../lib/projectDataStore.svelte";
+  import { loadProjectData, getProjectData } from "../lib/projectDataStore.svelte";
   import OngoingIndicator from "./OngoingIndicator.svelte";
   import SkeletonList from "./SkeletonList.svelte";
   import WorktreeChipCluster from "../lib/components/WorktreeChipCluster.svelte";
@@ -98,6 +98,9 @@
   // return 期间 entry 闪现/消失引发 sidebar 顶部 layout shift。命中走 SWR：
   // 先 set 当前值同时后台 refresh；miss 走正常 fetch。
   const memoryCache = new Map<string, ProjectMemory | null>();
+  let memoryGeneration = 0;
+  let sessionGeneration = 0;
+  let rootSwitching = $state(false);
   let projectsLoading = $state(true);
   let sessionsLoading = $state(false);
   let sessionsLoadingMore = $state(false);
@@ -222,6 +225,8 @@
   let sseRecoveredUnlisten: Unsubscribe | null = null;
   let sseLaggedUnlisten: Unsubscribe | null = null;
   let refreshProjectsListener: (() => void) | null = null;
+  let dataRootChangedListener: (() => void) | null = null;
+  let rootSwitchCompleteListener: (() => void) | null = null;
   let sessionListEl: HTMLElement | null = null;
 
   async function loadProjects(silent = false) {
@@ -326,6 +331,7 @@
       "session-metadata-update",
       (event) => {
         const payload = event.payload;
+        if (rootSwitching) return;
         // 切 group 期间残留的旧 group 事件忽略。D7：后端 `SessionMetadataUpdate`
         // 新增 `groupId` 字段——优先按 groupId 匹配 selectedGroupId；缺省
         // （未跑过 list_repository_groups）时 fallback 按 projectId 匹配
@@ -415,11 +421,13 @@
         //   response 拿、cache miss 真值从 SSE patch 拿
         const pageSize = Math.max(sessions.length, SESSION_PAGE_SIZE);
         const cacheKey = buildSessionListCacheKey();
+        const requestGeneration = sessionGeneration;
         void (async () => {
           try {
             // D6/D7：走 listGroupSessions + 当前 worktree filter 的初始 cursor
             const result = await listGroupSessions(groupId, pageSize, initialFilterCursor());
-            // race guard：异步完成时 user 可能已切到别的 group / filter
+            // race guard：异步完成时 user 可能已切到别的 group / filter / root
+            if (requestGeneration !== sessionGeneration) return;
             if (groupId !== selectedGroupId) return;
             if (cacheKey !== buildSessionListCacheKey()) return;
             // recovery 专用合并语义：response 真值（cache hit fast-path）
@@ -474,6 +482,28 @@
     };
     window.addEventListener("cdt-refresh-projects", refreshProjectsListener);
 
+    dataRootChangedListener = () => {
+      cancelScheduledRefresh("sidebar:projects");
+      if (selectedGroupId) {
+        cancelScheduledRefresh(`sidebar-structural:${selectedGroupId}`);
+        cancelScheduledRefresh(`sidebar-append:${selectedGroupId}`);
+      }
+      memoryGeneration += 1;
+      sessionGeneration += 1;
+      rootSwitching = true;
+      memoryCache.clear();
+      projectMemory = null;
+      sessions = [];
+      sessionsNextCursor = null;
+      pendingMetadataUpdates.clear();
+    };
+    window.addEventListener("cdt-data-root-changed", dataRootChangedListener);
+
+    rootSwitchCompleteListener = () => {
+      rootSwitching = false;
+    };
+    window.addEventListener("cdt-root-switch-complete", rootSwitchCompleteListener);
+
     try {
       await loadProjects();
     } finally {
@@ -494,6 +524,7 @@
       projectMemory = null;
       return;
     }
+    const requestGeneration = memoryGeneration;
     // 同步 hydrate：cache 命中立即 set，避免等 IPC return 期间 memory-entry
     // 显隐引发 sidebar 顶部 layout shift（用户来回切已访问过的项目时）。
     const cached = memoryCache.get(projectId);
@@ -506,7 +537,7 @@
         try {
           const fresh = await getProjectMemory(projectId);
           memoryCache.set(projectId, fresh);
-          if (projectId === memoryAnchorWorktreeId) projectMemory = fresh;
+          if (requestGeneration === memoryGeneration && projectId === memoryAnchorWorktreeId) projectMemory = fresh;
         } catch (e) {
           console.warn("Failed to refresh project memory:", e);
         }
@@ -516,10 +547,10 @@
     try {
       const memory = await getProjectMemory(projectId);
       memoryCache.set(projectId, memory);
-      if (projectId === memoryAnchorWorktreeId) projectMemory = memory;
+      if (requestGeneration === memoryGeneration && projectId === memoryAnchorWorktreeId) projectMemory = memory;
     } catch (e) {
       console.warn("Failed to load project memory:", e);
-      if (projectId === memoryAnchorWorktreeId) projectMemory = null;
+      if (requestGeneration === memoryGeneration && projectId === memoryAnchorWorktreeId) projectMemory = null;
     }
   }
 
@@ -531,6 +562,7 @@
       return;
     }
     const cacheKey = buildSessionListCacheKey();
+    const requestGeneration = sessionGeneration;
     const anchor = anchorWorktreeId;
     // 非 silent 路径（切 group / 首次加载）：先查 sessionListStore 缓存；
     // 命中则立即 sync hydrate 三态（避免"加载中..."中间态），同时触发 silent
@@ -576,6 +608,7 @@
         SESSION_PAGE_SIZE,
         initialFilterCursor(),
       );
+      if (requestGeneration !== sessionGeneration) return;
       // 同时校验 groupId + (groupId, filter) 复合键——切 group 时 reset
       // worktreeFilter effect 与本 loadSessions effect 在同 microtask 触发，
       // 旧 filter 构造的请求可能晚于新 filter 请求返回，late response 会用空
@@ -596,6 +629,7 @@
         nextCursor = result.nextCursor;
       }
       fresh = await reconcilePinnedAndHidden(anchor, fresh);
+      if (requestGeneration !== sessionGeneration) return;
       if (cacheKey !== buildSessionListCacheKey()) return;
       // sessions 写入后立即把 pending buffer 中已存在的 sessionId 应用上去——
       // 兜底 broadcast 在 IPC return 之前到达时找不到目标的 race。
@@ -609,13 +643,13 @@
       queueMicrotask(() => maybeLoadMoreSessions(true));
     } catch (e) {
       console.error("Failed to load sessions:", e);
-      if (!silent && cacheKey === buildSessionListCacheKey()) {
+      if (!silent && requestGeneration === sessionGeneration && cacheKey === buildSessionListCacheKey()) {
         sessions = [];
         sessionsNextCursor = null;
         pendingMetadataUpdates.clear();
       }
     } finally {
-      if (!silent && cacheKey === buildSessionListCacheKey()) sessionsLoading = false;
+      if (!silent && requestGeneration === sessionGeneration && cacheKey === buildSessionListCacheKey()) sessionsLoading = false;
     }
   }
 
@@ -624,9 +658,11 @@
     const cursor = sessionsNextCursor;
     if (!groupId || !cursor || sessionsLoading || sessionsLoadingMore) return;
     const cacheKey = buildSessionListCacheKey();
+    const requestGeneration = sessionGeneration;
     sessionsLoadingMore = true;
     try {
       const result = await listGroupSessions(groupId, SESSION_PAGE_SIZE, cursor);
+      if (requestGeneration !== sessionGeneration) return;
       if (groupId !== selectedGroupId || cursor !== sessionsNextCursor) return;
       if (cacheKey !== buildSessionListCacheKey()) return;
       // 翻页扩展 sessions 后立即把 pending buffer 应用上去——broadcast 可能在
@@ -681,7 +717,19 @@
   }
 
   $effect(() => {
-    if (selectedGroupId) {
+    const cached = getProjectData();
+    if (cached) {
+      rootSwitching = false;
+      repositoryGroups = cached.repositoryGroups;
+      projects = cached.worktreeProjects;
+    } else {
+      repositoryGroups = [];
+      projects = [];
+    }
+  });
+
+  $effect(() => {
+    if (selectedGroupId && !rootSwitching) {
       // memory 走 memoryAnchorWorktreeId（恒定 group repo 根，不随 filter 漂）；
       // pin/hide 仍 per-worktree 持久化——用 anchorWorktreeId 跟随 filter。
       void loadProjectMemory(memoryAnchorWorktreeId);
@@ -783,6 +831,14 @@
     if (refreshProjectsListener) {
       window.removeEventListener("cdt-refresh-projects", refreshProjectsListener);
       refreshProjectsListener = null;
+    }
+    if (dataRootChangedListener) {
+      window.removeEventListener("cdt-data-root-changed", dataRootChangedListener);
+      dataRootChangedListener = null;
+    }
+    if (rootSwitchCompleteListener) {
+      window.removeEventListener("cdt-root-switch-complete", rootSwitchCompleteListener);
+      rootSwitchCompleteListener = null;
     }
     metadataUnlisten?.();
     metadataUnlisten = null;
@@ -1448,7 +1504,7 @@
     min-width: 13px;
     height: 13px;
     padding: 0 3px;
-    border-radius: 7px;
+    border-radius: var(--radius-pill);
     background: var(--color-surface-overlay);
     color: var(--color-text-secondary);
     font-size: 9px;

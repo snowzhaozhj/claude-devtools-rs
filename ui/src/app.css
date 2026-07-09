@@ -574,7 +574,7 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -588,7 +588,7 @@ body {
 mark[data-search-match] {
   background: var(--highlight-bg);
   color: inherit;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   padding: 0 1px;
 }
 
@@ -794,7 +794,7 @@ mark[data-search-current] {
   width: 26px;
   height: 26px;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-xs, 4px);
+  border-radius: var(--radius-xs);
   background: var(--color-surface, #f9f9f7);
   color: var(--color-text-muted);
   cursor: pointer;

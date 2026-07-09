@@ -7,7 +7,7 @@
 
 import { describe, expect, test, afterEach, beforeEach, vi } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/svelte'
-import { clearMocks } from '@tauri-apps/api/mocks'
+import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 
 import SessionDetail from '../routes/SessionDetail.svelte'
 import { setupMockIPC } from '../lib/tauriMock'
@@ -16,6 +16,8 @@ import {
   getTabUIState,
   openTab,
   getActiveTab,
+  getCachedSession,
+  resetWorkspaceTabsToDashboard,
   closeTab,
 } from '../lib/tabStore.svelte'
 import { singleProjectFixture } from '../lib/__fixtures__'
@@ -255,6 +257,39 @@ describe('SessionDetail smoke', () => {
     expect(after.anchorOffsetPx).toBe(42)
 
     closeTab(tabId)
+  })
+
+  test('tab 被 root reset 关闭后，延迟返回的 detail 不会重新写入 cache', async () => {
+    openTab(SESSION_ID, PROJECT_ID, 'root-reset-late-detail')
+    const tabId = getActiveTab()!.id
+    let resolveDetail!: (value: unknown) => void
+    const detailPromise = new Promise((resolve) => { resolveDetail = resolve })
+
+    mockIPC((cmd: string) => {
+      if (cmd === 'get_session_detail') return detailPromise
+      throw new Error(`unexpected command: ${cmd}`)
+    })
+
+    const { unmount } = render(SessionDetail, {
+      props: {
+        tabId,
+        projectId: PROJECT_ID,
+        sessionId: SESSION_ID,
+      },
+    })
+    await waitFor(() => expect(getCachedSession(tabId)).toBeNull())
+
+    resetWorkspaceTabsToDashboard()
+    unmount()
+    resolveDetail({
+      status: 'changed',
+      fingerprint: { mtime: 1, size: 1, hash: null },
+      detail: singleProjectFixture.sessionDetails[`${PROJECT_ID}:${SESSION_ID}`],
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(getCachedSession(tabId)).toBeNull()
   })
 
   test('detail.title 存在时 <h1> 直接渲染该值（与 sidebar 派生一致）', async () => {

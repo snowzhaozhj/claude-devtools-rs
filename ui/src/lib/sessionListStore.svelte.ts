@@ -318,14 +318,18 @@ export function invalidate(projectId: string): void {
   entry.lastFetchedAt = 0;
 }
 
-/** 测试专用：清空 store 全部状态。 */
-export function __resetForTests(): void {
+export function clearSessionListCache(): void {
   for (const entry of cache.values()) {
     if (entry.pendingMoreTimer) clearTimeout(entry.pendingMoreTimer);
     entry.inflightAbort?.abort();
   }
   cache.clear();
   accessCounter = 0;
+}
+
+/** 测试专用：清空 store 全部状态。 */
+export function __resetForTests(): void {
+  clearSessionListCache();
 }
 
 /** 测试专用：返回 cache 的 key 序列（按 LRU 顺序：最旧在前）。 */
