@@ -204,22 +204,27 @@ impl CdtMcpServer {
     }
 
     fn emit_json<T: Serialize>(&self, value: &T) -> Result<CallToolResult, McpError> {
+        // 先序列化保留字段声明顺序；命中 secret 才走结构化脱敏 + 包裹（该分支重排 key
+        // 与旧实现一致），未命中原样返回原串（禁用脱敏 / 无 secret 均走此路，字节不变）。
+        // 结构化脱敏只替换字符串叶子值与对象 key 内的 secret，不再对序列化文本正则，
+        // 从根因上杜绝脱敏破坏 JSON 结构（change `mcp-redact-preserve-json-structure`）。
         let json = serde_json::to_string(value)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let (text, redacted_count) = self.redactor.redact(&json);
+        let root: serde_json::Value = serde_json::from_str(&json)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let (redacted, redacted_count) = self.redactor.redact_value(root);
 
         if redacted_count > 0 {
             let wrapper = serde_json::json!({
-                "data": serde_json::from_str::<serde_json::Value>(&text)
-                    .unwrap_or(serde_json::Value::String(text)),
+                "data": redacted,
                 "redacted": true,
                 "redactedCount": redacted_count,
             });
-            Ok(CallToolResult::success(vec![ContentBlock::text(
-                serde_json::to_string(&wrapper).unwrap_or_default(),
-            )]))
-        } else {
+            let text = serde_json::to_string(&wrapper)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
             Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+        } else {
+            Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
         }
     }
 }
