@@ -4,9 +4,15 @@
 
   interface Props {
     text: string;
+    /** 可选可见文字标签（如"复制全文"）；省略则仅图标。 */
+    label?: string;
+    /** 禁用态（完整原文未就绪 / 失败）：不响应点击，SHALL NOT 复制可见片段。 */
+    disabled?: boolean;
+    /** 自定义 aria-label / title；省略则用默认"复制"。 */
+    ariaLabel?: string;
   }
 
-  let { text }: Props = $props();
+  let { text, label, disabled = false, ariaLabel }: Props = $props();
   let copied = $state(false);
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -15,6 +21,7 @@
   });
 
   async function copy() {
+    if (disabled) return;
     const copyText = text ?? "";
     if (!copyText) return;
     try {
@@ -31,9 +38,12 @@
 <button
   class="copy-btn"
   class:copied
+  class:has-label={label}
+  {disabled}
   onmousedown={(e) => { if (e.button === 0) e.preventDefault(); }}
   onclick={copy}
-  aria-label={copied ? "已复制" : "复制"}
+  aria-label={ariaLabel ?? (copied ? "已复制" : label ?? "复制")}
+  title={ariaLabel ?? label}
 >
   <svg
     width="14"
@@ -51,6 +61,7 @@
       {@html COPY_SVG}
     {/if}
   </svg>
+  {#if label}<span class="copy-btn-label">{copied ? "已复制" : label}</span>{/if}
 </button>
 
 <style>

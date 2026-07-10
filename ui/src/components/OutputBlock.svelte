@@ -1,7 +1,15 @@
 <script lang="ts">
   import { highlightCode } from "../lib/render";
-  import CopyButton from "../lib/components/CopyButton.svelte";
   import { ByteCappedCache } from "../lib/byteCappedCache";
+  import AdaptiveOutputFrame from "./AdaptiveOutputFrame.svelte";
+  import { formatBytes } from "../lib/formatters";
+  import {
+    classifyText,
+    countLines,
+    utf8ByteLength,
+    sliceHeadTail,
+    type OutputTier,
+  } from "../lib/outputSizing";
 
   // key 含完整源码 + 高亮后 HTML，单条可达数 MB → count + byte 双闸门（见 byteCappedCache）。
   const highlightCache = new ByteCappedCache<string>({
@@ -14,11 +22,10 @@
     code: string;
     lang?: string;
     isError?: boolean;
-    maxHeight?: number;
     label?: string;
   }
 
-  let { code, lang = "json", isError = false, maxHeight = 384, label }: Props = $props();
+  let { code, lang = "json", isError = false, label }: Props = $props();
 
   function cachedHighlight(value: string, language: string): string {
     const key = `${language}\0${value.length}\0${value}`;
@@ -29,87 +36,62 @@
     return result;
   }
 
-  const highlighted = $derived(cachedHighlight(code, lang));
+  const lines = $derived(countLines(code));
+  const bytes = $derived(utf8ByteLength(code));
+  // 工具输出为行导向纯文本 / 代码，允许 oversized top/tail 切片。
+  const tier = $derived<OutputTier>(classifyText(code, true));
+
+  // oversized 切片；行数不足以切片时 sliceHeadTail 返回 null → 退回完整渲染。
+  const sliced = $derived(tier === "oversized" ? sliceHeadTail(code) : null);
+  const effectiveTier = $derived<OutputTier>(
+    tier === "oversized" && sliced === null ? "bounded" : tier,
+  );
+
+  const fullHighlighted = $derived(
+    effectiveTier === "oversized" ? "" : cachedHighlight(code, lang),
+  );
+  const headHighlighted = $derived(sliced ? cachedHighlight(sliced.head, lang) : "");
+  const tailHighlighted = $derived(sliced ? cachedHighlight(sliced.tail, lang) : "");
 </script>
 
-<div class="output-block" class:output-block-err={isError}>
-  {#if label}
-    <div class="output-header">
-      <span class="output-label">{label}</span>
-      <CopyButton text={code} />
-    </div>
-    <pre class="output-pre" style:max-height="{maxHeight}px"><code>{@html highlighted}</code></pre>
-  {:else}
-    <div class="output-block-inline">
-      <pre class="output-pre output-pre-standalone" style:max-height="{maxHeight}px"><code>{@html highlighted}</code></pre>
-      <div class="copy-float">
-        <CopyButton text={code} />
+<AdaptiveOutputFrame
+  tier={effectiveTier}
+  {lines}
+  {bytes}
+  copyText={code}
+  {label}
+  {isError}
+  viewportLabel={label ?? "输出"}
+>
+  {#snippet children()}
+    {#if effectiveTier === "oversized" && sliced}
+      <pre class="output-pre output-pre-slice"><code>{@html headHighlighted}</code></pre>
+      <div class="output-seam" role="separator">
+        已省略中段 {sliced.omittedLines > 0 ? `${sliced.omittedLines} 行` : ""}
+        {sliced.omittedBytes > 0 ? `· ${formatBytes(sliced.omittedBytes)}` : ""} — 复制全文查看完整内容
       </div>
-    </div>
-  {/if}
-</div>
+      <pre class="output-pre output-pre-slice"><code>{@html tailHighlighted}</code></pre>
+    {:else}
+      <pre class="output-pre"><code>{@html fullHighlighted}</code></pre>
+    {/if}
+  {/snippet}
+</AdaptiveOutputFrame>
 
 <style>
-  .output-block {
-    min-width: 0;
-  }
-
-  .output-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 4px 12px 0;
-    background: var(--code-bg);
-    border: 1px solid var(--code-border);
-    border-bottom: none;
-    border-radius: 6px 6px 0 0;
-  }
-
-  .output-block-inline {
-    position: relative;
-  }
-
-  .output-pre-standalone {
-    border-top: 1px solid var(--code-border);
-    border-radius: 6px;
-  }
-
-  .copy-float {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    opacity: 0;
-    transition: opacity 0.15s;
-  }
-
-  .output-block-inline:hover .copy-float {
-    opacity: 1;
-  }
-
-  .output-label {
-    font-size: 9px;
-    font-weight: 600;
-    color: var(--color-text-muted);
-    letter-spacing: 1px;
-    text-transform: uppercase;
-  }
-
   .output-pre {
     min-width: 0;
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--color-text-secondary);
     background: var(--code-bg);
-    border: 1px solid var(--code-border);
-    border-top: none;
-    border-radius: 0 0 6px 6px;
     padding: 10px 12px;
     margin: 0;
     white-space: pre;
-    overflow-x: auto;
-    overflow-y: auto;
-    /* scrollbar-gutter-exempt: 等宽输出块首帧定型 + 横向滚动为主，竖向滚动条不影响可读性 */
     line-height: 1.5;
+  }
+
+  .output-pre-slice {
+    padding-block: 6px;
   }
 
   .output-pre :global(code) {
@@ -121,25 +103,23 @@
     border-radius: 0;
   }
 
-  .output-block-err .output-label {
-    color: var(--tool-result-error-text);
+  .output-seam {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-muted);
+    background: var(--code-bg);
+    padding: 4px 12px;
+    border-block: 1px dashed var(--color-border);
+    white-space: normal;
   }
 
-  .output-block-err .output-pre {
+  /* 错误态：正文用 danger 语义色（header 由 frame 的 ao-err 承载）。 */
+  :global(.ao-err) .output-pre {
     color: var(--tool-result-error-text);
     background: var(--tool-result-error-bg);
-    border-color: rgba(239, 68, 68, 0.2);
-    border-color: color-mix(in oklch, var(--color-danger-bright) 20%, transparent);
   }
 
-  .output-block-err .output-header {
+  :global(.ao-err) .output-seam {
     background: var(--tool-result-error-bg);
-    border-color: rgba(239, 68, 68, 0.2);
-    border-color: color-mix(in oklch, var(--color-danger-bright) 20%, transparent);
-  }
-
-  .output-block-err .output-pre-standalone {
-    border-color: rgba(239, 68, 68, 0.2);
-    border-color: color-mix(in oklch, var(--color-danger-bright) 20%, transparent);
   }
 </style>
