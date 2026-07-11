@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- **Session view**: long outputs no longer flood the conversation. Text, code, diff, and tool outputs now adapt to their size — short content stays fully inline, medium content renders in a height-bounded scrollable preview with a `lines · bytes · preview` indicator, and very large line-oriented outputs render head + tail slices with an explicit "N lines omitted" seam. Copy-full-text is always visible (no longer hover-only) and always copies the complete original, staying disabled with a reason while content is still loading. Bounded scroll areas are keyboard-accessible when they actually overflow. The main AI reply at the end of each turn intentionally stays fully inline for readability.
+
 ## [0.7.5] — 2026-07-09
 
 ### Fixed
