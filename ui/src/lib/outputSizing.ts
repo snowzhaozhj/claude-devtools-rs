@@ -166,6 +166,51 @@ export function sliceHeadTail(text: string): SlicedOutput | null {
   };
 }
 
+/** 结构化行数组的首尾切片索引结果。 */
+export interface SliceIndices {
+  headCount: number;
+  tailCount: number;
+  omittedLines: number;
+  omittedBytes: number;
+}
+
+/**
+ * 对结构化行数组（Read 的 `{num,text}[]` / Diff 的 `DiffLine[]` 等）计算
+ * 首尾切片索引：调用方按 `slice(0, headCount)` / `slice(-tailCount)` 取行。
+ * 预算与 `sliceHeadTail` 多行路径一致（每侧行 + 字节双上限，首行必取）；
+ * 重叠规避同规则（首尾覆盖全部行时返回 `null`，退回限高预览）。
+ *
+ * `lineByteLengths` 为每行 UTF-8 字节数（不含换行）；字节核算内部按
+ * 每行 +1 近似换行符，省略量 = 总量 − 首尾实渲量。
+ */
+export function sliceLineIndices(lineByteLengths: number[]): SliceIndices | null {
+  const n = lineByteLengths.length;
+  const take = (fromEnd: boolean): { count: number; bytes: number } => {
+    let count = 0;
+    let bytes = 0;
+    for (let i = 0; i < n; i++) {
+      const b = lineByteLengths[fromEnd ? n - 1 - i : i] + 1;
+      if (count >= SLICE_MAX_LINES_PER_SIDE || (count > 0 && bytes + b > SLICE_MAX_BYTES_PER_SIDE)) {
+        break;
+      }
+      count++;
+      bytes += b;
+    }
+    return { count, bytes };
+  };
+  const head = take(false);
+  const tail = take(true);
+  if (head.count + tail.count >= n) return null;
+  let totalBytes = 0;
+  for (const b of lineByteLengths) totalBytes += b + 1;
+  return {
+    headCount: head.count,
+    tailCount: tail.count,
+    omittedLines: n - head.count - tail.count,
+    omittedBytes: Math.max(totalBytes - head.bytes - tail.bytes, 0),
+  };
+}
+
 function takeLines(
   lines: string[],
   maxLines: number,

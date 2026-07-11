@@ -8,6 +8,9 @@
   import { getMenuSettings } from "../../lib/contextMenu/settings.svelte";
   import { getMenuItemDispatch } from "../../lib/contextMenu/dispatch";
   import CopyButton from "../../lib/components/CopyButton.svelte";
+  import { formatBytes } from "../../lib/formatters";
+  import { adaptiveScrollViewport } from "../../lib/adaptiveViewport";
+  import { classifyText, countLines, utf8ByteLength, sliceLineIndices } from "../../lib/outputSizing";
 
   interface Props {
     exec: ToolExecution;
@@ -29,6 +32,22 @@
   // .md 默认 preview，可切 code（对齐原版 WriteToolViewer.tsx 第 59-62 行）
   let viewMode = $state<"preview" | "code">("preview");
 
+  // 三档分级：内容面 = 待写入文件内容（input.content），不按成功回执分档
+  // （spec tool-viewer-routing::写入型工具按输入内容规模分档）。
+  // markdown 预览是富文本不切片；code 模式行导向允许 top/tail 切片。
+  const totalLines = $derived(countLines(content));
+  const totalBytes = $derived(utf8ByteLength(content));
+  const allowSlice = $derived(!(isMarkdown && viewMode === "preview"));
+  const tier = $derived(classifyText(content, allowSlice));
+  const sliceIdx = $derived(
+    tier === "oversized" ? sliceLineIndices(lines.map((l) => utf8ByteLength(l))) : null
+  );
+  const effectiveTier = $derived(tier === "oversized" && sliceIdx === null ? "bounded" : tier);
+  const headLines = $derived(sliceIdx ? lines.slice(0, sliceIdx.headCount) : []);
+  const tailStart = $derived(sliceIdx ? lines.length - sliceIdx.tailCount : 0);
+  const tailLines = $derived(sliceIdx ? lines.slice(tailStart) : []);
+  const scent = $derived(`${totalLines} 行 · ${formatBytes(totalBytes)} · 预览`);
+
   function buildCtx(): MenuItemContext {
     return {
       sessionId,
@@ -45,6 +64,9 @@
     <span class="write-icon">W</span>
     <span class="write-path">{shortenPath(filePath)}</span>
     <span class="write-badge">NEW</span>
+    {#if effectiveTier !== "inline"}
+      <span class="write-scent">{scent}</span>
+    {/if}
     {#if isMarkdown}
       <span class="write-spacer"></span>
       <button
@@ -54,16 +76,34 @@
         {viewMode === "preview" ? "源码" : "预览"}
       </button>
     {/if}
-    <CopyButton text={content} />
+    <CopyButton text={content} ariaLabel="复制全文" />
   </div>
 
   {#if content}
     {#if isMarkdown && viewMode === "preview"}
-      <div class="md-preview">{@html renderMarkdown(content)}</div>
+      <div
+        class="md-preview"
+        class:bounded={effectiveTier !== "inline"}
+        {@attach adaptiveScrollViewport(() => `Write ${shortenPath(filePath)}（${scent}，可滚动）`)}
+      >{@html renderMarkdown(content)}</div>
     {:else}
-      <div class="write-code-container">
-        <pre class="write-code"><code>{#each lines as line, i}<span class="line" data-line={i + 1}>{@html highlightLine(line, language)}
+      <div
+        class="write-code-container"
+        class:bounded={effectiveTier !== "inline"}
+        {@attach adaptiveScrollViewport(() => `Write ${shortenPath(filePath)}（${scent}，可滚动）`)}
+      >
+        {#if effectiveTier === "oversized" && sliceIdx}
+          <pre class="write-code"><code>{#each headLines as line, i}<span class="line" data-line={i + 1}>{@html highlightLine(line, language)}
 </span>{/each}</code></pre>
+          <div class="write-seam" role="separator">
+            已省略 {sliceIdx.omittedLines} 行 · {formatBytes(sliceIdx.omittedBytes)}
+          </div>
+          <pre class="write-code"><code>{#each tailLines as line, i}<span class="line" data-line={tailStart + i + 1}>{@html highlightLine(line, language)}
+</span>{/each}</code></pre>
+        {:else}
+          <pre class="write-code"><code>{#each lines as line, i}<span class="line" data-line={i + 1}>{@html highlightLine(line, language)}
+</span>{/each}</code></pre>
+        {/if}
       </div>
     {/if}
   {/if}
@@ -117,6 +157,15 @@
     flex: 0 0 auto;
   }
 
+  /* 信息气味：总行数 · 总字节数 · 预览（mono metadata，中性色）。 */
+  .write-scent {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
+
   .view-toggle {
     flex-shrink: 0;
     font-size: 11px;
@@ -138,10 +187,31 @@
   }
 
   .write-code-container {
-    max-height: 400px;
     overflow: auto;
-    /* scrollbar-gutter-exempt: 等宽代码块首帧定型 + 横向滚动为主，竖向滚动条不影响可读性 */
+    scrollbar-gutter: stable;
     background: var(--code-bg);
+  }
+
+  /* bounded / oversized：响应式限高（共享 token），inline 不限高。 */
+  .write-code-container.bounded {
+    max-block-size: var(--ao-preview-max-block);
+  }
+
+  .write-code-container:focus-visible,
+  .md-preview:focus-visible {
+    outline: 2px solid var(--color-accent-blue, #3b82f6);
+    outline-offset: -2px;
+  }
+
+  /* 省略接缝：中性文字 + 细分隔线，显式标注省略量（不用渐隐遮罩）。 */
+  .write-seam {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    background: var(--code-bg);
+    padding: 4px 12px 4px 60px;
+    border-block: 1px dashed var(--color-border);
+    white-space: normal;
   }
 
   .write-code {
@@ -183,13 +253,17 @@
 
   .md-preview {
     padding: 12px 16px;
-    max-height: 500px;
     overflow: auto;
-    /* scrollbar-gutter-exempt: 预览块首帧定型 + 横向滚动为主，竖向滚动条不影响可读性 */
+    scrollbar-gutter: stable;
     background: var(--code-bg);
     color: var(--color-text);
     font-size: 13px;
     line-height: 1.6;
+  }
+
+  /* markdown 富文本不切片：bounded 顶格为限高预览（完整内容留 DOM）。 */
+  .md-preview.bounded {
+    max-block-size: var(--ao-preview-max-block);
   }
 
   .md-preview :global(h1),

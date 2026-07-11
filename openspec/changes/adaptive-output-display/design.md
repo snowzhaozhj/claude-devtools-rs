@@ -98,6 +98,14 @@ prose 走 lazy markdown：先写按全文估算的 inline `min-height` 占位、
 - **理由**：`PRODUCT.md::Accessibility & Inclusion` + WCAG 2.1.1 键盘可达滚动区。
 - **风险**：长输出多时 Tab 步数增加 → "仅实际 overflow 可聚焦"控制数量。
 
+### D10：apply 阶段决策——主 AI 回复（lastOutput）不限高 + prose 用轻量框（用户拍板）
+
+apply 中接入 prose 路径时向用户确认两点，结论反转 / 细化了原方案：
+
+- **主 AI 回复不限高**：原 spec 把"AIChunk 末尾的最后输出"纳入自适应两档。实测判断：顶层 SessionDetail 的主 AI 回复是用户要阅读的正文，塞进 ~30rem 限高滚动框反而降低可读性。**反转**：顶层主回复 SHALL 始终完整内联，不进限高；只有 output / user_message 展示项（在可折叠 disclosure 内）与嵌套执行轨迹内被平铺为普通输出项的文本受两档约束。已同步 `session-display` spec delta（新增"主 AI 回复始终完整内联不限高"Scenario）+ proposal + tasks（3.2 改为"lastOutput 保持不限高"）。
+- **prose 用轻量框**：prose 限高时若复用工具输出的 code-bg 边框 header，会把普通文本显示得像代码块。**细化**：`AdaptiveOutputFrame` 加 `variant='prose'`——透明 / surface 底 + 细下边框承载 scent + 复制，不套 code-bg 边框；`variant='code'`（默认）仍为工具输出的 code-bg 框。
+- 依据：`PRODUCT.md::Design Principles`（审计优先——正文优先可读）；`DESIGN.md::The Tool Density Rule`（不为普通文本套代码块 chrome）。
+
 ### D-V1 ~ D-V4（视觉决策）
 
 > 来自设计 teammate `/impeccable shape` 产出、按本 change 裁剪后的关键视觉决策（原 drill-in 完整查看器 D-V 因范围裁定 deferred to issue），与 D1–D5 共享同一审计 / 反转规则。

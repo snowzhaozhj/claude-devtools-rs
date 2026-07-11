@@ -420,6 +420,54 @@ const aiChunk: AIChunk = {
   ],
 }
 
+// 自适应输出展示专用 chunk（change adaptive-output-display e2e）：
+// - 长 prose output（120 行，中段埋唯一关键词）→ 限高预览两档 + 搜索 hydrate 断言
+// - 超大 Bash 输出（1200 行）→ top/tail 切片 + 省略接缝断言
+// 注意：最后一个 text step 是 lastOutput（不限高），长 prose 必须放在非末位。
+const adaptiveProseLines = Array.from({ length: 120 }, (_, i) =>
+  i === 60 ? `- 第 ${i + 1} 条：NEEDLE-MID-XYZQ 中段唯一关键词` : `- 第 ${i + 1} 条：字段 field_${i} 的 camelCase 序列化检查`,
+).join('\n')
+const adaptiveBashLines = Array.from({ length: 1200 }, (_, i) => `bash-line-${i} output row`).join('\n')
+
+const adaptiveChunk: AIChunk = {
+  kind: 'ai',
+  chunkId: 'a-adaptive-1:0',
+  timestamp: ts(0.72),
+  durationMs: 3100,
+  responses: [
+    {
+      uuid: 'a-adaptive-1',
+      timestamp: ts(0.72),
+      content: '逐项核对结果如下。',
+      toolCalls: [],
+      usage: null,
+      model: 'claude-sonnet-4-6',
+    },
+  ],
+  metrics: { ...emptyMetrics(), toolCount: 1 },
+  semanticSteps: [
+    { kind: 'text', text: adaptiveProseLines, timestamp: ts(0.72) },
+    { kind: 'tool_execution', toolUseId: 'tu-adaptive-bash', toolName: 'Bash', timestamp: ts(0.74) },
+    { kind: 'text', text: '核对完成，无阻塞项。', timestamp: ts(0.76) },
+  ],
+  toolExecutions: [
+    {
+      toolUseId: 'tu-adaptive-bash',
+      toolName: 'Bash',
+      input: { command: 'seq 1 1200 | sed "s/^/bash-line-/"' },
+      output: { kind: 'text', text: adaptiveBashLines },
+      isError: false,
+      startTs: ts(0.74),
+      endTs: ts(0.75),
+      sourceAssistantUuid: 'a-adaptive-1',
+      outputOmitted: false,
+      outputBytes: adaptiveBashLines.length,
+    },
+  ],
+  subagents: [],
+  slashCommands: [],
+}
+
 // 一个含 interruption 的 ai chunk
 const aiChunkInterrupted: AIChunk = {
   kind: 'ai',
@@ -476,6 +524,9 @@ const compactChunk: CompactChunk = {
   phaseNumber: 2,
 }
 
+// adaptiveChunk 不放本会话：sess-rust-active 被 tab-scroll-preserve 等多个
+// e2e 依赖精确布局（锚点偏差容差 50px），增删 chunk 会破坏锚点恢复断言。
+// 自适应输出 e2e 用 sess-rust-2（原本只有 userChunk 的极简会话）承载。
 const richChunks: Chunk[] = [userChunk, systemChunk, aiChunk, aiChunkInterrupted, compactChunk]
 
 export const multiProjectRichFixture: Fixture = {
@@ -715,8 +766,9 @@ export const multiProjectRichFixture: Fixture = {
     'mock-rich-rust:sess-rust-2': {
       sessionId: 'sess-rust-2',
       projectId: 'mock-rich-rust',
-      chunks: [userChunk],
-      metrics: { message_count: 1 },
+      // adaptiveChunk：自适应输出展示 e2e 专用（长 prose + 超大 Bash 输出）
+      chunks: [userChunk, adaptiveChunk],
+      metrics: { message_count: 2 },
       metadata: { last_modified: null, size: null, cwd: null },
       contextInjections: [],
       isOngoing: false,

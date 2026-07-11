@@ -2,6 +2,7 @@
   import type { Snippet } from "svelte";
   import CopyButton from "../lib/components/CopyButton.svelte";
   import { formatBytes } from "../lib/formatters";
+  import { adaptiveScrollViewport } from "../lib/adaptiveViewport";
   import type { OutputTier } from "../lib/outputSizing";
 
   interface Props {
@@ -21,6 +22,8 @@
     isError?: boolean;
     /** 可访问名前缀（如工具名），用于可滚动 viewport 的 aria-label。 */
     viewportLabel?: string;
+    /** 视觉变体：code（工具输出，code-bg 框）/ prose（AI 文本，轻量框）。 */
+    variant?: "code" | "prose";
     /** 内容槽。oversized 时由调用方组合 head + 省略接缝 + tail。 */
     children: Snippet;
   }
@@ -34,65 +37,59 @@
     label,
     isError = false,
     viewportLabel = "输出",
+    variant = "code",
     children,
   }: Props = $props();
 
   const isBounded = $derived(tier === "bounded" || tier === "oversized");
-  const scent = $derived(`${lines} 行 · ${formatBytes(bytes)}`);
-  const previewTag = $derived(isBounded ? "预览" : "");
-
-  // 仅当内容沿任一轴实际溢出时，viewport 才进入 Tab 序列（spec a11y 契约）。
-  let overflowing = $state(false);
-
-  function watchOverflow(el: HTMLElement) {
-    const measure = () => {
-      overflowing = el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1;
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    // 内容懒加载 / 高亮完成后尺寸会变，观察子树变化重测。
-    const mo = new MutationObserver(measure);
-    mo.observe(el, { childList: true, subtree: true, characterData: true });
-    return () => {
-      ro.disconnect();
-      mo.disconnect();
-    };
-  }
+  // header 仅在 bounded/oversized/loading 出现，故 scent 恒为"预览"语境；
+  // "预览"折进纯文本，取代此前的带框 badge（无状态装饰违反 Status Owns the Color）。
+  // loading 时行数未知（未加载），只显示已知字节量（outputBytes）+ 载入中。
+  const scent = $derived(
+    loading
+      ? bytes > 0
+        ? `${formatBytes(bytes)} · 载入中`
+        : "载入中"
+      : `${lines} 行 · ${formatBytes(bytes)} · 预览`,
+  );
 </script>
 
-<div class="ao" class:ao-err={isError}>
-  <div class="ao-header">
-    <span class="ao-meta">
-      {#if label}<span class="ao-label">{label}</span>{/if}
-      <span class="ao-scent">{scent}</span>
-      {#if previewTag}<span class="ao-preview">{previewTag}</span>{/if}
-    </span>
-    <CopyButton
-      text={copyText}
-      label="复制全文"
-      disabled={loading || !copyText}
-      ariaLabel={loading ? "完整内容加载中，暂不可复制" : "复制全文"}
-    />
-  </div>
-
+<div class="ao" class:ao-err={isError} class:ao-prose={variant === "prose"}>
   {#if loading}
+    <div class="ao-header">
+      <span class="ao-meta">
+        {#if label}<span class="ao-label">{label}</span>{/if}
+        <span class="ao-scent">{scent}</span>
+      </span>
+      <CopyButton text="" disabled={true} ariaLabel="完整内容加载中，暂不可复制" />
+    </div>
     <div class="ao-body ao-viewport ao-loading" aria-busy="true">正在载入完整内容…</div>
   {:else if isBounded}
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <!-- 可滚动 region 需可键盘聚焦以滚动（WCAG 2.1.1）；仅在实际溢出时才可聚焦。 -->
+    <div class="ao-header">
+      <span class="ao-meta">
+        {#if label}<span class="ao-label">{label}</span>{/if}
+        <span class="ao-scent">{scent}</span>
+      </span>
+      <CopyButton text={copyText} disabled={!copyText} ariaLabel="复制全文" />
+    </div>
+    <!-- 可滚动 region 需可键盘聚焦以滚动（WCAG 2.1.1）；仅实际溢出时才进
+         Tab 序列（tabindex/role/aria-label 由 attachment 按溢出实测切换）。 -->
     <div
       class="ao-body ao-viewport"
-      tabindex={overflowing ? 0 : undefined}
-      role={overflowing ? "region" : undefined}
-      aria-label={overflowing ? `${viewportLabel}（${scent}，可滚动）` : undefined}
-      {@attach watchOverflow}
+      {@attach adaptiveScrollViewport(() => `${viewportLabel}（${scent}，可滚动）`)}
     >
       {@render children()}
     </div>
   {:else}
-    <div class="ao-body">
+    <!-- inline（短内容）：不渲 metadata 带——chrome 不得压过内容。
+         复制全文入口降为右上角常驻低调 icon（满足 spec"常驻可发现"，不用 hover-only）。 -->
+    <div class="ao-body ao-inline">
       {@render children()}
+      {#if copyText}
+        <span class="ao-inline-copy">
+          <CopyButton text={copyText} ariaLabel="复制全文" />
+        </span>
+      {/if}
     </div>
   {/if}
 </div>
@@ -107,7 +104,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 3px 8px 3px 10px;
+    padding: 4px 8px 4px 10px;
     background: var(--code-bg);
     border: 1px solid var(--code-border);
     border-bottom: none;
@@ -123,9 +120,9 @@
   }
 
   .ao-label {
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 600;
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     letter-spacing: 1px;
     text-transform: uppercase;
     flex-shrink: 0;
@@ -134,19 +131,10 @@
   .ao-scent {
     font-family: var(--font-mono);
     font-size: 11px;
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  .ao-preview {
-    font-size: 10px;
-    color: var(--color-text-muted);
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    padding: 0 4px;
-    flex-shrink: 0;
   }
 
   .ao-body {
@@ -155,8 +143,30 @@
     border-radius: 0 0 6px 6px;
   }
 
+  /* inline：无 header 带，body 四角自成一体；相对定位承载常驻 copy。 */
+  .ao-inline {
+    position: relative;
+    border-radius: 6px;
+  }
+
+  .ao-inline-copy {
+    position: absolute;
+    top: 4px;
+    inset-inline-end: 4px;
+    /* 常驻但低调：与 code-bg 同底融入，不抢内容；hover 由 CopyButton 自身加深。 */
+    background: var(--code-bg);
+    border-radius: 4px;
+    opacity: 0.65;
+    transition: opacity 0.15s;
+  }
+
+  .ao-inline:hover .ao-inline-copy,
+  .ao-inline-copy:focus-within {
+    opacity: 1;
+  }
+
   .ao-viewport {
-    max-block-size: clamp(12rem, 42dvh, 30rem);
+    max-block-size: var(--ao-preview-max-block);
     overflow: auto;
     scrollbar-gutter: stable;
   }
@@ -172,7 +182,7 @@
     justify-content: center;
     color: var(--color-text-muted);
     font-size: 12px;
-    min-block-size: clamp(12rem, 42dvh, 30rem);
+    min-block-size: var(--ao-preview-max-block);
   }
 
   .ao-err .ao-header {
@@ -182,5 +192,19 @@
 
   .ao-err .ao-body {
     border-color: color-mix(in oklch, var(--color-danger-bright) 20%, transparent);
+  }
+
+  /* prose 轻量变体：不套 code-bg 框，透明 header + 细下边框，避免把正文显示得像代码。 */
+  .ao-prose .ao-header {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+    padding-inline: 2px;
+  }
+
+  .ao-prose .ao-body {
+    border: none;
+    border-radius: 0;
   }
 </style>

@@ -8,14 +8,19 @@
   import { getMenuSettings } from "../../lib/contextMenu/settings.svelte";
   import { getMenuItemDispatch } from "../../lib/contextMenu/dispatch";
   import CopyButton from "../../lib/components/CopyButton.svelte";
+  import { formatBytes } from "../../lib/formatters";
+  import { adaptiveScrollViewport } from "../../lib/adaptiveViewport";
+  import { classifyText, countLines, utf8ByteLength, sliceLineIndices } from "../../lib/outputSizing";
 
   interface Props {
     exec: ToolExecution;
     sessionId?: string;
     projectId?: string;
+    /** 完整输出懒加载中：以限高档稳定占位渲染，复制禁用。 */
+    outputLoading?: boolean;
   }
 
-  let { exec, sessionId = "", projectId = "" }: Props = $props();
+  let { exec, sessionId = "", projectId = "", outputLoading = false }: Props = $props();
 
   function buildCtx(): MenuItemContext {
     return {
@@ -72,6 +77,22 @@
   );
   const useLightHighlight = $derived(parsedLines.length > 250 || cleanText.length > 40_000);
   const highlightLine = $derived(useLightHighlight ? lightHighlightLine : highlightCode);
+
+  // 三档分级（spec tool-viewer-routing::工具查看器按内容规模自适应展示）：
+  // 内容面 = Read 输出（strip 后主内容）。markdown 预览是富文本不切片
+  // （oversized 降级 bounded）；code 模式行导向允许 top/tail 切片。
+  const totalLines = $derived(countLines(cleanText));
+  const totalBytes = $derived(utf8ByteLength(cleanText));
+  const allowSlice = $derived(!(isMarkdown && viewMode === "preview"));
+  const tier = $derived(classifyText(cleanText, allowSlice));
+  const sliceIdx = $derived(
+    tier === "oversized" ? sliceLineIndices(parsedLines.map((p) => utf8ByteLength(p.text))) : null
+  );
+  // 行数不足以切片（sliceLineIndices 返回 null）→ 退回限高预览。
+  const effectiveTier = $derived(tier === "oversized" && sliceIdx === null ? "bounded" : tier);
+  const headLines = $derived(sliceIdx ? parsedLines.slice(0, sliceIdx.headCount) : []);
+  const tailLines = $derived(sliceIdx ? parsedLines.slice(parsedLines.length - sliceIdx.tailCount) : []);
+  const scent = $derived(`${totalLines} 行 · ${formatBytes(totalBytes)} · 预览`);
 </script>
 
 <div class="read-viewer" use:contextMenu={() => buildFileToolItems(exec, buildCtx())}>
@@ -81,6 +102,9 @@
     <span class="file-name">{shortenPath(filePath)}</span>
     <span class="file-lang">{language}</span>
     <span class="file-spacer"></span>
+    {#if !outputLoading && effectiveTier !== "inline"}
+      <span class="file-scent">{scent}</span>
+    {/if}
     {#if isMarkdown}
       <button
         class="view-toggle"
@@ -89,17 +113,41 @@
         {viewMode === "preview" ? "源码" : "预览"}
       </button>
     {/if}
-    <CopyButton text={cleanText} />
+    <CopyButton
+      text={outputLoading ? "" : cleanText}
+      disabled={outputLoading}
+      ariaLabel={outputLoading ? "完整内容加载中，暂不可复制" : "复制全文"}
+    />
   </div>
 
-  {#if isMarkdown && viewMode === "preview"}
+  {#if outputLoading}
+    <div class="read-loading" aria-busy="true">正在载入完整内容…</div>
+  {:else if isMarkdown && viewMode === "preview"}
     <!-- 用 strip 后的纯文本渲染：raw outputText 含 cat -n 前缀会让 markdown 标记失效 -->
-    <div class="md-preview">{@html renderMarkdown(cleanText)}</div>
+    <div
+      class="md-preview"
+      class:bounded={effectiveTier !== "inline"}
+      {@attach adaptiveScrollViewport(() => `Read ${fileName}（${scent}，可滚动）`)}
+    >{@html renderMarkdown(cleanText)}</div>
   {:else}
     <!-- Code with line numbers (line numbers are CSS ::before, not part of clipboard text) -->
-    <div class="code-container">
-      <pre class="code-content"><code>{#each parsedLines as p (p.num)}<span class="line" data-line={p.num}>{@html highlightLine(p.text, language)}
+    <div
+      class="code-container"
+      class:bounded={effectiveTier !== "inline"}
+      {@attach adaptiveScrollViewport(() => `Read ${fileName}（${scent}，可滚动）`)}
+    >
+      {#if effectiveTier === "oversized" && sliceIdx}
+        <pre class="code-content"><code>{#each headLines as p (p.num)}<span class="line" data-line={p.num}>{@html highlightLine(p.text, language)}
 </span>{/each}</code></pre>
+        <div class="read-seam" role="separator">
+          已省略 {sliceIdx.omittedLines} 行 · {formatBytes(sliceIdx.omittedBytes)}
+        </div>
+        <pre class="code-content"><code>{#each tailLines as p (p.num)}<span class="line" data-line={p.num}>{@html highlightLine(p.text, language)}
+</span>{/each}</code></pre>
+      {:else}
+        <pre class="code-content"><code>{#each parsedLines as p (p.num)}<span class="line" data-line={p.num}>{@html highlightLine(p.text, language)}
+</span>{/each}</code></pre>
+      {/if}
     </div>
   {/if}
 </div>
@@ -151,6 +199,15 @@
     flex: 0 0 auto;
   }
 
+  /* 信息气味：总行数 · 总字节数 · 预览（mono metadata，中性色）。 */
+  .file-scent {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
+
   .view-toggle {
     flex-shrink: 0;
     font-size: 11px;
@@ -170,10 +227,41 @@
   }
 
   .code-container {
-    max-height: 400px;
     overflow: auto;
-    /* scrollbar-gutter-exempt: 等宽代码块首帧定型 + 横向滚动为主，竖向滚动条不影响可读性 */
+    scrollbar-gutter: stable;
     background: var(--code-bg);
+  }
+
+  /* bounded / oversized：响应式限高（共享 token），inline 不限高。 */
+  .code-container.bounded {
+    max-block-size: var(--ao-preview-max-block);
+  }
+
+  .code-container:focus-visible,
+  .md-preview:focus-visible {
+    outline: 2px solid var(--color-accent-blue, #3b82f6);
+    outline-offset: -2px;
+  }
+
+  .read-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-block-size: var(--ao-preview-max-block);
+    color: var(--color-text-muted);
+    font-size: 12px;
+    background: var(--code-bg);
+  }
+
+  /* 省略接缝：中性文字 + 细分隔线，显式标注省略量（不用渐隐遮罩）。 */
+  .read-seam {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    background: var(--code-bg);
+    padding: 4px 12px 4px 60px;
+    border-block: 1px dashed var(--color-border);
+    white-space: normal;
   }
 
   .code-content {
@@ -213,13 +301,17 @@
 
   .md-preview {
     padding: 12px 16px;
-    max-height: 500px;
     overflow: auto;
-    /* scrollbar-gutter-exempt: 预览块首帧定型 + 横向滚动为主，竖向滚动条不影响可读性 */
+    scrollbar-gutter: stable;
     background: var(--code-bg);
     color: var(--color-text);
     font-size: 13px;
     line-height: 1.6;
+  }
+
+  /* markdown 富文本不切片：bounded 顶格为限高预览（完整内容留 DOM）。 */
+  .md-preview.bounded {
+    max-block-size: var(--ao-preview-max-block);
   }
 
   .md-preview :global(h1),

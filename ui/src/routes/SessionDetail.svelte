@@ -24,6 +24,7 @@
   import { getMenuSettings } from "../lib/contextMenu/settings.svelte";
   import { getMenuItemDispatch } from "../lib/contextMenu/dispatch";
   import BaseItem from "../components/BaseItem.svelte";
+  import AdaptiveProse from "../components/AdaptiveProse.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
   import WorkflowCard from "../components/WorkflowCard.svelte";
   import TeammateMessageItem from "../components/TeammateMessageItem.svelte";
@@ -631,7 +632,9 @@
   }
 
   function isOutputLoading(exec: ToolExecution): boolean {
-    return !!exec.outputOmitted && !cachedOutput(exec);
+    // missing 标记也算"已就绪"——内容确实不存在，不再显示加载占位
+    // （渲染层 cachedOutput 过滤 missing 后退回 exec.output 的空态展示）。
+    return !!exec.outputOmitted && !outputCache.has(exec.toolUseId);
   }
 
   function isOutputReady(exec: ToolExecution): boolean {
@@ -659,7 +662,9 @@
     const load = (async () => {
       try {
         const out = await getToolOutput(sessionId, sessionId, exec.toolUseId);
-        if (out.kind === "missing") return;
+        // missing 也缓存：终结加载占位态（否则永久"载入中"）。渲染层
+        // cachedOutput 过滤 missing，effectiveExec 退回原 exec.output；
+        // 后续 detail 替换（工具完成推送）时 ensureToolOutput 会再拉。
         const next = new Map(outputCache);
         next.set(exec.toolUseId, out);
         while (next.size > OUTPUT_CACHE_LIMIT) {
@@ -715,9 +720,11 @@
       expandedItems = next;
       return;
     }
+    // 展开即触发懒加载并立即展开；加载期由 viewer 以稳定的限高档占位渲染
+    // （spec tool-viewer-routing::工具输出懒加载态的稳定分档，design D6
+    // fetch-first）。不再阻塞展开等待 IPC——慢网络下点击无反馈是反模式。
     if (exec && viewerUsesOutput(exec) && !isOutputReady(exec)) {
-      await ensureToolOutput(exec);
-      if (!isOutputReady(exec)) return;
+      void ensureToolOutput(exec);
     }
     const next = new Set(expandedItems);
     next.add(key);
@@ -1289,16 +1296,17 @@
                           onclick={() => toggle(key, exec)}
                         >
                           {#snippet children()}
+                            {@const outputLoading = viewerUsesOutput(exec) && isOutputLoading(exec)}
                             {#if isReadTool(exec)}
-                              <ReadToolViewer exec={eff} {sessionId} {projectId} />
+                              <ReadToolViewer exec={eff} {sessionId} {projectId} {outputLoading} />
                             {:else if isEditTool(exec)}
                               <EditToolViewer exec={eff} {sessionId} {projectId} />
                             {:else if isWriteTool(exec)}
                               <WriteToolViewer exec={eff} {sessionId} {projectId} />
                             {:else if isBashTool(exec)}
-                              <BashToolViewer exec={eff} {sessionId} {projectId} />
+                              <BashToolViewer exec={eff} {sessionId} {projectId} {outputLoading} />
                             {:else}
-                              <DefaultToolViewer exec={eff} />
+                              <DefaultToolViewer exec={eff} {outputLoading} />
                             {/if}
                           {/snippet}
                         </BaseItem>
@@ -1328,7 +1336,11 @@
                       onclick={() => toggle(key)}
                     >
                       {#snippet children()}
-                        <div class="prose lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildMenuCtx())} {@attach attachMarkdown(item.text, "output")}></div>
+                        <AdaptiveProse text={item.text} viewportLabel="Output">
+                          {#snippet body()}
+                            <div class="prose lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildMenuCtx())} {@attach attachMarkdown(item.text, "output")}></div>
+                          {/snippet}
+                        </AdaptiveProse>
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "user_message"}
@@ -1341,7 +1353,11 @@
                       onclick={() => toggle(key)}
                     >
                       {#snippet children()}
-                        <div class="prose lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildMenuCtx())} {@attach attachMarkdown(item.text, "output")}></div>
+                        <AdaptiveProse text={item.text} viewportLabel="User message">
+                          {#snippet body()}
+                            <div class="prose lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildMenuCtx())} {@attach attachMarkdown(item.text, "output")}></div>
+                          {/snippet}
+                        </AdaptiveProse>
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "subagent"}

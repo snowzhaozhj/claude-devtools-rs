@@ -83,10 +83,10 @@
 
   .copy-btn:hover {
     color: var(--color-text);
-    background: var(--color-hover-bg, rgba(127, 127, 127, 0.1));
+    background: var(--color-surface-hover);
   }
 
   .copy-btn.copied {
-    color: var(--color-success, #22c55e);
+    color: var(--color-success, #15803d);
   }
 </style>

@@ -3,6 +3,10 @@
   import { generateDiff, type DiffLine } from "../lib/diff";
   import { highlightCode } from "../lib/render";
   import { ByteCappedCache } from "../lib/byteCappedCache";
+  import CopyButton from "../lib/components/CopyButton.svelte";
+  import { formatBytes } from "../lib/formatters";
+  import { adaptiveScrollViewport } from "../lib/adaptiveViewport";
+  import { classifyBySize, utf8ByteLength, sliceLineIndices } from "../lib/outputSizing";
 
   interface Props {
     fileName: string;
@@ -45,6 +49,25 @@
   });
   const language = $derived(getLanguageFromPath(fileName));
   const shortName = $derived(getFileName(fileName));
+
+  // 三档分级：内容面 = old/new 差异内容（工具输入），不依赖 output
+  // （spec tool-viewer-routing::编辑型工具无输出时按差异内容分档）。
+  // 复制全文 = 完整差异文本（+/-/空格前缀逐行拼接）。diff 行导向，允许切片。
+  const diffText = $derived(
+    diffLines
+      .map((l) => `${l.type === "added" ? "+" : l.type === "removed" ? "-" : " "}${l.content}`)
+      .join("\n")
+  );
+  const totalLines = $derived(diffLines.length);
+  const totalBytes = $derived(utf8ByteLength(diffText));
+  const tier = $derived(classifyBySize(totalLines, totalBytes, true));
+  const sliceIdx = $derived(
+    tier === "oversized" ? sliceLineIndices(diffLines.map((l) => utf8ByteLength(l.content))) : null
+  );
+  const effectiveTier = $derived(tier === "oversized" && sliceIdx === null ? "bounded" : tier);
+  const headDiffLines = $derived(sliceIdx ? diffLines.slice(0, sliceIdx.headCount) : diffLines);
+  const tailDiffLines = $derived(sliceIdx ? diffLines.slice(diffLines.length - sliceIdx.tailCount) : []);
+  const scent = $derived(`${totalLines} 行 · ${formatBytes(totalBytes)} · 预览`);
 </script>
 
 <div class="diff-viewer">
@@ -61,23 +84,44 @@
     {#if stats.removed > 0}
       <span class="diff-stat diff-stat-removed">-{stats.removed}</span>
     {/if}
+    {#if effectiveTier !== "inline"}
+      <span class="diff-scent">{scent}</span>
+    {/if}
+    <span class="diff-header-spacer"></span>
+    <CopyButton text={diffText} ariaLabel="复制完整差异" />
   </div>
 
+  {#snippet diffRows(rows: DiffLine[])}
+    {#each rows as line}
+      <div
+        class="diff-line"
+        class:diff-line-added={line.type === "added"}
+        class:diff-line-removed={line.type === "removed"}
+      >
+        <span class="diff-gutter diff-gutter-old">{line.oldLineNumber ?? ""}</span>
+        <span class="diff-gutter diff-gutter-new">{line.newLineNumber ?? ""}</span>
+        <span class="diff-prefix">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
+        <span class="diff-content">{@html line.content ? highlightCode(line.content, language) : " "}</span>
+      </div>
+    {/each}
+  {/snippet}
+
   <!-- Diff lines -->
-  <div class="diff-body">
+  <div
+    class="diff-body"
+    class:bounded={effectiveTier !== "inline"}
+    {@attach adaptiveScrollViewport(() => `Diff ${shortName}（${scent}，可滚动）`)}
+  >
     <div class="diff-body-inner">
-      {#each diffLines as line}
-        <div
-          class="diff-line"
-          class:diff-line-added={line.type === "added"}
-          class:diff-line-removed={line.type === "removed"}
-        >
-          <span class="diff-gutter diff-gutter-old">{line.oldLineNumber ?? ""}</span>
-          <span class="diff-gutter diff-gutter-new">{line.newLineNumber ?? ""}</span>
-          <span class="diff-prefix">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
-          <span class="diff-content">{@html line.content ? highlightCode(line.content, language) : " "}</span>
+      {#if effectiveTier === "oversized" && sliceIdx}
+        {@render diffRows(headDiffLines)}
+        <div class="diff-seam" role="separator">
+          已省略 {sliceIdx.omittedLines} 行 · {formatBytes(sliceIdx.omittedBytes)}
         </div>
-      {/each}
+        {@render diffRows(tailDiffLines)}
+      {:else}
+        {@render diffRows(diffLines)}
+      {/if}
     </div>
   </div>
 </div>
@@ -132,11 +176,42 @@
   .diff-stat-added { color: var(--diff-added-text); }
   .diff-stat-removed { color: var(--diff-removed-text); }
 
+  /* 信息气味：总行数 · 总字节数 · 预览（mono metadata，中性色）。 */
+  .diff-scent {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
+
+  .diff-header-spacer {
+    flex: 1 1 auto;
+  }
+
   .diff-body {
-    max-height: 400px;
     overflow: auto;
-    /* scrollbar-gutter-exempt: 等宽 diff 块首帧定型 + 横向滚动为主，竖向滚动条不影响可读性 */
+    scrollbar-gutter: stable;
     background: var(--code-bg);
+  }
+
+  /* bounded / oversized：响应式限高（共享 token），inline 不限高。 */
+  .diff-body.bounded {
+    max-block-size: var(--ao-preview-max-block);
+  }
+
+  .diff-body:focus-visible {
+    outline: 2px solid var(--color-accent-blue, #3b82f6);
+    outline-offset: -2px;
+  }
+
+  /* 省略接缝：中性文字 + 细分隔线，显式标注省略量（不用渐隐遮罩）。 */
+  .diff-seam {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    padding: 4px 12px 4px 74px;
+    border-block: 1px dashed var(--color-border);
+    white-space: normal;
   }
 
   .diff-body-inner {

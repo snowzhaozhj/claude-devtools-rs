@@ -9,6 +9,7 @@
   import { getMenuSettings } from "../lib/contextMenu/settings.svelte";
   import { getMenuItemDispatch } from "../lib/contextMenu/dispatch";
   import BaseItem from "./BaseItem.svelte";
+  import AdaptiveProse from "./AdaptiveProse.svelte";
   import SubagentCard from "./SubagentCard.svelte";
   import WorkflowCard from "./WorkflowCard.svelte";
   import DefaultToolViewer from "./tool-viewers/DefaultToolViewer.svelte";
@@ -75,6 +76,11 @@
     return !exec.outputOmitted || !!cachedOutput(exec);
   }
 
+  function isOutputLoading(exec: ToolExecution): boolean {
+    // missing 标记也算"已就绪"——内容确实不存在，不再显示加载占位。
+    return !!exec.outputOmitted && !outputCache.has(exec.toolUseId);
+  }
+
   function effectiveExec(exec: ToolExecution): ToolExecution {
     const cached = cachedOutput(exec);
     if (!cached) return exec;
@@ -89,7 +95,7 @@
     const load = (async () => {
       try {
         const out = await getToolOutput(rootSessionId, traceSessionId, exec.toolUseId);
-        if (out.kind === "missing") return;
+        // missing 也缓存：终结加载占位态（渲染层 cachedOutput 过滤 missing）。
         const next = new Map(outputCache);
         next.set(exec.toolUseId, out);
         outputCache = next;
@@ -110,9 +116,10 @@
       expandedKeys = next;
       return;
     }
+    // 展开即触发懒加载并立即展开；加载期由 viewer 以稳定的限高档占位渲染
+    // （spec tool-viewer-routing::工具输出懒加载态的稳定分档，design D6）。
     if (exec && viewerUsesOutput(exec) && !isOutputReady(exec)) {
-      await ensureToolOutput(exec);
-      if (!isOutputReady(exec)) return;
+      void ensureToolOutput(exec);
     }
     const next = new Set(expandedKeys);
     next.add(key);
@@ -164,16 +171,17 @@
           onclick={() => toggle(key, exec)}
         >
           {#snippet children()}
+            {@const outputLoading = viewerUsesOutput(exec) && isOutputLoading(exec)}
             {#if isReadTool(exec)}
-              <ReadToolViewer exec={eff} />
+              <ReadToolViewer exec={eff} {outputLoading} />
             {:else if isEditTool(exec)}
               <EditToolViewer exec={eff} />
             {:else if isWriteTool(exec)}
               <WriteToolViewer exec={eff} />
             {:else if isBashTool(exec)}
-              <BashToolViewer exec={eff} />
+              <BashToolViewer exec={eff} {outputLoading} />
             {:else}
-              <DefaultToolViewer exec={eff} />
+              <DefaultToolViewer exec={eff} {outputLoading} />
             {/if}
           {/snippet}
         </BaseItem>
@@ -203,7 +211,11 @@
         onclick={() => toggle(key)}
       >
         {#snippet children()}
-          <div class="prose" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildBlockMenuCtx())}>{@html renderMarkdown(item.text)}</div>
+          <AdaptiveProse text={item.text} viewportLabel="Output">
+            {#snippet body()}
+              <div class="prose" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildBlockMenuCtx())}>{@html renderMarkdown(item.text)}</div>
+            {/snippet}
+          </AdaptiveProse>
         {/snippet}
       </BaseItem>
     {:else if item.type === "user_message"}
@@ -217,7 +229,11 @@
         onclick={() => toggle(key)}
       >
         {#snippet children()}
-          <div class="prose" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildBlockMenuCtx())}>{@html renderMarkdown(item.text)}</div>
+          <AdaptiveProse text={item.text} viewportLabel="User message">
+            {#snippet body()}
+              <div class="prose" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildBlockMenuCtx())}>{@html renderMarkdown(item.text)}</div>
+            {/snippet}
+          </AdaptiveProse>
         {/snippet}
       </BaseItem>
     {:else if item.type === "subagent"}

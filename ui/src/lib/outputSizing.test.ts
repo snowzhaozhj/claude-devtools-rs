@@ -9,6 +9,9 @@ import {
   classifyText,
   sizingForToolOutput,
   sliceHeadTail,
+  sliceLineIndices,
+  SLICE_MAX_LINES_PER_SIDE,
+  SLICE_MAX_BYTES_PER_SIDE,
 } from "./outputSizing";
 
 describe("utf8ByteLength", () => {
@@ -137,5 +140,42 @@ describe("sliceHeadTail（首尾切片预算与安全）", () => {
     // 切出的片段仍是合法中文（不含替换字符），逐字符校验字节数为 3
     for (const ch of sliced!.head) expect(utf8ByteLength(ch)).toBe(3);
     for (const ch of sliced!.tail) expect(utf8ByteLength(ch)).toBe(3);
+  });
+});
+
+// 结构化行数组切片索引（Read 行号数组 / Diff 行数组接入，spec
+// tool-viewer-routing::首尾切片的渲染上限与切分安全）。
+describe("sliceLineIndices（结构化行数组切片索引）", () => {
+  test("行数不足两侧上限之和 → 不切片返回 null", () => {
+    expect(sliceLineIndices(Array.from({ length: 800 }, () => 10))).toBeNull();
+  });
+  test("超大多行给出首尾索引 + 省略量精确", () => {
+    const total = 2000;
+    const idx = sliceLineIndices(Array.from({ length: total }, () => 10));
+    expect(idx).not.toBeNull();
+    expect(idx!.headCount).toBe(SLICE_MAX_LINES_PER_SIDE);
+    expect(idx!.tailCount).toBe(SLICE_MAX_LINES_PER_SIDE);
+    expect(idx!.omittedLines).toBe(total - idx!.headCount - idx!.tailCount);
+    // 省略字节 = 总量 − 首尾实渲量（每行 +1 近似换行）
+    expect(idx!.omittedBytes).toBe(idx!.omittedLines * 11);
+  });
+  test("每侧字节上限先达即停（长行少量即触顶）", () => {
+    // 每行 64 KiB：字节预算 128 KiB/侧 → 每侧只能取 ~2 行
+    const idx = sliceLineIndices(Array.from({ length: 2000 }, () => 64 * 1024));
+    expect(idx).not.toBeNull();
+    expect(idx!.headCount).toBeLessThanOrEqual(
+      Math.ceil(SLICE_MAX_BYTES_PER_SIDE / (64 * 1024)),
+    );
+    expect(idx!.headCount).toBeGreaterThan(0);
+  });
+  test("首行超字节预算仍必取一行（不空切）", () => {
+    const idx = sliceLineIndices([
+      512 * 1024,
+      ...Array.from({ length: 1500 }, () => 10),
+      512 * 1024,
+    ]);
+    expect(idx).not.toBeNull();
+    expect(idx!.headCount).toBeGreaterThanOrEqual(1);
+    expect(idx!.tailCount).toBeGreaterThanOrEqual(1);
   });
 });

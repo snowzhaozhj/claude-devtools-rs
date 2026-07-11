@@ -23,9 +23,13 @@
     lang?: string;
     isError?: boolean;
     label?: string;
+    /** 完整输出懒加载中：以限高档稳定占位渲染，复制禁用（spec 工具输出懒加载态的稳定分档）。 */
+    loading?: boolean;
+    /** 懒加载前已知的输出字节量（exec.outputBytes），loading 态信息气味用。 */
+    bytesHint?: number;
   }
 
-  let { code, lang = "json", isError = false, label }: Props = $props();
+  let { code, lang = "json", isError = false, label, loading = false, bytesHint }: Props = $props();
 
   function cachedHighlight(value: string, language: string): string {
     const key = `${language}\0${value.length}\0${value}`;
@@ -48,17 +52,18 @@
   );
 
   const fullHighlighted = $derived(
-    effectiveTier === "oversized" ? "" : cachedHighlight(code, lang),
+    loading || effectiveTier === "oversized" ? "" : cachedHighlight(code, lang),
   );
   const headHighlighted = $derived(sliced ? cachedHighlight(sliced.head, lang) : "");
   const tailHighlighted = $derived(sliced ? cachedHighlight(sliced.tail, lang) : "");
 </script>
 
 <AdaptiveOutputFrame
-  tier={effectiveTier}
-  {lines}
-  {bytes}
-  copyText={code}
+  tier={loading ? "bounded" : effectiveTier}
+  lines={loading ? 0 : lines}
+  bytes={loading ? (bytesHint ?? 0) : bytes}
+  copyText={loading ? "" : code}
+  {loading}
   {label}
   {isError}
   viewportLabel={label ?? "输出"}
@@ -67,8 +72,10 @@
     {#if effectiveTier === "oversized" && sliced}
       <pre class="output-pre output-pre-slice"><code>{@html headHighlighted}</code></pre>
       <div class="output-seam" role="separator">
-        已省略中段 {sliced.omittedLines > 0 ? `${sliced.omittedLines} 行` : ""}
-        {sliced.omittedBytes > 0 ? `· ${formatBytes(sliced.omittedBytes)}` : ""} — 复制全文查看完整内容
+        已省略 {sliced.omittedLines > 0 ? `${sliced.omittedLines} 行` : ""}{sliced.omittedBytes >
+        0
+          ? ` · ${formatBytes(sliced.omittedBytes)}`
+          : ""}
       </div>
       <pre class="output-pre output-pre-slice"><code>{@html tailHighlighted}</code></pre>
     {:else}
@@ -106,10 +113,10 @@
   .output-seam {
     font-family: var(--font-mono);
     font-size: 11px;
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     background: var(--code-bg);
     padding: 4px 12px;
-    border-block: 1px dashed var(--color-border);
+    border-top: 1px dashed var(--color-border);
     white-space: normal;
   }
 
