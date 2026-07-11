@@ -628,7 +628,7 @@ async fn cmd_sessions_list(
                 let duration = format_duration(s.timestamp);
                 println!(
                     "{:<38} {:<title_w$} {:>10} {:>8} {:>8}",
-                    &s.session_id,
+                    s.session_id,
                     truncate(title, title_w.saturating_sub(1)),
                     duration,
                     status,
@@ -1459,7 +1459,7 @@ async fn cmd_search(
                 let preview = r.hits.first().map_or("", |h| h.preview.as_str());
                 println!(
                     "{:<38} {:<title_w$} {:>8} {:<preview_w$}",
-                    &r.session_id,
+                    r.session_id,
                     truncate(&r.session_title, title_w.saturating_sub(1)),
                     r.total_matches,
                     truncate(preview, preview_w.saturating_sub(1)),

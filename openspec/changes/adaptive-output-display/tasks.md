@@ -41,13 +41,13 @@
 
 - [x] 6.1 Vitest：分级判定 / 复制全文指向原文 / 信息气味文案（`outputSizing.test.ts` 28 例 + `OutputBlock.test.svelte.ts` + `AdaptiveProse.test.svelte.ts` + `DiffViewer.test.svelte.ts`）
 - [x] 6.2 Playwright：长输出限高滚动、键盘进入内部滚动、超大 top/tail + 省略接缝、搜索 hydrate 后限高保持（`adaptive-output-display.spec.ts` 4 例；滚动位置稳定由既有 `tab-scroll-preserve.spec.ts` 锚点断言兜底，fixture 改动经全量 e2e 103 例回归验证）
-- [ ] 6.3 真实长输出 fixture 浏览器视觉验收：短 / 中长 / 超大三档 × 浅 / 深 / 窄 pane 各截图自查（无逐字折行 / 列对齐 / 文案统一 / 对比度达标）
-- [ ] 6.4 阈值体感校准：按 6.3 结果必要时调整阈值并同步 spec NFR 数字
+- [x] 6.3 真实长输出 fixture 浏览器视觉验收：短 / 中长 / 超大三档 × 浅 / 深 / 窄 pane 各截图自查（sess-rust-2 adaptiveChunk：inline Read 无 chrome、bounded prose/Bash 信息气味 + 限高、oversized 接缝省略量精确 400 行 · 9.8 KiB；无逐字折行 / 文案统一 / 对比度达标）
+- [x] 6.4 阈值体感校准：80 行/16 KiB 与 1000 行/256 KiB 体感合适不调整；限高 token 定稿 `--ao-preview-max-block: clamp(10rem, 30dvh, 22rem)`（比 design D-V2 初始估计 42dvh/30rem 收紧，属实现 tuning 不进 spec NFR）
 
 ## 7. 设计契约沉淀
 
-- [ ] 7.1 `/impeccable extract`：把 Adaptive Output Frame / Output Omission Seam 及候选 token 提进 `DESIGN.md`；更新 `DESIGN.md::Code, diff, and output` 章节
-- [ ] 7.2 按 design `DESIGN.md delta plan` 提取门槛核对（三类 viewer 实装 + 三主题验收为证据）
+- [x] 7.1 `/impeccable extract`：把 Adaptive Output Frame / Output Omission Seam 及候选 token 提进 `DESIGN.md`；更新 `DESIGN.md::Code, diff, and output` 章节（含 `The Conversation Owns the Scroll Rule` / `The Preview Must Declare Itself Rule` 两条 Named Rule + `--ao-preview-max-block` token）
+- [x] 7.2 按 design `DESIGN.md delta plan` 提取门槛核对：OutputBlock（Bash/Default）+ Read/Write + Diff 三类 viewer 实装 ✓，浅 / 深 / 窄 pane 视觉验收 ✓（6.3）
 
 ## 8. Followup issue（本 change 前置产物）
 
