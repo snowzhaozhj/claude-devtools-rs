@@ -124,6 +124,36 @@ test.describe('自适应输出展示', () => {
     await expect(copyBtn).toBeEnabled()
   })
 
+  test('短输出不增加 Tab 停靠点 + 主 AI 回复不限高', async ({ page }) => {
+    await openSession(page)
+    await expandAdaptiveChunk(page)
+
+    // 主 AI 回复（lastOutput）不包 AdaptiveProse——始终完整内联（design D10）。
+    // 会话内唯一 .ao-prose 只能来自展开的 output/user_message 项；未展开时应为 0。
+    expect(await page.locator('.ao-prose').count()).toBe(0)
+    await expect(page.getByText('核对完成，无阻塞项。')).toBeVisible()
+
+    // 展开超大 Bash（内容溢出 → viewport 有 tabindex），对照短命令块无 tabindex：
+    const bashRow = page.getByText('seq 1 1200', { exact: false }).first()
+    await bashRow.scrollIntoViewIfNeeded()
+    await bashRow.click()
+    const seam = page.locator('.output-seam').first()
+    await seam.waitFor({ state: 'attached', timeout: 3_000 })
+
+    // 未溢出的 inline 滚动容器（bash 命令行等短内容）不进 Tab 序列
+    const inlineScrolls = page.locator('.ao-inline-scroll')
+    const n = await inlineScrolls.count()
+    for (let i = 0; i < n; i++) {
+      const el = inlineScrolls.nth(i)
+      const overflowing = await el.evaluate(
+        (e) => e.scrollWidth > e.clientWidth + 1 || e.scrollHeight > e.clientHeight + 1,
+      )
+      if (!overflowing) {
+        expect(await el.getAttribute('tabindex')).toBeNull()
+      }
+    }
+  })
+
   test('搜索 hydrate 后限高仍生效、中段关键词命中', async ({ page }) => {
     await openSession(page)
     const viewport = await expandLongProse(page)

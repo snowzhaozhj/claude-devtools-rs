@@ -4,10 +4,10 @@
   import AdaptiveOutputFrame from "./AdaptiveOutputFrame.svelte";
   import { formatBytes } from "../lib/formatters";
   import {
-    classifyText,
     countLines,
     utf8ByteLength,
     sliceHeadTail,
+    sizingForToolOutput,
     type OutputTier,
   } from "../lib/outputSizing";
 
@@ -25,11 +25,13 @@
     label?: string;
     /** 完整输出懒加载中：以限高档稳定占位渲染，复制禁用（spec 工具输出懒加载态的稳定分档）。 */
     loading?: boolean;
-    /** 懒加载前已知的输出字节量（exec.outputBytes），loading 态信息气味用。 */
+    /** 懒加载失败：显式失败态（复制禁用 + 可重试提示），不停留在假加载占位。 */
+    loadFailed?: boolean;
+    /** 懒加载前已知的输出字节量（exec.outputBytes），loading 态信息气味 + 占位分档用。 */
     bytesHint?: number;
   }
 
-  let { code, lang = "json", isError = false, label, loading = false, bytesHint }: Props = $props();
+  let { code, lang = "json", isError = false, label, loading = false, loadFailed = false, bytesHint }: Props = $props();
 
   function cachedHighlight(value: string, language: string): string {
     const key = `${language}\0${value.length}\0${value}`;
@@ -43,7 +45,16 @@
   const lines = $derived(countLines(code));
   const bytes = $derived(utf8ByteLength(code));
   // 工具输出为行导向纯文本 / 代码，允许 oversized top/tail 切片。
-  const tier = $derived<OutputTier>(classifyText(code, true));
+  // 分档走懒加载稳定状态机（spec 工具输出懒加载态的稳定分档）：
+  // 未加载时按 outputBytes 保守占位（不判 inline），加载后按真实内容校正。
+  const tier = $derived<OutputTier>(
+    sizingForToolOutput({
+      loadedText: loading || loadFailed ? null : code,
+      outputBytes: bytesHint,
+      omitted: loading || loadFailed,
+      allowOversized: true,
+    }).tier,
+  );
 
   // oversized 切片；行数不足以切片时 sliceHeadTail 返回 null → 退回完整渲染。
   const sliced = $derived(tier === "oversized" ? sliceHeadTail(code) : null);
@@ -52,18 +63,19 @@
   );
 
   const fullHighlighted = $derived(
-    loading || effectiveTier === "oversized" ? "" : cachedHighlight(code, lang),
+    loading || loadFailed || effectiveTier === "oversized" ? "" : cachedHighlight(code, lang),
   );
   const headHighlighted = $derived(sliced ? cachedHighlight(sliced.head, lang) : "");
   const tailHighlighted = $derived(sliced ? cachedHighlight(sliced.tail, lang) : "");
 </script>
 
 <AdaptiveOutputFrame
-  tier={loading ? "bounded" : effectiveTier}
-  lines={loading ? 0 : lines}
-  bytes={loading ? (bytesHint ?? 0) : bytes}
-  copyText={loading ? "" : code}
+  tier={effectiveTier}
+  lines={loading || loadFailed ? 0 : lines}
+  bytes={loading || loadFailed ? (bytesHint ?? 0) : bytes}
+  copyText={loading || loadFailed ? "" : code}
   {loading}
+  failed={loadFailed}
   {label}
   {isError}
   viewportLabel={label ?? "输出"}

@@ -86,6 +86,21 @@
     background: var(--color-surface-hover);
   }
 
+  .copy-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .copy-btn:disabled:hover {
+    color: var(--color-text-muted);
+    background: transparent;
+  }
+
+  .copy-btn-label {
+    font-size: 11px;
+    margin-left: 4px;
+  }
+
   .copy-btn.copied {
     color: var(--color-success, #15803d);
   }

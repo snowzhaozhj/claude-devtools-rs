@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { DisplayItem } from "../lib/displayItemBuilder";
   import { getToolOutput, type ToolExecution, type ToolOutput, type WorkflowItem } from "../lib/api";
   import { renderMarkdown } from "../lib/render";
@@ -66,6 +67,8 @@
   // 且用户首次展开该 tool 时通过 getToolOutput IPC 拉取。
   let outputCache: Map<string, ToolOutput> = $state(new Map());
   const outputLoads = new Map<string, Promise<void>>();
+  // 懒拉失败哨兵：失败 ≠ 加载中（同 SessionDetail，防占位永挂谎称加载）。
+  let failedOutputs: Set<string> = $state(new Set());
 
   function cachedOutput(exec: ToolExecution): ToolOutput | undefined {
     const cached = outputCache.get(exec.toolUseId);
@@ -78,7 +81,17 @@
 
   function isOutputLoading(exec: ToolExecution): boolean {
     // missing 标记也算"已就绪"——内容确实不存在，不再显示加载占位。
-    return !!exec.outputOmitted && !outputCache.has(exec.toolUseId);
+    return (
+      !!exec.outputOmitted &&
+      !outputCache.has(exec.toolUseId) &&
+      !failedOutputs.has(exec.toolUseId)
+    );
+  }
+
+  function isOutputLoadFailed(exec: ToolExecution): boolean {
+    return (
+      !!exec.outputOmitted && !outputCache.has(exec.toolUseId) && failedOutputs.has(exec.toolUseId)
+    );
   }
 
   function effectiveExec(exec: ToolExecution): ToolExecution {
@@ -92,15 +105,25 @@
     if (cachedOutput(exec)) return;
     const existing = outputLoads.get(exec.toolUseId);
     if (existing) return existing;
+    // 重试入口：新一轮加载开始即清失败哨兵。
+    if (failedOutputs.has(exec.toolUseId)) {
+      const nextFailed = new Set(failedOutputs);
+      nextFailed.delete(exec.toolUseId);
+      failedOutputs = nextFailed;
+    }
     const load = (async () => {
       try {
         const out = await getToolOutput(rootSessionId, traceSessionId, exec.toolUseId);
-        // missing 也缓存：终结加载占位态（渲染层 cachedOutput 过滤 missing）。
+        // missing 也缓存：终结加载占位态（渲染层 cachedOutput 过滤 missing）；
+        // items 替换补拉 effect 会在工具完成推送后再拉。
         const next = new Map(outputCache);
         next.set(exec.toolUseId, out);
         outputCache = next;
       } catch (e) {
-        console.warn("[perf] getToolOutput failed", exec.toolUseId, e);
+        console.warn("getToolOutput failed", exec.toolUseId, e);
+        const nextFailed = new Set(failedOutputs);
+        nextFailed.add(exec.toolUseId);
+        failedOutputs = nextFailed;
       } finally {
         outputLoads.delete(exec.toolUseId);
       }
@@ -108,6 +131,26 @@
     outputLoads.set(exec.toolUseId, load);
     return load;
   }
+
+  // items 替换后（file-change 推送新 trace / 工具完成）补拉所有已展开 +
+  // outputOmitted 的工具输出——与 SessionDetail 的 detail 补拉 effect 同构：
+  // 没有这层时，展开中拉到 missing（工具还在跑）的项在工具完成后永远显示
+  // 空输出（toggle 不会再触发，缓存的 missing 挡住渲染）。
+  $effect(() => {
+    void items;
+    untrack(() => {
+      for (const it of items) {
+        if (it.type !== "tool") continue;
+        const exec = it.execution;
+        if (!exec.outputOmitted) continue;
+        if (expandedKeys.has(`tool-${exec.toolUseId}`)) {
+          // 缓存的 missing 在 cachedOutput 过滤下会触发重拉；真内容命中则 no-op
+          const cached = outputCache.get(exec.toolUseId);
+          if (!cached || cached.kind === "missing") void ensureToolOutput(exec);
+        }
+      }
+    });
+  });
 
   async function toggle(key: string, exec?: ToolExecution) {
     if (expandedKeys.has(key)) {
@@ -172,16 +215,17 @@
         >
           {#snippet children()}
             {@const outputLoading = viewerUsesOutput(exec) && isOutputLoading(exec)}
+            {@const outputLoadFailed = viewerUsesOutput(exec) && isOutputLoadFailed(exec)}
             {#if isReadTool(exec)}
-              <ReadToolViewer exec={eff} {outputLoading} />
+              <ReadToolViewer exec={eff} {outputLoading} {outputLoadFailed} />
             {:else if isEditTool(exec)}
-              <EditToolViewer exec={eff} />
+              <EditToolViewer exec={eff} {outputLoading} {outputLoadFailed} />
             {:else if isWriteTool(exec)}
               <WriteToolViewer exec={eff} />
             {:else if isBashTool(exec)}
-              <BashToolViewer exec={eff} {outputLoading} />
+              <BashToolViewer exec={eff} {outputLoading} {outputLoadFailed} />
             {:else}
-              <DefaultToolViewer exec={eff} {outputLoading} />
+              <DefaultToolViewer exec={eff} {outputLoading} {outputLoadFailed} />
             {/if}
           {/snippet}
         </BaseItem>

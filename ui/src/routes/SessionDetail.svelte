@@ -625,6 +625,9 @@
   const OUTPUT_CACHE_LIMIT = 200;
   let outputCache: Map<string, ToolOutput> = $state(new Map());
   const outputLoads = new Map<string, Promise<void>>();
+  // 懒拉失败哨兵：失败 ≠ 加载中（否则占位永挂谎称"正在载入"且复制永久禁用）。
+  // 失败项渲染显式失败态；折叠再展开 / detail 替换补拉时清除重试。
+  let failedOutputs: Set<string> = $state(new Set());
 
   function cachedOutput(exec: ToolExecution): ToolOutput | undefined {
     const cached = outputCache.get(exec.toolUseId);
@@ -634,7 +637,18 @@
   function isOutputLoading(exec: ToolExecution): boolean {
     // missing 标记也算"已就绪"——内容确实不存在，不再显示加载占位
     // （渲染层 cachedOutput 过滤 missing 后退回 exec.output 的空态展示）。
-    return !!exec.outputOmitted && !outputCache.has(exec.toolUseId);
+    // 失败项不算加载中——已无 in-flight 请求，谎称加载是静默失败反模式。
+    return (
+      !!exec.outputOmitted &&
+      !outputCache.has(exec.toolUseId) &&
+      !failedOutputs.has(exec.toolUseId)
+    );
+  }
+
+  function isOutputLoadFailed(exec: ToolExecution): boolean {
+    return (
+      !!exec.outputOmitted && !outputCache.has(exec.toolUseId) && failedOutputs.has(exec.toolUseId)
+    );
   }
 
   function isOutputReady(exec: ToolExecution): boolean {
@@ -659,6 +673,12 @@
     }
     const existing = outputLoads.get(exec.toolUseId);
     if (existing) return existing;
+    // 重试入口：新一轮加载开始即清失败哨兵（折叠再展开 / detail 替换补拉都经此）。
+    if (failedOutputs.has(exec.toolUseId)) {
+      const nextFailed = new Set(failedOutputs);
+      nextFailed.delete(exec.toolUseId);
+      failedOutputs = nextFailed;
+    }
     const load = (async () => {
       try {
         const out = await getToolOutput(sessionId, sessionId, exec.toolUseId);
@@ -667,14 +687,28 @@
         // 后续 detail 替换（工具完成推送）时 ensureToolOutput 会再拉。
         const next = new Map(outputCache);
         next.set(exec.toolUseId, out);
-        while (next.size > OUTPUT_CACHE_LIMIT) {
-          const firstKey = next.keys().next().value;
-          if (firstKey === undefined) break;
-          next.delete(firstKey);
+        // LRU 淘汰跳过仍展开的项：淘汰它们会让 isOutputLoading 重新为 true、
+        // 退回假加载占位且无请求在跑（silent-failure 审计 #3）。
+        if (next.size > OUTPUT_CACHE_LIMIT) {
+          const expandedToolIds = new Set(
+            [...expandedItems]
+              .filter((k) => k.includes("-tool-"))
+              .map((k) => k.slice(k.indexOf("-tool-") + "-tool-".length)),
+          );
+          for (const key of [...next.keys()]) {
+            if (next.size <= OUTPUT_CACHE_LIMIT) break;
+            if (key === exec.toolUseId || expandedToolIds.has(key)) continue;
+            next.delete(key);
+          }
         }
         outputCache = next;
       } catch (e) {
-        console.warn("[perf] getToolOutput failed", exec.toolUseId, e);
+        // 失败落显式哨兵：渲染层切"加载失败"态（复制禁用 + 可重试），
+        // 不得停留在 aria-busy 假占位。
+        console.warn("getToolOutput failed", exec.toolUseId, e);
+        const nextFailed = new Set(failedOutputs);
+        nextFailed.add(exec.toolUseId);
+        failedOutputs = nextFailed;
       } finally {
         outputLoads.delete(exec.toolUseId);
       }
@@ -1297,16 +1331,17 @@
                         >
                           {#snippet children()}
                             {@const outputLoading = viewerUsesOutput(exec) && isOutputLoading(exec)}
+                            {@const outputLoadFailed = viewerUsesOutput(exec) && isOutputLoadFailed(exec)}
                             {#if isReadTool(exec)}
-                              <ReadToolViewer exec={eff} {sessionId} {projectId} {outputLoading} />
+                              <ReadToolViewer exec={eff} {sessionId} {projectId} {outputLoading} {outputLoadFailed} />
                             {:else if isEditTool(exec)}
-                              <EditToolViewer exec={eff} {sessionId} {projectId} />
+                              <EditToolViewer exec={eff} {sessionId} {projectId} {outputLoading} {outputLoadFailed} />
                             {:else if isWriteTool(exec)}
                               <WriteToolViewer exec={eff} {sessionId} {projectId} />
                             {:else if isBashTool(exec)}
-                              <BashToolViewer exec={eff} {sessionId} {projectId} {outputLoading} />
+                              <BashToolViewer exec={eff} {sessionId} {projectId} {outputLoading} {outputLoadFailed} />
                             {:else}
-                              <DefaultToolViewer exec={eff} {outputLoading} />
+                              <DefaultToolViewer exec={eff} {outputLoading} {outputLoadFailed} />
                             {/if}
                           {/snippet}
                         </BaseItem>

@@ -52,5 +52,7 @@ describe("AdaptiveProse 两档", () => {
     // 单一 viewport 完整渲染（AdaptiveProse 走 allowOversized=false）
     expect(container.querySelectorAll(".ao-viewport").length).toBe(1);
     expect(container.querySelector(".prose-body")).not.toBeNull();
+    // 显式锁"无省略接缝语义"：prose 路径误加切片时此断言变红
+    expect(container.querySelector('[role="separator"]')).toBeNull();
   });
 });

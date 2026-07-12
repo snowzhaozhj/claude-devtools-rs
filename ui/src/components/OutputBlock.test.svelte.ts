@@ -69,6 +69,17 @@ describe("OutputBlock 分级渲染", () => {
     expect(writeTextMock).toHaveBeenCalledWith(oversizedCode);
   });
 
+  test("loadFailed：显式失败态（无 aria-busy 假占位）+ 复制禁用 + 原因标签", () => {
+    const { container } = render(OutputBlock, {
+      props: { code: "", loadFailed: true, bytesHint: 32 * 1024 },
+    });
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(container.textContent).toContain("加载失败");
+    const btn = container.querySelector(".ao-header button") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute("aria-label")).toContain("加载失败");
+  });
+
   test("loading：稳定占位 + 复制禁用 + 已知字节量气味", () => {
     const { container } = render(OutputBlock, {
       props: { code: "", loading: true, bytesHint: 32 * 1024 },

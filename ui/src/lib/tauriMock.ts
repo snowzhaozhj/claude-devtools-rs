@@ -532,8 +532,13 @@ function buildHandler(fx: Fixture) {
       case 'get_image_asset':
         return ''
 
-      case 'get_tool_output':
-        return { kind: 'missing' }
+      case 'get_tool_output': {
+        const toolUseId = getArg<string>(payload, 'toolUseId') ?? ''
+        const entry = fx.toolOutputs?.[toolUseId]
+        if (entry === 'error') throw new Error(`mock get_tool_output error for ${toolUseId}`)
+        if (entry === 'pending') return new Promise(() => {})
+        return entry ?? { kind: 'missing' }
+      }
 
       case 'get_config':
         return { ...fx.config, _version: fx.configVersion ?? 0 }

@@ -16,6 +16,8 @@
     copyText: string;
     /** 完整原文是否正在加载 / 不可得——复制禁用、显示加载占位。 */
     loading?: boolean;
+    /** 懒加载失败：显式失败态（复制禁用 + 可重试提示），不停留在 aria-busy 假占位。 */
+    failed?: boolean;
     /** 可选左上标签（如 "OUTPUT" / 文件名）。 */
     label?: string;
     /** 错误态样式。 */
@@ -34,6 +36,7 @@
     bytes,
     copyText,
     loading = false,
+    failed = false,
     label,
     isError = false,
     viewportLabel = "输出",
@@ -46,16 +49,28 @@
   // "预览"折进纯文本，取代此前的带框 badge（无状态装饰违反 Status Owns the Color）。
   // loading 时行数未知（未加载），只显示已知字节量（outputBytes）+ 载入中。
   const scent = $derived(
-    loading
-      ? bytes > 0
-        ? `${formatBytes(bytes)} · 载入中`
-        : "载入中"
-      : `${lines} 行 · ${formatBytes(bytes)} · 预览`,
+    failed
+      ? "加载失败"
+      : loading
+        ? bytes > 0
+          ? `${formatBytes(bytes)} · 载入中`
+          : "载入中"
+        : `${lines} 行 · ${formatBytes(bytes)} · 预览`,
   );
 </script>
 
 <div class="ao" class:ao-err={isError} class:ao-prose={variant === "prose"}>
-  {#if loading}
+  {#if failed}
+    <div class="ao-header">
+      <span class="ao-meta">
+        {#if label}<span class="ao-label">{label}</span>{/if}
+        <span class="ao-scent">{scent}</span>
+      </span>
+      <CopyButton text="" disabled={true} ariaLabel="完整内容加载失败，暂不可复制" />
+    </div>
+    <!-- 与 loading 占位同几何（min-block-size 共用），失败↔重试切换不跳变。 -->
+    <div class="ao-body ao-loading">完整内容加载失败，收起后重新展开可重试</div>
+  {:else if loading}
     <div class="ao-header">
       <span class="ao-meta">
         {#if label}<span class="ao-label">{label}</span>{/if}
@@ -82,9 +97,16 @@
     </div>
   {:else}
     <!-- inline（短内容）：不渲 metadata 带——chrome 不得压过内容。
-         复制全文入口降为右上角常驻低调 icon（满足 spec"常驻可发现"，不用 hover-only）。 -->
+         复制全文入口降为右上角常驻低调 icon（满足 spec"常驻可发现"，不用 hover-only）。
+         内层滚动容器承载长单行横向滚动（main 既有行为）+ 仅实际溢出时键盘可达；
+         copy 挂外层不随横向滚动漂移。 -->
     <div class="ao-body ao-inline">
-      {@render children()}
+      <div
+        class="ao-inline-scroll"
+        {@attach adaptiveScrollViewport(() => `${viewportLabel}（${lines} 行 · ${formatBytes(bytes)}，可滚动）`)}
+      >
+        {@render children()}
+      </div>
       {#if copyText}
         <span class="ao-inline-copy">
           <CopyButton text={copyText} ariaLabel="复制全文" />
@@ -147,6 +169,17 @@
   .ao-inline {
     position: relative;
     border-radius: 6px;
+  }
+
+  .ao-inline-scroll {
+    overflow-x: auto;
+    /* scrollbar-gutter-exempt: 横向滚动为主，inline 档内容不限高、无竖向滚动条 */
+    border-radius: inherit;
+  }
+
+  .ao-inline-scroll:focus-visible {
+    outline: 2px solid var(--color-accent-blue, #3b82f6);
+    outline-offset: -2px;
   }
 
   .ao-inline-copy {

@@ -13,6 +13,7 @@ import type {
   RepositoryGroup,
   SessionDetail,
   SessionSummary,
+  ToolOutput,
 } from '../api'
 import type { AgentConfig } from '../agentConfigsStore.svelte'
 
@@ -38,6 +39,9 @@ export interface Fixture {
   /** agentId（WorkflowAgent.sessionId）→ 该 workflow agent 的 trace chunks。
    *  get_workflow_agent_trace 查找；无则返回 []（agent 不可 drilldown）。 */
   workflowAgentTraces?: Record<string, Chunk[]>
+  /** toolUseId → 懒拉输出。get_tool_output 查找；缺省返回 { kind: "missing" }；
+   *  "error" 时 mock 抛错（测失败态）；"pending" 时永不 resolve（测加载占位）。 */
+  toolOutputs?: Record<string, ToolOutput | 'error' | 'pending'>
   /** "<projectId>:<file>" → Markdown 内容。read_memory_file 查找。 */
   memoryFiles?: Record<string, string>
   /** AppConfig。get_config / update_config 返回。 */

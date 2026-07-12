@@ -18,9 +18,11 @@
     projectId?: string;
     /** 完整输出懒加载中：以限高档稳定占位渲染，复制禁用。 */
     outputLoading?: boolean;
+    /** 懒加载失败：显式失败态。 */
+    outputLoadFailed?: boolean;
   }
 
-  let { exec, sessionId = "", projectId = "", outputLoading = false }: Props = $props();
+  let { exec, sessionId = "", projectId = "", outputLoading = false, outputLoadFailed = false }: Props = $props();
 
   function buildCtx(): MenuItemContext {
     return {
@@ -102,7 +104,9 @@
     <span class="file-name">{shortenPath(filePath)}</span>
     <span class="file-lang">{language}</span>
     <span class="file-spacer"></span>
-    {#if !outputLoading && effectiveTier !== "inline"}
+    {#if outputLoadFailed}
+      <span class="file-scent">加载失败</span>
+    {:else if !outputLoading && effectiveTier !== "inline"}
       <span class="file-scent">{scent}</span>
     {/if}
     {#if isMarkdown}
@@ -114,13 +118,19 @@
       </button>
     {/if}
     <CopyButton
-      text={outputLoading ? "" : cleanText}
-      disabled={outputLoading}
-      ariaLabel={outputLoading ? "完整内容加载中，暂不可复制" : "复制全文"}
+      text={outputLoading || outputLoadFailed ? "" : cleanText}
+      disabled={outputLoading || outputLoadFailed}
+      ariaLabel={outputLoadFailed
+        ? "完整内容加载失败，暂不可复制"
+        : outputLoading
+          ? "完整内容加载中，暂不可复制"
+          : "复制全文"}
     />
   </div>
 
-  {#if outputLoading}
+  {#if outputLoadFailed}
+    <div class="read-loading">完整内容加载失败，收起后重新展开可重试</div>
+  {:else if outputLoading}
     <div class="read-loading" aria-busy="true">正在载入完整内容…</div>
   {:else if isMarkdown && viewMode === "preview"}
     <!-- 用 strip 后的纯文本渲染：raw outputText 含 cat -n 前缀会让 markdown 标记失效 -->
