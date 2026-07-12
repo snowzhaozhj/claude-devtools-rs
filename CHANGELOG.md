@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Fixed
+- **MCP**: secret redaction (on by default) no longer corrupts tool responses. The `password` pattern used an unbounded match that, on the compact JSON payload, could swallow everything after `password=` — breaking the JSON so the response silently collapsed into a truncated string and dropped data. Redaction now operates on the structured value (string leaves and object keys) instead of the serialized text, so the response is always valid JSON and only the matched secret is replaced (issue #596).
+
 ## [0.7.5] — 2026-07-09
 
 ### Fixed
