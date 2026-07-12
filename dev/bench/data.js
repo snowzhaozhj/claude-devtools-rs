@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783585431494,
+  "lastUpdate": 1783815212074,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -29886,6 +29886,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12260,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6420af27606fe8e8242e88547eb3074acf33c277",
+          "message": "fix(mcp): redact secrets structurally to preserve JSON response (#596) (#598)\n\n* fix(mcp): redact secrets structurally to preserve JSON response (#596)\n\nMCP secret redaction (on by default) ran regexes over the serialized\ncompact JSON string. The `password` rule's unbounded `\\S+` swallowed\neverything from `password=` up to the next real whitespace — across\nfield and structure boundaries — so `[REDACTED]` broke the JSON,\n`emit_json`'s `from_str` failed, and the response silently collapsed\ninto a truncated string, dropping all data after the first match.\n\nRedact the structured `serde_json::Value` instead: replace secrets only\ninside string leaf values and object keys, never touching structure\nchars. The response is always valid JSON and only matched secrets are\nreplaced. Object keys are redacted too because `get_tool_output`'s\n`Structured` output preserves arbitrary tool JSON whose keys may carry\nuser data (codex design review finding). Also narrows the `password`\nregex to `[^\\s\"]+` as defense-in-depth.\n\nopenspec: change mcp-redact-preserve-json-structure (MODIFIED\nmcp-server::Secret redaction — adds \"脱敏不破坏响应 JSON 结构\" scenario).\n\nCloses #596\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* fix(mcp): address review + CI on redaction change\n\n- Drop the `password` regex narrowing (D2 reverted): codex + silent-failure\n  review found `[^\\s\"]+` under-redacts when a password value itself contains\n  a `\"` (leaks the tail). Now that redaction runs per string leaf (D1), the\n  original `\\S+` is structure-safe (over-redacts within one leaf at worst)\n  and leak-free — see design D2b.\n- Extract the emit core into `redact_and_serialize(&Redactor, value)` and add\n  emit-layer unit tests (valid JSON + wrapper + sibling survival / no-secret\n  passthrough / disabled==allow-sensitive passthrough), covering the layer\n  where #596 lived (pr-test-analyzer Gap 1).\n- Fix pre-existing `clippy::useless_borrows_in_formatting` in main.rs (631,\n  1462) newly denied by the CI stable clippy 1.97 bump; local was 1.96 so it\n  passed locally but failed CI on all platforms.\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* chore(opsx): archive mcp-redact-preserve-json-structure\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Fable 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-12T08:08:11+08:00",
+          "tree_id": "141e7018394cd7ad2434d0962f4ecb35ea1bef6d",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/6420af27606fe8e8242e88547eb3074acf33c277"
+        },
+        "date": 1783815211597,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 113.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1112,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4798,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.476,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 8.251,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 48.22,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 34.58,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 293.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1245,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3401,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3491,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 38360,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.141,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 62.16,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 628.5,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6314,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 189.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1920,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 52.29,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 519.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5208,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 126.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1271,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 7.69,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 76.66,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 8542,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 905.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 8862,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 909.2,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 49.26,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 513.3,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 100.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 1003,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 10020,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 190.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1340,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 12910,
             "unit": "µs"
           }
         ]
