@@ -689,14 +689,18 @@
         next.set(exec.toolUseId, out);
         // LRU 淘汰跳过仍展开的项：淘汰它们会让 isOutputLoading 重新为 true、
         // 退回假加载占位且无请求在跑（silent-failure 审计 #3）。
+        // 上限 = LIMIT + 展开项数（codex 验证轮 c）：未展开部分仍严格 ≤ LIMIT；
+        // 展开项的 cache 与其 DOM 渲染同生命周期同数量级（折叠后即回可淘汰池），
+        // 增长上界由用户显式展开数决定，不构成无界泄漏，也不产生淘汰死态。
         if (next.size > OUTPUT_CACHE_LIMIT) {
           const expandedToolIds = new Set(
             [...expandedItems]
               .filter((k) => k.includes("-tool-"))
               .map((k) => k.slice(k.indexOf("-tool-") + "-tool-".length)),
           );
+          const cap = OUTPUT_CACHE_LIMIT + expandedToolIds.size;
           for (const key of [...next.keys()]) {
-            if (next.size <= OUTPUT_CACHE_LIMIT) break;
+            if (next.size <= cap) break;
             if (key === exec.toolUseId || expandedToolIds.has(key)) continue;
             next.delete(key);
           }
