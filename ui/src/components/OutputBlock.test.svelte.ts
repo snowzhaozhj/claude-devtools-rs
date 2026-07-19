@@ -69,16 +69,34 @@ describe("OutputBlock 分级渲染", () => {
     expect(writeTextMock).toHaveBeenCalledWith(oversizedCode);
   });
 
-  test("首尾空行修剪：inline 档不留空框、复制内容同步去首尾空白（图1 回归）", async () => {
-    // 终端输出常以 \n 开头 / 结尾（cargo / git / kbase fetch 等），
+  test("首尾空白行修剪：显示去空框，但复制仍为完整原文（图1 回归 + spec 复制原文）", async () => {
+    // 终端输出常以空行开头 / 结尾（cargo / git / kbase fetch 等），
     // white-space:pre 忠实渲染会在框顶留空行 → 配常驻 copy icon 成"空框"。
-    const { container } = render(OutputBlock, { props: { code: "\n\n0 errors\n\n", lang: "text" } });
+    const raw = "\n\n0 errors\n\n";
+    const { container } = render(OutputBlock, { props: { code: raw, lang: "text" } });
+    // 显示修剪首尾空白行
     const pre = container.querySelector(".output-pre code");
     expect(pre!.textContent).toBe("0 errors");
-    // 复制同步修剪后文本（显示与复制一致）
+    // 复制仍是完整原文（spec copy-to-clipboard::复制该输出面的完整原文）
     const btn = container.querySelector(".ao-inline-copy button") as HTMLButtonElement;
     await fireEvent.click(btn);
-    expect(writeTextMock).toHaveBeenCalledWith("0 errors");
+    expect(writeTextMock).toHaveBeenCalledWith(raw);
+  });
+
+  test("修剪只删整条空白行：保留 CRLF 首部去除 + 最后一行有意义的尾随空格", () => {
+    // CRLF 空行需被首部修剪吃掉；最后一个非空行自身的尾随空格/tab 不得误删。
+    const raw = "\r\n\r\nrecord \t\r\n\r\n";
+    const { container } = render(OutputBlock, { props: { code: raw, lang: "text" } });
+    const pre = container.querySelector(".output-pre code");
+    // 首尾整条空白行（含 CRLF）删除，"record \t" 的尾随空格 tab 保留
+    expect(pre!.textContent).toBe("record \t");
+  });
+
+  test("纯空白输出：不渲染带边框空 <pre>，仅极简空输出提示（空框变体）", () => {
+    const { container } = render(OutputBlock, { props: { code: "\n\n  \n", lang: "text" } });
+    expect(container.querySelector(".output-pre")).toBeNull();
+    expect(container.querySelector(".ao")).toBeNull();
+    expect(container.querySelector(".output-empty")).not.toBeNull();
   });
 
   test("loadFailed：显式失败态（无 aria-busy 假占位）+ 复制禁用 + 原因标签", () => {

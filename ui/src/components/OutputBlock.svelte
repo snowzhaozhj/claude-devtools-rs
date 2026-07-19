@@ -33,11 +33,16 @@
 
   let { code: rawCode, lang = "json", isError = false, label, loading = false, loadFailed = false, bytesHint }: Props = $props();
 
-  // 终端输出常以 `\n` 开头 / 结尾（cargo / git / kbase fetch 等）；inline 档以
+  // 终端 / API 输出常以空行开头 / 结尾（cargo / git / kbase fetch 等）；inline 档以
   // white-space:pre 忠实渲染会在框顶 / 框底留出空白行，配常驻复制 icon 就成了
-  // "空框"（图1 回归）。入口统一修剪首尾空行（保留内部），分档 / 字节 / 切片 /
-  // 复制全部基于修剪后文本，显示与复制一致。
-  const code = $derived(rawCode.replace(/^\n+/, "").replace(/\s+$/, ""));
+  // "空框"（图1 回归）。仅**显示 / 分档**修剪首尾**整条空白行**（含 CRLF、含只有
+  // 空格/tab 的行），保留最后一个非空行自身的尾随空格。**复制仍用完整原文** rawCode
+  // （spec copy-to-clipboard::复制该输出面的完整原文——显示可规范化但复制不删原文）。
+  const code = $derived(
+    rawCode.replace(/^(?:[ \t]*\r?\n)+/, "").replace(/(?:\r?\n[ \t]*)+$/, ""),
+  );
+  // 修剪后为纯空（原文只有空白行）：不渲染带边框 padding 的空 `<pre>`（空框变体）。
+  const isEmpty = $derived(!loading && !loadFailed && code.length === 0);
 
   function cachedHighlight(value: string, language: string): string {
     const key = `${language}\0${value.length}\0${value}`;
@@ -75,34 +80,46 @@
   const tailHighlighted = $derived(sliced ? cachedHighlight(sliced.tail, lang) : "");
 </script>
 
-<AdaptiveOutputFrame
-  tier={effectiveTier}
-  lines={loading || loadFailed ? 0 : lines}
-  bytes={loading || loadFailed ? (bytesHint ?? 0) : bytes}
-  copyText={loading || loadFailed ? "" : code}
-  {loading}
-  failed={loadFailed}
-  {label}
-  {isError}
-  viewportLabel={label ?? "输出"}
->
-  {#snippet children()}
-    {#if effectiveTier === "oversized" && sliced}
-      <pre class="output-pre output-pre-slice"><code>{@html headHighlighted}</code></pre>
-      <div class="output-seam" role="separator">
-        已省略 {sliced.omittedLines > 0 ? `${sliced.omittedLines} 行` : ""}{sliced.omittedBytes >
-        0
-          ? ` · ${formatBytes(sliced.omittedBytes)}`
-          : ""}
-      </div>
-      <pre class="output-pre output-pre-slice"><code>{@html tailHighlighted}</code></pre>
-    {:else}
-      <pre class="output-pre"><code>{@html fullHighlighted}</code></pre>
-    {/if}
-  {/snippet}
-</AdaptiveOutputFrame>
+{#if isEmpty}
+  <div class="output-empty">（空输出）</div>
+{:else}
+  <AdaptiveOutputFrame
+    tier={effectiveTier}
+    lines={loading || loadFailed ? 0 : lines}
+    bytes={loading || loadFailed ? (bytesHint ?? 0) : bytes}
+    copyText={loading || loadFailed ? "" : rawCode}
+    {loading}
+    failed={loadFailed}
+    {label}
+    {isError}
+    viewportLabel={label ?? "输出"}
+  >
+    {#snippet children()}
+      {#if effectiveTier === "oversized" && sliced}
+        <pre class="output-pre output-pre-slice"><code>{@html headHighlighted}</code></pre>
+        <div class="output-seam" role="separator">
+          已省略 {sliced.omittedLines > 0 ? `${sliced.omittedLines} 行` : ""}{sliced.omittedBytes >
+          0
+            ? ` · ${formatBytes(sliced.omittedBytes)}`
+            : ""}
+        </div>
+        <pre class="output-pre output-pre-slice"><code>{@html tailHighlighted}</code></pre>
+      {:else}
+        <pre class="output-pre"><code>{@html fullHighlighted}</code></pre>
+      {/if}
+    {/snippet}
+  </AdaptiveOutputFrame>
+{/if}
 
 <style>
+  /* 纯空白输出：不套边框框，仅极简次级文案暗示"确有输出但为空"，不留空框。 */
+  .output-empty {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-text-muted);
+    padding: 4px 2px;
+  }
+
   .output-pre {
     min-width: 0;
     font-size: 12px;
