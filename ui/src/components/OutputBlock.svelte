@@ -31,7 +31,13 @@
     bytesHint?: number;
   }
 
-  let { code, lang = "json", isError = false, label, loading = false, loadFailed = false, bytesHint }: Props = $props();
+  let { code: rawCode, lang = "json", isError = false, label, loading = false, loadFailed = false, bytesHint }: Props = $props();
+
+  // 终端输出常以 `\n` 开头 / 结尾（cargo / git / kbase fetch 等）；inline 档以
+  // white-space:pre 忠实渲染会在框顶 / 框底留出空白行，配常驻复制 icon 就成了
+  // "空框"（图1 回归）。入口统一修剪首尾空行（保留内部），分档 / 字节 / 切片 /
+  // 复制全部基于修剪后文本，显示与复制一致。
+  const code = $derived(rawCode.replace(/^\n+/, "").replace(/\s+$/, ""));
 
   function cachedHighlight(value: string, language: string): string {
     const key = `${language}\0${value.length}\0${value}`;

@@ -16,8 +16,9 @@ import { expect, test, type Page } from '@playwright/test'
 const SESSION_ID = 'sess-rust-2'
 const PROJECT_ID = 'mock-rich-rust'
 
-// 限高上限 22rem = 352px（--ao-preview-max-block），留边框 / 取整余量
-const BOUNDED_MAX_PX = 360
+// 限高上限 40rem = 640px（--ao-preview-max-block 的 clamp 上限），留边框 / 取整余量。
+// 用硬上限而非 45dvh 中间值判定：跨视口高度稳健，仍能抓"限高失效"（内容全撑开会远超此值）。
+const BOUNDED_MAX_PX = 650
 
 async function openSession(page: Page) {
   await page.goto('/?mock=1&fixture=multi-project-rich')

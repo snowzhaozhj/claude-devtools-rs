@@ -59,7 +59,7 @@
   /* 自适应输出限高预览的响应式 block-size 上限（spec session-display /
      tool-viewer-routing 自适应展示；design D-V2 共享 token——各 viewer 不再
      各自固定像素限高）。与主题无关，仅在 :root 声明一次。 */
-  --ao-preview-max-block: clamp(10rem, 30dvh, 22rem);
+  --ao-preview-max-block: clamp(18rem, 45dvh, 40rem);
 
   /* Code blocks */
   --code-bg: #efeee9;

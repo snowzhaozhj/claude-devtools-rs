@@ -69,6 +69,18 @@ describe("OutputBlock 分级渲染", () => {
     expect(writeTextMock).toHaveBeenCalledWith(oversizedCode);
   });
 
+  test("首尾空行修剪：inline 档不留空框、复制内容同步去首尾空白（图1 回归）", async () => {
+    // 终端输出常以 \n 开头 / 结尾（cargo / git / kbase fetch 等），
+    // white-space:pre 忠实渲染会在框顶留空行 → 配常驻 copy icon 成"空框"。
+    const { container } = render(OutputBlock, { props: { code: "\n\n0 errors\n\n", lang: "text" } });
+    const pre = container.querySelector(".output-pre code");
+    expect(pre!.textContent).toBe("0 errors");
+    // 复制同步修剪后文本（显示与复制一致）
+    const btn = container.querySelector(".ao-inline-copy button") as HTMLButtonElement;
+    await fireEvent.click(btn);
+    expect(writeTextMock).toHaveBeenCalledWith("0 errors");
+  });
+
   test("loadFailed：显式失败态（无 aria-busy 假占位）+ 复制禁用 + 原因标签", () => {
     const { container } = render(OutputBlock, {
       props: { code: "", loadFailed: true, bytesHint: 32 * 1024 },
