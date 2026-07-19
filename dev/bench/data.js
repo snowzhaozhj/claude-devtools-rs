@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783815212074,
+  "lastUpdate": 1784452378142,
   "repoUrl": "https://github.com/snowzhaozhj/claude-devtools-rs",
   "entries": {
     "Divan Benchmarks": [
@@ -30095,6 +30095,215 @@ window.BENCHMARK_DATA = {
           {
             "name": "cdt-parse/parse_file_async/5000",
             "value": 12910,
+            "unit": "µs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "81480356+snowzhaozhj@users.noreply.github.com",
+            "name": "snowzhaozhj",
+            "username": "snowzhaozhj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ed1ac0a2f2eee75e7da9854097bc1973ee9d6a98",
+          "message": "feat(ui): adaptive output display (三档自适应输出展示) (#600)\n\n* feat(ui): adaptive output framing for tool output blocks\n\nOpenSpec change adaptive-output-display 的第一批实现：规模自适应展示的\n共享基础 + 工具输出块（Bash/Default/Edit-result 走 OutputBlock）接入。\n\n- outputSizing.ts: 规模判定纯函数（UTF-8 字节 + 行数、>= 升档、三档）\n  + 懒加载稳定分档状态机 + top/tail 切片预算（Unicode 安全 / 重叠规避 /\n  省略量精确），24 个 Vitest 用例\n- AdaptiveOutputFrame.svelte: 信息气味 header（行数·字节·预览）+ 响应式\n  限高 viewport（scrollbar-gutter stable + 溢出才可键盘聚焦 + focus-visible）\n  + 常驻复制全文\n- OutputBlock.svelte: 三档接入（inline / bounded 限高 / oversized top-tail\n  + 省略接缝），复制全文常驻替代 hover-only overlay\n- CopyButton: 扩展 label / disabled / ariaLabel\n- formatters: formatBytes\n\n三档均已浏览器视觉验证（inline / bounded 150 行 / oversized 1200 行）。\nprose 路径 + Read/Write/Diff viewer + Playwright + DESIGN.md extract 待续。\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* feat(ui): adaptive tiers for prose and Read/Write/Diff viewers\n\n- AdaptiveProse：output / user_message prose 两档轻量框接入\n  SessionDetail + ExecutionTrace；主 AI 回复 lastOutput 保持完整内联\n  （design D10 用户拍板），spec delta / proposal / tasks 三处同步\n- Read/Write/Diff viewer 接入三档（信息气味 header + 共享\n  --ao-preview-max-block 限高 token + 结构化行数组 top/tail 切片\n  sliceLineIndices + 省略接缝），移除各自固定像素限高与 gutter 豁免\n- DiffViewer 新增常驻\"复制完整差异\"入口（copy-to-clipboard 契约）\n- 懒加载态稳定分档落地（design D6）：展开即触发懒拉 + 限高档稳定\n  占位（aria-busy + 复制禁用），missing 输出缓存标记终结占位态\n- 共享 adaptiveScrollViewport attachment：仅实际溢出时进入 Tab 序列\n- 测试：outputSizing 28 例、OutputBlock/AdaptiveProse/DiffViewer 组件\n  测试、adaptive-output-display.spec.ts 4 条 e2e（限高滚动 / 键盘进入 /\n  top-tail 接缝 / 搜索 hydrate 后限高保持），全量 vitest + e2e 通过\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* docs(design): extract Adaptive Output Frame contracts into DESIGN.md\n\n- DESIGN.md::Code, diff, and output 新增 Adaptive Output Frame /\n  Output Omission Seam 组件契约 + --ao-preview-max-block token +\n  The Conversation Owns the Scroll Rule / The Preview Must Declare\n  Itself Rule 两条 Named Rule\n- fix(lint): cdt-cli useless_borrows_in_formatting（rust 1.97 新 lint，\n  与本 change 无关但挡 CI）\n- tasks.md 勾 6.3/6.4/7.1/7.2（浏览器三档 × 浅/深/窄视觉验收通过；\n  阈值体感合适不调整）\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* test(ui): Write viewer input-based tiering + changelog entry\n\n- WriteToolViewer.test.svelte.ts：写入型工具按 input.content 分档\n  （极小回执不误判 inline）+ 超大切片接缝，补 openspec-verify-change\n  发现的 scenario 覆盖缺口\n- CHANGELOG [Unreleased] Added 条目\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* fix(ui): review findings — failure state, missing refetch, inline overflow\n\nPR #600 二审（code-reviewer / silent-failure-hunter / pr-test-analyzer）修复：\n\n- 懒拉失败显式失败态（silent-failure #1 CRITICAL）：failedOutputs 哨兵\n  区分 in-flight 与 failed，失败渲染\"加载失败，收起后重新展开可重试\"\n  （复制禁用 + aria 原因），不再永久 aria-busy 假占位；console.warn 去\n  误导性 [perf] 前缀\n- ExecutionTrace items 替换补拉 effect（#2 HIGH）：展开中拉到 missing\n  的项在工具完成推送后自动重拉，不再永久空白\n- LRU 淘汰跳过仍展开项（#3）：避免退回无请求在跑的假 loading\n- EditToolViewer 接 outputLoading/outputLoadFailed 占位（#4）：isError\n  无 errorMessage 的 Edit 不再\"标错误却无内容无提示\"\n- inline 档恢复横向滚动（code-reviewer #1 回归）：ao-inline-scroll 内层\n  滚动容器 + 溢出时键盘可达；CopyButton 补 :disabled 视觉态\n- OutputBlock 接线 sizingForToolOutput（test-analyzer #1 覆盖假象）：\n  懒加载分档状态机成为真实路径，单测锚定生效\n- spec 收窄两处（test-analyzer #3/#8，design D6b/D7b 修订记录）：\n  加载后校正\"不改外层几何\"→\"不放大\"（inline 最终态允许收缩）；\n  切片字符安全收窄到码点边界（簇完整性为非目标）\n- 测试：SessionDetail 懒加载状态机 4 例（fetch-first 占位/missing 终结/\n  真内容分档/失败态，mock get_tool_output 支持注入）+ ReadToolViewer\n  5 例（真实行号切片/preview-code 切换/loading-failed 禁用）+ OutputBlock\n  failed 例 + AdaptiveProse 接缝反断言 + e2e 2 例（短输出无 Tab 停靠/\n  lastOutput 不限高锚）；vitest 999 + e2e 104 全绿\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* fix(ui): output cache cap accounts for expanded items (codex round c)\n\nLRU 淘汰跳过展开项后上限失守：>200 同时展开时 cache 无界。上限改为\nLIMIT + 展开项数——未展开部分仍严格 ≤200，展开项与其 DOM 渲染同生命\n周期同数量级，折叠后即回可淘汰池；无泄漏也无淘汰死态。\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* chore(opsx): archive adaptive-output-display\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* fix(ui): raise adaptive preview height + trim inline output leading/trailing blank lines\n\n限高 token 30dvh→45dvh（10rem/22rem 下限上限同步抬高），矮窗口下预览\n不再只露几行。OutputBlock 入口修剪输出首尾空行（保留内部）：终端/API\n输出常以 \\n 开头，white-space:pre 忠实渲染会在 inline 框顶留空行 + 配\n常驻 copy icon 成\"空框\"回归。分档/字节/切片/复制均基于修剪后文本。\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* fix(ui): copy full原文 + 整条空白行修剪 + 纯空白空框（codex 二审）\n\ncodex 二审三处:\n- 复制违反 copy-to-clipboard spec\"复制完整原文\":copyText 改回 rawCode,\n  只让显示/分档走修剪后 code\n- 修剪表达式换成面向整条空白行 + 兼容 CRLF:^(?:[ \\t]*\\r?\\n)+ /\n  (?:\\r?\\n[ \\t]*)+$，保留最后一非空行自身的尾随空格/tab（原 \\s+$ 会误删）\n- 纯空白输出（修剪后为空）不再渲染带边框空 <pre>，改极简\"（空输出）\"提示\n\n回归测试补:复制原文断言 / CRLF+尾随空格保留 / 纯空白空框变体。\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* fix(ui): 空白修剪改单遍扫描 + 覆盖无换行纯空白 + 空输出保留禁用复制入口（codex 复审）\n\ncodex 复审第二轮三处:\n- 修剪正则 (?:\\r?\\n[ \\t]*)+$ 近二次回溯（8000 行内部空白数百 ms 阻塞 UI）\n  → 抽 trimBlankEdgeLines 纯函数单遍索引扫描 O(n) 无回溯（行尾兼容 CR/LF）\n- 无终止换行的纯空白（\"   \" / \"\\n\\n  \"）漏判 → isEmpty 走 trim 后 length===0，\n  单遍扫描对纯空格/tab 也返回空串\n- 空输出分支丢了复制入口违反 copy-to-clipboard spec\"空内容复制入口 SHALL 禁用\n  说明原因\" → .output-empty 加禁用 CopyButton（aria 说明原因），不移除入口\n\n回归测试补:trimBlankEdgeLines 7 例（CRLF/末行尾随空格/纯空白/性能守卫）\n+ 无换行纯空白判空 + 空输出禁用复制入口断言。\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: 赵和杰 <zhaohejie.zhj@taobao.com>\nCo-authored-by: Claude Fable 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-19T17:07:27+08:00",
+          "tree_id": "2330f6cebd8f85a76410b39865c90e957d2c4da8",
+          "url": "https://github.com/snowzhaozhj/claude-devtools-rs/commit/ed1ac0a2f2eee75e7da9854097bc1973ee9d6a98"
+        },
+        "date": 1784452377377,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "cdt-analyze/build_chunks/50",
+            "value": 117.1,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/500",
+            "value": 1133,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/build_chunks/2000",
+            "value": 4781,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/50",
+            "value": 1.521,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/500",
+            "value": 9.266,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/check_messages_ongoing/2000",
+            "value": 41.23,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/50",
+            "value": 33.7,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/500",
+            "value": 293,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-analyze/pair_tool_executions/2000",
+            "value": 1208,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_project_scan",
+            "value": 3725,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/cold_scan_and_group",
+            "value": 3276,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/get_session_detail",
+            "value": 38760,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-api/list_repository_groups",
+            "value": 4.378,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/100",
+            "value": 59.85,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/1000",
+            "value": 611,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/decode_path_throughput/10000",
+            "value": 6183,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/100",
+            "value": 191.8,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_decode_roundtrip/1000",
+            "value": 1924,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/100",
+            "value": 52.34,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/1000",
+            "value": 546.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/encode_path_throughput/10000",
+            "value": 5420,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/1000",
+            "value": 117.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/extract_project_name_throughput/10000",
+            "value": 1190,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/1000",
+            "value": 6.501,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-discover/validate_encoded_path/10000",
+            "value": 64.76,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_large",
+            "value": 9593,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/direct_read_small",
+            "value": 1018,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_large",
+            "value": 9450,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-fs/dyn_read_small",
+            "value": 1023,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/500",
+            "value": 46.85,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/dedupe_by_request_id/5000",
+            "value": 503.6,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/50",
+            "value": 99.01,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/500",
+            "value": 990.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_entry_lines/5000",
+            "value": 9916,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/50",
+            "value": 211.4,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/500",
+            "value": 1447,
+            "unit": "µs"
+          },
+          {
+            "name": "cdt-parse/parse_file_async/5000",
+            "value": 13610,
             "unit": "µs"
           }
         ]
