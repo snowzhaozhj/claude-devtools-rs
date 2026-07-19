@@ -14,9 +14,13 @@
      *  老 caller 缺省时 fallback 到空 sessionId/projectId（ctx.dispatch 仍可用） */
     sessionId?: string;
     projectId?: string;
+    /** 完整输出懒加载中：以限高档稳定占位渲染，复制禁用。 */
+    outputLoading?: boolean;
+    /** 懒加载失败：显式失败态。 */
+    outputLoadFailed?: boolean;
   }
 
-  let { exec, sessionId = "", projectId = "" }: Props = $props();
+  let { exec, sessionId = "", projectId = "", outputLoading = false, outputLoadFailed = false }: Props = $props();
 
   const input = $derived(exec.input as Record<string, unknown>);
   const command = $derived(String(input?.command ?? ""));
@@ -47,7 +51,9 @@
   </div>
 
   <!-- Output -->
-  {#if outputStr}
+  {#if outputLoading || outputLoadFailed}
+    <OutputBlock code="" lang="bash" isError={exec.isError} label={exec.isError ? "ERROR" : "OUTPUT"} loading={outputLoading} loadFailed={outputLoadFailed} bytesHint={exec.outputBytes} />
+  {:else if outputStr}
     <OutputBlock code={outputStr} lang="bash" isError={exec.isError} label={exec.isError ? "ERROR" : "OUTPUT"} />
   {/if}
 </div>

@@ -9,6 +9,9 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+### Added
+- **Session view**: long outputs no longer flood the conversation. Text, code, diff, and tool outputs now adapt to their size — short content stays fully inline, medium content renders in a height-bounded scrollable preview with a `lines · bytes · preview` indicator, and very large line-oriented outputs render head + tail slices with an explicit "N lines omitted" seam. Copy-full-text is always visible (no longer hover-only) and always copies the complete original, staying disabled with a reason while content is still loading. Bounded scroll areas are keyboard-accessible when they actually overflow. The main AI reply at the end of each turn intentionally stays fully inline for readability.
+
 ### Fixed
 - **MCP**: secret redaction (on by default) no longer corrupts tool responses. The `password` pattern used an unbounded match that, on the compact JSON payload, could swallow everything after `password=` — breaking the JSON so the response silently collapsed into a truncated string and dropped data. Redaction now operates on the structured value (string leaves and object keys) instead of the serialized text, so the response is always valid JSON and only the matched secret is replaced (issue #596).
 

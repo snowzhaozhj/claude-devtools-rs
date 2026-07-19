@@ -12,9 +12,13 @@
     exec: ToolExecution;
     sessionId?: string;
     projectId?: string;
+    /** 错误详情懒加载中（Edit isError 且 errorMessage 缺失时走 output 懒拉）。 */
+    outputLoading?: boolean;
+    /** 懒加载失败：显式失败态。 */
+    outputLoadFailed?: boolean;
   }
 
-  let { exec, sessionId = "", projectId = "" }: Props = $props();
+  let { exec, sessionId = "", projectId = "", outputLoading = false, outputLoadFailed = false }: Props = $props();
 
   const input = $derived(exec.input as Record<string, unknown>);
   const filePath = $derived(String(input?.file_path ?? input?.filePath ?? ""));
@@ -47,7 +51,14 @@
     <DiffViewer fileName={filePath} {oldString} newString="" />
   {/if}
 
-  {#if resultText}
+  {#if outputLoading || outputLoadFailed}
+    <div class="edit-result">
+      <span class="edit-result-label" class:edit-result-label-err={exec.isError}>
+        {exec.isError ? "ERROR" : "RESULT"}
+      </span>
+      <OutputBlock code="" isError={exec.isError} loading={outputLoading} loadFailed={outputLoadFailed} bytesHint={exec.outputBytes} />
+    </div>
+  {:else if resultText}
     <div class="edit-result">
       <span class="edit-result-label" class:edit-result-label-err={exec.isError}>
         {exec.isError ? "ERROR" : "RESULT"}

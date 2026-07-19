@@ -5,9 +5,13 @@
 
   interface Props {
     exec: ToolExecution;
+    /** 完整输出懒加载中：以限高档稳定占位渲染，复制禁用。 */
+    outputLoading?: boolean;
+    /** 懒加载失败：显式失败态。 */
+    outputLoadFailed?: boolean;
   }
 
-  let { exec }: Props = $props();
+  let { exec, outputLoading = false, outputLoadFailed = false }: Props = $props();
 
   const inputStr = $derived(JSON.stringify(exec.input, null, 2));
   const outputStr = $derived(exec.isError ? toolErrorText(exec) : toolOutputText(exec.output));
@@ -28,7 +32,14 @@
     <OutputBlock code={inputStr} lang="json" />
   </div>
 
-  {#if outputStr}
+  {#if outputLoading || outputLoadFailed}
+    <div class="viewer-section">
+      <span class="viewer-label" class:viewer-label-err={exec.isError}>
+        {exec.isError ? "ERROR" : "OUTPUT"}
+      </span>
+      <OutputBlock code="" isError={exec.isError} loading={outputLoading} loadFailed={outputLoadFailed} bytesHint={exec.outputBytes} />
+    </div>
+  {:else if outputStr}
     <div class="viewer-section">
       <span class="viewer-label" class:viewer-label-err={exec.isError}>
         {exec.isError ? "ERROR" : "OUTPUT"}

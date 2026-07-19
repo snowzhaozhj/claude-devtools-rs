@@ -24,6 +24,7 @@
   import { getMenuSettings } from "../lib/contextMenu/settings.svelte";
   import { getMenuItemDispatch } from "../lib/contextMenu/dispatch";
   import BaseItem from "../components/BaseItem.svelte";
+  import AdaptiveProse from "../components/AdaptiveProse.svelte";
   import SubagentCard from "../components/SubagentCard.svelte";
   import WorkflowCard from "../components/WorkflowCard.svelte";
   import TeammateMessageItem from "../components/TeammateMessageItem.svelte";
@@ -624,6 +625,9 @@
   const OUTPUT_CACHE_LIMIT = 200;
   let outputCache: Map<string, ToolOutput> = $state(new Map());
   const outputLoads = new Map<string, Promise<void>>();
+  // 懒拉失败哨兵：失败 ≠ 加载中（否则占位永挂谎称"正在载入"且复制永久禁用）。
+  // 失败项渲染显式失败态；折叠再展开 / detail 替换补拉时清除重试。
+  let failedOutputs: Set<string> = $state(new Set());
 
   function cachedOutput(exec: ToolExecution): ToolOutput | undefined {
     const cached = outputCache.get(exec.toolUseId);
@@ -631,7 +635,20 @@
   }
 
   function isOutputLoading(exec: ToolExecution): boolean {
-    return !!exec.outputOmitted && !cachedOutput(exec);
+    // missing 标记也算"已就绪"——内容确实不存在，不再显示加载占位
+    // （渲染层 cachedOutput 过滤 missing 后退回 exec.output 的空态展示）。
+    // 失败项不算加载中——已无 in-flight 请求，谎称加载是静默失败反模式。
+    return (
+      !!exec.outputOmitted &&
+      !outputCache.has(exec.toolUseId) &&
+      !failedOutputs.has(exec.toolUseId)
+    );
+  }
+
+  function isOutputLoadFailed(exec: ToolExecution): boolean {
+    return (
+      !!exec.outputOmitted && !outputCache.has(exec.toolUseId) && failedOutputs.has(exec.toolUseId)
+    );
   }
 
   function isOutputReady(exec: ToolExecution): boolean {
@@ -656,20 +673,46 @@
     }
     const existing = outputLoads.get(exec.toolUseId);
     if (existing) return existing;
+    // 重试入口：新一轮加载开始即清失败哨兵（折叠再展开 / detail 替换补拉都经此）。
+    if (failedOutputs.has(exec.toolUseId)) {
+      const nextFailed = new Set(failedOutputs);
+      nextFailed.delete(exec.toolUseId);
+      failedOutputs = nextFailed;
+    }
     const load = (async () => {
       try {
         const out = await getToolOutput(sessionId, sessionId, exec.toolUseId);
-        if (out.kind === "missing") return;
+        // missing 也缓存：终结加载占位态（否则永久"载入中"）。渲染层
+        // cachedOutput 过滤 missing，effectiveExec 退回原 exec.output；
+        // 后续 detail 替换（工具完成推送）时 ensureToolOutput 会再拉。
         const next = new Map(outputCache);
         next.set(exec.toolUseId, out);
-        while (next.size > OUTPUT_CACHE_LIMIT) {
-          const firstKey = next.keys().next().value;
-          if (firstKey === undefined) break;
-          next.delete(firstKey);
+        // LRU 淘汰跳过仍展开的项：淘汰它们会让 isOutputLoading 重新为 true、
+        // 退回假加载占位且无请求在跑（silent-failure 审计 #3）。
+        // 上限 = LIMIT + 展开项数（codex 验证轮 c）：未展开部分仍严格 ≤ LIMIT；
+        // 展开项的 cache 与其 DOM 渲染同生命周期同数量级（折叠后即回可淘汰池），
+        // 增长上界由用户显式展开数决定，不构成无界泄漏，也不产生淘汰死态。
+        if (next.size > OUTPUT_CACHE_LIMIT) {
+          const expandedToolIds = new Set(
+            [...expandedItems]
+              .filter((k) => k.includes("-tool-"))
+              .map((k) => k.slice(k.indexOf("-tool-") + "-tool-".length)),
+          );
+          const cap = OUTPUT_CACHE_LIMIT + expandedToolIds.size;
+          for (const key of [...next.keys()]) {
+            if (next.size <= cap) break;
+            if (key === exec.toolUseId || expandedToolIds.has(key)) continue;
+            next.delete(key);
+          }
         }
         outputCache = next;
       } catch (e) {
-        console.warn("[perf] getToolOutput failed", exec.toolUseId, e);
+        // 失败落显式哨兵：渲染层切"加载失败"态（复制禁用 + 可重试），
+        // 不得停留在 aria-busy 假占位。
+        console.warn("getToolOutput failed", exec.toolUseId, e);
+        const nextFailed = new Set(failedOutputs);
+        nextFailed.add(exec.toolUseId);
+        failedOutputs = nextFailed;
       } finally {
         outputLoads.delete(exec.toolUseId);
       }
@@ -715,9 +758,11 @@
       expandedItems = next;
       return;
     }
+    // 展开即触发懒加载并立即展开；加载期由 viewer 以稳定的限高档占位渲染
+    // （spec tool-viewer-routing::工具输出懒加载态的稳定分档，design D6
+    // fetch-first）。不再阻塞展开等待 IPC——慢网络下点击无反馈是反模式。
     if (exec && viewerUsesOutput(exec) && !isOutputReady(exec)) {
-      await ensureToolOutput(exec);
-      if (!isOutputReady(exec)) return;
+      void ensureToolOutput(exec);
     }
     const next = new Set(expandedItems);
     next.add(key);
@@ -1289,16 +1334,18 @@
                           onclick={() => toggle(key, exec)}
                         >
                           {#snippet children()}
+                            {@const outputLoading = viewerUsesOutput(exec) && isOutputLoading(exec)}
+                            {@const outputLoadFailed = viewerUsesOutput(exec) && isOutputLoadFailed(exec)}
                             {#if isReadTool(exec)}
-                              <ReadToolViewer exec={eff} {sessionId} {projectId} />
+                              <ReadToolViewer exec={eff} {sessionId} {projectId} {outputLoading} {outputLoadFailed} />
                             {:else if isEditTool(exec)}
-                              <EditToolViewer exec={eff} {sessionId} {projectId} />
+                              <EditToolViewer exec={eff} {sessionId} {projectId} {outputLoading} {outputLoadFailed} />
                             {:else if isWriteTool(exec)}
                               <WriteToolViewer exec={eff} {sessionId} {projectId} />
                             {:else if isBashTool(exec)}
-                              <BashToolViewer exec={eff} {sessionId} {projectId} />
+                              <BashToolViewer exec={eff} {sessionId} {projectId} {outputLoading} {outputLoadFailed} />
                             {:else}
-                              <DefaultToolViewer exec={eff} />
+                              <DefaultToolViewer exec={eff} {outputLoading} {outputLoadFailed} />
                             {/if}
                           {/snippet}
                         </BaseItem>
@@ -1328,7 +1375,11 @@
                       onclick={() => toggle(key)}
                     >
                       {#snippet children()}
-                        <div class="prose lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildMenuCtx())} {@attach attachMarkdown(item.text, "output")}></div>
+                        <AdaptiveProse text={item.text} viewportLabel="Output">
+                          {#snippet body()}
+                            <div class="prose lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildMenuCtx())} {@attach attachMarkdown(item.text, "output")}></div>
+                          {/snippet}
+                        </AdaptiveProse>
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "user_message"}
@@ -1341,7 +1392,11 @@
                       onclick={() => toggle(key)}
                     >
                       {#snippet children()}
-                        <div class="prose lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildMenuCtx())} {@attach attachMarkdown(item.text, "output")}></div>
+                        <AdaptiveProse text={item.text} viewportLabel="User message">
+                          {#snippet body()}
+                            <div class="prose lazy-md" use:contextMenu={() => buildMarkdownBlockItems(item.text, buildMenuCtx())} {@attach attachMarkdown(item.text, "output")}></div>
+                          {/snippet}
+                        </AdaptiveProse>
                       {/snippet}
                     </BaseItem>
                   {:else if item.type === "subagent"}

@@ -23,6 +23,14 @@ export function formatTokensCompact(n: number | null | undefined): string {
   return String(n);
 }
 
+/** 字节紧凑格式：B / KiB / MiB（1024 进制，与后端 outputBytes 同度量）。 */
+export function formatBytes(n: number | null | undefined): string {
+  if (n == null || n < 0) return "0 B";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 /**
  * 绝对时间戳渲染入口。`hour12=true` 产 "上午 X 点 XX 分 XX 秒" 形式；
  * `hour12=false` 产 24 小时制 `HH:MM:SS`。`date` 接 `Date` / `number` (ms) /

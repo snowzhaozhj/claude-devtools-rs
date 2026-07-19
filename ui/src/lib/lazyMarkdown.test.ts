@@ -5,7 +5,8 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
-import { createLazyMarkdownObserver, LAZY_MARKDOWN_ENABLED } from './lazyMarkdown.svelte'
+import { createLazyMarkdownObserver, LAZY_MARKDOWN_ENABLED, estimatePlaceholderHeight } from './lazyMarkdown.svelte'
+import { BOUNDED_BYTE_THRESHOLD } from './outputSizing'
 
 class MockIntersectionObserver {
   observed: Element[] = []
@@ -150,5 +151,25 @@ describe('createLazyMarkdownObserver.flushAll', () => {
 
     // disconnect 后再 flushAll 不应报错
     expect(() => observer.flushAll()).not.toThrow()
+  })
+})
+
+// spec session-display §"对话流文本输出按内容规模自适应展示" + tasks 2.4：
+// bounded prose 的 lazy 占位 min-height 落在**内层** .lazy-md，限高滚动落在
+// **外层** .ao-viewport（max-block-size 上限 40rem = 640px @ 16px root）。
+// 外层几何在"占位清除→真实高度接管"前后保持稳定的充分条件：
+// 占位估算与真实渲染高度都 ≥ viewport 上限（外层恒钳在上限）。
+// 本块锁字节触发路径的该不变量，防未来调估算公式 / viewport 上限时静默破坏。
+describe('bounded prose 占位估算 ≥ 限高 viewport 上限（外层几何稳定）', () => {
+  const VIEWPORT_MAX_PX = 640 // clamp(18rem, 45dvh, 40rem) 的上限（AdaptiveOutputFrame）
+
+  test('字节达 bounded 阈值的 prose 估算高度远超 viewport 上限', () => {
+    const text = 'x'.repeat(BOUNDED_BYTE_THRESHOLD)
+    expect(estimatePlaceholderHeight(text, 'output')).toBeGreaterThanOrEqual(VIEWPORT_MAX_PX)
+  })
+
+  test('user_message prose 同一路径同一保证', () => {
+    const text = 'x'.repeat(BOUNDED_BYTE_THRESHOLD)
+    expect(estimatePlaceholderHeight(text, 'user')).toBeGreaterThanOrEqual(VIEWPORT_MAX_PX)
   })
 })
