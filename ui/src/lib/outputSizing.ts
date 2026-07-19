@@ -28,6 +28,50 @@ export const SLICE_MAX_BYTES_PER_SIDE = 128 * 1024;
 export type OutputTier = "inline" | "bounded" | "oversized";
 
 /**
+ * 修剪首尾**整条空白行**（仅由空格 / tab / CR / LF 组成的行），保留：
+ * - 中间的空白行（内部结构不动）；
+ * - 最后一个非空行**自身**的尾随空格 / tab（不是空白行，不删）。
+ *
+ * 为什么不用正则：`/(?:\r?\n[ \t]*)+$/` 这类"重复组 + 行尾锚"在
+ * "首尾有内容、中间大量空白行"输入上会退化为近二次回溯（8000 行内部空白
+ * 实测数百 ms，且本函数在分档 / 切片之前跑，会直接阻塞 UI）。改用单遍索引
+ * 扫描：O(n) 无回溯。
+ *
+ * 全部为空白（含纯空格无换行如 `"   "`、`"\n\n  "`）→ 返回空串，
+ * 供调用方判 `length === 0` 走"空输出"分支，不渲染空框。
+ */
+export function trimBlankEdgeLines(text: string): string {
+  const n = text.length;
+  const isBlank = (c: number) => c === 32 || c === 9 || c === 13 || c === 10; // space tab CR LF
+
+  // 找首个非空白字符。
+  let firstNonBlank = 0;
+  while (firstNonBlank < n && isBlank(text.charCodeAt(firstNonBlank))) firstNonBlank++;
+  if (firstNonBlank === n) return ""; // 全空白（覆盖无换行的纯空格 / tab）。
+
+  // 找末个非空白字符。
+  let lastNonBlank = n - 1;
+  while (lastNonBlank >= 0 && isBlank(text.charCodeAt(lastNonBlank))) lastNonBlank--;
+
+  // 起点回退到"首个非空白字符所在行的行首"（上一个 \n 之后），
+  // 使该行自身的行首缩进保留；此前的整条空白行被丢弃。
+  let start = firstNonBlank;
+  while (start > 0 && text.charCodeAt(start - 1) !== 10) start--;
+
+  // 终点前进到"末个非空白字符所在行的行尾"（下一个 CR / LF 之前），
+  // 使该行自身的尾随空格 / tab 保留；此后的整条空白行（含 CRLF）被丢弃。
+  // 须同时认 \r：否则 "x \t\r\n" 会把行尾 \r 也纳入 → 残留 "x \t\r"。
+  let end = lastNonBlank + 1;
+  while (end < n) {
+    const c = text.charCodeAt(end);
+    if (c === 10 || c === 13) break; // LF / CR
+    end++;
+  }
+
+  return text.slice(start, end);
+}
+
+/**
  * 内容的 UTF-8 字节长度。与后端裁剪层记录的 `outputBytes` 同度量，
  * 不用 UTF-16 码元数 / `string.length`（多字节内容会与 `outputBytes` 得不同档）。
  */

@@ -92,11 +92,26 @@ describe("OutputBlock 分级渲染", () => {
     expect(pre!.textContent).toBe("record \t");
   });
 
-  test("纯空白输出：不渲染带边框空 <pre>，仅极简空输出提示（空框变体）", () => {
+  test("纯空白输出：不渲染带边框空 <pre>，仅极简占位 + 禁用复制入口（空框变体 + spec 空内容禁用）", () => {
     const { container } = render(OutputBlock, { props: { code: "\n\n  \n", lang: "text" } });
     expect(container.querySelector(".output-pre")).toBeNull();
     expect(container.querySelector(".ao")).toBeNull();
     expect(container.querySelector(".output-empty")).not.toBeNull();
+    // spec copy-to-clipboard::空内容复制入口 SHALL 禁用并说明原因（不移除入口）
+    const btn = container.querySelector(".output-empty button") as HTMLButtonElement;
+    expect(btn).not.toBeNull();
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute("aria-label")).toContain("空");
+  });
+
+  test("无终止换行的纯空白也判空（EOF 无换行变体）", () => {
+    // codex 报的边界：'   ' / '\n\n  ' 之前会漏判 → 残留空框
+    for (const raw of ["   ", "\n\n  "]) {
+      const { container, unmount } = render(OutputBlock, { props: { code: raw, lang: "text" } });
+      expect(container.querySelector(".output-pre")).toBeNull();
+      expect(container.querySelector(".output-empty")).not.toBeNull();
+      unmount();
+    }
   });
 
   test("loadFailed：显式失败态（无 aria-busy 假占位）+ 复制禁用 + 原因标签", () => {

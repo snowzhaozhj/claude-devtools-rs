@@ -2,12 +2,14 @@
   import { highlightCode } from "../lib/render";
   import { ByteCappedCache } from "../lib/byteCappedCache";
   import AdaptiveOutputFrame from "./AdaptiveOutputFrame.svelte";
+  import CopyButton from "../lib/components/CopyButton.svelte";
   import { formatBytes } from "../lib/formatters";
   import {
     countLines,
     utf8ByteLength,
     sliceHeadTail,
     sizingForToolOutput,
+    trimBlankEdgeLines,
     type OutputTier,
   } from "../lib/outputSizing";
 
@@ -35,13 +37,13 @@
 
   // 终端 / API 输出常以空行开头 / 结尾（cargo / git / kbase fetch 等）；inline 档以
   // white-space:pre 忠实渲染会在框顶 / 框底留出空白行，配常驻复制 icon 就成了
-  // "空框"（图1 回归）。仅**显示 / 分档**修剪首尾**整条空白行**（含 CRLF、含只有
-  // 空格/tab 的行），保留最后一个非空行自身的尾随空格。**复制仍用完整原文** rawCode
-  // （spec copy-to-clipboard::复制该输出面的完整原文——显示可规范化但复制不删原文）。
-  const code = $derived(
-    rawCode.replace(/^(?:[ \t]*\r?\n)+/, "").replace(/(?:\r?\n[ \t]*)+$/, ""),
-  );
-  // 修剪后为纯空（原文只有空白行）：不渲染带边框 padding 的空 `<pre>`（空框变体）。
+  // "空框"（图1 回归）。仅**显示 / 分档**修剪首尾整条空白行（单遍扫描，见
+  // trimBlankEdgeLines）；**复制仍用完整原文** rawCode（spec copy-to-clipboard::
+  // 复制该输出面的完整原文——显示可规范化但复制不删原文）。
+  const code = $derived(trimBlankEdgeLines(rawCode));
+  // 修剪后为纯空（原文只有空白行 / 纯空格）：不渲染带边框 padding 的空 `<pre>`，
+  // 改极简占位；但按 spec copy-to-clipboard 空内容仍提供**禁用**复制入口（说明原因），
+  // 不移除入口。
   const isEmpty = $derived(!loading && !loadFailed && code.length === 0);
 
   function cachedHighlight(value: string, language: string): string {
@@ -81,7 +83,12 @@
 </script>
 
 {#if isEmpty}
-  <div class="output-empty">（空输出）</div>
+  <!-- 纯空白 / 空输出：不渲染带边框空 <pre>，仅极简占位；复制入口按 spec
+       copy-to-clipboard 保留但禁用（说明原因），不移除入口、不复制空白。 -->
+  <div class="output-empty">
+    <span class="output-empty-label">{label ? `${label}·空` : "空输出"}</span>
+    <CopyButton text="" disabled={true} ariaLabel="输出为空，暂无可复制内容" />
+  </div>
 {:else}
   <AdaptiveOutputFrame
     tier={effectiveTier}
@@ -112,12 +119,23 @@
 {/if}
 
 <style>
-  /* 纯空白输出：不套边框框，仅极简次级文案暗示"确有输出但为空"，不留空框。 */
+  /* 纯空白 / 空输出：不套边框框，仅极简次级文案 + 禁用复制入口，不留空框。 */
   .output-empty {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     font-family: var(--font-mono);
     font-size: 12px;
     color: var(--color-text-muted);
     padding: 4px 2px;
+  }
+
+  .output-empty-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .output-pre {

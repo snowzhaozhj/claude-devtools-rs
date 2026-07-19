@@ -10,6 +10,7 @@ import {
   sizingForToolOutput,
   sliceHeadTail,
   sliceLineIndices,
+  trimBlankEdgeLines,
   SLICE_MAX_LINES_PER_SIDE,
   SLICE_MAX_BYTES_PER_SIDE,
 } from "./outputSizing";
@@ -177,5 +178,51 @@ describe("sliceLineIndices（结构化行数组切片索引）", () => {
     expect(idx).not.toBeNull();
     expect(idx!.headCount).toBeGreaterThanOrEqual(1);
     expect(idx!.tailCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("trimBlankEdgeLines（首尾整条空白行修剪）", () => {
+  test("删首尾整条空白行（LF）", () => {
+    expect(trimBlankEdgeLines("\n\n0 errors\n\n")).toBe("0 errors");
+  });
+
+  test("兼容 CRLF 首部 + 保留末行自身尾随空格/tab", () => {
+    expect(trimBlankEdgeLines("\r\n\r\nrecord \t\r\n\r\n")).toBe("record \t");
+  });
+
+  test("保留中间空白行 + 末行有意义尾随空格", () => {
+    // 中间空行不动；最后一个非空行 "  b   " 的行首缩进 + 尾随空格全留。
+    expect(trimBlankEdgeLines("a\n\n  b   ")).toBe("a\n\n  b   ");
+  });
+
+  test("纯空白全变空串：无换行纯空格 / tab", () => {
+    expect(trimBlankEdgeLines("   ")).toBe("");
+    expect(trimBlankEdgeLines("\t \t")).toBe("");
+  });
+
+  test("纯空白全变空串：换行 + 尾随空格无终止换行", () => {
+    // codex 报的 EOF 无换行空白变体：\n\n  / \n\n  \n 都应判空。
+    expect(trimBlankEdgeLines("\n\n  ")).toBe("");
+    expect(trimBlankEdgeLines("\n\n  \n")).toBe("");
+  });
+
+  test("首行自身缩进保留（首个非空行不是整条空白行）", () => {
+    expect(trimBlankEdgeLines("\n  indented\nnext")).toBe("  indented\nnext");
+  });
+
+  test("无首尾空白行：原样返回", () => {
+    expect(trimBlankEdgeLines("line1\nline2")).toBe("line1\nline2");
+  });
+
+  test("性能：首尾有内容 + 大量中间空白行 O(n) 无回溯（守卫二次退化）", () => {
+    // 正则 /(?:\r?\n[ \t]*)+$/ 在此形态近二次回溯（8000 行数百 ms）；
+    // 单遍扫描应在毫秒级。中间空白行须完整保留。
+    const mid = "\n ".repeat(20000);
+    const input = `head${mid}tail`;
+    const t0 = performance.now();
+    const out = trimBlankEdgeLines(input);
+    const dt = performance.now() - t0;
+    expect(out).toBe(input); // 首尾都是非空白行，整体不变
+    expect(dt).toBeLessThan(50);
   });
 });
