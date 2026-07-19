@@ -9,6 +9,8 @@ Each release ships prebuilt binaries (macOS / Linux / Windows) on the
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-07-19
+
 ### Added
 - **Session view**: long outputs no longer flood the conversation. Text, code, diff, and tool outputs now adapt to their size — short content stays fully inline, medium content renders in a height-bounded scrollable preview with a `lines · bytes · preview` indicator, and very large line-oriented outputs render head + tail slices with an explicit "N lines omitted" seam. Copy-full-text is always visible (no longer hover-only) and always copies the complete original, staying disabled with a reason while content is still loading. Bounded scroll areas are keyboard-accessible when they actually overflow. The main AI reply at the end of each turn intentionally stays fully inline for readability.
 
@@ -442,7 +444,8 @@ refresh, execution-trace rendering (user / AI / tool-call cards), context panel,
 global search, desktop notifications, and the multi-segment IPC payload
 slimming that keeps thousand-message sessions fast to open.
 
-[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.5...HEAD
+[Unreleased]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.6...HEAD
+[0.7.6]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.5...v0.7.6
 [0.7.5]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/snowzhaozhj/claude-devtools-rs/compare/v0.7.2...v0.7.3
