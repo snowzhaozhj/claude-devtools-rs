@@ -146,7 +146,7 @@ jobs:
       # cargo-nextest 走 GitHub Release 直下二进制（~5s vs `cargo install` ~30s），
       # 与 `cache-bin: false` 兼容（不依赖 ~/.cargo/bin 缓存）
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.5
         with:
           tool: cargo-nextest
       - name: cargo nextest run --workspace
