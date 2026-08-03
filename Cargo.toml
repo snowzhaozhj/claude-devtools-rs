@@ -30,7 +30,7 @@ cdt-telemetry = { path = "crates/cdt-telemetry" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time", "process"] }
 async-trait = "0.1"
 sha2 = "0.11"
-base64 = "0.22"
+base64 = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Workflow script meta（`export const meta = {...}`）静态解析（Tier 1）：纯 Rust JSON5
