@@ -30,7 +30,7 @@ cdt-telemetry = { path = "crates/cdt-telemetry" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time", "process"] }
 async-trait = "0.1"
 sha2 = "0.11"
-base64 = "0.22"
+base64 = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Workflow script meta（`export const meta = {...}`）静态解析（Tier 1）：纯 Rust JSON5
@@ -50,7 +50,7 @@ filetime = "0.2"
 dirs = "6"
 notify = "8"
 insta = { version = "1", features = ["yaml", "json", "filters"] }
-serial_test = "3"
+serial_test = "4"
 dunce = "1"
 lru = "0.18"
 regex = "1"
@@ -67,7 +67,7 @@ parking_lot = "0.12"
 clap = { version = "4", features = ["derive"] }
 clap_complete = { version = "~4.6", features = ["unstable-dynamic"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-rmcp = { version = "2.1", features = ["server", "macros", "transport-io"] }
+rmcp = { version = "3.2", features = ["server", "macros", "transport-io"] }
 schemars = "1"
 semver = "1"
 flate2 = "1"
