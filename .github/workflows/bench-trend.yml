@@ -64,7 +64,7 @@ jobs:
 
       - name: Store benchmark result (push to main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1
         with:
           name: "Divan Benchmarks"
           tool: "customSmallerIsBetter"
@@ -96,7 +96,7 @@ jobs:
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository &&
           steps.gh_pages_check.outputs.exists == 'true'
-        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1
         with:
           name: "Divan Benchmarks"
           tool: "customSmallerIsBetter"
